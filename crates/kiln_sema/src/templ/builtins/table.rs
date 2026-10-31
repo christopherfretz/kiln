@@ -400,9 +400,9 @@ mod tests {
         assert_eq!(has_builtin_staged("__is_same"), Some(true));
         assert_eq!(has_builtin_staged("__remove_cvref"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_memcpy"), Some(true));
-        assert_eq!(has_builtin_staged("__builtin_constant_p"), Some(false));
+        assert_eq!(has_builtin_staged("__builtin_constant_p"), Some(true));
         assert_eq!(has_constexpr_builtin_staged("__builtin_strlen"), Some(true));
-        assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(false));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_expect"), None);
         assert_eq!(has_builtin_staged("__make_integer_seq"), Some(true));
     }
