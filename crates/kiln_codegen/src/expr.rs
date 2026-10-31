@@ -467,6 +467,16 @@ impl Cg<'_> {
                 {
                     return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
                 }
+                // A call returning a reference yields its address; the
+                // conversion loads the object (clang `EmitLoadOfLValue`).
+                if matches!(
+                    ast.exprs.get(s).kind(),
+                    ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr
+                ) && self.is_glvalue(s)
+                {
+                    let lv = self.emit_lvalue(s)?;
+                    return Ok(Some(self.load_lv(lv)));
+                }
                 return self.emit_scalar_opt(s);
             }
             CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => {

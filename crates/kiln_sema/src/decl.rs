@@ -1130,6 +1130,10 @@ impl Sema<'_, '_> {
             self.templ.cur = None;
             return None;
         }
+        let base = match d.qualifier {
+            Some(q) => self.rebuild_in_current_instantiation(base, q),
+            None => base,
+        };
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {

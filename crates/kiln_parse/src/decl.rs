@@ -1186,6 +1186,7 @@ impl Parser<'_, '_> {
                 d.ellipsis = Some(self.bump().span.lo);
             }
         }
+        let mut decl_scopes = 0;
         if (self.ident().is_some() || self.at(Punct::ColonColon))
             && d.ctx != DeclaratorContext::TypeName
         {
@@ -1197,6 +1198,12 @@ impl Parser<'_, '_> {
                 d.invalid = true;
                 None
             });
+            // [basic.lookup.unqual]/1: the rest of the declarator is
+            // looked up in the qualifier's scope (clang's
+            // `EnterDeclaratorScope`).
+            if let Some(q) = qual {
+                decl_scopes = self.s.act_on_enter_declarator_scope(q);
+            }
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
                 d.qualifier = qual;
                 self.parse_special_declarator_id(d);
@@ -1278,6 +1285,7 @@ impl Parser<'_, '_> {
                 break;
             }
         }
+        self.s.act_on_exit_declarator_scope(decl_scopes);
     }
 
     /// `name<args>` as the declarator-id after a template head, when

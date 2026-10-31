@@ -429,6 +429,14 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         if let Some(m) = self.sema.ast.templates.find_member(inst_parent, d) {
             return Ok(m);
         }
+        // An out-of-line definition (`template<class T> T A<T>::st;`)
+        // names the member its first declaration declares.
+        let first = self.sema.ast.first(d);
+        if first != d
+            && let Some(m) = self.sema.ast.templates.find_member(inst_parent, first)
+        {
+            return Ok(m);
+        }
         // A member not instantiated (an invalid member of the
         // specialization): already diagnosed.
         Err(SubstFail)

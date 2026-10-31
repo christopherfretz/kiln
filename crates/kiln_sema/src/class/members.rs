@@ -507,6 +507,33 @@ impl Sema<'_, '_> {
                 .decls
                 .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
+        self.push_ctx_scopes(ctx, lexical)
+    }
+
+    /// After the qualified declarator-id `q::name` ([basic.lookup.unqual]/1,
+    /// clang's `EnterDeclaratorScope`): the scopes of `q` and of the
+    /// contexts between it and the current one, outermost first, so the
+    /// names after the declarator-id (parameters, trailing return type,
+    /// array bounds) are looked up there. Returns how many scopes were
+    /// pushed, for [`Sema::act_on_exit_declarator_scope`].
+    pub fn act_on_enter_declarator_scope(&mut self, q: DeclId) -> usize {
+        if self.ast.decls.record(q).is_none() && self.kind_of(q) != DeclKind::Namespace {
+            return 0;
+        }
+        let lexical = self.ctx;
+        self.push_ctx_scopes(q, lexical)
+    }
+
+    /// Ends the scopes [`Sema::act_on_enter_declarator_scope`] pushed.
+    pub fn act_on_exit_declarator_scope(&mut self, n: usize) {
+        for _ in 0..n {
+            self.scopes.pop();
+        }
+    }
+
+    /// Pushes a scope for `ctx` and each enclosing context up to (not
+    /// including) the first that encloses `lexical`, outermost first.
+    fn push_ctx_scopes(&mut self, ctx: DeclId, lexical: DeclId) -> usize {
         let mut chain = Vec::new();
         let mut c = Some(ctx);
         while let Some(x) = c {
@@ -518,7 +545,7 @@ impl Sema<'_, '_> {
         }
         let n = chain.len();
         for x in chain.into_iter().rev() {
-            let kind = if self.kind_of(x) == DeclKind::CXXRecord {
+            let kind = if self.ast.decls.record(x).is_some() {
                 crate::scope::ScopeKind::Record
             } else {
                 crate::scope::ScopeKind::Namespace

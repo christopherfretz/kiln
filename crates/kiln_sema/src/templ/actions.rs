@@ -152,6 +152,21 @@ impl Sema<'_, '_> {
             let r = self.ast.types.as_record(ty)?;
             return Some((self.ast.definition(r).unwrap_or(r), n));
         }
+        // `template<class T> void P<T*>::f()`: a declarator qualifier
+        // naming a partial specialization by its own arguments
+        // ([temp.spec.partial.general]/7, [temp.class.general]/3).
+        if self.templ.entering_context
+            && let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty())
+        {
+            let canonical = self.ast.types.canonical_args(args);
+            let t = self.ast.first(tmpl);
+            if let Some(i) = self.ast.templates.find_partial(t, canonical)
+                && let Some(p) = self.ast.templates.partial(i)
+            {
+                let p = p.partial;
+                return Some((self.ast.definition(p).unwrap_or(p), n));
+            }
+        }
         Some((tmpl, n))
     }
 
@@ -178,13 +193,62 @@ impl Sema<'_, '_> {
             }
         }
         let pat = self.pattern_of(tmpl)?;
-        if !self.templ.entering_context && !self.encloses(pat, self.ctx) {
+        if !self.templ.entering_context
+            && !self.encloses(pat, self.ctx)
+            && !self.in_declarator_scope_of(pat)
+        {
             // `X<P...>` outside `X` (an alias template's or another
             // template's own parameters at the same positions) is an
             // ordinary dependent specialization.
             return None;
         }
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// Whether the class scope of pattern `pat` was entered for the rest
+    /// of a qualified declarator (`A<T>::f(typename A<T>::X)`).
+    fn in_declarator_scope_of(&self, pat: DeclId) -> bool {
+        let pat = self.ast.first(pat);
+        self.scopes.iter().any(|s| {
+            s.kind == ScopeKind::Record && s.entity.is_some_and(|e| self.ast.first(e) == pat)
+        })
+    }
+
+    /// The decl-specifier type `base` of a declarator whose qualifier
+    /// `q` names the current instantiation, rebuilt in it (clang's
+    /// `RebuildDeclaratorInCurrentInstantiation`, [temp.dep.type]/1):
+    /// `typename A<T>::X` written before `A<T>::f` names the member `X`.
+    pub(crate) fn rebuild_in_current_instantiation(
+        &mut self,
+        base: QualType,
+        q: DeclId,
+    ) -> QualType {
+        let TypeView::DependentName { keyword, nns, name } = self.ast.types.view(base.ty()) else {
+            return base;
+        };
+        let Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else { return base };
+        let TypeView::TemplateSpecialization { name: tn, .. } = self.ast.types.view(ty.ty())
+        else {
+            return base;
+        };
+        let Some(tmpl) = self.ast.types.template_decl(tn) else { return base };
+        let saved = self.set_entering_context(true);
+        let cur = self.current_instantiation(tmpl, ty);
+        self.set_entering_context(saved);
+        if cur.is_none_or(|c| self.ast.first(c) != self.ast.first(q)) {
+            return base;
+        }
+        let found = self.lookup_in_class(q, name, LookupKind::Ordinary);
+        let Some(&d) = found.decls.first() else { return base };
+        let t = match self.kind_of(d) {
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
+            }
+            DeclKind::CXXRecord | DeclKind::Enum => self.tag_type(d),
+            _ => return base,
+        };
+        let t = self.ast.types.elaborated(keyword, Some(nns), t);
+        self.ast.types.qualify(t, base.quals())
     }
 
     /// Whether `d` is a template parameter of `p`'s kind at `p`'s depth
@@ -990,7 +1054,16 @@ impl Sema<'_, '_> {
             }
             c = self.ast.decls.lexical_ctx(x).or_else(|| self.ast.decls.get(x).ctx());
         }
-        None
+        // The class scopes entered for the rest of a qualified declarator
+        // (`template<class T> void A<T>::f(const A&)`, [basic.lookup.unqual]/1).
+        self.scopes.iter().rev().filter(|s| s.kind == ScopeKind::Record).find_map(
+            |s| {
+                let x = s.entity?;
+                (self.kind_of(x) == DeclKind::CXXRecord
+                    && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl))
+                .then_some(x)
+            },
+        )
     }
 
     /// The injected-class-name of class template `tmpl` used without
