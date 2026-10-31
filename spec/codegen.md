@@ -493,7 +493,7 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `operator delete` (or the class's own). An abstract class's D0 is
   `llvm.trap` + `unreachable`. `delete p` of a polymorphic class with a
   virtual destructor calls D0 through the vtable; otherwise D1 then
-  `operator delete`. `::delete p` of such a class is not supported yet.
+  `operator delete`. `::delete p` of such a class: see WP-108 below.
 - **Thunks** (`CodeGenVTables::maybeEmitThunk`): a thunk is declared
   when the vtable that needs it is built and defined right after its
   target (method, D1 or D0) is emitted. `this`-adjusting (`_ZThn`) and
@@ -564,14 +564,52 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   - Thunks with a virtual adjustment (`_ZTv0_n<off>_`) load the
     vcall offset from the vtable.
 
+**Landed (WP-108):**
+- *Member-pointer RTTI* (clang `BuildPointerToMemberTypeInfo`):
+  `{ vt, name, i32 flags, pointee, class }` with the
+  `__pointer_to_member_type_info` vtable; flags are the pointee's
+  qualifiers, 8 for an incomplete pointee class, 16
+  (`PTI_ContainingClassIncomplete`) for an incomplete class, 64 for a
+  noexcept function pointee. Linkage is `internal` when the class or the
+  pointee involves an incomplete class or an internal-linkage class.
+- *noexcept function types* (`extractPBaseFlags`): a pointer to (or
+  member pointer to) a noexcept function type has flag 64 and refers to
+  the `type_info` of the function type *without* `noexcept`
+  (`_ZTIPDoFviE` -> `_ZTIFviE`); `typeid` of the function type itself
+  is its own `_ZTIDoF...E` `__function_type_info`.
+- *`::delete p` of a polymorphic class* (`emitVirtualObjectDelete`,
+  `UseGlobalDelete`): after the null check, the complete object is
+  `p + vtable[-2]` (offset-to-top), the complete destructor (D1) is
+  called through the vtable, then the global `operator delete` with the
+  complete-object pointer and the static type's size (even when the
+  class declares its own `operator delete`). A final class is
+  devirtualized as before.
+- *Sema guarantee for `base_path_offset`*: a member-pointer conversion
+  whose base path has a virtual step is rejected in every form (implicit,
+  `static_cast` / C-style cast in either direction) with clang's
+  `conversion from pointer to member of class 'D' to pointer to member
+  of class 'B' via virtual base 'V' is not allowed`, so none reaches
+  codegen (conformance `expr.static.cast/member-pointer-virtual-base`).
+- Corpus: `virtual_rtti_memptr`, `virtual_global_delete`,
+  `virtual_base_dyncast_hint` (the `-1` `__dynamic_cast` hint).
+
 **Gaps (owned elsewhere or open):**
-- Virtual bases: the `-1` `__dynamic_cast` offset hint (no public path
-  through a virtual base) is implemented but not covered by the corpus;
-  inheriting constructors of classes with virtual bases are not covered.
+- Inheriting constructors are not implemented at all (sema rejects
+  `using B::B;` with `sema_using_decl_not_base_class`; codegen has no
+  `CI1`/`CI2` structors), with or without virtual bases.
+- Explicit instantiation definitions (`template struct X<int>;`) emit
+  nothing: the members are instantiated by sema but codegen emits only
+  used functions, with `linkonce_odr`. clang emits every member
+  `weak_odr`, the vtable/RTTI `weak_odr`, and a non-trivial destructor
+  as a `D5` COMDAT with a `weak_odr` D1 alias; `extern template` makes
+  the vtable an `external` declaration and suppresses the member
+  definitions. Kiln still treats both like implicit instantiations
+  (and explicit instantiation of function templates is a sema
+  "not yet implemented").
 - EH-dependent forms (WP-100): `dynamic_cast` / `typeid` inside cleanup
   scopes use plain `call`s.
-- Member-pointer RTTI (`__pointer_to_member_type_info`), the
-  `noexcept` function-pointer flag, `::delete` of a polymorphic class.
+- RTTI of a pointer to member function with method qualifiers
+  (`void (S::*)() const`, an abominable pointee) is not covered.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
