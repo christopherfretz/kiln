@@ -250,10 +250,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                         // parameter through its replacement's declaration
                         // (`apply<int>`, not `template apply<int>`): the
                         // qualifier as written belongs to the argument.
-                        ArgView::Template(t) => Ok(match self.sema.ast.types.template_name_view(t) {
-                            TemplateName::Qualified { underlying, .. } => underlying,
-                            _ => t,
-                        }),
+                        ArgView::Template(t) => {
+                            Ok(match self.sema.ast.types.template_name_view(t) {
+                                TemplateName::Qualified { underlying, .. } => underlying,
+                                _ => t,
+                            })
+                        }
                         _ => Err(SubstFail),
                     },
                     ArgLookup::Retain(nd) if nd == d => Ok(n),

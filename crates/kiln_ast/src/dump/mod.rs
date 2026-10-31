@@ -1416,17 +1416,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             Requirement::Simple(x)
             | Requirement::Nested(x)
             | Requirement::Compound { expr: x, .. } => !self.ast.exprs.get(x).deps().is_none(),
-            Requirement::Type(t) => self.ast.types.is_dependent(t),
+            Requirement::Type(t, _) => self.ast.types.is_dependent(t),
         };
         match r {
             Requirement::Simple(_) => self.line.push_str("SimpleRequirement"),
-            Requirement::Type(t) => {
+            Requirement::Type(t, _) => {
                 self.line.push_str("TypeRequirement");
                 self.ty(t);
             }
             Requirement::Compound { noexcept, .. } => {
                 self.line.push_str("CompoundRequirement");
-                if noexcept {
+                if noexcept.is_some() {
                     self.line.push_str(" noexcept");
                 }
             }
@@ -1448,7 +1448,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
-            Some(Requirement::Type(_)) | None => {}
+            Some(Requirement::Type(..)) | None => {}
         }
     }
 

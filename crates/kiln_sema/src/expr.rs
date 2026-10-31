@@ -2876,6 +2876,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[base], loc);
         }
         if let Some(e) = self.try_dependent_member(base, name, None, false, loc, arrow) {
+            if op_loc != loc {
+                let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
+            }
             return e;
         }
         // [over.ref]/1: `x->m` on a class `x` is `(x.operator->())->m`.

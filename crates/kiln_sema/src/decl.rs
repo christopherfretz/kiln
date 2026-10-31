@@ -1473,9 +1473,7 @@ impl Sema<'_, '_> {
         // parameters (canonical types compare by depth and index) chains
         // to the earlier pattern.
         let alias_template_prev = prev.and_then(|p| {
-            (alias
-                && self.templ.cur.is_some()
-                && self.kind_of(p) == DeclKind::TypeAliasTemplate)
+            (alias && self.templ.cur.is_some() && self.kind_of(p) == DeclKind::TypeAliasTemplate)
                 .then(|| self.pattern_of(p))
                 .flatten()
         });

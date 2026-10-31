@@ -10,7 +10,7 @@
 
 use kiln_ast::expr::{BinaryOp, ExprKind};
 use kiln_ast::ids::{ArgListId, RawId};
-use kiln_ast::types::{ArgView, BuiltinType, TemplateArg};
+use kiln_ast::types::{ArgView, BuiltinType, TemplateArg, TypeFlags};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_oven::{EvalContext, EvalKind};
@@ -18,7 +18,7 @@ use kiln_source::Loc;
 
 use super::{SatId, SatRecord, Satisfaction};
 use crate::Sema;
-use crate::templ::args::MultiLevelArgs;
+use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
@@ -305,13 +305,15 @@ impl Sema<'_, '_> {
             (Some(x), Ok(())) => x,
             (_, st) => {
                 let first = st.err().flatten();
-                // A construct the substituter does not handle yet: assume
-                // satisfied rather than reject a valid program.
-                if first
+                // A construct the substituter does not handle yet is a
+                // hard error: assuming either answer could accept an
+                // invalid program or pick the wrong overload.
+                if let Some(d) = first
                     .as_ref()
-                    .is_some_and(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
+                    .filter(|d| d.id() == Some(DiagId::sema_unimplemented_template_feature))
                 {
-                    return true;
+                    self.emit(d.clone());
+                    return false;
                 }
                 let at = first.as_ref().map_or(loc, Diag::loc);
                 let msg = first.map(|d| format!(": {}", d.message())).unwrap_or_default();
@@ -329,9 +331,19 @@ impl Sema<'_, '_> {
             return false;
         }
         if self.expr_is_value_dependent(x) {
-            // Still dependent (an enclosing template's parameters are
-            // retained): checked again when instantiated.
-            return true;
+            // Dependent arguments (an enclosing template's parameters are
+            // retained): checked again when instantiated, as clang treats
+            // constraints with dependent arguments as satisfied.
+            if self.levels_dependent(levels) {
+                return true;
+            }
+            // Concrete arguments but a dependent result: a substitution
+            // the substituter does not complete.
+            let d = self
+                .diag(DiagId::sema_unimplemented_template_feature, loc)
+                .arg("an atomic constraint that stays value-dependent after substitution");
+            self.emit(d);
+            return false;
         }
         let ty = self.ety(x);
         if self.ast.types.builtin(ty) != Some(BuiltinType::Bool) {
@@ -352,6 +364,19 @@ impl Sema<'_, '_> {
                 false
             }
         }
+    }
+
+    /// True if substituting `levels` leaves template parameters behind: a
+    /// retained level or a dependent argument.
+    fn levels_dependent(&self, levels: &MultiLevelArgs) -> bool {
+        levels.levels.iter().any(|l| {
+            l.mode == LevelMode::Retain
+                || self.ast.types.args(l.args).iter().any(|&a| {
+                    self.ast.types.arg_flags(a).intersects(
+                        TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::INSTANTIATION_DEPENDENT,
+                    )
+                })
+        })
     }
 
     /// The notes explaining why the (substituted, non-dependent) atomic

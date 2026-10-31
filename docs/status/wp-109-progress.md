@@ -27,4 +27,24 @@ Branch `wp/109-concepts-alias-followups`. Living file; deleted at merge.
   implemented); span `__compare/ordering.h:62` defaulted comparisons
   (WP-082).
 
-## Items 2-7: pending
+## Item 2 — tighten the 073 fallback: IN PROGRESS
+- `sat_atom`: an unimplemented substitution is now a hard error (the
+  captured diagnostic is emitted); a value-dependent result is satisfied
+  only when the levels are dependent (retained level / dependent arg),
+  else a hard "not yet implemented" error. `req_expr` likewise.
+- Corpus fallout: `templates/concepts/temp.constr.concept-std-like.cpp`
+  hits `__is_convertible` (unimplemented trait) — needs the trait.
+- Fold-expanded constraints `(C<Ts> && ...)` evaluate correctly; notes
+  differ from clang 19 (clang expands the fold per element:
+  "because 'long' does not satisfy 'Int'"; kiln "'... && ...' evaluated
+  to false"). TODO: `sat_fold` in concepts/sat.rs + tests.
+
+## Item 4 — note locations: mostly DONE (uncommitted tests)
+- type-requirement note at the type (`Requirement::Type(QualType, Loc)`),
+  noexcept note at the keyword (`Compound { noexcept: Option<Loc> }`),
+  member access after substitution at the `.`/`->`
+  (`templates.member_op_loc` side table). Verified vs clang on scratch.
+- TODO: non-bool atom at concept definition; ambiguous-atomic note;
+  `static_assert(requires{...})` prints the expression, no note.
+
+## Items 3, 5, 6, 7: pending

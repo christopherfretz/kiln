@@ -1023,7 +1023,7 @@ impl Parser<'_, '_> {
                 return None;
             };
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
-            let noexcept = self.eat_kw(Kw::Noexcept).is_some();
+            let noexcept = self.eat_kw(Kw::Noexcept);
             let mut constraint = None;
             if self.eat(Punct::Arrow).is_some() {
                 let loc = self.loc();
@@ -1037,9 +1037,11 @@ impl Parser<'_, '_> {
             // type-name (`typename X<T>;`) is a plain type.
             if self.unqualified_type_requirement() {
                 self.bump();
-                Requirement::Type(self.parse_type_id()?)
+                let at = self.loc();
+                Requirement::Type(self.parse_type_id()?, at)
             } else {
-                Requirement::Type(self.parse_typename_specifier()?)
+                let at = self.tok_at(self.pos() + 1).span.lo;
+                Requirement::Type(self.parse_typename_specifier()?, at)
             }
         } else if self.at_kw(Kw::Requires) {
             // nested-requirement ([expr.prim.req.nested]).
