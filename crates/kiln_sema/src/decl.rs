@@ -345,6 +345,30 @@ impl Sema<'_, '_> {
         self.prototype_params.pop();
     }
 
+    /// The trailing requires-clause of function declarator `d`: its
+    /// parameters are in scope again ([basic.scope.param]/1), and in a
+    /// member-declaration so is `this` ([expr.prim.this]/2). Returns what
+    /// [`Sema::act_on_end_trailing_requires`] leaves.
+    pub fn act_on_start_trailing_requires(&mut self, d: &Declarator) -> bool {
+        let Some(Chunk::Function { params, quals, .. }) = d.chunks.first() else { return false };
+        let mut frame =
+            PrototypeFrame { depth: self.scopes.len(), params: Vec::new(), index: params.len() };
+        for p in params {
+            if let (Some((n, _)), Some(pd)) = (p.name, p.decl) {
+                frame.params.push((n, pd));
+            }
+        }
+        let quals = *quals;
+        self.prototype_params.push(frame);
+        self.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals)
+    }
+
+    /// Leaves the scopes [`Sema::act_on_start_trailing_requires`] entered.
+    pub fn act_on_end_trailing_requires(&mut self, this: bool) {
+        self.act_on_end_this_scope(this);
+        self.prototype_params.pop();
+    }
+
     /// Normalizes a parameter list ([dcl.fct]/2): a lone unnamed `void`
     /// parameter means "no parameters"; any other `void` parameter is an
     /// error.

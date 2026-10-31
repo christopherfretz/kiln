@@ -911,7 +911,9 @@ impl Parser<'_, '_> {
             return;
         }
         self.bump();
+        let scope = self.s.act_on_start_trailing_requires(d);
         d.trailing_requires = self.parse_requires_clause();
+        self.s.act_on_end_trailing_requires(scope);
     }
 
     /// The constraint-logical-or-expression of a requires-clause after
