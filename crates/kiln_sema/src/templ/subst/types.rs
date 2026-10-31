@@ -5,7 +5,7 @@
 //! written).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, Nns, TypeView};
+use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -190,9 +190,7 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::DependentName { keyword, nns, name } => {
                 let n = self.nns(nns, loc)?;
-                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(n)
-                    && self.sema.is_dependent_type(ty)
-                {
+                if self.nns_still_dependent(n) {
                     // Substituted with dependent arguments (an alias
                     // template named in a template): still dependent.
                     return Ok(self.sema.ast.types.dependent_name(keyword, n, name));
@@ -266,9 +264,7 @@ impl Substituter<'_, '_, '_> {
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
                 let n = self.nns(nns, loc)?;
                 let args = self.args(args, loc)?;
-                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(n)
-                    && self.sema.is_dependent_type(ty)
-                {
+                if self.nns_still_dependent(n) {
                     return Ok(self
                         .sema
                         .ast
@@ -396,7 +392,10 @@ impl Substituter<'_, '_, '_> {
     /// A context for diagnostics: `'X<int>'` or `namespace 'n'`.
     pub(crate) fn ctx_arg(&self, ctx: DeclId) -> String {
         match self.sema.kind_of(ctx) {
-            DeclKind::CXXRecord | DeclKind::Enum => self.sema.ty_arg(self.sema.tag_type(ctx)),
+            // Fully qualified, unsugared (clang: `'S::In'`, `'S::M<int>'`).
+            DeclKind::CXXRecord | DeclKind::Enum => {
+                format!("'{}'", self.sema.ty_canonical_str(self.sema.tag_type(ctx)))
+            }
             _ => format!("'{}'", self.sema.decl_name(ctx)),
         }
     }

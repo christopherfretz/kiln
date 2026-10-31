@@ -337,6 +337,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             Nns::Identifier { prefix, name } => {
                 let Some(p) = prefix else { return self.unimplemented("dependent name", loc) };
                 let p = self.nns(p, loc)?;
+                if self.nns_still_dependent(p) {
+                    // Substituted with dependent arguments: `X::name::`
+                    // stays dependent ([temp.dep.type]/6), rebuilt on
+                    // the substituted prefix (WP-121).
+                    return Ok(self.sema.ast.types.nns(Nns::Identifier { prefix: Some(p), name }));
+                }
                 let ctx = self.nns_context(p, loc)?;
                 let Some((c, spelled)) = self.sema.act_on_nested_name_spelled(Some(ctx), name, loc)
                 else {
@@ -353,6 +359,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             other => other,
         };
         Ok(self.sema.ast.types.nns(r))
+    }
+
+    /// True if the substituted specifier `n` is still dependent (its
+    /// arguments were dependent: an alias or member template named in
+    /// another template), so names after it are looked up later.
+    pub(crate) fn nns_still_dependent(&self, n: NnsId) -> bool {
+        self.sema.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
     }
 
     /// The context a substituted nested-name-specifier names (a class

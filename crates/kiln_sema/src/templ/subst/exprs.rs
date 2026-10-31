@@ -255,9 +255,7 @@ impl Substituter<'_, '_, '_> {
                 let name = kiln_source::symbol::Symbol::from_index(n.b());
                 let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                 let nns = self.nns(nns, begin)?;
-                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(nns)
-                    && self.sema.is_dependent_type(ty)
-                {
+                if self.nns_still_dependent(nns) {
                     // Substituted with dependent arguments (an alias
                     // template named in a template): still dependent.
                     let targs = match self.sema.ast.templates.expr_targs.get(e).copied() {

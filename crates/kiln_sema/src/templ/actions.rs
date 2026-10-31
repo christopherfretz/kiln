@@ -84,7 +84,7 @@ impl Sema<'_, '_> {
             && let Some(scope) = scope
             && let Some(r) = self.member_qualifier_first(scope, name, loc)
         {
-            return r;
+            return r.ok();
         }
         let (ctx, spelled) = self.act_on_nested_name_spelled(prefix.map(|p| p.0), name, loc)?;
         let n = self.nns_component(prefix.map(|p| p.1), ctx, spelled);
@@ -130,13 +130,14 @@ impl Sema<'_, '_> {
     /// object scope `scope`: a type or template found in the object's
     /// class; for a dependent object, a name found nowhere is a
     /// dependent `name::` (clang's `ActOnCXXNestedNameSpecifier` with a
-    /// dependent object type). `None` to use ordinary lookup.
+    /// dependent object type). `None` to use ordinary lookup, `Err`
+    /// after diagnosing.
     fn member_qualifier_first(
         &mut self,
         scope: MemberScope,
         name: Symbol,
         loc: Loc,
-    ) -> Option<Option<(DeclId, NnsId)>> {
+    ) -> Option<Result<(DeclId, NnsId), ()>> {
         let dependent_class = match scope {
             MemberScope::Class(c) => {
                 let found = self.lookup_in_class(c, name, LookupKind::Nested);
@@ -147,7 +148,7 @@ impl Sema<'_, '_> {
                             (ctx, n)
                         },
                     );
-                    return Some(r);
+                    return Some(r.ok_or(()));
                 }
                 self.is_dependent_type(self.tag_type(c))
             }
@@ -160,7 +161,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let n = self.ast.types.nns(Nns::Identifier { prefix: None, name });
-        Some(Some((self.decltype_scope_marker(), n)))
+        Some(Ok((self.decltype_scope_marker(), n)))
     }
 
     /// `decltype(e)::`, the first component of a nested-name-specifier
