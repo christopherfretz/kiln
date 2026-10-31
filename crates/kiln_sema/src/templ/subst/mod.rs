@@ -246,7 +246,14 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 let (d, i) = (depth as u16, index as u16);
                 match self.lookup(d, i) {
                     ArgLookup::Arg(a) => match self.element(a, None, loc)?.view() {
-                        ArgView::Template(t) => Ok(t),
+                        // clang prints a substituted template template
+                        // parameter through its replacement's declaration
+                        // (`apply<int>`, not `template apply<int>`): the
+                        // qualifier as written belongs to the argument.
+                        ArgView::Template(t) => Ok(match self.sema.ast.types.template_name_view(t) {
+                            TemplateName::Qualified { underlying, .. } => underlying,
+                            _ => t,
+                        }),
                         _ => Err(SubstFail),
                     },
                     ArgLookup::Retain(nd) if nd == d => Ok(n),

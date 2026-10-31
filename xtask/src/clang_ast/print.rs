@@ -1969,6 +1969,13 @@ fn spec_arg(n: &Json, param: Option<&str>) -> Res<Tree> {
         push_word(&mut line, &type_pair(Some(ty), "TemplateArgument")?);
         return Ok(Tree { line, kids: Vec::new() });
     }
+    // A converted argument is never a pack expansion (packs are `pack`
+    // arguments with children), so clang's empty object here is a
+    // template-name argument.
+    if n.as_obj().is_some_and(|o| o.len() == 1) {
+        push_word(&mut line, "template");
+        return Ok(Tree { line, kids: Vec::new() });
+    }
     // Numbers parse as `f64`: exact within 2^53 (the bound), enough for
     // the corpus.
     let as_i64 = |j: &Json| {

@@ -591,15 +591,21 @@ impl Parser<'_, '_> {
     /// alias template or a template template parameter
     /// ([temp.arg.template]/1): consumed, as a template name.
     fn at_template_name_arg(&mut self) -> Option<TemplateArg> {
-        let (end, split, class, _) = self.scan_name_at(self.pos())?;
+        let (end, split, class, _, qual) = self.scan_name_qual_at(self.pos())?;
         // `nns template name` with a dependent `nns` ([temp.names]/5,
-        // [temp.arg.template]/1).
-        let dep_name = matches!(class, NameClass::Dependent)
+        // [temp.arg.template]/1). A member template of a dependent
+        // specialization that is not the current instantiation (`X<T>::
+        // template M`, found in `X`'s primary pattern by the lookahead)
+        // is a dependent template name too: the member is looked up again
+        // in the specialization `X<T>` becomes ([temp.dep.type]/6).
+        let dep_qual = qual.is_some_and(|q| self.s.is_dependent_ctx(q));
+        let dep_name = (matches!(class, NameClass::Dependent)
             && end >= 2
-            && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template);
+            && self.kw_of(self.tok_at(end - 2)) == Some(Kw::Template))
+            || (dep_qual && matches!(class, NameClass::TypeTemplate(_)));
         let d = match class {
-            NameClass::TypeTemplate(d) => Some(d),
             _ if dep_name => None,
+            NameClass::TypeTemplate(d) => Some(d),
             _ => return None,
         };
         if split
@@ -619,9 +625,22 @@ impl Parser<'_, '_> {
         }
         let Some(d) = d else {
             let qual = self.parse_nested_name_nns().ok()??;
-            self.eat_kw(Kw::Template);
+            let template_kw = self.eat_kw(Kw::Template).is_some();
             let n = self.ident()?;
             self.bump();
+            // `X<T>::template M` inside `X` names the current
+            // instantiation's member ([temp.dep.type]/1), found now.
+            if !self.s.is_dependent_ctx(qual.ctx)
+                && let NameClass::TypeTemplate(d) = self.s.classify_name(n, Some(qual.ctx))
+            {
+                let underlying = self.s.template_name_for(d);
+                let tn = self.s.ast.types.template_name(TemplateName::Qualified {
+                    nns: qual.nns,
+                    template_kw,
+                    underlying,
+                });
+                return Some(TemplateArg::template(tn));
+            }
             let tn = self
                 .s
                 .ast

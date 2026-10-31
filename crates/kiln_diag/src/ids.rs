@@ -565,7 +565,7 @@ diag_ids! {
     sema_redefinition_different_kind = Error (1) "redefinition of '{0}' as different kind of symbol";
     sema_redefinition_different_type = Error (3) "redefinition of '{0}' with a different type: {1} vs {2}";
     sema_redeclaration_different_type = Error (3) "redeclaration of '{0}' with a different type: {1} vs {2}";
-    sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias} redefinition with different types ({1} vs {2})";
+    sema_redefinition_different_typedef = Error (3) "{0:typedef|type alias|type alias template} redefinition with different types ({1} vs {2})";
     sema_ovl_diff_return_type = Error (0) "functions that differ only in their return type cannot be overloaded";
     sema_static_non_static = Error (1) "static declaration of '{0}' follows non-static declaration";
     sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
