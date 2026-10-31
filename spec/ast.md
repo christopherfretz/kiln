@@ -255,6 +255,10 @@ fields used by fewer than ~5% of decls of a kind go there.
 - `AstBuilder::linkage_spec_head(head, lang)` creates a
   `LinkageSpecDecl` from a full `DeclHead`, so implicit ones get
   `IMPLICIT` at creation (`linkage_spec` delegates to it).
+- `AstBuilder::unlinked_alias(head, underlying)` (WP-119) creates a
+  `TypeAlias` decl with its typedef type that is entered in no lookup
+  table and no context's member list: Sema's dependent-scope marker for
+  a dependent `decltype(e)::` qualifier (sema.md §4.3.1).
 
 ### 4.3 DeclContext lookup tables
 - **One global table** `FxHashMap<(DeclId /*semantic ctx*/, DeclName),

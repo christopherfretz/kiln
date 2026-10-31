@@ -83,6 +83,51 @@ impl Sema<'_, '_> {
         Some((ctx, n))
     }
 
+    /// `decltype(e)::`, the first component of a nested-name-specifier
+    /// ([expr.prim.id.qual]/1, [dcl.type.decltype]): `ty` is the
+    /// `decltype` type, kept as written in a `Type` specifier (clang's
+    /// `TypeSpec` with a `DecltypeType`; printed `decltype(e)::`). A
+    /// dependent type gives the dependent-scope marker (names after it
+    /// are dependent, [temp.dep.type]/6; substitution re-evaluates the
+    /// `decltype` and looks the name up again, §5.3); otherwise the type
+    /// must be a complete class or an enumeration ("'decltype(e)' (aka
+    /// 'int') is not a class, namespace, or enumeration").
+    pub fn act_on_nested_name_decltype(
+        &mut self,
+        ty: QualType,
+        loc: Loc,
+    ) -> Option<(DeclId, NnsId)> {
+        let n = self.ast.types.nns(Nns::Type { prefix: None, ty, template_kw: false });
+        if self.ast.types.flags(ty.ty()).contains(TypeFlags::DEPENDENT) {
+            return Some((self.decltype_scope_marker(), n));
+        }
+        let t = &self.ast.types;
+        let Some(r) = t.as_record(ty).or_else(|| t.as_enum(ty)) else {
+            let msg = self.diag(DiagId::sema_expected_class_or_namespace, loc).arg(self.ty_arg(ty));
+            self.emit(msg);
+            return None;
+        };
+        if !self.require_complete_nns(ty, loc) {
+            return None;
+        }
+        Some((self.ast.definition(r).unwrap_or(r), n))
+    }
+
+    /// The qualifier context of a dependent `decltype(e)::`: one implicit
+    /// alias of `<dependent type>` linked into no context, so that
+    /// [`Sema::is_dependent_ctx`] holds for it (the specifier itself
+    /// carries the `decltype`).
+    fn decltype_scope_marker(&mut self) -> DeclId {
+        if let Some(d) = self.templ.decltype_scope {
+            return d;
+        }
+        let h =
+            DeclHead::new(self.ast.tu, DeclName::EMPTY, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        let d = self.ast.builder().unlinked_alias(h, QualType::DEPENDENT);
+        self.templ.decltype_scope = Some(d);
+        d
+    }
+
     /// `prefix X<args>::` where the template-id named type `ty` of
     /// template `tmpl` ([temp.res.general]/2): the current instantiation
     /// (its pattern, [temp.dep.type]/1), a dependent marker, or the

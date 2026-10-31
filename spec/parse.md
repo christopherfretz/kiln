@@ -510,7 +510,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Base clause** ([class.derived]): `[attrs] [virtual] [access]
   [virtual] class-or-decltype [...]`; a second `virtual` is
   `duplicate 'virtual' in base specifier`. Each base becomes a
-  `BaseSpecInfo`. Template-id and `decltype` bases are not handled.
+  `BaseSpecInfo`. A class-or-decltype is a decltype-specifier, a
+  simple-template-id or a (possibly qualified) class-name; the qualifier
+  may begin with `decltype(e)::` (WP-119).
 - **Member declarations** (`parse_member_declaration`, clang's
   `ParseCXXClassMemberDeclaration`):
   - leaders: `;`, `public:`/`protected:`/`private:` (a missing `:` is
@@ -756,8 +758,8 @@ in `kiln_diag` for now; nothing emits them.
   linkage, `clang diagnostic` to the diagnostic engine; `weak` and the
   other unsupported pragmas of §2.3.
 - **Classes** (parsed by WP-065; their Sema is WP-066b):
-  - template-id and `decltype` base-specifiers, qualified non-type and
-    `decltype` mem-initializer-ids, braced default arguments
+  - qualified non-type and `decltype` mem-initializer-ids, braced
+    default arguments
   - clang's template-argument heuristics when saving a default argument
     or default member initializer (`a < b, c > d`)
   - literal operators (`operator""`)
@@ -793,6 +795,33 @@ function-try-block (`class.rs` captured prologue and the free-function
 path) parses `try`, then the ctor-initializer, then the body and its
 handlers; the body statement given to `act_on_finish_function_def` is the
 `CXXTryStmt` (as clang's AST: no enclosing `CompoundStmt`).
+
+**Landed (WP-119).** `decltype ( expression ) ::` as the first component
+of a nested-name-specifier ([expr.prim.id.qual]/1), in every place a
+nested-name-specifier is parsed: decl-specifiers, `typename`,
+id-expressions, template-ids (`decltype(e)::template M<T>`),
+base-specifiers, member-pointer declarators (`int decltype(e)::*p`),
+using-declarations, template arguments, conditions and statements. The
+parser has no annotation tokens, so it keeps a one-slot equivalent of
+clang's `annot_decltype`: `annotate_decltype_scope` (at a
+`decltype(...)::` found by `decltype_scope_end`, never `decltype(auto)`)
+parses the decltype-specifier, calls `Sema::act_on_nested_name_decltype`
+and records the result at the `::` (replay depth and index; cleared by
+every `bump`). `scan_name_qual_at` and `parse_nested_name_nns` start
+from a pending annotation; a failed one (diagnosed "'decltype(i)' (aka
+'int') is not a class, namespace, or enumeration") makes the name
+unclassifiable, and the rest of the qualified name is skipped silently
+(`skip_failed_decltype_scope`), as clang recovers. The decision points
+that look at the current token annotate first: the decl-specifier loop
+(after a type specifier the form starts a member-pointer declarator),
+primary expressions, `is_cxx_declaration_statement`,
+`is_cxx_condition_declaration`, `is_cxx_type_id` and template
+arguments. A `decltype(e)::name` seen by lookahead at another index (the
+tentative scanner after the `(` of a possible cast or `sizeof`, template
+argument skipping) is skipped syntactically (`skip_qualified_rest`) and
+classified by what follows the name: an identifier, a `*`/`&`/`&&`
+before `)`/`,`/`>`, or a `)` before an identifier, literal or `(` make it
+a type. A name begins at the `decltype` keyword (`name_begin`).
 - **Other declarations:**
   - pack expansions in dynamic exception specifications
   - `auto` deduction from braced lists (`std::initializer_list`)

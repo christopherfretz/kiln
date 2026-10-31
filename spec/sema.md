@@ -301,6 +301,29 @@ Redeclaration and linkage rules:
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 
+**Landed (WP-119).** `decltype(e)::` as a nested-name-specifier
+([expr.prim.id.qual]/1). `act_on_nested_name_decltype(ty, loc) ->
+Option<(DeclId, NnsId)>` builds `Nns::Type { prefix: None, ty, .. }`
+over the `Decltype` sugar (printed `decltype(s)::`, dumped per clang)
+and returns the scope it names:
+- a non-dependent class or enumeration type: its definition, after
+  `require_complete_nns` (an undefined specialization is instantiated,
+  an incomplete class diagnosed);
+- any other non-dependent type: `'decltype(i)' (aka 'int') is not a
+  class, namespace, or enumeration` (`sema_expected_class_or_namespace`,
+  at the `decltype`), `None`;
+- a dependent type: one shared dependent marker per TU
+  (`TemplState::decltype_scope`, an implicit unnamed `TypeAlias` of
+  `QualType::DEPENDENT` made by `AstBuilder::unlinked_alias`), for which
+  `is_dependent_ctx` is true. Names after it therefore take the existing
+  dependent paths (`DependentNameType`, `DependentScopeDeclRefExpr`,
+  `Nns::Identifier`), and the Substituter's `Nns::Type` arm substitutes
+  the decltype and resolves the scope at instantiation (`nns_context`:
+  `type 'decltype(int{})' (aka 'int') cannot be used prior to '::'`).
+- The Substituter keeps the written keyword of a substituted
+  `DependentNameType` (`typename S::type`, as clang's
+  `ElaboratedType`); it was dropped before.
+
 ### 4.4 Tags, enumerations, bit-fields and anonymous records
 - **`act_on_tag(kind, name, TagUse, …)`** implements [dcl.type.elab]
   and [class.name]:
