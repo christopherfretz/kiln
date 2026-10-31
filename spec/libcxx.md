@@ -236,8 +236,9 @@ If a step has no `error:` line, the key falls back as follows:
 - otherwise the key is the first stderr line, or the exit status.
 
 An expected-fail test that succeeded gets the key `compile.fail: compiled
-successfully` or `link.fail: linked successfully`. A crash gets
-`crash: panicked at <file>: <normalized message>`.
+successfully` or `link.fail: linked successfully`. A crash's first key is
+`crash: panicked at <file>: <normalized message>` (or `crash: <signal>`). The
+`error:` keys printed before the crash follow it.
 
 Each cluster counts **first** (tests whose first key it is) and **any** (tests
 that have it anywhere). Clusters are ranked by first, then any, then text.

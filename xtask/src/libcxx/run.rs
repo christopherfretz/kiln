@@ -374,17 +374,21 @@ fn judge(stage: Stage, m: &Measured) -> Step {
     }
     let detail = tail(&stderr, 12);
     let signalled = out.code().is_none_or(|c| c >= 128);
+    let label = stage.label();
+    let errors = cluster::staged(label, cluster::error_keys(&stderr));
     if stage != Stage::Run {
-        if let Some(k) = cluster::crash_key(&stderr) {
-            return Step::Failed { keys: vec![k], crashed: true, detail };
-        }
-        if signalled {
-            let k = format!("crash: {}", out.describe_end());
-            return Step::Failed { keys: vec![(k, out.describe_end())], crashed: true, detail };
+        // A crash is the first key; the errors before it still count as
+        // "any" occurrences of their clusters.
+        let crash = cluster::crash_key(&stderr).or_else(|| {
+            signalled.then(|| (format!("crash: {}", out.describe_end()), out.describe_end()))
+        });
+        if let Some(k) = crash {
+            let mut keys = vec![k];
+            keys.extend(errors);
+            return Step::Failed { keys, crashed: true, detail };
         }
     }
-    let label = stage.label();
-    let mut keys = cluster::staged(label, cluster::error_keys(&stderr));
+    let mut keys = errors;
     if keys.is_empty() && stage == Stage::Link {
         if let Some(l) = stderr.lines().find(|l| l.contains("undefined reference to")) {
             let i = l.find("undefined reference to").unwrap_or(0);
@@ -486,6 +490,70 @@ mod tests {
             Outcome::Unsupported("driver: -verify".into()).to_string(),
             "UNSUPPORTED (driver: -verify)"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn judging() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::ExitStatus;
+        let m = |raw: i32, stderr: &str| Measured {
+            status: Some(ExitStatus::from_raw(raw)),
+            stderr: stderr.as_bytes().to_vec(),
+            wall: Duration::ZERO,
+            max_rss_kb: None,
+        };
+        let keys = |s: Step| match s {
+            Step::Failed { keys, crashed, .. } => {
+                (keys.into_iter().map(|k| k.0).collect::<Vec<_>>(), crashed)
+            }
+            Step::Ok => (vec!["ok".into()], false),
+            Step::Killed(_) => (vec!["killed".into()], false),
+            Step::Timeout => (vec!["timeout".into()], false),
+        };
+        assert_eq!(keys(judge(Stage::Compile, &m(0, ""))).0, ["ok"]);
+        assert_eq!(
+            keys(judge(
+                Stage::Compile,
+                &m(256, "a.h:1:2: error: 'asm' statements is not supported yet\n")
+            )),
+            (vec!["compile: '…' statements is not supported yet".to_owned()], false)
+        );
+        let crash = "t.h:1:1: error: expected '>'\nthread 'kiln' panicked at crates/kiln_ast/src/decl.rs:1907:5:\ndecl has no Function payload\n";
+        assert_eq!(
+            keys(judge(Stage::Compile, &m(101 << 8, crash))),
+            (
+                vec![
+                    "crash: panicked at crates/kiln_ast/src/decl.rs: decl has no Function payload"
+                        .to_owned(),
+                    "compile: expected '…'".to_owned()
+                ],
+                true
+            )
+        );
+        assert_eq!(
+            keys(judge(Stage::Compile, &m(11, ""))),
+            (vec!["crash: killed by signal 11".to_owned()], true)
+        );
+        assert_eq!(
+            keys(judge(Stage::Link, &m(256, "/usr/bin/ld: t.o: in function `main':\nt.cpp:(.text+0x1): undefined reference to `foo()'\n"))).0,
+            ["link: undefined reference to '…'"]
+        );
+        assert_eq!(
+            keys(judge(
+                Stage::Run,
+                &m(6, "t.exe: t.cpp:3: int main(): Assertion `x == 1' failed.\n")
+            )),
+            (vec!["run: assertion failed".to_owned()], false)
+        );
+        assert_eq!(keys(judge(Stage::Run, &m(256, ""))).0, ["run: exit code 1"]);
+        assert_eq!(
+            keys(judge(Stage::Compile, &m(134, "memory allocation of 8 bytes failed\n"))).0,
+            ["killed"]
+        );
+        let timed_out =
+            Measured { status: None, stderr: Vec::new(), wall: Duration::ZERO, max_rss_kb: None };
+        assert_eq!(keys(judge(Stage::Run, &timed_out)).0, ["timeout"]);
     }
 
     #[test]
