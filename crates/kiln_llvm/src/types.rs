@@ -269,8 +269,10 @@ impl TypeTable {
             name.into()
         } else {
             loop {
-                self.unique_counter += 1;
+                // LLVM `StructType::setName`: the counter's value, then
+                // its increment.
                 let cand = format!("{name}.{}", self.unique_counter);
+                self.unique_counter += 1;
                 if !self.by_name.contains_key(cand.as_str()) {
                     break cand.into_boxed_str();
                 }

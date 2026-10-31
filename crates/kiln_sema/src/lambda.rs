@@ -10,7 +10,7 @@
 //! closure and returns the `LambdaExpr`. [`Sema::act_on_lambda_error`]
 //! abandons a lambda whose body could not be parsed.
 
-use kiln_ast::decl::{Access, ConstexprKind, DeclFlags, FnSpec, FnStorage, TagKind};
+use kiln_ast::decl::{Access, ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, TagKind};
 use kiln_ast::ids::{AttrId, ExprId, LambdaId, StmtId};
 use kiln_ast::lambda::{CaptureDefault, CaptureKind, LambdaData};
 use kiln_ast::names::{DeclName, OverloadedOperator};
@@ -73,6 +73,21 @@ pub struct LambdaSpecifiers {
     pub attrs: Vec<AttrId>,
 }
 
+/// What decides a closure type's mangling number (clang
+/// `getCurrentMangleNumberContext`, `ItaniumNumberingContext`).
+#[derive(Debug, Default)]
+pub(crate) struct ManglingState {
+    /// The variable whose initializer may be being parsed (set when it is
+    /// declared, cleared at its initializer's end).
+    pub(crate) var: Option<DeclId>,
+    /// The parameter whose delayed default argument is being parsed.
+    pub(crate) default_arg: Option<DeclId>,
+    /// The last number given per numbering context (a function, or the
+    /// variable, data member or parameter whose initializer holds the
+    /// lambda) and call-operator parameter list.
+    numbers: kiln_source::fx::FxHashMap<(DeclId, Vec<QualType>, bool), u32>,
+}
+
 /// A lambda whose body is being analysed: what [`Sema`] saved on entry.
 #[derive(Debug)]
 pub(crate) struct LambdaScope {
@@ -89,6 +104,8 @@ pub(crate) struct LambdaScope {
     saved_immediate: u32,
     saved_extend: Option<Vec<ExprId>>,
     saved_ctor_entity: Option<(crate::class::InitEntity, kiln_ast::expr::ConstructionKind)>,
+    saved_mangle_var: Option<DeclId>,
+    saved_default_arg: Option<DeclId>,
     body_open: bool,
     /// `constexpr` was written (the static invoker is then constexpr too).
     explicit_constexpr: bool,
@@ -126,6 +143,8 @@ impl Sema<'_, '_> {
             saved_immediate: 0,
             saved_extend: None,
             saved_ctor_entity: None,
+            saved_mangle_var: None,
+            saved_default_arg: None,
             body_open: false,
             explicit_constexpr: false,
             heads: self.templ.heads.len(),
@@ -184,7 +203,7 @@ impl Sema<'_, '_> {
         }
         let h = DeclHead::new(closure, DeclName::operator(OverloadedOperator::Call), lbracket)
             .access(Access::Public);
-        let f = self.builder().function(h, kiln_ast::decl::DeclKind::CXXMethod, ty, spec, None);
+        let f = self.builder().function(h, DeclKind::CXXMethod, ty, spec, None);
         let defaults: Vec<Option<ExprId>> = params
             .iter()
             .map(|p| match p.default_arg {
@@ -209,7 +228,99 @@ impl Sema<'_, '_> {
             l.explicit_result =
                 d.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
         }
+        self.number_lambda(id, closure, f);
         self.begin_lambda_body(f, specs.constexpr.is_some());
+    }
+
+    /// Before the delayed default argument of parameter `p` is parsed: a
+    /// lambda in it is numbered in the argument's own context (Itanium
+    /// ABI §5.1.8, "default arguments appearing in class definitions").
+    pub fn act_on_start_delayed_default_arg(&mut self, p: DeclId) {
+        self.lambda_mangle.default_arg = Some(p);
+    }
+
+    /// After a delayed default argument.
+    pub fn act_on_end_delayed_default_arg(&mut self) {
+        self.lambda_mangle.default_arg = None;
+    }
+
+    /// Gives closure type `closure` of lambda `id` with call operator `f`
+    /// its mangling number and context (clang `handleLambdaNumbering`):
+    /// lambdas in the body of an inline function, in a default argument
+    /// in a class definition, in a default member initializer or in the
+    /// initializer of an inline variable are numbered per context and
+    /// call-operator parameter list; any other has internal linkage and
+    /// no number.
+    fn number_lambda(&mut self, id: LambdaId, closure: DeclId, f: DeclId) {
+        let Some((key, context)) = self.lambda_numbering_context(closure) else { return };
+        let Some(fty) = self.ast.decls.get(f).ty() else { return };
+        let Some(p) = self.ast.types.proto(self.ast.types.canonical(fty)).copied() else {
+            return;
+        };
+        let params: Vec<QualType> = self
+            .ast
+            .types
+            .params(&p)
+            .iter()
+            .map(|&q| self.ast.types.canonical(q).without_quals())
+            .collect();
+        let n = self.lambda_mangle.numbers.entry((key, params, p.variadic())).or_insert(0);
+        *n += 1;
+        let number = *n;
+        let m = &mut self.ast.exprs.lambdas.get_mut(id).mangling;
+        m.number = number;
+        m.context = context;
+    }
+
+    /// The numbering context of a closure type created in context `ctx`
+    /// (its parent) and its context declaration, if it has one.
+    fn lambda_numbering_context(&self, closure: DeclId) -> Option<(DeclId, Option<DeclId>)> {
+        let ctx = self.ast.decls.get(closure).ctx()?;
+        let kind = self.kind_of(ctx);
+        if is_function(kind) {
+            return self.in_inline_function(ctx).then_some((ctx, None));
+        }
+        if kind == DeclKind::CXXRecord {
+            if let Some(p) = self.lambda_mangle.default_arg {
+                return Some((p, Some(p)));
+            }
+            if let Some(&(field, _)) = self.nsdmi_this.last()
+                && self.ast.decls.get(field).ctx() == Some(ctx)
+            {
+                return Some((field, Some(field)));
+            }
+        }
+        let v = self.lambda_mangle.var?;
+        let inline = self
+            .ast
+            .redecls_of(v)
+            .any(|r| self.ast.decls.var(r).is_some_and(|x| x.spec.is_inline()));
+        inline.then_some((v, Some(v)))
+    }
+
+    /// clang `isInLineFunction`: `dc` or a lexically enclosing function
+    /// (up to the namespace) is inline.
+    fn in_inline_function(&self, dc: DeclId) -> bool {
+        let mut c = Some(dc);
+        while let Some(d) = c {
+            let k = self.kind_of(d);
+            if matches!(k, DeclKind::TranslationUnit | DeclKind::Namespace) {
+                return false;
+            }
+            if is_function(k)
+                && self.ast.redecls_of(d).any(|r| {
+                    self.ast.decls.function(r).is_some_and(|x| {
+                        x.spec.is_inline()
+                            || x.spec.implicit_inline()
+                            || x.spec.constexpr_kind() != ConstexprKind::None
+                    })
+                })
+            {
+                return true;
+            }
+            c = self.ast.decls.lexical_ctx(d);
+        }
+        false
     }
 
     /// Opens the body of call operator `f`: the enclosing function's
@@ -228,7 +339,11 @@ impl Sema<'_, '_> {
         let immediate = std::mem::take(&mut self.immediate);
         let extend = self.extend_collector.take();
         let entity = self.ctor_entity.take();
+        let mangle_var = self.lambda_mangle.var.take();
+        let default_arg = self.lambda_mangle.default_arg.take();
         if let Some(top) = self.lambdas.last_mut() {
+            top.saved_mangle_var = mangle_var;
+            top.saved_default_arg = default_arg;
             top.call_op = Some(f);
             top.depth = depth;
             top.saved_ctx = saved_ctx;
@@ -293,6 +408,10 @@ impl Sema<'_, '_> {
             }
         }
         self.ctx = top.saved_ctx;
+        if top.body_open {
+            self.lambda_mangle.var = top.saved_mangle_var;
+            self.lambda_mangle.default_arg = top.saved_default_arg;
+        }
         Some(top)
     }
 
@@ -405,13 +524,7 @@ impl Sema<'_, '_> {
         let h = DeclHead::new(closure, name, lbracket)
             .flags(DeclFlags::IMPLICIT)
             .access(Access::Public);
-        let _conv = self.builder().function(
-            h,
-            kiln_ast::decl::DeclKind::CXXConversion,
-            conv_ty,
-            spec,
-            None,
-        );
+        let _conv = self.builder().function(h, DeclKind::CXXConversion, conv_ty, spec, None);
         if self.is_static_method(call_op) {
             return;
         }
@@ -423,8 +536,7 @@ impl Sema<'_, '_> {
         let h = DeclHead::new(closure, DeclName::ident(sym), lbracket)
             .flags(DeclFlags::IMPLICIT)
             .access(Access::Public);
-        let inv =
-            self.builder().function(h, kiln_ast::decl::DeclKind::CXXMethod, invoker, spec, None);
+        let inv = self.builder().function(h, DeclKind::CXXMethod, invoker, spec, None);
         let src: Vec<DeclId> = self
             .ast
             .decls
@@ -467,4 +579,16 @@ impl Sema<'_, '_> {
         let l = self.ast.exprs.lambdas.get(id);
         l.default == CaptureDefault::None && l.captures.is_empty()
     }
+}
+
+/// A function declaration kind.
+fn is_function(k: DeclKind) -> bool {
+    matches!(
+        k,
+        DeclKind::Function
+            | DeclKind::CXXMethod
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXConversion
+    )
 }

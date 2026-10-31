@@ -2445,6 +2445,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        self.lambda_mangle.var = Some(v);
         if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             // The constrained placeholder's diagnostics point here.
             self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
@@ -2464,6 +2465,7 @@ impl Sema<'_, '_> {
     pub fn act_on_init(&mut self, v: DeclId, init: Initializer) {
         self.act_on_init_inner(v, init);
         self.initializing = None;
+        self.lambda_mangle.var = None;
     }
 
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
@@ -2697,6 +2699,7 @@ impl Sema<'_, '_> {
     /// A variable declared without an initializer ([dcl.init]/7).
     pub fn act_on_uninit(&mut self, v: DeclId) {
         self.initializing = None;
+        self.lambda_mangle.var = None;
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var || vn.has(DeclFlags::INVALID) {
             return;

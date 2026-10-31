@@ -96,8 +96,6 @@ pub(crate) struct Cg<'a> {
     pub named: FxHashMap<DeclId, LTy>,
     /// Base-subobject (`.base`) struct types by record.
     pub named_base: FxHashMap<DeclId, LTy>,
-    /// Names already used for named struct types.
-    pub struct_names: FxHashMap<String, u32>,
     /// The `.constant` globals of frozen constant objects (clang
     /// `GetAddrOfUnnamedGlobalConstantDecl`), by value.
     pub const_objects: FxHashMap<kiln_ast::ConstValueId, GlobalId>,
@@ -145,6 +143,8 @@ pub(crate) struct Cg<'a> {
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
     /// Per-function state.
     pub f: Fx,
+    /// The `$_N` ids of unnamed classes, in first-mangle order.
+    pub anon: mangle::AnonIds,
 }
 
 impl<'a> Cg<'a> {
@@ -174,7 +174,6 @@ impl<'a> Cg<'a> {
             strings: FxHashMap::default(),
             named: FxHashMap::default(),
             named_base: FxHashMap::default(),
-            struct_names: FxHashMap::default(),
             const_objects: FxHashMap::default(),
             srcloc: None,
             static_locals: FxHashMap::default(),
@@ -197,6 +196,7 @@ impl<'a> Cg<'a> {
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
             f: Fx::empty(),
+            anon: mangle::AnonIds::new(),
         }
     }
 
@@ -481,11 +481,15 @@ impl<'a> Cg<'a> {
         if let Some(&t) = self.named.get(&first) {
             return t;
         }
-        let base =
-            format!("{}.{}", record_kind_prefix(self.ast, first), self.qualified_name(first));
-        let n = self.struct_names.entry(base.clone()).or_insert(0);
-        let name = if *n == 0 { base } else { format!("{base}.{n}") };
-        *n += 1;
+        // clang `addRecordTypeName`: an unnamed class (without a typedef
+        // name for linkage) is plain `anon`; LLVM uniquifies a repeated
+        // name with one module-wide counter.
+        let leaf = if mangle::decl_name(self.ast, first).is_empty() {
+            "anon".to_owned()
+        } else {
+            self.qualified_name(first)
+        };
+        let name = format!("{}.{leaf}", record_kind_prefix(self.ast, first));
         let t = self.m.types.named_struct(&name);
         self.named.insert(first, t);
         let rec = self.tys.record(first).clone();
@@ -854,7 +858,7 @@ impl<'a> Cg<'a> {
         if let Some(&f) = self.fns.get(&first) {
             return Ok(f);
         }
-        let name = mangle::mangle_decl(ast, first);
+        let name = mangle::mangle_decl(ast, &mut self.anon, first);
         let sig = self.decl_sig(first)?;
         let f = self.declare_fn(&name, first, &sig)?;
         self.fns.insert(first, f);
@@ -976,7 +980,7 @@ impl<'a> Cg<'a> {
         }
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
         let lt = self.mty(ty);
-        let name = mangle::mangle_decl(ast, first);
+        let name = mangle::mangle_decl(ast, &mut self.anon, first);
         let g = self.m.add_global(&name, lt);
         let (_, align) = self.size_align(ty);
         let gv = self.m.global_mut(g);
@@ -1067,7 +1071,7 @@ impl<'a> Cg<'a> {
             }
             g
         } else {
-            let name = mangle::mangle_decl(ast, first);
+            let name = mangle::mangle_decl(ast, &mut self.anon, first);
             let g = self.m.add_global(&name, ity);
             self.gvars.insert(first, g);
             g
@@ -1121,7 +1125,7 @@ impl<'a> Cg<'a> {
             *n += 1;
             *n - 1
         };
-        let name = mangle::mangle_static_local(ast, first, index);
+        let name = mangle::mangle_static_local(ast, &mut self.anon, first, index);
         let mt = self.mty(ty);
         let g = self.m.add_global(&name, mt);
         let align = self.global_align(ty);

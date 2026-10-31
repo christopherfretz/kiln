@@ -237,6 +237,8 @@ pub struct Sema<'a, 'sm> {
     /// The lambdas whose bodies are being analysed, innermost last
     /// (spec/sema-lambda.md; WP-075).
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
+    /// The mangling-number state of closure types (spec/sema-lambda.md).
+    pub(crate) lambda_mangle: lambda::ManglingState,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -319,6 +321,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             abstract_noted: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),
             lambdas: Vec::new(),
+            lambda_mangle: lambda::ManglingState::default(),
         }
     }
 
