@@ -11,7 +11,7 @@ use crate::ids::{
     ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, RedeclGroupId, StmtId,
     StringLitId,
 };
-use crate::mem::{HeapSize, MemReport, MemRow};
+use crate::mem::{HeapSize, MemReport, MemRow, VecDims};
 use crate::names::DeclName;
 use crate::slot::{AlreadySet, ColdMap, set_once};
 
@@ -2435,26 +2435,26 @@ impl DeclArena {
 
     /// Bytes of the node and payload vectors (instantiation meter).
     pub(crate) fn live_bytes(&self) -> u64 {
-        self.vec_rows().iter().map(|r| r.live_bytes).sum()
+        self.vec_rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn vec_rows(&self) -> [MemRow; 15] {
+    fn vec_rows(&self) -> [VecDims; 15] {
         [
-            MemRow::of_vec("nodes", &self.nodes),
-            MemRow::of_vec("functions", &self.functions),
-            MemRow::of_vec("vars", &self.vars),
-            MemRow::of_vec("records", &self.records),
-            MemRow::of_vec("fields", &self.fields),
-            MemRow::of_vec("enums", &self.enums),
-            MemRow::of_vec("enumerators", &self.enumerators),
-            MemRow::of_vec("params", &self.params),
-            MemRow::of_vec("typedefs", &self.typedefs),
-            MemRow::of_vec("namespaces", &self.namespaces),
-            MemRow::of_vec("scopes", &self.scopes),
-            MemRow::of_vec("static_asserts", &self.static_asserts),
-            MemRow::of_vec("base_specs", &self.base_specs),
-            MemRow::of_vec("lets", &self.lets),
-            MemRow::of_vec("ctor_inits", &self.ctor_inits),
+            VecDims::of("nodes", &self.nodes),
+            VecDims::of("functions", &self.functions),
+            VecDims::of("vars", &self.vars),
+            VecDims::of("records", &self.records),
+            VecDims::of("fields", &self.fields),
+            VecDims::of("enums", &self.enums),
+            VecDims::of("enumerators", &self.enumerators),
+            VecDims::of("params", &self.params),
+            VecDims::of("typedefs", &self.typedefs),
+            VecDims::of("namespaces", &self.namespaces),
+            VecDims::of("scopes", &self.scopes),
+            VecDims::of("static_asserts", &self.static_asserts),
+            VecDims::of("base_specs", &self.base_specs),
+            VecDims::of("lets", &self.lets),
+            VecDims::of("ctor_inits", &self.ctor_inits),
         ]
     }
 }
@@ -2479,7 +2479,7 @@ impl HeapSize for DeclArena {
     fn heap_bytes(&self) -> MemReport {
         let mut r = MemReport::new();
         for row in self.vec_rows() {
-            r.push(row);
+            r.push(row.row());
         }
         for row in self.cold.rows() {
             r.push(row.prefixed("cold"));

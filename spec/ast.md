@@ -73,6 +73,15 @@ the Oven counters (spec/bench.md). Size assertions (`size_of`) for every
 header type are unit tests (§14), so a field addition that grows a header
 fails CI rather than silently costing memory.
 
+The per-instantiation node meter (`Ast::node_live_bytes`, read at every
+instantiation frame push and pop) must not allocate. The decl, expr and
+stmt arenas therefore list their vectors as `kiln_ast::VecDims`, which
+holds a static name, length, capacity and element size and has
+`live_bytes()` and `row() -> MemRow`. A `MemRow` and its `String` name
+are built only for the report (WP-116: the meter was allocating about 1M
+`String`s on `templates_wide`, roughly 9% of its instruction count, once
+LLVM stopped eliding them).
+
 ### 2.4 Mutation discipline
 After a node is created its header and side record are immutable, except:
 
