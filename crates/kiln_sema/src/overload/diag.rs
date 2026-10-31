@@ -213,6 +213,10 @@ impl Sema<'_, '_> {
                 let which = u8::from(cand.kind == CandidateKind::ConvFn);
                 return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
             }
+            CandidateFailure::IllegalCtor => {
+                let which = u8::from(cand.template.is_some());
+                return self.diag(DiagId::note_ovl_candidate_illegal_constructor, loc).arg(which);
+            }
             CandidateFailure::None
             | CandidateFailure::BadFinalConversion
             | CandidateFailure::BadDeduction

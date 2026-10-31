@@ -3330,10 +3330,7 @@ impl Sema<'_, '_> {
     /// The type of enumerator `d` while its enumeration (without a fixed
     /// underlying type) is being defined ([dcl.enum]/5), if it is.
     pub(crate) fn enumerator_pre_brace_type(&self, d: DeclId) -> Option<QualType> {
-        self.enums
-            .iter()
-            .rev()
-            .find_map(|b| b.pre_types.iter().find(|x| x.0 == d).map(|x| x.1))
+        self.enums.iter().rev().find_map(|b| b.pre_types.iter().find(|x| x.0 == d).map(|x| x.1))
     }
 
     /// The value and the converted initializer of an enumerator whose

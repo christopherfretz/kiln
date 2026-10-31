@@ -1149,6 +1149,7 @@ diag_ids! {
     note_ovl_candidate = Note (1) "candidate {0}";
     note_ovl_candidate_kind_not_viable = Note (2) "candidate {0} not viable: {1}";
     note_ovl_candidate_deleted = Note (2) "candidate {0} has been {1:explicitly|implicitly} deleted";
+    note_ovl_candidate_illegal_constructor = Note (1) "candidate {0:constructor|template} ignored: instantiation {0:takes|would take} its own class type by value";
     note_ovl_candidate_explicit = Note (1) "explicit {0:constructor|conversion function|deduction guide} is not a candidate";
     note_possible_target = Note (0) "possible target for call";
     sema_addr_ovl_cast = Error (3) "address of overloaded function '{0}' cannot be {1:cast|static_cast} to type {2}";

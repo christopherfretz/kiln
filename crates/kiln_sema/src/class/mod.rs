@@ -295,8 +295,11 @@ impl Sema<'_, '_> {
             return false;
         }
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let quals =
-            self.ast.types.proto(ty).map_or(kiln_ast::types::Quals::NONE, |p| p.info().this_quals());
+        let quals = self
+            .ast
+            .types
+            .proto(ty)
+            .map_or(kiln_ast::types::Quals::NONE, |p| p.info().this_quals());
         self.act_on_start_this_scope(true, quals)
     }
 

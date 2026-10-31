@@ -11,8 +11,8 @@ use kiln_oven::EvalContext;
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::declspec::Declarator;
 use crate::conv::{self, ConvCtx};
+use crate::declspec::Declarator;
 
 /// How a `noexcept` specifier argument converts to `bool`.
 enum BoolCce {

@@ -74,6 +74,7 @@ impl Sema<'_, '_> {
         if let [arg] = args {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
+        self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         self.selected_of(set, out)
     }
