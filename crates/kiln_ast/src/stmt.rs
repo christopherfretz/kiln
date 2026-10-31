@@ -5,7 +5,7 @@
 use kiln_source::Loc;
 
 use crate::ids::{DeclId, ExprId, ListId, RawId, StmtId};
-use crate::mem::{HeapSize, MemReport, MemRow};
+use crate::mem::{HeapSize, MemReport, VecDims};
 
 /// Statement kinds (spec/ast.md §6; clang's class names). The numbering is
 /// stable.
@@ -327,16 +327,16 @@ impl StmtArena {
     }
 
     pub(crate) fn live_bytes(&self) -> u64 {
-        self.rows().iter().map(|r| r.live_bytes).sum()
+        self.rows().iter().map(|r| r.live_bytes()).sum()
     }
 
-    fn rows(&self) -> [MemRow; 5] {
+    fn rows(&self) -> [VecDims; 5] {
         [
-            MemRow::of_vec("nodes", &self.nodes),
-            MemRow::of_vec("ifs", &self.ifs),
-            MemRow::of_vec("switches", &self.switches),
-            MemRow::of_vec("cases", &self.cases),
-            MemRow::of_vec("loops", &self.loops),
+            VecDims::of("nodes", &self.nodes),
+            VecDims::of("ifs", &self.ifs),
+            VecDims::of("switches", &self.switches),
+            VecDims::of("cases", &self.cases),
+            VecDims::of("loops", &self.loops),
         ]
     }
 }
@@ -345,7 +345,7 @@ impl HeapSize for StmtArena {
     fn heap_bytes(&self) -> MemReport {
         let mut r = MemReport::new();
         for row in self.rows() {
-            r.push(row);
+            r.push(row.row());
         }
         r
     }

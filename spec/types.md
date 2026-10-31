@@ -305,6 +305,54 @@ canonical form of a dependent type must identify *equivalent* types:
   the substituted operands and produce non-dependent canonical types; no
   separate "dependent to concrete" mapping exists.
 
+**Landed (WP-116).** The profiler is `kiln_ast::types::profile_expr`
+(`crates/kiln_ast/src/types/profile_expr.rs`), modelled on clang's
+`StmtProfiler` with `Canonical = true`. API on `Ast`:
+- `profile_expr(&mut self, e) -> ProfileId` interns `e`'s profile with
+  the type flags of `e`'s dependence; `profile_expr_with(e, flags)` takes
+  the flags explicitly; `expr_profile_words(&self, e) -> Vec<u32>` and
+  `exprs_equivalent(&self, a, b) -> bool` compare without interning.
+- `kiln_ast::types::deps_type_flags(ExprDeps) -> TypeFlags` is the single
+  dependence-to-flags mapping (`DEPENDENT_INSTANTIATION` for type or value
+  dependence, `INSTANTIATION_DEPENDENT`, `UNEXPANDED_PACK`).
+- `Builder::template_arg_expr` and sema's `dependent_profile` now intern
+  the real profile, not the old one-word `[expr id]` stub. Equivalent
+  dependent template arguments, array bounds, `decltype` operands and
+  `noexcept` operands therefore canonicalize alike.
+
+Encoding (prefix-free, so equal word sequences mean equal trees):
+- every node starts with a tag word `(kind + 1) | detail << 8`, where the
+  detail is the operator, trait or cast kind. It is never 0, and the
+  word `NONE = 0` marks an absent optional operand;
+- each kind has a fixed operand layout, and lists carry a length prefix;
+- types are canonical `QualType` words. NNS, argument lists and template
+  names are their canonical ids, which already embed nested profiles;
+- declaration references:
+  - template parameters are `(depth, index, pack)`, plus the canonical
+    type for a non-type parameter;
+  - `ParmVar` is `(index, pack, in-requires-body, canonical type)`, like
+    the Itanium mangling. A requires-expression's parameters are a
+    separate scope;
+  - any other declaration is its first declaration;
+- unresolved names (`UnresolvedLookup`, `CXXDependentScopeMemberExpr`,
+  `DependentScopeDeclRef`) are `(qualifier, name, explicit args)`. The
+  lookup result is not part of the profile;
+- literals are their value plus canonical type;
+- transparent nodes: `ImplicitCastExpr`, `ConstantExpr`,
+  `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`, `ExprWithCleanups`.
+  `SubstNonTypeTemplateParmExpr` profiles as its replacement. `ParenExpr`
+  is kept;
+- *unique* kinds are `[UNIQUE | kind, expr id]` and equal only
+  themselves. They cover lambdas, statement-expressions, recovery
+  expressions, coroutine and reflection operators, and any kind with no
+  equivalence rule. The match is exhaustive, so a new `ExprKind` must
+  choose a rule.
+
+The walk runs on an explicit work stack with no recursion (tested at 200k
+nesting). Its buffers live on `TypeContext` (`profile_scratch`), so
+profiling allocates only while those buffers grow. Tests:
+`crates/kiln_ast/tests/profile_expr.rs`.
+
 ## 8. Names inside types
 ### 8.1 `TemplateNameId(u32)`
 Interned: `Template(DeclId)` (canonical: the first decl of the template),

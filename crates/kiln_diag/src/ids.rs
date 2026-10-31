@@ -952,6 +952,15 @@ diag_ids! {
     sema_template_param_missing_default = Error (0) "template parameter missing a default argument";
     note_template_param_has_default = Note (0) "previous default template argument defined here";
     sema_template_param_pack_not_last = Error (0) "template parameter pack must be the last template parameter";
+    sema_template_param_list_different_arity = Error (2) "{0:too few|too many} template parameters in template {1:|template parameter }redeclaration";
+    sema_template_param_different_kind = Error (1) "template parameter has a different kind in template {0:|template parameter }redeclaration";
+    sema_template_nontype_parm_different_type = Error (2) "template non-type parameter has a different type {0} in template {1:|template parameter }redeclaration";
+    note_template_nontype_parm_prev_declaration = Note (1) "previous non-type template parameter with type {0} is here";
+    sema_template_parameter_pack_non_pack = Error (2) "{0:template type|non-type template|template template} parameter{1:| pack} conflicts with previous {0:template type|non-type template|template template} parameter{1: pack|}";
+    note_template_parameter_pack_here = Note (2) "previous {0:template type|non-type template|template template} parameter{1:| pack} declared here";
+    sema_template_different_requires_clause = Error (0) "requires clause differs in template redeclaration";
+    sema_template_different_type_constraint = Error (0) "type constraint differs in template redeclaration";
+    note_template_prev_declaration = Note (1) "previous template {0:declaration|template parameter} is here";
     parse_expected_template_param = Error (0) "expected template parameter";
     sema_no_template_named = Error (1) "no template named '{0}'";
     sema_template_decl_in_local = Error (0) "templates cannot be declared inside of a local class";

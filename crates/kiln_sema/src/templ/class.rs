@@ -990,6 +990,13 @@ impl Substituter<'_, '_, '_> {
     fn member(&mut self, m: DeclId) -> Result<Option<DeclId>, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
         let loc = n.loc();
+        // A typedef member diagnosed as a redefinition in the pattern is
+        // not instantiated (clang skips invalid members), so it is not
+        // diagnosed again.
+        if matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias) && n.has(DeclFlags::INVALID)
+        {
+            return Ok(None);
+        }
         Ok(Some(match n.kind() {
             DeclKind::Field => self.field_decl(m)?,
             DeclKind::Var if self.defers_init(m) => self.deferred_static_member(m)?,

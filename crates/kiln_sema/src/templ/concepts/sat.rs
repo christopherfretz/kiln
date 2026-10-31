@@ -218,7 +218,7 @@ impl Sema<'_, '_> {
     /// declaration with arguments `canonical` and template-head `head`
     /// redeclares: same arguments and equivalent constraints
     /// ([temp.spec.partial.general]/2, [temp.over.link]/6; constraints
-    /// compared by their printed form).
+    /// compared by equivalence, WP-116).
     pub(crate) fn find_partial_decl(
         &self,
         tmpl: DeclId,
@@ -229,19 +229,23 @@ impl Sema<'_, '_> {
         let sig = self.head_signature(head);
         let rows = self.ast.templates.partials_of(tmpl);
         std::iter::once(i).chain(rows.iter().copied()).find(|&r| {
-            self.ast
-                .templates
-                .partial(r)
-                .is_some_and(|p| p.canonical == canonical && self.head_signature(p.params) == sig)
+            self.ast.templates.partial(r).is_some_and(|p| {
+                p.canonical == canonical && {
+                    let other = self.head_signature(p.params);
+                    other.len() == sig.len()
+                        && other.iter().zip(&sig).all(|(&a, &b)| self.exprs_equivalent(a, b))
+                }
+            })
         })
     }
 
-    /// The constraints of template-head `head`, printed.
-    fn head_signature(&self, head: kiln_ast::ids::TemplateParamListId) -> Vec<String> {
+    /// The associated constraints of template-head `head`
+    /// ([temp.constr.decl]/3), in order.
+    fn head_signature(&self, head: kiln_ast::ids::TemplateParamListId) -> Vec<ExprId> {
         let l = *self.ast.templates.param_list(head);
         let mut c = Vec::new();
         self.head_constraints(l.params, l.requires, &mut c);
-        c.into_iter().map(|e| self.expr_text(e)).collect()
+        c
     }
 
     /// A satisfied result.

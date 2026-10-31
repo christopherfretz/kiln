@@ -171,7 +171,7 @@ impl Sema<'_, '_> {
             if ea == eb {
                 return true;
             }
-            if !s.exprs_equivalent(ea, eb, 0) {
+            if !s.exprs_equivalent(ea, eb) {
                 return false;
             }
             pair = Some((ea, eb));

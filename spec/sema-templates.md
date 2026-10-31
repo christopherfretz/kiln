@@ -2659,10 +2659,11 @@ four gaps above that they close are removed.
 - The parameters of a nested function declarator (a function-pointer
   parameter's own parameters) and of a destructor declarator are never
   adopted: they keep their provisional context (`unowned_params`).
-- `decltype(param)` in a dependent return type profiles the
-  `DeclRefExpr` by declaration, not by parameter index as clang does,
-  so two redeclarations of a function template with such a return type
-  may not match.
+- (Fixed by WP-116.) `decltype(param)` in a dependent return type used
+  to profile the `DeclRefExpr` by declaration. Parameters now profile by
+  `(index, pack, type)` as in clang (spec/types.md §7.2), so the
+  redeclarations match
+  (`templates/equiv/temp.over.link-fn-redecl-decltype.cpp`).
 - A non-dependent `static_assert` in a template definition is evaluated
   in the definition; clang (CWG2518) waits for an instantiation, and
   then reports it once per instantiation.
@@ -3144,7 +3145,8 @@ explicit specialization errors remain. The blockers are:
   `with_ovl_notes`) adds clang's `note_ambiguous_atomic_constraints` and
   `note_ambiguous_atomic_constraints_similar_expression`.
   `exprs_equivalent` compares `sizeof(T)` and type-trait operands by
-  canonical type.
+  canonical type. (Superseded by WP-116: it compares canonical profiles,
+  below.)
 - Trailing requires-clauses of members of class templates
   ([over.match.viable]/3, [over.match.best]/2.6). As in clang, the
   instantiated member keeps the pattern's clause, which is checked with
@@ -3197,6 +3199,79 @@ explicit specialization errors remain. The blockers are:
     (`ics.rs`) do not order constrained candidates: unowned;
   - `__is_convertible` (WP-068a): `temp.constr.concept-std-like.cpp`
     is xfail, it passed only through the removed fallback.
+
+**Landed (WP-116): expression equivalence ([temp.over.link]).**
+- `templ/equiv.rs` is the equivalence API on `Sema`:
+  - `exprs_equivalent(a, b) -> bool` and `opt_exprs_equivalent` compare
+    canonical expression profiles (spec/types.md §7.2, "Landed
+    (WP-116)"). Both moved here from `overload/redecl.rs`. The old
+    structural walk and its `depth` parameter are gone, and the callers
+    in `concepts/subsume.rs` were updated.
+  - `pub fn equivalent_signatures(&mut self, a: DeclId, b: DeclId) ->
+    bool`: true when two function declarations or function templates
+    (each a `FunctionTemplate` or its pattern) declare the same entity
+    under [temp.over.link]/7. That means equivalent template heads,
+    including requires-clauses, plus the same declared type and the same
+    trailing requires-clause. It is `fn_corresponds` with `b` as the new
+    declaration. WP-106 and later ordering/redeclaration code should
+    call this instead of comparing printed or structural forms.
+  - `check_template_heads_match(new, old) -> bool` checks a class,
+    variable or alias template redeclaration's head against the
+    template's, with clang's `TemplateParameterListsAreEqual`
+    (`TPL_TemplateMatch`) checks and locations. In order:
+    - arity (`sema_template_param_list_different_arity` at each list's
+      `template` keyword);
+    - kind (`sema_template_param_different_kind`);
+    - pack (`sema_template_parameter_pack_non_pack` /
+      `note_template_parameter_pack_here`);
+    - non-type parameter type (`sema_template_nontype_parm_different_type`
+      / `note_template_nontype_parm_prev_declaration`);
+    - nested template template heads (`which = 1`);
+    - type-constraint (`sema_template_different_type_constraint`);
+    - requires-clause (`sema_template_different_requires_clause`);
+    - each followed by `note_template_prev_declaration`.
+
+    On a mismatch the redeclaration is not chained. That covers
+    `act_on_typedef` for an alias template,
+    `finish_template_pattern` for a class or variable template, and the
+    `act_on_tag` declaration path through `check_redeclared_class_head`.
+    Function templates with different heads are overloads, so they
+    never reach this check.
+- Canonical dependent types and dependent template arguments use real
+  profiles. Equivalent alias template redeclarations therefore chain,
+  e.g. libc++ `__swap_result_t` in `__utility/swap.h:33`. Function
+  template redeclarations whose `decltype`, `noexcept` or array-bound
+  expressions are equivalent also match. Class and variable partial
+  specializations with equivalent arguments are the same specialization.
+- `concepts/sat.rs` `find_partial_decl` compares template heads by
+  pairwise expression equivalence (`head_signature` returns `ExprId`s, no
+  longer printed strings).
+- Typedef redefinition follows clang's `isIncompatibleTypedef`:
+  - when either type is dependent, the check is skipped and a mismatch
+    is diagnosed at instantiation. Alias templates are always compared;
+  - the kind in `sema_redefinition_different_typedef` is the previous
+    declaration's (typedef, type alias, or alias template);
+  - in class scope, redeclaring a typedef-name with the same type is
+    `sema_redefinition` ([dcl.typedef]/4, CWG56/424);
+  - an invalid typedef member of a class template is not instantiated
+    (`templ/class.rs`).
+- `expr.rs` `builtin_unary`: `*e` on a type-dependent operand that is not
+  of an overloadable type (`T (&a)[N]`) builds a dependent unary
+  expression, as clang's `CheckIndirectionOperand` does, instead of
+  "indirection requires pointer operand".
+- Explicit specializations of function templates are still unimplemented
+  (`act_on_specialization_declarator_id`). When they land, clang matches
+  them by deduction plus `hasSameType`, and canonical types are now
+  profile-based, so no extra equivalence step is needed.
+- Known divergences, recorded in the xfail test
+  `templates/equiv/temp.over.link-head-locations.cpp`:
+  - an unnamed template parameter's diagnostic sits at its keyword, not
+    at the following token (a parser location);
+  - an unconstrained type parameter's begin location is not recorded.
+- Not done here (BACKLOG WP-116 extras): `sat_fold` per-element notes;
+  dropping a declaration with a non-`bool` atom; keeping requirements in
+  an instantiated `RequiresExpr`.
+- Tests: `tests/conformance/templates/equiv/` (27).
 
 ### 11.3 Instantiation report and memory accounting
 

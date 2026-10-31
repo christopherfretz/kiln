@@ -1387,24 +1387,13 @@ impl AstBuilder<'_> {
     }
 
     /// A template argument for expression `e`: dependent expressions get
-    /// a stub profile carrying their dependence (WP-070 replaces it with
-    /// the canonical profile, spec/types.md §7.2).
+    /// their canonical profile (spec/types.md §7.2), so equivalent
+    /// arguments ([temp.over.link]/5) canonicalize alike.
     pub fn template_arg_expr(&mut self, e: ExprId) -> TemplateArg {
-        let deps = self.deps(e);
-        if deps.is_none() {
+        if self.deps(e).is_none() {
             return TemplateArg::expr(e, None);
         }
-        let mut f = TypeFlags::NONE;
-        if deps.intersects(ExprDeps::TYPE.with(ExprDeps::VALUE)) {
-            f |= TypeFlags::DEPENDENT_INSTANTIATION;
-        }
-        if deps.contains(ExprDeps::INSTANTIATION) {
-            f |= TypeFlags::INSTANTIATION_DEPENDENT;
-        }
-        if deps.contains(ExprDeps::UNEXPANDED_PACK) {
-            f |= TypeFlags::UNEXPANDED_PACK;
-        }
-        let p = self.ast.types.profile(&[e.raw()], e, f);
+        let p = self.ast.profile_expr(e);
         TemplateArg::expr(e, Some(p))
     }
 
