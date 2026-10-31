@@ -57,9 +57,10 @@ const VIRTUAL_UNSUPPORTED: &str =
 
 impl Compiler<'_> {
     /// The current `this`: the object a default member initializer is
-    /// initializing, else the implicit object parameter.
+    /// initializing, else the `this` a lambda captured, else the implicit
+    /// object parameter.
     fn this_ptr(&self) -> Option<u32> {
-        self.this_override.or(self.this_reg)
+        self.this_override.or(self.lambda_this).or(self.this_reg)
     }
 
     /// `this` into `dst` ([expr.prim.this]).

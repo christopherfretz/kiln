@@ -28,6 +28,7 @@ use crate::{Oven, SemaBridge};
 mod bitcast;
 mod builtins;
 mod class;
+mod lambda;
 mod mptr;
 mod new_delete;
 mod rtti;
@@ -557,6 +558,7 @@ impl Oven {
             }
         }
         c.member_prologue(def);
+        c.lambda_prologue(def);
         c.stmt(body);
         // Falling off the end ([stmt.return]/4).
         if ret == RetKind::Void {
@@ -626,6 +628,9 @@ pub(crate) struct Compiler<'a> {
     /// The object a default member initializer of an aggregate is
     /// initializing (its `this`, [class.mem.general]/11).
     this_override: Option<u32>,
+    /// In a lambda call operator capturing `this` or `*this`: the
+    /// captured `this` (the `this` of its body; `this_reg` is the closure).
+    lambda_this: Option<u32>,
     /// The storage of the lifetime-extended temporaries of the variable
     /// being initialized, allocated before its initializer's cleanups
     /// scope (keyed by the `MaterializeTemporaryExpr`).
@@ -674,6 +679,7 @@ impl<'a> Compiler<'a> {
             uses_cc: false,
             this_reg: None,
             this_override: None,
+            lambda_this: None,
             ext_temps: FxHashMap::default(),
             late_const: FxHashSet::default(),
             cur_fn: None,
@@ -2939,8 +2945,11 @@ impl Compiler<'_> {
                 r
             }
             ExprKind::DeclRefExpr => {
+                let d = self.ast().exprs.decl(e);
+                if let Some(p) = self.captured_var_place(e, d) {
+                    return p;
+                }
                 let ast = self.ast();
-                let d = ast.exprs.decl(e);
                 if let Some(l) = self.locals.get(&d).copied() {
                     return match l {
                         Local::Reg(r) => Place::Reg(r),

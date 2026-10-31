@@ -1,0 +1,97 @@
+Dumping lamtest:
+FunctionDecl lamtest 'int (int, int)'
+|-ParmVarDecl used a 'int'
+|-ParmVarDecl used b 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl referenced n 'const int' cinit
+  |   `-IntegerLiteral 'int' 4
+  |-DeclStmt
+  | `-VarDecl used c '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:8:12)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:8:12)'
+  |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+  |     |-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-BinaryOperator 'int' '+'
+  |           |-ImplicitCastExpr 'int' <LValueToRValue>
+  |           | `-DeclRefExpr 'const int' lvalue ParmVar 'a' 'int'
+  |           `-ImplicitCastExpr 'int' <LValueToRValue>
+  |             `-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+  |-DeclStmt
+  | `-VarDecl used d '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:9:12)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:9:12)'
+  |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-BinaryOperator 'int' '*'
+  |           |-ImplicitCastExpr 'int' <LValueToRValue>
+  |           | `-DeclRefExpr 'const int' lvalue ParmVar 'a' 'int'
+  |           `-ImplicitCastExpr 'int' <LValueToRValue>
+  |             `-DeclRefExpr 'const int' lvalue Var 'n' 'const int' non_odr_use_constant
+  |-DeclStmt
+  | `-VarDecl used e '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:10:12)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:10:12)'
+  |     |-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+  |     |-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+  |     `-CompoundStmt
+  |       `-CompoundAssignOperator 'int' lvalue '+=' ComputeLHSTy='int' ComputeResultTy='int'
+  |         |-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+  |         `-ImplicitCastExpr 'int' <LValueToRValue>
+  |           `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+  |-DeclStmt
+  | `-VarDecl used f '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:11:12)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:11:12)'
+  |     |-BinaryOperator 'int' '+'
+  |     | |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+  |     | `-IntegerLiteral 'int' 1
+  |     |-DeclRefExpr 'int' lvalue ParmVar 'b' 'int'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-BinaryOperator 'int' '+'
+  |           |-ImplicitCastExpr 'int' <LValueToRValue>
+  |           | `-DeclRefExpr 'const int' lvalue Var 'x' 'int'
+  |           `-ImplicitCastExpr 'int' <LValueToRValue>
+  |             `-DeclRefExpr 'int' lvalue Var 'y' 'int &'
+  |-DeclStmt
+  | `-VarDecl used g '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:12:12)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:12:12)'
+  |     |-ImplicitCastExpr 'int' <LValueToRValue>
+  |     | `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ImplicitCastExpr 'int' <LValueToRValue>
+  |           `-UnaryOperator 'int' lvalue prefix '++'
+  |             `-DeclRefExpr 'int' lvalue ParmVar 'a' 'int'
+  |-CXXOperatorCallExpr 'void' '()'
+  | |-ImplicitCastExpr 'auto (*)() const -> void' <FunctionToPointerDecay>
+  | | `-DeclRefExpr 'auto () const -> void' lvalue CXXMethod 'operator()' 'auto () const -> void'
+  | `-ImplicitCastExpr 'const (lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:10:12)' lvalue <NoOp>
+  |   `-DeclRefExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:10:12)' lvalue Var 'e' '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:10:12)'
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-BinaryOperator 'int' '+'
+      | |-BinaryOperator 'int' '+'
+      | | |-CXXOperatorCallExpr 'int' '()'
+      | | | |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
+      | | | | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
+      | | | `-ImplicitCastExpr 'const (lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:8:12)' lvalue <NoOp>
+      | | |   `-DeclRefExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:8:12)' lvalue Var 'c' '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:8:12)'
+      | | `-CXXOperatorCallExpr 'int' '()'
+      | |   |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
+      | |   | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
+      | |   `-ImplicitCastExpr 'const (lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:9:12)' lvalue <NoOp>
+      | |     `-DeclRefExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:9:12)' lvalue Var 'd' '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:9:12)'
+      | `-CXXOperatorCallExpr 'int' '()'
+      |   |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
+      |   | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
+      |   `-ImplicitCastExpr 'const (lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:11:12)' lvalue <NoOp>
+      |     `-DeclRefExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:11:12)' lvalue Var 'f' '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:11:12)'
+      `-CXXOperatorCallExpr 'int' '()'
+        |-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+        | `-DeclRefExpr 'int ()' lvalue CXXMethod 'operator()' 'int ()'
+        `-DeclRefExpr '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:12:12)' lvalue Var 'g' '(lambda at tests/conformance/expr.prim.lambda/ast-captures.cpp:12:12)'
+
