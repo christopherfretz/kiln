@@ -72,7 +72,11 @@ impl Substituter<'_, '_, '_> {
         loc: Loc,
     ) -> SubstResult<(Option<DeclId>, Option<ExprId>)> {
         if let Some(v) = var {
-            let v2 = self.var_decl(v, DeclaratorContext::Condition)?;
+            let v2 = if self.sema.ast.decls.decomp_bindings(v).is_some() {
+                self.decomp_decl(v, DeclaratorContext::Condition)?
+            } else {
+                self.var_decl(v, DeclaratorContext::Condition)?
+            };
             let (v3, c) = self.sema.act_on_condition_var(v2, loc);
             return Ok((v3, Some(c)));
         }
@@ -307,12 +311,19 @@ impl Substituter<'_, '_, '_> {
             let temps = self.sema.end_for_range_init(collect);
             let range = range?;
             let lv = d.loop_var;
-            let vloc = self.sema.ast.decls.get(lv).loc();
-            let t = self.decl_ty(lv);
-            let ty = self.named_decl_ty(lv, t, vloc)?;
-            let ds = self.pattern_declspec(lv, ty);
-            let dr = self.pattern_declarator(lv, DeclaratorContext::ForInit)?;
-            let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
+            let (ds, v) = if self.sema.ast.decls.decomp_bindings(lv).is_some() {
+                self.decomp_declare(lv, DeclaratorContext::ForInit)?
+            } else {
+                let vloc = self.sema.ast.decls.get(lv).loc();
+                let t = self.decl_ty(lv);
+                let ty = self.named_decl_ty(lv, t, vloc)?;
+                let ds = self.pattern_declspec(lv, ty);
+                let dr = self.pattern_declarator(lv, DeclaratorContext::ForInit)?;
+                let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else {
+                    return Err(SubstFail);
+                };
+                (ds, v)
+            };
             self.locals.insert(lv, super::DeclOrPack::Decl(v));
             if !self.sema.act_on_for_range_decl(&ds, v) {
                 return Err(SubstFail);
@@ -334,6 +345,9 @@ impl Substituter<'_, '_, '_> {
     fn local_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         match self.sema.kind_of(d) {
+            DeclKind::Var if self.sema.ast.decls.decomp_bindings(d).is_some() => {
+                self.decomp_decl(d, DeclaratorContext::Block)
+            }
             DeclKind::Var => self.var_decl(d, DeclaratorContext::Block),
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 let x = self.typedef_decl_in(d, DeclaratorContext::Block)?;

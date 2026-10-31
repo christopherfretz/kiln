@@ -103,6 +103,23 @@ impl Sema<'_, '_> {
             let at = if ds.constraint_loc.is_valid() { ds.constraint_loc } else { ds.loc };
             self.error(DiagId::sema_decomp_decl_constraint, at);
         }
+        let v = self.declare_decomposition(ds, ty, d, &dc, invalid);
+        if self.in_template() {
+            self.decomp_written.insert(v, ty);
+        }
+        Some(v)
+    }
+
+    /// Declares the bindings `dc` and then the unnamed variable of type
+    /// `ty` they decompose (located at `[`); `invalid` marks it so.
+    pub(crate) fn declare_decomposition(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        dc: &crate::declspec::Decomposition,
+        mut invalid: bool,
+    ) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let mut bindings = Vec::with_capacity(dc.ids.len());
         let mut pack_reported = false;
@@ -156,7 +173,7 @@ impl Sema<'_, '_> {
             self.check_decl_attrs(v, &attrs);
             let _ = self.builder().attach_attrs(v, &attrs);
         }
-        Some(v)
+        v
     }
 
     /// A decomposition declaration that is not alone in its
@@ -247,7 +264,7 @@ impl Sema<'_, '_> {
         self.invalidate_bindings(v);
     }
 
-    fn invalidate_bindings(&mut self, v: DeclId) {
+    pub(crate) fn invalidate_bindings(&mut self, v: DeclId) {
         for b in self.decomp_binding_list(v) {
             if self.ast.decls.get(b).ty().is_none() {
                 self.ast.decls.set_ty(b, QualType::ERROR);

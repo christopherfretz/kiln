@@ -140,6 +140,10 @@ pub struct Sema<'a, 'sm> {
     /// Parameters created by [`Sema::act_on_prototype_param`] that no
     /// function has adopted yet ([`Sema::create_params`]).
     pub(crate) unowned_params: std::collections::HashSet<DeclId>,
+    /// The declared type (`cv auto`, `auto &`, `auto &&`) of each
+    /// decomposition declared in a template, which instantiation
+    /// deduces anew (the pattern's own may be deduced, spec/sema.md).
+    pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
     /// The declared (placeholder) return type of each function whose
     /// return type was deduced, by first declaration: redeclarations are
     /// matched against it ([dcl.spec.auto.general]/13).
@@ -311,6 +315,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
+            decomp_written: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
