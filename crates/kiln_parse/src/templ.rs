@@ -395,22 +395,25 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// `...`? identifier? after a type parameter's key or constraint.
-    fn parse_param_pack_and_name(&mut self) -> (bool, Option<(Symbol, Loc)>) {
+    /// `...`? identifier? after a type parameter's key or constraint,
+    /// and where the name is or would be (an unnamed parameter's
+    /// location, clang's `NameLoc`).
+    fn parse_param_pack_and_name(&mut self) -> (bool, Option<(Symbol, Loc)>, Loc) {
         let pack = self.eat(Punct::Ellipsis).is_some();
+        let at = self.loc();
         let name = match self.ident() {
             Some(n) if self.kw().is_none() => Some((n, self.bump().span.lo)),
             _ => None,
         };
-        (pack, name)
+        (pack, name, at)
     }
 
     /// `class|typename ...? T? (= type-id)?` ([temp.param]/1).
     fn parse_type_param(&mut self) -> bool {
         let kw = self.bump();
         let typename_kw = self.kw_of(kw) == Some(Kw::Typename);
-        let (pack, name) = self.parse_param_pack_and_name();
-        let p = self.s.act_on_type_template_param(typename_kw, kw.span.lo, pack, name);
+        let (pack, name, at) = self.parse_param_pack_and_name();
+        let p = self.s.act_on_type_template_param(typename_kw, kw.span.lo, pack, name, at);
         self.parse_type_param_default(p)
     }
 
@@ -433,8 +436,8 @@ impl Parser<'_, '_> {
     fn parse_constrained_param(&mut self, concept: DeclId) -> bool {
         let loc = self.loc();
         let Some((_, args)) = self.parse_concept_name() else { return false };
-        let (pack, name) = self.parse_param_pack_and_name();
-        let p = self.s.act_on_constrained_template_param(concept, &args, loc, pack, name);
+        let (pack, name, at) = self.parse_param_pack_and_name();
+        let p = self.s.act_on_constrained_template_param(concept, &args, loc, pack, (name, at));
         self.parse_type_param_default(p)
     }
 
@@ -470,7 +473,6 @@ impl Parser<'_, '_> {
             None
         };
         let params = self.s.act_template_head(requires, r_angle);
-        let kw = self.tok();
         let typename_kw = match self.kw() {
             Some(Kw::Class) => false,
             Some(Kw::Typename) => true,
@@ -482,8 +484,8 @@ impl Parser<'_, '_> {
             }
         };
         self.bump();
-        let (pack, name) = self.parse_param_pack_and_name();
-        let p = self.s.act_on_template_template_param(params, typename_kw, kw.span.lo, pack, name);
+        let (pack, name, at) = self.parse_param_pack_and_name();
+        let p = self.s.act_on_template_template_param(params, typename_kw, pack, name, at);
         if self.eat(Punct::Equal).is_none() {
             return true;
         }
@@ -536,7 +538,12 @@ impl Parser<'_, '_> {
         self.with_greater_op(false, |s| s.parse_declarator(&mut d));
         self.pack_hint = saved;
         let pack = d.ellipsis.take().is_some();
-        let info = self.s.act_on_param_declarator(&ds, &d);
+        let mut info = self.s.act_on_param_declarator(&ds, &d);
+        // An unnamed parameter is located where its name would be
+        // (clang's identifier location of an abstract declarator).
+        if info.name.is_none() {
+            info.loc = self.loc();
+        }
         let p = self.s.act_on_non_type_template_param(&info, pack);
         if self.eat(Punct::Equal).is_some() {
             let eq = self.loc();

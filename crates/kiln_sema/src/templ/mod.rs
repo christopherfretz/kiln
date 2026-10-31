@@ -327,10 +327,16 @@ impl Sema<'_, '_> {
         kw_loc: Loc,
         pack: bool,
         name: Option<(Symbol, Loc)>,
+        at: Loc,
     ) -> DeclId {
-        let h = self.param_head(name, kw_loc);
+        let h = self.param_head(name, at);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_type_parm(h, depth, index, pack, typename_kw);
+        // Its first token, the key or the type-constraint (clang's
+        // `getBeginLoc`; redeclaration diagnostics point there).
+        if kw_loc != h.loc {
+            let _ = self.ast.decls.cold.begin_loc.insert(p, kw_loc);
+        }
         self.push_template_param(p, name);
         p
     }
@@ -344,9 +350,9 @@ impl Sema<'_, '_> {
         cargs: &[TemplateArg],
         loc: Loc,
         pack: bool,
-        name: Option<(Symbol, Loc)>,
+        (name, at): (Option<(Symbol, Loc)>, Loc),
     ) -> DeclId {
-        let p = self.act_on_type_template_param(false, loc, pack, name);
+        let p = self.act_on_type_template_param(false, loc, pack, name, at);
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let mut c = self.immediately_declared_constraint(concept, ty, cargs, loc);
         if pack {
@@ -425,12 +431,12 @@ impl Sema<'_, '_> {
         &mut self,
         params: TemplateParamListId,
         typename_kw: bool,
-        kw_loc: Loc,
         pack: bool,
         name: Option<(Symbol, Loc)>,
+        at: Loc,
     ) -> DeclId {
         self.act_on_finish_template_decl();
-        let h = self.param_head(name, kw_loc);
+        let h = self.param_head(name, at);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_template_parm(h, params, depth, index, pack, typename_kw);
         self.push_template_param(p, name);

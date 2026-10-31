@@ -1405,6 +1405,55 @@ selection, and operator ambiguity:
   with clang 19's text.
 - *Gaps* (§11 Q12).
 
+**Landed (WP-121): member access by declared name, qualified member
+access, out-of-line declarator scope.**
+- *Member names* ([expr.ref], [class.dtor]/15, [expr.prim.id.dtor]):
+  `x.operator@(...)`, `x.operator T()`, `x.~T()`, `p->~T()`, and
+  unqualified `operator@` / `operator T()` in members (implicit `this->`).
+  The member name of `CXXDependentScopeMemberExpr` and
+  `UnresolvedLookupExpr` is a `DeclName` (`Ast::dependent_member_name`,
+  `Ast::unresolved_name`). Entry points take a `DeclName`:
+  `act_on_member_dn`, `act_on_id_expression_dn`, `act_on_call_name_dn`,
+  `act_on_undeclared_call_name_dn` (the `Symbol` forms wrap them).
+  Destructor calls: `act_on_member_destructor`, `rebuild_member_destructor`
+  (instantiation). A pseudo-destructor on a scalar or dependent object is
+  a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
+  `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
+  expression only, and the Oven does not end the object's lifetime (as
+  for an explicit destructor call; a gap).
+- *Qualified member access* ([expr.ref]/5, [class.member.lookup]):
+  `e.N::m`, `p->B::f()`, `this->Base::x`, dependent qualifiers.
+  `begin_member_qualifier`/`end_member_qualifier` bracket the qualifier
+  (`Sema.member_scope: Option<MemberScope>`: the object's class is looked
+  up first, [basic.lookup.qual.general]/2), then `act_on_member_q` /
+  `act_on_template_member_q`. `qualifier_names_base` checks the
+  qualifier names the object's class or a base
+  (`sema_qualified_member_of_unrelated`).
+- *Out-of-line declarator scope* ([dcl.meaning]/1, [basic.scope.class]/1;
+  clang `ActOnCXXEnterDeclaratorScope`): after a qualified declarator-id
+  the parser calls `act_on_enter_declarator_scope(qualifier) -> usize`,
+  which pushes the scopes from the qualifier's context to the current
+  one (`push_scopes_between`) and sets `Sema.ctx` to the qualifier's
+  definition (`Sema.declarator_records`); `act_on_exit_declarator_scope`
+  undoes it. `act_on_enter_decl_initializer(v)` does the same for the
+  initializer of a qualified variable, and
+  `act_on_start_trailing_requires` for a trailing requires-clause (it now
+  returns `(usize, bool)`, passed back to `act_on_end_trailing_requires`).
+  `this` in such a declarator names the qualifier's class.
+  `rebuild_in_current_instantiation(type, declarator)` resolves a
+  top-level decl-spec `typename C<X>::m` to the member of the current
+  instantiation (clang `RebuildDeclaratorInCurrentInstantiation`); nested
+  positions are not rebuilt (a gap).
+- *Diagnostics*: the destructor and pseudo-destructor errors
+  (`sema_dtor_type_mismatch`, `note_dtor_type_found`,
+  `sema_dtor_name_undeclared`, `sema_pseudo_dtor_*`) and
+  `sema_qualified_member_of_unrelated`, with clang 19's text.
+- *Gaps*: qualified destructor names (`p->N::~T()`); dependent
+  `operator T()` printing in dumps; the "member has the same name as its
+  class" error.
+- Tests: `tests/conformance/expr.ref/`, `dcl.meaning/`,
+  `ast/expr.ref/`, `class.member.lookup/ambiguous.cpp` (flipped).
+
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
 ```
