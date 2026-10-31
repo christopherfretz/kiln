@@ -15,7 +15,10 @@ pub mod args;
 pub mod auto;
 pub mod builtins;
 pub mod class;
+pub mod ctad;
 pub mod deduce;
+pub mod deduce_call;
+pub mod funcs;
 pub mod member;
 pub mod order;
 pub mod pending;
@@ -91,6 +94,11 @@ pub struct TemplState {
     /// pair: whether the first is at least as specialized as the second
     /// ([temp.spec.partial.order], §4.4).
     pub(crate) partial_order: kiln_source::fx::FxHashMap<(u32, u32), bool>,
+    /// The first error substituting into a function template
+    /// specialization's signature, by (invalid) specialization: the
+    /// substitution-failure note of a later deduction that finds it
+    /// memoized (§6.1 step 4).
+    pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).

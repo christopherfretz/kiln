@@ -671,6 +671,11 @@ impl Sema<'_, '_> {
         let Some(pattern) = self.ast.instantiated_from(f) else { return };
         let Some(pdef) = self.ast.definition(pattern) else { return };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
+        if self.is_function_spec(f) {
+            // A function template specialization (WP-071, §4.4).
+            self.instantiate_function_spec_definition(f, pdef, body, poi);
+            return;
+        }
         // The specialization whose member `f` is: its semantic context
         // (a friend: the class that declared it).
         let Some(spec) = self.inst_owner(f) else { return };

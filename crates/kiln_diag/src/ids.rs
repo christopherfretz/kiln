@@ -1026,6 +1026,19 @@ diag_ids! {
     note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflicting {0:types|values|templates} for parameter '{1}' ({2} vs. {3})";
     note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";
     note_deduction_underqualified = Note (3) "candidate template ignored: cannot deduce a type for '{0}' that would make '{1}' equal '{2}'";
+    // WP-071
+    note_function_template_deduction_instantiation_here = Note (1) "while substituting deduced template arguments into function template {0}";
+    note_explicit_template_arg_substitution_here = Note (1) "while substituting explicitly-specified template arguments into function template {0}";
+    note_ovl_candidate_substitution_failure = Note (2) "candidate template ignored: substitution failure{0}{1}";
+    note_ovl_candidate_explicit_arg_mismatch_named = Note (1) "candidate template ignored: invalid explicitly-specified argument for template parameter '{0}'";
+    note_ovl_candidate_explicit_arg_mismatch_unnamed = Note (1) "candidate template ignored: invalid explicitly-specified argument for {0} template parameter";
+    note_ovl_candidate_instantiation_depth = Note (0) "candidate template ignored: substitution exceeded maximum template instantiation depth";
+    note_ovl_candidate_deduced_mismatch = Note (4) "candidate template ignored: deduced type {0} of {1} parameter does not match adjusted type {2} of argument{3}";
+    note_ovl_candidate_non_deduced_mismatch = Note (2) "candidate function not viable: no known conversion from {0} to {1}";
+    sema_fn_template_spec_no_match = Error (1) "no function template matches function template specialization '{0}'";
+    sema_fn_template_spec_ambiguous = Error (1) "function template specialization '{0}' ambiguously refers to more than one function template";
+    sema_explicit_instantiation_no_match = Error (1) "explicit instantiation of '{0}' does not refer to a function template, variable template, member function, member class, or static data member";
+    note_ovl_candidate_with_args = Note (2) "candidate {0} {1}";
     note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match '{0}' against '{1}'";
     sema_partial_spec_ambiguous = Error (1) "ambiguous partial specializations of '{0}'";
     note_partial_spec_match = Note (1) "partial specialization matches {0}";

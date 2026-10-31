@@ -140,6 +140,11 @@ impl Sema<'_, '_> {
             }
             return self.diag(DiagId::note_ovl_candidate, loc).arg(kind);
         }
+        if cand.failure == CandidateFailure::BadDeduction
+            && let (Some(ft), Some(fail)) = (cand.template, cand.deduction.as_deref())
+        {
+            return self.deduction_note(ft, fail, loc);
+        }
         let detail = match cand.failure {
             CandidateFailure::TooManyArgs { .. } | CandidateFailure::TooFewArgs { .. } => {
                 let mut params = Vec::new();

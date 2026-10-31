@@ -373,6 +373,61 @@ impl Substituter<'_, '_, '_> {
         Ok(r)
     }
 
+    /// The signature of function template specialization `spec` of
+    /// pattern `pat` (§6.1 step 4, clang's `SubstFunctionType` under
+    /// `FinishTemplateArgumentDeduction`): parameters, return type and
+    /// exception specification substituted, parameter types adjusted
+    /// ([dcl.fct]/5), default arguments substituted.
+    pub(crate) fn function_spec_signature(&mut self, pat: DeclId, spec: DeclId) -> SubstResult<()> {
+        let loc = self.sema.ast.decls.get(pat).loc();
+        let t = self.decl_ty(pat);
+        let TypeView::Function(p) = self.sema.ast.types.view(t.ty()) else {
+            return self.unimplemented("function declared with a typedef of function type", loc);
+        };
+        let info = p.info();
+        let params = self.param_infos(pat);
+        let method = self.sema.kind_of(pat) == DeclKind::CXXMethod;
+        let this = self.sema.act_on_start_this_scope(method, info.this_quals());
+        let sig = params.and_then(|params| {
+            let ret = self.ty(p.ret(), loc)?;
+            let exc = self.exc_spec(&p, loc)?;
+            Ok((params, ret, exc))
+        });
+        self.sema.act_on_end_this_scope(this);
+        let (params, ret, exc) = match sig {
+            Ok(x) => x,
+            Err(e) => {
+                self.forget_pattern_params(pat);
+                return Err(e);
+            }
+        };
+        let mut ptys = Vec::with_capacity(params.len());
+        let mut ids = Vec::with_capacity(params.len());
+        for pi in &params {
+            let types = &mut self.sema.ast.types;
+            let mut ty = pi.ty;
+            if types.is_array(ty) {
+                let e = types.element(ty).unwrap_or(QualType::ERROR);
+                ty = types.pointer_to(e);
+            } else if types.is_function(ty) {
+                ty = types.pointer_to(ty);
+            }
+            ptys.push(ty);
+            if let Some(d) = pi.decl {
+                self.sema.unowned_params.remove(&d);
+                self.sema.ast.decls.set_param_owner(d, spec);
+                self.sema.ast.decls.set_ty(d, ty);
+                ids.push(d);
+            }
+        }
+        let fty = self.sema.ast.types.function(ret, &ptys, info, exc);
+        self.sema.ast.decls.set_ty(spec, fty);
+        let _ = self.sema.builder().set_params(spec, &ids);
+        self.forget_pattern_params(pat);
+        self.default_args(pat, spec);
+        Ok(())
+    }
+
     /// Drops the mapping of pattern function `pat`'s parameters
     /// ([`Self::param_infos`]).
     fn forget_pattern_params(&mut self, pat: DeclId) {

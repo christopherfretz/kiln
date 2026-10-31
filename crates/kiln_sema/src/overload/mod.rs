@@ -106,7 +106,6 @@ pub(crate) enum CandidateFailure {
         arg: u16,
     },
     /// Template argument deduction failed (WP-071).
-    #[allow(dead_code, reason = "stub: WP-071 template candidates")]
     BadDeduction,
     /// The trailing requires-clause is not satisfied (WP-073).
     #[allow(dead_code, reason = "stub: WP-073 constraints")]
@@ -172,6 +171,8 @@ pub(crate) struct Candidate {
     /// A built-in candidate's parameter types (the second is
     /// [`QualType::ERROR`] for a unary operator).
     pub builtin: [QualType; 2],
+    /// `BadDeduction`: why the template's deduction failed (§10.4).
+    pub deduction: Option<Box<crate::templ::deduce_call::DeductionFailure>>,
 }
 
 /// The result of overload resolution (spec/sema-overload.md §10.1).
@@ -203,6 +204,7 @@ impl Candidate {
             ambiguous_mark: false,
             final_conv: None,
             builtin: [QualType::ERROR; 2],
+            deduction: None,
         }
     }
 
