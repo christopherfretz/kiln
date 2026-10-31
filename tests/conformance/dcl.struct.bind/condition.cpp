@@ -4,8 +4,8 @@
 // condition. clang 19 accepts it as an extension with
 // -Wbinding-in-condition, testing the holding variable (here through its
 // explicit operator bool); an init-statement is plain C++17.
-//@ diag: 9:12 warning "ISO C++17 does not permit structured binding declaration in a condition"
-//@ diag: 10:15 warning "ISO C++17 does not permit structured binding declaration in a condition"
+//@ diag: 11:12 warning "ISO C++17 does not permit structured binding declaration in a condition"
+//@ diag: 12:15 warning "ISO C++17 does not permit structured binding declaration in a condition"
 struct P { int x, y; explicit operator bool() const { return x; } };
 int test_cond(P p) {
   if (auto [a, b] = p) return a;
