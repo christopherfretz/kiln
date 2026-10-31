@@ -27,12 +27,13 @@ impl Substituter<'_, '_, '_> {
         let (Some(call_op), Some(body)) = (data.call_op, data.body) else {
             return Err(SubstFail);
         };
-        if self.sema.ast.described_template(call_op).is_some() {
-            return self.unimplemented("generic lambdas in templates", loc);
-        }
-        if self.sema.ast.templates.trailing_requires.get(call_op).is_some() {
-            return self.unimplemented("a lambda's requires-clause in a template", loc);
-        }
+        // A generic lambda: its template parameter list is substituted
+        // (its own parameters one level shallower per substituted level,
+        // as a member template's are) and its body rebuilt as a pattern.
+        let head = match self.sema.ast.described_template(call_op) {
+            Some(t) => Some((t, self.sema.ast.template_info(t).ok_or(SubstFail)?.params)),
+            None => None,
+        };
         // The explicit captures; the implicit ones are found again in the
         // rebuilt body (clang stops at the first implicit capture).
         let mut intro = LambdaIntroducer {
@@ -62,15 +63,29 @@ impl Substituter<'_, '_, '_> {
                 }
                 None => None,
             };
+            // A simple capture names its variable again directly: the
+            // name may not be in scope (a nested lambda instantiated with
+            // its enclosing generic lambda's call operator).
+            let var = match c.var.filter(|_| !c.init) {
+                Some(v) => Some(self.find_instantiated_decl(v, c.loc)?),
+                None => None,
+            };
             intro.captures.push(LambdaCaptureSpec {
                 kind: c.kind,
                 name,
                 loc: c.loc,
                 ellipsis: None,
                 init,
+                var,
             });
         }
         let lambda = self.sema.act_on_lambda_start(&intro);
+        if let Some((_, params)) = head
+            && self.open_substituted_head(params).is_err()
+        {
+            self.sema.act_on_lambda_error(lambda);
+            return Err(SubstFail);
+        }
         let Some(d) = self.lambda_declarator(call_op, &data, loc) else {
             self.sema.act_on_lambda_error(lambda);
             self.forget_pattern_params(call_op);
@@ -87,6 +102,7 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         };
         self.locals.insert(call_op, DeclOrPack::Decl(new_op));
+        self.lambda_constraints(head.map(|h| h.0), call_op, new_op);
         self.lambda_default_args(call_op, new_op);
         // The init-capture variables, by name.
         for v in init_vars {
@@ -128,6 +144,9 @@ impl Substituter<'_, '_, '_> {
         let exc = self.exc_spec(&p, loc).ok()?;
         let mut d = Declarator::new(DeclaratorContext::Member, data.lbracket);
         d.op_name = Some(OverloadedOperator::Call);
+        // The trailing requires-clause, unsubstituted (checked through
+        // `member_constraints`).
+        d.trailing_requires = self.sema.ast.templates.trailing_requires.get(call_op).copied();
         d.chunks.push(Chunk::Function {
             params,
             variadic: info.variadic(),
@@ -171,6 +190,30 @@ impl Substituter<'_, '_, '_> {
 
     /// The default arguments of pattern call operator `pat` on `f`; the
     /// pattern's parameters stay mapped to `f`'s for the body.
+    /// The call operator's constraints stay the pattern's, checked with
+    /// this instantiation's levels outside the operator's own (as a class
+    /// template member's, `ConceptState::member_constraints`,
+    /// spec/sema-templates.md).
+    fn lambda_constraints(
+        &mut self,
+        pattern_template: Option<kiln_ast::DeclId>,
+        call_op: kiln_ast::DeclId,
+        new_op: kiln_ast::DeclId,
+    ) {
+        let (pat, new) = match pattern_template {
+            Some(t) => match self.sema.ast.described_template(new_op) {
+                Some(x) if !self.sema.associated_constraints(t).is_empty() => (t, x),
+                _ => return,
+            },
+            None if self.sema.ast.templates.trailing_requires.get(call_op).is_some() => {
+                (call_op, new_op)
+            }
+            None => return,
+        };
+        let args = self.args.clone();
+        self.sema.inst.concepts.member_constraints.insert(new, (pat, args));
+    }
+
     fn lambda_default_args(&mut self, pat: kiln_ast::DeclId, f: kiln_ast::DeclId) {
         let params = |s: &Self, x: kiln_ast::DeclId| -> Vec<kiln_ast::DeclId> {
             s.sema

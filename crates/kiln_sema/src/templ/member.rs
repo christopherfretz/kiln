@@ -25,7 +25,27 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn member_template(&mut self, t: DeclId) -> SubstResult<DeclId> {
         let Some(info) = self.sema.ast.template_info(t).copied() else { return Err(SubstFail) };
         let Some(pattern) = info.pattern else { return Err(SubstFail) };
-        let list = self.param_list(info.params)?;
+        self.open_substituted_head(info.params)?;
+        let r = self.member_template_pattern(pattern);
+        self.sema.act_on_finish_template_decl();
+        self.sema.templ.cur = None;
+        let d = r?;
+        if let Some(x) = self.sema.template_of(d) {
+            self.locals.insert(pattern, DeclOrPack::Decl(d));
+            if !self.sema.associated_constraints(t).is_empty() {
+                self.sema.inst.concepts.member_constraints.insert(x, (t, self.args.clone()));
+            }
+            return Ok(x);
+        }
+        Err(SubstFail)
+    }
+
+    /// Opens the head of a member template (or a generic lambda's call
+    /// operator) being redeclared: template parameter list `params`
+    /// substituted ([`Self::param_list`]), its parameters in scope, one
+    /// more dependent level. The declaration takes the head.
+    pub(crate) fn open_substituted_head(&mut self, params: TemplateParamListId) -> SubstResult<()> {
+        let list = self.param_list(params)?;
         let l = *self.sema.ast.templates.param_list(list);
         let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l.params).collect();
         self.sema.templ.heads.push(HeadBuild {
@@ -45,18 +65,7 @@ impl Substituter<'_, '_, '_> {
         }
         self.sema.scopes.push(s);
         self.sema.ast.templates.dependent_depth += 1;
-        let r = self.member_template_pattern(pattern);
-        self.sema.act_on_finish_template_decl();
-        self.sema.templ.cur = None;
-        let d = r?;
-        if let Some(x) = self.sema.template_of(d) {
-            self.locals.insert(pattern, DeclOrPack::Decl(d));
-            if !self.sema.associated_constraints(t).is_empty() {
-                self.sema.inst.concepts.member_constraints.insert(x, (t, self.args.clone()));
-            }
-            return Ok(x);
-        }
-        Err(SubstFail)
+        Ok(())
     }
 
     /// Declares the pattern of a member template (the head is open).

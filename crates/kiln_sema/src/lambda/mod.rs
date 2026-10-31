@@ -42,6 +42,9 @@ pub struct LambdaCaptureSpec {
     pub ellipsis: Option<Loc>,
     /// The initializer of an init-capture.
     pub init: Option<ExprId>,
+    /// The variable a simple capture names, already resolved (a lambda
+    /// rebuilt by template instantiation); `None` looks the name up.
+    pub var: Option<DeclId>,
 }
 
 /// A *lambda-introducer* ([expr.prim.lambda.general]/1).

@@ -506,7 +506,12 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_copy_capture_with_copy_default, nloc);
                 continue;
             }
-            let found = self.lookup_name(sym, LookupKind::Ordinary);
+            let found = match c.var {
+                Some(v) => {
+                    crate::lookup::Found { decls: vec![v], found: vec![v], ..Default::default() }
+                }
+                None => self.lookup_name(sym, LookupKind::Ordinary),
+            };
             if found.is_empty() {
                 let msg = self.diag(DiagId::sema_undeclared_var_use, nloc).arg(text);
                 self.emit(msg);

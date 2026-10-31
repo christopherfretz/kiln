@@ -253,8 +253,34 @@ impl Substituter<'_, '_, '_> {
                 let loc = n.loc();
                 let tys = match self.expand_pattern(|s| s.ty(pat, loc))? {
                     crate::templ::pack::Expansion::Elements(v) => v,
-                    crate::templ::pack::Expansion::Unexpanded(_) => {
-                        return self.unimplemented("function parameter packs", loc);
+                    crate::templ::pack::Expansion::Unexpanded(x) => {
+                        // Still a pack: a parameter pack of a template
+                        // being redeclared (a generic lambda's) whose
+                        // own levels stay.
+                        let ty = self.sema.ast.types.pack_expansion(x, None);
+                        let ctx = self.sema.ctx;
+                        let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
+                        let np = self.sema.builder().prototype_param(
+                            ctx,
+                            n.name(),
+                            loc,
+                            ty,
+                            idx,
+                            ParamData::PACK,
+                        );
+                        self.sema.unowned_params.insert(np);
+                        self.locals.insert(p, DeclOrPack::Decl(np));
+                        out.push(ParamInfo {
+                            name,
+                            ty,
+                            loc,
+                            attrs: Vec::new(),
+                            invalid: false,
+                            default_arg: DefaultArg::None,
+                            range: (loc, loc),
+                            decl: Some(np),
+                        });
+                        continue;
                     }
                 };
                 let mut decls = Vec::with_capacity(tys.len());

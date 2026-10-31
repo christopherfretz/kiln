@@ -127,6 +127,7 @@ impl Parser<'_, '_> {
                 loc,
                 ellipsis: None,
                 init: None,
+                var: None,
             };
             if self.at(Punct::Star) {
                 self.bump();
