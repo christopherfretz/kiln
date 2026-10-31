@@ -18,6 +18,8 @@ pub(crate) struct Scope {
     depth: Depth,
     le: usize,
     lexical: bool,
+    /// The enclosing `CurrentCleanupScopeDepth`.
+    old_cur: Depth,
 }
 
 impl Cg<'_> {
@@ -46,7 +48,9 @@ impl Cg<'_> {
         if lexical {
             self.f.lex_labels.push(Vec::new());
         }
-        Scope { depth: self.f.cl.depth(), le: self.f.cl.lifetime_extended.len(), lexical }
+        let depth = self.f.cl.depth();
+        let old_cur = std::mem::replace(&mut self.f.cl.cur_scope, depth);
+        Scope { depth, le: self.f.cl.lifetime_extended.len(), lexical, old_cur }
     }
 
     /// `RunCleanupsScope::requiresCleanups`.
@@ -60,11 +64,12 @@ impl Cg<'_> {
     pub(crate) fn end_scope(&mut self, s: Scope) {
         let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
         self.pop_cleanup_blocks_le(s.depth, s.le);
+        self.f.cl.cur_scope = s.old_cur;
         if let Some(labels) = labels
             && !labels.is_empty()
         {
             // rescopeLabels.
-            let innermost = self.f.cl.depth();
+            let innermost = self.f.cl.innermost_normal();
             for l in &labels {
                 if let Some(j) = self.f.labels.get_mut(l) {
                     j.depth = Some(innermost);
@@ -116,7 +121,7 @@ impl Cg<'_> {
                 j.blk
             }
         };
-        if !self.f.cl.stack.is_empty()
+        if self.f.cl.has_normal_cleanups()
             && let Some(l) = self.f.lex_labels.last_mut()
         {
             l.push(d);

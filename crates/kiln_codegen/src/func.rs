@@ -320,6 +320,13 @@ impl Cg<'_> {
             let z = self.m.const_int(slot.ty, 0);
             self.store(V::C(z), slot.v, slot.align, false);
         }
+        // EmitStartEHSpec: a non-throwing function is a terminate scope
+        // (thunks are emitted without a declaration and get none).
+        let eh_spec = sig.nothrow && self.opts.exceptions && thunk.is_none();
+        if eh_spec {
+            self.push_terminate();
+        }
+        self.f.cl.prologue = self.f.cl.depth();
         // EmitFunctionProlog: every argument first, then EmitParmDecl for
         // each parameter in order (the implicit object parameter first).
         let this_arg = sig.this.map(|_| {
@@ -406,9 +413,14 @@ impl Cg<'_> {
             self.emit_trap_unreachable();
         }
         // FinishFunction.
-        self.pop_cleanup_blocks(0);
+        let prologue = self.f.cl.prologue;
+        self.pop_cleanup_blocks(prologue);
         self.emit_return_block();
         self.emit_epilog();
+        if eh_spec {
+            self.pop_terminate();
+        }
+        self.finish_eh();
         self.emit_unreachable_if_used();
         if let Some(e) = self.f.error.take() {
             return Err(e);
@@ -490,8 +502,12 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `TryMarkNoThrow`: no call in the body may throw.
+    /// clang `TryMarkNoThrow`: no call or invoke in the body may throw,
+    /// and nothing resumes unwinding.
     fn no_throw_calls(&self) -> bool {
+        if self.f.cl.eh_resume_used {
+            return false;
+        }
         self.f.calls.iter().all(|&(i, callee, site)| {
             self.f.fir.inst_block(i).is_none()
                 || site

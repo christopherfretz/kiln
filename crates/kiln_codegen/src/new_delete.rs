@@ -238,16 +238,8 @@ impl Cg<'_> {
         let ret = self.m.attr_set(&ra);
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
         let rty = if af.is_new { LTy::PTR } else { LTy::VOID };
-        let r = self.f.fir.push(
-            Op::Call {
-                fn_ty: sig.fn_ty,
-                callee: V::C(Value::func(f)),
-                args: ir_args,
-                opts: Box::new(opts),
-            },
-            rty,
-        );
-        self.f.calls.push((Fir::last_inst(r), Some(f), sig.nothrow));
+        let r =
+            self.emit_call_op(sig.fn_ty, V::C(Value::func(f)), ir_args, opts, rty, Some(f), sig.nothrow);
         Ok(r)
     }
 

@@ -8,7 +8,7 @@
 //! emits — and lowered into the module once it is final ([`Fir::lower`]).
 
 use kiln_llvm::{
-    BinOp, BlockId, CallOpts, CastOp, FastMath, Flags, FloatPredicate, FuncId, GepFlags,
+    BinOp, BlockId, CallOpts, Clause, CastOp, FastMath, Flags, FloatPredicate, FuncId, GepFlags,
     IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module, TypeId, Value,
 };
 
@@ -46,6 +46,12 @@ pub(crate) enum Op {
     Phi { ty: TypeId, inc: Vec<(V, Blk)> },
     Select { c: V, t: V, f: V },
     Call { fn_ty: TypeId, callee: V, args: Vec<V>, opts: Box<CallOpts> },
+    /// `invoke ... to label %normal unwind label %unwind` (spec/codegen.md §7b).
+    Invoke { fn_ty: TypeId, callee: V, args: Vec<V>, opts: Box<CallOpts>, normal: Blk, unwind: Blk },
+    /// `landingpad { ptr, i32 } [cleanup] catch ptr <clause>...`.
+    LandingPad { cleanup: bool, clauses: Vec<V> },
+    /// `resume { ptr, i32 } %v`.
+    Resume { v: V },
     Br { dest: Blk },
     CondBr { c: V, t: Blk, f: Blk },
     Switch { c: V, default: Blk, cases: Vec<(V, Blk)> },
@@ -64,12 +70,15 @@ impl Op {
                 | Op::Switch { .. }
                 | Op::Ret { .. }
                 | Op::Unreachable
+                | Op::Invoke { .. }
+                | Op::Resume { .. }
         )
     }
 
     fn successors(&self) -> Vec<Blk> {
         match self {
             Op::Br { dest } => vec![*dest],
+            Op::Invoke { normal, unwind, .. } => vec![*normal, *unwind],
             Op::CondBr { t, f, .. } => vec![*t, *f],
             Op::Switch { default, cases, .. } => {
                 std::iter::once(*default).chain(cases.iter().map(|c| c.1)).collect()
@@ -81,6 +90,7 @@ impl Op {
     fn successors_mut(&mut self) -> Vec<&mut Blk> {
         match self {
             Op::Br { dest } => vec![dest],
+            Op::Invoke { normal, unwind, .. } => vec![normal, unwind],
             Op::CondBr { t, f, .. } => vec![t, f],
             Op::Switch { default, cases, .. } => {
                 std::iter::once(default).chain(cases.iter_mut().map(|c| &mut c.1)).collect()
@@ -103,9 +113,11 @@ impl Op {
             }
             Op::Phi { inc, .. } => inc.iter().map(|x| x.0).collect(),
             Op::Select { c, t, f } => vec![*c, *t, *f],
-            Op::Call { callee, args, .. } => {
+            Op::Call { callee, args, .. } | Op::Invoke { callee, args, .. } => {
                 std::iter::once(*callee).chain(args.iter().copied()).collect()
             }
+            Op::LandingPad { clauses, .. } => clauses.clone(),
+            Op::Resume { v } => vec![*v],
             Op::CondBr { c, .. } => vec![*c],
             Op::Switch { c, cases, .. } => {
                 std::iter::once(*c).chain(cases.iter().map(|x| x.0)).collect()
@@ -579,6 +591,15 @@ impl Fir {
                         let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
                         b.call_ex(*fn_ty, val(*callee), &args, opts)?
                     }
+                    Op::Invoke { fn_ty, callee, args, opts, normal, unwind } => {
+                        let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
+                        b.invoke_ex(*fn_ty, val(*callee), &args, blk(*normal), blk(*unwind), opts)?
+                    }
+                    Op::LandingPad { cleanup, clauses } => {
+                        let cl: Vec<Clause> = clauses.iter().map(|&x| Clause::Catch(val(x))).collect();
+                        b.landingpad(inst.ty, *cleanup, &cl)?
+                    }
+                    Op::Resume { v } => b.resume(val(*v))?,
                     Op::Br { dest } => b.br(blk(*dest))?,
                     Op::CondBr { c, t, f } => b.cond_br(val(*c), blk(*t), blk(*f))?,
                     Op::Switch { c, default, cases } => {

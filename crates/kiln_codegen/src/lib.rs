@@ -21,6 +21,7 @@ mod class;
 mod cleanup;
 mod consts;
 mod dyncast;
+mod eh;
 mod expr;
 mod fir;
 mod fold;

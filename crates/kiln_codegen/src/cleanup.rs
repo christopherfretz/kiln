@@ -1,12 +1,9 @@
-//! The normal-cleanup stack (spec/codegen.md §5.3): a port of clang's
-//! `EHScopeStack` restricted to normal cleanups and of `CGCleanup.cpp`'s
-//! `PopCleanupBlock`, `EmitBranchThroughCleanup` and the branch-fixup
-//! machinery, so that scope exits through destructors produce clang's
-//! block shapes (`cleanup.dest.slot`, the exit switch, `cleanup.cont`).
-//!
-//! Exception-handling cleanups are not modelled: kiln emits the normal
-//! path only, which is exact under `-fno-exceptions` (spec gap: landing
-//! pads under `-fexceptions`).
+//! The cleanup and EH scope stack (spec/codegen.md §5.3, §7b): a port of
+//! clang's `EHScopeStack` (cleanup, catch and terminate scopes) and of
+//! `CGCleanup.cpp`'s `PopCleanupBlock`, `EmitBranchThroughCleanup` and the
+//! branch-fixup machinery, so that scope exits through destructors produce
+//! clang's block shapes (`cleanup.dest.slot`, the exit switch,
+//! `cleanup.cont`) and EH cleanups clang's `ehcleanup` blocks (WP-100).
 
 use kiln_ast::DeclId;
 use kiln_llvm::{IntPredicate, MemOpts, TypeId as LTy};
@@ -48,15 +45,49 @@ pub(crate) enum Cleanup {
     /// non-virtual base in a base-object destructor, a virtual base
     /// (`virt`) in a complete-object one.
     BaseOfThis { base: DeclId, offset: u64, virt: bool },
+    /// Frees an exception object whose initialization threw
+    /// (`FreeException`); `saved` when `exn` is the
+    /// `cond-cleanup.save` slot holding it.
+    FreeException { exn: V, saved: bool },
+    /// Ends a catch handler (`CallEndCatch`); `might_throw` when the
+    /// caught object has a class type whose destructor may throw.
+    EndCatch { might_throw: bool },
 }
 
-/// One scope (clang `EHCleanupScope`, normal cleanups only).
+/// A handler of a catch scope (clang `EHCatchScope::Handler`): the
+/// type-info of the caught type, `None` for `catch (...)`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Handler {
+    pub rtti: Option<V>,
+    pub blk: Blk,
+}
+
+/// What a scope is (clang `EHScope::Kind`; filters are C++14-only).
+#[derive(Clone, Debug)]
+pub(crate) enum Kind {
+    Cleanup(Cleanup),
+    Catch(Vec<Handler>),
+    Terminate,
+}
+
+/// One scope (clang `EHCleanupScope`, `EHCatchScope`, `EHTerminateScope`).
 #[derive(Clone, Debug)]
 pub(crate) struct Scope {
-    pub cleanup: Cleanup,
+    pub kind: Kind,
+    /// A cleanup run on normal exits.
+    pub normal: bool,
+    /// A cleanup run on unwinding.
+    pub eh: bool,
     pub active: bool,
     pub active_flag: Option<Addr>,
+    /// `shouldTestFlagInNormalCleanup`.
     pub test_flag: bool,
+    /// `shouldTestFlagInEHCleanup`.
+    pub test_flag_eh: bool,
+    /// `getCachedLandingPad`.
+    pub cached_lpad: Option<Blk>,
+    /// `getCachedEHDispatchBlock`.
+    pub cached_eh: Option<Blk>,
     normal_block: Option<Blk>,
     fixup_depth: usize,
     /// `ExtInfo` exists.
@@ -66,6 +97,20 @@ pub(crate) struct Scope {
 }
 
 impl Scope {
+    /// A normal cleanup.
+    pub fn is_normal_cleanup(&self) -> bool {
+        matches!(self.kind, Kind::Cleanup(_)) && self.normal
+    }
+    /// An EH scope (`!isNonEHScope`): catch, terminate or an EH cleanup.
+    pub fn is_eh_scope(&self) -> bool {
+        !matches!(self.kind, Kind::Cleanup(_)) || self.eh
+    }
+    fn cleanup(&self) -> &Cleanup {
+        match &self.kind {
+            Kind::Cleanup(c) => c,
+            _ => panic!("kiln_codegen: top of the scope stack is not a cleanup"),
+        }
+    }
     fn has_branches(&self) -> bool {
         self.ext && !self.branches.is_empty()
     }
@@ -112,6 +157,22 @@ pub(crate) struct Cleanups {
     pub next_index: u32,
     /// `LifetimeExtendedCleanupStack`.
     pub lifetime_extended: Vec<(Cleanup, Option<Addr>)>,
+    /// `ExceptionSlot`.
+    pub exn_slot: Option<V>,
+    /// `EHSelectorSlot`.
+    pub sel_slot: Option<V>,
+    /// `EHResumeBlock`.
+    pub eh_resume: Option<Blk>,
+    /// The `eh.resume` block was emitted (a `resume` may throw).
+    pub eh_resume_used: bool,
+    /// `TerminateLandingPad`.
+    pub terminate_lpad: Option<Blk>,
+    /// `TerminateHandler`.
+    pub terminate_handler: Option<Blk>,
+    /// `CurrentCleanupScopeDepth`.
+    pub cur_scope: Depth,
+    /// `PrologueCleanupDepth`.
+    pub prologue: Depth,
 }
 
 impl Cleanups {
@@ -124,31 +185,42 @@ impl Cleanups {
         self.stack.len()
     }
 
-    /// `getEnclosingNormalCleanup` of the scope at stable position `d`
-    /// (every scope here is a normal cleanup).
-    fn enclosing(d: Depth) -> Depth {
-        d - 1
+    /// `getEnclosingNormalCleanup` of the scope at stable position `d`.
+    pub fn enclosing(&self, d: Depth) -> Depth {
+        (1..d).rev().find(|&i| self.stack[i - 1].is_normal_cleanup()).unwrap_or(0)
+    }
+
+    /// `getEnclosingEHScope` of the scope at stable position `d`.
+    pub fn enclosing_eh(&self, d: Depth) -> Depth {
+        (1..d).rev().find(|&i| self.stack[i - 1].is_eh_scope()).unwrap_or(0)
+    }
+
+    /// `getInnermostEHScope`.
+    pub fn innermost_eh(&self) -> Depth {
+        self.enclosing_eh(self.stack.len() + 1)
+    }
+
+    /// `getInnermostNormalCleanup`.
+    pub fn innermost_normal(&self) -> Depth {
+        self.enclosing(self.stack.len() + 1)
     }
 
     /// `getInnermostActiveNormalCleanup`.
     fn innermost_active(&self) -> Depth {
-        let mut d = self.stack.len();
-        while d != 0 {
-            if self.stack[d - 1].active {
-                return d;
-            }
-            d -= 1;
-        }
-        0
+        (1..=self.stack.len())
+            .rev()
+            .find(|&i| self.stack[i - 1].is_normal_cleanup() && self.stack[i - 1].active)
+            .unwrap_or(0)
     }
 
-    fn has_normal_cleanups(&self) -> bool {
-        !self.stack.is_empty()
+    /// `hasNormalCleanups`.
+    pub fn has_normal_cleanups(&self) -> bool {
+        self.innermost_normal() != 0
     }
 
     /// `popNullFixups`.
     fn pop_null_fixups(&mut self) {
-        let min = self.stack.last().expect("normal cleanup").fixup_depth;
+        let min = self.stack[self.innermost_normal() - 1].fixup_depth;
         while self.fixups.len() > min && self.fixups.last().is_some_and(|f| f.destination.is_none())
         {
             self.fixups.pop();
@@ -187,20 +259,61 @@ impl Cg<'_> {
         JumpDest { blk, depth: Some(self.f.cl.depth()), index }
     }
 
-    /// `EHScopeStack::pushCleanup` (a normal cleanup).
+    /// `EHScopeStack::pushCleanup` (`NormalAndEHCleanup`).
     pub(crate) fn push_cleanup(&mut self, c: Cleanup) {
+        self.push_cleanup_kind(c, true, true);
+    }
+
+    /// `EHScopeStack::pushCleanup` of kind `normal` / `eh`: no EH cleanup
+    /// without exceptions or under a terminate scope.
+    pub(crate) fn push_cleanup_kind(&mut self, c: Cleanup, normal: bool, eh: bool) {
+        let ie = self.f.cl.innermost_eh();
+        let under_terminate = ie != 0 && matches!(self.f.cl.stack[ie - 1].kind, Kind::Terminate);
+        let eh = eh && self.opts.exceptions && !under_terminate;
+        self.push_scope(Kind::Cleanup(c), normal, eh);
+    }
+
+    fn push_scope(&mut self, kind: Kind, normal: bool, eh: bool) {
         let fixup_depth = self.f.cl.fixups.len();
         self.f.cl.stack.push(Scope {
-            cleanup: c,
+            kind,
+            normal,
+            eh,
             active: true,
             active_flag: None,
             test_flag: false,
+            test_flag_eh: false,
+            cached_lpad: None,
+            cached_eh: None,
             normal_block: None,
             fixup_depth,
             ext: false,
             branch_afters: Vec::new(),
             branches: Vec::new(),
         });
+    }
+
+    /// `EHScopeStack::pushTerminate`.
+    pub(crate) fn push_terminate(&mut self) {
+        self.push_scope(Kind::Terminate, false, false);
+    }
+
+    /// `EHScopeStack::popTerminate`.
+    pub(crate) fn pop_terminate(&mut self) {
+        let s = self.f.cl.stack.pop();
+        debug_assert!(matches!(s.map(|s| s.kind), Some(Kind::Terminate)));
+    }
+
+    /// `EHScopeStack::pushCatch`.
+    pub(crate) fn push_catch(&mut self, handlers: Vec<Handler>) {
+        self.push_scope(Kind::Catch(handlers), false, false);
+    }
+
+    /// `EHScopeStack::popCatch`.
+    pub(crate) fn pop_catch(&mut self) -> Scope {
+        let s = self.f.cl.stack.pop().expect("catch scope");
+        debug_assert!(matches!(s.kind, Kind::Catch(_)));
+        s
     }
 
     /// `getNormalCleanupDestSlot`.
@@ -214,7 +327,7 @@ impl Cg<'_> {
     }
 
     /// `getUnreachableBlock`.
-    fn unreachable_block(&mut self) -> Blk {
+    pub(crate) fn unreachable_block(&mut self) -> Blk {
         if let Some(b) = self.f.cl.unreachable {
             return b;
         }
@@ -281,7 +394,7 @@ impl Cg<'_> {
         let mut i = top;
         if dd < i {
             loop {
-                let next = Cleanups::enclosing(i);
+                let next = self.f.cl.enclosing(i);
                 if dd >= next {
                     self.f.cl.stack[i - 1].add_branch_after(dest.index, dest.blk);
                     break;
@@ -348,7 +461,7 @@ impl Cg<'_> {
     pub(crate) fn pop_cleanup_blocks(&mut self, old: Depth) {
         while self.f.cl.depth() != old {
             let d = self.f.cl.depth();
-            let fallthrough_is_branch_through = old < Cleanups::enclosing(d);
+            let fallthrough_is_branch_through = old < self.f.cl.enclosing(d);
             self.pop_cleanup_block(fallthrough_is_branch_through);
         }
     }
@@ -361,9 +474,11 @@ impl Cg<'_> {
         for (c, flag) in pending {
             self.push_cleanup(c);
             if let Some(f) = flag {
+                // initFullExprCleanupWithFlag.
                 let s = self.f.cl.stack.last_mut().expect("scope");
                 s.active_flag = Some(f);
-                s.test_flag = true;
+                s.test_flag = s.normal;
+                s.test_flag_eh = s.eh;
             }
         }
     }
@@ -406,23 +521,51 @@ impl Cg<'_> {
         pred
     }
 
-    /// `PopCleanupBlock` (normal cleanups).
-    #[allow(clippy::too_many_lines)]
+    /// `PopCleanupBlock`.
     pub(crate) fn pop_cleanup_block(&mut self, fallthrough_is_branch_through: bool) {
+        self.pop_cleanup_block_ex(fallthrough_is_branch_through, false);
+    }
+
+    /// `PopCleanupBlock(FallthroughIsBranchThrough, ForDeactivation)`.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn pop_cleanup_block_ex(
+        &mut self,
+        fallthrough_is_branch_through: bool,
+        for_deactivation: bool,
+    ) {
         let top = self.f.cl.depth();
-        let (is_active, flag, fixup_depth, has_existing_branches) = {
-            let s = self.f.cl.stack.last().expect("cleanup scope");
-            (s.active, s.active_flag.filter(|_| s.test_flag), s.fixup_depth, s.has_branches())
+        let deact_ip = if for_deactivation {
+            let ip = self.f.fir.cur();
+            self.f.fir.set_cur(None);
+            Some(ip)
+        } else {
+            None
         };
+        let (is_active, flag, eh_flag, fixup_depth, has_existing_branches, is_normal, eh_entry) = {
+            let s = self.f.cl.stack.last().expect("cleanup scope");
+            (
+                s.active,
+                s.active_flag.filter(|_| s.test_flag),
+                s.active_flag.filter(|_| s.test_flag_eh),
+                s.fixup_depth,
+                s.has_branches(),
+                s.normal,
+                s.cached_eh,
+            )
+        };
+        let eh_parent = self.f.cl.enclosing_eh(top);
         let has_fixups = self.f.cl.fixups.len() != fixup_depth;
         let fallthrough_source = self.f.fir.cur();
         let has_fallthrough = fallthrough_source.is_some() && (is_active || has_existing_branches);
         let has_prebranched = fallthrough_source.is_some_and(|b| self.f.fir.is_terminated(b));
-        let requires_normal = has_fixups || has_existing_branches || has_fallthrough;
+        let requires_normal =
+            is_normal && (has_fixups || has_existing_branches || has_fallthrough);
+        let cleanup = self.f.cl.stack[top - 1].cleanup().clone();
 
-        if has_prebranched && !requires_normal {
+        if is_normal && has_prebranched && !requires_normal {
             let pre_dest = if fallthrough_is_branch_through {
-                self.normal_entry(Cleanups::enclosing(top))
+                let e = self.f.cl.enclosing(top);
+                self.normal_entry(e)
             } else {
                 let b = self.f.fir.create_block();
                 self.emit_block(b, false);
@@ -437,17 +580,51 @@ impl Cg<'_> {
         if !requires_normal {
             self.destroy_optimistic_entry(top);
             self.f.cl.pop();
-            return;
-        }
-        let cleanup = self.f.cl.stack[top - 1].cleanup.clone();
-
-        if has_fallthrough && !has_prebranched && !has_fixups && !has_existing_branches {
+        } else if has_fallthrough && !has_prebranched && !has_fixups && !has_existing_branches {
             self.destroy_optimistic_entry(top);
             self.f.cl.pop();
-            self.emit_cleanup(&cleanup, flag);
-            return;
+            self.emit_cleanup(&cleanup, flag, false);
+        } else {
+            self.emit_normal_cleanup_paths(
+                top,
+                &cleanup,
+                flag,
+                fallthrough_is_branch_through,
+                (fallthrough_source, has_fallthrough, has_prebranched),
+                (has_fixups, has_existing_branches, fixup_depth),
+            );
         }
+        if let Some(ip) = deact_ip {
+            self.f.fir.set_cur(ip);
+        }
+        if let Some(eh_entry) = eh_entry {
+            let saved = self.f.fir.cur();
+            self.f.fir.set_cur(None);
+            self.emit_block(eh_entry, false);
+            let next = self.eh_dispatch_block(eh_parent);
+            self.push_terminate();
+            if eh_flag.is_some() || is_active {
+                self.emit_cleanup(&cleanup, eh_flag, true);
+            }
+            self.br(next);
+            self.pop_terminate();
+            self.f.fir.set_cur(saved);
+            self.simplify_cleanup_entry(eh_entry);
+        }
+    }
 
+    /// The normal-cleanup emission of `PopCleanupBlock` (steps I-VI) for
+    /// a cleanup that needs its own normal entry block.
+    #[allow(clippy::too_many_lines)]
+    fn emit_normal_cleanup_paths(
+        &mut self,
+        top: Depth,
+        cleanup: &Cleanup,
+        flag: Option<Addr>,
+        fallthrough_is_branch_through: bool,
+        (fallthrough_source, has_fallthrough, has_prebranched): (Option<Blk>, bool, bool),
+        (has_fixups, _, fixup_depth): (bool, bool, usize),
+    ) {
         let entry = self.normal_entry(top);
         let mut saved_inactive = None;
         if has_fallthrough {
@@ -462,7 +639,8 @@ impl Cg<'_> {
         }
         self.emit_block(entry, false);
 
-        let has_enclosing = Cleanups::enclosing(top) != 0;
+        let enclosing = self.f.cl.enclosing(top);
+        let has_enclosing = enclosing != 0;
         let (has_throughs, n_afters, after0) = {
             let s = &self.f.cl.stack[top - 1];
             (s.has_branch_throughs(), s.branch_afters.len(), s.branch_afters.first().copied())
@@ -472,7 +650,7 @@ impl Cg<'_> {
             || (fallthrough_source.is_some() && fallthrough_is_branch_through)
             || (has_fixups && has_enclosing)
         {
-            through_dest = Some(self.normal_entry(Cleanups::enclosing(top)));
+            through_dest = Some(self.normal_entry(enclosing));
         }
 
         let mut fallthrough_dest = None;
@@ -530,7 +708,7 @@ impl Cg<'_> {
         };
 
         self.f.cl.pop();
-        self.emit_cleanup(&cleanup, flag);
+        self.emit_cleanup(cleanup, flag, false);
         let normal_exit = self.f.fir.cur().expect("cleanup ends with an insertion point");
         match exit {
             Exit::Br(b) => {
@@ -571,8 +749,9 @@ impl Cg<'_> {
         }
     }
 
-    /// `EmitCleanup`: runs `c`, testing the active flag if any.
-    fn emit_cleanup(&mut self, c: &Cleanup, flag: Option<Addr>) {
+    /// `EmitCleanup`: runs `c` (on the EH path if `for_eh`), testing the
+    /// active flag if any.
+    fn emit_cleanup(&mut self, c: &Cleanup, flag: Option<Addr>, for_eh: bool) {
         let mut cont = None;
         if let Some(f) = flag {
             let done = self.f.fir.create_block();
@@ -582,16 +761,20 @@ impl Cg<'_> {
             self.emit_block(action, false);
             cont = Some(done);
         }
-        self.run_cleanup(c);
+        self.run_cleanup(c, for_eh);
         if let Some(d) = cont {
             self.emit_block(d, false);
         }
     }
 
     /// The body of a cleanup (`Cleanup::Emit`).
-    fn run_cleanup(&mut self, c: &Cleanup) {
+    fn run_cleanup(&mut self, c: &Cleanup, for_eh: bool) {
         match *c {
             Cleanup::Dtor { addr, record, base } => self.call_dtor(record, addr, base),
+            // Along the exceptions path the destructor always runs.
+            Cleanup::NrvoDtor { addr, record, .. } if for_eh => {
+                self.call_dtor(record, addr, false);
+            }
             Cleanup::NrvoDtor { addr, record, flag } => {
                 let skip = self.f.fir.create_block();
                 let run = self.f.fir.create_block();
@@ -607,6 +790,19 @@ impl Cg<'_> {
                 let this = self.this_value();
                 let p = self.byte_offset(this, offset);
                 self.call_dtor_of(base, p, true, virt);
+            }
+            Cleanup::FreeException { exn, saved } => {
+                let exn = if saved { self.load(LTy::PTR, exn, 8, false) } else { exn };
+                let f = self.rt_fn("__cxa_free_exception", LTy::VOID, &[LTy::PTR], &[]);
+                self.nounwind_runtime_call(f, LTy::VOID, vec![exn]);
+            }
+            Cleanup::EndCatch { might_throw } => {
+                let f = self.rt_fn("__cxa_end_catch", LTy::VOID, &[], &[]);
+                if might_throw {
+                    self.runtime_call_or_invoke(f, LTy::VOID, Vec::new(), &[]);
+                } else {
+                    self.nounwind_runtime_call(f, LTy::VOID, Vec::new());
+                }
             }
         }
     }

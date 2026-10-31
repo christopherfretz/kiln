@@ -1781,11 +1781,7 @@ impl Cg<'_> {
             AttrList::default().func
         };
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
-        let r = self
-            .f
-            .fir
-            .push(Op::Call { fn_ty: sig.fn_ty, callee, args: ir_args, opts: Box::new(opts) }, rty);
-        self.f.calls.push((Fir::last_inst(r), fid, sig.nothrow));
+        let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
         if let Some(a) = sret_addr {
             let _ = a;
             return Ok(None);

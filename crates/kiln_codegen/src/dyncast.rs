@@ -51,7 +51,9 @@ impl Cg<'_> {
     /// `__cxa_bad_typeid`); leaves no insertion point.
     fn emit_noreturn_runtime_call(&mut self, name: &str) -> R<()> {
         let f = self.runtime_fn(name, LTy::VOID, &[], &[])?;
-        self.runtime_call(f, LTy::VOID, Vec::new(), AttrKind::NoReturn);
+        // emitBadCastCall / emitBadTypeidCall: EmitRuntimeCallOrInvoke,
+        // setDoesNotReturn, then `unreachable`.
+        self.runtime_call_or_invoke(f, LTy::VOID, Vec::new(), &[AttrKind::NoReturn]);
         self.f.fir.push(Op::Unreachable, LTy::VOID);
         self.f.fir.set_cur(None);
         Ok(())
