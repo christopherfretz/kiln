@@ -2332,7 +2332,7 @@ impl Compiler<'_> {
             TraitKind::AlignOf | TraitKind::PreferredAlignOf => {
                 u64::from(self.o.types.info(t).align)
             }
-            _ => {
+            TraitKind::VecStep => {
                 self.unsupported(e);
                 return;
             }

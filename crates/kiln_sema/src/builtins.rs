@@ -52,7 +52,7 @@ impl Sema<'_, '_> {
     ///   __builtin_va_list;` with `struct __va_list { void *__stack;
     ///   void *__gr_top; void *__vr_top; int __gr_offs; int __vr_offs; }`
     ///   in an implicit `namespace std` that lookup does not see;
-    /// - x86-64 (SysV psABI §3.5.7): `typedef __va_list_tag
+    /// - x86-64 (`SysV` psABI §3.5.7): `typedef __va_list_tag
     ///   __builtin_va_list[1];` with `struct __va_list_tag { unsigned
     ///   gp_offset; unsigned fp_offset; void *overflow_arg_area; void
     ///   *reg_save_area; }`, a record lookup does not see.
