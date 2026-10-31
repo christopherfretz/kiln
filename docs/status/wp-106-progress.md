@@ -27,7 +27,26 @@ supervisor folds the outcome into BACKLOG/HANDOFF.
      `instantiate_function_definition` returns early when member_spec kind is
      ExplicitSpecialization.
 2. TemplateParamObject — not started
-3. Template candidates (ics/arrow/oper/address) — not started
+3. Template candidates — DONE
+   - conversion-function templates ([temp.deduct.conv]; `deduce_conversion`,
+     `DeduceTarget`, `conversion_functions_all`, ordering via `more_specialized_conversion`).
+   - `operator->` templates (arrow.rs; clang adds invalid `operator->` decls as
+     candidates → `declares_arrow` decides NotFound vs "no viable").
+   - reversed/rewritten operator templates ([over.match.oper]/3.4):
+     `add_rewritten_template`, `more_specialized_operator` ([temp.func.order]/3 object
+     param + reversal), `more_specialized_candidate`, `Rewrite::reversed`, CWG1391
+     note mapping in diag.rs; P2468 `functions_correspond` maps templates to patterns.
+   - `&f` no-match notes (address.rs), `note_ovl_candidate_bad_deduction`.
+   - dependent member template-ids: `act_on_template_member`,
+     `act_on_member_template_args` (funcs.rs): dependent args → CXXDependentScopeMemberExpr
+     re-formed at instantiation; `x.template f` on a non-dependent object; implicit
+     `this->f<T>`; subst keeps targs on MemberExpr / dependent member / implicit member.
+   - template-id calls skip non-template members (member.rs); member-call
+     instantiation point at the member name (member_expr.rs try_member_call).
+   - GAPS: [temp.func.order]/6 reversed-constraint rules not applied; printer drops
+     explicit targs (`C{}.m<int>(1)` printed `C{}.m(1)`); "expression evaluates to"
+     note missing for member calls (pre-existing); a specialization whose body failed
+     to instantiate is not marked invalid (clang then reports "substitution failure").
 4. std::initializer_list construction — DONE (dad3f67)
    - AST: `CXXStdInitializerListExpr` (operand = `MaterializeTemporaryExpr 'const E[N]'`
      xvalue over the `InitListExpr 'const E[N]'`), clang's shape; `AstBuilder::std_initializer_list`.
