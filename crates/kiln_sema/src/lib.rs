@@ -39,6 +39,7 @@ pub mod scope;
 mod side_effects;
 pub mod stack_guard;
 pub mod stmt;
+mod struct_bind;
 pub mod target;
 pub mod templ;
 mod try_stmt;
@@ -53,8 +54,8 @@ use kiln_source::{Loc, Span};
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
-    BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, Decomposition, ParamInfo, Sign, SpecialName,
-    StorageSpec, TypeSpecKind, Width,
+    BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
+    ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
@@ -478,6 +479,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// The simple name of `d` (empty when unnamed).
     pub fn decl_name(&self, d: DeclId) -> String {
+        if self.ast.decls.decomp_bindings(d).is_some() {
+            return self.decomp_name(d);
+        }
         self.decl_name_str(self.ast.decls.get(d).name())
     }
 

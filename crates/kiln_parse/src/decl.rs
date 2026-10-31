@@ -11,9 +11,9 @@ use kiln_lex::{Punct, TokKind};
 use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
-    BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, Decomposition, Designator, InitItem, InitList,
-    InitValue, Initializer, NameClass, ParamInfo, Sign, SpecialName, StorageSpec, TagUse,
-    TypeSpecKind, Width,
+    BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
+    Designator, InitItem, InitList, InitValue, Initializer, NameClass, ParamInfo, Sign,
+    SpecialName, StorageSpec, TagUse, TypeSpecKind, Width,
 };
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};

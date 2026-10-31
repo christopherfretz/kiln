@@ -2178,6 +2178,12 @@ impl DeclArena {
         n.ctx = Some(func);
     }
 
+    /// Names `d` without making the name visible to lookup (a
+    /// structured binding's holding variable, `Builder::holding_var`).
+    pub fn set_name(&mut self, d: DeclId, name: DeclName) {
+        self.nodes[d.index() as usize].name = name;
+    }
+
     /// Re-points the declared type (deduced return types, resolved
     /// exception specifications; §2.4).
     pub fn set_ty(&mut self, d: DeclId, ty: QualType) {

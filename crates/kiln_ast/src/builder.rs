@@ -745,6 +745,25 @@ impl<'a> AstBuilder<'a> {
         self.add(h, DeclKind::Binding, None, Payload::None(0), None)
     }
 
+    /// The implicit variable holding a tuple-like structured binding's
+    /// value ([dcl.struct.bind]/4, clang's holding `VarDecl`): a member
+    /// of its lexical context that name lookup never finds.
+    pub fn holding_var(&mut self, h: DeclHead, ty: QualType, spec: VarSpec) -> DeclId {
+        let payload = Payload::Var(VarData {
+            redecl: self.redecl_link(None),
+            init: None,
+            spec,
+            eval: VarEval::default(),
+            templ: TemplLink::NONE,
+        });
+        let name = h.name;
+        let mut h = h;
+        h.name = DeclName::EMPTY;
+        let d = self.add(h, DeclKind::Var, Some(ty), payload, None);
+        self.ast.decls.set_name(d, name);
+        d
+    }
+
     /// Marks `v` (an unnamed `Var`) as the decomposition holding
     /// `bindings` (write-once).
     ///
