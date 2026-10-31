@@ -21,5 +21,12 @@ Updated: 2026-10-31
   parser) for array/string_view; defaulted comparisons (WP-082) for
   span/utility.
 
+- Bench after (release, bc15296): templates_wide 2,171,789,905
+  (-0.8%), templates_deep 678,675,597 (-0.1%). Before the meter fix
+  the numbers were +9.7% and +1.5%: the per-frame `node_live_bytes`
+  allocated a `String` per arena vector once LLVM stopped eliding the
+  allocations. Fixed with `VecDims` (spec/ast.md §2.3).
+- Quick CI (d8c63f2): 1411 passed, 15 xfail.
+
 ## Next step
-- Bench after-measurement, full `cargo xtask ci`, handback.
+- Done; handed back. Full CI (bc15296): clang 1398 + 3 xfail + 25 skipped; kiln 1411 + 15 xfail.
