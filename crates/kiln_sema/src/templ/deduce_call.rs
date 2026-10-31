@@ -52,7 +52,7 @@ impl Sema<'_, '_> {
         args: Option<ArgListId>,
         loc: Loc,
         f: impl FnOnce(&mut Self) -> R,
-    ) -> Option<(R, Option<Option<Diag>>)> {
+    ) -> Option<(R, Result<(), Option<Diag>>)> {
         if !self.push_inst_frame(kind, ft, ft, loc) {
             return None;
         }
@@ -66,7 +66,7 @@ impl Sema<'_, '_> {
         let r = f(self);
         let st = self.inst.sfinae.borrow_mut().pop().unwrap_or_default();
         self.pop_inst_frame();
-        let failed = (st.errors > 0).then_some(st.first);
+        let failed = if st.errors > 0 { Err(st.first) } else { Ok(()) };
         Some((r, failed))
     }
 
@@ -82,6 +82,7 @@ impl Sema<'_, '_> {
     /// template arguments, as written) and forms the specialization
     /// (§6.1). `object`: `args` has no slot for an object argument the
     /// template's implicit object parameter takes.
+    #[allow(clippy::too_many_lines, reason = "the steps of §6.1 in order")]
     pub(crate) fn deduce_call(
         &mut self,
         ft: DeclId,
@@ -102,7 +103,6 @@ impl Sema<'_, '_> {
             return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
         }
         // §6.1 step 1: the explicitly-specified arguments.
-        let mut explicit_n = 0usize;
         let (mut ptys, variadic) = self.proto_param_types(templated);
         if let Some(list) = explicit {
             let written: Vec<TemplateArg> = self.ast.types.args(list).to_vec();
@@ -114,26 +114,23 @@ impl Sema<'_, '_> {
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, None, loc, |s| {
                 for (i, &w) in written.iter().enumerate() {
                     let prior: Vec<TemplateArg> = d.args[..i].to_vec();
-                    match s.check_template_arg(ft, depth, params[i], w, loc, &prior) {
-                        Ok(a) => d.args[i] = a,
-                        Err(()) => {
-                            bad = Some(i);
-                            return;
-                        }
-                    }
+                    let Ok(a) = s.check_template_arg(ft, depth, params[i], w, loc, &prior) else {
+                        bad = Some(i);
+                        return;
+                    };
+                    d.args[i] = a;
                 }
             });
             let Some(((), failed)) = r else {
                 return Err(DeductionFailure::new(Tdk::InstantiationDepth, d));
             };
-            if let Some(i) = bad.or_else(|| failed.is_some().then_some(written.len() - 1)) {
+            if let Some(i) = bad.or_else(|| failed.is_err().then_some(written.len() - 1)) {
                 d.info.param = u16::try_from(i).ok();
                 return Err(DeductionFailure::new(Tdk::InvalidExplicitArguments, d));
             }
-            explicit_n = written.len();
             // P with the explicit arguments substituted ([temp.deduct]/2).
             let levels = self.prior_levels(ft, depth, &d.args);
-            let shown = self.ast.types.arg_list(&d.args[..explicit_n]);
+            let shown = self.ast.types.arg_list(&d.args[..written.len()]);
             let tys = ptys.clone();
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
                 let mut sub = Substituter::new(s, &levels);
@@ -141,11 +138,11 @@ impl Sema<'_, '_> {
             });
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-                Some((Ok(t), None)) => ptys = t,
+                Some((Ok(t), Ok(()))) => ptys = t,
                 Some((_, failed)) => {
                     let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                     f.args = Some(shown);
-                    f.diag = failed.flatten();
+                    f.diag = failed.err().flatten();
                     return Err(f);
                 }
             }
@@ -171,11 +168,10 @@ impl Sema<'_, '_> {
             }
         }
         // §6.1 step 3: defaults, then completeness.
-        for j in 0..n {
+        for (j, &p) in params.iter().enumerate() {
             if !matches!(d.args[j].view(), ArgView::Null) {
                 continue;
             }
-            let p = params[j];
             let Some(def) = self.template_default(p) else {
                 d.info.param = u16::try_from(j).ok();
                 return Err(DeductionFailure::new(Tdk::Incomplete, d));
@@ -187,16 +183,15 @@ impl Sema<'_, '_> {
             });
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-                Some((Ok(a), None)) => d.args[j] = a,
+                Some((Ok(a), Ok(()))) => d.args[j] = a,
                 Some((_, failed)) => {
                     let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                     f.args = Some(shown);
-                    f.diag = failed.flatten();
+                    f.diag = failed.err().flatten();
                     return Err(f);
                 }
             }
         }
-        let _ = explicit_n;
         // §6.1 step 4: the specialization, its signature substituted.
         let sugared = self.ast.types.arg_list(&d.args);
         let canonical = self.ast.types.canonical_args(sugared);
@@ -206,9 +201,9 @@ impl Sema<'_, '_> {
         });
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-            Some((Ok(spec), None)) => Ok(spec),
+            Some((Ok(spec), Ok(()))) => Ok(spec),
             Some((_, failed)) => {
-                let mut diag = failed.flatten();
+                let mut diag = failed.err().flatten();
                 if let Some(spec) = self.ast.templates.find_spec(ft, canonical) {
                     match &diag {
                         Some(x) => {
@@ -262,18 +257,14 @@ impl Sema<'_, '_> {
         // function deduces from its type; otherwise non-deduced.
         if let Some(e) = a.expr {
             match self.overload_set_arg(e) {
-                Some(Some(f)) => {
+                OverloadArg::Single(f) => {
                     let ft = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-                    let addr = self.ast.exprs.get(self.ignore_parens(e)).kind()
-                        == ExprKind::UnaryOperator;
-                    at = if addr {
-                        self.ast.types.pointer_to(ft)
-                    } else {
-                        ft
-                    };
+                    let addr =
+                        self.ast.exprs.get(self.ignore_parens(e)).kind() == ExprKind::UnaryOperator;
+                    at = if addr { self.ast.types.pointer_to(ft) } else { ft };
                 }
-                Some(None) => return Tdk::Success,
-                None => {}
+                OverloadArg::NonDeduced => return Tdk::Success,
+                OverloadArg::NotASet => {}
             }
         }
         let t = &mut self.ast.types;
@@ -322,7 +313,8 @@ impl Sema<'_, '_> {
             self.ast.types.canonical_view(p)
         {
             let tmpl = self.ast.types.template_decl(name)?;
-            if Some(self.ast.first(tmpl)) != self.std_initializer_list().map(|x| self.ast.first(x)) {
+            if Some(self.ast.first(tmpl)) != self.std_initializer_list().map(|x| self.ast.first(x))
+            {
                 return None;
             }
             return match self.ast.types.args(args).first()?.view() {
@@ -336,24 +328,27 @@ impl Sema<'_, '_> {
     /// For an argument naming an overload set (possibly `&set`): the one
     /// non-template function it names, or `Some(None)` when it names
     /// several or a template; `None` when it is not an overload set.
-    fn overload_set_arg(&self, e: ExprId) -> Option<Option<DeclId>> {
+    fn overload_set_arg(&self, e: ExprId) -> OverloadArg {
         let mut e = self.ignore_parens(e);
         if self.ast.exprs.get(e).kind() == ExprKind::UnaryOperator {
             if self.ast.exprs.unary_op(e) != kiln_ast::expr::UnaryOp::AddrOf {
-                return None;
+                return OverloadArg::NotASet;
             }
             e = self.ignore_parens(self.ast.exprs.operand(e));
         }
         if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr {
-            return None;
+            return OverloadArg::NotASet;
         }
         let decls = self.ast.unresolved_decls(e);
-        let plain: Vec<DeclId> =
-            decls.iter().copied().filter(|&d| self.kind_of(d) != DeclKind::FunctionTemplate).collect();
+        let plain: Vec<DeclId> = decls
+            .iter()
+            .copied()
+            .filter(|&d| self.kind_of(d) != DeclKind::FunctionTemplate)
+            .collect();
         if plain.len() == 1 && plain.len() == decls.len() {
-            return Some(Some(plain[0]));
+            return OverloadArg::Single(plain[0]);
         }
-        Some(None)
+        OverloadArg::NonDeduced
     }
 
     /// The candidate note of a function template whose deduction failed
@@ -392,6 +387,17 @@ impl Sema<'_, '_> {
     }
 }
 
+/// What a call argument naming an overload set deduces from
+/// ([temp.deduct.call]/6).
+enum OverloadArg {
+    /// Not an overload set.
+    NotASet,
+    /// One non-template function: its type.
+    Single(DeclId),
+    /// Several, or a template: a non-deduced context.
+    NonDeduced,
+}
+
 /// `1st`, `2nd`, `3rd`, `4th`, …
 fn ordinal(n: u32) -> String {
     let suffix = match (n % 10, n % 100) {
@@ -402,4 +408,3 @@ fn ordinal(n: u32) -> String {
     };
     format!("{n}{suffix}")
 }
-

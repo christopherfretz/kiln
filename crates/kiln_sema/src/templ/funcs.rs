@@ -7,11 +7,11 @@
 //! translation unit.
 
 use kiln_ast::DeclId;
+use kiln_ast::QualType;
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::ids::ArgListId;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::TypeView;
-use kiln_ast::QualType;
 use kiln_source::Loc;
 
 use crate::Sema;
