@@ -2,34 +2,26 @@
 
 Branch `wp/073-concepts`, worktree `.worktrees/wp-073`.
 
+## Status: feature-complete for the package; in the exit gate (full CI)
+
 ## Works
-- `templ/concepts/{mod,sat,requires,normal}.rs`: concept-id satisfaction
-  (memoized on (concept, canonical args), counters `sat.count`/`cache_hits`),
-  expression-based &&/|| satisfaction, atoms substituted under a SFINAE
-  `ConstraintSubstitution` frame, non-bool atom error, §8.7 note chains
-  (single-arg "does not satisfy", elaborated comparisons, nested chains).
-- Concept-ids are checked when formed non-dependent (`build_concept_id`) and
-  when substituted (`Substituter::concept_id_expr`); `ExprNode.aux` holds the
-  result (`ExprArena::satisfied`), the Oven folds it.
-- Requires-expressions substituted (`Substituter::requires_expr`): params,
-  simple/type/compound(noexcept, return-type-requirement)/nested requirements.
-- static_assert of a failing concept-id/requires-expr prints clang's chain.
+- `templ/concepts/{mod,sat,requires,normal,subsume}.rs`: satisfaction
+  (memoized, counters `sat.count`/`sat.cache_hits`), requires-expressions,
+  hash-consed normal forms, DNF/CNF subsumption (cap 65,536), tie-break.
+- Call sites: function deduction, class/var template selection, partial
+  specializations, static_assert note chains.
+- Constrained `auto` variables and return types (`check_placeholder_constraint`),
+  abbreviated templates, `template<C T>`, `template<C<U> T>`.
+- Non-dependent requires-expressions evaluated at parse time.
+- Unqualified type-requirements (`typename X<T>;`).
+- 65 conformance tests in `tests/conformance/templates/concepts/` (all pass).
+- `<type_traits>` probe: 20 -> 10 (4 packs/WP-072, 2 alias dependent-member,
+  4 `__int128`).
+- Spec: "Landed (WP-073)" note in `spec/sema-templates.md` §11.2.
 
-- Constraint checks in function deduction (`deduce_call.rs`, Tdk
-  ConstraintsNotSatisfied + note chain), class/var template selection
-  (`ensure_template_constraints`), partial specs (`deduce_partial` +
-  `find_partial_decl` distinguishing same-args partials by printed head).
-- Eager evaluation of non-dependent requires-expressions (`act_requires_expr`).
-- Subsumption: `normal.rs` hash-consed normal forms, `subsume.rs` DNF/CNF
-  (cap 65,536 clauses), tie-break in `order.rs` (functions + partials).
-
-## Not yet
-- Constrained auto / abbreviated templates.
-- Tests in `tests/conformance/templates/concepts/`.
-
-## Known divergences
-- Type-requirement failure note is placed at the requires keyword (no type loc).
-- Member-access failure note at member name, clang at `.`.
+## Not done (owners in the spec note)
+- Packs in constraints (WP-072), generic lambdas, [over.match.best]/2.6,
+  `atom_cache`, `note_ambiguous_atomic_constraints`.
 
 ## Next step
-See "Not yet", in order.
+Full `cargo xtask ci` green, then hand back.
