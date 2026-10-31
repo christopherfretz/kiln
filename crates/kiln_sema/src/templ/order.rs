@@ -156,13 +156,25 @@ impl Sema<'_, '_> {
         canonical: ArgListId,
         loc: Loc,
     ) -> bool {
-        let written: Vec<TemplateArg> = self.ast.types.args(p.args).to_vec();
+        let mut written: Vec<TemplateArg> = Vec::new();
+        let mut packed = false;
+        for &a in self.ast.types.args(p.args) {
+            match a.view() {
+                // A converted pack (`X<T, Ts...>` of a variadic primary):
+                // its elements are substituted, then converted again.
+                ArgView::Pack(l) => {
+                    packed = true;
+                    written.extend_from_slice(self.ast.types.args(l));
+                }
+                _ => written.push(a),
+            }
+        }
         let deduced_elems: Vec<TemplateArg> = self.ast.types.args(deduced).to_vec();
         let mut args = Self::outer_levels(p.template, depth);
         args.push(deduced, p.partial, LevelMode::Substitute);
         let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
         let mut out = Vec::with_capacity(written.len());
-        let mut has_expr = false;
+        let mut has_expr = packed;
         let mut failed = false;
         {
             let mut s = Substituter::new(self, &args);

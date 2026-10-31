@@ -1872,6 +1872,11 @@ impl Parser<'_, '_> {
                             self.skip_until(&[Punct::RParen], false, true);
                             return Err(());
                         };
+                        // [temp.variadic]/5: `T x(args...)`.
+                        let e = match self.eat(Punct::Ellipsis) {
+                            Some(l) => self.s.act_pack_expansion(e, l),
+                            None => e,
+                        };
                         v.push(e);
                         if self.eat(Punct::Comma).is_none() {
                             break;

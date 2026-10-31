@@ -31,6 +31,8 @@ pub struct PackState {
     pub found: Option<(u32, String)>,
     /// The length of the expansion and the first pack's name.
     pub expanding: Option<(u32, String)>,
+    /// The `...` of the expansion, where a length mismatch is reported.
+    pub ellipsis: Option<Loc>,
 }
 
 /// The result of expanding one pattern.
@@ -80,7 +82,7 @@ impl Substituter<'_, '_, '_> {
             let second = name(self);
             let d = self
                 .sema
-                .diag(DiagId::sema_pack_length_mismatch, loc)
+                .diag(DiagId::sema_pack_length_mismatch, self.pack.ellipsis.unwrap_or(loc))
                 .arg(first)
                 .arg(second)
                 .arg(len)
@@ -116,9 +118,20 @@ impl Substituter<'_, '_, '_> {
     /// the current pack index.
     pub fn expand_pattern<T>(
         &mut self,
+        f: impl FnMut(&mut Self) -> SubstResult<T>,
+    ) -> SubstResult<Expansion<T>> {
+        self.expand_pattern_at(None, f)
+    }
+
+    /// [`Self::expand_pattern`] for the expansion whose `...` is at
+    /// `ellipsis`.
+    pub fn expand_pattern_at<T>(
+        &mut self,
+        ellipsis: Option<Loc>,
         mut f: impl FnMut(&mut Self) -> SubstResult<T>,
     ) -> SubstResult<Expansion<T>> {
         let saved_state = std::mem::take(&mut self.pack);
+        self.pack.ellipsis = ellipsis;
         let saved_index = self.pack_index.take();
         self.pack.probing = true;
         let probe = f(self);
@@ -202,10 +215,20 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes into a list of expressions that may contain pack
     /// expansions.
     pub fn expand_exprs(&mut self, es: &[ExprId]) -> SubstResult<Vec<ExprId>> {
-        self.expand_list(es, expr_pattern, Self::expr, |s, e| {
-            let loc = s.sema.ast.exprs.get(e).loc();
-            s.sema.act_pack_expansion(e, loc)
-        })
+        let mut out = Vec::with_capacity(es.len());
+        for &x in es {
+            let Some(p) = expr_pattern(self.sema, x) else {
+                out.push(self.expr(x)?);
+                continue;
+            };
+            // A `PackExpansionExpr` is located at its `...`.
+            let ellipsis = self.sema.ast.exprs.get(x).loc();
+            match self.expand_pattern_at(Some(ellipsis), |s| s.expr(p))? {
+                Expansion::Elements(v) => out.extend(v),
+                Expansion::Unexpanded(y) => out.push(self.sema.act_pack_expansion(y, ellipsis)),
+            }
+        }
+        Ok(out)
     }
 
     /// Maps the parameters `pp` of a pattern function to the parameters
@@ -255,7 +278,7 @@ impl Substituter<'_, '_, '_> {
         let pattern = pattern.ok_or(SubstFail)?;
         let ellipsis = self.sema.templ.fold_ellipsis.get(&e).copied().unwrap_or(loc);
         let init = self.opt_expr(init)?;
-        let elems = match self.expand_pattern(|s| s.expr(pattern))? {
+        let elems = match self.expand_pattern_at(Some(ellipsis), |s| s.expr(pattern))? {
             Expansion::Elements(v) => v,
             Expansion::Unexpanded(p) => {
                 let (l, r) = if right { (Some(p), init) } else { (init, Some(p)) };

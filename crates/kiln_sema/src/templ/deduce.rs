@@ -1086,8 +1086,13 @@ impl Sema<'_, '_> {
         match tdk {
             Tdk::Inconsistent => {
                 let (x, y) = (d.info.first?, d.info.second?);
-                let kind = match x.view() {
-                    ArgView::Type(_) => 0,
+                // A pack: the kind of its elements (clang prints `<int>`).
+                let first = match x.view() {
+                    ArgView::Pack(l) => self.ast.types.args(l).first().copied().unwrap_or(x),
+                    _ => x,
+                };
+                let kind = match first.view() {
+                    ArgView::Type(_) | ArgView::Pack(_) => 0,
                     ArgView::Template(_) => 2,
                     _ => 1,
                 };
@@ -1144,6 +1149,11 @@ impl Sema<'_, '_> {
     fn deduced_arg_str(&self, a: TemplateArg) -> String {
         match a.view() {
             ArgView::Type(q) => format!("'{}'", self.ty_str(q)),
+            ArgView::Pack(l) => {
+                let v: Vec<String> =
+                    self.ast.types.args(l).iter().map(|&x| self.arg_str(x)).collect();
+                format!("<{}>", v.join(", "))
+            }
             _ => self.arg_str(a),
         }
     }

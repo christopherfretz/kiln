@@ -306,10 +306,14 @@ impl Substituter<'_, '_, '_> {
                 let l = kiln_ast::ids::ListId::new(n.a());
                 if n.aux() != 0 {
                     let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
-                    let mut out = Vec::new();
-                    for x in items {
-                        out.push(self.init_value(x)?);
+                    // `T{...}` keeps its braced list as the one argument.
+                    if let [x] = items[..]
+                        && self.sema.ast.exprs.get(x).kind() == ExprKind::InitListExpr
+                    {
+                        let il = self.init_list(x)?;
+                        return Ok(self.sema.act_on_list_cast(ty, &il, loc));
                     }
+                    let out = self.init_items(&items)?;
                     let il = InitList { items: out, lbrace: loc, rbrace: end };
                     return Ok(self.sema.act_on_list_cast(ty, &il, loc));
                 }
@@ -612,13 +616,11 @@ impl Substituter<'_, '_, '_> {
         Ok(InitItem { designator: Vec::new(), value })
     }
 
-    /// A braced-init-list of the pattern (designators: a gap).
-    pub(crate) fn init_list(&mut self, e: ExprId) -> SubstResult<InitList> {
-        let n = *self.sema.ast.exprs.get(e);
-        let l = self.sema.ast.exprs.init_list_inits(e);
-        let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+    /// The initializer-clauses `items` of a braced list, pack expansions
+    /// expanded ([temp.variadic]/5).
+    fn init_items(&mut self, items: &[ExprId]) -> SubstResult<Vec<InitItem>> {
         let mut out = Vec::with_capacity(items.len());
-        for x in items {
+        for &x in items {
             if crate::templ::pack::expr_pattern(self.sema, x).is_some() {
                 for y in self.expand_exprs(&[x])? {
                     out.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
@@ -627,6 +629,15 @@ impl Substituter<'_, '_, '_> {
             }
             out.push(self.init_value(x)?);
         }
+        Ok(out)
+    }
+
+    /// A braced-init-list of the pattern (designators: a gap).
+    pub(crate) fn init_list(&mut self, e: ExprId) -> SubstResult<InitList> {
+        let n = *self.sema.ast.exprs.get(e);
+        let l = self.sema.ast.exprs.init_list_inits(e);
+        let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        let out = self.init_items(&items)?;
         let rbrace = self.sema.ast.exprs.end_loc(e).unwrap_or(n.loc());
         Ok(InitList { items: out, lbrace: n.loc(), rbrace })
     }
@@ -751,6 +762,12 @@ impl Substituter<'_, '_, '_> {
             }
             // `= {…}` and `{…}` alike: list-initialization ([dcl.init.list]/1).
             ExprKind::InitListExpr => Initializer::List(self.init_list(init)?),
+            // `T x(args...)`: the one written argument is an expansion.
+            ExprKind::PackExpansionExpr => {
+                let args = self.expand_exprs(&[init])?;
+                let r = self.sema.ast.exprs.end_loc(init).unwrap_or(n.loc());
+                Initializer::Paren(args, n.loc(), r)
+            }
             _ => {
                 let e = self.expr(init)?;
                 match style {
@@ -820,10 +837,7 @@ impl Substituter<'_, '_, '_> {
             .iter::<ExprId>(self.sema.ast.exprs.construct_args(e))
             .take_while(|&a| self.sema.ast.exprs.get(a).kind() != ExprKind::CXXDefaultArgExpr)
             .collect();
-        let mut out = Vec::with_capacity(items.len());
-        for x in items {
-            out.push(self.init_value(x)?);
-        }
+        let out = self.init_items(&items)?;
         Ok(InitList { items: out, lbrace, rbrace })
     }
 }

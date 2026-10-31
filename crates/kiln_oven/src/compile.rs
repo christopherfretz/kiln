@@ -3643,6 +3643,9 @@ impl Compiler<'_> {
                 let _ = self.lv(e, Access::Addr);
             }
             ExprKind::CXXDeleteExpr => self.delete_expr(e),
+            // `void()` (an empty comma fold, [temp.variadic]/10) or a
+            // discarded `T()`: no effect.
+            ExprKind::CXXScalarValueInitExpr => {}
             _ if self.kind(ty) == TyKind::Void => self.unsupported(e),
             _ if self.o.types.is_aggregate(ty) => {
                 let _ = self.materialize(e, ty);
