@@ -218,9 +218,9 @@ impl Sema<'_, '_> {
     /// A declaration statement ([stmt.dcl]).
     pub fn act_on_decl_stmt(&mut self, decls: &[DeclId], loc: Loc) -> StmtId {
         if !self.lambdas.is_empty()
-            && decls.iter().any(|&d| {
-                self.ast.decls.get(d).ty().is_some_and(|t| self.has_unexpanded_pack(t))
-            })
+            && decls
+                .iter()
+                .any(|&d| self.ast.decls.get(d).ty().is_some_and(|t| self.has_unexpanded_pack(t)))
         {
             self.note_unexpanded_in_lambda();
         }

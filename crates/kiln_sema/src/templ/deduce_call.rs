@@ -455,7 +455,10 @@ impl Sema<'_, '_> {
                 self.resugar_mismatch(p, &mut d);
                 return Err(DeductionFailure::new(r, d));
             }
-            if r == Tdk::Success && self.has_deducible_params(p, &d, false) && self.is_original_arg(a) {
+            if r == Tdk::Success
+                && self.has_deducible_params(p, &d, false)
+                && self.is_original_arg(a)
+            {
                 originals.push((i, p, self.adjusted_call_arg(p, a, d.depth)));
             }
         }
