@@ -2006,6 +2006,17 @@ and `DiagnoseMisalignedMembers`:
   - `case` values converted to the promoted type
   - `act_on_start_switch(loc, …)` and
     `act_on_finish_switch(…, cond_var)` bracket the body
+  - GNU case ranges `case lo ... hi` (WP-205): the parser emits the
+    `-Wgnu-case-range` extension at the `...`; `act_on_case_range`
+    converts both bounds like a case value and `act_on_case(value,
+    Some(hi), …)` builds the `CaseStmt`. At the end of the switch
+    (`check_case_ranges`, clang `ActOnFinishSwitchStmt`) the ranges are
+    sorted by `lo`; an empty one (`lo > hi`) is `empty case range
+    specified` and dropped; one overlapping a case value reports the
+    largest such value, and one overlapping the previous range reports
+    that range's `hi`, both as `duplicate case value` at the range with
+    a `previous case defined here` note. Template instantiation goes
+    through the same entry points.
 - **Jumps:**
   - `break` and `continue` outside a loop or switch are errors.
   - `return`:
@@ -2095,9 +2106,14 @@ and `DiagnoseMisalignedMembers`:
   its try-block (or in a nested try without a catch-all, as calls have
   no exception edges); iterates `goto` labels and loop back edges to a
   fixed point; and checks nothing in a function with an `if consteval`
-  (clang builds no CFG). Not modeled: unevaluated operands are walked,
-  indirect `goto`, GNU case ranges, and implicit destructors marked
-  `noreturn`.
+  (clang builds no CFG). The operands of `sizeof`/`alignof` are not
+  walked (a `noexcept` operand is, as clang's CFG does); a GNU case range
+  is reached when the constant condition is in `[lo, hi]` and counts
+  toward enumeration coverage (WP-205). Not modeled: implicit
+  destructors marked `noreturn`; indirect `goto` needs no model because
+  kiln does not parse `&&label` / `goto *p`. The fall-off analysis
+  behind -Wreturn-type / -Winvalid-noreturn (`falls_off`) still ignores
+  enumeration coverage and constant switches.
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element
