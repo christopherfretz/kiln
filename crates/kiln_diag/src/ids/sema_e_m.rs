@@ -123,7 +123,6 @@ sema_init_string_too_long = Error (2) "initializer-string for char array is too 
 sema_init_uninit_member = Error (4) "{0:constructor for|implicit default constructor for} {1} must explicitly initialize the {2:reference|const} member {3}";
 sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
 sema_initializer_overrides = ExtWarn [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
-// ----- WP-196 (designated initializers: partial overrides)
 sema_initializer_overrides_destructed = Error (1) "initializer would partially override prior initialization of object of type {0} with non-trivial destruction";
 sema_initializer_union_overrides = WarningError [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
