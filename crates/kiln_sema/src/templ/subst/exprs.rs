@@ -1104,6 +1104,19 @@ impl Substituter<'_, '_, '_> {
                 }
                 continue;
             }
+            if self.sema.ast.exprs.get(x).kind() == ExprKind::DesignatedInitExpr {
+                // `.m = e...`: one designated clause per element (clang
+                // expands the whole `DesignatedInitExpr`).
+                let init = self.sema.ast.exprs.designated_init(x);
+                if crate::templ::pack::expr_pattern(self.sema, init).is_some() {
+                    let ds = self.sema.ast.exprs.designators(x).to_vec();
+                    let designator = self.designators(&ds)?;
+                    for y in self.expand_exprs(&[init])? {
+                        out.push(InitItem { designator: designator.clone(), value: InitValue::Expr(y) });
+                    }
+                    continue;
+                }
+            }
             out.push(self.init_value(x)?);
         }
         Ok(out)
@@ -1166,12 +1179,13 @@ impl Substituter<'_, '_, '_> {
         for it in &l.items {
             let designator = self.written_designators(&it.designator)?;
             let value = match &it.value {
-                InitValue::Expr(e)
-                    if designator.is_empty()
-                        && crate::templ::pack::expr_pattern(self.sema, *e).is_some() =>
-                {
+                InitValue::Expr(e) if crate::templ::pack::expr_pattern(self.sema, *e).is_some() => {
+                    // `.m = e...` repeats the designators per element.
                     for y in self.expand_exprs(&[*e])? {
-                        items.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
+                        items.push(InitItem {
+                            designator: designator.clone(),
+                            value: InitValue::Expr(y),
+                        });
                     }
                     continue;
                 }
