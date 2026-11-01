@@ -747,8 +747,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::CXXDefaultArgExpr => {
-                let param = exprs.default_arg_param(e);
-                if let Some(c) = self.ast.decls.param(param).and_then(|p| p.default_arg) {
+                if let Some(c) = self.ast.default_arg_expr(e) {
                     kids.push((Node::Expr(c), None));
                 }
             }

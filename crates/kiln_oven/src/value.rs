@@ -772,7 +772,9 @@ impl Oven {
         let ast = b.ast();
         let q = ast.decls.get(t).ty().unwrap_or(QualType::INT);
         let l = ast.decls.lifetime_extended(t).copied();
-        let usable = ast.types.canonical(q).has_const_bit()
+        // An array temporary is const through its elements.
+        let usable = (ast.types.canonical(q).has_const_bit()
+            || ast.types.effective_quals(q).is_const())
             && l.is_some_and(|l| var_info(ast, l.extending).usable);
         let value = l.and_then(|l| l.value);
         let ty = self.types.intern(b, q);
