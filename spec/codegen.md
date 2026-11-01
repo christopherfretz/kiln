@@ -747,6 +747,12 @@ aarch64 and x86_64. Not implemented: `asm goto` (callbr), the `unwind`
 clobber inside a `try` (no `invoke`), `=@cc` outputs, register-variable
 operands, MMX type adjustment.
 
+**Landed (WP-140): `PredefinedExpr`.** The name is a private
+`unnamed_addr constant` array named `<spelling>.<mangled function>`
+(`__func__._Z1fv`), as clang names it (`Module::string_global_named`);
+in a constant initializer outside a function it is an ordinary `.str`
+literal. `tests/codegen/predefined.cpp`.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

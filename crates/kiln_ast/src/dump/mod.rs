@@ -606,7 +606,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXPseudoDestructorExpr
-            | ExprKind::CompoundLiteralExpr => push(n.a()),
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::PredefinedExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 // The parameter prints first (clang), then the replacement.
                 drop(push);
@@ -1862,6 +1863,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ExprKind::StringLiteral => {
                 self.line.push(' ');
                 ast.strings.write_literal(exprs.string_lit(e), &mut self.line);
+            }
+            ExprKind::PredefinedExpr => {
+                self.line.push(' ');
+                self.line.push_str(exprs.predefined_kind(e).spelling());
             }
             ExprKind::CXXBoolLiteralExpr => {
                 self.line.push_str(if exprs.bool_value(e) { " true" } else { " false" });

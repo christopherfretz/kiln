@@ -1099,3 +1099,14 @@ constraint_loc, expr }`, outputs then inputs), clobbers and labels
 `AstBuilder::gcc_asm_stmt(data, ops, bits, loc)`. A namespace-scope
 asm-declaration is `DeclKind::FileScopeAsm` (`AstBuilder::file_scope_asm`,
 `Ast::file_scope_asm_string`). `labels` is always empty (no `asm goto`).
+
+**Landed (WP-140): `PredefinedExpr`.** `__func__`, `__FUNCTION__`,
+`__PRETTY_FUNCTION__` ([dcl.fct.def.general]/8; clang `PredefinedExpr`):
+`aux` is the `PredefinedKind` (`Func`, `Function`, `PrettyFunction`;
+`Exprs::predefined_kind`), `a` the `StringLiteral` holding the name
+(`Exprs::predefined_name`, its only child). An lvalue of `const char[N]`;
+in a dependent context it has type `QualType::DEPENDENT` and no child.
+Built by `AstBuilder::predefined_expr(kind, ty, name, loc)`.
+`ExprArena::mark_instantiation_dependent(e)` sets
+`ExprDeps::INSTANTIATION` on a `SourceLocExpr` or `CXXDefaultArgExpr`
+whose function name changes per specialization (sema, §5.8).

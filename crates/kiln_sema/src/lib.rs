@@ -35,6 +35,7 @@ pub mod lookup;
 pub mod names;
 pub mod new_delete;
 mod oven_bridge;
+mod predefined;
 pub mod overload;
 mod range_for;
 mod rtti;

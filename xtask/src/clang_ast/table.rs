@@ -212,7 +212,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ChooseExpr", Unsupported(NOT_M2)),
     ("GNUNullExpr", Unsupported(NOT_M2)),
     ("VAArgExpr", Unsupported(NOT_M2)),
-    ("PredefinedExpr", Unsupported(NOT_M2)),
+    ("PredefinedExpr", Keep),
     ("UserDefinedLiteral", Unsupported(NOT_M2)),
     ("DesignatedInitExpr", Unsupported(NOT_M2)),
     ("DesignatedInitUpdateExpr", Unsupported(NOT_M2)),
@@ -323,6 +323,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
         "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" | "CXXPseudoDestructorExpr" => &[],
+        "PredefinedExpr" => &["name"],
         // `isPlacement` and `initStyle` are implied by the children.
         "CXXNewExpr" => &[
             "isGlobal",
@@ -563,6 +564,8 @@ pub const M2_KINDS: &[&str] = &[
     // GNU asm (WP-140).
     "FileScopeAsmDecl",
     "GCCAsmStmt",
+    // Predefined identifiers (WP-140).
+    "PredefinedExpr",
     "IntegerLiteral",
     "FloatingLiteral",
     "CharacterLiteral",

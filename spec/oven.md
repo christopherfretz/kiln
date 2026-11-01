@@ -1220,6 +1220,10 @@ lowers it to the same trap as `goto`, giving clang's
 A constexpr function that contains asm on a path not taken still
 evaluates.
 
+**Landed (WP-140): `PredefinedExpr`.** An lvalue of its `StringLiteral`
+child: the same static string object as the literal
+(`tests/conformance/dcl.fct.def.general/predefined-constexpr.cpp`).
+
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:
 - `expr_const.rs`: one test per [expr.const]/5 bullet reachable in M2 with

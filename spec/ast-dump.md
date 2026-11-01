@@ -507,6 +507,11 @@ operand expressions are the children; the template, constraints and
 clobbers are not printed, as in clang's text dump). Both are kept by the
 `xtask clang-ast` normalizer. `tests/conformance/ast/dcl.asm/`.
 
+**Landed (WP-140).** `PredefinedExpr` prints its value category and
+spelling (`'const char[2]' lvalue __func__`) with the `StringLiteral` as
+its child (none when dependent), as clang does; kept by the normalizer.
+`tests/conformance/ast/dcl.fct.def.general/`.
+
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]
 [--all-files] [--filter=<substr>] [-- <clang args>]` prints clang's AST of

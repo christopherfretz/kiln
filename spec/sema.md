@@ -1392,6 +1392,32 @@ conflict check, the C++17 "asm in constexpr function" extension warning;
 `!srcloc` values in headers and macro expansions do not match clang's
 encoding.
 
+### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
+`act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing
+function (or, outside one, the translation unit with
+`-Wpredefined-identifier-outside-function`); a dependent context gives a
+dependent `PredefinedExpr` that template instantiation rebuilds;
+otherwise a `const char[N]` lvalue holding the name.
+`compute_predefined_name(kind, f)` is clang 19's
+`PredefinedExpr::ComputeName`: `__func__`/`__FUNCTION__` are the bare
+name (`operator int`, `operator()`, `top level` is only pretty);
+`__PRETTY_FUNCTION__` prints `virtual `/`static `, the return type
+(`auto` for lambdas, none for constructors and destructors, the
+instantiation pattern's otherwise), the scope with specialization
+arguments (`A<int>::`), the pattern's parameters (`, ...` if variadic),
+cv and ref qualifiers, and ` [T = int, ...]`: enclosing implicit class
+specializations' arguments (outermost first) then the function template
+specialization's, printed with their types (`2U`, `'a'`, packs
+`<int, char *>`, `x:auto` for a generic lambda's invented parameter).
+The source-location builtins use the same printer (§9.5 of
+sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
+in a dependent context, or a default argument evaluating one used there,
+is marked instantiation-dependent and recomputed at instantiation.
+Tests: `tests/conformance/dcl.fct.def.general/predefined-*.cpp`,
+`expr.const/builtins-srcloc-template-run.cpp`, `tests/codegen/predefined.cpp`.
+Gap: a function with a deduced return type prints `auto` where clang
+evaluates the source-location name after deduction.
+
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
 Sema does no constant evaluation of its own: every constant it needs

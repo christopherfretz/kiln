@@ -1183,6 +1183,31 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::CXXNullPtrLiteralExpr, ValueCategory::PRValue, deps, 0, ty, loc, 0, 0)
     }
 
+    /// `__func__`, `__FUNCTION__` or `__PRETTY_FUNCTION__`
+    /// ([dcl.fct.def.general]/8): `PredefinedExpr`, an lvalue of type `ty`
+    /// (`const char[N]`, or the dependent type in a dependent context,
+    /// where `name` is `None`); `name` is the `StringLiteral` holding the
+    /// value (its child).
+    pub fn predefined_expr(
+        &mut self,
+        kind: crate::expr::PredefinedKind,
+        ty: QualType,
+        name: Option<ExprId>,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(
+            ExprKind::PredefinedExpr,
+            ValueCategory::LValue,
+            deps,
+            kind as u8,
+            ty,
+            loc,
+            name.map_or(0, ExprId::raw),
+            0,
+        )
+    }
+
     /// A source-location builtin call `kind()` ([support.srcloc.cons];
     /// clang `SourceLocExpr`) of type `ty` written in context `ctx`, from
     /// `loc` to the `)` at `rparen`: a non-dependent prvalue (sema keeps a

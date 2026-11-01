@@ -3130,6 +3130,12 @@ impl Compiler<'_> {
                 }
                 Place::Mem(r)
             }
+            // `__func__` and friends designate their `StringLiteral`
+            // ([dcl.fct.def.general]/8; clang `getFunctionName`).
+            ExprKind::PredefinedExpr if self.ast().exprs.predefined_name(e).is_some() => {
+                let sl = self.ast().exprs.predefined_name(e).unwrap_or(e);
+                self.lv(sl, acc)
+            }
             ExprKind::StringLiteral => {
                 let s = self.ast().exprs.string_lit(e);
                 let ty = self.ety(e);

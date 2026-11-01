@@ -1144,6 +1144,11 @@ impl<'a> Printer<'a, '_> {
                     format!("{} {lit}", self.expr_head(n, k)?)
                 };
             }
+            "PredefinedExpr" => {
+                let v = text(n, "name").ok_or("clang-ast: PredefinedExpr without a name")?;
+                line = format!("{} {v}", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
             "CXXBoolLiteralExpr" => {
                 let v = match n.get("value") {
                     Some(Json::Bool(b)) => *b,

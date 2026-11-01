@@ -126,6 +126,9 @@ keywords! {
     BuiltinFile = "__builtin_FILE";
     BuiltinFileName = "__builtin_FILE_NAME";
     BuiltinFunction = "__builtin_FUNCTION";
+    Func = "__func__";
+    FunctionName = "__FUNCTION__";
+    PrettyFunction = "__PRETTY_FUNCTION__";
     BuiltinLine = "__builtin_LINE";
     BuiltinColumn = "__builtin_COLUMN";
     BuiltinSourceLocation = "__builtin_source_location";

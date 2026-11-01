@@ -126,17 +126,25 @@ impl<'a> AstNames<'a> {
     /// struct)`, enclosing functions `f(int, char *)`. A declaration
     /// directly inside a function prints its bare name.
     pub fn write_qualified_name(&self, d: DeclId, out: &mut String) {
+        self.write_scope_prefix(d, false, out);
+        self.write_component(d, out);
+    }
+
+    /// Appends the scopes of `d`'s qualified name, each followed by `::`
+    /// (empty directly inside a function); with `spec_args`, class
+    /// template specializations print their arguments without trailing
+    /// defaults (clang `NamedDecl::printNestedNameSpecifier`, `A<int>::`).
+    pub fn write_scope_prefix(&self, d: DeclId, spec_args: bool, out: &mut String) {
         let n = self.ast.decls.get(d);
         if let Some(ctx) = n.ctx()
             && !self.ast.decls.get(ctx).kind().is_function()
         {
-            self.write_scope_chain(ctx, 0, out);
+            self.write_scope_chain(ctx, 0, spec_args, out);
         }
-        self.write_component(d, out);
     }
 
     /// Appends `ctx` and its parents, each followed by `::`.
-    fn write_scope_chain(&self, ctx: DeclId, depth: u32, out: &mut String) {
+    fn write_scope_chain(&self, ctx: DeclId, depth: u32, spec_args: bool, out: &mut String) {
         if depth > MAX_DEPTH {
             out.push_str("...::");
             return;
@@ -147,7 +155,7 @@ impl<'a> AstNames<'a> {
             return;
         }
         if let Some(parent) = n.ctx() {
-            self.write_scope_chain(parent, depth + 1, out);
+            self.write_scope_chain(parent, depth + 1, spec_args, out);
         }
         let skip = match kind {
             DeclKind::LinkageSpec | DeclKind::Export => true,
@@ -161,6 +169,12 @@ impl<'a> AstNames<'a> {
         };
         if !skip {
             self.write_component(ctx, out);
+            if spec_args
+                && !self.is_unnamed(ctx)
+                && let Some(args) = self.ast.spec_print_args(ctx)
+            {
+                write_arg_list(&self.ast.types, self, args, out);
+            }
             if kind.is_function() {
                 self.write_function_scope(ctx, out);
             }
@@ -560,6 +574,7 @@ impl<'a> AstNames<'a> {
                 }
                 self.write_name(exprs.decl(e), out);
             }
+            ExprKind::PredefinedExpr => out.push_str(exprs.predefined_kind(e).spelling()),
             ExprKind::SourceLocExpr => {
                 out.push_str(exprs.source_loc_kind(e).spelling());
                 out.push_str("()");

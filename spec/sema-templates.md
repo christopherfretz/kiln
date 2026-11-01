@@ -2850,10 +2850,10 @@ explicit specialization errors remain. The blockers are:
   evaluation, compile-fail and run), `tests/codegen/builtins_*.cpp` (5
   IR-diff programs), the `templates/builtins/has-builtin-*` probes, and
   three `bench/oven/builtins-*` entries.
-- Gaps: `__builtin_FUNCTION` in a function with a deduced return type
-  prints `auto` (clang prints the deduced type), and the
-  `[T = int]` template-argument suffix clang appends inside templates
-  is not produced. A `CXXDefaultInitExpr` does not yet take the
+- Gaps: `__builtin_source_location` in a function with a deduced return
+  type prints `auto` (clang prints the deduced type). (The
+  `[T = int]` template-argument suffix inside templates: Landed (WP-140),
+  spec/sema.md §7.8.) A `CXXDefaultInitExpr` does not yet take the
   location of the constructor that uses it (owner: WP-067b).
 
 **Landed (WP-071): function templates.**

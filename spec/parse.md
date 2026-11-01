@@ -841,6 +841,10 @@ clang does. `asm goto` is parsed and then reported as
 `'asm goto' is not supported yet` (callbr lowering is not implemented).
 Not implemented: `asm goto`, MS-style `__asm { }` blocks.
 
+**Landed (WP-140).** The predefined identifiers `__func__`,
+`__FUNCTION__` and `__PRETTY_FUNCTION__` are keywords and primary
+expressions ([dcl.fct.def.general]/8) passed to `act_on_predefined_expr`.
+
 - **Other declarations:**
   - pack expansions in dynamic exception specifications
   - `auto` deduction from braced lists (`std::initializer_list`)
