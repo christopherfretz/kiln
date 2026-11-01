@@ -1910,8 +1910,13 @@ impl Sema<'_, '_> {
                 };
                 inits.push(e);
             }
-            if self.check_remaining_dtors(&fields, dtors, designated, cur.saturating_sub(nb), dtor_end)
-            {
+            if self.check_remaining_dtors(
+                &fields,
+                dtors,
+                designated,
+                cur.saturating_sub(nb),
+                dtor_end,
+            ) {
                 return self.recover(ty, &inits, lbrace);
             }
             // A field whose initializer failed makes the list invalid
@@ -1947,7 +1952,8 @@ impl Sema<'_, '_> {
         }
         // [dcl.init.aggr]/8: the element destructor, at the list's `}`
         // (`init_dtor.rs`); not within a designator path's subobject.
-        if sub.entry.is_none() && self.check_element_dtor(elem, self.agg_dtor_end(sub.braced, rbrace))
+        if sub.entry.is_none()
+            && self.check_element_dtor(elem, self.agg_dtor_end(sub.braced, rbrace))
         {
             *pos = items.len();
             return self.recover(ty, &[], lbrace);
