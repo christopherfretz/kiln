@@ -1467,7 +1467,7 @@ impl Oven {
         let es = self.types.size(elem).max(1);
         let off = u64::from(p.off);
         if let TyKind::Array { elem: e, n } = self.types.kind(a.ty)
-            && e == elem
+            && self.types.same_unqualified(e, elem)
         {
             return Ok((0, n, off / es, true));
         }
@@ -1575,11 +1575,7 @@ impl Oven {
                     t = elem;
                 }
                 TyKind::Record { .. } => {
-                    let Some(f) = self.types.fields(t).iter().find(|f| {
-                        f.width.is_none()
-                            && off >= f.offset
-                            && off < f.offset + self.types.size(f.ty).max(1)
-                    }) else {
+                    let Some(f) = self.types.field_at(t, off) else {
                         return t;
                     };
                     off -= f.offset;
@@ -1759,7 +1755,13 @@ impl Oven {
                             active: active.map(|i| fields[i as usize].decl),
                         });
                     }
-                    let Some(f) = fields.iter().find(|f| contains(f)) else { return Ok(()) };
+                    let Some(f) = self
+                        .types
+                        .field_at(t, rel)
+                        .or_else(|| fields.iter().find(|f| contains(f)).copied())
+                    else {
+                        return Ok(());
+                    };
                     if f.width.is_some() {
                         return Ok(());
                     }
@@ -2075,11 +2077,7 @@ impl Oven {
                     t = elem;
                 }
                 TyKind::Record { .. } => {
-                    let f = self.types.fields(t).iter().find(|f| {
-                        f.width.is_none()
-                            && off >= f.offset
-                            && off < f.offset + self.types.size(f.ty).max(1)
-                    });
+                    let f = self.types.field_at(t, off);
                     match f {
                         Some(f)
                             if !f.base

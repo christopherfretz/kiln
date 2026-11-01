@@ -792,11 +792,7 @@ impl Oven {
                     t = elem;
                 }
                 TyKind::Record { .. } => {
-                    let Some(f) = self.types.fields(t).iter().find(|f| {
-                        f.width.is_none()
-                            && rel >= f.offset
-                            && rel < f.offset + self.types.size(f.ty).max(1)
-                    }) else {
+                    let Some(f) = self.types.field_at(t, rel) else {
                         break;
                     };
                     if f.base {

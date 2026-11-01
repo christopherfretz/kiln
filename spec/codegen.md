@@ -528,7 +528,9 @@ The normative description is spec/driver.md "Code generation". In short:
   `const T(&)[N]` to a `T[N]` argument, copy-initializing a class object
   from an lvalue (so a function cannot return a named local or a
   parameter of class type), `S{...}` temporaries, and binding a
-  reference to a temporary.
+  reference to a temporary. In kiln_codegen itself, a local aggregate
+  whose folded initializer the constant lowering cannot spell is
+  initialized as written (`emit_agg_into`, WP-201).
 - **New/delete (§3.1).** The EH cleanup is emulated only for
   initializers that cannot throw; clang's `invoke` + landing pad for a
   throwing one waits for EH. The placement-argument alignment is

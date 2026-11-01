@@ -408,7 +408,7 @@ impl Sema<'_, '_> {
         for &e in &ops {
             if let Some(c) = self.operand_class(e) {
                 let t = self.ety(e);
-                let _ = self.require_complete(t, loc);
+                let _ = self.require_complete_silent(t, loc);
                 let _ = c;
             }
         }
@@ -719,7 +719,7 @@ impl Sema<'_, '_> {
         let obj = if reversed { ops[1] } else { ops[0] };
         let Some(c) = self.operand_class(obj) else { return };
         let t = self.ety(obj);
-        if !self.require_complete(t, loc) && self.ast.definition(c).is_none() {
+        if !self.require_complete_silent(t, loc) && self.ast.definition(c).is_none() {
             return;
         }
         let Some(def) = self.ast.definition(c) else { return };

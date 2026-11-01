@@ -390,6 +390,10 @@ literal is one instruction and one step, not an interpreted loop.
   elements left and a size that is a multiple of the element size
   (`note_constexpr_memcpy_*`: null, type pun, non-trivial, overlap for
   `memcpy`, unsupported); `memmove` handles overlap in either direction.
+  The type check compares array types element-wise without qualifiers
+  (`Types::same_unqualified`), and a pointer that designates a whole
+  array (sema's implicit copy assignment of an array member passes
+  `&this->m`) copies the array's elements (WP-201).
   The fast path compares, scans or moves bytes directly when the
   elements are one byte (or, for `memcpy`/`memmove`, scalars) and no
   union is involved; any irregularity falls back to the element-wise
@@ -783,8 +787,7 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   `method_call` lowers it to `Copy [this, src, U]`). A pointer into an
   array member that shares its offset with a preceding zero-size member
   (`char __padding_[0]` before the short string's `__data_`) designates
-  that array: the subobject search for an offset (`Types::extent_in`)
-  skips a zero-size member at the offset in favour of a later sized one
+  that array (`Types::field_at` skips zero-size members, WP-201, "Classes")
   (`tests/conformance/class.union/constexpr-trivial-assign.cpp`,
   `tests/conformance/expr.add/constexpr-zero-size-member.cpp`).
 
@@ -1019,6 +1022,16 @@ object's, which is precise for constant evaluation because no constant
 expression can end a subobject's lifetime independently except through a
 union (tracked) or an explicit destructor call (tracked in
 `std::allocator` storage, "Transient allocation", WP-212).
+Looking a member up by offset (`Types::field_at`, `subobject_at`,
+`has_member_at`) skips zero-size members (libc++'s `char __padding_[0]`
+shares its offset with the next member). Within a union, extents are
+computed per member, so a path through a bit-field member of a union
+resolves (WP-201). Extents compare element types up to array-element
+qualifiers (`Types::same_unqualified`): `p[1][2]` through a `const S&`
+designates the member `P[2][3]` although the subscript's element type is
+`const P[3]` (WP-201). A function named by a `DeclRefExpr` or a member access
+(`t.f` with `f` a static member function) is an lvalue whose address is
+`fn_ptr(func_index)`; references to functions evaluate to it (WP-201).
 
 **Static members and function lvalues (WP-207).** `E.m`/`E->m` naming a
 static data member evaluates `E` for its side effects only
