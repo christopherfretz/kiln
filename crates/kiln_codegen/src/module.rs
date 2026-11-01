@@ -61,6 +61,13 @@ impl Sig {
     pub fn sret(&self) -> bool {
         matches!(self.info.ret.kind, ArgKind::Indirect { .. })
     }
+
+    /// The return or some argument is passed by address (`sret`,
+    /// `byval`, or a pointer to a temporary): clang
+    /// `ConstructAttributeList`'s `AddPotentialArgAccess` cases.
+    pub fn passes_indirect(&self) -> bool {
+        self.sret() || self.info.args.iter().any(|a| matches!(a.kind, ArgKind::Indirect { .. }))
+    }
 }
 
 /// A definition to emit (clang `DeferredDeclsToEmit` entry).
@@ -1204,7 +1211,7 @@ impl<'a> Cg<'a> {
         // clang `ConstructAttributeList`: a non-throwing type or a
         // `NoThrowAttr` (a recognized C library function).
         let mut cp = Vec::new();
-        let const_pure = crate::builtins::const_pure_attrs(ast, first, &mut cp);
+        let const_pure = crate::builtins::const_pure_attrs(ast, first, sig, &mut cp);
         let nothrow = sig.nothrow || const_pure || ast.has_nothrow_attr(first);
         if nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));

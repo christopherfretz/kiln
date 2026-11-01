@@ -29,6 +29,11 @@ impl Substituter<'_, '_, '_> {
             && self.sema.ast.definition(m) == Some(m)
     }
 
+    /// Whether record `m` of the pattern is an anonymous struct or union.
+    pub(crate) fn is_anonymous_record(&self, m: DeclId) -> bool {
+        self.sema.ast.decls.record(m).is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS))
+    }
+
     /// Unnamed member class `m` of the pattern: defined now with its
     /// members; an anonymous struct or union then declares its member
     /// object and injects its members' names into the class being
@@ -98,7 +103,8 @@ impl Substituter<'_, '_, '_> {
     /// ([dcl.attr.grammar]/5 appertain to the class; clang
     /// `InstantiateAttrs`): copied, with a dependent `alignas` operand
     /// substituted. A failed operand drops the attribute (diagnosed).
-    /// Also used for a data member's attributes (`field_decl`).
+    /// Also used for a data member's attributes (`field_decl`) and a
+    /// function's (`function_decl`, `function_spec_signature`).
     pub(crate) fn class_attrs(&mut self, spec: DeclId, def: DeclId) {
         let ast = &self.sema.ast;
         let list = ast.attrs.of_decl(def);

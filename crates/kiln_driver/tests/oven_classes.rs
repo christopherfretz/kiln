@@ -77,10 +77,11 @@ fn deep_spines() {
          static_assert(f(1) == {});\n",
         2 - n as i64
     );
-    // Parse and sema may recurse along the spines: give them room.
+    // Parse and sema may recurse along the spines: give them room. The
+    // comma spine's left operands warn as in clang (-Wunused-value).
     let h = std::thread::Builder::new()
         .stack_size(256 << 20)
-        .spawn(move || kiln(&[], &src))
+        .spawn(move || kiln(&["-Wno-unused-value"], &src))
         .expect("thread");
     let o = h.join().expect("join");
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));

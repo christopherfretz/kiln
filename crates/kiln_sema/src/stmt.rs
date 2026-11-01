@@ -244,51 +244,119 @@ impl Sema<'_, '_> {
     }
 
     /// The statement attributes `attrs` written before `sub`, at `loc`
-    /// ([dcl.attr.grammar]/5; clang's `ProcessStmtAttributes`). Only
-    /// `[[assume]]` is kept (in an `AttributedStmt`); it applies to a null
-    /// statement only ([dcl.attr.assume]/1). The assumption is
-    /// contextually converted to `bool` unless dependent, and a C++23
-    /// extension before C++23 (`pre_cxx23`, under `-pedantic`).
+    /// ([dcl.attr.grammar]/5; clang's `ProcessStmtAttributes`), under
+    /// language standard `std`. `[[assume]]`, `[[likely]]`,
+    /// `[[unlikely]]` and `[[fallthrough]]` are kept (in an
+    /// `AttributedStmt`); none applies to a declaration statement.
+    /// `[[assume]]` and `[[fallthrough]]` apply to a null statement only
+    /// ([dcl.attr.assume]/1, [dcl.attr.fallthrough]/1), a fallthrough
+    /// statement only inside a switch (clang
+    /// `err_fallthrough_attr_outside_switch`; whether it directly precedes
+    /// a case label is clang's CFG analysis, not checked). `likely` and
+    /// `unlikely` exclude each other ([dcl.attr.likelihood]/1). The
+    /// assumption is contextually converted to `bool` unless dependent.
+    /// Each attribute newer than `std` is an extension warning
+    /// (`-Wc++17-attribute-extensions`, `-Wc++20-…`, `-Wc++23-…` under
+    /// `-pedantic`).
     pub fn act_on_attributed_stmt(
         &mut self,
         attrs: &[kiln_ast::AttrId],
         sub: StmtId,
         loc: Loc,
-        pre_cxx23: bool,
+        std: kiln_lex::Std,
     ) -> StmtId {
         use kiln_ast::attr::AttrKind;
+        use kiln_lex::Std;
         let sub_kind = self.ast.stmts.get(sub).kind();
         let mut kept = Vec::new();
+        let mut likelihood: Option<kiln_ast::attr::AttrNode> = None;
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
-            if node.kind != AttrKind::ASSUME {
-                continue;
-            }
+            let name = match node.kind {
+                AttrKind::ASSUME => "assume",
+                AttrKind::LIKELY => "likely",
+                AttrKind::UNLIKELY => "unlikely",
+                AttrKind::FALLTHROUGH => "fallthrough",
+                _ => continue,
+            };
             if sub_kind == StmtKind::DeclStmt {
-                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg("assume");
+                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg(name);
                 self.emit(msg);
                 continue;
             }
-            if sub_kind != StmtKind::NullStmt {
+            if matches!(node.kind, AttrKind::ASSUME | AttrKind::FALLTHROUGH)
+                && sub_kind != StmtKind::NullStmt
+            {
                 let msg = self
                     .diag(DiagId::sema_attribute_wrong_stmt_type, node.loc)
-                    .arg("assume")
+                    .arg(name)
                     .arg("empty statements");
                 self.emit(msg);
                 continue;
             }
-            let Some(e) = ExprId::from_raw(node.a) else { continue };
-            let Some(e) = self.build_cxx_assume_expr(e) else { continue };
-            if pre_cxx23 {
-                let msg = self.diag(DiagId::ext_cxx23_attr, node.loc).arg("assume");
-                self.emit(msg);
+            match node.kind {
+                AttrKind::FALLTHROUGH => {
+                    if self.func.as_ref().is_none_or(|f| f.switches.is_empty()) {
+                        let msg = self.diag(DiagId::sema_fallthrough_outside_switch, node.loc);
+                        self.emit(msg);
+                        continue;
+                    }
+                    if std < Std::Cxx17 && node.syntax == kiln_ast::attr::AttrSyntax::Cxx11 {
+                        let msg = self.diag(DiagId::ext_cxx17_attr, node.loc).arg(name);
+                        self.emit(msg);
+                    }
+                    kept.push(a);
+                }
+                AttrKind::LIKELY | AttrKind::UNLIKELY => {
+                    if std < Std::Cxx20 && node.syntax == kiln_ast::attr::AttrSyntax::Cxx11 {
+                        let msg = self.diag(DiagId::ext_cxx20_attr, node.loc).arg(name);
+                        self.emit(msg);
+                    }
+                    if let Some(prev) = likelihood
+                        && prev.kind != node.kind
+                    {
+                        let other =
+                            if prev.kind == AttrKind::LIKELY { "likely" } else { "unlikely" };
+                        let msg = self
+                            .diag(DiagId::sema_attributes_not_compatible, node.loc)
+                            .arg(name)
+                            .arg(other)
+                            .with_note(self.diag(DiagId::note_conflicting_attribute, prev.loc));
+                        self.emit(msg);
+                        continue;
+                    }
+                    likelihood = Some(node);
+                    kept.push(a);
+                }
+                _ => {
+                    let Some(e) = ExprId::from_raw(node.a) else { continue };
+                    let Some(e) = self.build_cxx_assume_expr(e) else { continue };
+                    if std < Std::Cxx23 {
+                        let msg = self.diag(DiagId::ext_cxx23_attr, node.loc).arg(name);
+                        self.emit(msg);
+                    }
+                    kept.push(self.assume_attr(node, e));
+                }
             }
-            kept.push(self.assume_attr(node, e));
         }
         if kept.is_empty() {
             return sub;
         }
         self.builder().attributed_stmt(&kept, sub, loc)
+    }
+
+    /// The likelihood attribute (`[[likely]]`/`[[unlikely]]`) of `s`, if
+    /// it is an `AttributedStmt` with one (clang `Stmt::getLikelihood`).
+    fn likelihood_attr(&self, s: StmtId) -> Option<kiln_ast::attr::AttrNode> {
+        use kiln_ast::attr::AttrKind;
+        if self.ast.stmts.get(s).kind() != StmtKind::AttributedStmt {
+            return None;
+        }
+        self.ast
+            .lists
+            .iter::<kiln_ast::AttrId>(self.ast.stmts.stmt_attrs(s))
+            .map(|a| *self.ast.attrs.get(a))
+            .find(|n| matches!(n.kind, AttrKind::LIKELY | AttrKind::UNLIKELY))
     }
 
     /// The `[[assume]]` attribute `node` with built assumption `e`
@@ -392,6 +460,22 @@ impl Sema<'_, '_> {
         els: Option<StmtId>,
         loc: Loc,
     ) -> StmtId {
+        // [dcl.attr.likelihood]: both branches equally likely (clang
+        // `ActOnIfStmt`, `Stmt::determineLikelihoodConflict`). clang
+        // reports it straight to the engine (`Diags.Report`): again for
+        // each instantiation, without instantiation context notes.
+        if let (Some(t), Some(e)) =
+            (self.likelihood_attr(then), els.and_then(|e| self.likelihood_attr(e)))
+            && t.kind == e.kind
+        {
+            let name =
+                if t.kind == kiln_ast::attr::AttrKind::LIKELY { "likely" } else { "unlikely" };
+            self.diag(DiagId::sema_likelihood_if_conflict, t.loc)
+                .arg(name)
+                .with_note(self.diag(DiagId::note_conflicting_attribute, e.loc))
+                .allow_duplicate()
+                .emit(self.diags);
+        }
         let data = IfData { init, cond_var, cond, then: Some(then), els };
         self.builder().if_stmt(kind, data, loc)
     }
@@ -1033,7 +1117,7 @@ impl Sema<'_, '_> {
                 let body = self.ast.stmts.range_for_data(s).body;
                 Falloff::Maybe.min_with(Falloff::Always, Some(self.has_return(body)))
             }
-            StmtKind::LabelStmt => self.falls_off(StmtId::new(n.b())),
+            StmtKind::LabelStmt | StmtKind::AttributedStmt => self.falls_off(StmtId::new(n.b())),
             StmtKind::CaseStmt => self.falls_off(self.ast.stmts.case_data(s).sub),
             StmtKind::DefaultStmt => self.falls_off(self.ast.stmts.default_sub(s)),
             StmtKind::SwitchStmt => {
@@ -1133,7 +1217,7 @@ impl Sema<'_, '_> {
             StmtKind::SwitchStmt => vec![st.switch_data(s).body],
             StmtKind::CaseStmt => vec![st.case_data(s).sub],
             StmtKind::DefaultStmt => vec![st.default_sub(s)],
-            StmtKind::LabelStmt => vec![StmtId::new(n.b())],
+            StmtKind::LabelStmt | StmtKind::AttributedStmt => vec![StmtId::new(n.b())],
             StmtKind::CXXTryStmt => std::iter::once(st.try_block(s))
                 .chain(self.ast.lists.iter::<StmtId>(st.try_handlers(s)))
                 .collect(),

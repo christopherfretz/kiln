@@ -320,10 +320,6 @@ pub struct Sema<'a, 'sm> {
     /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
     /// their templates per specialization.
     pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
-    /// The member aliases standing for a dependent `using typename
-    /// B<T>::name;` ([`Sema::act_on_using_typename_declarator`]): an
-    /// instantiation redoes the using-declarator.
-    pub(crate) using_typename: kiln_source::fx::FxHashSet<DeclId>,
     pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
     /// The inheriting constructors declared, by (derived class, base
     /// constructor) (WP-114, clang `findInheritingConstructor`'s lookup).
@@ -388,7 +384,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             rtti: true,
             range_lifetime_extension: false,
             pack: (0, Vec::new()),
-            scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
+            scopes: vec![scope::Scope {
+                first_decl: 0,
+                ..scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))
+            }],
             ctx: tu,
             func: None,
             unevaluated: 0,
@@ -452,7 +451,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
-            using_typename: kiln_source::fx::FxHashSet::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),

@@ -75,6 +75,7 @@ pub(crate) fn shape(kind: TypeKind) -> Shape {
         | K::IncompleteArray
         | K::Record
         | K::Enum
+        | K::UnresolvedUsing
         | K::Complex
         | K::Atomic
         | K::QualifiedArray

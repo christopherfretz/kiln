@@ -192,6 +192,18 @@ impl Substituter<'_, '_, '_> {
                     .get(decl)
                     .ctx()
                     .is_some_and(|c| self.sema.kind_of(c) == DeclKind::CXXRecord);
+                if ctx_is_record
+                    && !self.locals.contains_key(&decl)
+                    && self.class_not_instantiated(decl, loc)?
+                {
+                    // A member typedef of a class pattern that is not
+                    // being instantiated (the constructor signature of an
+                    // implicit deduction guide): the substituted
+                    // underlying type, sugar kept (clang's guide
+                    // transform clones the typedef).
+                    let u = self.ty(underlying, loc)?;
+                    return Ok(self.sema.ast.types.typedef_type(decl, u).into());
+                }
                 if ctx_is_record || self.locals.contains_key(&decl) {
                     let d = self.find_instantiated_decl(decl, loc)?;
                     if d != decl {
@@ -227,6 +239,14 @@ impl Substituter<'_, '_, '_> {
                     return Ok(self.sema.tag_type(i));
                 }
                 self.ty(injected, loc)
+            }
+            TypeView::UnresolvedUsing(d) => {
+                // The instantiated using-declaration's named type.
+                let i = self.find_instantiated_decl(d, loc)?;
+                if i == d {
+                    return Err(SubstFail);
+                }
+                Ok(self.decl_type(i))
             }
             TypeView::Record(d) | TypeView::Enum(d) => {
                 let i = self.find_instantiated_decl(d, loc)?;

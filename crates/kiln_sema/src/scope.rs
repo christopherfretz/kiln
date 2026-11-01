@@ -62,6 +62,12 @@ pub struct Scope {
     /// A try-block's compound statement (clang `TryScope`): the search
     /// for a thrown variable's scope stops here ([class.copy.elision]/3.2).
     pub try_barrier: bool,
+    /// For a namespace or translation-unit scope: the index of the first
+    /// declaration created while this scope instance is open. Members of
+    /// the entity with a lower index were declared in an earlier
+    /// definition of the namespace (clang's `Scope::isDeclScope`, which
+    /// orders the names of an ambiguous lookup). `u32::MAX` for none.
+    pub first_decl: u32,
 }
 
 /// The name space (C's "tag" vs "ordinary" split) of a local entry.
@@ -83,6 +89,7 @@ impl Scope {
             using_dirs: Vec::new(),
             nrvo: NrvoState::default(),
             try_barrier: false,
+            first_decl: u32::MAX,
         }
     }
 

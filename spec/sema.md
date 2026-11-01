@@ -76,6 +76,16 @@ Constructors:
     [namespace.udir]/2 requires.
   - If several *different* entities are found at one level, lookup
     reports `reference to 'x' is ambiguous`, with candidate notes.
+    The notes follow clang's order (`ambiguity_order`, WP-179): for an
+    unqualified lookup that ends at a namespace scope, the names declared
+    in that open namespace definition come first, newest first (clang's
+    `IdentifierResolver` chain; `Scope::first_decl` marks the first
+    declaration created in the scope instance), then the namespace's
+    lookup table, and duplicates are removed by moving the last entry
+    into the duplicate's slot (`LookupResult::resolveKind`). A qualified
+    lookup lists table order. An ambiguous *type* name (`S s;` with `S`
+    in the namespace and in one of its inline namespaces) is not yet
+    diagnosed: `classify_name` takes the first declaration.
 - **Block-scope using-directives** ([namespace.udir]/2): a local
   scope's `using namespace N;` is collected while walking outwards, and
   `N`'s members are searched at the nearest enclosing namespace (or the
@@ -116,7 +126,15 @@ Constructors:
   qualifier. `act_on_nested_name_spelled` also returns the declaration
   as written, for `nns_component`.
 - **Redeclaration lookup** (`lookup_current_scope`) searches only the
-  current scope, and leaves out using-shadows
+  current scope. The members of a namespace's inline namespaces are in
+  other scopes ([basic.scope.scope]/4, [namespace.def.general]/6): an
+  unqualified declaration in the enclosing namespace never redeclares
+  one, it declares a distinct entity, and a later use that finds both
+  is ambiguous (clang's `FilterLookupForScope` without
+  `AllowInlineNamespace`; WP-179). A qualified declaration (`int I::x
+  = 1;`, `void N::f() {}`) and the template lookup of an explicit
+  specialization (`current_scope_with_inline_dn`, [temp.expl.spec]/3)
+  do see them. Redeclaration lookup leaves out using-shadows
   (`current_scope_shadows` returns those, for §4.8's conflict checks). If the current scope is the outermost block of a
   control statement (a Block directly above a Control scope), it also
   searches the Control scope, so `if (int x = 0) { int x; }` is
@@ -362,8 +380,50 @@ Redeclaration and linkage rules:
     dependent assumption, and codegen and the oven skip those.
   - A dependent assumption is converted and checked again on
     instantiation (`templ/subst/stmts.rs`).
-  - Not kept yet: `likely`/`unlikely`/`fallthrough` in the
-    `AttributedStmt`.
+- **`[[likely]]`, `[[unlikely]]`, `[[fallthrough]]`**
+  ([dcl.attr.likelihood], [dcl.attr.fallthrough]; WP-182, `stmt.rs`
+  `act_on_attributed_stmt`). They are kept in the same `AttributedStmt`
+  (clang `ProcessStmtAttributes`), in written order:
+  - On a declaration: `'likely' attribute cannot be applied to a
+    declaration` (each name).
+  - `fallthrough` on a statement that is not null: `'fallthrough'
+    attribute only applies to empty statements`; outside a switch of the
+    current function (a lambda body has its own): `fallthrough annotation
+    is outside switch statement` (clang `handleFallThroughAttr`, checked
+    in a template definition). Whether it directly precedes a case label
+    (`fallthrough annotation does not directly precede switch label`) is
+    clang's CFG analysis and is not checked.
+  - A `likely` after an `unlikely` (or the reverse) in the same
+    sequence: `'unlikely' and 'likely' attributes are not compatible` at
+    the second, with `note: conflicting attribute is here` at the first;
+    the second is dropped.
+  - `-pedantic` before C++17 (`fallthrough`) or C++20 (`likely`,
+    `unlikely`): `use of the 'x' attribute is a C++17/C++20 extension`
+    (`-Wc++17-attribute-extensions`, `-Wc++20-attribute-extensions`,
+    not under `-Wc++NN-extensions`). Under `[[clang::fallthrough]]`
+    the scope is not recorded, so the C++17 extension warns for it too
+    (clang does not).
+  - `act_on_if`: both branches `AttributedStmt`s with the same
+    likelihood warn `conflicting attributes 'likely' are ignored`
+    (`-Wignored-attributes`) at the then-branch attribute, with the
+    note at the else-branch one. As clang's `Diags.Report`, it goes
+    straight to the engine (`allow_duplicate`, no instantiation notes),
+    so each instantiation repeats it.
+  - Instantiation keeps these attributes unchanged
+    (`templ/subst/stmts.rs`); they are not checked again.
+  - The parser rejects an argument list on a standard attribute that
+    takes none (`carries_dependency`, `fallthrough`, `noreturn`,
+    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`, even
+    `()`): `attribute 'likely' cannot have an argument list` at the `(`,
+    and drops the attribute (clang `ParseCXX11AttributeArgs`).
+  - Codegen ignores them: clang 19 consults likelihood only when
+    optimizing (no `!prof` weights or `llvm.expect` at `-O0`;
+    `tests/codegen/likelihood_attrs.cpp`). The oven evaluates an
+    `AttributedStmt` as its statement with one step, and a switch body
+    child that is an `AttributedStmt` directly on a `case`/`default`
+    label (`[[likely]] case 1:`) is a link in the label chain
+    (`attributed_label`), charging its step on the way in, as clang's
+    `EvaluateStmt`.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 
@@ -780,17 +840,42 @@ specification as written (`TypeNames` prints ` noexcept`,
     table).
   - `using typename q::x;` ([namespace.udecl]/1, /12;
     `act_on_using_typename_declarator`, WP-169): with a dependent
-    qualifier in a class member specification, the declarator is kept
-    as a member alias `x` of the dependent type `typename q::x`
-    (recorded in `Sema::using_typename`); at instantiation
-    (`templ/class.rs` `member_using_typename`) it is redone as an
-    ordinary using-declarator, and references to the alias in
-    instantiated members resolve to the type of its shadow's target
+    qualifier in a class member specification, the declarator is an
+    `UnresolvedUsingTypename` member `x` (entered in lookup; a type
+    name) whose type is its own dependent `UnresolvedUsing` type
+    (spec/types.md §5.3, WP-179); at instantiation (`templ/class.rs`
+    `member_using_typename`) it is redone as an ordinary
+    using-declarator, and the `UnresolvedUsing` type in instantiated
+    members resolves to the type of its shadow's target
     (`subst/types.rs` `decl_type`). With a non-dependent qualifier, or
     at instantiation, a target that is not a type reports `'typename'
     keyword used on a non-type` at the name, with the `target of using
-    declaration` note (clang's `err_using_typename_non_type`). Kiln has
-    no `UnresolvedUsingTypename` node; the dump shows the alias.
+    declaration` note (clang's `err_using_typename_non_type`).
+  - Dependent using-declarators in templates (WP-179):
+    - A class member `using B<T>::m;` is an `UnresolvedUsingValue`
+      member (spec/sema-class.md). An unqualified use of `m` in the
+      class (`act_on_id_expression_dn`) is a baseless
+      `CXXDependentScopeMemberExpr`, also when the class's own
+      overloads of `m` join the set (no ambiguity, and the pattern's
+      own `f(char)` is not a redefinition of the unresolved `f`,
+      `overload/redecl.rs`). The instantiation (`subst/exprs.rs`
+      `implicit_dependent_member`) looks the name up again from the
+      instantiation context: an implicit member access or a static
+      member reference.
+    - An `UnresolvedUsingTypename` is a dependent context, so
+      `type::value` and `typename type::vt` nest through it.
+    - At block scope in a template, a declarator with a dependent
+      qualifier (`using E<T>::A;`, [namespace.udecl]/8: an enumerator)
+      is a local `UnresolvedUsingValue`; its uses are dependent, and
+      the instantiation redoes the declarator (`subst/stmts.rs`
+      `local_using_decl`), so a non-enumerator target is diagnosed
+      then.
+    - A qualifier that is still dependent after substitution (a
+      generic lambda in a function template specialization, or a
+      local class in one) leaves the declarator unresolved, rebuilt
+      with the substituted qualifier, until the inner specialization
+      (`still_dependent_class_using`,
+      `still_dependent_using_typename`).
 - **Conflicts** ([namespace.udecl]/11, [basic.scope.scope]/4), as in
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:
@@ -1216,6 +1301,28 @@ for them.
   class is `[[nodiscard]]` (`ignoring temporary created by a constructor
   declared with 'nodiscard' attribute[: msg]`, -Wunused-value). A braced
   or scalar functional cast warns `expression result unused`.
+  - `emit_unused` (WP-182) follows clang's order: a comparison is
+    `-Wunused-comparison` only when it is the unused expression itself
+    (`top_comparison`: not parenthesized, not a comma's right operand or
+    a conditional's arm, which are `expression result unused`); an `==`
+    / `!=` (built-in or overloaded) whose left operand is an lvalue (not
+    a materialized temporary) adds the note `use '=' to turn this
+    equality comparison into an assignment` / `use '|=' to turn this
+    inequality comparison into an or-assignment`. A call to a `pure` or
+    `const` function with a non-`void` result warns `ignoring return
+    value of function declared with pure|const attribute` [-Wunused-value]
+    at the call's start. Nothing but `nodiscard` is diagnosed for an
+    expression spelled in a macro body (clang `ShouldSuppress`).
+  - **Comma (WP-182)**: the left operand of a built-in comma is checked
+    the same way when the comma is built (clang `CheckCommaOperands`),
+    with the generic warning spelled `left operand of comma operator has
+    no effect` [-Wunused-value] (not in a SFINAE context). Nothing is
+    checked in an unevaluated operand or for a type-dependent operand
+    (it is checked on instantiation, with the instantiation note), and
+    an `[[assume(...)]]` argument is checked like any other expression.
+  - Unlike clang, the warnings are emitted at once, not deferred to the
+    end of the function and dropped when unreachable (`DiagIfReachable`),
+    and a macro-argument location gets no `expanded from macro` note.
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
@@ -1540,8 +1647,8 @@ The vector operators themselves are summarized in spec/types.md
     elided, is `cannot initialize a vector element of type T with an
     rvalue|lvalue of type V`. Deviation: clang 19 does not stop the list at
     a designator, so `{1, 2, .z = 5}` is an error there (a `void`
-    "vector element"). Kiln does not diagnose the C99 mixture of
-    designated and positional items in either case.
+    "vector element"). The C99 mixture of designated and positional
+    items is diagnosed on the written list in both cases (below).
   - a non-class `T` list-initialized from one class-type element (or
     `bool` from `nullptr`) is initialized from the element itself
     (`class_element_list_init`; clang's core-24034 rewrite in
@@ -1551,6 +1658,65 @@ The vector operators themselves are summarized in spec/types.md
     return value; an argument adds its "passing argument" note), no
     `-Wbraced-scalar-init`, and narrowing checked on the user
     conversion's result
+- **Designators** (WP-192; clang `SemaInit.cpp`). The parser reads
+  `.name`, nested `.a.b`, `[i]` (C99) and mixtures of them. A leading
+  `[` begins a designator unless it begins a lambda (clang
+  `MayBeDesignationStart`): `[=`, `[...` and `[]` are lambdas, and
+  `[&`, `[*` or `[identifier` scan to the matching `]` and are a
+  designator when `=` follows.
+  - Syntactic warnings come from `act_on_init_list_syntax`, once per
+    written list at parse time, never on instantiation. All are
+    `-Wc99-designator` (in `-Wc99-extensions`):
+    - nested designators: at the first designator's `.`
+    - array designators: at the `[`
+    - the mixture of designated and positional items: at the designator
+      begin, with a note on the first non-designated item, or, when
+      item 0 is designated, at item 0 with the note on the positional
+      item. A designated pack expansion `.m = e...` counts as
+      non-designated here, as in clang.
+  - Semantic checks run in `check_aggregate_in` and `check_array`,
+    again at every instantiation. A designator names a direct field or
+    a field of an anonymous member (`designated_field`). A nested or
+    anonymous designator descends into the subobject (`Sub { braced:
+    false, entry, prior }`), and the positional items that follow keep
+    filling it (`.p.y = 1, 7, 8` sets `p.z` and `w`). A subobject named
+    again merges with its prior initialization, seeded from the prior
+    `InitListExpr` (`prior_list`). Seeded slots count as explicit unless
+    they are fillers (`ImplicitValueInitExpr`, `CXXDefaultInitExpr`).
+    Descending into a subobject that an expression initialized is
+    unsupported, since clang would build `DesignatedInitUpdateExpr`.
+    - out of declaration order: `-Wreorder-init-list` (ExtWarn, in
+      `-Wreorder`), at the later value, with the note
+      `previous initialization for field` on the earlier one. It covers
+      only the list's own designators.
+    - a re-initialized subobject: `-Winitializer-overrides` at the new
+      value, with the note `previous initialization is here`. A union
+      initialized through a different member is the DefaultError form,
+      at the designator.
+    - an unknown field: `field designator 'q' does not refer to any field
+      in type T`, at the name.
+    - a field designator into a scalar: `field designator cannot
+      initialize a non-class type`, at the `.`.
+    - an array designator into a class: `array designator cannot
+      initialize non-array type`, at the `[`.
+    - an array designator leaving a hole gives the list an
+      `array_filler`, even when the element count equals the bound.
+    - non-aggregate types are `designated_non_aggregate`.
+  - In templates (spec/ast.md §5.6, spec/sema-templates.md §5.4), the
+    designators are carried in `DesignatedInitExpr`s and in the written
+    form of non-dependent lists. The semantic checks run on the
+    instantiated type at the written locations. A designated pack
+    expansion gives one designated clause per element.
+  - Deviations:
+    - A non-dependent designated list in a template pattern is not
+      re-checked at instantiation, so clang's repeated
+      `-Wreorder-init-list` under the instantiation note is missing.
+    - An array designator beyond the bound is reported as excess
+      elements, not as clang's `array designator index exceeds array
+      bounds`.
+    - Reorder and override warnings do not cause a substitution failure
+      (clang's are warnings too, but SFINAE-visible as errors under
+      `-Werror`).
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
@@ -1858,7 +2024,10 @@ it needs two things:
 
 That is an ABI-free, preprocessor-wide change with no effect on codegen.
 The `!srcloc` value only labels inline-asm backend diagnostics, so it is
-left for a pp/source WP.
+left for a pp/source WP. WP-182 re-evaluated this: kiln_source and
+kiln_pp still have no clang-compatible offset space (expansions are
+recorded per `ExpansionInfo`, not as a running offset), so the deferral
+stands.
 
 ### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
 `act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing

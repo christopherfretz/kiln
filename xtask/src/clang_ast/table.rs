@@ -48,6 +48,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // nominated/constructed base classes of the text dump.
     ("ConstructorUsingShadowDecl", Keep),
     ("UnresolvedUsingValueDecl", Keep),
+    ("UnresolvedUsingTypenameDecl", Keep),
     ("FunctionDecl", Keep),
     ("CXXMethodDecl", Keep),
     ("CXXConstructorDecl", Keep),
@@ -86,6 +87,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("UnaryExprOrTypeTraitExpr", Keep),
     ("InitListExpr", Keep),
     ("ImplicitValueInitExpr", Keep),
+    // Designated clauses of a dependent list (WP-192; template patterns).
+    ("DesignatedInitExpr", Keep),
     ("ConstantExpr", Keep),
     ("CXXConstructExpr", Keep),
     ("CXXTemporaryObjectExpr", Keep),
@@ -191,10 +194,14 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("LabelStmt", Keep),
     ("GotoStmt", Keep),
     ("IndirectGotoStmt", Unsupported(NOT_M2)),
-    // Only `[[assume]]` is kept on a statement (WP-160); another statement
-    // attribute is unsupported by its own kind.
+    // `[[assume]]` (WP-160), `[[likely]]`, `[[unlikely]]` and
+    // `[[fallthrough]]` (WP-182) are kept on a statement; another
+    // statement attribute is unsupported by its own kind.
     ("AttributedStmt", Keep),
     ("CXXAssumeAttr", Keep),
+    ("LikelyAttr", Keep),
+    ("UnlikelyAttr", Keep),
+    ("FallThroughAttr", Keep),
     ("CXXTryStmt", Keep),
     ("CXXCatchStmt", Keep),
     ("GCCAsmStmt", Keep),
@@ -224,7 +231,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("VAArgExpr", Keep),
     ("PredefinedExpr", Keep),
     ("UserDefinedLiteral", Unsupported(NOT_M2)),
-    ("DesignatedInitExpr", Unsupported(NOT_M2)),
     ("DesignatedInitUpdateExpr", Unsupported(NOT_M2)),
     ("NoInitExpr", Unsupported(NOT_M2)),
     ("ImaginaryLiteral", Unsupported(NOT_M2)),
@@ -299,7 +305,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "UsingDecl" => &[],
         "UsingDirectiveDecl" => &["nominatedNamespace"],
         "UsingShadowDecl" | "ConstructorUsingShadowDecl" => &["target"],
-        "UnresolvedUsingValueDecl" => &[],
+        "UnresolvedUsingValueDecl" | "UnresolvedUsingTypenameDecl" => &[],
         "UsingEnumDecl" => &["target"],
         // `immediate`: kiln prints clang's text-dump `consteval` instead;
         // `variadic` is part of the printed type; `deletedMessage` becomes
@@ -377,6 +383,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "UnaryExprOrTypeTraitExpr" => &["name", "argType"],
         "InitListExpr" => &["field", "array_filler"],
         "ImplicitValueInitExpr" => &[],
+        // clang's JSON has no designators (its text dump neither).
+        "DesignatedInitExpr" => &[],
         "ConstantExpr" => &["value"],
         // `hadMultipleCandidates` and `constructionKind` are not printed
         // (clang's text dump prints neither); `elidable` is rejected.
@@ -456,7 +464,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "WhileStmt" => &["hasVar"],
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
         | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXForRangeStmt" | "CXXTryStmt"
-        | "CXXCatchStmt" | "GCCAsmStmt" | "AttributedStmt" | "CXXAssumeAttr" => &[],
+        | "CXXCatchStmt" | "GCCAsmStmt" | "AttributedStmt" | "CXXAssumeAttr" | "LikelyAttr"
+        | "UnlikelyAttr" | "FallThroughAttr" => &[],
         "LabelStmt" => &["name", "declId"],
         "GotoStmt" => &["targetLabelDeclId"],
         _ => return None,
@@ -526,6 +535,8 @@ pub const CLASS_KINDS: &[&str] = &[
     // WP-114: inheriting constructors and dependent using-declarations.
     "ConstructorUsingShadowDecl",
     "UnresolvedUsingValueDecl",
+    // WP-179: `using typename B<T>::x;` in a template.
+    "UnresolvedUsingTypenameDecl",
 ];
 
 /// The template kinds §5 of `spec/ast-dump.md` adds (WP-069).
@@ -558,6 +569,7 @@ pub const TEMPLATE_KINDS: &[&str] = &[
     "UnresolvedLookupExpr",
     "PackExpansionExpr",
     "SizeOfPackExpr",
+    "DesignatedInitExpr",
 ];
 
 /// The kinds §3 of `spec/ast-dump.md` defines lines for (the M2 kinds, with
@@ -592,6 +604,10 @@ pub const M2_KINDS: &[&str] = &[
     "GotoStmt",
     "AttributedStmt",
     "CXXAssumeAttr",
+    // Likelihood and fallthrough statement attributes (WP-182).
+    "LikelyAttr",
+    "UnlikelyAttr",
+    "FallThroughAttr",
     // Predefined identifiers (WP-140).
     "PredefinedExpr",
     "IntegerLiteral",

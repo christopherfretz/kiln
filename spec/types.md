@@ -217,6 +217,7 @@ Reserved depths (spec/sema-templates.md Q15, 2026-10-28): `AUTO_DEPTH = 0x7FFD` 
 | `DeducedTemplateSpecialization` | I | S or C | pairs [TemplateNameId, deduced or 0] | CTAD placeholder |
 | `Attributed` | I | S | aux = attribute kind, pairs [modified, equivalent] | type attributes (nullability, `noderef`, calling conventions); canonical = canonical(equivalent) |
 | `Splice` dep | O | S or S/C | pairs [operand ExprId, designated QualType or 0] | P2996 `typename [: r :]` (*M6*); canonical = designated type, or a dependent node keyed by the operand's profile |
+| `UnresolvedUsing` dep | D | C | data = `UnresolvedUsingTypename` `DeclId` | clang's `UnresolvedUsingType` (WP-179): the member type `x` of a dependent `using typename B<T>::x;`, one canonical node per declaration; prints as the declaration's name (scoped when desugared). The declaration's `ty` wraps it in keyword-less `Elaborated` sugar, as clang's type for the name as written |
 
 Not represented (out of scope, rejected): `FunctionNoProto` (C only),
 Objective-C, OpenCL pipes/samplers, matrices, HLSL, `BTFTagAttributed`,

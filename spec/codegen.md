@@ -105,7 +105,17 @@ panic and never silently wrong IR.
   - a written or implicit `const` / `pure` attribute (not on a builtin,
     whose row decides) adds `willreturn memory(none)` /
     `willreturn memory(read)` to the declaration, the definition and
-    direct call sites (clang `ConstructAttributeList`);
+    every call site: direct, member (`emit_method_call` /
+    `call_extra`), and virtual (the named method's attributes) (clang
+    `ConstructAttributeList`). When the return or some argument is
+    passed by address (`sret`, `byval`, or a pointer to a temporary for
+    a class that is not trivially copyable: `Sig::passes_indirect`),
+    the access widens to `argmem: readwrite` (clang
+    `AddPotentialArgAccess`: `memory(argmem: readwrite)` /
+    `memory(read, argmem: readwrite)`; without it LLVM rejects an
+    `sret` `writable` pointer). A template specialization carries the
+    pattern's attributes (spec/sema-templates.md §5)
+    (`tests/codegen/const_pure_call_sites.cpp`, WP-182);
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary.
@@ -331,8 +341,8 @@ array cookies).
   assumption that is not `ASSUME_IGNORED` is emitted as a scalar and
   passed to `llvm.assume`, in source order and before the (null)
   sub-statement (`emit_assumptions`; `tests/codegen/assume_attr.cpp`).
-  Not yet: call-site attributes (`memory(none)`/`memory(read)`) on calls
-  to `const`/`pure` functions, which clang emits.
+  Calls to `const`/`pure` functions carry their call-site attributes
+  (§3 "Calls", WP-182).
 
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:

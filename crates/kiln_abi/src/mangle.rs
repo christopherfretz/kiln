@@ -846,17 +846,25 @@ impl<'a, 'b> Mangler<'a, 'b> {
         matches!(self.ast.decls.get(c).kind(), DeclKind::Var | DeclKind::Field).then_some(c)
     }
 
-    /// <closure-prefix> ::= [ <prefix> ] <unqualified-name> M, a
+    /// <closure-prefix> ::= [ <prefix> ] <unqualified-name> M
+    ///                  ::= <template-prefix> <template-args> M, a
     /// substitution candidate.
     fn closure_prefix(&mut self, c: DeclId, stop: Option<DeclId>) {
         let key = Sub::Decl(self.ast.first(c));
         if self.try_sub(key) {
             return;
         }
-        if let Some(p) = self.parent(c) {
-            self.prefix(p, stop);
+        if let Some((t, args)) = self.spec_of(c) {
+            // A variable template specialization: <template-prefix>
+            // <template-args> (clang `mangleClosurePrefix`).
+            self.template_prefix(t, stop, Structor::Complete);
+            self.template_args(args);
+        } else {
+            if let Some(p) = self.parent(c) {
+                self.prefix(p, stop);
+            }
+            self.unqualified(c, Structor::Complete);
         }
-        self.unqualified(c, Structor::Complete);
         self.out.push('M');
         self.subs.push(key);
     }

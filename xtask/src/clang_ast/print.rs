@@ -815,7 +815,7 @@ impl<'a> Printer<'a, '_> {
                     }
                 }
             }
-            "UsingDecl" | "UnresolvedUsingValueDecl" => {
+            "UsingDecl" | "UnresolvedUsingValueDecl" | "UnresolvedUsingTypenameDecl" => {
                 // clang's `name` is the qualified name as written (`N::x`);
                 // an unresolved one's is the unqualified member name.
                 let mut l = decl_head(n, k);
@@ -1429,6 +1429,7 @@ impl<'a> Printer<'a, '_> {
             | "ParenExpr"
             | "ArraySubscriptExpr"
             | "ImplicitValueInitExpr"
+            | "DesignatedInitExpr"
             | "ExprWithCleanups"
             | "CXXStdInitializerListExpr"
             | "CXXDefaultArgExpr"
@@ -1563,7 +1564,8 @@ impl<'a> Printer<'a, '_> {
             }
             "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt"
             | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" | "CXXTryStmt"
-            | "GCCAsmStmt" | "FileScopeAsmDecl" | "AttributedStmt" | "CXXAssumeAttr" => {
+            | "GCCAsmStmt" | "FileScopeAsmDecl" | "AttributedStmt" | "CXXAssumeAttr"
+            | "LikelyAttr" | "UnlikelyAttr" | "FallThroughAttr" => {
                 line = k.to_owned();
                 kids_out = self.kid_trees(n)?;
             }

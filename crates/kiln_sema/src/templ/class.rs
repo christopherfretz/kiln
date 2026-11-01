@@ -1056,7 +1056,10 @@ impl Substituter<'_, '_, '_> {
                 // Injected by its anonymous struct or union.
                 continue;
             }
-            if local.is_none() && sub.is_unnamed_member_class(m) {
+            // An anonymous struct or union of a local class has no
+            // member functions of its own: it is instantiated as in a
+            // class template, declaring its member object.
+            if sub.is_unnamed_member_class(m) && (local.is_none() || sub.is_anonymous_record(m)) {
                 let _ = sub.unnamed_member_class(m);
                 continue;
             }
@@ -1168,7 +1171,8 @@ impl Substituter<'_, '_, '_> {
         let mut last = None;
         for nns in nnss {
             if self.nns_still_dependent(nns) {
-                return self.unimplemented("dependent using-declarations in templates", loc);
+                last = self.sema.still_dependent_class_using(nns, name, loc, inheriting).or(last);
+                continue;
             }
             let ctx = self.nns_context(nns, loc)?;
             let q = crate::using::Qualifier { ctx, nns, loc };
@@ -1185,14 +1189,15 @@ impl Substituter<'_, '_, '_> {
     /// `UnresolvedUsingTypenameDecl` instantiation): a using-declaration
     /// and its shadows, or "'typename' keyword used on a non-type".
     fn member_using_typename(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
-        let Some(u) = self.sema.ast.decls.typedef(m).map(|t| t.underlying) else { return Ok(None) };
-        let TypeView::DependentName { nns: pnns, name, .. } = self.sema.ast.types.view(u.ty())
-        else {
-            return Ok(None);
-        };
+        let Some(pnns) = self.sema.ast.using_qualifier(m) else { return Ok(None) };
+        let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else { return Ok(None) };
         let nns = self.nns(pnns, loc)?;
         if self.nns_still_dependent(nns) {
-            return self.unimplemented("dependent using-declarations in templates", loc);
+            return Ok(Some(self.sema.still_dependent_using_typename(
+                nns,
+                DeclName::ident(name),
+                loc,
+            )));
         }
         let ctx = self.nns_context(nns, loc)?;
         let q = crate::using::Qualifier { ctx, nns, loc };
@@ -1240,9 +1245,7 @@ impl Substituter<'_, '_, '_> {
                 // class's member list; only the first declaration is.
                 self.function_decl(m, DeclaratorContext::Member, None)?
             }
-            DeclKind::TypeAlias if self.sema.using_typename.contains(&m) => {
-                return self.member_using_typename(m, loc);
-            }
+            DeclKind::UnresolvedUsingTypename => return self.member_using_typename(m, loc),
             DeclKind::Typedef | DeclKind::TypeAlias => self.typedef_decl(m)?,
             DeclKind::StaticAssert => {
                 self.static_assert_decl(m)?;
