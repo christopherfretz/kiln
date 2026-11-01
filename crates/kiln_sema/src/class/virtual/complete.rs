@@ -4,8 +4,7 @@
 //! check and the key function).
 
 use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage, TagKind,
-    TemplLinkKind,
+    ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage, TagKind, TemplLinkKind,
 };
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::Quals;
