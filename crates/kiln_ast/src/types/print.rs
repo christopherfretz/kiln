@@ -567,6 +567,7 @@ impl Printer<'_> {
                             | TypeView::Vector { .. }
                             | TypeView::DependentVector { .. }
                             | TypeView::Function(_)
+                            | TypeView::Paren(_)
                             | TypeView::PackExpansion { .. }
                             | TypeView::SubstTemplateTypeParm { .. }
                             | TypeView::Attributed { .. }
@@ -702,6 +703,16 @@ impl Printer<'_> {
             TypeView::UnresolvedUsing(d) => {
                 self.decl(d, self.scope);
                 self.space_before_ph();
+            }
+            // clang's printParenBefore: the parentheses are printed only
+            // inside a declarator and not around a function type (which
+            // prints its own).
+            TypeView::Paren(inner) => {
+                self.before(inner);
+                if !self.empty_ph && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function
+                {
+                    self.push("(");
+                }
             }
             TypeView::Complex(e) => {
                 self.push("_Complex ");
@@ -977,6 +988,12 @@ impl Printer<'_> {
                 self.after(elem);
             }
             TypeView::Function(_) => self.function_after(t),
+            TypeView::Paren(inner) => {
+                if !self.empty_ph && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function {
+                    self.push(")");
+                }
+                self.after(inner);
+            }
             TypeView::Complex(e) => self.after(e),
             TypeView::Vector { elem, count, kind } => {
                 self.after(elem);

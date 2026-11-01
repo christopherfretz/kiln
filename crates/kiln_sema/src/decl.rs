@@ -585,6 +585,33 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// `ty` wrapped in `ParenType` sugar for each pair of grouping
+    /// parentheses of `d` around exactly `inside` chunks (clang's
+    /// `DeclaratorChunk::Paren`, WP-191). Parentheses around no chunk (the
+    /// outermost type, `int (x)`) and around a function or array type
+    /// (`void (*f)(int)`, `int (*p)[3]`) get no node: clang's printer
+    /// shows neither, so the sugar would only cost a node.
+    fn declarator_parens(&mut self, mut ty: QualType, d: &Declarator, inside: usize) -> QualType {
+        if inside == 0 {
+            return ty;
+        }
+        for &(n, _, _) in &d.parens {
+            if n != inside {
+                continue;
+            }
+            let k = self.ast.types.kind(ty.ty());
+            if k == kiln_ast::types::TypeKind::Function
+                || k.is_array()
+                || k == kiln_ast::types::TypeKind::QualifiedArray
+                || self.is_error_type(ty)
+            {
+                return ty;
+            }
+            ty = self.ast.types.paren_type(ty);
+        }
+        ty
+    }
+
     /// The type of `d` given the decl-specifier type `base`
     /// ([dcl.meaning], [dcl.ptr], [dcl.ref], [dcl.array], [dcl.fct]).
     pub fn type_for_declarator(&mut self, base: QualType, d: &Declarator) -> QualType {
@@ -608,10 +635,11 @@ impl Sema<'_, '_> {
         let mut ty = self.ctad_declarator_check(base, spec_loc, d);
         let name = self.declarator_name(d);
         let mut prev_ref = false;
-        for chunk in d.chunks.iter().rev() {
+        for (i, chunk) in d.chunks.iter().enumerate().rev() {
             if self.is_error_type(ty) {
                 return ty;
             }
+            ty = self.declarator_parens(ty, d, i + 1);
             if let Some(which) = self.decltype_auto_compound(ty, chunk) {
                 let loc = Self::chunk_loc(chunk);
                 let msg = self.diag(DiagId::sema_decltype_auto_compound, loc).arg(which);

@@ -369,6 +369,10 @@ impl Substituter<'_, '_, '_> {
                 }
                 None => Ok(q),
             },
+            TypeView::Paren(inner) => {
+                let i = self.ty(inner, loc)?;
+                Ok(self.sema.ast.types.paren_type(i))
+            }
             TypeView::Attributed { kind, modified, equivalent } => {
                 let m = self.ty(modified, loc)?;
                 let e = self.ty(equivalent, loc)?;
