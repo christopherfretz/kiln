@@ -29,11 +29,10 @@ declarations; implicit-then-explicit re-emission as `weak_odr`.
 - [x] spec/codegen.md §7g + GVA linkage table; spec/llvm.md §2.4.
 
 Tests: `tests/codegen/explicit_instantiation_spec.cpp` (G2),
-`explicit_instantiation_order.cpp` (G1, G5, G6), `structor_rauw_order.cpp`
+`explicit_instantiation_order.cpp` (G1, G5, G6, G8: late-defined
+variable template), `structor_rauw_order.cpp`
 (G3), kiln_llvm `tests/builder.rs::move_function_to_end`.
 
 ## Follow-ups (not in scope)
-- G8: `template<class T> extern T v; template int v<int>; template<class T>
-  T v = 9;` emits no definition of `v<int>` (clang: at end of TU).
 - sema: `template <> struct X<int>::N { void n2() {} };` is rejected.
 - sema: `extern template int vv<long>;` (type mismatch) is not diagnosed.

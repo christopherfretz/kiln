@@ -1107,8 +1107,12 @@ Where the definitions are emitted (clang hands them to
   explicit kind in its member-spec info, so its members and vtable follow
   the table above; member templates are not instantiated
   ([temp.explicit]/10).
-- A function, member function or structor explicitly instantiated before
-  its template's definition is seen: instantiated at the end of the TU
+- A function, member function, structor or variable template
+  specialization explicitly instantiated before its template's
+  definition is seen (for a variable template, after a non-defining
+  `extern` declaration; sema `instantiate_late_var_spec` rebinds the
+  specialization to the defining redeclaration): instantiated at the end
+  of the TU
   and emitted after the last top-level declaration, in explicit
   instantiation order, before the key-function vtables and the deferred
   definitions (clang `PerformPendingInstantiations`;
@@ -1126,10 +1130,6 @@ Where the definitions are emitted (clang hands them to
   that kind (`Sema::mark_member_explicit_spec`), with or without an
   explicit instantiation.
 
-Not covered: an explicit instantiation of a variable template whose
-definition follows an earlier non-defining declaration
-(`template<class T> extern T v; template int v<int>; template<class T>
-T v = 9;`) emits nothing where clang defines it at the end of the TU.
 Tests: `tests/codegen/explicit_instantiation*.cpp`,
 `tests/codegen/structor_rauw_order.cpp` (IR parity on both triples).
 

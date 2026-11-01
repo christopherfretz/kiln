@@ -273,13 +273,18 @@ impl<'a> Cg<'a> {
         Ok(())
     }
 
-    /// The functions explicitly instantiated before their template was
-    /// defined, instantiated at the end of the TU: clang
+    /// The functions and variables explicitly instantiated before their
+    /// template was defined, instantiated at the end of the TU: clang
     /// `PerformPendingInstantiations` hands them to `HandleTopLevelDecl`
     /// after the last top-level declaration, before `Release`.
     fn emit_late_explicit_insts(&mut self) -> R<()> {
         let ast = self.ast;
         for &m in ast.templates.late_explicit_insts() {
+            if ast.decls.get(m).kind() == DeclKind::Var {
+                // A variable template specialization is its own definition.
+                self.emit_global_var(m)?;
+                continue;
+            }
             let Some(def) = ast.definition(m) else { continue };
             match ast.decls.get(def).kind() {
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
