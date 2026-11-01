@@ -340,6 +340,7 @@ impl Substituter<'_, '_, '_> {
                             default_arg: DefaultArg::None,
                             range: (loc, loc),
                             decl: Some(np),
+                            explicit_object: None,
                         });
                         continue;
                     }
@@ -362,6 +363,7 @@ impl Substituter<'_, '_, '_> {
                         default_arg: DefaultArg::None,
                         range: (loc, loc),
                         decl: Some(np),
+                        explicit_object: None,
                     });
                 }
                 let l = self.sema.ast.lists.push(&decls);
@@ -374,7 +376,8 @@ impl Substituter<'_, '_, '_> {
             // ([basic.scope.param]); the function adopts it.
             let ctx = self.sema.ctx;
             let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
-            let np = self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, 0);
+            let eo = pd.map_or(0, |x| x.flags & ParamData::EXPLICIT_OBJECT);
+            let np = self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo);
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
             out.push(ParamInfo {
@@ -386,6 +389,7 @@ impl Substituter<'_, '_, '_> {
                 default_arg: DefaultArg::None,
                 range: (n.loc(), n.loc()),
                 decl: Some(np),
+                explicit_object: (eo != 0).then_some(n.loc()),
             });
         }
         Ok(out)

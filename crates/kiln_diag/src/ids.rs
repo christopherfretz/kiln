@@ -856,6 +856,12 @@ diag_ids! {
     sema_ambiguous_member_subobjects = Error (3) "non-static member '{0}' found in multiple base-class subobjects of type {1}:{2}";
     note_ambiguous_member_found = Note (0) "member found by ambiguous name lookup";
     sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
+    sema_explicit_object_this = Error (0) "invalid use of 'this' in a function with an explicit object parameter";
+    sema_explicit_object_param_nonmember = Error (1) "an explicit object parameter cannot appear in a {0:static|virtual|non-member} function";
+    sema_explicit_object_param_not_first = Error (0) "an explicit object parameter can only appear as the first parameter of the function";
+    sema_explicit_object_param_qualifier = Error (1) "explicit object member function cannot have '{0}' qualifier";
+    sema_explicit_object_param_default = Error (0) "the explicit object parameter cannot have a default argument";
+    sema_explicit_object_param_pack = Error (0) "the explicit object parameter cannot be a function parameter pack";
     sema_mutable_const = Error (0) "'mutable' and 'const' cannot be mixed";
     sema_mutable_reference = Error (0) "'mutable' cannot be applied to references";
     sema_mutable_function = Error (0) "'mutable' cannot be applied to functions";

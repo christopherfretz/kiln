@@ -584,8 +584,13 @@ specification as written (`TypeNames` prints ` noexcept`,
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
 - **Using-declarators** ([namespace.udecl]):
-  `act_on_using_declarator(using_loc, qual, name, name_loc, if_exists)`
-  handles one declarator of `using a::x, b::y;`.
+  `act_on_using_declarator(using_loc, qual, name: DeclName, name_loc,
+  if_exists, ellipsis)` handles one declarator of `using a::x, b::y;`.
+  The name may be an operator or conversion function name (WP-149).
+  A declarator with `...` ([namespace.udecl]/1,
+  P0195) is a pack expansion over a dependent qualifier, expanded
+  per element when the class template is instantiated
+  (`templ/class.rs` `member_using`).
   - The name must be qualified: `using declaration requires a
     qualified name`.
   - The target is looked up with `LookupKind::All` in the qualifier's

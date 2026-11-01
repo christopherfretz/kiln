@@ -732,6 +732,14 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             if self.at_cxx11_attr() {
                 return Tpr::True;
             }
+            // An explicit object parameter ([dcl.fct]/3): `this` followed
+            // by a decl-specifier is never an expression.
+            if self.kw() == Some(Kw::This) {
+                let t = Scan { p: self.p, i: self.i + 1, declared: self.declared.clone() };
+                if matches!(t.decl_specifier(Tpr::False), Tpr::True | Tpr::Ambiguous) {
+                    return Tpr::True;
+                }
+            }
             // A parameter's initializer needs `=`: `T{` is not one.
             let mut r = self.decl_specifier(Tpr::False);
             if r != Tpr::Ambiguous {

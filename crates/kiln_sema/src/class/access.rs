@@ -374,6 +374,12 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// A non-static member other than an explicit object member function
+    /// ([dcl.fct]/6): one whose address is a pointer to member.
+    pub(crate) fn is_implicit_object_member(&self, d: DeclId) -> bool {
+        self.is_instance_member(d) && !self.has_explicit_object(d)
+    }
+
     /// A non-static data member or member function (clang
     /// `isCXXInstanceMember`).
     pub(crate) fn is_instance_member(&self, d: DeclId) -> bool {

@@ -558,7 +558,10 @@ impl Sema<'_, '_> {
             .ast
             .decls
             .function(f)
-            .is_some_and(|x| x.spec.storage() == kiln_ast::decl::FnStorage::Static)
+            .is_some_and(|x| {
+                x.spec.storage() == kiln_ast::decl::FnStorage::Static
+                    || x.spec.has_explicit_object()
+            })
         {
             return None;
         }

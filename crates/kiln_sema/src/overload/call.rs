@@ -144,16 +144,16 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         // A non-member operator template's first parameter takes the
-        // object operand ([over.match.oper]/2).
+        // object operand ([over.match.oper]/2), as does an explicit
+        // object parameter ([over.match.funcs.general]/4).
+        let pattern = self.templated_function(ft).unwrap_or(ft);
         let mut args = Vec::with_capacity(set.args.len() + 1);
-        if set.oper
-            && kind == CandidateKind::Function
+        if (set.oper && kind == CandidateKind::Function || self.has_explicit_object(pattern))
             && let Some(o) = set.object
         {
             args.push(o);
         }
         args.extend_from_slice(&set.args);
-        let pattern = self.templated_function(ft).unwrap_or(ft);
         match self.deduce_call(ft, explicit, &args, loc) {
             Ok(spec) => {
                 self.add_candidate(set, spec, found, kind, first_opts);

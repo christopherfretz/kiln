@@ -359,7 +359,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - on a function chunk: cv-qualifiers (a duplicate warns
     `duplicate 'const' declaration specifier`), a ref-qualifier, and an
     explicit object parameter (`this T self`, [dcl.fct]/6) in
-    `Declarator::explicit_object`
+    `Declarator::explicit_object`; in the tentative parse `this` followed
+    by a decl-specifier starts a parameter-declaration-clause, so
+    `void f(this int);` at namespace scope is a function declarator
   - in member context: virt-specifiers `override`/`final` (a repeat is
     `class member already marked 'X'`; `final` in a friend declaration
     is `'final' is invalid in friend declarations`) and a
@@ -397,6 +399,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     leading `auto` and diagnosed otherwise by Sema.
   - `decltype ( expression )` and `decltype(auto)` are type specifiers;
     the operand is unevaluated.
+  - `_Atomic ( type-id )` (a clang extension in C++, C11 6.7.2.4) is a
+    type specifier, built by `Sema::act_on_atomic_type` (array, function,
+    reference, atomic and qualified operands are
+    `sema_atomic_specifier_bad_type`); the bare `_Atomic` qualifier is
+    "not supported yet".
 - **Exception specifications** (`parse_exception_spec`, after the
   function parameters, [except.spec]/1): at most one per declarator.
   - `noexcept` is `ExcSpec::BasicNoexcept`.
@@ -480,11 +487,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Using-declarations and aliases** (`parse_using`, spec/sema.md §4.8):
   - `using a::x, ::b::y;`: each declarator is a nested-name-specifier
     (`parse_nested_name_nns`, which also builds the specifier as
-    written) and an identifier, passed to
-    `Sema::act_on_using_declarator` one at a time.
-    - `typename` declarators, `operator`/destructor names and pack
-      expansions (`x...`) are "not supported yet" (they need classes
-      with bases and templates).
+    written) and an unqualified-id (an identifier, an operator-function-id
+    or a conversion-function-id, WP-149) with an optional `...`, passed to
+    `Sema::act_on_using_declarator` one at a time as a `DeclName`.
+    - `typename` declarators (outside a class) and destructor names are
+      "not supported yet".
     - A missing name is `expected unqualified-id`; a missing `;` is
       `expected ';' after using declaration`.
   - `[[clang::using_if_exists]]` is accepted before `using` (at
@@ -600,6 +607,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - Then postfix operators (`parse_postfix_suffix`): calls, subscripts,
     `.`, `->`, `++`, `--`. A call argument may be a braced-init-list
     (`act_on_braced_arg`, converted once the parameter type is known).
+    A member destructor name may be a template-id, `p->~C<T>()`
+    ([expr.prim.id.dtor]/1): the template-id is parsed as a type and
+    passed to `Sema::rebuild_member_destructor` (WP-149).
   - Then primary expressions:
     - literals and `this`-less id-expressions
     - qualified names `N::x`

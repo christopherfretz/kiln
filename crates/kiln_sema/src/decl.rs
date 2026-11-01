@@ -298,7 +298,10 @@ impl Sema<'_, '_> {
         let idx = u16::try_from(frame.index).unwrap_or(u16::MAX);
         let name = p.name.map_or(DeclName::EMPTY, |(n, _)| DeclName::ident(n));
         let pack = matches!(self.ast.types.view(p.ty.ty()), TypeView::PackExpansion { .. });
-        let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        let mut flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        if p.explicit_object.is_some() {
+            flags |= kiln_ast::decl::ParamData::EXPLICIT_OBJECT;
+        }
         let ctx = self.ctx;
         let pd = self.builder().prototype_param(ctx, name, p.loc, p.ty, idx, flags);
         if p.invalid {
@@ -769,10 +772,6 @@ impl Sema<'_, '_> {
     /// A parameter-declaration ([dcl.fct]/3): its type, adjusted
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
-        if let Some(l) = d.explicit_object {
-            // P0847 (spec/sema-class.md §2.5, Q4).
-            self.unsupported("explicit object parameters", l);
-        }
         let base = self.type_from_declspec(ds);
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if let Some((s, loc)) = ds.storage
@@ -809,7 +808,72 @@ impl Sema<'_, '_> {
             default_arg: DefaultArg::None,
             range: (ds.loc, d.name_loc()),
             decl: None,
+            explicit_object: d.explicit_object,
         }
+    }
+
+    /// Whether the function declared by `d` with parameters `params` is an
+    /// explicit object member function ([dcl.fct]/6, P0847): its first
+    /// parameter is an explicit object parameter. Diagnoses one anywhere
+    /// else, in a static, virtual or non-member function, with a
+    /// cv- or ref-qualifier, a default argument or as a pack.
+    fn explicit_object_member(
+        &mut self,
+        ds: &DeclSpec,
+        d: &Declarator,
+        params: &[ParamInfo],
+        method: bool,
+    ) -> bool {
+        for p in params.iter().skip(1) {
+            if p.explicit_object.is_some() {
+                self.error(DiagId::sema_explicit_object_param_not_first, p.loc);
+            }
+        }
+        let Some(first) = params.first() else { return false };
+        let Some(this_loc) = first.explicit_object else { return false };
+        let which = if !method {
+            Some(2u8)
+        } else if ds.storage.is_some_and(|(s, _)| s == StorageSpec::Static) {
+            Some(0)
+        } else if ds.virtual_.is_some() {
+            Some(1)
+        } else {
+            None
+        };
+        if let Some(w) = which {
+            let m = self.diag(DiagId::sema_explicit_object_param_nonmember, this_loc).arg(w);
+            self.emit(m);
+            return false;
+        }
+        if let Some(Chunk::Function { quals, ref_qual, rparen, .. }) = d.chunks.first() {
+            let q = if quals.contains(Quals::CONST) {
+                Some("const")
+            } else if quals.contains(Quals::VOLATILE) {
+                Some("volatile")
+            } else {
+                match ref_qual {
+                    RefQual::LValue => Some("&"),
+                    RefQual::RValue => Some("&&"),
+                    RefQual::None => None,
+                }
+            };
+            if let Some(q) = q {
+                let m = self.diag(DiagId::sema_explicit_object_param_qualifier, *rparen).arg(q);
+                self.emit(m);
+            }
+        }
+        match first.default_arg {
+            DefaultArg::None => {}
+            DefaultArg::Unparsed(l) => self.error(DiagId::sema_explicit_object_param_default, l),
+            DefaultArg::Parsed(e) => {
+                let l = self.eloc(e);
+                self.error(DiagId::sema_explicit_object_param_default, l);
+            }
+        }
+        if matches!(self.ast.types.view(first.ty.ty()), TypeView::PackExpansion { .. }) {
+            self.error(DiagId::sema_explicit_object_param_pack, this_loc);
+        }
+        true
     }
 
     /// The default argument `= init` of parameter `p` ([dcl.fct.default]),
@@ -2085,6 +2149,9 @@ impl Sema<'_, '_> {
         }
         let params: Vec<ParamInfo> =
             d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
+        if self.explicit_object_member(ds, d, &params, method) {
+            spec = spec.with_explicit_object(true);
+        }
         let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params);
         // clang marks the redeclaration invalid and leaves it out of the
         // redeclaration chain; calls ignore it.
@@ -2304,7 +2371,10 @@ impl Sema<'_, '_> {
             // A function parameter pack ([temp.variadic]/3) has a pack
             // expansion type.
             let pack = matches!(self.ast.types.view(p.ty.ty()), TypeView::PackExpansion { .. });
-            let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+            let mut flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+            if p.explicit_object.is_some() {
+                flags |= kiln_ast::decl::ParamData::EXPLICIT_OBJECT;
+            }
             let pd = match p.decl.filter(|d| self.unowned_params.remove(d)) {
                 Some(pd) => {
                     // [basic.scope.param]: the parameter named in the rest

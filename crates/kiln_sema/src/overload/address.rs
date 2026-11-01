@@ -84,7 +84,7 @@ impl Sema<'_, '_> {
     /// member function, the others only a non-member target.
     fn address_matches(&mut self, d: DeclId, (fnty, member): (QualType, bool)) -> bool {
         if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
-            || self.is_instance_member(d) != member
+            || self.is_implicit_object_member(d) != member
         {
             return false;
         }
