@@ -3486,6 +3486,23 @@ explicit specialization errors remain. The blockers are:
     `act_on_tag` declaration path through `check_redeclared_class_head`.
     Function templates with different heads are overloads, so they
     never reach this check.
+  - A friend class template declared in a dependent context
+    (`template<C U> friend class X;` in a class template,
+    `is_dependent_friend_template`) has a head deeper than `X`'s that
+    may name the enclosing parameters. As in clang's
+    `CheckClassTemplate`, it is compared with neither side when it is
+    declared; other redeclarations compare with the latest declaration
+    before it that is not such a friend (`head_comparable_decl`). When
+    the enclosing class is instantiated, `check_friend_class_head`
+    (`templ/subst/decls.rs`) substitutes the friend's head, including
+    type-constraints and requires-clause, in a SFINAE frame and checks
+    it against that declaration, under the instantiation note (clang's
+    `TemplateDeclInstantiator::VisitClassTemplateDecl`; WP-167, tests
+    `temp.friend/friend-template-constrained-head.cpp` and
+    `friend-template-head-differs.cpp`). Deviation: clang compares
+    with the latest instantiated friend, so with two instantiated
+    dependent friends of one template it can diagnose (and note) where
+    kiln does not.
 - Canonical dependent types and dependent template arguments use real
   profiles. Equivalent alias template redeclarations therefore chain,
   e.g. libc++ `__swap_result_t` in `__utility/swap.h:33`. Function
