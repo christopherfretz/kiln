@@ -143,7 +143,9 @@ here` / `implicitly declared private here`.
 nested-name-specifier component (`A::Priv::X`), an elaborated reference
 (`struct A::Priv *`), a base-specifier (checked at once in the deriving class's
 context without its bases, as clang 19 does) and `T::type` after substitution
-(a SFINAE failure in a SFINAE context). The parser's classification
+(a SFINAE failure in a SFINAE context), a qualified member template name
+(`A::PT<int>`), a mem-initializer-id, and each member a member
+using-declarator names ([namespace.udecl]/19). The parser's classification
 (`classify_name`) is side-effect free; `Sema::check_type_name_access` redoes
 the lookup for a class member to learn the naming class and using-shadow. An
 injected-class-name is a public member of its own class (`struct G : F2 {
@@ -164,7 +166,8 @@ function or class is its own context (so a befriended `A::I g(A::I)` or
 `template<A::I> struct R` is accepted); a friend declaration is checked in the
 befriending class. Only checks made in the context the delay point opened in
 are queued: a class or function body (or lambda) inside the declaration checks
-at once (clang's `pushUndelayed`). Member declarations are not delayed. In
+at once (clang's `pushUndelayed`). Member declarations are not delayed
+(clang 19 rejects `friend A::I g(A::I);` in a class `A` does not befriend). In
 template patterns: at instantiation (WP-070, §4.8 of sema-templates.md); in
 SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
 
@@ -1818,11 +1821,9 @@ polymorphic classes) for `final_overrider`/vtable cache size.
 7. (WP-066b) `DeclRefExpr`/`MemberExpr` carry no nested-name-specifier;
    `(a.f)()` loses the parentheses when the call is rebuilt. Dumps that
    would show either differ.
-8. (WP-066b) Member declarations do not delay their access checks to the
-   declared entity (`friend A::I g(A::I);` inside a class other than `A`
-   that `A` does not befriend, with `g` befriended by `A`, is rejected);
-   names in a `using`-declaration and in a mem-initializer-id are not
-   access-checked as type names (WP-174); `&B::m`'s [class.protected] rule and member-pointer
+8. (WP-066b, WP-174) A type name checked after substitution (`T::type`) is
+   reported at the location the substitution was given (the declarator,
+   or the use of an alias template) rather than at the name; `&B::m`'s [class.protected] rule and member-pointer
    base-to-derived conversion access are not re-checked; an unqualified
    `&f` naming a member function gets no `must explicitly qualify name of
    member function` diagnostic; calls through member pointers get no
