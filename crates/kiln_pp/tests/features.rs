@@ -18,7 +18,9 @@ use std::collections::BTreeMap;
 
 use ifeval_common::{clang_available, clang_version_line, run_clang, run_kiln_with};
 use kiln_lex::Std;
-use kiln_pp::{ClangCompat, ClangFeatures, FeatureFlag, FeatureQueries, MemoryResolver, TargetQuery};
+use kiln_pp::{
+    ClangCompat, ClangFeatures, FeatureFlag, FeatureQueries, MemoryResolver, TargetQuery,
+};
 
 const TABLE: &str = include_str!("../src/features_table.rs");
 const TRIPLES: [&str; 2] = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"];
@@ -654,9 +656,14 @@ fn probed_builtins_match_recorded_clang_answers() {
 fn has_builtin_under_both_levels() {
     let c19 = cf("x86_64-unknown-linux-gnu", Std::Cxx26, &[]);
     let c22 = c19.clone().with_compat(ClangCompat::Clang22);
-    for name in ["__builtin_is_virtual_base_of", "__builtin_is_implicit_lifetime", "__builtin_invoke"] {
+    for name in
+        ["__builtin_is_virtual_base_of", "__builtin_is_implicit_lifetime", "__builtin_invoke"]
+    {
         assert_eq!((c19.has_builtin(name), c22.has_builtin(name)), (0, 1), "{name}");
     }
-    assert_eq!((c19.has_builtin("__is_referenceable"), c22.has_builtin("__is_referenceable")), (1, 0));
+    assert_eq!(
+        (c19.has_builtin("__is_referenceable"), c22.has_builtin("__is_referenceable")),
+        (1, 0)
+    );
     assert_eq!((c19.has_builtin("__is_same"), c22.has_builtin("__is_same")), (1, 1));
 }

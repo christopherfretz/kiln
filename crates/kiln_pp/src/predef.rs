@@ -381,9 +381,12 @@ mod tests {
         let mut cfg = PredefConfig::new(true);
         assert_eq!(cfg.clang_compat, ClangCompat::Clang19);
         let s19 = build_predefines(base, &cfg, &[]);
-        assert!(s19.contains("#define __BOOL_WIDTH__ 8\n#define __clang_major__ 19\n"), "{s19}");
+        for here in ["__BOOL_WIDTH__ 8", "__clang_major__ 19", "__ARM_ACLE 200"] {
+            assert!(s19.contains(&format!("#define {here}\n")), "{here}: {s19}");
+        }
         assert!(!s19.contains("__INT64_C"));
         cfg.clang_compat = ClangCompat::Clang22;
+        cfg.aarch64 = false;
         let s22 = build_predefines(base, &cfg, &[]);
         for here in [
             "__BOOL_WIDTH__ 1",

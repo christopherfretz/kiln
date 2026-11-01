@@ -27,7 +27,8 @@ impl Sema<'_, '_> {
     /// and `Base` named by a `virtual` base-specifier somewhere in
     /// `Derived`'s hierarchy (`CXXRecordDecl::isVirtuallyDerivedFrom`).
     pub(super) fn is_virtual_base_of(&mut self, a: QualType, b: QualType, rhs_loc: Loc) -> bool {
-        let (Some(base), Some(derived)) = (self.ast.types.as_record(a), self.ast.types.as_record(b))
+        let (Some(base), Some(derived)) =
+            (self.ast.types.as_record(a), self.ast.types.as_record(b))
         else {
             return false;
         };
@@ -82,7 +83,8 @@ impl Sema<'_, '_> {
         if declared.iter().any(|&c| !self.is_deleted_fn(c) && self.fn_spec(c).is_trivial()) {
             return true;
         }
-        (self.needs_implicit(r, K::DefaultCtor) && bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR))
+        (self.needs_implicit(r, K::DefaultCtor)
+            && bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR))
             || (self.needs_implicit(r, K::CopyCtor)
                 && bits.contains(DefinitionBits::TRIVIAL_COPY_CTOR)
                 && !self.known_deleted(r, K::CopyCtor))
@@ -165,5 +167,4 @@ impl Sema<'_, '_> {
             _ => true,
         }
     }
-
 }

@@ -646,10 +646,9 @@ impl Args {
         if let Some(v) = arg.strip_prefix("-fclang-compat=") {
             match v.parse().ok().and_then(ClangCompat::from_major) {
                 Some(c) => self.predef.clang_compat = c,
-                None => self.errors.push(ArgError::UnsupportedValue(
-                    "-fclang-compat=".to_owned(),
-                    v.to_owned(),
-                )),
+                None => self
+                    .errors
+                    .push(ArgError::UnsupportedValue("-fclang-compat=".to_owned(), v.to_owned())),
             }
             return true;
         }
@@ -818,13 +817,13 @@ mod tests {
         assert_eq!(parse("t.cpp").predef.clang_compat, ClangCompat::Clang19);
         let a = parse("-fclang-compat=22 t.cpp");
         assert_eq!(a.predef.clang_compat, ClangCompat::Clang22);
-        assert!(a.errors.is_empty());
-        assert_eq!(parse("-fclang-compat=22 -fclang-compat=19 t.cpp").predef.clang_compat, ClangCompat::Clang19);
-        let bad = parse("-fclang-compat=20 t.cpp");
+        assert_eq!(a.errors, []);
         assert_eq!(
-            bad.errors,
-            [ArgError::UnsupportedValue("-fclang-compat=".into(), "20".into())]
+            parse("-fclang-compat=22 -fclang-compat=19 t.cpp").predef.clang_compat,
+            ClangCompat::Clang19
         );
+        let bad = parse("-fclang-compat=20 t.cpp");
+        assert_eq!(bad.errors, [ArgError::UnsupportedValue("-fclang-compat=".into(), "20".into())]);
     }
 
     #[test]
