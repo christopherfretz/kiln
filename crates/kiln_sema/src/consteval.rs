@@ -125,8 +125,10 @@ impl Sema<'_, '_> {
                     )
                 }) || self.ast.member_spec_info(f).is_some()
                     || self.ast.templates.instantiated_from_map(f).is_some()
-                    // A templated function being defined (its pattern).
-                    || self.in_template()
+                    // A function template being defined (its pattern); not
+                    // a member of a class template's pattern (clang's
+                    // `TK_NonTemplate`), whose instantiations escalate.
+                    || self.ast.described_template(self.ast.first(f)).is_some()
             }
             ConstexprKind::None => false,
         }
@@ -290,6 +292,60 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// An immediate invocation `c` of a template definition that the
+    /// instantiation being performed shares with it
+    /// (`templ/subst/shared.rs`): one that failed at the definition is
+    /// evaluated again and reported with the instantiation's context, as
+    /// clang reports its rebuilt `ConstantExpr` ([expr.const]/16).
+    /// One that made the pattern immediate makes an immediate-escalating
+    /// instantiation immediate.
+    pub(crate) fn recheck_shared_invocation(&mut self, c: ExprId) {
+        if self.ast.exprs.constant_value(c).is_some()
+            || (self.ast.exprs.constant_elided(c) && !self.marked_escalating(c))
+            || self.immediate_exempt()
+            || self.has_errors_in(c)
+        {
+            return;
+        }
+        let Some(f) = self.invocation_callee(c).filter(|&f| self.is_immediate_fn(f)) else {
+            return;
+        };
+        let at = self.begin_loc(c);
+        let r =
+            self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
+        let Err(fail) = r else { return };
+        match self.func.as_ref().map(|s| s.decl).filter(|&g| self.is_immediate_escalating(g)) {
+            Some(g) => {
+                let why = Escalation {
+                    loc: at,
+                    callee: f,
+                    call: true,
+                    default_init: None,
+                    written: false,
+                };
+                self.escalate(g, why);
+            }
+            None => self.report_immediate_call(c, f, fail, None, true),
+        }
+    }
+
+    /// Whether the immediate invocation `c` is marked as the one that
+    /// made its function immediate ([`Sema::mark_immediate_escalating`]).
+    fn marked_escalating(&self, c: ExprId) -> bool {
+        let e = self.ignore_implicit_for_imm(self.ast.exprs.operand(c));
+        match self.ast.exprs.get(e).kind() {
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                self.ast.exprs.construct_info(e).immediate_escalating
+            }
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr => {
+                let r = self.ignore_implicit_for_imm(self.ast.exprs.callee(e));
+                self.ast.exprs.get(r).kind() == ExprKind::DeclRefExpr
+                    && self.ast.exprs.get(r).has(ExprFlags::IMMEDIATE_ESCALATING)
+            }
+            _ => false,
+        }
+    }
+
     /// The immediate function an immediate invocation `c` calls.
     fn invocation_callee(&self, c: ExprId) -> Option<DeclId> {
         let e = self.ignore_implicit_for_imm(self.ast.exprs.operand(c));
@@ -350,7 +406,7 @@ impl Sema<'_, '_> {
                     self.escalate(g, why);
                     return;
                 }
-                None => self.report_immediate_call(c, callee, fail, Some((decl, loc))),
+                None => self.report_immediate_call(c, callee, fail, Some((decl, loc)), false),
             }
         }
     }
@@ -391,6 +447,25 @@ impl Sema<'_, '_> {
         let w = self.builder().constant_expr(call, None);
         self.imm.pending.candidates.push((w, f));
         w
+    }
+
+    /// The end of a full-expression kept as the separate expressions
+    /// `parts` (the arguments of a mem-initializer of a template, which
+    /// is not built until instantiation): the immediate invocations of
+    /// each part are finished like those of a full-expression.
+    pub(crate) fn finish_immediate_parts(&mut self, parts: &[ExprId]) {
+        let candidates = std::mem::take(&mut self.imm.pending.candidates);
+        let refs = std::mem::take(&mut self.imm.pending.refs);
+        let uses = std::mem::take(&mut self.imm.pending.default_uses);
+        for &e in parts {
+            self.imm.pending.candidates.clone_from(&candidates);
+            self.imm.pending.refs.clone_from(&refs);
+            self.imm.pending.default_uses.clone_from(&uses);
+            self.finish_immediate_invocations(e);
+        }
+        self.imm.pending.candidates.clear();
+        self.imm.pending.refs.clear();
+        self.imm.pending.default_uses.clear();
     }
 
     /// The end of full-expression `e` (from [`Sema::act_on_full_expr`]):
@@ -461,7 +536,7 @@ impl Sema<'_, '_> {
                             Escalation { loc, callee, call: true, default_init: field, written };
                         self.escalate(g, why);
                     }
-                    None => self.report_immediate_call(c, callee, fail, None),
+                    None => self.report_immediate_call(c, callee, fail, None, false),
                 },
             }
         }
@@ -601,6 +676,7 @@ impl Sema<'_, '_> {
         f: DeclId,
         mut fail: kiln_oven::EvalFailure,
         default_use: Option<(DeclId, Loc)>,
+        again: bool,
     ) {
         let loc = self.begin_loc(c);
         let consteval = self.is_consteval_kind(f);
@@ -609,6 +685,9 @@ impl Sema<'_, '_> {
             .diag(DiagId::sema_immediate_call_non_constant, at)
             .arg(u8::from(consteval))
             .arg(self.qualified_decl_name(f));
+        if again {
+            msg = msg.allow_duplicate();
+        }
         if let Some((d, used)) = default_use {
             let begin = self.ast.decls.cold.begin_loc.get(d).copied();
             let begin = begin.unwrap_or(self.ast.decls.get(d).loc());
