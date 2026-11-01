@@ -9,7 +9,7 @@ use kiln_ast::expr::ExprKind;
 use kiln_ast::{Ast, ExprId, QualType};
 
 use super::{Compiler, float_code, skip_parens};
-use crate::kbc::{Op, bi};
+use crate::kbc::{Op, ak, bi};
 use crate::softfloat;
 use crate::ty::TyKind;
 
@@ -164,6 +164,16 @@ impl Compiler<'_> {
             TyKind::Int { width, .. } => u32::from(width),
             TyKind::Bool => 1,
             _ => 64,
+        }
+    }
+
+    /// The width and signedness of integer (`bool`: 1, unsigned) operand
+    /// `e`.
+    fn int_ws(&mut self, e: ExprId) -> (u32, bool) {
+        let t = self.ety(e);
+        match self.kind(t) {
+            TyKind::Int { width, signed } => (u32::from(width), signed),
+            _ => (1, false),
         }
     }
 
@@ -403,6 +413,13 @@ impl Compiler<'_> {
             | id::STRSTR
             | id::MEMSET
             | id::MEMPCPY
+            // WP-270: clang evaluates neither `alloca` nor the
+            // `printf` family.
+            | id::ALLOCA
+            | id::ALLOCA_WITH_ALIGN
+            | id::VSNPRINTF
+            | id::SNPRINTF
+            | id::SPRINTF
             // clang evaluates no `va_list` operation.
             | id::VA_START
             | id::VA_END
@@ -496,6 +513,41 @@ impl Compiler<'_> {
                     None => dst,
                 };
                 op(self, bi::INT_OP, w | k << 8, [a, b, dst], [0, 0], begin);
+            }
+            // WP-270: checked arithmetic (clang `IntExprEvaluator`
+            // `BI__builtin_*_overflow`): both operands, then the result
+            // pointer, are evaluated; the wrapped value is stored through
+            // the pointer and the overflow flag is the call's value.
+            _ if id::checked_op(bid).is_some() => {
+                let (k, _) = id::checked_op(bid)?;
+                let (x, y, r) = (arg(0)?, arg(1)?, arg(2)?);
+                let sa = self.int_ws(x).1;
+                let sb = self.int_ws(y).1;
+                let rq = self.ast().exprs.get(r).ty();
+                let pq = self.ast().types.pointee(rq)?;
+                let rt = self.ty(pq);
+                let (wr, sr) = match self.kind(rt) {
+                    TyKind::Int { width, signed } => (u32::from(width), signed),
+                    _ => (1, false),
+                };
+                let a = self.rv(x);
+                let b = self.rv(y);
+                let p = self.rv(r);
+                let sub = u32::from(k)
+                    | u32::from(sa) << 2
+                    | u32::from(sb) << 3
+                    | u32::from(sr) << 4
+                    | wr << 6;
+                let v = self.reg();
+                self.emit_site(
+                    Op::Builtin,
+                    bi::OVERFLOW | (sub | bi::VALUE) << 8,
+                    &[v, a, b, dst, 0, 0],
+                    e,
+                    begin,
+                );
+                op(self, bi::OVERFLOW, sub, [a, b, dst], [0, 0], begin);
+                self.emit_site(Op::Store, ak::ASSIGN, &[p, v, rt.0], e, begin);
             }
             // clang 19 does not constant-evaluate the vector reductions
             // (spec/oven.md "Vectors").

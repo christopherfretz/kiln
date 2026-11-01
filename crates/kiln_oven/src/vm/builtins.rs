@@ -52,6 +52,47 @@ pub(crate) enum BiFault {
     CastUnrep { v: u8 },
 }
 
+/// `bi::OVERFLOW` (WP-270; clang `BI__builtin_*_overflow`): the
+/// overflow flag of `a op b` computed in infinite precision against the
+/// result type, or (`bi::VALUE`) the result wrapped to that type. The
+/// canonical operands are the two's-complement images of their values,
+/// so the wrapped result is the modulo-2^128 operation re-canonicalized.
+fn checked(sub: u32, a: u128, b: u128) -> u128 {
+    let (op, sr, w) = (sub & 3, sub & 16 != 0, (sub >> 6) & 0xFF);
+    if sub & bi::VALUE != 0 {
+        let v = match op {
+            0 => a.wrapping_add(b),
+            1 => a.wrapping_sub(b),
+            _ => a.wrapping_mul(b),
+        };
+        return crate::arith::canon(v, w, sr);
+    }
+    // Sign and magnitude of each operand.
+    let sm = |v: u128, signed: bool| {
+        if signed && (v as i128) < 0 { (true, (v as i128).unsigned_abs()) } else { (false, v) }
+    };
+    let (na, ma) = sm(a, sub & 4 != 0);
+    let (nb, mb) = sm(b, sub & 8 != 0);
+    let nb = if op == 1 { !nb } else { nb };
+    let r = if op == 2 {
+        ma.checked_mul(mb).map(|m| (na != nb, m))
+    } else if na == nb {
+        ma.checked_add(mb).map(|m| (na, m))
+    } else if ma >= mb {
+        Some((na, ma - mb))
+    } else {
+        Some((nb, mb - ma))
+    };
+    let Some((neg, m)) = r else { return 1 };
+    let fits = match (sr, neg && m != 0) {
+        (false, true) => false,
+        (false, false) => m <= mask(w),
+        (true, true) => m <= 1u128 << (w - 1),
+        (true, false) => m <= mask(w - 1),
+    };
+    u128::from(!fits)
+}
+
 fn mask(w: u32) -> u128 {
     if w >= 128 { u128::MAX } else { (1u128 << w) - 1 }
 }
@@ -233,6 +274,7 @@ impl Oven {
                     }
                 })
             }
+            bi::OVERFLOW => Ok(checked(sub, a, b)),
             bi::BIT_CAST => {
                 let (to_mem, read) = (sub == bi::TO_MEM, sub == bi::READ_ONLY);
                 self.bit_cast(ast, a as u64, b as u64, OTy(t1), OTy(t2), to_mem, read)

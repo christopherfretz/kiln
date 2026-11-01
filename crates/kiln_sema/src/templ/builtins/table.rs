@@ -386,6 +386,34 @@ pub static TABLE: &[Row] = &[
     f("__builtin_wmemmove", DONE, Oven::Yes),
     f("__builtin_memset", DONE, Oven::No),
     f("__builtin_mempcpy", DONE, Oven::No),
+    // WP-270: checked arithmetic (constant-evaluated), alloca and the
+    // printf-family library builtins (not constant in clang 19)
+    f("__builtin_add_overflow", DONE, Oven::Yes),
+    f("__builtin_sub_overflow", DONE, Oven::Yes),
+    f("__builtin_mul_overflow", DONE, Oven::Yes),
+    f("__builtin_sadd_overflow", DONE, Oven::Yes),
+    f("__builtin_saddl_overflow", DONE, Oven::Yes),
+    f("__builtin_saddll_overflow", DONE, Oven::Yes),
+    f("__builtin_uadd_overflow", DONE, Oven::Yes),
+    f("__builtin_uaddl_overflow", DONE, Oven::Yes),
+    f("__builtin_uaddll_overflow", DONE, Oven::Yes),
+    f("__builtin_ssub_overflow", DONE, Oven::Yes),
+    f("__builtin_ssubl_overflow", DONE, Oven::Yes),
+    f("__builtin_ssubll_overflow", DONE, Oven::Yes),
+    f("__builtin_usub_overflow", DONE, Oven::Yes),
+    f("__builtin_usubl_overflow", DONE, Oven::Yes),
+    f("__builtin_usubll_overflow", DONE, Oven::Yes),
+    f("__builtin_smul_overflow", DONE, Oven::Yes),
+    f("__builtin_smull_overflow", DONE, Oven::Yes),
+    f("__builtin_smulll_overflow", DONE, Oven::Yes),
+    f("__builtin_umul_overflow", DONE, Oven::Yes),
+    f("__builtin_umull_overflow", DONE, Oven::Yes),
+    f("__builtin_umulll_overflow", DONE, Oven::Yes),
+    f("__builtin_alloca", DONE, Oven::No),
+    f("__builtin_alloca_with_align", DONE, Oven::No),
+    f("__builtin_vsnprintf", DONE, Oven::No),
+    f("__builtin_snprintf", DONE, Oven::No),
+    f("__builtin_sprintf", DONE, Oven::No),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -463,6 +491,16 @@ mod tests {
         assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_expect"), None);
         assert_eq!(has_builtin_staged("__make_integer_seq"), Some(true));
+    }
+
+    /// WP-270: the checked-arithmetic builtins are constant-evaluated
+    /// (clang 19 `Constexpr`); `alloca` and `vsnprintf` are not.
+    #[test]
+    fn checked_arithmetic_rows() {
+        assert_eq!(has_constexpr_builtin_staged("__builtin_mul_overflow"), Some(true));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_umulll_overflow"), Some(true));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_alloca"), Some(false));
+        assert_eq!(has_builtin_staged("__builtin_vsnprintf"), Some(true));
     }
 
     #[test]
