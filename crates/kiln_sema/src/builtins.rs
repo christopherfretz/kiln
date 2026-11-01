@@ -684,7 +684,8 @@ impl Sema<'_, '_> {
     /// types, `_BitInt`) or a complete unscoped enumeration.
     fn is_integer_type(&self, q: QualType) -> bool {
         if self.ast.types.as_enum(q).is_some() {
-            return conv::rank::is_unscoped_enum(self, q) && conv::rank::int_width(self, q).is_some();
+            return conv::rank::is_unscoped_enum(self, q)
+                && conv::rank::int_width(self, q).is_some();
         }
         self.ast.types.is_integral(q)
     }

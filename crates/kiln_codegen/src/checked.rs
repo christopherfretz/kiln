@@ -160,7 +160,7 @@ impl Cg<'_> {
         Ok(carry)
     }
 
-    /// IRBuilder `CreateSelect`: folded only when every operand is a
+    /// `IRBuilder::CreateSelect`: folded only when every operand is a
     /// constant (`ConstantFolder::FoldSelect`).
     fn fold_select(&mut self, c: V, t: V, f: V) -> V {
         if matches!((t, f), (V::C(_), V::C(_))) {
@@ -225,5 +225,3 @@ fn int_max(w: u32) -> i128 {
 fn uint_max(w: u32) -> i128 {
     if w >= 128 { -1 } else { ((1u128 << w) - 1) as i128 }
 }
-
-
