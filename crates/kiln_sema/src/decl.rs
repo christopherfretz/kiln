@@ -691,6 +691,15 @@ impl Sema<'_, '_> {
                             self.ast.types.dependent_sized_array(ty, *e, p)
                         }
                         Some(e) => match self.array_bound(*e, d) {
+                            // clang `BuildArrayType`: a zero-length array is
+                            // a GNU extension, but an error in a SFINAE
+                            // context (`err_typecheck_zero_array_size`), so
+                            // `int[0]` never matches `T[N]`.
+                            Some(0) if self.inst.stack.is_sfinae() => {
+                                let l = self.begin_loc(*e);
+                                self.error(DiagId::sema_zero_array_size_sfinae, l);
+                                return QualType::ERROR;
+                            }
                             Some(n) => self.ast.types.constant_array(ty, n, None),
                             None => return QualType::ERROR,
                         },

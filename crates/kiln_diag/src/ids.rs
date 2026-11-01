@@ -698,6 +698,7 @@ diag_ids! {
     sema_alignment_too_big = Error (1) "requested alignment must be {0} bytes or smaller";
     sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";
     sema_vector_zero_size = Error (0) "zero vector size";
+    sema_zero_array_size_sfinae = Error (0) "zero-length arrays are not permitted in C++";
     sema_vector_size_too_large = Error (0) "vector size too large";
     sema_vector_size_not_multiple = Error (0) "vector size not an integral multiple of component size";
     sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";
