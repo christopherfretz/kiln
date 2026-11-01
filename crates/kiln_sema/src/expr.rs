@@ -442,6 +442,11 @@ impl Sema<'_, '_> {
     /// implicit-conversion warnings (clang's `CheckCompletedExpr`
     /// location: the declared variable, `return`).
     pub(crate) fn act_on_full_expr_at(&mut self, e: ExprId, cc: Loc) -> ExprId {
+        if !self.lambdas.is_empty()
+            && self.ast.exprs.get(e).deps().contains(kiln_ast::expr::ExprDeps::UNEXPANDED_PACK)
+        {
+            self.note_unexpanded_in_lambda();
+        }
         self.check_implicit_conversions(e, cc);
         self.flush_member_refs();
         if !self.special.pending_deleted.is_empty() {
