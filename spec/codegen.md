@@ -104,7 +104,11 @@ panic and never silently wrong IR.
       the `g` forms with a fallback use true and `select (x == 0)`;
       popcount is `llvm.ctpop`, bswap `llvm.bswap`;
     - isfinite/isinf/isnan/isnormal are `llvm.is.fpclass` (tests 504,
-      516, 3, 264) zero-extended; signbit bitcasts to an integer of the
+      516, 3, 264) zero-extended; `__builtin_isfpclass(x, m)` is
+      `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
+      prepass collects it); `__builtin_expect_with_probability` at -O0 is
+      its first operand (the expected value emitted, the probability
+      not); signbit bitcasts to an integer of the
       float's width and tests `slt 0`; the isgreater family is one
       `fcmp` (`ogt oge olt ole one uno`) zero-extended;
     - memcpy/memmove are `llvm.memcpy`/`llvm.memmove` (`i64` length,

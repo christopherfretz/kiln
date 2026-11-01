@@ -296,7 +296,10 @@ literal is one instruction and one step, not an interpreted loop.
   constant (no note, as clang).
 - **Classification** (`bi::FP_CLASS`): `isfinite`/`isinf`/`isnan`/
   `isnormal` on every float format, x87 and binary128 through
-  `softfloat.rs`.
+  `softfloat.rs`; `__builtin_isfpclass` is the `MASK` class: the
+  value's LLVM `FPClassTest` bit (sign and signaling distinguished) ANDed
+  with the mask register, the mask evaluated first.
+  `__builtin_expect_with_probability` is its first operand, as `expect`.
 - **Strings and memory** (`bi::STRLEN`, `MEMCMP`, `MEMCHR`, `MEMCPY`, each
   with a `WIDE` or `MOVE` sub-kind): clang's typed semantics. `strlen`,
   `memcmp` and `memchr` read element by element and fail with clang's

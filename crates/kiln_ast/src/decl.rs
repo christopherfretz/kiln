@@ -2921,6 +2921,11 @@ pub mod builtin {
     pub const ISSIGNALING: u32 = 739;
     /// `__builtin_expect` (clang `Builtins.td` signature `LiLiLi`).
     pub const EXPECT: u32 = 528;
+    /// `__builtin_expect_with_probability` (clang `Builtins.td` signature
+    /// `LiLiLid`).
+    pub const EXPECT_WITH_PROBABILITY: u32 = 529;
+    /// `__builtin_isfpclass` (clang `Builtins.td` signature `i.`).
+    pub const ISFPCLASS: u32 = 726;
     /// `__builtin_assume` (clang `Builtins.td` signature `vb`).
     pub const ASSUME: u32 = 148;
     /// `__builtin_trap` (clang `Builtins.td` signature `v`).
@@ -3075,6 +3080,8 @@ pub mod builtin {
         row(ISZERO, "__builtin_iszero", "i.", N | C | T),
         row(ISSIGNALING, "__builtin_issignaling", "i.", N | C | T),
         row(EXPECT, "__builtin_expect", "LiLiLi", N | C),
+        row(EXPECT_WITH_PROBABILITY, "__builtin_expect_with_probability", "LiLiLid", N | C),
+        row(ISFPCLASS, "__builtin_isfpclass", "i.", N | C | T),
         row(ASSUME, "__builtin_assume", "vb", N),
         row(TRAP, "__builtin_trap", "v", N | R),
         row(ABORT, "__builtin_abort", "v", N | R),

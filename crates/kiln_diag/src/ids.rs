@@ -1177,6 +1177,10 @@ diag_ids! {
     sema_call_too_many_args_at_most = Error (2) "too many arguments to function call, expected at most {0}, have {1}";
     sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
     sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";
+    sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant integer";
+    sema_argument_invalid_range = Error (3) "argument value {0} is outside the valid range [{1}, {2}]";
+    sema_probability_not_constant_float = Error (0) "probability argument to __builtin_expect_with_probability must be constant floating-point expression";
+    sema_probability_out_of_range = Error (0) "probability argument to __builtin_expect_with_probability is outside the range [0.0, 1.0]";
     sema_builtin_passing_incompatible = Error (2) "passing {0} to parameter of incompatible type {1}";
     sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";
     sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";

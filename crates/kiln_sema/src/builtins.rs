@@ -21,6 +21,7 @@ use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
 use kiln_ast::types::{Nns, TagKeyword};
 use kiln_ast::{Ast, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
+use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
@@ -276,6 +277,7 @@ impl Sema<'_, '_> {
             | builtin::ISZERO
             | builtin::ISSIGNALING => self.builtin_fp_classification(args, rparen),
             builtin::FPCLASSIFY => self.builtin_fpclassify(args, rparen),
+            builtin::ISFPCLASS => self.builtin_isfpclass(callee, args, rparen),
             builtin::ISGREATER
             | builtin::ISGREATEREQUAL
             | builtin::ISLESS
@@ -418,6 +420,81 @@ impl Sema<'_, '_> {
             return None;
         }
         Some((vec![a], QualType::INT))
+    }
+
+    /// The probability argument of `__builtin_expect_with_probability`
+    /// (already converted to `double`): a constant expression in
+    /// [0.0, 1.0] (clang `Sema::BuiltinExpectWithProbability`). A
+    /// value-dependent argument is checked at instantiation.
+    pub(crate) fn check_expect_probability(&mut self, p: ExprId) -> bool {
+        if self.expr_is_value_dependent(p) {
+            return true;
+        }
+        let at = self.begin_loc(p);
+        let v = match self.eval_const(p, EvalContext::new(EvalKind::Other, at)) {
+            Ok(v) => v,
+            Err(f) => {
+                let d = self.diag(DiagId::sema_probability_not_constant_float, at);
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                return false;
+            }
+        };
+        let x = match self.ast.consts.scalar(v) {
+            Some(Scalar::Float { kind, bits, .. }) if kind.bits() == 64 => {
+                f64::from_bits(bits as u64)
+            }
+            _ => {
+                let d = self.diag(DiagId::sema_probability_not_constant_float, at);
+                self.emit(d);
+                return false;
+            }
+        };
+        if !(0.0..=1.0).contains(&x) {
+            let d = self.diag(DiagId::sema_probability_out_of_range, at);
+            self.emit(d);
+            return false;
+        }
+        true
+    }
+
+    /// `__builtin_isfpclass(x, mask)` (clang's `BuiltinFPClassification`
+    /// with `IsFPClass`): `x` real floating, `mask` an integer constant
+    /// in [0, 1023] (`llvm::fcAllFlags`), left unconverted; reported at
+    /// the call's start (clang `BuiltinConstantArgRange`).
+    fn builtin_isfpclass(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let (mut out, _) = self.builtin_fp_classification(&args[..1], rparen)?;
+        let m = args[1];
+        if !self.expr_is_value_dependent(m) {
+            let at = self.begin_loc(callee);
+            let v = if self.ast.types.is_integral(self.ety(m)) { self.fold_int(m) } else { None };
+            let Some(v) = v else {
+                let msg = self
+                    .diag(DiagId::sema_constant_integer_arg_type, at)
+                    .arg("__builtin_isfpclass".to_string());
+                self.emit(msg);
+                return None;
+            };
+            if !(0..=1023).contains(&v) {
+                let msg = self
+                    .diag(DiagId::sema_argument_invalid_range, at)
+                    .arg(v.to_string())
+                    .arg("0".to_string())
+                    .arg("1023".to_string());
+                self.emit(msg);
+                return None;
+            }
+        }
+        out.push(m);
+        Some((out, QualType::INT))
     }
 
     /// `__builtin_fpclassify(nan, inf, normal, subnormal, zero, x)`
