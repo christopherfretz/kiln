@@ -569,7 +569,6 @@ pub(crate) const CLANG_GROUP_NAMES: &[&str] = &[
     "mismatched-return-types",
     "mismatched-tags",
     "missing-braces",
-    "missing-constinit",
     "missing-declarations",
     "missing-designated-field-initializers",
     "missing-exception-spec",

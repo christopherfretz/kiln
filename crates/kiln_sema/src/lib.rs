@@ -167,6 +167,9 @@ pub struct Sema<'a, 'sm> {
     /// declaration (clang `getTypeSpecStartLoc`), where the handler-order
     /// warnings point ([except.handle]/4, WP-100).
     pub(crate) handler_type_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where `constinit` was written on each variable declaration that
+    /// has it ([dcl.constinit]; WP-159).
+    pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The declared placeholder type and decl-specifiers' type location
     /// of each variable of a multi-declarator group in a template
     /// pattern: instantiation checks the group's deductions again
@@ -377,6 +380,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             decomp_written: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
+            constinit_locs: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             ovl: overload::OverloadScratch::default(),
