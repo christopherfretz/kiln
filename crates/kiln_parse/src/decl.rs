@@ -986,7 +986,7 @@ impl Parser<'_, '_> {
         ctx: DeclaratorContext,
     ) {
         let _ = ctx;
-        let Some((args, _, r_angle)) = self.parse_template_arg_list() else {
+        let Some((args, l_angle, r_angle)) = self.parse_template_arg_list() else {
             ds.invalid = true;
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
@@ -994,7 +994,7 @@ impl Parser<'_, '_> {
         let final_loc = self.parse_class_virt_specifiers();
         let use_ = self.tag_use(ds, true, final_loc);
         let r = self.s.act_on_class_template_id_tag(
-            keyword, tmpl, &args, qualifier, use_, name_loc, r_angle, kw_loc,
+            keyword, tmpl, &args, qualifier, use_, name_loc, (l_angle, r_angle), kw_loc,
         );
         let ty = if let Ok((rec, ty)) = r {
             if use_ == TagUse::Definition {
