@@ -13,8 +13,8 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Setup
 
-- kiln: debug build of the WP-166 branch (commit in the generated "Run" table below), with main
-  `f948983a` (WP-158, WP-159, WP-164, WP-156 merged) merged in.
+- kiln: debug build of the WP-175 branch (commit in the generated "Run" table below), based on
+  main `81c84b7f` (WP-166 merged; main was unchanged at the merge).
 - Tests and headers: libc++ `llvmorg-19.1.7`. The tests come from the sparse checkout. The headers,
   `libc++.so`, `libc++experimental.a` and `libc++abi` come from the clang 19 packages in the
   container.
@@ -24,13 +24,13 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Reading
 
-**Overall: 415/585 (70.9%)** on the WP-152 branch merged with main `81c84b7f` (unchanged from
-that main; WP-152 is CTAD/list-init/diagnostic follow-ups). Earlier: 415 on the WP-166 branch
-merged with main `f948983a`. The same branch
-measured 410/585 merged with main `f5dc929c` (405 on that main), and 364 on its base `b61aa714`.
-There are no crashes and no KILLED, TIMEOUT, link or run failures. Every failure is at the compile
-stage. (The kiln binary was rebuilt partway through this run with the zero-length-array fix; the
-tests that fix affects, such as `is_bounded_array`, ran on the rebuilt binary.)
+**Overall: 415/585 (70.9%)** on the WP-175 branch, the same as main `81c84b7f`. WP-175 fixed the
+parse of `static MemCounter counter((MemCounter::MemCounterCtorArg_()));` (`test/support/count_new.h:377`),
+but the same 18 tests now fail one step later, in codegen: the constructor is not `constexpr`, so
+`counter` needs dynamic initialization, which kiln does not emit yet. (Before WP-175: 405 on main
+`f5dc929c`, 410 on the WP-166 branch merged with it, 415 on the WP-166 branch merged with main
+`f948983a`, and 364 on its base `b61aa714`.) There are no crashes and no KILLED, TIMEOUT, link or
+run failures. Every failure is at the compile stage.
 
 No test fails on an unimplemented type trait any more, first or anywhere. `98108541` (on the base)
 cleared `__is_trivially_assignable`/`__is_trivially_constructible`, and WP-166 implemented the rest
@@ -55,10 +55,11 @@ Per directory, WP-149 → WP-164 → WP-166 (merged with main `f948983a`):
 
 **What blocks the rest** (first-error counts; see the generated cluster table):
 
-1. `expected expression` (18 first), all from `test/support/count_new.h:377`:
-   `static MemCounter counter((MemCounter::MemCounterCtorArg_()));`. A parenthesized
-   value-initialized temporary in a direct-initializer does not parse. This replaced the
-   simd lambda cluster (31 first) that WP-156 fixed.
+1. `dynamic initialization of a global is not supported yet` (18 first), all from
+   `test/support/count_new.h:377`: `static MemCounter counter((MemCounter::MemCounterCtorArg_()));`
+   parses since WP-175 (it was `expected expression`), but `MemCounter`'s constructor is not
+   `constexpr`, so the global needs a dynamic initializer (`llvm.global_ctors`), which
+   kiln_codegen does not emit yet.
 2. `'typename' using-declarators is not supported yet` (14 first, 32 any).
 3. `redefinition of 'iter_move' as different kind of symbol` (13 first), WP-169.
 4. `exception specification of overriding function is more lax than base version` (12 first),
@@ -81,7 +82,7 @@ Per directory, WP-149 → WP-164 → WP-166 (merged with main `f948983a`):
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `5ad3b24e` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `444711a5` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -90,8 +91,8 @@ Per directory, WP-149 → WP-164 → WP-166 (merged with main `f948983a`):
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 426.8 s |
-| peak RSS | 72 MiB (largest single process, `std/strings/string.view/string.view.template/contains.char.pass.cpp`; gnu-time) |
+| wall time | 523.8 s |
+| peak RSS | 72 MiB (largest single process, `std/strings/string.view/string.view.iterators/begin.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -129,7 +130,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | directory | clusters |
 |---|---|
 | `std/utilities/meta` | `compile: constexpr variable '…' must be initialized by a constant expression` (5); `compile: '…' using-declarators is not supported yet` (4); `compile: static assertion failed due to requirement '…':` (3) |
-| `std/utilities/utility` | `compile: expected expression` (18); `compile: no member named '…' in '…'` (11); `compile: member initializer '…' does not name a non-static data member or base class` (7) |
+| `std/utilities/utility` | `compile: dynamic initialization of a global is not supported yet (MN)` (18); `compile: no member named '…' in '…'` (11); `compile: member initializer '…' does not name a non-static data member or base class` (7) |
 | `std/containers/sequences/array` | `compile: constexpr variable '…' must be initialized by a constant expression` (2); `compile: implicit assignment of an array of this type is not supported yet` (1); `compile: no viable conversion from '…' (aka '…') to '…' (aka '…')` (1) |
 | `std/strings/string.view` | `compile: kiln: not yet implemented: substitution into CXXTryStmt` (7); `compile: called object type '…' is not a function or function pointer` (6); `compile: static assertion expression is not an integral constant expression` (5) |
 | `std/containers/views/views.span` | `compile: initialization by an initializer-list constructor is not supported yet` (9); `compile: redefinition of '…' as different kind of symbol` (3); `compile: constexpr if condition is not a constant expression` (2) |
@@ -139,11 +140,11 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 
 ### Error clusters
 
-65 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
+66 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
-| 1 | 18 | 19 | `compile: expected expression` | `std/utilities/utility/mem.res/mem.res.global/new_delete_resource.pass.cpp` | `expected expression` |
+| 1 | 18 | 18 | `compile: dynamic initialization of a global is not supported yet (MN)` | `std/utilities/utility/mem.res/mem.res.global/new_delete_resource.pass.cpp` | `dynamic initialization of a global is not supported yet (M3)` |
 | 2 | 14 | 32 | `compile: '…' using-declarators is not supported yet` | `std/containers/views/views.span/span.elem/at.pass.cpp` | `'typename' using-declarators is not supported yet` |
 | 3 | 13 | 13 | `compile: redefinition of '…' as different kind of symbol` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `redefinition of 'iter_move' as different kind of symbol` |
 | 4 | 12 | 15 | `compile: exception specification of overriding function is more lax than base version` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `exception specification of overriding function is more lax than base version` |
@@ -156,7 +157,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 11 | 6 | 22 | `compile: out-of-line definition of '…' does not match any declaration in '…'` | `std/language.support/support.limits/support.limits.general/unordered_map.version.compile.pass.cpp` | `out-of-line definition of '__node_insert_unique' does not match any declaration in 'std::__1::__hash_table'` |
 | 12 | 6 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/equal.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
 | 13 | 6 | 9 | `compile: too few template arguments for concept '…'` | `std/containers/sequences/array/iterators.pass.cpp` | `too few template arguments for concept 'std::__1::same_as'` |
-| 14 | 5 | 37 | `compile: static assertion expression is not an integral constant expression` | `std/strings/string.view/string.view.find/find_first_of_pointer_size.pass.cpp` | `static assertion expression is not an integral constant expression` |
+| 14 | 5 | 38 | `compile: static assertion expression is not an integral constant expression` | `std/strings/string.view/string.view.find/find_first_of_pointer_size.pass.cpp` | `static assertion expression is not an integral constant expression` |
 | 15 | 4 | 11 | `compile: static assertion failed due to requirement '…'` | `std/numerics/bit/bit.cast/bit_cast.compile.pass.cpp` | `static assertion failed due to requirement '!...'` |
 | 16 | 4 | 4 | `compile: aggregate expression ConditionalOperator is not supported yet` | `std/strings/string.view/string.view.template/ends_with.ptr.pass.cpp` | `aggregate expression ConditionalOperator is not supported yet` |
 | 17 | 3 | 17 | `compile: no matching function for call to '…'` | `std/containers/views/views.span/span.cons/iterator_len.pass.cpp` | `no matching function for call to 'size'` |
