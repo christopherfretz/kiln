@@ -263,9 +263,17 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(c).kind() == ExprKind::MemberExpr {
             return !self.decl_is_nothrow(self.ast.exprs.decl(c));
         }
-        // `(o.*pm)()`: the pointer-to-member's function type.
+        // `(o.*pm)()`: the pointer-to-member's function type (the
+        // `.*` / `->*` itself is a bound-member prvalue).
         let t = &self.ast.types;
-        let ty = self.ast.exprs.get(c).ty();
+        let mut ty = self.ast.exprs.get(c).ty();
+        if self.ast.exprs.get(c).kind() == ExprKind::BinaryOperator
+            && let Some(&rhs) = self.ast.exprs.children(c, &self.ast.lists).get(1)
+            && let Some((p, _)) =
+                conv::scs::member_pointer_parts(self, self.ast.exprs.get(rhs).ty())
+        {
+            ty = p;
+        }
         t.proto(ty).is_none_or(|p| !t.exc_spec(p).is_nothrow())
     }
 

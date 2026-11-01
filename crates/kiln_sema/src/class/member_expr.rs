@@ -130,10 +130,12 @@ impl Sema<'_, '_> {
             self.diagnose_deleted_use(d, loc);
         }
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
-        let extra = shadow.map(|s| DeclRefExtra {
-            qualifier: None,
+        // The qualifier is kept so that a substitution rebuilds `&C::m`
+        // (a local class of a function template) as qualified.
+        let extra = (shadow.is_some() || nns.is_some()).then_some(DeclRefExtra {
+            qualifier: nns,
             template_args: None,
-            found_decl: Some(s),
+            found_decl: shadow,
         });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         let error = self.unevaluated == 0 || self.kind_of(d) == DeclKind::CXXMethod;

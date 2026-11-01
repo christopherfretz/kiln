@@ -1762,6 +1762,16 @@ impl Cg<'_> {
         self.field_lvalue_init(base, field, q)
     }
 
+    /// The lvalue an aggregate initializer stores to: a reference member's
+    /// own slot (to bind), any other field as `field_lvalue` (bit-fields).
+    fn init_field_lvalue(&mut self, base: Addr, field: DeclId, q: QualType) -> R<LV> {
+        if self.referee(q).is_some() {
+            self.field_lvalue_init(base, field, q)
+        } else {
+            self.field_lvalue(base, field, q)
+        }
+    }
+
     /// The storage of field `field` of the object at `base` (a reference
     /// member's own slot, not its referee): clang `EmitLValueForFieldInitialization`.
     pub(crate) fn field_lvalue_init(&mut self, base: Addr, field: DeclId, q: QualType) -> R<LV> {
@@ -2593,6 +2603,27 @@ impl Cg<'_> {
                 self.ensure_insert_point();
                 self.agg_visit(r, dest, zeroed)
             }
+            // clang `AggExprEmitter::VisitAbstractConditionalOperator`: each
+            // arm initializes the destination in its own block.
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                let c = self.sub(e);
+                if let Some(x) = self.fold_bool(c) {
+                    return self.agg_visit(if x { a } else { b }, dest, zeroed);
+                }
+                let lb = self.f.fir.create_block();
+                let rb = self.f.fir.create_block();
+                let cont = self.f.fir.create_block();
+                let start = self.f.fir.cur();
+                self.branch_on_bool(c, lb, rb)?;
+                self.emit_block(lb, false);
+                self.cond_eval(start, |cg| cg.agg_visit(a, dest, zeroed))?;
+                self.br(cont);
+                self.emit_block(rb, false);
+                self.cond_eval(start, |cg| cg.agg_visit(b, dest, zeroed))?;
+                self.emit_block(cont, false);
+                Ok(())
+            }
             ExprKind::StringLiteral => {
                 // A literal initializing a (possibly longer) char array:
                 // copy from the literal's constant padded to the array.
@@ -2722,6 +2753,13 @@ impl Cg<'_> {
         if matches!(k, ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr) {
             return self.null_init_lvalue(lv, zeroed);
         }
+        if lv.bf.is_none() && self.referee(lv.q).is_some() {
+            // A reference member binds to its initializer's address
+            // (clang `EmitInitializationToLValue`, reference case).
+            let p = self.emit_ref_binding(e)?;
+            self.store(p, lv.addr.v, lv.addr.align, false);
+            return Ok(());
+        }
         if self.is_aggregate(lv.q) {
             // `AggValueSlot::IsDestructed`: the enclosing object owns the
             // destruction, so a bound temporary initializing it in place
@@ -2820,7 +2858,7 @@ impl Cg<'_> {
         if is_union {
             let Some(f) = ast.exprs.init_list(e).union_field else { return Ok(()) };
             let fq = ast.decls.get(f).ty().expect("field type");
-            let lv = self.field_lvalue(base, f, fq)?;
+            let lv = self.init_field_lvalue(base, f, fq)?;
             return match inits.first() {
                 Some(&i) => self.init_to_lvalue(i, lv, zeroed),
                 None => self.null_init_lvalue(lv, zeroed),
@@ -2871,7 +2909,7 @@ impl Cg<'_> {
                 break;
             }
             let fq = ast.decls.get(f).ty().expect("field type");
-            let lv = self.field_lvalue(base, f, fq)?;
+            let lv = self.init_field_lvalue(base, f, fq)?;
             if k < inits.len() {
                 self.init_to_lvalue(inits[k], lv, zeroed)?;
                 k += 1;

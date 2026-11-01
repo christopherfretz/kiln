@@ -1529,6 +1529,7 @@ diag_ids! {
     sema_compound_qualified_function_type = Error (4) "{0:pointer|reference} to function type {1:{2} |}cannot have '{3}' qualifier";
     sema_ptrmem_value_classify = Error (2) "pointer-to-member function type {0} can only be called on an {1:rvalue|lvalue}";
     sema_ptrmem_call_drops_quals = Error (3) "call to pointer to member function of type {0} drops '{1}' qualifier{2:|s}";
+    sema_conditional_ambiguous = Error (2) "conditional expression is ambiguous; {0} can be converted to {1} and vice versa";
 }
 
 impl DiagId {
