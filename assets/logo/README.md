@@ -43,6 +43,29 @@ light pages and polished steel on dark. It is the simplest and most
 icon-like of the three, and very legible small, but "fire + code brackets"
 is a common pairing and the mark alone does not say "kiln".
 
+## Concept B variants: C++ and Rust cues (`concept-b/variants/`)
+
+Four refinements of concept B that say "C++" and "Rust" explicitly while
+keeping its look. The gear is a nod to Rust, not its logo: 16 chunky
+trapezoid teeth, a plain bore, no R and no rivets.
+
+- **B1, gear frame:** the tile becomes a 16-tooth steel gear ring; the hot K
+  sits in its charcoal hub. Survives at 32 px as a toothed ring.
+- **B2, C++ plate:** the original tile with a chamfered charcoal base plate
+  reading `C++` in glowing amber (drawn as stroked paths); the wordmark's `i`
+  carries a small hot gear instead of a flame.
+- **B3, gear frame + C++ plate (recommended):** B1's gear with B2's plate
+  bolted across its lower rim, echoing the original inspiration image's
+  kiln-with-gear-and-badge while staying geometric.
+- **B4, K++:** the original tile with two hot `+` marks set in the
+  bracket's mouth, so the mark reads `K++`; gear tittle in the wordmark.
+
+Each variant directory holds `kiln-mark`, `kiln-logo` and `kiln-banner`
+(lockup with the tagline "C++26 COMPILER FRONTEND IN RUST" in stroked
+monoline caps), each with a `-dark` twin, plus `kiln-social.svg` (1280x640).
+B2 and B3 add `kiln-favicon[-dark].svg`: the plate is unreadable at 32 px,
+so the favicon drops it (B3's favicon is the B1 gear mark).
+
 ## Palette
 
 | Role | Hex |
