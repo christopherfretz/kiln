@@ -11,6 +11,7 @@ use kiln_ast::decl::{
     CtorInitKind, DeclKind, Defaulted, DefinitionBits, FnStorage, TagKind, TemplLinkKind,
 };
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
+use kiln_ast::names::OverloadedOperator;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
@@ -1543,7 +1544,7 @@ impl Cg<'_> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn emit_method_call(
         &mut self,
-        _e: ExprId,
+        e: ExprId,
         md: DeclId,
         base: ExprId,
         arrow: bool,
@@ -1577,6 +1578,26 @@ impl Cg<'_> {
             base = b;
             use_virtual = false;
         }
+        let rd = ast.decls.get(md).ctx().expect("method class");
+        let trivial = ast.decls.function(md).is_some_and(|f| f.spec.is_trivial())
+            || (self.is_union(rd) && self.is_defaulted(md));
+        let kind = ast.decls.get(md).kind();
+        let trivial_assign = trivial
+            && matches!(self.special_of(md), Some(Special::CopyAssign | Special::MoveAssign));
+        let crd = ast.decls.get(callee_md).ctx().expect("method class");
+        let cfty = ast.decls.get(callee_md).ty().expect("method type");
+        // [expr.ass]/1 (C++17): the right operand of an assignment
+        // operator is sequenced before the object (clang's `RtlArgs`).
+        let rtl = ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
+            && is_assignment_op(ast.exprs.operator_call_op(e));
+        let mut sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
+        let mut rtl_rhs = None;
+        let mut rtl_vals = None;
+        if rtl && trivial_assign {
+            rtl_rhs = Some(self.emit_lvalue(args[0])?);
+        } else if rtl && kind != DeclKind::CXXDestructor {
+            rtl_vals = Some(self.emit_call_args(&sig, args)?);
+        }
         let this = if arrow {
             let p = self.emit_scalar(base)?;
             let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
@@ -1586,16 +1607,15 @@ impl Cg<'_> {
         } else {
             self.emit_lvalue(base)?.addr
         };
-        let rd = ast.decls.get(md).ctx().expect("method class");
-        let trivial = ast.decls.function(md).is_some_and(|f| f.spec.is_trivial())
-            || (self.is_union(rd) && self.is_defaulted(md));
-        let kind = ast.decls.get(md).kind();
         if trivial {
             if kind == DeclKind::CXXDestructor {
                 return Ok(None);
             }
-            if matches!(self.special_of(md), Some(Special::CopyAssign | Special::MoveAssign)) {
-                let src = self.emit_lvalue(args[0])?;
+            if trivial_assign {
+                let src = match rtl_rhs {
+                    Some(lv) => lv,
+                    None => self.emit_lvalue(args[0])?,
+                };
                 // clang `EmitAggregateCopy`: empty classes are ignored.
                 if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                     let size = self.copy_size(rd, true);
@@ -1604,8 +1624,6 @@ impl Cg<'_> {
                 return Ok(Some(this.v));
             }
         }
-        let crd = ast.decls.get(callee_md).ctx().expect("method class");
-        let cfty = ast.decls.get(callee_md).ty().expect("method type");
         if kind == DeclKind::CXXDestructor {
             let sig = self.call_sig_this(cfty, false, &[], Some(crd));
             if use_virtual {
@@ -1615,11 +1633,13 @@ impl Cg<'_> {
             let (callee, fid) = self.structor_ref(callee_md, Structor::Complete)?;
             return self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[]);
         }
-        let mut sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
         if use_virtual {
             // The arguments come first; `prepareConcreteCallee` then
             // loads the slot.
-            let vals = self.emit_call_args(&sig, args)?;
+            let vals = match rtl_vals {
+                Some(v) => v,
+                None => self.emit_call_args(&sig, args)?,
+            };
             let (extra, nr) = self.call_extra(md, cfty, &mut sig);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
             let r =
@@ -1631,7 +1651,10 @@ impl Cg<'_> {
         }
         let f = self.get_fn(callee_md)?;
         let (mut extra, nr) = self.call_extra(callee_md, cfty, &mut sig);
-        let vals = self.emit_call_args(&sig, args)?;
+        let vals = match rtl_vals {
+            Some(v) => v,
+            None => self.emit_call_args(&sig, args)?,
+        };
         let mut ret_extra = Vec::new();
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
         let callee = V::C(Value::func(f));
@@ -1921,4 +1944,24 @@ impl Cg<'_> {
             None => true,
         }
     }
+}
+
+/// clang `CXXOperatorCallExpr::isAssignmentOp`: `=` and the compound
+/// assignments.
+fn is_assignment_op(op: OverloadedOperator) -> bool {
+    use OverloadedOperator as O;
+    matches!(
+        op,
+        O::Equal
+            | O::PlusEqual
+            | O::MinusEqual
+            | O::StarEqual
+            | O::SlashEqual
+            | O::PercentEqual
+            | O::CaretEqual
+            | O::AmpEqual
+            | O::PipeEqual
+            | O::LessLessEqual
+            | O::GreaterGreaterEqual
+    )
 }

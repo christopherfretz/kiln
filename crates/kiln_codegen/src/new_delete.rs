@@ -416,8 +416,7 @@ impl Cg<'_> {
     pub(crate) fn alloc_align_assume(&mut self, d: DeclId, vals: &[CallArg], r: V) {
         let Some(i) = self.fn_alloc_align(d) else { return };
         let Some(&CallArg::Scalar(v)) = vals.get(i) else { return };
-        if self.cint(v).is_some_and(|(_, n, _)| n.is_power_of_two()) || self.f.fir.cur().is_none()
-        {
+        if self.cint(v).is_some_and(|(_, n, _)| n.is_power_of_two()) || self.f.fir.cur().is_none() {
             return;
         }
         let a = self.int_cast(v, LTy::I64, false);
@@ -425,7 +424,13 @@ impl Cg<'_> {
         let fn_ty = self.m.func(f).ty();
         let cond = self.m.const_bool(true);
         self.f.fir.push(
-            Op::AssumeBundle { fn_ty, callee: Value::func(f), cond, tag: "align", args: vec![r, a] },
+            Op::AssumeBundle {
+                fn_ty,
+                callee: Value::func(f),
+                cond,
+                tag: "align",
+                args: vec![r, a],
+            },
             LTy::VOID,
         );
     }

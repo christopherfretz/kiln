@@ -100,6 +100,10 @@ pub(crate) struct Types {
     pub union_pos: Vec<(u64, OTy)>,
     map: FxHashMap<QualType, OTy>,
     arrays: FxHashMap<(OTy, u64), OTy>,
+    /// Declared constant arrays by (element, bound): arrays of
+    /// differently qualified elements (`const E[3]`, `E[3]`) are one
+    /// type, as clang's `getUnqualifiedArrayType` makes them.
+    const_arrays: FxHashMap<(OTy, u64), OTy>,
 }
 
 /// Evaluates an integral constant already checked by sema (bit-field
@@ -336,6 +340,9 @@ impl Types {
             }
             TypeView::ConstantArray(a) => {
                 let elem = self.intern(bridge, a.elem);
+                if let Some(&t) = self.const_arrays.get(&(elem, a.size)) {
+                    return t;
+                }
                 let e = *self.info(elem);
                 let start = self.union_pos.len() as u32;
                 if e.has_union {
@@ -347,7 +354,7 @@ impl Types {
                     }
                 }
                 let end = self.union_pos.len() as u32;
-                self.push(TyInfo {
+                let t = self.push(TyInfo {
                     q: c,
                     size: e.size.saturating_mul(a.size),
                     align: e.align,
@@ -356,7 +363,9 @@ impl Types {
                     has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
                     has_vptr: e.has_vptr,
                     upos: (start, end),
-                })
+                });
+                let _ = self.const_arrays.insert((elem, a.size), t);
+                t
             }
             TypeView::Function(_) => self.simple(c, 1, 1, TyKind::Func),
             TypeView::Record(d) => self.record(bridge, c, d),
@@ -547,6 +556,10 @@ impl Types {
                 TyKind::Array { elem, n } => {
                     if elem == p {
                         return Some((base, n, true));
+                    }
+                    // The array object itself (`&arr`), not an element.
+                    if t == p {
+                        return Some((base, 1, false));
                     }
                     let es = self.size(elem);
                     if es == 0 || n == 0 {

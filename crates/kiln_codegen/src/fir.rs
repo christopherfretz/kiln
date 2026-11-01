@@ -9,8 +9,8 @@
 
 use kiln_llvm::{
     BinOp, BlockId, CallOpts, CastOp, Clause, CmpXchgOpts, FastMath, Flags, FloatPredicate, FuncId,
-    GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module, OperandBundle,
-    Ordering, RmwOp, SyncScope, TypeId, Value,
+    GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module,
+    OperandBundle, Ordering, RmwOp, SyncScope, TypeId, Value,
 };
 
 /// A block of the buffer.
