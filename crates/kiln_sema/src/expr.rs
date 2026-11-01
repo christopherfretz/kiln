@@ -266,6 +266,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CharacterLiteral
                 | ExprKind::CXXBoolLiteralExpr
                 | ExprKind::CXXNullPtrLiteralExpr
+                | ExprKind::GNUNullExpr
                 | ExprKind::StringLiteral => return true,
                 ExprKind::UnaryOperator => e = ast.exprs.operand(e),
                 ExprKind::BinaryOperator => {
@@ -1085,6 +1086,7 @@ impl Sema<'_, '_> {
             | ExprKind::StringLiteral
             | ExprKind::CXXBoolLiteralExpr
             | ExprKind::CXXNullPtrLiteralExpr
+            | ExprKind::GNUNullExpr
             | ExprKind::UnaryExprOrTypeTraitExpr
             | ExprKind::CXXNoexceptExpr
             | ExprKind::TypeTraitExpr
@@ -2535,6 +2537,7 @@ impl Sema<'_, '_> {
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_arithmetic_null(op, l, r, loc);
         if !matches!(op, BinaryOp::Assign | BinaryOp::Comma | BinaryOp::PtrMemD | BinaryOp::PtrMemI)
             && (self.is_vector_type(self.ety(l)) || self.is_vector_type(self.ety(r)))
         {

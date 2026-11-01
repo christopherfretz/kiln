@@ -61,7 +61,7 @@ undeclared, which resolves the C++ declaration/expression ambiguities.
   - GNU extensions: `x ?: y`, statement expressions `({ ... })`,
     `__builtin_offsetof`, scalar compound literals `(T){...}`
     (spec/sema.md §6.10)
-  - `nullptr`, `true`, `false`
+  - `nullptr`, `true`, `false`, GNU `__null` (spec/sema.md §5.8)
   - string-literal concatenation
   - literals; user-defined literals are diagnosed because M2 has no
     literal operators

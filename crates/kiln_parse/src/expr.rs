@@ -533,6 +533,7 @@ impl Parser<'_, '_> {
                         | Kw::New
                         | Kw::Noexcept
                         | Kw::Nullptr
+                        | Kw::GnuNull
                         | Kw::Operator
                         | Kw::ReinterpretCast
                         | Kw::Requires
@@ -1352,6 +1353,10 @@ impl Parser<'_, '_> {
                 Kw::Nullptr => {
                     self.bump();
                     Some(self.s.act_on_nullptr(loc))
+                }
+                Kw::GnuNull => {
+                    self.bump();
+                    Some(self.s.act_on_gnu_null(loc))
                 }
                 Kw::StaticCast => self.parse_named_cast(CastStyle::Static),
                 Kw::ConstCast => self.parse_named_cast(CastStyle::Const),

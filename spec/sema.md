@@ -1855,6 +1855,33 @@ for them.
 - **Zero-length arrays** `T[0]`: `zero size arrays are an extension`
   [-Wzero-length-array, in -Wgnu] at the bound, per instantiation; an
   error in a SFINAE context (above).
+- **`__null`** (`gnu_null.rs`; `NULL` in the resource `<stddef.h>`): a
+  `GNUNullExpr` prvalue of the signed integer type as wide as a data
+  pointer (`int`, `long` or `long long`; `long` on LP64, clang's
+  `ActOnGNUNullExpr`), with value 0. It is a null pointer constant
+  (`conv::is_null_pointer_constant`), so it converts to any pointer,
+  pointer to member and `std::nullptr_t`; as an integer it converts like
+  any `long` (so `g(int)`/`g(void*)` is ambiguous). Constant-evaluates to
+  0; mangles as the literal `Ll0E`; prints as `__null`. Warnings (both on
+  by default, not runtime-behavior diagnostics):
+  - `implicit conversion of NULL constant to 'T'` [-Wnull-conversion, in
+    -Wconversion; alias -Wconversion-null] for an implicit conversion to
+    a scalar type other than its own, a pointer, a pointer to member or
+    `std::nullptr_t` (clang's `DiagnoseNullConversion`, from the
+    implicit-conversion walk, `impcast.rs`). It is reported at `__null`,
+    or at the `NULL` macro name when `__null` came from `NULL`'s
+    expansion; after taking both locations out of macro arguments, it is
+    dropped when that location and the conversion's context are in
+    different files or macro expansions (`#define MYNULL __null` does
+    not warn).
+  - [-Wnull-arithmetic] (clang's `checkArithmeticNull`), at the operator
+    of a built-in `+ - * / % << >> & ^ |`, compound assignment, or
+    comparison with a `__null` operand (implicit casts and parentheses
+    stripped), unless the other operand is a pointer to member or a
+    function: `use of NULL in arithmetic operation` for the arithmetic
+    operators; for a comparison, `comparison between NULL and non-pointer
+    (NULL and 'T')` / `('T' and NULL)` when only one side is `__null`
+    and the other is neither a pointer nor an array.
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class

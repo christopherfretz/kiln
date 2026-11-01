@@ -460,8 +460,8 @@ pub fn usual_unary_conversions(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
 }
 
 /// True if `e` is a null pointer constant ([conv.ptr]/1): an integer
-/// literal with value zero or a prvalue of type `std::nullptr_t`
-/// (through parentheses and `ConstantExpr`).
+/// literal with value zero, GNU `__null`, or a prvalue of type
+/// `std::nullptr_t` (through parentheses and `ConstantExpr`).
 pub fn is_null_pointer_constant(s: &Sema<'_, '_>, e: ExprId) -> bool {
     if s.ast.types.builtin(ty(s, e)) == Some(kiln_ast::types::BuiltinType::NullPtr) {
         return true;
@@ -471,6 +471,7 @@ pub fn is_null_pointer_constant(s: &Sema<'_, '_>, e: ExprId) -> bool {
         let n = s.ast.exprs.get(cur);
         match n.kind() {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => cur = s.ast.exprs.operand(cur),
+            ExprKind::GNUNullExpr => return true,
             ExprKind::IntegerLiteral => {
                 return match s.ast.exprs.int_value(cur) {
                     Some(v) => v == 0,

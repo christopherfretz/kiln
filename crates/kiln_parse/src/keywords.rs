@@ -84,6 +84,7 @@ keywords! {
     New = "new";
     Noexcept = "noexcept";
     Nullptr = "nullptr";
+    GnuNull = "__null";
     Operator = "operator";
     Private = "private";
     Protected = "protected";
