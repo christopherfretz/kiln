@@ -581,6 +581,7 @@ impl Sema<'_, '_> {
             self.discard_assignment_ref(e);
             self.act_on_full_expr(e)
         });
+        self.check_for_loop_analysis(cond_var, cond, inc, body);
         let data = LoopData { init, cond_var, cond, inc, body: Some(body) };
         self.builder().for_stmt(data, loc)
     }

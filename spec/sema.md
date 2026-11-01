@@ -1590,10 +1590,24 @@ for them.
     when `const`, in declaration order and none once an error occurred;
     not a variable template, a static data member, or one referenced but
     not odr-used.
-  - Gaps: -Wunused-but-set-parameter; -Wunneeded-internal-declaration
-    and -Wunused-template for variables; static data members of class
-    templates; C++26 `_` placeholder redeclarations ("redefinition of
-    '_'").
+  - Parameters (WP-234): a parameter that is only assigned is
+    `parameter 'p' set but not used` [-Wunused-but-set-parameter, in
+    -Wextra], by the same rule as a variable (never a `_` placeholder).
+    The parameters' warnings come first, in location order, then the
+    body's (clang reports them in `ActOnFinishFunctionBody` before the
+    body scope is popped).
+  - Unneeded file-scope variables (WP-234, clang
+    `ShouldRemoveFromUnused`): an internal variable that is referenced
+    but not odr-used is `variable 'x' is not needed and will not be
+    emitted` [-Wunneeded-internal-declaration, in -Wunused-function and
+    -Wunused-template]; an unused variable template is `unused variable
+    template 'x'` [-Wunused-template]. Static data members of classes
+    with internal linkage, and out-of-line explicit specializations of
+    class template members, are diagnosed at their definition; inline
+    variables in the main file are diagnosed as clang does.
+  - Gaps: a variable named only in a default argument counts as
+    odr-used, so it is not reported as unneeded; C++26 `_` placeholder
+    redeclarations ("redefinition of '_'").
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
   with `OffsetofComponent`s; clang's `BuildBuiltinOffsetOf`): a
   `size_t` prvalue `OffsetOfExpr`.
@@ -2657,6 +2671,86 @@ semicolon on a separate line to silence this warning" are both at the
   a loop before it may warn where clang (which begins at the `[[`) does
   not.
 - Test: `tests/conformance/stmt.pre/empty-body-warning.cpp`.
+
+### 7.10 `-Wunreachable-code` (`unreachable_code.rs`, WP-234)
+clang 19's `CheckUnreachable` (`ReachableCode.cpp`) with Sema's
+`UnreachableCodeHandler`, run with the other flow warnings at the end of
+a function body, never in a dependent context, in an instantiation or
+after an error (`uncompilable_error_count`, spec/diag.md §7.5).
+- `Sema::dead_scan` (in `try_stmt/reach.rs`) follows control through the
+  body as clang's CFG does. A constant branch condition prunes its dead
+  edge unless it is a configuration value (`is_configuration_value`:
+  a `constexpr` call, a global or `const` local, `sizeof`, or a
+  parenthesized or macro-expanded literal).
+- Each round reports one dead root: the last dead element, in
+  evaluation order, that no reached or dead element flows into. It is
+  then treated as reached and the scan repeats, so the regions come out
+  last first, as clang scans its blocks in reverse. The cost is
+  O(regions × body).
+- A root that is a `break` is `'break' will never be executed`
+  [-Wunreachable-code-break]; a `return`, or part of a returned value
+  whose evaluation does not branch, is `'return' will never be executed`
+  [-Wunreachable-code-return]; otherwise `code will never be executed`
+  [-Wunreachable-code]. The warning is at clang's `GetUnreachableLoc`:
+  an operator's token, a member's name, else where the element begins.
+- Not reported: a root in a macro expansion, the literal or enumerator
+  condition of `do { ... } while (0)`, or a reference to
+  `__builtin_unreachable`.
+- A dead `for` increment is `loop will run at most once (loop increment
+  never executed)` [-Wunreachable-code-loop-increment] at the increment.
+- A dead branch pruned by a bare literal condition has the note
+  `silence by adding parentheses to mark code as explicitly dead`, with
+  the `/* DISABLES CODE */ (` ... `)` fix-its around the literal. A root
+  whose note repeats the previous root's literal is dropped.
+- A dead `[[fallthrough]];` is reported by -Wunreachable-code-fallthrough
+  (§ implicit fallthrough) instead when that is enabled.
+- Groups: -Wunreachable-code = {-Wunreachable-code-fallthrough,
+  -Wunreachable-code-loop-increment}; -Wunreachable-code-aggressive adds
+  -break and -return. None is in -Wall.
+- Tests: `tests/conformance/stmt.return/unreachable-code*.cpp`,
+  `stmt.break/unreachable-code-break.cpp`,
+  `stmt.if/unreachable-code-config.cpp`.
+
+### 7.11 `-Wfor-loop-analysis` (`for_loop_analysis.rs`, WP-234)
+clang 19's `CheckForLoopConditionalStatement` and
+`CheckForRedundantIteration`. `act_on_for` runs both as each `for` is
+built, so a template definition is checked, and every instantiation is
+checked again (the warnings are `allow_duplicate`, so each
+instantiation repeats them, as clang does).
+- **Condition** (not with a condition variable). The condition must be
+  simple (clang `DeclExtractor`): literals (integer, floating, `bool`,
+  character, `__null`, imaginary), casts, parentheses, built-in
+  unary operators except `*`, binary and compound-assignment operators,
+  `?:` and `?:` with an omitted middle operand, and names of variables
+  or parameters. Unevaluated operands (`sizeof`, `noexcept`, an
+  unevaluated `typeid`) are skipped. Anything else (a member, a call, an
+  array subscript, an enumerator, `nullptr`, a template parameter) is
+  not simple and nothing is checked.
+- None of those variables may be `volatile` or lack automatic storage
+  (a parameter has it; a `static`, `thread_local` or namespace-scope
+  variable does not).
+- The condition, the increment and the body are then searched (clang
+  `DeclMatcher`, an evaluated-expression walk): any `return`, `break`
+  or `goto`, or any use of one of the variables that is not read
+  through an lvalue-to-rvalue conversion (an assignment, `++`, `&x`,
+  binding a reference, a discarded-value `x;`), silences the warning.
+  A read through `?:` arms counts as a read. Lambda bodies are not
+  searched, only their capture initializers.
+- Otherwise: `variable 'i' used in loop condition not modified in loop
+  body`, `variables 'i' and 'n' ...`, up to four names, and `variables
+  used ...` with five or more [-Wfor-loop-analysis] at the first name.
+- **Redundant iteration.** The body is a braced, non-empty block whose
+  last statement and the increment are both `++x`/`x++` (or both
+  `--`), built-in or overloaded, applied directly to the same name (no
+  parentheses). Unless the body has a `continue` of this loop (a nested
+  `switch` is searched; nested loops other than their init-statements
+  are not): `variable 'i' is incremented both in the loop header and in
+  the loop body` [-Wfor-loop-analysis] at the body's name, with the note
+  `incremented here` at the header's name.
+- Groups: -Wloop-analysis = {-Wfor-loop-analysis,
+  -Wrange-loop-analysis}; not in -Wall.
+- Tests: `tests/conformance/stmt.for/for-loop-analysis.cpp`,
+  `stmt.for/loop-analysis.cpp`.
 
 ## 8. Constant evaluation (`oven_bridge.rs`)
 

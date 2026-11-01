@@ -13,6 +13,7 @@ Dangling = "dangling" [DanglingField, ReturnStackAddress];
 Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture];
 Extra = "extra" [InitializerOverrides, UnusedButSetParameter];
 Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
+LoopAnalysis = "loop-analysis" [ForLoopAnalysis, RangeLoopAnalysis];
 Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized, RangeLoopConstruct, Unused];
 Narrowing = "narrowing" [Cxx11Narrowing];
 OverrideInit = "override-init" [InitializerOverrides];

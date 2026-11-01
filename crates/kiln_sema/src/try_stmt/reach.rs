@@ -100,7 +100,7 @@ pub(crate) enum Unit {
 }
 
 /// What the unreachable-code walk learns about the elements of a body
-/// (clang `reachable_code::FindUnreachableCode`; spec/sema.md §7.5).
+/// (clang `reachable_code::FindUnreachableCode`; spec/sema.md §7.10).
 /// An expression counts after its operands (its own CFG position), a
 /// declaration and a `return` after their expressions, a jump on entry.
 #[derive(Default)]

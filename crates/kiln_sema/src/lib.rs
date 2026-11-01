@@ -28,6 +28,7 @@ mod empty_body;
 pub mod except;
 pub mod expr;
 mod fallthrough;
+mod for_loop_analysis;
 mod forms;
 mod gnu;
 mod impcast;

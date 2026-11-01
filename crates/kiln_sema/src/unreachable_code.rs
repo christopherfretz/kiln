@@ -1,5 +1,5 @@
 //! `-Wunreachable-code` and its subgroups (clang `ReachableCode.cpp`;
-//! spec/sema.md §7.5).
+//! spec/sema.md §7.10).
 //!
 //! The walk is [`Sema::dead_scan`]: it follows control through a body
 //! the way clang's CFG does, with constant branch conditions pruning
