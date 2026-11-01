@@ -24,6 +24,21 @@ pub fn clang_available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// The first line of `clang++-19 --version` (empty if clang cannot be
+/// run), e.g. `Debian clang version 19.1.7 (3+b1)`; cached.
+pub fn clang_version_line() -> &'static str {
+    static LINE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    LINE.get_or_init(|| {
+        Command::new(CLANG)
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.lines().next().map(|l| l.trim().to_owned()))
+            .unwrap_or_default()
+    })
+}
+
 /// clang's `-std=` spelling of `std`.
 pub fn std_flag(std: Std) -> &'static str {
     match std {

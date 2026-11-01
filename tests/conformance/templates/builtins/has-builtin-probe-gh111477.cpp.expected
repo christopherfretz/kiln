@@ -1,0 +1,4 @@
+__can_pass_in_regs 1 0
+__reference_binds_to_temporary 1 0
+__reference_constructs_from_temporary 1 0
+__reference_converts_from_temporary 1 0
