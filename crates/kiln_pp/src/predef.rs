@@ -8,6 +8,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use crate::options::ClangCompat;
+
 /// Position-independent code model (clang `ParsePICArgs`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PicModel {
@@ -65,6 +67,10 @@ pub struct PredefConfig {
     pub sized_deallocation: bool,
     /// kiln's version (`__KILN_MAJOR__`, `__KILN_MINOR__`).
     pub kiln_version: (u32, u32),
+    /// Whose predefined macros (`-fclang-compat=`): the base files are
+    /// clang 19's; [`ClangCompat::Clang22`] applies `CLANG22_COMMON`
+    /// (and `CLANG22_AARCH64` on `AArch64`).
+    pub clang_compat: ClangCompat,
 }
 
 impl PredefConfig {
@@ -85,6 +91,7 @@ impl PredefConfig {
             threadsafe_statics: true,
             sized_deallocation: true,
             kiln_version: (0, 0),
+            clang_compat: ClangCompat::Clang19,
         }
     }
 }
@@ -97,6 +104,42 @@ pub enum CmdMacro {
     /// `-U name`.
     Undef(String),
 }
+
+/// clang 22.1.8's predefined macros that differ from clang 19.1.7's on
+/// both targets, other than the `__cpp_*` feature-test macros (spec/pp.md
+/// "clang compatibility level"), each defined or replaced: clang 22
+/// removes none. The difference is the same for every
+/// standard, C and C++, strict and GNU, and every flag `PredefConfig`
+/// models (measured with `clang-N --target=<triple> -std=<std> -dM -E`).
+/// Function-like macros carry their parameter list in the name.
+const CLANG22_COMMON: &[(&str, &str)] = &[
+    ("__BOOL_WIDTH__", "1"),
+    ("__INT16_C(c)", "c"),
+    ("__INT32_C(c)", "c"),
+    ("__INT64_C(c)", "c##L"),
+    ("__INT8_C(c)", "c"),
+    ("__INTMAX_C(c)", "c##L"),
+    ("__MEMORY_SCOPE_CLUSTR", "5"),
+    ("__UINT16_C(c)", "c"),
+    ("__UINT32_C(c)", "c##U"),
+    ("__UINT64_C(c)", "c##UL"),
+    ("__UINT8_C(c)", "c"),
+    ("__UINTMAX_C(c)", "c##UL"),
+    ("__VERSION__", "\"Debian Clang 22.1.8 (1~deb13u4)\""),
+    ("__clang_major__", "22"),
+    ("__clang_patchlevel__", "8"),
+    ("__clang_version__", "\"22.1.8 (1~deb13u4)\""),
+];
+
+/// The `AArch64`-only part of the clang 22 difference ([`CLANG22_COMMON`]).
+const CLANG22_AARCH64: &[(&str, &str)] = &[
+    ("__ARM_ACLE", "202420"),
+    ("__ARM_ACLE_VERSION(year,quarter,patch)", "(100 * (year) + 10 * (quarter) + (patch))"),
+    ("__ARM_NEON_SVE_BRIDGE", "1"),
+    ("__ARM_PREFETCH_RANGE", "1"),
+    ("__FUNCTION_MULTI_VERSIONING_SUPPORT_LEVEL", "202430"),
+    ("__GCC_DESTRUCTIVE_SIZE", "256"),
+];
 
 /// The driver-injected `-D` that clang's driver appends after the user's
 /// (it follows the unwind-table defaults on Linux).
@@ -111,6 +154,12 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
         let Some(rest) = line.strip_prefix("#define ") else { continue };
         let (name, value) = rest.split_once(' ').unwrap_or((rest, ""));
         m.insert(name.to_owned(), value.to_owned());
+    }
+    if cfg.clang_compat == ClangCompat::Clang22 {
+        let arch: &[_] = if cfg.aarch64 { CLANG22_AARCH64 } else { &[] };
+        for &(n, v) in CLANG22_COMMON.iter().chain(arch) {
+            set(&mut m, n, v);
+        }
     }
     let mut driver: Vec<(String, String)> = Vec::new();
     for d in DRIVER_DEFINES {
@@ -320,6 +369,41 @@ mod tests {
             "__pic__ 1",
         ] {
             assert!(s.contains(&format!("#define {here}\n")), "{here}");
+        }
+    }
+
+    /// spec/pp.md "clang compatibility level": compat 19 leaves the base
+    /// alone; compat 22 applies the clang 22 version, width and
+    /// integer-constant macros, plus the `AArch64` ones on `AArch64` only.
+    #[test]
+    fn clang_compat_levels() {
+        let base = "#define __BOOL_WIDTH__ 8\n#define __clang_major__ 19\n#define __ARM_ACLE 200\n";
+        let mut cfg = PredefConfig::new(true);
+        assert_eq!(cfg.clang_compat, ClangCompat::Clang19);
+        let s19 = build_predefines(base, &cfg, &[]);
+        for here in ["__BOOL_WIDTH__ 8", "__clang_major__ 19", "__ARM_ACLE 200"] {
+            assert!(s19.contains(&format!("#define {here}\n")), "{here}: {s19}");
+        }
+        assert!(!s19.contains("__INT64_C"));
+        cfg.clang_compat = ClangCompat::Clang22;
+        cfg.aarch64 = false;
+        let s22 = build_predefines(base, &cfg, &[]);
+        for here in [
+            "__BOOL_WIDTH__ 1",
+            "__clang_major__ 22",
+            "__clang_patchlevel__ 8",
+            "__INT64_C(c) c##L",
+            "__UINTMAX_C(c) c##UL",
+            "__MEMORY_SCOPE_CLUSTR 5",
+            "__ARM_ACLE 200",
+        ] {
+            assert!(s22.contains(&format!("#define {here}\n")), "{here}: {s22}");
+        }
+        assert!(!s22.contains("__GCC_DESTRUCTIVE_SIZE"));
+        cfg.aarch64 = true;
+        let a22 = build_predefines(base, &cfg, &[]);
+        for here in ["__ARM_ACLE 202420", "__GCC_DESTRUCTIVE_SIZE 256", "__ARM_NEON_SVE_BRIDGE 1"] {
+            assert!(a22.contains(&format!("#define {here}\n")), "{here}: {a22}");
         }
     }
 }

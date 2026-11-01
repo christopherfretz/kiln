@@ -812,8 +812,14 @@ u8_enum!(
         CanPassInRegs = "__can_pass_in_regs",
         /// `__is_bitwise_cloneable`.
         IsBitwiseCloneable = "__is_bitwise_cloneable",
+        /// `__builtin_is_implicit_lifetime` (clang 20+).
+        IsImplicitLifetime = "__builtin_is_implicit_lifetime",
+        /// `__builtin_is_cpp_trivially_relocatable` (clang 21+).
+        IsCppTriviallyRelocatable = "__builtin_is_cpp_trivially_relocatable",
         /// `__is_base_of`.
         IsBaseOf = "__is_base_of",
+        /// `__builtin_is_virtual_base_of` (clang 20+).
+        IsVirtualBaseOf = "__builtin_is_virtual_base_of",
         /// `__is_same`.
         IsSame = "__is_same",
         /// `__is_same_as` (an alias of `__is_same`).

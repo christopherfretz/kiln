@@ -149,7 +149,7 @@ impl Sema<'_, '_> {
     /// clang `hasSimple*`: whether the `k` of class `r` is known to be the
     /// non-deleted implicit (or defaulted) one without overload
     /// resolution.
-    fn has_simple(&self, r: DeclId, k: SpecialKind) -> bool {
+    pub(crate) fn has_simple(&self, r: DeclId, k: SpecialKind) -> bool {
         let bits = self.defn_bits(r);
         if bits.contains(k.user_declared_bit()) || self.known_deleted(r, k) {
             return false;
@@ -161,7 +161,7 @@ impl Sema<'_, '_> {
     }
 
     /// clang `hasTrivial*`: whether class `r` has a trivial `k`.
-    fn has_trivial(&self, r: DeclId, k: SpecialKind) -> bool {
+    pub(crate) fn has_trivial(&self, r: DeclId, k: SpecialKind) -> bool {
         let bits = self.defn_bits(r);
         match k {
             SpecialKind::MoveCtor | SpecialKind::MoveAssign => {

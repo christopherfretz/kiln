@@ -237,6 +237,13 @@ already compared with the golden).
 For `layout` and `vtables`, the oracle's dump is the reference; see "Layout
 and vtable tests".
 
+When the compiler is kiln and the oracle is a clang whose version is known,
+every kiln command gets `-fclang-compat=<major>` (the oracle's major version)
+ahead of the test's `args`, so kiln's predefined macros and `__has_*` answers
+are the oracle's (spec/pp.md "clang compatibility level"; WP-263). A test's
+own `args: -fclang-compat=N` comes later and wins. Without an oracle
+(`--no-oracle`, or a kiln oracle) kiln runs at its default level.
+
 ### verify tests
 
 A `verify` test states its expectations once, as clang `expected-*`
@@ -538,7 +545,8 @@ it runs alongside:
 - **Scope.** Every child started through `util::process` (`run`,
   `run_with_input`, `run_measured`) holds one token for its whole lifetime:
   each compiler, oracle and test-binary process of `cargo xtask test`, each
-  compile and run of `cargo xtask libcxx`, each measured compile of
+  compile and run of `cargo xtask libcxx`, each compile of
+  `cargo xtask libstdcxx`, each measured compile of
   `cargo xtask bench`, and the `--version` probes. Timeouts and the
   measured wall clock start once the token is held. Helper invocations of
   `git` and `cargo` are not counted (cargo is a client itself).
@@ -638,6 +646,10 @@ removed at the end of the run.
 
 The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a
 separate manual or periodic gate, and its contract is `spec/libcxx.md`.
+Neither is the libstdc++ header status (`cargo xtask libstdcxx`), which is
+informational (exit status non-zero only on tool errors); its contract is
+`spec/libstdcxx.md`.
+
 `cargo xtask features` ("Feature table") is not part of `ci` either: it is a
 manual / M4-gate check.
 
