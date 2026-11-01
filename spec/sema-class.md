@@ -192,6 +192,14 @@ SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
   `invalid use of non-static data member 'x'`, `invalid use of member 'x' in
   static member function`, `call to non-static member function without an
   object argument`.
+- **Through a dependent base** ([temp.dep.type]): in a member of a class
+  template with a dependent base, a qualified name `B::m` that names a
+  non-static member of a class that is not (yet) a base is kept as a
+  dependent implicit member access `(*this).B::m`, resolved when the
+  class is instantiated (`dependent_implicit_member`). If `B` is then
+  not a base, the error is clang's "'B::m' is not a member of class
+  'D<T>'". `&B::m` is a pointer to member, never an implicit access
+  (the `&` operand undoes it).
 - In a `const` member function, members through `this` are const unless
   `mutable` ([expr.ref]/6): `cannot assign to non-static data member within
   const member function 'f'` + `member function 'K::f' is declared const here`.

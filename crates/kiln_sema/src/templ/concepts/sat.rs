@@ -282,16 +282,24 @@ impl Sema<'_, '_> {
             return Satisfaction { ok: false, records: Vec::new() };
         }
         self.set_frame_args(shown);
-        let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
-        let mut records = Vec::new();
-        let mut ok = true;
-        for &e in exprs {
-            if !self.sat_expr(entity, e, levels, &mut records, 0) {
-                ok = false;
-                break;
+        // Names in the constraints are looked up from the entity's
+        // definition context, not from where satisfaction is checked
+        // ([temp.constr.atomic]/3 substitutes into the template's
+        // expression; [temp.dep.candidate]): libc++'s
+        // `__unqualified_swappable_with` must see its poison-pill `swap`
+        // when `swappable<T>` is checked from inside namespace std.
+        let ctx = self.ast.decls.get(entity).ctx().unwrap_or(self.ast.tu);
+        let (ok, mut records) = self.in_inst_context(ctx, |s| {
+            let mut records = Vec::new();
+            let mut ok = true;
+            for &e in exprs {
+                if !s.sat_expr(entity, e, levels, &mut records, 0) {
+                    ok = false;
+                    break;
+                }
             }
-        }
-        self.ast.templates.dependent_depth = saved;
+            (ok, records)
+        });
         self.pop_inst_frame();
         if ok {
             records.clear();
