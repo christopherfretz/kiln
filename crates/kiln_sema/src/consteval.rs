@@ -212,6 +212,15 @@ impl Sema<'_, '_> {
     /// evaluated at the end of the enclosing full-expression, unless that
     /// is exempt ([expr.const]/16; clang rebuilds the initializer there).
     pub(crate) fn note_default_use(&mut self, e: ExprId, decl: DeclId, loc: Loc) {
+        // A default argument's temporaries belong to the full-expression
+        // of the call (clang `CheckCXXDefaultArgExpr`'s
+        // `setExprNeedsCleanups`; [intro.execution]/5).
+        if let Some(d) = self.ast.decls.param(decl).and_then(|p| p.default_arg)
+            && self.ast.exprs.get(d).kind() == ExprKind::ExprWithCleanups
+        {
+            self.cleanup.needs = true;
+            self.cleanup.side_effects |= self.ast.exprs.cleanups_have_side_effects(d);
+        }
         if self.immediate_exempt() || !self.default_has_invocation(decl) {
             return;
         }

@@ -1141,7 +1141,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// True when the current token is the `::` of a pending decltype
     /// qualifier.
     pub(crate) fn at_decltype_scope(&self) -> bool {
-        self.decltype_scope_at(self.pos).is_some()
+        self.is_decltype_scope_at(self.pos)
+    }
+
+    /// True when token `i` is the `::` of a pending decltype qualifier.
+    pub(crate) fn is_decltype_scope_at(&self, i: usize) -> bool {
+        self.decltype_scope_at(i).is_some()
     }
 
     /// Parses an optional nested-name-specifier (`::`, `N::`, `N::M::`),

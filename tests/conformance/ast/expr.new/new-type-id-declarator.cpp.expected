@@ -1,0 +1,63 @@
+TranslationUnitDecl
+|-FunctionDecl used operator new 'void *(unsigned long, void *) noexcept' inline
+| |-ParmVarDecl 'unsigned long'
+| |-ParmVarDecl used p 'void *'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'void *' <LValueToRValue>
+|       `-ImplicitCastExpr 'void *' xvalue <NoOp>
+|         `-DeclRefExpr 'void *' lvalue ParmVar 'p' 'void *'
+|-CXXRecordDecl struct T definition
+| |-CXXMethodDecl used f 'void ()'
+| `-FieldDecl referenced m 'int'
+|-TypeAliasDecl referenced PMF 'void (T::*)()'
+`-FunctionDecl g 'void (void *)'
+  |-ParmVarDecl used buf 'void *'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl a 'void (T::**)()' cinit
+    |   `-CXXNewExpr 'void (T::**)()' Function 'operator new' 'void *(unsigned long)'
+    |     `-ImplicitValueInitExpr 'void (T::*)()'
+    |-DeclStmt
+    | `-VarDecl b 'int T::**' cinit
+    |   `-CXXNewExpr 'int T::**' Function 'operator new' 'void *(unsigned long)'
+    |     `-UnaryOperator 'int T::*' prefix '&' cannot overflow
+    |       `-DeclRefExpr 'int' lvalue Field 'm' 'int'
+    |-DeclStmt
+    | `-VarDecl c 'void (**)(int)' cinit
+    |   `-CXXNewExpr 'void (**)(int)' Function 'operator new' 'void *(unsigned long)'
+    |     `-ImplicitCastExpr 'void (*)(int)' <NullToPointer>
+    |       `-CXXNullPtrLiteralExpr 'std::nullptr_t'
+    |-DeclStmt
+    | `-VarDecl d 'int (**)[3]' cinit
+    |   `-CXXNewExpr 'int (**)[3]' Function 'operator new' 'void *(unsigned long)'
+    |-DeclStmt
+    | `-VarDecl e 'int T::**' cinit
+    |   `-CXXNewExpr 'int T::**' Function 'operator new' 'void *(unsigned long)'
+    |     `-UnaryOperator 'int T::*' prefix '&' cannot overflow
+    |       `-DeclRefExpr 'int' lvalue Field 'm' 'int'
+    |-DeclStmt
+    | `-VarDecl f 'int (**)()' cinit
+    |   `-CXXNewExpr 'int (**)()' array Function 'operator new[]' 'void *(unsigned long)'
+    |     `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |       `-IntegerLiteral 'int' 2
+    |-DeclStmt
+    | `-VarDecl h 'void (T::**)()' cinit
+    |   `-CXXNewExpr 'void (T::**)()' array Function 'operator new[]' 'void *(unsigned long)'
+    |     `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |       `-IntegerLiteral 'int' 2
+    |-DeclStmt
+    | `-VarDecl i 'PMF *' cinit
+    |   `-CXXNewExpr 'PMF *' Function 'operator new' 'void *(unsigned long)'
+    |     `-UnaryOperator 'void (T::*)()' prefix '&' cannot overflow
+    |       `-DeclRefExpr 'void ()' CXXMethod 'f' 'void ()'
+    |-DeclStmt
+    | `-VarDecl j 'int T::***' cinit
+    |   `-CXXNewExpr 'int T::***' Function 'operator new' 'void *(unsigned long)'
+    `-DeclStmt
+      `-VarDecl k 'void (T::**)()' cinit
+        `-CXXNewExpr 'void (T::**)()' Function 'operator new' 'void *(unsigned long, void *) noexcept'
+          |-UnaryOperator 'void (T::*)()' prefix '&' cannot overflow
+          | `-DeclRefExpr 'void ()' CXXMethod 'f' 'void ()'
+          `-ImplicitCastExpr 'void *' <LValueToRValue>
+            `-DeclRefExpr 'void *' lvalue ParmVar 'buf' 'void *'
