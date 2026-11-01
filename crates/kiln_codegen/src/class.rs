@@ -504,7 +504,7 @@ impl Cg<'_> {
             return Ok(());
         }
         let first = ast.first(d);
-        if self.is_explicit_inst_declaration(first) {
+        if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return Ok(());
         }
         let is_ctor = ast.decls.get(d).kind() == DeclKind::CXXConstructor;

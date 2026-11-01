@@ -70,6 +70,54 @@ panic and never silently wrong IR.
 - `expr.rs`: scalar, lvalue and aggregate expression emission (§3).
 - `stmt.rs`: statement emission (§4).
 
+### 2a. Emission order (WP-172)
+Function and global positions in the module are **creation order** (the
+first `get_fn`/`get_gvar` of a name creates its declaration); a later
+definition fills the existing declaration in place. Emission order still
+matters, because it decides where declarations created inside a body
+land, the order in which comdats are created (at definition), and
+nounwind inference: clang's `TryMarkNoThrow` marks a definition
+`nounwind` when every call in it is to a `nounwind` callee, so a callee
+defined earlier turns a caller's `invoke` into `call`. kiln mirrors
+clang's `CodeGenModule` pipeline:
+1. **Top-level walk** (`emit_members`, clang `HandleTopLevelDecl` per
+   declaration, in parse order). Strong definitions are emitted now.
+   Discardable ones (`linkonce_odr`: inline functions, implicit
+   instantiations, ...) go to `deferred` (clang `DeferredDecls`) unless
+   their name was already referenced, in which case they go straight to
+   `to_emit` (`DeferredDeclsToEmit`). The first reference to a deferred
+   name (`get_fn`/`get_gvar`) moves its definition to `to_emit`. A
+   variable with a side-effecting dynamic initializer is must-emit and is
+   emitted at its `HandleTopLevelDecl`.
+2. **Key-function vtables** (`emit_key_function_vtables`, clang
+   `DefineUsedVTables` -> `HandleVTable`).
+3. **End-of-TU instantiations** (`emit_end_of_tu_instantiations`). Sema's
+   end-of-TU drain (`kiln_sema::templ::pending`) records each definition
+   it instantiates in `TemplateTables::end_of_tu_defs`, in clang's order:
+   every instantiation is recursive (`GlobalEagerInstantiationScope`), so
+   after a body is instantiated, the vtables and definitions it requires
+   are instantiated before the rest of the enclosing queue (depth-first,
+   pre-order; an already queued definition is never queued again, and
+   constexpr and deduced-return functions are instantiated at their
+   use, [temp.inst]/5). Codegen holds these definitions back from the
+   top-level walk (`Cg::held`: `inline_def`, `instantiated_var_def` and
+   the walk's `emit_global_*` skip them, including instantiated
+   out-of-line static member definitions that sema appends to the TU)
+   and replays them through `emit_global_*` in that order, which is
+   clang's `HandleTopLevelDecl` of each instantiation.
+4. **`emit_deferred`** (clang `EmitDeferred`): deferred vtables first,
+   then `to_emit`, recursing depth-first into the names each definition
+   newly references.
+
+Deviation: clang's `applyReplacements` moves a base-object structor
+(`D2`/`C2`) that replaces a complete-object alias to the position of the
+replaced declaration; `kiln_llvm` cannot reorder functions, so kiln keeps
+it at its creation position (only visible when a complete-object
+structor declaration is created before its base variant is defined, e.g.
+a virtual destructor of a template base called from a cleanup in a
+strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
+`tests/codegen/virtual_template_out_of_line.cpp`.
+
 ## 3. Expressions (clang CGExprScalar/CGExprAgg/CGDecl rules mirrored)
 `expr.rs` mirrors clang's `ScalarExprEmitter`, `EmitLValue`,
 `AggExprEmitter`, `EmitBranchOnBoolExpr` and `EmitAutoVarDecl`.
@@ -373,12 +421,13 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 105 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 157 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
-  `class_*` cases of §7, and the WP-137 `consteval_oversized` case): 210/210 pairs
-  exact, `DEVIATIONS` is empty.
+  `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
+  work packages' cases): 313/314 pairs exact; `DEVIATIONS` holds
+  `global_init_array_eh` on aarch64 (§7f).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
   are compiled, linked and run by kiln and by clang, and their stdout and

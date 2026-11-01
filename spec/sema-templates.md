@@ -78,7 +78,10 @@ P4 **Bounded native stack.**
     runs at **every** substitution step (`Substituter::expr`, `ty`,
     `stmt`), not every 16th, as well as at every frame push, at the
     parser's recursive rules and at each Oven entry from sema (§10.3).
-- End-of-TU instantiation is a worklist (`pending`), not recursion.
+- End-of-TU instantiation is a worklist (`pending`), not recursion: the
+  drain keeps an explicit stack of saved queues to visit instantiations
+  depth-first, in clang's `GlobalEagerInstantiationScope` order
+  (WP-172, spec/codegen.md §2a).
 
 P5 **Diagnostics identical to clang 19.**
 - This covers note texts, note order, elision, and when the instantiation
