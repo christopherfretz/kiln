@@ -30,6 +30,7 @@ use crate::init::InitList;
 use crate::literal;
 use crate::lookup::LookupKind;
 use crate::overload::oper::{OperForm, OperResult};
+use crate::vector_ops::VecParts;
 
 mod ref_cast;
 
@@ -3911,7 +3912,7 @@ impl Sema<'_, '_> {
             }
             // `areLaxCompatibleVectorTypes`: never between a scalar and an
             // ext vector.
-            let ext = |q| self.vector_parts(q).is_some_and(|p| p.is_ext());
+            let ext = |q| self.vector_parts(q).is_some_and(VecParts::is_ext);
             let scalar_ext = (!fv && ext(to)) || (!tv && ext(from));
             if !scalar_ext
                 && self.lax_size(from).is_some()

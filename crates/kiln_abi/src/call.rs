@@ -230,7 +230,7 @@ fn ir_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
     match ty {
         IrType::Int(n) => u64::from(*n),
         IrType::X86Fp80 => 80,
-        IrType::Vector(e, n) => ir_bits(t, &e.clone()) * u64::from(*n),
+        IrType::Vector(e, n) => ir_bits(t, &e.clone()) * *n,
         _ => t.size_align(ty).0 * 8,
     }
 }

@@ -14,6 +14,7 @@ use super::rank::{
 };
 use super::{ConvCtx, array_decayed, bit_field_width, is_null_pointer_constant, strip_cv};
 use crate::Sema;
+use crate::vector_ops::VecParts;
 
 /// The first conversion of a standard conversion sequence ([conv.lval],
 /// [conv.array], [conv.func]).
@@ -448,7 +449,7 @@ fn vector_conversion(s: &Sema<'_, '_>, from: QualType, to: QualType) -> Option<S
     if let Some(t) = tv
         && t.is_ext()
     {
-        if fv.is_some_and(|f| f.is_ext()) {
+        if fv.is_some_and(VecParts::is_ext) {
             return None;
         }
         if super::rank::is_arithmetic_or_unscoped_enum(s, from) {

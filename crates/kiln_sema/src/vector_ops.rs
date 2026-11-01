@@ -210,9 +210,8 @@ impl Sema<'_, '_> {
         }
         let bt = self.ety(b);
         let top = self.ast.types.desugar_top(bt);
-        let elem = match self.ast.types.view(top.ty()) {
-            TypeView::Vector { elem, .. } => elem,
-            _ => return self.recover_err(&[b, i], loc),
+        let TypeView::Vector { elem, .. } = self.ast.types.view(top.ty()) else {
+            return self.recover_err(&[b, i], loc);
         };
         let quals = self.ast.types.effective_quals(bt);
         let ty = QualType::new(elem.ty(), elem.quals_bits() | quals.bits());
@@ -519,8 +518,8 @@ impl Sema<'_, '_> {
 
     /// clang's `canConvertIntToOtherIntTy`.
     fn int_would_truncate(&mut self, e: ExprId, ity: QualType, other: QualType) -> bool {
-        let order = conv::integer_rank(self, other).unwrap_or(0) as i64
-            - conv::integer_rank(self, ity).unwrap_or(0) as i64;
+        let order = i64::from(conv::integer_rank(self, other).unwrap_or(0))
+            - i64::from(conv::integer_rank(self, ity).unwrap_or(0));
         let isigned = conv::int_signed(self, ity);
         let osigned = conv::int_signed(self, other);
         let owidth = u64::from(conv::int_width(self, other).unwrap_or(0));
@@ -584,7 +583,7 @@ impl Sema<'_, '_> {
                 let d = f64::from_bits(bits as u64);
                 #[allow(clippy::cast_possible_truncation, reason = "the truncation is the test")]
                 let f = d as f32;
-                f64::from(f) != d && !d.is_nan()
+                f64::from(f).to_bits() != d.to_bits() && !d.is_nan()
             }
             _ => true,
         }
