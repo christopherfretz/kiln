@@ -233,10 +233,12 @@ the current directory (standard input is `-`). `-o -` is standard output.
   `compiling C is not implemented yet`.
 - **Frontend.** The preprocessor is built as for `-E`
   (`Job::build_preprocessor`), then `parse_preprocessed`, then
-  `kiln_codegen::emit` (spec/codegen.md) with the target's data layout,
-  `source_filename` = the input path, and `!llvm.ident` =
-  `kiln version <v>`. A `CodegenError` is reported at its location as an
-  error (`cg_error`). The `-fconstexpr-report` is written for every job.
+  `kiln_codegen::emit_with_diags` (spec/codegen.md) with the target's
+  data layout, `source_filename` = the input path, and `!llvm.ident` =
+  `kiln version <v>`. The warnings codegen returns (`-Watomic-alignment`)
+  are emitted first, in order, under the usual policy (`-Werror` makes
+  them errors, failing the job); then a `CodegenError` is reported at its
+  location as an error (`cg_error`). The `-fconstexpr-report` is written for every job.
   With an error, nothing is written to the output and no further step of
   that input runs; other inputs still compile; the link does not run.
 - **Tools.** Each tool is `$KILN_LLVM_DIR/bin/<tool>` (default

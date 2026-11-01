@@ -276,9 +276,13 @@ impl Cg<'_> {
                 let is_string =
                     e.is_some_and(|x| self.ast.exprs.get(x).kind() == ExprKind::StringLiteral);
                 let inits: Vec<ExprId> = match e {
-                    Some(x) if self.ast.exprs.get(x).kind() == ExprKind::InitListExpr => {
-                        let l = self.ast.exprs.init_list_inits(x);
-                        self.ast.lists.get(l).iter().map(|&i| ExprId::new(i)).collect()
+                    Some(x)
+                        if matches!(
+                            self.ast.exprs.get(x).kind(),
+                            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+                        ) =>
+                    {
+                        crate::expr::agg_init_parts(self.ast, x).0
                     }
                     _ => Vec::new(),
                 };
@@ -311,9 +315,13 @@ impl Cg<'_> {
                 }
                 let e = e.map(|x| self.strip_init(x));
                 let inits: Vec<ExprId> = match e {
-                    Some(x) if self.ast.exprs.get(x).kind() == ExprKind::InitListExpr => {
-                        let l = self.ast.exprs.init_list_inits(x);
-                        self.ast.lists.get(l).iter().map(|&i| ExprId::new(i)).collect()
+                    Some(x)
+                        if matches!(
+                            self.ast.exprs.get(x).kind(),
+                            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+                        ) =>
+                    {
+                        crate::expr::agg_init_parts(self.ast, x).0
                     }
                     _ => Vec::new(),
                 };
@@ -448,18 +456,20 @@ impl Cg<'_> {
         e: Option<ExprId>,
     ) -> R<Value> {
         let e = e.map(|x| self.strip_init(x));
-        let ile = e.filter(|&x| self.ast.exprs.get(x).kind() == ExprKind::InitListExpr);
-        let active = ile.and_then(|x| self.ast.exprs.init_list(x).union_field);
+        let ile = e.filter(|&x| {
+            matches!(
+                self.ast.exprs.get(x).kind(),
+                ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+            )
+        });
+        let active = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).2);
         let Some(f) = active else {
             if (0..size).all(|i| img.byte(off + i) == 0) && img.relocs.is_empty() {
                 return Ok(self.m.const_zero(t));
             }
             return err(None, "union constant without an active member");
         };
-        let sub = ile.and_then(|x| {
-            let l = self.ast.exprs.init_list_inits(x);
-            self.ast.lists.get(l).first().map(|&i| ExprId::new(i))
-        });
+        let sub = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).0.first().copied());
         let fq = self.ast.decls.get(f).ty().expect("field type");
         let fit = self.tys.convert(fq);
         let c = self.image_const(img, off, &fit, sub)?;

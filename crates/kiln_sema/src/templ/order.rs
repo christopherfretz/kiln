@@ -521,7 +521,7 @@ impl Sema<'_, '_> {
             }
             let rest: Vec<QualType> = pa[ai.min(pa.len())..].iter().map(|x| x.ty).collect();
             ai = pa.len();
-            let r = self.deduce_pack_elements_from(0, rest.len(), &mut d, |s, k, d| {
+            let r = self.deduce_pack_elements_from(None, rest.len(), &mut d, |s, k, d| {
                 s.deduce(p.ty, rest[k], TdfFlags::NONE, d)
             });
             if r != Tdk::Success {

@@ -49,6 +49,7 @@ mod sve;
 pub mod target;
 pub mod templ;
 mod try_stmt;
+mod type_diff;
 pub mod using;
 mod vector;
 mod vector_ops;
@@ -254,6 +255,10 @@ pub struct Sema<'a, 'sm> {
     /// builds (clang's `InitializedEntity` for bases, members and
     /// delegation; spec/sema-class.md §4.9).
     pub(crate) ctor_entity: Option<(class::InitEntity, kiln_ast::expr::ConstructionKind)>,
+    /// The type a failed constructor call names instead of the class:
+    /// the reference a list-initialized temporary binds to (`'const E &'`,
+    /// clang's entity type). Set around that construction only.
+    pub(crate) ctor_diag_ty: Option<QualType>,
     /// The mem-initializers of the constructor definition being parsed
     /// (spec/sema-class.md §4.9).
     pub(crate) mem_inits: class::MemInitState,
@@ -304,6 +309,10 @@ pub struct Sema<'a, 'sm> {
     /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
     /// their templates per specialization.
     pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
+    /// The member aliases standing for a dependent `using typename
+    /// B<T>::name;` ([`Sema::act_on_using_typename_declarator`]): an
+    /// instantiation redoes the using-declarator.
+    pub(crate) using_typename: kiln_source::fx::FxHashSet<DeclId>,
     pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
     /// The inheriting constructors declared, by (derived class, base
     /// constructor) (WP-114, clang `findInheritingConstructor`'s lookup).
@@ -414,6 +423,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             memcpy_decl: None,
             delegating: Vec::new(),
             ctor_entity: None,
+            ctor_diag_ty: None,
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             diag_capture: std::cell::RefCell::new(None),
@@ -429,6 +439,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
+            using_typename: kiln_source::fx::FxHashSet::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),
@@ -639,7 +650,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn qualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        names::SemaNames::new(self).write_decl_name(d, true, &mut s);
+        names::SemaNames::new(self).for_decls().write_decl_name(d, true, &mut s);
         s
     }
 

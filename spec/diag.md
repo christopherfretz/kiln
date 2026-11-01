@@ -248,6 +248,41 @@ Diag::new(DiagId::pp_macro_redefined, name_span)
 - `Diag` is `#[must_use]`. Notes MUST only be attached, never emitted
   directly; free-text messages exist only for notes.
 
+### 6.1 Template type diffing (`%diff`)
+
+Templates take pre-formatted strings, so a clang `%diff{...$...$...}`
+pair is formatted by the producer: `Sema::ty_diff(from, to)` (kiln_sema
+`type_diff.rs`) returns both quoted strings, and the template carries the
+quotes-free `{0}`/`{1}` slots. It reproduces clang 19's `TemplateDiff` with
+its defaults (elided, not tree form; `-fno-elide-type` and
+`-fdiagnostics-show-template-tree` are not supported):
+
+- Diffing applies only when both types (after their own sugar, aliases
+  climbed as clang's `hasSameTemplate`) are specializations of the same
+  class template. References and pointers at the top level are not
+  diffed. Otherwise each side prints as a normal type argument (with its
+  `aka`); a diffed side never has an `aka`.
+- The template name prints unqualified (`tr<...>` for `N::tr`). Arguments
+  are compared position by position over both written lists, packs
+  flattened. An equal argument prints `[...]`, a run of N equal ones
+  `[N * ...]`, and a fully equal list `pr<...>` (the types then differ
+  in qualifiers only).
+- A differing type argument recurses when both are specializations of one
+  template and prints in full otherwise. A missing argument is the
+  specialization's default prefixed `(default) `, or `(no argument)`.
+  Qualifiers print common ones first, then the side's own.
+- Two integral values of different types print `(T) V`; template template
+  arguments print `template X`. Two type leaves that print the same are
+  retried without elaboration, then canonically.
+
+Users: `no known conversion` notes, `no viable conversion`, reference
+binding errors, deleted/ambiguous conversions, `typedef redefinition`,
+redeclaration with a different type, initializer-list `auto`
+conflicts, overriding return types, assignment and conditional operand
+mismatches, and `could not match ... against ...` deduction notes (which
+report the innermost mismatching pair, canonical below the top level, and
+the two template names for a template mismatch).
+
 ## 7. The engine
 
 ### 7.1 Interface

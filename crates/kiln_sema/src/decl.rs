@@ -31,6 +31,7 @@ use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
 use crate::scope::{Scope, ScopeKind};
+use crate::type_diff::DiffArgs as _;
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
 use kiln_oven::{EvalContext, EvalKind};
@@ -772,8 +773,11 @@ impl Sema<'_, '_> {
             return None;
         }
         let t = &self.ast.types;
+        // The lvalue conversion of an `_Atomic(T)` bound is a `T` (clang
+        // `DefaultLvalueConversion`).
+        let vty = t.as_atomic(ety).unwrap_or(ety);
         let integral =
-            t.is_integral(ety) || t.as_enum(ety).is_some_and(|en| !self.is_scoped_enum(en));
+            t.is_integral(vty) || t.as_enum(vty).is_some_and(|en| !self.is_scoped_enum(en));
         if !integral {
             let msg = self.diag(DiagId::sema_array_size_non_int, loc).arg(self.ty_arg(ety));
             self.emit(msg);
@@ -802,11 +806,40 @@ impl Sema<'_, '_> {
                 }
                 u64::try_from(v).ok()
             }
-            _ => {
-                self.error(DiagId::sema_vla_unsupported, loc);
-                None
-            }
+            Err(f) => self.folded_array_bound(c, d, loc, f),
         }
+    }
+
+    /// A bound that is not a constant expression makes a variable length
+    /// array; at namespace or class scope, where one is not allowed,
+    /// clang folds the bound if it can (`EvaluateAsInt`: a `const double`
+    /// or `const _Atomic(int)` variable reads as its value) and makes a
+    /// constant array as an extension (`TryToFixInvalidVariablyModifiedType`,
+    /// after `-Wvla-cxx-extension` with the failure's notes). Anything
+    /// else is a variable length array, which kiln does not support.
+    fn folded_array_bound(
+        &mut self,
+        c: ExprId,
+        d: &Declarator,
+        loc: Loc,
+        mut f: kiln_oven::EvalFailure,
+    ) -> Option<u64> {
+        let at = d.name.map_or(d.loc, |(_, l)| l);
+        let folded = match d.ctx {
+            DeclaratorContext::File | DeclaratorContext::Member => {
+                self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
+            }
+            _ => None,
+        };
+        let Some(v) = folded else {
+            self.error(DiagId::sema_vla_unsupported, loc);
+            return None;
+        };
+        let wloc = Self::fold_lone_invalid(&mut f, loc);
+        let w = Self::with_failure_notes(self.diag(DiagId::sema_vla_cxx_extension, wloc), f);
+        self.emit(w);
+        self.error(DiagId::sema_vla_folded_to_constant, at);
+        u64::try_from(v).ok()
     }
 
     pub(crate) fn is_scoped_enum(&self, en: DeclId) -> bool {
@@ -964,7 +997,8 @@ impl Sema<'_, '_> {
                     l.items.truncate(1);
                     self.init_from_list_at(p.ty, &l, Some(p.loc))
                 } else {
-                    self.init_list_entity(p.ty, &l, p.loc)
+                    let note = Some(self.with_param_note_only(p));
+                    self.init_list_entity(p.ty, &l, p.loc, ConvCtx::Argument, note)
                 }
             }
             Initializer::Expr(e) => {
@@ -1814,8 +1848,7 @@ impl Sema<'_, '_> {
                     (DeclKind::TypeAlias, false) => "1",
                     (_, false) => "0",
                 })
-                .arg(self.ty_arg(underlying))
-                .arg(self.ty_arg(pty));
+                .diff_args(self, underlying, pty);
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
             return None;
@@ -2102,8 +2135,17 @@ impl Sema<'_, '_> {
         let prev = if global_new_delete {
             None
         } else if friend && d.qualifier.is_none() {
-            // Redeclaration lookup in the namespace sees hidden friends.
-            let found: Vec<DeclId> = self.ast.lookup_local(ctx, dname).iter().collect();
+            // Redeclaration lookup in the namespace sees hidden friends,
+            // but not the members of its inline namespaces: those are in
+            // other scopes ([dcl.meaning.general]/2.3, [namespace.memdef]/3;
+            // clang's `FilterLookupForScope` without `AllowInlineNamespace`).
+            let found: Vec<DeclId> = self
+                .ast
+                .lookup_local(ctx, dname)
+                .iter_with_inline()
+                .filter(|&(_, via_inline)| !via_inline)
+                .map(|(d, _)| d)
+                .collect();
             self.pick_prev_function(&found, new_fn)
         } else if method {
             let found = self.prev_candidates_dn(dname, d.qualifier);
@@ -2897,8 +2939,7 @@ impl Sema<'_, '_> {
                     let msg = self
                         .diag(id, d.name_loc())
                         .arg(sym_str(self, name))
-                        .arg(self.ty_arg(ty))
-                        .arg(self.ty_arg(pty));
+                        .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
                 } else if spec.storage() != VarStorage::Extern && self.is_var_definition(p) {
@@ -2973,6 +3014,28 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Diagnoses initializing `extern` variable `v` (clang
+    /// `AddInitializerToDecl`): an error at block scope (false: the
+    /// initializer is dropped); otherwise a warning, but not for a const
+    /// object or an `extern "C"` variable in C++, nor an instantiation.
+    fn check_extern_init(&mut self, v: DeclId, loc: Loc) -> bool {
+        use kiln_ast::templates::SpecKind;
+        if self.in_local_scope() {
+            self.error(DiagId::sema_block_extern_init, loc);
+            return false;
+        }
+        let t = self.base_element(self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR));
+        if !self.ast.types.effective_quals(t).is_const()
+            && !kiln_abi::mangle::is_extern_c(&self.ast, v)
+            && !self.ast.spec_info(v).is_some_and(|(_, i)| {
+                !matches!(i.kind, SpecKind::Undeclared | SpecKind::ExplicitSpecialization)
+            })
+        {
+            self.error(DiagId::sema_extern_init, loc);
+        }
+        true
+    }
+
     /// clang `AddInitializerToDecl`: a bounded array of an incomplete
     /// element (now formable, [dcl.array]/1) is diagnosed under the full
     /// variable type at the variable's name; the variable becomes invalid.
@@ -3018,12 +3081,8 @@ impl Sema<'_, '_> {
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
-        if spec.storage() == VarStorage::Extern {
-            if self.in_local_scope() {
-                self.error(DiagId::sema_block_extern_init, loc);
-                return;
-            }
-            self.error(DiagId::sema_extern_init, loc);
+        if spec.storage() == VarStorage::Extern && !self.check_extern_init(v, loc) {
+            return;
         }
         let mut ty = vn.ty().unwrap_or(QualType::ERROR);
         let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
@@ -3195,10 +3254,9 @@ impl Sema<'_, '_> {
                 .arg(name)
                 .arg(self.ty_arg(declared)),
             AutoFail::NoInitializerList => self.diag(DiagId::sema_auto_init_list_deduction, lbrace),
-            AutoFail::Conflict(a, b, _) => self
-                .diag(DiagId::sema_auto_inconsistent_deduction, lbrace)
-                .arg(self.ty_arg(a))
-                .arg(self.ty_arg(b)),
+            AutoFail::Conflict(a, b, _) => {
+                self.diag(DiagId::sema_auto_inconsistent_deduction, lbrace).diff_args(self, a, b)
+            }
             AutoFail::FromInitList => self
                 .diag(DiagId::sema_auto_var_deduction_failure_from_init_list, loc)
                 .arg(name)
@@ -5140,6 +5198,7 @@ impl Sema<'_, '_> {
             ("deprecated", _, _) => AttrKind::DEPRECATED,
             ("noreturn", _, _) => AttrKind::NORETURN,
             ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
+            ("assume", true, _) => AttrKind::ASSUME,
             ("likely", true, _) => AttrKind::LIKELY,
             ("unlikely", true, _) => AttrKind::UNLIKELY,
             ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
@@ -5171,14 +5230,16 @@ impl Sema<'_, '_> {
             return self.vector_attribute(kind, syntax, &raw, args, loc);
         }
         let takes = match kind {
-            AttrKind::NODISCARD | AttrKind::DEPRECATED => 1,
+            AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
             AttrKind::ALIGNED => {
                 usize::from(syntax != AttrSyntax::Keyword)
                     + usize::from(syntax == AttrSyntax::Keyword)
             }
             _ => 0,
         };
-        if args.len() > takes {
+        // [dcl.attr.assume]/1: exactly one argument (clang's
+        // `ActOnCXXAssumeAttr`).
+        if args.len() > takes || (kind == AttrKind::ASSUME && args.is_empty()) {
             let msg = self
                 .diag(DiagId::parse_attribute_wrong_arg_count, loc)
                 .arg(n.clone())
@@ -5193,6 +5254,9 @@ impl Sema<'_, '_> {
                 a = e.raw();
             }
             (AttrKind::ALIGNED, Some(AttrArg::Type(t))) => b = t.to_raw(),
+            // The assumption as written; converted by
+            // `act_on_attributed_stmt` once its statement is known.
+            (AttrKind::ASSUME, Some(AttrArg::Expr(e))) => a = e.raw(),
             (AttrKind::NODISCARD | AttrKind::DEPRECATED, Some(AttrArg::Expr(e))) => {
                 if self.string_lit_of(*e).is_none() {
                     let msg = self
@@ -5266,6 +5330,12 @@ impl Sema<'_, '_> {
         let kind = self.ast.decls.get(d).kind();
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::ASSUME {
+                // [dcl.attr.assume]/1: a statement attribute.
+                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg("assume");
+                self.emit(msg);
+                continue;
+            }
             let bad = match node.kind {
                 AttrKind::NODISCARD => {
                     // Every function kind, constructors included

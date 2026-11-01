@@ -521,7 +521,16 @@ where `inner` is the declarator text so far (empty at the top):
 Diagnostics print `'T'` and add ` (aka 'U')` when `U`, the printed
 canonical type (`full_scope`), differs textually from `T` (clang's
 `desugarForDiagnostic`; deviations, if any, are recorded in spec/diag.md
-§11). Representative goldens (each a unit test, checked against clang 19):
+§11). A dependent type whose canonical form would name
+`type-parameter-D-I` gets no `aka` (clang's `Desugar` keeps the
+parameter's name, which the canonical printer cannot). A pair of class
+template specializations in a `%diff` argument prints the template diff
+instead (spec/diag.md §6.1). An implicitly instantiated class template
+specialization (the `Record` behind the sugar) prints its canonical
+arguments without trailing defaults, as clang prints a
+`ClassTemplateSpecializationDecl`: `pr<int, typename id<int>::type>`
+is `'pr<int, typename id<int>::type>' (aka 'pr<int, int>')`, and an
+instantiation note names `'X<int>'` for `X<I>`. Representative goldens (each a unit test, checked against clang 19):
 
 | type | prints |
 |---|---|
@@ -631,9 +640,12 @@ stores ids.
   Comparison category types are made by sema, not written, and clang
   prints them as `'std::strong_ordering'`. kiln gives them `Elaborated`
   sugar with the enclosing non-inline namespaces as the qualifier
-  (`scoped_class_type`, WP-082). A diagnostic's `aka` still shows the
-  inline namespace (`'std::S' (aka 'std::__1::S')`), whereas clang
-  suppresses inline namespaces there (printer follow-up).
+  (`scoped_class_type`, WP-082). A type's scope skips inline
+  namespaces as clang's `AppendScope` does (`SemaNames::write_scope`;
+  clang's redundancy lookup is not done), so the canonical `aka` is
+  `'std::S'` too and is dropped. A declaration's own qualified name
+  (`qualified_decl_name`, clang `printQualifiedName`) keeps them
+  (`SemaNames::for_decls`).
 - **R5 A thread-safe `&self` interner (sharded locks, as
   `kiln_lex::Interner`).** Sema is single-threaded per TU (spec/ast.md
   §13 Q8); parallelism is across TUs. A lock per type construction costs

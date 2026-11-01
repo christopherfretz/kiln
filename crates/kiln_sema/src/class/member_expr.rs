@@ -21,6 +21,7 @@ use crate::conv::{self};
 use crate::expr::CallCallee;
 use crate::init::InitList;
 use crate::lookup::LookupKind;
+use crate::type_diff::DiffArgs as _;
 
 /// The object of a destructor member access (`x.~T`, `p->~T`).
 #[derive(Clone, Copy, Debug)]
@@ -430,8 +431,7 @@ impl Sema<'_, '_> {
         if !same {
             let msg = self
                 .diag(DiagId::sema_pseudo_dtor_type_mismatch, loc)
-                .arg(self.ty_arg(obj_ty))
-                .arg(self.ty_arg(destroyed));
+                .diff_args(self, obj_ty, destroyed);
             self.emit(msg);
             return self.recover_err(&[base], loc);
         }

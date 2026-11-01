@@ -202,6 +202,19 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
     }
 
+    /// Does a placeholder type specifier (`auto` or `decltype(auto)`)
+    /// start at token `i`? Used after a type-constraint.
+    fn placeholder_at(&self, i: usize) -> bool {
+        match self.p.kw_of(self.p.tok_at(i)) {
+            Some(Kw::Auto) => true,
+            Some(Kw::Decltype) => {
+                self.p.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)
+                    && self.p.kw_of(self.p.tok_at(i + 2)) == Some(Kw::Auto)
+            }
+            _ => false,
+        }
+    }
+
     /// clang's `isCXXDeclarationSpecifier`: can a decl-specifier start at
     /// the current token? `True` if it must be one, `Ambiguous` for a
     /// simple-type-specifier followed by `(` (a functional cast is
@@ -309,10 +322,8 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             NameClass::TypeTemplate(d) if self.p.s.names_class_type(d) => {
                 self.after_simple_type(end, braced)
             }
-            // `C auto` ([dcl.spec.auto.general]/1).
-            NameClass::Concept(_) if self.p.kw_of(self.p.tok_at(end)) == Some(Kw::Auto) => {
-                Tpr::True
-            }
+            // `C auto`, `C decltype(auto)` ([dcl.spec.auto.general]/1).
+            NameClass::Concept(_) if self.placeholder_at(end) => Tpr::True,
             // `T::type x` (a missing `typename`, diagnosed by the
             // declaration parser).
             NameClass::Dependent if end > self.i + 1 && self.ident_at(end).is_some() => Tpr::True,

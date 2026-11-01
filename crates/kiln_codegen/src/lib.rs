@@ -81,13 +81,26 @@ impl std::error::Error for CodegenError {}
 /// Lowers a translation unit to an LLVM module.
 ///
 /// `ast` must be free of errors. Constant expressions are folded with
-/// `oven` first (which may cache values in `ast`).
+/// `oven` first (which may cache values in `ast`). Warnings codegen
+/// reports itself are dropped; see [`emit_with_diags`].
 pub fn emit(
     ast: &mut Ast,
     oven: &mut Oven,
     target: &Target,
     opts: &CodegenOptions,
 ) -> Result<Module, CodegenError> {
+    emit_with_diags(ast, oven, target, opts).0
+}
+
+/// [`emit`], also returning the warnings codegen reports itself (clang
+/// reports them from `CodeGenModule`, e.g. `-Watomic-alignment`), in
+/// emission order, for the caller to emit to its engine.
+pub fn emit_with_diags(
+    ast: &mut Ast,
+    oven: &mut Oven,
+    target: &Target,
+    opts: &CodegenOptions,
+) -> (Result<Module, CodegenError>, Vec<kiln_diag::Diag>) {
     let folds = fold::prepass(ast, oven, target);
     let void_ptr = ast.types.pointer_to(kiln_ast::QualType::VOID);
     module::Cg::new(&*ast, &folds, target, opts, void_ptr).run()

@@ -258,8 +258,101 @@ impl Substituter<'_, '_, '_> {
                 let (name, at) = self.label_name(DeclId::new(n.a()))?;
                 Ok(self.sema.act_on_goto(name, at, loc))
             }
+            // clang `TransformAttributedStmt`: each assumption is
+            // substituted and built again (`BuildCXXAssumeExpr`, so the
+            // instantiation gets its own conversion and `-Wassume`).
+            StmtKind::AttributedStmt => {
+                use kiln_ast::ids::RawId;
+                let list = self.sema.ast.stmts.stmt_attrs(s);
+                let attrs: Vec<kiln_ast::AttrId> = self.sema.ast.lists.iter(list).collect();
+                let mut kept = Vec::with_capacity(attrs.len());
+                for a in attrs {
+                    let node = *self.sema.ast.attrs.get(a);
+                    let Some(e) = ExprId::from_raw(node.a) else { continue };
+                    let e = self.expr(e)?;
+                    if let Some(c) = self.sema.build_cxx_assume_expr(e) {
+                        kept.push(self.sema.assume_attr(node, c));
+                    }
+                }
+                let sub = self.stmt(StmtId::new(n.b()));
+                if kept.is_empty() {
+                    return Ok(sub);
+                }
+                Ok(self.sema.builder().attributed_stmt(&kept, sub, loc))
+            }
+            StmtKind::CXXTryStmt => self.try_stmt(s),
             k => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
+    }
+
+    /// A try-block (clang `TransformCXXTryStmt`): the compound statement
+    /// in a try scope, each handler, then `act_on_try`, whose handler-order
+    /// checks run on the instantiated types.
+    fn try_stmt(&mut self, s: StmtId) -> SubstResult<StmtId> {
+        let loc = self.sema.ast.stmts.get(s).loc();
+        let block = self.sema.ast.stmts.try_block(s);
+        let hs: Vec<StmtId> =
+            self.sema.ast.lists.iter::<StmtId>(self.sema.ast.stmts.try_handlers(s)).collect();
+        self.sema.push_try_scope();
+        let block = self.body(block);
+        self.sema.pop_scope();
+        let mut handlers = Vec::with_capacity(hs.len());
+        for h in hs {
+            handlers.push(self.handler(h)?);
+        }
+        self.sema.act_on_try(loc, block, &handlers).ok_or(SubstFail)
+    }
+
+    /// A handler (clang `TransformCXXCatchStmt`): the exception
+    /// declaration is rebuilt from its substituted type through
+    /// `act_on_exception_decl` (decay, the incomplete-type and abstract
+    /// checks, the copy-initialization from the exception object), in the
+    /// handler's scope; a pattern whose declaration is invalid fails.
+    fn handler(&mut self, h: StmtId) -> SubstResult<StmtId> {
+        let loc = self.sema.ast.stmts.get(h).loc();
+        let var = self.sema.ast.stmts.catch_var(h);
+        let block = self.sema.ast.stmts.catch_block(h);
+        self.sema.push_scope(ScopeKind::Control);
+        let v = match var {
+            Some(d) => match self.exception_decl(d) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.sema.pop_scope();
+                    return Err(e);
+                }
+            },
+            None => None,
+        };
+        let block = self.stmt(block);
+        self.sema.pop_scope();
+        Ok(self.sema.act_on_catch(v, block, loc))
+    }
+
+    fn exception_decl(&mut self, d: DeclId) -> SubstResult<Option<DeclId>> {
+        use crate::declspec::{DeclSpec, Declarator, TypeSpecKind};
+        use kiln_ast::decl::DeclFlags;
+        let n = *self.sema.ast.decls.get(d);
+        if n.has(DeclFlags::INVALID) {
+            return Err(SubstFail);
+        }
+        let loc = n.loc();
+        let ty = self.named_decl_ty(d, self.decl_ty(d), loc)?;
+        let type_loc = self.sema.handler_type_locs.get(&d).copied().unwrap_or(loc);
+        let mut ds = DeclSpec::new(type_loc);
+        ds.base = TypeSpecKind::Named;
+        ds.named = Some(ty);
+        ds.type_loc = Some(type_loc);
+        let mut dr = Declarator::new(DeclaratorContext::Block, loc);
+        if let Some(name) = n.name().as_ident()
+            && !n.name().is_empty()
+        {
+            dr.name = Some((name, loc));
+        }
+        let v = self.sema.act_on_exception_decl(&ds, ty, &dr);
+        if let Some(v) = v {
+            self.locals.insert(d, super::DeclOrPack::Decl(v));
+        }
+        Ok(v)
     }
 
     /// A GNU asm statement (clang `TransformGCCAsmStmt`): the operands

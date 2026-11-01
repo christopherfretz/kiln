@@ -1,0 +1,65 @@
+Dumping U::f:
+FieldDecl f 'float'
+
+Dumping f:
+FunctionDecl f 'void (int)'
+|-ParmVarDecl used n 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl u 'U' parenlistinit
+  |   `-CXXParenListInitExpr 'U'
+  |     `-IntegerLiteral 'int' 4
+  |-DeclStmt
+  | `-VarDecl w 'U' parenlistinit
+  |   `-CXXParenListInitExpr 'U'
+  |     `-ImplicitCastExpr 'int' <FloatingToIntegral>
+  |       `-FloatingLiteral 'double' 2.5e0
+  |-DeclStmt
+  | `-VarDecl s 'S[3]' parenlistinit
+  |   `-CXXParenListInitExpr 'S[3]'
+  |     |-array_filler: CXXConstructExpr 'S' 'void ()'
+  |     `-CXXFunctionalCastExpr 'S' functional cast to S <ConstructorConversion>
+  |       `-CXXConstructExpr 'S' 'void (int)'
+  |         `-IntegerLiteral 'int' 1
+  |-DeclStmt
+  | `-VarDecl t 'T[2]' parenlistinit
+  |   `-CXXParenListInitExpr 'T[2]'
+  |     |-array_filler: CXXConstructExpr 'T' 'void () noexcept' zeroing
+  |     `-CXXFunctionalCastExpr 'T' functional cast to T <NoOp>
+  |       `-InitListExpr 'T'
+  |         `-IntegerLiteral 'int' 1
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long)'
+  |   |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+  |   | `-IntegerLiteral 'int' 3
+  |   `-CXXParenListInitExpr 'int[3]'
+  |     |-array_filler: ImplicitValueInitExpr 'int'
+  |     |-IntegerLiteral 'int' 1
+  |     `-IntegerLiteral 'int' 2
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long)'
+  |   |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+  |   | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |   |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  |   `-CXXParenListInitExpr 'int[2]'
+  |     |-array_filler: ImplicitValueInitExpr 'int'
+  |     |-IntegerLiteral 'int' 1
+  |     `-IntegerLiteral 'int' 2
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-CXXNewExpr 'int *' array Function 'operator new[]' 'void *(unsigned long)'
+  |   |-IntegerLiteral 'unsigned long' 3
+  |   `-CXXParenListInitExpr 'int[3]'
+  |     |-array_filler: ImplicitValueInitExpr 'int'
+  |     |-IntegerLiteral 'int' 1
+  |     |-IntegerLiteral 'int' 2
+  |     `-IntegerLiteral 'int' 3
+  `-CStyleCastExpr 'void' <ToVoid>
+    `-CXXNewExpr 'S *' array Function 'operator new[]' 'void *(unsigned long)'
+      |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      | `-IntegerLiteral 'int' 2
+      `-CXXParenListInitExpr 'S[2]'
+        |-array_filler: CXXConstructExpr 'S' 'void ()'
+        `-ImplicitCastExpr 'S' <ConstructorConversion>
+          `-CXXConstructExpr 'S' 'void (int)'
+            `-IntegerLiteral 'int' 1
+

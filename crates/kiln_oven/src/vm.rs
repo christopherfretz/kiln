@@ -97,6 +97,10 @@ pub(crate) struct RunState {
     /// nested evaluation's calls count from the depth of the call that
     /// started it, plus one for the context itself.
     pub depth_base: u32,
+    /// A lax fold ([`crate::Oven::fold_rvalue`]): `const` variables that
+    /// are not usable in constant expressions are read; results are not
+    /// memoized.
+    pub lax: bool,
 }
 
 impl RunState {
@@ -1326,7 +1330,9 @@ impl Oven {
         // A call that allocated or freed heap memory is not pure (a cached
         // result would skip the allocation's accounting, or return a
         // pointer to an object a later delete frees).
-        if self.run.impure == p.impure0 && self.mem.heap_ops == p.heap0 {
+        // A lax fold's result may depend on a read a strict evaluation
+        // rejects.
+        if self.run.impure == p.impure0 && self.mem.heap_ops == p.heap0 && !self.run.lax {
             self.memo.insert(p.key, val);
         }
         self.mem.peak = self.mem.peak.max(p.peak_saved);

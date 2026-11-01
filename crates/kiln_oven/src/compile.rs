@@ -990,6 +990,17 @@ impl Scan<'_> {
             StmtKind::CaseStmt => self.stmt(ast.stmts.case_data(s).sub),
             StmtKind::DefaultStmt => self.stmt(ast.stmts.default_sub(s)),
             StmtKind::LabelStmt => self.stmt(StmtId::new(n.b())),
+            StmtKind::AttributedStmt => {
+                for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
+                    let node = *ast.attrs.get(a);
+                    if node.kind == kiln_ast::attr::AttrKind::ASSUME
+                        && let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a)
+                    {
+                        self.expr(e, false);
+                    }
+                }
+                self.stmt(ast.stmts.sub_stmt(s));
+            }
             StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::ForStmt => {
                 let d = *ast.stmts.loop_data(s);
                 d.init.into_iter().for_each(|x| self.stmt(x));
@@ -1559,13 +1570,40 @@ impl Compiler<'_> {
             // a core constant expression), so no handler is ever entered
             // (clang `EvaluateStmt`, one step for the try itself).
             StmtKind::CXXTryStmt => self.stmt(ast.stmts.try_block(s)),
-            // The payload of an attributed statement is not yet defined by
-            // kiln_ast (spec/ast.md §6; no builder exists).
+            // [dcl.attr.assume]/1, [expr.const]/5.8: an assumption that
+            // would evaluate to false is not a core constant expression;
+            // one with possible side effects is ignored (clang
+            // `EvaluateStmt`, `note_constexpr_assumption_failed` at the
+            // assumption's `getExprLoc`).
             StmtKind::AttributedStmt => {
-                self.trap_loc(
-                    n.loc(),
-                    format!("kiln: constant evaluation of {:?} is not supported yet", n.kind()),
-                );
+                let nodes: Vec<kiln_ast::attr::AttrNode> = ast
+                    .lists
+                    .iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s))
+                    .map(|a| *ast.attrs.get(a))
+                    .collect();
+                let sub = ast.stmts.sub_stmt(s);
+                for node in nodes {
+                    if node.kind != kiln_ast::attr::AttrKind::ASSUME
+                        || node.flags & kiln_ast::attr::AttrNode::ASSUME_IGNORED != 0
+                    {
+                        continue;
+                    }
+                    let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a) else {
+                        continue;
+                    };
+                    let r = if self.has_temps {
+                        self.open_scope(&[], true);
+                        let r = self.rv(e);
+                        self.close_scope();
+                        r
+                    } else {
+                        self.rv(e)
+                    };
+                    let ok = self.jmp_if(r, true);
+                    self.trap_loc(Loc::from_raw(node.b), "assumption evaluated to false".into());
+                    self.patch_here(ok);
+                }
+                self.stmt(sub);
             }
             k => {
                 self.trap_loc(
@@ -3623,7 +3661,8 @@ impl Compiler<'_> {
                 let inits: Vec<ExprId> =
                     ast.lists.iter::<ExprId>(ast.exprs.paren_list_inits(e)).collect();
                 let filler = ast.exprs.paren_list_filler(e);
-                self.init_aggr(e, &inits, filler, None, p, ty);
+                let union_field = ast.exprs.paren_list_union_field(e);
+                self.init_aggr(e, &inits, filler, union_field, p, ty);
                 return;
             }
             _ => {}

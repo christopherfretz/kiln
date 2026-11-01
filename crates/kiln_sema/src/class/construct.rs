@@ -29,6 +29,11 @@ pub(crate) struct ConstructSite {
     /// The `)` of a parenthesized initializer (the end of a
     /// `CXXParenListInitExpr`).
     pub rparen: Option<Loc>,
+    /// The end of a parenthesized aggregate initialization (P0960) when
+    /// it is neither `rparen` nor `temp_end`: the `)` of `S(x)` and
+    /// `static_cast<S>(x)`, where clang's default member initializers
+    /// take their source location (WP-160).
+    pub agg_end: Option<Loc>,
     /// Where the access and deletion errors go, and their form.
     pub sites: DiagSites,
 }
@@ -41,6 +46,7 @@ impl ConstructSite {
             loc: at,
             temp_end: None,
             rparen: None,
+            agg_end: None,
             sites: DiagSites { access: at, deleted: at, deleted_as: DeletedAs::Call },
         }
     }
@@ -143,17 +149,10 @@ impl Sema<'_, '_> {
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;
         let (entity, ck) = self.take_ctor_entity();
+        let diag_ty = self.ctor_diag_ty.take();
         let loc = site.loc;
-        if style.is_list()
-            && self.has_init_list_ctor(class)
-            && self.init_list_phase1_viable(class, args)
-        {
-            // todo(WP-067b follow-up): building the initializer_list
-            // object for an initializer-list constructor
-            // ([dcl.init.list]/3.7, [over.match.list]/1.1; phase 2 below).
-            self.unsupported("initialization by an initializer-list constructor", loc);
-            return Some(self.recover(ty, args, loc));
-        }
+        // [over.match.list]/1.1 (phase 1) was done by the caller
+        // (`init_list_ctor_init`); this is phase 2.
         let actual = matches!(
             (entity, ck),
             (InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating)
@@ -166,7 +165,7 @@ impl Sema<'_, '_> {
         {
             // [dcl.init.general]/16.6.2.2: no constructor is viable, so
             // the aggregate is initialized from the parenthesized list.
-            let rparen = site.rparen.or(site.temp_end).unwrap_or(loc);
+            let rparen = site.rparen.or(site.temp_end).or(site.agg_end).unwrap_or(loc);
             return Some(self.paren_aggregate_init(ty, args, loc, rparen));
         }
         if let Selected::Found(f) | Selected::Deleted(f) = sel
@@ -186,6 +185,7 @@ impl Sema<'_, '_> {
             ..CtorCall::new(args)
         };
         let k = if args.is_empty() { SpecialKind::DefaultCtor } else { SpecialKind::CopyCtor };
+        self.ctor_diag_ty = diag_ty;
         let built = self.use_ctor(sel, ty, class, k, call, loc, entity, site.sites);
         Some(built.unwrap_or_else(|| self.recover(ty, args, loc)))
     }
@@ -260,6 +260,7 @@ impl Sema<'_, '_> {
             loc: self.begin_loc(e),
             temp_end: None,
             rparen: None,
+            agg_end: None,
             sites: DiagSites { access: at, deleted: at, deleted_as },
         };
         let c = self.construct_class(to, &[e], InitStyle::Copy, site)?;

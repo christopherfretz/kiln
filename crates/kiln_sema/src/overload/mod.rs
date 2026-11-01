@@ -564,7 +564,10 @@ impl Sema<'_, '_> {
     pub(crate) fn fn_min_args(&self, f: DeclId) -> usize {
         let Some(fd) = self.ast.decls.function(f) else { return 0 };
         let n = self.ast.lists.get(fd.params).len();
+        // clang's getMinRequiredArguments: a parameter pack is not
+        // counted, wherever it is.
         let mut min = 0;
+        let mut so_far = 0;
         for i in 0..n {
             let Some(p) = self.ast.lists.at::<DeclId>(fd.params, i) else { break };
             // A function parameter pack may be empty (WP-072).
@@ -573,8 +576,12 @@ impl Sema<'_, '_> {
                 .decls
                 .param(p)
                 .is_some_and(|x| x.flags & kiln_ast::decl::ParamData::PACK != 0);
-            if !self.param_has_default(p) && !pack {
-                min = i + 1;
+            if pack {
+                continue;
+            }
+            so_far += 1;
+            if !self.param_has_default(p) {
+                min = so_far;
             }
         }
         min

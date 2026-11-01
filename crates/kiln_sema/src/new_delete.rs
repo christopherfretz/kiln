@@ -1116,11 +1116,10 @@ impl Sema<'_, '_> {
             }
             NewInit::Paren(v, l, r) => {
                 if array_form {
-                    if !v.is_empty() {
-                        self.unsupported("parenthesized initialization of an array", l);
-                        return Err(());
-                    }
                     let t = array_ty(self);
+                    if !v.is_empty() {
+                        return self.new_paren_array_init(elem, t, &v, first, l, r);
+                    }
                     return match self.new_class_default(elem, t, true, at) {
                         Some(Ok(e)) => Ok((Some(e), None)),
                         Some(Err(())) => Err(()),
@@ -1179,6 +1178,40 @@ impl Sema<'_, '_> {
                 Ok((Some(e), completed))
             }
         }
+    }
+
+    /// `new T[n](args...)`: a parenthesized aggregate initialization of the
+    /// array (P0960). Like clang's `TryOrBuildParenListInitialization` for
+    /// a new-expression, the `CXXParenListInitExpr` always carries an array
+    /// filler (a runtime bound may exceed the arguments); with no written
+    /// bound its length completes the array type.
+    fn new_paren_array_init(
+        &mut self,
+        elem: QualType,
+        t: QualType,
+        args: &[ExprId],
+        first: Option<(Option<ExprId>, Loc)>,
+        l: Loc,
+        r: Loc,
+    ) -> Result<(Option<ExprId>, Option<u64>), ()> {
+        let e = self.paren_aggregate_init(t, args, l, r);
+        if self.is_err_expr(e) || self.ast.exprs.get(e).kind() != ExprKind::CXXParenListInitExpr {
+            return Err(());
+        }
+        let ety = self.ast.exprs.get(e).ty();
+        let e = if self.ast.exprs.paren_list_filler(e).is_none() {
+            let inits: Vec<ExprId> = {
+                let l = self.ast.exprs.paren_list_inits(e);
+                self.ast.lists.iter(l).collect()
+            };
+            let filler = self.paren_value_init(elem, l);
+            self.builder().paren_list_init(ety, &inits, Some(filler), l, r)
+        } else {
+            e
+        };
+        let completed =
+            if matches!(first, Some((None, _))) { self.ast.types.array_size(ety) } else { None };
+        Ok((Some(e), completed))
     }
 
     /// An array `InitListExpr` for a runtime bound: clang's

@@ -116,11 +116,8 @@ impl Sema<'_, '_> {
                 if let Some(s) = self.base_to_derived_pointer(b.from, b.to) {
                     return format!("{s} for {which}");
                 }
-                format!(
-                    "no known conversion from {} to {} for {which}",
-                    self.ty_arg(b.from),
-                    self.ty_arg(b.to)
-                )
+                let (from, to) = self.ty_diff(b.from, b.to);
+                format!("no known conversion from {from} to {to} for {which}")
             }
             BadKind::LvalueRequired => format!("expects an lvalue for {which}"),
             BadKind::RvalueRequired => format!("expects an rvalue for {which}"),
@@ -128,11 +125,8 @@ impl Sema<'_, '_> {
                 // clang names the lost qualifiers only for the same type
                 // (`DiagnoseBadConversion`); a derived class is no known
                 // conversion.
-                format!(
-                    "no known conversion from {} to {} for {which}",
-                    self.ty_arg(b.from),
-                    self.ty_arg(b.to)
-                )
+                let (from, to) = self.ty_diff(b.from, b.to);
+                format!("no known conversion from {from} to {to} for {which}")
             }
             BadKind::LosesQuals(q) => {
                 let (s, plural) = lost_quals(q, "and");

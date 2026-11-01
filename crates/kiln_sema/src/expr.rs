@@ -30,6 +30,7 @@ use crate::init::InitList;
 use crate::literal;
 use crate::lookup::LookupKind;
 use crate::overload::oper::{OperForm, OperResult};
+use crate::type_diff::DiffArgs as _;
 use crate::vector_ops::VecParts;
 
 mod ref_cast;
@@ -544,7 +545,7 @@ impl Sema<'_, '_> {
         // the parameter ([dcl.init.list]).
         if let Some(l) = self.take_braced_arg(e) {
             let to = if self.ast.types.is_reference(ty) { ty } else { conv::strip_cv(self, ty) };
-            return self.init_list_entity(to, &l, l.lbrace);
+            return self.init_list_entity(to, &l, l.lbrace, ctx, None);
         }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
@@ -753,7 +754,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
+    pub(crate) fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
         let mut cur = Some(d);
         let mut n = 0;
         while let Some(x) = cur {
@@ -1853,9 +1854,15 @@ impl Sema<'_, '_> {
         let t = atomic.unwrap_or(operand_t);
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
         if self.ast.types.builtin(t) == Some(BuiltinType::Bool) {
-            let msg = self.diag(DiagId::sema_incdec_bool, loc).arg(if inc { "0" } else { "1" });
+            // clang: decrementing is always an error; incrementing is a
+            // DefaultError extension (`-Wno-increment-bool` accepts it).
+            if !inc {
+                let msg = self.diag(DiagId::sema_decrement_bool, loc);
+                self.emit(msg);
+                return self.recover_err(&[e], loc);
+            }
+            let msg = self.diag(DiagId::sema_increment_bool, loc);
             self.emit(msg);
-            return self.recover_err(&[e], loc);
         }
         if self.ast.types.as_enum(t).is_some() {
             let msg = self
@@ -2114,10 +2121,20 @@ impl Sema<'_, '_> {
         }
         let lt = self.ety(l);
         let to = conv::strip_cv(self, lt);
-        let r2 = match conv::implicit_convert(self, r, to, ConvCtx::Assignment) {
+        let conv = match conv::atomic_class_assign(self, to, r) {
+            Some(x) => Ok(x),
+            None => conv::implicit_convert(self, r, to, ConvCtx::Assignment),
+        };
+        let r2 = match conv {
             Ok(x) => x,
             Err(err) => {
-                let d = err.diag(self, r);
+                // An `_Atomic` target is checked as in C, at the operator
+                // (clang `DiagnoseAssignmentResult`).
+                let d = if self.ast.types.as_atomic(to).is_some() {
+                    err.diag_at(self, loc)
+                } else {
+                    err.diag(self, r)
+                };
                 self.emit(d);
                 return self.recover_err(&[l, r], loc);
             }
@@ -2202,10 +2219,7 @@ impl Sema<'_, '_> {
         if conv::is_unscoped_enum(self, lt)
             && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
         {
-            let msg = self
-                .diag(DiagId::sema_assign_incompatible, loc)
-                .arg(self.ty_arg(lt))
-                .arg(self.ty_arg(res_ty));
+            let msg = self.diag(DiagId::sema_assign_incompatible, loc).diff_args(self, lt, res_ty);
             self.emit(msg);
             return self.recover_err(&[l, r], loc);
         }
@@ -2596,10 +2610,7 @@ impl Sema<'_, '_> {
                 return self.builder().conditional(c2, t2, f2, ty, loc);
             }
         }
-        let msg = self
-            .diag(DiagId::sema_incompatible_cond_operands, loc)
-            .arg(self.ty_arg(tt))
-            .arg(self.ty_arg(ft));
+        let msg = self.diag(DiagId::sema_incompatible_cond_operands, loc).diff_args(self, tt, ft);
         self.emit(msg);
         self.recover_err(&[c, t, f], loc)
     }
@@ -2754,7 +2765,14 @@ impl Sema<'_, '_> {
     /// The note details the candidate's bad conversion sequence (clang
     /// `DiagnoseBadConversion`: a temporary's referent, an lvalue
     /// required, lost qualifiers).
-    fn bad_argument(&mut self, d: DeclId, callee: ExprId, a: ExprId, pt: QualType, i: usize) {
+    pub(crate) fn bad_argument(
+        &mut self,
+        d: DeclId,
+        callee: ExprId,
+        a: ExprId,
+        pt: QualType,
+        i: usize,
+    ) {
         let msg = self
             .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
             .arg(self.decl_name(d));
@@ -3061,6 +3079,7 @@ impl Sema<'_, '_> {
                     callee,
                     &l,
                     params[i],
+                    (i, pdecls.get(i).copied()),
                 )?);
                 continue;
             }
@@ -3695,6 +3714,10 @@ impl Sema<'_, '_> {
                 loc,
                 temp_end: None,
                 rparen: None,
+                // clang `InitializationKind::CreateFunctionalCast` /
+                // `CreateCast`: the `)`. A C-style cast's range ends at its
+                // operand's last token, which kiln does not record.
+                agg_end: (style != CastStyle::CStyle).then_some(rparen),
                 sites: crate::class::DiagSites {
                     access: loc,
                     deleted: loc,

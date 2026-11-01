@@ -187,6 +187,60 @@ impl Sema<'_, '_> {
         Some(using)
     }
 
+    /// One using-declarator `using typename qual name;`
+    /// ([namespace.udecl]/1, [temp.res.general]/5): the name is a type.
+    /// In a class with a dependent qualifier (`using typename
+    /// B<T>::type;`) the member is an alias of the dependent type
+    /// `typename B<T>::type` (clang's `UnresolvedUsingTypenameDecl` with
+    /// its `UnresolvedUsingType`), resolved when the class is
+    /// instantiated. Otherwise the declarator is an ordinary one whose
+    /// target must be a type. Returns the declaration, or `None` after an
+    /// error.
+    pub fn act_on_using_typename_declarator(
+        &mut self,
+        using_loc: Loc,
+        qual: Option<Qualifier>,
+        name: DeclName,
+        name_loc: Loc,
+        if_exists: bool,
+        ellipsis: Option<Loc>,
+    ) -> Option<DeclId> {
+        if let (Some(q), Some(n), None) = (qual, name.as_ident(), ellipsis)
+            && self.member_spec_class().is_some()
+            && (self.is_dependent_ctx(q.ctx)
+                || self
+                    .ast
+                    .types
+                    .nns_flags(q.nns)
+                    .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
+                    && self.kind_of(q.ctx) != DeclKind::CXXRecord)
+        {
+            let ty = self.act_dependent_name(q.nns, n, None, kiln_ast::types::TagKeyword::Typename);
+            let d = self.act_on_alias_decl(n, name_loc, ty, &[]);
+            self.using_typename.insert(d);
+            return Some(d);
+        }
+        if let Some(q) = qual
+            && !self.is_dependent_ctx(q.ctx)
+        {
+            let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
+            if let Some(&t) = found.decls.iter().find(|&&d| {
+                let k = self.kind_of(self.ast.using_target(d).unwrap_or(d));
+                !is_type_kind(k) && !is_tag_kind(k)
+            }) && !found.decls.iter().any(|&d| {
+                let k = self.kind_of(self.ast.using_target(d).unwrap_or(d));
+                is_type_kind(k) || is_tag_kind(k)
+            }) {
+                let msg = self.diag(DiagId::sema_using_typename_non_type, name_loc).with_note(
+                    self.diag(DiagId::note_using_decl_target, self.ast.decls.get(t).loc()),
+                );
+                self.emit(msg);
+                return None;
+            }
+        }
+        self.act_on_using_declarator(using_loc, qual, name, name_loc, if_exists, ellipsis)
+    }
+
     fn new_using_decl(&mut self, name: DeclName, name_loc: Loc, nns: NnsId) -> DeclId {
         let h = DeclHead::new(self.ctx, name, name_loc);
         self.builder().using_decl(h, Some(nns))
