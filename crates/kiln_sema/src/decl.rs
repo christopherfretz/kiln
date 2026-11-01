@@ -2454,8 +2454,8 @@ impl Sema<'_, '_> {
         }
         let mut prev_ok = None;
         let mut invalid_redecl = false;
-        let late_exc = d.late_noexcept.is_some()
-            || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
+        let late_exc =
+            d.late_noexcept.is_some() || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,

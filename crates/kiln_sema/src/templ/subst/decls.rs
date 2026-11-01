@@ -772,7 +772,9 @@ impl Substituter<'_, '_, '_> {
         // redeclared pattern, or one awaiting its complete-class context):
         // so does the specialization's ([`Sema::defer_spec_exception_spec`]).
         let sig = sig.map(|(params, ret, exc)| match exc {
-            kiln_ast::types::ExcSpec::Deferred(_) if self.sema.defer_spec_exception_spec(pat, spec) => {
+            kiln_ast::types::ExcSpec::Deferred(_)
+                if self.sema.defer_spec_exception_spec(pat, spec) =>
+            {
                 (params, ret, kiln_ast::types::ExcSpec::Deferred(spec))
             }
             _ => (params, ret, exc),

@@ -293,7 +293,12 @@ impl Sema<'_, '_> {
     /// clang `CheckCXXDefaultArgExpr`): "use of default argument to
     /// function ... that is declared later in class ...", noted at the
     /// argument. Returns true then.
-    pub(crate) fn diagnose_unparsed_default_arg(&mut self, f: DeclId, p: DeclId, callee: ExprId) -> bool {
+    pub(crate) fn diagnose_unparsed_default_arg(
+        &mut self,
+        f: DeclId,
+        p: DeclId,
+        callee: ExprId,
+    ) -> bool {
         let Some(&at) = self.unparsed_default_args.get(&p) else { return false };
         if self.ast.decls.param(p).is_none_or(|x| x.default_arg.is_some()) {
             return false;
