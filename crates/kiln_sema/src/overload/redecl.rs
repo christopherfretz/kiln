@@ -34,7 +34,10 @@ impl Sema<'_, '_> {
         let mut other = None;
         for &d in cands.iter().rev() {
             let k = self.kind_of(d);
-            if is_tag_kind(k) {
+            // A dependent using-declarator (`using T::f;`) is checked
+            // against the class's functions only at instantiation
+            // ([namespace.udecl]/14; clang's `CheckUsingShadowDecl`).
+            if is_tag_kind(k) || k == DeclKind::UnresolvedUsingValue {
                 continue;
             }
             if is_template_kind(k) {

@@ -89,6 +89,8 @@ pub enum TypeView {
     Function(FuncProto),
     Record(DeclId),
     Enum(DeclId),
+    /// The type of an `UnresolvedUsingTypename` declaration (WP-179).
+    UnresolvedUsing(DeclId),
     Complex(QualType),
     Atomic(QualType),
     Vector {
@@ -607,6 +609,7 @@ impl TypeContext {
             K::Function => TypeView::Function(s.protos[n.data as usize]),
             K::Record => TypeView::Record(d(n.data)),
             K::Enum => TypeView::Enum(d(n.data)),
+            K::UnresolvedUsing => TypeView::UnresolvedUsing(d(n.data)),
             K::Complex => TypeView::Complex(q(n.data)),
             K::Atomic => TypeView::Atomic(q(n.data)),
             K::Vector => {

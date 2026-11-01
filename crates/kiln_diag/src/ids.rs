@@ -1577,6 +1577,19 @@ diag_ids! {
     sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
     parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
     sema_lvalue_cast_not_supported = Error (0) "assignment to cast is illegal, lvalue casts are not supported";
+    note_reference_temporary_list_init = Note (1) "in initialization of temporary of type {0} created to list-initialize this reference";
+    // ----- WP-192 (designated initializers; clang `SemaInit.cpp`)
+    sema_designated_init_reordered = ExtWarn [ReorderInitList] (2) "ISO C++ requires field designators to be specified in declaration order; field {1} will be initialized after field {0}";
+    note_previous_field_init = Note (1) "previous initialization for field {0} is here";
+    sema_designated_init_mixed = ExtWarn [C99Designator] (0) "mixture of designated and non-designated initializers in the same initializer list is a C99 extension";
+    note_designated_init_mixed = Note (0) "first non-designated initializer is here";
+    sema_designated_init_nested = ExtWarn [C99Designator] (0) "nested designators are a C99 extension";
+    sema_designated_init_array = ExtWarn [C99Designator] (0) "array designators are a C99 extension";
+    sema_initializer_overrides = ExtWarn [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
+    sema_initializer_union_overrides = WarningError [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
+    sema_field_designator_unknown = Error (2) "field designator '{0}' does not refer to any field in type {1}";
+    sema_field_designator_non_record = Error (1) "field designator cannot initialize a non-class type {0}";
+    sema_array_designator_non_array = Error (1) "array designator cannot initialize non-array type {0}";
     sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
 }
 

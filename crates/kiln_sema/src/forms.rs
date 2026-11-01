@@ -72,7 +72,8 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
                 .arg(self.decl_name(d));
-            let detail = format!("cannot convert initializer list argument to {}", self.ty_arg(pt));
+            let ics = self.list_arg_ics(to, l);
+            let detail = self.bad_conversion_detail(&ics, Some(i));
             let fl = self.ast.decls.get(d).loc();
             let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
             self.emit(msg.with_note(note));
@@ -86,9 +87,12 @@ impl Sema<'_, '_> {
     /// conversion sequence ([over.ics.list]): the one-candidate set's
     /// argument conversion.
     fn list_viable(&mut self, ty: QualType, l: &InitList) -> bool {
-        if self.is_error_type(ty) {
-            return true;
-        }
+        self.is_error_type(ty) || !self.list_arg_ics(ty, l).is_bad()
+    }
+
+    /// The conversion sequence of braced argument `l` to parameter type
+    /// `ty` ([over.ics.list]).
+    fn list_arg_ics(&mut self, ty: QualType, l: &InitList) -> crate::overload::Ics {
         let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
         self.ovl.lists.push(l.clone());
         let a = crate::overload::ArgInfo {
@@ -97,7 +101,7 @@ impl Sema<'_, '_> {
         };
         let ics = self.try_implicit_conversion(&a, ty, crate::overload::IcsOptions::CANDIDATE_ARG);
         self.ovl.lists.pop();
-        !ics.is_bad()
+        ics
     }
 
     /// The number of scalar subobjects of aggregate `ty` that brace

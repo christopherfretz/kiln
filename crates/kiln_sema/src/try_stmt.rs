@@ -377,7 +377,15 @@ impl Sema<'_, '_> {
         }
         // clang visits the CFG blocks, built back to front.
         found.sort_by_key(|&e| std::cmp::Reverse(self.ast.exprs.get(e).loc()));
-        let fname = self.decl_name(f);
+        let mut fname = self.decl_name(f);
+        // A function template specialization prints with its arguments
+        // (clang's `getNameForDiagnostic`: `'k<int>'`).
+        if let Some((_, info)) = self.ast.spec_info(f)
+            && self.kind_of(info.template) == DeclKind::FunctionTemplate
+        {
+            let names = crate::names::SemaNames::new(self);
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, info.args, &mut fname);
+        }
         let floc = self.ast.decls.get(f).loc();
         let dealloc = self.ast.decls.get(f).name().as_operator().is_some_and(|o| {
             matches!(o, OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)

@@ -360,7 +360,11 @@ Wording: "cannot convert initializer list argument to 'int'". Every failure
 of a braced argument is `Bad(InitList)` naming the parameter type (for a
 reference, the cv-qualified referenced type: `'const G'` for the implicit
 copy constructor), as clang's `TryListConversion` fails with the list as the
-source (WP-152).
+source (WP-152). A non-const (or volatile) lvalue reference whose temporary
+would list-initialize is instead `Bad(LvalueRequired)` ("expects an lvalue
+for 1st argument"); a single-element candidate call reports the same detail
+(`forms.rs` `braced_argument`;
+`tests/conformance/over.ics.list/reference-parameter-notes.cpp`).
 
 ### 3.4 Comparing ICSs (`compare_ics`, [over.ics.rank])
 (1) /2: `Standard` < `UserDefined` = `Ambiguous` < `Ellipsis`. (2) /3.1
@@ -694,6 +698,11 @@ was used). Type sugar (`'Z':'N::Z'`) is the printer's job (ast-dump.md).
 | `warn_ambiguous_reversed_operator` [ambiguous-reversed-operator] + 2 notes | §5.3 |
 | notes | `note_ovl_candidate` "candidate {kind}{tmpl}" with `_not_viable` ("… not viable: {detail}"), `_deleted` ("candidate function has been explicitly deleted"), `_explicit`, `_type_mismatch`; `note_ovl_builtin_candidate` "built-in candidate {0}"; `note_ovl_surrogate` "conversion candidate of type '{0}'"; `note_ambiguous_conversion_of`; `note_possible_target` "possible target for call"; `note_explicit_ctor_here`; `note_arrow_produces`; `note_rewriting_operator_as_spaceship` |
 
+The name in "call to deleted function '{0}'" (and the other call
+diagnostics) is the name as looked up, without qualifier or template
+arguments (clang `ULE->getName()`): `show<int>(2)` and `ns::r(1)` print
+'show' and 'r', not the selected specialization.
+
 `{kind}` (clang `note_ovl_candidate` select): "function", "function (with
 reversed parameter order)", "constructor", "constructor (the implicit
 default constructor)" / "(… copy constructor)" / "(… move constructor)",
@@ -880,8 +889,20 @@ Where the code differs from (or details) the design above:
   row of [over.ics.list], for a standard or user-defined sequence);
   `compare_ics` checks it after the /2 class and before /3.2, so
   `S({1, 2})` prefers `S(initializer_list<int>)` to
-  `S(const int (&)[2])` (clang). The array-bound tie-breaker of /3.1.2 is
-  not implemented.
+  `S(const int (&)[2])` (clang). The array-bound tie-breaker of /3.1.2
+  (WP-179) is `StandardConversion::list_array` (`ListArray`: element
+  type, number of elements initialized, unknown bound; clang's
+  `InitializerListContainerType`), set on the array row of
+  [over.ics.list] (an array of unknown bound counts one element per
+  initializer) and kept through a reference binding. Right after /3.1.1,
+  two sequences converting to arrays whose element types agree without
+  cv-qualifiers compare by element count (fewer is better), then the one
+  not converting to an array of unknown bound wins
+  (`tests/conformance/over.ics.rank/list-array-bound.cpp`). Binding a
+  reference to an array of unknown bound (`const int (&)[]`) to an
+  array of known bound is not implemented yet ([dcl.init.ref]/4 with
+  P0388's array conversions), so a call that selects such an overload
+  still fails after overload resolution.
 - **Casts.** `static_cast` / functional / C-style casts from a class to a
   non-class type run the direct-initialization's user-defined conversion
   (explicit conversion functions are candidates) with clang's
