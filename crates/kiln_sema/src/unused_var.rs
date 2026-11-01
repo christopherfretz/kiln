@@ -155,7 +155,8 @@ impl Sema<'_, '_> {
         let (lhs, compound) = match ex.get(e).kind() {
             ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator => {
                 let op = ex.binary_op(e);
-                let [l, r] = ex.operands(e);
+                let ch = ex.children(e, &self.ast.lists);
+                let (l, r) = (ch[0], ch[1]);
                 let dependent =
                     self.ast.types.is_dependent(self.ety(l)) || self.ast.types.is_dependent(self.ety(r));
                 if (dependent && op != BinaryOp::Assign) || !op.is_assignment() {

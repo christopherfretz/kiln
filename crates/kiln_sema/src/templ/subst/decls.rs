@@ -203,6 +203,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn decomp_decl(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
         let (_, v) = self.decomp_declare(d, ctx)?;
         self.var_init(d, v)?;
+        self.sema.diagnose_unused_inst_var(d, v);
         Ok(v)
     }
 

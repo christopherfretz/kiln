@@ -435,6 +435,9 @@ impl Parser<'_, '_> {
             if self.at_attr() {
                 self.parse_attributes(&mut attrs);
             }
+            // The leading attributes appertain to the exception variable
+            // ([except.pre]/1, [dcl.pre]/5).
+            self.lead_decl_attrs = attrs;
             let ctx = DeclaratorContext::Block;
             let ds = self.parse_decl_specifiers(ctx);
             let mut d = Declarator::new(ctx, self.loc());
