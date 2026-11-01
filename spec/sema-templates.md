@@ -1478,6 +1478,10 @@ initializer-list guides first, with the whole list as the argument.
 Without user guides, an aggregate class template adds the aggregate
 deduction candidate (P1816). An alias template deduces through the
 transformed guides of the template its defining-type-id names (P1814).
+When a non-list argument has already been diagnosed (a `RecoveryExpr` or
+an error type, such as a variable whose own deduction failed), nothing is
+deduced and no further error is emitted. clang likewise deduces nothing
+from an initializer that contains errors (WP-192).
 
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
 implemented and what is deferred (P2582 inherited-constructor guides).
