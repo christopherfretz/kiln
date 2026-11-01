@@ -1,0 +1,29 @@
+// Diagnostic ids `drv_*` (spec/diag.md §2.4).
+// One row per line, sorted by name; a comment directly above a row
+// belongs to it. `cargo xtask diag-split` maintains this layout.
+
+drv_argument_not_allowed_with = Error (2) "invalid argument '{0}' not allowed with '{1}'";
+drv_argument_unused = Warning [UnusedCommandLineArgument] (1) "argument unused during compilation: '{0}'";
+drv_cannot_execute = Error (2) "unable to execute command: {0}: {1}";
+drv_cannot_open_output = Error (2) "unable to open output file '{0}': '{1}'";
+drv_cannot_read_input = Fatal (2) "cannot read '{0}': {1}";
+drv_cannot_read_predefines = Fatal (2) "cannot read the predefined macros '{0}': {1}";
+drv_command_failed = Error (2) "{0} command failed with exit code {1} (use -v to see invocation)";
+drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to see invocation)";
+drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
+drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
+drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
+drv_invalid_int_value = Error (2) "invalid integral value '{1}' in '{0}'";
+drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
+drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
+drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
+drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
+drv_missing_argument = Error (2) "argument to '{0}' is missing (expected {1} value)";
+drv_no_input_files = Error (0) "no input files";
+drv_no_such_file = Error (1) "no such file or directory: '{0}'";
+drv_not_implemented = Error (1) "{0} is not implemented yet";
+drv_out_file_multiple = Error (0) "cannot specify -o when generating multiple output files";
+drv_unable_to_execute = Error (1) "unable to execute command: Executable \"{0}\" doesn't exist!";
+drv_unknown_argument = Error (1) "unknown argument: '{0}'";
+drv_unknown_argument_suggest = Error (2) "unknown argument '{0}'; did you mean '{1}'?";
+drv_unsupported_target = Error (1) "unsupported target '{0}' (kiln supports aarch64 and x86_64 Linux)";
