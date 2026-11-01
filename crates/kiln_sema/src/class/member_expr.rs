@@ -775,25 +775,24 @@ impl Sema<'_, '_> {
             // base ([expr.ref]/4) and records the qualifier, so the call
             // is not virtual ([class.virtual]/16).
             let class = self.ast.types.as_record(destroyed).and_then(|r| self.ast.definition(r));
-            let q = match qual {
-                DtorQual::Written(q) => q,
-                _ => {
-                    let Some(c) = class else {
-                        let msg = self
-                            .diag(DiagId::sema_dtor_type_mismatch, loc)
-                            .arg(self.ty_arg(destroyed))
-                            .arg(self.ty_arg(obj_ty));
-                        self.emit(msg);
-                        return self.recover_err(&[base], loc);
-                    };
-                    let ty = self.class_type(c);
-                    let nns = self.ast.types.nns(kiln_ast::types::Nns::Type {
-                        prefix: None,
-                        ty,
-                        template_kw: false,
-                    });
-                    crate::using::Qualifier { ctx: c, nns, loc: name_loc }
-                }
+            let q = if let DtorQual::Written(q) = qual {
+                q
+            } else {
+                let Some(c) = class else {
+                    let msg = self
+                        .diag(DiagId::sema_dtor_type_mismatch, loc)
+                        .arg(self.ty_arg(destroyed))
+                        .arg(self.ty_arg(obj_ty));
+                    self.emit(msg);
+                    return self.recover_err(&[base], loc);
+                };
+                let ty = self.class_type(c);
+                let nns = self.ast.types.nns(kiln_ast::types::Nns::Type {
+                    prefix: None,
+                    ty,
+                    template_kw: false,
+                });
+                crate::using::Qualifier { ctx: c, nns, loc: name_loc }
             };
             let canon = self.ast.types.canonical(destroyed).ty();
             if let Some(c) = class {

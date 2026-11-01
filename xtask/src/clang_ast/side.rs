@@ -239,7 +239,7 @@ fn cast_written(class: &str, content: &str) -> Option<String> {
     let mut from = 0;
     let start = loop {
         let i = from + content[from..].find(head)?;
-        if content[..i].matches('\'').count() % 2 == 0 {
+        if content[..i].matches('\'').count().is_multiple_of(2) {
             break i + head.len();
         }
         from = i + 1;
