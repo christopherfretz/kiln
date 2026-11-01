@@ -668,6 +668,17 @@ impl Sema<'_, '_> {
             self.instantiate_for_init(r, l.lbrace);
         }
         if self.is_aggregate(ty) {
+            // [dcl.init.list]/3.2: an aggregate class initialized from a
+            // single element of the same or a derived class type is
+            // initialized from that element.
+            if let Some(r) = self.ast.types.as_record(ty)
+                && let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+                && designator.is_empty()
+                && let Some(u) = self.ast.types.as_record(self.ety(*x))
+                && self.derived_inclusive(u, r)
+            {
+                return self.init_from_expr(ty, *x, ConvCtx::Initialization, l.lbrace);
+            }
             if self.ast.types.as_record(ty).is_some() && !self.require_complete(ty, l.lbrace) {
                 let msg = self
                     .diag(DiagId::sema_typecheck_decl_incomplete_type, l.lbrace)
