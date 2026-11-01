@@ -79,6 +79,46 @@ impl Sema<'_, '_> {
         self.explicit_pack_len(params, d)
     }
 
+    /// The function parameter packs whose pattern also expands the
+    /// explicitly specified pack (the last explicit argument, when a
+    /// pack: [temp.arg.explicit]/9) against the other packs of the
+    /// pattern: one shorter than the explicit pack can never match
+    /// (clang reports it substituting the explicit arguments, with the
+    /// pack partially substituted). The failure, if any.
+    fn check_partial_pack_lengths(
+        &mut self,
+        ft: DeclId,
+        d: &DeducedArgs,
+        levels: &crate::templ::args::MultiLevelArgs,
+        tys: &[QualType],
+        shown: ArgListId,
+        loc: Loc,
+    ) -> Option<Box<DeductionFailure>> {
+        let n = self.ast.types.args(shown).len();
+        let last = n.checked_sub(1)?;
+        if !matches!(d.args.get(last).map(TemplateArg::view), Some(ArgView::Pack(_))) {
+            return None;
+        }
+        let partial = (d.depth, u16::try_from(last).ok()?);
+        for &t in tys {
+            let Some(pat) = crate::templ::pack::type_pattern(self, t) else { continue };
+            let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
+                let mut sub = Substituter::new(s, levels);
+                sub.partial_pack = Some(partial);
+                let _ = sub.expand_pattern_at(None, |sub| sub.ty(pat, loc));
+            });
+            if let Some(((), Err(Some(diag)))) = r
+                && diag.id() == Some(DiagId::sema_pack_length_mismatch_partial)
+            {
+                let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d.clone());
+                f.args = Some(shown);
+                f.diag = Some(diag);
+                return Some(f);
+            }
+        }
+        None
+    }
+
     /// Runs `f` in a SFINAE frame of `kind` for template `ft` showing
     /// `args`: its result, and the first error captured (`Some` when
     /// substitution failed). `None` when the instantiation depth limit
@@ -278,6 +318,10 @@ impl Sema<'_, '_> {
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
                 Some((Ok((t, f)), Ok(()))) => {
+                    if let Some(f) = self.check_partial_pack_lengths(ft, &d, &levels, &tys, shown, loc)
+                    {
+                        return Err(f);
+                    }
                     ptys = t;
                     if let Some(f) = f {
                         pfn = f;

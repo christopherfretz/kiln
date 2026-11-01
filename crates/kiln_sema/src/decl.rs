@@ -1365,6 +1365,11 @@ impl Sema<'_, '_> {
             self.check_member_spec_header(d.qualifier, nloc, ds.loc);
         }
         let head = self.take_template_head(d.qualifier);
+        if self.templ.head_mismatch {
+            // `template<class T> void A<int>::f()`: diagnosed; clang
+            // drops the declaration.
+            return None;
+        }
         if !d.dropped
             && ds.friend.is_none()
             && let Some((SpecialName::DeductionGuide(t), _)) = d.special

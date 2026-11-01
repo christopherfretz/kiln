@@ -1096,7 +1096,7 @@ diag_ids! {
     parse_concept_has_constraints = Error (0) "concept cannot have associated constraints";
     parse_concept_legacy_bool = Error (0) "ISO C++ does not permit the 'bool' keyword after 'concept'";
     sema_extraneous_template_params = Error (0) "extraneous template parameter list in template specialization";
-    sema_template_params_for_non_template = Error (1) "template parameter list matching the non-templated nested type {0} should be empty";
+    sema_template_params_for_non_template = Error (1) "template parameter list matching the non-templated nested type {0} should be empty ('template<>')";
     sema_template_param_default_redefined = Error (0) "template parameter redefines default argument";
     note_template_param_prev_default = Note (0) "previous default template argument defined here";
     sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";
@@ -1191,6 +1191,7 @@ diag_ids! {
     // WP-072: packs (spec/sema-templates.md §7, §10.5)
     sema_pack_length_mismatch = Error (4) "pack expansion contains parameter packs '{0}' and '{1}' that have different lengths ({2} vs. {3})";
     sema_pack_length_mismatch_outer = Error (3) "pack expansion contains parameter pack '{0}' that has a different length ({1} vs. {2}) from outer parameter packs";
+    sema_pack_length_mismatch_partial = Error (3) "pack expansion contains parameter pack '{0}' that has a different length (at least {1} vs. {2}) from outer parameter packs";
     sema_fold_empty = Error (1) "unary fold expression has empty expansion for operator '{0}' with no fallback value";
     sema_pack_index_invalid = Error (3) "invalid index {0} for pack {1} of size {2}";
     sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";

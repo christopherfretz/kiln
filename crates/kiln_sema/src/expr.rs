@@ -757,6 +757,16 @@ impl Sema<'_, '_> {
         self.act_on_id_expression_dn(DeclName::ident(name), loc, qualifier)
     }
 
+    /// The qualifier's begin `b` of the overload-set reference `e` named
+    /// at `loc` (clang's `OverloadExpr::getBeginLoc`).
+    fn set_overload_begin(&mut self, e: ExprId, begin: Option<Loc>, loc: Loc) {
+        if let Some(b) = begin
+            && b != loc
+        {
+            let _ = self.ast.templates.expr_begin.insert(e, b);
+        }
+    }
+
     /// clang's `getBeginLoc` of a qualified name is the qualifier's: the
     /// begin `b` of `DeclRefExpr` `e` named at `loc`.
     fn set_qualified_begin(&mut self, e: ExprId, begin: Option<Loc>, loc: Loc) {
@@ -824,9 +834,12 @@ impl Sema<'_, '_> {
                 // A member template: the member overload set (an
                 // implicit `this->` for instance members).
                 let valid = found.decls.clone();
-                return self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
+                let e =
+                    self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
+                self.set_overload_begin(e, begin, loc);
+                return e;
             }
-            return self.builder().unresolved_lookup(
+            let e = self.builder().unresolved_lookup(
                 name,
                 &lookup_set_order(&found.decls, qualifier.is_none()),
                 qualifier.is_none(),
@@ -834,6 +847,8 @@ impl Sema<'_, '_> {
                 None,
                 loc,
             );
+            self.set_overload_begin(e, begin, loc);
+            return e;
         }
         let fns = found.decls.iter().all(|&x| self.ast.decls.get(x).kind().is_function());
         // An invalid redeclaration is not a separate overload (clang
@@ -846,11 +861,7 @@ impl Sema<'_, '_> {
             .collect();
         if fns && (valid.len() > 1 || self.call_uses_adl(&valid, qualifier.is_none())) {
             let e = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
-            if let Some(b) = begin
-                && b != loc
-            {
-                let _ = self.ast.templates.expr_begin.insert(e, b);
-            }
+            self.set_overload_begin(e, begin, loc);
             return e;
         }
         if fns && valid.len() == 1 {
