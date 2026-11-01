@@ -754,6 +754,46 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Declares the implicit special members a lookup of `name` in class
+    /// `class` can find (clang `DeclareImplicitMemberFunctionsWithName`,
+    /// run by every class-scope lookup): `operator=` declares the copy and
+    /// move assignment operators, a destructor name the destructor. Name
+    /// lookup is `&self`, so the `&mut` entry points of a lookup that may
+    /// name one (qualified-ids, member access, using-declarators) call
+    /// this first. Hiding stops at `class`, which always declares
+    /// `operator=` and a destructor, so its bases need nothing.
+    pub(crate) fn declare_implicit_named(&mut self, class: DeclId, name: DeclName) {
+        use kiln_ast::names::DeclNameKind;
+        if self.kind_of(class) != DeclKind::CXXRecord {
+            return;
+        }
+        match name.kind() {
+            DeclNameKind::Operator if name.as_operator() == Some(OverloadedOperator::Equal) => {
+                self.ensure_implicit(class, SpecialKind::CopyAssign);
+                self.ensure_implicit(class, SpecialKind::MoveAssign);
+            }
+            DeclNameKind::Destructor => self.ensure_implicit(class, SpecialKind::Dtor),
+            _ => {}
+        }
+    }
+
+    /// [`Sema::declare_implicit_named`] for an unqualified lookup of
+    /// `name` from the current scope: every enclosing class scope.
+    pub(crate) fn declare_implicit_named_in_scope(&mut self, name: DeclName) {
+        if name.as_operator() != Some(OverloadedOperator::Equal) {
+            return;
+        }
+        let classes: Vec<DeclId> = self
+            .scopes
+            .iter()
+            .filter(|s| s.kind == crate::scope::ScopeKind::Record)
+            .filter_map(|s| s.entity)
+            .collect();
+        for c in classes {
+            self.declare_implicit_named(c, name);
+        }
+    }
+
     /// Whether the implicit copy/move `k` of class `d`, which needs
     /// overload resolution, is trivial ([class.copy.ctor]/11,
     /// [class.copy.assign]/9; clang `SpecialMemberIsTrivial`): no virtual

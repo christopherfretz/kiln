@@ -98,6 +98,12 @@ Base lookup (`conv/bases.rs`): `find_base(derived, base) -> BaseSearch {
 NotDerived, Unique(BasePath), Ambiguous(Vec<BasePath>) }` searches the
 complete base graph depth first, with a bounded visit count. Two paths to
 the same virtual base count as one. Access is **not** checked (§10).
+`find_base` itself does not instantiate. A caller that asks whether a class
+template specialization is derived first completes it with
+`require_complete_silent`, as clang's `isCompleteType` does
+([temp.inst]/2). The callers that do this are: the derived-to-base pointer
+conversion (`pointer_conversion`), reference-relatedness (`ref_related`),
+and static_cast up and down (`class_relation`, `static_downcast`).
 
 ## 4. Ranking (`compare_standard_conversions`)
 `compare_standard_conversions(a, b) -> IcsCompare {Better, Worse,

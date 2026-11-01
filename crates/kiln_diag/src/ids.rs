@@ -1616,6 +1616,7 @@ diag_ids! {
     sema_unused_voidptr = Warning [UnusedValue] (0) "expression result unused; should this cast be to 'void'?";
     sema_unused_variable = WarningOff [UnusedVariable] (1) "unused variable {0}";
     sema_fallthrough_invalid_placement = Error (0) "fallthrough annotation does not directly precede switch label";
+    sema_explicit_inst_undefined_func_template = Error (1) "explicit instantiation of undefined function template '{0}'";
 }
 
 impl DiagId {

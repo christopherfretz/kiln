@@ -1266,11 +1266,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
             (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
                 let list = self.s.ast.types.arg_list(args);
-                let ty = self.s.act_dependent_name(
+                let ty = self.s.act_dependent_name_at(
                     pn,
                     name,
                     Some(list),
                     kiln_ast::types::TagKeyword::None,
+                    loc,
                 );
                 self.s.act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc).ok_or(())?
             }

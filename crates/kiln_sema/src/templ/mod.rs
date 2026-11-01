@@ -33,6 +33,7 @@ pub mod spec;
 pub mod stack;
 pub mod subst;
 pub mod var;
+pub(crate) mod written;
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
@@ -194,6 +195,9 @@ pub struct TemplState {
     /// The `using` keyword of each alias declaration in a template:
     /// where clang declares the guides formed for an alias template.
     pub(crate) alias_using_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where each dependent type and nested-name-specifier component was
+    /// written, sorted (§5.8; [`Sema::written_loc`]).
+    pub(crate) written_locs: kiln_source::fx::FxHashMap<written::WrittenKey, Vec<Loc>>,
 }
 
 /// The class an object expression names for the lookup of the first

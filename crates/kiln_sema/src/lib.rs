@@ -241,6 +241,14 @@ pub struct Sema<'a, 'sm> {
     pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
     /// True while [`Sema::replay_dependent_access`] runs.
     pub(crate) replaying_access: bool,
+    /// The context access is checked from while a namespace-scope alias
+    /// template is substituted in its own context: the use's
+    /// (spec/sema-class.md §2.4, clang's `CheckTemplateIdType`).
+    pub(crate) access_ctx: Option<DeclId>,
+    /// Bumped by every access check that is not trivially satisfied (an
+    /// alias template specialization whose substitution made one is not
+    /// cached: its result depends on the context).
+    pub(crate) access_checks: u32,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
     pub(crate) cleanup: class::CleanupState,
@@ -436,6 +444,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
+            access_ctx: None,
+            access_checks: 0,
             cleanup: class::CleanupState::default(),
             cleanup_saved: Vec::new(),
             synth: Vec::new(),
