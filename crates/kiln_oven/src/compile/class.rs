@@ -813,8 +813,10 @@ impl Compiler<'_> {
         // [class.union.general]/6: `u.m = x` by a trivial assignment
         // operator makes `m` (and each union member on the access chain)
         // active, as a built-in assignment does (clang's
-        // `MaybeHandleUnionActiveMemberChange`).
-        let trivial_assign = spec.is_some_and(kiln_ast::decl::FnSpec::is_trivial)
+        // `MaybeHandleUnionActiveMemberChange`); only the operator syntax
+        // does: `u.m.operator=(x)` is a member call on `m` (WP-224).
+        let trivial_assign = self.node(e).kind() == ExprKind::CXXOperatorCallExpr
+            && spec.is_some_and(kiln_ast::decl::FnSpec::is_trivial)
             && self.ast().decls.get(md).name().as_operator()
                 == Some(kiln_ast::names::OverloadedOperator::Equal);
         let this = if arrow {

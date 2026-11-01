@@ -2041,14 +2041,17 @@ impl Oven {
     fn end_life(&mut self, raw: u64, ty: OTy, aux: u32) -> Result<(), Fault> {
         let size = self.types.size(ty);
         if aux & 4 != 0 {
-            // A member call: only the lifetime of `std::allocator` storage
-            // (clang's `checkDynamicType`); other faults surface in the
-            // body, at the accesses that make them.
-            if let Ok((_, abs, a)) = self.mem.check_storage(raw, size, false)
-                && a.flags & flags::STD_ALLOC != 0
-                && !self.mem.heap.is_live(abs, size)
-            {
+            // A member call (clang's `checkDynamicType` with
+            // `AK_MemberCall`): the lifetime of `std::allocator` storage
+            // and the active members of the unions on the path to the
+            // object ([class.union.general]/6, WP-224); other faults
+            // surface in the body, at the accesses that make them.
+            let Ok((_, abs, a)) = self.mem.check_storage(raw, size, false) else { return Ok(()) };
+            if a.flags & flags::STD_ALLOC != 0 && !self.mem.heap.is_live(abs, size) {
                 return Err(Fault::Mem { f: MemFault::Lifetime, ak: ak::MEMBER_CALL, ty, p: raw });
+            }
+            if a.flags & flags::HAS_UNION != 0 {
+                self.union_path(raw, ty, ak::MEMBER_CALL)?;
             }
             return Ok(());
         }
