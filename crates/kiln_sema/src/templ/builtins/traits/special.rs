@@ -8,11 +8,11 @@
 //! `EvaluateBinaryTypeTrait` and the `ASTContext` / `Sema` helpers they
 //! call), including its extension behaviour.
 
+use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, DefinitionBits};
 use kiln_ast::expr::{BinaryOp, ExprKind, TypeTrait, ValueCategory};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{Quals, TypeView};
-use kiln_ast::attr::AttrKind;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -102,9 +102,7 @@ impl Sema<'_, '_> {
             }
             found = true;
             self.resolve_exception_spec(m, loc);
-            if !self.fn_is_nothrow(m)
-                || max_params.is_some_and(|n| self.param_decls(m).len() > n)
-            {
+            if !self.fn_is_nothrow(m) || max_params.is_some_and(|n| self.param_decls(m).len() > n) {
                 return false;
             }
         }
@@ -214,8 +212,7 @@ impl Sema<'_, '_> {
         if self.ast.types.canonical(pointee).without_quals() != class {
             return false;
         }
-        let bases: Vec<QualType> =
-            self.ast.decls.bases(d, &self.ast.lists).map(|b| b.ty).collect();
+        let bases: Vec<QualType> = self.ast.decls.bases(d, &self.ast.lists).map(|b| b.ty).collect();
         for b in bases {
             if let Some(br) = self.ast.types.as_record(b)
                 && !self.defaulted_equality(br, loc, depth + 1)
@@ -311,7 +308,8 @@ impl Sema<'_, '_> {
                 continue;
             }
             if kind == DeclKind::CXXConstructor {
-                if !self.is_member_of_kind(m, K::CopyCtor) && !self.is_member_of_kind(m, K::MoveCtor)
+                if !self.is_member_of_kind(m, K::CopyCtor)
+                    && !self.is_member_of_kind(m, K::MoveCtor)
                 {
                     continue;
                 }
@@ -358,7 +356,11 @@ impl Sema<'_, '_> {
     /// `BTT_IsLayoutCompatible`): each operand other than `void` or an
     /// array of unknown bound must be complete ("incomplete type 'X'
     /// where a complete type is required" where it is written).
-    pub(super) fn eval_layout_compatible(&mut self, a: (QualType, Loc), b: (QualType, Loc)) -> bool {
+    pub(super) fn eval_layout_compatible(
+        &mut self,
+        a: (QualType, Loc),
+        b: (QualType, Loc),
+    ) -> bool {
         for (q, at) in [a, b] {
             let tys = &self.ast.types;
             // A function or reference type is complete (clang
@@ -395,8 +397,8 @@ impl Sema<'_, '_> {
                     let first = self.ast.first(e);
                     let def = self.ast.definition(first).unwrap_or(first);
                     let data = self.ast.decls.enumeration(def)?;
-                    let complete = data.flags & kiln_ast::decl::EnumData::COMPLETE != 0
-                        || data.is_fixed();
+                    let complete =
+                        data.flags & kiln_ast::decl::EnumData::COMPLETE != 0 || data.is_fixed();
                     complete.then_some(data.int_type).flatten()
                 };
                 match (int_ty(x), int_ty(y)) {
@@ -426,8 +428,9 @@ impl Sema<'_, '_> {
         if self.is_union(x) {
             let mut unmatched = fy;
             for f in fx {
-                let Some(i) =
-                    unmatched.iter().position(|&g| self.fields_layout_compatible(f, g, true, depth))
+                let Some(i) = unmatched
+                    .iter()
+                    .position(|&g| self.fields_layout_compatible(f, g, true, depth))
                 else {
                     return false;
                 };

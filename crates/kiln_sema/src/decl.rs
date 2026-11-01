@@ -2973,6 +2973,35 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// clang `AddInitializerToDecl`: a bounded array of an incomplete
+    /// element (now formable, [dcl.array]/1) is diagnosed under the full
+    /// variable type at the variable's name; the variable becomes invalid.
+    fn reject_incomplete_array_init(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        loc: Loc,
+        init: &Initializer,
+    ) -> bool {
+        if !matches!(self.ast.types.canonical_view(ty), TypeView::ConstantArray(_))
+            || self.ast.types.is_dependent(ty)
+            || self.require_complete(self.bounded_array_element(ty), loc)
+        {
+            return false;
+        }
+        let msg = self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
+        self.emit(self.incomplete_note(msg, self.bounded_array_element(ty)));
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.discard_initializer(init);
+        true
+    }
+
+    /// A dependent initializer, kept as written until instantiation.
+    fn set_dependent_var_init(&mut self, v: DeclId, e: ExprId) {
+        let e = self.act_on_full_expr(e);
+        let _ = self.builder().set_var_init(v, e);
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -3047,8 +3076,7 @@ impl Sema<'_, '_> {
             // Initialized at instantiation ([temp.dep.expr]); clang keeps
             // the list as written with type `void` (and `int[]` unbounded).
             let e = self.dependent_init_list(l);
-            let e = self.act_on_full_expr(e);
-            let _ = self.builder().set_var_init(v, e);
+            self.set_dependent_var_init(v, e);
             return;
         }
         if let Initializer::Paren(es, l, r) = &init
@@ -3060,22 +3088,10 @@ impl Sema<'_, '_> {
             // instantiation, kept as a `ParenListExpr` (clang
             // `ActOnParenListExpr` / `AddInitializerToDecl`).
             let e = self.builder().paren_list(es, *l, *r);
-            let e = self.act_on_full_expr(e);
-            let _ = self.builder().set_var_init(v, e);
+            self.set_dependent_var_init(v, e);
             return;
         }
-        // clang `AddInitializerToDecl`: a bounded array of an incomplete
-        // element (now formable, [dcl.array]/1) is diagnosed under the
-        // full variable type at the variable's name.
-        if matches!(self.ast.types.canonical_view(ty), TypeView::ConstantArray(_))
-            && !self.ast.types.is_dependent(ty)
-            && !self.require_complete(self.bounded_array_element(ty), loc)
-        {
-            let msg =
-                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
-            self.emit(self.incomplete_note(msg, self.bounded_array_element(ty)));
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
-            self.discard_initializer(&init);
+        if self.reject_incomplete_array_init(v, ty, loc, &init) {
             return;
         }
         let e = self.perform_init(ty, init, loc, direct);

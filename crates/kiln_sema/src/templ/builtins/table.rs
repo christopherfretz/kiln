@@ -199,12 +199,7 @@ const DONE: Status = Status::Done;
 /// The non-trait rows: §9.3 templates, then §9.4-9.5 functions.
 pub static TABLE: &[Row] = &[
     Row { name: "__make_integer_seq", kind: Kind::Template, status: Status::Done, oven: Oven::No },
-    Row {
-        name: "__type_pack_element",
-        kind: Kind::Template,
-        status: Status::Done,
-        oven: Oven::No,
-    },
+    Row { name: "__type_pack_element", kind: Kind::Template, status: Status::Done, oven: Oven::No },
     // §9.4
     f("__builtin_is_constant_evaluated", DONE, Oven::Yes),
     f("__builtin_constant_p", DONE, Oven::Yes),
