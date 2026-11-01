@@ -519,9 +519,11 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   The key is the `SourceLocExpr` itself (its own location and context),
   or a `CXXDefaultArgExpr` that uses a default argument containing one
   (the call's location and the caller's context, [dcl.fct.default]/9 via
-  [support.srcloc.cons]/2). Consumers (Oven, codegen) take the values of
-  the outermost `CXXDefaultArgExpr` in scope that has an entry, else the
-  `SourceLocExpr`'s own.
+  [support.srcloc.cons]/2), or a `CXXDefaultInitExpr` using a default
+  member initializer containing one (the constructor's or the aggregate
+  initialization's location and context). Consumers (Oven, codegen) take
+  the values of the outermost `CXXDefaultArgExpr`/`CXXDefaultInitExpr` in
+  scope that has an entry, else the `SourceLocExpr`'s own.
 
 ### 5.9 Lambdas (WP-075)
 - **`LambdaExpr`** ([expr.prim.lambda]; spec/sema-lambda.md): `a` is its

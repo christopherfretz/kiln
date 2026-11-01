@@ -1965,8 +1965,17 @@ location, `FILE` as written and `FILE_NAME` as its last path component,
 and `__builtin_source_location()` as a frozen `std::source_location::__impl`
 built from that record's layout. When a default argument containing a
 `SourceLocExpr` is used by a call, sema records the call's values on the
-`CXXDefaultArgExpr`; the Oven and codegen read them from the outermost
-such default argument in scope. `std::source_location::__impl` must be a
+`CXXDefaultArgExpr`; likewise a use of a default member initializer
+containing one records, on the `CXXDefaultInitExpr`, the values of the
+constructor's name (the class name for an implicit constructor) or of the
+`}`/`)` of an aggregate initialization, with the constructor or the
+enclosing function as the function (clang `CXXDefaultInitExpr::
+getUsedLocation`/`getUsedContext`). The Oven and codegen read them from
+the outermost such default argument or member initializer in scope, and
+the codegen prepass evaluates the immediate invocations of such a member
+initializer per use (`fold_immediate_in`). Substitution drops the trailing
+`CXXDefaultInitExpr` fillers of a braced list; the rebuilt list adds them
+in the instantiation's context. `std::source_location::__impl` must be a
 complete, standard-layout, non-union class without bases whose only
 fields are `_M_file_name`, `_M_function_name` (`const char *`), `_M_line`
 and `_M_column` (integral); otherwise clang's

@@ -962,7 +962,16 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn init_list(&mut self, e: ExprId) -> SubstResult<InitList> {
         let n = *self.sema.ast.exprs.get(e);
         let l = self.sema.ast.exprs.init_list_inits(e);
-        let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        let mut items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        // The default member initializers filling the trailing fields are
+        // implicit: the rebuilt list uses them again (in its own context,
+        // for the source-location builtins in them).
+        while items
+            .last()
+            .is_some_and(|&x| self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultInitExpr)
+        {
+            items.pop();
+        }
         let out = self.init_items(&items)?;
         let rbrace = self.sema.ast.exprs.end_loc(e).unwrap_or(n.loc());
         Ok(InitList { items: out, lbrace: n.loc(), rbrace })

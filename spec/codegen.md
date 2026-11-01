@@ -144,8 +144,9 @@ panic and never silently wrong IR.
     holding the frozen `__impl` object (clang
     `GetAddrOfUnnamedGlobalConstantDecl`), one per frozen value
     (`ModuleGen::const_object`), its initializer, and so its strings,
-    emitted first. Inside a `CXXDefaultArgExpr` (and nested default
-    arguments) the outermost use's recorded values are taken
+    emitted first. Inside a `CXXDefaultArgExpr` or a
+    `CXXDefaultInitExpr` (and nested ones) the outermost use's recorded
+    values are taken
     (`enter_default_arg`), so each call site gets its own location.
   - a conversion to bool of a `zext` from `i1` is the `i1`, and the
     `zext` is erased when unused (clang `EmitIntToBoolConversion`);

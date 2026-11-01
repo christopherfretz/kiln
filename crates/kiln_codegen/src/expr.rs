@@ -165,7 +165,10 @@ impl Cg<'_> {
                 let Some(init) = self.default_member_init(e) else {
                     return err(self.loc_of(e), "default member initializer not yet parsed");
                 };
-                return self.emit_scalar_opt(init);
+                let saved = self.enter_default_arg(e);
+                let r = self.emit_scalar_opt(init);
+                self.srcloc = saved;
+                return r;
             }
             ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
@@ -1269,7 +1272,12 @@ impl Cg<'_> {
                 r
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
-                Some(init) => self.emit_lvalue(init),
+                Some(init) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.emit_lvalue(init);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
             },
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
@@ -2176,7 +2184,12 @@ impl Cg<'_> {
                 Ok(())
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
-                Some(init) => self.agg_visit(init, dest, zeroed),
+                Some(init) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.agg_visit(init, dest, zeroed);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
             },
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {

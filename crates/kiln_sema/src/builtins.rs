@@ -1375,8 +1375,33 @@ impl Sema<'_, '_> {
 
     /// Whether `param`'s default argument holds an immediate invocation
     /// (a `ConstantExpr`), through nested default arguments.
+    /// Records the source-location values at a use of `field`'s default
+    /// member initializer (the `CXXDefaultInitExpr` `e`, built at `loc`:
+    /// the constructor's name, or the `}` / `)` of an aggregate
+    /// initialization, in context `ctx`) when the initializer evaluates a
+    /// source-location builtin ([support.srcloc.cons]/2; clang
+    /// `CXXDefaultInitExpr::getUsedLocation` / `getUsedContext`).
+    pub(crate) fn note_default_init_use(
+        &mut self,
+        e: ExprId,
+        field: DeclId,
+        loc: Loc,
+        ctx: DeclId,
+    ) {
+        let kinds = self.default_arg_srcloc_kinds(field);
+        if kinds != 0 {
+            self.record_source_loc(e, loc, ctx, kinds & SRC_LOC_STRUCT_BIT != 0);
+            if self.default_arg_has_immediate(field, 0) {
+                self.srcloc.deferred.retain(|&(x, _)| x != e);
+            }
+            if kinds & (SRC_LOC_STRUCT_BIT | 1 << SourceLocKind::Function as u8) != 0 {
+                self.mark_function_name_dependent(e, ctx);
+            }
+        }
+    }
+
     fn default_arg_has_immediate(&self, param: DeclId, depth: u32) -> bool {
-        let Some(init) = self.ast.decls.param(param).and_then(|p| p.default_arg) else {
+        let Some(init) = self.default_init_of(param) else {
             return false;
         };
         if depth > 32 {
@@ -1389,6 +1414,12 @@ impl Sema<'_, '_> {
                 ExprKind::CXXDefaultArgExpr => {
                     let p = self.ast.exprs.default_arg_param(x);
                     if self.default_arg_has_immediate(p, depth + 1) {
+                        return true;
+                    }
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    let f = self.ast.exprs.default_init_field(x);
+                    if self.default_arg_has_immediate(f, depth + 1) {
                         return true;
                     }
                 }
@@ -1408,15 +1439,25 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The source-location builtins `param`'s default argument evaluates
-    /// (a mask of `1 << kind`), through nested default arguments.
+    /// The default argument of parameter `d` or the default member
+    /// initializer of field `d`.
+    fn default_init_of(&self, d: DeclId) -> Option<ExprId> {
+        match self.ast.decls.param(d) {
+            Some(p) => p.default_arg,
+            None => self.ast.decls.field(d).and_then(|f| f.init),
+        }
+    }
+
+    /// The source-location builtins `param`'s default argument (or field
+    /// `param`'s default member initializer) evaluates (a mask of
+    /// `1 << kind`), through nested default arguments and initializers.
     fn default_arg_srcloc_kinds(&mut self, param: DeclId) -> u8 {
         if let Some(&k) = self.srcloc.param_kinds.get(&param) {
             return k;
         }
         // Guards recursion through `void f(int = f())`.
         self.srcloc.param_kinds.insert(param, 0);
-        let Some(init) = self.ast.decls.param(param).and_then(|p| p.default_arg) else {
+        let Some(init) = self.default_init_of(param) else {
             return 0;
         };
         let mut kinds = 0u8;
@@ -1429,6 +1470,10 @@ impl Sema<'_, '_> {
                 ExprKind::CXXDefaultArgExpr => {
                     let p = self.ast.exprs.default_arg_param(x);
                     kinds |= self.default_arg_srcloc_kinds(p);
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    let f = self.ast.exprs.default_init_field(x);
+                    kinds |= self.default_arg_srcloc_kinds(f);
                 }
                 _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
             }
