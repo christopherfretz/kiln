@@ -3124,6 +3124,114 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     reason, the `in call to` backtrace, and any `declared here` notes.
   - An expression that already contains errors is not evaluated.
 
+## 8a. Reflection (spike, -freflection) (`reflect.rs`, WP-267)
+
+This is a design spike, not P2996. All of it is gated on `Sema::reflection`
+(driver `-freflection`, default off, C++26). `__cpp_reflection` is not
+predefined. With the flag off, nothing here is reachable: the lexer does
+not produce `^^`, `[:` or `:]`. Findings: docs/status/reflection-spike.md.
+Tests: `tests/conformance/reflection/`, written as kiln-only goldens from
+the P2996R13 wording.
+
+- **Value type.** `std::meta::info` is the builtin type `MetaInfo`, spelled
+  `decltype(^^int)` (`tests/support/kiln_meta.h`). It is a scalar with
+  these operations:
+  - copy, and comparison with `==`/`!=` (both operands `info`;
+    [expr.eq]/7 as amended by P2996);
+  - `?:` with two `info` arms;
+  - value-initialization (`info{}`, the null reflection);
+  - use as an NTTP: a substituted argument is rebuilt as the
+    `CXXReflectExpr` of the same entity.
+
+  Nothing converts to or from it. Any other operator is
+  `invalid operands`.
+- **`^^` operand** ([expr.reflect]). Supported operands:
+  - a type-id;
+  - a namespace;
+  - a variable;
+  - a non-template function;
+  - a (qualified) data member.
+
+  The result is a constant `CXXReflectExpr` whose value is the
+  `ReflectionId` of `Reflectee::Type(canonical QualType)` or
+  `Reflectee::Decl(first declaration)`. **Divergence from spec/ast.md §10:**
+  the spike canonicalizes alias sugar, so `^^Alias == ^^int`. Any other
+  operand gets `cannot reflect {0}`. In a template, `^^T` reflects the
+  substituted type.
+- **Type splice** ([dcl.type.splice]). `typename [: e :]` is a type, and so
+  is `[: e :]` where a template type argument is expected. `e` is
+  converted and evaluated as a constant expression of type `info`. The
+  errors are:
+  - `splice operand of type {0} is not a reflection`;
+  - `splice operand must be a constant expression`, with the Oven's notes;
+  - `splice in a type position does not designate a type`.
+
+  A dependent operand is "unsupported: dependent splice", and
+  `using A = [: r :];` without `typename` is not parsed yet.
+- **Intrinsics.** `meta_intrinsic_of(f)` recognizes these declarations by
+  qualified name, for the Oven's dispatch (spec/oven.md
+  "Reflection runtime"). Their bodies do not exist; the header only
+  declares them.
+  - `std::meta::type_of(info)`: the type of a variable, data member or
+    function, canonical. Anything else gets the note "'X' has no type".
+  - `std::meta::name_of(info) -> const char*`: an identifier, a class's
+    name, or a type's spelling, as a frozen string literal object. The
+    null reflection gets the note "'std::meta::info()' has no name".
+  - `std::meta::__kiln_members_count(info)` / `__kiln_member_at(info, i)`:
+    the class's members in declaration order. Members are included if
+    they are named and are not implicitly declared, an access specifier,
+    a `static_assert` or a friend. A class template specialization is
+    completed on demand (lent Oven; only when manifestly
+    constant-evaluated). An incomplete class gets the note
+    "'X' reflects an incomplete class". The header's
+    `members_of<R>()` builds a `member_list<N>` from these two.
+  - `__kiln_define_member(info cls, info type, const char* name)`, at
+    namespace scope: see below.
+- **`define_member` rules** (the mutation experiment). When the call
+  succeeds, it appends a public non-static data member `name` of type
+  `type` to `cls`'s member list, at the point the member-specification has
+  reached. The new member is a `Field` with `DeclFlags::INJECTED` and the
+  call's location. The call returns the member's reflection.
+
+  Layout, aggregate-ness and the rest of the definition bits come from
+  class completion at `}`. The member is found by every later lookup:
+  - later code in the same evaluation;
+  - later member declarations;
+  - complete-class contexts (member function bodies);
+  - code after the class.
+
+  In a class template, an unqualified name in a member function body is
+  looked up at definition time ([temp.res]), so it needs `this->v`. The
+  conditions, checked in order:
+  1. The evaluation must be manifestly constant-evaluated
+     (`inst.eval_loc` set). Otherwise the call fails silently, so a
+     speculative `try_fold` never mutates.
+  2. `cls` must reflect a class type: "'X' does not reflect a class type".
+  3. That class must be the innermost class being defined
+     (`classes.last()`), compared by first declaration. Otherwise the
+     note is "'__kiln_define_member' can only add a member to the class
+     whose member-specification is being evaluated ('S' is not)", plus
+     "class being defined is 'I'" when there is one. This covers a
+     complete class, an outer class, and namespace scope.
+  4. `type` must reflect a complete object type other than `cls`. A
+     template specialization is completed on demand. Otherwise the note is
+     "'X' is not a complete object type for a data member", or
+     "'X' does not reflect a type".
+  5. `name` must be an identifier: "'n' is not an identifier".
+  6. `name` must not be declared in the class yet ([class.mem]/5). A
+     duplicate gets three notes:
+     - "duplicate member 'x'" at the call;
+     - "previous declaration is here";
+     - "in evaluation of '__kiln_define_member' for class 'S' being
+       defined here" at the class.
+
+  The supported evaluation contexts are any constant evaluation in the
+  member-specification. In practice that is `static_assert`, called
+  directly or through a consteval helper, in a class or a class template
+  (each specialization evaluates its own). P2996's `define_aggregate`,
+  which completes an *incomplete* class from a consteval block, is not
+  implemented.
+
 ## 9. Target (`target.rs`)
 - `pub use kiln_abi::{Arch, Target}`.
 - `target_for_types` maps `TargetTypes` to a layout target.
