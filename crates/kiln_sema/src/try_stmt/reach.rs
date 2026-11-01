@@ -258,7 +258,7 @@ impl Sema<'_, '_> {
             .any(|h| self.ast.stmts.catch_var(h).is_none())
     }
 
-    fn known_truth(&mut self, e: ExprId) -> Option<bool> {
+    pub(crate) fn known_truth(&mut self, e: ExprId) -> Option<bool> {
         let n = self.ast.exprs.get(e);
         if n.kind() == ExprKind::BinaryOperator {
             let op = self.ast.exprs.binary_op(e);

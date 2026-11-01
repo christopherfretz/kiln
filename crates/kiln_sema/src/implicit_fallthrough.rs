@@ -70,6 +70,9 @@ enum End {
 struct Flow {
     before: HashMap<StmtId, bool>,
     after: HashMap<StmtId, bool>,
+    /// Per `do` statement holding a label: its condition is reached and
+    /// loops back to the body (clang's loop-back block is reachable).
+    do_back: HashMap<StmtId, bool>,
 }
 
 impl Flow {
@@ -107,7 +110,19 @@ impl Sema<'_, '_> {
             return;
         }
         let Some((before, after)) = self.stmt_flow(body) else { return };
-        let flow = Flow { before, after };
+        let mut flow = Flow { before, after, do_back: HashMap::new() };
+        let dos: Vec<StmtId> = parents
+            .iter()
+            .filter(|&(&c, &(p, _))| {
+                self.ast.stmts.get(p).kind() == StmtKind::DoStmt
+                    && self.ast.stmts.loop_data(p).body == Some(c)
+            })
+            .map(|(_, &(p, _))| p)
+            .collect();
+        for d in dos {
+            let back = self.ift_do_back(d, &flow);
+            flow.do_back.insert(d, back);
+        }
         for l in labels {
             let mut into = Preds::default();
             self.ift_label_preds(l, &parents, &switch_bodies, &flow, &mut into);
@@ -230,10 +245,44 @@ impl Sema<'_, '_> {
                     }
                     return;
                 }
-                // A label in a `do` or range-`for` body, or elsewhere: not
-                // followed.
+                // `do { case 1: } while (c);`: the label starts the body,
+                // entered from before the `do` and from the condition
+                // (clang's loop-back block, empty, so its predecessor,
+                // the condition block ending in the `do`).
+                StmtKind::DoStmt if self.ast.stmts.loop_data(p).body == Some(cur) => {
+                    if flow.do_back.get(&p).copied().unwrap_or(false) {
+                        into.unannotated += 1;
+                    }
+                    cur = p;
+                }
+                // A range-`for` body (jumping past its declarations is
+                // ill-formed), a `try` block or a handler: not followed.
                 _ => return,
             }
+        }
+    }
+
+    /// Whether the condition of `do` statement `d` is reached (the body
+    /// falls off its end or a `continue` of this loop is reached) and is
+    /// not a constant false (clang prunes that edge).
+    fn ift_do_back(&mut self, d: StmtId, flow: &Flow) -> bool {
+        let l = *self.ast.stmts.loop_data(d);
+        let Some(body) = l.body else { return false };
+        let reached = flow.after(body) || self.ift_has_continue(body, flow);
+        reached && l.cond.is_none_or(|c| self.known_truth(c) != Some(false))
+    }
+
+    /// `s` holds a reached `continue` of the enclosing loop.
+    fn ift_has_continue(&self, s: StmtId, flow: &Flow) -> bool {
+        match self.ast.stmts.get(s).kind() {
+            StmtKind::ContinueStmt => flow.before(s),
+            StmtKind::WhileStmt
+            | StmtKind::ForStmt
+            | StmtKind::DoStmt
+            | StmtKind::CXXForRangeStmt
+            | StmtKind::DeclStmt
+            | StmtKind::ExprStmt => false,
+            _ => self.children(s).into_iter().any(|c| self.ift_has_continue(c, flow)),
         }
     }
 

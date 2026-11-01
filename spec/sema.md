@@ -476,7 +476,14 @@ Redeclaration and linkage rules:
       `getLastStmt` counts as the predecessor itself), the branches of
       an `if` ending there (plus the false edge of an `if` with no
       else), and the condition of an `if`/`while`/`for` whose branch or
-      body the label starts. Reachability comes from `Sema::stmt_flow`
+      body the label starts. A label starting a `do` body (WP-234) is
+      entered from the statements before the `do` (walked as above) and
+      from the condition (clang's empty loop-back block, whose
+      predecessor ends in the `do`), counted unannotated when the
+      condition is reached (the body falls off its end or a `continue`
+      of that loop is reached) and is not a constant false; the
+      placement check likewise lets a `[[fallthrough]];` before such a
+      `do` precede that label. Reachability comes from `Sema::stmt_flow`
       (`try_stmt/reach.rs`): the `Reach` walk recording each
       statement's live-in and live-out with every case label reachable
       (clang `fillReachableBlocks`). A switch dispatch, a label directly
@@ -508,10 +515,13 @@ Redeclaration and linkage rules:
       annotation in unreachable code` [-Wunreachable-code-fallthrough, in
       -Wunreachable-code] at the attribute, before that label's warning;
       it counts as annotated. Not in an instantiation.
-    - Gaps: a label in a `do` or range-`for` body, or deeper in a
-      branch, is not followed (Duff's device works because its labels
-      follow statements in the `do` body); -Wimplicit-fallthrough-per-
-      function is not implemented.
+    - Gaps: a label in a range-`for` body, a `try` block or a handler
+      is not followed (jumping there is ill-formed, so clang stops at
+      the error); -Wimplicit-fallthrough-per-function is not
+      implemented; the macro history a function's labels see is the one
+      at the end of its body (a later `#define` cannot precede a label,
+      so only a lookahead past the `}` is visible, and it is filtered by
+      location).
   - A `likely` after an `unlikely` (or the reverse) in the same
     sequence: `'unlikely' and 'likely' attributes are not compatible` at
     the second, with `note: conflicting attribute is here` at the first;
