@@ -2666,6 +2666,7 @@ impl Sema<'_, '_> {
             && self.is_dependent_type(*t)
         {
             let _ = self.templ.trailing_arrow.insert(f, *arrow);
+        }
         if let Some(tl) = ds.type_loc
             && tl != d.name_loc()
             && self.ast.types.proto(ty).is_some_and(|p| self.ast.types.is_dependent(p.ret()))
