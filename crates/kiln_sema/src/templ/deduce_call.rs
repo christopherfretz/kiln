@@ -388,7 +388,28 @@ impl Sema<'_, '_> {
         });
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-            Some((Ok(spec), Ok(()))) => Ok(spec),
+            Some((Ok(spec), Ok(()))) => {
+                // [over.match.class.deduct]/3: a guide formed for an alias
+                // template is constrained on the alias template's
+                // arguments being deducible from its return type.
+                if let Some(&(alias, rhs)) = self.templ.ctad_alias.get(&ft) {
+                    let ty = self.ast.decls.get(spec).ty().unwrap_or(QualType::ERROR);
+                    let ret = self.ast.types.proto(ty).map_or(QualType::ERROR, |p| p.ret());
+                    if !self.alias_deducible(alias, rhs, ret) {
+                        let at = self.ast.decls.get(ft).loc();
+                        let n = self.decl_name_str(self.ast.decls.get(alias).name());
+                        let why = self
+                            .diag(DiagId::note_alias_not_deducible, at)
+                            .arg(n)
+                            .arg(self.ty_arg(ret));
+                        let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
+                        f.args = (!self.ast.types.args(sugared).is_empty()).then_some(sugared);
+                        f.diag = Some(why);
+                        return Err(f);
+                    }
+                }
+                Ok(spec)
+            }
             Some((_, failed)) => {
                 let mut diag = failed.err().flatten();
                 if let Some(spec) = self.ast.templates.find_spec(ft, canonical) {
@@ -659,9 +680,11 @@ impl Sema<'_, '_> {
                 let d = self
                     .diag(DiagId::note_ovl_candidate_unsatisfied_constraints, loc)
                     .arg(with.unwrap_or_default());
-                match f.sat {
-                    Some(id) => self.with_sat_notes(d, id),
-                    None => d,
+                match (f.sat, &f.diag) {
+                    (Some(id), _) => self.with_sat_notes(d, id),
+                    // An alias template guide's deducibility constraint.
+                    (None, Some(why)) => d.with_note(why.clone()),
+                    (None, None) => d,
                 }
             }
             Tdk::SubstitutionFailure => {

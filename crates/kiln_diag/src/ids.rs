@@ -1174,6 +1174,8 @@ diag_ids! {
     sema_ctad_explicit_copy_list = Error (2) "class template argument deduction for '{0}' selected an explicit {1:constructor|deduction guide} for copy-list-initialization";
     note_ctad_explicit_here = Note (1) "explicit {0:constructor|deduction guide} declared here";
     note_implicit_deduction_guide = Note (1) "implicit deduction guide declared as '{0}'";
+    sema_ctad_non_deducible_template = Error (2) "{0} {1} requires template arguments; argument deduction only allowed for class templates or alias templates";
+    note_alias_not_deducible = Note (2) "cannot deduce template arguments for '{0}' from {1}";
     sema_ctad_not_allowed = Error (1) "cannot use deduced class template specialization type {0} here";
     sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
     sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";

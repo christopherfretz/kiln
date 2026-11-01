@@ -1202,43 +1202,7 @@ impl Sema<'_, '_> {
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
         let mut args = Vec::with_capacity(params.len());
         for p in params {
-            let pack = self.ast.template_parm(p).is_some_and(|i| i.pack);
-            let loc = self.ast.decls.get(p).loc();
-            let a = match self.kind_of(p) {
-                DeclKind::TemplateTypeParm => {
-                    let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-                    TemplateArg::ty(if pack { self.ast.types.pack_expansion(t, None) } else { t })
-                }
-                DeclKind::NonTypeTemplateParm => {
-                    // Built directly: naming the parameter here is not a
-                    // reference to it (clang leaves it unreferenced).
-                    let mut t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-                    if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(t.ty()) {
-                        t = pattern;
-                    }
-                    let t = self.non_reference(t);
-                    let mut e = self.builder().decl_ref(
-                        p,
-                        t,
-                        loc,
-                        None,
-                        kiln_ast::expr::NonOdrUse::None,
-                        kiln_ast::expr::ExprFlags::NONE,
-                    );
-                    if pack {
-                        e = self.act_pack_expansion(e, loc);
-                    }
-                    self.builder().template_arg_expr(e)
-                }
-                _ => {
-                    let n = self.template_name_for(p);
-                    if pack {
-                        TemplateArg::template_expansion(n, None)
-                    } else {
-                        TemplateArg::template(n)
-                    }
-                }
-            };
+            let a = self.template_param_arg(p);
             args.push(a);
         }
         let name = self.template_name_for(tmpl);
@@ -1246,5 +1210,47 @@ impl Sema<'_, '_> {
         let spec = self.ast.types.template_specialization(name, list, None, false);
         let pat = self.ast.definition(pat).unwrap_or(pat);
         Some(self.ast.types.injected_class_name(pat, spec.ty()).into())
+    }
+
+    /// Template parameter `p` named as a template argument, as in an
+    /// injected-class-name: `T`, `N`, `TT`, or `T...` for a pack.
+    pub(crate) fn template_param_arg(&mut self, p: DeclId) -> TemplateArg {
+        let pack = self.ast.template_parm(p).is_some_and(|i| i.pack);
+        let loc = self.ast.decls.get(p).loc();
+        match self.kind_of(p) {
+            DeclKind::TemplateTypeParm => {
+                let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                TemplateArg::ty(if pack { self.ast.types.pack_expansion(t, None) } else { t })
+            }
+            DeclKind::NonTypeTemplateParm => {
+                // Built directly: naming the parameter here is not a
+                // reference to it (clang leaves it unreferenced).
+                let mut t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(t.ty()) {
+                    t = pattern;
+                }
+                let t = self.non_reference(t);
+                let mut e = self.builder().decl_ref(
+                    p,
+                    t,
+                    loc,
+                    None,
+                    kiln_ast::expr::NonOdrUse::None,
+                    kiln_ast::expr::ExprFlags::NONE,
+                );
+                if pack {
+                    e = self.act_pack_expansion(e, loc);
+                }
+                self.builder().template_arg_expr(e)
+            }
+            _ => {
+                let n = self.template_name_for(p);
+                if pack {
+                    TemplateArg::template_expansion(n, None)
+                } else {
+                    TemplateArg::template(n)
+                }
+            }
+        }
     }
 }

@@ -173,6 +173,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
             ArgView::Template(n) => Ok(TemplateArg::template(self.template_name(n, loc)?)),
+            // A canonical value-dependent argument: its first expression
+            // stands for it (an implicit deduction guide's, WP-134).
+            ArgView::Profile(p) if !flags.contains(TypeFlags::UNEXPANDED_PACK) => {
+                let e = self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?;
+                let e = self.expr(e)?;
+                Ok(self.sema.ast.builder().template_arg_expr(e))
+            }
             ArgView::Pack(_) | ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
                 self.unimplemented("pack expansion", loc)
             }

@@ -119,6 +119,10 @@ pub struct DeducedArgs {
     /// While deducing one element of a pack expansion: the deductions
     /// of the pack parameters it names (§6.2, §7.2).
     pub pack_cur: Option<Vec<(u16, TemplateArg)>>,
+    /// A trailing pack expansion in `P` is deduced from `A` elements
+    /// that are pack expansions too, each taken as a whole (clang; the
+    /// alias template guides of [over.match.class.deduct]/3).
+    pub expansions: bool,
 }
 
 impl DeducedArgs {
@@ -129,6 +133,7 @@ impl DeducedArgs {
             args: vec![TemplateArg::NULL; n],
             info: DeductionInfo::default(),
             pack_cur: None,
+            expansions: false,
         }
     }
 
@@ -226,7 +231,7 @@ impl Sema<'_, '_> {
                     return Tdk::Success;
                 }
                 let rest = as_.get(k..).unwrap_or(&[]);
-                if rest.iter().any(|&a| self.is_pack_arg(a)) {
+                if !d.expansions && rest.iter().any(|&a| self.is_pack_arg(a)) {
                     // `A` has an expansion too: equal only as written.
                     let same = rest.len() == 1
                         && self.ast.types.canonical_arg(p) == self.ast.types.canonical_arg(rest[0]);

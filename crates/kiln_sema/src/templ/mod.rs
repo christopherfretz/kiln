@@ -159,6 +159,15 @@ pub struct TemplState {
     /// What each implicit guide among them (template decl) was formed
     /// from ([over.match.class.deduct]/1, [over.match.best.general]/2.12-13).
     pub(crate) ctad_origin: kiln_source::fx::FxHashMap<DeclId, ctad::GuideOrigin>,
+    /// Each guide formed for an alias template from a guide of the
+    /// template it aliases ([over.match.class.deduct]/3, P1814): the
+    /// alias template and its defining-type-id.
+    pub(crate) ctad_alias: kiln_source::fx::FxHashMap<DeclId, (DeclId, QualType)>,
+    /// The guide formed for (alias template, source guide), if any.
+    pub(crate) ctad_alias_cache: kiln_source::fx::FxHashMap<(DeclId, DeclId), Option<DeclId>>,
+    /// The `using` keyword of each alias declaration in a template:
+    /// where clang declares the guides formed for an alias template.
+    pub(crate) alias_using_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
 }
 
 /// The class an object expression names for the lookup of the first

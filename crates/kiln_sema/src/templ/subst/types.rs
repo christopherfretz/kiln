@@ -113,7 +113,15 @@ impl Substituter<'_, '_, '_> {
                 let e = self.ty(elem, loc)?;
                 self.chunk(e, Chunk::Array { size: None, loc }, loc)
             }
-            TypeView::DependentSizedArray { elem, size: ExprOperand::Expr(s) } => {
+            TypeView::DependentSizedArray { elem, size } => {
+                // A canonical array's bound is profiled: its first
+                // expression stands for it (an implicit guide's, WP-134).
+                let s = match size {
+                    ExprOperand::Expr(s) => s,
+                    ExprOperand::Profile(p) => {
+                        self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?
+                    }
+                };
                 let e = self.ty(elem, loc)?;
                 let s = self.expr(s)?;
                 self.chunk(e, Chunk::Array { size: Some(s), loc }, loc)
@@ -334,6 +342,13 @@ impl Substituter<'_, '_, '_> {
                 let a = self.element(a, decl, loc)?;
                 let ArgView::Type(t) = a.view() else { return Err(SubstFail) };
                 let Some(assoc) = self.assoc(depth) else { return Ok(t) };
+                // A pack element that is itself an expansion (`Ts` = <`Us...`>,
+                // an alias template guide's) stays visibly one (WP-134).
+                if self.pack_index.is_some()
+                    && matches!(self.sema.ast.types.view(t.ty()), TypeView::PackExpansion { .. })
+                {
+                    return Ok(t);
+                }
                 Ok(self.sema.ast.types.subst_template_type_parm(
                     t,
                     assoc,

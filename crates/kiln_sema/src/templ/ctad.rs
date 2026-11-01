@@ -14,16 +14,16 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::conv;
+use crate::declspec::{Chunk, DeclSpec, Declarator};
 use crate::init::{Designator, InitItem, InitList, InitValue, Initializer};
-use crate::templ::args::{LevelMode, MultiLevelArgs};
-use crate::templ::pack::Expansion;
-use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 use crate::overload::{
     Candidate, CandidateFailure, CandidateKind, IcsOptions, OverloadCandidateSet, OvlOutcome,
     SetKind,
 };
+use crate::templ::args::{LevelMode, MultiLevelArgs};
+use crate::templ::pack::Expansion;
+use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 
 /// How the object whose type is a deduced class template specialization
 /// is initialized ([over.match.class.deduct]/1, /3).
@@ -183,16 +183,20 @@ impl Sema<'_, '_> {
 
     /// True if `d`, named without template arguments outside its own
     /// definition, is a placeholder for a deduced class type
-    /// ([dcl.type.class.deduct]/1): a class template. Alias templates
-    /// (P1814) are not deduced yet.
+    /// ([dcl.type.class.deduct]/1): a class template or (P1814) an
+    /// alias template.
     pub fn is_ctad_template(&self, d: DeclId) -> bool {
-        self.kind_of(d) == DeclKind::ClassTemplate && !self.names_injected_class(d)
+        match self.kind_of(d) {
+            DeclKind::ClassTemplate => !self.names_injected_class(d),
+            DeclKind::TypeAliasTemplate => true,
+            _ => false,
+        }
     }
 
-    /// True if a class template name `d` alone is a type: its
+    /// True if a class or alias template name `d` alone is a type: its
     /// injected-class-name or a CTAD placeholder.
     pub fn names_class_type(&self, d: DeclId) -> bool {
-        self.kind_of(d) == DeclKind::ClassTemplate
+        matches!(self.kind_of(d), DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate)
     }
 
     /// The undeduced placeholder `X` / `nns::X` for class template `d`
@@ -276,7 +280,8 @@ impl Sema<'_, '_> {
             return None;
         };
         let t = self.ast.types.template_decl(name)?;
-        (self.kind_of(t) == DeclKind::ClassTemplate).then_some((name, t))
+        matches!(self.kind_of(t), DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate)
+            .then_some((name, t))
     }
 
     /// The implicit deduction guides of class template `tmpl`
@@ -506,7 +511,9 @@ impl Sema<'_, '_> {
             };
             let flags = match data {
                 Some(d) => d.flags & !ParamData::DEFAULT_ARG_PENDING,
-                None if matches!(self.ast.types.view(ty.ty()), TypeView::PackExpansion { .. }) => ParamData::PACK,
+                None if matches!(self.ast.types.view(ty.ty()), TypeView::PackExpansion { .. }) => {
+                    ParamData::PACK
+                }
                 None => 0,
             };
             let idx = u16::try_from(i).unwrap_or(u16::MAX);
@@ -638,12 +645,8 @@ impl Sema<'_, '_> {
         braced: bool,
         out: &mut Vec<QualType>,
     ) -> Option<()> {
-        let bases: Vec<(QualType, bool)> = self
-            .ast
-            .decls
-            .bases(def, &self.ast.lists)
-            .map(|b| (b.ty, b.pack_expansion))
-            .collect();
+        let bases: Vec<(QualType, bool)> =
+            self.ast.decls.bases(def, &self.ast.lists).map(|b| (b.ty, b.pack_expansion)).collect();
         let fields = self.init_fields(def);
         let union = self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union);
         let nb = bases.len();
@@ -674,7 +677,10 @@ impl Sema<'_, '_> {
                 // A pack expansion element: when trailing, its parameter
                 // pack takes every remaining clause ([over.match.class.
                 // deduct]/1.7). clang forms no candidate otherwise.
-                if cur + 1 != total || !braced || items[*pos..].iter().any(|i| !i.designator.is_empty()) {
+                if cur + 1 != total
+                    || !braced
+                    || items[*pos..].iter().any(|i| !i.designator.is_empty())
+                {
                     return None;
                 }
                 let pack = self.ast.types.pack_expansion(bases[cur].0, None);
@@ -715,9 +721,7 @@ impl Sema<'_, '_> {
                 let elem = self.ast.types.element(ety);
                 let string = is_array
                     && self.string_lit_of(e).is_some()
-                    && elem.is_some_and(|t| {
-                        self.ast.types.is_dependent(t) || self.is_char_type(t)
-                    });
+                    && elem.is_some_and(|t| self.ast.types.is_dependent(t) || self.is_char_type(t));
                 if string {
                     // /1.6.2: by a string literal, an lvalue reference to
                     // its const-qualified type.
@@ -769,6 +773,387 @@ impl Sema<'_, '_> {
 
     /// The user-declared deduction guides of class template `tmpl`
     /// ([temp.deduct.guide]/3: declared in its scope).
+    /// The guides of class or alias template `tmpl` for initializer
+    /// `init`: a class template's implicit guides, its aggregate
+    /// deduction candidate when it has no deduction-guides
+    /// ([over.match.class.deduct]/1.5), and its deduction-guides; an
+    /// alias template's are those of the template its defining-type-id
+    /// names, transformed ([over.match.class.deduct]/3). `None` for an
+    /// alias template whose defining-type-id names no class or alias
+    /// template specialization.
+    fn ctad_guides(
+        &mut self,
+        tmpl: DeclId,
+        init: Option<&Initializer>,
+        level: u32,
+    ) -> Option<Vec<DeclId>> {
+        if self.kind_of(tmpl) == DeclKind::TypeAliasTemplate {
+            let (target, rhs) = self.alias_ctad_target(tmpl)?;
+            if level > 64 {
+                return Some(Vec::new());
+            }
+            let inner = self.ctad_guides(target, init, level + 1)?;
+            return Some(
+                inner.into_iter().filter_map(|g| self.alias_guide(tmpl, rhs, g)).collect(),
+            );
+        }
+        let mut guides = self.implicit_guides(tmpl);
+        let user = self.user_guides(tmpl);
+        // [over.match.class.deduct]/1.5: only when C has no
+        // deduction-guides.
+        if user.is_empty()
+            && let Some(init) = init
+            && let Some(g) = self.aggregate_guide(tmpl, init)
+        {
+            guides.push(g);
+        }
+        guides.extend(user);
+        Some(guides)
+    }
+
+    /// The class or alias template named by the defining-type-id of
+    /// alias template `alias` and that type, when it is a
+    /// simple-template-id ([over.match.class.deduct]/3).
+    fn alias_ctad_target(&self, alias: DeclId) -> Option<(DeclId, QualType)> {
+        let pat = self.ast.template_info(alias)?.pattern?;
+        let mut rhs = self.ast.decls.typedef(pat)?.underlying;
+        while let TypeView::Elaborated { named, .. } = self.ast.types.view(rhs.ty()) {
+            rhs = named;
+        }
+        if !rhs.quals().is_empty() {
+            return None;
+        }
+        let TypeView::TemplateSpecialization { name, .. } = self.ast.types.view(rhs.ty()) else {
+            return None;
+        };
+        let t = self.ast.types.template_decl(name)?;
+        matches!(self.kind_of(t), DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate)
+            .then_some((t, rhs))
+    }
+
+    /// True if the template arguments of alias template `alias`
+    /// (defining-type-id `rhs`) are deducible from `ty`
+    /// ([over.match.class.deduct]/3, clang `__is_deducible`).
+    pub(crate) fn alias_deducible(&mut self, alias: DeclId, rhs: QualType, ty: QualType) -> bool {
+        use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
+        let Some(info) = self.ast.template_info(alias).copied() else { return false };
+        let list = *self.ast.templates.param_list(info.params);
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
+        let mut d = DeducedArgs::new(list.depth, params.len());
+        if self.deduce(rhs, ty, TdfFlags::NONE, &mut d) != Tdk::Success {
+            return false;
+        }
+        d.args.iter().zip(&params).all(|(a, &p)| {
+            !matches!(a.view(), kiln_ast::types::ArgView::Null)
+                || self.ast.template_parm(p).is_some_and(|i| i.pack)
+        })
+    }
+
+    /// The guide of alias template `alias` (defining-type-id `rhs`)
+    /// formed from guide `g` of the template `rhs` names
+    /// ([over.match.class.deduct]/3, P1814), cached; `None` when `g`'s
+    /// return type does not match `rhs`.
+    fn alias_guide(&mut self, alias: DeclId, rhs: QualType, g: DeclId) -> Option<DeclId> {
+        if let Some(&r) = self.templ.ctad_alias_cache.get(&(alias, g)) {
+            return r;
+        }
+        let r = if self.kind_of(g) == DeclKind::FunctionTemplate {
+            self.build_alias_guide(alias, rhs, g)
+        } else {
+            // A non-template guide: its return type is not dependent, so
+            // its deducibility constraint is decided here.
+            let ty = self.ast.decls.get(g).ty().unwrap_or(QualType::ERROR);
+            let ret = self.ast.types.proto(ty).map(FuncProto::ret);
+            ret.is_some_and(|r| self.alias_deducible(alias, rhs, r)).then_some(g)
+        };
+        let _ = self.templ.ctad_alias_cache.insert((alias, g), r);
+        r
+    }
+
+    /// [over.match.class.deduct]/3 for guide template `g`: its return
+    /// type's template arguments are deduced from `rhs`; the new guide's
+    /// template parameters are the alias template's followed by `g`'s
+    /// undeduced ones (renumbered after them), and its signature and
+    /// constraints are `g`'s with the deductions substituted. Its
+    /// deducibility constraint is checked by
+    /// [`Sema::deduce_call`](crate::Sema) through `templ.ctad_alias`.
+    fn build_alias_guide(&mut self, alias: DeclId, rhs: QualType, g: DeclId) -> Option<DeclId> {
+        use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
+        let f = self.pattern_of(g)?;
+        let gl = *self.ast.templates.param_list(self.ast.template_info(g)?.params);
+        let al = *self.ast.templates.param_list(self.ast.template_info(alias)?.params);
+        if gl.depth != al.depth {
+            return None;
+        }
+        let fty = self.ast.decls.get(f).ty()?;
+        let proto = self.ast.types.proto(fty)?;
+        let ret = proto.ret();
+        let ptys: Vec<QualType> = self.ast.types.params(&proto).to_vec();
+        let variadic = proto.variadic();
+        let gps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(gl.params).collect();
+        let mut d = DeducedArgs::new(gl.depth, gps.len());
+        d.expansions = true;
+        if self.deduce(ret, rhs, TdfFlags::NONE, &mut d) != Tdk::Success {
+            return None;
+        }
+        let first = self.ast.first(alias);
+        let ctx = self.ast.decls.get(first).ctx().unwrap_or(self.ast.tu);
+        // The alias template's parameters the deductions name (clang
+        // `MarkUsedTemplateParameters`); found as those deducible from
+        // the deductions themselves.
+        let aps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(al.params).collect();
+        let deduced: Vec<TemplateArg> = d
+            .args
+            .iter()
+            .copied()
+            .filter(|a| !matches!(a.view(), kiln_ast::types::ArgView::Null))
+            .collect();
+        let mut du = DeducedArgs::new(al.depth, aps.len());
+        du.expansions = true;
+        let used: Vec<bool> = if self.deduce_args(&deduced, &deduced, true, &mut du, Loc::INVALID)
+            == Tdk::Success
+        {
+            du.args.iter().map(|a| !matches!(a.view(), kiln_ast::types::ArgView::Null)).collect()
+        } else {
+            vec![true; aps.len()]
+        };
+        let all_used = used.iter().all(|&u| u);
+        // The deductions are canonical: name the (used, renumbered) alias
+        // template parameters in them again.
+        let mut resugar = MultiLevelArgs::new();
+        for _ in 0..al.depth {
+            resugar.push(ArgListId::EMPTY, alias, LevelMode::Retain);
+        }
+        let mut new_ps: Vec<DeclId> = Vec::with_capacity(aps.len());
+        let mut named: Vec<TemplateArg> = vec![TemplateArg::NULL; aps.len()];
+        for (j, &p) in aps.iter().enumerate() {
+            if !used[j] {
+                continue;
+            }
+            let pi = self.ast.template_parm(p).copied()?;
+            let np = if all_used {
+                p
+            } else {
+                let n = *self.ast.decls.get(p);
+                let index = u16::try_from(new_ps.len()).ok()?;
+                let h = DeclHead::new(ctx, n.name(), n.loc());
+                match n.kind() {
+                    DeclKind::TemplateTypeParm => self.builder().template_type_parm(
+                        h,
+                        al.depth,
+                        index,
+                        pi.pack,
+                        pi.typename_kw,
+                    ),
+                    DeclKind::NonTypeTemplateParm => {
+                        let mut lv = resugar.clone();
+                        lv.push(self.ast.types.arg_list(&named), alias, LevelMode::Substitute);
+                        let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                        let ty = Substituter::new(self, &lv).ty(t, n.loc()).ok()?;
+                        self.builder().non_type_template_parm(h, ty, al.depth, index, pi.pack)
+                    }
+                    _ => return None,
+                }
+            };
+            new_ps.push(np);
+            let a = self.template_param_arg(np);
+            named[j] = if pi.pack { TemplateArg::pack(self.ast.types.arg_list(&[a])) } else { a };
+        }
+        let named = self.ast.types.arg_list(&named);
+        resugar.push(named, alias, LevelMode::Substitute);
+        for a in &mut d.args {
+            let mut s = Substituter::new(self, &resugar);
+            *a = match a.view() {
+                kiln_ast::types::ArgView::Null => continue,
+                // A deduced pack (its elements may be expansions).
+                kiln_ast::types::ArgView::Pack(l) => {
+                    let l = s.args(l, Loc::INVALID).ok()?;
+                    let v: Vec<TemplateArg> = self
+                        .ast
+                        .types
+                        .args(l)
+                        .iter()
+                        .map(|&e| self.strip_expansion_sugar(e))
+                        .collect();
+                    TemplateArg::pack(self.ast.types.arg_list(&v))
+                }
+                // A canonical (profiled) value-dependent expression.
+                kiln_ast::types::ArgView::Profile(p) => {
+                    let e = s.sema.ast.types.profile_expr(p)?;
+                    let e = s.expr(e).ok()?;
+                    s.sema.ast.builder().template_arg_expr(e)
+                }
+                _ => s.template_arg(*a, Loc::INVALID).ok()?,
+            };
+        }
+        let name = self.ast.names.deduction_guide(first);
+        let loc = self.alias_guide_loc(alias);
+        let mut levels = MultiLevelArgs::new();
+        for _ in 0..gl.depth {
+            levels.push(ArgListId::EMPTY, g, LevelMode::Retain);
+        }
+        let saved = self.ast.templates.dependent_depth;
+        self.ast.templates.dependent_depth = u32::from(gl.depth) + 1;
+        let built = (|| {
+            // The undeduced parameters, redeclared after the alias
+            // template's.
+            let mut sargs = d.args.clone();
+            let mut moved: Vec<(DeclId, DeclId)> = Vec::new();
+            for (i, &p) in gps.iter().enumerate() {
+                if !matches!(sargs[i].view(), kiln_ast::types::ArgView::Null) {
+                    continue;
+                }
+                let n = *self.ast.decls.get(p);
+                let pi = self.ast.template_parm(p).copied().ok_or(SubstFail)?;
+                let index = u16::try_from(new_ps.len()).map_err(|_| SubstFail)?;
+                let h = DeclHead::new(ctx, n.name(), n.loc());
+                let np = match n.kind() {
+                    DeclKind::TemplateTypeParm => self.builder().template_type_parm(
+                        h,
+                        gl.depth,
+                        index,
+                        pi.pack,
+                        pi.typename_kw,
+                    ),
+                    DeclKind::NonTypeTemplateParm => {
+                        let mut lv = levels.clone();
+                        lv.push(self.ast.types.arg_list(&sargs), g, LevelMode::Substitute);
+                        let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                        let ty = Substituter::new(self, &lv).ty(t, n.loc())?;
+                        self.builder().non_type_template_parm(h, ty, gl.depth, index, pi.pack)
+                    }
+                    _ => return Err(SubstFail),
+                };
+                new_ps.push(np);
+                moved.push((p, np));
+                let a = self.template_param_arg(np);
+                sargs[i] =
+                    if pi.pack { TemplateArg::pack(self.ast.types.arg_list(&[a])) } else { a };
+            }
+            let sl = self.ast.types.arg_list(&sargs);
+            levels.push(sl, g, LevelMode::Substitute);
+            let mut s = Substituter::new(self, &levels);
+            for &(p, np) in &moved {
+                s.locals.insert(p, DeclOrPack::Decl(np));
+                if let Some(c) = s.sema.ast.template_parm(p).and_then(|i| i.constraint) {
+                    let c = s.expr(c)?;
+                    s.sema.builder().set_parm_constraint(np, c);
+                }
+                if let Some(a) = s.sema.template_default(p) {
+                    let a = s.template_arg(a, loc)?;
+                    let _ = s.sema.builder().set_template_default(np, a);
+                }
+            }
+            // The parameter types; a function parameter pack whose
+            // template parameter pack was deduced as a list expands.
+            let mut nptys = Vec::with_capacity(ptys.len());
+            let mut aligned = true;
+            for &t in &ptys {
+                if let TypeView::PackExpansion { pattern, .. } = s.sema.ast.types.view(t.ty()) {
+                    match s.expand_pattern(|s| s.ty(pattern, loc))? {
+                        Expansion::Unexpanded(x) => {
+                            nptys.push(s.sema.ast.types.pack_expansion(x, None));
+                        }
+                        Expansion::Elements(es) => {
+                            aligned &= es.len() == 1;
+                            // An element that is an expansion (an alias
+                            // template's pack) stays a function parameter
+                            // pack: drop the substitution sugar over it.
+                            nptys.extend(es.into_iter().map(|e| s.sema.strip_expansion_ty(e)));
+                        }
+                    }
+                } else {
+                    nptys.push(s.ty(t, loc)?);
+                }
+            }
+            let nret = s.ty(ret, loc)?;
+            let cparams: Vec<DeclId> = match s.sema.ast.decls.function(f) {
+                Some(fd) if aligned => s.sema.ast.lists.iter::<DeclId>(fd.params).collect(),
+                _ => Vec::new(),
+            };
+            let shape = GuideShape {
+                ret: nret,
+                cparams: &cparams,
+                ptys: &nptys,
+                variadic,
+                explicit: s.sema.fn_spec(f).is_explicit(),
+                depth: gl.depth + 1,
+            };
+            let nf = s.sema.guide_function(ctx, name, loc, &shape);
+            let gps2: Vec<DeclId> = s
+                .sema
+                .ast
+                .decls
+                .function(nf)
+                .map(|x| s.sema.ast.lists.iter::<DeclId>(x.params).collect())
+                .unwrap_or_default();
+            for (&o, nw) in cparams.iter().zip(gps2) {
+                s.locals.insert(o, DeclOrPack::Decl(nw));
+            }
+            let trailing = s.sema.ast.templates.trailing_requires.get(f).copied();
+            let req = ctad_guide_requires(&mut s, [gl.requires, trailing], loc)?;
+            Ok::<_, SubstFail>((nf, req))
+        })();
+        self.ast.templates.dependent_depth = saved;
+        let (nf, requires) = built.ok()?;
+        if let Some(r) = requires {
+            let _ = self.ast.templates.trailing_requires.insert(nf, r);
+        }
+        let list = self.builder().template_param_list(
+            al.template_loc,
+            al.l_angle,
+            al.r_angle,
+            gl.depth,
+            &new_ps,
+            None,
+        );
+        let ng = self.builder().detached_template_decl(DeclKind::FunctionTemplate, nf, list);
+        if let Some(&o) = self.templ.ctad_origin.get(&g) {
+            let _ = self.templ.ctad_origin.insert(ng, o);
+        }
+        let _ = self.templ.ctad_alias.insert(ng, (alias, rhs));
+        Some(ng)
+    }
+
+    /// `t` without the top-level sugar over a pack expansion (an alias
+    /// template's pack substituted for a guide's): the expansion must be
+    /// visible as one to expand it later.
+    fn strip_expansion_ty(&self, t: QualType) -> QualType {
+        let top = self.ast.types.desugar_top(t);
+        match self.ast.types.view(top.ty()) {
+            TypeView::PackExpansion { .. } => top,
+            _ => t,
+        }
+    }
+
+    /// [`Self::strip_expansion_ty`] for a type argument.
+    fn strip_expansion_sugar(&self, a: TemplateArg) -> TemplateArg {
+        match a.view() {
+            kiln_ast::types::ArgView::Type(t) => TemplateArg::ty(self.strip_expansion_ty(t)),
+            _ => a,
+        }
+    }
+
+    /// Where the guides of alias template `alias` are declared: clang
+    /// puts them at the alias declaration (`using`).
+    fn alias_guide_loc(&self, alias: DeclId) -> Loc {
+        let pat = self.ast.template_info(alias).and_then(|i| i.pattern).unwrap_or(alias);
+        self.templ.alias_using_loc.get(&pat).copied().unwrap_or(self.ast.decls.get(pat).loc())
+    }
+
+    /// Records the `using` keyword `loc` of alias declaration `d` when it
+    /// is an alias template's pattern ([`Sema::alias_guide_loc`]).
+    pub fn note_alias_decl_loc(&mut self, d: DeclId, loc: Loc) {
+        let pat = match self.kind_of(d) {
+            DeclKind::TypeAliasTemplate => self.ast.template_info(d).and_then(|i| i.pattern),
+            DeclKind::TypeAlias if self.ast.described_template(d).is_some() => Some(d),
+            _ => None,
+        };
+        if let Some(p) = pat {
+            let _ = self.templ.alias_using_loc.insert(p, loc);
+        }
+    }
+
     fn user_guides(&mut self, tmpl: DeclId) -> Vec<DeclId> {
         let first = self.ast.first(tmpl);
         let ctx = self.ast.decls.get(first).ctx().unwrap_or(self.ast.tu);
@@ -815,17 +1200,20 @@ impl Sema<'_, '_> {
         {
             return Some(with_quals(self, QualType::DEPENDENT));
         }
-        let mut guides = self.implicit_guides(tmpl);
-        let user = self.user_guides(tmpl);
-        // [over.match.class.deduct]/1.5: only when C has no
-        // deduction-guides.
-        if user.is_empty()
-            && let Some(init) = init
-            && let Some(g) = self.aggregate_guide(tmpl, init)
-        {
-            guides.push(g);
-        }
-        guides.extend(user);
+        let Some(guides) = self.ctad_guides(tmpl, init, 0) else {
+            // [dcl.type.class.deduct]/2: an alias template whose
+            // defining-type-id is not a simple-template-id.
+            let at = self.alias_guide_loc(tmpl);
+            let note = self.diag(DiagId::note_template_decl_here, at);
+            let n = self.decl_name_str(self.ast.decls.get(tmpl).name());
+            let msg = self
+                .diag(DiagId::sema_ctad_non_deducible_template, loc)
+                .arg("alias template")
+                .arg(format!("'{n}'"))
+                .with_note(note);
+            self.emit(msg);
+            return None;
+        };
         let mut set = self.begin_set(SetKind::Normal, loc);
         let base = self.push_call_args(&mut set, args, braced);
         for g in guides {
@@ -1007,6 +1395,10 @@ impl Sema<'_, '_> {
             }
         }
         out.push_str("> ");
+        if let Some(&(alias, rhs)) = self.templ.ctad_alias.get(&g) {
+            let n = self.decl_name_str(self.ast.decls.get(alias).name());
+            out.push_str(&format!("requires __is_deducible({n}, {}) ", self.ty_str(rhs)));
+        }
         if self.fn_spec(pattern).is_explicit() {
             out.push_str("explicit ");
         }
@@ -1024,7 +1416,24 @@ impl Sema<'_, '_> {
             if i > 0 {
                 out.push_str(", ");
             }
-            out.push_str(&self.ty_str(self.ast.decls.get(*p).ty().unwrap_or(QualType::ERROR)));
+            // clang's `DeclPrinter`: the name (after `...` for a pack) is
+            // the declarator's placeholder, `Ts ...xs`, `const Ts &...`.
+            let mut t = self.ast.decls.get(*p).ty().unwrap_or(QualType::ERROR);
+            let mut ph = String::new();
+            if let TypeView::PackExpansion { pattern, .. } = self.ast.types.view(t.ty()) {
+                t = pattern;
+                ph.push_str("...");
+            }
+            ph.push_str(&self.decl_name_str(self.ast.decls.get(*p).name()));
+            let names = crate::names::SemaNames::new(self);
+            kiln_ast::types::write_declarator(
+                &self.ast.types,
+                &names,
+                t,
+                kiln_ast::types::PrintOptions::SUGARED,
+                &ph,
+                &mut out,
+            );
             // clang's placeholder for an inherited default argument.
             if self.ast.decls.param(*p).is_some_and(|d| {
                 d.default_arg.is_some() || d.flags & ParamData::DEFAULT_ARG_PENDING != 0
