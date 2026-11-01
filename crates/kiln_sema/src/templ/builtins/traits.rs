@@ -788,7 +788,14 @@ impl Sema<'_, '_> {
             T::IsEmpty => self.defined_record(q).is_some_and(|r| {
                 !self.is_union(r) && self.bits_of(r).contains(DefinitionBits::EMPTY)
             }),
-            T::IsAggregate => tys.is_array(q) || self.record_bit(q, DefinitionBits::AGGREGATE),
+            // clang reports vector and complex types as aggregates (they
+            // support aggregate initialization).
+            T::IsAggregate => {
+                tys.is_array(q)
+                    || tys.as_complex(q).is_some()
+                    || self.is_vector_type(q)
+                    || self.record_bit(q, DefinitionBits::AGGREGATE)
+            }
             T::IsTriviallyCopyable => self.is_trivially_copyable_type(q),
             T::IsTrivial => self.is_trivial_type(q),
             T::IsPod => self.is_pod_type(q),
