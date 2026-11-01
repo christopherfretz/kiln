@@ -401,6 +401,7 @@ impl Parser<'_, '_> {
             }
             self.parse_attributes(&mut attrs);
             let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
+            self.s.check_using_declarator_access(qual, name, nl);
             let d = if typename {
                 self.s.act_on_using_typename_declarator(
                     using_loc, qual, name, nl, if_exists, ellipsis,
@@ -826,11 +827,12 @@ impl Parser<'_, '_> {
                 }
                 true
             }
-            Some((end, NameClass::Type(ty, d), _)) => {
+            Some((end, NameClass::Type(ty, d), name)) => {
                 while self.pos() < end {
                     self.bump();
                 }
                 self.s.mark_type_referenced(d);
+                self.s.check_type_name_access(name, None, d, loc);
                 let kind = self.s.ast.decls.get(d).kind();
                 let ty = if kiln_sema::lookup::is_tag_kind(kind) {
                     self.s.elaborated_tag_type(d, TagKeyword::None)
@@ -1109,13 +1111,24 @@ impl Parser<'_, '_> {
         ctx: DeclaratorContext,
     ) {
         let _ = ctx;
-        let Some((args, l_angle, r_angle)) = self.parse_template_arg_list() else {
+        // The template arguments of a partial or explicit specialization's
+        // class-head are not access checked ([temp.spec.partial.general]/10,
+        // [temp.spec.general]/6); a reference's join the declaration's.
+        let level = self.s.delayed_access_level();
+        self.s.begin_delayed_access();
+        let parsed = self.parse_template_arg_list().map(|a| {
+            let final_loc = self.parse_class_virt_specifiers();
+            (a, final_loc, self.tag_use(ds, true, final_loc))
+        });
+        let declares = parsed
+            .as_ref()
+            .is_some_and(|p| matches!(p.2, TagUse::Definition | TagUse::Declaration));
+        self.s.end_delayed_access_to_enclosing(level, declares);
+        let Some(((args, l_angle, r_angle), final_loc, use_)) = parsed else {
             ds.invalid = true;
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
         };
-        let final_loc = self.parse_class_virt_specifiers();
-        let use_ = self.tag_use(ds, true, final_loc);
         let r = self.s.act_on_class_template_id_tag(
             keyword,
             tmpl,
@@ -2073,6 +2086,26 @@ impl Parser<'_, '_> {
         ctx: DeclaratorContext,
         allow_fn_def: bool,
     ) -> Vec<DeclId> {
+        // [class.access]/7: the names in the decl-specifiers and the first
+        // declarator are checked in the context of the declared entity
+        // (`A::I A::f()`, a befriended `A::I g(A::I)`; clang's
+        // `ParsingDeclSpec`), together with those of a template head.
+        let level = match self.template_delay_level.take() {
+            Some(l) => l,
+            None => self.s.delayed_access_level(),
+        };
+        self.s.begin_delayed_access();
+        let decls = self.parse_simple_declaration_delayed(ctx, allow_fn_def, level);
+        self.s.end_delayed_access_to(level, None);
+        decls
+    }
+
+    fn parse_simple_declaration_delayed(
+        &mut self,
+        ctx: DeclaratorContext,
+        allow_fn_def: bool,
+        level: usize,
+    ) -> Vec<DeclId> {
         let ds = self.parse_decl_specifiers(ctx);
         let mut decls = Vec::new();
         if ds.tag_declares
@@ -2082,6 +2115,7 @@ impl Parser<'_, '_> {
         }
         if self.eat(Punct::Semi).is_some() {
             decls.extend(self.s.act_on_decl_spec_only(&ds));
+            self.s.end_delayed_access_to(level, ds.tag);
             return decls;
         }
         if ds.is_empty() && !self.at_special_declarator(ctx) {
@@ -2143,7 +2177,9 @@ impl Parser<'_, '_> {
             // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
             if first && d.is_function_declarator() && d.asm_label.is_none() {
                 if allow_fn_def && self.at_function_definition_start() {
-                    self.parse_function_definition_after_declarator(&ds, base, &d, &mut decls);
+                    self.parse_function_definition_after_declarator(
+                        &ds, base, &d, &mut decls, level,
+                    );
                     return decls;
                 }
                 if !allow_fn_def && self.at(Punct::LBrace) {
@@ -2155,6 +2191,7 @@ impl Parser<'_, '_> {
             first = false;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
+            self.s.end_delayed_access_to(level, v);
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);
             }
@@ -2219,10 +2256,12 @@ impl Parser<'_, '_> {
         base: QualType,
         d: &Declarator,
         decls: &mut Vec<DeclId>,
+        level: usize,
     ) {
         self.s.act_function_def_next(true);
         let f = self.s.act_on_declarator(ds, base, d);
         self.s.act_function_def_next(false);
+        self.s.end_delayed_access_to(level, f);
         // An invalid declarator sema did not make a function (an unknown
         // return type, say): the error is reported; the body is skipped.
         let f = f.filter(|&f| self.s.ast.decls.function(f).is_some());

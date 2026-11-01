@@ -102,6 +102,9 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         };
         self.locals.insert(call_op, DeclOrPack::Decl(new_op));
+        // A generic lambda's dependent access checks are replayed by the
+        // instantiations of the new call operator.
+        self.sema.copy_dependent_access(call_op, new_op);
         self.lambda_constraints(head.map(|h| h.0), call_op, new_op);
         self.lambda_default_args(call_op, new_op);
         // The init-capture variables, by name.
