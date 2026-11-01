@@ -2842,6 +2842,19 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_var_init(v, e);
             return;
         }
+        if let Initializer::Paren(es, l, r) = &init
+            && es.len() > 1
+            && (self.ast.types.is_dependent(ty)
+                || es.iter().any(|&a| self.expr_is_type_dependent(a)))
+        {
+            // `T x(a, b)` with a dependent `T` or argument: initialized at
+            // instantiation, kept as a `ParenListExpr` (clang
+            // `ActOnParenListExpr` / `AddInitializerToDecl`).
+            let e = self.builder().paren_list(es, *l, *r);
+            let e = self.act_on_full_expr(e);
+            let _ = self.builder().set_var_init(v, e);
+            return;
+        }
         let e = self.perform_init(ty, init, loc, direct);
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
             // P0960 (clang's `parenlistinit`).

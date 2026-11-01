@@ -1113,14 +1113,21 @@ impl Sema<'_, '_> {
     /// specializations.
     fn injected_class_for(&self, tmpl: DeclId) -> Option<DeclId> {
         let tmpl = self.ast.first(tmpl);
-        let mut c = Some(self.ctx);
-        while let Some(x) = c {
-            if self.kind_of(x) == DeclKind::CXXRecord
-                && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl)
-            {
-                return Some(x);
+        // Lexically enclosing classes (a friend defined in its class),
+        // then semantically enclosing ones (an out-of-line member
+        // definition `template<class T> void X<T>::f() { X x; }` is in
+        // the scope of `X`, [basic.scope.class]).
+        for semantic in [false, true] {
+            let mut c = Some(self.ctx);
+            while let Some(x) = c {
+                if self.kind_of(x) == DeclKind::CXXRecord
+                    && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl)
+                {
+                    return Some(x);
+                }
+                let (lex, sem) = (self.ast.decls.lexical_ctx(x), self.ast.decls.get(x).ctx());
+                c = if semantic { sem.or(lex) } else { lex.or(sem) };
             }
-            c = self.ast.decls.lexical_ctx(x).or_else(|| self.ast.decls.get(x).ctx());
         }
         None
     }

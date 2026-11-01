@@ -222,7 +222,9 @@ impl<'a> Cg<'a> {
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
         for d in members {
             let n = ast.decls.get(d);
-            if n.has(DeclFlags::INVALID) {
+            // A templated declaration ([temp.pre]/8: an out-of-line
+            // member of a class template) is emitted only as instantiated.
+            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) {
                 continue;
             }
             match n.kind() {
