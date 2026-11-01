@@ -638,14 +638,26 @@ impl<'a> Cg<'a> {
     }
 
     /// The definition of static data member `first` of an implicitly
-    /// instantiated class template specialization, which no walk of the
-    /// translation unit reaches ([temp.inst]/5: instantiated when used).
+    /// instantiated class template specialization, or of an implicit
+    /// specialization of a member variable template, which no walk of the
+    /// translation unit reaches ([temp.inst]/5,7: instantiated when used).
     fn instantiated_var_def(&self, first: DeclId) -> Option<DeclId> {
         let ast = self.ast;
-        if !matches!(ast.templ_link(first).get(), Some((TemplLinkKind::MemberOfSpecialization, _)))
-            || self.is_explicit_inst_declaration(first)
-            || self.held.contains(&first)
-        {
+        let instantiated = match ast.templ_link(first).get() {
+            Some((TemplLinkKind::MemberOfSpecialization, _)) => true,
+            Some((TemplLinkKind::Specialization, _)) => {
+                ast.decls.get(first).ctx().is_some_and(|c| {
+                    matches!(
+                        ast.decls.get(c).kind(),
+                        DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+                    )
+                }) && ast
+                    .spec_info(first)
+                    .is_some_and(|(_, s)| s.kind == SpecKind::ImplicitInstantiation)
+            }
+            _ => false,
+        };
+        if !instantiated || self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return None;
         }
         ast.redecls_of(first).find(|&r| {
