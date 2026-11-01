@@ -897,7 +897,7 @@ impl Sema<'_, '_> {
 
     /// An array bound or vector size `size` against `A`'s (a value or a
     /// dependent expression) ([temp.deduct.type]/8: `T[i]`).
-    fn deduce_array_bound(
+    pub(super) fn deduce_array_bound(
         &mut self,
         size: ExprOperand,
         asize: Option<Result<u64, ExprOperand>>,

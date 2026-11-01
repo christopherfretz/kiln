@@ -462,16 +462,29 @@ impl Sema<'_, '_> {
                 TypeView::LValueRef(x) | TypeView::RValueRef(x) => t.canonical(x),
                 _ => p,
             };
-            let Some(elem) = self.initializer_list_param(inner) else {
-                // A non-deduced context.
-                return Tdk::Success;
-            };
             let items: Vec<crate::init::InitValue> = self
                 .ovl
                 .lists
                 .get(li as usize)
                 .map(|l| l.items.iter().map(|x| x.value.clone()).collect())
                 .unwrap_or_default();
+            // `P'[N]` with a non-empty list: each element deduces `P'`,
+            // and the list's length deduces `N` (WP-134: the aggregate
+            // deduction candidate's `T(&&)[N]` parameters).
+            let t = &self.ast.types;
+            let array = match t.canonical_view(inner) {
+                TypeView::ConstantArray(pa) if !items.is_empty() => Some((pa.elem, None)),
+                TypeView::DependentSizedArray { elem, size } if !items.is_empty() => {
+                    Some((elem, Some(size)))
+                }
+                _ => None,
+            };
+            let Some(elem) = array.map(|x| x.0).or_else(|| self.initializer_list_param(inner))
+            else {
+                // A non-deduced context.
+                return Tdk::Success;
+            };
+            let n = u64::try_from(items.len()).unwrap_or(u64::MAX);
             for v in items {
                 let crate::init::InitValue::Expr(e) = v else { continue };
                 let info = self.arg_info(e);
@@ -479,6 +492,9 @@ impl Sema<'_, '_> {
                 if r != Tdk::Success {
                     return r;
                 }
+            }
+            if let Some((_, Some(size))) = array {
+                return self.deduce_array_bound(size, Some(Ok(n)), d);
             }
             return Tdk::Success;
         }

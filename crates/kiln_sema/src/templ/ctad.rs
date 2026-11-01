@@ -2,12 +2,12 @@
 //! deduction-guide declarations ([temp.deduct.guide]); spec/sema.md
 //! "Class template argument deduction".
 
-use kiln_ast::decl::{DeclFlags, DeclKind, FnSpec, ParamData};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, FnSpec, ParamData, TagKind};
 use kiln_ast::expr::BinaryOp;
 use kiln_ast::ids::{ArgListId, TemplateNameId, TemplateParamListId};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{
-    AutoKeyword, ExcSpec, FuncInfo, FuncProto, TemplateArg, TemplateName, TypeView,
+    AutoKeyword, ExcSpec, FuncInfo, FuncProto, Quals, TemplateArg, TemplateName, TypeView,
 };
 use kiln_ast::{DeclHead, DeclId, ExprId, NnsId, QualType};
 use kiln_diag::DiagId;
@@ -15,7 +15,8 @@ use kiln_source::Loc;
 
 use crate::Sema;
 use crate::declspec::{Chunk, DeclSpec, Declarator};
-use crate::init::{InitList, InitValue, Initializer};
+use crate::conv;
+use crate::init::{Designator, InitItem, InitList, InitValue, Initializer};
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::pack::Expansion;
 use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
@@ -48,6 +49,8 @@ pub(crate) enum GuideOrigin {
     CtorTemplate,
     /// The copy deduction candidate `C(C<P...>) -> C<P...>`.
     Copy,
+    /// The aggregate deduction candidate (P1816).
+    Aggregate,
 }
 
 /// The signature of an implicit guide being formed.
@@ -490,13 +493,24 @@ impl Sema<'_, '_> {
         self.ast.templates.dependent_depth = u32::from(g.depth);
         self.ast.templates.pattern_next = true;
         let f = self.builder().deduction_guide(h, fty, spec);
-        let mut ids = Vec::with_capacity(g.cparams.len());
-        for (i, (&p, &ty)) in g.cparams.iter().zip(g.ptys).enumerate() {
-            let pn = *self.ast.decls.get(p);
-            let data = self.ast.decls.param(p).copied();
-            let flags = data.map_or(0, |d| d.flags & !ParamData::DEFAULT_ARG_PENDING);
+        let mut ids = Vec::with_capacity(g.ptys.len());
+        for (i, &ty) in g.ptys.iter().enumerate() {
+            // The aggregate deduction candidate has no constructor
+            // parameters to copy: its parameters are unnamed.
+            let (pname, ploc, data) = match g.cparams.get(i) {
+                Some(&p) => {
+                    let pn = *self.ast.decls.get(p);
+                    (pn.name(), pn.loc(), self.ast.decls.param(p).copied())
+                }
+                None => (DeclName::EMPTY, loc, None),
+            };
+            let flags = match data {
+                Some(d) => d.flags & !ParamData::DEFAULT_ARG_PENDING,
+                None if matches!(self.ast.types.view(ty.ty()), TypeView::PackExpansion { .. }) => ParamData::PACK,
+                None => 0,
+            };
             let idx = u16::try_from(i).unwrap_or(u16::MAX);
-            let np = self.builder().param(f, pn.name(), pn.loc(), ty, idx, flags);
+            let np = self.builder().param(f, pname, ploc, ty, idx, flags);
             match data {
                 Some(d) if d.default_arg.is_some() => {
                     if let Some(e) = d.default_arg {
@@ -537,6 +551,222 @@ impl Sema<'_, '_> {
         self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params)
     }
 
+    /// The aggregate deduction candidate of class template `tmpl` for
+    /// initializer `init` ([over.match.class.deduct]/1.5-1.8, P1816):
+    /// `template<P...> C(T1, ..., Tn) -> C<P...>`, where `Ti` is the
+    /// declared type of the element `xi` initializes. `None` when C is
+    /// not a defined aggregate, the initializer is not a non-empty
+    /// braced-init-list or parenthesized expression-list, or some `xi`
+    /// initializes no element.
+    fn aggregate_guide(&mut self, tmpl: DeclId, init: &Initializer) -> Option<DeclId> {
+        let pat = self.pattern_of(tmpl)?;
+        let def = self.ast.definition(pat)?;
+        let bits = self.ast.decls.record(def).map(|x| x.defn).unwrap_or_default();
+        if !bits.contains(DefinitionBits::AGGREGATE) {
+            return None;
+        }
+        let mut ptys = Vec::new();
+        match init {
+            Initializer::List(l) if !l.items.is_empty() => {
+                let mut pos = 0;
+                self.agg_elements(def, &l.items, &mut pos, true, &mut ptys)?;
+                if pos != l.items.len() {
+                    return None;
+                }
+            }
+            Initializer::Paren(es, ..) if !es.is_empty() => {
+                // No brace elision and no designators in a parenthesized
+                // list ([over.match.class.deduct]/1.6).
+                let items: Vec<InitItem> = es
+                    .iter()
+                    .map(|&e| InitItem {
+                        designator: Vec::new(),
+                        value: match self.braced_args.iter().find(|(x, _)| *x == e) {
+                            Some((_, l)) => InitValue::List(l.clone()),
+                            None => InitValue::Expr(e),
+                        },
+                    })
+                    .collect();
+                let mut pos = 0;
+                self.agg_elements(def, &items, &mut pos, true, &mut ptys)?;
+                if pos != items.len() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+        let first = self.ast.first(tmpl);
+        let owner = self.ast.described_template(def).unwrap_or(tmpl);
+        let info = self.ast.template_info(owner).copied()?;
+        let Some(TypeView::InjectedClassName { injected, .. }) =
+            self.injected_type_of(owner).map(|q| self.ast.types.view(q.ty()))
+        else {
+            return None;
+        };
+        let ctx = self.ast.decls.get(first).ctx().unwrap_or(self.ast.tu);
+        let name = self.ast.names.deduction_guide(first);
+        let loc = self.ast.decls.get(owner).loc();
+        let depth = self.ast.templates.param_list(info.params).depth + 1;
+        let shape = GuideShape {
+            ret: injected,
+            cparams: &[],
+            ptys: &ptys,
+            variadic: false,
+            explicit: false,
+            depth,
+        };
+        let saved = self.ast.templates.dependent_depth;
+        let f = self.guide_function(ctx, name, loc, &shape);
+        self.ast.templates.dependent_depth = saved;
+        let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, info.params);
+        let _ = self.templ.ctad_origin.insert(g, GuideOrigin::Aggregate);
+        Some(g)
+    }
+
+    /// The parameter types of the aggregate deduction candidate for the
+    /// elements of class `def` that `items[*pos..]` initialize
+    /// ([over.match.class.deduct]/1.5): bases then fields, brace elision
+    /// assumed only for a non-dependent sub-aggregate or an array whose
+    /// bound is not value-dependent. `braced` is false inside an elided
+    /// sub-aggregate, where a designator or an excess clause ends it.
+    /// `None` when some clause initializes no element.
+    fn agg_elements(
+        &mut self,
+        def: DeclId,
+        items: &[InitItem],
+        pos: &mut usize,
+        braced: bool,
+        out: &mut Vec<QualType>,
+    ) -> Option<()> {
+        let bases: Vec<(QualType, bool)> = self
+            .ast
+            .decls
+            .bases(def, &self.ast.lists)
+            .map(|b| (b.ty, b.pack_expansion))
+            .collect();
+        let fields = self.init_fields(def);
+        let union = self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union);
+        let nb = bases.len();
+        let total = nb + fields.len();
+        let mut cur = 0usize;
+        let mut done_union = false;
+        while *pos < items.len() {
+            let item = &items[*pos];
+            if let Some(d) = item.designator.first() {
+                if !braced {
+                    break;
+                }
+                let Designator::Field(name, _) = *d else { return None };
+                if item.designator.len() > 1 {
+                    return None;
+                }
+                let idx = fields
+                    .iter()
+                    .position(|&f| self.ast.decls.get(f).name().as_ident() == Some(name))?;
+                cur = nb + idx;
+            } else if union && done_union {
+                cur = total;
+            }
+            if cur >= total {
+                return if braced { None } else { Some(()) };
+            }
+            if cur < nb && bases[cur].1 {
+                // A pack expansion element: when trailing, its parameter
+                // pack takes every remaining clause ([over.match.class.
+                // deduct]/1.7). clang forms no candidate otherwise.
+                if cur + 1 != total || !braced || items[*pos..].iter().any(|i| !i.designator.is_empty()) {
+                    return None;
+                }
+                let pack = self.ast.types.pack_expansion(bases[cur].0, None);
+                out.push(pack);
+                *pos = items.len();
+                return Some(());
+            }
+            let ety = if cur < nb {
+                bases[cur].0
+            } else {
+                self.ast.decls.get(fields[cur - nb]).ty().unwrap_or(QualType::ERROR)
+            };
+            self.agg_element(ety, items, pos, out)?;
+            cur += 1;
+            done_union = union;
+        }
+        Some(())
+    }
+
+    /// The parameter type(s) for element type `ety` initialized by
+    /// `items[*pos]` (and, under brace elision, the clauses after it).
+    fn agg_element(
+        &mut self,
+        ety: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        out: &mut Vec<QualType>,
+    ) -> Option<()> {
+        let is_array = self.ast.types.is_array(ety);
+        match items[*pos].value {
+            // [over.match.class.deduct]/1.6.1: an array element initialized
+            // by a braced-init-list is an rvalue reference to its type.
+            InitValue::List(_) => {
+                *pos += 1;
+                out.push(if is_array { self.ast.types.rvalue_ref_to(ety) } else { ety });
+            }
+            InitValue::Expr(e) => {
+                let elem = self.ast.types.element(ety);
+                let string = is_array
+                    && self.string_lit_of(e).is_some()
+                    && elem.is_some_and(|t| {
+                        self.ast.types.is_dependent(t) || self.is_char_type(t)
+                    });
+                if string {
+                    // /1.6.2: by a string literal, an lvalue reference to
+                    // its const-qualified type.
+                    *pos += 1;
+                    let c = self.ast.types.qualify(ety, Quals::CONST);
+                    out.push(self.ast.types.lvalue_ref_to(c));
+                } else if self.agg_elides(ety, e) {
+                    if is_array {
+                        let elem = elem.unwrap_or(QualType::ERROR);
+                        let bound = self.ast.types.array_size(ety).unwrap_or(0);
+                        let mut k = 0u64;
+                        while k < bound && *pos < items.len() && items[*pos].designator.is_empty() {
+                            self.agg_element(elem, items, pos, out)?;
+                            k += 1;
+                        }
+                    } else {
+                        let r = self.ast.types.as_record(ety)?;
+                        let d = self.ast.definition(r)?;
+                        self.agg_elements(d, items, pos, false, out)?;
+                    }
+                } else {
+                    *pos += 1;
+                    out.push(ety);
+                }
+            }
+        }
+        Some(())
+    }
+
+    /// Whether clause `e` initializing an element of type `ety` takes
+    /// brace elision for deduction: never for a dependent non-array type
+    /// or an array with a value-dependent bound; otherwise as
+    /// [dcl.init.aggr]/16 (`Sema::init_element`).
+    fn agg_elides(&mut self, ety: QualType, e: ExprId) -> bool {
+        if self.ast.types.is_array(ety) {
+            return self.ast.types.array_size(ety).is_some();
+        }
+        if self.ast.types.is_dependent(ety) {
+            return false;
+        }
+        let Some(r) = self.ast.types.as_record(ety) else { return false };
+        let ety_e = self.ast.exprs.get(e).ty();
+        self.is_aggregate(ety)
+            && !self.is_error_type(ety_e)
+            && self.ast.types.as_record(ety_e).is_none_or(|x| {
+                self.ast.first(x) != self.ast.first(r) && !conv::is_derived_from(self, x, r)
+            })
+    }
+
     /// The user-declared deduction guides of class template `tmpl`
     /// ([temp.deduct.guide]/3: declared in its scope).
     fn user_guides(&mut self, tmpl: DeclId) -> Vec<DeclId> {
@@ -558,6 +788,20 @@ impl Sema<'_, '_> {
         how: CtadInit,
         loc: Loc,
     ) -> Option<QualType> {
+        self.deduce_ctad_from(declared, args, braced, how, None, loc)
+    }
+
+    /// [`Sema::deduce_ctad`] with the initializer `init` the arguments
+    /// come from, for the aggregate deduction candidate.
+    fn deduce_ctad_from(
+        &mut self,
+        declared: QualType,
+        args: &[ExprId],
+        braced: &[Option<InitList>],
+        how: CtadInit,
+        init: Option<&Initializer>,
+        loc: Loc,
+    ) -> Option<QualType> {
         let (name, tmpl) = self.undeduced_ctad(declared)?;
         let with_quals = |s: &mut Self, t: QualType| {
             let d = s.ast.types.deduced_template_specialization(name, Some(t));
@@ -572,7 +816,16 @@ impl Sema<'_, '_> {
             return Some(with_quals(self, QualType::DEPENDENT));
         }
         let mut guides = self.implicit_guides(tmpl);
-        guides.extend(self.user_guides(tmpl));
+        let user = self.user_guides(tmpl);
+        // [over.match.class.deduct]/1.5: only when C has no
+        // deduction-guides.
+        if user.is_empty()
+            && let Some(init) = init
+            && let Some(g) = self.aggregate_guide(tmpl, init)
+        {
+            guides.push(g);
+        }
+        guides.extend(user);
         let mut set = self.begin_set(SetKind::Normal, loc);
         let base = self.push_call_args(&mut set, args, braced);
         for g in guides {
@@ -740,10 +993,11 @@ impl Sema<'_, '_> {
                 }
                 _ => out.push_str("template <...> class"),
             }
+            // clang spells a pack `class ...Ts`.
             if pack {
-                out.push_str("...");
-            }
-            if !pname.is_empty() {
+                out.push_str(" ...");
+                out.push_str(&pname);
+            } else if !pname.is_empty() {
                 out.push(' ');
                 out.push_str(&pname);
             }
@@ -846,7 +1100,7 @@ impl Sema<'_, '_> {
             Initializer::List(_) => CtadInit::CopyList,
         };
         let (args, braced) = self.ctad_args(init);
-        self.deduce_ctad(declared, &args, &braced, how, loc)
+        self.deduce_ctad_from(declared, &args, &braced, how, Some(init), loc)
     }
 
     /// `C x;` ([over.match.class.deduct], no arguments): the type of
