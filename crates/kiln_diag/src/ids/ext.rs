@@ -1,0 +1,7 @@
+// Diagnostic ids `ext_*` (spec/diag.md §2.4).
+// One row per line, sorted by name; a comment directly above a row
+// belongs to it. `cargo xtask diag-split` maintains this layout.
+
+ext_cxx17_attr = Extension [Cxx17AttributeExtensions] (1) "use of the '{0}' attribute is a C++17 extension";
+ext_cxx20_attr = Extension [Cxx20AttributeExtensions] (1) "use of the '{0}' attribute is a C++20 extension";
+ext_cxx23_attr = Extension [Cxx23AttributeExtensions] (1) "use of the '{0}' attribute is a C++23 extension";

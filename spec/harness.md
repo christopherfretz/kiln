@@ -585,6 +585,9 @@ separate manual or periodic gate, and its contract is `spec/libcxx.md`.
 `cargo xtask ci [--quick]` is the merge gate (`docs/AGENTS.md` rule 3). It
 runs, stopping at the first failing step:
 
+0. `cargo xtask diag-split --check` (in-process): kiln_diag's id and group
+   tables are in their area files with empty tails (spec/diag.md §2.4).
+   On failure it lists each problem and says to run `cargo xtask diag-split`;
 1. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
    warnings`, `cargo test --workspace`. A step that fails with rustc's
    `error[E0463]` (can't find crate) on a line of its stderr is rerun
