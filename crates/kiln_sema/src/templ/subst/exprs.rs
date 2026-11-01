@@ -1148,6 +1148,9 @@ impl Substituter<'_, '_, '_> {
             out.push(match *d {
                 A::Field { name, loc } => D::Field(name, loc),
                 A::Index { index, loc } => D::Index(self.expr(index)?, loc),
+                A::Range { first, last, loc, ellipsis } => {
+                    D::Range(self.expr(first)?, self.expr(last)?, loc, ellipsis)
+                }
             });
         }
         Ok(out)

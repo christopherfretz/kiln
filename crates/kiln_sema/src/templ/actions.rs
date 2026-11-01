@@ -1104,21 +1104,38 @@ impl Sema<'_, '_> {
     /// stays as written; a constant one is wrapped in its
     /// `ConstantExpr` (clang `CheckArrayDesignatorExpr`).
     fn designator_ast(&mut self, d: &crate::init::Designator) -> kiln_ast::expr::Designator {
-        let crate::init::Designator::Index(e, loc) = *d else { return d.to_ast() };
+        match *d {
+            crate::init::Designator::Index(e, loc) => {
+                kiln_ast::expr::Designator::Index { index: self.designator_index_ast(e, loc), loc }
+            }
+            crate::init::Designator::Range(a, b, loc, ellipsis) => {
+                kiln_ast::expr::Designator::Range {
+                    first: self.designator_index_ast(a, loc),
+                    last: self.designator_index_ast(b, loc),
+                    loc,
+                    ellipsis,
+                }
+            }
+            crate::init::Designator::Field(..) => d.to_ast(),
+        }
+    }
+
+    /// An array designator's index in the AST: as written when
+    /// value-dependent, else wrapped in its `ConstantExpr`.
+    fn designator_index_ast(&mut self, e: ExprId, loc: Loc) -> ExprId {
         if self.expr_is_value_dependent(e) || self.is_err_expr(e) {
-            return d.to_ast();
+            return e;
         }
         let c = crate::conv::lvalue_to_rvalue(self, e);
         let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, loc);
-        let index = match self.eval_int(c, ctx) {
+        match self.eval_int(c, ctx) {
             Ok(v) => {
                 let ty = self.ast.exprs.get(c).ty();
                 let cv = self.int_const(ty, v);
                 self.builder().constant_expr(c, Some(cv))
             }
             Err(_) => e,
-        };
-        kiln_ast::expr::Designator::Index { index, loc }
+        }
     }
 
     /// Records the written form of the semantic list `sem` built from
@@ -1140,8 +1157,12 @@ impl Sema<'_, '_> {
     /// names is known only at instantiation).
     pub(crate) fn init_list_type_dependent(&self, l: &crate::init::InitList) -> bool {
         l.items.iter().any(|it| {
-            it.designator.iter().any(|d| {
-                matches!(*d, crate::init::Designator::Index(e, _) if self.expr_is_value_dependent(e))
+            it.designator.iter().any(|d| match *d {
+                crate::init::Designator::Index(e, _) => self.expr_is_value_dependent(e),
+                crate::init::Designator::Range(a, b, _, _) => {
+                    self.expr_is_value_dependent(a) || self.expr_is_value_dependent(b)
+                }
+                crate::init::Designator::Field(..) => false,
             }) || match &it.value {
                 crate::init::InitValue::Expr(e) => self.expr_is_type_dependent(*e),
                 crate::init::InitValue::List(n) => self.init_list_type_dependent(n),

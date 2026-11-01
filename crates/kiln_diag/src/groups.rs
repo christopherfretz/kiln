@@ -211,6 +211,8 @@ diag_groups! {
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
     AddressOfPackedMember = "address-of-packed-member" [];
     UnusedVariable = "unused-variable" [];
+    // ----- WP-193 (GNU designators)
+    GnuDesignator = "gnu-designator" [];
     // ----- WP-219 (switch coverage, typeid, the GNU umbrella)
     Switch = "switch" [];
     SwitchEnum = "switch-enum" [];
@@ -220,7 +222,7 @@ diag_groups! {
     PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
     GnuPointerArith = "gnu-pointer-arith" [];
     VlaExtension = "vla-extension" [VlaCxxExtension];
-    Gnu = "gnu" [GnuCaseRange, GnuFoldingConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
+    Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
 }
 
 impl Group {

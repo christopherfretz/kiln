@@ -532,6 +532,13 @@ The normative description is spec/driver.md "Code generation". In short:
   construction and EH-cleanup loops gain `.preheader`/`.loopexit` blocks
   and LCSSA `phi`s. kiln emits the plain loops. `ir_vs_clang` lists
   `global_init_array_eh` on aarch64 as a known deviation; x86_64 is exact.
+- **GNU array range designators with side effects** (`int a[3] =
+  {[0 ... 2] = f()}`, WP-193): sema gives each element of the range its
+  own copy of the clause, so the clause is evaluated once per element.
+  clang refuses it ("cannot compile this GNU array range designator
+  extension yet", `sawArrayRangeDesignator`); GCC evaluates it once.
+  Side-effect-free ranges match clang's IR
+  (`tests/codegen/union_nsdmi_and_array_ranges.cpp`).
 - **Reference members** (`struct S { int& r; }`) are diagnosed (`a
   reference member is not supported yet`).
 - **`dereferenceable(N)` of a reference to a class** uses the class's
