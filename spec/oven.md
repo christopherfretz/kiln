@@ -805,12 +805,16 @@ it after an explicit destructor call, is not diagnosed (clang diagnoses
 both). An explicit call of a virtual destructor ends only the lifetime of
 the static type's bytes. A placement new of the wrong type names the
 most-derived type at the offset as the "from" type, where clang names the
-designated subobject's type. A qualified call (`::operator new(n)`,
-`std::construct_at(...)`) is located at the name, two columns right of
-clang's location at the qualifier (the AST has no qualifier location);
-notes for unqualified calls agree. "in call to" notes print some
+designated subobject's type. "in call to" notes print some
 arguments differently (`decltype(...)` and `{temporary}` where clang
 prints the value).
+
+*Note locations.* A call-site note locates the callee at its begin, as
+clang's `getBeginLoc`: a qualified name (`::operator new(n)`,
+`std::construct_at(...)`, also when rebuilt by instantiation) at its
+qualifier, which sema records in `expr_begin`. An element step out of
+range is located at the begin of the subscripted base (`this->b[n]` at
+`this`). `tests/conformance/expr.const/note-begin-location.cpp`.
 
 *Memory benchmark.* `bench/oven/vector-alloc.cpp` builds a
 `std::vector<int>` of 100 000 elements by `push_back` and sums it: 18
