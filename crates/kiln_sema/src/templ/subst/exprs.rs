@@ -141,6 +141,16 @@ impl Substituter<'_, '_, '_> {
                 }
                 Ok(r)
             }
+            // Named in the instantiated context (clang
+            // `TransformPredefinedExpr`).
+            ExprKind::SourceLocExpr => {
+                let kind = ex(self).source_loc_kind(e);
+                Ok(self.sema.act_on_source_loc_expr(kind, loc, end))
+            }
+            ExprKind::PredefinedExpr => {
+                let kind = ex(self).predefined_kind(e);
+                Ok(self.sema.act_on_predefined_expr(kind, loc))
+            }
             ExprKind::ParenExpr => {
                 let o = ex(self).operand(e);
                 let o = self.expr(o)?;
@@ -655,6 +665,17 @@ impl Substituter<'_, '_, '_> {
     fn callee(&mut self, c: ExprId) -> SubstResult<ExprId> {
         let n = *self.sema.ast.exprs.get(c);
         if n.kind() != ExprKind::UnresolvedLookupExpr {
+            // A resolved callee rebuilt because of an argument (a
+            // function-name-dependent default argument): the call is redone
+            // on the function itself, so it adds its default arguments again.
+            let ex = &self.sema.ast.exprs;
+            if n.kind() == ExprKind::ImplicitCastExpr
+                && ex.cast_kind(c) == CastKind::FunctionToPointerDecay
+                && ex.get(ex.operand(c)).kind() == ExprKind::DeclRefExpr
+            {
+                let o = ex.operand(c);
+                return self.expr(o);
+            }
             return self.expr(c);
         }
         let name = self.sema.ast.unresolved_name(c);

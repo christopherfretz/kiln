@@ -695,6 +695,20 @@ points, thunks and method indices are clang's.
   for those too, which differs only when a later same-named class is
   mangled first. `tests/codegen/local_class_template.cpp` checks this.
 
+### 8.11 Landed (WP-140): inline-asm target rules (`asm.rs`)
+Per-target (aarch64, x86_64) data and checks behind clang's `TargetInfo`
+asm hooks, shared by sema and codegen: `ConstraintInfo` and
+`validate_output_constraint` / `validate_input_constraint` (alternatives,
+`+`/`=`/`&`, tied numbers and `[name]`s, immediate classes),
+`validate_constraint_modifier` (the aarch64 `w`/`x` width warning),
+register and clobber names (`is_valid_register_name`, `is_valid_clobber`,
+`normalized_register_name`), `machine_clobbers`, `simplify_constraint`
+(clang's `SimplifyConstraint`), and the template parser
+`analyze_asm_string` (pieces: text, operand with modifier; clang's
+errors) with `generate_asm_string` producing LLVM's `$`-syntax as bytes.
+Not implemented: other targets, immediate range validation of operand
+sizes.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

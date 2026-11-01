@@ -1,0 +1,41 @@
+TranslationUnitDecl
+|-FileScopeAsmDecl
+| `-StringLiteral 'const char[4]' lvalue "nop"
+|-FunctionTemplateDecl dno
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl dno 'void (T &)'
+|   |-ParmVarDecl referenced value 'T &'
+|   `-CompoundStmt
+|     `-GCCAsmStmt
+|       `-DeclRefExpr 'T' lvalue ParmVar 'value' 'T &'
+|-FunctionTemplateDecl dnc
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl dnc 'void (const T &)'
+|   |-ParmVarDecl referenced value 'const T &'
+|   `-CompoundStmt
+|     `-GCCAsmStmt
+|       `-DeclRefExpr 'const T' lvalue ParmVar 'value' 'const T &'
+|-FunctionDecl f 'int (int)'
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl used o 'int'
+|   |-GCCAsmStmt
+|   | |-DeclRefExpr 'int' lvalue Var 'o' 'int'
+|   | |-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   | |-IntegerLiteral 'int' 42
+|   | `-BinaryOperator 'int' '+'
+|   |   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   |   `-IntegerLiteral 'int' 1
+|   |-GCCAsmStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       `-ImplicitCastExpr 'int' xvalue <NoOp>
+|         `-DeclRefExpr 'int' lvalue Var 'o' 'int'
+`-FunctionDecl g 'void (const int &)'
+  |-ParmVarDecl used c 'const int &'
+  `-CompoundStmt
+    `-GCCAsmStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'const int' lvalue ParmVar 'c' 'const int &'

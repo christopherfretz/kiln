@@ -179,7 +179,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("BindingDecl", Keep),
     ("EmptyDecl", Unsupported(NOT_M2)),
     ("LabelDecl", Unsupported(NOT_M2)),
-    ("FileScopeAsmDecl", Unsupported(NOT_M2)),
+    ("FileScopeAsmDecl", Keep),
     ("ExportDecl", Unsupported(NOT_M2)),
     ("ImportDecl", Unsupported(NOT_M2)),
     ("TopLevelStmtDecl", Unsupported(NOT_M2)),
@@ -191,7 +191,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("AttributedStmt", Unsupported("attributes are not in the M2 dump")),
     ("CXXTryStmt", Keep),
     ("CXXCatchStmt", Keep),
-    ("GCCAsmStmt", Unsupported(NOT_M2)),
+    ("GCCAsmStmt", Keep),
     ("CoreturnStmt", Unsupported(NOT_M2)),
     ("CoroutineBodyStmt", Unsupported(NOT_M2)),
     // Expressions kiln does not dump in M2.
@@ -216,7 +216,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ChooseExpr", Unsupported(NOT_M2)),
     ("GNUNullExpr", Unsupported(NOT_M2)),
     ("VAArgExpr", Unsupported(NOT_M2)),
-    ("PredefinedExpr", Unsupported(NOT_M2)),
+    ("PredefinedExpr", Keep),
     ("UserDefinedLiteral", Unsupported(NOT_M2)),
     ("DesignatedInitExpr", Unsupported(NOT_M2)),
     ("DesignatedInitUpdateExpr", Unsupported(NOT_M2)),
@@ -324,10 +324,11 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         }
         // The type is the binding expression's (the JSON has none).
         "BindingDecl" => &[],
-        "StaticAssertDecl" => &[],
+        "StaticAssertDecl" | "FileScopeAsmDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
         "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" | "CXXPseudoDestructorExpr" => &[],
+        "PredefinedExpr" => &["name"],
         // `isPlacement` and `initStyle` are implied by the children.
         "CXXNewExpr" => &[
             "isGlobal",
@@ -443,7 +444,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "WhileStmt" => &["hasVar"],
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
         | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXForRangeStmt" | "CXXTryStmt"
-        | "CXXCatchStmt" => &[],
+        | "CXXCatchStmt" | "GCCAsmStmt" => &[],
         _ => return None,
     })
 }
@@ -565,6 +566,11 @@ pub const M2_KINDS: &[&str] = &[
     "DecompositionDecl",
     "BindingDecl",
     "StaticAssertDecl",
+    // GNU asm (WP-140).
+    "FileScopeAsmDecl",
+    "GCCAsmStmt",
+    // Predefined identifiers (WP-140).
+    "PredefinedExpr",
     "IntegerLiteral",
     "FloatingLiteral",
     "CharacterLiteral",

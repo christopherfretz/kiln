@@ -126,6 +126,11 @@ Constructors:
   per [basic.link]/6 and clang's local extern decls.
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
+  Landed (WP-140): a non-dependent typedef or alias qualifier is
+  replaced by the class or enumeration it names before the lookup, as
+  `act_on_nested_name` does, so `typedef D J; J::T x;` declares `x`
+  (libc++ `<typeinfo>`'s `__impl::__type_name_t`;
+  `tests/conformance/basic.lookup.qual/typedef-qualifier-decl.cpp`).
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
@@ -1367,6 +1372,56 @@ template saved in `range_for_outer_depth` for instantiations).
   DefaultIgnore `-Wrange-loop-construct`/`-Wrange-loop-bind-reference`
   warnings (groups declared, not emitted); the begin/end-types-differ
   pre-C++17 extension warning; clang's recovery for `for (int x, y : a)`.
+
+### 7.7 Landed (WP-140): GNU asm statements (`asm.rs`)
+`act_on_gcc_asm_stmt` follows clang's `ActOnGCCAsmStmt`: output and input
+constraints are validated per target (`kiln_abi::asm`, aarch64 and
+x86_64), outputs must be modifiable lvalues
+(`invalid lvalue in asm output`), a register-only input is converted to a
+prvalue (lvalue-to-rvalue) and a memory input stays an lvalue, an
+immediate input (`i`, `n`) must be an integer constant expression, a
+tied operand must have a compatible type, and the template is parsed
+(`%N`, `%[name]`, `%=`, `%%`, modifiers) with clang's errors for an
+invalid operand number, unknown name and a mismatched modifier (the
+aarch64 `-Wasm-operand-widths` warning with its `%w` fix-it note).
+Clobbers are checked against the target's register names. Each operand
+ends a full-expression (its odr-uses are resolved). The `!srcloc`
+values clang attaches are precomputed into `AsmData.srclocs` (literal
+begin, then every later template line; offset + 2). Templates are
+substituted (`subst/stmts.rs`) and rechecked at instantiation.
+`act_on_file_scope_asm` builds a `FileScopeAsmDecl`. Not implemented:
+`asm goto` (rejected by the parser), immediate range checks
+(`validateInputSize`/`validateOutputSize`), `=@cc` flag outputs, register
+variables (`register int r asm("x0")`) as operands and their clobber
+conflict check, the C++17 "asm in constexpr function" extension warning;
+`!srcloc` values in headers and macro expansions do not match clang's
+encoding.
+
+### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
+`act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing
+function (or, outside one, the translation unit with
+`-Wpredefined-identifier-outside-function`); a dependent context gives a
+dependent `PredefinedExpr` that template instantiation rebuilds;
+otherwise a `const char[N]` lvalue holding the name.
+`compute_predefined_name(kind, f)` is clang 19's
+`PredefinedExpr::ComputeName`: `__func__`/`__FUNCTION__` are the bare
+name (`operator int`, `operator()`, `top level` is only pretty);
+`__PRETTY_FUNCTION__` prints `virtual `/`static `, the return type
+(`auto` for lambdas, none for constructors and destructors, the
+instantiation pattern's otherwise), the scope with specialization
+arguments (`A<int>::`), the pattern's parameters (`, ...` if variadic),
+cv and ref qualifiers, and ` [T = int, ...]`: enclosing implicit class
+specializations' arguments (outermost first) then the function template
+specialization's, printed with their types (`2U`, `'a'`, packs
+`<int, char *>`, `x:auto` for a generic lambda's invented parameter).
+The source-location builtins use the same printer (§9.5 of
+sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
+in a dependent context, or a default argument evaluating one used there,
+is marked instantiation-dependent and recomputed at instantiation.
+Tests: `tests/conformance/dcl.fct.def.general/predefined-*.cpp`,
+`expr.const/builtins-srcloc-template-run.cpp`, `tests/codegen/predefined.cpp`.
+Gap: a function with a deduced return type prints `auto` where clang
+evaluates the source-location name after deduction.
 
 ## 8. Constant evaluation (`oven_bridge.rs`)
 

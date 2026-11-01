@@ -480,6 +480,36 @@
 #if !__has_builtin(__builtin_wmemcmp)
 #error __builtin_wmemcmp
 #endif
+#if !__has_builtin(__builtin_strcmp)
+#error __builtin_strcmp
+#endif
+#if !__has_builtin(__builtin_strncmp)
+#error __builtin_strncmp
+#endif
+#if !__has_builtin(__builtin_strchr)
+#error __builtin_strchr
+#endif
+#if !__has_builtin(__builtin_strrchr)
+#error __builtin_strrchr
+#endif
+#if !__has_builtin(__builtin_strpbrk)
+#error __builtin_strpbrk
+#endif
+#if !__has_builtin(__builtin_strstr)
+#error __builtin_strstr
+#endif
+#if !__has_builtin(__builtin_wcscmp)
+#error __builtin_wcscmp
+#endif
+#if !__has_builtin(__builtin_wcsncmp)
+#error __builtin_wcsncmp
+#endif
+#if !__has_builtin(__builtin_wcschr)
+#error __builtin_wcschr
+#endif
+#if !__has_constexpr_builtin(__builtin_strcmp) || !__has_constexpr_builtin(__builtin_wcschr) || __has_constexpr_builtin(__builtin_strstr)
+#error constexpr WP-140
+#endif
 #if !__has_constexpr_builtin(__builtin_memcpy) || !__has_constexpr_builtin(__builtin_strlen) || !__has_constexpr_builtin(__builtin_popcount)
 #error constexpr WP-088
 #endif

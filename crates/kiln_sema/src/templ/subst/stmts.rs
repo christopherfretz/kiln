@@ -221,8 +221,35 @@ impl Substituter<'_, '_, '_> {
             }
             StmtKind::BreakStmt => Ok(self.sema.act_on_break(loc)),
             StmtKind::ContinueStmt => Ok(self.sema.act_on_continue(loc)),
+            StmtKind::GCCAsmStmt => self.asm_stmt(s),
             k => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
+    }
+
+    /// A GNU asm statement (clang `TransformGCCAsmStmt`): the operands
+    /// are substituted and the statement is checked again.
+    fn asm_stmt(&mut self, s: StmtId) -> SubstResult<StmtId> {
+        let loc = self.sema.ast.stmts.get(s).loc();
+        let data = *self.sema.ast.stmts.asm_data(s);
+        let bits = self.sema.ast.stmts.asm_bits(s);
+        let ops = self.sema.ast.stmts.asm_operands(s).to_vec();
+        let mut new = Vec::with_capacity(ops.len());
+        for op in ops {
+            let expr = self.expr(op.expr)?;
+            new.push(kiln_ast::stmt::AsmOperand { expr, ..op });
+        }
+        let clobbers: Vec<_> = self
+            .sema
+            .ast
+            .lists
+            .iter::<kiln_ast::StringLitId>(data.clobbers)
+            .map(|c| (c, data.string_loc))
+            .collect();
+        let (outs, ins) = new.split_at(data.num_outputs as usize);
+        let string = (data.string, data.string_loc);
+        self.sema
+            .act_on_gcc_asm_stmt(loc, bits, string, outs, ins, &clobbers, data.rparen)
+            .ok_or(SubstFail)
     }
 
     /// `if` ([stmt.if]); for `if constexpr` only the taken branch is

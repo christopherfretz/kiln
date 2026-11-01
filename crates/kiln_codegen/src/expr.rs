@@ -289,6 +289,7 @@ impl Cg<'_> {
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
             | ExprKind::StringLiteral
+            | ExprKind::PredefinedExpr
             | ExprKind::MaterializeTemporaryExpr => {
                 let lv = self.emit_lvalue(e)?;
                 self.load_lv(lv)
@@ -1276,6 +1277,29 @@ impl Cg<'_> {
             }
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_lvalue(ExprId::new(n.b())),
             ExprKind::DeclRefExpr => self.decl_lvalue(e, ast.exprs.decl(e), q),
+            // clang `EmitPredefinedLValue`: the literal's global, named
+            // `<identifier>.<current function>` when first emitted.
+            ExprKind::PredefinedExpr => {
+                let Some(sl) = ast.exprs.predefined_name(e) else {
+                    return err(self.loc_of(e), "dependent predefined identifier");
+                };
+                let lit = ast.exprs.string_lit(sl);
+                let fname = self.f.func.map(|f| self.m.func(f).name().to_owned());
+                let g = match fname {
+                    Some(fname) => {
+                        let name = format!("{}.{}", ast.exprs.predefined_kind(e).spelling(), fname);
+                        let bytes = ast.strings.bytes(lit).to_vec();
+                        let mut bytes = bytes;
+                        let total = ast.strings.object_bytes(lit);
+                        bytes.resize(total as usize, 0);
+                        self.string_global_named(&bytes, 1, total, &name)
+                    }
+                    None => self.lit_global(lit),
+                };
+                let ty = self.m.global(g).value_type();
+                let align = self.m.global(g).align.unwrap_or(1);
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+            }
             ExprKind::StringLiteral => {
                 let g = self.lit_global(ast.exprs.string_lit(e));
                 let ty = self.m.global(g).value_type();

@@ -157,6 +157,12 @@ impl Ast {
         }
     }
 
+    /// The template (a `StringLiteral`) of a `FileScopeAsm` declaration.
+    pub fn file_scope_asm_string(&self, d: DeclId) -> Option<crate::ids::ExprId> {
+        let n = self.decls.get(d);
+        (n.kind() == DeclKind::FileScopeAsm).then(|| crate::ids::ExprId::new(n.data()))
+    }
+
     /// The nested-name-specifier written in a `Using` declaration.
     pub fn using_qualifier(&self, d: DeclId) -> Option<crate::ids::NnsId> {
         let n = self.decls.get(d);

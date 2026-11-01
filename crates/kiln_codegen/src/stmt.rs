@@ -267,6 +267,7 @@ impl Cg<'_> {
                 self.emit_stmt(ast.stmts.default_sub(s))
             }
             StmtKind::CXXTryStmt => self.emit_try_stmt(s),
+            StmtKind::GCCAsmStmt => self.emit_asm(s),
             k => err(Some(n.loc()), format!("statement {k:?} is not supported yet")),
         }
     }

@@ -240,6 +240,11 @@ impl Collect<'_> {
                     self.expr(v);
                 }
             }
+            StmtKind::GCCAsmStmt => {
+                for op in ast.stmts.asm_operands(s) {
+                    self.expr(op.expr);
+                }
+            }
             _ => {}
         }
     }

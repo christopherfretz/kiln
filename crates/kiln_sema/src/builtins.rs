@@ -953,6 +953,9 @@ impl Sema<'_, '_> {
         let ctx = self.ctx;
         let e = self.builder().source_loc_expr(kind, ty, ctx, loc, rparen);
         self.record_source_loc(e, loc, ctx, kind == SourceLocKind::SourceLocStruct);
+        if matches!(kind, SourceLocKind::Function | SourceLocKind::SourceLocStruct) {
+            self.mark_function_name_dependent(e, ctx);
+        }
         e
     }
 
@@ -1183,29 +1186,15 @@ impl Sema<'_, '_> {
     /// clang `PredefinedExpr::ComputeName` of context `ctx` for
     /// `__builtin_FUNCTION` (`Function`: the unqualified name) and
     /// `_M_function_name` (`PrettyFunction`); both empty outside a
-    /// function. Gap: the ` [T = int]` suffix of template specializations
-    /// is not printed (spec/sema-templates.md §9.5).
+    /// function.
     fn predefined_function_names(&self, ctx: DeclId) -> (String, String) {
-        let n = self.ast.decls.get(ctx);
-        if !n.kind().is_function() {
+        if !self.ast.decls.get(ctx).kind().is_function() {
             return (String::new(), String::new());
         }
-        let names = kiln_ast::dump::AstNames::new(&self.ast);
-        let mut plain = String::new();
-        names.write_name(ctx, &mut plain);
-        let mut pretty = String::new();
-        if let Some(f) = self.ast.decls.function(ctx)
-            && n.kind() == DeclKind::CXXMethod
-        {
-            if f.spec.is_virtual() {
-                pretty.push_str("virtual ");
-            }
-            if f.spec.storage() == FnStorage::Static {
-                pretty.push_str("static ");
-            }
-        }
-        pretty.push_str(&kiln_abi::vtable::pretty_function(&self.ast, ctx));
-        (plain, pretty)
+        (
+            self.compute_predefined_name(kiln_ast::expr::PredefinedKind::Func, ctx),
+            self.compute_predefined_name(kiln_ast::expr::PredefinedKind::PrettyFunction, ctx),
+        )
     }
 
     /// Records the source-location values at a use of `param`'s default
@@ -1218,6 +1207,19 @@ impl Sema<'_, '_> {
         if kinds != 0 {
             let ctx = self.ctx;
             self.record_source_loc(e, call_begin, ctx, kinds & SRC_LOC_STRUCT_BIT != 0);
+            if kinds & (SRC_LOC_STRUCT_BIT | 1 << SourceLocKind::Function as u8) != 0 {
+                self.mark_function_name_dependent(e, ctx);
+            }
+        }
+    }
+
+    /// In a dependent context the function name a source-location value
+    /// holds changes per specialization (`[T = int]`): `e` is marked
+    /// instantiation-dependent so instantiation rebuilds it (clang 19's
+    /// `SourceLocExpr::MayBeDependent`, `TransformCXXDefaultArgExpr`).
+    fn mark_function_name_dependent(&mut self, e: ExprId, ctx: DeclId) {
+        if self.ast.decls.get(ctx).kind().is_function() && self.ctx_template_levels(ctx) > 0 {
+            self.ast.exprs.mark_instantiation_dependent(e);
         }
     }
 

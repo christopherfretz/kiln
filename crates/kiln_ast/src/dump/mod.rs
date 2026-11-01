@@ -548,6 +548,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         } else if let Some(s) = decls.static_assert(d) {
             expr(Some(s.cond));
             expr(s.message);
+        } else if let Some(s) = ast.file_scope_asm_string(d) {
+            expr(Some(s));
         } else if decls.record(d).is_some() {
             self.spec_children(d, kids);
             for i in 0..decls.bases(d, &ast.lists).count() {
@@ -643,7 +645,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     push(c.raw());
                 }
             }
-            ExprKind::CXXRewrittenBinaryOperator => push(n.a()),
+            ExprKind::CXXRewrittenBinaryOperator | ExprKind::PredefinedExpr => push(n.a()),
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 push(n.a());
                 for c in lists.iter::<ExprId>(exprs.call_args(e)) {
@@ -812,6 +814,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 stmt(Some(r.body), kids);
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
+            StmtKind::GCCAsmStmt => {
+                for op in stmts.asm_operands(s) {
+                    expr(Some(op.expr), kids);
+                }
+            }
             StmtKind::CXXTryStmt => {
                 stmt(Some(stmts.try_block(s)), kids);
                 for h in lists.iter::<StmtId>(stmts.try_handlers(s)) {
@@ -1159,7 +1166,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         let ast = self.ast;
         let decls = &ast.decls;
         match n.kind() {
-            DeclKind::TranslationUnit | DeclKind::StaticAssert | DeclKind::Empty => {}
+            DeclKind::TranslationUnit
+            | DeclKind::StaticAssert
+            | DeclKind::Empty
+            | DeclKind::FileScopeAsm => {}
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.name(d);
                 let under = decls.typedef(d).map(|t| t.underlying).or(n.ty());
@@ -1873,6 +1883,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ExprKind::StringLiteral => {
                 self.line.push(' ');
                 ast.strings.write_literal(exprs.string_lit(e), &mut self.line);
+            }
+            ExprKind::PredefinedExpr => {
+                self.line.push(' ');
+                self.line.push_str(exprs.predefined_kind(e).spelling());
             }
             ExprKind::CXXBoolLiteralExpr => {
                 self.line.push_str(if exprs.bool_value(e) { " true" } else { " false" });

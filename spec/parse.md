@@ -829,12 +829,28 @@ argument skipping) is skipped syntactically (`skip_qualified_rest`) and
 classified by what follows the name: an identifier, a `*`/`&`/`&&`
 before `)`/`,`/`>`, or a `)` before an identifier, literal or `(` make it
 a type. A name begins at the `decltype` keyword (`name_begin`).
+**Landed (WP-140).** GNU asm ([dcl.asm], `asm.rs`): the asm-declaration
+`asm ( string-literal ) ;` at namespace scope goes to
+`act_on_file_scope_asm`; in a function body `asm`/`__asm`/`__asm__` with
+the qualifiers `volatile`, `inline`, `goto` (duplicates diagnosed,
+`const`/`restrict` ignored with clang's warnings) and the extended form
+`( template : outputs : inputs : clobbers [: labels] )`, operands
+`[name] "constraint" ( expression )`, goes to `act_on_gcc_asm_stmt`. A
+wide, Unicode or empty literal is diagnosed at the following token, as
+clang does. `asm goto` is parsed and then reported as
+`'asm goto' is not supported yet` (callbr lowering is not implemented).
+Not implemented: `asm goto`, MS-style `__asm { }` blocks.
+
+**Landed (WP-140).** The predefined identifiers `__func__`,
+`__FUNCTION__` and `__PRETTY_FUNCTION__` are keywords and primary
+expressions ([dcl.fct.def.general]/8) passed to `act_on_predefined_expr`.
+
 - **Other declarations:**
   - pack expansions in dynamic exception specifications
   - `auto` deduction from braced lists (`std::initializer_list`)
   - `typename`, `operator` and pack forms of using-declarators, and an
     attributed `[[...]] using` as a block-scope statement
-  - `asm` declarations, modules, `__declspec`
+  - `asm goto`, MS `__asm` blocks, modules, `__declspec`
 
 ## 10. Tests
 - **Per-rule tests** in `crates/kiln_parse/tests/`, each tagged with

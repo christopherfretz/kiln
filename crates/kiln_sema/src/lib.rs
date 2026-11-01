@@ -14,6 +14,7 @@
     reason = "sema code uses the standard's short names (e, t, d, l, r)"
 )]
 
+mod asm;
 mod builtins;
 pub mod class;
 mod consteval;
@@ -35,6 +36,7 @@ pub mod names;
 pub mod new_delete;
 mod oven_bridge;
 pub mod overload;
+mod predefined;
 mod range_for;
 mod rtti;
 pub mod scope;

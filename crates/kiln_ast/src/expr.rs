@@ -1118,6 +1118,39 @@ pub struct ColdExprData {
     pub source_loc: ColdMap<ExprId, SourceLocValues>,
 }
 
+/// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
+/// and the GNU spellings; clang `PredefinedIdentKind`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum PredefinedKind {
+    /// `__func__`: the function's unqualified name.
+    Func,
+    /// `__FUNCTION__`: the same as `__func__` outside MSVC mode.
+    Function,
+    /// `__PRETTY_FUNCTION__`: the signature with qualified name and
+    /// template arguments.
+    PrettyFunction,
+}
+
+impl PredefinedKind {
+    /// Every kind, in `repr` order.
+    pub const ALL: [PredefinedKind; 3] =
+        [PredefinedKind::Func, PredefinedKind::Function, PredefinedKind::PrettyFunction];
+
+    /// The identifier (clang `getIdentKindName`).
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            PredefinedKind::Func => "__func__",
+            PredefinedKind::Function => "__FUNCTION__",
+            PredefinedKind::PrettyFunction => "__PRETTY_FUNCTION__",
+        }
+    }
+
+    fn from_aux(a: u8) -> PredefinedKind {
+        Self::ALL.get(usize::from(a)).copied().unwrap_or(PredefinedKind::Func)
+    }
+}
+
 /// The builtin a `SourceLocExpr` names (clang `SourceLocIdentKind`).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(u8)]
@@ -1711,6 +1744,17 @@ impl ExprArena {
         DeclId::new(self.expect_kind(e, ExprKind::CXXDefaultArgExpr).a)
     }
 
+    /// The identifier a `PredefinedExpr` names.
+    pub fn predefined_kind(&self, e: ExprId) -> PredefinedKind {
+        PredefinedKind::from_aux(self.expect_kind(e, ExprKind::PredefinedExpr).aux)
+    }
+
+    /// The `StringLiteral` holding a `PredefinedExpr`'s value (clang
+    /// `getFunctionName`); `None` in a dependent context.
+    pub fn predefined_name(&self, e: ExprId) -> Option<ExprId> {
+        ExprId::from_raw(self.expect_kind(e, ExprKind::PredefinedExpr).a)
+    }
+
     /// The builtin a `SourceLocExpr` names.
     pub fn source_loc_kind(&self, e: ExprId) -> SourceLocKind {
         SourceLocKind::from_aux(self.expect_kind(e, ExprKind::SourceLocExpr).aux)
@@ -1989,6 +2033,15 @@ impl ExprArena {
         self.expect_kind(e, ExprKind::ConstantExpr).aux & CONSTANT_VALUE_HIDDEN != 0
     }
 
+    /// Marks `e` instantiation-dependent: a source-location value naming
+    /// the enclosing function in a dependent context (clang's
+    /// `SourceLocExpr` and the used-context rebuild of `CXXDefaultArgExpr`)
+    /// is recomputed when the template is instantiated. Call it before
+    /// any parent of `e` is built (parents copy their children's bits).
+    pub fn mark_instantiation_dependent(&mut self, e: ExprId) {
+        self.nodes[e.index() as usize].deps |= ExprDeps::INSTANTIATION;
+    }
+
     /// Marks the `DeclRefExpr` or construction `e` as immediate-escalating
     /// (P2564): it made the enclosing function immediate.
     ///
@@ -2105,7 +2158,8 @@ impl ExprArena {
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::CXXStdInitializerListExpr
-            | ExprKind::ExprWithCleanups => v.extend(id(n.a)),
+            | ExprKind::ExprWithCleanups
+            | ExprKind::PredefinedExpr => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.b)));

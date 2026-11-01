@@ -35,7 +35,8 @@ use crate::lookup::LookupFlags;
 use crate::names::DeclName;
 use crate::slot::AlreadySet;
 use crate::stmt::{
-    CaseData, IfData, IfKind, LoopData, RangeForData, StmtKind, StmtNode, SwitchData,
+    AsmData, AsmOperand, CaseData, IfData, IfKind, LoopData, RangeForData, StmtKind, StmtNode,
+    SwitchData,
 };
 use crate::types::TypeFlags;
 
@@ -324,6 +325,13 @@ impl<'a> AstBuilder<'a> {
             self.add_unregistered(h, DeclKind::NamespaceAlias, Payload::None(target.raw()), true);
         self.register_name(h.ctx, h.name, d, prev, false, false);
         d
+    }
+
+    /// A file-scope `asm("...")` declaration ([dcl.asm]); the inline
+    /// payload is the template string.
+    pub fn file_scope_asm(&mut self, ctx: DeclId, loc: Loc, string: ExprId) -> DeclId {
+        let h = DeclHead::new(ctx, DeclName::EMPTY, loc);
+        self.add_unregistered(h, DeclKind::FileScopeAsm, Payload::None(string.raw()), true)
     }
 
     /// The placeholder target of a `using_if_exists` using-declaration
@@ -1221,6 +1229,31 @@ impl<'a> AstBuilder<'a> {
     pub fn nullptr_literal(&mut self, ty: QualType, loc: Loc) -> ExprId {
         let deps = self.type_deps(ty);
         self.simple(ExprKind::CXXNullPtrLiteralExpr, ValueCategory::PRValue, deps, 0, ty, loc, 0, 0)
+    }
+
+    /// `__func__`, `__FUNCTION__` or `__PRETTY_FUNCTION__`
+    /// ([dcl.fct.def.general]/8): `PredefinedExpr`, an lvalue of type `ty`
+    /// (`const char[N]`, or the dependent type in a dependent context,
+    /// where `name` is `None`); `name` is the `StringLiteral` holding the
+    /// value (its child).
+    pub fn predefined_expr(
+        &mut self,
+        kind: crate::expr::PredefinedKind,
+        ty: QualType,
+        name: Option<ExprId>,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(
+            ExprKind::PredefinedExpr,
+            ValueCategory::LValue,
+            deps,
+            kind as u8,
+            ty,
+            loc,
+            name.map_or(0, ExprId::raw),
+            0,
+        )
     }
 
     /// A source-location builtin call `kind()` ([support.srcloc.cons];
@@ -2883,6 +2916,20 @@ impl<'a> AstBuilder<'a> {
     pub fn cxx_for_range_stmt(&mut self, data: RangeForData, loc: Loc) -> StmtId {
         let side = self.ast.stmts.push_range_for(data);
         self.stmt(StmtKind::CXXForRangeStmt, 0, loc, side, 0)
+    }
+
+    /// A GNU asm statement (`GCCAsmStmt`, [dcl.asm]); `bits` are the
+    /// [`crate::stmt::asm_bits`]. `data.operands` is ignored (the operands
+    /// are copied into the operand table).
+    pub fn gcc_asm_stmt(
+        &mut self,
+        data: AsmData,
+        operands: &[AsmOperand],
+        bits: u16,
+        loc: Loc,
+    ) -> StmtId {
+        let side = self.ast.stmts.push_asm(data, operands);
+        self.stmt(StmtKind::GCCAsmStmt, bits, loc, side, 0)
     }
 
     /// A labeled statement `label: sub` ([stmt.label]); `label` is the

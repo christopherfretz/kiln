@@ -16,6 +16,7 @@
     clippy::unnecessary_wraps
 )]
 
+mod asm;
 mod builtins;
 mod class;
 mod cleanup;

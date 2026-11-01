@@ -7,7 +7,7 @@ use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::ArgListId;
-use kiln_ast::types::{ArgView, TemplateArg, TypeView};
+use kiln_ast::types::{ArgView, Quals, TemplateArg, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -384,6 +384,24 @@ impl Sema<'_, '_> {
         if !self.fn_at_least_as_specialized(&pb, a, &pa) {
             return true;
         }
+        // [temp.deduct.partial]/9-10: deduction succeeded both ways; a
+        // reference parameter is more specialized when it is an lvalue
+        // reference against an rvalue one, or else more cv-qualified.
+        let (mut a_wins, mut b_wins) = (false, false);
+        for (x, y) in pa.iter().zip(&pb) {
+            if let (Some((xl, xq)), Some((yl, yq))) = (x.refq, y.refq) {
+                if xl != yl {
+                    *(if xl { &mut a_wins } else { &mut b_wins }) = true;
+                } else if xq != yq && xq.contains(yq) {
+                    a_wins = true;
+                } else if xq != yq && yq.contains(xq) {
+                    b_wins = true;
+                }
+            }
+        }
+        if a_wins != b_wins {
+            return a_wins;
+        }
         // [temp.deduct.partial]/11 (CWG1395): equally specialized, a
         // template without a trailing function parameter pack beats one
         // whose trailing pack has no corresponding parameter (clang
@@ -444,12 +462,17 @@ impl Sema<'_, '_> {
                         TypeView::PackExpansion { pattern, .. } => (t.canonical(pattern), true),
                         _ => (p, false),
                     };
-                    let p = match t.canonical_view(p) {
-                        TypeView::LValueRef(x) | TypeView::RValueRef(x) => t.canonical(x),
-                        _ => p,
+                    let (p, refq) = match t.canonical_view(p) {
+                        TypeView::LValueRef(x) => {
+                            (t.canonical(x), Some((true, t.effective_quals(x))))
+                        }
+                        TypeView::RValueRef(x) => {
+                            (t.canonical(x), Some((false, t.effective_quals(x))))
+                        }
+                        _ => (p, None),
                     };
                     let u = t.unqualified(p);
-                    OrderingType { ty: t.canonical(u), pack }
+                    OrderingType { ty: t.canonical(u), pack, refq }
                 })
                 .collect(),
         )
@@ -521,6 +544,9 @@ impl Sema<'_, '_> {
 struct OrderingType {
     ty: QualType,
     pack: bool,
+    /// A reference parameter: lvalue reference, and the referred-to
+    /// type's cv-qualifiers ([temp.deduct.partial]/9).
+    refq: Option<(bool, Quals)>,
 }
 
 /// One side of a partial ordering of function templates

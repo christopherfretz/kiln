@@ -176,6 +176,10 @@ diag_groups! {
     // ----- WP-131 (literal operators)
     UserDefinedLiterals = "user-defined-literals" [];
     GnuStringLiteralOperatorTemplate = "gnu-string-literal-operator-template" [];
+    // WP-140
+    AsmOperandWidths = "asm-operand-widths" [];
+    Asm = "asm" [AsmOperandWidths];
+    PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
 }
 
 impl Group {

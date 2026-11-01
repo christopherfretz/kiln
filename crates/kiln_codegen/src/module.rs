@@ -243,6 +243,7 @@ impl<'a> Cg<'a> {
                     self.emit_class_members(d)?;
                 }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
+                DeclKind::FileScopeAsm => self.emit_file_scope_asm(d),
                 _ => {}
             }
         }
@@ -1283,6 +1284,19 @@ impl<'a> Cg<'a> {
     /// The global holding a string literal of array type `arr` (clang
     /// `GetAddrOfConstantStringFromLiteral`).
     pub fn string_global(&mut self, bytes: &[u8], elem_size: u64, n_elems: u64) -> GlobalId {
+        self.string_global_named(bytes, elem_size, n_elems, ".str")
+    }
+
+    /// [`Self::string_global`] naming a new global `name` (clang's
+    /// `GetAddrOfConstantStringFromLiteral(S, Name)`; an equal constant
+    /// already emitted is reused whatever its name).
+    pub fn string_global_named(
+        &mut self,
+        bytes: &[u8],
+        elem_size: u64,
+        n_elems: u64,
+        name: &str,
+    ) -> GlobalId {
         let et = match elem_size {
             1 => LTy::I8,
             2 => LTy::I16,
@@ -1305,7 +1319,7 @@ impl<'a> Cg<'a> {
             }
             self.m.const_array(et, &es).expect("string array")
         };
-        let g = self.private_const(".str", init, elem_size);
+        let g = self.private_const(name, init, elem_size);
         self.strings.insert((at, bytes.to_vec()), g);
         g
     }

@@ -5,7 +5,9 @@
 //! descent. A `None` result ([`PExpr`]) means a syntax error was reported
 //! and the caller must recover; semantic errors yield an error expression.
 
-use kiln_ast::expr::{BinaryOp, ExprKind, SourceLocKind, TraitKind, TypeTrait, UnaryOp};
+use kiln_ast::expr::{
+    BinaryOp, ExprKind, PredefinedKind, SourceLocKind, TraitKind, TypeTrait, UnaryOp,
+};
 use kiln_ast::names::DeclName;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
@@ -993,6 +995,15 @@ impl Parser<'_, '_> {
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
+                Kw::Func | Kw::FunctionName | Kw::PrettyFunction => {
+                    self.bump();
+                    let kind = match k {
+                        Kw::Func => PredefinedKind::Func,
+                        Kw::FunctionName => PredefinedKind::Function,
+                        _ => PredefinedKind::PrettyFunction,
+                    };
+                    Some(self.s.act_on_predefined_expr(kind, loc))
+                }
                 Kw::BuiltinFile => self.parse_source_loc_expr(SourceLocKind::File),
                 Kw::BuiltinFileName => self.parse_source_loc_expr(SourceLocKind::FileName),
                 Kw::BuiltinFunction => self.parse_source_loc_expr(SourceLocKind::Function),

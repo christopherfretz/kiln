@@ -1508,7 +1508,10 @@ impl Compiler<'_> {
             }
             // [expr.const]/5: evaluating a goto statement is not a core
             // constant expression (clang: the generic note at the `goto`).
-            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt => {
+            // [dcl.asm]/1, [expr.const]/5: an asm statement is never a
+            // core constant expression (clang: the generic note at `asm`;
+            // spec/oven.md, WP-140).
+            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt | StmtKind::GCCAsmStmt => {
                 self.trap_loc(n.loc(), "subexpression not valid in a constant expression".into());
             }
             // A label is evaluated by evaluating its statement (clang
@@ -3126,6 +3129,12 @@ impl Compiler<'_> {
                     return Place::Mem(a);
                 }
                 Place::Mem(r)
+            }
+            // `__func__` and friends designate their `StringLiteral`
+            // ([dcl.fct.def.general]/8; clang `getFunctionName`).
+            ExprKind::PredefinedExpr if self.ast().exprs.predefined_name(e).is_some() => {
+                let sl = self.ast().exprs.predefined_name(e).unwrap_or(e);
+                self.lv(sl, acc)
             }
             ExprKind::StringLiteral => {
                 let s = self.ast().exprs.string_lit(e);

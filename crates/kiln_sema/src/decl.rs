@@ -4427,6 +4427,16 @@ impl Sema<'_, '_> {
     /// [basic.lookup.unqual]); `qualifier` is the context named by a
     /// preceding nested-name-specifier.
     pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        // A typedef qualifier names its class or enumeration, as in
+        // `nested_name_from_found` ([basic.lookup.qual.general]/1).
+        let qualifier = qualifier.map(|q| match self.kind_of(q) {
+            DeclKind::Typedef | DeclKind::TypeAlias if !self.is_dependent_ctx(q) => {
+                let ty = self.ast.decls.get(q).ty().unwrap_or(QualType::ERROR);
+                let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
+                r.map_or(q, |r| self.ast.definition(r).unwrap_or(r))
+            }
+            _ => q,
+        });
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::ClassTemplate
         {

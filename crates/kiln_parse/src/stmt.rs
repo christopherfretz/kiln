@@ -124,7 +124,8 @@ impl Parser<'_, '_> {
                 Kw::Return => return self.parse_return(),
                 Kw::Goto => return self.parse_goto(),
                 Kw::Try => return self.parse_try_stmt(),
-                Kw::CoReturn | Kw::Asm => {
+                Kw::Asm => return self.parse_asm_statement(),
+                Kw::CoReturn => {
                     self.unsupported(&format!("'{}' statements", k.spelling()), loc);
                     self.skip_statement();
                     return None;
