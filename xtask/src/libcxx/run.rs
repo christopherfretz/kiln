@@ -16,6 +16,11 @@ pub struct Config {
     pub kiln: PathBuf,
     /// The `llvm-project` checkout (holding `libcxx/test`).
     pub checkout: PathBuf,
+    /// The release tag the checkout should be at (`--tag`).
+    pub tag: String,
+    /// `/usr/lib/llvm-N` of `KILN_ORACLE`: kiln++ runs with it as
+    /// `KILN_LLVM_DIR` (`spec/harness.md` "Oracle toolchain").
+    pub llvm_dir: PathBuf,
     pub resource_dir: PathBuf,
     pub features: Vec<String>,
     pub compile_timeout: Duration,
@@ -285,11 +290,13 @@ fn execute(
     let compile = |extra: &[&str]| {
         let mut c = Command::new(&cfg.kiln);
         c.args(cfg.base_compile_flags()).args(flags).args(extra).arg(src);
+        c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
         c
     };
     let link = || {
         let mut c = Command::new(&cfg.kiln);
         c.arg(&obj).arg("-o").arg(&exe).args(Config::link_flags());
+        c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
         c
     };
     let obj_s = obj.display().to_string();

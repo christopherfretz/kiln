@@ -13,7 +13,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Stress | `tests/stress/` | Deep nesting, huge packs, the stack guard, runaway-allocation regressions, under `mem<=N` budgets |
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
-| libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
+| libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
 | Feature table | `docs/status/cxx-features.md`, checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every C++23/C++26 paper marked `done` has passing tests and clang 22's `__cpp_*` value |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 
@@ -209,13 +209,25 @@ the local run is still the merge gate (docs/AGENTS.md rule 3).
 
 `clang-19` is the oracle for everything that is not a kiln-specific feature.
 
+The oracle release is selected by `KILN_ORACLE` (`19`, the default and the
+release the M3 gate and its numbers stay on, or `22` for the M4+ switch,
+WP-184). It names `clang++-N`, `opt-N`, `llc-N`, `FileCheck-N` and
+`/usr/lib/llvm-N` in one place (`xtask/src/oracle.rs`); `xtask test` and
+`ci` use `clang++-N` as the oracle and self-check compiler and run kiln++
+with `KILN_LLVM_DIR=/usr/lib/llvm-N`, `ir_vs_clang` runs `clang++-N`/`opt-N`,
+and `xtask libcxx --tag` picks a libc++ test checkout
+(`.toolchain/libcxx-<tag>`, one per release). Until steps B–E of
+docs/status/wp-184-oracle-switch.md land, the corpus is baselined on 19 and
+`KILN_ORACLE=22` runs report FAILs (never mapping-table ERRORs). Contract:
+spec/harness.md "Oracle toolchain".
+
 **Clang compatibility level.** kiln reproduces one clang release's
 predefined macros and `__has_builtin`/`__has_feature`/`__has_extension`/
 `__has_attribute`/`__has_cpp_attribute` answers, chosen by
 `-fclang-compat=<major>`: 19 (the default) or 22 (spec/pp.md "clang
 compatibility level"; WP-263). The test runner passes the oracle's major
-version, so `cargo xtask test --oracle clang++-22` compares kiln at level 22
-with clang 22 and headers take the same `#if` branches under both. The
+version, so `KILN_ORACLE=22` (or `--oracle clang++-22`) compares kiln at
+level 22 with clang 22 and headers take the same `#if` branches under both. The
 `__cpp_*` feature-test macros are not part of the level: they follow what
 kiln implements (docs/status/cxx-features.md). Builtins that only clang 22
 has are tested by `skip(clang)` tests that were checked by hand against

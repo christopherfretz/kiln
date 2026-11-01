@@ -14,7 +14,7 @@ cargo xtask test [options] [paths...]
 | Option | Meaning |
 |---|---|
 | `--compiler <path>` | Compiler under test. Default: `cargo build -p kiln_driver`, then `kiln++` (the `kiln` binary under its C++ name, made beside it if missing) in the target dir (`$CARGO_TARGET_DIR`, else `target_directory` from `cargo metadata`), `debug` profile. |
-| `--oracle <path>` | Oracle compiler for `run`/`pp`/`ast`/`layout`/`vtables` comparisons. Default `clang++-19`. |
+| `--oracle <path>` | Oracle compiler for `run`/`pp`/`ast`/`layout`/`vtables` comparisons. Default `clang++-N` of `KILN_ORACLE` (`clang++-19`; see "Oracle toolchain"). |
 | `--no-oracle` | Skip all oracle comparisons (`layout` and `vtables` tests, which have no other reference, are then a SKIP). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--update` | Rewrite existing pp and ast `.expected` goldens with the actual output. |
@@ -181,6 +181,42 @@ The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
 the inherited environment plus `env:`, and the `run-stdin:` /
 `run-stdin-file:` bytes on stdin (empty without them). The oracle's binary
 gets the same.
+
+### Oracle toolchain
+
+One environment variable, `KILN_ORACLE`, names the clang/LLVM release the
+harness compares kiln with. It accepts `19` (the default when unset or
+empty, and the release the M3 gate runs on) or `22`; any other value is an
+infrastructure error (exit 2) naming the two accepted values, raised before
+anything is built or run, by `xtask test`, `ci`, `stress`, `clang-ast`,
+`gen-pp-corpus` and `libcxx` alike. The one place that maps the release to
+tools is `xtask/src/oracle.rs`:
+
+| Release N names | Used by |
+|---|---|
+| `clang++-N` | the default `--oracle` of `test`/`stress`; the `ci` self-check compiler (step 3); the default `--compiler` of `clang-ast` |
+| `opt-N`, `llc-N`, `FileCheck-N` | named for the IR-diff and libc++ steps (WP-184 step E); `crates/kiln_codegen/tests/ir_vs_clang.rs` reads `KILN_ORACLE` itself (a test crate cannot use xtask) and runs `clang++-N`/`opt-N` |
+| `/usr/lib/llvm-N` | exported as `KILN_LLVM_DIR` to every kiln++ the harness runs (`test` compiles and links with kiln as the compiler or the oracle; `libcxx` compiles, links and the `_LIBCPP_VERSION` probe), so kiln's headers, `llc`, `opt` and link driver are release N's (`kiln_driver/src/toolchain.rs`) |
+| `/usr/lib/llvm-N/include/c++/v1` | the default `gen-pp-corpus --libcxx`; `libcxx` refuses to run (exit 2) when it is missing |
+
+What a run passes, by role: the compiler under test gets the test's flags
+and, when it is kiln, `KILN_LLVM_DIR=/usr/lib/llvm-N`; the oracle is
+`clang++-N` with the same flags (an explicit `--oracle` replaces the
+compiler, not N: kiln still gets release N's directory). Clang ignores
+`KILN_LLVM_DIR`, so a clang under test or a clang oracle runs as before.
+With `KILN_ORACLE` unset every command is what it was before the variable
+existed (kiln_driver's own default is `/usr/lib/llvm-19`). `requires:
+clang>=N` compares with the oracle's `--version`, so it follows the
+release without further configuration.
+
+The goldens, `//@ diag:` directives, kiln's builtin tables and the IR-diff
+baseline are clang 19's; under `KILN_ORACLE=22` FAILs are expected until
+WP-184 steps B–E land (docs/status/wp-184-oracle-switch.md). An ERROR
+under 22 from the AST normalizer ("is not in the mapping table") is a
+harness bug: `xtask/src/clang_ast/table.rs` lists the clang 22 JSON
+attributes it ignores (`TemplateInstantiationPattern` on
+`ClassTemplateSpecializationDecl`, `hasExplicitParameters` on
+`LambdaExpr`; WP-262).
 
 ### Oracle
 
@@ -417,7 +453,7 @@ included on their own (`gnumake.h`, `regexp.h`).
 
 Options: `--std <std>` (default `c++26`; any other standard goes to sibling
 files named `<header>.<std>.cpp`), `--libcxx <dir>` (default
-`/usr/lib/llvm-19/include/c++/v1`), `--sysroot <dir>` (default
+`/usr/lib/llvm-N/include/c++/v1`, N from `KILN_ORACLE`), `--sysroot <dir>` (default
 `/usr/include`), `--out <dir>`, and `--check` (write nothing; exit 1 if any
 file would change). The generator writes only changed files, removes stale
 generated files (those starting with its banner) in the directories it owns,
@@ -632,15 +668,18 @@ runs, stopping at the first failing step:
 
 then the two corpus runs, both over the default paths (`tests/conformance`,
 `tests/differential` and `tests/stress`) with the default oracle
-`clang++-19` and the default `--mem-limit` (8192 MiB). Both run even
+`clang++-N` (N from `KILN_ORACLE`, default 19; "Oracle toolchain") and the
+default `--mem-limit` (8192 MiB). A bad `KILN_ORACLE` fails `ci` (exit 2)
+before step 0. Both run even
 if the first fails, so one cannot hide the other:
 
-3. **clang self-check**: `cargo xtask test --compiler clang++-19`. The corpus
+3. **clang self-check**: `cargo xtask test --compiler clang++-N` (printed
+   as `corpus (clang++-N self-check)`). The corpus
    must pass with the reference compiler, or the corpus is wrong. It is
-   skipped, with the reason, under `--quick` or when `clang++-19` is not on
+   skipped, with the reason, under `--quick` or when `clang++-N` is not on
    PATH (`--version` cannot be run).
 4. **kiln mode**: `cargo xtask test --compiler <the kiln built in step 2>`.
-   It is never skipped. It needs clang 19 (the oracle, and kiln's linker), so
+   It is never skipped. It needs clang N (the oracle, and kiln's linker), so
    without clang it ends in an infrastructure error and `ci` fails.
 
 `ci` then prints one line per corpus run, `xtask ci: corpus (<run>): <line>`,
@@ -798,7 +837,13 @@ infrastructure error. Parse errors name their line.
   conformance corpus.
 - `xtask/src/clang_ast/tests.rs`: the clang-ast normalizer (the mapping
   table covers M2, unknown kinds and keys are errors, the spec example,
-  values, strings, the side channel), over `xtask/fixtures/ast/normalize/`.
+  values, strings, the side channel), over `xtask/fixtures/ast/normalize/`;
+  the clang 22 attributes it ignores
+  (`clang22_template_instantiation_pattern_is_ignored`,
+  `clang22_lambda_has_explicit_parameters_is_ignored`).
+- `xtask/src/oracle.rs`: "Oracle toolchain": `KILN_ORACLE` unset/empty is
+  19, `19` and `22` name their tools and directories, anything else is an
+  error naming both values.
 
 - `xtask/src/features.rs` tests: the feature-table parser over
   `xtask/fixtures/features/{good,bad}.md` (cells, macro forms, code-span

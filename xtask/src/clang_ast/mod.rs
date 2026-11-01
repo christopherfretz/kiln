@@ -31,7 +31,8 @@ Runs clang on <file> and prints its AST in the kiln dump format
 (spec/ast-dump.md), as `kiln++ -fsyntax-only -fdump-ast` would.
 
 options:
-  --compiler=<clang>   the clang to run (default: clang++-19)
+  --compiler=<clang>   the clang to run (default: clang++-N, N from KILN_ORACLE: 19
+                       or 22, default 19; spec/harness.md \"Oracle toolchain\")
   --std=<std>          language standard (default: c++26)
   --implicit           include implicit declarations (-fdump-ast=implicit)
   --all-files          include top-level declarations from included files
@@ -39,9 +40,6 @@ options:
   --filter=<substr>    dump each declaration whose qualified name contains
                        <substr> (-fdump-ast-filter=<substr>)
 ";
-
-/// Default clang for the CLI (the harness passes its own).
-const DEFAULT_CLANG: &str = "clang++-19";
 
 /// The kiln `-fdump-ast` options the normalizer supports
 /// (`spec/ast-dump.md` §1; `ids`, `locs` and `canonical` have no clang
@@ -135,7 +133,8 @@ struct Cli {
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Cli>, String> {
     let mut cli = Cli {
         file: String::new(),
-        compiler: PathBuf::from(DEFAULT_CLANG),
+        // The CLI's default is the oracle clang (the harness passes its own).
+        compiler: PathBuf::from(crate::oracle::Oracle::from_env()?.clang()),
         std: "c++26".into(),
         opts: DumpOptions::default(),
         extra: Vec::new(),

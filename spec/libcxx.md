@@ -9,18 +9,36 @@ need. It is a separate manual or periodic gate. It is **not** part of
 
 ## Test sources
 
-`scripts/fetch-libcxx-tests.sh [dir]` makes a shallow, sparse, blobless
-checkout of `llvmorg-19.1.7` (paths `libcxx/test` and `libcxx/utils`). The
-default location is `.toolchain/llvm-project` of the main checkout (a
-worktree resolves to its main checkout through `core.worktree`). The script
-is idempotent: a checkout already at the tag is left alone. It prints the
-path. `LLVM_TAG` and `LLVM_REPO` override the tag and the remote.
+`scripts/fetch-libcxx-tests.sh [<tag>] [<dir>]` makes a shallow, sparse,
+blobless checkout of an llvm-project release tag (paths `libcxx/test` and
+`libcxx/utils`); `<tag>` is an `llvmorg-*` tag, default `$LLVM_TAG`, else
+`llvmorg-19.1.7` (a first argument not starting with `llvmorg-` is
+`<dir>`). The default location is `.toolchain/libcxx-<tag>` of the main
+checkout (a worktree resolves to its main checkout through
+`core.worktree`), so checkouts of two releases coexist: the M3 gate stays on
+19 while the clang 22 oracle (spec/harness.md "Oracle toolchain") uses 22.
+The script is idempotent: a checkout already at the tag is left alone, and
+for the default tag a checkout at the older location
+`.toolchain/llvm-project` is used as is. It prints the path. `LLVM_REPO`
+overrides the remote.
 
-`cargo xtask libcxx` looks for `<repo>/.toolchain/llvm-project` first, then
-the main checkout's. `--libcxx-tests <dir>` overrides both. If
+`cargo xtask libcxx` uses the checkout of `--tag <tag>` (default
+`$KILN_LIBCXX_TAG`, else `llvmorg-19.1.7`; a tag not of the form
+`llvmorg-<version>` is a usage error): `<repo>/.toolchain/libcxx-<tag>`,
+then the main checkout's, and for `llvmorg-19.1.7` then
+`.toolchain/llvm-project` of each, the first that exists.
+`--libcxx-tests <dir>` overrides them. If
 `<dir>/libcxx/test/support/test_macros.h` is missing, it fails with exit
 status 2 and the one-line message `libc++ tests not found at <dir>; run
-scripts/fetch-libcxx-tests.sh`.
+scripts/fetch-libcxx-tests.sh <tag>`. The report's tests line names the
+checkout's `git describe` and, when it differs from the tag, `(expected
+<tag>)`.
+
+kiln++ runs with `KILN_LLVM_DIR=/usr/lib/llvm-N` of `KILN_ORACLE`
+(spec/harness.md "Oracle toolchain"; default 19), whose libc++ headers
+must be the release the tests come from; when
+`/usr/lib/llvm-N/include/c++/v1` is missing the run fails with exit status
+2 before compiling anything (`--list` does not need it).
 
 ## Command line
 
@@ -32,6 +50,7 @@ cargo xtask libcxx [options] [<dir>...]
 |---|---|
 | `<dir>` | Directories relative to `libcxx/test`, walked recursively. Each one is a row of the report. `Inputs/` directories are skipped, as lit skips them. With no `<dir>`, the default is `--gate m3`. |
 | `--gate m3` | The M3 gate directories (below). With `<dir>`s, those are added after them. |
+| `--tag <tag>` | The release whose checkout to use (above). Default `$KILN_LIBCXX_TAG`, else `llvmorg-19.1.7`. |
 | `--libcxx-tests <dir>` | The `llvm-project` checkout. |
 | `--compiler <path>` | kiln binary. Default: `cargo build -p kiln_driver` (debug), then `kiln++`. |
 | `--filter <s>` | Keep only tests whose path (relative to `libcxx/test`) contains `<s>`. |
@@ -266,7 +285,10 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 - `cluster.rs`: normalization, message extraction, counting, crash keys.
 - `run.rs`: verdict order, outcome rules.
 - `report.rs`: counts, page rendering, marker splicing.
-- `mod.rs`: options, discovery, `lit.local.cfg` lookup.
+- `mod.rs`: options, discovery, `lit.local.cfg` lookup; `tag_selection`
+  (`--tag`, `KILN_LIBCXX_TAG`, bad tags) and `checkouts_coexist` (two
+  `.toolchain/libcxx-<tag>` checkouts side by side, the legacy
+  `.toolchain/llvm-project` for the default tag only).
 - `features.rs`: the set is sorted and unique, with no compiler-identity
   feature.
 
