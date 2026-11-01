@@ -61,6 +61,62 @@ pub fn error_keys(stderr: &str) -> Vec<(String, String)> {
     seen
 }
 
+/// The cluster texts of a `-verify` report (spec/libcxx.md
+/// ".verify.cpp"): one key per listed entry, `verify: <level> <expected
+/// but not seen|seen but not expected>: <normalized text>`, in order of
+/// first appearance. Entries are the indented lines after a
+/// `'<prefix>-<level>' diagnostics ...:` header; the `File X Line N` (and
+/// `(directive at ...)`) prefix is dropped. Empty when `stderr` is not a
+/// verify report.
+pub fn verify_keys(stderr: &str) -> Vec<(String, String)> {
+    let mut seen = Vec::<(String, String)>::new();
+    let mut section: Option<String> = None;
+    for line in stderr.lines() {
+        if let Some(m) = error_message(line) {
+            section = verify_section(m);
+            continue;
+        }
+        let Some(sec) = &section else { continue };
+        let Some(entry) = line.strip_prefix("  ") else {
+            section = None;
+            continue;
+        };
+        let text = verify_entry_text(entry);
+        let k = format!("{sec}: {}", normalize(text));
+        if !seen.iter().any(|(s, _)| *s == k) {
+            seen.push((k, text.to_owned()));
+        }
+    }
+    seen
+}
+
+/// `'expected-error' diagnostics expected but not seen:` to
+/// `verify: error expected but not seen`.
+fn verify_section(msg: &str) -> Option<String> {
+    let rest = msg.strip_prefix('\'')?;
+    let (name, rest) = rest.split_once('\'')?;
+    let level = name.rsplit('-').next()?;
+    let what = rest.trim().strip_prefix("diagnostics ")?.strip_suffix(':')?;
+    Some(format!("verify: {level} {what}"))
+}
+
+/// The message of one report entry: after `File X Line N[ (directive at
+/// f:l)]: ` or `(frontend): `.
+fn verify_entry_text(entry: &str) -> &str {
+    let e = entry.trim_start();
+    if let Some(m) = e.strip_prefix("(frontend): ") {
+        return m;
+    }
+    let after_line = e.find("Line ").map_or(e, |i| &e[i..]);
+    let after_dir = match after_line.find(" (directive at ") {
+        Some(i) if after_line[..i].bytes().skip(5).all(|b| b.is_ascii_digit()) => {
+            after_line[i..].find("): ").map_or(after_line, |j| &after_line[i + j + 1..])
+        }
+        _ => after_line,
+    };
+    after_dir.split_once(": ").map_or(e, |(_, m)| m)
+}
+
 /// One row of the clusters table.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Cluster {
@@ -142,6 +198,22 @@ pub fn crash_key(stderr: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// spec/libcxx.md ".verify.cpp": one key per report entry.
+    #[test]
+    fn verify_report_keys() {
+        let report = "error: 'expected-error' diagnostics expected but not seen: \n  File /a/t.cpp Line 12: call to deleted function 'f'\n  File /a/t.cpp Line 9 (directive at /a/t.cpp:30): call to deleted function 'g'\nerror: 'expected-warning' diagnostics seen but not expected: \n  File /a/t.cpp Line 3: unused variable 'x'\n  (frontend): odd: thing\n3 errors generated.\n";
+        let keys: Vec<String> = verify_keys(report).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            [
+                "verify: error expected but not seen: call to deleted function '…'",
+                "verify: warning seen but not expected: unused variable '…'",
+                "verify: warning seen but not expected: odd: thing",
+            ]
+        );
+        assert_eq!(verify_keys("t.cpp:1:2: error: boom\n"), Vec::new());
+    }
 
     #[test]
     fn normalization() {

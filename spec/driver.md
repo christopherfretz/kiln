@@ -75,6 +75,8 @@ starting with `-` are inputs.
 | `-v`, `--verbose`, `--version`, `--help` | see below |
 | `-F <dir>` | accepted; warns `ignoring framework directory` |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
+| `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | with `-fsyntax-only`: check the diagnostics against `expected-*` comments (see "-verify") |
+| `-Xclang <arg>` | `<arg>` is parsed as a driver option (kiln has no separate `cc1`), so `-Xclang -verify` is `-verify` |
 | `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | with `-fsyntax-only`: the AST dump (`spec/ast-dump.md`) to the output |
 | `-fdump-record-layouts`, `-fdump-record-layouts-complete` | with `-fsyntax-only`: the record layouts (`spec/abi.md` §6, §8.4) to the output |
 | `-fdump-vtable-layouts` | with `-fsyntax-only`: the vtable groups (`spec/abi.md` §8.5) to the output |
@@ -258,8 +260,47 @@ An unknown `-fdump-ast` option gives `invalid value '<opt>' in
 '-fdump-ast=<opts>'`.
 
 C inputs (`-x c`, `.c`), `-MD`/`-MMD` with `-fsyntax-only`, and
-`-fdump-ast`, `-fdump-record-layouts` or `-fdump-vtable-layouts` without
-`-fsyntax-only` are "not implemented yet".
+`-fdump-ast`, `-fdump-record-layouts`, `-fdump-vtable-layouts` or
+`-verify` without `-fsyntax-only` are "not implemented yet".
+
+## `-verify`
+
+`-verify` is clang's `-cc1 -verify` (WP-143). The consumer, its
+directive grammar, the matching rules and the report are spec/diag.md
+§11. This section covers the options and the driver's part.
+
+- **Options.** These follow clang's `ParseDiagnosticArgs`.
+  - `-verify` adds the prefix `expected`.
+  - `-verify=<p>[,<p>...]` adds each listed prefix. The option may be
+    repeated, and the prefixes accumulate.
+  - All prefixes are then validated, sorted and deduplicated. An
+    invalid one gives `invalid value '<p>' in '-verify='` plus the note
+    `-verify prefixes must start with a letter and contain only
+    alphanumeric characters, hyphens, and underscores`, and turns
+    verify off.
+  - `-verify-ignore-unexpected` ignores unexpected diagnostics of every
+    level. `=<levels>` (comma-separated `note`, `remark`, `warning`,
+    `error`) ignores only those. Any other value gives
+    `invalid value '<v>' in '-verify-ignore-unexpected='`. These errors
+    come after the prefix errors.
+  - `-Xclang <arg>` forwards `<arg>` to the same parser. A trailing
+    `-Xclang` is `argument to '-Xclang' is missing`.
+- **Run.**
+  - Each input is parsed as for `-fsyntax-only`, with diagnostics going
+    to a buffer instead of stderr.
+  - The preprocessor's comment handler feeds every lexed comment to the
+    verifier.
+  - `@<file>:N` resolves `<file>` like a quoted include: an absolute
+    path as is; otherwise relative to the directive's file, then the
+    search directories in order, then relative to the working directory.
+  - After the parse the verifier reports marker errors and checks the
+    buffer.
+  - Its report goes to stderr in the selected diagnostic format. In the
+    text format it is followed by `N error[s] generated.`.
+- **Exit status.** 1 if the report has any problem, else 0, whatever
+  the matched diagnostics were. The error limit (`-ferror-limit`)
+  still applies to the buffered diagnostics, as it does in clang;
+  libc++ passes `-ferror-limit=0`.
 
 ## Code generation
 
@@ -479,6 +520,9 @@ Each deviation is covered by a test or a test note.
     only when code generation emits it (so never under `-fsyntax-only`),
     in emission order, sometimes repeating a construction vtable, and
     prints its `Original map` debugging sections, which kiln omits.
+17. **`-verify` needs `-fsyntax-only`.** clang also verifies a full
+    compile. `-Xclang` forwards to the driver parser, not to a `cc1`,
+    so only options the driver knows are accepted after it.
 
 ## Tests
 
@@ -493,6 +537,10 @@ Each deviation is covered by a test or a test note.
   - the driver modes (`driver_modes`): the name, `--driver-mode=`, `-x`
     precedence, the C++-mode warning under `-W` options, `kiln` taking
     `.c`/`.h`/`.i`/stdin as C.
+- `crates/kiln_driver/tests/verify.rs`: `-verify` end to end under both
+  names (`kiln` and `kiln++`): the report pinned against clang 19, and
+  compared live with `clang++-19 -Xclang -verify` when it is installed.
+  `args.rs` unit tests cover the option semantics.
 - `crates/kiln_driver/tests/codegen.rs`: the codegen path end to end
   (`.ll`, `.s`, `.o`, linking and running, output naming, `-###`, `-v`,
   unused-input warnings, missing tools; `kiln_and_kilnpp`: both names as
