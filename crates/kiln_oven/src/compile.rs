@@ -786,6 +786,13 @@ impl<'a> Compiler<'a> {
 
     fn unsupported(&mut self, e: ExprId) {
         let k = self.b.ast().exprs.get(e).kind();
+        if k == ExprKind::RecoveryExpr {
+            // An expression sema already diagnosed (clang's contains-errors
+            // RecoveryExpr) fails evaluation silently: an empty message
+            // renders no notes (notes.rs).
+            let loc = self.b.ast().exprs.get(e).loc();
+            return self.trap_loc(loc, String::new());
+        }
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
     }
 

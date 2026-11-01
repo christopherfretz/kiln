@@ -25,6 +25,14 @@ impl Substituter<'_, '_, '_> {
         }
         match self.stmt_node(s) {
             Ok(x) => x,
+            // A declaration statement whose initializer failed keeps the
+            // function valid (clang keeps the invalid variable); its
+            // evaluation fails silently. Any other failed statement makes
+            // the instantiated function invalid.
+            Err(SubstFail) if self.sema.ast.stmts.get(s).kind() == StmtKind::DeclStmt => {
+                let e = self.sema.recover_err(&[], loc);
+                self.sema.act_on_expr_stmt(e)
+            }
             Err(SubstFail) => {
                 self.failed = true;
                 self.sema.act_on_null_stmt(loc)

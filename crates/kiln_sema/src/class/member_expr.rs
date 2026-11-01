@@ -212,6 +212,11 @@ impl Sema<'_, '_> {
             found_decl: shadow,
         });
         let kind = self.kind_of(m);
+        if kind.is_function() && self.ast.decls.get(m).has(DeclFlags::INVALID) {
+            // An already-invalid member function: erroneous, undiagnosed
+            // (as a reference to it by name, expr.rs).
+            return self.recover_err(&[b], loc);
+        }
         match kind {
             DeclKind::Field | DeclKind::IndirectField => {
                 let Some(target) = self.declaring_class(m) else {

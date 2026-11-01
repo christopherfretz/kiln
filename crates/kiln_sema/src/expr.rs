@@ -1062,6 +1062,12 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[], loc);
             }
         }
+        // A reference to a function already invalid (its body failed to
+        // instantiate, diagnosed then) is erroneous with no diagnostic of
+        // its own (clang's `BuildDeclarationNameExpr`).
+        if n.kind().is_function() && n.has(DeclFlags::INVALID) {
+            return self.recover_err(&[], loc);
+        }
         if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
             && self.check_undeduced_use(d, loc)
         {
