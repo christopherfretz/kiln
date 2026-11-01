@@ -126,7 +126,9 @@ clang's `CodeGenModule` pipeline:
    and replays them through `emit_global_*` in that order, which is
    clang's `HandleTopLevelDecl` of each instantiation (a static data
    member's replayed definition is its instantiated out-of-line
-   redeclaration, initializer or not: `template<class T> T A<T>::s;`).
+   redeclaration, initializer or not: `template<class T> T A<T>::s;`; a
+   variable template specialization used before its template was
+   defined has no redeclaration and is replayed itself, WP-238).
 4. **`emit_deferred`** (clang `EmitDeferred`): deferred vtables first,
    then `to_emit`, recursing depth-first into the names each definition
    newly references.

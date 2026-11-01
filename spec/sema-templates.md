@@ -1188,8 +1188,13 @@ follow clang:
 
 `tests/conformance/temp.inst/undefined-var-template.cpp` pins all of
 this. A variable template defined later in the TU is instantiated
-silently, but codegen still emits it as an external declaration
-(follow-up).
+silently: its queued implicit specialization finds the definition seen
+since (`instantiate_pending` -> `instantiate_late_var_spec`, clang
+`InstantiateVariableDefinition`) and is recorded in `end_of_tu_defs`, so
+codegen emits it as its own linkonce_odr definition (WP-238,
+`tests/codegen/var_template_defined_after_use.cpp`). One usable in
+constant expressions (`const int`) is not queued and stays an external
+declaration, as in clang.
 
 **Member variable templates defined out of line** (`template<class T>
 T A::v = T(1);`, WP-206). The implicit specialization `A::v<int>` is a

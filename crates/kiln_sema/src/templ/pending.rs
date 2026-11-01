@@ -142,8 +142,24 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        let had = self.ast.definition(p.decl).is_some();
         let is_var = self.kind_of(p.decl) == kiln_ast::decl::DeclKind::Var;
+        if is_var
+            && self.is_implicit_var_spec(p.decl)
+            && !self.inst.member_defs.contains(&p.decl)
+            && self.ast.decls.var(p.decl).is_some_and(|v| v.init.is_none())
+        {
+            // An implicit variable template specialization used before its
+            // template's definition: instantiated from the definition seen
+            // since (clang `InstantiateVariableDefinition` finds the
+            // pattern's definition at the end of the TU), and emitted as
+            // its own definition (spec/codegen.md §2a).
+            self.instantiate_late_var_spec(p.decl, p.poi);
+            if self.ast.decls.var(p.decl).is_some_and(|v| v.init.is_some()) {
+                self.ast.templates.add_end_of_tu_def(p.decl);
+                return;
+            }
+        }
+        let had = self.ast.definition(p.decl).is_some();
         let redecls = self.ast.redecls_of(p.decl).count();
         if is_var {
             self.instantiate_static_member_def(p.decl, p.poi);
