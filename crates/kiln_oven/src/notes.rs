@@ -674,7 +674,7 @@ impl Oven {
                 let off = u64::from(Ptr::decode(raw).off);
                 s.push('{');
                 if union {
-                    if let Some(&i) = self.mem.unions.get(&Ptr::union_key(raw, off)) {
+                    if let Some(&i) = self.mem.unions.get(&Ptr::union_key(raw, off, t)) {
                         let f = fields[i as usize];
                         let _ = write!(s, ".{} = ", name_of(ast, f.decl));
                         self.write_field(ast, s, raw, f, depth);
@@ -844,7 +844,7 @@ impl Oven {
                 && self.types.has_subobject(f.ty, rel - f.offset, pointee)
         };
         let active =
-            self.mem.unions.get(&Ptr::union_key(raw, at)).and_then(|&i| fs.get(i as usize));
+            self.mem.unions.get(&Ptr::union_key(raw, at, t)).and_then(|&i| fs.get(i as usize));
         active
             .filter(holds)
             .or_else(|| fs.iter().find(holds))

@@ -654,7 +654,7 @@ impl Oven {
             TyKind::Record { union, first, count, .. } => {
                 let (first, count) = (first as usize, count as usize);
                 if union {
-                    let key = Ptr::union_key(raw, u64::from(p.off));
+                    let key = Ptr::union_key(raw, u64::from(p.off), t);
                     let Some(&i) = self.mem.unions.get(&key) else { return Ok(()) };
                     let f = self.types.fields[first + i as usize];
                     s.unions.push(UnionMember { at: at as u32, field: f.decl });
@@ -960,10 +960,11 @@ impl Oven {
             let at = u64::from(u.at);
             let idx =
                 self.types.unions(aty).iter().filter(|&&(o, _)| o == at).find_map(|&(_, ut)| {
-                    self.types.fields(ut).iter().position(|f| f.decl == u.field)
+                    let i = self.types.fields(ut).iter().position(|f| f.decl == u.field)?;
+                    Some((i, ut))
                 });
-            if let Some(i) = idx {
-                self.mem.unions.insert(Ptr::union_key(p, u64::from(pp.off) + at), i as u32);
+            if let Some((i, ut)) = idx {
+                self.mem.unions.insert(Ptr::union_key(p, u64::from(pp.off) + at, ut), i as u32);
             }
         }
     }

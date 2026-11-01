@@ -1628,7 +1628,7 @@ impl Oven {
                     let active = if union {
                         self.mem
                             .unions
-                            .get(&Ptr::union_key(raw, base))
+                            .get(&Ptr::union_key(raw, base, t))
                             .and_then(|&i| fields.get(i as usize))
                             .filter(contains)
                     } else {
@@ -1724,7 +1724,7 @@ impl Oven {
                         rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
                     };
                     if union {
-                        let active = self.mem.unions.get(&Ptr::union_key(raw, base)).copied();
+                        let active = self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied();
                         let reach = |f: &crate::ty::FieldInfo| {
                             contains(f)
                                 && (f.width.is_some()
@@ -1936,9 +1936,9 @@ impl Oven {
             let (so, dof) = (u64::from(Ptr::decode(src).off), u64::from(Ptr::decode(dst).off));
             let (a, z) = self.types.info(ty).upos;
             for i in a..z {
-                let o = self.types.union_pos[i as usize].0;
-                let v = self.mem.unions.get(&Ptr::union_key(src, so + o)).copied();
-                self.mem.union_put(Ptr::union_key(dst, dof + o), v);
+                let (o, ut) = self.types.union_pos[i as usize];
+                let v = self.mem.unions.get(&Ptr::union_key(src, so + o, ut)).copied();
+                self.mem.union_put(Ptr::union_key(dst, dof + o, ut), v);
             }
         }
         Ok(())
@@ -1962,13 +1962,13 @@ impl Oven {
                     // Clear stale entries of nested unions first.
                     let (a, z) = self.types.info(t).upos;
                     for i in a..z {
-                        let o = self.types.union_pos[i as usize].0;
-                        self.mem.union_put(Ptr::union_key(raw, off + o), None);
+                        let (o, ut) = self.types.union_pos[i as usize];
+                        self.mem.union_put(Ptr::union_key(raw, off + o, ut), None);
                     }
                     if count == 0 {
                         return;
                     }
-                    self.mem.union_put(Ptr::union_key(raw, off), Some(0));
+                    self.mem.union_put(Ptr::union_key(raw, off, t), Some(0));
                     let f = self.types.fields[first as usize];
                     if self.types.info(f.ty).has_union {
                         self.zero_unions(raw, off + f.offset, f.ty);
@@ -2110,7 +2110,7 @@ impl Oven {
             return Err(Fault::Mem { f, ak: k, ty: uty, p: raw });
         }
         let off = u64::from(Ptr::decode(raw).off);
-        let key = Ptr::union_key(raw, off);
+        let key = Ptr::union_key(raw, off, uty);
         if self.mem.unions.get(&key) == Some(&idx) {
             return Ok(());
         }
@@ -2122,8 +2122,8 @@ impl Oven {
         }
         let (a0, z) = self.types.info(uty).upos;
         for i in a0..z {
-            let o = self.types.union_pos[i as usize].0;
-            self.mem.union_put(Ptr::union_key(raw, off + o), None);
+            let (o, ut) = self.types.union_pos[i as usize];
+            self.mem.union_put(Ptr::union_key(raw, off + o, ut), None);
         }
         self.mem.union_put(key, Some(idx));
         Ok(())
@@ -2185,7 +2185,7 @@ impl Oven {
             // The access itself reports it.
             return Ok(());
         }
-        let active = self.mem.unions.get(&Ptr::union_key(raw, u64::from(p.off))).copied();
+        let active = self.mem.unions.get(&Ptr::union_key(raw, u64::from(p.off), uty)).copied();
         if active == Some(idx) {
             return Ok(());
         }
