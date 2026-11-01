@@ -420,7 +420,11 @@ impl Sema<'_, '_> {
                 // arguments being deducible from its return type.
                 if let Some(&(alias, rhs)) = self.templ.ctad_alias.get(&ft) {
                     let ty = self.ast.decls.get(spec).ty().unwrap_or(QualType::ERROR);
-                    let ret = self.ast.types.proto(ty).map_or(QualType::ERROR, |p| p.ret());
+                    let ret = self
+                        .ast
+                        .types
+                        .proto(ty)
+                        .map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
                     if !self.alias_deducible(alias, rhs, ret) {
                         let at = self.ast.decls.get(ft).loc();
                         let n = self.decl_name_str(self.ast.decls.get(alias).name());

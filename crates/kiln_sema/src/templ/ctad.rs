@@ -988,6 +988,7 @@ impl Sema<'_, '_> {
     /// constraints are `g`'s with the deductions substituted. Its
     /// deducibility constraint is checked by
     /// [`Sema::deduce_call`](crate::Sema) through `templ.ctad_alias`.
+    #[allow(clippy::too_many_lines, reason = "the [over.match.class.deduct]/3 steps in order")]
     fn build_alias_guide(&mut self, alias: DeclId, rhs: QualType, g: DeclId) -> Option<DeclId> {
         use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
         let f = self.pattern_of(g)?;
@@ -999,7 +1000,7 @@ impl Sema<'_, '_> {
         let fty = self.ast.decls.get(f).ty()?;
         let proto = self.ast.types.proto(fty)?;
         let ret = proto.ret();
-        let ptys: Vec<QualType> = self.ast.types.params(&proto).to_vec();
+        let ptys: Vec<QualType> = self.ast.types.params(proto).to_vec();
         let variadic = proto.variadic();
         let gps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(gl.params).collect();
         let mut d = DeducedArgs::new(gl.depth, gps.len());
@@ -1417,7 +1418,7 @@ impl Sema<'_, '_> {
                     loc,
                 ),
                 None => {
-                    self.add_candidate(set, pattern, g, CandidateKind::Function, IcsOptions::NONE)
+                    self.add_candidate(set, pattern, g, CandidateKind::Function, IcsOptions::NONE);
                 }
             }
         }
@@ -1553,6 +1554,7 @@ impl Sema<'_, '_> {
     /// guide, what it was formed from: `Some(None)` for a user-declared
     /// guide, `Some(Some(origin))` for an implicit one
     /// ([over.match.best.general]/2.11-2.13).
+    #[allow(clippy::option_option, reason = "not a guide / user-declared / implicit origin")]
     pub(crate) fn ctad_guide_kind(
         &self,
         f: DeclId,
@@ -1573,6 +1575,7 @@ impl Sema<'_, '_> {
 
     /// clang's `implicit deduction guide declared as '...'` text for the
     /// implicit guide template `g`.
+    #[allow(clippy::too_many_lines, reason = "clang DeclPrinter order")]
     pub(crate) fn implicit_guide_signature(&self, g: DeclId) -> Option<String> {
         let pattern = self.pattern_of(g)?;
         let info = self.ast.template_info(g)?;
@@ -1630,7 +1633,11 @@ impl Sema<'_, '_> {
         out.push_str("> ");
         if let Some(&(alias, rhs)) = self.templ.ctad_alias.get(&g) {
             let n = self.decl_name_str(self.ast.decls.get(alias).name());
-            out.push_str(&format!("requires __is_deducible({n}, {}) ", self.ty_str(rhs)));
+            let r = self.ty_str(rhs);
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!("requires __is_deducible({n}, {r}) "),
+            );
         }
         if self.fn_spec(pattern).is_explicit() {
             out.push_str("explicit ");
