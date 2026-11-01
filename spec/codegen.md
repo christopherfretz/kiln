@@ -379,7 +379,10 @@ The normative description is spec/driver.md "Code generation". In short:
   may overlap (`AggValueSlot::getPreferredSize`). A base subobject
   initialized from a call (WP-158) goes through a temporary and copies
   the data size, as clang; an aggregate's base element is initialized by
-  the base-object (C2) constructor variant. An immediate invocation
+  the base-object (C2) constructor variant (sema-class.md §5.6), and a
+  zeroing construction of a base subobject memsets its non-virtual size
+  through an `inbounds i8` GEP at offset 0 (clang
+  `EmitNullBaseClassInitialization`). An immediate invocation
   (a valued `ConstantExpr`, WP-137) does use the data size of a
   `MayOverlap` slot (a materialized temporary): an oversized constant is
   stored to a temporary of its own type and the data size copied out,

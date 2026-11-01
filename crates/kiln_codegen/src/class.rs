@@ -1283,7 +1283,12 @@ impl Cg<'_> {
                     if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                         let def = self.class_def(rd).expect("class definition");
                         let nv = self.tys.layouter().record(def).nv_size;
-                        self.memset(dest, 0, nv, false);
+                        // clang `EmitNullBaseClassInitialization`: the
+                        // store range is addressed as a byte offset (0;
+                        // Itanium has no vbptr gaps) from the subobject.
+                        let z = V::C(self.m.const_int(LTy::I64, 0));
+                        let v = self.gep(LTy::I8, dest.v, vec![z], true);
+                        self.memset(Addr { v, ..dest }, 0, nv, false);
                     }
                 }
             }
