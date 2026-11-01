@@ -643,7 +643,9 @@ impl Sema<'_, '_> {
             }
             _ => (conv::strip_cv(self, fty), ValueCategory::PRValue),
         };
-        Some(self.builder().default_init(field, ctor, ty, vk, loc))
+        let e = self.builder().default_init(field, ctor, ty, vk, loc);
+        self.note_default_init_use(e, field, loc, ctor);
+        Some(e)
     }
 
     /// A reference to the first parameter of the special member being
@@ -999,6 +1001,24 @@ impl Sema<'_, '_> {
                 Some(self.check_immediate_invocation(e, m, None))
             }
             Selected::Deleted(m) => {
+                if let Some(bc) = self.inherited_ctor_base(m)
+                    && !self.is_deleted_fn(bc)
+                {
+                    // clang `DiagnoseUseOfDecl` of a deleted inheriting
+                    // constructor.
+                    let base = self.ast.decls.get(bc).ctx().unwrap_or(class);
+                    let mut msg = self
+                        .diag(DiagId::sema_deleted_inherited_ctor_use, sites.deleted)
+                        .arg(self.decl_arg(class))
+                        .arg(self.decl_arg(base));
+                    for n in self.deleted_function_notes(m, 0) {
+                        msg = msg.with_note(n);
+                    }
+                    self.emit(msg);
+                    return None;
+                }
+                // A deleted inherited constructor is named as the base's.
+                let m = self.inherited_ctor_base(m).unwrap_or(m);
                 let spec =
                     self.ast.decls.function(self.ast.first(m)).map(|x| x.spec).unwrap_or_default();
                 let mk = self.special_kind_of(m).filter(|x| x.is_ctor());

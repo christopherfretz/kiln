@@ -96,6 +96,17 @@ impl Oven {
                 Ok(u128::from(n))
             }
             bi::POPCOUNT => Ok(u128::from((a & mask(sub & 0xFF)).count_ones())),
+            bi::LOCK_FREE => {
+                // clang 19 `IntExprEvaluator::VisitBuiltinCallExpr`: a
+                // power-of-two size within the inline width is lock-free
+                // for an `_Atomic` (c11) or null object, a single byte,
+                // or an object aligned to the size.
+                let max = u128::from(sub & 0xFF);
+                let yes = a.is_power_of_two()
+                    && a <= max
+                    && (sub >> 8 & 1 != 0 || a == 1 || u128::from(t1) >= a);
+                if yes || sub >> 9 & 1 != 0 { Ok(u128::from(yes)) } else { Err(Fault::Invalid) }
+            }
             bi::BSWAP => {
                 let w = sub & 0xFF;
                 Ok((a & mask(w)).swap_bytes() >> (128 - w))
@@ -109,6 +120,43 @@ impl Oven {
                     bi::SUBNORMAL => c == Class::Subnormal,
                     bi::ZERO => c == Class::Zero,
                     bi::SIGNALING => softfloat::is_signaling(float_of(sub & 15), a),
+                    bi::MASK => {
+                        let k = float_of(sub & 15);
+                        let neg = a & softfloat::sign_bit(k) != 0;
+                        let bit = match c {
+                            Class::NaN if softfloat::is_signaling(k, a) => 0x1,
+                            Class::NaN => 0x2,
+                            Class::Inf => {
+                                if neg {
+                                    0x4
+                                } else {
+                                    0x200
+                                }
+                            }
+                            Class::Normal => {
+                                if neg {
+                                    0x8
+                                } else {
+                                    0x100
+                                }
+                            }
+                            Class::Subnormal => {
+                                if neg {
+                                    0x10
+                                } else {
+                                    0x80
+                                }
+                            }
+                            Class::Zero => {
+                                if neg {
+                                    0x20
+                                } else {
+                                    0x40
+                                }
+                            }
+                        };
+                        b & bit != 0
+                    }
                     _ => c == Class::Normal,
                 };
                 Ok(u128::from(r))
@@ -160,7 +208,30 @@ impl Oven {
                 }
             }
             bi::MEMCPY => {
-                self.bi_memcpy(ast, a as u64, b as u64, c as u64, t1, t2, sub != 0).map(|()| a)
+                let (mv, wide) = (sub & bi::MOVE != 0, sub & bi::WCHAR != 0);
+                self.bi_memcpy(ast, a as u64, b as u64, c as u64, [t1, t2], mv, wide).map(|()| a)
+            }
+            bi::INT_OP => {
+                let w = sub & 0xFF;
+                let v = a & mask(w);
+                Ok(match sub >> 8 {
+                    bi::FFS if v == 0 => 0,
+                    bi::FFS => u128::from(v.trailing_zeros() + 1),
+                    bi::PARITY => u128::from(v.count_ones() & 1),
+                    bi::CLRSB => {
+                        // The redundant sign bits: `clz` of `v` (or of
+                        // `~v` when negative) in `w` bits, minus one.
+                        let s = if v >> (w - 1) & 1 != 0 { !v & mask(w) } else { v };
+                        u128::from(s.leading_zeros() - (128 - w) - 1)
+                    }
+                    bi::BITREVERSE => v.reverse_bits() >> (128 - w),
+                    k => {
+                        // clang: the amount modulo the width.
+                        let n = ((b & mask(w)) % u128::from(w)) as u32;
+                        let n = if k == bi::ROTL { n } else { (w - n) % w };
+                        if n == 0 { v } else { (v << n | v >> (w - n)) & mask(w) }
+                    }
+                })
             }
             bi::BIT_CAST => {
                 let (to_mem, read) = (sub == bi::TO_MEM, sub == bi::READ_ONLY);
@@ -392,9 +463,9 @@ impl Oven {
         dst: u64,
         src: u64,
         n: u64,
-        t1: u32,
-        t2: u32,
+        [t1, t2]: [u32; 2],
         mv: bool,
+        wide: bool,
     ) -> Result<(), Fault> {
         if n == 0 {
             return Ok(());
@@ -414,10 +485,14 @@ impl Oven {
         if size == 0 {
             return Err(Fault::Invalid);
         }
-        if !n.is_multiple_of(size) {
+        // `wmemcpy`/`wmemmove` count elements (clang: no size check).
+        let (n, ne) = if wide {
+            (n.saturating_mul(size), n)
+        } else if !n.is_multiple_of(size) {
             return Err(Fault::Bi(BiFault::CopySize { mv, t, n, size }));
-        }
-        let ne = n / size;
+        } else {
+            (n, n / size)
+        };
         for (p, is_src) in [(src, true), (dst, false)] {
             let (_, len, cur, _) = self.extent_of(p, t)?;
             if ne > len - cur {

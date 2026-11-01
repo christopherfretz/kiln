@@ -35,6 +35,15 @@ pub fn apply_standard_conversion(
     to: QualType,
 ) -> Result<ExprId, ConvError> {
     let mut e = e;
+    // A sequence to `_Atomic(T)` that ends at `T` (clang's
+    // `tryAtomicConversion`): convert to `T`, then `NonAtomicToAtomic`.
+    let atomic_to = s
+        .ast
+        .types
+        .as_atomic(to)
+        .filter(|_| !s.ast.types.same_unqualified(scs.to_types[2], to))
+        .map(|v| (to, v));
+    let to = atomic_to.map_or(to, |(_, v)| v);
     match scs.first {
         FirstStep::Identity => {}
         FirstStep::LValueToRValue => {
@@ -57,6 +66,10 @@ pub fn apply_standard_conversion(
             e = cast_to(s, CastKind::NoOp, e, u, None);
         }
         ThirdStep::FunctionPointer => e = cast_to(s, CastKind::NoOp, e, to, None),
+    }
+    if let Some((at, _)) = atomic_to {
+        let at = s.ast.types.unqualified(at);
+        e = cast_to(s, CastKind::NonAtomicToAtomic, e, at, None);
     }
     Ok(e)
 }

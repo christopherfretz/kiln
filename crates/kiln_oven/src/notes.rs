@@ -5,6 +5,7 @@
 use std::fmt::Write as _;
 
 use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::builtin as id;
 use kiln_ast::dump::AstNames;
 use kiln_ast::expr::{ExprFlags, ExprKind};
 use kiln_ast::lambda::ClosureThunk;
@@ -386,7 +387,12 @@ impl Oven {
                 })
                 .map_or_else(|| self.tname(ast, t), |q| Self::qname(ast, q))
         };
-        let op = |mv: bool| if mv { "memmove" } else { "memcpy" };
+        // The builtin the call names: `wmemcpy`/`wmemmove` and `bcmp`
+        // share the `memcpy`/`memcmp` faults (WP-150).
+        let callee = site.e.and_then(|e| called_builtin(ast, e));
+        let w = if matches!(callee, Some(id::WMEMCPY | id::WMEMMOVE)) { "w" } else { "" };
+        let quoted = |dflt: &'static str| callee.and_then(id::info).map_or(dflt, |i| i.name);
+        let op = |mv: bool| format!("{w}{}", if mv { "memmove" } else { "memcpy" });
         let end = |src: bool| if src { "source" } else { "destination" };
         match f {
             BiFault::CopyNull { mv, src } => format!("{} of '{}' is nullptr", end(src), op(mv)),
@@ -401,7 +407,7 @@ impl Oven {
                 op(mv),
                 arg_ty(0, t)
             ),
-            BiFault::CopyOverlap => "'memcpy' between overlapping memory regions".into(),
+            BiFault::CopyOverlap => format!("'{w}memcpy' between overlapping memory regions"),
             BiFault::CopySize { mv, t, n, size } => format!(
                 "'{}' not supported: size to copy ({n}) is not a multiple of size of element type '{}' ({size})",
                 op(mv),
@@ -414,7 +420,8 @@ impl Oven {
                 arg_ty(0, t)
             ),
             BiFault::CmpType { t1, t2 } => format!(
-                "constant evaluation of '__builtin_memcmp' between arrays of types '{}' and '{}' is not supported; only arrays of narrow character types can be compared",
+                "constant evaluation of '{}' between arrays of types '{}' and '{}' is not supported; only arrays of narrow character types can be compared",
+                quoted("__builtin_memcmp"),
                 arg_ty(0, t1),
                 arg_ty(1, t2)
             ),
@@ -1016,4 +1023,18 @@ fn callee_name(ast: &Ast, call: ExprId) -> Option<String> {
         }
     }
     None
+}
+
+/// The builtin call `e` names directly, if any.
+fn called_builtin(ast: &Ast, e: ExprId) -> Option<u32> {
+    if ast.exprs.get(e).kind() != ExprKind::CallExpr {
+        return None;
+    }
+    let mut c = skip_parens(ast, ast.exprs.callee(e));
+    while ast.exprs.get(c).kind().is_cast() {
+        c = skip_parens(ast, ast.exprs.operand(c));
+    }
+    (ast.exprs.get(c).kind() == ExprKind::DeclRefExpr)
+        .then(|| ast.decls.builtin_id(ast.exprs.decl(c)))
+        .flatten()
 }

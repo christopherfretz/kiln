@@ -50,11 +50,22 @@ impl Sema<'_, '_> {
         ctx: ConvCtx,
         at: Loc,
     ) -> Option<Result<ExprId, ConvError>> {
+        self.user_convert_with(e, to, ctx, udc_options(ctx), at)
+    }
+
+    /// [`Sema::user_convert`] with the conversion's options `opts`.
+    pub(crate) fn user_convert_with(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+        ctx: ConvCtx,
+        opts: IcsOptions,
+        at: Loc,
+    ) -> Option<Result<ExprId, ConvError>> {
         if self.ovl.udc_depth >= MAX_UDC_DEPTH {
             return None;
         }
         let a = self.arg_info(e);
-        let opts = udc_options(ctx);
         match self.try_implicit_conversion(&a, to, opts) {
             Ics::UserDefined(u) => {
                 self.ovl.udc_depth += 1;
@@ -280,8 +291,18 @@ impl Sema<'_, '_> {
     /// `to` in context `ctx` (clang's "no viable conversion" notes):
     /// empty when neither type is a class.
     pub(crate) fn udc_failure_notes(&mut self, e: ExprId, to: QualType, ctx: ConvCtx) -> Vec<Diag> {
+        self.udc_failure_notes_with(e, to, udc_options(ctx))
+    }
+
+    /// [`Sema::udc_failure_notes`] with the conversion's options `opts`.
+    pub(crate) fn udc_failure_notes_with(
+        &mut self,
+        e: ExprId,
+        to: QualType,
+        opts: IcsOptions,
+    ) -> Vec<Diag> {
         let a = self.arg_info(e);
-        self.udc_notes_of(&a, to, udc_options(ctx), false)
+        self.udc_notes_of(&a, to, opts, false)
     }
 
     /// The notes of a failed cast's user-defined conversion of `a` to
@@ -340,7 +361,15 @@ impl Sema<'_, '_> {
             TypeView::RValueRef(p) => (Some(false), p),
             _ => (None, to),
         };
+        // [over.match.ref]/1.1: explicit conversion functions, also for
+        // a non-class temporary (as `ref_ics`).
+        let ref_opts = if lref.is_some() && opts.contains(IcsOptions::EXPLICIT_REF_CONV) {
+            opts.with(IcsOptions::ALLOW_EXPLICIT)
+        } else {
+            opts
+        };
         if let Some(lref) = lref {
+            let opts = ref_opts;
             let q1 = self.ast.types.effective_quals(referee);
             let plain = lref && (!q1.is_const() || q1.is_volatile());
             if class_src {
@@ -376,6 +405,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let kind = if class_dst { SetKind::CopyInit } else { SetKind::ConvToNonClass };
+        let opts = if class_dst { opts } else { ref_opts };
         let mut set = self.begin_set(kind, Loc::INVALID);
         set.target = target;
         self.build_conversion_set(&mut set, a, target, opts);

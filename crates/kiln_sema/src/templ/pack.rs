@@ -29,9 +29,9 @@ pub struct PackState {
     /// Probing for the length: the first pack reached stops the probe.
     pub probing: bool,
     /// What the probe found: the length and the pack's name.
-    pub found: Option<(u32, String)>,
+    pub found: Option<(u32, PackName)>,
     /// The length of the expansion and the first pack's name.
-    pub expanding: Option<(u32, String)>,
+    pub expanding: Option<(u32, PackName)>,
     /// The `...` of the expansion, where a length mismatch is reported.
     pub ellipsis: Option<Loc>,
     /// A pack element substituted since the flag was last cleared is a
@@ -65,6 +65,26 @@ pub struct PackState {
     pub rewrap_ok: bool,
 }
 
+/// A pack as the length-mismatch diagnostic names it: its name and,
+/// for a template parameter pack, its depth.
+#[derive(Clone, Debug, Default)]
+pub struct PackName {
+    /// The pack's name.
+    pub name: String,
+    /// The template depth of a template parameter pack.
+    pub depth: Option<u16>,
+    /// A pack substituted earlier (§7.2): one of the "outer parameter
+    /// packs" of the diagnostic.
+    pub outer: bool,
+}
+
+impl PackName {
+    /// A pack substituted earlier, unnamed.
+    pub fn outer() -> Self {
+        PackName { outer: true, ..PackName::default() }
+    }
+}
+
 /// The result of expanding one pattern.
 #[derive(Debug)]
 pub enum Expansion<T> {
@@ -96,7 +116,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn pack_reached(
         &mut self,
         n: u32,
-        name: impl FnOnce(&Self) -> String,
+        name: impl FnOnce(&Self) -> PackName,
         loc: Loc,
     ) -> SubstResult<u32> {
         if self.pack.probing {
@@ -110,13 +130,31 @@ impl Substituter<'_, '_, '_> {
             && len != n
         {
             let second = name(self);
-            let d = self
-                .sema
-                .diag(DiagId::sema_pack_length_mismatch, self.pack.ellipsis.unwrap_or(loc))
-                .arg(first)
-                .arg(second)
-                .arg(len)
-                .arg(n);
+            let at = self.pack.ellipsis.unwrap_or(loc);
+            // A pack of a shallower level than the other, or one
+            // substituted earlier (§7.2), is an outer pack: clang
+            // substitutes it first and reports
+            // `err_pack_expansion_length_conflict_multilevel`.
+            let first_outer =
+                first.outer || matches!((first.depth, second.depth), (Some(a), Some(b)) if a < b);
+            let second_outer =
+                second.outer || matches!((first.depth, second.depth), (Some(a), Some(b)) if b < a);
+            let d = if first_outer == second_outer {
+                self.sema
+                    .diag(DiagId::sema_pack_length_mismatch, at)
+                    .arg(first.name)
+                    .arg(second.name)
+                    .arg(len)
+                    .arg(n)
+            } else {
+                let (named, outer, inner) =
+                    if first_outer { (second.name, len, n) } else { (first.name, n, len) };
+                self.sema
+                    .diag(DiagId::sema_pack_length_mismatch_outer, at)
+                    .arg(named)
+                    .arg(outer)
+                    .arg(inner)
+            };
             self.sema.emit(d);
             return Err(SubstFail);
         }
@@ -131,7 +169,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn pack_element(
         &mut self,
         a: TemplateArg,
-        name: impl FnOnce(&Self) -> String,
+        name: impl FnOnce(&Self) -> PackName,
         loc: Loc,
     ) -> SubstResult<TemplateArg> {
         match a.view() {

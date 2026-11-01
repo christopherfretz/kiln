@@ -66,6 +66,11 @@ impl IcsOptions {
     /// deleted is no conversion (clang's `FindConversionForRefInit`),
     /// where an initialization diagnoses the deleted function.
     pub const CANDIDATE_ARG: IcsOptions = IcsOptions(8);
+    /// A direct-initialization of a reference: explicit conversion
+    /// functions are candidates of [over.match.ref] (/1.1), but not the
+    /// constructors of the /5.4.1 temporary (clang
+    /// `allowExplicitConversionFunctionsInRefBinding`).
+    pub const EXPLICIT_REF_CONV: IcsOptions = IcsOptions(16);
 
     /// The raw bits.
     pub(crate) fn bits(self) -> u8 {
@@ -435,12 +440,17 @@ impl Sema<'_, '_> {
             return Ics::Standard(direct(rb));
         }
         let suppress = opts.contains(IcsOptions::SUPPRESS_UDC);
+        let ref_opts = if opts.contains(IcsOptions::EXPLICIT_REF_CONV) {
+            opts.with(IcsOptions::ALLOW_EXPLICIT)
+        } else {
+            opts
+        };
         // /5.1.2: an lvalue result of a conversion function.
         if lref
             && !related
             && class_src
             && !suppress
-            && let Some(x) = self.ref_conversion(a, to, true, opts)
+            && let Some(x) = self.ref_conversion(a, to, true, ref_opts)
         {
             return x;
         }
@@ -464,7 +474,7 @@ impl Sema<'_, '_> {
         if !related
             && class_src
             && !suppress
-            && let Some(x) = self.ref_conversion(a, to, false, opts)
+            && let Some(x) = self.ref_conversion(a, to, false, ref_opts)
         {
             return x;
         }
@@ -486,7 +496,15 @@ impl Sema<'_, '_> {
         }
         let target = conv::strip_cv(self, t1);
         let temp_rb = base.with(RefBinding::BINDS_RVALUE);
-        match self.try_implicit_conversion(a, target, opts) {
+        // A non-class prvalue result of an explicit conversion function
+        // binds in a direct-initialization ([over.match.ref]/1.1); a
+        // class temporary's explicit constructors stay excluded.
+        let temp_opts = if ref_opts != opts && self.ast.types.as_record(t1).is_none() {
+            ref_opts
+        } else {
+            opts
+        };
+        match self.try_implicit_conversion(a, target, temp_opts) {
             Ics::Standard(mut s) => {
                 s.rb = temp_rb;
                 s.to_types[2] = t1;
@@ -521,11 +539,25 @@ impl Sema<'_, '_> {
     /// `m` and object `o` ([over.match.funcs]/4–5, clang
     /// `TryObjectArgumentInitialization`).
     pub(crate) fn object_ics(&mut self, o: &ArgInfo, m: DeclId) -> Ics {
+        self.object_ics_found(o, m, m)
+    }
+
+    /// [`Self::object_ics`] for method `m` found as `found`: a member
+    /// nominated by a using-declaration is a member of the class of the
+    /// using-declaration for the type of its implicit object parameter
+    /// ([over.match.funcs.general]/4; clang's `ActingContext`).
+    pub(crate) fn object_ics_found(&mut self, o: &ArgInfo, m: DeclId, found: DeclId) -> Ics {
         self.ovl.stats.ics += 1;
         if self.ics_is_error(o.ty) {
             return super::ignored_object(o.ty);
         }
-        let Some(cls) = self.declaring_class(m) else { return super::ignored_object(o.ty) };
+        let acting = (found != m && self.kind_of(found) == DeclKind::UsingShadow)
+            .then(|| self.ast.decls.get(found).ctx())
+            .flatten()
+            .filter(|&c| self.kind_of(c) == DeclKind::CXXRecord);
+        let Some(cls) = acting.or_else(|| self.declaring_class(m)) else {
+            return super::ignored_object(o.ty);
+        };
         let cty = self.ast.decls.get(cls).ty().unwrap_or(QualType::ERROR);
         let (q, rq) = self.method_object_quals(m);
         let param = self.ast.types.qualify(cty, q);
@@ -923,7 +955,15 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(cand) = set.cands.get(n) else { return };
-        if !cand.viable {
+        // clang checks the slice before the arity and the conversions, so
+        // it overrides those failures (not a failed deduction or an
+        // illegal constructor specialization, checked earlier).
+        if !cand.viable
+            && matches!(
+                cand.failure,
+                CandidateFailure::BadDeduction | CandidateFailure::IllegalCtor
+            )
+        {
             return;
         }
         let f = cand.func();

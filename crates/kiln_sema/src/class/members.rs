@@ -274,6 +274,7 @@ impl Sema<'_, '_> {
         if invalid {
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
         }
+        self.check_sizeless_var(v, false);
         if d.qualifier.is_some() {
             // [class.static.data]/3: the initializer is in the scope of
             // the class (and its access context, [class.access]/7).

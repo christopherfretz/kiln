@@ -58,7 +58,7 @@ pub enum TypeOfOperand {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[allow(missing_docs)] // field names are the spec's operand names (§5)
 pub enum TypeView {
-    /// The dummy node 0 and the reserved builtin ids 34..=63.
+    /// The dummy node 0 and the reserved builtin ids 48..=63.
     Invalid,
     Builtin(BuiltinType),
     BitInt {
@@ -250,7 +250,7 @@ impl From<TypeId> for QualType {
     }
 }
 
-/// First id after the builtins and their reserved range (34..=63).
+/// First id after the builtins and their reserved range (48..=63).
 pub const FIRST_USER_TYPE: u32 = 64;
 
 #[inline]
@@ -260,7 +260,7 @@ fn q_opt(raw: u32) -> Option<QualType> {
 
 impl TypeContext {
     /// A context for `target` with default (C++17+) options, with the
-    /// builtins at ids 1..=33 (§5.1).
+    /// builtins at ids 1..=47 (§5.1).
     pub fn new(target: TargetTypes) -> Self {
         Self::with_options(target, TypeOptions::default())
     }
@@ -813,6 +813,15 @@ impl TypeContext {
         }
     }
 
+    /// The value type `T` of an `_Atomic(T)` (canonically; the
+    /// qualifiers on `_Atomic(T)` itself are not included).
+    pub fn as_atomic(&self, q: QualType) -> Option<QualType> {
+        match self.canonical_view(q) {
+            TypeView::Atomic(v) => Some(v),
+            _ => None,
+        }
+    }
+
     /// The class of a (canonical) record type.
     pub fn as_record(&self, q: QualType) -> Option<DeclId> {
         match self.canonical_view(q) {
@@ -865,6 +874,11 @@ impl TypeContext {
     /// True for the floating-point builtins.
     pub fn is_floating(&self, q: QualType) -> bool {
         self.builtin(q).is_some_and(BuiltinType::is_floating)
+    }
+
+    /// True for the sizeless `AArch64` SVE builtins (§5.1).
+    pub fn is_sizeless(&self, q: QualType) -> bool {
+        self.builtin(q).is_some_and(BuiltinType::is_sizeless)
     }
 
     /// True for integral and floating types ([basic.fundamental]/14).

@@ -49,7 +49,7 @@ pub fn is_complete_object(ast: &Ast, ty: QualType) -> bool {
     let t = &ast.types;
     let c = t.canonical(ty);
     match t.view(c.ty()) {
-        TypeView::Builtin(b) => t.target().builtin_size_align(b).0 != 0,
+        TypeView::Builtin(b) => b.is_sizeless() || t.target().builtin_size_align(b).0 != 0,
         TypeView::LValueRef(r) | TypeView::RValueRef(r) => is_complete_object(ast, r),
         TypeView::ConstantArray(a) => is_complete_object(ast, a.elem),
         TypeView::Enum(d) => {

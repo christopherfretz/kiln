@@ -226,6 +226,9 @@ impl Sema<'_, '_> {
         if let Some(p) = self.current_instantiation(tmpl, ty) {
             return Some((p, n));
         }
+        if let Some(p) = self.entered_partial_by_converted_args(tmpl, ty, loc) {
+            return Some((p, n));
+        }
         if !self.is_dependent_type(ty) {
             // [expr.prim.id.qual]/1: the class must be complete.
             if !self.require_complete_nns(ty, loc) {
@@ -272,6 +275,35 @@ impl Sema<'_, '_> {
             // ordinary dependent specialization.
             return None;
         }
+        Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// `template<int S> void B<1, S>::g()`: a dependent template-id keeps
+    /// its written arguments, so a non-dependent non-type argument (`1`)
+    /// does not match the partial specialization, which was registered
+    /// with converted ones. When entering a declarator scope, convert
+    /// them as the partial specialization's declaration did and look
+    /// again (clang checks the arguments of every template-id).
+    fn entered_partial_by_converted_args(
+        &mut self,
+        tmpl: DeclId,
+        ty: QualType,
+        loc: Loc,
+    ) -> Option<DeclId> {
+        if !self.templ.entering_context || self.kind_of(tmpl) != DeclKind::ClassTemplate {
+            return None;
+        }
+        let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty()) else {
+            return None;
+        };
+        let written = self.ast.types.args(args).to_vec();
+        let unconverted = |a: &TemplateArg| matches!(a.view(), ArgView::Expr { profile: None, .. });
+        if !written.iter().any(unconverted) {
+            return None;
+        }
+        let conv = self.check_template_args(tmpl, &written, &[], loc).ok()?;
+        let i = self.ast.templates.find_partial(self.ast.first(tmpl), conv.canonical)?;
+        let pat = self.ast.templates.partial(i)?.partial;
         Some(self.ast.definition(pat).unwrap_or(pat))
     }
 
@@ -1080,7 +1112,10 @@ impl Sema<'_, '_> {
         idx: u16,
     ) -> DeclId {
         let name = p.name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
-        let d = self.builder().param(body, name, p.loc, p.ty, idx, 0);
+        // A parameter pack ([temp.variadic]/5), expanded on substitution.
+        let pack = matches!(self.ast.types.view(p.ty.ty()), TypeView::PackExpansion { .. });
+        let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        let d = self.builder().param(body, name, p.loc, p.ty, idx, flags);
         if p.invalid {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
         }

@@ -79,7 +79,8 @@ impl Substituter<'_, '_, '_> {
                 }
                 let args = self.sema.ast.types.args(pack);
                 let n = u32::try_from(args.len()).unwrap_or(u32::MAX);
-                let i = self.pack_reached(n, |s| s.sema.ty_str(q), loc)?;
+                // Unnamed: an outer pack in the length-mismatch diagnostic.
+                let i = self.pack_reached(n, |_| crate::templ::pack::PackName::outer(), loc)?;
                 let ArgView::Type(t) = self.sema.ast.types.args(pack)[i as usize].view() else {
                     return Err(SubstFail);
                 };

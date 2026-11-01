@@ -5,10 +5,11 @@
 //! `RequiresExpr` whose satisfaction (and the notes explaining a
 //! failure) is recorded.
 
-use kiln_ast::expr::ValueCategory;
+use kiln_ast::decl::ParamData;
+use kiln_ast::expr::{ExprDeps, ValueCategory};
 use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::templates::Requirement;
-use kiln_ast::types::TemplateArg;
+use kiln_ast::types::{TemplateArg, TypeFlags};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_oven::{EvalContext, EvalKind};
@@ -16,6 +17,7 @@ use kiln_source::Loc;
 
 use super::{SatRecord, Satisfaction};
 use crate::Sema;
+use crate::templ::pack::Expansion;
 use crate::templ::stack::{FrameKind, SfinaeState};
 use crate::templ::subst::{DeclOrPack, SubstFail, SubstResult, Substituter};
 
@@ -42,33 +44,86 @@ impl Substituter<'_, '_, '_> {
         Some((r, failed))
     }
 
-    /// Substitutes into requires-expression `e` and evaluates it.
-    pub(crate) fn requires_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
-        let Some(rq) = self.sema.ast.requires_of(e).copied() else { return Err(SubstFail) };
-        let items: Vec<Requirement> = self.sema.ast.templates.requirements(&rq).to_vec();
-        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(rq.params).collect();
-        let at = self.sema.ast.exprs.get(e).loc();
-        let rbrace = self.sema.ast.exprs.cold.end_loc.get(e).copied().unwrap_or(at);
-        let mut recs = Vec::new();
+    /// Substitutes the parameters `params` of a requires-expression with
+    /// body `body`, recording a failure in `recs`: the new parameters and
+    /// whether every one substituted.
+    fn requires_params(
+        &mut self,
+        body: DeclId,
+        params: &[DeclId],
+        recs: &mut Vec<SatRecord>,
+    ) -> (Vec<DeclId>, bool) {
         let mut new_params = Vec::with_capacity(params.len());
         let mut ok = true;
-        // The requirements are unevaluated operands
-        // ([expr.prim.req.general]/2), as in `act_on_requires_expr_start`.
-        self.sema.enter_unevaluated();
-        for (i, &p) in params.iter().enumerate() {
+        for &p in params {
             let n = *self.sema.ast.decls.get(p);
             let ty = n.ty().unwrap_or(QualType::ERROR);
-            let r = self.sfinae(rq.body, n.loc(), |s| s.ty(ty, n.loc()).ok());
+            let pack = self
+                .sema
+                .ast
+                .decls
+                .param(p)
+                .is_some_and(|x| x.flags & ParamData::PACK != 0)
+                .then(|| crate::templ::pack::type_pattern(self.sema, ty))
+                .flatten();
+            if let Some(pat) = pack {
+                // A parameter pack ([temp.variadic]/5): one parameter per
+                // element, or still a pack when its expansion names a
+                // retained level (§7.2, `requires(T... t, U... u)` in a
+                // member template with only `T` known).
+                let r = self.sfinae(body, n.loc(), |s| {
+                    s.expand_pattern(|s| s.element_ty(pat, n.loc())).ok()
+                });
+                match r {
+                    Some((Some(Expansion::Elements(v)), Ok(()))) => {
+                        let mut decls = Vec::with_capacity(v.len());
+                        for t in v {
+                            let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
+                            let np = self.sema.builder().param(body, n.name(), n.loc(), t, idx, 0);
+                            decls.push(np);
+                            new_params.push(np);
+                        }
+                        let l = self.sema.ast.lists.push(&decls);
+                        self.locals.insert(p, DeclOrPack::Pack(l));
+                        continue;
+                    }
+                    Some((Some(Expansion::Unexpanded(x)), Ok(()))) => {
+                        let t = self.sema.ast.types.pack_expansion(x, None);
+                        let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
+                        let np = self.sema.builder().param(
+                            body,
+                            n.name(),
+                            n.loc(),
+                            t,
+                            idx,
+                            ParamData::PACK,
+                        );
+                        self.locals.insert(p, DeclOrPack::Decl(np));
+                        new_params.push(np);
+                        continue;
+                    }
+                    Some((_, st)) => {
+                        let first = st.err().flatten();
+                        recs.push(invalid_record(
+                            self.sema,
+                            first.as_ref(),
+                            n.loc(),
+                            String::new(),
+                        ));
+                        ok = false;
+                        break;
+                    }
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            let r = self.sfinae(body, n.loc(), |s| s.ty(ty, n.loc()).ok());
             match r {
                 Some((Some(t), Ok(()))) => {
-                    let np = self.sema.builder().param(
-                        rq.body,
-                        n.name(),
-                        n.loc(),
-                        t,
-                        u16::try_from(i).unwrap_or(u16::MAX),
-                        0,
-                    );
+                    let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
+                    let np = self.sema.builder().param(body, n.name(), n.loc(), t, idx, 0);
                     self.locals.insert(p, DeclOrPack::Decl(np));
                     new_params.push(np);
                 }
@@ -84,15 +139,47 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         }
+        (new_params, ok)
+    }
+
+    /// Substitutes into requires-expression `e` and evaluates it.
+    pub(crate) fn requires_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        let Some(rq) = self.sema.ast.requires_of(e).copied() else { return Err(SubstFail) };
+        let items: Vec<Requirement> = self.sema.ast.templates.requirements(&rq).to_vec();
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(rq.params).collect();
+        let at = self.sema.ast.exprs.get(e).loc();
+        let rbrace = self.sema.ast.exprs.cold.end_loc.get(e).copied().unwrap_or(at);
+        let mut recs = Vec::new();
+        // The requirements are unevaluated operands
+        // ([expr.prim.req.general]/2), as in `act_on_requires_expr_start`.
+        self.sema.enter_unevaluated();
+        let (new_params, mut ok) = self.requires_params(rq.body, &params, &mut recs);
+        // A requirement left dependent (it names a retained level, §7.2)
+        // is not checked: the requires-expression stays dependent with
+        // the substituted requirements (clang's `TransformRequiresExpr`).
+        let mut dependent = false;
+        let mut new_reqs = Vec::with_capacity(items.len());
         if ok {
             for r in items {
-                if !self.requirement(rq.body, r, at, &mut recs) {
+                if let Some(r) = self.requirement(rq.body, r, at, &mut recs, &mut dependent) {
+                    new_reqs.push(r);
+                } else {
                     ok = false;
                     break;
                 }
             }
         }
         self.sema.exit_unevaluated();
+        if ok && dependent {
+            return Ok(self.sema.builder().requires_expr(
+                rq.body,
+                &new_params,
+                &new_reqs,
+                QualType::BOOL,
+                at,
+                rbrace,
+            ));
+        }
         let x = self.sema.builder().requires_expr(
             rq.body,
             &new_params,
@@ -111,31 +198,60 @@ impl Substituter<'_, '_, '_> {
     }
 
     /// Checks requirement `r` ([expr.prim.req.simple] to
-    /// [expr.prim.req.nested]); a failure appends its note.
+    /// [expr.prim.req.nested]); a failure appends its note and gives
+    /// `None`. A requirement whose substitution is still dependent sets
+    /// `dependent` and is returned unchecked.
     fn requirement(
         &mut self,
         body: DeclId,
         r: Requirement,
         at: Loc,
         recs: &mut Vec<SatRecord>,
-    ) -> bool {
+        dependent: &mut bool,
+    ) -> Option<Requirement> {
+        let dep_expr = |s: &Self, x: ExprId| {
+            s.sema
+                .ast
+                .exprs
+                .get(x)
+                .deps()
+                .intersects(ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK))
+        };
         match r {
-            Requirement::Simple(e) => self.req_expr(body, e, recs).is_some(),
+            Requirement::Simple(e) => {
+                let x = self.req_expr(body, e, recs)?;
+                *dependent |= dep_expr(self, x);
+                Some(Requirement::Simple(x))
+            }
             Requirement::Type(t, loc) => {
                 let _ = at;
                 match self.sfinae(body, loc, |s| s.ty(t, loc).ok()) {
-                    Some((Some(_), Ok(()))) => true,
+                    Some((Some(x), Ok(()))) => {
+                        *dependent |= self.sema.ast.types.qflags(x).intersects(
+                            TypeFlags::DEPENDENT_INSTANTIATION.union(TypeFlags::UNEXPANDED_PACK),
+                        );
+                        Some(Requirement::Type(x, loc))
+                    }
                     Some((_, st)) => {
                         let first = st.err().flatten();
                         let text = self.sema.type_requirement_text(t);
                         recs.push(invalid_record(self.sema, first.as_ref(), loc, text));
-                        false
+                        None
                     }
-                    None => false,
+                    None => None,
                 }
             }
             Requirement::Compound { expr, noexcept, constraint } => {
-                let Some(x) = self.req_expr(body, expr, recs) else { return false };
+                let x = self.req_expr(body, expr, recs)?;
+                if dep_expr(self, x) {
+                    *dependent = true;
+                    let c = match constraint {
+                        Some(c) => Some(self.req_subst(body, c, at)?),
+                        None => None,
+                    };
+                    return Some(Requirement::Compound { expr: x, noexcept, constraint: c });
+                }
+                let done = Some(Requirement::Compound { expr: x, noexcept, constraint });
                 if let Some(at) = noexcept
                     && self.sema.can_throw(x)
                 {
@@ -146,12 +262,12 @@ impl Substituter<'_, '_, '_> {
                         args: vec![self.sema.expr_text(expr)],
                         nested: None,
                     });
-                    return false;
+                    return None;
                 }
                 if let Some(c) = constraint {
-                    return self.return_type_requirement(c, x, recs);
+                    return self.return_type_requirement(c, x, recs).then_some(done).flatten();
                 }
-                true
+                done
             }
             Requirement::Nested(e) => {
                 let loc = self.sema.begin_loc(e);
@@ -165,22 +281,26 @@ impl Substituter<'_, '_, '_> {
                         args: vec![self.sema.expr_text(e)],
                         nested: None,
                     });
-                    return false;
+                    return None;
                 };
-                if self.sema.expr_is_value_dependent(x) || self.sema.has_errors_in(x) {
-                    return !self.sema.has_errors_in(x);
+                if self.sema.has_errors_in(x) {
+                    return None;
+                }
+                if self.sema.expr_is_value_dependent(x) || dep_expr(self, x) {
+                    *dependent = true;
+                    return Some(Requirement::Nested(x));
                 }
                 let c = crate::conv::contextually_convert_to_bool(self.sema, x).unwrap_or(x);
                 match self.sema.eval_const(c, EvalContext::new(EvalKind::Constraint, loc)) {
-                    Ok(v) if self.sema.const_truth(v) == Some(true) => true,
+                    Ok(v) if self.sema.const_truth(v) == Some(true) => Some(Requirement::Nested(x)),
                     Ok(_) => {
                         let r = self.sema.false_atom_records(x);
                         recs.extend(r);
-                        false
+                        None
                     }
                     Err(_) => {
                         self.sema.error(DiagId::sema_non_constant_constraint, loc);
-                        false
+                        None
                     }
                 }
             }

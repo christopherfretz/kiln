@@ -270,6 +270,12 @@ pub(crate) mod bi {
     /// sub = float kind | `FABS`..`ISINF_SIGN` << 4 (clang 19's
     /// `FloatExprEvaluator::VisitCallExpr`).
     pub const FP_OP: u32 = 11;
+    /// `__atomic_always_lock_free`/`__atomic_is_lock_free`/
+    /// `__c11_atomic_is_lock_free` of size `a`: `t1` the object's
+    /// alignment (0: unknown); sub = the target's inline width in bytes
+    /// | any object qualifies << 8 | `always` (an unknown answer is 0,
+    /// not a failure) << 9.
+    pub const LOCK_FREE: u32 = 12;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
@@ -288,6 +294,26 @@ pub(crate) mod bi {
     /// before the compiler's static ones).
     pub const READ_ONLY: u32 = 2;
 
+    // WP-150: the GCC integer builtins and `wmemcpy`/`wmemmove`.
+    /// An integer operation on `a` (and the amount `b`): sub = width |
+    /// `FFS`..`ROTR` << 8 (clang 19 `IntExprEvaluator::VisitBuiltinCallExpr`).
+    pub const INT_OP: u32 = 20;
+    /// `INT_OP`: `__builtin_ffs*`.
+    pub const FFS: u32 = 0;
+    /// `INT_OP`: `__builtin_parity*`.
+    pub const PARITY: u32 = 1;
+    /// `INT_OP`: `__builtin_clrsb*`.
+    pub const CLRSB: u32 = 2;
+    /// `INT_OP`: `__builtin_bitreverse*`.
+    pub const BITREVERSE: u32 = 3;
+    /// `INT_OP`: `__builtin_rotateleft*`.
+    pub const ROTL: u32 = 4;
+    /// `INT_OP`: `__builtin_rotateright*`.
+    pub const ROTR: u32 = 5;
+    /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
+    /// bytes.
+    pub const WCHAR: u32 = 2;
+
     /// Classes of `FP_CLASS`.
     pub const FINITE: u32 = 0;
     pub const INF: u32 = 1;
@@ -296,6 +322,11 @@ pub(crate) mod bi {
     pub const SUBNORMAL: u32 = 4;
     pub const ZERO: u32 = 5;
     pub const SIGNALING: u32 = 6;
+    /// `__builtin_isfpclass`: whether `a`'s class is in the LLVM
+    /// `FPClassTest` mask `b` (0x1 sNaN, 0x2 qNaN, 0x4 -inf, 0x8 -normal,
+    /// 0x10 -subnormal, 0x20 -zero, 0x40 +zero, 0x80 +subnormal,
+    /// 0x100 +normal, 0x200 +inf).
+    pub const MASK: u32 = 7;
 
     /// Operations of `FP_OP`: `|a|`; `a` with the sign of `b`; `fmax`
     /// and `fmin` (a NaN operand yields the other; `-0 < +0`); the

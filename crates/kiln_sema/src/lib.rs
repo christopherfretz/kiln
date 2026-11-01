@@ -28,6 +28,7 @@ pub mod expr;
 mod forms;
 mod gnu;
 pub mod init;
+mod jump_scope;
 pub mod lambda;
 pub mod literal;
 mod literal_op;
@@ -44,6 +45,7 @@ mod side_effects;
 pub mod stack_guard;
 pub mod stmt;
 mod struct_bind;
+mod sve;
 pub mod target;
 pub mod templ;
 mod try_stmt;
@@ -424,6 +426,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             lambda_mangle: lambda::ManglingState::default(),
         };
         s.declare_builtin_va_list();
+        s.declare_sve_typedefs();
         s
     }
 

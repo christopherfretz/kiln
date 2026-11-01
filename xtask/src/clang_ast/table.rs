@@ -225,7 +225,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("NoInitExpr", Unsupported(NOT_M2)),
     ("ImaginaryLiteral", Unsupported(NOT_M2)),
     ("FixedPointLiteral", Unsupported(NOT_M2)),
-    ("AtomicExpr", Unsupported(NOT_M2)),
+    ("AtomicExpr", Keep),
     ("ParenListExpr", Unsupported(NOT_M2)),
     ("SourceLocExpr", Unsupported(NOT_M2)),
     ("EmbedExpr", Unsupported(NOT_M2)),
@@ -331,7 +331,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "StaticAssertDecl" | "FileScopeAsmDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
-        "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" | "CXXPseudoDestructorExpr" => &[],
+        "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" | "CXXPseudoDestructorExpr" | "AtomicExpr" => {
+            &[]
+        }
         "PredefinedExpr" => &["name"],
         // `isPlacement` and `initStyle` are implied by the children.
         "CXXNewExpr" => &[
@@ -599,6 +601,7 @@ pub const M2_KINDS: &[&str] = &[
     "CallExpr",
     "UnaryExprOrTypeTraitExpr",
     "CXXNoexceptExpr",
+    "AtomicExpr",
     "CXXNewExpr",
     "CXXDeleteExpr",
     "InitListExpr",

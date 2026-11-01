@@ -229,4 +229,8 @@ impl TypeNames for SemaNames<'_> {
     fn write_symbol(&self, sym: Symbol, out: &mut String) {
         out.push_str(self.ast.symbols().as_str(sym));
     }
+
+    fn write_template_param(&self, associated: DeclId, index: u32, out: &mut String) {
+        self.ast.write_replaced_param(associated, index, out);
+    }
 }

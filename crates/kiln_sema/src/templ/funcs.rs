@@ -115,7 +115,7 @@ impl Sema<'_, '_> {
             if matches!(a.view(), kiln_ast::types::ArgView::Null) {
                 continue;
             }
-            parts.push(format!("{} = {}", self.decl_name(*p), self.arg_str(a)));
+            parts.push(format!("{} = {}", self.decl_name(*p), self.binding_arg_str(a)));
         }
         format!("[with {}]", parts.join(", "))
     }
@@ -207,6 +207,15 @@ impl Sema<'_, '_> {
                 sub.sema.act_on_mem_initializers(f, &[], colon);
             }
             let b = sub.body(body);
+            // A statement of the body failed: the specialization is
+            // invalid (clang's `InstantiateFunctionDefinition` marks it
+            // when the body is `StmtError`), so a later call deduces it
+            // as a substitution failure and an undeduced placeholder
+            // return type is not deduced `void` (spec/sema-templates.md
+            // §5.5).
+            if sub.stmt_failed {
+                s.ast.decls.set_flags(f, DeclFlags::INVALID);
+            }
             s.act_on_finish_function_def(f, b, rbrace);
         });
         self.pop_inst_frame();

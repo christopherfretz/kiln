@@ -170,6 +170,9 @@ pub struct DeclSpec {
     pub friend: Option<Loc>,
     /// cv-qualifiers.
     pub cv: Quals,
+    /// The C11 `_Atomic` type qualifier (no parenthesis; a clang
+    /// extension in C++) written at.
+    pub atomic_qual: Option<Loc>,
     /// `short`/`long`.
     pub width: Width,
     /// `signed`/`unsigned`.
@@ -221,6 +224,7 @@ impl DeclSpec {
             && self.inline.is_none()
             && self.thread_local.is_none()
             && self.cv.is_empty()
+            && self.atomic_qual.is_none()
             && self.consteval.is_none()
             && self.virtual_.is_none()
             && self.explicit.is_none()
@@ -570,6 +574,10 @@ pub struct Declarator {
     /// `this` before a parameter-declaration (an explicit object
     /// parameter, P0847 [dcl.fct]/6).
     pub explicit_object: Option<Loc>,
+    /// Where the innermost function declarator's `const`, `volatile` and
+    /// ref-qualifier are ("explicit object member function cannot have
+    /// '...' qualifier" points at the first and quotes them in order).
+    pub fn_qual_locs: [Option<Loc>; 3],
     /// The declarator-id is an operator-function-id (`operator new`):
     /// `name` then holds the `operator` keyword and its location.
     pub op_name: Option<OverloadedOperator>,
@@ -675,6 +683,7 @@ impl Declarator {
             pure: None,
             late_noexcept: None,
             explicit_object: None,
+            fn_qual_locs: [None; 3],
             op_name: None,
             lit_suffix: None,
             ellipsis: None,

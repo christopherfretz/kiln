@@ -231,8 +231,13 @@ outermost class is complete, so their tokens are saved and re-parsed
     default argument (ends at `,` or `)`) or a default member initializer
     (ends at `,` or `;`). A `?:` keeps its `:` (`capture_conditional`),
     and `operator,`-style names are taken whole. clang's
-    template-argument heuristics (`a < b, c > d` in a default argument)
-    are not implemented.
+    template-argument heuristics are implemented (WP-155): a `,` after an
+    unclosed `<` ends the initializer only if the tokens after it form an
+    init-declarator-list followed by `;` (default member initializer) or
+    parameters that each have `=` (default argument), decided by the
+    tentative scanner (`comma_ends_saved_initializer`); otherwise the `<`
+    is known to open template arguments and later commas inside it are
+    kept. `template name <` is known up front.
   - `capture_default_arg` (at `=`), `capture_exception_spec` (at
     `noexcept`/`throw`, through the `)`), and
     `capture_function_prologue` (an optional `try`, a ctor-initializer and
@@ -402,8 +407,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - `_Atomic ( type-id )` (a clang extension in C++, C11 6.7.2.4) is a
     type specifier, built by `Sema::act_on_atomic_type` (array, function,
     reference, atomic and qualified operands are
-    `sema_atomic_specifier_bad_type`); the bare `_Atomic` qualifier is
-    "not supported yet".
+    `sema_atomic_specifier_bad_type`). The bare `_Atomic` qualifier
+    (WP-154) is parsed with the cv-qualifiers (`tentative.rs` treats it as
+    a decl-specifier when not followed by `(`) and applied as clang's
+    `BuildQualifiedType`: `_Atomic T` is `_Atomic(T)`, with the same
+    operand checks.
 - **Exception specifications** (`parse_exception_spec`, after the
   function parameters, [except.spec]/1): at most one per declarator.
   - `noexcept` is `ExcSpec::BasicNoexcept`.
@@ -778,8 +786,6 @@ in `kiln_diag` for now; nothing emits them.
 - **Classes** (parsed by WP-065; their Sema is WP-066b):
   - qualified non-type and `decltype` mem-initializer-ids, braced
     default arguments
-  - clang's template-argument heuristics when saving a default argument
-    or default member initializer (`a < b, c > d`)
   - literal operators (`operator""`)
   - pragma events inside saved tokens (they fire at capture)
   - diagnostics clang gives that the parser skips: a decl-specifier

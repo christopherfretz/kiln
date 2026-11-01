@@ -517,6 +517,11 @@ impl<'a> Cg<'a> {
                 let e = self.ir(e);
                 self.m.types.vector(e, u32::try_from(*n).unwrap_or(u32::MAX))
             }
+            IrType::ScalableVector(e, n) => {
+                let e = self.ir(e);
+                self.m.types.scalable_vector(e, u32::try_from(*n).unwrap_or(u32::MAX))
+            }
+            IrType::TargetExt(name) => self.m.types.target_ext(name),
             IrType::Record(d) => self.record_ty(*d),
             IrType::RecordBase(d) => {
                 let first = self.ast.first(*d);
@@ -733,6 +738,15 @@ impl<'a> Cg<'a> {
 
     pub fn is_bool(&self, q: QualType) -> bool {
         matches!(self.ast.types.canonical_view(q), TypeView::Builtin(BuiltinType::Bool))
+    }
+
+    /// [`Cg::is_bool`], seeing through `_Atomic` (the memory form of an
+    /// `_Atomic(bool)` is `i8` too).
+    pub fn is_bool_value(&self, q: QualType) -> bool {
+        match self.ast.types.canonical_view(q) {
+            TypeView::Atomic(v) => self.is_bool(v),
+            _ => self.is_bool(q),
+        }
     }
 
     pub fn is_signed(&self, q: QualType) -> bool {
@@ -1008,6 +1022,9 @@ impl<'a> Cg<'a> {
         if sig.nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
+        if ast.is_noreturn_fn(first) {
+            fa.push(Attr::Flag(AttrKind::NoReturn));
+        }
         self.target_attrs(&mut fa);
         let fa = self.m.attr_set(&fa);
         let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
@@ -1052,13 +1069,8 @@ impl<'a> Cg<'a> {
     }
 
     /// The function attributes of a definition.
-    pub fn def_fn_attrs(
-        &mut self,
-        is_main: bool,
-        nounwind: bool,
-        mustprogress: bool,
-        vector_width: u64,
-    ) -> AttrSetId {
+    pub fn def_fn_attrs(&mut self, f: DefFnAttrs) -> AttrSetId {
+        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn } = f;
         let mut a = Vec::new();
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
@@ -1066,6 +1078,9 @@ impl<'a> Cg<'a> {
         a.push(Attr::Flag(AttrKind::NoInline));
         if is_main {
             a.push(Attr::Flag(AttrKind::NoRecurse));
+        }
+        if noreturn {
+            a.push(Attr::Flag(AttrKind::NoReturn));
         }
         if nounwind {
             a.push(Attr::Flag(AttrKind::NoUnwind));
@@ -1437,4 +1452,16 @@ fn has_mutable(_ty: QualType) -> bool {
 /// `Value` of a global.
 pub(crate) fn gval(g: GlobalId) -> Value {
     Value::global(g)
+}
+
+/// The inputs of [`Cg::def_fn_attrs`]: the flags that decide a
+/// definition's function attributes.
+#[derive(Clone, Copy, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent attribute flags")]
+pub(crate) struct DefFnAttrs {
+    pub(crate) is_main: bool,
+    pub(crate) nounwind: bool,
+    pub(crate) mustprogress: bool,
+    pub(crate) vector_width: u64,
+    pub(crate) noreturn: bool,
 }

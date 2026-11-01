@@ -179,9 +179,7 @@ pub fn trait_status(t: TypeTrait) -> Status {
         // [meta.unary.prop] initialization and conversion checks: these
         // need the unevaluated `init_check` / `conv_check` of overload
         // resolution.
-        T::IsTriviallyConstructible
-        | T::IsTriviallyAssignable
-        | T::HasNothrowAssign
+        T::HasNothrowAssign
         | T::HasNothrowConstructor
         | T::HasNothrowCopy
         | T::HasNothrowMoveAssign
@@ -388,6 +386,34 @@ pub static TABLE: &[Row] = &[
     f("__builtin_reduce_mul", DONE, Oven::No),
     f("__builtin_reduce_or", DONE, Oven::No),
     f("__builtin_reduce_xor", DONE, Oven::No),
+    // WP-150: the remaining GCC integer and memory builtins
+    // (`builtin::INT_MEM`); `memset`/`mempcpy` are not constant in clang 19
+    f("__builtin_ffs", DONE, Oven::Yes),
+    f("__builtin_ffsl", DONE, Oven::Yes),
+    f("__builtin_ffsll", DONE, Oven::Yes),
+    f("__builtin_parity", DONE, Oven::Yes),
+    f("__builtin_parityl", DONE, Oven::Yes),
+    f("__builtin_parityll", DONE, Oven::Yes),
+    f("__builtin_clrsb", DONE, Oven::Yes),
+    f("__builtin_clrsbl", DONE, Oven::Yes),
+    f("__builtin_clrsbll", DONE, Oven::Yes),
+    f("__builtin_bitreverse8", DONE, Oven::Yes),
+    f("__builtin_bitreverse16", DONE, Oven::Yes),
+    f("__builtin_bitreverse32", DONE, Oven::Yes),
+    f("__builtin_bitreverse64", DONE, Oven::Yes),
+    f("__builtin_rotateleft8", DONE, Oven::Yes),
+    f("__builtin_rotateleft16", DONE, Oven::Yes),
+    f("__builtin_rotateleft32", DONE, Oven::Yes),
+    f("__builtin_rotateleft64", DONE, Oven::Yes),
+    f("__builtin_rotateright8", DONE, Oven::Yes),
+    f("__builtin_rotateright16", DONE, Oven::Yes),
+    f("__builtin_rotateright32", DONE, Oven::Yes),
+    f("__builtin_rotateright64", DONE, Oven::Yes),
+    f("__builtin_bcmp", DONE, Oven::Yes),
+    f("__builtin_wmemcpy", DONE, Oven::Yes),
+    f("__builtin_wmemmove", DONE, Oven::Yes),
+    f("__builtin_memset", DONE, Oven::No),
+    f("__builtin_mempcpy", DONE, Oven::No),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -450,7 +476,9 @@ mod tests {
 
     #[test]
     fn overload_traits_are_staged_off() {
-        assert_eq!(has_builtin_staged("__is_trivially_constructible"), Some(false));
+        assert_eq!(has_builtin_staged("__is_trivially_constructible"), Some(true));
+        assert_eq!(has_builtin_staged("__is_trivially_assignable"), Some(true));
+        assert_eq!(has_builtin_staged("__has_nothrow_assign"), Some(false));
         assert_eq!(has_builtin_staged("__is_layout_compatible"), Some(false));
         assert_eq!(has_builtin_staged("__is_constructible"), Some(true));
         assert_eq!(has_builtin_staged("__is_convertible"), Some(true));

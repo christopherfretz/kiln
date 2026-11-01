@@ -282,6 +282,7 @@ impl Substituter<'_, '_, '_> {
             // clang marks the declaration invalid: no follow-up
             // "must be initialized" diagnostic.
             self.sema.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.init_failures += 1;
             Err(SubstFail)
         }
     }
@@ -320,7 +321,7 @@ impl Substituter<'_, '_, '_> {
                 // A function parameter pack ([temp.variadic]/2): one
                 // parameter per element (§7.1).
                 let loc = n.loc();
-                let tys = match self.expand_pattern(|s| s.ty(pat, loc))? {
+                let tys = match self.expand_pattern(|s| s.element_ty(pat, loc))? {
                     crate::templ::pack::Expansion::Elements(v) => v,
                     crate::templ::pack::Expansion::Unexpanded(x) => {
                         // Still a pack: a parameter pack of a template
@@ -884,7 +885,13 @@ impl Substituter<'_, '_, '_> {
         };
         let scoped = data.flags & (EnumData::SCOPED | EnumData::SCOPED_STRUCT);
         let name = n.name().as_ident().filter(|_| !n.name().is_empty()).map(|s| (s, loc));
-        let defined = self.sema.ast.definition(d) == Some(d);
+        // A member enumeration defined out of line before the class is
+        // instantiated (`template<class T> enum class A<T>::E { ... }`,
+        // [temp.mem.enum]) is defined from that definition.
+        let src = self.sema.ast.definition(d).filter(|&x| {
+            x == d || self.sema.ast.decls.get(x).ctx() == self.sema.ast.decls.get(d).ctx()
+        });
+        let defined = src.is_some();
         let use_ = if defined {
             crate::decl::TagUse::Definition
         } else {
@@ -896,7 +903,7 @@ impl Substituter<'_, '_, '_> {
             return Ok(e);
         }
         self.sema.act_on_start_enum_definition(e);
-        let ens: Vec<DeclId> = self.sema.ast.decls.members(d).collect();
+        let ens: Vec<DeclId> = self.sema.ast.decls.members(src.unwrap_or(d)).collect();
         for en in ens {
             let m = *self.sema.ast.decls.get(en);
             if m.kind() != DeclKind::EnumConstant {

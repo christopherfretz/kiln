@@ -35,6 +35,7 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::overload::ics::IcsOptions;
 
 pub use apply::apply_standard_conversion;
 pub use arith::{ArithConvKind, usual_arithmetic_conversions_kind};
@@ -250,7 +251,17 @@ pub fn lvalue_to_rvalue(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     } else {
         CastKind::LValueToRValue
     };
-    raw_cast(s, ck, e, to, ValueCategory::PRValue, None)
+    let atomic = types.as_atomic(t);
+    let r = raw_cast(s, ck, e, to, ValueCategory::PRValue, None);
+    // clang's `DefaultLvalueConversion`: the load of an `_Atomic(T)` is
+    // then converted to the unqualified `T` (C11 6.3.2.1p2).
+    match atomic {
+        Some(v) => {
+            let v = strip_cv(s, v);
+            raw_cast(s, CastKind::AtomicToNonAtomic, r, v, ValueCategory::PRValue, None)
+        }
+        None => r,
+    }
 }
 
 /// The array-to-pointer ([conv.array]) and function-to-pointer
@@ -606,7 +617,12 @@ fn unsupported(what: &str) -> ConvError {
 /// 5.3 for reference-compatible glvalues). Temporaries and conversion
 /// functions are not supported yet (M3).
 #[allow(clippy::too_many_lines, reason = "one step per bullet of [dcl.init.ref]/5")]
-fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprId, ConvError> {
+fn bind_reference(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Result<ExprId, ConvError> {
     let (rvalue_ref, referee) = match s.ast.types.canonical_view(to) {
         TypeView::LValueRef(p) => (false, p),
         TypeView::RValueRef(p) => (true, p),
@@ -684,21 +700,23 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         let class_ref = s.ast.types.as_record(r_un).is_some();
         if class_src || (class_ref && !plain_lref) {
             let at = s.begin_loc(e);
-            if let Some(r) = s.user_convert(e, to, ConvCtx::Initialization, at) {
+            // [over.match.ref]/1.1: a direct-initialization considers the
+            // explicit conversion functions (not the explicit constructors
+            // of a /5.4.1 temporary).
+            let opts =
+                if ctx.is_direct() { IcsOptions::EXPLICIT_REF_CONV } else { IcsOptions::NONE };
+            if let Some(r) = s.user_convert_with(e, to, ConvCtx::Initialization, opts, at) {
                 return r;
             }
-            if !plain_lref
-                || (class_src
-                    && s.has_lvalue_ref_conversion_candidates(
-                        from,
-                        crate::overload::udc::udc_options(ConvCtx::Initialization),
-                    ))
+            let lref_opts =
+                if ctx.is_direct() { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };
+            if !plain_lref || (class_src && s.has_lvalue_ref_conversion_candidates(from, lref_opts))
             {
                 let mut err = ConvError::new(
                     DiagId::sema_no_viable_conversion,
                     vec![s.ty_arg(from), s.ty_arg(referee)],
                 );
-                err.notes = s.udc_failure_notes(e, to, ConvCtx::Initialization);
+                err.notes = s.udc_failure_notes_with(e, to, opts);
                 return Err(err);
             }
         }
@@ -951,7 +969,7 @@ pub fn implicit_convert(
         };
     }
     if s.ast.types.is_reference(to) {
-        return bind_reference(s, e, to);
+        return bind_reference(s, e, to, ctx);
     }
     let (fr, tr) = (s.ast.types.as_record(from), s.ast.types.as_record(to));
     if tr.is_some() {

@@ -204,6 +204,20 @@ impl Sema<'_, '_> {
             }
             TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
         };
+        // clang `BuildQualifiedType`: the `_Atomic` qualifier makes the
+        // unqualified type atomic and keeps its qualifiers outside.
+        let base = match ds.atomic_qual {
+            Some(aloc) if self.ast.types.as_atomic(base).is_none() => {
+                let q = self.ast.types.effective_quals(base);
+                let un = if q.is_empty() { base } else { self.ast.types.unqualified(base) };
+                match self.act_on_atomic_type(un, aloc) {
+                    Some(t) if q.is_empty() => t,
+                    Some(t) => self.ast.types.qualify(t, q),
+                    None => QualType::ERROR,
+                }
+            }
+            _ => base,
+        };
         let cv = ds.cv;
         if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
     }
@@ -644,6 +658,13 @@ impl Sema<'_, '_> {
                         self.emit(self.incomplete_note(msg, ty));
                         return QualType::ERROR;
                     }
+                    if self.ast.types.is_sizeless(ty) {
+                        let msg = self
+                            .diag(DiagId::sema_array_sizeless_element, *loc)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
                     if self.require_non_abstract_element(*loc, ty) {
                         return QualType::ERROR;
                     }
@@ -848,19 +869,24 @@ impl Sema<'_, '_> {
             return false;
         }
         if let Some(Chunk::Function { quals, ref_qual, rparen, .. }) = d.chunks.first() {
-            let q = if quals.contains(Quals::CONST) {
-                Some("const")
-            } else if quals.contains(Quals::VOLATILE) {
-                Some("volatile")
-            } else {
-                match ref_qual {
-                    RefQual::LValue => Some("&"),
-                    RefQual::RValue => Some("&&"),
-                    RefQual::None => None,
-                }
-            };
-            if let Some(q) = q {
-                let m = self.diag(DiagId::sema_explicit_object_param_qualifier, *rparen).arg(q);
+            // clang quotes the qualifiers (cv first) and points at the
+            // first one written.
+            let mut written: Vec<(Option<Loc>, &str)> = Vec::new();
+            if quals.contains(Quals::CONST) {
+                written.push((d.fn_qual_locs[0], "const"));
+            }
+            if quals.contains(Quals::VOLATILE) {
+                written.push((d.fn_qual_locs[1], "volatile"));
+            }
+            match ref_qual {
+                RefQual::LValue => written.push((d.fn_qual_locs[2], "&")),
+                RefQual::RValue => written.push((d.fn_qual_locs[2], "&&")),
+                RefQual::None => {}
+            }
+            if !written.is_empty() {
+                let q = written.iter().map(|&(_, q)| q).collect::<Vec<_>>().join(" ");
+                let at = written.iter().filter_map(|&(l, _)| l).min().unwrap_or(*rparen);
+                let m = self.diag(DiagId::sema_explicit_object_param_qualifier, at).arg(q);
                 self.emit(m);
             }
         }
@@ -1382,6 +1408,11 @@ impl Sema<'_, '_> {
         d: &Declarator,
     ) -> Option<DeclId> {
         self.finish_invented_head();
+        if ds.friend.is_none()
+            && let Some(nloc) = d.name.map(|n| n.1).or(d.special.map(|s| s.1))
+        {
+            self.check_member_spec_header(d.qualifier, nloc, ds.loc);
+        }
         let head = self.take_template_head(d.qualifier);
         if !d.dropped
             && ds.friend.is_none()
@@ -1503,8 +1534,12 @@ impl Sema<'_, '_> {
             self.set_member_access(t);
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
-        if d.qualifier.is_none() && d.op_name.is_none() && d.lit_suffix.is_none() {
-            self.check_using_shadow_conflict(decl, name);
+        if d.qualifier.is_none() {
+            // Operator and conversion function names too: a member
+            // `operator[]` hides a using-declared base one
+            // ([namespace.udecl]/14).
+            let dn = self.ast.decls.get(decl).name();
+            self.check_using_shadow_conflict(decl, dn);
         }
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
@@ -1541,6 +1576,12 @@ impl Sema<'_, '_> {
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
+        }
+        if d.qualifier.is_none() && self.kind_of(decl) == DeclKind::CXXConversion {
+            // A conversion function hides a using-declared base one with
+            // the same target type ([namespace.udecl]/14).
+            let dn = self.ast.decls.get(decl).name();
+            self.check_using_shadow_conflict(decl, dn);
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -1883,7 +1924,7 @@ impl Sema<'_, '_> {
         if let Some(t) = self.finish_template_pattern(td) {
             self.set_member_access(t);
         }
-        self.check_using_shadow_conflict(td, name);
+        self.check_using_shadow_conflict(td, DeclName::ident(name));
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(td, &attrs);
         }
@@ -2622,6 +2663,10 @@ impl Sema<'_, '_> {
         };
         let ty = if invalid && self.placeholder_keyword(ty).is_some() {
             QualType::ERROR
+        } else if !invalid && self.ast.types.is_sizeless(ty) {
+            let msg = self.diag(DiagId::sema_field_sizeless, d.name_loc()).arg(self.ty_arg(ty));
+            self.emit(msg);
+            QualType::ERROR
         } else if !invalid
             && !self.ast.types.is_reference(ty)
             && !self.require_complete(ty, d.name_loc())
@@ -2851,6 +2896,7 @@ impl Sema<'_, '_> {
             self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
         }
         self.check_abstract_var(v);
+        self.check_sizeless_var(v, self.in_local_scope());
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
             self.note_local_extern(name, v);
@@ -3092,6 +3138,10 @@ impl Sema<'_, '_> {
         }
         // clang reports at the variable (`CheckCompleteVariableDeclaration`).
         let loc = self.ast.decls.get(v).loc();
+        if self.constexpr_var_virtual_base(v, loc) {
+            self.ast.decls.finish_eval(v, None);
+            return;
+        }
         if self.has_errors_in(e)
             || self.expr_is_value_dependent(e)
             || self.ast.decls.get(v).ty().is_some_and(|t| self.is_dependent_type(t))
@@ -3116,6 +3166,35 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+
+    /// [dcl.constexpr]/6: a `constexpr` variable of a class type (or
+    /// array of it) with a virtual base has a non-literal type
+    /// ([basic.types.general]/10); clang `RequireLiteralType`'s notes.
+    /// Other non-literal types are left to the evaluation (WP-146).
+    fn constexpr_var_virtual_base(&mut self, v: DeclId, loc: Loc) -> bool {
+        let Some(q) = self.ast.decls.get(v).ty() else { return false };
+        if self.is_dependent_type(q) {
+            return false;
+        }
+        let Some(r) = self.ast.types.as_record(self.base_element(q)) else { return false };
+        let Some(def) = self.ast.definition(r) else { return false };
+        if !self.defn_bits(def).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return false;
+        }
+        let vbases = self.virtual_bases(def);
+        let tag = 2 * u8::from(self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Class));
+        let mut msg =
+            self.diag(DiagId::sema_constexpr_var_non_literal, loc).arg(self.ty_arg(q)).with_note(
+                self.diag(DiagId::note_non_literal_virtual_base, self.ast.decls.get(def).loc())
+                    .arg(tag)
+                    .arg(u8::from(vbases.len() != 1)),
+            );
+        for (_, b) in vbases {
+            msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+        }
+        self.emit(msg);
+        true
     }
 
     pub(crate) fn has_errors_in(&self, e: ExprId) -> bool {
@@ -3294,6 +3373,10 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
         self.end_function_body(body, rbrace);
+        // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
+        if let Some(fty) = self.ast.decls.get(f).ty() {
+            self.check_sve_support(fty, self.ast.decls.get(f).loc());
+        }
         self.finish_source_locs(f);
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
@@ -3423,6 +3506,15 @@ impl Sema<'_, '_> {
                 .filter(|&d| self.kind_of(d) == DeclKind::ClassTemplate)
                 .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
                 .collect(),
+            // `template<class T> template<class U> struct A<T>::B { ... }`:
+            // the member template's latest pattern ([temp.mem.class]).
+            (Some(q), _) if templ => self
+                .lookup_qualified(q, n, LookupKind::All)
+                .decls
+                .into_iter()
+                .filter(|&d| self.kind_of(d) == DeclKind::ClassTemplate)
+                .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
+                .collect(),
             (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
             (None, TagUse::Reference) if !opaque_enum => self.lookup_name(n, LookupKind::Tag).decls,
             (None, _) => self
@@ -3431,6 +3523,48 @@ impl Sema<'_, '_> {
                 .filter(|&d| is_tag_kind(self.ast.decls.get(d).kind()))
                 .collect(),
         }
+    }
+
+    /// A qualified tag name `A::X` that names no tag of `A`: another kind
+    /// of member redefined (`struct A<T>::D` for a member template `D`),
+    /// else clang's `err_not_tag_in_scope`.
+    fn diag_qualified_tag_not_found(
+        &mut self,
+        keyword: TagKeyword,
+        n: Symbol,
+        nloc: Loc,
+        q: DeclId,
+        use_: TagUse,
+    ) {
+        if use_ == TagUse::Definition
+            && let Some(&other) = self.lookup_qualified(q, n, LookupKind::All).decls.first()
+        {
+            let other = self.ast.first(self.pattern_of(other).unwrap_or(other));
+            let msg =
+                self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
+            let msg = self.note_prev(msg, other, true);
+            self.emit(msg);
+            return;
+        }
+        let kind = match keyword {
+            TagKeyword::Union => 2u8,
+            TagKeyword::Class => 3,
+            TagKeyword::Enum => 4,
+            _ => 0,
+        };
+        let scope = match self.kind_of(q) {
+            DeclKind::CXXRecord => {
+                let t = self.this_class_type(q);
+                format!("'{}'", self.ty_str(t))
+            }
+            _ => format!("'{}'", self.decl_name(q)),
+        };
+        let msg = self
+            .diag(DiagId::sema_not_tag_in_scope, nloc)
+            .arg(kind)
+            .arg(sym_str(self, n))
+            .arg(scope);
+        self.emit(msg);
     }
 
     /// The template head of a class template redeclaration that creates
@@ -3445,6 +3579,19 @@ impl Sema<'_, '_> {
         {
             self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
             self.inherit_redeclared_defaults(t, list);
+        }
+    }
+
+    /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2).
+    fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) {
+        if let Some(f) = fixed {
+            let ok = self.ast.types.is_integral(f)
+                || self.is_error_type(f)
+                || self.ast.types.is_dependent(f);
+            if !ok {
+                let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
+                self.emit(msg);
+            }
         }
     }
 
@@ -3467,18 +3614,21 @@ impl Sema<'_, '_> {
         }
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
-        if let Some(f) = fixed {
-            let ok = self.ast.types.is_integral(f)
-                || self.is_error_type(f)
-                || self.ast.types.is_dependent(f);
-            if !ok {
-                let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
-                self.emit(msg);
-            }
+        self.check_enum_fixed_type(fixed, loc);
+        if use_ == TagUse::Definition
+            && let Some((_, nloc)) = name
+        {
+            self.check_member_spec_header(qualifier, nloc, loc);
         }
         let head = if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
             self.take_template_head(qualifier)
         } else {
+            if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
+                // `template<class T> enum class A<T>::E { ... }`: the heads
+                // belong to the qualifier's class templates ([temp.mem.enum]).
+                let _ = self.take_template_head(qualifier);
+                self.templ.cur = None;
+            }
             None
         };
         let mut prev = None;
@@ -3525,12 +3675,8 @@ impl Sema<'_, '_> {
                     self.check_redeclared_class_head(p);
                     return p;
                 }
-            } else if qualifier.is_some() {
-                let msg = self
-                    .diag(DiagId::sema_no_member, nloc)
-                    .arg(sym_str(self, n))
-                    .arg(format!("'{}'", self.decl_name(qualifier.unwrap_or(self.ast.tu))));
-                self.emit(msg);
+            } else if let Some(q) = qualifier {
+                self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_);
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
@@ -3562,7 +3708,7 @@ impl Sema<'_, '_> {
             && qualifier.is_none()
             && prev.is_none()
         {
-            self.check_using_shadow_conflict(d, n);
+            self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
     }
@@ -3741,7 +3887,7 @@ impl Sema<'_, '_> {
         }
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
-        self.classes.push(ClassBuild::new(r, tag));
+        self.classes.push(ClassBuild::new(r, tag, self.ctx));
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;
@@ -3759,12 +3905,16 @@ impl Sema<'_, '_> {
             None
         };
         self.defining.retain(|&d| d != r);
-        self.ctx = self
-            .ast
-            .decls
-            .lexical_ctx(r)
-            .or_else(|| self.ast.decls.get(r).ctx())
-            .unwrap_or(self.ast.tu);
+        self.ctx = build.as_ref().map_or_else(
+            || {
+                self.ast
+                    .decls
+                    .lexical_ctx(r)
+                    .or_else(|| self.ast.decls.get(r).ctx())
+                    .unwrap_or(self.ast.tu)
+            },
+            |b| b.outer,
+        );
         let mut bits = DefinitionBits::COMPLETE
             .with(DefinitionBits::AGGREGATE)
             .with(DefinitionBits::STANDARD_LAYOUT)
@@ -4700,7 +4850,15 @@ impl Sema<'_, '_> {
             DeclKind::NamespaceAlias => Some(self.ast.resolve_alias(d)),
             // A class named only as a qualifier is not marked referenced
             // (clang's `isReferenced`).
-            DeclKind::CXXRecord | DeclKind::Enum => Some(self.ast.definition(d).unwrap_or(d)),
+            DeclKind::CXXRecord | DeclKind::Enum => {
+                // [expr.prim.id.qual]/1, [temp.inst]/3: a member class of
+                // a class template specialization named before `::` is
+                // instantiated (`O<int>::M::N`).
+                if self.ast.definition(d).is_none() && self.ast.instantiated_from(d).is_some() {
+                    let _ = self.instantiate_class(d, loc, true);
+                }
+                Some(self.ast.definition(d).unwrap_or(d))
+            }
             DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm => Some(d),
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
                 let what = if self.kind_of(d) == DeclKind::ClassTemplate {

@@ -716,8 +716,23 @@ arguments are substituted with the enclosing level, so `In<T, B>` of
 original partial as its pattern (`instantiated_from_map`). A
 specialization that matches it is instantiated from the original
 partial's definition, with the enclosing arguments as the outer levels
-plus the deduced arguments (§4.6). Out-of-class partial specializations
-of a member template are not redeclared yet (a follow-up).
+plus the deduced arguments (§4.6).
+
+Out-of-class partial specializations of a member template (WP-150):
+`template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
+- The parser takes `Outer<T>::` as a tag qualifier and enters its scope
+  for the body ([class.nest]/3); the qualifier consumes the outer head
+  (`match_template_lists_to_scope`), the inner one heads the partial.
+- The partial is created on the member template of the pattern with
+  `Outer` as its semantic context and the namespace as its lexical one,
+  so it is not in `Outer`'s member list. A definition of one declared in
+  the class completes that declaration; `}` returns to the context the
+  definition began in (`ClassBuild::outer`), not the lexical one.
+- When the member template is redeclared in `Outer<X>`
+  (`Substituter::member_template`), each partial of it not lexically in
+  the class is redeclared as above (clang's `VisitClassTemplateDecl`).
+  One declared after `Outer<X>` was instantiated is not part of it, as
+  with clang.
 
 ### 4.5 Explicit specializations and instantiations
 
@@ -1074,6 +1089,30 @@ recomputed exactly as for non-template code (clang's
   `__end` variables.
 - **`return` in a deduced-return function** deduces from the first
   non-discarded `return` (§6.3).
+- **A failed statement invalidates the specialization** (clang 19's
+  `TransformCompoundStmt` `SubStmtInvalid` → `InstantiateFunctionDefinition`
+  `setInvalidDecl`; WP-145). When a statement of a function body fails to
+  substitute *and reported a new error while doing so*, the function
+  template specialization is marked `INVALID`. Consequences:
+  - a later `deduce_call` that forms the same specialization reports
+    `candidate template ignored: substitution failure [with ...]`
+    (`get_function_spec` returns `Err` for an invalid spec);
+  - a placeholder (`auto`) return type left undeduced by the failed body
+    deduces to the error type, not `void`, so no "cannot be used before
+    it is defined"/void cascade follows.
+  The exceptions match clang, which keeps the statement:
+  - a `DeclStmt` whose variable *initializer* failed (the variable is
+    invalid, the statement is not; `Substituter::init_failures`);
+  - errors inside a lambda body (the lambda's own body is invalid, the
+    enclosing function is not);
+  - a statement that only refers to an already-invalid entity (it fails
+    without a new error: clang builds a `RecoveryExpr`).
+- **Labels and `goto`** (WP-153). A `LabelStmt`, a `GotoStmt` and the
+  labels of an `asm goto` are rebuilt by name (`act_on_label`,
+  `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
+  `LabelDecl`s and the jump-scope checker (spec/sema.md §7.4) runs on it.
+  Not yet: `CXXTryStmt` (needs the handler's exception declaration
+  substituted through `act_on_exception_decl`).
 
 ### 5.6 Declarations
 
@@ -1235,7 +1274,10 @@ result is `MiscellaneousDeductionFailure` (clang).
 - an overload set that contains a template;
 - a braced list (except as in §6.1);
 - a pack expansion that is not last;
-- a pack-index (P2662).
+- a pack-index (P2662);
+- `_Atomic(T)` (WP-154: clang 19 does not deduce through an `AtomicType`,
+  so `template<class T> void f(_Atomic(T)*)` called with an
+  `_Atomic(int)*` fails to deduce `T`).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
@@ -1542,7 +1584,15 @@ flag, to name the first pack.
    `pack_index`, and give `PackExpansion(subst_pattern)`.
 3. **Check the lengths.** They must all be equal. Otherwise: "pack
    expansion contains parameter packs 'T' and 'U' that have different
-   lengths (2 vs. 3)". This is SFINAE-able.
+   lengths (2 vs. 3)". This is SFINAE-able. When exactly one of the two
+   is an *outer* pack (a pack kept from an earlier substitution,
+   `SubstTemplateTypeParmPack` / `SubstNonTypeTemplateParmPackExpr`, or
+   one of a shallower depth than the other), clang's multilevel text is
+   used instead, naming the inner pack: "pack expansion contains
+   parameter pack 'U' that has a different length (2 vs. 1) from outer
+   parameter packs" (outer length first). clang's "(at least 3 vs. 2)"
+   variant, for an explicitly specified pack that deduction may still
+   extend, is not produced: kiln reports the plain multilevel text.
 4. **Expand.** For k in 0..N, substitute the pattern with
    `pack_index = Some(k)`. Restore the previous index afterwards. Inner
    expansions keep their own packs untouched.
@@ -1560,9 +1610,30 @@ type parameter pack becomes `SubstTemplateTypeParmPack {associated,
 index, pack}`, which is dependent and unexpanded, and the result is
 `PackExpansion(pattern')`. A later substitution that expands the
 pattern takes element *i* of the recorded pack (clang's
-`SubstTemplateTypeParmPackType`). Only type packs are kept so far.
-Non-type and function parameter packs in keep mode are still "not yet
-implemented".
+`SubstTemplateTypeParmPackType`).
+
+A substituted non-type pack is kept the same way, as
+`SubstNonTypeTemplateParmPackExpr {param, pack}` (value- and
+instantiation-dependent, unexpanded; its type is the first element's).
+`All<O<T, I>...>` in a member alias of `Imp<Seq<I...>>` thus keeps `I`
+until `T` is supplied (libc++ `<variant>` `__all_overloads`). Both kept
+forms count as outer packs for the length check (step 3) and print as
+their parameter's name (`P<T, U>...`).
+
+A function parameter pack whose type is partially substituted
+(`P<T, U>... ps` in a member template of `S<T...>`) stays one pack
+parameter of type `PackExpansion(P<SubstPack(T), U>)`. Deduction against
+it substitutes the kept pack element by element: while deducing element
+*i* of the expansion, a `SubstTemplateTypeParmPack` in P is matched as
+element *i* of its pack. kiln has no final [temp.deduct.call]/4
+"deduced A" compatibility check, so an element mismatch is reported as
+"could not match 'P<T, U>' against 'P<char, long>'" where clang says
+"deduced type 'P<int, [...]>' of 1st parameter does not match adjusted
+type 'P<char, [...]>' of argument".
+
+Function parameter packs and pack expansion expressions met in keep
+mode (`FunctionParmPackExpr`, `PackExpansionExpr` patterns) are still
+"not yet implemented".
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
@@ -1747,6 +1818,18 @@ Its requirements are processed **in order**, each under
 A `requires`-expression outside any template whose requirement is
 ill-formed is a hard error ([expr.prim.req.general]/5, clang).
 
+A parameter pack in the parameter list (`requires(T... t, U u)`) is
+expanded like a function parameter pack (§7.2): one parameter per
+element, numbered consecutively with the other parameters. When the
+pack's expansion names a retained level, it stays one pack parameter.
+A requirement whose substituted form is still dependent (it names a
+retained level: a generic lambda's `auto` inside an instantiated
+function template) is not checked. The requires-expression is then
+rebuilt as a dependent `RequiresExpr` with the substituted parameters
+and requirements, and evaluated when the remaining level is
+substituted. A compound requirement's type-constraint keeps its
+invented first argument in that case.
+
 The expression is a `bool` prvalue. `RequiresExpr` stores the value plus
 the index of the failed requirement.
 
@@ -1927,6 +2010,7 @@ records it in `TABLE`.
 | bits | `__builtin_clz`/`l`/`ll`, `__builtin_ctz`/`l`/`ll`, `__builtin_popcount`/`l`/`ll`, `__builtin_clzg`†/`ctzg`†/`popcountg`† (type-generic, with an optional fallback argument), `__builtin_bswap16`/`32`/`64` | yes | `llvm.ctlz`/`cttz`/`ctpop`/`bswap` |
 | memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp`, `__builtin_strcmp`, `__builtin_strncmp`, `__builtin_strchr`, `__builtin_wcscmp`, `__builtin_wcsncmp`, `__builtin_wcschr`; `__builtin_strrchr`, `__builtin_strpbrk`, `__builtin_strstr` | yes (for trivially copyable element types); no for `strrchr`/`strpbrk`/`strstr` (clang 19) | libcall or `llvm.mem*` |
 | float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for `isfinite`/`isinf`/`isnan`/`isnormal`; no for `signbit` and the six comparisons (the clang 19 probe rejects them) | `fcmp` / `llvm.is.fpclass` |
+| atomics (WP-154) | `__c11_atomic_*`†, `__atomic_*`† (an `AtomicExpr`, spec/sema.md §5.11) | only `__atomic_always_lock_free`/`__atomic_is_lock_free`/`__c11_atomic_is_lock_free` (spec/oven.md) | `load atomic`/`store atomic`/`atomicrmw`/`cmpxchg`/`fence` (spec/codegen.md §7d) |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
@@ -1970,8 +2054,17 @@ location, `FILE` as written and `FILE_NAME` as its last path component,
 and `__builtin_source_location()` as a frozen `std::source_location::__impl`
 built from that record's layout. When a default argument containing a
 `SourceLocExpr` is used by a call, sema records the call's values on the
-`CXXDefaultArgExpr`; the Oven and codegen read them from the outermost
-such default argument in scope. `std::source_location::__impl` must be a
+`CXXDefaultArgExpr`; likewise a use of a default member initializer
+containing one records, on the `CXXDefaultInitExpr`, the values of the
+constructor's name (the class name for an implicit constructor) or of the
+`}`/`)` of an aggregate initialization, with the constructor or the
+enclosing function as the function (clang `CXXDefaultInitExpr::
+getUsedLocation`/`getUsedContext`). The Oven and codegen read them from
+the outermost such default argument or member initializer in scope, and
+the codegen prepass evaluates the immediate invocations of such a member
+initializer per use (`fold_immediate_in`). Substitution drops the trailing
+`CXXDefaultInitExpr` fillers of a braced list; the rebuilt list adds them
+in the instantiation's context. `std::source_location::__impl` must be a
 complete, standard-layout, non-union class without bases whose only
 fields are `_M_file_name`, `_M_function_name` (`const char *`), `_M_line`
 and `_M_column` (integral); otherwise clang's
@@ -1981,6 +2074,9 @@ The counts are 49 type predicates (§9.1), `__array_extent`, 15 transforms,
 2 builtin templates and 76 `__builtin_*` names (2 of them in §9.4). That gives 143
 builtins in total (§13.3). `TABLE` also holds the 6 source-location
 names, for 82 function rows (91 with WP-140's string builtins, §9.5).
+WP-150 adds 26 function rows (`builtin::INT_MEM`: the GCC integer builtins,
+`bcmp`, `wmemcpy`/`wmemmove`, `memset`, `mempcpy`; folding status in
+spec/oven.md "Builtins").
 
 ## 10. Diagnostics
 
@@ -2687,7 +2783,7 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
 `__has_builtin` answers false):
 | Stub | Owner |
 |---|---|
-| The 10 other overload-resolution traits (`__is_trivially_constructible`, `__is_trivially_assignable`, `__reference_*_from_temporary`, …) | WP-068a (`__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU; `__is_constructible` / `__is_nothrow_constructible` the three `__is_convertible` forms and `__is_nothrow_assignable` in WP-131) |
+| The 8 other overload-resolution traits (`__reference_*_from_temporary`, …) | WP-068a (`__is_trivially_constructible` / `__is_trivially_assignable` landed in WP-155: `init_check` `.ok && .trivial`, with clang 19's "no non-trivial call in the expression" rule; `__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU; `__is_constructible` / `__is_nothrow_constructible` the three `__is_convertible` forms and `__is_nothrow_assignable` in WP-131) |
 | `__is_layout_compatible`, `__is_pointer_interconvertible_base_of`, `__can_pass_in_regs`, `__is_bitwise_cloneable` | M4 (unassigned) |
 | `__is_trivially_relocatable` (`TRIVIALLY_RELOCATABLE` is never set) | unowned: S3C canPassInRegisters |
 | `__type_pack_element` and `__make_integer_seq` with pack arguments | WP-072 |
@@ -2960,6 +3056,19 @@ explicit specialization errors remain. The blockers are:
   defaulted argument) and the `std::source_location::__impl` check.
   `Sema::fold_lone_invalid` keeps clang's single "subexpression not
   valid" note for `__builtin_unreachable`.
+- Landed (WP-153): `__builtin_isfpclass(x, mask)` (custom: `x` a real
+  floating type, else `floating point classification requires argument
+  of floating point type`; `mask` an integer constant expression in
+  [0, 1023], else `argument to '__builtin_isfpclass' must be a constant
+  integer` / `argument value N is outside the valid range [0, 1023]`;
+  result `int`), and `__builtin_expect_with_probability(e, c, p)`, whose
+  `p` must be a `double` constant expression (`probability argument to
+  __builtin_expect_with_probability must be constant floating-point
+  expression`, with the evaluation notes) in [0.0, 1.0] (`probability
+  argument to __builtin_expect_with_probability is outside the range
+  [0.0, 1.0]`); checked after `convert_call_args`
+  (`check_expect_probability`). Not yet: `-Wassume` (needs clang's
+  possible-effects flavour of `HasSideEffects`).
 - `kiln_ast`: `ExprKind::SourceLocExpr`, `SourceLocKind`,
   `SourceLocValues` and `exprs.cold.source_loc` (spec/ast.md §5.8);
   `kiln_parse` parses the six keywords.
@@ -2977,8 +3086,8 @@ explicit specialization errors remain. The blockers are:
 - Gaps: `__builtin_source_location` in a function with a deduced return
   type prints `auto` (clang prints the deduced type). (The
   `[T = int]` template-argument suffix inside templates: Landed (WP-140),
-  spec/sema.md §7.8.) A `CXXDefaultInitExpr` does not yet take the
-  location of the constructor that uses it (owner: WP-067b).
+  spec/sema.md §7.8.) (`CXXDefaultInitExpr` use locations: Landed (WP-153), see
+  **Source location** above.)
 
 **Landed (WP-071): function templates.**
 - `deduce_call` (`templ/deduce_call.rs`, §6.1) builds each candidate's
@@ -3468,6 +3577,32 @@ requires-clause scope.**
   `basic.scope.param/`, `dcl.meaning/qualified-declarator-scope-template.cpp`,
   `templates/deduce/temp.deduct.type-defaulted-args.cpp`, and the
   `ast/` goldens for each.
+
+**Landed (WP-155): out-of-line member classes, partial-specialization
+declarator scopes.**
+- *Out-of-line member classes and enums* ([temp.mem.class],
+  [temp.mem.enum]): `template<class T> struct A<T>::B { ... };` defines
+  the member class declared in the class template; it is a pattern for
+  `MemberOfSpecialization` (§4.6) and is instantiated when completeness
+  is needed. Members of a member class of a partial specialization, and
+  member class templates, are supported (`templ/mod.rs`, `decl.rs`
+  `act_on_tag`; the parser's `parse_tag_qualifier`).
+- *Constructors of partial specializations*: `X<T*>::X(` is a
+  constructor declarator. The parser no longer annotates the template
+  scope ahead (`annotate_template_scope`) when `at_special_declarator`
+  holds.
+- *Non-type arguments in a declarator scope*: a dependent template-id
+  keeps its written arguments (§3.4), so `template<int S> void
+  B<1, S>::g()` did not find the partial specialization `B<1, S>`
+  (registered with converted arguments). When entering a declarator
+  context, `entered_partial_by_converted_args` converts the arguments
+  with `check_template_args` and looks again (`find_partial`). Gap:
+  dependent template-ids elsewhere are still neither checked nor
+  converted (clang checks every template-id).
+- Tests: `tests/conformance/temp.mem.class/`, `temp.mem.enum/`,
+  `temp.spec.partial.member/out-of-line-ctors.cpp`,
+  `temp.spec.partial.member/non-type-arg-scope.cpp`,
+  `templates/builtins/builtin.is-trivially-constructible-assignable.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 

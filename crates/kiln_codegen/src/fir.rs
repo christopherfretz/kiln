@@ -8,8 +8,9 @@
 //! emits — and lowered into the module once it is final ([`Fir::lower`]).
 
 use kiln_llvm::{
-    BinOp, BlockId, CallOpts, CastOp, Clause, FastMath, Flags, FloatPredicate, FuncId, GepFlags,
-    IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module, TypeId, Value,
+    BinOp, BlockId, CallOpts, CastOp, Clause, CmpXchgOpts, FastMath, Flags, FloatPredicate, FuncId,
+    GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module, Ordering,
+    RmwOp, SyncScope, TypeId, Value,
 };
 
 /// A block of the buffer.
@@ -164,6 +165,25 @@ pub(crate) enum Op {
         b: V,
         mask: Vec<u32>,
     },
+    /// `atomicrmw` (the result has `val`'s type).
+    AtomicRmw {
+        op: RmwOp,
+        ptr: V,
+        val: V,
+        mem: MemOpts,
+    },
+    /// `cmpxchg` (the result is `{ T, i1 }`).
+    CmpXchg {
+        ptr: V,
+        cmp: V,
+        new: V,
+        opts: CmpXchgOpts,
+    },
+    /// `fence`.
+    Fence {
+        ordering: Ordering,
+        scope: SyncScope,
+    },
 }
 
 impl Op {
@@ -213,7 +233,9 @@ impl Op {
 
     fn operands(&self) -> Vec<V> {
         match self {
-            Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable => Vec::new(),
+            Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable | Op::Fence { .. } => Vec::new(),
+            Op::AtomicRmw { ptr, val, .. } => vec![*ptr, *val],
+            Op::CmpXchg { ptr, cmp, new, .. } => vec![*ptr, *cmp, *new],
             Op::ExtractValue { agg, .. } => vec![*agg],
             Op::InsertValue { agg, val, .. } => vec![*agg, *val],
             Op::ExtractElement { vec, idx } => vec![*vec, *idx],
@@ -732,6 +754,13 @@ impl Fir {
                     }
                     Op::Ret { v } => b.ret(v.map(val))?,
                     Op::Unreachable => b.unreachable()?,
+                    Op::AtomicRmw { op, ptr, val: v, mem } => {
+                        b.atomicrmw(*op, val(*ptr), val(*v), *mem)?
+                    }
+                    Op::CmpXchg { ptr, cmp, new, opts } => {
+                        b.cmpxchg(val(*ptr), val(*cmp), val(*new), *opts)?
+                    }
+                    Op::Fence { ordering, scope } => b.fence(*ordering, *scope)?,
                     Op::ExtractValue { agg, idx } => b.extract_value(val(*agg), &[*idx])?,
                     Op::ExtractElement { vec, idx } => b.extract_element(val(*vec), val(*idx))?,
                     Op::InsertElement { vec, elt, idx } => {

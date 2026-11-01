@@ -311,6 +311,26 @@ pub fn standard_conversion_from(
     to: QualType,
     ctx: ConvCtx,
 ) -> Option<StandardConversion> {
+    let r = standard_conversion_non_atomic(s, from, vk, npc, bit_field, to, ctx);
+    if r.is_some() {
+        return r;
+    }
+    // clang's `tryAtomicConversion`: a conversion to `_Atomic(T)` is the
+    // conversion to `T`, then `NonAtomicToAtomic` (applied by
+    // `apply_standard_conversion` when the sequence ends at `T`).
+    let v = s.ast.types.as_atomic(to)?;
+    standard_conversion_non_atomic(s, from, vk, npc, bit_field, v, ctx)
+}
+
+fn standard_conversion_non_atomic(
+    s: &mut Sema<'_, '_>,
+    from: QualType,
+    vk: ValueCategory,
+    npc: bool,
+    bit_field: Option<u32>,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Option<StandardConversion> {
     let types = &s.ast.types;
     if types.as_record(from).is_some() || types.as_record(to).is_some() {
         return None;
@@ -327,7 +347,13 @@ pub fn standard_conversion_from(
     } else if types.is_array(from) {
         (FirstStep::ArrayToPointer, array_decayed(s, from))
     } else if vk.is_glvalue() && !types.is_void(from) {
-        (FirstStep::LValueToRValue, strip_cv(s, from))
+        // C11 6.3.2.1p2: the value of an `_Atomic(T)` lvalue is a `T`
+        // (clang's `DefaultLvalueConversion` adds `AtomicToNonAtomic`).
+        let cur = match types.as_atomic(from) {
+            Some(v) => v,
+            None => from,
+        };
+        (FirstStep::LValueToRValue, strip_cv(s, cur))
     } else {
         (FirstStep::Identity, from)
     };

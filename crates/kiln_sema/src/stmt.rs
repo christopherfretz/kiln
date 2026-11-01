@@ -65,6 +65,9 @@ pub struct FnState {
     /// The `return`s with an NRVO candidate, re-checked at the end of
     /// the body (clang `FunctionScopeInfo::Returns`, §5.5).
     pub(crate) returns: Vec<StmtId>,
+    /// The body has a `switch` (a goto or `asm goto` shows in `labels`):
+    /// the jump-scope check runs (clang `NeedsScopeChecking`).
+    pub(crate) has_switch: bool,
 }
 
 impl FnState {
@@ -80,6 +83,7 @@ impl FnState {
             this_ty: None,
             this_override: None,
             returns: Vec::new(),
+            has_switch: false,
         }
     }
 }
@@ -364,8 +368,9 @@ impl Sema<'_, '_> {
     pub fn act_on_start_switch(&mut self, cond: ExprId, loc: Loc) -> ExprId {
         let ty0 = self.ast.exprs.get(cond).ty();
         let t = &self.ast.types;
-        let ok = t.is_integral(ty0)
-            || t.as_enum(ty0).is_some()
+        let tv = t.as_atomic(ty0).unwrap_or(ty0);
+        let ok = t.is_integral(tv)
+            || t.as_enum(tv).is_some()
             || t.builtin(ty0) == Some(BuiltinType::Error);
         // [temp.res.general]/6: a condition of dependent type is checked
         // (converted, promoted) when the template is instantiated; the
@@ -384,6 +389,7 @@ impl Sema<'_, '_> {
         };
         let cond = self.act_on_full_expr(cond);
         if let Some(f) = self.func.as_mut() {
+            f.has_switch = true;
             f.switches.push(SwitchState {
                 cond_ty,
                 values: Vec::new(),
@@ -764,7 +770,15 @@ impl Sema<'_, '_> {
             && !st.deduced
         {
             let f = st.decl;
-            self.set_deduced_return(f, QualType::VOID);
+            // A specialization whose body failed to instantiate (a
+            // dropped `return`) deduces nothing (clang leaves the type
+            // undeduced): the error type, so uses are silent.
+            let ret = if self.ast.decls.get(f).has(DeclFlags::INVALID) {
+                QualType::ERROR
+            } else {
+                QualType::VOID
+            };
+            self.set_deduced_return(f, ret);
         }
         let Some(state) = self.func.take() else { return };
         for &r in &state.returns {
@@ -781,6 +795,11 @@ impl Sema<'_, '_> {
                     .arg(self.ast.symbols().as_str(l.name).to_string());
                 self.emit(msg);
             }
+        }
+        // [stmt.dcl]/3, [except.handle]/2: jumps into protected scopes
+        // (clang `DiagnoseInvalidJumps`, ahead of the flow warnings).
+        if state.has_switch || !state.labels.is_empty() {
+            self.check_jump_scopes(body);
         }
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred
@@ -828,11 +847,7 @@ impl Sema<'_, '_> {
 
     /// Whether function `f` is declared `[[noreturn]]`.
     fn decl_is_noreturn(&self, f: DeclId) -> bool {
-        let attrs = self.ast.attrs.of_decl(f);
-        self.ast
-            .lists
-            .iter::<kiln_ast::AttrId>(attrs)
-            .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::NORETURN)
+        self.ast.is_noreturn_fn(f)
     }
 
     /// Whether control can reach the end of `s` (a structural
@@ -940,7 +955,10 @@ impl Sema<'_, '_> {
 
     fn is_noreturn_call(&self, e: ExprId) -> bool {
         let n = self.ast.exprs.get(e);
-        if !matches!(n.kind(), ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr) {
+        if !matches!(
+            n.kind(),
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr
+        ) {
             return false;
         }
         let mut c = self.ast.exprs.callee(e);
@@ -956,12 +974,15 @@ impl Sema<'_, '_> {
                         return builtin::info(b)
                             .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
                     }
-                    let attrs = self.ast.attrs.of_decl(d);
-                    return self
-                        .ast
-                        .lists
-                        .iter::<kiln_ast::AttrId>(attrs)
-                        .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::NORETURN);
+                    return self.ast.decls.get(d).kind().is_function()
+                        && self.ast.is_noreturn_fn(d);
+                }
+                // `s.m()`: clang's CFG uses the direct callee, virtual or
+                // not.
+                ExprKind::MemberExpr => {
+                    let d = self.ast.exprs.decl(c);
+                    return self.ast.decls.get(d).kind().is_function()
+                        && self.ast.is_noreturn_fn(d);
                 }
                 _ => return false,
             }

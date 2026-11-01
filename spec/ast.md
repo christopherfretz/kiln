@@ -383,7 +383,7 @@ Names are clang's (the dump prints them). (M2) marks the M2 subset.
 | lambdas, packs | `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr` (P2662), `CXXUnresolvedConstructExpr` |
 | coroutines | `CoawaitExpr`, `DependentCoawaitExpr`, `CoyieldExpr` |
 | constant | `ConstantExpr` (M2; caches the value, §9.2) |
-| GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr`, `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`), `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr` |
+| GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr`, `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`; WP-154: `aux` = the builtin id (`ExprArena::atomic_op`), `a` = a list of the operands in clang's order `ptr`, `order`, `val1`, `order_fail`, `val2`, `weak`, only those the op takes (`atomic_subs`); the per-op shape is `kiln_ast::decl::builtin::atomic`), `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr` |
 | reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated) |
 | recovery | `RecoveryExpr` (children kept; `ERROR` dependence; type if known) |
 
@@ -519,9 +519,11 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   The key is the `SourceLocExpr` itself (its own location and context),
   or a `CXXDefaultArgExpr` that uses a default argument containing one
   (the call's location and the caller's context, [dcl.fct.default]/9 via
-  [support.srcloc.cons]/2). Consumers (Oven, codegen) take the values of
-  the outermost `CXXDefaultArgExpr` in scope that has an entry, else the
-  `SourceLocExpr`'s own.
+  [support.srcloc.cons]/2), or a `CXXDefaultInitExpr` using a default
+  member initializer containing one (the constructor's or the aggregate
+  initialization's location and context). Consumers (Oven, codegen) take
+  the values of the outermost `CXXDefaultArgExpr`/`CXXDefaultInitExpr` in
+  scope that has an entry, else the `SourceLocExpr`'s own.
 
 ### 5.9 Lambdas (WP-075)
 - **`LambdaExpr`** ([expr.prim.lambda]; spec/sema-lambda.md): `a` is its

@@ -54,7 +54,7 @@ impl Cg<'_> {
         self.ast.exprs.get(e).value_category() != ValueCategory::PRValue
     }
 
-    fn is_volatile(&self, q: QualType) -> bool {
+    pub(crate) fn is_volatile(&self, q: QualType) -> bool {
         self.ast.types.effective_quals(q).is_volatile()
     }
 
@@ -79,7 +79,7 @@ impl Cg<'_> {
     }
 
     /// A floating constant `x` (±1.0 and 0.0 only) of type `ty`.
-    fn fconst(&mut self, ty: LTy, x: f64) -> V {
+    pub(crate) fn fconst(&mut self, ty: LTy, x: f64) -> V {
         if let Some((et, n, _)) = self.m.types.vector_info(ty) {
             let V::C(c) = self.fconst(et, x) else { unreachable!("constant") };
             return V::C(self.m.const_vector(&vec![c; n as usize]).expect("float vector"));
@@ -108,7 +108,7 @@ impl Cg<'_> {
         V::C(self.m.const_float_bits(ty, bits))
     }
 
-    fn is_float_ty(&self, t: LTy) -> bool {
+    pub(crate) fn is_float_ty(&self, t: LTy) -> bool {
         self.m.types.is_float_or_float_vector(t)
     }
 
@@ -192,7 +192,10 @@ impl Cg<'_> {
                 let Some(init) = self.default_member_init(e) else {
                     return err(self.loc_of(e), "default member initializer not yet parsed");
                 };
-                return self.emit_scalar_opt(init);
+                let saved = self.enter_default_arg(e);
+                let r = self.emit_scalar_opt(init);
+                self.srcloc = saved;
+                return r;
             }
             ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
@@ -311,6 +314,7 @@ impl Cg<'_> {
                 return Ok(None);
             }
             ExprKind::StmtExpr => return self.emit_stmt_expr(e),
+            ExprKind::AtomicExpr => return self.emit_atomic_expr(e, None),
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
             // clang `VisitInitListExpr` on a vector: `insertelement` of
@@ -378,7 +382,12 @@ impl Cg<'_> {
             let vec = self.vec_elt_load(lv);
             return self.extract_elt(vec, idx);
         }
-        let Some(bf) = lv.bf else { return self.load_scalar(lv.addr, lv.q) };
+        let Some(bf) = lv.bf else {
+            if let Some(vq) = self.ast.types.as_atomic(lv.q) {
+                return self.atomic_load_lv(lv, vq);
+            }
+            return self.load_scalar(lv.addr, lv.q);
+        };
         let vol = self.is_volatile(lv.q);
         let st = lv.addr.ty;
         let mut v = self.load(st, lv.addr.v, lv.addr.align, vol);
@@ -425,7 +434,11 @@ impl Cg<'_> {
             return v;
         }
         let Some(bf) = lv.bf else {
-            self.store_scalar(v, lv.addr, lv.q);
+            if let Some(vq) = self.ast.types.as_atomic(lv.q) {
+                self.atomic_store_lv(v, lv, vq);
+            } else {
+                self.store_scalar(v, lv.addr, lv.q);
+            }
             return v;
         };
         let vol = self.is_volatile(lv.q);
@@ -598,6 +611,8 @@ impl Cg<'_> {
             CastKind::NoOp
             | CastKind::BitCast
             | CastKind::LValueBitCast
+            | CastKind::AtomicToNonAtomic
+            | CastKind::NonAtomicToAtomic
             | CastKind::UserDefinedConversion
             | CastKind::ConstructorConversion => {
                 return self.emit_scalar_opt(s);
@@ -764,13 +779,24 @@ impl Cg<'_> {
 
     /// clang `EmitScalarPrePostIncDec`.
     fn inc_dec(&mut self, e: ExprId, lv: LV, op: UnaryOp) -> R<V> {
-        let ast = self.ast;
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
         let pre = matches!(op, UnaryOp::PreInc | UnaryOp::PreDec);
-        let q = lv.q;
+        if lv.bf.is_none()
+            && let Some(vq) = self.ast.types.as_atomic(lv.q)
+        {
+            return self.atomic_inc_dec(e, lv, vq, inc, pre);
+        }
         let old = self.load_lv(lv);
+        let new = self.inc_dec_value(e, lv.q, old, inc)?;
+        let stored = self.store_lv(new, lv, lv.bf.is_some());
+        Ok(if pre { stored } else { old })
+    }
+
+    /// The incremented (`inc`) or decremented value `old` of type `q`.
+    pub(crate) fn inc_dec_value(&mut self, e: ExprId, q: QualType, old: V, inc: bool) -> R<V> {
+        let ast = self.ast;
         let amount: i128 = if inc { 1 } else { -1 };
-        let new = if self.is_bool(q) && inc {
+        Ok(if self.is_bool(q) && inc {
             V::C(self.m.const_bool(true))
         } else if ast.types.is_pointer(q) {
             let pq = ast.types.pointee(q).expect("pointee");
@@ -792,9 +818,7 @@ impl Cg<'_> {
                 let fl = if can_overflow && self.is_signed(q) { Flags::NSW } else { Flags::NONE };
                 self.bin(BinOp::Add, fl, old, c)
             }
-        };
-        let stored = self.store_lv(new, lv, lv.bf.is_some());
-        Ok(if pre { stored } else { old })
+        })
     }
 
     fn emit_binary(&mut self, e: ExprId) -> R<Option<V>> {
@@ -842,7 +866,7 @@ impl Cg<'_> {
     /// Binary arithmetic, comparison and pointer arithmetic on emitted
     /// operands (`q` is the computation type).
     #[allow(clippy::too_many_arguments)]
-    fn arith(
+    pub(crate) fn arith(
         &mut self,
         e: ExprId,
         op: BinaryOp,
@@ -1251,6 +1275,12 @@ impl Cg<'_> {
         let rv = self.emit_scalar(ca.rhs)?;
         let lv = self.emit_lvalue(l)?;
         let lq = lv.q;
+        if lv.bf.is_none()
+            && let Some(vq) = ast.types.as_atomic(lq)
+        {
+            let v = self.atomic_compound_assign(e, op, lv, vq, rv, rq, ca.lhs_ty, ca.result_ty)?;
+            return Ok((lv, v));
+        }
         let old = self.load_lv(lv);
         let lhs = if ast.types.is_pointer(lq) { old } else { self.conv(old, lq, ca.lhs_ty) };
         let res = self.arith(e, op, lhs, rv, ca.lhs_ty, rq, ca.result_ty)?;
@@ -1383,7 +1413,12 @@ impl Cg<'_> {
                 r
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
-                Some(init) => self.emit_lvalue(init),
+                Some(init) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.emit_lvalue(init);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
             },
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
@@ -2038,18 +2073,57 @@ impl Cg<'_> {
             (p, fty, false, None)
         };
         let sig = self.call_sig(fty, extern_c, &arg_tys);
-        let extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
-        let noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
+        let mut extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
+        let mut noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
+        if !noreturn {
+            let (site, unreachable) = self.noreturn_call(direct, fty);
+            if site {
+                extra.push(Attr::Flag(AttrKind::NoReturn));
+            }
+            noreturn = unreachable;
+        }
         let r = self.call_with(&sig, callee, fid, None, &args, dest, &extra)?;
         if noreturn {
-            // clang `EmitCall` of a `noreturn` library builtin
-            // (`__builtin_abort`): `unreachable`, then a dummy block.
-            self.f.fir.push(Op::Unreachable, LTy::VOID);
-            self.f.fir.set_cur(None);
-            let cont = self.f.fir.create_block();
-            self.emit_block(cont, false);
+            self.finish_noreturn_call();
         }
         Ok(r)
+    }
+
+    /// Whether a call of function `d` (`None`: through a pointer) of type
+    /// `fty` gets the `noreturn` call-site attribute, and whether it is
+    /// followed by `unreachable` (clang `ConstructAttributeList`: a
+    /// `[[noreturn]]` virtual function's overriders may return, so only
+    /// the GNU spelling and a `noreturn` function type mark its call
+    /// site; `EmitCall` still ends the block).
+    pub(crate) fn noreturn_call(&self, d: Option<DeclId>, fty: QualType) -> (bool, bool) {
+        let ast = self.ast;
+        let ty_nr = ast.types.proto(fty).is_some_and(|p| p.info().noreturn());
+        let Some(d) = d else { return (ty_nr, ty_nr) };
+        if !ast.is_noreturn_fn(d) {
+            return (ty_nr, ty_nr);
+        }
+        let virt =
+            ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_virtual()));
+        let gnu = ast.redecls_of(d).any(|r| {
+            ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).any(|a| {
+                let n = ast.attrs.get(a);
+                n.kind == kiln_ast::attr::AttrKind::NORETURN
+                    && n.syntax == kiln_ast::attr::AttrSyntax::Gnu
+            })
+        });
+        (ty_nr || gnu || !virt, true)
+    }
+
+    /// clang `EmitCall` of a call that does not return: `unreachable`,
+    /// then a dummy block for the unreachable code that follows.
+    pub(crate) fn finish_noreturn_call(&mut self) {
+        if self.f.fir.cur().is_none() {
+            return;
+        }
+        self.f.fir.push(Op::Unreachable, LTy::VOID);
+        self.f.fir.set_cur(None);
+        let cont = self.f.fir.create_block();
+        self.emit_block(cont, false);
     }
 
     /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
@@ -2156,6 +2230,8 @@ impl Cg<'_> {
             let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
             fa.extend(extra.iter().cloned());
             self.m.attr_set(&fa)
+        } else if !extra.is_empty() {
+            self.m.attr_set(extra)
         } else {
             AttrList::default().func
         };
@@ -2363,6 +2439,7 @@ impl Cg<'_> {
                 r
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
+            ExprKind::AtomicExpr => self.emit_atomic_expr(e, Some(dest)).map(|_| ()),
             ExprKind::CXXThrowExpr => self.emit_throw(e, true),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)
@@ -2379,7 +2456,12 @@ impl Cg<'_> {
                 Ok(())
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
-                Some(init) => self.agg_visit(init, dest, zeroed),
+                Some(init) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.agg_visit(init, dest, zeroed);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
             },
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
@@ -2591,7 +2673,12 @@ impl Cg<'_> {
             return r;
         }
         let v = self.emit_scalar(e)?;
-        self.store_lv(v, lv, false);
+        if lv.bf.is_none() && self.ast.types.as_atomic(lv.q).is_some() {
+            // An initialization of an `_Atomic` object is a plain store.
+            self.store_scalar(v, lv.addr, lv.q);
+        } else {
+            self.store_lv(v, lv, false);
+        }
         Ok(())
     }
 
@@ -3017,17 +3104,18 @@ impl Cg<'_> {
             (Addr { v: a, ty, align }, None)
         };
         self.f.locals.insert(d, addr);
-        // Default-initialization by a trivial constructor emits nothing.
-        let Some(init) = v.init.filter(|&i| {
+        // Default-initialization by a trivial constructor emits nothing
+        // (but a non-trivial destructor still gets its cleanup).
+        let init = v.init.filter(|&i| {
             !ast.is_trivial_default_construction(i) || ast.exprs.construct_info(i).zeroing
-        }) else {
-            return Ok(());
-        };
-        if self.f.fir.cur().is_none() {
-            return Ok(());
+        });
+        if let Some(init) = init
+            && self.f.fir.cur().is_some()
+        {
+            self.emit_var_init(d, q, addr, init)?;
         }
-        self.emit_var_init(d, q, addr, init)?;
-        // clang `EmitAutoVarCleanups`.
+        // clang `EmitAutoVarCleanups`: no insertion point, no cleanup
+        // (sema rejects jumps into the variable's scope).
         if self.f.fir.cur().is_none() {
             return Ok(());
         }

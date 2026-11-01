@@ -694,9 +694,12 @@ specification as written (`TypeNames` prints ` noexcept`,
     conflicts with declaration already in scope`, with notes at the
     target and the conflicting declaration; no shadow is made.
   - A later declaration that conflicts with a shadow
-    (`check_using_shadow_conflict`, from variable, function and typedef
-    declarations) reports `declaration conflicts with target of using
-    declaration already in scope`, and is marked invalid.
+    (`check_using_shadow_conflict`, from variable, function, typedef
+    and tag declarations, including operator, literal-operator and
+    conversion function names, WP-146) reports `declaration conflicts with
+    target of using declaration already in scope`, and is marked invalid;
+    in a class a member function instead hides the shadow
+    ([namespace.udecl]/14, `Decls::hidden_shadow`).
   - Repeating a using-declaration of the same entity is allowed; the new
     shadow redeclares the old one.
 - **Class scope:** kiln has no base classes yet (M3), so every
@@ -941,6 +944,15 @@ diagnostics and IR.
   Not yet: the composite type that needs a cv-union of both sides
   (`const int B::*` vs `volatile int D::*`; [expr.type]/4.6) and
   constant evaluation of the comparison (WP-076).
+- **Composite pointer type** ([expr.type]/4; `composite_pointer` in
+  `expr.rs`, used by `==`, `<`, `<=>` and `?:`): after the null,
+  same-type and one-way-conversion cases, `cv_combined_pointer` tries a
+  pointer to either side's unqualified pointee with the cv-qualifiers of
+  both (`void *` vs `const B *` is `const void *`; `B *` vs `const D *`
+  is `const B *`), taking the first that both operands reach by a
+  standard conversion (WP-155). Not yet: multi-level cv-combination
+  (`int **` vs `const int **` is `const int *const *`) and the member
+  pointer case above.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -1274,6 +1286,29 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   through a member whose (non-NSDMI) default construction is a failed
   consteval constructor call.
 
+### 5.11 Atomics (`builtins/atomic.rs`, WP-154)
+- **Builtins.** `__c11_atomic_*` and `__atomic_*` calls (the ids in
+  `kiln_ast::decl::builtin::atomic`) become an `AtomicExpr`, as clang's
+  `Sema::BuildAtomicExpr`: the pointer operand is checked
+  (`sema_atomic_builtin_must_be_pointer`, `_op_needs_atomic` for the c11
+  forms, `_needs_non_const_atomic`/`_pointer`, incomplete types, `_BitInt`
+  prohibited), the value kind per op (int / int-or-fp / int-ptr-or-fp /
+  trivially copyable), value operands are converted to the value type (or
+  `ptrdiff_t` for pointer arithmetic, or pointers for the generic
+  `__atomic_load`/`store`/`exchange`/`compare_exchange` forms), orders to
+  `int`, and a constant order invalid for the op is
+  `-Watomic-memory-ordering` (`sema_atomic_op_invalid_memory_order`). The
+  result type is clang's (void, the value, or `bool`).
+- **Lvalues of `_Atomic(T)`.** Lvalue-to-rvalue conversion adds
+  `AtomicToNonAtomic`; assignment and initialization from `T` add
+  `NonAtomicToAtomic`. Operand checks of the arithmetic, shift, bitwise,
+  unary and `switch` conditions use the value type (`value_ty`). `++`/`--`
+  and compound assignment are allowed on a modifiable `_Atomic` lvalue
+  and yield an lvalue of `T` (`++`) or `_Atomic(T)` (compound assignment),
+  as clang 19's `decltype` shows. A braced list initializing an `_Atomic`
+  object is `sema_illegal_initializer_type`, as clang.
+- **Not done:** `-Watomic-alignment` (the libcall-size warning).
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -1371,7 +1406,25 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
 - `goto` to an undeclared label is reported at the end of the function
   (`use of undeclared label 'x'`).
 - A redefinition is an error, with a note.
-- Jumps past initializations are not checked yet (M3, [stmt.dcl]/3).
+- **Landed (WP-153): jump-scope checking** (`jump_scope.rs`, clang
+  `JumpScopeChecker`), run at the end of every function body with a
+  label, `switch` or `asm goto` (in templates, at instantiation).
+  Protected scopes: a variable whose initialization a jump would bypass
+  ([stmt.dcl]/3: non-trivial default init, any initializer, a VLA or a
+  non-trivial destructor), try blocks and handlers ([except.handle]/2),
+  each arm of a constexpr/consteval `if` ([stmt.if]/2), GNU statement
+  expressions and lifetime-extended temporaries with a destructor. A
+  `goto` or `case` entering one is `cannot jump from this goto statement
+  to its label` / `cannot jump from switch statement to this case label`
+  with one `jump bypasses …` note per scope entered; an `asm goto` may
+  neither enter nor leave a scope with a destructor (`cannot jump from
+  this asm goto statement to one of its possible targets`, the
+  `possible target of asm goto statement` note and `jump exits …`
+  notes). Leaving scopes through `goto` is fine; codegen runs their
+  cleanups (spec/codegen.md).
+- `[[noreturn]]`: the fall-off analysis (§4.3) treats a call as not
+  returning when any redeclaration of the callee is `[[noreturn]]`,
+  including member calls.
 
 ### 7.5 Landed (WP-100): try-blocks (`try_stmt.rs`)
 - `act_on_exception_decl` ([except.handle]/1-3): an rvalue-reference

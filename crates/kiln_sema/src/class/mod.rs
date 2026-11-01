@@ -104,6 +104,10 @@ pub struct ClassBuild {
     /// The first declarations befriended by this class, in order; stored
     /// in `RecordCold.friends` at `}`.
     pub friends: Vec<DeclId>,
+    /// The context current where the definition began, current again at
+    /// `}` (an out-of-line definition of a member partial specialization
+    /// declared in its class is lexically outside it).
+    pub outer: DeclId,
 }
 
 /// The function being defined when a nested function definition starts
@@ -117,7 +121,7 @@ pub(crate) struct SavedFn {
 
 impl ClassBuild {
     /// A fresh entry for `record` with the default access of `tag`.
-    pub fn new(record: DeclId, tag: TagKind) -> Self {
+    pub fn new(record: DeclId, tag: TagKind, outer: DeclId) -> Self {
         let access = if tag == TagKind::Class { Access::Private } else { Access::Public };
         ClassBuild {
             record,
@@ -127,6 +131,7 @@ impl ClassBuild {
             pending_nsdmi: 0,
             pending_default_args: 0,
             friends: Vec::new(),
+            outer,
         }
     }
 }

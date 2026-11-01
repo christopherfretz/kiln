@@ -25,6 +25,10 @@ kiln_driver  = { path = "crates/kiln_driver" }
 # Third-party (each approved in a work package; see docs/AGENTS.md rule 7).
 # hashbrown: `HashTable` for key-in-arena interning (spec/types.md §7.1, §17 T1).
 hashbrown = { version = "0.15", default-features = false, features = ["inline-more"] }
+# signal-hook: xtask returns its held jobserver tokens on SIGINT/SIGTERM
+# (WP-157, spec/harness.md "Jobserver"); the signal-handler `unsafe` stays in
+# the dependency, xtask itself remains `forbid(unsafe_code)`.
+signal-hook = { version = "0.3", default-features = false, features = ["iterator"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

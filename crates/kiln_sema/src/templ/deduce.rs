@@ -123,6 +123,11 @@ pub struct DeducedArgs {
     /// that are pack expansions too, each taken as a whole (clang; the
     /// alias template guides of [over.match.class.deduct]/3).
     pub expansions: bool,
+    /// While deducing one element of a pack expansion: its index, which
+    /// selects the element of a pack substituted earlier
+    /// (`SubstTemplateTypeParmPackType` in a partially substituted
+    /// pattern, §7.2).
+    pub pack_elem: Option<usize>,
 }
 
 impl DeducedArgs {
@@ -134,6 +139,7 @@ impl DeducedArgs {
             info: DeductionInfo::default(),
             pack_cur: None,
             expansions: false,
+            pack_elem: None,
         }
     }
 
@@ -324,9 +330,12 @@ impl Sema<'_, '_> {
         let saved = d.pack_cur.take();
         let mut per: Vec<(u16, Vec<TemplateArg>)> = Vec::new();
         let skip = skip.min(n);
+        let saved_elem = d.pack_elem;
         for i in skip..n {
             d.pack_cur = Some(Vec::new());
+            d.pack_elem = Some(i);
             let r = f(self, i, d);
+            d.pack_elem = saved_elem;
             let cur = d.pack_cur.take().unwrap_or_default();
             if r != Tdk::Success {
                 d.pack_cur = saved;
@@ -847,10 +856,6 @@ impl Sema<'_, '_> {
                 let TypeView::Complex(ae) = av else { return mismatch(d) };
                 self.deduce_ty(pe, ae, TdfFlags::NONE, d, next)
             }
-            TypeView::Atomic(pe) => {
-                let TypeView::Atomic(ae) = av else { return mismatch(d) };
-                self.deduce_ty(pe, ae, TdfFlags::NONE, d, next)
-            }
             TypeView::Vector { elem: pe, count: pc, kind: pk } => {
                 let TypeView::Vector { elem: ae, count: ac, kind: ak } = av else {
                     return mismatch(d);
@@ -876,13 +881,25 @@ impl Sema<'_, '_> {
                 }
                 self.deduce_array_bound(size, asize, d)
             }
+            // A pack substituted earlier into a partially substituted
+            // pattern (§7.2): its element for the element being deduced
+            // must match; outside an element it is not deduced from.
+            TypeView::SubstTemplateTypeParmPack { pack, .. } => {
+                let elem = d.pack_elem.and_then(|i| t.args(pack).get(i).copied());
+                match elem.map(|x| x.view()) {
+                    Some(ArgView::Type(e)) => self.deduce_ty(e, a, flags, d, next),
+                    _ => Tdk::Success,
+                }
+            }
             TypeView::PackExpansion { .. } => {
                 self.templ_unimplemented("template argument deduction for a pack", Loc::INVALID);
                 Tdk::MiscellaneousDeductionFailure
             }
             // Non-deduced contexts ([temp.deduct.type]/5): the
             // qualifier of a qualified-id, `decltype`, pack indexing,
-            // type transforms.
+            // type transforms. clang 19 also does not deduce through
+            // `_Atomic(T)` (its `DeduceTemplateArgumentsByTypeMatch`
+            // treats it as non-deduced: "couldn't infer template argument").
             TypeView::DependentName { .. }
             | TypeView::DependentTemplateSpecialization { .. }
             | TypeView::DependentDecltype(_)
@@ -891,7 +908,8 @@ impl Sema<'_, '_> {
             | TypeView::TypeOf { .. }
             | TypeView::UnaryTransform { .. }
             | TypeView::DependentBitInt { .. }
-            | TypeView::Splice { .. } => Tdk::Success,
+            | TypeView::Splice { .. }
+            | TypeView::Atomic(_) => Tdk::Success,
             // A dependent record (a member of the current instantiation)
             // and anything else: exact match.
             _ => {
@@ -1189,6 +1207,16 @@ impl Sema<'_, '_> {
         let mut s = String::new();
         kiln_ast::types::write_template_arg(&self.ast.types, &names, a, &mut s);
         s
+    }
+
+    /// Argument `a` as a binding in `[with T = int]` prints it: a pack
+    /// in angle brackets (`U = <long, short>`, clang's
+    /// `getTemplateArgumentBindingsText`).
+    pub(crate) fn binding_arg_str(&self, a: TemplateArg) -> String {
+        if matches!(a.view(), ArgView::Pack(_)) {
+            return format!("<{}>", self.arg_str(a));
+        }
+        self.arg_str(a)
     }
 
     /// A conflicting deduction: a type in quotes, a value or template bare.

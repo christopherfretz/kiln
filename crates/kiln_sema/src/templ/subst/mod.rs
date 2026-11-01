@@ -72,6 +72,13 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// How many lambda bodies are being rebuilt (a shared expression in
     /// one still captures `this`).
     pub(crate) lambda_bodies: u32,
+    /// A statement of the body failed to substitute after an error
+    /// (clang's `TransformCompoundStmt` `SubStmtInvalid`: the body, and
+    /// so the function template specialization, is invalid; WP-145).
+    pub(crate) stmt_failed: bool,
+    /// Variable initializers that failed to substitute (the variable is
+    /// invalid, its declaration statement is not: clang keeps it).
+    pub(crate) init_failures: u32,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -97,6 +104,8 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             pairs: Vec::new(),
             declarator_name: None,
             lambda_bodies: 0,
+            stmt_failed: false,
+            init_failures: 0,
         }
     }
 
@@ -158,7 +167,19 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         parm: Option<DeclId>,
         loc: Loc,
     ) -> SubstResult<TemplateArg> {
-        self.pack_element(a, |s| parm.map_or_else(String::new, |d| s.sema.decl_name(d)), loc)
+        use crate::templ::pack::PackName;
+        self.pack_element(
+            a,
+            |s| match parm {
+                Some(d) => PackName {
+                    name: s.sema.decl_name(d),
+                    depth: s.sema.ast.template_parm(d).map(|i| i.depth),
+                    outer: false,
+                },
+                None => PackName::default(),
+            },
+            loc,
+        )
     }
 
     /// Substitutes into one template argument (§5.3).
@@ -461,7 +482,15 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 DeclOrPack::Decl(x) => Ok(x),
                 DeclOrPack::Pack(l) => {
                     let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
-                    let i = self.pack_reached(n, |s| s.sema.decl_name(d), loc)?;
+                    let i = self.pack_reached(
+                        n,
+                        |s| crate::templ::pack::PackName {
+                            name: s.sema.decl_name(d),
+                            depth: None,
+                            outer: false,
+                        },
+                        loc,
+                    )?;
                     self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)
                 }
             };

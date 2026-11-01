@@ -737,6 +737,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
+            ExprKind::AtomicExpr => {
+                for c in exprs.children(e, lists) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
             _ => {}
         }
     }
@@ -1046,7 +1051,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.value(c);
                 }
             }
-            if n.ty().is_some_and(|t| needs_destruction(ast, t)) {
+            if n.ty().is_some_and(|t| ast.needs_destruction(t)) {
                 self.line.push_str(" destroyed");
             }
         } else if let Some(p) = decls.param(d) {
@@ -1056,7 +1061,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             if p.default_arg.is_some() {
                 self.line.push_str(" cinit");
             }
-            if n.ty().is_some_and(|t| needs_destruction(ast, t)) {
+            if n.ty().is_some_and(|t| ast.needs_destruction(t)) {
                 self.line.push_str(" destroyed");
             }
             if p.flags & ParamData::PACK != 0 {
@@ -2171,24 +2176,4 @@ fn is_value_decl(k: DeclKind) -> bool {
                 | DeclKind::IndirectField
                 | DeclKind::TemplateParamObject
         )
-}
-
-/// clang `VarDecl::needsDestruction`: the (array element) type is a class
-/// with a non-trivial destructor ([basic.life]/1). Sema declares the
-/// destructor of every variable's class (spec/sema-class.md §4.8), so a
-/// class without a declared destructor is not destroyed.
-fn needs_destruction(ast: &Ast, t: QualType) -> bool {
-    let mut t = t;
-    for _ in 0..256 {
-        match ast.types.element(t) {
-            Some(e) if ast.types.is_array(t) => t = e,
-            _ => break,
-        }
-    }
-    let Some(def) = ast.types.as_record(t).and_then(|r| ast.definition(r)) else { return false };
-    ast.decls.record(def).is_some_and(|x| !x.defn.contains(DefinitionBits::TRIVIAL_DTOR))
-        && ast
-            .destructor(def)
-            .and_then(|d| ast.decls.function(d))
-            .is_some_and(|f| !f.spec.is_trivial())
 }
