@@ -2642,6 +2642,9 @@ records it in `TABLE`.
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
 | complex math (WP-237) | `__builtin_cabs`/`carg`/`cacos`/`cacosh`/`casin`/`casinh`/`catan`/`catanh`/`ccos`/`ccosh`/`cexp`/`clog`/`cpow`/`cproj`/`csin`/`csinh`/`csqrt`/`ctan`/`ctanh`, each with the `f` and `l` forms (`builtin::LIBM`; the signature prefix `X` is `_Complex` of the type after it; `cproj` is `const`) | no (clang 19) | libcall through the complex call ABI (spec/abi.md §8.17) |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
+| checked arithmetic (WP-270) | `__builtin_add_overflow`†, `__builtin_sub_overflow`†, `__builtin_mul_overflow`† (generic: two integer operands of any types, a pointer to a non-const integer result); the typed `__builtin_{s,u}{add,sub,mul}_overflow` with `l`/`ll` forms (fixed `int`/`long`/`long long` parameters, signed or unsigned) | yes | `llvm.{s,u}{add,sub,mul}.with.overflow` in clang's encompassing width (spec/codegen.md §3) |
+| stack allocation (WP-270) | `__builtin_alloca`, `__builtin_alloca_with_align` (the alignment an `I` argument in bits: a power of two, at least 8, at most `INT_MAX`) | no ("subexpression not valid") | dynamic `alloca i8` where the call is |
+| printf family (WP-270) | `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf` (signature letter `R`: `restrict`) | no | libcall |
 
 **Landed (WP-088).** Every row above is implemented in sema, the Oven
 and codegen, with these exceptions, each matching clang 19:
@@ -2674,6 +2677,31 @@ not counted in the 143 header builtins of §13.3, which are the M3
 headers' own uses; `TABLE` now holds 91 function rows. Tests:
 `tests/conformance/expr.const/builtins-str{,-errors,-run}.cpp`,
 `tests/codegen/builtins_str.cpp`.
+
+**Landed (WP-270): checked arithmetic, alloca, printf builtins.**
+`builtin::CHECKED` holds the 26 rows (clang 19 ids; `checked_op` maps
+an overflow id to its operation and whether it is a typed form). The
+generic overflow builtins are custom-checked (`builtin_overflow`, clang
+`SemaBuiltinOverflow`): exactly three arguments (the usual count
+errors); each argument is decayed; an operand must be an integer type
+(integral, `bool`, or an unscoped enumeration; a scoped enumeration,
+floating or class type is `operand argument to overflow builtin must be
+an integer type ('T' invalid)` at the operand); the result must be a
+pointer to a non-const integer type, volatile allowed (`result argument
+to overflow builtin must be a pointer to a non-const integer type ('T'
+invalid)`, also for `nullptr` and `0`). The call is a `bool` prvalue and
+the arguments keep their own types. The typed forms are ordinary calls
+(conversion errors as for any parameter). `__builtin_alloca_with_align`'s
+alignment, after the integer-constant check, must be a power of two
+(`requested alignment is not a power of 2`), at least 8 (`requested
+alignment must be 8 or greater`) and at most 2147483647 (`requested
+alignment must be 2147483647 or smaller`), reported at the callee
+(`check_alloca_align`, clang `SemaBuiltinAllocaWithAlign`). clang's
+implicit `format` attributes on the printf rows are not modelled (see
+§5.4 of spec/sema.md). Tests: `tests/conformance/ext.gnu.builtins/`
+(`overflow-args`, `overflow-constexpr`, `overflow-constexpr-invalid`,
+`overflow-run`, `alloca-args`, `alloca-run`, `printf-builtins-run`,
+`libstdcxx-gnu-builtins`), `tests/codegen/builtins_{overflow,alloca,printf_lib}.cpp`.
 
 **Source location.** Sema computes the values once, when it builds the
 `SourceLocExpr` (spec/ast.md §5.8): `LINE`/`COLUMN` from the presumed

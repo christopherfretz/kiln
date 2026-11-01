@@ -264,6 +264,31 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
       call site too).
+    - checked arithmetic (WP-270, clang `EmitBuiltinExpr`;
+      `checked.rs`): the typed forms call `llvm.{s,u}{op}.with.overflow`
+      at the parameter type and store the value at the result pointer's
+      known alignment. The generic forms take each type's width (`bool`
+      1) and signedness; mixed-sign `mul` whose wider operand is at least
+      as wide as the result is clang's `EmitCheckedMixedSignMultiply`
+      (absolute value of the signed operand, `umul`, range checks against
+      `INT_MAX + IsNegative` or `UINT_MAX`, a negating `select`), and
+      unsigned × unsigned into an equally wide signed result is `umul`
+      plus `ugt INT_MAX` (the result pointer emitted last); otherwise the
+      operands are `int_cast` to the encompassing width (signed if any of
+      the three is; each unsigned type one bit wider then), the
+      intrinsic's flag is extracted before its value, and a narrower
+      result is truncated, extended back and compared (`icmp ne`, `or`).
+      The value is stored through `EmitToMemory` (an `i1` widened),
+      volatile per the pointee. A `select` whose arms are not both
+      constants is not folded (IRBuilder `FoldSelect`). The calls are not
+      fold candidates, since they store
+      (`tests/codegen/builtins_overflow.cpp`);
+    - `__builtin_alloca(n)` is `alloca i8, i64 n` in the current block
+      (not the entry block, no stack save), aligned to
+      `__BIGGEST_ALIGNMENT__` (16); `__builtin_alloca_with_align(n, a)`
+      to `a / 8` (`tests/codegen/builtins_alloca.cpp`);
+    - `__builtin_vsnprintf`, `__builtin_snprintf`, `__builtin_sprintf`
+      are library builtins (`tests/codegen/builtins_printf_lib.cpp`).
   - a call of one of the standard functions clang treats as builtins
     (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
     `forward_like`, `as_const`, `addressof`, `__addressof`, declared in

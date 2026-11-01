@@ -532,6 +532,29 @@ literal is one instruction and one step, not an interpreted loop.
   `i8` GEP by the count; `bcmp`, `wmemcpy` and `wmemmove` call the
   library functions.
 
+- **Landed (WP-270): checked arithmetic** (`builtin::CHECKED`). The
+  generic and typed `__builtin_{add,sub,mul}_overflow` forms are
+  evaluated, as clang 19's `ExprConstant`: the compiler evaluates both
+  operands, then the result pointer, then emits `bi::OVERFLOW` twice,
+  once with the `VALUE` flag for the wrapped result and once for the
+  flag, and stores the value through the pointer with the ordinary
+  assignment checks (a null pointer is "assignment to dereferenced null
+  pointer", an object from outside the evaluation "cannot modify an
+  object that is visible outside that expression"). The sub-operand
+  packs the operation (0 add, 1 sub, 2 mul), each operand's signedness,
+  the result's signedness and width; operands arrive canonical (sign- or
+  zero-extended to 128 bits). The VM computes in sign-magnitude with a
+  checked `u128` magnitude, so any `__int128`/`unsigned __int128` mix is
+  exact: overflow is a magnitude past `u128` or a value outside the
+  result type; the stored value is the wrapping operation truncated to
+  the result width (`arith::canon`). **Deliberate divergence:** for a
+  `bool` result clang 19's evaluator truncates to 8 bits (it stores 2 for
+  `1 + 1`), while its codegen and GCC use 1 bit; kiln uses 1 bit in both
+  (value `0`, overflow `true`).
+  `__builtin_alloca`, `__builtin_alloca_with_align`, `__builtin_vsnprintf`,
+  `__builtin_snprintf` and `__builtin_sprintf` trap "subexpression not
+  valid in a constant expression", as clang 19.
+
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
   `bool` or floating and its result is such a scalar (not a pointer, not
