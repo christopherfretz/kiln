@@ -758,7 +758,13 @@ carrying the attribute, else the template pattern (`template_info`,
 template clang 19 looks only at the pattern's definition when one exists
 (an out-of-line `template<class T> int Y<T>::f(){}` without a repeated
 tag mangles untagged); static data members and member templates of
-non-templates keep the declaration's tag. Tags mangle as `B<source-name>`
+non-templates keep the declaration's tag. Since sema copies a pattern's
+attributes onto its instantiations (WP-182), an instantiated function, a
+non-explicit function specialization and the pattern of a member template
+instantiated with its class never use their own attributes: their tags
+come from the walk above (for the member template, from the original
+member's definition: `X4<int>::X4<int>(int)` is untagged when the
+out-of-line `template<class T> template<class U> X4<T>::X4(U){}` is). Tags mangle as `B<source-name>`
 each, after the unqualified name (identifiers, `C2`/`D2`, operator codes),
 and a tagged namespace-scope variable is mangled (`_Z1vB1x`) rather than
 emitted under its plain name.

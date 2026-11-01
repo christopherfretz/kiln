@@ -525,14 +525,31 @@ fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
                 .find(|a| a.kind == AttrKind::ABI_TAG)
                 .map(|a| ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(a.a)))
         };
-        if def_only {
+        let f = ast.first(cur);
+        // An instantiated function carries its pattern's attributes
+        // (sema `InstantiateAttrs`), but its tags are the pattern's as
+        // found below, so its own are not consulted. That includes the
+        // pattern of a member template instantiated with its class,
+        // whose tags are those of the original member's definition.
+        let member_tmpl = ast
+            .described_template(f)
+            .and_then(|t| ast.instantiated_from(t))
+            .and_then(|t| ast.template_info(t))
+            .and_then(|i| i.pattern);
+        let instantiated = is_function_kind(ast.decls.get(cur).kind())
+            && (ast.instantiated_from(f).is_some()
+                || member_tmpl.is_some()
+                || ast.spec_info(f).is_some_and(|(_, s)| {
+                    s.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
+                }));
+        if instantiated {
+        } else if def_only {
             if let Some(t) = ast.definition(cur).and_then(tag_of) {
                 return Some(t);
             }
         } else if let Some(t) = ast.redecls_of(cur).find_map(tag_of) {
             return Some(t);
         }
-        let f = ast.first(cur);
         if let Some(p) = ast.template_info(f).and_then(|i| i.pattern) {
             work.push((p, member));
         }
@@ -542,6 +559,9 @@ fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
             work.push((p, member));
         }
         if let Some(p) = ast.instantiated_from(f) {
+            work.push((p, true));
+        }
+        if let Some(p) = member_tmpl {
             work.push((p, true));
         }
     }
