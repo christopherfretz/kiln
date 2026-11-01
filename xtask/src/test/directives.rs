@@ -291,8 +291,7 @@ impl TestSpec {
     /// `arch` (`std::env::consts::ARCH` spelling), if it cannot.
     pub fn unmet_requirement(&self, arch: &str) -> Option<String> {
         let want = self.requires_target.as_deref()?;
-        (want != arch)
-            .then(|| format!("requires target-{want}; the default target is {arch}"))
+        (want != arch).then(|| format!("requires target-{want}; the default target is {arch}"))
     }
 
     /// Does this test use directives only kiln can check?
@@ -677,7 +676,10 @@ impl Parser {
 
     /// `requires: target-<arch>`, `<arch>` one of [`TARGET_ARCHES`].
     fn requires_directive(&mut self, line: usize, value: &str) {
-        let usage = format!("expected `requires: target-<arch>`, <arch> one of {}", TARGET_ARCHES.join(" "));
+        let usage = format!(
+            "expected `requires: target-<arch>`, <arch> one of {}",
+            TARGET_ARCHES.join(" ")
+        );
         match value.strip_prefix("target-") {
             Some(a) if TARGET_ARCHES.contains(&a) => {
                 if self.requires_target.is_some() {
