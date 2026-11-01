@@ -43,4 +43,3 @@ constexpr bool span_at() {
   return vec_span.at(0) == 0 && vec_span.at(6) == 9084 && std::as_const(vec_span).at(1) == 1;
 }
 static_assert(span_at());
-
