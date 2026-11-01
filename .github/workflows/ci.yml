@@ -25,8 +25,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y clang-19 libc++-19-dev libc++abi-19-dev
       # WP-226 discovery (temporary): every failing test binary and corpus
       # test at once.
-      - run: cargo test --workspace --no-fail-fast 2>&1 | grep -E '^test .*FAILED|panicked at|test result: FAILED|^error' || true
-      - run: cargo build -p kiln_driver && cargo xtask test --compiler clang++-19 2>&1 | grep -E -A3 '^(FAIL|XPASS|ERROR|KILLED) |^test result' | head -200 || true
-      - run: cargo xtask test 2>&1 | grep -E -A3 '^(FAIL|XPASS|ERROR|KILLED) |^test result' | head -200 || true
+      - run: |
+          cargo test --workspace --no-fail-fast 2>&1 | grep -E '^test .*FAILED|panicked at|test result: FAILED|^error' || true
+      - run: |
+          cargo build -p kiln_driver && cargo xtask test --compiler clang++-19 2>&1 | grep -E -A3 '^(FAIL|XPASS|ERROR|KILLED) |^test result' | head -200 || true
+      - run: |
+          cargo xtask test 2>&1 | grep -E -A3 '^(FAIL|XPASS|ERROR|KILLED) |^test result' | head -200 || true
       # fmt, clippy, cargo test, then the corpus self-check with clang++-19.
       - run: cargo xtask ci
