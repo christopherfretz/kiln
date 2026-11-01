@@ -616,6 +616,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::ConvertVectorExpr
             | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 // The parameter prints first (clang), then the replacement.

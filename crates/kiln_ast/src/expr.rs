@@ -1539,6 +1539,17 @@ impl ExprArena {
         n.bits = (n.bits & !(3 << 2)) | ((ObjectKind::BitField as u8) << 2);
     }
 
+    /// Marks the glvalue `e` as designating a vector component
+    /// ([`ObjectKind::VectorComponent`]), propagated like
+    /// [`Self::mark_bitfield`] (clang copies the object kind of the
+    /// left operand of `=`, of a compound assignment and of prefix
+    /// `++`/`--`, and of the right operand of `,`). Monotone.
+    pub fn mark_vector_component(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.bits & 3 != 0, "only a glvalue can designate a vector component");
+        n.bits = (n.bits & !(3 << 2)) | ((ObjectKind::VectorComponent as u8) << 2);
+    }
+
     /// Retypes the string literal `e` that initializes a character array
     /// (and the parentheses around it) to the array type `ty`, as a
     /// prvalue ([dcl.init.string]; clang's `updateStringLiteralType`).
@@ -1975,6 +1986,7 @@ impl ExprArena {
                         | ExprKind::CXXBindTemporaryExpr
                         | ExprKind::CXXStdInitializerListExpr
                         | ExprKind::ExprWithCleanups
+                        | ExprKind::ConvertVectorExpr
                         | ExprKind::PackExpansionExpr
                 ),
             "{:?} has no single operand",
@@ -2167,6 +2179,7 @@ impl ExprArena {
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::CXXStdInitializerListExpr
             | ExprKind::ExprWithCleanups
+            | ExprKind::ConvertVectorExpr
             | ExprKind::PredefinedExpr => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {

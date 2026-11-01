@@ -1524,7 +1524,7 @@ impl Sema<'_, '_> {
 
     /// [expr.assign]/1, [expr.pre.incr]: the operand must be a modifiable
     /// lvalue. Diagnoses and returns false otherwise.
-    fn check_modifiable(&mut self, e: ExprId, loc: Loc) -> bool {
+    pub(crate) fn check_modifiable(&mut self, e: ExprId, loc: Loc) -> bool {
         let n = *self.ast.exprs.get(e);
         let t = n.ty();
         if self.ast.types.is_function(t) || self.ast.types.is_array(t) {
@@ -1542,7 +1542,14 @@ impl Sema<'_, '_> {
             return false;
         }
         if self.ast.types.effective_quals(t).is_const() {
-            let base = self.ignore_parens(e);
+            let mut base = self.ignore_parens(e);
+            // clang classifies a vector element through its vector.
+            while self.ast.exprs.get(base).object_kind() == ObjectKind::VectorComponent
+                && self.ast.exprs.get(base).kind() == ExprKind::ArraySubscriptExpr
+            {
+                let v = ExprId::new(self.ast.exprs.get(base).a());
+                base = self.ignore_parens(v);
+            }
             if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr
                 && self.ast.exprs.get(base).has(ExprFlags::REFERS_TO_ENCLOSING)
                 && let d = self.ast.exprs.decl(base)
@@ -1575,8 +1582,13 @@ impl Sema<'_, '_> {
     }
 
     fn mark_bitfield_if(&mut self, result: ExprId, from: ExprId) {
-        if self.is_bitfield(from) && self.ast.exprs.get(result).value_category().is_glvalue() {
+        if !self.ast.exprs.get(result).value_category().is_glvalue() {
+            return;
+        }
+        if self.is_bitfield(from) {
             self.ast.exprs.mark_bitfield(result);
+        } else if self.ast.exprs.get(from).object_kind() == ObjectKind::VectorComponent {
+            self.ast.exprs.mark_vector_component(result);
         }
     }
 
@@ -1611,6 +1623,14 @@ impl Sema<'_, '_> {
             s.emit(msg);
             s.recover_err(&[e], loc)
         };
+        if self.is_vector_type(t0)
+            && matches!(op, UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::LNot)
+        {
+            return match self.vector_unary(op, e, loc) {
+                Some(x) => x,
+                None => bad(self, e),
+            };
+        }
         match op {
             UnaryOp::Plus | UnaryOp::Minus => {
                 let ok = self.ast.types.is_arithmetic(t0)
@@ -1733,6 +1753,10 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_addrof_bitfield, loc);
             return None;
         }
+        if n.object_kind() == ObjectKind::VectorComponent {
+            self.error(DiagId::sema_addrof_vector_element, loc);
+            return None;
+        }
         if n.value_category() != ValueCategory::LValue {
             let msg = self.diag(DiagId::sema_addrof_rvalue, loc).arg(self.ty_arg(n.ty()));
             self.emit(msg);
@@ -1807,10 +1831,8 @@ impl Sema<'_, '_> {
     // -- binary operators --------------------------------------------------------
 
     pub(crate) fn invalid_operands(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
-        let msg = self
-            .diag(DiagId::sema_invalid_operands, loc)
-            .arg(self.ty_arg(self.ety(l)))
-            .arg(self.ty_arg(self.ety(r)));
+        let (a, b) = self.ty_arg_pair(self.ety(l), self.ety(r));
+        let msg = self.diag(DiagId::sema_invalid_operands, loc).arg(a).arg(b);
         self.emit(msg);
         self.recover_err(&[l, r], loc)
     }
@@ -1875,6 +1897,11 @@ impl Sema<'_, '_> {
         // assignment's right operand has one.
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
+        }
+        if !matches!(op, BinaryOp::Assign | BinaryOp::Comma | BinaryOp::PtrMemD | BinaryOp::PtrMemI)
+            && (self.is_vector_type(self.ety(l)) || self.is_vector_type(self.ety(r)))
+        {
+            return self.vector_binary(op, l, r, loc);
         }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
@@ -2549,6 +2576,9 @@ impl Sema<'_, '_> {
         if self.expr_is_type_dependent(base) || self.expr_is_type_dependent(idx) {
             let ty = self.dependent_subscript_type(base, idx);
             return self.builder().subscript(base, idx, ty, loc);
+        }
+        if self.is_vector_type(self.ety(base)) {
+            return self.vector_subscript(base, idx, loc);
         }
         let b = conv::decay(self, base);
         let i = conv::decay(self, idx);

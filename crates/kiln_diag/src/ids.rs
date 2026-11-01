@@ -690,6 +690,17 @@ diag_ids! {
     sema_vector_size_not_multiple = Error (0) "vector size not an integral multiple of component size";
     sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";
     sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
+    sema_vector_not_convertible = Error (2) "cannot convert between vector values of different size ({0} and {1})";
+    sema_vector_not_convertible_non_scalar = Error (2) "cannot convert between vector and non-scalar values ({0} and {1})";
+    sema_vector_implicit_truncation = Error (3) "cannot convert between {0:scalar|vector} type {1} and vector type {2} as implicit conversion would cause truncation";
+    sema_vector_lengths_not_equal = Error (2) "vector operands do not have the same number of elements ({0} and {1})";
+    sema_vector_element_sizes_not_equal = WarningError [VecElemSize] (2) "vector operands do not have the same elements sizes ({0} and {1})";
+    sema_expect_int = Error (1) "used type {0} where integer is required";
+    sema_three_way_vector_comparison = Error (0) "three-way comparison between vectors is not supported";
+    sema_convertvector_non_vector = Error (0) "first argument to __builtin_convertvector must be a vector";
+    sema_convertvector_non_vector_type = Error (0) "second argument to __builtin_convertvector must be of vector type";
+    sema_convertvector_incompatible_vector = Error (0) "first two arguments to __builtin_convertvector must have the same number of elements";
+    sema_builtin_arg_must_be = Error (3) "{0:1st|2nd|3rd|4th|5th} argument must be a {1} (was {2})";
     sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
     sema_static_assert_failed = Error (0) "static assertion failed";
     sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";
@@ -755,6 +766,7 @@ diag_ids! {
     sema_arith_function_pointer = Extension [PointerArith] (2) "arithmetic on{0: a pointer| pointers} to the function type {1} is a GNU extension";
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
     sema_addrof_bitfield = Error (0) "address of bit-field requested";
+    sema_addrof_vector_element = Error (0) "address of vector element requested";
     sema_incdec_bool = Error (1) "ISO C++17 does not allow {0:incrementing|decrementing} expression of type bool";
     sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
     sema_ovl_no_viable_function_in_call = Error (1) "no matching function for call to '{0}'";
@@ -1232,6 +1244,7 @@ diag_ids! {
     note_in_binding_decl_init = Note (1) "in implicit initialization of binding declaration '{0}'";
     sema_binding_in_own_initializer = Error (1) "binding '{0}' cannot appear in the initializer of its own decomposition declaration";
     sema_reference_bind_to_bitfield = Error (2) "{0:non-const|volatile} reference cannot bind to bit-field{1}";
+    sema_reference_bind_to_vector_element = Error (1) "{0:non-const|volatile} reference cannot bind to vector element";
     // WP-087
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";

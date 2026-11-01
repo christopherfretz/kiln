@@ -1645,6 +1645,49 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::ArraySubscriptExpr, vk, deps, 0, ty, loc, base.raw(), idx.raw())
     }
 
+    /// `v[i]` on a vector `v` (a GNU/clang extension): the element, of
+    /// `v`'s value category; a glvalue designates a vector component
+    /// (clang `OK_VectorComponent`).
+    pub fn vector_subscript(&mut self, base: ExprId, idx: ExprId, ty: QualType, loc: Loc) -> ExprId {
+        let vk = self.vk(base);
+        let ok =
+            if vk == ValueCategory::PRValue { ObjectKind::Ordinary } else { ObjectKind::VectorComponent };
+        let deps = self.deps(base) | self.deps(idx) | self.type_deps(ty);
+        self.push_expr(
+            ExprKind::ArraySubscriptExpr,
+            vk,
+            ok,
+            ExprFlags::NONE,
+            deps,
+            0,
+            ty,
+            loc,
+            base.raw(),
+            idx.raw(),
+        )
+    }
+
+    /// `__builtin_convertvector(src, T)` (clang `ConvertVectorExpr`): a
+    /// prvalue of the written vector type `ty` whose operand `src` is kept
+    /// unconverted, as clang does (codegen and the Oven read it).
+    pub fn convert_vector(&mut self, src: ExprId, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let deps = self.deps(src) | self.type_deps(ty);
+        let e = self.push_expr(
+            ExprKind::ConvertVectorExpr,
+            ValueCategory::PRValue,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            0,
+            ty,
+            loc,
+            src.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
     /// A parenthesized expression ([expr.prim.paren]): the type, category,
     /// object kind and dependence of `sub`.
     pub fn paren(&mut self, sub: ExprId, lparen: Loc, rparen: Loc) -> ExprId {

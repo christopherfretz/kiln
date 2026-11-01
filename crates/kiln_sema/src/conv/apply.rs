@@ -1,7 +1,7 @@
 //! Performing a standard conversion sequence: the `ImplicitCastExpr`s
 //! clang's `PerformImplicitConversion` builds for each step.
 
-use kiln_ast::expr::CastKind;
+use kiln_ast::expr::{CastKind, ValueCategory};
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
@@ -72,6 +72,15 @@ fn apply_second(
     let to_bool = s.ast.types.builtin(to) == Some(BuiltinType::Bool);
     Ok(match scs.second {
         SecondStep::Identity => e,
+        SecondStep::VectorSplat => {
+            let x = s.prepare_vector_splat(to, e);
+            let u = s.ast.types.unqualified(to);
+            super::raw_cast(s, CastKind::VectorSplat, x, u, ValueCategory::PRValue, None)
+        }
+        SecondStep::VectorConversion => {
+            let u = s.ast.types.unqualified(to);
+            cast_to(s, CastKind::BitCast, e, u, None)
+        }
         SecondStep::IntegralPromotion | SecondStep::IntegralConversion => {
             let ck = if to_bool { CastKind::IntegralToBoolean } else { CastKind::IntegralCast };
             cast_to(s, ck, e, to, None)

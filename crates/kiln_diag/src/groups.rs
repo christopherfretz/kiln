@@ -74,6 +74,7 @@ diag_groups! {
     DivisionByZero = "division-by-zero" [];
     ShiftCountNegative = "shift-count-negative" [];
     ShiftCountOverflow = "shift-count-overflow" [];
+    VecElemSize = "vec-elem-size" [];
     EnumConstexprConversion = "enum-constexpr-conversion" [];
     ConstantEvaluated = "constant-evaluated" [];
     Unused = "unused" [UnusedValue];
