@@ -520,15 +520,32 @@ impl Parser<'_, '_> {
         } else {
             (IfKind::Ordinary, self.s.act_on_condition(c))
         };
-        let then = self.parse_sub_statement();
-        let els =
-            if self.eat_kw(Kw::Else).is_some() { Some(self.parse_sub_statement()) } else { None };
+        // The branch a non-dependent `if constexpr` condition discards
+        // is a discarded statement ([stmt.if]/2).
+        let taken = if constexpr { self.s.constexpr_condition_value(cond) } else { None };
+        let then = self.parse_branch(taken == Some(false));
+        let els = if self.eat_kw(Kw::Else).is_some() {
+            Some(self.parse_branch(taken == Some(true)))
+        } else {
+            None
+        };
         self.s.pop_scope();
         let s = self.s.act_on_if(kind, init, var, Some(cond), then, els, loc);
         if els.is_none() {
             self.s.check_empty_body(EmptyBodyStmt::If, rparen, then);
         }
         Some(s)
+    }
+
+    /// A sub-statement of an if-statement, `discarded` or not.
+    fn parse_branch(&mut self, discarded: bool) -> StmtId {
+        if !discarded {
+            return self.parse_sub_statement();
+        }
+        self.s.enter_discarded_statement();
+        let s = self.parse_sub_statement();
+        self.s.exit_discarded_statement();
+        s
     }
 
     /// `if !? consteval compound-statement (else statement)?`

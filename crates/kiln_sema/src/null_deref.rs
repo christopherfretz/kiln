@@ -11,8 +11,9 @@
 //!   behavior" (clang `SemaInit`, `SK_BindReference`).
 //!
 //! Both are run-time behavior diagnostics (clang `DiagRuntimeBehavior`):
-//! dropped in unevaluated operands and immediate function contexts and
-//! when the dereference is unreachable.
+//! dropped in unevaluated operands, discarded statements, manifestly
+//! constant-evaluated expressions and immediate function contexts
+//! (`runtime_diag_quiet`) and when the dereference is unreachable.
 
 use kiln_ast::ExprId;
 use kiln_ast::expr::{ExprKind, UnaryOp};
@@ -68,7 +69,7 @@ impl Sema<'_, '_> {
 
     /// clang `DiagRuntimeBehavior` anchored at `anchor`.
     fn null_deref_diag(&mut self, msg: kiln_diag::Diag, anchor: ExprId) {
-        if self.unevaluated > 0 || self.immediate > 0 {
+        if self.runtime_diag_quiet() {
             return;
         }
         self.diag_if_reachable(msg, anchor);

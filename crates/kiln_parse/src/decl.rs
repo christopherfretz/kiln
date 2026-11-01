@@ -2097,8 +2097,22 @@ impl Parser<'_, '_> {
             (Some(v), Some(_)) => self.s.act_on_enter_decl_initializer(v),
             _ => 0,
         };
+        // The initializer, with its conversions, is potentially evaluated.
+        let quiet = self.s.enter_var_initializer();
         let init = self.parse_initializer(d.init_style, d.is_function_declarator());
         self.s.act_on_exit_declarator_scope(entered);
+        let r = self.finish_declarator_initializer(d, v, init);
+        self.s.exit_var_initializer(quiet);
+        r
+    }
+
+    /// The semantic action of declarator `d`'s parsed initializer `init`.
+    fn finish_declarator_initializer(
+        &mut self,
+        d: &Declarator,
+        v: Option<DeclId>,
+        init: Result<Option<Initializer>, ()>,
+    ) -> Result<(), ()> {
         match init {
             Ok(init) => {
                 match (v, init) {

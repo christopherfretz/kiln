@@ -1357,7 +1357,13 @@ diagnostics and IR.
     initialization failure of its static step instead of `C-style cast
     from rvalue to reference type`).
 - **Constant-folding warnings:** division by zero, negative shifts and
-  over-wide shifts warn when the operands fold.
+  over-wide shifts warn when the operands fold. They are run-time
+  behavior diagnostics anchored at the right operand (clang's
+  `DiagRuntimeBehavior` → `DiagIfReachable`, §5.12): they are dropped
+  where `runtime_diag_quiet` holds, deferred to the end of a function
+  body (and dropped there when unreachable), and skipped in the
+  initializer of a namespace-scope `constexpr` variable or of a static
+  data member's first declaration (WP-235).
 - **Pointer arithmetic on `void` or a function type** ([expr.add]/1;
   `check_pointer_arith`, WP-219): `+`, `-`, `++`, `--` and compound
   assignment on a pointer to `void` or to a function type is an error in
@@ -1609,9 +1615,8 @@ for them.
     `lambda_mangle.var`); otherwise at once.
   - The warning carries the expression's range, so a macro-argument
     location gets clang's `expanded from macro` note (spec/diag.md §8.4).
-  - The run-time diagnostics of §5.15 use the same queue. kiln has no
-    constant-evaluated or discarded-statement context, where clang's
-    `DiagRuntimeBehavior` drops them too.
+  - The run-time diagnostics of §5.15 use the same queue and are
+    dropped in the same contexts (§5.12, `runtime_diag_quiet`).
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **Unused variables (WP-203; clang `ShouldDiagnoseUnusedDecl` /
@@ -1999,9 +2004,26 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   through `act_on_va_arg`.
 - **Runtime-behavior diagnostics** (`stmt.rs`, clang
   `DiagRuntimeBehavior`): inside a function body they are queued on
-  `FnState::runtime_diags` and flushed in `end_function_body`; in an
-  unevaluated operand or an immediate context they are dropped; outside a
+  `FnState::runtime_diags` and flushed in `end_function_body`; outside a
   function (a namespace-scope initializer) they are emitted at once.
+  `runtime_diag_quiet` drops them where clang's innermost evaluation
+  context is not potentially evaluated (WP-235):
+  - an unevaluated operand;
+  - a manifestly constant-evaluated expression: a constant-expression
+    the parser enters with `enter_constant_evaluated` or sema with
+    `act_on_constant_full_expr`, and the conversions of a non-type
+    template argument. The Oven reports the constant-evaluation failure
+    instead (`division by zero` as a note of the error);
+  - a quiet context of the body, counted by `FnState::rt_quiet`: the
+    body of a `consteval` function, the immediate compound statement of
+    `if consteval` / `if !consteval`, and the branch a non-dependent
+    `if constexpr` condition discards (`enter_discarded_statement`,
+    from the parser's `constexpr_condition_value`).
+
+  A variable's initializer, including its conversions, is potentially
+  evaluated again (`enter_var_initializer` zeroes `rt_quiet` until
+  `act_on_init` is done; clang's `ActOnCXXEnterDeclInitializer`). So
+  `if constexpr (false) { int x = 1 / 0; }` still warns, as in clang.
   Each queued diagnostic has an optional anchor expression; an anchored
   one is dropped at the flush when the anchor is unreachable (see the
   unused-value reachability rule, WP-203).

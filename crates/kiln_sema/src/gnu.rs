@@ -598,7 +598,7 @@ impl Sema<'_, '_> {
 
     /// clang's `getExprLoc` of a culprit: the operator of a binary or
     /// member expression (kiln's node location), else its first token.
-    fn culprit_loc(&self, mut e: ExprId) -> Loc {
+    pub(crate) fn culprit_loc(&self, mut e: ExprId) -> Loc {
         while self.ast.exprs.get(e).kind() == ExprKind::ImplicitCastExpr {
             e = self.ast.exprs.operand(e);
         }

@@ -441,7 +441,12 @@ impl Sema<'_, '_> {
             return Err(());
         }
         let pty = conv::strip_cv(self, pty);
+        // The conversions are part of the converted constant expression,
+        // manifestly constant-evaluated: no run-time behavior warnings
+        // (`-Wnull-dereference` on the load).
+        self.constant_full_expr += 1;
         let c = conv::lvalue_to_rvalue(self, e);
+        self.constant_full_expr -= 1;
         let cty = conv::strip_cv(self, self.ast.exprs.get(c).ty());
         let t = &self.ast.types;
         let int_like = |q| t.is_integral(q) || t.as_enum(q).is_some();
@@ -467,7 +472,10 @@ impl Sema<'_, '_> {
             // default) recovers with the converted value.
             self.emit(d);
         }
-        let c = match conv::implicit_convert(self, c, pty, ConvCtx::Initialization) {
+        self.constant_full_expr += 1;
+        let c = conv::implicit_convert(self, c, pty, ConvCtx::Initialization);
+        self.constant_full_expr -= 1;
+        let c = match c {
             Ok(c) => c,
             Err(err) => {
                 self.emit_conv_error(err, at);

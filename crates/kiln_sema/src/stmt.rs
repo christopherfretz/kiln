@@ -83,6 +83,14 @@ pub struct FnState {
     /// end (`diag_runtime_behavior`, `diag_if_reachable`), each with
     /// the expression whose reachability decides it.
     pub(crate) runtime_diags: Vec<(kiln_diag::Diag, Option<ExprId>)>,
+    /// The quiet expression-evaluation contexts entered since the
+    /// innermost potentially-evaluated one (clang's
+    /// `ExprEvalContexts.back()` being `DiscardedStatement` or
+    /// `ImmediateFunctionContext`): the body of a `consteval` function,
+    /// the compound statement of `if consteval`, a discarded
+    /// `if constexpr` branch. A variable's initializer is potentially
+    /// evaluated again ([`Sema::enter_var_initializer`]).
+    pub(crate) rt_quiet: u32,
 }
 
 impl FnState {
@@ -101,6 +109,7 @@ impl FnState {
             has_switch: false,
             has_fallthrough: false,
             runtime_diags: Vec::new(),
+            rt_quiet: 0,
         }
     }
 }
@@ -522,11 +531,74 @@ impl Sema<'_, '_> {
     /// consults it yet beyond [`Sema::in_immediate_context`].
     pub fn enter_immediate_context(&mut self) {
         self.immediate += 1;
+        self.enter_quiet_context();
     }
 
     /// Leaves an immediate function context.
     pub fn exit_immediate_context(&mut self) {
         self.immediate = self.immediate.saturating_sub(1);
+        self.exit_quiet_context();
+    }
+
+    fn enter_quiet_context(&mut self) {
+        if let Some(f) = self.func.as_mut() {
+            f.rt_quiet += 1;
+        }
+    }
+
+    fn exit_quiet_context(&mut self) {
+        if let Some(f) = self.func.as_mut() {
+            f.rt_quiet = f.rt_quiet.saturating_sub(1);
+        }
+    }
+
+    /// Enters the discarded sub-statement of an `if constexpr` whose
+    /// condition is not value-dependent ([stmt.if]/2; clang's
+    /// `DiscardedStatement` evaluation context).
+    pub fn enter_discarded_statement(&mut self) {
+        self.enter_quiet_context();
+    }
+
+    /// Leaves a context entered with [`Sema::enter_discarded_statement`].
+    pub fn exit_discarded_statement(&mut self) {
+        self.exit_quiet_context();
+    }
+
+    /// Before a variable's initializer: it is potentially evaluated even
+    /// inside a quiet context (clang's `ActOnCXXEnterDeclInitializer`
+    /// pushes `PotentiallyEvaluated`). Returns what
+    /// [`Sema::exit_var_initializer`] restores.
+    pub fn enter_var_initializer(&mut self) -> u32 {
+        self.func.as_mut().map_or(0, |f| std::mem::take(&mut f.rt_quiet))
+    }
+
+    /// After a variable's initializer.
+    pub fn exit_var_initializer(&mut self, saved: u32) {
+        if let Some(f) = self.func.as_mut() {
+            f.rt_quiet = saved;
+        }
+    }
+
+    /// The value of an `if constexpr` condition `c` as returned by
+    /// [`Sema::act_on_constexpr_condition`], when it was evaluated
+    /// (`None` when value-dependent or invalid).
+    pub fn constexpr_condition_value(&self, c: ExprId) -> Option<bool> {
+        if self.ast.exprs.get(c).kind() != ExprKind::ConstantExpr {
+            return None;
+        }
+        self.const_truth(self.ast.exprs.constant_value(c)?)
+    }
+
+    /// Whether a run-time behavior diagnostic is dropped where the
+    /// expression being built is (clang `DiagRuntimeBehavior`): in an
+    /// unevaluated operand, a discarded statement, a manifestly
+    /// constant-evaluated expression (whose problems the Oven reports),
+    /// or an immediate function context.
+    pub(crate) fn runtime_diag_quiet(&self) -> bool {
+        self.unevaluated > 0
+            || self.constant_full_expr > 0
+            || self.in_constant_evaluated()
+            || self.func.as_ref().is_some_and(|f| f.rt_quiet > 0)
     }
 
     /// True inside an immediate function context entered with
@@ -765,8 +837,9 @@ impl Sema<'_, '_> {
             }
             Err(mut f) => {
                 // [stmt.switch]/2: a converted constant expression (clang's
-                // `CheckConvertedConstantExpression`, CCEK_CaseValue).
-                let at = Self::fold_lone_invalid(&mut f, loc);
+                // `CheckConvertedConstantExpression`, CCEK_CaseValue),
+                // reported at the value's first token.
+                let at = Self::fold_lone_invalid(&mut f, at);
                 let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
                 let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
@@ -1033,6 +1106,9 @@ impl Sema<'_, '_> {
     /// the function scope).
     pub(crate) fn begin_function_body(&mut self, f: DeclId, ret: QualType) {
         let mut state = FnState::new(f, ret);
+        // An immediate function's body is an immediate function context
+        // ([expr.const]/16).
+        state.rt_quiet = u32::from(self.is_consteval_kind(f));
         let auto = self.contains_undeduced_auto(ret);
         if auto {
             state.auto_ret = Some(ret);
@@ -1187,14 +1263,14 @@ impl Sema<'_, '_> {
     }
 
     /// A diagnostic about behavior at run time (clang
-    /// `DiagRuntimeBehavior`): dropped in an unevaluated operand or an
-    /// immediate function context, deferred to the end of the enclosing
+    /// `DiagRuntimeBehavior`): dropped where
+    /// [`Sema::runtime_diag_quiet`], deferred to the end of the enclosing
     /// function body, emitted at once outside a function. clang drops
     /// the deferred ones whose statement is unreachable in the body's
     /// CFG when no error occurred; kiln has no CFG and emits them all
     /// (spec/sema-stmt.md).
     pub(crate) fn diag_runtime_behavior(&mut self, msg: kiln_diag::Diag) {
-        if self.unevaluated > 0 || self.immediate > 0 {
+        if self.runtime_diag_quiet() {
             return;
         }
         match self.func.as_mut() {

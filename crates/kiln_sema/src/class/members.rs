@@ -414,7 +414,9 @@ impl Sema<'_, '_> {
             let loc = self.begin_loc(e);
             let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, loc);
             if self.eval_int(e, ctx).is_err() {
-                self.error(DiagId::sema_static_member_init_not_ice, loc);
+                // clang reports at the initializer's `getExprLoc`.
+                let at = self.culprit_loc(e);
+                self.error(DiagId::sema_static_member_init_not_ice, at);
                 self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
             }
         } else if self.is_literal_type(ty) {
