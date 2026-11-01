@@ -29,6 +29,7 @@ mod fallthrough;
 mod forms;
 mod gnu;
 mod impcast;
+mod implicit_fallthrough;
 pub mod init;
 mod jump_scope;
 pub mod lambda;
@@ -132,6 +133,8 @@ pub struct Sema<'a, 'sm> {
     /// ending is a manifestly constant-evaluated constant-expression (no
     /// runtime-behavior warnings, clang's `ConstantEvaluated` context).
     pub(crate) constant_full_expr: u32,
+    /// The language standard (set by the parser; spellings in notes).
+    pub(crate) std: kiln_lex::Std,
     /// `DeclRefExpr`s of the current full-expression that are potential
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
@@ -426,6 +429,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             decltype_calls: Vec::new(),
             immediate: 0,
             constant_full_expr: 0,
+            std: kiln_lex::Std::Cxx26,
             pending_odr: Vec::new(),
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
