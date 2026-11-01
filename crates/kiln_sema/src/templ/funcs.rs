@@ -552,7 +552,11 @@ impl Sema<'_, '_> {
         }
         self.instantiate_function_definition(s, name_loc);
         if self.ast.definition(s).is_none() {
+            // Defined later: instantiated, and emitted, at the end of the
+            // TU (clang `PerformPendingInstantiations`).
             self.queue_instantiation(s, name_loc);
+            let first = self.ast.first(s);
+            self.ast.templates.add_late_explicit_inst(first);
         }
     }
 
@@ -851,6 +855,8 @@ impl Sema<'_, '_> {
             self.instantiate_function_definition(m, name_loc);
             if self.ast.definition(m).is_none() {
                 self.queue_instantiation(m, name_loc);
+                let first = self.ast.first(m);
+                self.ast.templates.add_late_explicit_inst(first);
             }
         }
     }
