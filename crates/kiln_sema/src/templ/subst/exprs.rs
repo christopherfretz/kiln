@@ -44,7 +44,12 @@ impl Substituter<'_, '_, '_> {
 
     /// Substitutes into `e`.
     pub fn expr(&mut self, e: ExprId) -> SubstResult<ExprId> {
-        if !self.needs_rebuild(e) {
+        // A non-dependent overloaded member access (`M(1).f` called with
+        // dependent arguments) is formed again too: resolving its call
+        // consumes the overload set it records, so the pattern's node
+        // cannot be shared between specializations (clang's
+        // `TransformUnresolvedMemberExpr`).
+        if !self.needs_rebuild(e) && self.sema.member_overload(e).is_none() {
             if self.lambda_bodies > 0 {
                 self.note_shared_this(e);
             }

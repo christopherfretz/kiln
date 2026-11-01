@@ -3561,8 +3561,12 @@ impl Cg<'_> {
             // constant initializer.
             let constexpr = ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
             if let Some(c) = fold.filter(|_| constexpr || self.is_pod(q)) {
-                let k = self.const_value(c, q, Some(init), true)?;
-                return self.stores_for_constant(d, addr, k, self.is_volatile(q));
+                // A constant the lowering cannot spell yet (bit-fields,
+                // base subobjects) is initialized as written instead,
+                // which has the same effect for a local.
+                if let Ok(k) = self.const_value(c, q, Some(init), true) {
+                    return self.stores_for_constant(d, addr, k, self.is_volatile(q));
+                }
             }
             return self.emit_agg_into(init, addr, false);
         }

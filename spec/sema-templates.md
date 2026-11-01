@@ -596,6 +596,17 @@ Lookup of a found member binds it (`typename A<T>::X` resolves to the
 member typedef, not to `DependentName`). If the member is not found and
 the class has dependent bases, the result is a dependent node.
 
+Inside a member of a class whose definition has a dependent base, an
+id-expression that names a non-static member (or an overload set or
+member template containing one) of a class not known to be a base of
+`*this` is an implicit `this->Q::name`. It is built as a dependent member
+access on an implicit `this` object (`Sema::dependent_implicit_member`)
+and resolved at instantiation (`Sema::member_via_dependent_base`; clang
+`IMA_Dependent`); when `Q` turns out not to be a base, the error is
+`'Q::name' is not a member of class 'D<O>'`.
+libc++ `basic_ostream::operator<<(int)` calls `ios_base::flags()` through
+the virtual base `basic_ios<C>` (WP-201).
+
 ### 3.5 ADL and operator lookup at instantiation ([temp.dep.candidate])
 
 When a dependent unqualified call or operator is substituted:
@@ -1623,6 +1634,11 @@ immediate context: errors are hard.
   "not a candidate" before deduction only when it is explicit
   non-dependently (clang `isNonDependentlyExplicit`;
   `Sema::nondependently_explicit`).
+- **Return types** ([temp.deduct.general]/11.10). A substituted
+  signature (or any substituted function type) whose return type is an
+  array or function type fails with `function cannot return
+  {array|function} type T`, a deduction failure under SFINAE (clang
+  `BuildFunctionType`; `Subst::check_return_type`, WP-201).
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.
@@ -1825,6 +1841,15 @@ The `SpecKind` transitions are those of §4.5.
   the TU, in no lookup or member list) memoized in
   `TemplateTables::{param_objects, param_object_values}`
   (`param_object(v)`, `param_object_value(d)`).
+- **Class template placeholders** (`template<std::array A>`,
+  [temp.param]/6.3): `convert_nttp_arg` deduces the type per argument by
+  CTAD as for `C x = e;` (`ctad_for_initializer`, copy-initialization),
+  then converts as a class argument. A use of such a parameter in the
+  pattern is type-dependent (`QualType::DEPENDENT`). After substitution,
+  `decltype(A)` of a template parameter object is the deduced class type
+  without `const` ([dcl.type.decltype]/1.3; `decltype_of` on a
+  `SubstNonTypeTemplateParmExpr` of class type); `decltype((A))` is
+  `const T&` (WP-201).
 - **Uses.** An id-expression naming a class-type NTTP in the pattern is an
   lvalue of type `const T` (builder `decl_ref_category`,
   `build_decl_ref_extra`); a reference NTTP names its referent (an
@@ -2068,6 +2093,12 @@ declared constraint of a constrained pack `C... Ts` is the fold
 
 - **Atomic.** Substitute `args` into `mapping` and then into `expr`,
   under `ConstraintSubstitution` (SFINAE).
+  - Names in the atom that substitution looks up again (unresolved
+    callees, §5.4) are looked up from the constrained entity's
+    definition context, not from the point of the check: for an entity
+    in a namespace (with no `this`), the substitution runs inside
+    `in_inst_context(namespace)` (`sat_atom_uncached`, WP-201; libc++
+    `ranges::__movable_box` concepts checked from `<string_view>`).
   - A substitution failure means not satisfied, with the captured
     diagnostic recorded.
   - Otherwise the expression must have type exactly `bool`. Anything else
