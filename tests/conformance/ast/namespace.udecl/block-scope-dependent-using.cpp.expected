@@ -1,0 +1,21 @@
+TranslationUnitDecl
+|-NamespaceDecl N
+| `-ClassTemplateDecl E
+|   |-TemplateTypeParmDecl class depth 0 index 0 T
+|   `-CXXRecordDecl struct E definition
+|     `-EnumDecl
+|       |-EnumConstantDecl a 'N::E::(unnamed enum at tests/conformance/ast/namespace.udecl/block-scope-dependent-using.cpp:6:44)'
+|       `-EnumConstantDecl b 'N::E::(unnamed enum at tests/conformance/ast/namespace.udecl/block-scope-dependent-using.cpp:6:44)'
+`-FunctionTemplateDecl f
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl f 'int ()'
+    `-CompoundStmt
+      |-DeclStmt
+      | `-UnresolvedUsingValueDecl a
+      |-DeclStmt
+      | `-VarDecl referenced x 'int' cinit
+      |   `-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'a'
+      `-ReturnStmt
+        `-BinaryOperator '<dependent type>' '+'
+          |-UnresolvedLookupExpr '<dependent type>' lvalue (no ADL) = 'a'
+          `-DeclRefExpr 'int' lvalue Var 'x' 'int'

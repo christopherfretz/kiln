@@ -377,4 +377,11 @@ fn side_channel_reads_cast_written_types() {
             ("CXXStaticCastExpr", "X<1>".to_owned()),
         ]
     );
+    let fun = "CXXStaticCastExpr 0x7 <col:3> 'void ()' lvalue static_cast<void (&)(void)> <NoOp>\n";
+    assert_eq!(side::casts(fun).unwrap(), vec![("CXXStaticCastExpr", "void (&)()".to_owned())]);
+    // C policy's tag keyword is dropped unless the JSON type has it.
+    assert_eq!(side::cplusplus_tags("const struct V &", "const V"), "const V &");
+    assert_eq!(side::cplusplus_tags("struct V", "struct V"), "struct V");
+    assert_eq!(side::cplusplus_tags("X<struct n::V>", "X<V>"), "X<n::V>");
+    assert_eq!(side::cplusplus_tags("my_struct V", "V"), "my_struct V");
 }

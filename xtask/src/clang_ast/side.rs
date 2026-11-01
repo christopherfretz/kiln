@@ -249,9 +249,14 @@ fn cast_written(class: &str, content: &str) -> Option<String> {
     Some(cplusplus_spelling(&content[start..stop]))
 }
 
-/// `ty` with C++'s spelling of `bool`: clang prints a cast's written type
-/// with the default (C) printing policy, so `bool` comes out `_Bool`.
+/// `ty` with C++'s spelling of `bool` and of an empty parameter list:
+/// clang prints a cast's written type with the default (C) printing
+/// policy, so `bool` comes out `_Bool` and `void ()` `void (void)`.
 fn cplusplus_spelling(ty: &str) -> String {
+    respell_bool(ty).replace("(void)", "()")
+}
+
+fn respell_bool(ty: &str) -> String {
     let mut out = String::with_capacity(ty.len());
     let mut rest = ty;
     while let Some(i) = rest.find("_Bool") {
@@ -285,4 +290,33 @@ pub fn casts(text: &str) -> Result<Vec<(&'static str, String)>, String> {
         out.push((class, w));
     }
     Ok(out)
+}
+
+/// Written type `w` (C policy) without the tag keyword clang's C policy
+/// prints before a class or enumeration that was not written elaborated
+/// (an instantiation's substituted `T` prints `struct V`): a keyword is
+/// kept only where the expression's JSON type `qual` has it too.
+pub fn cplusplus_tags(w: &str, qual: &str) -> String {
+    let mut out = String::with_capacity(w.len());
+    let mut rest = w;
+    'scan: while !rest.is_empty() {
+        let at_word = out.chars().next_back().is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+        if at_word {
+            for kw in ["struct ", "class ", "union ", "enum "] {
+                if let Some(tail) = rest.strip_prefix(kw) {
+                    let n = tail
+                        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+                        .unwrap_or(tail.len());
+                    if !qual.contains(&format!("{kw}{}", &tail[..n])) {
+                        rest = tail;
+                        continue 'scan;
+                    }
+                }
+            }
+        }
+        let c = rest.chars().next().unwrap_or(' ');
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }

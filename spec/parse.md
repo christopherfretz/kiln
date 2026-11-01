@@ -761,6 +761,16 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   or `__attribute__`. `condition_has_init_statement` looks for a `;` at
   the top level of the parentheses, skipping balanced groups, so
   `if (int n{1}; n)` has an init-statement.
+- **Ambiguous names** ([basic.lookup.general]/1; WP-197): before that
+  decision, a statement that starts with an unqualified identifier
+  (not followed by `::`) asks Sema's `diagnose_ambiguous_name(name,
+  None, loc)`. When the lookup is ambiguous it reports `reference to
+  'x' is ambiguous` with candidate notes and the statement is skipped
+  to its `;` (clang's `ClassifyName` error in
+  `ParseStatementOrDeclaration`). Where a type name was already
+  classified (a decl-specifier's simple type, a qualified
+  `typename`-less type name) the same call reports the ambiguity and
+  recovery keeps the classified type, as clang's `getTypeName` does.
 
   Audit against clang 19 (WP-180). `T` is a class, `U` a template type
   parameter, `a` a variable, `I` a typedef; tests are under

@@ -577,7 +577,9 @@ contract:
   `friend_undeclared` words, its `Overrides:` line and the exact text of
   a `delete("msg")` message, and the type as written of a named or
   functional cast (clang prints it with the C printing policy, so the
-  tool respells `_Bool` as `bool`), so when one is present the tool also runs
+  tool respells `_Bool` as `bool` and `(void)` as `()`, and drops a
+  `struct`/`class`/`union`/`enum` keyword the expression's JSON type
+  does not have), so when one is present the tool also runs
   `clang -Xclang -ast-dump` and pairs that dump's function lines
   (`FunctionDecl`, `CXXMethodDecl`, `CXXConstructorDecl`,
   `CXXDestructorDecl`, `CXXConversionDecl`) and `VarDecl` lines with the

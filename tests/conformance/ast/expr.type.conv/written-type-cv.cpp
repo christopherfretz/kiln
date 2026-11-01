@@ -21,3 +21,14 @@ void f(int x) {
   (void)CV{2};
   (void)CA(1, 2);
 }
+// A rebuilt reference to an array or function is spelled around its
+// declarator, as clang prints the written type: `int (&&)[3]`.
+void h();
+void g(int (&a)[3], int (*p)[3]) {
+  (void)static_cast<int (&)[3]>(a);
+  (void)static_cast<int (&&)[3]>(a);
+  (void)static_cast<void (&)()>(h);
+  (void)static_cast<int (*&)[3]>(p);
+}
+// A written elaborated type keeps its keyword.
+void m() { (void)static_cast<struct V>(V{2}); }

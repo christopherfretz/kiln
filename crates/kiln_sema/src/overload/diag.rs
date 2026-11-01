@@ -192,6 +192,26 @@ impl Sema<'_, '_> {
         ))
     }
 
+    /// `x` with its target replaced by parameter `param` of `f` as
+    /// written, when that is the same type: the candidate's conversions
+    /// run against the canonical prototype, but clang's
+    /// `DiagnoseBadConversion` prints the declared parameter type with
+    /// its sugar (`'WI' (aka 'W<int>')`, WP-227).
+    fn sugared_bad_param(&self, f: kiln_ast::DeclId, x: Ics, param: Option<usize>) -> Ics {
+        let (Ics::Bad(mut b), Some(i)) = (x, param) else { return x };
+        let (ptys, _) = self.proto_param_types(f);
+        // The canonical prototype drops a parameter's top-level cv
+        // ([dcl.fct]/5); clang prints it as declared (`'const CI *const'`).
+        let t = &self.ast.types;
+        if let Some(&p) = ptys.get(i)
+            && p != b.to
+            && t.canonical(p).without_quals() == t.canonical(b.to).without_quals()
+        {
+            b.to = p;
+        }
+        Ics::Bad(b)
+    }
+
     /// The note for candidate `c` of `set` (clang `NoteFunctionCandidate`).
     pub(crate) fn ovl_note(&mut self, set: &OverloadCandidateSet, c: u32) -> Diag {
         let cand = set.cand(c);
@@ -237,6 +257,7 @@ impl Sema<'_, '_> {
                 // The operands are the 1st, 2nd, ... arguments.
                 let slot = if arg == u16::MAX { 0 } else { usize::from(arg) + 1 };
                 let x = set.ics_of(c).get(slot).copied().unwrap_or(Ics::Ellipsis);
+                let x = self.sugared_bad_param(f, x, Some(slot));
                 self.bad_conversion_detail(&x, Some(slot))
             }
             CandidateFailure::BadConversion { arg } => {
@@ -247,6 +268,14 @@ impl Sema<'_, '_> {
                     (i + usize::from(set.object.is_some()), Some(i))
                 };
                 let x = set.ics_of(c).get(slot).copied().unwrap_or(Ics::Ellipsis);
+                // The parameter the argument initializes: an explicit
+                // object parameter takes the object argument.
+                let param = if self.has_explicit_object(f) && set.object.is_some() {
+                    Some(which.map_or(0, |i| i + 1))
+                } else {
+                    which
+                };
+                let x = self.sugared_bad_param(f, x, param);
                 self.bad_conversion_detail(&x, which)
             }
             CandidateFailure::ConstraintsNotSatisfied { sat } => {

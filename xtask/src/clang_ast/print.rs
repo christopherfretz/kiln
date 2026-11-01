@@ -1404,7 +1404,8 @@ impl<'a> Printer<'a, '_> {
                     // clang prints the type as written, which only its
                     // text dump has.
                     l.push_str(head);
-                    l.push_str(&self.cast_written(n, k)?);
+                    let w = self.cast_written(n, k)?;
+                    l.push_str(&side::cplusplus_tags(&w, qual_type(n)));
                     if k != "CXXFunctionalCastExpr" {
                         l.push('>');
                     }
