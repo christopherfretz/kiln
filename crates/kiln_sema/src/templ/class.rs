@@ -1105,6 +1105,25 @@ impl Substituter<'_, '_, '_> {
         Ok(self.sema.act_on_tag(kw, Some((name, loc)), None, TagUse::Declaration, 0, None, loc))
     }
 
+    /// A class-scope using-declaration of the pattern (`using B<T>::f;`,
+    /// `using __base::__base;`), redone in the instantiation with its
+    /// qualifier substituted (WP-114).
+    fn member_using(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
+        let pnns = self.sema.ast.using_qualifier(m).ok_or(SubstFail)?;
+        let name = self.sema.ast.decls.get(m).name();
+        let (name, inheriting) = match name.as_ident() {
+            Some(n) => (n, self.sema.nns_last_name(pnns) == Some(n)),
+            None => (self.sema.nns_last_name(pnns).ok_or(SubstFail)?, true),
+        };
+        let nns = self.nns(pnns, loc)?;
+        if self.nns_still_dependent(nns) {
+            return self.unimplemented("dependent using-declarations in templates", loc);
+        }
+        let ctx = self.nns_context(nns, loc)?;
+        let q = crate::using::Qualifier { ctx, nns, loc };
+        Ok(self.sema.instantiate_class_using(q, name, loc, inheriting))
+    }
+
     /// Replays member `m` of the pattern class (§4.6).
     fn member(&mut self, m: DeclId) -> Result<Option<DeclId>, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
@@ -1154,7 +1173,12 @@ impl Substituter<'_, '_, '_> {
                 let r = self.friend_decl(m)?;
                 return Ok(r.filter(|&x| self.sema.kind_of(x) != DeclKind::Friend));
             }
-            DeclKind::Empty => return Ok(None),
+            // A class-scope using-declaration is redone with its
+            // substituted qualifier; its shadows come with it.
+            DeclKind::Using | DeclKind::UnresolvedUsingValue => return self.member_using(m, loc),
+            DeclKind::Empty | DeclKind::UsingShadow | DeclKind::ConstructorUsingShadow => {
+                return Ok(None);
+            }
             // A friend function is in its class's member list as well as
             // in its FriendDecl, which instantiates it.
             // So is a friend template ([temp.friend]/1) or a class a

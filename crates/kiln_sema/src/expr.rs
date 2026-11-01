@@ -869,6 +869,13 @@ impl Sema<'_, '_> {
             self.diag_unresolved_using(d, loc);
             return self.recover_err(&[], loc);
         }
+        if self.kind_of(d) == DeclKind::UnresolvedUsingValue {
+            // A member named by a dependent using-declarator: an implicit
+            // `this->name` (or `Class::name`) resolved at instantiation
+            // (clang's UnresolvedLookupExpr over the
+            // UnresolvedUsingValueDecl).
+            return self.builder().dependent_member(None, true, name, false, nns, None, loc);
+        }
         if let Some(naming) = found.naming {
             // [class.access.base]/5: the object is `*this` for an implicit
             // member access.

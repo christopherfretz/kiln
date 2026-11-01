@@ -122,6 +122,12 @@ pub(crate) enum CandidateFailure {
     /// A constructor template specialization that would take its own
     /// class by value to copy an object of it ([class.copy.ctor]/5).
     IllegalCtor,
+    /// An inherited constructor that would copy or move a base
+    /// subobject of the constructed class ([over.match.funcs.general]/8).
+    InhCtorSlice {
+        /// Its first parameter is an rvalue reference.
+        moving: bool,
+    },
 }
 
 /// A rewritten comparison candidate's form ([over.match.oper]/3.4;

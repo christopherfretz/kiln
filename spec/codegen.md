@@ -596,9 +596,18 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   `virtual_base_dyncast_hint` (the `-1` `__dynamic_cast` hint).
 
 **Gaps (owned elsewhere or open):**
-- Inheriting constructors are not implemented at all (sema rejects
-  `using B::B;` with `sema_using_decl_not_base_class`; codegen has no
-  `CI1`/`CI2` structors), with or without virtual bases.
+- Inheriting constructors (WP-114): `CI1`/`CI2` structors mangled with
+  the base as a `<name>` (not a substitution candidate, clang
+  `mangleCXXCtorType`), defined from the `CXXInheritedCtorInitExpr`
+  ctor-initializer, which forwards the inheriting constructor's own
+  parameters. When the class has virtual bases and the inherited
+  constructor comes through one, the base variant takes no parameters
+  beyond `this`/VTT (clang `inheritingCtorHasParams`), yet a call still
+  passes the evaluated arguments, as clang does. Corpus
+  `class_inheriting_ctors`, mangle `inheriting_ctors`. Gap: a variadic
+  base constructor is defined like any other; clang instead inlines the
+  inheriting constructor at each call
+  (`EmitInlinedInheritingCXXConstructorCall`), so its IR differs.
 - Explicit instantiation definitions (`template struct X<int>;`) emit
   nothing: the members are instantiated by sema but codegen emits only
   used functions, with `linkonce_odr`. clang emits every member

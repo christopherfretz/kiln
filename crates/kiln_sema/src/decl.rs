@@ -3724,6 +3724,7 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_friends(r, &b.friends);
         }
         self.builder().complete_record_definition(r, bits);
+        self.hide_inherited_ctors(r);
         self.check_pending_defaulted(r);
         self.act_on_complete_virtual(r);
     }

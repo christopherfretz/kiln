@@ -28,6 +28,10 @@ pub(crate) const BACKTRACE_LIMIT: usize = 10;
 /// Elements of an aggregate argument printed before eliding.
 const MAX_ELEMS: u64 = 16;
 
+pub(crate) fn notes_name(ast: &Ast, d: DeclId) -> String {
+    name_of(ast, d)
+}
+
 fn name_of(ast: &Ast, d: DeclId) -> String {
     let mut s = String::new();
     write_name_for_diag(ast, d, &mut s);
@@ -305,17 +309,45 @@ impl Oven {
             }
             Fault::Callee(f) => {
                 let func = &self.funcs[f as usize];
-                let d = func.decl.unwrap_or_else(|| DeclId::new(0));
-                let what =
+                let mut d = func.decl.unwrap_or_else(|| DeclId::new(0));
+                let mut what =
                     if func.state == FState::NotConstexpr { "non-constexpr" } else { "undefined" };
+                // An inheriting constructor whose inherited constructor is
+                // not constexpr is diagnosed as that constructor (clang
+                // `CheckConstexprFunction`).
+                let mut inh = ast
+                    .decls
+                    .inheriting_ctor_shadow(d)
+                    .and_then(|s| ast.using_target(s))
+                    .map(|t| ast.first(t));
+                if let Some(t) = inh
+                    && !ast.decls.function(t).is_some_and(|f| {
+                        f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
+                    })
+                {
+                    d = t;
+                    what = "non-constexpr";
+                    inh = None;
+                }
                 extra.push(Note::new(ast.decls.get(ast.latest(d)).loc(), "declared here"));
-                (
-                    site.loc,
+                let msg = if let Some(t) = inh {
+                    let base = ast.decls.get(t).ctx().map(|c| name_of(ast, c)).unwrap_or_default();
                     format!(
-                        "{what} function '{}' cannot be used in a constant expression",
+                        "constructor inherited from base class '{base}' cannot be used in a \
+                         constant expression; derived class cannot be implicitly initialized"
+                    )
+                } else {
+                    let kind = if ast.decls.get(d).kind() == DeclKind::CXXConstructor {
+                        "constructor"
+                    } else {
+                        "function"
+                    };
+                    format!(
+                        "{what} {kind} '{}' cannot be used in a constant expression",
                         name_of(ast, d)
-                    ),
-                )
+                    )
+                };
+                (site.loc, msg)
             }
         };
         let mut notes = Vec::with_capacity(2 + extra.len());

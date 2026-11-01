@@ -575,11 +575,21 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
         }
         if !kind.is_function() && decls.member_list(d).is_some() {
-            for m in ast.members(d) {
-                // A befriended declaration prints under its `FriendDecl`.
-                if self.shown(d, m) && decls.get(m).misc().friend() == FriendKind::None {
-                    kids.push((Node::Decl(m), None));
-                }
+            self.member_children(d, kids);
+        }
+    }
+
+    /// The members of context `d` that print under it: a befriended
+    /// declaration prints under its `FriendDecl`, and a shadow hidden by a
+    /// later member is gone, as clang's `HideUsingShadowDecl` removes it.
+    fn member_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let decls = &self.ast.decls;
+        for m in self.ast.members(d) {
+            if self.shown(d, m)
+                && decls.get(m).misc().friend() == FriendKind::None
+                && decls.hidden_shadow(m).is_none()
+            {
+                kids.push((Node::Decl(m), None));
             }
         }
     }
@@ -1253,6 +1263,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             DeclKind::Using
             | DeclKind::NamespaceAlias
             | DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
+            | DeclKind::UnresolvedUsingValue
             | DeclKind::UsingEnum
             | DeclKind::UsingDirective => self.using_fields(d, n.kind()),
             DeclKind::LinkageSpec => {
@@ -1624,6 +1636,20 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 return;
             }
             DeclKind::NamespaceAlias => self.name(d),
+            // clang's JSON `name` is the unqualified member name (a
+            // constructor's is its canonical class type).
+            DeclKind::UnresolvedUsingValue => {
+                self.line.push(' ');
+                if let crate::names::DeclNameView::Constructor(t) =
+                    ast.names.view(ast.decls.get(d).name())
+                {
+                    let opts = PrintOptions { full_scope: false, ..PrintOptions::CANONICAL };
+                    write_type(&ast.types, &self.names, QualType::unqual(t), opts, &mut self.line);
+                } else {
+                    self.names.write_name(d, &mut self.line);
+                }
+                return;
+            }
             _ => {}
         }
         if let Some(t) = ast.using_target(d) {

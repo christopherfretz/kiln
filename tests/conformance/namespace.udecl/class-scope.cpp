@@ -1,5 +1,5 @@
 // [namespace.udecl]/3: in a class, the nested-name-specifier names a base
-// class (kiln has no base classes yet: every non-enum qualifier is diagnosed)
+// class; E names D, which is not a base of E (line 13)
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 12:25 error "using declaration in class refers into 'N::', which is not a class"
