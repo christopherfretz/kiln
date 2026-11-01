@@ -478,6 +478,11 @@ impl Parser<'_, '_> {
                 }
                 continue;
             }
+            if !ds.has_type_specifier() && self.template_scope_end(self.pos()).is_some() {
+                // `X<A>::name` / `td::name` whose scope the lookahead
+                // cannot look into: parse the scope first.
+                self.annotate_template_scope();
+            }
             if self.decltype_scope_end(self.pos()).is_some() || self.at_decltype_scope() {
                 // `decltype(e)::name` (WP-119); after a type specifier it
                 // starts a member-pointer declarator.
@@ -642,7 +647,7 @@ impl Parser<'_, '_> {
             self.spec_error(&e, loc);
         }
         let open = self.bump().span.lo;
-        if let Some(e) = self.parse_constant_expr() {
+        if let Some(e) = self.with_greater_op(true, Self::parse_constant_expr) {
             ds.explicit_expr = Some(e);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
         } else {
@@ -673,7 +678,8 @@ impl Parser<'_, '_> {
             return (TypeSpecKind::DecltypeAuto, None);
         }
         self.s.enter_decltype();
-        let e = self.parse_expression();
+        // [temp.names]/4: inside the parentheses `>` is an operator again.
+        let e = self.with_greater_op(true, Self::parse_expression);
         self.s.exit_decltype(e);
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], false, true);
@@ -800,17 +806,25 @@ impl Parser<'_, '_> {
                 self.parse_ctad_placeholder(ds, d, end > start + 1, end, loc);
                 true
             }
+            // `X<A>::name` with an annotated scope ([`Parser::annotate_template_scope`])
+            // in which `name` is not a type, where only a type can be:
+            // the parse proper reports it ("no type named ..."; clang's
+            // `DiagnoseUnknownTypeName`).
+            Some((end, NameClass::Undeclared, _))
+                if end == start + 2
+                    && self.at_decltype_scope()
+                    && self.decltype_scope_ok()
+                    && self.unknown_type_follows(end, ctx) =>
+            {
+                if let Ok(Some(q)) = self.parse_nested_name_nns() {
+                    let _ = self.parse_qualified_type_rest(q, TagKeyword::None);
+                }
+                ds.invalid = true;
+                let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
+                true
+            }
             Some((end, NameClass::Undeclared, name)) if end == start + 1 => {
-                let next = self.tok_at(end);
-                let unknown_type = self.ident_of(next).is_some()
-                    || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
-                        && matches!(
-                            Self::punct_of(next),
-                            Some(Punct::Star | Punct::Amp | Punct::AmpAmp)
-                        ))
-                    || (ctx == DeclaratorContext::Prototype
-                        && matches!(Self::punct_of(next), Some(Punct::RParen | Punct::Comma)));
-                if !unknown_type {
+                if !self.unknown_type_follows(end, ctx) {
                     return false;
                 }
                 let text = self.s.ast.symbols().as_str(name).to_owned();
@@ -823,6 +837,17 @@ impl Parser<'_, '_> {
             }
             _ => false,
         }
+    }
+
+    /// True if token `end`, after an unknown name in a decl-specifier,
+    /// shows the name was meant as a type (a declarator follows).
+    fn unknown_type_follows(&self, end: usize, ctx: DeclaratorContext) -> bool {
+        let next = self.tok_at(end);
+        self.ident_of(next).is_some()
+            || (matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member)
+                && matches!(Self::punct_of(next), Some(Punct::Star | Punct::Amp | Punct::AmpAmp)))
+            || (ctx == DeclaratorContext::Prototype
+                && matches!(Self::punct_of(next), Some(Punct::RParen | Punct::Comma)))
     }
 
     // -- class and enum specifiers ----------------------------------------------------

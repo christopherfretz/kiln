@@ -181,9 +181,10 @@ impl Sema<'_, '_> {
         arg_locs: &[Loc],
         loc: Loc,
     ) -> Result<ConvertedArgs, ()> {
+        let head = self.head_template(tmpl);
         let tmpl = self.ast.first(tmpl);
-        let params = self.template_params(tmpl);
-        let depth = self.template_param_depth(tmpl);
+        let params = self.template_params(head);
+        let depth = self.template_param_depth(head);
         let mut out: Vec<TemplateArg> = Vec::with_capacity(params.len());
         let mut ok = true;
         let arg_loc = |i: usize| arg_locs.get(i).copied().unwrap_or(loc);

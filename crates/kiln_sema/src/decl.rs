@@ -1322,12 +1322,11 @@ impl Sema<'_, '_> {
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
             return self.act_on_function_spec_declarator(ds, ty, d, invalid);
         }
-        if let Some((_, l)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
+        if let Some((ext, _)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
             self.templ.explicit_inst = None;
             // [temp.explicit]/3: of a variable template or static data
-            // member (WP-106 lands functions only).
-            self.templ_unimplemented("explicit instantiation of a variable", l);
-            self.templ.cur = None;
+            // member.
+            self.act_on_explicit_var_inst(d, ext.is_some(), invalid);
             return None;
         }
         if let Some(sid) = &d.spec_id {
@@ -2759,6 +2758,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Checks the expressions of an initializer that will not initialize
+    /// anything (the variable is invalid).
+    fn discard_initializer(&mut self, init: &Initializer) {
+        let es = match init {
+            Initializer::Expr(e) => vec![*e],
+            Initializer::Paren(es, ..) => es.clone(),
+            Initializer::List(l) => Self::list_exprs(l),
+        };
+        for e in es {
+            self.act_on_full_expr(e);
+        }
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -2796,14 +2808,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_ty(v, ty);
             if self.is_error_type(ty) {
                 self.ast.decls.set_flags(v, DeclFlags::INVALID);
-                let es = match &init {
-                    Initializer::Expr(e) => vec![*e],
-                    Initializer::Paren(es, ..) => es.clone(),
-                    Initializer::List(l) => Self::list_exprs(l),
-                };
-                for e in es {
-                    self.act_on_full_expr(e);
-                }
+                self.discard_initializer(&init);
                 return;
             }
         }
@@ -2822,14 +2827,7 @@ impl Sema<'_, '_> {
                 let msg = self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty));
                 self.emit(msg);
                 self.ast.decls.set_flags(v, DeclFlags::INVALID);
-                let es = match &init {
-                    Initializer::Expr(e) => vec![*e],
-                    Initializer::Paren(es, ..) => es.clone(),
-                    Initializer::List(l) => Self::list_exprs(l),
-                };
-                for e in es {
-                    self.act_on_full_expr(e);
-                }
+                self.discard_initializer(&init);
                 return;
             }
         }
@@ -2839,6 +2837,19 @@ impl Sema<'_, '_> {
             // Initialized at instantiation ([temp.dep.expr]); clang keeps
             // the list as written with type `void` (and `int[]` unbounded).
             let e = self.dependent_init_list(l);
+            let e = self.act_on_full_expr(e);
+            let _ = self.builder().set_var_init(v, e);
+            return;
+        }
+        if let Initializer::Paren(es, l, r) = &init
+            && es.len() > 1
+            && (self.ast.types.is_dependent(ty)
+                || es.iter().any(|&a| self.expr_is_type_dependent(a)))
+        {
+            // `T x(a, b)` with a dependent `T` or argument: initialized at
+            // instantiation, kept as a `ParenListExpr` (clang
+            // `ActOnParenListExpr` / `AddInitializerToDecl`).
+            let e = self.builder().paren_list(es, *l, *r);
             let e = self.act_on_full_expr(e);
             let _ = self.builder().set_var_init(v, e);
             return;
@@ -3315,6 +3326,7 @@ impl Sema<'_, '_> {
             && self.check_template_heads_match(list, old)
         {
             self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
+            self.inherit_redeclared_defaults(t, list);
         }
     }
 
@@ -4328,7 +4340,11 @@ impl Sema<'_, '_> {
         let ty = self.tag_type(rec);
         let h = DeclHead::new(ctx, DeclName::EMPTY, ds.loc).flags(DeclFlags::IMPLICIT);
         let obj = if in_class {
-            self.builder().field(h, ty, None, 0)
+            // The unnamed member has the access in effect
+            // ([class.access.spec]/1; standard-layout compares it).
+            let f = self.builder().field(h, ty, None, 0);
+            self.set_member_access(f);
+            f
         } else {
             let storage = match ds.storage {
                 Some((StorageSpec::Static, _)) => VarStorage::Static,
@@ -4750,7 +4766,7 @@ impl Sema<'_, '_> {
 
     /// An alignment argument ([dcl.align]/2): an integral constant
     /// expression whose value is a power of two (0 is ignored).
-    fn check_alignment_expr(&mut self, e: ExprId) -> Option<ExprId> {
+    pub(crate) fn check_alignment_expr(&mut self, e: ExprId) -> Option<ExprId> {
         if self.expr_is_value_dependent(e) {
             return Some(e);
         }
