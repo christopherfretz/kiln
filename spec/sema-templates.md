@@ -3346,8 +3346,6 @@ explicit specialization errors remain. The blockers are:
   - Partially substituted pack expansions (`tl<tl<Ts, Us>...>` with
     only `Ts` known) need clang's `SubstTemplateTypeParmPackType`:
     unimplemented ("partially substituted pack expansion").
-  - `using Ts::operator()...;`: the parser rejects a pack in a
-    using-declarator.
   - Lambda init-capture packs: WP-075. Fold-expanded constraints: Q17.
   - Pre-existing, seen while testing: `int a[] = {sizeof(Ts)...};`
     reports "sizeof incomplete type" (a reference to an incomplete
