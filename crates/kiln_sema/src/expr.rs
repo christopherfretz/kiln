@@ -821,6 +821,21 @@ impl Sema<'_, '_> {
         let nns = qualifier.map(|q| q.nns);
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
+        if qualifier.is_none_or(|q| q == self.ast.tu)
+            && matches!(
+                name.as_operator(),
+                Some(
+                    kiln_ast::names::OverloadedOperator::New
+                        | kiln_ast::names::OverloadedOperator::ArrayNew
+                        | kiln_ast::names::OverloadedOperator::Delete
+                        | kiln_ast::names::OverloadedOperator::ArrayDelete
+                )
+            )
+        {
+            // The replaceable global allocation functions are visible to
+            // lookup without `<new>` ([basic.stc.dynamic.general]/2).
+            self.declare_global_new_delete();
+        }
         let found = match qualifier {
             Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
             None => self.lookup_name_dn(name, LookupKind::Ordinary),
