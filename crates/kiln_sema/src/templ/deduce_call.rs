@@ -56,6 +56,29 @@ impl DeductionFailure {
 }
 
 impl Sema<'_, '_> {
+    /// The elements of the trailing function parameter pack with
+    /// pattern `pat` given explicitly ([temp.arg.explicit]/9): only the
+    /// first template parameter pack takes explicit arguments (it takes
+    /// the rest of them), so none when the pattern (`U`, `U&&`, `U*`)
+    /// expands another pack (`f<int>(tys<int>, 'a')` for
+    /// `template<class... T, class... U> f(tys<T...>, U...)`). A pattern
+    /// of another shape is taken to expand the first pack.
+    fn trailing_pack_skip(&self, pat: QualType, params: &[DeclId], d: &DeducedArgs) -> usize {
+        let types = &self.ast.types;
+        let mut q = types.canonical(pat);
+        while let Some(p) = types.pointee(q) {
+            q = types.canonical(p);
+        }
+        let first = params.iter().position(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack));
+        if let TypeView::CanonTemplateTypeParm { depth, index, .. } = types.view(q.ty())
+            && depth == u32::from(d.depth)
+            && first.is_some_and(|f| f != index as usize)
+        {
+            return 0;
+        }
+        self.explicit_pack_len(params, d)
+    }
+
     /// Runs `f` in a SFINAE frame of `kind` for template `ft` showing
     /// `args`: its result, and the first error captured (`Some` when
     /// substitution failed). `None` when the instantiation depth limit
@@ -304,7 +327,11 @@ impl Sema<'_, '_> {
                 return Err(DeductionFailure::new(r, d));
             }
         }
-        // §6.1 step 2: each (P, A).
+        // §6.1 step 2: each (P, A). The explicitly given prefix of a
+        // pack is fixed before any deduction: a pack deduced from an
+        // earlier parameter (`tys<Tf...>`) is not a prefix of the
+        // trailing function parameter pack.
+        let skip = fn_pack.map_or(0, |pat| self.trailing_pack_skip(pat, &params, &d));
         for (i, a) in args.iter().enumerate() {
             let Some(&p) = ptys.get(i) else { break };
             if i + 1 == ptys.len()
@@ -313,7 +340,6 @@ impl Sema<'_, '_> {
                 // [temp.deduct.call]/1: the trailing function parameter
                 // pack's pattern against each remaining argument; the
                 // elements given explicitly are not deduced.
-                let skip = self.explicit_pack_len(&params, &d);
                 let rest = &args[i..];
                 let r = self.deduce_pack_elements_from(skip, rest.len(), &mut d, |s, k, d| {
                     s.deduce_call_arg(pat, &rest[k], d)
