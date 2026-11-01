@@ -102,8 +102,8 @@ pub struct EnumBuild {
     last: Option<i128>,
     enumerators: Vec<(DeclId, i128)>,
     /// The type of each enumerator before the closing brace
-    /// ([dcl.enum]/5), for an enumeration without a fixed underlying
-    /// type: a reference to an enumerator inside the body has it.
+    /// ([dcl.enum]/5): a reference to an enumerator inside the body has
+    /// it.
     pre_types: Vec<(DeclId, QualType)>,
 }
 
@@ -2331,6 +2331,10 @@ impl Sema<'_, '_> {
         });
         let prev = if global_new_delete {
             None
+        } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
+            // A friend of a templated class redeclares nothing until
+            // instantiated (see `is_dependent_friend_fn`).
+            None
         } else if friend && d.qualifier.is_none() {
             // Redeclaration lookup in the namespace sees hidden friends,
             // but not the members of its inline namespaces: those are in
@@ -2340,7 +2344,7 @@ impl Sema<'_, '_> {
                 .ast
                 .lookup_local(ctx, dname)
                 .iter_with_inline()
-                .filter(|&(_, via_inline)| !via_inline)
+                .filter(|&(d, via_inline)| !via_inline && !self.is_dependent_friend_fn(d))
                 .map(|(d, _)| d)
                 .collect();
             self.pick_prev_function(&found, new_fn)
@@ -3855,6 +3859,38 @@ impl Sema<'_, '_> {
 
     // -- function definitions ----------------------------------------------------
 
+    /// Whether function (template) `f` is a friend declared in a
+    /// templated class: it is a pattern that only declares the function
+    /// when the class is instantiated ([temp.inst]/4, [temp.friend]), so
+    /// another friend declaration does not redeclare it and two such
+    /// definitions are not a redefinition before then (libc++ `expected` and its `void` partial
+    /// specialization both define `operator==(const expected&, const
+    /// unexpected<_E2>&)`; clang's `CheckForFunctionRedefinition`).
+    fn is_dependent_friend_fn(&self, f: DeclId) -> bool {
+        let f = if self.kind_of(f) == DeclKind::FunctionTemplate {
+            self.pattern_of(f).unwrap_or(f)
+        } else {
+            f
+        };
+        self.ast.decls.get(f).misc().friend() != FriendKind::None
+            && self.in_templated_class(self.ast.decls.lexical_ctx(f))
+    }
+
+    /// True if lexical context `cur` is, or is nested in, a class template
+    /// or partial specialization before any namespace scope.
+    fn in_templated_class(&self, mut cur: Option<DeclId>) -> bool {
+        while let Some(c) = cur {
+            match self.kind_of(c) {
+                DeclKind::ClassTemplatePartialSpecialization => return true,
+                DeclKind::CXXRecord if self.ast.described_template(c).is_some() => return true,
+                DeclKind::TranslationUnit | DeclKind::Namespace => return false,
+                _ => {}
+            }
+            cur = self.ast.decls.lexical_ctx(c);
+        }
+        false
+    }
+
     /// Starts the definition of function `f` at `{`: checks for a
     /// redefinition, opens the function scope with the parameters.
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
@@ -3862,6 +3898,8 @@ impl Sema<'_, '_> {
         let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
         if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
             && prev != f
+            && !self.is_dependent_friend_fn(f)
+            && !self.is_dependent_friend_fn(prev)
         {
             let msg = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
@@ -4686,8 +4724,8 @@ impl Sema<'_, '_> {
         self.ctx = e;
     }
 
-    /// The type of enumerator `d` while its enumeration (without a fixed
-    /// underlying type) is being defined ([dcl.enum]/5), if it is.
+    /// The type of enumerator `d` while its enumeration is being defined
+    /// ([dcl.enum]/5), if it is.
     pub(crate) fn enumerator_pre_brace_type(&self, d: DeclId) -> Option<QualType> {
         self.enums.iter().rev().find_map(|b| b.pre_types.iter().find(|x| x.0 == d).map(|x| x.1))
     }
@@ -4838,13 +4876,15 @@ impl Sema<'_, '_> {
         });
         let cv = self.int_const(vty, v);
         let _ = self.ast.decls.set_enumerator_value(d, cv);
-        // [dcl.enum]/5 (clang `CheckEnumConstant`): without a fixed
-        // underlying type, an enumerator has the type of its initializing
-        // value until the closing brace; without an initializer, that of
-        // the previous enumerator if the incremented value fits, else `int`
-        // for the first one or a type wide enough.
-        let pre = if build.fixed.is_some() {
-            None
+        // [dcl.enum]/5 (clang `CheckEnumConstant`): until the closing
+        // brace an enumerator has the fixed underlying type, if there is
+        // one (`enum class E { a = 1, b = a | 2 }` uses the built-in `|`
+        // of `int`); otherwise the type of its initializing value, or
+        // without an initializer that of the previous enumerator if the
+        // incremented value fits, else `int` for the first one or a type
+        // wide enough.
+        let pre = if let Some(f) = build.fixed {
+            Some(self.ast.types.unqualified(f))
         } else if let Some(ie) = init_e {
             Some(self.ast.types.unqualified(self.ast.exprs.get(ie).ty()))
         } else {

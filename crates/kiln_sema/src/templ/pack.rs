@@ -112,6 +112,12 @@ pub(crate) fn expr_pattern(s: &Sema<'_, '_>, e: ExprId) -> Option<ExprId> {
 }
 
 impl Substituter<'_, '_, '_> {
+    /// True while probing once the probe has found its pack: what remains
+    /// of the pattern (the rest of a lambda body) is not substituted.
+    pub(crate) fn probe_done(&self) -> bool {
+        self.pack.probing && self.pack.found.is_some()
+    }
+
     /// A pack of length `n` named `name` reached during substitution:
     /// the index of the element to use. Probing records the pack and
     /// stops; expanding checks the length ([temp.variadic]/8).
@@ -280,9 +286,12 @@ impl Substituter<'_, '_, '_> {
         let found = self.pack.found.take();
         self.pack.probing = false;
         let r = match (probe, found) {
-            (Ok(x), _) => Ok(Expansion::Unexpanded(x)),
+            (Ok(x), None) => Ok(Expansion::Unexpanded(x)),
             (Err(e), None) => Err(e),
-            (Err(_), Some((n, name))) => {
+            // A probe that reached a pack but still succeeded: the failure
+            // was recovered from inside a statement of a lambda body in
+            // the pattern (`[] { return sizeof(T); }()...`).
+            (_, Some((n, name))) => {
                 self.pack.expanding = Some((n, name));
                 let mut out = Vec::with_capacity(n as usize);
                 let mut res = Ok(());
