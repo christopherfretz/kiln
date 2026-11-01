@@ -1844,10 +1844,7 @@ impl Parser<'_, '_> {
         if let Some(out) = out {
             let ast = &self.s.ast;
             let is_vec = |a: &AttrId| {
-                matches!(
-                    ast.attrs.get(*a).kind,
-                    AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE
-                )
+                matches!(ast.attrs.get(*a).kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE)
             };
             out.extend(ds.attrs.iter().copied().filter(is_vec));
             ds.attrs.retain(|a| !is_vec(a));

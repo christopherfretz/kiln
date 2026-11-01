@@ -807,6 +807,9 @@ diag_ids! {
     sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
     sema_sizeof_bitfield = Error (1) "invalid application of '{0}' to bit-field";
     sema_bad_cxx_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} is not allowed";
+    sema_bad_cxx_cast_vector_to_scalar_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to scalar {2} of different size";
+    sema_bad_cxx_cast_scalar_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from scalar {1} to vector {2} of different size";
+    sema_bad_cxx_cast_vector_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to vector {2} of different size";
     sema_bad_cast_qualifiers_away = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} casts away qualifiers";
     sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
     sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";

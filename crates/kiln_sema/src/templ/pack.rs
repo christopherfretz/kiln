@@ -161,8 +161,9 @@ impl Substituter<'_, '_, '_> {
     fn expansion_pattern_arg(&mut self, a: TemplateArg) -> Option<TemplateArg> {
         match a.view() {
             ArgView::Type(q) => type_pattern(self.sema, q).map(TemplateArg::ty),
-            ArgView::Expr { expr, .. } => expr_pattern(self.sema, expr)
-                .map(|p| self.sema.ast.builder().template_arg_expr(p)),
+            ArgView::Expr { expr, .. } => {
+                expr_pattern(self.sema, expr).map(|p| self.sema.ast.builder().template_arg_expr(p))
+            }
             ArgView::TemplateExpansion { name, .. } => Some(TemplateArg::template(name)),
             _ => None,
         }
@@ -258,7 +259,8 @@ impl Substituter<'_, '_, '_> {
         };
         self.pack = saved_state;
         self.pack_index = saved_index;
-        self.pack.rewrap = if matches!(r, Ok(Expansion::Elements(_))) { rewrap } else { Vec::new() };
+        self.pack.rewrap =
+            if matches!(r, Ok(Expansion::Elements(_))) { rewrap } else { Vec::new() };
         r
     }
 

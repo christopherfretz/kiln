@@ -1648,10 +1648,19 @@ impl<'a> AstBuilder<'a> {
     /// `v[i]` on a vector `v` (a GNU/clang extension): the element, of
     /// `v`'s value category; a glvalue designates a vector component
     /// (clang `OK_VectorComponent`).
-    pub fn vector_subscript(&mut self, base: ExprId, idx: ExprId, ty: QualType, loc: Loc) -> ExprId {
+    pub fn vector_subscript(
+        &mut self,
+        base: ExprId,
+        idx: ExprId,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
         let vk = self.vk(base);
-        let ok =
-            if vk == ValueCategory::PRValue { ObjectKind::Ordinary } else { ObjectKind::VectorComponent };
+        let ok = if vk == ValueCategory::PRValue {
+            ObjectKind::Ordinary
+        } else {
+            ObjectKind::VectorComponent
+        };
         let deps = self.deps(base) | self.deps(idx) | self.type_deps(ty);
         self.push_expr(
             ExprKind::ArraySubscriptExpr,

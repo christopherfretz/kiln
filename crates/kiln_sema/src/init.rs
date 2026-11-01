@@ -780,8 +780,7 @@ impl Sema<'_, '_> {
             }
         }
         if let Some(extra) = l.items.get(pos) {
-            let msg =
-                self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
+            let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
             self.emit(msg);
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)

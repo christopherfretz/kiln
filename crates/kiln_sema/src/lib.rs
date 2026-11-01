@@ -577,10 +577,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                     cur = t.canonical(cur);
                     continue;
                 }
-                V::Elaborated { .. }
-                | V::Using { .. }
-                | V::Attributed { .. }
-                | V::Auto { .. } => {}
+                V::Elaborated { .. } | V::Using { .. } | V::Attributed { .. } | V::Auto { .. } => {}
                 _ => {
                     if matches!(t.view(next.ty()), V::Vector { .. }) {
                         break;

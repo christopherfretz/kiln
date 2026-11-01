@@ -147,6 +147,23 @@ pub(crate) enum Op {
         val: V,
         idx: u32,
     },
+    /// `extractelement vec, idx` (WP-156).
+    ExtractElement {
+        vec: V,
+        idx: V,
+    },
+    /// `insertelement vec, elt, idx`.
+    InsertElement {
+        vec: V,
+        elt: V,
+        idx: V,
+    },
+    /// `shufflevector a, b, mask`.
+    ShuffleVector {
+        a: V,
+        b: V,
+        mask: Vec<u32>,
+    },
 }
 
 impl Op {
@@ -199,6 +216,9 @@ impl Op {
             Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable => Vec::new(),
             Op::ExtractValue { agg, .. } => vec![*agg],
             Op::InsertValue { agg, val, .. } => vec![*agg, *val],
+            Op::ExtractElement { vec, idx } => vec![*vec, *idx],
+            Op::InsertElement { vec, elt, idx } => vec![*vec, *elt, *idx],
+            Op::ShuffleVector { a, b, .. } => vec![*a, *b],
             Op::Load { ptr, .. } => vec![*ptr],
             Op::Store { val, ptr, .. } => vec![*val, *ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![*l, *r],
@@ -713,6 +733,13 @@ impl Fir {
                     Op::Ret { v } => b.ret(v.map(val))?,
                     Op::Unreachable => b.unreachable()?,
                     Op::ExtractValue { agg, idx } => b.extract_value(val(*agg), &[*idx])?,
+                    Op::ExtractElement { vec, idx } => b.extract_element(val(*vec), val(*idx))?,
+                    Op::InsertElement { vec, elt, idx } => {
+                        b.insert_element(val(*vec), val(*elt), val(*idx))?
+                    }
+                    Op::ShuffleVector { a, b: y, mask } => {
+                        b.shuffle_vector(val(*a), val(*y), mask)?
+                    }
                     Op::InsertValue { agg, val: x, idx } => {
                         b.insert_value(val(*agg), val(*x), &[*idx])?
                     }

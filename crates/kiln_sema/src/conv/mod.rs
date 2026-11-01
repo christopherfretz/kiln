@@ -721,7 +721,10 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         // A vector element is not referenceable either (clang
         // `err_reference_bind_to_vector_element`).
         let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
-        return Err(ConvError::new(DiagId::sema_reference_bind_to_vector_element, vec![sel.into()]));
+        return Err(ConvError::new(
+            DiagId::sema_reference_bind_to_vector_element,
+            vec![sel.into()],
+        ));
     }
     if related
         && vk.is_glvalue()

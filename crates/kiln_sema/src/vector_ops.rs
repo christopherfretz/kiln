@@ -35,11 +35,9 @@ impl Sema<'_, '_> {
     /// The parts of vector type `q`, or `None` if `q` is not a vector.
     pub(crate) fn vector_parts(&self, q: QualType) -> Option<VecParts> {
         match self.ast.types.canonical_view(q) {
-            TypeView::Vector { elem, count, kind } => Some(VecParts {
-                elem: self.ast.types.canonical(elem).without_quals(),
-                count,
-                kind,
-            }),
+            TypeView::Vector { elem, count, kind } => {
+                Some(VecParts { elem: self.ast.types.canonical(elem).without_quals(), count, kind })
+            }
             _ => None,
         }
     }
@@ -61,7 +59,7 @@ impl Sema<'_, '_> {
 
     /// clang's `breakDownVectorType` + `areVectorTypesSameSize`: the data
     /// size of a vector (count × element size) or of a real scalar.
-    fn lax_size(&self, q: QualType) -> Option<u64> {
+    pub(crate) fn lax_size(&self, q: QualType) -> Option<u64> {
         if let Some(p) = self.vector_parts(q) {
             return self.scalar_bits(p.elem).map(|b| b * u64::from(p.count));
         }
@@ -392,9 +390,7 @@ impl Sema<'_, '_> {
                 return Some(vec_ty);
             }
             let vt_count = lv.or(rv).map_or(0, |p| p.count);
-            if self.is_vector_type(other_ty)
-                || (self.is_scalar_real(other_ty) && vt_count == 1)
-            {
+            if self.is_vector_type(other_ty) || (self.is_scalar_real(other_ty) && vt_count == 1) {
                 *r = conv::cast_to(self, CastKind::BitCast, *r, lt, None);
                 return Some(vec_ty);
             }
@@ -623,9 +619,8 @@ impl Sema<'_, '_> {
             self.vector_diag2(DiagId::sema_invalid_operands, lt, rt, loc);
             return None;
         }
-        let int_like = |s: &Self, q: QualType| {
-            s.ast.types.is_integral(q) || conv::is_unscoped_enum(s, q)
-        };
+        let int_like =
+            |s: &Self, q: QualType| s.ast.types.is_integral(q) || conv::is_unscoped_enum(s, q);
         if !int_like(self, lelem) {
             let msg = self.diag(DiagId::sema_expect_int, loc).arg(self.ty_arg(lt));
             self.emit(msg);
@@ -704,7 +699,13 @@ impl Sema<'_, '_> {
     /// `__builtin_convertvector(e, ty)` (clang `Sema::ConvertVectorExpr`):
     /// `e` a vector, `ty` a vector type with as many elements. The operand
     /// stays unconverted, as in clang's AST.
-    pub fn act_on_convert_vector(&mut self, e: ExprId, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+    pub fn act_on_convert_vector(
+        &mut self,
+        e: ExprId,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
         if self.is_err_expr(e) || self.is_error_type(ty) {
             return self.recover(ty, &[e], loc);
         }
@@ -762,7 +763,8 @@ impl Sema<'_, '_> {
             _ => None,
         };
         let ints_only = !matches!(id, b::REDUCE_MIN | b::REDUCE_MAX);
-        let ok = elem.is_some_and(|el| !ints_only || conv::rank::is_integral_or_unscoped_enum(self, el));
+        let ok =
+            elem.is_some_and(|el| !ints_only || conv::rank::is_integral_or_unscoped_enum(self, el));
         let Some(elem) = elem.filter(|_| ok) else {
             let what = if ints_only { "vector of integers" } else { "vector type" };
             let msg = self

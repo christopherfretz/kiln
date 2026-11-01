@@ -577,6 +577,7 @@ impl Cg<'_> {
                 addr: Addr { v: alloc, ty, align: allocation_align },
                 q: x.allocated_ty,
                 bf: None,
+                vidx: None,
             };
             self.init_to_lvalue(init, lv, false)?;
         }
@@ -681,7 +682,12 @@ impl Cg<'_> {
             let start_align = cur_align;
             for (k, &ie) in elems.iter().enumerate() {
                 let q = ast.exprs.get(ie).ty();
-                let lv = LV { addr: Addr { v: cur, ty: cur_ty, align: cur_align }, q, bf: None };
+                let lv = LV {
+                    addr: Addr { v: cur, ty: cur_ty, align: cur_align },
+                    q,
+                    bf: None,
+                    vidx: None,
+                };
                 self.init_to_lvalue(ie, lv, false)?;
                 let one = self.i64c(1);
                 cur = self.gep(cur_ty, cur, vec![one], true);
@@ -750,7 +756,8 @@ impl Cg<'_> {
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(cur, entry)] }, LTy::PTR);
         let iq = ast.exprs.get(init).ty();
         let ity = self.mty(iq);
-        let lv = LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None };
+        let lv =
+            LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None, vidx: None };
         self.init_to_lvalue(init, lv, false)?;
         let one = self.icn(LTy::I32, 1);
         let next = self.gep(elem_ty, phi, vec![one], true);

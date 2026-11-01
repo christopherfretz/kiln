@@ -3823,6 +3823,30 @@ impl Sema<'_, '_> {
         style: CastStyle,
         loc: Loc,
     ) -> Option<CastKind> {
+        // clang `TryReinterpretCast`: a vector and a vector or integer of
+        // the same data size (`areLaxCompatibleVectorTypes`) bit-cast.
+        let (fv, tv) = (self.is_vector_type(from), self.is_vector_type(to));
+        if fv || tv {
+            if (!tv && !self.ast.types.is_integral(to))
+                || (!fv && !self.ast.types.is_integral(from))
+            {
+                return None;
+            }
+            if self.lax_size(from).is_some() && self.lax_size(from) == self.lax_size(to) {
+                return Some(CastKind::BitCast);
+            }
+            let id = if !tv {
+                DiagId::sema_bad_cxx_cast_vector_to_scalar_different_size
+            } else if !fv {
+                DiagId::sema_bad_cxx_cast_scalar_to_vector_different_size
+            } else {
+                DiagId::sema_bad_cxx_cast_vector_to_vector_different_size
+            };
+            let msg =
+                self.diag(id, loc).arg(style.select()).arg(self.ty_arg(from)).arg(self.ty_arg(to));
+            self.emit(msg);
+            return Some(CastKind::BitCast);
+        }
         let (fp, tp) = (self.ast.types.is_pointer(from), self.ast.types.is_pointer(to));
         if fp && tp {
             if style == CastStyle::Reinterpret && self.casts_away_quals(from, to) {
