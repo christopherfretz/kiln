@@ -310,6 +310,24 @@ impl Sema<'_, '_> {
                     // [dcl.init.general]/16.5: `T a[N](x, y)`.
                     return self.paren_aggregate_init(ty, &v, loc, r);
                 }
+                if settled
+                    && let [a] = v.as_slice()
+                    && self.is_braced_arg(*a)
+                    && (self.ast.types.is_reference(ty) || self.ast.types.as_record(ty).is_none())
+                {
+                    // clang's FK_ParenthesizedListInitFor{Scalar,Reference}:
+                    // `int x({1})` is neither list- nor aggregate
+                    // initialization ([dcl.init.general]/16.1 applies only
+                    // to a non-parenthesized braced-init-list).
+                    let _ = self.take_braced_arg(*a);
+                    let reference = u8::from(self.ast.types.is_reference(ty));
+                    let msg = self
+                        .diag(DiagId::sema_list_init_in_parens, loc)
+                        .arg(reference)
+                        .arg(self.ty_arg(ty));
+                    self.emit(msg);
+                    return self.recover(ty, &v, l);
+                }
                 if settled && self.ast.types.as_record(ty).is_some() {
                     if v.len() == 1
                         && let Some(x) = self.construct_from_class(
@@ -622,31 +640,18 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return self.recover(ty, args, at);
             }
-            let inits: Vec<ExprId> = args
-                .iter()
-                .map(|&a| {
-                    let loc = self.begin_loc(a);
-                    self.init_from_expr(elem, a, ConvCtx::Initialization, loc)
-                })
-                .collect();
+            let inits: Vec<ExprId> =
+                args.iter().map(|&a| self.paren_element_init(elem, a)).collect();
             if inits.iter().any(|&e| self.is_err_expr(e)) {
                 return self.recover(ty, args, at);
             }
             let n = bound.unwrap_or(args.len() as u64);
             let filler = if n > args.len() as u64 {
-                if self.ast.types.as_record(elem).is_some() {
-                    // Value-initialized class elements: clang's filler is
-                    // the default construction (`zeroing` unless the
-                    // constructor is user-provided).
-                    Some(self.paren_value_init(elem, at))
-                } else if self.ast.types.as_record(self.base_element(elem)).is_some() {
-                    // todo(WP-067b follow-up): value-initialized arrays of
-                    // classes inside a parenthesized array initialization.
-                    self.unsupported("parenthesized initialization of an array of classes", at);
-                    return self.recover(ty, args, at);
-                } else {
-                    Some(self.builder().implicit_value_init(elem))
-                }
+                // Value-initialized (arrays of) class elements: clang's
+                // filler is the default construction (`zeroing` unless the
+                // constructor is user-provided), one `CXXConstructExpr` of
+                // the array type for a multidimensional array.
+                Some(self.paren_value_init(elem, at))
             } else {
                 None
             };
@@ -677,11 +682,11 @@ impl Sema<'_, '_> {
                 self.ast.decls.get(fields[i - nb]).ty().unwrap_or(QualType::ERROR)
             };
             let e = match args.get(i) {
-                Some(&a) if i < nb => self.init_base_element(ety, a),
-                Some(&a) => {
-                    let loc = self.begin_loc(a);
-                    self.init_from_expr(ety, a, ConvCtx::Initialization, loc)
-                }
+                Some(&a) if i < nb => match self.take_braced_arg(a) {
+                    Some(l) => self.init_list_entity(ety, &l, l.lbrace, ConvCtx::Initialization, None),
+                    None => self.init_base_element(ety, a),
+                },
+                Some(&a) => self.paren_element_init(ety, a),
                 None if i < nb => self.paren_value_init(ety, at),
                 None => {
                     let f = fields[i - nb];
@@ -701,6 +706,19 @@ impl Sema<'_, '_> {
             return self.recover(ty, args, at);
         }
         self.builder().paren_list_init(ty, &inits, None, at, rparen)
+    }
+
+    /// An element (or member) of a parenthesized aggregate initialization
+    /// copy-initialized from the argument `a` ([dcl.init.general]/16.6.2.2):
+    /// a braced-init-list argument (`int a[2][2]({1, 2}, {3})`, the
+    /// call-argument placeholder of [`Sema::act_on_braced_arg`]) is
+    /// copy-list-initialization of the element.
+    fn paren_element_init(&mut self, ety: QualType, a: ExprId) -> ExprId {
+        if let Some(l) = self.take_braced_arg(a) {
+            return self.init_list_entity(ety, &l, l.lbrace, ConvCtx::Initialization, None);
+        }
+        let loc = self.begin_loc(a);
+        self.init_from_expr(ety, a, ConvCtx::Initialization, loc)
     }
 
     /// Parenthesized aggregate initialization of the union `ty` (definition
@@ -724,8 +742,7 @@ impl Sema<'_, '_> {
             return self.recover(ty, args, at);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let loc = self.begin_loc(a);
-        let init = self.init_from_expr(fty, a, ConvCtx::Initialization, loc);
+        let init = self.paren_element_init(fty, a);
         if self.is_err_expr(init) {
             return self.recover(ty, args, at);
         }
@@ -749,7 +766,7 @@ impl Sema<'_, '_> {
     /// default constructor (zero-initialized first unless that is
     /// user-provided), anything else as an `ImplicitValueInitExpr`.
     pub(crate) fn paren_value_init(&mut self, ty: QualType, at: Loc) -> ExprId {
-        if self.ast.types.as_record(ty).is_some()
+        if self.ast.types.as_record(self.base_element(ty)).is_some()
             && let Some(e) = self.value_init_class(ty, at)
         {
             return e;

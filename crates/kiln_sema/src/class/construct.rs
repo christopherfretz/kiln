@@ -200,9 +200,11 @@ impl Sema<'_, '_> {
     /// The value-initialization of an object of class type `ty`
     /// ([dcl.init.general]/9) by its default constructor, zero-initialized
     /// first unless that is user-provided: a `CXXConstructExpr` at `loc`.
-    /// `None` when `ty` is not a complete class.
+    /// An array of classes is one `CXXConstructExpr` of the array type
+    /// (each element value-initialized, [dcl.init.general]/9.2), as in
+    /// clang. `None` when the (element) type is not a complete class.
     pub(crate) fn value_init_class(&mut self, ty: QualType, loc: Loc) -> Option<ExprId> {
-        let target = self.ast.types.as_record(ty)?;
+        let target = self.ast.types.as_record(self.base_element(ty))?;
         self.instantiate_for_init(target, loc);
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;

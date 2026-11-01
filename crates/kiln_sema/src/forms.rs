@@ -36,6 +36,12 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// Whether `e` is a braced-init-list placeholder of
+    /// [`Sema::act_on_braced_arg`] (not yet taken).
+    pub(crate) fn is_braced_arg(&self, e: ExprId) -> bool {
+        self.braced_args.iter().any(|(x, _)| *x == e)
+    }
+
     /// The braced-init-list behind placeholder `e`, if `e` is one.
     pub(crate) fn take_braced_arg(&mut self, e: ExprId) -> Option<InitList> {
         let i = self.braced_args.iter().position(|(x, _)| *x == e)?;
