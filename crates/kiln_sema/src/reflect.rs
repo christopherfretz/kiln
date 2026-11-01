@@ -349,8 +349,10 @@ impl Sema<'_, '_> {
                 format!("'{}' does not reflect a class type", self.reflection_str(cls)),
             );
         };
+        // `^^S` names the first declaration of `S`; the class being
+        // defined is its definition: compare entities, not decls.
         let building = self.classes.last().map(|c| c.record);
-        if building != Some(r) {
+        let Some(r) = building.filter(|&b| self.ast.first(b) == self.ast.first(r)) else {
             let cname = self.decl_name(r);
             let mut notes = vec![Note::new(
                 loc,
@@ -367,7 +369,7 @@ impl Sema<'_, '_> {
                 ));
             }
             return Err(notes);
-        }
+        };
         let Reflectee::Type(t) = self.ast.reflections.get(ty) else {
             return fail(loc, format!("'{}' does not reflect a type", self.reflection_str(ty)));
         };

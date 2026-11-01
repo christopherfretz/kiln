@@ -643,6 +643,7 @@ impl Oven {
         const_context: bool,
     ) -> (Result<ConstValueId, EvalFailure>, Cost) {
         let start = Instant::now();
+        self.types.refresh(bridge);
         let frozen0 = bridge.consts().content_bytes();
         let inner0 = std::mem::take(&mut self.inner);
         let (r, c) = if self.ctx_depth == 0 {
