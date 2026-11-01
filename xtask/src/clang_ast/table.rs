@@ -509,6 +509,9 @@ pub const CLASS_KINDS: &[&str] = &[
     "OpaqueValueExpr",
     // WP-075: the closure class of a lambda.
     "LambdaExpr",
+    // WP-114: inheriting constructors and dependent using-declarations.
+    "ConstructorUsingShadowDecl",
+    "UnresolvedUsingValueDecl",
 ];
 
 /// The template kinds §5 of `spec/ast-dump.md` adds (WP-069).
