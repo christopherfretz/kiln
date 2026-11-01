@@ -11,7 +11,8 @@
 //!
 //! `KILN_CASE=<name>` (the file stem) runs one case and prints both IR
 //! texts for each triple. A `//@ args: <opts>` line in a case adds
-//! `<opts>` (whitespace-separated) to both command lines.
+//! `<opts>` (whitespace-separated) to both command lines, after the
+//! [`pinned_flags`].
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -37,6 +38,18 @@ const DEVIATIONS: &[(&str, &str)] = &[
     // initialization (WP-216).
     ("array_temporary_global", "aarch64-unknown-linux-gnu"),
 ];
+
+/// Flags given to both compilers ahead of a case's own, to pin target
+/// defaults that clang derives from the host rather than the triple.
+///
+/// clang 19 turns `AArch64`'s `+outline-atomics` on by default only when it
+/// finds a GCC >= 9.3.1 installation for the target (or compiler-rt):
+/// natively on an `AArch64` host it does, cross-compiling from x86-64 (the
+/// GitHub runner) it does not. kiln defaults to on; the explicit flag
+/// makes the comparison host-independent.
+fn pinned_flags(triple: &str) -> &'static [&'static str] {
+    if triple.starts_with("aarch64") { &["-moutline-atomics"] } else { &[] }
+}
 
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen")
@@ -64,6 +77,7 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     let args: Vec<String> =
         ["-S", "-emit-llvm", "-O0", "-std=c++26", &format!("--target={triple}"), "-o", "-"]
             .iter()
+            .chain(pinned_flags(triple))
             .map(|s| (*s).to_owned())
             .chain(extra_flags(file))
             .chain(std::iter::once(file.display().to_string()))
@@ -107,6 +121,7 @@ fn clang_ir(file: &Path, triple: &str) -> Option<Result<String, String>> {
     let path = file.display().to_string();
     let extra = extra_flags(file);
     let mut args = vec!["-S", "-emit-llvm", "-O0", "-std=c++26", target.as_str(), "-o", "-"];
+    args.extend(pinned_flags(triple));
     args.extend(extra.iter().map(String::as_str));
     args.push(path.as_str());
     pipe("clang++-19", &args, "")
