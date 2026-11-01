@@ -115,7 +115,7 @@ Among the clusters that are rarely first:
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `8fb772f` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `def1246` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -124,8 +124,8 @@ Among the clusters that are rarely first:
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 293.2 s |
-| peak RSS | 72 MiB (largest single process, `std/containers/sequences/array/array.tuple/tuple_size.pass.cpp`; gnu-time) |
+| wall time | 315.9 s |
+| peak RSS | 72 MiB (largest single process, `std/utilities/meta/meta.unary/meta.unary.cat/is_lvalue_reference.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -162,7 +162,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 
 | directory | clusters |
 |---|---|
-| `std/utilities/meta` | `compile: kiln: not yet implemented: type trait '…'` (7); `compile: static assertion failed due to requirement '…':` (5); `compile: a destructor template-id is not supported yet` (5) |
+| `std/utilities/meta` | `compile: kiln: not yet implemented: type trait '…'` (7); `compile: call to member function '…' is ambiguous` (5); `compile: static assertion failed due to requirement '…':` (5) |
 | `std/utilities/utility` | `compile: constructor cannot be redeclared` (94); `compile: use of undeclared identifier '…'` (5); `compile: this kind of name in a using-declarator is not supported yet` (3) |
 | `std/containers/sequences/array` | `compile: this kind of name in a using-declarator is not supported yet` (4); `compile: constructor cannot be redeclared` (3); `compile: a destructor template-id is not supported yet` (2) |
 | `std/strings/string.view` | `compile: this kind of name in a using-declarator is not supported yet` (10); `compile: called object type '…' is not a function or function pointer` (6); `compile: static assertion expression is not an integral constant expression` (5) |
@@ -173,15 +173,15 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 
 ### Error clusters
 
-102 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
+100 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
 | 1 | 124 | 170 | `compile: constructor cannot be redeclared` | `std/containers/sequences/array/array.tuple/get_const_rv.pass.cpp` | `constructor cannot be redeclared` |
 | 2 | 28 | 40 | `compile: this kind of name in a using-declarator is not supported yet` | `std/containers/sequences/array/iterator_concept_conformance.compile.pass.cpp` | `this kind of name in a using-declarator is not supported yet` |
 | 3 | 19 | 171 | `compile: use of undeclared identifier '…'` | `std/containers/views/views.span/span.cons/iterator_sentinel.pass.cpp` | `use of undeclared identifier '__builtin_labs'` |
-| 4 | 9 | 77 | `compile: kiln: not yet implemented: type trait '…'` | `std/language.support/support.limits/support.limits.general/thread.version.compile.pass.cpp` | `kiln: not yet implemented: type trait '__is_trivially_assignable'` |
-| 5 | 9 | 42 | `compile: kiln: not yet implemented: friend class template specialization` | `std/containers/views/views.span/span.elem/at.pass.cpp` | `kiln: not yet implemented: friend class template specialization` |
+| 4 | 10 | 131 | `compile: call to member function '…' is ambiguous` | `std/containers/views/views.span/span.elem/at.pass.cpp` | `call to member function 'operator=' is ambiguous` |
+| 5 | 9 | 77 | `compile: kiln: not yet implemented: type trait '…'` | `std/language.support/support.limits/support.limits.general/thread.version.compile.pass.cpp` | `kiln: not yet implemented: type trait '__is_trivially_assignable'` |
 | 6 | 8 | 9 | `compile: a destructor template-id is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `a destructor template-id is not supported yet` |
 | 7 | 6 | 83 | `compile: expected member name or '…' after declaration specifiers` | `std/language.support/support.limits/support.limits.general/atomic.version.compile.pass.cpp` | `expected member name or ';' after declaration specifiers` |
 | 8 | 6 | 18 | `compile: initialization by an initializer-list constructor is not supported yet` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `initialization by an initializer-list constructor is not supported yet` |
@@ -201,22 +201,22 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 22 | 2 | 5 | `compile: chosen constructor is explicit in copy-initialization` | `std/numerics/bit/byteswap.pass.cpp` | `chosen constructor is explicit in copy-initialization` |
 | 23 | 2 | 3 | `compile: constexpr if condition is not a constant expression` | `std/containers/views/views.span/span.objectrep/as_bytes.pass.cpp` | `constexpr if condition is not a constant expression` |
 | 24 | 2 | 2 | `compile: braced-init-list operands of a functional cast is not supported yet` | `std/utilities/utility/pairs/pairs.pair/ctor.brace-init.pass.cpp` | `braced-init-list operands of a functional cast is not supported yet` |
-| 25 | 1 | 131 | `compile: call to member function '…' is ambiguous` | `std/utilities/meta/meta.rel/is_same.pass.cpp` | `call to member function 'fn' is ambiguous` |
-| 26 | 1 | 26 | `compile: redefinition of '…'` | `std/language.support/support.limits/support.limits.general/expected.version.compile.pass.cpp` | `redefinition of 'operator=='` |
-| 27 | 1 | 12 | `compile: no type named '…' in '…'` | `std/utilities/meta/meta.trans/meta.trans.other/common_reference.compile.pass.cpp` | `no type named 'type' in 'std::__1::common_reference<B &, D &>'` |
-| 28 | 1 | 8 | `compile: ambiguous partial specializations of '…'` | `std/utilities/meta/meta.logical/conjunction.compile.pass.cpp` | `ambiguous partial specializations of 'conjunction<std::true_type>'` |
-| 29 | 1 | 7 | `compile: invalid operands to binary expression ('…' (aka '…') and '…' (aka '…'))` | `std/language.support/support.limits/support.limits.general/charconv.version.compile.pass.cpp` | `invalid operands to binary expression ('chars_format' (aka 'std::__1::chars_format') and 'chars_format' (aka 'std::__1::chars_format'))` |
-| 30 | 1 | 6 | `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` | `std/utilities/utility/mem.res/mem.res.aliases/header_list_synop2.pass.cpp` | `static_cast from '__base_pointer' (aka 'std::__1::__list_node_base<std::__1::__list_imp<int, polymorphic_allocator<int>>::value_type, std::__1::__list_imp<int, …` |
-| 31 | 1 | 3 | `compile: static assertion failed due to requirement '…': Types differ unexpectedly` | `std/utilities/meta/meta.trans/meta.trans.other/decay.pass.cpp` | `static assertion failed due to requirement 'test_macros_detail::is_same<int (int) const, std::decay<int (int) const>::type>::value': Types differ unexpectedly` |
-| 32 | 1 | 1 | `compile: IR lowering failed: IrError { kind: BadCall, message: "call with N arguments to a function taking N" }` | `std/language.support/support.limits/limits/numeric.limits/default.pass.cpp` | `IR lowering failed: IrError { kind: BadCall, message: "call with 1 arguments to a function taking 2" }` |
-| 33 | 1 | 1 | `compile: cast Dependent is not supported yet` | `std/strings/string.view/string.view.hash/string_view.pass.cpp` | `cast Dependent is not supported yet` |
-| 34 | 1 | 1 | `compile: implicit assignment of an array of this type is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.pass.cpp` | `implicit assignment of an array of this type is not supported yet` |
-| 35 | 1 | 1 | `compile: static assertion failed due to requirement '…': Operation must be noexcept` | `std/utilities/utility/exchange/exchange.pass.cpp` | `static assertion failed due to requirement 'noexcept(std::exchange(x, std::move(x)))': Operation must be noexcept` |
-| 36 | 1 | 1 | `compile: static assertion failed due to requirement '…': streaming operator declaration not present` | `std/strings/string.view/string.view.io/stream_insert_decl_present.compile.pass.cpp` | `static assertion failed due to requirement 'HasDecl<std::string_view>::value': streaming operator declaration not present` |
-| 37 | 0 | 71 | `compile: braced default arguments is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `braced default arguments is not supported yet` |
-| 38 | 0 | 60 | `compile: expected expression` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `expected expression` |
-| 39 | 0 | 58 | `compile: expected '…' for function-style cast or type construction` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `expected '(' for function-style cast or type construction` |
-| 40 | 0 | 52 | `compile: unknown type name '…'` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `unknown type name '__SVFloat32_t'` |
+| 25 | 1 | 26 | `compile: redefinition of '…'` | `std/language.support/support.limits/support.limits.general/expected.version.compile.pass.cpp` | `redefinition of 'operator=='` |
+| 26 | 1 | 12 | `compile: no type named '…' in '…'` | `std/utilities/meta/meta.trans/meta.trans.other/common_reference.compile.pass.cpp` | `no type named 'type' in 'std::__1::common_reference<B &, D &>'` |
+| 27 | 1 | 8 | `compile: ambiguous partial specializations of '…'` | `std/utilities/meta/meta.logical/conjunction.compile.pass.cpp` | `ambiguous partial specializations of 'conjunction<std::true_type>'` |
+| 28 | 1 | 7 | `compile: invalid operands to binary expression ('…' (aka '…') and '…' (aka '…'))` | `std/language.support/support.limits/support.limits.general/charconv.version.compile.pass.cpp` | `invalid operands to binary expression ('chars_format' (aka 'std::__1::chars_format') and 'chars_format' (aka 'std::__1::chars_format'))` |
+| 29 | 1 | 6 | `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` | `std/utilities/utility/mem.res/mem.res.aliases/header_list_synop2.pass.cpp` | `static_cast from '__base_pointer' (aka 'std::__1::__list_node_base<std::__1::__list_imp<int, polymorphic_allocator<int>>::value_type, std::__1::__list_imp<int, …` |
+| 30 | 1 | 3 | `compile: static assertion failed due to requirement '…': Types differ unexpectedly` | `std/utilities/meta/meta.trans/meta.trans.other/decay.pass.cpp` | `static assertion failed due to requirement 'test_macros_detail::is_same<int (int) const, std::decay<int (int) const>::type>::value': Types differ unexpectedly` |
+| 31 | 1 | 1 | `compile: IR lowering failed: IrError { kind: BadCall, message: "call with N arguments to a function taking N" }` | `std/language.support/support.limits/limits/numeric.limits/default.pass.cpp` | `IR lowering failed: IrError { kind: BadCall, message: "call with 1 arguments to a function taking 2" }` |
+| 32 | 1 | 1 | `compile: cast Dependent is not supported yet` | `std/strings/string.view/string.view.hash/string_view.pass.cpp` | `cast Dependent is not supported yet` |
+| 33 | 1 | 1 | `compile: implicit assignment of an array of this type is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.pass.cpp` | `implicit assignment of an array of this type is not supported yet` |
+| 34 | 1 | 1 | `compile: static assertion failed due to requirement '…': Operation must be noexcept` | `std/utilities/utility/exchange/exchange.pass.cpp` | `static assertion failed due to requirement 'noexcept(std::exchange(x, std::move(x)))': Operation must be noexcept` |
+| 35 | 1 | 1 | `compile: static assertion failed due to requirement '…': streaming operator declaration not present` | `std/strings/string.view/string.view.io/stream_insert_decl_present.compile.pass.cpp` | `static assertion failed due to requirement 'HasDecl<std::string_view>::value': streaming operator declaration not present` |
+| 36 | 0 | 60 | `compile: expected expression` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `expected expression` |
+| 37 | 0 | 58 | `compile: expected '…' for function-style cast or type construction` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `expected '(' for function-style cast or type construction` |
+| 38 | 0 | 52 | `compile: unknown type name '…'` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `unknown type name '__SVFloat32_t'` |
+| 39 | 0 | 44 | `compile: expected body of lambda expression` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `expected body of lambda expression` |
+| 40 | 0 | 44 | `compile: static assertion failed due to requirement '…': unexpected required size for mask integer type` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `static assertion failed due to requirement 'sizeof(bool) == 0': unexpected required size for mask integer type` |
 
 ### Crashes
 
