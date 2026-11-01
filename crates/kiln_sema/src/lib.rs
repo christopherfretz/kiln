@@ -380,8 +380,12 @@ pub struct Sema<'a, 'sm> {
     pub(crate) extend_collector: Option<Vec<ExprId>>,
     /// Diagnostics held back while a range-based `for` step runs, so
     /// clang's trailing notes (`when looking up 'begin' function...`)
-    /// can be attached to the last of them (`range_for.rs`).
-    pub(crate) diag_capture: std::cell::RefCell<Option<Vec<Diag>>>,
+    /// can be attached to the last of them (`range_for.rs`). The `usize`
+    /// is the instantiation-stack length when the capture began: only
+    /// diagnostics of the step itself are held, never one from an
+    /// instantiation the step started (a SFINAE context traps those,
+    /// [temp.deduct.general]/8; a hard error keeps its context notes).
+    pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>)>>,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -639,7 +643,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
-        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
+        if let Some((depth, held)) = self.diag_capture.borrow_mut().as_mut()
+            && *depth == self.inst.stack.len()
+        {
             held.push(d);
             return;
         }
