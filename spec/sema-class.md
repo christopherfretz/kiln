@@ -1304,7 +1304,15 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   `-Wabstract-final-class`. After the complete-class contexts
   (`act_on_virtual_class_contexts`, from `act_on_finish_class_contexts`):
   overrider exception specifications ([except.spec]/13) and the key
-  function (Itanium §5.2.3, stored in `cold.key_function`).
+  function (Itanium §5.2.3, stored in `cold.key_function`). The
+  exception-specification check is clang's delayed
+  `CheckOverridingFunctionExceptionSpec` + `CheckExceptionSpecSubset`
+  (WP-171): no check under `-fno-exceptions` or for a destructor of a
+  dependent class; otherwise the base's then the overrider's
+  specification is resolved (`resolve_exception_spec`: implicit,
+  defaulted, and uninstantiated dependent ones), and a still-deferred or
+  value-dependent one passes. Tests:
+  `tests/conformance/class.virtual/exception-spec-deferred*.cpp`.
 - Abstract classes (`abstract_.rs`): `AbstractUse { Return, Param,
   Variable, Field }`, `require_non_abstract(loc, ty, use)`,
   `require_non_abstract_alloc` (new-expression, functional casts),
