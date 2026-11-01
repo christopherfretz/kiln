@@ -2,7 +2,7 @@
 //! seed corpus and the self-test fixtures in `xtask/fixtures/`.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::directives::{self, Expect, StdoutExpect};
@@ -187,6 +187,7 @@ fn seed_corpus_passes_with_clang() {
         flag(s.ast_implicit, "ast-implicit");
         flag(s.inst_report.is_some(), "inst-report");
         flag(s.requires_target.is_some(), "requires");
+        flag(s.requires_clang.is_some(), "requires-clang");
     }
     let want = [
         "args",
@@ -212,6 +213,7 @@ fn seed_corpus_passes_with_clang() {
         "pp-linemarkers",
         "placeholder",
         "requires",
+        "requires-clang",
         "run",
         "run-args",
         "run-stdin",
@@ -262,8 +264,8 @@ fn fixtures_produce_expected_statuses() {
     let mut o = clang_opts(&[dir]);
     o.run_timeout = Duration::from_secs(1);
     let results = execute(&o).unwrap();
-    // 35 tests: helper.h and Inputs/* are not discovered.
-    check_fixture_statuses(&results, 35);
+    // 38 tests: helper.h and Inputs/* are not discovered.
+    check_fixture_statuses(&results, 38);
     let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
     assert!(by_name("fail-timeout.cpp").details.contains("timed out"));
     assert!(by_name("fail-crash.cpp").details.contains("signal"));
@@ -287,6 +289,12 @@ fn fixtures_produce_expected_statuses() {
         by_name("skip-kiln-specific.cpp").reason.as_deref(),
         Some("not supported by this compiler (kiln-specific `oven:` directive)")
     );
+    assert_eq!(
+        by_name("skip-requires-pinned-target.cpp").reason.as_deref(),
+        Some("requires target-x86_64; the test targets aarch64 (`aarch64-unknown-linux-gnu`)")
+    );
+    let reason = by_name("skip-requires-clang.cpp").reason.clone().unwrap_or_default();
+    assert!(reason.starts_with("requires clang>=999.0.0; the compiler is clang 19."), "{reason}");
     assert!(by_name("error-bad-directive.cpp").details.contains("unknown directive `frobnicate`"));
     assert!(by_name("error-missing-stdin-file.cpp").details.contains("cannot read run-stdin-file"));
     let hang = by_name("error-oracle-binary-hangs.cpp");

@@ -697,7 +697,7 @@ was used). Type sugar (`'Z':'N::Z'`) is the printer's job (ast-dump.md).
 
 ## 9. Diagnostics
 
-### 9.1 New diagnostic ids (`kiln_diag/src/ids.rs`, clang wording)
+### 9.1 New diagnostic ids (`kiln_diag/src/ids/*.rs`, clang wording)
 | id | text |
 |---|---|
 | `sema_ovl_no_viable_member_function_in_call` | "no matching member function for call to '{0}'" |
@@ -762,6 +762,13 @@ Verified: deleted best, distance 1, two distance-3 (scope order), distance 4.
 for member calls), the operator token, the declarator / `T(` for
 constructors, the expression for conversions; notes are at each candidate's
 name; implicit special members at the class name.
+
+**Parameter sugar** (WP-227): a bad-conversion note names the parameter
+type as declared, sugar and top-level `const` kept (`no known conversion
+from 'int' to 'WI' (aka 'W<int>')`, `'CI *const' (aka 'const int
+*const')`), when it is the canonical target of the failed conversion
+(`overload/diag.rs` `sugared_bad_param`); a target computed otherwise
+(an object argument, a deduced type) is printed as converted.
 
 ### 9.3 Deviations from clang 19 (authoritative)
 1. `-fshow-overloads=best` unsupported (always `all`).

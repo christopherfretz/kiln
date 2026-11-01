@@ -1222,7 +1222,9 @@ impl Sema<'_, '_> {
                 return self.recover(ty, &[], l.lbrace);
             }
             let mut pos = 0;
+            let outer = self.agg_list_end.replace(l.rbrace);
             let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
+            self.agg_list_end = outer;
             if pos < l.items.len() {
                 self.excess(ty, &l.items[pos]);
             }
@@ -1730,6 +1732,19 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        // [dcl.init.aggr]/8: element destructor checks (`init_dtor.rs`);
+        // not within a designator path's subobject.
+        let dtors = sub.entry.is_none();
+        let dtor_end = self.agg_dtor_end(sub.braced, rbrace);
+        let mut designated = false;
+        if dtors && union && sub.braced && items.is_empty() {
+            for &f in &fields {
+                let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+                if self.check_member_dtor(fty, dtor_end) {
+                    return self.recover(ty, &[], lbrace);
+                }
+            }
+        }
         let mut entry = sub.entry;
         let mut cur = 0usize;
         while *pos < items.len() {
@@ -1815,6 +1830,13 @@ impl Sema<'_, '_> {
             } else {
                 self.ast.decls.get(fields[cur - nb]).ty().unwrap_or(QualType::ERROR)
             };
+            let dtor_at = self.item_begin(item);
+            let top_designated = dtors && k.is_some();
+            designated |= top_designated;
+            if dtors && !top_designated && cur >= nb && self.check_member_dtor(ety, dtor_at) {
+                *pos = items.len();
+                return self.recover(ty, &[], lbrace);
+            }
             let e = if let Some(k2) = descend {
                 let prior = self.descend_prior(slots[cur], explicit[cur], item);
                 let at = self.designator_begin(&item.designator[0]);
@@ -1845,6 +1867,12 @@ impl Sema<'_, '_> {
             if union {
                 union_field = Some(fields[cur]);
             }
+            if ((top_designated && !self.is_err_expr(e)) || (dtors && cur < nb))
+                && self.check_member_dtor(ety, dtor_at)
+            {
+                *pos = items.len();
+                return self.recover(ty, &[], lbrace);
+            }
             cur += 1;
         }
         let mut inits = Vec::new();
@@ -1852,6 +1880,10 @@ impl Sema<'_, '_> {
             if let Some(f) = union_field {
                 let i = fields.iter().position(|&x| x == f).unwrap_or(0);
                 inits.extend(slots[i]);
+                let next = cur.saturating_sub(nb);
+                if self.check_remaining_dtors(&fields, dtors, designated, next, dtor_end) {
+                    return self.recover(ty, &inits, lbrace);
+                }
             } else if let Some(f) = self.union_default_member(&fields) {
                 // [dcl.init.aggr]/5 (C++20): an empty list initializes the
                 // variant member with a default member initializer (clang
@@ -1870,7 +1902,11 @@ impl Sema<'_, '_> {
                     Some(e) => e,
                     None if i < nb => {
                         let b = bases[i];
-                        self.init_base_list(b, |s| s.filler(b, rbrace))
+                        let e = self.init_base_list(b, |s| s.filler(b, rbrace));
+                        if dtors && self.check_element_dtor(b, dtor_end) {
+                            return self.recover(ty, &[], lbrace);
+                        }
+                        e
                     }
                     None => {
                         let f = fields[i - nb];
@@ -1879,6 +1915,15 @@ impl Sema<'_, '_> {
                     }
                 };
                 inits.push(e);
+            }
+            if self.check_remaining_dtors(
+                &fields,
+                dtors,
+                designated,
+                cur.saturating_sub(nb),
+                dtor_end,
+            ) {
+                return self.recover(ty, &inits, lbrace);
             }
             // A field whose initializer failed makes the list invalid
             // (clang: no `-Wunused-value`, no constant evaluation).
@@ -1910,6 +1955,14 @@ impl Sema<'_, '_> {
                 slots.push(Some(e));
                 explicit.push(!self.is_filler_expr(e));
             }
+        }
+        // [dcl.init.aggr]/8: the element destructor, at the list's `}`
+        // (`init_dtor.rs`); not within a designator path's subobject.
+        if sub.entry.is_none()
+            && self.check_element_dtor(elem, self.agg_dtor_end(sub.braced, rbrace))
+        {
+            *pos = items.len();
+            return self.recover(ty, &[], lbrace);
         }
         let mut entry = sub.entry;
         let mut cur: u64 = 0;

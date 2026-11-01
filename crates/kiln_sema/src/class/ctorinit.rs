@@ -95,6 +95,11 @@ impl Sema<'_, '_> {
         let index = u8::try_from(self.mem_inits.count).unwrap_or(CtorInit::IMPLICIT - 1);
         self.mem_inits.count += 1;
         if self.mem_inits.skip {
+            if !self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID) {
+                // Its non-dependent immediate invocations are evaluated
+                // now ([expr.const]/16; clang checks them as it parses).
+                self.finish_immediate_parts(&initializer_exprs(&info.init));
+            }
             self.mem_inits.pattern.push(info.clone());
             self.cleanup = super::CleanupState::default();
             return;
@@ -1193,6 +1198,27 @@ fn out_of_order(ideal: &[OrderKey], keys: &[Option<OrderKey>]) -> Vec<usize> {
         }
     }
     warn
+}
+
+/// The expressions of `init`, nested braced lists included (their
+/// designators are constant-expressions, finished where they are built).
+fn initializer_exprs(init: &Initializer) -> Vec<ExprId> {
+    use crate::init::{InitList, InitValue};
+    fn list(l: &InitList, out: &mut Vec<ExprId>) {
+        for i in &l.items {
+            match &i.value {
+                InitValue::Expr(e) => out.push(*e),
+                InitValue::List(l) => list(l, out),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    match init {
+        Initializer::Expr(e) => out.push(*e),
+        Initializer::Paren(es, ..) => out.extend_from_slice(es),
+        Initializer::List(l) => list(l, &mut out),
+    }
+    out
 }
 
 #[cfg(test)]

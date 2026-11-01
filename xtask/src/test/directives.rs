@@ -9,10 +9,10 @@
 use std::fmt;
 use std::path::PathBuf;
 
-pub use crate::util::CompilerKind;
 pub use crate::util::header::{
     self, C_STDS, CXX_STDS, DirectiveError, OvenBudget, parse_oven, split_args,
 };
+pub use crate::util::{ClangVersion, CompilerKind, parse_version};
 
 /// What a test expects of the compiler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,9 +271,22 @@ pub struct TestSpec {
     /// `mem<=N`: the address-space cap, in MiB, of every process the test
     /// runs (lowers `--mem-limit`; `spec/harness.md` "Resource limits").
     pub mem_mib: Option<u64>,
-    /// `requires: target-<arch>`: the architecture the compiler's default
-    /// target must have; otherwise the test is a SKIP.
+    /// `requires: target-<arch>`: the architecture the test's effective
+    /// target (its `--target`, else the host) must have; otherwise the test
+    /// is a SKIP.
     pub requires_target: Option<String>,
+    /// `requires: clang>=X[.Y[.Z]]`: the least version of every clang the
+    /// test runs (the compiler under test, the oracle); otherwise a SKIP.
+    pub requires_clang: Option<ClangVersion>,
+}
+
+/// A clang that a test runs, for `requires: clang>=`: what it is to the
+/// test (`the compiler`, `the oracle`) and the version its `--version` line
+/// names (`None`: none could be parsed, which never meets a requirement).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClangRun<'a> {
+    pub role: &'a str,
+    pub version: Option<ClangVersion>,
 }
 
 impl TestSpec {
@@ -287,11 +300,48 @@ impl TestSpec {
         marker_for(&self.xfail, kind)
     }
 
-    /// Why the test cannot run when the default target's architecture is
-    /// `arch` (`std::env::consts::ARCH` spelling), if it cannot.
-    pub fn unmet_requirement(&self, arch: &str) -> Option<String> {
-        let want = self.requires_target.as_deref()?;
-        (want != arch).then(|| format!("requires target-{want}; the default target is {arch}"))
+    /// The `--target` triple the test's `args:` pin, if any: the last of
+    /// `--target=<t>`, `--target <t>` and `-target <t>`, as for clang.
+    pub fn target_triple(&self) -> Option<&str> {
+        let mut found = None;
+        let mut args = self.args.iter();
+        while let Some(a) = args.next() {
+            if let Some(t) = a.strip_prefix("--target=") {
+                found = Some(t);
+            } else if a == "--target" || a == "-target" {
+                found = args.next().map(String::as_str).or(found);
+            }
+        }
+        found
+    }
+
+    /// The architecture the test compiles for (`std::env::consts::ARCH`
+    /// spelling): that of its `--target` triple, else `host`, the default
+    /// target of kiln and clang.
+    pub fn target_arch<'a>(&'a self, host: &'a str) -> &'a str {
+        self.target_triple().map_or(host, triple_arch)
+    }
+
+    /// Why the test cannot run, if it cannot: `host` is the harness's
+    /// architecture (`std::env::consts::ARCH`), `clangs` the clangs the test
+    /// would run (`spec/harness.md`, `requires:`).
+    pub fn unmet_requirement(&self, host: &str, clangs: &[ClangRun<'_>]) -> Option<String> {
+        if let Some(want) = self.requires_target.as_deref() {
+            let arch = self.target_arch(host);
+            if want != arch {
+                return Some(match self.target_triple() {
+                    Some(t) => format!("requires target-{want}; the test targets {arch} (`{t}`)"),
+                    None => format!("requires target-{want}; the default target is {arch}"),
+                });
+            }
+        }
+        let want = self.requires_clang?;
+        let need = format!("requires clang>={}", version_str(want));
+        clangs.iter().find_map(|c| match c.version {
+            Some(v) if v >= want => None,
+            Some(v) => Some(format!("{need}; {} is clang {}", c.role, version_str(v))),
+            None => Some(format!("{need}; {} names no clang version", c.role)),
+        })
     }
 
     /// Does this test use directives only kiln can check?
@@ -348,6 +398,7 @@ struct Parser {
     ast_implicit: bool,
     mem_mib: Option<u64>,
     requires_target: Option<String>,
+    requires_clang: Option<ClangVersion>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -387,6 +438,7 @@ impl Parser {
             ast_implicit: false,
             mem_mib: None,
             requires_target: None,
+            requires_clang: None,
             run_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -674,21 +726,31 @@ impl Parser {
         }
     }
 
-    /// `requires: target-<arch>`, `<arch>` one of [`TARGET_ARCHES`].
+    /// `requires: target-<arch>` (`<arch>` one of [`TARGET_ARCHES`]) or
+    /// `requires: clang>=X[.Y[.Z]]`; each kind at most once.
     fn requires_directive(&mut self, line: usize, value: &str) {
         let usage = format!(
-            "expected `requires: target-<arch>`, <arch> one of {}",
+            "expected `requires: target-<arch>` (<arch> one of {}) or `requires: clang>=X[.Y[.Z]]`",
             TARGET_ARCHES.join(" ")
         );
-        match value.strip_prefix("target-") {
-            Some(a) if TARGET_ARCHES.contains(&a) => {
-                if self.requires_target.is_some() {
-                    self.err(line, "duplicate `requires`");
-                } else {
-                    self.requires_target = Some(a.to_owned());
-                }
+        if let Some(a) = value.strip_prefix("target-") {
+            if !TARGET_ARCHES.contains(&a) {
+                self.err(line, usage);
+            } else if self.requires_target.is_some() {
+                self.err(line, "duplicate `requires: target-`");
+            } else {
+                self.requires_target = Some(a.to_owned());
             }
-            _ => self.err(line, usage),
+        } else if let Some(v) = value.strip_prefix("clang>=") {
+            match parse_version(v.trim()) {
+                None => self.err(line, usage),
+                Some(_) if self.requires_clang.is_some() => {
+                    self.err(line, "duplicate `requires: clang>=`");
+                }
+                Some(v) => self.requires_clang = Some(v),
+            }
+        } else {
+            self.err(line, usage);
         }
     }
 
@@ -798,6 +860,7 @@ impl Parser {
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
             requires_target: self.requires_target,
+            requires_clang: self.requires_clang,
         })
     }
 }
@@ -805,6 +868,20 @@ impl Parser {
 /// The architectures `requires: target-<arch>` accepts, spelled as
 /// `std::env::consts::ARCH` (a typo would otherwise skip the test forever).
 pub const TARGET_ARCHES: &[&str] = &["aarch64", "x86_64"];
+
+/// The architecture of a target triple, in `std::env::consts::ARCH`
+/// spelling (clang's `arm64` and `amd64` aliases normalized).
+pub fn triple_arch(triple: &str) -> &str {
+    match triple.split('-').next().unwrap_or_default() {
+        "arm64" => "aarch64",
+        "amd64" => "x86_64",
+        a => a,
+    }
+}
+
+fn version_str(v: ClangVersion) -> String {
+    format!("{}.{}.{}", v[0], v[1], v[2])
+}
 
 fn is_known_key(k: &str) -> bool {
     matches!(
@@ -1014,18 +1091,78 @@ mod tests {
     fn requires_target_directive() {
         let s = ok("//@ expect: run\n//@ requires: target-aarch64\n");
         assert_eq!(s.requires_target.as_deref(), Some("aarch64"));
-        assert_eq!(s.unmet_requirement("aarch64"), None);
+        assert_eq!(s.unmet_requirement("aarch64", &[]), None);
         assert_eq!(
-            s.unmet_requirement("x86_64").as_deref(),
+            s.unmet_requirement("x86_64", &[]).as_deref(),
             Some("requires target-aarch64; the default target is x86_64")
         );
-        assert_eq!(ok("int x;\n").unmet_requirement("x86_64"), None);
+        assert_eq!(ok("int x;\n").unmet_requirement("x86_64", &[]), None);
         let e = errs("//@ requires: target-aarch46\n");
         assert!(e.iter().any(|e| e.contains("expected `requires: target-<arch>`")), "{e:?}");
         let e = errs("//@ requires: aarch64\n");
         assert!(e.iter().any(|e| e.contains("expected `requires: target-<arch>`")), "{e:?}");
         let e = errs("//@ requires: target-x86_64\n//@ requires: target-x86_64\n");
-        assert!(e.iter().any(|e| e.contains("duplicate `requires`")), "{e:?}");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires: target-`")), "{e:?}");
+    }
+
+    /// WP-239: `requires: target-` compares against the test's effective
+    /// target, its `--target` when `args:` pin one, not the host.
+    #[test]
+    fn requires_target_uses_the_pinned_target() {
+        let s = ok("//@ requires: target-x86_64\n//@ args: --target=x86_64-unknown-linux-gnu\n");
+        assert_eq!(s.target_triple(), Some("x86_64-unknown-linux-gnu"));
+        assert_eq!(s.target_arch("aarch64"), "x86_64");
+        assert_eq!(s.unmet_requirement("aarch64", &[]), None);
+        let s = ok("//@ requires: target-aarch64\n//@ args: --target=x86_64-unknown-linux-gnu\n");
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[]).as_deref(),
+            Some("requires target-aarch64; the test targets x86_64 (`x86_64-unknown-linux-gnu`)")
+        );
+        // The last spelling wins, in each of clang's three forms, and the
+        // `arm64`/`amd64` aliases are normalized.
+        let s = ok("//@ args: --target=x86_64-linux-gnu -target arm64-apple-macos\n");
+        assert_eq!(s.target_arch("x86_64"), "aarch64");
+        let s = ok("//@ args: -target aarch64-linux-gnu --target amd64-unknown-freebsd\n");
+        assert_eq!(s.target_arch("aarch64"), "x86_64");
+        let s = ok("//@ args: -O2\n");
+        assert_eq!((s.target_triple(), s.target_arch("aarch64")), (None, "aarch64"));
+        // A trailing `--target` with no value leaves the default.
+        assert_eq!(ok("//@ args: --target\n").target_arch("x86_64"), "x86_64");
+    }
+
+    /// WP-239: `requires: clang>=X[.Y[.Z]]` against the clangs a test runs.
+    #[test]
+    fn requires_clang_directive() {
+        let s = ok("//@ requires: clang>=19.1.3\n//@ requires: target-aarch64\n");
+        assert_eq!(s.requires_clang, Some([19, 1, 3]));
+        assert_eq!(s.requires_target.as_deref(), Some("aarch64"));
+        assert_eq!(ok("//@ requires: clang>=20\n").requires_clang, Some([20, 0, 0]));
+        let old = ClangRun { role: "the oracle", version: Some([19, 1, 1]) };
+        let new = ClangRun { role: "the compiler", version: Some([19, 1, 7]) };
+        let unknown = ClangRun { role: "the compiler", version: None };
+        assert_eq!(s.unmet_requirement("aarch64", &[]), None, "kiln alone runs no clang");
+        assert_eq!(s.unmet_requirement("aarch64", &[new]), None);
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[new, old]).as_deref(),
+            Some("requires clang>=19.1.3; the oracle is clang 19.1.1")
+        );
+        assert_eq!(
+            s.unmet_requirement("aarch64", &[unknown]).as_deref(),
+            Some("requires clang>=19.1.3; the compiler names no clang version")
+        );
+        // The target requirement is reported first.
+        assert_eq!(
+            s.unmet_requirement("x86_64", &[old]).as_deref(),
+            Some("requires target-aarch64; the default target is x86_64")
+        );
+        for bad in ["clang>=", "clang>=19.x", "clang>=19.1.3.4", "clang>=.1", "clang>19", "clang"] {
+            let e = errs(&format!("//@ requires: {bad}\n"));
+            assert!(e.iter().any(|e| e.contains("`requires: clang>=X[.Y[.Z]]`")), "{bad}: {e:?}");
+        }
+        let e = errs("//@ requires: clang>=19\n//@ requires: clang>=20\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires: clang>=`")), "{e:?}");
+        assert_eq!(parse_version("19.1.7"), Some([19, 1, 7]));
+        assert_eq!(parse_version("19."), None);
     }
 
     #[test]

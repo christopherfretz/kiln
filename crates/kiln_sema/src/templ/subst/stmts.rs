@@ -564,12 +564,17 @@ impl Substituter<'_, '_, '_> {
         let name = dname.as_ident().ok_or(SubstFail)?;
         let nns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
         let nns = self.nns(nns, loc)?;
+        // The `using` keyword, where the declaration's notes point.
+        let using_loc = self.sema.ast.decls.cold.begin_loc.get(d).copied().unwrap_or(loc);
         if self.nns_still_dependent(nns) {
             // Still dependent (a generic lambda's body inside a function
             // template specialization): the local stays unresolved, its
             // uses dependent, until the lambda's own instantiation.
             let h = kiln_ast::builder::DeclHead::new(self.sema.ctx, dname, loc);
             let x = self.sema.builder().unresolved_using_value(h, nns, false);
+            if using_loc != loc {
+                let _ = self.sema.ast.decls.cold.begin_loc.insert(x, using_loc);
+            }
             self.sema.push_local(name, x);
             return Ok(x);
         }
@@ -581,9 +586,11 @@ impl Substituter<'_, '_, '_> {
         let if_exists = self.sema.kind_of(d) == DeclKind::Using
             && self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc };
-        self.sema
-            .act_on_using_declarator(loc, Some(q), dname, loc, if_exists, None)
-            .ok_or(SubstFail)
+        let r = self.sema.act_on_using_declarator(using_loc, Some(q), dname, loc, if_exists, None);
+        if r.is_none() && self.sema.kind_of(d) == DeclKind::UnresolvedUsingValue {
+            self.failed_usings.push(d);
+        }
+        r.ok_or(SubstFail)
     }
 
     /// A declaration of a declaration statement.
