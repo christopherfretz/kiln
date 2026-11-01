@@ -451,7 +451,10 @@ impl Sema<'_, '_> {
             // against `const char*`); the argument is checked by the
             // conversion to the substituted P. Asked only on failure:
             // otherwise skipping and deducing agree.
-            if r != Tdk::Success && self.has_deducible_params(p, &d, false) {
+            if r != Tdk::Success
+                && (self.has_deducible_params(p, &d, false)
+                    || self.has_deducible_pack_expansion(p, &d))
+            {
                 self.resugar_mismatch(p, &mut d);
                 return Err(DeductionFailure::new(r, d));
             }
@@ -582,6 +585,28 @@ impl Sema<'_, '_> {
         self.deduce(p, p, TdfFlags::NONE, &mut probe);
         probe.args.iter().any(|a| !matches!(a.view(), ArgView::Null))
             || probe.pack_cur.is_some_and(|c| !c.is_empty())
+    }
+
+    /// Whether `p` holds a template-argument pack expansion whose
+    /// pattern is deducible (`Tup<int, Us...>`): deducing `p` against
+    /// itself matches the expansion as a whole, so
+    /// [`Self::has_deducible_params`] does not see its packs.
+    fn has_deducible_pack_expansion(&mut self, p: QualType, d: &DeducedArgs) -> bool {
+        let args = match self.ast.types.canonical_view(p) {
+            TypeView::Pointer(i) | TypeView::LValueRef(i) | TypeView::RValueRef(i) => {
+                return self.has_deducible_pack_expansion(i, d);
+            }
+            TypeView::TemplateSpecialization { args, .. } => args,
+            _ => return false,
+        };
+        let list = self.ast.types.args(args).to_vec();
+        list.into_iter().any(|a| match self.arg_expansion_pattern(a).map(|x| x.view()) {
+            Some(ArgView::Type(q)) => {
+                self.has_deducible_params(q, d, true) || self.has_deducible_pack_expansion(q, d)
+            }
+            Some(_) => true,
+            None => matches!(a.view(), ArgView::Type(q) if self.has_deducible_pack_expansion(q, d)),
+        })
     }
 
     /// The template parameter packs pack expansion pattern `p` names.
