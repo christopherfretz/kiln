@@ -1545,6 +1545,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::DependentTemplateSpecialization { nns, name, args, .. } => {
                 self.dependent_template_spec(nns, name, args);
             }
+            TypeView::DependentDecltype(p) => self.dependent_decltype(ast.types.profile_expr(p)),
             // A dependent transform: `u <vendor builtin name> I <base> E`.
             TypeView::UnaryTransform { kind, base, .. } => {
                 self.out.push('u');

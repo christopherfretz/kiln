@@ -1,7 +1,8 @@
 // Dependent signature mangling (WP-172): typename-specifiers, dependent
 // template specializations, template template parameters, dependent
 // unary transforms and value-dependent template-argument expressions
-// (sr unresolved names, operators, sizeof/alignof, conditionals).
+// (sr unresolved names, operators, sizeof/alignof, conditionals, calls in
+// decltype, pack expansions grouped into J...E, sizeof..., type traits).
 namespace ns {
 template <class T> struct rr { using type = T; };
 template <class T> struct rr<T&> { using type = T; };
@@ -51,4 +52,23 @@ int use2() {
   int& r = ufw<int&>(i);
   return umv(i) + r + udc(i) + szt(i) + szx('c') + nttp<3>() + nttp2<4>() + cnd(I<5>{})
        + alt(1.0) + ttp<G>(1) + (int)dts(H{}) + ex2(I<3>{}) + nn2(J{});
+}
+namespace q {
+template <class T> T&& dv();
+template <class... Ts> struct tup { using type = int; };
+template <int... Ns> struct ix { using type = int; };
+template <bool B> struct bc { using type = int; static constexpr bool value = B; };
+struct W { static int un(int x) { return x; } };
+template <class T, class U> decltype(T::un(q::dv<U>())) dc(T, U u) { return u; }
+template <class... Ts> typename tup<Ts...>::type pk(Ts...) { return sizeof...(Ts); }
+template <class A, class... Ts> typename tup<A, Ts...>::type pk2(A, Ts...) { return 0; }
+template <int... Ns> typename ix<Ns...>::type ixf() { return 0; }
+template <class... Ts> typename bc<sizeof...(Ts) == 2>::type szp(Ts...) { return 0; }
+template <class T> typename bc<__is_same(T, int) && __is_class(T)>::type tt(T) { return 0; }
+template <class T> decltype(dv<T>() + 1) dvr() { return 0; }
+template <class T> decltype((dv<T>())) dvp() { static T t{}; return static_cast<T&&>(t); }
+}
+int use3() {
+  return q::dc(q::W{}, 1) + q::pk(1, 2.0) + q::pk2('a') + q::ixf<1, 2>() + q::szp(1, 2) + q::tt(3)
+       + q::dvr<int>() + q::dvp<int>();
 }

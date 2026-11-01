@@ -757,9 +757,20 @@ substituted parameters are transparent; a parameter reference is `T_`;
 qualifier as written, a template parameter or `decltype` level an
 unresolved type with no closing `E`, a specialization level its source
 name and arguments, else `E` after the levels); unary/binary operator,
-`qu`, `st`/`sz`, `at`/`az` and `cv`/`sc`/`cc`/`rc`/`dc` encodings. An
-unsupported expression (calls, member access, non-dependent `sizeof`
-whose value would be needed, ...) still mangles as `XLi0EE`. The
+`qu`, `st`/`sz`, `at`/`az` and `cv`/`sc`/`cc`/`rc`/`dc` encodings;
+`sp <expr>` for a pack expansion, `sZ <param>` for `sizeof...`,
+`u <trait> <type>* E` for a type trait, `cl <callee> <args> E` for a call
+and an `UnresolvedLookupExpr` as an unresolved name (the parser records
+the written qualifier of a qualified function template-id,
+`set_template_id_qualifier`, so `std::declval<T>()` is
+`clsr3stdE7declvalIT_EE`). A dependent `decltype(e)` is `Dt <expr> E` for
+an id-expression or member access, else `DT <expr> E`. The arguments of
+a dependent specialization of a known template group those of its
+parameter pack into one `J ... E` (clang's converted list:
+`NS_3tupIJDpT_EE`). An unsupported expression (member access, function
+parameters, non-dependent `sizeof` whose value would be needed, ...)
+mangles as `XLi0EE` in a template argument and `u7unknown` as a
+`decltype` operand. The
 template-parameter-declaration prefixes `Tn`/`Tp` of clang ≥ 19 are left
 to WP-117, so a non-type parameter whose type is dependent
 (`enable_if_t<...> = 0`) is not yet clang's spelling.

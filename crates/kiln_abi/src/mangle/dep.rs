@@ -10,9 +10,9 @@
 use super::{Mangler, Structor, Sub};
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, TraitKind, UnaryOp};
-use kiln_ast::ids::{ArgListId, ExprId, NnsId, QualType, TemplateNameId};
+use kiln_ast::ids::{ArgListId, DeclId, ExprId, NnsId, QualType, TemplateNameId};
 use kiln_ast::names::DeclNameView;
-use kiln_ast::types::{Nns, TagKeyword, TemplateName, TypeView};
+use kiln_ast::types::{ArgView, Nns, TagKeyword, TemplateName, TypeView};
 use kiln_source::symbol::Symbol;
 
 impl Mangler<'_, '_> {
@@ -31,11 +31,11 @@ impl Mangler<'_, '_> {
                 let std = parent.is_some_and(|p| self.is_std(p));
                 if top || std {
                     self.unscoped_template(t, std);
-                    self.template_args(args);
+                    self.converted_args(t, args);
                 } else {
                     self.out.push('N');
                     self.template_prefix(t, None, Structor::Complete);
-                    self.template_args(args);
+                    self.converted_args(t, args);
                     self.out.push('E');
                 }
             }
@@ -127,7 +127,12 @@ impl Mangler<'_, '_> {
                 }
                 let n = ast.types.canonical_template_name(name);
                 match ast.types.template_name_view(n) {
-                    TemplateName::Template(t) => self.template_prefix(t, None, Structor::Complete),
+                    TemplateName::Template(t) => {
+                        self.template_prefix(t, None, Structor::Complete);
+                        self.converted_args(t, args);
+                        self.subs.push(key);
+                        return;
+                    }
                     TemplateName::TemplateTemplateParm { depth, index, .. }
                     | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
                         self.template_template_parm(depth, index);
@@ -153,6 +158,35 @@ impl Mangler<'_, '_> {
         }
     }
 
+    /// The arguments of a dependent specialization of `t` as clang's
+    /// converted (canonical) list has them: those for a trailing
+    /// parameter pack are grouped into one `J ... E` argument pack.
+    fn converted_args(&mut self, t: DeclId, args: ArgListId) {
+        let ast = self.ast;
+        let list: Vec<_> = ast.types.args(args).to_vec();
+        let pack_at = ast.template_info(ast.first(t)).and_then(|i| {
+            let params = ast.templates.param_list(i.params).params;
+            ast.lists
+                .iter::<DeclId>(params)
+                .position(|p| ast.template_parm(p).is_some_and(|x| x.pack))
+        });
+        let Some(k) = pack_at.filter(|&k| {
+            k <= list.len() && !list.get(k).is_some_and(|a| matches!(a.view(), ArgView::Pack(_)))
+        }) else {
+            self.template_args(args);
+            return;
+        };
+        self.out.push('I');
+        for a in &list[..k] {
+            self.template_arg(a.view());
+        }
+        self.out.push('J');
+        for a in &list[k..] {
+            self.template_arg(a.view());
+        }
+        self.out.push_str("EE");
+    }
+
     /// A template template parameter as a template prefix: `T_`, a
     /// substitution candidate.
     fn template_template_parm(&mut self, depth: u32, index: u32) {
@@ -166,6 +200,31 @@ impl Mangler<'_, '_> {
     fn symbol(&mut self, s: Symbol) {
         let name = self.ast.symbols().as_str(s);
         self.source_name(name);
+    }
+
+    /// A dependent `decltype(e)`: `Dt <expression> E` for an
+    /// id-expression or member access, else `DT <expression> E`.
+    pub(super) fn dependent_decltype(&mut self, e: Option<ExprId>) {
+        let (len, subs) = (self.out.len(), self.subs.len());
+        if let Some(e) = e {
+            let id = matches!(
+                self.ast.exprs.get(e).kind(),
+                ExprKind::DeclRefExpr
+                    | ExprKind::MemberExpr
+                    | ExprKind::UnresolvedLookupExpr
+                    | ExprKind::DependentScopeDeclRefExpr
+                    | ExprKind::CXXDependentScopeMemberExpr
+                    | ExprKind::UnresolvedMemberExpr
+            );
+            self.out.push_str(if id { "Dt" } else { "DT" });
+            if self.expression(e) {
+                self.out.push('E');
+                return;
+            }
+        }
+        self.out.truncate(len);
+        self.subs.truncate(subs);
+        self.out.push_str("u7unknown");
     }
 
     // ---- template-argument expressions -----------------------------------
@@ -268,6 +327,35 @@ impl Mangler<'_, '_> {
                     self.template_args(args);
                 }
             }
+            ExprKind::UnresolvedLookupExpr => {
+                let DeclNameView::Identifier(name) =
+                    ast.names.view(kiln_ast::names::DeclName::from_raw(n.a()).unwrap_or_default())
+                else {
+                    return false;
+                };
+                if let Some(&nns) = ast.templates.expr_nns.get(e)
+                    && !self.unresolved_prefix(nns, false)
+                {
+                    return false;
+                }
+                self.symbol(name);
+                if let Some(&args) = ast.templates.expr_targs.get(e) {
+                    self.template_args(args);
+                }
+            }
+            ExprKind::CallExpr => {
+                self.out.push_str("cl");
+                if !self.expression(ast.exprs.callee(e)) {
+                    return false;
+                }
+                let args: Vec<ExprId> = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).collect();
+                for a in args {
+                    if !self.expression(a) {
+                        return false;
+                    }
+                }
+                self.out.push('E');
+            }
             ExprKind::UnaryOperator => {
                 let code = match ast.exprs.unary_op(e) {
                     UnaryOp::PostInc | UnaryOp::PreInc => "pp",
@@ -316,6 +404,27 @@ impl Mangler<'_, '_> {
                     self.out.push_str(x);
                     return self.expression(sub);
                 }
+            }
+            ExprKind::PackExpansionExpr => {
+                self.out.push_str("sp");
+                return self.expression(ast.exprs.operand(e));
+            }
+            ExprKind::SizeOfPackExpr => {
+                let Some(d) = DeclId::try_new(n.a()) else { return false };
+                let Some(p) = ast.template_parm(d) else { return false };
+                self.out.push_str("sZ");
+                self.template_param(u32::from(p.index));
+            }
+            // A vendor trait: `u <source-name> <type>* E`.
+            ExprKind::TypeTraitExpr => {
+                self.out.push('u');
+                self.source_name(ast.exprs.type_trait(e).spelling());
+                let tys: Vec<QualType> =
+                    ast.lists.iter::<QualType>(ast.exprs.type_trait_args(e)).collect();
+                for q in tys {
+                    self.ty(q);
+                }
+                self.out.push('E');
             }
             ExprKind::CStyleCastExpr
             | ExprKind::CXXStaticCastExpr
