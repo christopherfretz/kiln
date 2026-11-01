@@ -100,6 +100,7 @@ static initialization order, inline variables.
   in conditions and with packs, P2795 erroneous behavior, P2786 trivial relocation,
   P2300-adjacent library hooks, expansion statements where clang ships them).
   Each row names its corpus/libc++ tests; status is `done`/`partial`/`todo`.
+  Seeded by WP-185; `cargo xtask features` checks it (done rows have passing tests and clang 22's macro value).
 - **Oracle switch (WP-184):** at M3 exit the differential oracle, libc++ headers and
   libc++ test checkout move from clang/llvm 19 to clang/llvm 22 (both are in the
   sandbox). The M3 gate is frozen on 19 so its numbers stay comparable; M4+ gates run
