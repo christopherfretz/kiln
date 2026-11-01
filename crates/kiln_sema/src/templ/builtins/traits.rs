@@ -57,6 +57,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        let t = alias_target(t);
         let tys: Vec<QualType> = args.iter().map(|a| a.0).collect();
         if tys.iter().any(|&q| self.ast.types.flags(q.ty()).intersects(TypeFlags::CONTAINS_ERROR))
             || tys.contains(&QualType::ERROR)
@@ -970,7 +971,7 @@ impl Sema<'_, '_> {
 
     /// C++11 POD types (clang `isCXX11PODType`): trivial and
     /// standard-layout.
-    fn is_pod_type(&self, q: QualType) -> bool {
+    pub(crate) fn is_pod_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
@@ -1249,4 +1250,14 @@ enum InitCheck {
     WellFormed,
     Nothrow,
     Trivial,
+}
+
+/// clang `TypeTraits.def` `ALIAS`es: the keyword names the aliased trait,
+/// which is what diagnostics and dumps spell.
+fn alias_target(t: TypeTrait) -> TypeTrait {
+    match t {
+        TypeTrait::IsSameAs => TypeTrait::IsSame,
+        TypeTrait::IsLiteralType => TypeTrait::IsLiteral,
+        _ => t,
+    }
 }

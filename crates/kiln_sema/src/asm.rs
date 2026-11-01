@@ -407,7 +407,9 @@ impl Sema<'_, '_> {
     /// location, then the first byte of every later line. A value is
     /// clang's raw encoding of a main-file location (byte offset + 2);
     /// kiln uses the same formula for every file, so locations in headers
-    /// or macro expansions do not match clang's numbering.
+    /// or macro expansions do not match clang's numbering. Macro parity
+    /// needs clang's unified offset space (spec/sema.md §7.7, "Deferred
+    /// (WP-160 item 4)").
     fn asm_srclocs(&mut self, string: AsmStr) -> ListId {
         let enc = |s: &Self, l: Loc| {
             let sm = s.diags.sm();

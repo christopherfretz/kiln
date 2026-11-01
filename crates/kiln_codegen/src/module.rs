@@ -141,10 +141,15 @@ pub(crate) struct Cg<'a> {
     pub rtti_globals: FxHashMap<String, GlobalId>,
     /// Bodies using placeholders, lowered once the module is complete.
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
+    /// Warnings codegen reports itself (clang's `CGM.getDiags()`, e.g.
+    /// `-Watomic-alignment`), in emission order.
+    pub diags: Vec<kiln_diag::Diag>,
     /// Per-function state.
     pub f: Fx,
     /// The `$_N` ids of unnamed classes, in first-mangle order.
     pub anon: mangle::AnonIds,
+    /// Dynamic initialization of static-storage variables.
+    pub gi: crate::global_init::GlobalInits,
 }
 
 impl<'a> Cg<'a> {
@@ -195,7 +200,9 @@ impl<'a> Cg<'a> {
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
+            diags: Vec::new(),
             f: Fx::empty(),
+            gi: crate::global_init::GlobalInits::default(),
             anon: mangle::AnonIds::new(),
         }
     }
@@ -206,15 +213,22 @@ impl<'a> Cg<'a> {
 
     // ---- driving -------------------------------------------------------
 
-    /// Emits the whole translation unit.
-    pub fn run(mut self) -> R<Module> {
+    /// Emits the whole translation unit; also returns the warnings
+    /// reported on the way (even when emission fails).
+    pub fn run(mut self) -> (R<Module>, Vec<kiln_diag::Diag>) {
+        let r = self.run_tu();
+        (r.map(|()| self.m), self.diags)
+    }
+
+    fn run_tu(&mut self) -> R<()> {
         let tu = self.ast.tu;
         self.emit_members(tu)?;
         self.emit_key_function_vtables()?;
         self.emit_deferred()?;
         self.resolve_placeholders()?;
+        self.emit_global_init_trailer()?;
         self.trailer();
-        Ok(self.m)
+        Ok(())
     }
 
     fn emit_members(&mut self, ctx: DeclId) -> R<()> {
@@ -320,9 +334,10 @@ impl<'a> Cg<'a> {
         if self.is_explicit_inst_declaration(first) {
             return Ok(());
         }
-        if !self.discardable_var(d) {
+        if !self.discardable_var(d) || self.var_must_emit(d) {
             return self.emit_var_def(d);
         }
+        self.note_deferred_init(first, d);
         if self.gvars.contains_key(&first) {
             self.to_emit.push(Def::Decl(d));
         } else {
@@ -468,7 +483,7 @@ impl<'a> Cg<'a> {
         self.fn_internal(d) || self.fn_is_inline(d)
     }
 
-    fn var_is_inline(&self, d: DeclId) -> bool {
+    pub(crate) fn var_is_inline(&self, d: DeclId) -> bool {
         let ast = self.ast;
         ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|v| v.spec.is_inline()))
     }
@@ -1070,9 +1085,15 @@ impl<'a> Cg<'a> {
         };
         let (ret, params) = self.sig_attrs(sig, sig.params.len(), false);
         let mut fa = Vec::new();
-        if sig.nothrow {
+        // clang `ConstructAttributeList`: a non-throwing type or a
+        // `NoThrowAttr` (a recognized C library function).
+        let mut cp = Vec::new();
+        let const_pure = crate::builtins::const_pure_attrs(ast, first, &mut cp);
+        let nothrow = sig.nothrow || const_pure || ast.has_nothrow_attr(first);
+        if nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
+        fa.extend(cp);
         if ast.is_noreturn_fn(first) {
             fa.push(Attr::Flag(AttrKind::NoReturn));
         }
@@ -1094,7 +1115,7 @@ impl<'a> Cg<'a> {
                 func.unnamed_addr = UnnamedAddr::Global;
             }
         }
-        self.nounwind.insert(f, sig.nothrow);
+        self.nounwind.insert(f, nothrow);
         Ok(f)
     }
 
@@ -1121,7 +1142,7 @@ impl<'a> Cg<'a> {
 
     /// The function attributes of a definition.
     pub fn def_fn_attrs(&mut self, f: DefFnAttrs) -> AttrSetId {
-        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn } = f;
+        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, extra } = f;
         let mut a = Vec::new();
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
@@ -1137,6 +1158,7 @@ impl<'a> Cg<'a> {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
         a.push(Attr::Flag(AttrKind::OptimizeNone));
+        a.extend(extra);
         a.push(Attr::UwTable(UwTableKind::Async));
         self.target_attrs(&mut a);
         if self.is_x86() {
@@ -1236,21 +1258,26 @@ impl<'a> Cg<'a> {
         let any_init = v
             .init
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
+        let mut needs_init = false;
         let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
             None => {
                 let t = self.mty(ty);
                 self.m.const_zero(t)
             }
-            Some(e) => match self.folds.get(e) {
-                Some(c) => self.const_value(c, ty, Some(e), true)?,
-                None => {
-                    return err(
-                        loc,
-                        "dynamic initialization of a global is not supported yet (M3)",
-                    );
+            Some(e) => {
+                if let Some(c) = self.folds.get(e) {
+                    self.const_value(c, ty, Some(e), true)?
+                } else {
+                    // Dynamic initialization ([basic.start.dynamic]): zero
+                    // until the initialization function runs.
+                    needs_init = true;
+                    let t = self.mty(ty);
+                    self.m.const_zero(t)
                 }
-            },
+            }
         };
+        let is_ref = ast.types.is_reference(ty);
+        let needs_dtor = !is_ref && self.destructed_class(ty).is_some();
         let ity = self.m.const_type(init);
         let g = if let Some(&g) = self.gvars.get(&first) {
             if self.m.global(g).value_type() != ity {
@@ -1267,7 +1294,8 @@ impl<'a> Cg<'a> {
         let instantiated = self.var_instantiation_linkage(first);
         let inline = self.var_is_inline(d) || instantiated.is_some();
         let quals = ast.types.effective_quals(ty);
-        let constant = quals.is_const() && !has_mutable(ty);
+        let constant =
+            ((quals.is_const() && !has_mutable(ty)) || is_ref) && !needs_init && !needs_dtor;
         let align = self.global_align(ty);
         let name = self.m.global(g).name().to_owned();
         let comdat =
@@ -1289,6 +1317,9 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::External;
             gv.dso_local = true;
         }
+        if needs_init || needs_dtor {
+            self.emit_var_init_fn(d, g, needs_init)?;
+        }
         Ok(())
     }
 
@@ -1298,7 +1329,7 @@ impl<'a> Cg<'a> {
     /// instantiation definition ([temp.explicit]), `linkonce_odr` for an
     /// implicit instantiation; `None` for an explicit specialization or a
     /// non-templated variable.
-    fn var_instantiation_linkage(&self, first: DeclId) -> Option<Linkage> {
+    pub(crate) fn var_instantiation_linkage(&self, first: DeclId) -> Option<Linkage> {
         let ast = self.ast;
         let explicit = |k: SpecKind| k == SpecKind::ExplicitInstantiationDefinition;
         match ast.templ_link(first).get() {
@@ -1347,8 +1378,13 @@ impl<'a> Cg<'a> {
         let name = mangle::mangle_static_local(ast, &mut self.anon, first, index);
         let mt = self.mty(ty);
         let g = self.m.add_global(&name, mt);
+        self.gi.local_index.insert(first, index);
         let align = self.global_align(ty);
-        let constant = ast.types.effective_quals(ty).is_const();
+        let init_expr = v.init.filter(|&e| !ast.is_trivial_default_construction(e));
+        let dynamic = self.static_needs_init(d, init_expr);
+        let constant = (ast.types.effective_quals(ty).is_const() && !has_mutable(ty)
+            || ast.types.is_reference(ty))
+            && !dynamic;
         let encl = mangle::enclosing_function(ast, first);
         let inline_fn = encl.is_some_and(|f| self.fn_is_inline(f) && !self.fn_internal(f));
         let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
@@ -1364,17 +1400,11 @@ impl<'a> Cg<'a> {
         }
         self.static_locals.insert(first, g);
         // clang `AddInitializerToStaticVarDecl`.
-        let init = match v.init {
+        // A dynamic initializer runs, guarded, at the declaration
+        // statement ([stmt.dcl]/3; `static_local_init`).
+        let init = match init_expr.and_then(|e| self.folds.get(e).map(|c| (e, c))) {
             None => self.m.const_zero(mt),
-            Some(e) => match self.folds.get(e) {
-                Some(c) => self.const_value(c, ty, Some(e), true)?,
-                None => {
-                    return err(
-                        loc,
-                        "dynamic initialization of a static local is not supported yet (M3)",
-                    );
-                }
-            },
+            Some((e, c)) => self.const_value(c, ty, Some(e), true)?,
         };
         let ity = self.m.const_type(init);
         if ity != mt {
@@ -1507,7 +1537,7 @@ pub(crate) fn gval(g: GlobalId) -> Value {
 
 /// The inputs of [`Cg::def_fn_attrs`]: the flags that decide a
 /// definition's function attributes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools, reason = "independent attribute flags")]
 pub(crate) struct DefFnAttrs {
     pub(crate) is_main: bool,
@@ -1515,4 +1545,6 @@ pub(crate) struct DefFnAttrs {
     pub(crate) mustprogress: bool,
     pub(crate) vector_width: u64,
     pub(crate) noreturn: bool,
+    /// `const` / `pure` attributes (`crate::builtins::const_pure_attrs`).
+    pub(crate) extra: Vec<Attr>,
 }

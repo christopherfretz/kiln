@@ -754,7 +754,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
+    pub(crate) fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
         let mut cur = Some(d);
         let mut n = 0;
         while let Some(x) = cur {
@@ -1859,9 +1859,15 @@ impl Sema<'_, '_> {
         let t = atomic.unwrap_or(operand_t);
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
         if self.ast.types.builtin(t) == Some(BuiltinType::Bool) {
-            let msg = self.diag(DiagId::sema_incdec_bool, loc).arg(if inc { "0" } else { "1" });
+            // clang: decrementing is always an error; incrementing is a
+            // DefaultError extension (`-Wno-increment-bool` accepts it).
+            if !inc {
+                let msg = self.diag(DiagId::sema_decrement_bool, loc);
+                self.emit(msg);
+                return self.recover_err(&[e], loc);
+            }
+            let msg = self.diag(DiagId::sema_increment_bool, loc);
             self.emit(msg);
-            return self.recover_err(&[e], loc);
         }
         if self.ast.types.as_enum(t).is_some() {
             let msg = self
@@ -2120,10 +2126,20 @@ impl Sema<'_, '_> {
         }
         let lt = self.ety(l);
         let to = conv::strip_cv(self, lt);
-        let r2 = match conv::implicit_convert(self, r, to, ConvCtx::Assignment) {
+        let conv = match conv::atomic_class_assign(self, to, r) {
+            Some(x) => Ok(x),
+            None => conv::implicit_convert(self, r, to, ConvCtx::Assignment),
+        };
+        let r2 = match conv {
             Ok(x) => x,
             Err(err) => {
-                let d = err.diag(self, r);
+                // An `_Atomic` target is checked as in C, at the operator
+                // (clang `DiagnoseAssignmentResult`).
+                let d = if self.ast.types.as_atomic(to).is_some() {
+                    err.diag_at(self, loc)
+                } else {
+                    err.diag(self, r)
+                };
                 self.emit(d);
                 return self.recover_err(&[l, r], loc);
             }
@@ -2479,6 +2495,13 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
             return self.recover_err(&[c, t, f], loc);
         }
+        // The GNU element-wise conditional (clang `CXXCheckConditionalOperands`).
+        if !self.expr_is_type_dependent(c) {
+            let ct = self.ety(c);
+            if self.is_vector_condition(ct) {
+                return self.act_on_vector_conditional(c, t, f, loc);
+            }
+        }
         let c2 = if self.expr_is_type_dependent(c) {
             c
         } else {
@@ -2625,6 +2648,15 @@ impl Sema<'_, '_> {
             ) {
                 Ok((t2, f2, ty)) => self.builder().conditional(c2, t2, f2, ty, loc),
                 Err(err) => self.conv_failed(&err, t, f, loc),
+            };
+        }
+        // Extension: a vector arm (clang `CheckVectorOperands`).
+        if !tv && !fv && (self.is_vector_type(tt) || self.is_vector_type(ft)) {
+            let mut t2 = conv::decay(self, t);
+            let mut f2 = conv::decay(self, f);
+            return match self.scalar_cond_vector_operands(&mut t2, &mut f2, loc) {
+                Some(ty) => self.builder().conditional(c2, t2, f2, ty, loc),
+                None => self.recover_err(&[c, t, f], loc),
             };
         }
         if !tv && !fv {
@@ -3071,6 +3103,11 @@ impl Sema<'_, '_> {
         if named.and_then(|d| self.ast.decls.builtin_id(d))
             == Some(kiln_ast::decl::builtin::EXPECT_WITH_PROBABILITY)
             && !self.check_expect_probability(conv_args[2])
+        {
+            return self.recover_err(&kids, loc);
+        }
+        if let Some(id) = named.and_then(|d| self.ast.decls.builtin_id(d))
+            && !self.check_builtin_ice_args(id, callee, &conv_args)
         {
             return self.recover_err(&kids, loc);
         }
@@ -3822,6 +3859,10 @@ impl Sema<'_, '_> {
                 loc,
                 temp_end: None,
                 rparen: None,
+                // clang `InitializationKind::CreateFunctionalCast` /
+                // `CreateCast`: the `)`. A C-style cast's range ends at its
+                // operand's last token, which kiln does not record.
+                agg_end: (style != CastStyle::CStyle).then_some(rparen),
                 sites: crate::class::DiagSites {
                     access: loc,
                     deleted: loc,

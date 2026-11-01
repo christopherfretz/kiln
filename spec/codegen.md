@@ -24,7 +24,10 @@ A construct outside M2 is a `CodegenError` ("not supported in M2"), never a
 panic and never silently wrong IR.
 
 ## 2. Architecture
-- `lib.rs`: `emit(ast, oven, target, opts) -> Result<Module, CodegenError>`.
+- `lib.rs`: `emit(ast, oven, target, opts) -> Result<Module, CodegenError>`;
+  `emit_with_diags` also returns the warnings codegen reports itself
+  (`Cg::diags`, `kiln_diag::Diag`s in emission order, as clang's
+  `CGM.getDiags()`; WP-165), returned even when emission fails.
 - `fold.rs`: a pre-pass that asks the Oven to fold initializers and
   constant-reference loads (the `Folds` table). A const var is foldable
   only when it is non-volatile and either static storage, integral or enum
@@ -39,6 +42,16 @@ panic and never silently wrong IR.
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
   (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
   its parameter's default argument once, at the first use (WP-136).
+  Non-initializer candidates (a load of a const variable, a builtin
+  call) fold with `Oven::fold_rvalue` (lax mode, WP-165): like clang's
+  `tryEmitAsConstant`, a read of any `const` non-volatile variable with an
+  initializer folds, even one not usable in constant expressions (`const
+  double`, `const _Atomic(int)`, a `const` array or class element), so a
+  global whose every use folds is not emitted. A load of a const variable
+  is recognized through parentheses and `NoOp` casts (the xvalue cast of
+  an implicitly moved `return x;`). Variables with a `mutable` member are
+  not folded (clang folds their non-mutable members; deviation).
+  Validation: `tests/codegen/const_fold_lax.cpp`.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
@@ -85,7 +98,14 @@ panic and never silently wrong IR.
     `lshr`/`and` (unsigned); stores mask, clear and `or` into the unit;
   - `++`/`--` on bool, integers, floats and pointers, including bit-fields.
 - Calls:
-  - a call site gets `nounwind` only when the callee's prototype is nothrow;
+  - a call site gets `nounwind` only when the callee's prototype is
+    nothrow, or the direct callee has a `NoThrow` attribute (a
+    recognized C library function, spec/sema.md §5.4) or a `const` /
+    `pure` attribute; the declaration and a definition get it too;
+  - a written or implicit `const` / `pure` attribute (not on a builtin,
+    whose row decides) adds `willreturn memory(none)` /
+    `willreturn memory(read)` to the declaration, the definition and
+    direct call sites (clang `ConstructAttributeList`);
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary.
@@ -286,6 +306,13 @@ array cookies).
   overriders may return — and are followed by `unreachable` and a dummy
   block (`noreturn_call`, `finish_noreturn_call`).
 
+- `[[assume(e)]]` (WP-160): when there is an insertion point, each
+  assumption that is not `ASSUME_IGNORED` is emitted as a scalar and
+  passed to `llvm.assume`, in source order and before the (null)
+  sub-statement (`emit_assumptions`; `tests/codegen/assume_attr.cpp`).
+  Not yet: call-site attributes (`memory(none)`/`memory(read)`) on calls
+  to `const`/`pure` functions, which clang emits.
+
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
 - `-S -emit-llvm` writes a `.ll` file; `-c -emit-llvm` pipes it to
@@ -321,7 +348,8 @@ The normative description is spec/driver.md "Code generation". In short:
   `kiln_driver::run` (`-S -emit-llvm -O0 -std=c++26 --target=<t> -o -`)
   and through `clang++-19` with the same flags, on
   `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, under the
-  same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
+  same normalization. A `//@ args: <opts>` line in a case appends
+  `<opts>` to both command lines (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
   corpus is 105 programs (ABI classification of 1- to 32-byte structs,
@@ -344,9 +372,17 @@ The normative description is spec/driver.md "Code generation". In short:
   direct use of its referee (`load i32, ptr @g`); kiln loads the
   reference's slot. The Oven does not fold reference initializers yet,
   so `fold.rs` has nothing to substitute. No corpus case covers it.
-- **Namespace-scope and static reference variables** are diagnosed
-  (`dynamic initialization of a global is not supported yet (M3)`), even
-  when clang would constant-initialize them, for the same reason.
+- **Namespace-scope and static reference variables** are emitted as
+  clang does (a constant initializer when the referee is a constant
+  address, else dynamic initialization, §7e); only their uses differ, as
+  above.
+- **AArch64 loop canonicalization of initialization functions.**
+  clang 19's AArch64 `-O0` pipeline runs `loop-idiom-vectorize`, whose
+  LoopSimplify/LCSSA prerequisites rewrite loops in every function
+  without `optnone` (the `__cxx_global_var_init` functions): array
+  construction and EH-cleanup loops gain `.preheader`/`.loopexit` blocks
+  and LCSSA `phi`s. kiln emits the plain loops. `ir_vs_clang` lists
+  `global_init_array_eh` on aarch64 as a known deviation; x86_64 is exact.
 - **Reference members** (`struct S { int& r; }`) are diagnosed (`a
   reference member is not supported yet`).
 - **`dereferenceable(N)` of a reference to a class** uses the class's
@@ -855,14 +891,145 @@ clang 19 `CGAtomic` at -O0, mirrored:
   integers and a `cmpxchg` loop (`atomic_cont`/`atomic_exit`) otherwise.
   On x86_64 a 16-byte `_Atomic` lvalue load/store is the
   `__atomic_load`/`__atomic_store` libcall with order 5, as clang.
+- **Library calls (WP-165).** An `AtomicExpr` whose size is not a power
+  of two or exceeds 16 bytes is the generic libatomic call
+  (`__atomic_load(size, obj, ret, order)`, `__atomic_store(size, obj,
+  val, order)`, `__atomic_exchange(size, obj, val, ret, order)`,
+  `__atomic_compare_exchange(size, obj, expected, desired, success,
+  failure)` returning `i1`, `noundef` and on x86_64 `zeroext`); every
+  argument `noundef`, the declaration `nounwind willreturn`, orders passed
+  as given (no switch). A `cmpxchg` loop on an `_Atomic` lvalue that needs
+  a libcall (x86_64 16-byte x87 `long double` and `__int128`) materializes
+  expected and desired in `_Atomic` temporaries (zeroed first when the
+  value does not fill them) and reads the old value back from the
+  expected buffer.
+- **Padded and aggregate `_Atomic` (WP-165).** `_Atomic(T)` of at most 16
+  bytes is laid out as `{ T, [n x i8] }` rounded to a power of two
+  (`size_align`); operands whose memory size (x87: 80 bits) differs from
+  the atomic width are copied into an `_Atomic`-typed temporary first
+  (`convertToAtomicIntPointer`). Initialization is `EmitAtomicInit`
+  (`atomic_init`, used for locals, `init_to_lvalue` and
+  `__c11_atomic_init`): the object is zeroed when padded or not filled by
+  its value, and the value goes into field 0. Aggregate `_Atomic` reads
+  load the atomic integer straight into the slot (or `__atomic_load`
+  into it); `NonAtomicToAtomic`/`AtomicToNonAtomic` aggregate casts
+  follow `AggExprEmitter::VisitCastExpr` (peephole of a reverse pair;
+  zero + field 0 for a padded destination; through an atomic temporary
+  otherwise); assignment evaluates the right side into a temporary of the
+  assignment's type (the result) and stores it with
+  `store atomic`/`__atomic_store` (`atomic_agg_store`).
+- **`++` of `_Atomic(bool)` (WP-165)**, accepted under
+  `-Wno-increment-bool`: as clang's `EmitScalarPrePostIncDec`,
+  pre-increment is `store atomic i8 1` (volatile when the object is)
+  yielding `true`; post-increment is `atomicrmw xchg i8 1` (never
+  volatile) yielding the old byte in its memory form (`i8`), which clang
+  then stores or extends as if it were the `i1` value. Where the value
+  must meet an `i1` (a conditional operator's `phi`) clang 19 emits
+  invalid IR; kiln reports an IR lowering error there.
+- **Floating `min`/`max_fetch` (WP-165), a deviation:** clang 19 compares
+  the old value and the operand with an `icmp` (invalid IR); kiln yields
+  `llvm.minnum` / `llvm.maxnum` of the two, the value `atomicrmw fmin` /
+  `fmax` stored. `fetch_min`/`fetch_max` match clang.
+- **`-Watomic-alignment` (WP-165)**, clang `EmitAtomicExpr`: for every
+  atomic builtin except `__c11_atomic_init` (never for `_Atomic` lvalue
+  accesses), at the expression's start, `cg_atomic_misaligned` (size,
+  pointer alignment) when the pointer's alignment is not a multiple of
+  the size, then `cg_atomic_oversized` (size, max inline width: 16 on
+  aarch64, 8 on x86_64) when the size exceeds it; clang's texts, the
+  latter with its double space before "bytes".
 - **Validation:** `tests/codegen/atomic_{builtins,orders,lvalues,wide,
-  qualifier}.cpp` exact on aarch64 and x86_64; `run` tests under
-  `tests/conformance/ext.c11.atomic/`.
-- **Not implemented** (a codegen error): `AtomicExpr` library calls (size
-  above the inline width or not a power of two), padded `_Atomic` types,
-  floating `min`/`max_fetch` (clang 19 emits invalid IR), aggregate
-  `_Atomic` lvalue loads and stores, `++` of `_Atomic(bool)`, a `cmpxchg`
-  loop that needs a libcall (x86_64 16 bytes, x87 `long double`).
+  qualifier,libcall,lv_libcall,padded,aggregate,bool_inc,alignment}.cpp` exact on
+  aarch64 and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`
+  (`fp-minmax-fetch-run.cpp` without an oracle).
+
+## 7e. Landed (WP-171): `__builtin_va_arg` (`va_arg.rs`)
+- **`emit_va_arg(e, dest)`** reads the address of the next argument
+  (`va_arg_addr`) and loads a scalar, or `memcpy`s an aggregate into
+  `dest`; an ignored aggregate read copies nothing (clang 19
+  `Slot.asRValue()`), and an ignored `Ignore`-class type emits no code.
+  The `va_list` base is the operand's lvalue, or its value when the
+  operand is the decayed x86-64 array pointer.
+- **Classification** comes from `kiln_abi::call::classify_va_arg`.
+- **AAPCS64** (clang `AArch64ABIInfo::EmitAAPCSVAArg`), block order
+  `vaarg.maybe_reg`, `vaarg.in_reg`, `vaarg.on_stack`, `vaarg.end`:
+  - GPR types use `__gr_offs`/`__gr_top` (fields 3/1); FP and vector
+    types use `__vr_offs`/`__vr_top` (fields 4/2).
+  - The register size is `alignTo(size, 8)` for GPR (8 when passed
+    indirectly) or 16 × the HFA member count for FPR. A GPR offset is
+    realigned when the type's alignment exceeds 8.
+  - An HFA/HVA with more than one member is copied from 16-byte-strided
+    q-register slots into an `[N x base]` temporary.
+  - On the stack: the pointer is rounded up with `llvm.ptrmask` when the
+    alignment exceeds 8 and the argument is direct, then advanced by the
+    slot size.
+  - The `phi` address takes the smaller alignment. An indirect argument
+    loads the pointer.
+- **SysV x86-64** (clang `X86_64ABIInfo::EmitVAArg`):
+  - `needed_int`/`needed_sse` gate `fits_in_gp` (`gp_offset ≤ 48-8n`) and
+    `fits_in_fp` (`fp_offset ≤ 176-16n`).
+  - In registers, the address comes from `reg_save_area`. Mixed int/SSE
+    and two-SSE structs are reassembled into a temporary of the coerce
+    type. A single register class is read in place, or through a
+    temporary when the coerce type sits at offset 8, the type is larger
+    than the register span, or an integer type is over-aligned.
+  - Otherwise the address is `overflow_arg_area` (ptrmask-aligned above
+    8), advanced by `alignTo(size, 8)`.
+- **`min-legal-vector-width` of a definition** (`def_vector_width`) counts
+  only IR vector parameters/returns, as clang's
+  `CodeGenFunction::StartFunction` does, not vectors nested in coerced
+  structs. Call sites keep the recursive `CallInfo::max_vector_width`.
+- **Validation:** `tests/codegen/va_arg.cpp` exact on aarch64 and
+  x86_64; `tests/conformance/cstdarg.syn/va-arg.cpp` (run).
+- **Not implemented:** `_Complex` operands (unsupported in codegen
+  generally).
+
+## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
+Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
+[basic.start.term], [stmt.dcl]/3).
+- **Which variables.** `emit_var_def` folds the initializer first; a
+  variable whose initializer does not fold gets a zero initializer and
+  needs construction, one of class type with a non-trivial destructor
+  (not a reference) needs destruction. The global is `constant` only
+  when it is `const` (not `mutable`) or a reference and needs neither.
+  Constant-initialized variables keep the constant path unchanged.
+- **Init functions.** Each such variable gets an internal
+  `__cxx_global_var_init[.N]` in `.text.startup` (`noinline`, `nounwind`
+  under `-fno-exceptions`, `uwtable`, the target attributes, x86
+  `min-legal-vector-width`) that runs the initializer into the global
+  and registers the destructor with `__cxa_atexit(dtor, ptr, @__dso_handle)`
+  (arrays: an internal `__cxx_global_array_dtor` helper). Ordered
+  variables are called, in declaration order (deferred variables keep
+  the slot of their first use), from `_GLOBAL__sub_I_<file>` (clang's
+  file-name transformation), registered in `@llvm.global_ctors` with
+  priority 65535.
+- **Partially-ordered variables.** Template instantiations and
+  non-internal inline variables have linkonce/weak linkage: their init
+  function gets its own `@llvm.global_ctors` entry keyed on the variable
+  (and `@llvm.used`, in the variable's comdat), guarded by an `i64` `_ZGV`
+  (its first byte tested with a plain load for a template
+  instantiation; the Itanium `__cxa_guard_acquire`/`release` protocol
+  when thread-safe, i.e. a non-template inline variable; an `i8` guard
+  only for a non-thread-safe internal variable).
+- **Static locals.** A static local whose initializer does not fold is
+  zero-initialized and guarded at its declaration: `_ZGV` (`i64`, in the
+  local's comdat when it has one), an acquire-load of the guard byte
+  (AArch64 tests the low bit), `!prof` branch weights `1, 1048575`,
+  `__cxa_guard_acquire`, the initializer under a `__cxa_guard_abort`
+  EH cleanup (`Cleanup::GuardAbort`), `__cxa_guard_release`, then the
+  destructor registration.
+- **Lifetime-extended temporaries.** A temporary bound to a reference
+  with static storage becomes `_ZGR<var>_` (`let_global`): constant when
+  the Oven folded it (the fold bridge now records
+  `set_temporary_value`), else initialized in the variable's init
+  function with its destructor registered via `__cxa_atexit`.
+- Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
+  `tests/conformance/basic.start.dynamic/order-run.cpp`,
+  `tests/conformance/stmt.dcl/static-local-run.cpp`.
+- **Not implemented:** `init_priority`, `thread_local` dynamic
+  initialization (TLS wrappers), explicit instantiation definitions of
+  static data members, folding of uses of constant-initialized
+  references and of reads of `const` class objects that clang permits
+  ([basic.start.static]/3).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
@@ -883,9 +1050,9 @@ and indirect returns with `byval` (clang's `getNaturalAlignIndirect`, so
 no `result.ptr` spill).
 
 **Remaining (M3):**
-1. Oven folding of constant-initialized references; then global and
-   static reference variables and the direct-referee use (deviations
-   above).
+1. Oven folding of constant-initialized references, for the
+   direct-referee use (deviations above); `init_priority` and
+   `thread_local` dynamic initialization (§7e).
 2. The Sema gaps above, then corpus cases for them: class copy-init,
    braced returns, reference casts, temporaries, range-for over arrays.
 3. Bit-field and base-class constants, case ranges, reference members.

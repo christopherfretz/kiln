@@ -19,7 +19,7 @@ use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
 use kiln_ast::types::{Nns, TagKeyword};
-use kiln_ast::{Ast, DeclHead, DeclId, ExprId, QualType};
+use kiln_ast::{Ast, AttrId, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
@@ -132,6 +132,81 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The parameter type a `Builtins.td` `a` spells: `__builtin_va_list`,
+    /// decayed when the target's `va_list` is an array (clang
+    /// `GetBuiltinType` decays array parameters).
+    fn builtin_va_list_value(&mut self) -> QualType {
+        let Some(t) = self.va_list_type else { return QualType::ERROR };
+        if self.ast.types.is_array(t) { conv::array_decayed(self, t) } else { t }
+    }
+
+    /// The type a `Builtins.td` `P` spells (clang `ASTContext::getFILEType`):
+    /// the type a translation-unit-scope typedef named `FILE` names, or
+    /// the error type when there is none (clang `GE_Missing_stdio`).
+    fn file_type(&mut self) -> QualType {
+        let name = self.intern("FILE");
+        let found = self.lookup_in(self.ast.tu, name, LookupKind::Ordinary);
+        found
+            .decls
+            .iter()
+            .find(|&&d| matches!(self.kind_of(d), DeclKind::Typedef | DeclKind::TypeAlias))
+            .and_then(|&d| self.ast.decls.get(d).ty())
+            .unwrap_or(QualType::ERROR)
+    }
+
+    /// clang's library-builtin recognition (`ActOnFunctionDeclarator`)
+    /// and `AddKnownFunctionAttributes` (spec/sema.md §5.4): the first
+    /// declaration of a [`builtin::LIB`] function, in a namespace-scope
+    /// context with C language linkage and with the row's type ignoring
+    /// the exception specification, gets clang's implicit `NoThrowAttr`,
+    /// `ConstAttr` / `PureAttr`, appended to `attrs`. Redeclarations
+    /// inherit them (the attributes are read across the redeclaration
+    /// chain). `NoThrowAttr` makes a call non-throwing for `noexcept`
+    /// ([`Sema::can_throw`]) and `nounwind` in IR, as in clang; no
+    /// `BuiltinAttr` is attached, so a call stays an ordinary call.
+    pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
+        if self.kind_of(f) != DeclKind::Function || self.ast.prev(f).is_some() {
+            return;
+        }
+        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
+            let r = self.ast.redecl_context(c);
+            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
+        });
+        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
+            return;
+        }
+        let Some(name) = self.ast.decls.get(f).name().as_ident() else { return };
+        let Some(info) = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied() else {
+            return;
+        };
+        let Some(ty) = self.ast.decls.get(f).ty() else { return };
+        let (ret, params, variadic) = self.builtin_signature(info.sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return;
+        }
+        let want = self.ast.types.function(
+            ret,
+            &params,
+            FuncInfo::new().with_variadic(variadic),
+            ExcSpec::None,
+        );
+        let have = self.with_exc_spec(ty, ExcSpec::None);
+        if !self.ast.types.same_type(want, have) {
+            return;
+        }
+        let loc = self.ast.decls.get(f).loc();
+        for (bit, kind) in [
+            (builtin::attr::NOTHROW, AttrKind::NOTHROW),
+            (builtin::attr::CONST, AttrKind::CONST),
+            (builtin::attr::PURE, AttrKind::PURE),
+        ] {
+            if info.attrs & bit != 0 {
+                let n = AttrNode { kind, syntax: AttrSyntax::Gnu, flags: 1, loc, a: 0, b: 0 };
+                attrs.push(self.ast.attrs.push(n));
+            }
+        }
+    }
+
     /// Declares the builtin function `name` (first used at `loc`) if it
     /// is one kiln knows, from its [`builtin::Info`] row: the type its
     /// `Builtins.td` signature spells (`noexcept` for the `NoThrow` ones,
@@ -214,6 +289,9 @@ impl Sema<'_, '_> {
             match c {
                 b'U' => unsigned = true,
                 b'L' => longs += 1,
+                // An integer constant expression argument (checked by
+                // `check_builtin_ice_args`).
+                b'I' => {}
                 _ => break,
             }
             s = &s[1..];
@@ -238,6 +316,8 @@ impl Sema<'_, '_> {
             (b'd', ..) => QualType::LONGDOUBLE,
             (b'z', ..) => self.size_type(),
             (b'A', ..) => self.builtin_va_list_param(),
+            (b'a', ..) => self.builtin_va_list_value(),
+            (b'P', ..) => self.file_type(),
             _ => QualType::VOID,
         };
         while let Some(&c) = s.first() {
@@ -487,6 +567,35 @@ impl Sema<'_, '_> {
             let d = self.diag(DiagId::sema_probability_out_of_range, at);
             self.emit(d);
             return false;
+        }
+        true
+    }
+
+    /// The arguments of a builtin call that must be integer constant
+    /// expressions (clang `CheckBuiltinFunctionCall` -> `BuiltinConstantArg`:
+    /// `argument to '<name>' must be a constant integer` at the call's
+    /// start). Value-dependent arguments wait for instantiation.
+    pub(crate) fn check_builtin_ice_args(
+        &mut self,
+        id: u32,
+        callee: ExprId,
+        args: &[ExprId],
+    ) -> bool {
+        let mask = builtin::ice_params(id);
+        if mask == 0 {
+            return true;
+        }
+        for (i, &a) in args.iter().enumerate().take(32) {
+            if mask & (1 << i) == 0 || self.expr_is_value_dependent(a) {
+                continue;
+            }
+            if self.fold_int(a).is_none() {
+                let name = builtin::info(id).map_or("", |e| e.name);
+                let at = self.begin_loc(callee);
+                let d = self.diag(DiagId::sema_constant_integer_arg_type, at).arg(name.to_string());
+                self.emit(d);
+                return false;
+            }
         }
         true
     }
@@ -753,6 +862,114 @@ impl Sema<'_, '_> {
             }
         }
         Some((vec![ap, args[1]], QualType::VOID))
+    }
+
+    /// `__builtin_va_arg(list, T)` ([cstdarg.syn]/1, C 7.16.1.1; clang's
+    /// `BuildVAArgExpr`). The `va_list` operand: on a target whose
+    /// `va_list` is an array (x86-64) it decays (the usual unary
+    /// conversions) and must then have the decayed type, else `first
+    /// argument to 'va_arg' is of type 'T' and not 'va_list'`; on one
+    /// whose `va_list` is a class (`AArch64`) it is copy-initialized to a
+    /// `__builtin_va_list &` parameter (so a mismatch is a reference
+    /// binding error). A non-dependent `T` must be complete and not
+    /// abstract; a non-POD `T` (a reference included) is a
+    /// `-Wnon-pod-varargs` error that does not stop the expression; a
+    /// promotable `T` (an integer type of rank below `int`, an unscoped
+    /// enumeration whose promoted type is not its underlying type, or
+    /// `float`) gets the `-Wvarargs` undefined-behavior warning as a
+    /// runtime-behavior diagnostic (`diag_runtime_behavior`). Every check
+    /// reports at `ty_loc`, where `T` begins. The result is a prvalue of
+    /// `T`'s non-lvalue expression type (clang's `getNonLValueExprType`:
+    /// a reference's referent; cv dropped for a non-class non-array).
+    pub fn act_on_va_arg(
+        &mut self,
+        e: ExprId,
+        ty: QualType,
+        ty_loc: Loc,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        if self.is_err_expr(e) || self.is_error_type(ty) {
+            return self.recover_err(&[e], loc);
+        }
+        let Some(vl) = self.va_list_type else { return self.recover_err(&[e], loc) };
+        let mut list = e;
+        if !self.expr_is_type_dependent(e) {
+            if self.ast.types.is_array(vl) {
+                let orig = self.ety(e);
+                list = conv::usual_unary_conversions(self, e);
+                let want = conv::array_decayed(self, vl);
+                if self.ast.types.canonical(self.ety(list)) != self.ast.types.canonical(want) {
+                    let at = self.begin_loc(e);
+                    let msg = self.diag(DiagId::sema_va_arg_not_va_list, at).arg(self.ty_arg(orig));
+                    self.emit(msg);
+                    return self.recover_err(&[list], loc);
+                }
+            } else {
+                let pt = self.ast.types.lvalue_ref_to(vl);
+                list = match conv::implicit_convert(self, e, pt, ConvCtx::Argument) {
+                    Ok(x) => x,
+                    Err(err) => {
+                        let msg = err.diag(self, e);
+                        self.emit(msg);
+                        return self.recover_err(&[e], loc);
+                    }
+                };
+            }
+        }
+        if !self.ast.types.is_dependent(ty) {
+            if !self.require_complete(ty, ty_loc) {
+                let msg = self.diag(DiagId::sema_va_arg_incomplete, ty_loc).arg(self.ty_arg(ty));
+                self.emit(self.incomplete_note(msg, ty));
+                return self.recover_err(&[list], loc);
+            }
+            if let Some(c) = self.abstract_class(ty) {
+                let msg = self.diag(DiagId::sema_va_arg_abstract, ty_loc).arg(self.ty_arg(ty));
+                let msg = self.pure_virtual_notes(msg, c);
+                self.emit(msg);
+                return self.recover_err(&[list], loc);
+            }
+            if self.ast.types.is_reference(ty) || !self.is_pod_type(ty) {
+                let msg = self.diag(DiagId::sema_va_arg_not_pod, ty_loc).arg(self.ty_arg(ty));
+                self.emit(msg);
+            }
+            if let Some(p) = self.va_arg_promotion(ty) {
+                let msg = self
+                    .diag(DiagId::sema_va_arg_never_compatible, ty_loc)
+                    .arg(self.ty_arg(ty))
+                    .arg(self.ty_arg(p));
+                self.diag_runtime_behavior(msg);
+            }
+        }
+        let mut rty = self.non_reference(ty);
+        if !self.ast.types.is_reference(ty)
+            && self.ast.types.as_record(rty).is_none()
+            && !self.ast.types.is_array(rty)
+        {
+            rty = conv::strip_cv(self, rty);
+        }
+        self.builder().va_arg_expr(list, ty, rty, ty_loc, loc, rparen)
+    }
+
+    /// The type a variadic argument read as `t` was promoted to when `t`
+    /// is not that type (clang `BuildVAArgExpr`'s `PromoteType`): an
+    /// integral promotion ([conv.prom]) whose result is not `t` (for an
+    /// unscoped enumeration: not its underlying type), and `double` for
+    /// `float` ([expr.call]/13). clang's second test, a promoted type
+    /// differing from the underlying type only in signedness, never
+    /// holds for a standard promotable type, so it is not repeated.
+    fn va_arg_promotion(&mut self, t: QualType) -> Option<QualType> {
+        let canon = |s: &Self, q: QualType| s.ast.types.canonical(q).without_quals();
+        if canon(self, t) == QualType::FLOAT {
+            return Some(QualType::DOUBLE);
+        }
+        let p = conv::rank::promoted_type(self, t, None)?;
+        let under = if self.ast.types.as_enum(t).is_some() {
+            conv::rank::enum_data(self, t).and_then(|e| e.int_type).unwrap_or(t)
+        } else {
+            t
+        };
+        (canon(self, p) != canon(self, under)).then_some(p)
     }
 
     /// `__builtin_operator_new` / `__builtin_operator_delete` (clang's

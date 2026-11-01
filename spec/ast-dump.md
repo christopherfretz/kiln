@@ -163,6 +163,7 @@ no category).
 | `CallExpr` | `CallExpr 'type' [lvalue\|xvalue] [adl]` (`adl`: the callee was found by argument-dependent lookup, clang's `usesADL`; WP-122); children: callee, arguments |
 | `UnaryExprOrTypeTraitExpr` | `UnaryExprOrTypeTraitExpr 'type' sizeof\|alignof 'operand-type'` (or expression child) |
 | `CXXNoexceptExpr` | `CXXNoexceptExpr 'bool'`; one child, the unevaluated operand. The value is not printed (clang prints none) |
+| `VAArgExpr` | `VAArgExpr 'T'` (the written type; a prvalue); one child, the `va_list` operand |
 | `CXXStaticCastExpr`, `CXXDynamicCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr` | `Class 'type' [lvalue\|xvalue] static_cast<T> <Kind [(path)]>` (the written type, as `'type'` plus `&` for an lvalue and `&&` for an xvalue result) |
 | `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` |
 | cast paths | a derived-to-base or base-to-derived cast kind prints its path: `<DerivedToBase (A -> virtual V)>` (each base class, `virtual` on a virtual step), also on `ImplicitCastExpr` and `CStyleCastExpr` |
@@ -520,6 +521,17 @@ clobbers are not printed, as in clang's text dump). Both are kept by the
 spelling (`'const char[2]' lvalue __func__`) with the `StringLiteral` as
 its child (none when dependent), as clang does; kept by the normalizer.
 `tests/conformance/ast/dcl.fct.def.general/`.
+
+**Landed (WP-160).** `LabelStmt 'name'` (the labelled statement is its
+child), `GotoStmt 'name'` (the target label; clang's text dump adds its
+address, the JSON names only the `LabelDecl` id, which the normalizer
+resolves through the `LabelStmt`), and `AttributedStmt` for
+`[[assume(e)]]`: its children are the `CXXAssumeAttr`s (each with the
+assumption as its child) then the statement. `asm goto` labels are not
+children of the `GCCAsmStmt`, as in clang's text dump. Other statement
+attributes are not yet kept (kiln drops them; the normalizer rejects
+their `Attr` kinds). `tests/conformance/ast/stmt.label/`,
+`tests/conformance/ast/dcl.attr.assume/`.
 
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]

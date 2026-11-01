@@ -433,6 +433,14 @@ impl Substituter<'_, '_, '_> {
                 let o = self.expr(ex(self).operand(e))?;
                 Ok(self.sema.act_on_builtin_bit_cast(ty, o, loc, end))
             }
+            ExprKind::VAArgExpr => {
+                // WP-171: clang's `TransformVAArgExpr` rebuilds through
+                // `BuildVAArgExpr` (the checks run on the instantiated type).
+                let (list, written, ty_loc) = ex(self).va_arg(e);
+                let ty = self.ty(written, ty_loc)?;
+                let list = self.expr(list)?;
+                Ok(self.sema.act_on_va_arg(list, ty, ty_loc, loc, end))
+            }
             ExprKind::ConvertVectorExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let o = self.expr(ex(self).operand(e))?;

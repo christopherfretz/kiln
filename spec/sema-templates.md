@@ -1123,8 +1123,20 @@ recomputed exactly as for non-template code (clang's
   labels of an `asm goto` are rebuilt by name (`act_on_label`,
   `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
   `LabelDecl`s and the jump-scope checker (spec/sema.md §7.4) runs on it.
-  Not yet: `CXXTryStmt` (needs the handler's exception declaration
-  substituted through `act_on_exception_decl`).
+- **Try-blocks** (WP-160, clang `TransformCXXTryStmt`/`TransformCXXCatchStmt`).
+  The compound statement is substituted in a try scope. Each handler gets
+  its control scope, and its exception declaration is declared again from
+  the substituted type through `act_on_exception_decl`. That repeats the
+  decay, the incomplete-type and abstract-type checks and the
+  copy-initialization from the exception object, and maps the pattern
+  variable to the new one. `act_on_try` then checks the handler order on
+  the instantiated types; -Wexceptions is `allow_duplicate`, so it prints
+  once per instantiation as in clang. A pattern handler whose declaration
+  is invalid fails the statement. Function-try-blocks take the same path
+  (`body` of a non-compound body).
+- **`[[assume]]`** (WP-160): an `AttributedStmt`'s assumptions are
+  substituted, converted and checked again (`build_cxx_assume_expr`,
+  -Wassume at instantiation).
 
 ### 5.6 Declarations
 
@@ -1932,6 +1944,11 @@ used in type trait expression". Each "complete" check calls
 
 ### 9.1 Type predicates (`TypeTraitExpr`, `bool` prvalue, unevaluated operands)
 
+The clang `ALIAS` keywords `__is_same_as` and `__is_literal_type` build
+a `TypeTraitExpr` of the aliased trait (`__is_same`, `__is_literal`),
+which diagnostics and dumps print (WP-171); `__is_convertible_to` is a
+trait of its own.
+
 | Builtin | True iff | Query |
 |---|---|---|
 | `__is_same(T,U)` | the canonical types are equal (cv included) | `tc.canonical` |
@@ -2077,6 +2094,7 @@ records it in `TABLE`.
 | memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp`, `__builtin_strcmp`, `__builtin_strncmp`, `__builtin_strchr`, `__builtin_wcscmp`, `__builtin_wcsncmp`, `__builtin_wcschr`; `__builtin_strrchr`, `__builtin_strpbrk`, `__builtin_strstr` | yes (for trivially copyable element types); no for `strrchr`/`strpbrk`/`strstr` (clang 19) | libcall or `llvm.mem*` |
 | float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for `isfinite`/`isinf`/`isnan`/`isnormal`; no for `signbit` and the six comparisons (the clang 19 probe rejects them) | `fcmp` / `llvm.is.fpclass` |
 | atomics (WP-154) | `__c11_atomic_*`†, `__atomic_*`† (an `AtomicExpr`, spec/sema.md §5.11) | only `__atomic_always_lock_free`/`__atomic_is_lock_free`/`__c11_atomic_is_lock_free` (spec/oven.md) | `load atomic`/`store atomic`/`atomicrmw`/`cmpxchg`/`fence` (spec/codegen.md §7d) |
+| coroutines (WP-171) | `__builtin_coro_resume`/`destroy`/`done`/`promise`/`noop`/`size`/`align`/`frame`/`free`/`id`/`alloc`/`begin`/`end`/`suspend` (`builtin::CORO`, clang 19's types and `noexcept`; an `I` signature argument must be an integer constant expression, `sema_constant_integer_arg_type` at the call, through `check_builtin_ice_args`) | no (the generic note) | not implemented (a codegen error) |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
@@ -3139,8 +3157,8 @@ explicit specialization errors remain. The blockers are:
   expression`, with the evaluation notes) in [0.0, 1.0] (`probability
   argument to __builtin_expect_with_probability is outside the range
   [0.0, 1.0]`); checked after `convert_call_args`
-  (`check_expect_probability`). Not yet: `-Wassume` (needs clang's
-  possible-effects flavour of `HasSideEffects`).
+  (`check_expect_probability`). `-Wassume` landed in WP-160 (spec/sema.md
+  §3, `[[assume]]`).
 - `kiln_ast`: `ExprKind::SourceLocExpr`, `SourceLocKind`,
   `SourceLocValues` and `exprs.cold.source_loc` (spec/ast.md §5.8);
   `kiln_parse` parses the six keywords.

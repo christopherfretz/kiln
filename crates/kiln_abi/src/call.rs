@@ -108,6 +108,40 @@ pub fn classify_call(
     info
 }
 
+/// How `__builtin_va_arg` reads a value of type `q` (clang's per-target
+/// `EmitVAArg` classification): the variadic-argument lowering plus, on
+/// x86-64, the general-purpose and SSE registers it needs (both zero when
+/// it is always read from the overflow area). `AArch64` leaves them zero.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct VaArgInfo {
+    /// The variadic-argument lowering of the type.
+    pub kind: ArgKind,
+    /// x86-64 general-purpose registers needed (`neededInt`).
+    pub needed_int: u32,
+    /// x86-64 SSE registers needed (`neededSSE`).
+    pub needed_sse: u32,
+}
+
+/// Classify `q` as an unnamed (variadic) argument read by `va_arg`.
+pub fn classify_va_arg(t: &mut IrTypes<'_>, q: QualType) -> VaArgInfo {
+    match t.target().arch() {
+        Arch::AArch64 => VaArgInfo { kind: aarch64_arg(t, q), needed_int: 0, needed_sse: 0 },
+        Arch::X86_64 => {
+            let (kind, needed_int, needed_sse) = x86_arg(t, q, 0);
+            VaArgInfo { kind, needed_int, needed_sse }
+        }
+    }
+}
+
+/// The `getPrimitiveSizeInBits` of a vector IR type (`<3 x i32>` is 96);
+/// zero for any other type.
+pub fn vector_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
+    match ty {
+        IrType::Vector(..) => ir_bits(t, ty),
+        _ => 0,
+    }
+}
+
 fn vector_width(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
     match ty {
         // `getPrimitiveSizeInBits`: `<3 x i32>` is 96.

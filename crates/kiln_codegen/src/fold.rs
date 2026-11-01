@@ -14,7 +14,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{RecordLayout, TypeView};
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{Oven, SemaBridge, Subobject, SubobjectId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -58,6 +58,13 @@ impl SemaBridge for Bridge<'_> {
         kiln_abi::ensure_layout(&mut *self.ast, record, self.abi)
     }
 
+    // A vector's size and alignment: the Oven lays out its lanes inside
+    // them (WP-173).
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32) {
+        let l = kiln_abi::type_size_align(self.ast, ty, self.abi);
+        (l.size, u32::try_from(l.align).unwrap_or(1))
+    }
+
     fn final_overrider(
         &mut self,
         most_derived: DeclId,
@@ -78,6 +85,12 @@ impl SemaBridge for Bridge<'_> {
     }
 
     fn diag(&mut self, _d: Diag) {}
+
+    fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
+        // The `_ZGR` global of a constant-initialized reference holds the
+        // value (write-once, as sema's bridge).
+        let _ = self.ast.decls.set_lifetime_extended_value(t, v);
+    }
 }
 
 /// Folds every candidate expression of the translation unit.
@@ -101,10 +114,12 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         }
         // A constant initializer is manifestly constant-evaluated
         // ([expr.const]/20, clang `EvaluateAsInitializer`); anything else
-        // is a trial fold (`__builtin_is_constant_evaluated()` is false).
+        // is a trial fold (`__builtin_is_constant_evaluated()` is false),
+        // lax as clang's `EvaluateAsRValue`: a `const double` or
+        // `const _Atomic(int)` variable reads as its value.
         let v = match inits.get(&e) {
             Some(&var) => oven.fold_constant_init(&mut b, e, var),
-            None => oven.try_fold(&mut b, e),
+            None => oven.fold_rvalue(&mut b, e),
         };
         if let Some(v) = v {
             folds.expr.insert(e, v);
@@ -244,6 +259,16 @@ impl Collect<'_> {
             }
             StmtKind::DefaultStmt => self.stmt(ast.stmts.default_sub(s)),
             StmtKind::LabelStmt | StmtKind::AttributedStmt => {
+                if n.kind() == StmtKind::AttributedStmt {
+                    for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
+                        let node = *ast.attrs.get(a);
+                        if node.kind == kiln_ast::attr::AttrKind::ASSUME
+                            && let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a)
+                        {
+                            self.expr(e);
+                        }
+                    }
+                }
                 if n.b() != 0 {
                     self.stmt(StmtId::new(n.b()));
                 }
@@ -421,11 +446,20 @@ impl Collect<'_> {
     }
 }
 
-/// Whether `e` (through parentheses) names a variable of const,
+/// Whether `e` (through parentheses and no-op casts) names a variable of const,
 /// non-volatile type (clang `checkVarTypeForConstantEmission`).
 pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
-    while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-        e = ast.exprs.operand(e);
+    // Through parentheses and no-op casts (the xvalue of an implicitly
+    // movable `return x;`): clang's `VisitCastExpr` visits a `CK_NoOp`
+    // operand, reaching `VisitDeclRefExpr`'s `tryEmitAsConstant`.
+    loop {
+        match ast.exprs.get(e).kind() {
+            ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::ImplicitCastExpr if ast.exprs.cast_kind(e) == CastKind::NoOp => {
+                e = ast.exprs.operand(e);
+            }
+            _ => break,
+        }
     }
     if ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
         return false;

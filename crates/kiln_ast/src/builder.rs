@@ -1959,6 +1959,37 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// `__builtin_va_arg(list, T)` (clang's `VAArgExpr`): a prvalue of
+    /// `ty` (the non-reference form of `written`, clang's
+    /// `getNonLValueExprType`) reading the next variadic argument through
+    /// the `va_list` lvalue `list`; `ty_loc` is where `written` begins
+    /// and `rparen` is the closing `)`. Dependence is `written`'s plus `list`'s without its type
+    /// dependence (clang's `computeDependence(VAArgExpr *)`).
+    pub fn va_arg_expr(
+        &mut self,
+        list: ExprId,
+        written: QualType,
+        ty: QualType,
+        ty_loc: Loc,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(written) | self.deps(list).without(ExprDeps::TYPE);
+        let e = self.simple(
+            ExprKind::VAArgExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            list.raw(),
+            written.to_raw(),
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.trait_rhs_loc.insert(e, ty_loc).expect("fresh expression");
+        e
+    }
+
     /// `noexcept(operand)` ([expr.unary.noexcept]): a `bool` prvalue whose
     /// `value` sema computed from the unevaluated `operand`; `rparen` is
     /// the closing `)`. Value-dependent if `operand` is type- or
@@ -2813,6 +2844,21 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// A union's parenthesized aggregate initialization: `init`
+    /// copy-initializes the member `field` ([dcl.init.general]/16.6.2.2).
+    pub fn paren_list_init_union(
+        &mut self,
+        ty: QualType,
+        init: ExprId,
+        field: DeclId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let e = self.paren_list_init(ty, &[init], None, loc, rparen);
+        self.ast.exprs.cold.union_field.insert(e, field).expect("fresh expression");
+        e
+    }
+
     /// An `OpaqueValueExpr` standing for `source` (same type, category,
     /// object kind and dependence); `source` is shared, not a child.
     pub fn opaque_value(&mut self, source: ExprId) -> ExprId {
@@ -3024,6 +3070,14 @@ impl<'a> AstBuilder<'a> {
     /// `Label` declaration (`a` = label, `b` = sub-statement).
     pub fn label_stmt(&mut self, label: DeclId, sub: StmtId, loc: Loc) -> StmtId {
         self.stmt(StmtKind::LabelStmt, 0, loc, label.raw(), sub.raw())
+    }
+
+    /// An attributed statement `[[attrs]] sub` ([stmt.pre]/1, clang's
+    /// `AttributedStmt`): `a` = the `AttrId` list, `b` = the statement.
+    /// `loc` is the first attribute-specifier.
+    pub fn attributed_stmt(&mut self, attrs: &[AttrId], sub: StmtId, loc: Loc) -> StmtId {
+        let list = self.ast.lists.push(attrs);
+        self.stmt(StmtKind::AttributedStmt, 0, loc, list.raw(), sub.raw())
     }
 
     /// `goto label;` ([stmt.goto]); `a` = the `Label` declaration.

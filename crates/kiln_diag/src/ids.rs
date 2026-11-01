@@ -375,6 +375,8 @@ diag_ids! {
     drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
     drv_argument_unused = Warning [UnusedCommandLineArgument] (1) "argument unused during compilation: '{0}'";
     cg_error = Error (1) "{0}";
+    cg_atomic_misaligned = Warning [AtomicAlignment] (2) "misaligned atomic operation may incur significant performance penalty; the expected alignment ({0} bytes) exceeds the actual alignment ({1} bytes)";
+    cg_atomic_oversized = Warning [AtomicAlignment] (2) "large atomic operation may incur significant performance penalty; the access size ({0} bytes) exceeds the max lock-free size ({1}  bytes)";
 
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`
@@ -648,6 +650,11 @@ diag_ids! {
     sema_va_start_not_last_named_param = Warning [Varargs] (0) "second argument to 'va_start' is not the last named parameter";
     sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object that undergoes default argument promotion|an object of reference type|a parameter declared with the 'register' keyword} to 'va_start' has undefined behavior";
     note_va_start_parameter_type = Note (1) "parameter of type {0} is declared here";
+    sema_va_arg_not_va_list = Error (1) "first argument to 'va_arg' is of type {0} and not 'va_list'";
+    sema_va_arg_incomplete = Error (1) "second argument to 'va_arg' is of incomplete type {0}";
+    sema_va_arg_abstract = Error (1) "second argument to 'va_arg' is of abstract type {0}";
+    sema_va_arg_not_pod = WarningError [NonPodVarargs] (1) "second argument to 'va_arg' is of non-POD type {0}";
+    sema_va_arg_never_compatible = Warning [Varargs] (2) "second argument to 'va_arg' is of promotable type {0}; this va_arg has undefined behavior because arguments will be promoted to {1}";
     sema_refconst_no_ctor = Warning (2) "{0:struct|interface|union|class|enum} {1} does not declare any constructor to initialize its non-modifiable members";
     note_refconst_member_not_initialized = Note (2) "{0:const|reference} member {1} will never be initialized";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
@@ -687,6 +694,7 @@ diag_ids! {
     sema_vla_decl_in_file_scope = Error (0) "variable length array declaration not allowed at file scope";
     sema_vla_cxx_extension = Warning [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
     sema_vla_unsupported = Error (0) "variable length arrays are not supported yet";
+    sema_vla_folded_to_constant = ExtWarn [GnuFoldingConstant] (0) "variable length array folded to constant array as an extension";
     sema_expr_not_ice = Error (0) "expression is not an integral constant expression";
     sema_bitfield_negative_width = Error (2) "bit-field '{0}' has negative width ({1})";
     sema_anon_bitfield_negative_width = Error (1) "anonymous bit-field has negative width ({0})";
@@ -782,7 +790,8 @@ diag_ids! {
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
     sema_addrof_bitfield = Error (0) "address of bit-field requested";
     sema_addrof_vector_element = Error (0) "address of vector element requested";
-    sema_incdec_bool = Error (1) "ISO C++17 does not allow {0:incrementing|decrementing} expression of type bool";
+    sema_increment_bool = WarningError [IncrementBool] (0) "ISO C++17 does not allow incrementing expression of type bool";
+    sema_decrement_bool = Error (0) "cannot decrement expression of type bool";
     sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
     sema_ovl_no_viable_function_in_call = Error (1) "no matching function for call to '{0}'";
     note_ovl_candidate_not_viable = Note (1) "candidate function not viable: {0}";
@@ -834,6 +843,8 @@ diag_ids! {
     sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
     sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
     sema_excess_initializers = Error (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
+    sema_init_reference_member_uninitialized = Error (1) "reference member of type {0} uninitialized";
+    note_uninit_reference_member = Note (0) "uninitialized reference member is here";
     sema_builtin_func_cast_more_than_one_arg = Error (0) "function-style cast to a builtin type can only take one argument";
     sema_reference_bind_to_init_list = Error (1) "reference to type {0} cannot bind to an initializer list";
     sema_array_init_not_init_list = Error (1) "array initializer must be an initializer list{0:| or string literal| or wide string literal}";
@@ -1297,6 +1308,12 @@ diag_ids! {
     // WP-087
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
+    // [dcl.attr.assume] (WP-160)
+    sema_assume_side_effects = Warning [Assume] (0) "assumption is ignored because it contains (potential) side-effects";
+    parse_assume_attr_expects_cond_expr = Error (1) "use of this expression in an '{0}' attribute requires parentheses";
+    sema_attribute_wrong_stmt_type = Error (2) "'{0}' attribute only applies to {1}";
+    sema_stmt_attribute_on_decl = Error (1) "'{0}' attribute cannot be applied to a declaration";
+    ext_cxx23_attr = Extension [Cxx23AttributeExtensions] (1) "use of the '{0}' attribute is a C++23 extension";
     sema_auto_non_deduced_not_alone = Error (1) "{0:function with deduced return type|declaration with trailing return type} must be the only declaration in its group";
     note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflicting {0:types|values|templates} for parameter '{1}' ({2} vs. {3})";
     note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";
@@ -1383,6 +1400,9 @@ diag_ids! {
     sema_init_not_class = Error (1) "constructor initializer {0} does not name a class";
     sema_ref_uninit_use = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used here";
     sema_base_uninit_use = Warning [Uninitialized] (2) "base class {0} is uninitialized when used here to access {1}";
+    sema_uninit_self_reference_in_init = Warning [Uninitialized] (1) "variable {0} is uninitialized when used within its own initialization";
+    sema_uninit_self_reference_in_reference_init = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used within its own initialization";
+    sema_static_self_reference_in_init = Warning [StaticSelfInit] (1) "static variable {0} is suspiciously used within its own initialization";
     note_uninit_in_ctor = Note (1) "during field initialization in {0:this|the implicit default} constructor";
     sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";
     note_reorder_ctor = Note (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
@@ -1530,6 +1550,15 @@ diag_ids! {
     sema_ptrmem_value_classify = Error (2) "pointer-to-member function type {0} can only be called on an {1:rvalue|lvalue}";
     sema_ptrmem_call_drops_quals = Error (3) "call to pointer to member function of type {0} drops '{1}' qualifier{2:|s}";
     sema_conditional_ambiguous = Error (2) "conditional expression is ambiguous; {0} can be converted to {1} and vice versa";
+    // clang `CheckVectorConditionalTypes` (WP-173); the stray `}` in
+    // `..._mismatched` is clang 19's (a `%diff` typo in the .td file).
+    sema_conditional_vector_has_void = Error (1) "GNU vector conditional operand cannot be {0:void|a throw expression}";
+    sema_conditional_vector_operand_type = Error (1) "enumeration type {0} is not allowed in a vector conditional";
+    sema_conditional_vector_cond_result_mismatch = Error (0) "cannot mix vectors and extended vectors in a vector conditional";
+    sema_conditional_vector_mismatched = Error (2) "vector operands to the vector conditional must be the same type ({0} and {1})}}";
+    sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
+    sema_conditional_vector_element_size = Error (2) "vector condition type {0} and result type {1} do not have elements of the same size";
+    sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
 }
 
 impl DiagId {

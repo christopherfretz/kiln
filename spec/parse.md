@@ -672,6 +672,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
       `expected ','`, `expected identifier` (skip past `)`), a missing
       `]` (reported, parsing continues) and a missing `)` (reported;
       the expression fails).
+    - `__builtin_va_arg ( assignment-expression , type-id )` (WP-171) goes
+      to `act_on_va_arg` with the type's begin location and the `)`.
+      Errors as clang: `expected '(' after '__builtin_va_arg'`,
+      `expected ','`, a missing `)`.
 - **The GNU `x ?: y`** goes to `act_on_binary_conditional`; the middle
   operand of an ordinary `?:` is a full expression.
 - **Missing closers** (`expect_closing`) are reported at the current
@@ -793,6 +797,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     declaration
   - the class-head and enum-head, for the tag (`act_on_tag_attrs`)
   - before a statement, for the statement (`fallthrough`, `likely`)
+- **`[[assume(e)]]` (WP-160):** `parse_assume_arg` parses a
+  conditional-expression. If the next token is not `)`, it reparses the
+  full expression, reports `use of this expression in an 'assume'
+  attribute requires parentheses` at its expression location, and drops
+  the attribute. A statement whose leading `[[...]]` holds an `assume`
+  goes through `act_on_attributed_stmt` after the sub-statement is parsed,
+  passing whether the standard is before C++23 (sema has no standard).
 
 ## 7. Driver (`kiln -fsyntax-only [-fdump-ast]`)
 - The driver builds the preprocessor exactly as `-E` does

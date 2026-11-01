@@ -280,6 +280,14 @@ impl Sema<'_, '_> {
     /// Whether calling through `callee` may throw: its (pointer to)
     /// function type does not have a non-throwing exception specification.
     fn callee_can_throw(&self, callee: ExprId) -> bool {
+        // clang `canCalleeThrow`: a callee declared with `NoThrowAttr`
+        // (a recognized C library function, spec/sema.md §5.4) cannot.
+        let c = self.ignore_paren_imp_casts(callee);
+        if self.ast.exprs.get(c).kind() == ExprKind::DeclRefExpr
+            && self.ast.has_nothrow_attr(self.ast.exprs.decl(c))
+        {
+            return false;
+        }
         let t = &self.ast.types;
         let mut ty = self.ast.exprs.get(callee).ty();
         if let Some(p) = t.pointee(ty) {

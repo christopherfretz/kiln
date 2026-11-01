@@ -103,6 +103,15 @@ pub struct AttrNode {
     pub b: u32,
 }
 
+impl AttrNode {
+    /// `[[assume]]` flag (bit 2): the assumption has possible side
+    /// effects and is ignored (clang `-Wassume`): neither assumed by
+    /// codegen nor checked by constant evaluation. For `ASSUME`, `a` is
+    /// the assumption (`ExprId`) and `b` the raw `Loc` of its clang
+    /// `getExprLoc`, where constant evaluation reports it false.
+    pub const ASSUME_IGNORED: u8 = 4;
+}
+
 /// Attribute nodes and the declaration → attributes map.
 #[derive(Debug)]
 pub struct AttrArena {

@@ -242,7 +242,7 @@ exact type, name mangling (`overloaded_name`: `llvm.memcpy.p0.p0.i64`) and
 **built-in attributes** (LLVM's parser adds them, so declaring them
 ourselves is what makes our text canonical): `memcpy`, `memmove`, `memset`,
 `lifetime_start`/`_end`, `trap`, `debugtrap`, `with_overflow` (six ops),
-`va_start`/`va_end`/`va_copy`, `stacksave`/`stackrestore`,
+`va_start`/`va_end`/`va_copy`, `ptrmask` (`llvm.ptrmask.p0.i64`), `stacksave`/`stackrestore`,
 `threadlocal_address`, `eh_typeid_for`, `expect`, `assume`, `abs`, `ctlz`,
 `cttz`, `ctpop`, `bswap`, `fabs`, `dbg_declare`/`dbg_value`. Each helper
 returns the existing declaration if present.
