@@ -232,6 +232,17 @@ impl Sema<'_, '_> {
         matches!(self.ast.types.view(self.ast.types.canonical(q).ty()), TypeView::Auto { .. })
     }
 
+    /// The base element type of `q` if it is an array of known bound,
+    /// else `q` (clang's `getBaseElementType` in the variable and field
+    /// completeness checks).
+    pub(crate) fn bounded_array_element(&self, q: QualType) -> QualType {
+        if matches!(self.ast.types.canonical_view(q), TypeView::ConstantArray(_)) {
+            self.base_element(q)
+        } else {
+            q
+        }
+    }
+
     /// True if `q` is a complete object type here (a class is incomplete
     /// until its closing brace).
     pub fn is_complete(&self, q: QualType) -> bool {
@@ -651,7 +662,11 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         return QualType::ERROR;
                     }
-                    if !self.require_complete(ty, spec_loc) {
+                    // [dcl.array]/1, /3 (clang `BuildArrayType`): in C++
+                    // only an array of unknown bound is rejected here; an
+                    // incomplete class element is checked where the array
+                    // type must be complete ([basic.types.general]/6).
+                    if matches!(t.canonical_view(ty), TypeView::IncompleteArray(_)) {
                         let msg = self
                             .diag(DiagId::sema_array_incomplete_type, *loc)
                             .arg(self.ty_arg(ty));
@@ -2635,10 +2650,12 @@ impl Sema<'_, '_> {
             QualType::ERROR
         } else if !invalid
             && !self.ast.types.is_reference(ty)
-            && !self.require_complete(ty, d.name_loc())
+            && !self.require_complete(self.bounded_array_element(ty), d.name_loc())
         {
-            let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
-            self.emit(self.incomplete_note(msg, ty));
+            // clang checks (and names) the element type of a bounded array.
+            let elem = self.bounded_array_element(ty);
+            let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(elem));
+            self.emit(self.incomplete_note(msg, elem));
             // clang marks the field invalid: initialization never
             // descends into it (a field of the class's own type would
             // recurse forever).
@@ -2979,6 +2996,20 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_var_init(v, e);
             return;
         }
+        // clang `AddInitializerToDecl`: a bounded array of an incomplete
+        // element (now formable, [dcl.array]/1) is diagnosed under the
+        // full variable type at the variable's name.
+        if matches!(self.ast.types.canonical_view(ty), TypeView::ConstantArray(_))
+            && !self.ast.types.is_dependent(ty)
+            && !self.require_complete(self.bounded_array_element(ty), loc)
+        {
+            let msg =
+                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
+            self.emit(self.incomplete_note(msg, self.bounded_array_element(ty)));
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.discard_initializer(&init);
+            return;
+        }
         let e = self.perform_init(ty, init, loc, direct);
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
             // P0960 (clang's `parenlistinit`).
@@ -3240,13 +3271,15 @@ impl Sema<'_, '_> {
         if spec.storage() == VarStorage::Extern {
             return;
         }
-        if !self.require_complete(ty, self.ast.decls.get(v).loc()) {
-            let msg = if self.ast.types.is_void(ty) {
-                self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty))
+        // clang checks (and names) the element type of a bounded array.
+        let elem = self.bounded_array_element(ty);
+        if !self.require_complete(elem, self.ast.decls.get(v).loc()) {
+            let msg = if self.ast.types.is_void(elem) {
+                self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(elem))
             } else {
-                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty))
+                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(elem))
             };
-            self.emit(self.incomplete_note(msg, ty));
+            self.emit(self.incomplete_note(msg, elem));
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return;
         }
