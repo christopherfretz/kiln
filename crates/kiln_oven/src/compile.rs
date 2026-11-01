@@ -1930,7 +1930,10 @@ impl Compiler<'_> {
             // variable of non-literal type, named with its initializer's
             // whole (array) type.
             let t = Oven::type_name(ast, ast.exprs.get(init).ty().without_quals());
-            self.trap(init, &format!("non-literal type '{t}' cannot be used in a constant expression"));
+            self.trap(
+                init,
+                &format!("non-literal type '{t}' cannot be used in a constant expression"),
+            );
         }
         let ty = self.ty(q);
         let local = self.locals.get(&d).copied();

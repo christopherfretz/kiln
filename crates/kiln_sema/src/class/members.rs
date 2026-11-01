@@ -350,8 +350,9 @@ impl Sema<'_, '_> {
             && !bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
             && !bits.contains(DefinitionBits::LAMBDA)
         {
-            return msg
-                .with_note(self.diag(DiagId::note_non_literal_no_constexpr_ctors, def_loc).arg(rd));
+            return msg.with_note(
+                self.diag(DiagId::note_non_literal_no_constexpr_ctors, def_loc).arg(rd),
+            );
         }
         for b in self.ast.decls.bases(def, &self.ast.lists) {
             if !self.is_literal_type(b.ty) {
@@ -393,8 +394,11 @@ impl Sema<'_, '_> {
                 .is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None)
         {
             msg = msg.with_note(
-                self.diag(DiagId::note_non_literal_non_constexpr_dtor, self.ast.decls.get(dtor).loc())
-                    .arg(rd),
+                self.diag(
+                    DiagId::note_non_literal_non_constexpr_dtor,
+                    self.ast.decls.get(dtor).loc(),
+                )
+                .arg(rd),
             );
         }
         msg
