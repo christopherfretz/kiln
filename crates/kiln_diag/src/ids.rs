@@ -844,6 +844,22 @@ diag_ids! {
     sema_switch_into_protected_scope = Error (0) "cannot jump from switch statement to this case label";
     sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
     note_protected_by_variable_init = Note (0) "jump bypasses variable initialization";
+    // ----- jump-scope checking (WP-153; clang JumpDiagnostics.cpp)
+    sema_indirect_goto_in_protected_scope = Error (1) "cannot jump from this {0:indirect|asm} goto statement to one of its possible targets";
+    note_indirect_goto_target = Note (1) "possible target of {0:indirect|asm} goto statement";
+    note_protected_by_variable_nontriv_destructor = Note (0) "jump bypasses variable with a non-trivial destructor";
+    note_protected_by_vla = Note (0) "jump bypasses initialization of variable length array";
+    note_protected_by_vla_typedef = Note (0) "jump bypasses initialization of VLA typedef";
+    note_protected_by_vla_type_alias = Note (0) "jump bypasses initialization of VLA type alias";
+    note_protected_by_constexpr_if = Note (0) "jump enters controlled statement of constexpr if";
+    note_protected_by_consteval_if = Note (0) "jump enters controlled statement of consteval if";
+    note_protected_by_cxx_try = Note (0) "jump bypasses initialization of try block";
+    note_protected_by_cxx_catch = Note (0) "jump bypasses initialization of catch block";
+    note_enters_statement_expression = Note (0) "jump enters a statement expression";
+    note_exits_dtor = Note (0) "jump exits scope of variable with non-trivial destructor";
+    note_exits_temporary_dtor = Note (0) "jump exits scope of lifetime-extended temporary with non-trivial destructor";
+    note_exits_cxx_try = Note (0) "jump exits try block";
+    note_exits_cxx_catch = Note (0) "jump exits catch block";
     // ----- classes (WP-066b; clang SemaDeclCXX.cpp, SemaAccess.cpp,
     // SemaExprMember.cpp, SemaExprCXX.cpp)
     sema_base_not_class = Error (0) "base specifier must name a class";
@@ -1179,6 +1195,10 @@ diag_ids! {
     sema_call_too_many_args_at_most = Error (2) "too many arguments to function call, expected at most {0}, have {1}";
     sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
     sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";
+    sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant integer";
+    sema_argument_invalid_range = Error (3) "argument value {0} is outside the valid range [{1}, {2}]";
+    sema_probability_not_constant_float = Error (0) "probability argument to __builtin_expect_with_probability must be constant floating-point expression";
+    sema_probability_out_of_range = Error (0) "probability argument to __builtin_expect_with_probability is outside the range [0.0, 1.0]";
     sema_builtin_passing_incompatible = Error (2) "passing {0} to parameter of incompatible type {1}";
     sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";
     sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";

@@ -59,6 +59,13 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId) -> bool {
         && (ast.types.is_integral(q) || ast.types.is_floating(q))
 }
 
+/// The argument of the builtin call `e` codegen folds rather than emits
+/// (the `__builtin_isfpclass` mask), for the fold prepass.
+pub(crate) fn folded_arg(ast: &Ast, e: ExprId) -> Option<ExprId> {
+    let (_, b) = builtin_callee(ast, e)?;
+    (b == id::ISFPCLASS).then(|| ast.lists.iter(ast.exprs.call_args(e)).nth(1)).flatten()
+}
+
 /// The name of the library function a library builtin calls (clang
 /// `getBuiltinLibFunction`), `None` for a builtin that is not one.
 fn lib_name(b: u32) -> Option<&'static str> {
@@ -261,6 +268,22 @@ impl Cg<'_> {
                 let rt = self.lty(q);
                 self.cast(CastOp::ZExt, r, rt)
             }
+            id::ISFPCLASS => {
+                // clang: the mask is an integer constant, folded, not emitted.
+                let Some(m) = arg(1) else {
+                    return err(self.loc_of(e), "__builtin_isfpclass without a mask");
+                };
+                let Some(test) = self.fold_int(m) else {
+                    return err(self.loc_of(e), "__builtin_isfpclass mask is not a constant");
+                };
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let f = kiln_llvm::intrinsics::is_fpclass(&mut self.m, ty);
+                let t = V::C(self.m.const_int(LTy::I32, test));
+                let r = self.intrinsic_call(f, vec![x, t]);
+                let rt = self.lty(q);
+                self.cast(CastOp::ZExt, r, rt)
+            }
             id::SIGNBIT => {
                 // clang `EmitSignBit`: the sign of the bits as an integer.
                 let x = self.emit_scalar(a0)?;
@@ -365,8 +388,9 @@ impl Cg<'_> {
             id::FPCLASSIFY => {
                 return self.builtin_fpclassify(e, &args).map(|v| BuiltinCall::Emitted(Some(v)));
             }
-            id::EXPECT => {
-                // At -O0 clang returns the value (both operands emitted).
+            id::EXPECT | id::EXPECT_WITH_PROBABILITY => {
+                // At -O0 clang returns the value (the value and the expected
+                // value emitted; the probability is only folded).
                 let x = self.emit_scalar(a0)?;
                 if let Some(a1) = arg(1) {
                     self.emit_scalar(a1)?;
