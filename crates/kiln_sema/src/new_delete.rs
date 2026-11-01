@@ -543,7 +543,13 @@ impl Sema<'_, '_> {
         if array_form {
             // [expr.new]/27: the destructor of an array's elements is
             // potentially invoked (odr-used, [basic.def.odr]/8).
-            self.mark_element_dtor_referenced(elem, loc);
+            // clang `BuildCXXNew` diagnoses both at the type's location,
+            // an inaccessible one as for a temporary.
+            let at = tid.loc;
+            let access = DiagId::sema_temp_dtor_access;
+            if self.mark_element_dtor_referenced(elem, (at, access), at).is_none() {
+                return self.recover_err(&kids, loc);
+            }
         }
         let mut flags = ExprFlags::NONE;
         if global {
@@ -1371,7 +1377,15 @@ impl Sema<'_, '_> {
             elem = self.ast.types.element(elem).unwrap_or(QualType::ERROR);
         }
         // [expr.delete]/6: the destructor is invoked.
-        let destructed = complete && self.mark_element_dtor_referenced(elem, loc);
+        let destructed = if complete {
+            let at = self.expr_loc(operand);
+            match self.mark_element_dtor_referenced(elem, (at, DiagId::sema_access_dtor), loc) {
+                Some(d) => d,
+                None => return self.recover_err(&[operand], loc),
+            }
+        } else {
+            false
+        };
         let align = if complete {
             crate::target::size_align(&self.ast, elem, &self.abi).map_or(1, |(_, a)| a)
         } else {
@@ -1407,24 +1421,50 @@ impl Sema<'_, '_> {
 impl Sema<'_, '_> {
     /// Marks the destructor of `elem`'s innermost element class as
     /// referenced (odr-used, [basic.def.odr]/8) when it is non-trivial,
-    /// returning whether it is.
-    fn mark_element_dtor_referenced(&mut self, mut elem: QualType, loc: Loc) -> bool {
+    /// returning whether it is; `None` after diagnosing a deleted
+    /// destructor at `loc` (clang `DiagnoseUseOfDecl`, the expression
+    /// fails). An inaccessible one is diagnosed with `access` = (location,
+    /// diagnostic), clang `CheckDestructorAccess`.
+    fn mark_element_dtor_referenced(
+        &mut self,
+        mut elem: QualType,
+        access: (Loc, DiagId),
+        loc: Loc,
+    ) -> Option<bool> {
         while let Some(e) = self.ast.types.element(elem) {
             elem = e;
         }
         let Some(def) = self.ast.types.as_record(elem).and_then(|r| self.ast.definition(r)) else {
-            return false;
+            return Some(false);
         };
-        let defn = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
-        if defn.contains(DefinitionBits::TRIVIAL_DTOR) {
-            return false;
+        let cflags = self.ast.decls.get(def).flags();
+        if cflags.contains(DeclFlags::INVALID) || cflags.contains(DeclFlags::DEPENDENT_CTX) {
+            return Some(false);
         }
-        if let Selected::Found(m) =
-            self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
-        {
-            self.mark_function_referenced(m, loc);
+        let trivial = self
+            .ast
+            .decls
+            .record(def)
+            .is_some_and(|r| r.defn.contains(DefinitionBits::TRIVIAL_DTOR));
+        match self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
+            Selected::Found(m) => {
+                let msg = self.special_member_access(m, def, |s, prot| {
+                    s.diag(access.1, access.0).arg(s.ty_arg(elem)).arg(u8::from(prot))
+                });
+                if let Some(msg) = msg {
+                    self.emit(msg);
+                }
+                if !trivial {
+                    self.mark_function_referenced(m, loc);
+                }
+            }
+            Selected::Deleted(m) => {
+                self.diagnose_deleted_use(m, loc);
+                return None;
+            }
+            _ => {}
         }
-        true
+        Some(!trivial)
     }
 }
 
