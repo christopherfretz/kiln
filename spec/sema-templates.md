@@ -3815,6 +3815,44 @@ declarator scopes.**
   `templates/order/temp.spec.partial.order-empty-pack.cpp`,
   `templates/spec/temp.spec.partial.match-cv-array.cpp`.
 
+**Landed (WP-117): out-of-line members and specialization follow-ups.**
+- *Declarator scope*: the parser brackets a qualified declarator's
+  suffix with `act_on_enter_declarator_scope` /
+  `act_on_exit_declarator_scope` (clang `EnterDeclaratorScope`), so
+  `S::vt S::f(vt)` finds `vt` in `S`. The injected-class-name is found
+  through that scope, and `typename A<T>::vt A<T>::g(vt)` is rebuilt in
+  the current instantiation (`rebuild_in_current_instantiation`) to
+  match the in-class declaration, including partial-specialization
+  qualifiers `P<T*>::f`.
+- *Member specializations*: `template<> int A<long>::s = 9;` explicitly
+  specializes the static member (`act_on_explicit_member_var_spec`).
+  `template<> template<class U> int A<long>::g(U)` declares a member
+  template of `A<long>`. The parser passes the number of empty
+  `template<>` heads (`act_member_template_spec_prefix`), and
+  `take_template_head` consumes them for the enclosing specializations.
+  The result is recorded in `InstState::member_template_specs`, and
+  `inst_template` instantiates its specializations from that
+  redeclaration, not from the class pattern (clang
+  `isMemberSpecialization`).
+- *Invalid bodies*: errors while instantiating a nested function body
+  are counted separately (`InstState::body_errors`). They do not make
+  the calling statement invalid. A call that names an invalid function
+  through a plain `DeclRefExpr` recovers without a follow-on error
+  (clang `RecoveryExpr`); member calls and explicit template-id calls
+  still report one.
+- *Placeholder NTTPs* (`auto*`, `const auto&`, `decltype(auto)`) are
+  deduced through `deduce_auto`; a failure is
+  `sema_nttp_deduction_failed`.
+- *Printer*: a member call keeps its explicit template arguments
+  (`s.get<0>()`); sema stores them on the `MemberExpr`
+  (`set_member_template_args`).
+- Tests: `templates/spec/temp.expl.spec-member-not-instantiated.cpp`,
+  `templates/spec/temp.inst-invalid-member-call.cpp`,
+  `templates/spec/temp.inst-member-template-args-printed.cpp`,
+  `templates/spec/temp.expl.spec-static-member-{run,after-use}.cpp`,
+  `templates/nttp/temp.param-placeholder-deduction.cpp`,
+  `basic.lookup.unqual/qualified-declarator-run.cpp`.
+
 ### 11.3 Instantiation report and memory accounting
 
 **Meter.** Each instantiation frame records, at push, `(Ast::bytes(),

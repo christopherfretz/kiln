@@ -1,6 +1,6 @@
 # WP-117 progress — template mangling correctness + WP-106 follow-ups
 
-## Done (uncommitted -> WIP commits)
+## Done
 - Headline bug root cause: codegen emitted *templated* out-of-line member
   definitions (pattern `A<T>::g`) as `_ZN1A1gEv`. Fix: `ModuleCx::is_templated`
   (walks ctx chain; template kinds / Pattern / PartialSpecialization /
@@ -71,6 +71,27 @@
   templates/nttp/temp.param-placeholder-deduction.cpp.
 - mangle_vs_clang: 725 clang symbols/triple.
 
+- Deliverable 3: `template<> template<class U> int A<long>::g(U)` (parser
+  passes the empty-head count; `take_template_head` consumes them;
+  `inst_template` instantiates from the member-specialized redeclaration).
+  Errors in a nested instantiated body no longer invalidate the caller
+  (`InstState::body_errors`); a direct call of an invalid function
+  recovers silently (clang RecoveryExpr). The ExplicitSpecialization early
+  return and invalid-on-failed-body parts were already on main by the time
+  this landed; the tests below cover them.
+- Deliverable 4: `_ZGR` backing arrays of namespace-scope initializer_lists
+  are `constant` (other materialized temporaries stay `global`). Constructor
+  templates with `std::initializer_list<T>` parameters work, and their
+  mangling needed dependent template-specialization types
+  (`St16initializer_listIT_E`, nested `N1N1WIT_EE`, template template
+  parameters `T_IT0_E` with clang's substitutions). The printer keeps
+  explicit template args on member calls.
+- Deliverable 5: spec Landed entries: abi.md §8.14, sema-templates.md
+  (WP-117 block), codegen.md §7f backing arrays, ast-dump.md.
+- Tests: tests/mangle/dependent_spec.cpp, tests/codegen/init_list_global.cpp,
+  templates/spec/temp.expl.spec-member-not-instantiated.cpp,
+  temp.inst-invalid-member-call.cpp, temp.inst-member-template-args-printed.cpp.
+
 ## Gaps found (out of scope, for handback)
 - codegen `UserDefinedConversion` cast unsupported (even non-template).
 - `a.operator int()` -> "expected unqualified-id" (wp-121?).
@@ -78,9 +99,12 @@
 - `Tk`/`Tt`/`Q` requires-clause mangling, constrained `Dk` not implemented.
 - general `-Wreturn-stack-address` (`return &x;`) missing.
 
-## Next
-- Deliverable 3: `template<> template<class U> int A<long>::g(U)`;
-  ExplicitSpecialization early return; failed body instantiation -> invalid.
-- Deliverable 4: `_ZGR` namespace-scope temporaries; ctor templates with
-  initializer_list params; printer explicit member template args.
-- Deliverable 5: spec Landed entries.
+- `let_global` treats any constant-initialized const array temporary as
+  constant; this is right for initializer_list backing arrays, but
+  `const A (&r)[2] = {...}` paths have not been checked separately.
+- Deferred-emission order: clang instantiates constexpr functions eagerly,
+  so they are emitted earlier and their callers can be inferred `nounwind`.
+  kiln emits in first-reference order (the constexpr variant of
+  init_list_global.cpp differs only in `#0`/`#2`).
+- `auto&& __range = global` in a range-for: clang folds the reference to
+  the global's address (constant-emitted reference); kiln loads it.
