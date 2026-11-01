@@ -35,6 +35,6 @@
     <g id="kb-k"><path d="M0,-144H28V0H0Z" fill="#f4efe6"/><path d="M33,-50L63,-100H99L69,-50L99,0H63Z" fill="url(#kb-chev)"/></g>
     <g id="kb-i" transform="translate(121,0)"><path d="M0,-100H28V0H0Z" fill="#f4efe6"/><path d="M14,-114C3,-114 -3,-122 0,-132C2,-138 6,-141 7,-148C11,-143 13,-137 12,-131C17,-137 20,-146 18,-158C28,-150 32,-138 29,-126C27,-118 21,-114 14,-114Z" fill="url(#kb-tittle)"/></g>
     <path id="kb-l" transform="translate(173,0)" d="M0,-144H28V0H0Z" fill="#f4efe6"/>
-    <path id="kb-n" transform="translate(225,0)" d="M0,0V-100H28V0ZM28,-50A22,22 0 0 1 72,-50V0H100V-50A50,50 0 0 0 28,-94.9Z" fill="#f4efe6"/>
+    <path id="kb-n" transform="translate(225,0)" d="M0,0V-100H28V-94.9A50,50 0 0 1 100,-50V0H72V-50A22,22 0 0 0 28,-50V0Z" fill="#f4efe6"/>
   </g>
 </svg>

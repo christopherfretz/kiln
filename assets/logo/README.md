@@ -6,7 +6,7 @@ canonical files live here at the top level:
 | File | Use |
 | --- | --- |
 | `kiln-logo.svg` / `kiln-logo-dark.svg` | mark + wordmark lockup |
-| `kiln-banner.svg` / `kiln-banner-dark.svg` | lockup + tagline "C++26 COMPILER FRONTEND IN RUST" (README header) |
+| `kiln-banner.svg` / `kiln-banner-dark.svg` | lockup + tagline "C++26 LLVM FRONTEND IN RUST" (README header) |
 | `kiln-mark.svg` / `kiln-mark-dark.svg` | square mark with the C++ plate (avatars, 64 px and up) |
 | `kiln-favicon.svg` / `kiln-favicon-dark.svg` | square mark without the plate (favicon, 16-48 px) |
 | `kiln-social.svg` | 1280x640 repository social card (dark) |
@@ -23,6 +23,9 @@ All files are hand-written, self-contained SVG: no fonts, no `<text>`, no
 rasters, no external references, no scripts. The wordmark is outlined
 geometric letterforms (x-height 100 u, ascender 144 u, stem 28 u) whose
 ascender spans the mark's stem band; the tagline is stroked monoline caps.
+Each wordmark glyph is a single outline (the n's stem and arch, and concept
+A's k, are unioned into one path), so no anti-aliasing seam can appear where
+sub-shapes would otherwise meet.
 Each `-dark` file is tuned for dark backgrounds (GitHub dark is `#0d1117`).
 
 The exploration that led here is kept below: three first-round concepts
@@ -80,7 +83,7 @@ trapezoid teeth, a plain bore, no R and no rivets.
   bracket's mouth, so the mark reads `K++`; gear tittle in the wordmark.
 
 Each variant has `kiln-mark`, `kiln-logo` and `kiln-banner` (lockup with
-the tagline "C++26 COMPILER FRONTEND IN RUST" in stroked monoline caps),
+the tagline "C++26 LLVM FRONTEND IN RUST" in stroked monoline caps),
 each with a `-dark` twin, plus `kiln-social.svg` (1280x640); B3's set is
 the top-level files. B2 and B3 add `kiln-favicon[-dark].svg`: the plate is
 unreadable at 32 px, so the favicon drops it (B3's favicon is the B1 gear

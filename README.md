@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo/kiln-banner-dark.svg">
-    <img src="assets/logo/kiln-banner.svg" alt="kiln: C++26 compiler frontend in Rust" width="480">
+    <img src="assets/logo/kiln-banner.svg" alt="kiln: C++26 LLVM frontend in Rust" width="480">
   </picture>
 </p>
 
