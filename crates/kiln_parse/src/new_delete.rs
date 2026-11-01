@@ -158,9 +158,11 @@ impl Parser<'_, '_> {
                 | Punct::LParen
                 | Punct::Ellipsis,
             ) => true,
+            // `new (void (T::*)())`: a member-pointer declarator.
             _ => {
                 self.is_type_id_start(j + 1)
                     || self.kw_of(after).is_some_and(crate::decl::is_decl_specifier_kw)
+                    || self.member_pointer_at(j + 1).is_some()
             }
         }
     }

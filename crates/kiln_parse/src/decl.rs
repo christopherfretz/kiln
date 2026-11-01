@@ -1316,14 +1316,18 @@ impl Parser<'_, '_> {
     /// True at `N::*` (a ptr-operator naming a member pointer): the index
     /// of the `*`. The components may be template-ids (`X<T>::*`).
     pub(crate) fn at_member_pointer(&self) -> Option<usize> {
-        let mut i = self.pos();
+        self.member_pointer_at(self.pos())
+    }
+
+    /// [`Parser::at_member_pointer`] at token `i`.
+    pub(crate) fn member_pointer_at(&self, mut i: usize) -> Option<usize> {
         let mut any = false;
         if let Some(cc) = self.decltype_scope_end(i) {
             // `decltype(e)::*` (WP-119).
             i = cc + 1;
             any = true;
         } else if self.tok_at(i).kind == TokKind::Punct(Punct::ColonColon) {
-            any = self.at_decltype_scope();
+            any = self.is_decltype_scope_at(i);
             i += 1;
         }
         loop {

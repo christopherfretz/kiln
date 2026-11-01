@@ -410,7 +410,7 @@ impl Sema<'_, '_> {
         };
         let fty = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
         self.ctor_entity = Some((InitEntity::Field(field), ConstructionKind::Complete));
-        let e = self.mem_init_value(fty, info);
+        let e = self.with_init_entity(crate::init::entity::MEMBER, |s| s.mem_init_value(fty, info));
         self.ctor_entity = None;
         if self.ast.types.is_reference(fty) {
             self.check_dangling_temporary(BindingSite::Member(field), e);
@@ -521,7 +521,8 @@ impl Sema<'_, '_> {
             ConstructionKind::NonVirtualBase
         };
         self.ctor_entity = Some((InitEntity::Base { inherited_virtual: inherited }, ck));
-        let e = self.mem_init_value(spec.ty, info);
+        let e =
+            self.with_init_entity(crate::init::entity::BASE, |s| s.mem_init_value(spec.ty, info));
         self.ctor_entity = None;
         if self.is_err_expr(e) {
             return None;
