@@ -1382,8 +1382,26 @@ pub enum LinkageLang {
 pub struct ScopeData {
     /// Lexical members.
     pub members: Members,
-    /// `LinkageSpec`: the [`LinkageLang`]; else 0.
+    /// `LinkageSpec`: the [`LinkageLang`] in the low byte, plus
+    /// [`ScopeData::LINKAGE_BRACELESS`]; else 0.
     pub aux: u32,
+}
+
+impl ScopeData {
+    /// `aux` bit of a `LinkageSpec` written without braces
+    /// (`extern "C" int x;`); its declaration is treated as if it had
+    /// `extern` when deciding whether it is a definition ([dcl.link]/8,
+    /// clang `isSingleLineLanguageLinkage`).
+    pub const LINKAGE_BRACELESS: u32 = 1 << 8;
+
+    /// The language of a `LinkageSpec`'s payload.
+    pub fn linkage_lang(&self) -> Option<LinkageLang> {
+        match self.aux & 0xff {
+            1 => Some(LinkageLang::C),
+            2 => Some(LinkageLang::Cxx),
+            _ => None,
+        }
+    }
 }
 
 /// Payload of `StaticAssert` (8 bytes).
@@ -2033,6 +2051,20 @@ impl DeclArena {
         } else {
             n.ctx
         }
+    }
+
+    /// Marks the linkage specification `ls` as written without braces.
+    pub fn set_linkage_braceless(&mut self, ls: DeclId) {
+        self.scope_mut(ls).aux |= ScopeData::LINKAGE_BRACELESS;
+    }
+
+    /// True if `d` is directly contained in a linkage specification
+    /// written without braces (`extern "C" int x;`, [dcl.link]/8).
+    pub fn is_single_line_linkage(&self, d: DeclId) -> bool {
+        self.lexical_ctx(d).is_some_and(|c| {
+            self.get(c).kind() == DeclKind::LinkageSpec
+                && self.scope(c).is_some_and(|s| s.aux & ScopeData::LINKAGE_BRACELESS != 0)
+        })
     }
 
     /// The typedef naming unnamed tag `d` for linkage purposes

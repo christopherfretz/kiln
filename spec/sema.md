@@ -623,6 +623,23 @@ and returns the scope it names:
     implicit `UsingDirectiveDecl` ([namespace.unnamed]).
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
 - **`extern "C"`/`"C++"`** creates a `LinkageSpecDecl`.
+  - Without braces (`extern "C" int x;`) the parser calls
+    `act_on_linkage_spec_braceless`, which sets
+    `ScopeData::LINKAGE_BRACELESS` in the payload's `aux`.
+    `Decls::is_single_line_linkage(d)` is true for the declaration it
+    directly contains.
+  - [dcl.link]/8: that declaration is treated as if it had `extern`
+    when deciding whether it is a definition (`is_var_definition`, the
+    redefinition checks in `act_on_var`, codegen's `emit_global_var`).
+    The storage class itself stays `None`, so the AST dump shows no
+    `extern`, as in clang. `extern "C" int x; extern "C" int x = 1;`
+    is a declaration followed by its definition.
+- **Redefinition through an initializer** (clang
+  `AddInitializerToDecl`): a namespace-scope variable that was a
+  declaration before its initializer (`extern`, or a single-line
+  linkage specification) gets "redefinition of 'x'" with "previous
+  definition is here" if an earlier redeclaration is a definition. The
+  variable becomes invalid and the initializer is dropped.
 - **`static_assert`** ([dcl.pre]/10) requires a converted constant
   expression of type `bool`.
   - On failure it reports

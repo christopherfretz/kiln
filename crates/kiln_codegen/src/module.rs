@@ -318,7 +318,9 @@ impl<'a> Cg<'a> {
     fn emit_global_var(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
-        if v.spec.storage() == VarStorage::Extern && v.init.is_none() {
+        // [dcl.link]/8: `extern "C" int x;` declares, like `extern`.
+        let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);
+        if ext && v.init.is_none() {
             return Ok(());
         }
         if matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _))) {

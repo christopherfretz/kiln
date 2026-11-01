@@ -2902,10 +2902,22 @@ impl Sema<'_, '_> {
         if self.is_in_class_static(v) {
             return self.ast.decls.var(v).is_some_and(|x| x.spec.is_inline());
         }
-        self.ast
-            .decls
-            .var(v)
-            .is_some_and(|x| x.spec.storage() != VarStorage::Extern || x.init.is_some())
+        // [dcl.link]/8: `extern "C" int x;` is treated as `extern`.
+        let ext = |x: &kiln_ast::decl::VarData| {
+            x.spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v)
+        };
+        self.ast.decls.var(v).is_some_and(|x| !ext(x) || x.init.is_some())
+    }
+
+    /// True while declaring the declaration directly contained in a
+    /// linkage specification without braces ([dcl.link]/8).
+    fn in_single_line_linkage(&self) -> bool {
+        self.kind_of(self.ctx) == DeclKind::LinkageSpec
+            && self
+                .ast
+                .decls
+                .scope(self.ctx)
+                .is_some_and(|s| s.aux & kiln_ast::decl::ScopeData::LINKAGE_BRACELESS != 0)
     }
 
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
@@ -2915,9 +2927,10 @@ impl Sema<'_, '_> {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
         let mut prev_ok = None;
+        let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let local = self.find_prev(name, d.qualifier);
         let prev = match local {
-            None if spec.storage() == VarStorage::Extern || !self.in_local_scope() => {
+            None if ext || !self.in_local_scope() => {
                 self.find_prev_linkage(name, d.qualifier)
             }
             p => p,
@@ -2939,7 +2952,7 @@ impl Sema<'_, '_> {
                     // the new declaration is a definition (judged before its
                     // initializer is seen), and the note says whether the
                     // old one was.
-                    let new_def = spec.storage() != VarStorage::Extern;
+                    let new_def = !ext;
                     let id = if new_def {
                         DiagId::sema_redefinition_different_type
                     } else {
@@ -2951,7 +2964,7 @@ impl Sema<'_, '_> {
                         .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
-                } else if spec.storage() != VarStorage::Extern && self.is_var_definition(p) {
+                } else if !ext && self.is_var_definition(p) {
                     let msg =
                         self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
                     let msg = self.note_prev(msg, p, true);
@@ -3090,6 +3103,22 @@ impl Sema<'_, '_> {
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
+        let ext = spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v);
+        if ext && !self.in_local_scope() && !self.is_in_class_static(v) {
+            // clang `AddInitializerToDecl`: a declaration that was not a
+            // definition before its initializer (`extern int a = 2;`)
+            // still redefines an earlier definition.
+            let def = self.ast.redecls_of(v).find(|&x| x != v && self.is_var_definition(x));
+            if let Some(def) = def {
+                let name = self.ast.decls.get(v).name();
+                let msg = self.diag(DiagId::sema_redefinition, loc).arg(self.decl_name_str(name));
+                let msg = self.note_prev(msg, def, true);
+                self.emit(msg);
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
+                self.discard_initializer(&init);
+                return;
+            }
+        }
         if spec.storage() == VarStorage::Extern && !self.check_extern_init(v, loc) {
             return;
         }
@@ -4642,6 +4671,12 @@ impl Sema<'_, '_> {
         self.scopes.push(Scope::new(ScopeKind::LinkageSpec, Some(ls)));
         self.ctx = ls;
         ls
+    }
+
+    /// The linkage specification `ls` has no braces: it directly
+    /// contains one declaration ([dcl.link]/8).
+    pub fn act_on_linkage_spec_braceless(&mut self, ls: DeclId) {
+        self.ast.decls.set_linkage_braceless(ls);
     }
 
     /// The end of a linkage specification.

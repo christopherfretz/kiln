@@ -1291,8 +1291,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | DeclKind::UsingEnum
             | DeclKind::UsingDirective => self.using_fields(d, n.kind()),
             DeclKind::LinkageSpec => {
-                let lang = decls.scope(d).map_or(0, |s| s.aux);
-                self.line.push_str(if lang == LinkageLang::C as u32 { " C" } else { " C++" });
+                let lang = decls.scope(d).and_then(|s| s.linkage_lang());
+                self.line.push_str(if lang == Some(LinkageLang::C) { " C" } else { " C++" });
             }
             DeclKind::Friend => {
                 if let FriendTarget::Type { ty, .. } = decls.friend_target(d) {
