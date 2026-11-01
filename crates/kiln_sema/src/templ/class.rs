@@ -1052,7 +1052,10 @@ impl Substituter<'_, '_, '_> {
                 // Injected by its anonymous struct or union.
                 continue;
             }
-            if local.is_none() && sub.is_unnamed_member_class(m) {
+            // An anonymous struct or union of a local class has no
+            // member functions of its own: it is instantiated as in a
+            // class template, declaring its member object.
+            if sub.is_unnamed_member_class(m) && (local.is_none() || sub.is_anonymous_record(m)) {
                 let _ = sub.unnamed_member_class(m);
                 continue;
             }
