@@ -2176,6 +2176,15 @@ pub struct InstFrame {          // 20 B
 | `LambdaSubstitution` | inherit | while substituting into a lambda expression here |
 | `DeclaringSpecialMember`, `DefiningSynthesizedFunction`, `RewritingOperatorAsSpaceship` | — | owned by S3C/S3O; listed here so that they count toward depth and elision |
 
+A conversion function template specialization keeps the pattern's
+declaration name (`operator T`, which the mangling uses: `cvT_`), but
+every printed name of it (notes, `%0` above, constant-evaluation call
+notes, the AST dump) uses its target type substituted before any
+return type deduction, as clang's instantiated declaration name does:
+`'G::operator int<int>'`, `'operator auto (*)(int)<int>'` for a generic
+lambda (`ColdDeclData::conversion_spec_target`, read by
+`AstNames::write_name`; WP-170).
+
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.
 

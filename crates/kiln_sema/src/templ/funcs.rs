@@ -101,8 +101,12 @@ impl Sema<'_, '_> {
     /// `f<int>`: how function template specialization `spec` (of `tmpl`
     /// with `args`) prints in an instantiation note.
     pub(crate) fn function_spec_name(&self, spec: DeclId, tmpl: DeclId, args: ArgListId) -> String {
-        let _ = spec;
-        self.spec_name(tmpl, args)
+        if self.kind_of(spec) != DeclKind::CXXConversion {
+            return self.spec_name(tmpl, args);
+        }
+        // A conversion function template specialization is named by its
+        // substituted target type, then its arguments (`operator int<int>`).
+        self.qualified_decl_name(spec)
     }
 
     /// clang's template argument binding string, `[with T = int, N = 3]`,
