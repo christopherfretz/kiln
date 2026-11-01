@@ -14,6 +14,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
 | libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
+| Feature table | `docs/status/cxx-features.md`, checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every C++23/C++26 paper marked `done` has passing tests and clang 22's `__cpp_*` value |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 
 ## Conformance test format
@@ -144,6 +145,14 @@ the M3 exit gate. A run's `--report` regenerates the per-directory table and
 the error-cluster table of a status page (`docs/status/libcxx-m3.md`). It is
 run by hand or periodically, and the pass rate is tracked there. The
 contract is `spec/libcxx.md`.
+
+`cargo xtask features` is outside `ci` as well. It checks the language
+feature table, `docs/status/cxx-features.md`, which has one row per C++23 and
+C++26 paper with its status, its corpus tests and its `__cpp_*` macro value in
+kiln and in clang 22. It fails a `done` row that names no test, whose tests do
+not all pass under kiln, or whose macro kiln defines differently from clang 22.
+It also fails any row whose kiln macro column is stale. Run it by hand, and at
+the M4 gate. The format and checks are in `spec/harness.md` "Feature table".
 
 Each test file names the standard section it covers in its directory path,
 and `spec/` entries list the tests that back them, so coverage of a spec is
