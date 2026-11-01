@@ -59,7 +59,11 @@ flow, `constexpr` functions and variables, `static_assert`, string literals,
 - IR differential tests: kiln's `-S -emit-llvm` is semantically compared with
   clang's via `opt`-normalized FileCheck goldens where structure matters.
 
-## M3 — Classes, overloading, templates
+## M3 — Classes, overloading, templates — done (2026-11-01)
+Status: done. The M3 libc++ gate (`cargo xtask libcxx --gate m3`) is 585/585
+on main `4c3e8be9` (`docs/status/libcxx-m3.md`); the 51 `.verify.cpp` tests
+the driver marks UNSUPPORTED need `-verify` (WP-143, M4). The clang 22
+oracle switch (WP-184) is unblocked.
 Member functions, constructors/destructors, references, overload resolution,
 implicit conversion sequences, class templates, function templates, deduction,
 partial/explicit specialization, `auto`, variadic templates, fold expressions,
