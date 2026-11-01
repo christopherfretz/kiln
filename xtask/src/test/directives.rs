@@ -271,6 +271,9 @@ pub struct TestSpec {
     /// `mem<=N`: the address-space cap, in MiB, of every process the test
     /// runs (lowers `--mem-limit`; `spec/harness.md` "Resource limits").
     pub mem_mib: Option<u64>,
+    /// `requires: target-<arch>`: the architecture the compiler's default
+    /// target must have; otherwise the test is a SKIP.
+    pub requires_target: Option<String>,
 }
 
 impl TestSpec {
@@ -282,6 +285,14 @@ impl TestSpec {
     /// The xfail reason that applies to `kind`, if any.
     pub fn xfail_reason(&self, kind: CompilerKind) -> Option<&str> {
         marker_for(&self.xfail, kind)
+    }
+
+    /// Why the test cannot run when the default target's architecture is
+    /// `arch` (`std::env::consts::ARCH` spelling), if it cannot.
+    pub fn unmet_requirement(&self, arch: &str) -> Option<String> {
+        let want = self.requires_target.as_deref()?;
+        (want != arch)
+            .then(|| format!("requires target-{want}; the default target is {arch}"))
     }
 
     /// Does this test use directives only kiln can check?
@@ -337,6 +348,7 @@ struct Parser {
     inst_report_line: usize,
     ast_implicit: bool,
     mem_mib: Option<u64>,
+    requires_target: Option<String>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -375,6 +387,7 @@ impl Parser {
             inst_report_line: 0,
             ast_implicit: false,
             mem_mib: None,
+            requires_target: None,
             run_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -501,6 +514,7 @@ impl Parser {
                 Err(e) => self.err(line, e),
             },
             "skip" | "xfail" => self.marker(line, name, qualifier, value),
+            "requires" => self.requires_directive(line, value),
             _ => self.err(line, format!("unknown directive `{name}`")),
         }
     }
@@ -661,6 +675,21 @@ impl Parser {
         }
     }
 
+    /// `requires: target-<arch>`, `<arch>` one of [`TARGET_ARCHES`].
+    fn requires_directive(&mut self, line: usize, value: &str) {
+        let usage = format!("expected `requires: target-<arch>`, <arch> one of {}", TARGET_ARCHES.join(" "));
+        match value.strip_prefix("target-") {
+            Some(a) if TARGET_ARCHES.contains(&a) => {
+                if self.requires_target.is_some() {
+                    self.err(line, "duplicate `requires`");
+                } else {
+                    self.requires_target = Some(a.to_owned());
+                }
+            }
+            _ => self.err(line, usage),
+        }
+    }
+
     fn marker(&mut self, line: usize, name: &str, qualifier: Option<&str>, reason: &str) {
         let compiler = match qualifier {
             None => None,
@@ -766,9 +795,14 @@ impl Parser {
             inst_report: self.inst_report,
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
+            requires_target: self.requires_target,
         })
     }
 }
+
+/// The architectures `requires: target-<arch>` accepts, spelled as
+/// `std::env::consts::ARCH` (a typo would otherwise skip the test forever).
+pub const TARGET_ARCHES: &[&str] = &["aarch64", "x86_64"];
 
 fn is_known_key(k: &str) -> bool {
     matches!(
@@ -791,6 +825,7 @@ fn is_known_key(k: &str) -> bool {
             | "xfail"
             | "pp-compare"
             | "ast-filter"
+            | "requires"
     )
 }
 
@@ -971,6 +1006,24 @@ mod tests {
         assert!(e.iter().any(|e| e.contains("duplicate `inst-report`")), "{e:?}");
         let e = errs("//@ inst-report:\n");
         assert!(e.iter().any(|e| e.contains("requires a path")), "{e:?}");
+    }
+
+    #[test]
+    fn requires_target_directive() {
+        let s = ok("//@ expect: run\n//@ requires: target-aarch64\n");
+        assert_eq!(s.requires_target.as_deref(), Some("aarch64"));
+        assert_eq!(s.unmet_requirement("aarch64"), None);
+        assert_eq!(
+            s.unmet_requirement("x86_64").as_deref(),
+            Some("requires target-aarch64; the default target is x86_64")
+        );
+        assert_eq!(ok("int x;\n").unmet_requirement("x86_64"), None);
+        let e = errs("//@ requires: target-aarch46\n");
+        assert!(e.iter().any(|e| e.contains("expected `requires: target-<arch>`")), "{e:?}");
+        let e = errs("//@ requires: aarch64\n");
+        assert!(e.iter().any(|e| e.contains("expected `requires: target-<arch>`")), "{e:?}");
+        let e = errs("//@ requires: target-x86_64\n//@ requires: target-x86_64\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires`")), "{e:?}");
     }
 
     #[test]
