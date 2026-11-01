@@ -155,8 +155,18 @@ Constructors:
    - arrays of references, functions, `void` or abstract types
    - functions returning arrays or functions
    - references to references, pointers to references
-   - array bounds: converted constant expressions, which must be
-     positive
+   - array bounds: converted constant expressions of integral,
+     unscoped enumeration or `_Atomic` integral type, which must be
+     positive. A bound that is not a constant expression is a VLA, which
+     kiln does not support (`sema_vla_unsupported`), except at namespace
+     or class scope, where a bound that `OvenBridge::fold_rvalue_int`
+     folds (lax mode: e.g. a `const _Atomic(int)` or `const` variable
+     with a non-constant-expression initializer that is still a constant)
+     gives clang's `TryToFixInvalidVariablyModifiedType` result: a
+     constant array, `-Wvla-cxx-extension` at the bound (with the strict
+     evaluation's notes) and the ExtWarn "variable length array folded
+     to constant array as an extension" [-Wgnu-folding-constant] at the
+     declarator name (WP-165)
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
    are compatible, and links the redeclaration chain.
@@ -967,7 +977,9 @@ diagnostics and IR.
       by width, and an unscoped-enumeration left operand is then an
       error: sema-conv.md §6)
     - `?:`, the comma operator
-    - increment and decrement
+    - increment and decrement (of `bool`, or `_Atomic(bool)`: `++` is
+      clang's DefaultError `-Wincrement-bool` extension and is then
+      accepted, `--` is always an error; WP-165)
   - **calls:** argument conversion, arity notes, variadic default
     promotions
   - **member access:** `.` and `->` on records and through
@@ -1380,8 +1392,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   and compound assignment are allowed on a modifiable `_Atomic` lvalue
   and yield an lvalue of `T` (`++`) or `_Atomic(T)` (compound assignment),
   as clang 19's `decltype` shows. A braced list initializing an `_Atomic`
-  object is `sema_illegal_initializer_type`, as clang.
-- **Not done:** `-Watomic-alignment` (the libcall-size warning).
+  object is `sema_illegal_initializer_type`, as clang, unless it holds
+  one element of class type.
+- **`_Atomic(T)` of class type `T` (WP-165).** Initialized from a `T` or
+  a class derived from `T` (copy, direct, or a one-element braced list)
+  as `T` is, then `NonAtomicToAtomic` (clang `InitializeFrom`
+  `NeedAtomicConversion`; `Sema::atomic_class_init`); other class sources
+  fail as a conversion to `_Atomic(T)`. Assignment from `T` or `_Atomic(T)`
+  is the right side's lvalue conversion then `NonAtomicToAtomic`
+  (`conv::atomic_class_assign`, C11 6.5.16.1). Assignment errors to any
+  `_Atomic` target are reported at the operator, as clang's C path.
+- `-Watomic-alignment` is reported by codegen (spec/codegen.md §7d).
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

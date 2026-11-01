@@ -375,6 +375,8 @@ diag_ids! {
     drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
     drv_argument_unused = Warning [UnusedCommandLineArgument] (1) "argument unused during compilation: '{0}'";
     cg_error = Error (1) "{0}";
+    cg_atomic_misaligned = Warning [AtomicAlignment] (2) "misaligned atomic operation may incur significant performance penalty; the expected alignment ({0} bytes) exceeds the actual alignment ({1} bytes)";
+    cg_atomic_oversized = Warning [AtomicAlignment] (2) "large atomic operation may incur significant performance penalty; the access size ({0} bytes) exceeds the max lock-free size ({1}  bytes)";
 
     // ----- sema conversions (WP-049): [conv], [expr.arith.conv], [lex.*con] --
     // Type arguments are passed pre-quoted, with clang's `(aka '...')`
@@ -687,6 +689,7 @@ diag_ids! {
     sema_vla_decl_in_file_scope = Error (0) "variable length array declaration not allowed at file scope";
     sema_vla_cxx_extension = Warning [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
     sema_vla_unsupported = Error (0) "variable length arrays are not supported yet";
+    sema_vla_folded_to_constant = ExtWarn [GnuFoldingConstant] (0) "variable length array folded to constant array as an extension";
     sema_expr_not_ice = Error (0) "expression is not an integral constant expression";
     sema_bitfield_negative_width = Error (2) "bit-field '{0}' has negative width ({1})";
     sema_anon_bitfield_negative_width = Error (1) "anonymous bit-field has negative width ({0})";
@@ -782,7 +785,8 @@ diag_ids! {
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
     sema_addrof_bitfield = Error (0) "address of bit-field requested";
     sema_addrof_vector_element = Error (0) "address of vector element requested";
-    sema_incdec_bool = Error (1) "ISO C++17 does not allow {0:incrementing|decrementing} expression of type bool";
+    sema_increment_bool = WarningError [IncrementBool] (0) "ISO C++17 does not allow incrementing expression of type bool";
+    sema_decrement_bool = Error (0) "cannot decrement expression of type bool";
     sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
     sema_ovl_no_viable_function_in_call = Error (1) "no matching function for call to '{0}'";
     note_ovl_candidate_not_viable = Note (1) "candidate function not viable: {0}";
