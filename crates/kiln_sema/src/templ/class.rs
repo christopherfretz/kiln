@@ -1145,11 +1145,12 @@ impl Substituter<'_, '_, '_> {
                 let r = self.friend_decl(m)?;
                 return Ok(r.filter(|&x| self.sema.kind_of(x) != DeclKind::Friend));
             }
-            DeclKind::Empty => return Ok(None),
             // A class-scope using-declaration is redone with its
             // substituted qualifier; its shadows come with it.
             DeclKind::Using | DeclKind::UnresolvedUsingValue => return self.member_using(m, loc),
-            DeclKind::UsingShadow | DeclKind::ConstructorUsingShadow => return Ok(None),
+            DeclKind::Empty | DeclKind::UsingShadow | DeclKind::ConstructorUsingShadow => {
+                return Ok(None);
+            }
             // A friend function is in its class's member list as well as
             // in its FriendDecl, which instantiates it.
             // So is a friend template ([temp.friend]/1) or a class a

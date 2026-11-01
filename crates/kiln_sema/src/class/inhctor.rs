@@ -8,7 +8,7 @@
 use kiln_ast::decl::{CtorInit, CtorInitKind, DeclFlags, DeclKind, DefinitionBits, FnSpec};
 use kiln_ast::expr::ConstructionKind;
 use kiln_ast::names::DeclName;
-use kiln_ast::types::{ExcSpec, FuncInfo};
+use kiln_ast::types::ExcSpec;
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_source::Loc;
 
@@ -42,7 +42,8 @@ impl Sema<'_, '_> {
             return dc;
         }
         let bty = self.ast.decls.get(bc).ty().unwrap_or(QualType::ERROR);
-        let info = self.ast.types.proto(bty).map(|p| p.info()).unwrap_or_else(FuncInfo::new);
+        let info =
+            self.ast.types.proto(bty).map(kiln_ast::types::FuncProto::info).unwrap_or_default();
         let mut params = Vec::new();
         self.fn_param_types(bc, &mut params);
         let fty = self.ast.types.function(QualType::VOID, &params, info, ExcSpec::None);
