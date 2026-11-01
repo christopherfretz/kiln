@@ -5,7 +5,7 @@ Status: normative for WP-002 (crate `crates/kiln_diag`). "MUST" and
 **clang 19** (`clang++-19`, the version in the container). Where this
 document says "as clang", kiln's output for the same input, the same
 options and the same locations MUST be byte-identical to clang's, except
-for the numbered deviations in §11. Every test in `crates/kiln_diag/tests`
+for the numbered deviations in §12. Every test in `crates/kiln_diag/tests`
 names the section it checks with a `// spec: diag.md §N` comment.
 
 ## 1. Scope
@@ -698,7 +698,161 @@ U+0000-U+001F and U+007F as `\u00xx` (lowercase hex), and copies
 everything else, non-ASCII included. Output lines never contain raw
 control characters.
 
-## 11. Deviations from clang 19
+## 11. Verify mode (`-verify`)
+
+`kiln_diag::verify` is a port of clang 19's `VerifyDiagnosticConsumer`
+(`clang/lib/Frontend/VerifyDiagnosticConsumer.cpp`), quirks included;
+the driver side is spec/driver.md "-verify". Under `-verify` the
+translation unit's diagnostics go to a `MemorySink`, not to stderr. The
+`Verifier` collects `expected-*` directives from comments as they are
+lexed. At the end, `Verifier::finish` reports marker errors,
+`Verifier::check` matches the buffered diagnostics against the
+directives, and the resulting `VerifyReport` is emitted through the
+ordinary engine (text or JSON, §9-§10). Every report diagnostic is an
+error located nowhere. After them the driver prints
+`N error[s] generated.`, where N is the report's problem count, and
+exits 1 if N > 0. It exits 0 when every diagnostic was matched, even if
+those diagnostics were errors.
+
+### 11.1 Comments
+
+- The preprocessor hands every comment it lexes to the verifier (the
+  comment handler, spec/pp.md): comments in the main file, in included
+  files and in macro definitions. Comments in skipped conditional
+  groups and in the raw text of `#error`/`#warning` are not handed over,
+  because clang lexes those raw. Line splices (`\` newline) are folded
+  out before parsing.
+- Markers are scanned first. A `#name` (identifier characters) that
+  starts a word marks the comment's line.
+- Then directives are scanned. A directive is `<prefix>-<kind>[-re]`,
+  where `<kind>` is `error`, `warning`, `remark`, `note` or
+  `no-diagnostics`.
+  - It must start a word: be at the comment start, or follow whitespace,
+    or follow `//` or `/*`.
+  - The token runs over `[A-Za-z0-9_-]` and then gives back trailing
+    digits and `-`.
+  - A token with an unknown prefix or kind is skipped, and the search
+    continues after it.
+  - One comment may hold several directives.
+- With one prefix the search looks for the prefix itself. With several,
+  it looks for any word and checks the prefix afterwards (clang's two
+  paths behave the same).
+
+### 11.2 Directive grammar
+
+```
+<prefix>-<kind>[-re][@<loc>] [<count>] {{<text>}}[{{...}}]
+<prefix>-no-diagnostics
+<loc>   ::= +N | -N | N | #marker | <file>:N | <file>:* | * | *:*
+<count> ::= N | N+ | N-M | +
+```
+
+- **Prefixes.** The prefix is `expected` for plain `-verify`. With
+  `-verify=a,b` it is any of the listed ones. A prefix is valid if it is
+  a letter followed by letters, digits, `-` and `_`. Reports always name
+  the alphabetically first prefix (clang's `*Prefixes.begin()`).
+- **`no-diagnostics`.** It cannot be mixed with other directives
+  (`diag_verify_invalid_no_diags`, either order). If the file has no
+  directives at all, the report says "no expected directives found:
+  consider use of '<prefix>-no-diagnostics'", which counts as one
+  problem.
+- **Locations.**
+  - `@+N` and `@-N` are relative to the directive's line. `@N` is an
+    absolute line.
+  - `@<file>:N` finds `<file>` as a quoted `#include` written at the
+    directive would. A missing file is `diag_verify_missing_file`.
+  - `@<file>:*` and `@*` match any line, in that file or in the
+    directive's file. `@*:*` also matches any file.
+  - A line past the end of the file is clamped to the last byte
+    (`translateLineCol`).
+  - A malformed line is `diag_verify_missing_line`.
+- **Counts.**
+  - N exactly; `N+` at least N; `N-M` between N and M; a lone `+` one
+    or more. The default is 1.
+  - `N-M` with M < N is `diag_verify_invalid_range`.
+  - A count of 0 is allowed. Such a directive consumes nothing, so a
+    matching diagnostic stays unexpected.
+- **Text.**
+  - The text starts at `{{` (`diag_verify_missing_start` if absent).
+    A string directive accepts any number of extra `{`.
+  - The closing `}}` is searched with nesting
+    (`diag_verify_missing_end`).
+  - Several `{{...}}` in a row are concatenated.
+  - `\n` in the text is a newline. Text after the last `\n` is then
+    dropped, which is clang's quirk.
+  - A `-re` directive with no `{{` in its text is
+    `diag_verify_missing_regex`, and parsing of that comment stops.
+- Directive errors are ordinary diagnostics located at the directive. If
+  nothing expects them, they show up in the report as unexpected errors.
+
+### 11.3 Markers
+
+- `#name` defines a marker at the line of its comment. `@#name` locates
+  a directive at that marker's line.
+- A directive may name a marker defined later. It is attached when the
+  marker appears.
+- At `finish`:
+  - A marker defined more than once and used is ambiguous:
+    `diag_verify_ambiguous_marker`, with one
+    `diag_verify_ambiguous_marker_here` note per definition.
+  - A used marker that is never defined is `diag_verify_no_such_marker`,
+    at the directive.
+
+### 11.4 Regex
+
+- A `-re` directive's text becomes one regex. Literal parts are escaped,
+  and each `{{x}}` becomes `(x)`.
+- The regex is a POSIX extended regular expression as `llvm::Regex`
+  (Henry Spencer's `regcomp`) accepts it. The search is unanchored.
+- A regex that fails to compile is `diag_verify_invalid_content`, with
+  `llvm::regerror`'s text, and matches nothing.
+- The engine is hand-written in `verify/regex.rs` because the `regex`
+  crate is not a workspace dependency. It is a Pike VM, linear in the
+  subject. It supports literals, `\c`, `.`, bracket expressions with
+  classes, collating symbols and equivalence classes, `^`, `$`, groups,
+  `|`, `*`, `+`, `?` and `{m,n}` with counts up to 255.
+- A string directive matches if its text is a substring of the message.
+
+### 11.5 Matching
+
+- `check` flattens the buffered diagnostics, attached notes included, in
+  emission order. Fatal errors count as errors.
+- Levels are checked in the order error, warning, remark, note. Within
+  a level each directive takes up to its count of diagnostics. A
+  diagnostic matches if:
+  - it is on the same presumed line (`#line` applies), unless the
+    directive matches any line;
+  - it is from the same file (clang `IsFromSameFile`): a macro location
+    is replaced by its expansion location until the files agree; and
+  - its text matches.
+- A matched diagnostic is consumed, so each duplicate directive needs a
+  diagnostic of its own. A directive short of its minimum count is
+  listed once per missing occurrence. kiln caps the listing at 10000
+  per level, which only matters for absurd counts.
+- Diagnostics left over are unexpected, unless
+  `-verify-ignore-unexpected` covers their level.
+- kiln's engine deduplicates identical diagnostics (§7.4) and clang's
+  does not. So two identical diagnostics at the same location are one
+  diagnostic here; verify's own diagnostics are `allow_duplicate`.
+
+### 11.6 Report
+
+- For each level, the report first lists what was expected but not seen,
+  then what was seen but not expected, as
+  `diag_verify_inconsistent_diags`:
+  `'<prefix>-<level>' diagnostics expected but not seen: ` (or
+  `seen but not expected: `), followed by one entry per line.
+- Expected entries read `\n  File <file> Line <n>[ (directive at <file>:<l>)]: <text>`.
+  The parenthesis appears when the directive is not on the expected
+  line.
+- Unexpected entries read `\n  File <file> Line <n>: <message>`. A
+  diagnostic located nowhere reads `\n  (frontend): <message>`.
+- The ` File <file>` part is omitted for a diagnostic in a macro
+  expansion, or in a buffer without a file (a name in `<...>`).
+- The problem count is the number of entries, plus one for "no expected
+  directives found".
+
+## 12. Deviations from clang 19
 
 | # | Deviation | Why |
 |---|---|---|
@@ -715,8 +869,10 @@ control characters.
 | D11 | JSON is kiln's own schema (with `option`, `fixits`, severity `fatal`), not clang's SARIF. | Built for the test harness. |
 | D12 | `pedantic` contains exactly the groupless extensions. | clang's `-Wpedantic` also has named subgroups kiln does not have yet. |
 | D13 | *(Resolved by WP-183: `#pragma clang diagnostic` state, §5.5.)* | |
+| D14 | `-verify` sees identical diagnostics at one location once (§7.4), so a test needing two of them with two directives fails under kiln. | Engine deduplication; no libc++ test is known to depend on it. |
+| D15 | A `-verify` report lists at most 10000 missing occurrences per level (§11.5). | Bounds the output of a count like `4000000000`. |
 
-## 12. Integration notes and open questions
+## 13. Integration notes and open questions
 
 - Lexer/preprocessor MUST pass `.range()` for underlines and MUST build
   expansion records as §8.5 describes; pasted/stringized tokens go in a

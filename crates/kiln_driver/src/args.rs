@@ -251,6 +251,9 @@ pub enum ArgError {
     MissingValue(String),
     /// An option with a bad value: `(option as written, value)`.
     InvalidValue(String, String),
+    /// A `-verify=` prefix that is not a letter followed by letters,
+    /// digits, `-` and `_`.
+    InvalidVerifyPrefix(String),
     /// `-stdlib=` with an unknown library.
     InvalidStdlib(String),
     /// An option with a bad integer value: `(argument, value)`.
@@ -284,6 +287,10 @@ pub struct Args {
     /// (`-fsyntax-only`; clang's `-Xclang` options of those names): the
     /// layout of every complete class, spec/driver.md.
     pub dump_record_layouts: bool,
+    /// `-verify[=<prefixes>]` (clang's `-Xclang` option; `-fsyntax-only`):
+    /// check the diagnostics against `expected-*` comments, spec/driver.md
+    /// "-verify". `None` without `-verify`, or with an invalid prefix.
+    pub verify: Option<kiln_diag::verify::VerifyOptions>,
     /// `-fdump-vtable-layouts` (`-fsyntax-only`; clang's `-Xclang` option
     /// of that name): the vtable group of every complete dynamic class,
     /// spec/driver.md.
@@ -408,10 +415,24 @@ impl Args {
             ..Args::default()
         };
         let mut x: Option<Lang> = None;
+        let mut verify = VerifyRaw::default();
         let mut i = 0;
         while i < argv.len() {
-            let arg = argv[i].as_str();
+            let mut arg = argv[i].as_str();
             i += 1;
+            // `-Xclang <arg>`: kiln has no separate frontend command line;
+            // the argument is parsed like any other.
+            if arg == "-Xclang" {
+                let Some(next) = argv.get(i) else {
+                    a.errors.push(ArgError::MissingValue(arg.to_owned()));
+                    continue;
+                };
+                arg = next.as_str();
+                i += 1;
+            }
+            if verify.parse_arg(arg) {
+                continue;
+            }
             if arg == "-" || !arg.starts_with('-') {
                 a.inputs.push(Input { path: arg.to_owned(), lang: x });
                 continue;
@@ -438,6 +459,7 @@ impl Args {
                 a.errors.push(ArgError::Unknown(arg.to_owned()));
             }
         }
+        a.verify = verify.finish(&mut a.errors);
         a
     }
 
@@ -674,6 +696,73 @@ impl Args {
     }
 }
 
+/// The `-verify` family as given (clang `ParseDiagnosticArgs`).
+#[derive(Default)]
+struct VerifyRaw {
+    /// `-verify` or `-verify=` seen.
+    on: bool,
+    /// Plain `-verify` seen (adds the `expected` prefix).
+    bare: bool,
+    /// The `-verify=` values, comma-split, in order.
+    prefixes: Vec<String>,
+    /// `-verify-ignore-unexpected[=...]`.
+    ignore: [bool; 4],
+    /// Invalid `-verify-ignore-unexpected=` values, reported after the
+    /// prefix errors (clang's `ParseDiagnosticArgs` order).
+    bad_levels: Vec<String>,
+}
+
+impl VerifyRaw {
+    fn parse_arg(&mut self, arg: &str) -> bool {
+        use kiln_diag::verify::VerifyLevel;
+        if arg == "-verify" {
+            (self.on, self.bare) = (true, true);
+        } else if let Some(v) = arg.strip_prefix("-verify=") {
+            self.on = true;
+            self.prefixes.extend(v.split(',').map(str::to_owned));
+        } else if arg == "-verify-ignore-unexpected" {
+            self.ignore = [true; 4];
+        } else if let Some(v) = arg.strip_prefix("-verify-ignore-unexpected=") {
+            for level in v.split(',') {
+                match VerifyLevel::from_name(level) {
+                    Some(l) => self.ignore[l as usize] = true,
+                    None => self.bad_levels.push(level.to_owned()),
+                }
+            }
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// clang `checkVerifyPrefixes`: an invalid prefix is an error and
+    /// turns `-verify` off.
+    fn finish(mut self, errors: &mut Vec<ArgError>) -> Option<kiln_diag::verify::VerifyOptions> {
+        if self.bare {
+            self.prefixes.push("expected".to_owned());
+        }
+        let mut ok = self.on;
+        for p in &self.prefixes {
+            if !kiln_diag::verify::VerifyOptions::is_valid_prefix(p) {
+                errors.push(ArgError::InvalidVerifyPrefix(p.clone()));
+                ok = false;
+            }
+        }
+        for level in self.bad_levels.drain(..) {
+            errors.push(ArgError::InvalidFlagValue("-verify-ignore-unexpected=".to_owned(), level));
+        }
+        if !ok {
+            return None;
+        }
+        self.prefixes.sort();
+        self.prefixes.dedup();
+        Some(kiln_diag::verify::VerifyOptions {
+            prefixes: self.prefixes,
+            ignore_unexpected: self.ignore,
+        })
+    }
+}
+
 enum Valued<'a> {
     Joined(&'a str),
     Next,
@@ -891,5 +980,53 @@ mod tests {
         let langs: Vec<Lang> = g.inputs.iter().map(|i| g.input_lang(i)).collect();
         assert_eq!(langs, [Lang::C, Lang::C, Lang::C, Lang::Cxx]);
         assert_eq!(g.promoted_inputs(&refs), []);
+    }
+
+    /// spec/driver.md "-verify": clang `ParseDiagnosticArgs` semantics:
+    /// bare `-verify` adds `expected`, `-verify=` values are comma-split,
+    /// all prefixes are sorted and deduplicated; `-Xclang` forwards the
+    /// next argument to the same parser.
+    #[test]
+    fn verify_prefixes() {
+        use kiln_diag::verify::VerifyLevel;
+        assert_eq!(parse("-fsyntax-only t.cpp").verify, None);
+        let a = parse("-fsyntax-only -verify t.cpp");
+        assert_eq!(a.verify.as_ref().map(|v| v.prefixes.clone()), Some(vec!["expected".into()]));
+        let a = parse("-Xclang -verify=foo,bar -Xclang -verify=foo -verify t.cpp");
+        let v = a.verify.unwrap();
+        assert_eq!(v.prefixes, ["bar", "expected", "foo"]);
+        assert_eq!(v.ignore_unexpected, [false; 4]);
+        assert_eq!(a.errors, []);
+        let v = parse("-verify -verify-ignore-unexpected t.cpp").verify.unwrap();
+        assert_eq!(v.ignore_unexpected, [true; 4]);
+        let v =
+            parse("-verify -Xclang -verify-ignore-unexpected=note,warning t.cpp").verify.unwrap();
+        let mut want = [false; 4];
+        want[VerifyLevel::Note as usize] = true;
+        want[VerifyLevel::Warning as usize] = true;
+        assert_eq!(v.ignore_unexpected, want);
+    }
+
+    /// spec/driver.md "-verify": an invalid prefix is an error and turns
+    /// verify off; invalid ignore levels are reported after the prefixes;
+    /// a trailing `-Xclang` is a missing value.
+    #[test]
+    fn verify_errors() {
+        let a = parse("-verify=9x,ok,a.b -verify-ignore-unexpected=bogus,note t.cpp");
+        assert_eq!(a.verify, None);
+        assert_eq!(
+            a.errors,
+            [
+                ArgError::InvalidVerifyPrefix("9x".into()),
+                ArgError::InvalidVerifyPrefix("a.b".into()),
+                ArgError::InvalidFlagValue("-verify-ignore-unexpected=".into(), "bogus".into()),
+            ]
+        );
+        let a = parse("-verify= t.cpp");
+        assert_eq!(a.errors, [ArgError::InvalidVerifyPrefix(String::new())]);
+        let a = parse("t.cpp -Xclang");
+        assert_eq!(a.errors, [ArgError::MissingValue("-Xclang".into())]);
+        let a = parse("-verify=a-b_c1 t.cpp");
+        assert_eq!(a.verify.unwrap().prefixes, ["a-b_c1"]);
     }
 }

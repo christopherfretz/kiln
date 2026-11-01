@@ -88,6 +88,9 @@ the evaluator's flattened type table.
   union type) (`mem::UKey`), so unions nested at one offset (`union {
   char c; union { int x; float y; } q; }`) each have their own entry
   (WP-224); two members of one union type at one offset share it.
+  `mem::Memory::union_alts` holds, per entry, the other members that may
+  equally be active after a placement new whose pointer names several
+  (WP-233, "Classes").
   Any write into a granule clears its pointer bit, so a class holding no
   data (`Types::holds_no_data`: an empty class, or one of only such
   subobjects) is zero-initialized and copied as zero bytes: an empty base
@@ -162,6 +165,18 @@ the evaluator's flattened type table.
   `9.999999999999999E+22`, `6.55E+4`); `+Inf`, `-Inf`, `NaN`, `0`, `-0`
   (WP-237; `fltstr.rs`). A float argument in an "in call to" note is
   clang's `%e` (`f(1.000000e+10)`).
+- Argument values print as clang's `APValue::printPretty` (WP-241): a
+  class or array as a brace list of its bases and members, an array cut
+  off after 10 elements with `...`, a member pointer as `&C::m` (`0` when
+  null), a pointer to a temporary or to a lifetime-extended object as
+  that object's expression (clang names a temporary by its
+  `MaterializeTemporaryExpr`). A failure inside the inline trivial copy
+  or move (`Op::Copy` aux bit 4) is reported inside the frame clang
+  creates for the trivial constructor or assignment: the fault at the
+  source argument, then "in call to 'T(t)'" (or "'t.operator=(s)'"), for
+  memory faults, uninitialized subobjects and mutable reads alike
+  (`tests/conformance/expr.const/call-note-argument-values.cpp`,
+  `call-note-constructor.cpp`, `call-note-temporary-arguments.cpp`).
 - `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
   frame limit; 0 shows every frame.
 - `try_fold`, `is_constant_initialized` and `fold_constant_init` never
@@ -209,6 +224,23 @@ the evaluator's flattened type table.
   is a local variable read as a global): "pointer to '…' is not a
   constant expression" (or "reference to …" when the frozen type is a
   reference; clang `note_constexpr_non_global`), with "declared here".
+- Freezing a pointer or reference to a temporary lifetime-extended by
+  the variable being initialized ([class.temporary]/6) rejects one whose
+  type is destructed (`Ast::needs_destruction`: a non-trivial destructor
+  of the type, an array element or a member; clang
+  `CheckLValueConstantExpression`): "non-trivial destruction of
+  lifetime-extended temporary with type 'const D' used in the result of a
+  constant expression is not yet supported" at the
+  `MaterializeTemporaryExpr`, the type as materialized (`const D`,
+  `const D[2]`, `D` for `D&& r = D{3}`). `constexpr RD rd{{1}}` with a
+  `const D&` member and `constexpr const D& d = {2}` fail; a temporary
+  destroyed within the evaluation (`RD{{1}}.r.v`) does not. A
+  non-constexpr variable so initialized is dynamically initialized and
+  the temporary's destructor registered (WP-231, WP-233; see also
+  "Temporaries" below;
+  `tests/conformance/class.temporary/constexpr-nontrivial-dtor.cpp`,
+  `tests/codegen/ref_temp_dtor_dynamic.cpp`,
+  `tests/conformance/expr.const/constexpr-ref-temporary-nontrivial-dtor.cpp`).
 - A **function parameter outside its call** (named in a template
   argument or a `static_assert` in the body, where it has no frame;
   WP-183) takes the same globals path as an external object that is never
@@ -250,8 +282,8 @@ the evaluator's flattened type table.
   any in a union; clang `diagnoseMutableFields`). The object being
   initialized (`RESOLVING`), its lifetime-extended temporaries, and
   frame and heap objects never carry the flag, so their mutable members
-  are read and written freely. Deviations: clang also notes "in call to
-  'S(s)'" for the trivial copy constructor; clang rejects every such read
+  are read and written freely. The read carries the trivial copy's "in
+  call to 'S(s)'" frame (WP-241). Deviations: clang rejects every such read
   before C++14 and during constant destruction, kiln does not.
 
 ### Manifestly constant-evaluated context — normative (WP-063)
@@ -881,14 +913,14 @@ re-begins the lifetime of the whole union in tracked storage
 *Deviations from clang 19.* A union whose own lifetime ended (`v.~V();
 v.b = 2;`) accepts the member assignment, which clang rejects. A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its
-implicit destruction as if destroyed itself. Copying a destroyed object
-with a trivial copy constructor reports the read without clang's "in call
-to 'T(t)'" frame note. An explicit call of a virtual destructor ends only the lifetime of
+implicit destruction as if destroyed itself. An explicit call of a virtual destructor ends only the lifetime of
 the static type's bytes. A placement new of the wrong type names the
 most-derived type at the offset as the "from" type, where clang names the
-designated subobject's type. "in call to" notes print some
-arguments differently (`decltype(...)` and `{temporary}` where clang
-prints the value).
+designated subobject's type. "in call to" notes print every
+element of a partly initialized array where clang prints the initialized
+ones and its filler, a character as `'\x{3}'` where clang prints `'\x03'`,
+and a floating literal in kiln's dump spelling (`3e0` where clang prints
+`3.F`).
 
 *Note locations.* A call-site note locates the callee at its begin, as
 clang's `getBeginLoc`: a qualified name (`::operator new(n)`,
@@ -1108,7 +1140,27 @@ is lowered as a write, clang's `MaybeHandleUnionActiveMemberChange`,
 WP-207; only the operator syntax does: `u.m.operator=(x)` is a member call
 on `m`, checked as above, WP-224). Nested unions are tracked per union
 subobject, so `n.q.x = 1` activates `q` in `n` and `x` in `q`
-(`tests/conformance/class.union/constexpr-nested-same-offset.cpp`). The active-member check on the path to an access reaches a
+(`tests/conformance/class.union/constexpr-nested-same-offset.cpp`).
+A placement new (`std::construct_at`, `Op::Placement`) walks the unions
+on the path to the constructed object (`Vm::place_in_unions`, clang's
+`findSubobject` with `AK_Construct`): an inactive member that is the
+constructed object itself becomes the active member (the union's bytes
+and nested entries reset as by an assignment, [class.union.general]/6);
+an inactive member holding it is "construction of subobject of member
+'p' of union with {active member 'a'|no active member} is not allowed in
+a constant expression" at the new-expression. A pointer is an
+allocation and an offset with no designator, so the constructed member
+is identified by offset and type. When several members may be it (two
+members of one type at one offset, or a member and a subobject of the
+active member), the entry keeps one and `Memory::union_alts` the others;
+a member access or assignment naming any of them is accepted, and an
+assignment makes it the only active member. Deviation: after
+`std::construct_at(&s.b, 7)` in `union S { int a; int b; }`, reading
+`s.a` is accepted (clang rejects it; xfail
+`tests/conformance/class.union/constexpr-placement-same-type.cpp`); a
+frozen union records the one kept member
+(`tests/conformance/class.union/constexpr-placement-activate.cpp`,
+WP-233). The active-member check on the path to an access reaches a
 bit-field's storage unit inside a member of class type
 (`Types::has_bit_unit`; a bit-field is not a `has_subobject` target),
 so libc++'s short-string `__s.__is_long_` reads and writes check against

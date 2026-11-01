@@ -357,12 +357,45 @@ impl Sema<'_, '_> {
         !params.iter().any(|&p| self.param_has_default(p))
     }
 
+    /// Whether constructor-using shadow `m` names a constexpr constructor
+    /// or constructor template that is not a copy or move constructor.
+    fn inherited_constexpr_ctor(&self, m: DeclId) -> bool {
+        let Some(t) = self.ast.using_target(m) else { return false };
+        let f = if self.kind_of(t) == DeclKind::FunctionTemplate {
+            match self.pattern_of(t) {
+                Some(p) => p,
+                None => return false,
+            }
+        } else {
+            t
+        };
+        self.kind_of(f) == DeclKind::CXXConstructor
+            && !matches!(
+                self.special_kind_of(f),
+                Some(SpecialKind::CopyCtor | SpecialKind::MoveCtor)
+            )
+            && self
+                .ast
+                .decls
+                .function(f)
+                .is_some_and(|x| x.spec.constexpr_kind() != ConstexprKind::None)
+    }
+
     /// The scan of class `r`'s own special members at its `}`.
     fn scan_declared(&mut self, r: DeclId, class_trivial: DefinitionBits) -> Declared {
         let mut out = Declared::default();
         let members: Vec<DeclId> = self.ast.members(r).collect();
         let vbases = class_trivial.contains(DefinitionBits::HAS_VIRTUAL_BASES);
         for m in members {
+            if self.kind_of(m) == DeclKind::ConstructorUsingShadow {
+                // [basic.types.general]/10.5.2: a constexpr constructor
+                // (or template) inherited from a base counts, as clang's
+                // `addedMember` counts the shadow's underlying constructor.
+                if self.inherited_constexpr_ctor(m) {
+                    out.constexpr_ctor = true;
+                }
+                continue;
+            }
             let f = if self.kind_of(m) == DeclKind::FunctionTemplate {
                 match self.pattern_of(m) {
                     Some(p) => p,

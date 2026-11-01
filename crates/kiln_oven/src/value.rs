@@ -231,6 +231,32 @@ impl Oven {
         self.run.object.is_some_and(|o| ast.first(o) == ast.first(l.extending))
     }
 
+    /// clang `CheckLValueConstantExpression`: a lifetime-extended
+    /// temporary whose type is destructed ([basic.life]/1, a non-trivial
+    /// destructor of the type, an element or a member) cannot be part of
+    /// a constant result: the destruction would have to run at program
+    /// exit ([class.temporary]/6, [expr.const]/14). clang's
+    /// `note_constexpr_unsupported_temporary_nontrivial_dtor`, at the
+    /// `MaterializeTemporaryExpr`.
+    fn check_let_destruction(&self, b: &mut dyn SemaBridge, t: DeclId) -> Result<(), Freeze> {
+        let ast = b.ast();
+        let mte = let_mte(ast, t);
+        let ty = mte.map(|e| ast.exprs.get(e).ty()).or_else(|| ast.decls.get(t).ty());
+        let Some(ty) = ty.filter(|&q| ast.needs_destruction(q)) else { return Ok(()) };
+        if self.run.silent {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        }
+        let loc = mte.map_or_else(|| ast.decls.get(t).loc(), |e| ast.exprs.get(e).loc());
+        Err(Freeze::Notes(vec![Note::new(
+            loc,
+            format!(
+                "non-trivial destruction of lifetime-extended temporary with type '{}' used in \
+                 the result of a constant expression is not yet supported",
+                Self::type_name(ast, ty)
+            ),
+        )]))
+    }
+
     /// Freezes the static temporaries the result points to (and those
     /// their values point to) into their `LetData.value`s.
     fn freeze_lets(&mut self, b: &mut dyn SemaBridge, loc: Loc) -> Result<(), EvalFailure> {
@@ -446,21 +472,7 @@ impl Oven {
             // temporary of destructed type cannot be part of a constant
             // result, so its variable is dynamically initialized and the
             // destructor registered at exit ([basic.start.term]; WP-231).
-            let ast = b.ast();
-            let tq = ast.decls.get(t).ty();
-            if let Some(tq) = tq.filter(|&tq| ast.needs_destruction(tq)) {
-                if self.run.silent {
-                    return Err(Freeze::Fault(FailKind::NotConstant));
-                }
-                return Err(Freeze::Notes(vec![Note::new(
-                    ast.decls.get(t).loc(),
-                    format!(
-                        "non-trivial destruction of lifetime-extended temporary with type '{}' \
-                         used in the result of a constant expression is not yet supported",
-                        Self::type_name(ast, tq)
-                    ),
-                )]));
-            }
+            self.check_let_destruction(b, t)?;
             if !self.let_pending.iter().any(|&(x, _)| x == t) {
                 self.let_pending.push((t, Ptr::with_off(raw, 0, false)));
             }

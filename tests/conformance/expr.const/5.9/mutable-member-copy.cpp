@@ -1,14 +1,17 @@
 // [expr.const]/4, /5.9: a trivial copy reads every member, so copying an
 // object with a mutable member (or a union whose active member is mutable)
 // whose lifetime began outside the evaluation is not a constant expression.
-// (clang also notes "in call to 'S(s)'" for the trivial copy constructor.)
+// The read carries the trivial copy constructor's "in call to" frame.
 //@ expect: compile-fail
-//@ diag: 17:13 error "constexpr variable 'c' must be initialized by a constant expression"
-//@ diag: 17:17 note "read of mutable member 'm' is not allowed in a constant expression"
-//@ diag: 12:31 note "declared here"
-//@ diag: 19:13 error "constexpr variable 'd' must be initialized by a constant expression"
-//@ diag: 19:17 note "read of mutable member 'b' is not allowed in a constant expression"
-//@ diag: 13:30 note "declared here"
+//@ strict-diags
+//@ diag: 20:13 error "constexpr variable 'c' must be initialized by a constant expression"
+//@ diag: 20:17 note "read of mutable member 'm' is not allowed in a constant expression"
+//@ diag: 20:17 note "in call to 'S(s)'"
+//@ diag: 15:31 note "declared here"
+//@ diag: 22:13 error "constexpr variable 'd' must be initialized by a constant expression"
+//@ diag: 22:17 note "read of mutable member 'b' is not allowed in a constant expression"
+//@ diag: 22:17 note "in call to 'U(u)'"
+//@ diag: 16:30 note "declared here"
 struct S { int k; mutable int m; };
 union U { int a; mutable int b; };
 struct E {};

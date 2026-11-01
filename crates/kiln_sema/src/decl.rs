@@ -1090,6 +1090,7 @@ impl Sema<'_, '_> {
             invalid: ds.invalid || d.invalid,
             default_arg: DefaultArg::None,
             range: (ds.loc, d.name_loc()),
+            type_loc: ds.type_loc.unwrap_or(ds.loc),
             decl: None,
             explicit_object: d.explicit_object,
         }
@@ -2262,6 +2263,7 @@ impl Sema<'_, '_> {
             && self.is_dependent_type(underlying)
         {
             let _ = self.ast.decls.cold.begin_loc.insert(td, ds.loc);
+            self.note_type_spec_loc(td, ds, d.name_loc());
         }
         if invalid {
             self.ast.decls.set_flags(td, DeclFlags::INVALID);
@@ -2274,12 +2276,27 @@ impl Sema<'_, '_> {
     }
 
     /// `using name = type-id;` ([dcl.typedef]/2).
+    /// Records where `d`'s first type-specifier was written (when not at
+    /// its name `name`) for a substituted declarator's function type
+    /// ([`Sema::type_spec_locs`]); the caller checks the type is dependent.
+    pub(crate) fn note_type_spec_loc(&mut self, d: DeclId, ds: &DeclSpec, name: Loc) {
+        if let Some(tl) = ds.type_loc
+            && tl.is_valid()
+            && tl != name
+        {
+            self.type_spec_locs.insert(d, tl);
+        }
+    }
+
+    /// `using name = type-id;` ([dcl.typedef]/2); `type_loc` is where
+    /// the type-id starts (invalid when not written).
     pub fn act_on_alias_decl(
         &mut self,
         name: Symbol,
         name_loc: Loc,
         ty: QualType,
         attrs: &[AttrId],
+        type_loc: Loc,
     ) -> DeclId {
         let mut d = Declarator::new(DeclaratorContext::File, name_loc);
         d.name = Some((name, name_loc));
@@ -2288,6 +2305,9 @@ impl Sema<'_, '_> {
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        if type_loc.is_valid() && self.is_dependent_type(ty) {
+            self.type_spec_locs.insert(td, type_loc);
+        }
         // [class.access.spec]/1: a member alias-declaration has the
         // current access, as a member typedef does.
         self.set_member_access(td);
@@ -2678,7 +2698,7 @@ impl Sema<'_, '_> {
             && tl != d.name_loc()
             && self.ast.types.proto(ty).is_some_and(|p| self.ast.types.is_dependent(p.ret()))
         {
-            self.ret_type_locs.insert(f, tl);
+            self.type_spec_locs.insert(f, tl);
         }
         // A pure virtual function's notes point at its decl-specifiers
         // (clang `getBeginLoc`, §4.11), as does the `->` note on an
@@ -2871,6 +2891,9 @@ impl Sema<'_, '_> {
             };
             if p.range.0.is_valid() && p.range.0 != p.loc {
                 let _ = self.ast.decls.cold.begin_loc.insert(pd, p.range.0);
+                if p.type_loc.is_valid() && p.type_loc != p.loc && self.is_dependent_type(p.ty) {
+                    self.type_spec_locs.insert(pd, p.type_loc);
+                }
             }
             if p.invalid {
                 self.ast.decls.set_flags(pd, DeclFlags::INVALID);
@@ -3094,6 +3117,9 @@ impl Sema<'_, '_> {
         // the Oven's `__builtin_bit_cast` notes point there).
         if ds.loc.is_valid() && ds.loc != d.name_loc() {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
+        }
+        if self.is_dependent_type(ty) {
+            self.note_type_spec_loc(f, ds, d.name_loc());
         }
         if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
@@ -3334,6 +3360,7 @@ impl Sema<'_, '_> {
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
         if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_dependent_type(ty) {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
+            self.note_type_spec_loc(v, ds, d.name_loc());
         }
         self.lambda_mangle.var = Some(v);
         if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
@@ -3552,6 +3579,7 @@ impl Sema<'_, '_> {
         // A variable names itself, even when declared inside the
         // initializer of another entity (a lambda body).
         let entity = self.init_entity.take();
+        let braced = matches!(init, Initializer::List(_));
         let e = self.perform_init(ty, init, loc, direct);
         self.init_entity = entity;
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
@@ -3581,11 +3609,38 @@ impl Sema<'_, '_> {
         {
             self.ast.decls.set_ty(v, ety);
         }
+        // So does a reference to one bound to a braced list's temporary
+        // (P0388R4; clang `InitializationSequence::Perform` updates the
+        // declared type: `const int (&h)[] = {1, 2}` is a `const int
+        // (&)[2]`, while `const int (&r)[] = arr` keeps its type).
+        if braced && let Some(t) = self.ref_to_bound_array(ty, ety) {
+            self.ast.decls.set_ty(v, t);
+        }
         if spec.is_constexpr() {
             self.check_constexpr_init(v, e);
         } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
         }
+    }
+
+    /// `ty` with its referenced array of unknown bound replaced by `ety`,
+    /// the bound array type of the temporary the reference binds, if `ty`
+    /// is such a reference.
+    fn ref_to_bound_array(&mut self, ty: QualType, ety: QualType) -> Option<QualType> {
+        let t = &self.ast.types;
+        let (rvalue, p) = match t.canonical_view(ty) {
+            TypeView::LValueRef(p) => (false, p),
+            TypeView::RValueRef(p) => (true, p),
+            _ => return None,
+        };
+        if !matches!(t.canonical_view(p), TypeView::IncompleteArray(_))
+            || !t.is_array(ety)
+            || t.array_size(ety).is_none()
+        {
+            return None;
+        }
+        let t = &mut self.ast.types;
+        Some(if rvalue { t.rvalue_ref_to(ety) } else { t.lvalue_ref_to(ety) })
     }
 
     /// The declaration whose initializer `v` carries: an instantiated

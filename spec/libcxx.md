@@ -60,11 +60,11 @@ with `.` is not a test.
 | Suffix | Kind | Steps | Passes when |
 |---|---|---|---|
 | `.compile.pass.cpp` | compile.pass | `-fsyntax-only` | it compiles |
-| `.compile.fail.cpp` | compile.fail | `-fsyntax-only` | it fails to compile (a kiln crash is a FAIL, not a pass) |
+| `.compile.fail.cpp` | compile.fail | `-fsyntax-only` | it fails to compile (a kiln crash is a FAIL, not a pass); no `-verify`, as in `format.py` (no such test carries `expected-*` comments) |
 | `.link.pass.cpp` | link.pass | `-c`, then link | both succeed |
 | `.link.fail.cpp` | link.fail | `-c`, then link | the compile succeeds and the link fails |
 | `.pass.cpp` | pass | `-c`, link, run | the binary exits 0 |
-| `.verify.cpp` | verify | — | UNSUPPORTED (`driver: -verify`): kiln has no `-verify` |
+| `.verify.cpp` | verify | `%{verify}`: `-fsyntax-only -Wno-error -Xclang -verify -Xclang -verify-ignore-unexpected=note` (`run.rs` `VERIFY_FLAGS`) | it exits 0: every `expected-*` comment matched (spec/diag.md §11) |
 | `.sh.<ext>` | sh | — | UNSUPPORTED (`driver: RUN lines`) |
 | `.gen.<ext>` | gen | — | UNSUPPORTED (`driver: generated tests`) |
 | `.pass.mm`, `.compile.pass.mm` | objective-c++ | — | UNSUPPORTED (`driver: objective-c++`) |
@@ -126,7 +126,8 @@ the set.
 
 `c++26`, `c++experimental`, `large_tests`, `long_tests`,
 `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`,
-`-fsized-deallocation`, `has-fconstexpr-steps`, `libcpp-abi-version=1`,
+`-fsized-deallocation`, `has-fconstexpr-steps`, `verify-support`,
+`libcpp-abi-version=1`,
 `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`,
 `buildhost=linux`, `linux`, `can-create-symlinks`, `has-64-bit-atomics`,
 `has-unix-headers`, `kiln`, `target=aarch64-unknown-linux-gnu`.
@@ -233,6 +234,14 @@ of the failing step's stderr gives a key:
 3. Replace each run of digits with `N`.
 4. Prefix the key with the stage (`compile: `, `link: `, `run: `).
 
+A failing `.verify.cpp` step is keyed by its `-verify` report instead
+(`cluster::verify_keys`): one key per listed entry,
+`verify: <level> expected but not seen: <text>` or
+`verify: <level> seen but not expected: <text>`, with the entry's text
+normalized as above (the `File … Line …` location dropped). A verify
+failure without such a report (a crash, a driver error) falls back to the
+`error:` keys.
+
 If a step has no `error:` line, the key falls back as follows:
 - a link step uses its `undefined reference to …` line;
 - a run step uses `run: assertion failed` for a failed `assert`;
@@ -264,16 +273,21 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
 ## Open questions
 
 - **M5: real lit.** The full suite (M5) needs `RUN:` scripts, `%{…}`
-  substitutions, `.sh.cpp`, `.gen.py` and `-verify`. Two candidate paths:
+  substitutions, `.sh.cpp` and `.gen.py`. Two candidate paths:
   - run upstream lit (`libcxx/utils/libcxx/test/format.py`) with kiln as
     `%{cxx}` through a kiln-flavoured `lit.site.cfg`, which needs Python
     and lit in the container;
   - grow this driver until it covers the suite.
 
-  Either path also needs `-verify` (clang's `expected-*` comment checking)
-  in kiln. Most `.verify.cpp` tests check `[[nodiscard]]` and
-  `static_assert` diagnostics. This driver's outcomes and report format
-  should carry over, so that pass rates stay comparable.
+  kiln has `-verify` (WP-143), so either path can run `%{verify}`. This
+  driver's outcomes and report format should carry over, so that pass
+  rates stay comparable.
+- **`.verify.cpp` FAILs are diagnostic gaps.** Most of these tests check
+  that a particular diagnostic text appears (`[[nodiscard]]`, deprecation
+  warnings, `static_assert` messages, overload-resolution errors). A FAIL
+  means kiln's diagnostic differs from clang 19's, not that the library is
+  rejected. Whether kiln should match clang's diagnostic text for all of
+  these, or only for the ones a test pins, is open.
 - **Static features.** The feature set is hand-maintained for one host.
   lit derives it by probing the compiler (`features.py`). Probing kiln
   would make the set honest for flags kiln does not implement yet.
