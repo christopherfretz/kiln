@@ -20,8 +20,9 @@ pub struct SemaNames<'s> {
     /// Where unnamed tags' locations resolve (`(lambda at F:L:C)`).
     sources: Option<&'s kiln_source::SourceManager>,
     /// Printing a declaration's own qualified name (clang
-    /// `printQualifiedName`), which keeps inline namespaces; a type's
-    /// scope (`AppendScope`) skips them.
+    /// `printQualifiedName`), which skips only an inline namespace that
+    /// is redundant for the next component; a type's scope
+    /// (`AppendScope`) skips them all.
     decl_scope: bool,
 }
 
@@ -70,19 +71,40 @@ impl<'s> SemaNames<'s> {
         }
     }
 
+    /// Whether inline namespace `ns` adds nothing to a qualified name
+    /// whose next component is `name` (clang
+    /// `NamespaceDecl::isRedundantInlineQualifierFor`): looking `name`
+    /// up in the enclosing context finds as many declarations as in `ns`.
+    fn redundant_inline(&self, ns: DeclId, name: kiln_ast::names::DeclName) -> bool {
+        if name == kiln_ast::names::DeclName::EMPTY {
+            return false;
+        }
+        let Some(parent) = self.ast.decls.get(ns).ctx() else { return false };
+        self.ast.lookup_local(ns, name).len() == self.ast.lookup_local(parent, name).len()
+    }
+
     fn write_scope(&self, d: DeclId, out: &mut String) {
         let mut chain = Vec::new();
         let mut cur = self.ast.decls.get(d).ctx();
+        // The name the next enclosing context qualifies (clang
+        // `printNestedNameSpecifier`'s `NameInScope`).
+        let mut name_in_scope = self.ast.decls.get(d).name();
         while let Some(c) = cur {
             let n = self.ast.decls.get(c);
+            let inline = n.kind() == DeclKind::Namespace
+                && self
+                    .ast
+                    .decls
+                    .namespace(self.ast.first(c))
+                    .is_some_and(kiln_ast::decl::NamespaceData::is_inline);
+            // A type's scope skips every inline namespace; a
+            // declaration's own name only the redundant ones.
+            let skip = inline && (!self.decl_scope || self.redundant_inline(c, name_in_scope));
+            if !skip {
+                name_in_scope = n.name();
+            }
             match n.kind() {
-                DeclKind::Namespace
-                    if !self.decl_scope
-                        && self
-                            .ast
-                            .decls
-                            .namespace(self.ast.first(c))
-                            .is_some_and(kiln_ast::decl::NamespaceData::is_inline) => {}
+                DeclKind::Namespace if skip => {}
                 DeclKind::Namespace => {
                     chain.push(self.simple(c).unwrap_or_else(|| "(anonymous namespace)".into()));
                 }
@@ -90,7 +112,18 @@ impl<'s> SemaNames<'s> {
                     let mut s = String::new();
                     self.write_unscoped(c, &mut s);
                     if let Some(args) = self.ast.spec_print_args(c) {
-                        kiln_ast::types::write_arg_list(&self.ast.types, self, args, &mut s);
+                        // A declaration's scope prints its canonical
+                        // arguments scoped (`std::Ptr<std::D<int>>::g`).
+                        if self.decl_scope {
+                            kiln_ast::types::write_arg_list_scoped(
+                                &self.ast.types,
+                                self,
+                                args,
+                                &mut s,
+                            );
+                        } else {
+                            kiln_ast::types::write_arg_list(&self.ast.types, self, args, &mut s);
+                        }
                     }
                     chain.push(s);
                 }

@@ -644,8 +644,15 @@ stores ids.
   namespaces as clang's `AppendScope` does (`SemaNames::write_scope`;
   clang's redundancy lookup is not done), so the canonical `aka` is
   `'std::S'` too and is dropped. A declaration's own qualified name
-  (`qualified_decl_name`, clang `printQualifiedName`) keeps them
-  (`SemaNames::for_decls`).
+  (`qualified_decl_name`, clang `printQualifiedName`,
+  `SemaNames::for_decls`) does clang's redundancy check
+  (`NamespaceDecl::isRedundantInlineQualifierFor`): an inline namespace
+  is dropped when looking the next component's name up in the
+  enclosing namespace finds as many declarations as in the inline one
+  (`std::Ptr<…>::g`, not `std::__1::Ptr<…>::g`), and a class
+  specialization in that scope prints its canonical arguments scoped
+  (`write_arg_list_scoped`: `std::Ptr<int *, std::alloc<int>>::g`)
+  (WP-172).
 - **R5 A thread-safe `&self` interner (sharded locks, as
   `kiln_lex::Interner`).** Sema is single-threaded per TU (spec/ast.md
   §13 Q8); parallelism is across TUs. A lock per type construction costs

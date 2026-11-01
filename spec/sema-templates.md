@@ -2221,6 +2221,22 @@ pub struct InstFrame {          // 20 B
 | `LambdaSubstitution` | inherit | while substituting into a lambda expression here |
 | `DeclaringSpecialMember`, `DefiningSynthesizedFunction`, `RewritingOperatorAsSpaceship` | — | owned by S3C/S3O; listed here so that they count toward depth and elision |
 
+A specialization in a note (and in the other diagnostics naming a
+specialization declaration: an ambiguous or late explicit
+specialization, a redefinition) prints as clang's
+`getNameForDiagnostic` does (`spec_decl_name`, WP-172): the qualified
+template name, then the canonical arguments with every type scoped,
+never the typedef they were written with (`'std::v<std::D<int, int>>'`
+for `std::v<_Del>`; `'std::Ptr<int *, std::D<int, int>,
+std::alloc<int>>::g'` for a member of a specialization spelled through
+the typedefs `_Del`, `_AllocT`). Known gap: clang instantiates the
+functions a function instantiation uses while that instantiation's
+frame is still open (`PerformPendingInstantiations` inside
+`InstantiateFunctionDefinition`), so their notes carry the chain
+(`in instantiation of function template specialization 'std::make<int>'
+requested here`); kiln instantiates them later from the TU-level queue
+and prints only the innermost note.
+
 A conversion function template specialization keeps the pattern's
 declaration name (`operator T`, which the mangling uses: `cvT_`), but
 every printed name of it (notes, `%0` above, constant-evaluation call
