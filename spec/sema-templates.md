@@ -3732,6 +3732,9 @@ declarator scopes.**
   the other's prvalue type. If both directions succeed, the result is
   `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
   /6 overloaded-operator candidates are not tried.
+- *Calls returning `F&&`*: a call whose result type is an rvalue
+  reference to function is an lvalue ([expr.call]/14), so
+  `declval<Fn>()()` is callable and `decltype` of it is `F&`.
 - Tests: `templates/builtins/temp.builtin.type-pack-element-narrowing.cpp`,
   `templates/diag/temp.arg.nontype-narrowing-wno.cpp`,
   `dcl.fct/abominable-compound.cpp`, `expr.mptr.oper/ref-qualified-call.cpp`,
@@ -3741,7 +3744,8 @@ declarator scopes.**
   `dcl.init.aggr/designated-in-template.cpp`,
   `dcl.init.aggr/reference-member.cpp`,
   `except.spec/noexcept-pointer-to-member-call.cpp`,
-  `temp.inst/local-class-member-pointer.cpp`, `expr.cond/class-operand-*.cpp`.
+  `temp.inst/local-class-member-pointer.cpp`, `expr.cond/class-operand-*.cpp`,
+  `expr.call/function-rvalue-reference-result.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 

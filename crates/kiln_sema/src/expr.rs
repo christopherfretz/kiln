@@ -3304,9 +3304,13 @@ impl Sema<'_, '_> {
         at: Loc,
     ) -> (QualType, ValueCategory) {
         let (ty, vk) = if self.ast.types.is_reference(ret) {
-            let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_));
+            // [expr.call]/14: an rvalue reference to function is an
+            // lvalue too (clang `Expr::getValueKindForType`).
+            let r = self.non_reference(ret);
+            let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_))
+                || self.ast.types.is_function(r);
             (
-                self.non_reference(ret),
+                r,
                 if lvalue { ValueCategory::LValue } else { ValueCategory::XValue },
             )
         } else {
