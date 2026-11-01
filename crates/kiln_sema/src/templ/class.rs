@@ -1005,6 +1005,37 @@ impl Sema<'_, '_> {
         self.pop_inst_frame();
     }
 
+    /// Instantiates the deferred default member initializer of field
+    /// `f` of a class template specialization, at its first use from
+    /// `poi` ([temp.inst]/3; clang `InstantiateInClassInitializer`).
+    /// Nothing happens for a field without one.
+    pub(crate) fn instantiate_nsdmi(&mut self, f: DeclId, poi: Loc) {
+        if self.inst.deferred_nsdmis.is_empty() {
+            return;
+        }
+        let Some((spec, init)) = self.inst.deferred_nsdmis.remove(&f) else { return };
+        if self.inst.fatal {
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            return;
+        }
+        let Some((args, pairs)) = self.inst.nsdmi_ctx.get(&spec).cloned() else { return };
+        let pattern = self.ast.instantiated_from(f).unwrap_or(f);
+        if !self.push_inst_frame(FrameKind::Nsdmi, f, pattern, poi) {
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+            return;
+        }
+        let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
+        self.in_inst_context(parent, |s| {
+            s.act_on_start_delayed_class(spec);
+            let mut sub = Substituter::new(s, &args);
+            sub.entity = Some(spec);
+            sub.pairs = pairs;
+            sub.nsdmi(f, init);
+            s.act_on_finish_delayed_class(spec);
+        });
+        self.pop_inst_frame();
+    }
+
     /// The class definition specialization `spec` of `tmpl` was
     /// instantiated from: the matched partial specialization's
     /// ([temp.spec.partial.match]) or the primary template's.
@@ -1114,6 +1145,9 @@ impl Substituter<'_, '_, '_> {
                     }
                     Err(_) => sub.sema.note_failed_mem_initializer(f),
                 }
+            }
+            if sub.sema.inst.failed_mem_inits.contains(&pdef) {
+                sub.sema.note_failed_mem_initializer(f);
             }
             sub.sema.act_on_mem_initializers(f, &[], colon);
         }
@@ -1276,38 +1310,57 @@ impl Substituter<'_, '_, '_> {
         if invalid {
             sub.sema.ast.decls.set_flags(spec, DeclFlags::INVALID);
         }
-        // Default member initializers: in the complete-class context
-        // (clang instantiates them when a constructor uses them; a gap).
+        // Default member initializers ([temp.inst]/3): instantiated when
+        // a constructor or an aggregate initialization uses one
+        // ([`Sema::instantiate_nsdmi`], clang
+        // `InstantiateInClassInitializer`). Those of a local class or an
+        // anonymous member are instantiated now, in the complete-class
+        // context (the parser replays them so).
         if !nsdmis.is_empty() && !invalid {
-            sub.sema.act_on_start_delayed_class(spec);
-            for (field, init) in nsdmis {
-                if sub.sema.kind_of(field) != DeclKind::Field {
-                    continue;
-                }
-                sub.sema.act_on_start_field_init(field);
-                let i = if sub.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
-                    sub.init_list(init).map(Initializer::List)
-                } else {
-                    sub.expr(init).map(Initializer::Expr)
-                };
-                if let Ok(i) = i {
-                    sub.sema.act_on_field_init(field, i);
-                } else {
-                    if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
-                        sub.sema.nsdmi_this.pop();
+            if local.is_none() && !anonymous {
+                let ctx = (sub.args.clone(), sub.pairs.clone());
+                let _ = sub.sema.inst.nsdmi_ctx.insert(spec, ctx);
+                for (field, init) in nsdmis {
+                    if sub.sema.kind_of(field) == DeclKind::Field {
+                        sub.sema.special.nsdmi.insert(field);
+                        let _ = sub.sema.inst.deferred_nsdmis.insert(field, (spec, init));
                     }
-                    // clang `InstantiateInClassInitializer`: the field
-                    // is invalid, so a constructor using the
-                    // initializer is quiet ([class.base.init]/9.1).
-                    sub.sema.ast.decls.set_flags(field, DeclFlags::INVALID);
                 }
+            } else {
+                sub.sema.act_on_start_delayed_class(spec);
+                for (field, init) in nsdmis {
+                    if sub.sema.kind_of(field) == DeclKind::Field {
+                        sub.nsdmi(field, init);
+                    }
+                }
+                sub.sema.act_on_finish_delayed_class(spec);
             }
-            sub.sema.act_on_finish_delayed_class(spec);
         }
         if local.is_none() {
             sub.sema.act_on_finish_class_contexts(spec);
         }
         sub.entity = saved_entity;
+    }
+
+    /// Instantiates pattern initializer `init` as `field`'s default
+    /// member initializer, in the class scope. On failure the field is
+    /// invalid, so a constructor using it is quiet ([class.base.init]/9.1,
+    /// clang `InstantiateInClassInitializer`).
+    fn nsdmi(&mut self, field: DeclId, init: kiln_ast::ExprId) {
+        self.sema.act_on_start_field_init(field);
+        let i = if self.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
+            self.init_list(init).map(Initializer::List)
+        } else {
+            self.expr(init).map(Initializer::Expr)
+        };
+        if let Ok(i) = i {
+            self.sema.act_on_field_init(field, i);
+        } else {
+            if self.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
+                self.sema.nsdmi_this.pop();
+            }
+            self.sema.ast.decls.set_flags(field, DeclFlags::INVALID);
+        }
     }
 
     /// A member class is declared with its class; its definition is

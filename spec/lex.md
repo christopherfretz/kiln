@@ -158,6 +158,12 @@ not close; `/*` inside records `NestedBlockComment`; unterminated →
 (sets `LEADING_SPACE`) unless `keep_comments`, which returns `Comment`
 tokens with the usual flags.
 
+`set_record_comments(true)` additionally records the span of every
+comment lexed, whether or not it becomes a token; `take_comments` drains
+them in source order (`has_comments` is the cheap check). The
+preprocessor's comment handler is built on it (spec/pp.md "Comment
+handler"). Recording is off by default and costs nothing then.
+
 ### Flags
 - `START_OF_LINE`: first token of the buffer or after a newline that is not
   inside a comment or spliced. A multi-line block comment does not start a
@@ -268,7 +274,7 @@ kiln-only `raw_string_literal` (`wide_raw_string_literal`, …), `other`,
   `lex_phases_sparse_splices_fuzz` covers long clean runs with rare
   splices; `cpp_cond_skip_plain_line_rest_preserves_line_starts` checks
   that skipping never moves a line-initial token or an `Eod`.
-- Later: `kiln -E -P` vs `clang -E -P` differential (tests/differential/pp/).
+- Later: `kiln++ -E -P` vs `clang -E -P` differential (tests/differential/pp/).
 
 ## Literals (`kiln_lex::literal`, [lex.ccon] [lex.string] [lex.icon] [lex.fcon] [lex.ext])
 The lexer only finds where a literal ends (`\` skips the next character).

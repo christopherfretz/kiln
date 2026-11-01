@@ -1115,12 +1115,28 @@ impl<'a> AstBuilder<'a> {
         destroyed: QualType,
         loc: Loc,
     ) -> ExprId {
+        self.pseudo_destructor_q(base, arrow, false, destroyed, loc)
+    }
+
+    /// [`AstBuilder::pseudo_destructor`] recording whether the destructor name
+    /// was qualified (`p->T::~T`, `this->B::~B` in a template): once the
+    /// destroyed type is a class at instantiation, a qualified name calls
+    /// the destructor non-virtually ([class.virtual]/16) and may name a
+    /// base class's destructor ([expr.ref]/4).
+    pub fn pseudo_destructor_q(
+        &mut self,
+        base: ExprId,
+        arrow: bool,
+        qualified: bool,
+        destroyed: QualType,
+        loc: Loc,
+    ) -> ExprId {
         let deps = self.deps(base) | self.type_deps(destroyed);
         self.simple(
             ExprKind::CXXPseudoDestructorExpr,
             ValueCategory::PRValue,
             deps,
-            u8::from(arrow),
+            u8::from(arrow) | (u8::from(qualified) << 1),
             QualType::BOUND_MEMBER,
             loc,
             base.raw(),
@@ -2729,6 +2745,13 @@ impl<'a> AstBuilder<'a> {
         let e = self.cast(ExprKind::CXXFunctionalCastExpr, ck, sub, ty, vk, path, loc, flags);
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
         e
+    }
+
+    /// Records the type as written `ty` of named or functional cast `e`
+    /// ([`crate::expr::ColdExprData::cast_written`]); a second record for
+    /// the same cast is ignored.
+    pub fn set_cast_written_type(&mut self, e: ExprId, ty: QualType) {
+        let _ = self.ast.exprs.cold.cast_written.insert(e, ty);
     }
 
     /// `dynamic_cast<T>(v)` ([expr.dynamic.cast]); `ck` is `Dynamic`, or

@@ -162,7 +162,10 @@ impl Sema<'_, '_> {
     /// `ActOnFinishSwitchStmt`), `loc` the `switch` keyword.
     pub(crate) fn check_switch_cases(&mut self, sw: &SwitchState, cond: ExprId, loc: Loc) {
         let deps = self.ast.exprs.get(cond).deps();
-        if sw.invalid || deps.intersects(ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::ERROR) {
+        if sw.invalid
+            || deps.intersects(ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::ERROR)
+            || self.has_dependent_case_label(&sw.cases)
+        {
             return;
         }
         let default = sw.default;
@@ -195,16 +198,30 @@ impl Sema<'_, '_> {
             not_in_enum.push((lo, le));
             not_in_enum.push((hi, he));
         }
+        // clang `ShouldDiagnoseSwitchCaseNotInEnum`: an open enumeration
+        // takes any value; a flag enumeration any combination of the bits
+        // of its single-bit enumerators.
+        let closed = self.enum_is_closed(def);
+        let flag_bits = self.find_attr(def, AttrKind::FLAG_ENUM).is_some().then(|| {
+            vals.iter().filter(|x| x.0 > 0 && x.0 & (x.0 - 1) == 0).fold(0, |b, x| b | x.0)
+        });
         for (v, e) in not_in_enum {
-            if vals.binary_search_by_key(&v, |x| x.0).is_err() && !self.names_const_enum_var(e, def)
-            {
+            let in_enum = match flag_bits {
+                Some(bits) => v & !bits == 0,
+                None => vals.binary_search_by_key(&v, |x| x.0).is_ok(),
+            };
+            if closed && !in_enum && !self.names_const_enum_var(e, def) {
                 let d = self.diag(DiagId::sema_switch_not_in_enum, self.begin_loc(e));
                 self.emit_switch(d.arg(ty_arg.clone()));
             }
         }
         let unhandled = self.unhandled_enumerators(def, &cases);
         if unhandled.is_empty() {
-            if let Some(dl) = default {
+            // clang `isClosedNonFlag`.
+            if let Some(dl) = default
+                && closed
+                && flag_bits.is_none()
+            {
                 self.emit_switch(self.diag(DiagId::sema_switch_unreachable_default, dl));
             }
             return;
@@ -220,6 +237,26 @@ impl Sema<'_, '_> {
             d = d.arg(unhandled.get(i).map_or_else(String::new, |&m| self.decl_arg(m)));
         }
         self.emit_switch(d.arg(n.to_string()));
+    }
+
+    /// `def` is not `enum_extensibility(open)` (clang `EnumDecl::isClosed`).
+    fn enum_is_closed(&self, def: DeclId) -> bool {
+        self.find_attr(def, AttrKind::ENUM_EXTENSIBILITY)
+            .is_none_or(|a| self.ast.attrs.get(a).a == 0)
+    }
+
+    /// A `case` label among `cases` is value-dependent (clang
+    /// `HasDependentValue`): none of the checks run, -Wswitch-default
+    /// included, until the instantiation.
+    fn has_dependent_case_label(&self, cases: &[StmtId]) -> bool {
+        let dependent =
+            |e: ExprId| self.ast.exprs.get(e).deps().intersects(ExprDeps::TYPE | ExprDeps::VALUE);
+        cases.iter().any(|&c| {
+            self.ast.stmts.get(c).kind() == StmtKind::CaseStmt && {
+                let d = *self.ast.stmts.case_data(c);
+                dependent(d.lhs) || d.rhs.is_some_and(dependent)
+            }
+        })
     }
 
     /// clang checks the case list again in each instantiation: its

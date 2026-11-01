@@ -1800,16 +1800,22 @@ impl Oven {
                                     || self.types.has_subobject(f.ty, rel - f.offset, ty)
                                     || self.types.has_bit_unit(f.ty, rel - f.offset, ty))
                         };
-                        if let Some(i) = active {
-                            let f = fields[i as usize];
-                            if reach(&f) {
-                                base += f.offset;
-                                t = f.ty;
-                                if f.width.is_some() {
-                                    return Ok(());
-                                }
-                                continue;
+                        let key = Ptr::union_key(raw, base, t);
+                        let alts = self.mem.union_alts.get(&key).copied().unwrap_or(0);
+                        let alt = (0..fields.len().min(64) as u32)
+                            .filter(|&i| alts & 1 << i != 0 && active != Some(i));
+                        if let Some(f) = active
+                            .into_iter()
+                            .chain(alt)
+                            .map(|i| fields[i as usize])
+                            .find(|f| reach(f))
+                        {
+                            base += f.offset;
+                            t = f.ty;
+                            if f.width.is_some() {
+                                return Ok(());
                             }
+                            continue;
                         }
                         // The object of a member call can be one the
                         // layout does not model (an empty base sharing
@@ -2032,8 +2038,12 @@ impl Oven {
             let (a, z) = self.types.info(ty).upos;
             for i in a..z {
                 let (o, ut) = self.types.union_pos[i as usize];
-                let v = self.mem.unions.get(&Ptr::union_key(src, so + o, ut)).copied();
+                let sk = Ptr::union_key(src, so + o, ut);
+                let v = self.mem.unions.get(&sk).copied();
                 self.mem.union_put(Ptr::union_key(dst, dof + o, ut), v);
+                if let Some(&m) = self.mem.union_alts.get(&sk) {
+                    self.mem.union_alts_put(Ptr::union_key(dst, dof + o, ut), Some(m));
+                }
             }
         }
         Ok(())
@@ -2188,7 +2198,119 @@ impl Oven {
             let from = self.dynamic_type(a.ty, off);
             return Err(Fault::PlacementType { from, to: ty });
         }
+        if a.flags & flags::HAS_UNION != 0 {
+            self.place_in_unions(raw, a.ty, ty)?;
+        }
         self.mem.set_lifetime(raw, self.types.size(ty), true).map_err(fault)
+    }
+
+    /// The unions on the path to a placement new of a `ty` at `raw` (in an
+    /// allocation of type `root`): clang's `findSubobject` with
+    /// `AK_Construct` makes an inactive union member the active one when
+    /// it is the constructed object itself, and diagnoses one holding it
+    /// ("construction of subobject of member 'p' of union with active
+    /// member 'a'", [class.union.general]/6, [expr.const]/5.10). Members of
+    /// `ty` at the object's offset are the ones the pointer may name; when
+    /// several may (two members of one type, or a member and a subobject
+    /// of the active member), each of them is recorded as possibly active
+    /// (`Memory::union_alts`, WP-233).
+    fn place_in_unions(&mut self, raw: u64, root: OTy, ty: OTy) -> Result<(), Fault> {
+        let target = u64::from(Ptr::decode(raw).off);
+        let (mut t, mut base) = (root, 0u64);
+        loop {
+            if t == ty && base == target {
+                return Ok(());
+            }
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem).max(1);
+                    let i = (target - base) / es;
+                    if i >= n {
+                        return Ok(());
+                    }
+                    base += i * es;
+                    t = elem;
+                }
+                TyKind::Record { union, .. } => {
+                    let rel = target - base;
+                    let fields = self.types.fields(t);
+                    let contains = |f: &crate::ty::FieldInfo| {
+                        f.width.is_none()
+                            && rel >= f.offset
+                            && rel < f.offset + self.types.size(f.ty).max(1)
+                    };
+                    if !union {
+                        let Some(f) = self
+                            .types
+                            .field_at(t, rel)
+                            .filter(|f| f.width.is_none())
+                            .or_else(|| fields.iter().find(|f| contains(f)).copied())
+                        else {
+                            return Ok(());
+                        };
+                        base += f.offset;
+                        t = f.ty;
+                        continue;
+                    }
+                    let reach = |f: &crate::ty::FieldInfo| {
+                        contains(f) && self.types.has_subobject(f.ty, rel - f.offset, ty)
+                    };
+                    let key = Ptr::union_key(raw, base, t);
+                    let active = self.mem.unions.get(&key).copied();
+                    let alts = self.mem.union_alts.get(&key).copied().unwrap_or(0);
+                    let n = fields.len().min(64) as u32;
+                    // The members that are the constructed object.
+                    let direct: u64 = (0..n)
+                        .filter(|&i| {
+                            let f = fields[i as usize];
+                            f.width.is_none()
+                                && f.offset == rel
+                                && self.types.same_unqualified(f.ty, ty)
+                        })
+                        .fold(0, |m, i| m | 1 << i);
+                    // The (possibly) active member holding it.
+                    let held = active
+                        .into_iter()
+                        .chain((0..n).filter(|&i| alts & 1 << i != 0 && active != Some(i)))
+                        .find(|&i| reach(&fields[i as usize]));
+                    match held {
+                        None if direct == 0 => {
+                            let Some(f) = fields.iter().find(|f| reach(f)) else { return Ok(()) };
+                            return Err(Fault::Union {
+                                ak: ak::CONSTRUCT,
+                                field: f.decl,
+                                active: active.map(|i| fields[i as usize].decl),
+                            });
+                        }
+                        None => {
+                            let size = self.types.size(t);
+                            let at = Ptr::with_off(raw, base, false);
+                            self.mem.trial_write(at, size).map_err(|f| Fault::Mem {
+                                f,
+                                ak: ak::INIT,
+                                ty,
+                                p: raw,
+                            })?;
+                            self.activate(raw, base, t, direct.trailing_zeros());
+                            if direct.count_ones() > 1 {
+                                self.mem.union_alts_put(key, Some(direct));
+                            }
+                            return Ok(());
+                        }
+                        Some(i) if direct & !(1 << i) == 0 => {
+                            let f = fields[i as usize];
+                            base += f.offset;
+                            t = f.ty;
+                        }
+                        Some(i) => {
+                            self.mem.union_alts_put(key, Some(alts | direct | 1 << i));
+                            return Ok(());
+                        }
+                    }
+                }
+                _ => return Ok(()),
+            }
+        }
     }
 
     /// `Op::EndLife`: an explicit destruction of the `ty` object at `raw`
@@ -2258,7 +2380,7 @@ impl Oven {
     fn set_active(&mut self, raw: u64, idx: u32, uty: OTy, init: bool) -> Result<(), Fault> {
         let size = self.types.size(uty);
         let k = if init { ak::INIT } else { ak::ASSIGN };
-        let (st, abs, a) = self.mem.check(raw, size, true).map_err(|f| Fault::Mem {
+        let (st, _, a) = self.mem.check(raw, size, true).map_err(|f| Fault::Mem {
             f,
             ak: k,
             ty: uty,
@@ -2269,10 +2391,29 @@ impl Oven {
         }
         let off = u64::from(Ptr::decode(raw).off);
         let key = Ptr::union_key(raw, off, uty);
-        if self.mem.unions.get(&key) == Some(&idx) {
+        if self.mem.may_be_active(key, idx) {
+            // One of the members a placement new may have constructed
+            // (`Memory::union_alts`) is now the active one.
+            if !self.mem.union_alts.is_empty() && self.mem.union_alts.contains_key(&key) {
+                self.mem.union_put(key, Some(idx));
+            }
             return Ok(());
         }
         self.mem.trial_write(raw, size).map_err(|f| Fault::Mem { f, ak: k, ty: uty, p: raw })?;
+        self.activate(raw, off, uty, idx);
+        Ok(())
+    }
+
+    /// Makes field `idx` the active member of the union of type `uty` at
+    /// byte `off` of `raw`'s allocation: the union's bytes become
+    /// uninitialized and the entries of the unions nested in it are
+    /// cleared ([class.union.general]/6). The caller checks the write.
+    fn activate(&mut self, raw: u64, off: u64, uty: OTy, idx: u32) {
+        let size = self.types.size(uty);
+        let Ok((st, abs, _)) = self.mem.check_storage(Ptr::with_off(raw, off, false), size, true)
+        else {
+            return;
+        };
         let sp = self.mem.space_mut(st);
         sp.set_init(abs, size, false);
         if size > 0 && abs % crate::mem::GRAN == 0 && size.is_multiple_of(crate::mem::GRAN) {
@@ -2283,8 +2424,7 @@ impl Oven {
             let (o, ut) = self.types.union_pos[i as usize];
             self.mem.union_put(Ptr::union_key(raw, off + o, ut), None);
         }
-        self.mem.union_put(key, Some(idx));
-        Ok(())
+        self.mem.union_put(Ptr::union_key(raw, off, uty), Some(idx));
     }
 
     /// `Op::MpAddr`: the member of the object at `raw` that member
@@ -2343,10 +2483,11 @@ impl Oven {
             // The access itself reports it.
             return Ok(());
         }
-        let active = self.mem.unions.get(&Ptr::union_key(raw, u64::from(p.off), uty)).copied();
-        if active == Some(idx) {
+        let key = Ptr::union_key(raw, u64::from(p.off), uty);
+        if self.mem.may_be_active(key, idx) {
             return Ok(());
         }
+        let active = self.mem.unions.get(&key).copied();
         let fields = self.types.fields(uty);
         let Some(f) = fields.get(idx as usize) else { return Ok(()) };
         Err(Fault::Union {

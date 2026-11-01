@@ -125,7 +125,9 @@ ops! {
     LoadBits = 4,
     // [p, src, type, bit | width << 8]; aux = 1 for an initialization
     StoreBits = 4,
-    // [dst p, src p, type]; aux = 1 for an initialization
+    // [dst p, src p, type]; aux = 1 for an initialization, | 2 to require
+    // a fully initialized source, | 4 for a trivial copy/move constructor
+    // or assignment call run inline (its failure notes the call's frame)
     Copy = 3,
     // [p, type]: zero-initialization ([dcl.init.general]/6)
     ZeroInit = 2,
@@ -404,6 +406,10 @@ pub(crate) mod ak {
     pub const DYNAMIC_CAST: u32 = 7;
     pub const TYPEID: u32 = 8;
     pub const DESTROY: u32 = 9;
+    /// The construction of a subobject of an inactive union member by a
+    /// placement new (clang's `AK_Construct` in
+    /// `note_constexpr_access_inactive_union_member`).
+    pub const CONSTRUCT: u32 = 10;
 
     pub fn verb(k: u32) -> &'static str {
         match k {
@@ -411,6 +417,7 @@ pub(crate) mod ak {
             INCREMENT => "increment of",
             DECREMENT => "decrement of",
             INIT => "construction of",
+            CONSTRUCT => "construction of subobject of",
             MEMBER_CALL => "member call on",
             DYNAMIC_CAST => "dynamic_cast of",
             TYPEID => "typeid applied to",

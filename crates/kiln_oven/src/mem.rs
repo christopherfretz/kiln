@@ -444,6 +444,14 @@ pub(crate) struct Memory {
     /// Active member of each union subobject with one: key the
     /// subobject ([`UKey`]), value the field index.
     pub unions: FxHashMap<UKey, u32>,
+    /// The members that may equally be the active one of a union whose
+    /// member a placement new constructed through a pointer that names
+    /// several of them (members of one type at one offset: a pointer is an
+    /// allocation and an offset, without clang's designator), bit `i` for
+    /// field `i` (< 64). [`Memory::unions`] holds one of them; an access
+    /// or assignment naming another is accepted (WP-233). Cleared with the
+    /// entry by [`Memory::union_put`].
+    pub union_alts: FxHashMap<UKey, u64>,
     /// Bytes allocated (cumulative, granule-rounded; frame and heap).
     pub allocated: u64,
     /// Peak live bytes: `frame.top + heap_live`.
@@ -492,6 +500,7 @@ impl Memory {
             heap_ops: 0,
             ctx: 0,
             unions: FxHashMap::default(),
+            union_alts: FxHashMap::default(),
             allocated: 0,
             peak: 0,
             arena_peak: 0,
@@ -514,6 +523,7 @@ impl Memory {
             + (self.free.capacity() + self.live.capacity() + self.hfree.capacity()) * 4
             + self.bins.footprint()
             + self.unions.capacity() * (size_of::<(UKey, u32)>() + 1)
+            + self.union_alts.capacity() * (size_of::<(UKey, u64)>() + 1)
             + self.trial.footprint()
     }
 
@@ -535,6 +545,9 @@ impl Memory {
         self.ctx = 0;
         if !self.unions.is_empty() {
             self.unions.retain(|&k, _| (k.alloc_key() as u32) & STATIC_BIT != 0);
+        }
+        if !self.union_alts.is_empty() {
+            self.union_alts.retain(|&k, _| (k.alloc_key() as u32) & STATIC_BIT != 0);
         }
         self.allocated = 0;
         self.peak = 0;
@@ -583,6 +596,9 @@ impl Memory {
                 let key = u64::from(s) | u64::from(a.generation) << 22;
                 for &(o, ut) in types.unions(a.ty) {
                     self.unions.remove(&UKey::new(key, o, ut));
+                    if !self.union_alts.is_empty() {
+                        self.union_alts.remove(&UKey::new(key, o, ut));
+                    }
                 }
             }
             if a.generation < GEN_MAX {
@@ -1128,6 +1144,8 @@ enum Undo {
     Gran { sp: Sp, g: u32, bytes: [u8; 8], init: u8, ptr: u8, life: u8 },
     /// A union's active-member entry ([`Memory::unions`]).
     Union(UKey, Option<u32>),
+    /// A union's alternative active members ([`Memory::union_alts`]).
+    UnionAlts(UKey, Option<u64>),
     /// An allocation's flags.
     Flags { sp: Sp, idx: u32, old: u8 },
     /// A heap slot (reused, or freed).
@@ -1247,6 +1265,14 @@ impl Memory {
                         self.unions.remove(&key);
                     }
                 },
+                Undo::UnionAlts(key, old) => match old {
+                    Some(v) => {
+                        self.union_alts.insert(key, v);
+                    }
+                    None => {
+                        self.union_alts.remove(&key);
+                    }
+                },
                 Undo::Flags { sp, idx, old } => {
                     let a = match sp {
                         Sp::Static => &mut self.statics[idx as usize],
@@ -1341,18 +1367,42 @@ impl Memory {
             None => self.unions.remove(&key),
         };
         if old != v && self.in_trial() {
-            self.trial_union(key, old);
+            self.trial_union(key, Undo::Union(key, old));
+        }
+        if !self.union_alts.is_empty() {
+            self.union_alts_put(key, None);
         }
     }
 
+    /// Sets or clears the alternative active members of union `key`
+    /// ([`Memory::union_alts`]), logged under a checkpoint.
+    pub fn union_alts_put(&mut self, key: UKey, v: Option<u64>) {
+        let old = match v {
+            Some(v) => self.union_alts.insert(key, v),
+            None => self.union_alts.remove(&key),
+        };
+        if old != v && self.in_trial() {
+            self.trial_union(key, Undo::UnionAlts(key, old));
+        }
+    }
+
+    /// Whether field `idx` is (or may be, [`Memory::union_alts`]) the
+    /// active member of union `key`.
+    pub fn may_be_active(&self, key: UKey, idx: u32) -> bool {
+        self.unions.get(&key) == Some(&idx)
+            || idx < 64
+                && !self.union_alts.is_empty()
+                && self.union_alts.get(&key).is_some_and(|m| m & 1 << idx != 0)
+    }
+
     #[inline(never)]
-    fn trial_union(&mut self, key: UKey, old: Option<u32>) {
+    fn trial_union(&mut self, key: UKey, undo: Undo) {
         let p = Ptr::decode(key.alloc_key() << SLOT_SHIFT);
         let Some(cp) = self.trial.cps.last().copied() else {
             return;
         };
         if self.alloc_any(p).is_none_or(|a| !self.fresh(&cp, p.space(), a)) {
-            self.trial.log.push(Undo::Union(key, old));
+            self.trial.log.push(undo);
         }
     }
 

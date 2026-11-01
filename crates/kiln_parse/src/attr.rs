@@ -31,7 +31,15 @@ fn takes_expr_args(name: &str) -> bool {
             | "alloc_size"
             | "alloc_align"
             | "abi_tag"
+            | "flag_enum"
+            | "enum_extensibility"
     )
+}
+
+/// True for the attributes whose first argument is an identifier when
+/// one is written (clang `attributeHasIdentifierArg`).
+fn takes_ident_arg(name: &str) -> bool {
+    name.trim_start_matches("__").trim_end_matches("__") == "enum_extensibility"
 }
 
 /// True for the standard attributes that take no argument list
@@ -289,6 +297,16 @@ impl Parser<'_, '_> {
         }
         let mut args = Vec::new();
         let mut ok = true;
+        if takes_ident_arg(&text)
+            && let Some(id) = self.ident()
+        {
+            let at = self.bump().span.lo;
+            args.push(AttrArg::Ident(id, at));
+            if self.eat(Punct::Comma).is_none() {
+                self.expect_closing(Punct::RParen, Punct::LParen, open);
+                return Some(args);
+            }
+        }
         while !self.at(Punct::RParen) && !self.at_eof() {
             let e = if self.at_string() {
                 self.parse_string_literal(true)

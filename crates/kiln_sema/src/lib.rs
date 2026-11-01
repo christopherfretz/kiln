@@ -210,14 +210,20 @@ pub struct Sema<'a, 'sm> {
     /// declaration (clang `getTypeSpecStartLoc`), where the handler-order
     /// warnings point ([except.handle]/4, WP-100).
     pub(crate) handler_type_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
-    /// The type-specifier location of each function declared with a
-    /// dependent return type, when it is not the name's: instantiating a
-    /// member to a function or array return type is diagnosed there
-    /// (clang's return `TypeLoc` begin; [dcl.fct]/11, WP-222).
-    pub(crate) ret_type_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where the first type-specifier was written for a declaration of
+    /// dependent type, when not at its name: a substituted function
+    /// return type (a member function's, or a function type in a
+    /// variable's, data member's, parameter's or typedef's declarator)
+    /// that is a function or array is diagnosed there (clang's
+    /// `FunctionTypeLoc` begin; [dcl.fct]/11, WP-222, WP-241).
+    pub(crate) type_spec_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Whether each reference variable named so far, whose initializer
+    /// is not a plain static lvalue, is constant-initialized (so usable
+    /// in constant expressions, [expr.const]/4; WP-231): evaluated once.
+    pub(crate) ref_usable: kiln_source::fx::FxHashMap<DeclId, bool>,
     /// Loops whose body is a same-line null statement, awaiting their
     /// enclosing compound statement (`-Wempty-body`, WP-191).
     pub(crate) empty_loop_bodies:
@@ -489,8 +495,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             refs_minus_assign: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
-            ret_type_locs: kiln_source::fx::FxHashMap::default(),
+            type_spec_locs: kiln_source::fx::FxHashMap::default(),
             constinit_locs: kiln_source::fx::FxHashMap::default(),
+            ref_usable: kiln_source::fx::FxHashMap::default(),
             empty_loop_bodies: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,

@@ -13,7 +13,7 @@ cargo xtask test [options] [paths...]
 
 | Option | Meaning |
 |---|---|
-| `--compiler <path>` | Compiler under test. Default: `cargo build -p kiln_driver`, then the `kiln` binary in the target dir (`$CARGO_TARGET_DIR`, else `target_directory` from `cargo metadata`), `debug` profile. |
+| `--compiler <path>` | Compiler under test. Default: `cargo build -p kiln_driver`, then `kiln++` (the `kiln` binary under its C++ name, made beside it if missing) in the target dir (`$CARGO_TARGET_DIR`, else `target_directory` from `cargo metadata`), `debug` profile. |
 | `--oracle <path>` | Oracle compiler for `run`/`pp`/`ast`/`layout`/`vtables` comparisons. Default `clang++-19`. |
 | `--no-oracle` | Skip all oracle comparisons (`layout` and `vtables` tests, which have no other reference, are then a SKIP). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
@@ -65,6 +65,7 @@ directives are also ERRORs.
 | `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
 | `diag: <line>[:<col>] <sev> "<substring>"` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. |
 | `strict-diags` | The `diag:` list is exhaustive for diagnostics located in the test file. |
+| `verify` | `compile-ok` only; takes no value. The test's expectations are clang `expected-*` comments (spec/diag.md §11), checked by the compiler's own `-Xclang -verify` and by the oracle's (see "verify tests"). It cannot be combined with `diag:` or `strict-diags`. |
 | `stdout: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`. Repeated lines concatenate in order. |
 | `stdout-file: <path>` | `run` only. The expected stdout is the file's exact contents. The path is relative to the test's directory. It cannot be combined with `stdout:`. |
 | `exit: <code>` | `run` only. Expected exit code. Default 0. |
@@ -72,7 +73,7 @@ directives are also ERRORs.
 | `run-stdin: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`, to the program's stdin, as for `stdout:`. Repeated lines concatenate in order. |
 | `run-stdin-file: <path>` | `run` only. The program's stdin is the file's exact contents. The path is relative to the test's directory (use `Inputs/`, which discovery skips). It cannot be combined with `run-stdin:`. A missing file is an ERROR. |
 | `env: <NAME>=<value>` | `run` only. Sets an environment variable for the program (the inherited environment is otherwise kept). `NAME` matches `[A-Za-z_][A-Za-z0-9_]*`; the value is the rest of the line, trimmed, and may be empty or contain `=`. It may be repeated, once per name. |
-| `oracle: clang \| none` | `run`/`pp`/`ast` only. Whether to compare with the oracle. Defaults to `clang` for `run` and `pp`, `none` for `ast` (the golden is the contract). `layout` and `vtables` tests are always compared with the oracle (they have no golden), so the directive is an error there. |
+| `oracle: clang \| none` | `run`/`pp`/`ast`/`verify` only. Whether to compare with the oracle. Defaults to `clang` for `run`, `pp` and `verify`, `none` for `ast` (the golden is the contract). `layout` and `vtables` tests are always compared with the oracle (they have no golden), so the directive is an error there. |
 | `ast-filter: <substr>` | `ast` only. Dump only the declarations whose qualified name contains `<substr>` (no whitespace): kiln gets `-fdump-ast-filter=<substr>`. |
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `ast-implicit` | `ast` only. Include implicit declarations (implicit special members, injected-class-names, ...): kiln gets `-fdump-ast=implicit`, clang's dump is normalized as `xtask clang-ast --implicit`. Use with `ast-filter` to keep the builtin implicit declarations out. |
@@ -86,7 +87,7 @@ directives are also ERRORs.
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, each `requires` kind (`target-`, `clang>=`), and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, each `requires` kind (`target-`, `clang>=`), `verify`, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -164,6 +165,7 @@ satisfies `compile-fail`.
 | Kind | Mode | Pass condition |
 |---|---|---|
 | `compile-ok` | `-fsyntax-only` | exit 0, and the diags match |
+| `compile-ok` + `verify` | `-fsyntax-only -Xclang -verify` | exit 0 (every `expected-*` comment matched, nothing unexpected); the oracle's own check passes (below). A compiler that is neither kiln nor clang is a SKIP. |
 | `compile-fail` | `-fsyntax-only` | non-zero exit, at least one `error`/`fatal` located in the test file, and the diags match |
 | `run` | compile and link to `<scratch>/test.out` | the compile succeeds and the diags match; the binary exits normally within `--timeout`; stdout equals the expectation exactly (if one is given); the exit code equals `exit:` (default 0); the oracle agrees (below) |
 | `pp` | `-E -P` (`-E` with `pp-linemarkers`) | exit 0; the diags match; the output is equivalent to `<test>.expected` (if that file exists); the oracle agrees (below). Equivalence is defined in "pp comparison". |
@@ -195,6 +197,20 @@ already compared with the golden).
 
 For `layout` and `vtables`, the oracle's dump is the reference; see "Layout
 and vtable tests".
+
+### verify tests
+
+A `verify` test states its expectations once, as clang `expected-*`
+comments, and both compilers check them with their own `-verify`. The
+compiler's check failing is a **FAIL**, with its `-verify` report as the
+detail. With `oracle: clang` (the default), the oracle then runs the same
+command. If its check fails, the test is an **ERROR**: the comments do not
+describe clang 19, so the test is wrong. As for `ast`, the oracle is
+skipped when the compiler under test is the oracle itself. `--no-oracle`
+and `oracle: none` skip it. `//@ diag` tests are unaffected. Use `verify`
+where the expected diagnostics should be pinned for both compilers (notes,
+regex matches, diagnostics in headers), and `diag:` where kiln's
+diagnostics deliberately differ from clang's.
 
 The oracle is run even when the compiler under test is itself clang. This
 keeps the harness's own code paths exercised. If the oracle compile fails or
@@ -688,9 +704,10 @@ from `tests/conformance/stress/`, with
   - `xtask/fixtures/basic/` (one fixture per outcome, with the expected status
     as the file-name prefix), including program arguments, stdin and
     environment, the oracle's binary hanging or crashing, token-wise and text
-    pp comparison, `pp-linemarkers` goldens, placeholders, and `requires`
+    pp comparison, `pp-linemarkers` goldens, placeholders, `requires`
     (a pinned `--target` meeting and missing `target-x86_64`, and an unmet
-    `clang>=999` under the clang compiler);
+    `clang>=999` under the clang compiler) and `verify` (`pass-verify.cpp`,
+    and `fail-verify.cpp` with its report);
   - `xtask/fixtures/oven/`: `oven:` budgets, run against
     `xtask/fixtures/fake-kiln/kiln`, a shell script that identifies as kiln,
     compiles with clang and writes the canned report `<test>.oven.jsonl`

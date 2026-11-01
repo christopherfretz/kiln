@@ -252,6 +252,16 @@ pub struct InstState {
     /// Inline static data members of specializations whose initializer
     /// is not instantiated yet ([temp.inst]/4: on first reference).
     pub(crate) deferred_inits: kiln_source::fx::FxHashSet<DeclId>,
+    /// Fields of class template specializations whose default member
+    /// initializer is not instantiated yet, with the class and the
+    /// pattern initializer ([temp.inst]/3: when a constructor or an
+    /// aggregate initialization uses it; clang
+    /// `InstantiateInClassInitializer`).
+    pub(crate) deferred_nsdmis: kiln_source::fx::FxHashMap<DeclId, (DeclId, ExprId)>,
+    /// The substitution state of each class owning a
+    /// `deferred_nsdmis` field: its arguments and context pairs.
+    pub(crate) nsdmi_ctx:
+        kiln_source::fx::FxHashMap<DeclId, (args::MultiLevelArgs, Vec<(DeclId, DeclId)>)>,
     /// Non-inline static data members of specializations whose
     /// definition (the pattern's out-of-line one, [class.static.data]/3)
     /// is not instantiated yet ([temp.inst]/4: when odr-used or needed
@@ -278,6 +288,10 @@ pub struct InstState {
     /// `CXXCtorInitializer`s for `InstantiateMemInitializers`).
     pub(crate) pattern_mem_inits:
         kiln_source::fx::FxHashMap<DeclId, (Vec<crate::class::MemInitInfo>, Loc)>,
+    /// The constructor definitions in a template one of whose
+    /// mem-initializers failed its definition-time check (diagnosed):
+    /// their instantiations add no implicit initializers.
+    pub(crate) failed_mem_inits: kiln_source::fx::FxHashSet<DeclId>,
     /// The location of the innermost running constant evaluation: the
     /// point of instantiation of a definition `ensure_body` instantiates
     /// (§4.11).

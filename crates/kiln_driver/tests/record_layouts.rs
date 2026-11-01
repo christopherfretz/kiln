@@ -13,6 +13,12 @@ use std::process::{Command, Stdio};
 
 use kiln_abi::dump_blocks::{RECORD_LAYOUT_MARKER as MARKER, record_layout_blocks as blocks};
 
+/// The `kiln++` beside the `kiln` binary under test (`kiln_driver`'s build
+/// script makes it): the C++ driver mode, spec/driver.md "Driver modes".
+fn kilnpp() -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++")
+}
+
 const CLANG: &str = "clang++-19";
 const TRIPLES: [&str; 2] = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
 /// Concurrent workers.
@@ -42,7 +48,7 @@ fn clang_available() -> bool {
 fn check(file: &Path, triple: &str, clang: bool) -> Result<(), String> {
     let name = file.display();
     let target = format!("--target={triple}");
-    let k = Command::new(env!("CARGO_BIN_EXE_kiln"))
+    let k = Command::new(kilnpp())
         .args(["-std=c++2c", "-fsyntax-only", "-fdump-record-layouts", &target])
         .arg(file)
         .output()
@@ -120,7 +126,7 @@ fn flag_spellings_and_action() {
     let src = dir.join("s.cpp");
     std::fs::write(&src, "struct S { char c; int i; };\n").unwrap();
     for flag in ["-fdump-record-layouts", "-fdump-record-layouts-complete"] {
-        let o = Command::new(env!("CARGO_BIN_EXE_kiln"))
+        let o = Command::new(kilnpp())
             .args(["-fsyntax-only", flag, "--target=x86_64-unknown-linux-gnu"])
             .arg(&src)
             .output()
@@ -133,7 +139,7 @@ fn flag_spellings_and_action() {
              nvalign=4]\n"
         );
     }
-    let o = Command::new(env!("CARGO_BIN_EXE_kiln"))
+    let o = Command::new(kilnpp())
         .args(["-S", "-emit-llvm", "-o", "-", "-fdump-record-layouts"])
         .arg(&src)
         .output()

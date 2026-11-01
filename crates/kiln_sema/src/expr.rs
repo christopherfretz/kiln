@@ -590,7 +590,28 @@ impl Sema<'_, '_> {
         let Some(init) = self.ast.decls.var(holder).and_then(|y| y.init) else { return false };
         let ty = n.ty().unwrap_or(QualType::ERROR);
         if self.ast.types.is_reference(ty) {
-            return self.is_static_lvalue(init);
+            // A reference is usable in constant expressions when its
+            // initializer is a constant expression ([expr.const]/4): a
+            // static lvalue (the common case, decided syntactically), or
+            // anything else the Oven evaluates to an lvalue constant
+            // (`const int& r = 5;`, `const P& r = P{1};`, `int& r = a[1];`
+            // at namespace scope; clang marks these `non_odr_use_constant`
+            // too, and codegen then reads through them, WP-231).
+            if self.is_static_lvalue(init) {
+                return true;
+            }
+            if let Some(&u) = self.ref_usable.get(&holder) {
+                return u;
+            }
+            if self.has_errors_in(init)
+                || self.expr_is_value_dependent(init)
+                || self.is_dependent_type(ty)
+            {
+                return false;
+            }
+            let u = self.is_constant_initialized(holder);
+            self.ref_usable.insert(holder, u);
+            return u;
         }
         let q = self.ast.types.effective_quals(ty);
         let ok = spec.is_constexpr()
@@ -2339,7 +2360,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         }
         if self.ast.types.is_pointer(t) {
-            if !self.check_pointer_arith(t, false, loc) {
+            if !self.check_pointer_arith(t, loc) {
                 return self.recover_err(&[e], loc);
             }
         } else if self.ast.types.as_complex(t).is_some() {
@@ -2368,19 +2389,20 @@ impl Sema<'_, '_> {
     /// Pointer arithmetic needs a pointer to a complete object type
     /// ([expr.add]/1); a `void` or function pointee is an error in C++
     /// (a GNU extension only in C: `sema_arith_void_pointer`).
-    fn check_pointer_arith(&mut self, pt: QualType, both: bool, loc: Loc) -> bool {
+    fn check_pointer_arith(&mut self, pt: QualType, loc: Loc) -> bool {
         let Some(p) = self.pointee_sugared(pt) else { return true };
-        let sel = if both { "1" } else { "0" };
         if self.ast.types.is_void(p) {
-            let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg(sel);
+            let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg("0");
             self.emit(msg);
             return false;
         }
         if self.ast.types.is_function(p) {
             let msg = self
                 .diag(DiagId::sema_arith_function_pointer_cxx, loc)
-                .arg(sel)
-                .arg(self.ty_arg(p));
+                .arg("0")
+                .arg(self.ty_arg(p))
+                .arg("0")
+                .arg("");
             self.emit(msg);
             return false;
         }
@@ -2390,6 +2412,50 @@ impl Sema<'_, '_> {
             return false;
         }
         true
+    }
+
+    /// [`Self::check_pointer_arith`] for the pointer difference `lt - rt`
+    /// (clang `checkArithmeticBinOpPointerOperands`): a `void` pointee on
+    /// one side is diagnosed for that side, on both as `pointers to void`;
+    /// likewise a function pointee, the two-pointer form naming the second
+    /// pointee only when the pointer types differ (`pointers to function
+    /// types 'void ()' and 'void (int)'`); then an incomplete pointee,
+    /// left first.
+    fn check_pointer_pair_arith(&mut self, lt: QualType, rt: QualType, loc: Loc) -> bool {
+        let (Some(a), Some(b)) = (self.pointee_sugared(lt), self.pointee_sugared(rt)) else {
+            return true;
+        };
+        let t = &self.ast.types;
+        let pick = |l: bool, r: bool| match (l, r) {
+            (true, true) => None,
+            (true, false) => Some(lt),
+            _ => Some(rt),
+        };
+        let (av, bv) = (t.is_void(a), t.is_void(b));
+        if av || bv {
+            let Some(one) = pick(av, bv) else {
+                let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg("1");
+                self.emit(msg);
+                return false;
+            };
+            return self.check_pointer_arith(one, loc);
+        }
+        let (af, bf) = (t.is_function(a), t.is_function(b));
+        if af || bf {
+            let Some(one) = pick(af, bf) else {
+                let differ = !self.ast.types.same_unqualified(lt, rt);
+                let msg = self
+                    .diag(DiagId::sema_arith_function_pointer_cxx, loc)
+                    .arg("1")
+                    .arg(self.ty_arg(a))
+                    .arg(if differ { "1" } else { "0" })
+                    .arg(self.ty_arg(b));
+                self.emit(msg);
+                return false;
+            };
+            return self.check_pointer_arith(one, loc);
+        }
+        self.check_pointer_arith(lt, loc) && self.check_pointer_arith(rt, loc)
     }
 
     // -- binary operators --------------------------------------------------------
@@ -2636,7 +2702,7 @@ impl Sema<'_, '_> {
                 if !self.is_integral_or_enum(rt) || conv::is_scoped_enum(self, rt) {
                     return self.invalid_operands(l, r, loc);
                 }
-                if !self.check_pointer_arith(lt, false, loc) {
+                if !self.check_pointer_arith(lt, loc) {
                     return self.recover_err(&[l, r], loc);
                 }
                 let r2 = conv::usual_unary_conversions(self, r);
@@ -2722,29 +2788,30 @@ impl Sema<'_, '_> {
                 (Some(a), Some(b)) => self.ast.types.same_unqualified(a, b),
                 _ => false,
             };
+            // clang `CheckSubtractionOperands`: the pointee check runs
+            // after an incompatibility too.
             if !same {
                 let msg = self
                     .diag(DiagId::sema_sub_ptr_compatible, loc)
                     .arg(self.ty_arg(lt))
                     .arg(self.ty_arg(rt));
                 self.emit(msg);
-                return self.recover_err(&[l2, r2], loc);
             }
-            if !self.check_pointer_arith(lt, true, loc) {
+            if !self.check_pointer_pair_arith(lt, rt, loc) || !same {
                 return self.recover_err(&[l2, r2], loc);
             }
             let ty = QualType::unqual(self.target.ptrdiff_t);
             return self.builder().binary(op, l2, r2, ty, loc);
         }
         if lp && int_like(self, rt) {
-            if !self.check_pointer_arith(lt, false, loc) {
+            if !self.check_pointer_arith(lt, loc) {
                 return self.recover_err(&[l2, r2], loc);
             }
             let r3 = conv::usual_unary_conversions(self, r2);
             return self.builder().binary(op, l2, r3, lt, loc);
         }
         if rp && int_like(self, lt) && op == BinaryOp::Add {
-            if !self.check_pointer_arith(rt, false, loc) {
+            if !self.check_pointer_arith(rt, loc) {
                 return self.recover_err(&[l2, r2], loc);
             }
             let l3 = conv::usual_unary_conversions(self, l2);
@@ -4290,8 +4357,52 @@ impl Sema<'_, '_> {
     /// [expr.static.cast], [expr.reinterpret.cast], [expr.const.cast],
     /// [expr.type.conv]). `loc` is the cast's start, `rparen` its closing
     /// `)`.
-    #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cast]/4")]
     pub fn act_on_cast(
+        &mut self,
+        style: CastStyle,
+        ty: QualType,
+        e: ExprId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let r = self.build_explicit_cast(style, ty, e, loc, rparen);
+        self.note_cast_written_type(r, ty);
+        r
+    }
+
+    /// Records the type as written `ty` of explicit cast `r` when the
+    /// dump cannot rebuild it from the node (clang prints
+    /// `getTypeAsWritten` for named and functional casts): the prvalue of
+    /// a non-class cast drops the qualifiers and sugar of `CI` in `CI{1}`
+    /// and `static_cast<CI>(x)`; a reference named by an alias.
+    pub(crate) fn note_cast_written_type(&mut self, r: ExprId, ty: QualType) {
+        let n = *self.ast.exprs.get(r);
+        if !matches!(
+            n.kind(),
+            ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
+                | ExprKind::CXXDynamicCastExpr
+        ) || self.is_error_type(ty)
+        {
+            return;
+        }
+        // `const R` for a reference alias `R` is `R` ([dcl.ref]/1).
+        let ty = if self.ast.types.is_reference(ty) { ty.without_quals() } else { ty };
+        let rebuilt = match (self.ast.types.view(ty.ty()), n.value_category()) {
+            (TypeView::LValueRef(p), ValueCategory::LValue)
+            | (TypeView::RValueRef(p), ValueCategory::XValue) => p == n.ty(),
+            (_, ValueCategory::PRValue) => ty == n.ty(),
+            _ => false,
+        };
+        if !rebuilt {
+            self.builder().set_cast_written_type(r, ty);
+        }
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cast]/4")]
+    fn build_explicit_cast(
         &mut self,
         style: CastStyle,
         ty: QualType,
@@ -4392,8 +4503,10 @@ impl Sema<'_, '_> {
                     deleted_as: crate::class::DeletedAs::Cast(d),
                 },
             };
-            let to = conv::strip_cv(self, ty);
-            if let Some(x) = self.construct_class(to, &[e], crate::class::InitStyle::Direct, site) {
+            // The temporary has the written type, qualifiers and sugar
+            // included ([expr.type.conv]/1, clang: `CV(1)` constructs a
+            // `'CV':'const V'`).
+            if let Some(x) = self.construct_class(ty, &[e], crate::class::InitStyle::Direct, site) {
                 if self.is_err_expr(x) {
                     return x;
                 }

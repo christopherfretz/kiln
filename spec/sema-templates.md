@@ -1625,7 +1625,10 @@ formed it:
    parameter type; Aᵢ is the argument's type and value category.
    - **Adjustments, when P is not a reference.** A undergoes
      array-to-pointer and function-to-pointer decay, and its top-level cv
-     is dropped. Top-level cv on P is dropped.
+     is dropped. Top-level cv on P is dropped too: the written
+     prototype that deduction reads keeps it (`void f(const T t)`
+     deduces `T = int` from an `int`, with or without a trailing
+     `requires requires { t; }`; WP-231).
    - **When P is a reference.** Use the referred type. A forwarding
      reference (`T&&`, where `T` is this template's own unqualified
      parameter) with an lvalue A uses A&. When the referred type is an
@@ -1792,7 +1795,16 @@ immediate context: errors are hard.
   signature (or any substituted function type) whose return type is an
   array or function type fails with `function cannot return
   {array|function} type T`, a deduction failure under SFINAE (clang
-  `BuildFunctionType`; `Subst::check_return_type`, WP-201).
+  `BuildFunctionType`; `Subst::check_return_type`, WP-201). It is
+  reported where the function type begins (clang's `FunctionTypeLoc`
+  begin): a member function's return type as written (WP-222), and for
+  a function type inside a parameter's, variable's, data member's,
+  typedef's or alias's declarator (`T (*p)()`, `static const T (*s)()`,
+  `using U = T (*)();`) the declaration's first type-specifier, recorded
+  for dependent declarations in `Sema::type_spec_locs` and carried as
+  `Subst::type_begin` while the declaration's type is substituted
+  (cleared inside the function type's parameters; WP-241). Without a
+  recorded location the declarator's name is used.
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.
@@ -3111,7 +3123,7 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - Calls to function templates (deduction, WP-071).
 
 *`<type_traits>` probe*: run
-`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0` on
+`kiln++ -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0` on
 `#include <type_traits>`. The error count went from 464 on main to 431.
 No remaining error is a WP-069 template-syntax failure. The blockers
 are:
@@ -3222,8 +3234,19 @@ first instead of emitting them (§5.7).
 *Gaps* (each reports a diagnostic or is a known divergence):
 - No TypeLocs: an error inside a written type points at the
   declarator, not the type.
-- Default member initializers are instantiated with the class. clang
-  instantiates them when used, with its own notes.
+- ~~Default member initializers are instantiated with the class~~
+  *Resolved (WP-223):* `Substituter::class_body_with` records each
+  field's pattern initializer in `inst.deferred_nsdmis` (the class's
+  arguments and context pairs in `inst.nsdmi_ctx`) and marks the field
+  as having one (`special.nsdmi`). `Sema::instantiate_nsdmi` instantiates
+  it at its first use ([temp.inst]/3, clang
+  `InstantiateInClassInitializer`): `default_member_init` (a constructor
+  or an aggregate initialization) and the implicit default constructor's
+  exception specification. It pushes the
+  `DefaultMemberInitializerInstantiation` frame; a failure makes the field
+  invalid, so later uses are quiet. A local class's or an anonymous
+  member's initializers are still instantiated with the class. Tests:
+  `temp.inst/lazy-default-member-init{,-errors}.cpp`.
 - ~~A qualified `DeclRefExpr` prints without its qualifier~~ *Resolved
   (WP-086):* `act_on_id_expression` records the nested-name-specifier in
   `DeclRefExtra.qualifier` and the qualifier's first token as the begin
@@ -4020,7 +4043,12 @@ explicit specialization errors remain. The blockers are:
     MultiLevelArgs)` is filled by `function_decl` (non-template
     members) and `member_template` (member templates, whose
     `associated_constraints` and `check_constraints` then use the
-    pattern's clause with the outer levels plus their own);
+    pattern's clause with the outer levels plus their own), and by
+    `friend_function_template` for the namespace-scope template a
+    constrained friend template redeclares, so a constraint naming the
+    enclosing class's parameter ([temp.friend]/9, `requires C<T>` on
+    `template<class U> friend int f(X, U)`) sees that specialization's
+    arguments (WP-231);
   - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
@@ -4572,7 +4600,7 @@ The headers use 143 distinct builtins for which `__has_builtin` is true
 - 76 are `__builtin_*` functions.
 
 Each WP's acceptance includes the drop in errors on
-`kiln -fsyntax-only` over the 8 headers. The status page is
+`kiln++ -fsyntax-only` over the 8 headers. The status page is
 `docs/status/libcxx-m3.md`, maintained by WP-081. The baseline today is
 490 errors on `<type_traits>`, 436 of them template-related
 (docs/status/libcxx-syntax.md).

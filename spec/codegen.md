@@ -58,7 +58,13 @@ panic and never silently wrong IR.
   an implicitly moved `return x;`). A read of a `mutable` member is not
   folded (the Oven's "read of mutable member" check, spec/oven.md); the
   variable's other members are.
-  Validation: `tests/codegen/const_fold_lax.cpp`.
+  A reference variable whose referee type is `const` non-volatile folds
+  the same way (clang `checkVarTypeForConstantEmission`:
+  `CEK_AsValueOrReference`), so `a + b` for `const int& a = {}; const int
+  b = 5;` is a constant (WP-231, WP-233; see also "Reference
+  read-through").
+  Validation: `tests/codegen/const_fold_lax.cpp`,
+  `tests/codegen/ref_const_fold.cpp`.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
@@ -508,12 +514,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines after it (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 215 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 226 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
   `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
-  work packages' cases): 427/430 pairs exact; `DEVIATIONS` holds
+  work packages' cases): 449/452 pairs exact; `DEVIATIONS` holds
   `global_init_array_eh`, `eh_array_destroy_throwing_global` and
   `array_temporary_global` on aarch64 (§7f, §7m).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
@@ -525,11 +531,14 @@ The normative description is spec/driver.md "Code generation". In short:
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
 ### Deviations
-- **Constant-initialized reference variables are not folded.** clang
-  emits a use of a reference that is usable in constant expressions as a
-  direct use of its referee (`load i32, ptr @g`); kiln loads the
-  reference's slot. The Oven does not fold reference initializers yet,
-  so `fold.rs` has nothing to substitute. No corpus case covers it.
+- **Uses of constant-initialized reference variables as lvalues.** A
+  read through a reference to a `const` referee folds (above), but clang
+  also emits a non-odr-use of a reference usable in constant expressions
+  as a direct use of its referee's address (`EmitDeclRefLValue` for
+  `NOUR_Constant`: `e.y`, `h[0]` with a non-constant index); kiln loads
+  the reference's slot (a dead `load ptr @e`). Sema does not yet mark a
+  reference bound to a static class or array temporary as a constant
+  non-odr-use (`is_static_lvalue` is syntactic). No corpus case covers it.
 - **Namespace-scope and static reference variables** are emitted as
   clang does (a constant initializer when the referee is a constant
   address, else dynamic initialization, §7e); only their uses differ, as
@@ -1243,14 +1252,29 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
 - Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
   `tests/conformance/basic.start.dynamic/order-run.cpp`,
   `tests/conformance/stmt.dcl/static-local-run.cpp`.
+- **Destructed temporaries (WP-231).** A temporary of a class with a
+  non-trivial destructor extended by a namespace-scope reference
+  (`const D& r = D{1};`) is never constant: the Oven rejects the result
+  (oven.md, clang `CheckLValueConstantExpression`), so `_ZGR` is a
+  `zeroinitializer` `global`, built in `__cxx_global_var_init` and
+  registered with `__cxa_atexit`, and the reference is `global ptr null`
+  stored there. `tests/codegen/ref_temporary_dtor_global.cpp`,
+  `tests/conformance/class.temporary/extended-temporary-destroyed-at-exit.cpp`.
+- **Reference read-through (WP-231).** A `DeclRefExpr` to a reference
+  marked `NonOdrUse::Constant` (sema: the reference is
+  constant-initialized, [expr.const]/4, cached in `Sema::ref_usable`)
+  emits its folded initializer (`expr.rs` `constant_ref_lvalue`, clang
+  `EmitDeclRefLValue`'s `NOUR_Constant` path) instead of loading the
+  reference; local reference initializers are fold candidates, and a
+  read through a reference to a `const` non-volatile object folds to the
+  value (`fold.rs` `refers_to_const_var`, clang `CEK_AsValueOrReference`).
+  `tests/codegen/ref_constant_read.cpp`,
+  `tests/conformance/basic.def.odr/reference-constant-init-not-odr-used.cpp`.
 - **Not implemented:** `init_priority`, `thread_local` dynamic
-  initialization (TLS wrappers), folding of uses of constant-initialized
-  references and of reads of `const` class objects that clang permits
-  ([basic.start.static]/3),
-  and a constant-initialized lifetime-extended temporary of a class
-  with a non-trivial destructor (`const D& r = D{1};`): clang emits a
-  `zeroinitializer` `_ZGR` global and stores the value in the init
-  function, kiln emits the folded value as the global's initializer.
+  initialization (TLS wrappers), folding of reads of `const` class
+  objects that clang permits ([basic.start.static]/3), and `constant` on
+  an `extern` declaration of a reference or const scalar (clang
+  `isTypeConstant`; `module.rs` `get_gvar` emits `external global`).
 
 ## 7g. Landed (WP-118): WP-100 follow-ups
 - **Constructor loops.** Sema gives `new K[2][3]` / `new K[n][3]()` a

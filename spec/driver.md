@@ -1,6 +1,10 @@
-# spec: kiln_driver — the `kiln` command line
+# spec: kiln_driver — the `kiln` and `kiln++` command lines
 
-`kiln` is a clang-compatible driver. A command line that clang 19 accepts
+`kiln` is a clang-compatible driver. Like clang and clang++ it is one
+driver under two names: `kiln++` compiles every input as C++, `kiln` picks
+the language by extension (see "Driver modes"). C++ is kiln's language, so
+`kiln++` is the name to use; xtask, the docs and the examples here invoke
+it. A command line that clang 19 accepts
 for preprocessing means the same thing to kiln. An option kiln does not
 implement is an error, never silently ignored. The oracle is Debian's
 `clang++-19` / `clang-19` on aarch64 and x86_64 Linux.
@@ -27,7 +31,8 @@ Crate layout (each part is replaceable on its own):
 | `constexpr_opts` | the `-fconstexpr-*` flags: Oven limits for the parser's Sema, the report |
 | `deps` | Make-style dependency output |
 | `time` | reproducible `__DATE__`/`__TIME__`/`__TIMESTAMP__` |
-| `lib` (`run`) | orchestration, driver diagnostics, outputs, exit status |
+| `lib` (`run`, `run_as`) | orchestration, driver diagnostics, outputs, exit status |
+| `main` | the `kiln` binary: `run_as(argv[0], ...)` on a big-stack thread |
 
 ## Options
 
@@ -44,6 +49,7 @@ starting with `-` are inputs.
 | `-C`, `-CC` | keep comments (`-CC`: also in macro expansions) |
 | `-dM` | print the macro table at the end instead of the text |
 | `-o <file>` | output file (`-` is standard output) |
+| `--driver-mode=g++`, `--driver-mode=gcc` | hidden (not in `--help`): the driver mode, overriding the program name; the last wins, wherever it is (see "Driver modes") |
 | `-x <lang>` | language of the following inputs: `c`, `c-header`, `cpp-output` -> C; `c++`, `c++-header`, `c++-cpp-output`, `c++-module` -> C++; `none` resets |
 | `-std=<std>` | `c++98`..`c++26`, `gnu++NN`, the `0x/1y/1z/2a/2b/2c` aliases; C: `c89/c99/c11/c17/c23`, `gnuNN`, `iso9899:*` |
 | `-D`, `-U` | command-line macros, in order |
@@ -69,6 +75,8 @@ starting with `-` are inputs.
 | `-v`, `--verbose`, `--version`, `--help` | see below |
 | `-F <dir>` | accepted; warns `ignoring framework directory` |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
+| `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | with `-fsyntax-only`: check the diagnostics against `expected-*` comments (see "-verify") |
+| `-Xclang <arg>` | `<arg>` is parsed as a driver option (kiln has no separate `cc1`), so `-Xclang -verify` is `-verify` |
 | `-fdump-ast[=ids,locs,canonical,implicit,all-files]`, `-fdump-ast-filter=<s>` | with `-fsyntax-only`: the AST dump (`spec/ast-dump.md`) to the output |
 | `-fdump-record-layouts`, `-fdump-record-layouts-complete` | with `-fsyntax-only`: the record layouts (`spec/abi.md` §6, §8.4) to the output |
 | `-fdump-vtable-layouts` | with `-fsyntax-only`: the vtable groups (`spec/abi.md` §8.5) to the output |
@@ -79,9 +87,52 @@ starting with `-` are inputs.
 | `-l<lib>`, `-L<dir>`, `-Wl,<args>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
 
-Language of an input: `-x`, else the extension (`.c` and `.i` are C;
-everything else, `.h` included, is C++). Standard input (`-`) is C++
-unless `-x` says otherwise.
+## Driver modes
+
+One binary, two names, as clang/clang++ (WP-244). Cargo cannot build a
+binary target named `kiln++` (a target name must be a crate name), so
+`kiln_driver`'s build script makes `kiln++` a relative symlink to `kiln`
+in the profile directory (`target/<profile>/kiln++ -> kiln`); xtask's
+`build_kiln` makes it again if it is missing and returns its path.
+
+The mode comes from the program name (`argv[0]`), as clang's driver name
+parsing: take the basename, drop a `.exe`; if that does not end in `++`,
+also drop a trailing version (`[0-9.]*` and then one `-`: `kiln++-0.1`,
+`clang++-19`) and look again. A name ending in `++` (`kiln++`, `c++`) is
+C++ mode (clang's `g++` mode); every other name is `kiln` mode (clang's
+`gcc` mode). The hidden
+`--driver-mode=g++|gcc` overrides the name (the last one wins);
+any other value is the error `unsupported argument '<v>' to option
+'--driver-mode='`. `kiln_driver::run` runs as `kiln++`;
+`kiln_driver::run_as(argv0, ...)` takes the name.
+
+The program's basename, as invoked, prefixes the driver diagnostics
+(`kiln++: error: no input files`, `kiln: warning: ...`), as clang prints
+`clang++-19: error:`; `--driver-mode=` does not change it. `--version`
+prints the same text under both names.
+
+## Input languages
+
+An input's language is its `-x` (the last one before it; `-x none`
+resets), else its extension and the mode. Extensions are case-sensitive,
+as in clang's table:
+
+| extension | clang's type | `kiln` | `kiln++` |
+|---|---|---|---|
+| `.c` | `c` | C | C++, with the warning below |
+| `.h` | `c-header` | C | C++ (`c++-header`), with the warning |
+| `.i` | `cpp-output` | C | C++ (`c++-cpp-output`), with the warning |
+| `.cc`, `.cp`, `.cpp`, `.CPP`, `.cxx`, `.c++`, `.C`, `.ii`, `.cppm`, `.ixx`, `.hh`, `.hpp`, `.hxx`, `.H`, `.inc` | C++ types | C++ | C++ |
+| standard input (`-`) | | C | C++ |
+| anything else | | C++ for `-E`/`-fsyntax-only`; a linker input for codegen | same |
+
+In C++ mode a `.c`, `.h` or `.i` input without `-x` gets clang++'s
+driver warning, once per input, before any job runs:
+`treating '<c type>' input as '<c++ type>' when in C++ mode, this
+behavior is deprecated [-Wdeprecated]`. The `-W` options apply to it
+(`-w` and `-Wno-deprecated` silence it); under `-Werror` it is an error
+and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
+(`-fsyntax-only`, codegen) is "not implemented yet" (WP-243).
 
 ## Toolchain
 
@@ -209,8 +260,47 @@ An unknown `-fdump-ast` option gives `invalid value '<opt>' in
 '-fdump-ast=<opts>'`.
 
 C inputs (`-x c`, `.c`), `-MD`/`-MMD` with `-fsyntax-only`, and
-`-fdump-ast`, `-fdump-record-layouts` or `-fdump-vtable-layouts` without
-`-fsyntax-only` are "not implemented yet".
+`-fdump-ast`, `-fdump-record-layouts`, `-fdump-vtable-layouts` or
+`-verify` without `-fsyntax-only` are "not implemented yet".
+
+## `-verify`
+
+`-verify` is clang's `-cc1 -verify` (WP-143). The consumer, its
+directive grammar, the matching rules and the report are spec/diag.md
+§11. This section covers the options and the driver's part.
+
+- **Options.** These follow clang's `ParseDiagnosticArgs`.
+  - `-verify` adds the prefix `expected`.
+  - `-verify=<p>[,<p>...]` adds each listed prefix. The option may be
+    repeated, and the prefixes accumulate.
+  - All prefixes are then validated, sorted and deduplicated. An
+    invalid one gives `invalid value '<p>' in '-verify='` plus the note
+    `-verify prefixes must start with a letter and contain only
+    alphanumeric characters, hyphens, and underscores`, and turns
+    verify off.
+  - `-verify-ignore-unexpected` ignores unexpected diagnostics of every
+    level. `=<levels>` (comma-separated `note`, `remark`, `warning`,
+    `error`) ignores only those. Any other value gives
+    `invalid value '<v>' in '-verify-ignore-unexpected='`. These errors
+    come after the prefix errors.
+  - `-Xclang <arg>` forwards `<arg>` to the same parser. A trailing
+    `-Xclang` is `argument to '-Xclang' is missing`.
+- **Run.**
+  - Each input is parsed as for `-fsyntax-only`, with diagnostics going
+    to a buffer instead of stderr.
+  - The preprocessor's comment handler feeds every lexed comment to the
+    verifier.
+  - `@<file>:N` resolves `<file>` like a quoted include: an absolute
+    path as is; otherwise relative to the directive's file, then the
+    search directories in order, then relative to the working directory.
+  - After the parse the verifier reports marker errors and checks the
+    buffer.
+  - Its report goes to stderr in the selected diagnostic format. In the
+    text format it is followed by `N error[s] generated.`.
+- **Exit status.** 1 if the report has any problem, else 0, whatever
+  the matched diagnostics were. The error limit (`-ferror-limit`)
+  still applies to the buffered diagnostics, as it does in clang;
+  libc++ passes `-ferror-limit=0`.
 
 ## Code generation
 
@@ -302,8 +392,8 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
 
 ## Output, diagnostics, exit status
 
-- Driver diagnostics (bad arguments, missing inputs) are prefixed `kiln: `
-  as clang prefixes `clang: `. They are reported before any input is
+- Driver diagnostics (bad arguments, missing inputs) are prefixed with the
+  program's basename (`kiln++: `, `kiln: `) as clang prefixes `clang++: `. They are reported before any input is
   processed, and any one of them stops the run with status 1.
 - Each input gets its own `SourceManager` and diagnostic engine. In text
   format a job prints clang's `N warning(s) and M error(s) generated.`
@@ -328,6 +418,7 @@ Driver diagnostics, in clang's wording:
 - `no such file or directory: '<f>'`
 - `no input files`
 - `unsupported target '<t>'` (kiln only)
+- `unsupported argument '<v>' to option '--driver-mode='`
 - `<action> is not implemented yet` (kiln only)
 - `cannot specify -o when generating multiple output files`
 - `-emit-llvm cannot be used when linking`
@@ -338,6 +429,7 @@ Driver diagnostics, in clang's wording:
 - warning `<x>: 'linker' input unused [-Wunused-command-line-argument]`
 - warning `argument unused during compilation: '<o>' [-Wunused-command-line-argument]`
 - warning `'<arch>' does not support '<flag>'; flag ignored [-Woption-ignored]`
+- warning `treating '<c type>' input as '<c++ type>' when in C++ mode, this behavior is deprecated [-Wdeprecated]`
 
 ## `-v`, `--version`, `--help`
 
@@ -358,7 +450,8 @@ Driver diagnostics, in clang's wording:
   `End of search list.`. That block is byte-identical to clang's (tested).
   The other `-v` lines are not.
 - `-v` or `--version` with no inputs exits 0.
-- `--help` prints a short summary of the implemented options.
+- `--help` prints a short summary of the implemented options and the
+  two names' language rule (the usage line says `kiln` under both names).
 
 ## Reproducible time
 
@@ -384,8 +477,13 @@ Each deviation is covered by a test or a test note.
    C has no C++ keywords-as-operators and no C++ ud-suffix rules. The pp
    corpus is unaffected, but a C file using `and` as an identifier would
    be.
-2. **`.h` is C++** (clang treats it as C, then as C++ when compiling as
-   C++). Pass `-x c` for C headers.
+2. **Driver modes and names.** `--driver-mode=` takes only `g++` and
+   `gcc` (clang also takes `cpp`, `cl`, `flang`, `dxc`). `kiln++` is a
+   symlink made by the build script, not a second binary target. Standard input is compiled in the mode's
+   language with any action, where clang asks for `-E` or `-x` unless
+   preprocessing. An input with an unknown extension is C++ for `-E` and
+   `-fsyntax-only` (clang takes it as a linker input). Pass `-x c++` to
+   compile a C header as C++ without the deprecation warning.
 3. **`-dD` and `-dI` are not implemented** (WP-017). Neither is `-MG`
    (unknown argument).
 4. **`-F` is ignored** with a warning. kiln does not search frameworks.
@@ -422,6 +520,9 @@ Each deviation is covered by a test or a test note.
     only when code generation emits it (so never under `-fsyntax-only`),
     in emission order, sometimes repeating a construction vtable, and
     prints its `Original map` debugging sections, which kiln omits.
+17. **`-verify` needs `-fsyntax-only`.** clang also verifies a full
+    compile. `-Xclang` forwards to the driver parser, not to a `cc1`,
+    so only options the driver knows are accepted after it.
 
 ## Tests
 
@@ -432,21 +533,30 @@ Each deviation is covered by a test or a test note.
   - the error summaries and exit codes;
   - `-M*` rules;
   - `-v` against clang's search block;
-  - reproducible time.
+  - reproducible time;
+  - the driver modes (`driver_modes`): the name, `--driver-mode=`, `-x`
+    precedence, the C++-mode warning under `-W` options, `kiln` taking
+    `.c`/`.h`/`.i`/stdin as C.
+- `crates/kiln_driver/tests/verify.rs`: `-verify` end to end under both
+  names (`kiln` and `kiln++`): the report pinned against clang 19, and
+  compared live with `clang++-19 -Xclang -verify` when it is installed.
+  `args.rs` unit tests cover the option semantics.
 - `crates/kiln_driver/tests/codegen.rs`: the codegen path end to end
   (`.ll`, `.s`, `.o`, linking and running, output naming, `-###`, `-v`,
-  unused-input warnings, missing tools). Steps needing `llc-19`/`clang++-19`
+  unused-input warnings, missing tools; `kiln_and_kilnpp`: both names as
+  real executables, `--version`, `.c` under each). It runs `kiln++`
+  (the build script's symlink beside `CARGO_BIN_EXE_kiln`). Steps needing `llc-19`/`clang++-19`
   are skipped without them.
 - `crates/kiln_driver/tests/record_layouts.rs`: the `tests/layout/`
   corpus (at least 40 programs). Each is dumped by
-  `kiln -fdump-record-layouts` and by `clang -Xclang
+  `kiln++ -fdump-record-layouts` and by `clang -Xclang
   -fdump-record-layouts-complete` on both triples, and the dumps are
   compared byte for byte (clang's builtin records are dropped). The test
   also covers both spellings and the "not implemented" error with
   `-S -emit-llvm`.
 - `crates/kiln_driver/tests/vtable_layouts.rs`: small programs (every
   dynamic class with an out-of-line key function, no constructors) are
-  dumped by `kiln -fsyntax-only -fdump-vtable-layouts` and by
+  dumped by `kiln++ -fsyntax-only -fdump-vtable-layouts` and by
   `clang -S -emit-llvm -Xclang -fdump-vtable-layouts` on both triples;
   the dumps are compared as sets of blocks without clang's `Original
   map` sections. Also the "not implemented" error with `-S -emit-llvm`.
@@ -458,5 +568,5 @@ Each deviation is covered by a test or a test note.
 - Unit tests sit in each module.
 - Parity: `cargo xtask test tests/differential/pp tests/conformance/cpp.*
   tests/conformance/lex* --report-parity docs/status/pp-parity.md`. This
-  runs `kiln -E` against `clang -E` on the corpus, including every libc++
+  runs `kiln++ -E` against `clang++ -E` on the corpus, including every libc++
   19 header, the sysroot headers, and the torture tests.

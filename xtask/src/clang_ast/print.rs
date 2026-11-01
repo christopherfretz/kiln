@@ -174,6 +174,11 @@ struct Index<'a> {
     order: HashMap<&'a str, usize>,
     /// (class, name) of each position in `order`.
     order_names: Vec<(&'a str, &'a str)>,
+    /// Named and functional cast ids by pre-order position (aligned with
+    /// the side channel's cast lines for the type as written).
+    casts: HashMap<&'a str, usize>,
+    /// The class of each position in `casts`.
+    cast_classes: Vec<&'a str>,
     /// Declarations inside a template (whose constexpr values clang's
     /// text dump may not show).
     templated: HashSet<&'a str>,
@@ -281,6 +286,10 @@ impl<'a> Index<'a> {
         }
         self.nontrivial_dtor |= has_nontrivial_dtor(n, k);
         self.note_template(n, k);
+        if side::CAST_CLASSES.contains(&k) {
+            self.casts.insert(id(n), self.cast_classes.len());
+            self.cast_classes.push(k);
+        }
         if k == "LabelStmt"
             && let (Some(d), Some(nm)) = (text(n, "declId"), name(n))
         {
@@ -434,7 +443,11 @@ struct Printer<'a, 'f> {
     opts: &'f DumpOptions,
     main_file: &'f str,
     text: &'f mut (dyn FnMut() -> Result<String, String> + Send),
+    /// The text dump, fetched at most once.
+    side_text: Option<String>,
     side: Option<Vec<TextDecl>>,
+    /// The side channel's cast lines: (class, type as written).
+    side_casts: Option<Vec<(&'static str, String)>>,
     /// Function words derived from the JSON, checked against the side
     /// channel when it is loaded: (order position, [(word, present)]).
     fn_flags: Vec<(usize, [(&'static str, bool); 3])>,
@@ -458,7 +471,9 @@ pub fn dump(
         opts,
         main_file,
         text,
+        side_text: None,
         side: None,
+        side_casts: None,
         fn_flags: Vec::new(),
         force: false,
     };
@@ -695,9 +710,50 @@ impl<'a> Printer<'a, '_> {
         Ok(chain)
     }
 
+    /// clang's text dump of the compile, fetched on first use.
+    fn side_text(&mut self) -> Res<&str> {
+        if self.side_text.is_none() {
+            self.side_text = Some((self.text)()?);
+        }
+        Ok(self.side_text.as_deref().unwrap_or(""))
+    }
+
+    /// The type as written of named or functional cast `n` (class `k`),
+    /// from the side channel.
+    fn cast_written(&mut self, n: &Json, k: &str) -> Res<String> {
+        if self.side_casts.is_none() {
+            let casts = side::casts(self.side_text()?)?;
+            if casts.len() != self.ix.cast_classes.len() {
+                return Err(format!(
+                    "clang-ast: clang's text dump has {} named/functional casts but its JSON \
+                     dump has {}; cannot align them",
+                    casts.len(),
+                    self.ix.cast_classes.len()
+                ));
+            }
+            for ((class, w), want) in casts.iter().zip(&self.ix.cast_classes) {
+                if class != want {
+                    return Err(format!(
+                        "clang-ast: text dump cast `{class}` (to `{w}`) does not match JSON {want}"
+                    ));
+                }
+            }
+            self.side_casts = Some(casts);
+        }
+        let pos = *self.ix.casts.get(id(n)).ok_or("clang-ast: cast missing from the index")?;
+        let casts = self.side_casts.as_deref().unwrap_or(&[]);
+        casts
+            .get(pos)
+            .map(|(c, w)| {
+                debug_assert_eq!(*c, k);
+                w.clone()
+            })
+            .ok_or_else(|| "clang-ast: cast missing from the side channel".into())
+    }
+
     fn side(&mut self) -> Res<&[TextDecl]> {
         if self.side.is_none() {
-            let decls = side::parse(&(self.text)()?)?;
+            let decls = side::parse(self.side_text()?)?;
             if decls.len() != self.ix.order_names.len() {
                 return Err(format!(
                     "clang-ast: clang's text dump has {} function/variable/specialization lines but its \
@@ -1345,15 +1401,11 @@ impl<'a> Printer<'a, '_> {
                     _ => None,
                 };
                 if let Some(head) = named {
-                    // clang prints the type as written; kiln rebuilds it
-                    // from the expression's type and value category.
+                    // clang prints the type as written, which only its
+                    // text dump has.
                     l.push_str(head);
-                    l.push_str(qual_type(n));
-                    match text(n, "valueCategory") {
-                        Some("lvalue") => l.push_str(" &"),
-                        Some("xvalue") => l.push_str(" &&"),
-                        _ => {}
-                    }
+                    let w = self.cast_written(n, k)?;
+                    l.push_str(&side::cplusplus_tags(&w, qual_type(n)));
                     if k != "CXXFunctionalCastExpr" {
                         l.push('>');
                     }

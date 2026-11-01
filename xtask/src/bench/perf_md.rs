@@ -299,7 +299,7 @@ mod tests {
         PerfContext {
             when: "2026-10-29 10:00:00 UTC",
             stamp,
-            test: ("target/release/kiln", "kiln", "kiln version 0.0.1"),
+            test: ("target/release/kiln++", "kiln", "kiln version 0.0.1"),
             oracle: ("clang++-19", "clang", "Debian clang version 19.1.7"),
             host: "aarch64, 24 CPUs".into(),
             runs: 5,

@@ -210,7 +210,7 @@ Constructors:
      the outer `[`, without notes). In a GNU dialect (`-std=gnu++NN`,
      `Sema::gnu`) the warning is clang's `ext_vla_cxx_in_gnu_mode`, an
      Extension that is off by default (`sema_vla_cxx_extension_gnu`;
-     clang also adds it to `-Wall` in GNU mode, kiln does not).
+     `-Wall` enables it, `vla-cxx-extension` being in `all`, WP-230).
      `check_vla_var` then handles the variable: `extern` is an error
      ("cannot have 'extern' linkage"); `static`/`thread_local` folds the
      bound (`fold_rvalue_int`) to a constant array with the
@@ -733,12 +733,17 @@ and returns the scope it names:
 - **Enumerations** ([dcl.enum]):
   - enumerators are typed as clang types them
   - a fixed underlying type gets converted-constant-expression checks
-    and narrowing diagnostics
+    and narrowing diagnostics; a non-constant initializer is
+    `enumerator value is not a constant expression` (clang
+    `CheckEnumConstant`, WP-230)
+  - an unfixed one's initializer is an integral constant expression that
+    may fold (`fold_not_ice`, below)
   - an unfixed one gets its type from the enumerators' range (the best
     type), and the enumerators are then retyped to the enumeration
   - `replace_enumerator_init` records the converted initializer
 - **Bit-fields** ([class.bit]):
-  - the width must be an integral constant expression
+  - the width must be an integral constant expression; one that folds
+    laxly is accepted (`fold_not_ice`, below)
   - it must not be negative
   - it must not be zero-width with a name
   - it must not exceed the type's width
@@ -813,6 +818,18 @@ and returns the scope it names:
     reference), else a `-Wignored-attributes` warning; on a non-function
     `only applies to non-K&R-style functions`. Codegen: spec/codegen.md
     "Allocation functions".
+  - `flag_enum` and `enum_extensibility(open|closed)` (GNU syntax or
+    `clang::`, `AttrKind::FLAG_ENUM` / `ENUM_EXTENSIBILITY`, WP-230), on
+    enumerations (else `'x' attribute only applies to enums`
+    [-Wignored-attributes]). `flag_enum` takes no arguments;
+    `enum_extensibility` takes exactly one, an identifier (the parser
+    passes a leading identifier as `AttrArg::Ident`, clang
+    `attributeHasIdentifierArg`): `takes one argument`, `requires
+    parameter 0 to be an identifier`, and for another identifier
+    `'enum_extensibility' attribute argument not supported: 'x'`
+    [-Wignored-attributes]; an argument already in error drops it
+    silently. They change only the switch checks (§7 Statements). Not
+    yet: -Wflag-enum (an enumerator out of range of the flags).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -828,6 +845,7 @@ and returns the scope it names:
   | MALLOC | — | — |
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
+  | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -1311,7 +1329,14 @@ diagnostics and IR.
   assignment on a pointer to `void` or to a function type is an error in
   C++ (`arithmetic on a pointer to void`, `arithmetic on pointers to the
   function type 'void ()'` for two pointer operands), not the GNU C
-  extension (`-Wgnu-pointer-arith`, kept for C).
+  extension (`-Wgnu-pointer-arith`, kept for C). A pointer difference
+  (`check_pointer_pair_arith`, clang `checkArithmeticBinOpPointerOperands`,
+  WP-230) runs after `'T *' and 'U *' are not pointers to compatible
+  types` too: a `void` pointee on one side is diagnosed for that side,
+  on both as `pointers to void`; likewise a function pointee, the
+  two-pointer form naming both pointees when the pointer types differ
+  (`arithmetic on pointers to function types 'void ()' and 'void
+  (int)'`); otherwise an incomplete pointee, left side first.
 - **Member-pointer equality** ([expr.eq]/4, clang's
   `CheckCompareOperands`, WP-085): when either operand of a comparison
   is a member pointer:
@@ -2169,7 +2194,7 @@ clang 19's C99/GNU complex support in C++:
     - not integral or unscoped enumeration type: `integral constant
       expression must have integral or unscoped enumeration type, not T`
     - not constant: `expression is not an integral constant expression`
-      with the evaluator's notes
+      with the evaluator's notes, unless it folds (`fold_not_ice`)
     - negative: `array designator value '-1' is negative`
     - an empty range: `array designator range [3, 1] is empty`, at the
       `...`.
@@ -2410,7 +2435,9 @@ clang 19's C99/GNU complex support in C++:
   - Enumeration and constant checks (`switch_enum.rs`
     `check_switch_cases`, WP-219), in clang `ActOnFinishSwitchStmt`
     order, after `check_case_ranges`; skipped for a dependent or invalid
-    condition:
+    condition and for a value-dependent case label (clang
+    `HasDependentValue`: -Wswitch-default included, so a template whose
+    labels depend on a parameter warns only per instantiation, WP-230):
     1. no `default`: `-Wswitch-default` (off by default) `'switch'
        missing 'default' label`;
     2. nothing more if the case list is broken (an unfolded label, a
@@ -2422,13 +2449,18 @@ clang 19's C99/GNU complex support in C++:
        before promotion) continues;
     5. a case value, then each range's `lo` and `hi`, that is no
        enumerator's value: `case value not in enumerated type 'E'`
-       [-Wswitch]; a condition naming a const variable of static or
-       thread storage duration of the same enumeration is exempt;
+       [-Wswitch]; a label naming a const variable of static or
+       thread storage duration of the same enumeration is exempt, and so
+       is every value of an `enum_extensibility(open)` enumeration; for a
+       `flag_enum` one "an enumerator's value" means any value whose bits
+       are all bits of its positive single-bit enumerators (clang
+       `ShouldDiagnoseSwitchCaseNotInEnum`, `IsValueInFlagEnum`);
     6. enumerators sorted by value (first of equal values kept),
        deprecated, `[[maybe_unused]]` and unused ones skipped, not
        covered by a case or range: none and a `default` is `default
        label in switch which covers all enumeration values`
-       [-Wcovered-switch-default, off]; otherwise `enumeration value 'A'
+       [-Wcovered-switch-default, off] for a closed non-flag enumeration
+       (clang `isClosedNonFlag`); otherwise `enumeration value 'A'
        not handled in switch` (two: `values 'A' and 'B'`, three: `'A',
        'B', and 'C'`, more: `N enumeration values not handled in switch:
        'A', 'B', 'C'...`) [-Wswitch] without a `default`, or the same with
@@ -2523,7 +2555,8 @@ clang 19's C99/GNU complex support in C++:
   the end of a switch with no default over a fully covered enumeration
   (`isAllEnumCasesCovered`); reaches a handler only from a live throw in
   its try-block (or in a nested try without a catch-all, as calls have
-  no exception edges); iterates `goto` labels and loop back edges to a
+  no exception edges); gives a live `asm goto` an edge to each of its
+  labels besides the next statement (WP-230); iterates `goto` labels and loop back edges to a
   fixed point; and checks nothing in a function with an `if consteval`
   (clang builds no CFG). The operands of `sizeof`/`alignof` are not
   walked (a `noexcept` operand is, as clang's CFG does); a GNU case range
@@ -2638,7 +2671,7 @@ values clang attaches are precomputed into `AsmData.srclocs` (literal
 begin, then every later template line; offset + 2). Templates are
 substituted (`subst/stmts.rs`) and rechecked at instantiation.
 `act_on_file_scope_asm` builds a `FileScopeAsmDecl`. Not implemented:
-`asm goto` (rejected by the parser), immediate range checks
+immediate range checks
 (`validateInputSize`/`validateOutputSize`), `=@cc` flag outputs, register
 variables (`register int r asm("x0")`) as operands and their clobber
 conflict check, the C++17 "asm in constexpr function" extension warning;
@@ -2771,6 +2804,21 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 | `case` label, enumerator of an enumeration with a fixed underlying type, `noexcept(e)` specifier | `EvalContext::converted(loc)`; a converted constant expression ([expr.const]/12) |
 | `if constexpr` condition | `EvalKind::IfConstexpr` |
 | array bound, bit-field width, enumerator without a fixed type, `alignas`, array designator | `EvalKind::Other` |
+
+- **GNU folding** (`Sema::fold_not_ice`, clang
+  `VerifyIntegerConstantExpression` with `AllowFold`, WP-230): for a
+  bit-field width, an enumerator without a fixed underlying type and an
+  array designator, an expression that is not an integral constant
+  expression but folds laxly (`fold_rvalue_int`: a `const` non-volatile
+  variable reads as its initializer, e.g. `(int)d` for `const double d =
+  2.0`) is accepted with its folded value. It warns `expression is not an
+  integral constant expression; folding it to a constant is a GNU
+  extension` [-Wgnu-folding-constant] (an Extension, so off unless
+  `-pedantic` or the group is enabled), with the evaluator's notes, at
+  the expression's begin (a lone "subexpression not valid" note moves
+  the location instead). Array bounds have their own folding (`variable
+  length array folded to constant array`, above). A `case` label,
+  `static_assert` and `alignas` never fold.
 
 - **Speculative folds (`try_fold`):**
   - narrowing checks in list-initialization and fixed-type enumerators

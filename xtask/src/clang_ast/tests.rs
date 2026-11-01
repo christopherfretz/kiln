@@ -359,3 +359,29 @@ fn value_tree_forms() {
     );
     assert!(values::parse(&leaf("value", "ComplexInt 1 + 2i")).is_err());
 }
+
+#[test]
+fn side_channel_reads_cast_written_types() {
+    let text = "FunctionDecl 0x1 <a.cpp:1:1> f 'void ()'\n\
+                `-CompoundStmt 0x2 <col:10>\n  \
+                |-CXXFunctionalCastExpr 0x3 <col:3> 'int' functional cast to CI <NoOp>\n  \
+                |-CXXStaticCastExpr 0x4 <col:3> 'int' lvalue static_cast<R> <NoOp>\n  \
+                |-CXXStaticCastExpr 0x5 <col:3> 'bool' static_cast<_Bool> <NoOp>\n  \
+                `-CXXStaticCastExpr 0x6 <col:3> 'X<1>' static_cast<X<1>> <NoOp>\n";
+    assert_eq!(
+        side::casts(text).unwrap(),
+        vec![
+            ("CXXFunctionalCastExpr", "CI".to_owned()),
+            ("CXXStaticCastExpr", "R".to_owned()),
+            ("CXXStaticCastExpr", "bool".to_owned()),
+            ("CXXStaticCastExpr", "X<1>".to_owned()),
+        ]
+    );
+    let fun = "CXXStaticCastExpr 0x7 <col:3> 'void ()' lvalue static_cast<void (&)(void)> <NoOp>\n";
+    assert_eq!(side::casts(fun).unwrap(), vec![("CXXStaticCastExpr", "void (&)()".to_owned())]);
+    // C policy's tag keyword is dropped unless the JSON type has it.
+    assert_eq!(side::cplusplus_tags("const struct V &", "const V"), "const V &");
+    assert_eq!(side::cplusplus_tags("struct V", "struct V"), "struct V");
+    assert_eq!(side::cplusplus_tags("X<struct n::V>", "X<V>"), "X<n::V>");
+    assert_eq!(side::cplusplus_tags("my_struct V", "V"), "my_struct V");
+}

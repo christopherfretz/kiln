@@ -393,6 +393,22 @@ that `pragma` does not consume becomes `Marker::Pragma`.
 
 The default is `NoCallbacks`.
 
+### Comment handler: consumer is `-verify` (WP-143)
+
+`Preprocessor::set_comment_handler(Box<dyn FnMut(Span)>)` is clang's
+`Preprocessor::addCommentHandler`. The handler is called with the span of
+every comment the preprocessor lexes in normal mode, in source order,
+whether or not `-C` keeps it as a token. That covers comments on
+directive lines, in included files and in macro definitions. It does not
+cover comments in skipped conditional groups or in the discarded text of
+`#error` / `#warning`, which clang lexes raw and never shows its handler.
+Installing the handler also turns recording on for files already entered
+(the lexer's `set_record_comments`, spec/lex.md "Comments"). There is at
+most one handler; with none, nothing is recorded. Comments lexed in
+clang's raw mode (`quiet_lex`: the rest of a `#error` / `#warning` line,
+`#pragma GCC poison` operands) are dropped, as clang's raw lexer never
+calls its handlers. Test: `tests/cpp_comments.rs`.
+
 ## Interface
 
 ```rust
@@ -469,6 +485,14 @@ belong to WP-017, which builds them on `macro_defined` and
   - the spacing of `#` results, taken from `LEADING_SPACE` flags rather
     than the source text;
   - `__VA_OPT__`, including P1042's stringify and placemarker cases;
+  - GNU `, ## __VA_ARGS__` (clang `MaybeRemoveCommaBeforeVaArgs`): the
+    comma is removed when the variadic argument is omitted. `token
+    pasting of ',' and __VA_ARGS__ is a GNU extension`
+    [-Wgnu-zero-variadic-macro-arguments] is reported at the spelling
+    in the definition (`expand.rs::emit_paste_comma`, WP-230): the `,`
+    when the argument is omitted, the `##` when it is present. There are
+    no "expanded from" notes, and the warning repeats per expansion
+    (`allow_duplicate`), as clang's does;
   - a function-like macro name followed by `(` on a later line, or after
     the end of a file.
 - **Locations.** Each expanded token has a `Loc` in a macro expansion
@@ -665,8 +689,8 @@ it through kiln_diag's fatal handling; the core itself carries on.
   group. Each test carries a `///` tag naming its [cpp] section, and a
   note when it records a deviation. The files are `cpp_replace`,
   `cpp_stringize`, `cpp_rescan`, `cpp_cond`, `cpp_line`, `cpp_pragma`,
-  `cpp_predefined`, `cpp_include`, `cpp_embed`, `cpp_module` and
-  `cpp_options`.
+  `cpp_predefined`, `cpp_include`, `cpp_embed`, `cpp_module`,
+  `cpp_options` and `cpp_comments`.
 
   Their goldens are clang 19's `-E -P` output and diagnostics, run with
   the aarch64 Linux C++26 predefines in

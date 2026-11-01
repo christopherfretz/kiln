@@ -802,7 +802,7 @@ impl Sema<'_, '_> {
             return (Status::Success, Some(call));
         }
         let mut cands = Vec::new();
-        self.adl_lookup_dn(DeclName::ident(sym), &[range], &mut cands);
+        self.adl_lookup_dn(DeclName::ident(sym), &[range], colon, &mut cands);
         cands.retain(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID));
         if cands.is_empty() {
             return (Status::NoViable(Vec::new()), None);
