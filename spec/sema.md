@@ -1355,9 +1355,24 @@ for them.
     checked in an unevaluated operand or for a type-dependent operand
     (it is checked on instantiation, with the instantiation note), and
     an `[[assume(...)]]` argument is checked like any other expression.
-  - Unlike clang, the warnings are emitted at once, not deferred to the
-    end of the function and dropped when unreachable (`DiagIfReachable`).
-    The warning carries the expression's range, so a macro-argument
+  - **Reachability (WP-203)**: the generic warnings (`expression result
+    unused`, `left operand of comma operator has no effect`) go through
+    `diag_if_reachable` (clang `DiagIfReachable`); the comparison,
+    `nodiscard`, `pure`/`const` and `(void*)` warnings are emitted at
+    once. In a function body the warning is queued on
+    `FnState::runtime_diags` with its expression as anchor; at the end
+    of the body, when no error occurred and outside a template, those
+    whose anchor the reachability walk (`unreachable_exprs`, the
+    structured CFG mirror of §7.5) meets only on dead paths are dropped
+    (`return; x;`, `if (0) x;`, the unmatched case of a constant
+    switch, the pruned arm of `true ? a : (x, 1)`); a template's are
+    emitted unfiltered and an instantiation filters its own; an `if
+    consteval` in the body (no CFG) keeps them all. Outside a function
+    the warning is not emitted in the initializer of a `constexpr`
+    variable or of a static data member's first, non-inline declaration
+    (clang's `ManglingContextDecl` test, read from
+    `lambda_mangle.var`); otherwise at once.
+  - The warning carries the expression's range, so a macro-argument
     location gets clang's `expanded from macro` note (spec/diag.md §8.4).
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
@@ -1625,7 +1640,11 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   `FnState::runtime_diags` and flushed in `end_function_body`; in an
   unevaluated operand or an immediate context they are dropped; outside a
   function (a namespace-scope initializer) they are emitted at once.
-  **Gaps:** clang filters queued diagnostics by CFG reachability
+  Each queued diagnostic has an optional anchor expression; an anchored
+  one is dropped at the flush when the anchor is unreachable (see the
+  unused-value reachability rule, WP-203).
+  **Gaps:** the `diag_runtime_behavior` callers queue without an anchor,
+  so clang's CFG reachability filter does not apply to them
   (`if (0) va_arg(ap, char)` is silent there, reported here), and a
   non-dependent expression shared by a template and its instantiation is
   checked once, at definition.

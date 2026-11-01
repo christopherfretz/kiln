@@ -49,6 +49,12 @@ struct Reach {
     found: Vec<ExprId>,
     /// An `if consteval` was seen.
     no_cfg: bool,
+    /// The expressions whose reachability is asked for.
+    wanted: HashSet<ExprId>,
+    /// The wanted expressions the walk met (in any pass).
+    visited: HashSet<ExprId>,
+    /// The wanted expressions met on a live path (in any pass).
+    reached: HashSet<ExprId>,
 }
 
 struct Jump {
@@ -80,6 +86,30 @@ impl Sema<'_, '_> {
             }
             if !r.changed {
                 return Some(r.found);
+            }
+        }
+    }
+
+    /// The expressions of `wanted` that are unreachable in `body` (clang
+    /// `IssueWarnings` filtering `PossiblyUnreachableDiags` through the
+    /// CFG); `None` when clang would build no CFG. An expression the walk
+    /// does not meet counts as reachable, as an unmapped statement does
+    /// in clang.
+    pub(crate) fn unreachable_exprs(
+        &mut self,
+        body: StmtId,
+        wanted: HashSet<ExprId>,
+    ) -> Option<HashSet<ExprId>> {
+        let mut r = Reach { wanted, ..Reach::default() };
+        loop {
+            r.changed = false;
+            r.found.clear();
+            self.reach_stmt(body, true, &mut r);
+            if r.no_cfg {
+                return None;
+            }
+            if !r.changed {
+                return Some(r.visited.difference(&r.reached).copied().collect());
             }
         }
     }
@@ -467,6 +497,12 @@ impl Sema<'_, '_> {
     }
 
     fn reach_expr(&mut self, e: ExprId, live: bool, r: &mut Reach) -> bool {
+        if r.wanted.contains(&e) {
+            r.visited.insert(e);
+            if live {
+                r.reached.insert(e);
+            }
+        }
         let kind = self.ast.exprs.get(e).kind();
         match kind {
             ExprKind::LambdaExpr => live,

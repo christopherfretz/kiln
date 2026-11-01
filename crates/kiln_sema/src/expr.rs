@@ -708,7 +708,10 @@ impl Sema<'_, '_> {
         if id == DiagId::sema_unused_voidptr {
             // clang's only range is the fix-it removing the `*`.
             if let Some(star) = self.voidptr_star(e) {
-                d = d.fixit(kiln_diag::FixIt::remove(kiln_source::Span::new(star, star.with_offset(1))));
+                d = d.fixit(kiln_diag::FixIt::remove(kiln_source::Span::new(
+                    star,
+                    star.with_offset(1),
+                )));
             }
         } else {
             d = d.range(self.expr_range(e));
@@ -720,7 +723,12 @@ impl Sema<'_, '_> {
             let op = kiln_source::Span::new(loc, loc.with_offset(2));
             d = d.with_note(self.diag(n, loc).fixit(kiln_diag::FixIt::replace(op, text)));
         }
-        self.emit(d);
+        // Only the generic warnings go through clang's `DiagIfReachable`.
+        if matches!(id, DiagId::sema_unused_expr | DiagId::sema_unused_comma_left_operand) {
+            self.diag_if_reachable(d, e);
+        } else {
+            self.emit(d);
+        }
     }
 
     /// The `*` of the `(void*)` cast `e` (the last one spelled before
@@ -1034,7 +1042,10 @@ impl Sema<'_, '_> {
                     self.ignore_paren_imp_casts(ex.operands(e)[1])
                 }
                 ExprKind::UnaryOperator
-                    if matches!(ex.unary_op(e), UnaryOp::Deref | UnaryOp::AddrOf | UnaryOp::Plus) =>
+                    if matches!(
+                        ex.unary_op(e),
+                        UnaryOp::Deref | UnaryOp::AddrOf | UnaryOp::Plus
+                    ) =>
                 {
                     self.ignore_paren_imp_casts(ex.operand(e))
                 }

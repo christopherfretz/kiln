@@ -13,6 +13,8 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
+use std::collections::HashSet;
+
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
 use crate::scope::{Scope, ScopeKind};
@@ -71,8 +73,9 @@ pub struct FnState {
     pub(crate) has_switch: bool,
     /// Runtime-behavior diagnostics of the body (clang
     /// `FunctionScopeInfo::PossiblyUnreachableDiags`), emitted at its
-    /// end (`diag_runtime_behavior`).
-    pub(crate) runtime_diags: Vec<kiln_diag::Diag>,
+    /// end (`diag_runtime_behavior`, `diag_if_reachable`), each with
+    /// the expression whose reachability decides it.
+    pub(crate) runtime_diags: Vec<(kiln_diag::Diag, Option<ExprId>)>,
 }
 
 impl FnState {
@@ -992,8 +995,22 @@ impl Sema<'_, '_> {
         // The deferred runtime-behavior diagnostics, ahead of the flow
         // warnings (clang `PopFunctionScopeInfo` / `IssueWarnings`); a
         // template's too (clang flushes them unfiltered there), and an
-        // instantiation re-checks.
-        for msg in state.runtime_diags {
+        // instantiation re-checks. With no error and outside a template,
+        // those anchored to an expression that is unreachable in the
+        // body are dropped.
+        let dead = if self.diags.error_count() > 0 || self.in_template() {
+            None
+        } else {
+            let wanted: HashSet<ExprId> =
+                state.runtime_diags.iter().filter_map(|(_, e)| *e).collect();
+            if wanted.is_empty() { None } else { self.unreachable_exprs(body, wanted) }
+        };
+        for (msg, anchor) in state.runtime_diags {
+            if let (Some(dead), Some(e)) = (&dead, anchor)
+                && dead.contains(&e)
+            {
+                continue;
+            }
             self.emit(msg);
         }
         let ret = state.ret;
@@ -1052,9 +1069,34 @@ impl Sema<'_, '_> {
             return;
         }
         match self.func.as_mut() {
-            Some(st) => st.runtime_diags.push(msg),
+            Some(st) => st.runtime_diags.push((msg, None)),
             None => self.emit(msg),
         }
+    }
+
+    /// clang `DiagIfReachable`: in a function body, deferred to its end
+    /// and dropped there when `anchor` is unreachable; outside one, not
+    /// emitted in the initializer of a constexpr variable or of a static
+    /// data member's first, non-inline declaration (clang reads its
+    /// `ManglingContextDecl`).
+    pub(crate) fn diag_if_reachable(&mut self, msg: kiln_diag::Diag, anchor: ExprId) {
+        if let Some(st) = self.func.as_mut() {
+            st.runtime_diags.push((msg, Some(anchor)));
+            return;
+        }
+        if let Some(v) = self.lambda_mangle.var
+            && let Some(var) = self.ast.decls.var(v)
+        {
+            let constexpr = var.spec.is_constexpr();
+            let ctx = self.ast.decls.get(v).ctx();
+            let static_member = ctx.is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord)
+                && self.ast.prev(v).is_none()
+                && !var.spec.is_inline();
+            if constexpr || static_member {
+                return;
+            }
+        }
+        self.emit(msg);
     }
 
     /// Whether function `f` is declared `[[noreturn]]`.
