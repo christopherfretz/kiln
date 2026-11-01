@@ -163,6 +163,13 @@ impl Cg<'_> {
         }
     }
 
+    /// The value of `ConstantExpr` `e`: sema's, or for an immediate
+    /// invocation inside a default argument the value the prepass folded
+    /// for the current use ([`crate::fold::Folds::imm`]).
+    pub(crate) fn immediate_value(&self, e: ExprId) -> Option<ConstValueId> {
+        self.ast.exprs.constant_value(e).or_else(|| self.folds.imm.get(&(e, self.srcloc)).copied())
+    }
+
     /// Enters default argument `e` for emission: the source-location
     /// builtins in it take the values of this use unless an enclosing
     /// default argument already set them. Returns the scope to restore.

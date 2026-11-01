@@ -103,6 +103,15 @@ pub(crate) enum Op {
         normal: Blk,
         unwind: Blk,
     },
+    /// `callbr ... to label %normal [label %indirect...]` (`asm goto`).
+    CallBr {
+        fn_ty: TypeId,
+        callee: V,
+        args: Vec<V>,
+        opts: Box<CallOpts>,
+        normal: Blk,
+        indirect: Vec<Blk>,
+    },
     /// `landingpad { ptr, i32 } [cleanup] catch ptr <clause>...`.
     LandingPad {
         cleanup: bool,
@@ -150,6 +159,7 @@ impl Op {
                 | Op::Ret { .. }
                 | Op::Unreachable
                 | Op::Invoke { .. }
+                | Op::CallBr { .. }
                 | Op::Resume { .. }
         )
     }
@@ -158,6 +168,9 @@ impl Op {
         match self {
             Op::Br { dest } => vec![*dest],
             Op::Invoke { normal, unwind, .. } => vec![*normal, *unwind],
+            Op::CallBr { normal, indirect, .. } => {
+                std::iter::once(*normal).chain(indirect.iter().copied()).collect()
+            }
             Op::CondBr { t, f, .. } => vec![*t, *f],
             Op::Switch { default, cases, .. } => {
                 std::iter::once(*default).chain(cases.iter().map(|c| c.1)).collect()
@@ -170,6 +183,9 @@ impl Op {
         match self {
             Op::Br { dest } => vec![dest],
             Op::Invoke { normal, unwind, .. } => vec![normal, unwind],
+            Op::CallBr { normal, indirect, .. } => {
+                std::iter::once(normal).chain(indirect.iter_mut()).collect()
+            }
             Op::CondBr { t, f, .. } => vec![t, f],
             Op::Switch { default, cases, .. } => {
                 std::iter::once(default).chain(cases.iter_mut().map(|c| &mut c.1)).collect()
@@ -192,7 +208,9 @@ impl Op {
             }
             Op::Phi { inc, .. } => inc.iter().map(|x| x.0).collect(),
             Op::Select { c, t, f } => vec![*c, *t, *f],
-            Op::Call { callee, args, .. } | Op::Invoke { callee, args, .. } => {
+            Op::Call { callee, args, .. }
+            | Op::Invoke { callee, args, .. }
+            | Op::CallBr { callee, args, .. } => {
                 std::iter::once(*callee).chain(args.iter().copied()).collect()
             }
             Op::LandingPad { clauses, .. } => clauses.clone(),
@@ -673,6 +691,11 @@ impl Fir {
                     Op::Invoke { fn_ty, callee, args, opts, normal, unwind } => {
                         let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
                         b.invoke_ex(*fn_ty, val(*callee), &args, blk(*normal), blk(*unwind), opts)?
+                    }
+                    Op::CallBr { fn_ty, callee, args, opts, normal, indirect } => {
+                        let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
+                        let ind: Vec<BlockId> = indirect.iter().map(|&x| blk(x)).collect();
+                        b.callbr_ex(*fn_ty, val(*callee), &args, blk(*normal), &ind, opts)?
                     }
                     Op::LandingPad { cleanup, clauses } => {
                         let cl: Vec<Clause> =
