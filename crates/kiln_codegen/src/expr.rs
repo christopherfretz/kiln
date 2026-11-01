@@ -5,7 +5,9 @@ use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::BitFieldInfo;
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, VarStorage};
-use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCategory};
+use kiln_ast::expr::{
+    BinaryOp, CastKind, ExprFlags, ExprKind, StorageDuration, UnaryOp, ValueCategory,
+};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
@@ -1535,7 +1537,15 @@ impl Cg<'_> {
                 let s =
                     if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
                 let sq = ast.exprs.get(s).ty();
-                let tmp = self.temp(sq);
+                // [class.temporary]/6: a temporary bound to a reference
+                // with static storage duration is a `_ZGR` global.
+                let static_tmp = n.kind() == ExprKind::MaterializeTemporaryExpr
+                    && ast.exprs.temporary_storage(e) == StorageDuration::Static;
+                let (tmp, needs_init) =
+                    if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
+                if !needs_init {
+                    return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
+                }
                 if self.is_aggregate(sq) {
                     // clang `EmitAnyExprToMem`: a materialized temporary is
                     // a `MayOverlap` slot, which only a constructor call or
@@ -1563,7 +1573,9 @@ impl Cg<'_> {
                     let v = self.emit_scalar(s)?;
                     self.store_scalar(v, tmp, sq);
                 }
-                if n.kind() == ExprKind::MaterializeTemporaryExpr {
+                if static_tmp {
+                    self.register_temporary_dtor(e, tmp)?;
+                } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
                     self.push_temporary_cleanup(e, tmp);
                 }
                 Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
@@ -3079,8 +3091,8 @@ impl Cg<'_> {
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
         match v.spec.storage() {
             VarStorage::Static => {
-                self.static_local(d)?;
-                return Ok(());
+                let g = self.static_local(d)?;
+                return self.static_local_init(d, g);
             }
             VarStorage::Extern => return Ok(()),
             _ => {}
@@ -3140,7 +3152,13 @@ impl Cg<'_> {
     }
 
     /// clang `EmitAutoVarInit` for variable `d` of type `q` at `addr`.
-    fn emit_var_init(&mut self, d: DeclId, q: QualType, addr: Addr, init: ExprId) -> R<()> {
+    pub(crate) fn emit_var_init(
+        &mut self,
+        d: DeclId,
+        q: QualType,
+        addr: Addr,
+        init: ExprId,
+    ) -> R<()> {
         let ast = self.ast;
         if self.referee(q).is_some() {
             // A reference binds the address of its initializer glvalue.

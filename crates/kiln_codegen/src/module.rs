@@ -145,6 +145,8 @@ pub(crate) struct Cg<'a> {
     pub f: Fx,
     /// The `$_N` ids of unnamed classes, in first-mangle order.
     pub anon: mangle::AnonIds,
+    /// Dynamic initialization of static-storage variables.
+    pub gi: crate::global_init::GlobalInits,
 }
 
 impl<'a> Cg<'a> {
@@ -196,6 +198,7 @@ impl<'a> Cg<'a> {
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
             f: Fx::empty(),
+            gi: crate::global_init::GlobalInits::default(),
             anon: mangle::AnonIds::new(),
         }
     }
@@ -213,6 +216,7 @@ impl<'a> Cg<'a> {
         self.emit_key_function_vtables()?;
         self.emit_deferred()?;
         self.resolve_placeholders()?;
+        self.emit_global_init_trailer()?;
         self.trailer();
         Ok(self.m)
     }
@@ -320,9 +324,10 @@ impl<'a> Cg<'a> {
         if self.is_explicit_inst_declaration(first) {
             return Ok(());
         }
-        if !self.discardable_var(d) {
+        if !self.discardable_var(d) || self.var_must_emit(d) {
             return self.emit_var_def(d);
         }
+        self.note_deferred_init(first, d);
         if self.gvars.contains_key(&first) {
             self.to_emit.push(Def::Decl(d));
         } else {
@@ -468,7 +473,7 @@ impl<'a> Cg<'a> {
         self.fn_internal(d) || self.fn_is_inline(d)
     }
 
-    fn var_is_inline(&self, d: DeclId) -> bool {
+    pub(crate) fn var_is_inline(&self, d: DeclId) -> bool {
         let ast = self.ast;
         ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|v| v.spec.is_inline()))
     }
@@ -1236,6 +1241,7 @@ impl<'a> Cg<'a> {
         let any_init = v
             .init
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
+        let mut needs_ctor = false;
         let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
             None => {
                 let t = self.mty(ty);
@@ -1243,14 +1249,17 @@ impl<'a> Cg<'a> {
             }
             Some(e) => match self.folds.get(e) {
                 Some(c) => self.const_value(c, ty, Some(e), true)?,
+                // Dynamic initialization ([basic.start.dynamic]): zero
+                // until the initialization function runs.
                 None => {
-                    return err(
-                        loc,
-                        "dynamic initialization of a global is not supported yet (M3)",
-                    );
+                    needs_ctor = true;
+                    let t = self.mty(ty);
+                    self.m.const_zero(t)
                 }
             },
         };
+        let is_ref = ast.types.is_reference(ty);
+        let needs_dtor = !is_ref && self.destructed_class(ty).is_some();
         let ity = self.m.const_type(init);
         let g = if let Some(&g) = self.gvars.get(&first) {
             if self.m.global(g).value_type() != ity {
@@ -1267,7 +1276,8 @@ impl<'a> Cg<'a> {
         let instantiated = self.var_instantiation_linkage(first);
         let inline = self.var_is_inline(d) || instantiated.is_some();
         let quals = ast.types.effective_quals(ty);
-        let constant = quals.is_const() && !has_mutable(ty);
+        let constant =
+            ((quals.is_const() && !has_mutable(ty)) || is_ref) && !needs_ctor && !needs_dtor;
         let align = self.global_align(ty);
         let name = self.m.global(g).name().to_owned();
         let comdat =
@@ -1289,6 +1299,9 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::External;
             gv.dso_local = true;
         }
+        if needs_ctor || needs_dtor {
+            self.emit_var_init_fn(d, g, needs_ctor)?;
+        }
         Ok(())
     }
 
@@ -1298,7 +1311,7 @@ impl<'a> Cg<'a> {
     /// instantiation definition ([temp.explicit]), `linkonce_odr` for an
     /// implicit instantiation; `None` for an explicit specialization or a
     /// non-templated variable.
-    fn var_instantiation_linkage(&self, first: DeclId) -> Option<Linkage> {
+    pub(crate) fn var_instantiation_linkage(&self, first: DeclId) -> Option<Linkage> {
         let ast = self.ast;
         let explicit = |k: SpecKind| k == SpecKind::ExplicitInstantiationDefinition;
         match ast.templ_link(first).get() {
@@ -1347,8 +1360,13 @@ impl<'a> Cg<'a> {
         let name = mangle::mangle_static_local(ast, &mut self.anon, first, index);
         let mt = self.mty(ty);
         let g = self.m.add_global(&name, mt);
+        self.gi.local_index.insert(first, index);
         let align = self.global_align(ty);
-        let constant = ast.types.effective_quals(ty).is_const();
+        let init_expr = v.init.filter(|&e| !ast.is_trivial_default_construction(e));
+        let dynamic = self.static_needs_init(d, init_expr);
+        let constant = (ast.types.effective_quals(ty).is_const() && !has_mutable(ty)
+            || ast.types.is_reference(ty))
+            && !dynamic;
         let encl = mangle::enclosing_function(ast, first);
         let inline_fn = encl.is_some_and(|f| self.fn_is_inline(f) && !self.fn_internal(f));
         let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
@@ -1364,17 +1382,11 @@ impl<'a> Cg<'a> {
         }
         self.static_locals.insert(first, g);
         // clang `AddInitializerToStaticVarDecl`.
-        let init = match v.init {
+        // A dynamic initializer runs, guarded, at the declaration
+        // statement ([stmt.dcl]/3; `static_local_init`).
+        let init = match init_expr.and_then(|e| self.folds.get(e).map(|c| (e, c))) {
             None => self.m.const_zero(mt),
-            Some(e) => match self.folds.get(e) {
-                Some(c) => self.const_value(c, ty, Some(e), true)?,
-                None => {
-                    return err(
-                        loc,
-                        "dynamic initialization of a static local is not supported yet (M3)",
-                    );
-                }
-            },
+            Some((e, c)) => self.const_value(c, ty, Some(e), true)?,
         };
         let ity = self.m.const_type(init);
         if ity != mt {

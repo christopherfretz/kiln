@@ -110,8 +110,9 @@ impl Cg<'_> {
             PtrBase::Function(d) => Ok(Value::func(self.get_fn(d)?)),
             PtrBase::StringLit { lit, .. } => Ok(gval(self.lit_global(lit))),
             PtrBase::Const(c) => Ok(gval(self.const_object(c)?)),
-            PtrBase::Temporary(_) => {
-                err(None, "pointers to lifetime-extended temporaries are not supported yet (M3)")
+            PtrBase::Temporary(t) => {
+                let ty = self.ast.decls.get(t).ty().unwrap_or(QualType::INT);
+                Ok(gval(self.let_global(t, ty)?))
             }
             PtrBase::TypeInfo(_) => err(None, "typeid constants are not supported yet (M3)"),
         }

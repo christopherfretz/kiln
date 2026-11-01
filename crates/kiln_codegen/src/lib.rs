@@ -28,6 +28,7 @@ mod expr;
 mod fir;
 mod fold;
 mod func;
+mod global_init;
 mod lambda;
 mod memptr;
 mod module;

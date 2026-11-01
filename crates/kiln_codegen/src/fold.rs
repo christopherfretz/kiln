@@ -78,6 +78,12 @@ impl SemaBridge for Bridge<'_> {
     }
 
     fn diag(&mut self, _d: Diag) {}
+
+    fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
+        // The `_ZGR` global of a constant-initialized reference holds the
+        // value (write-once, as sema's bridge).
+        let _ = self.ast.decls.set_lifetime_extended_value(t, v);
+    }
 }
 
 /// Folds every candidate expression of the translation unit.

@@ -566,7 +566,7 @@ impl Cg<'_> {
     }
 
     /// clang `EmitReturnBlock`.
-    fn emit_return_block(&mut self) {
+    pub(crate) fn emit_return_block(&mut self) {
         let rb = self.f.ret_block.expect("return block");
         if let Some(cur) = self.f.fir.cur() {
             if self.f.fir.block_empty(cur) || self.f.fir.block_uses(rb) == 0 {
@@ -593,7 +593,7 @@ impl Cg<'_> {
     }
 
     /// clang `EmitFunctionEpilog`.
-    fn emit_epilog(&mut self) {
+    pub(crate) fn emit_epilog(&mut self) {
         let rv = match self.f.ret_kind {
             RetKind::Void => None,
             RetKind::Sret => {
