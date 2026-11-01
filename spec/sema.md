@@ -1782,8 +1782,10 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   ([expr.const]/22; WP-137).
 - **Escalation** (P2564, [expr.const]/18-20). Immediate-escalating:
   a lambda call operator, a defaulted special member, a `constexpr`
-  function instantiated from a templated entity, and any templated
-  function while its definition is parsed. In one, a failed invocation
+  function instantiated from a templated entity, and a `constexpr`
+  function template while its definition is parsed (not a member of a
+  class template's pattern, clang's `TK_NonTemplate`: its failed
+  invocation is an error at the definition; WP-227). In one, a failed invocation
   or a bad reference makes the function immediate (`FnSpec::escalated`)
   instead of an error: the failed `ConstantExpr` loses its wrapper and
   its callee `DeclRefExpr` (or the `CXXConstructExpr`) is flagged
@@ -1797,9 +1799,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   ([expr.prim.lambda.closure]/10; clang 19 instead rejects every use of
   the conversion of a consteval lambda).
 - **Templates.** A template definition's non-dependent invocations are
-  checked at the definition (they are shared with every instantiation);
-  dependent ones are built and checked at instantiation, with
-  `in instantiation of ...` notes. A `ConstantExpr` is substituted
+  checked at the definition (they are shared with every instantiation),
+  including those of a constructor's mem-initializers, which are not
+  built until instantiation (sema-class.md §4.9); dependent ones are
+  built and checked at instantiation, with `in instantiation of ...`
+  notes. A shared invocation that failed at the definition is evaluated
+  again by each instantiation that substitutes it
+  (`recheck_shared_invocation`): reported again with the instantiation's
+  context, as clang reports its rebuilt `ConstantExpr`, or escalating an
+  immediate-escalating instantiation (`e<int>` of `template<class T>
+  constexpr int e() { return bad(1); }` becomes immediate, so a
+  non-constant call of it is an error; WP-227). A `ConstantExpr` is substituted
   through to its operand and re-wrapped by the rebuilt call. A shared
   (not rebuilt) expression is walked at each instantiation and the
   functions it odr-uses (named, constructors, bound destructors,

@@ -763,6 +763,13 @@ for member calls), the operator token, the declarator / `T(` for
 constructors, the expression for conversions; notes are at each candidate's
 name; implicit special members at the class name.
 
+**Parameter sugar** (WP-227): a bad-conversion note names the parameter
+type as declared, sugar and top-level `const` kept (`no known conversion
+from 'int' to 'WI' (aka 'W<int>')`, `'CI *const' (aka 'const int
+*const')`), when it is the canonical target of the failed conversion
+(`overload/diag.rs` `sugared_bad_param`); a target computed otherwise
+(an object argument, a deduced type) is printed as converted.
+
 ### 9.3 Deviations from clang 19 (authoritative)
 1. `-fshow-overloads=best` unsupported (always `all`).
 2. No `enable_if`/`diagnose_if`, CUDA, `target` multiversioning, ObjC, or C

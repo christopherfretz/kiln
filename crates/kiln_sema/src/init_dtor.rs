@@ -3,7 +3,7 @@
 //! destructor of each element of class type is potentially invoked from
 //! the context of the initialization, so it must be accessible and not
 //! deleted, and is odr-used. Kept apart from the list checking of
-//! `init.rs` (spec/sema-init.md §4.9).
+//! `init.rs` (spec/sema-class.md §4.8).
 
 use kiln_ast::{QualType, decl::DeclFlags};
 use kiln_source::Loc;
