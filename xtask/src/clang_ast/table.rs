@@ -561,6 +561,7 @@ pub const TEMPLATE_KINDS: &[&str] = &[
     "UnresolvedLookupExpr",
     "PackExpansionExpr",
     "SizeOfPackExpr",
+    "DesignatedInitExpr",
 ];
 
 /// The kinds §3 of `spec/ast-dump.md` defines lines for (the M2 kinds, with
