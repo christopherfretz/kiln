@@ -4003,7 +4003,12 @@ explicit specialization errors remain. The blockers are:
     MultiLevelArgs)` is filled by `function_decl` (non-template
     members) and `member_template` (member templates, whose
     `associated_constraints` and `check_constraints` then use the
-    pattern's clause with the outer levels plus their own);
+    pattern's clause with the outer levels plus their own), and by
+    `friend_function_template` for the namespace-scope template a
+    constrained friend template redeclares, so a constraint naming the
+    enclosing class's parameter ([temp.friend]/9, `requires C<T>` on
+    `template<class U> friend int f(X, U)`) sees that specialization's
+    arguments (WP-231);
   - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
