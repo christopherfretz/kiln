@@ -712,12 +712,17 @@ and returns the scope it names:
 - **Enumerations** ([dcl.enum]):
   - enumerators are typed as clang types them
   - a fixed underlying type gets converted-constant-expression checks
-    and narrowing diagnostics
+    and narrowing diagnostics; a non-constant initializer is
+    `enumerator value is not a constant expression` (clang
+    `CheckEnumConstant`, WP-230)
+  - an unfixed one's initializer is an integral constant expression that
+    may fold (`fold_not_ice`, below)
   - an unfixed one gets its type from the enumerators' range (the best
     type), and the enumerators are then retyped to the enumeration
   - `replace_enumerator_init` records the converted initializer
 - **Bit-fields** ([class.bit]):
-  - the width must be an integral constant expression
+  - the width must be an integral constant expression; one that folds
+    laxly is accepted (`fold_not_ice`, below)
   - it must not be negative
   - it must not be zero-width with a name
   - it must not exceed the type's width
@@ -2140,7 +2145,7 @@ clang 19's C99/GNU complex support in C++:
     - not integral or unscoped enumeration type: `integral constant
       expression must have integral or unscoped enumeration type, not T`
     - not constant: `expression is not an integral constant expression`
-      with the evaluator's notes
+      with the evaluator's notes, unless it folds (`fold_not_ice`)
     - negative: `array designator value '-1' is negative`
     - an empty range: `array designator range [3, 1] is empty`, at the
       `...`.
@@ -2721,6 +2726,21 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 | `case` label, enumerator of an enumeration with a fixed underlying type, `noexcept(e)` specifier | `EvalContext::converted(loc)`; a converted constant expression ([expr.const]/12) |
 | `if constexpr` condition | `EvalKind::IfConstexpr` |
 | array bound, bit-field width, enumerator without a fixed type, `alignas`, array designator | `EvalKind::Other` |
+
+- **GNU folding** (`Sema::fold_not_ice`, clang
+  `VerifyIntegerConstantExpression` with `AllowFold`, WP-230): for a
+  bit-field width, an enumerator without a fixed underlying type and an
+  array designator, an expression that is not an integral constant
+  expression but folds laxly (`fold_rvalue_int`: a `const` non-volatile
+  variable reads as its initializer, e.g. `(int)d` for `const double d =
+  2.0`) is accepted with its folded value. It warns `expression is not an
+  integral constant expression; folding it to a constant is a GNU
+  extension` [-Wgnu-folding-constant] (an Extension, so off unless
+  `-pedantic` or the group is enabled), with the evaluator's notes, at
+  the expression's begin (a lone "subexpression not valid" note moves
+  the location instead). Array bounds have their own folding (`variable
+  length array folded to constant array`, above). A `case` label,
+  `static_assert` and `alignas` never fold.
 
 - **Speculative folds (`try_fold`):**
   - narrowing checks in list-initialization and fixed-type enumerators

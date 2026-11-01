@@ -47,6 +47,7 @@ sema_explicit_spec_non_template = Error (1) "explicit specialization of non-temp
 sema_explicit_spec_storage_class = ExtWarn [ExplicitSpecializationStorageClass] (0) "explicit specialization cannot have a storage class";
 sema_expr_not_cce = Error (1) "{0} is not a constant expression";
 sema_expr_not_ice = Error (0) "expression is not an integral constant expression";
+sema_expr_not_ice_folded = Extension [GnuFoldingConstant] (0) "expression is not an integral constant expression; folding it to a constant is a GNU extension";
 sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
 sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
 sema_extraneous_template_params = Error (0) "extraneous template parameter list in template specialization";

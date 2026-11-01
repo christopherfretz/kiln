@@ -3153,13 +3153,8 @@ impl Sema<'_, '_> {
         let c = self.act_on_constant_full_expr(c);
         let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
             Ok(v) => v,
-            Err(mut f) => {
-                let at = Self::fold_lone_invalid(&mut f, self.begin_loc(w));
-                let d = self.diag(DiagId::sema_expr_not_ice, at);
-                let d = Self::with_failure_notes(d, f);
-                self.emit(d);
-                return None;
-            }
+            // clang `VerifyBitField`: `AllowFold`.
+            Err(f) => self.fold_not_ice(c, f, self.begin_loc(w))?,
         };
         if v < 0 {
             let msg = match name {
@@ -4974,19 +4969,26 @@ impl Sema<'_, '_> {
             } else {
                 EvalContext::new(EvalKind::Other, at)
             };
-            match self.eval_int(c, ctx) {
-                Ok(v) => {
-                    let v = self.check_enumerator_range(v, build.fixed, ie);
-                    value = Some(v);
-                    let cv = self.int_const(cty, v);
-                    init_e = Some(self.builder().constant_expr(c, Some(cv)));
-                }
-                Err(mut f) => {
-                    let at = Self::fold_lone_invalid(&mut f, self.ast.exprs.get(ie).loc());
-                    let msg = self.diag(DiagId::sema_expr_not_ice, at);
+            let v = match self.eval_int(c, ctx) {
+                Ok(v) => Some(v),
+                // clang `CheckEnumConstant`: a converted constant
+                // expression `enumerator value is not a constant
+                // expression`; otherwise an integral constant expression
+                // that may be folded (`AllowFold`).
+                Err(mut f) if build.fixed.is_some() => {
+                    let at = Self::fold_lone_invalid(&mut f, at);
+                    let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("enumerator value");
                     let msg = Self::with_failure_notes(msg, f);
                     self.emit(msg);
+                    None
                 }
+                Err(f) => self.fold_not_ice(c, f, at),
+            };
+            if let Some(v) = v {
+                let v = self.check_enumerator_range(v, build.fixed, ie);
+                value = Some(v);
+                let cv = self.int_const(cty, v);
+                init_e = Some(self.builder().constant_expr(c, Some(cv)));
             }
         }
         (value, init_e)
