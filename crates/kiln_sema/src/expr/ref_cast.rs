@@ -46,6 +46,19 @@ impl Sema<'_, '_> {
         let keeps_cv =
             self.ast.types.effective_quals(r).contains(self.ast.types.effective_quals(et));
         let same = self.ast.types.same_unqualified(r, et);
+        // [expr.const.cast]/3: a prvalue of class type as an xvalue of a
+        // similar type (`const_cast<const T&&>(f())`), materialized first
+        // (clang `TryConstCast`).
+        if style == CastStyle::Const
+            && !lref
+            && evk == ValueCategory::PRValue
+            && same
+            && self.ast.types.as_record(et).is_some()
+        {
+            let x = self.maybe_bind_temporary(e);
+            let m = self.materialize_temporary(x, et, false);
+            return self.typed_cast(style, CastKind::NoOp, m, r, vk, None, loc, rparen);
+        }
         if binds {
             // [expr.static.cast]/4, [expr.const.cast]/4: the same type,
             // (for `const_cast` and the C-style cast) cv-qualification
