@@ -1042,6 +1042,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if internal_by_storage(self.ast, d)
             && !in_anon_ns(self.ast, d)
             && self.ast.decls.decomp_bindings(d).is_none()
+            && anon_union_var_field(self.ast, d).is_none()
         {
             self.out.push('L');
         }
@@ -1235,6 +1236,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     && let Some(l) = ast.closure_lambda(d)
                 {
                     self.closure_name(d, l);
+                } else if nm.is_empty()
+                    && let Some(f) = anon_union_var_field(ast, d)
+                {
+                    // A variable of anonymous union type is named by the
+                    // union's first named data member (clang
+                    // `mangleUnqualifiedName`, no `L`).
+                    let fname = decl_name(ast, f);
+                    self.source_name(&fname);
                 } else if nm.is_empty() {
                     // An unnamed class without a typedef name for linkage.
                     self.out.push_str("Ut_");
@@ -2318,5 +2327,28 @@ fn read_bits(bytes: &[u8], start: u64, width: u32) -> Vec<u64> {
 fn read_le(bytes: &[u8], at: u64, n: u32) -> u128 {
     (0..u64::from(n.min(16))).rev().fold(0u128, |acc, i| {
         (acc << 8) | u128::from(bytes.get((at + i) as usize).copied().unwrap_or(0))
+    })
+}
+
+/// For the unnamed variable of a namespace-scope anonymous union, the
+/// union's first named data member, looking through nested anonymous
+/// records (clang `getFirstNamedDataMember`).
+fn anon_union_var_field(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    if ast.decls.get(d).kind() != DeclKind::Var || !decl_name(ast, d).is_empty() {
+        return None;
+    }
+    first_named_field(ast, ast.types.as_record(ast.decls.get(d).ty()?)?)
+}
+
+fn first_named_field(ast: &Ast, r: DeclId) -> Option<DeclId> {
+    if !decl_name(ast, r).is_empty() {
+        return None;
+    }
+    ast.members(r).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).find_map(|f| {
+        if decl_name(ast, f).is_empty() {
+            first_named_field(ast, ast.types.as_record(ast.decls.get(f).ty()?)?)
+        } else {
+            Some(f)
+        }
     })
 }

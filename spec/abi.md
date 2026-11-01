@@ -875,6 +875,12 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
 - A constraint expression kiln cannot mangle yet (a braced `new T{...}`)
   falls back to `Qu7unknown`, so the symbol stays unique but differs
   from clang.
+- **Anonymous unions at namespace scope (WP-204).** The unnamed variable
+  of a namespace-scope anonymous union ([class.union.anon]/2) is mangled
+  with the source name of the union's first named data member, found
+  through nested anonymous records (clang `getFirstNamedDataMember`),
+  and gets no internal-linkage `L` even though it is `static`:
+  `static union { int ga; };` is `_Z2ga`. `tests/codegen/anon_union_global.cpp`.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
