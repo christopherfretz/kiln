@@ -328,6 +328,10 @@ impl Cg<'_> {
             } else if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
                 let slot = self.f.ret_slot.expect("return slot");
                 self.emit_agg_slot(e, slot, false, false)?;
+            } else if self.is_complex(q) {
+                let v = self.emit_complex(e)?;
+                let slot = self.f.ret_slot.expect("return slot");
+                self.cx_store(v, slot, q);
             } else {
                 let v = self.emit_scalar(e)?;
                 let slot = self.f.ret_slot.expect("return slot");

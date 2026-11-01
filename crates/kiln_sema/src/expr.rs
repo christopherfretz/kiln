@@ -2300,6 +2300,10 @@ impl Sema<'_, '_> {
             if !self.check_pointer_arith(t, false, loc) {
                 return self.recover_err(&[e], loc);
             }
+        } else if self.ast.types.as_complex(t).is_some() {
+            // clang: a GNU extension for every complex type.
+            let msg = self.diag(DiagId::sema_increment_complex, loc).arg(self.ty_arg(t));
+            self.emit(msg);
         } else if !self.ast.types.is_arithmetic(t) {
             let msg = self
                 .diag(DiagId::sema_incdec_invalid, loc)

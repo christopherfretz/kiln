@@ -1075,6 +1075,16 @@ impl<'a> Cg<'a> {
         Sig { info, fn_ty, ret, params, nothrow, this, vtt: false }
     }
 
+    /// The signature of a runtime library call `ret(params...)` that
+    /// cannot throw and has no target declaration (clang
+    /// `arrangeFreeFunctionCall` of a `noexcept` prototype; the `_Complex`
+    /// multiplication and division routines).
+    pub(crate) fn libcall_sig(&mut self, ret: QualType, params: &[QualType]) -> Sig {
+        let info = self.classify(ret, params, params.len(), true, false);
+        let fn_ty = self.fn_type(&info, false, false);
+        Sig { info, fn_ty, ret, params: params.to_vec(), nothrow: true, this: None, vtt: false }
+    }
+
     /// clang `arrangeLLVMFunctionInfo`: classifies `this` (when present)
     /// with the parameters, then splits it off.
     fn classify(

@@ -1047,7 +1047,7 @@ impl Cg<'_> {
                     CallArg::Complex(re, im) => {
                         let mt = self.mty(q);
                         let t = Addr { v: self.f.fir.alloca(mt, *align), ty: mt, align: *align };
-                        self.cx_store((re, im), t, false);
+                        self.cx_store((re, im), t, q);
                         out.push(t.v);
                     }
                 }
@@ -1070,7 +1070,7 @@ impl Cg<'_> {
                     CallArg::Agg(a) => a,
                     CallArg::Complex(re, im) => {
                         let t = self.temp(q);
-                        self.cx_store((re, im), t, false);
+                        self.cx_store((re, im), t, q);
                         t
                     }
                 };

@@ -21,6 +21,7 @@ mod atomic;
 mod builtins;
 mod class;
 mod cleanup;
+mod complex;
 mod consts;
 mod dyncast;
 mod eh;

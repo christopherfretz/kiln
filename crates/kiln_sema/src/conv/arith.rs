@@ -272,42 +272,44 @@ fn complex_conversions(
         let r = conv(s, r, re, rc.is_some());
         return Ok((l, r, ct));
     }
-    // An integer (or complex integer) operand converts to the other
-    // side's complex floating type, or with a real floating other side
-    // to the complex of that type.
-    let to_float = |s: &mut Sema<'_, '_>, e: ExprId, c: bool, f: QualType| {
-        let ct = s.ast.types.complex(f);
+    // An integer operand converts to the other side's element type and a
+    // complex integer one to its complex floating type (clang
+    // `handleIntegerToComplexFloatConversion`); with a real floating
+    // other side both become the complex of that type
+    // (`handleIntToFloatConversion`). The result keeps the complex
+    // floating operand's type as written.
+    let to_float = |s: &mut Sema<'_, '_>, e: ExprId, c: bool, f: QualType, ct: QualType| {
         if c {
-            return cast_to(s, CastKind::IntegralComplexToFloatingComplex, e, ct, None);
+            cast_to(s, CastKind::IntegralComplexToFloatingComplex, e, ct, None)
+        } else {
+            cast_to(s, CastKind::IntegralToFloating, e, f, None)
         }
-        let e = cast_to(s, CastKind::IntegralToFloating, e, f, None);
-        cast_to(s, CastKind::FloatingRealToComplex, e, ct, None)
     };
     if !fl(s, re) {
-        let ct = s.ast.types.complex(le);
+        let ct = if lc.is_some() { lt } else { s.ast.types.complex(le) };
         let l = if lc.is_none() && !ca {
             cast_to(s, CastKind::FloatingRealToComplex, l, ct, None)
         } else {
             l
         };
-        return Ok((l, to_float(s, r, rc.is_some(), le), ct));
+        return Ok((l, to_float(s, r, rc.is_some(), le, ct), ct));
     }
     if !fl(s, le) {
-        let ct = s.ast.types.complex(re);
+        let ct = if rc.is_some() { rt } else { s.ast.types.complex(re) };
         let r =
             if rc.is_none() { cast_to(s, CastKind::FloatingRealToComplex, r, ct, None) } else { r };
-        let l = if ca { l } else { to_float(s, l, lc.is_some(), re) };
+        let l = if ca { l } else { to_float(s, l, lc.is_some(), re, ct) };
         return Ok((l, r, ct));
     }
     // Both floating: the more precise element type wins; the other side
-    // is promoted in precision only.
+    // is promoted in precision only (clang `handleComplexFloatConversion`:
+    // the result is the longer operand's type if it is complex).
     let order = match (s.ast.types.builtin(le), s.ast.types.builtin(re)) {
         (Some(a), Some(b)) => float_order(s, a, b),
         _ => FloatOrder::Unordered,
     };
-    let promote = |s: &mut Sema<'_, '_>, e: ExprId, c: bool, f: QualType| {
+    let promote = |s: &mut Sema<'_, '_>, e: ExprId, c: bool, f: QualType, ct: QualType| {
         if c {
-            let ct = s.ast.types.complex(f);
             cast_to(s, CastKind::FloatingComplexCast, e, ct, None)
         } else {
             cast_to(s, CastKind::FloatingCast, e, f, None)
@@ -319,13 +321,15 @@ fn complex_conversions(
             vec![kind.select().into(), s.ty_arg(lt), s.ty_arg(rt)],
         )),
         FloatOrder::Less => {
-            let l = if ca { l } else { promote(s, l, lc.is_some(), re) };
-            Ok((l, r, s.ast.types.complex(re)))
+            let ct = if rc.is_some() { rt } else { s.ast.types.complex(re) };
+            let l = if ca { l } else { promote(s, l, lc.is_some(), re, ct) };
+            Ok((l, r, ct))
         }
-        FloatOrder::Equal => Ok((l, r, s.ast.types.complex(le))),
+        FloatOrder::Equal => Ok((l, r, if lc.is_some() { lt } else { s.ast.types.complex(le) })),
         FloatOrder::Greater => {
-            let r = promote(s, r, rc.is_some(), le);
-            Ok((l, r, s.ast.types.complex(le)))
+            let ct = if lc.is_some() { lt } else { s.ast.types.complex(le) };
+            let r = promote(s, r, rc.is_some(), le, ct);
+            Ok((l, r, ct))
         }
     }
 }

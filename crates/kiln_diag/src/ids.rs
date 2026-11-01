@@ -1632,6 +1632,7 @@ diag_ids! {
     sema_realimag_invalid_type = Error (2) "invalid type {0} to {1} operator";
     sema_call_requires_real_fp = Error (1) "argument type {0} is not a real floating point type";
     sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";
+    sema_increment_complex = Extension (1) "ISO C does not support '++'/'--' on complex integer type {0}";
 }
 
 impl DiagId {
