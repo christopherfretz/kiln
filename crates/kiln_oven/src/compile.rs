@@ -54,6 +54,9 @@ pub(crate) enum FState {
     /// running, and may evaluate nested constant expressions): a call to it
     /// meanwhile fails as a call to an undefined function.
     Compiling,
+    /// An invalid declaration (its template instantiation failed): a
+    /// call is "subexpression not valid" (clang `isInvalidDecl`).
+    Invalid,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -528,6 +531,10 @@ impl Oven {
         };
         let ast = b.ast();
         let def = ast.definition(d).unwrap_or(d);
+        if ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID) {
+            self.funcs[idx as usize].state = FState::Invalid;
+            return;
+        }
         let params: Vec<DeclId> = ast
             .decls
             .function(def)
@@ -3229,7 +3236,11 @@ impl Compiler<'_> {
                 // frame is read like a global: usable if it is `constexpr`
                 // or a `const` integral with a constant initializer
                 // ([expr.const]/4), else its value is unknown.
-                if ast.decls.get(d).kind() == DeclKind::ParmVar {
+                // Its address alone is an unknown object, rejected when the
+                // result is frozen ("pointer to 'x' is not a constant
+                // expression").
+                let addr_only = matches!(acc, Access::Addr) && !is_reference_var(ast, d);
+                if ast.decls.get(d).kind() == DeclKind::ParmVar && !addr_only {
                     let name = {
                         let mut s = String::new();
                         kiln_ast::dump::AstNames::new(ast).write_name(d, &mut s);
@@ -3246,8 +3257,10 @@ impl Compiler<'_> {
                     );
                     return Place::Mem(self.reg());
                 }
-                if !matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::TemplateParamObject)
-                {
+                if !matches!(
+                    ast.decls.get(d).kind(),
+                    DeclKind::Var | DeclKind::TemplateParamObject | DeclKind::ParmVar
+                ) {
                     self.unsupported(e);
                     return Place::Mem(self.reg());
                 }

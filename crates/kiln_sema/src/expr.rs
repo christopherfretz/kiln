@@ -1429,6 +1429,12 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[], loc);
             }
         }
+        // A reference to a function already invalid (its body failed to
+        // instantiate, diagnosed then) is erroneous with no diagnostic of
+        // its own (clang's `BuildDeclarationNameExpr`).
+        if n.kind().is_function() && n.has(DeclFlags::INVALID) {
+            return self.recover_err(&[], loc);
+        }
         if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
             && self.check_undeduced_use(d, loc)
         {
@@ -1483,6 +1489,14 @@ impl Sema<'_, '_> {
             && let Some(t) = self.enumerator_pre_brace_type(d)
         {
             t
+        } else if n.kind() == DeclKind::NonTypeTemplateParm
+            && self.placeholder_keyword(declared).is_some()
+        {
+            // `template<auto& R>`: the placeholder is deduced per
+            // argument, so a use is type-dependent (clang's dependent
+            // `AutoType`).
+            let t = self.dependent_auto(declared);
+            self.non_reference(t)
         } else {
             self.non_reference(declared)
         };
@@ -3234,6 +3248,9 @@ impl Sema<'_, '_> {
         // dependent.
         let args_dep = args.iter().any(|&a| self.expr_is_type_dependent(a))
             || braced.iter().flatten().any(|l| self.init_list_type_dependent(l));
+        // A callee named by a `DeclRefExpr` before the call (clang's
+        // non-overloaded name), not resolved by it.
+        let direct = self.ast.exprs.get(self.ignore_parens(callee)).kind() == ExprKind::DeclRefExpr;
         let callee = if self.ast.exprs.get(self.ignore_parens(callee)).kind()
             == ExprKind::UnresolvedLookupExpr
             && !self.expr_is_type_dependent(callee)
@@ -3309,6 +3326,13 @@ impl Sema<'_, '_> {
                 .then(|| self.ast.exprs.decl(x))
                 .filter(|&d| self.ast.decls.function(d).is_some())
         };
+        // A function named directly whose definition failed to
+        // instantiate when this reference odr-used it (it is now invalid):
+        // the call is erroneous, undiagnosed (clang builds a
+        // `RecoveryExpr`; a member call is not affected).
+        if direct && named.is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::INVALID)) {
+            return self.recover_err(&kids, loc);
+        }
         let f = match self.builtin_callee(callee) {
             Some(b) => self.builtin_fn_to_ptr(callee, b),
             None => conv::decay(self, callee),

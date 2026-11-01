@@ -12,6 +12,8 @@ use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
+mod reach;
+
 use crate::Sema;
 use crate::conv::bases::{BaseSearch, find_base};
 use crate::conv::{self, ConvCtx};
@@ -276,14 +278,29 @@ impl Sema<'_, '_> {
     /// The body of a function-try-block of constructor `f`: a `return`
     /// in a handler is ill-formed ([except.handle]/13, clang
     /// `DiagnoseReturnInConstructorExceptionHandler`).
+    /// Also warns about each member access through `this` in a handler of
+    /// a constructor's or destructor's function-try-block, whose object is
+    /// gone ([except.handle]/10, clang `IsInFnTryBlockHandler`).
     pub(crate) fn check_function_try_block(&mut self, f: DeclId, body: StmtId) {
+        let kind = self.kind_of(f);
         if self.ast.stmts.get(body).kind() != StmtKind::CXXTryStmt
-            || self.kind_of(f) != DeclKind::CXXConstructor
+            || !matches!(kind, DeclKind::CXXConstructor | DeclKind::CXXDestructor)
         {
             return;
         }
         let handlers: Vec<StmtId> =
             self.ast.lists.iter(self.ast.stmts.try_handlers(body)).collect();
+        for &h in &handlers {
+            for loc in self.this_member_refs(self.ast.stmts.catch_block(h)) {
+                let msg = self
+                    .diag(DiagId::sema_cdtor_function_try_handler_mem_expr, loc)
+                    .arg(u8::from(kind == DeclKind::CXXDestructor));
+                self.emit(msg);
+            }
+        }
+        if kind != DeclKind::CXXConstructor {
+            return;
+        }
         for h in handlers {
             let mut todo = vec![self.ast.stmts.catch_block(h)];
             while let Some(s) = todo.pop() {
@@ -299,12 +316,48 @@ impl Sema<'_, '_> {
 }
 
 impl Sema<'_, '_> {
+    /// The locations of the member accesses `this->m` (explicit or
+    /// implicit `this`, under implicit casts only) in statement `s`,
+    /// outside lambda bodies.
+    fn this_member_refs(&self, s: StmtId) -> Vec<Loc> {
+        let mut out = Vec::new();
+        let mut stmts = vec![s];
+        while let Some(s) = stmts.pop() {
+            let (mut exprs, mut subs) = (Vec::new(), Vec::new());
+            self.stmt_parts(s, &mut exprs, &mut subs);
+            for e in exprs {
+                let mut stack = vec![e];
+                while let Some(x) = stack.pop() {
+                    let k = self.ast.exprs.get(x).kind();
+                    if k == ExprKind::LambdaExpr {
+                        continue;
+                    }
+                    if k == ExprKind::MemberExpr {
+                        let mut b = self.ast.exprs.operand(x);
+                        while self.ast.exprs.get(b).kind() == ExprKind::ImplicitCastExpr {
+                            b = self.ast.exprs.operand(b);
+                        }
+                        if self.ast.exprs.get(b).kind() == ExprKind::CXXThisExpr {
+                            out.push(self.ast.exprs.get(x).loc());
+                        }
+                    }
+                    let mut kids = self.ast.exprs.children(x, &self.ast.lists);
+                    kids.reverse();
+                    stack.extend(kids);
+                }
+            }
+            subs.reverse();
+            stmts.extend(subs);
+        }
+        out
+    }
+
     /// clang's `checkThrowInNonThrowingFunc` (-Wexceptions): each
     /// throw-expression in the body of a function with a non-throwing
     /// exception specification ([except.spec]/5) that no enclosing handler
     /// of the function catches ([except.handle]/3) — `std::terminate` is
-    /// called ([except.terminate]). A structural approximation of clang's
-    /// CFG walk: every throw counts as reachable.
+    /// called ([except.terminate]). Only the throws reachable in the body
+    /// count (`reach.rs`, clang's CFG walk).
     pub(crate) fn check_throw_in_nothrow(&mut self, f: DeclId, body: StmtId) {
         let t = &self.ast.types;
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
@@ -315,6 +368,10 @@ impl Sema<'_, '_> {
         let mut found = Vec::new();
         let mut handlers = Vec::new();
         self.escaping_throws(body, &mut handlers, &mut found);
+        if found.is_empty() {
+            return;
+        }
+        let Some(mut found) = self.reachable_escaping_throws(body) else { return };
         if found.is_empty() {
             return;
         }
@@ -361,16 +418,29 @@ impl Sema<'_, '_> {
         let n = st.get(s);
         let mut exprs: Vec<ExprId> = Vec::new();
         let mut subs: Vec<StmtId> = Vec::new();
-        match n.kind() {
-            StmtKind::CXXTryStmt => {
-                handlers.push(s);
-                self.escaping_throws(st.try_block(s), handlers, out);
-                handlers.pop();
-                for h in self.ast.lists.iter::<StmtId>(st.try_handlers(s)) {
-                    self.escaping_throws(st.catch_block(h), handlers, out);
-                }
-                return;
+        if n.kind() == StmtKind::CXXTryStmt {
+            handlers.push(s);
+            self.escaping_throws(st.try_block(s), handlers, out);
+            handlers.pop();
+            for h in self.ast.lists.iter::<StmtId>(st.try_handlers(s)) {
+                self.escaping_throws(st.catch_block(h), handlers, out);
             }
+            return;
+        }
+        self.stmt_parts(s, &mut exprs, &mut subs);
+        for e in exprs {
+            self.escaping_throws_in_expr(e, handlers, out);
+        }
+        for c in subs {
+            self.escaping_throws(c, handlers, out);
+        }
+    }
+
+    /// The expressions directly in statement `s` and its sub-statements
+    /// (in that order).
+    fn stmt_parts(&self, s: StmtId, exprs: &mut Vec<ExprId>, subs: &mut Vec<StmtId>) {
+        let st = &self.ast.stmts;
+        match st.get(s).kind() {
             StmtKind::ExprStmt => exprs.push(st.expr_stmt_expr(s)),
             StmtKind::ReturnStmt => exprs.extend(st.return_value(s)),
             StmtKind::DeclStmt => {
@@ -400,12 +470,6 @@ impl Sema<'_, '_> {
             _ => {}
         }
         subs.extend(self.children(s));
-        for e in exprs {
-            self.escaping_throws_in_expr(e, handlers, out);
-        }
-        for c in subs {
-            self.escaping_throws(c, handlers, out);
-        }
     }
 
     fn escaping_throws_in_expr(&self, e: ExprId, handlers: &[StmtId], out: &mut Vec<ExprId>) {

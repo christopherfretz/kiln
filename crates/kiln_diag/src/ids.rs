@@ -1377,6 +1377,7 @@ diag_ids! {
     // WP-067b: construction, ctor-initializers, implicit definitions,
     // temporaries ([class.base.init], [class.temporary], spec/sema-class.md §4.5-§5).
     sema_temp_return_local = Error (0) "returning reference to local temporary object";
+    sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";
     sema_temp_member_ref = Error (1) "reference member {0} binds to a temporary object whose lifetime would be shorter than the lifetime of the constructed object";
     note_temp_member_ref_here = Note (0) "reference member declared here";
     sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";
@@ -1504,6 +1505,7 @@ diag_ids! {
     sema_nttp_not_structural = Error (1) "type {0} of non-type template parameter is not a structural type";
     sema_nttp_non_literal = Error (1) "non-type template parameter has non-literal type {0}";
     sema_nttp_rvalue_ref = Error (1) "non-type template parameter has rvalue reference type {0}";
+    sema_nttp_deduction_failed = Error (3) "non-type template parameter '{0}' with type {1} has incompatible initializer of type {2}";
     note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
     note_not_structural_mutable_field = Note (1) "{0} is not a structural type because it has a mutable non-static data member";
     note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";
@@ -1605,6 +1607,7 @@ diag_ids! {
     sema_unused_call = Warning [UnusedValue] (1) "ignoring return value of function declared with {0} attribute";
     note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
     note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
+    sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
 }
 
 impl DiagId {
