@@ -2761,6 +2761,21 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// A union's parenthesized aggregate initialization: `init`
+    /// copy-initializes the member `field` ([dcl.init.general]/16.6.2.2).
+    pub fn paren_list_init_union(
+        &mut self,
+        ty: QualType,
+        init: ExprId,
+        field: DeclId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let e = self.paren_list_init(ty, &[init], None, loc, rparen);
+        self.ast.exprs.cold.union_field.insert(e, field).expect("fresh expression");
+        e
+    }
+
     /// An `OpaqueValueExpr` standing for `source` (same type, category,
     /// object kind and dependence); `source` is shared, not a child.
     pub fn opaque_value(&mut self, source: ExprId) -> ExprId {

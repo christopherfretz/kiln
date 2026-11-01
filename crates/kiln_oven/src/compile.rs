@@ -3596,7 +3596,8 @@ impl Compiler<'_> {
                 let inits: Vec<ExprId> =
                     ast.lists.iter::<ExprId>(ast.exprs.paren_list_inits(e)).collect();
                 let filler = ast.exprs.paren_list_filler(e);
-                self.init_aggr(e, &inits, filler, None, p, ty);
+                let union_field = ast.exprs.paren_list_union_field(e);
+                self.init_aggr(e, &inits, filler, union_field, p, ty);
                 return;
             }
             _ => {}

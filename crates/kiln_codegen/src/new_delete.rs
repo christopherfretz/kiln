@@ -379,11 +379,17 @@ impl Cg<'_> {
         let af = self.alloc_fn(op_new).unwrap_or_default();
 
         // minElements: a braced initializer's explicit elements.
-        let ile = x.init.filter(|&i| ast.exprs.get(i).kind() == ExprKind::InitListExpr);
+        // A parenthesized list counts the same (clang `EmitCXXNewAllocSize`).
+        let ile = x.init.filter(|&i| {
+            matches!(
+                ast.exprs.get(i).kind(),
+                ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+            )
+        });
         let mut min_elems: u64 = 0;
         if is_array && let Some(i) = x.init {
             let lits: Vec<ExprId> = match ile {
-                Some(l) => ast.lists.iter(ast.exprs.init_list_inits(l)).collect(),
+                Some(l) => crate::expr::agg_init_parts(ast, l).0,
                 None => vec![i],
             };
             if lits.len() == 1
@@ -663,8 +669,13 @@ impl Cg<'_> {
         let mut cur_align = align;
         let mut n_init: u64 = 0;
         let mut init = Some(init0);
-        if ast.exprs.get(init0).kind() == ExprKind::InitListExpr {
-            let elems: Vec<ExprId> = ast.lists.iter(ast.exprs.init_list_inits(init0)).collect();
+        // clang `EmitNewArrayInitializer`: the explicit elements of a braced
+        // or parenthesized list, then its array filler.
+        if matches!(
+            ast.exprs.get(init0).kind(),
+            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+        ) {
+            let (elems, filler, _) = crate::expr::agg_init_parts(ast, init0);
             n_init = elems.len() as u64;
             let mut cur_ty = base_ty;
             if matches!(t.canonical_view(x.allocated_ty), TypeView::ConstantArray(_)) {
@@ -687,7 +698,7 @@ impl Cg<'_> {
                 cur = self.gep(cur_ty, cur, vec![one], true);
                 cur_align = min_align(start_align, (k as u64 + 1).wrapping_mul(esize));
             }
-            init = ast.exprs.init_list(init0).array_filler;
+            init = filler;
             while let Some(f) = init
                 && matches!(t.canonical_view(ast.exprs.get(f).ty()), TypeView::ConstantArray(_))
                 && ast.exprs.get(f).kind() == ExprKind::InitListExpr
