@@ -83,9 +83,22 @@ Constructors:
     declaration created in the scope instance), then the namespace's
     lookup table, and duplicates are removed by moving the last entry
     into the duplicate's slot (`LookupResult::resolveKind`). A qualified
-    lookup lists table order. An ambiguous *type* name (`S s;` with `S`
-    in the namespace and in one of its inline namespaces) is not yet
-    diagnosed: `classify_name` takes the first declaration.
+    lookup lists table order.
+  - **Identity** ([basic.lookup.general]/1, [class.member.lookup]/3;
+    WP-197): declarations of one entity, and type declarations that
+    designate the same type (two typedefs of `int`, a typedef and the
+    class it names), are one result (`is_ambiguous_lookup` compares
+    `designated_type`, canonical, then first declarations; clang's
+    `resolveKind` UniqueTypes). A set that is all functions is an
+    overload set, and an `UnresolvedUsing*` candidate defers the check
+    to instantiation. Member lookup's subobject merge (`class_hit`)
+    keys declarations the same way, and its candidate note names a
+    record by its canonical type.
+  - An ambiguous *type* name (`S s;` with `S` in the namespace and in
+    one of its inline namespaces) is diagnosed by the parser through
+    `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
+    (`ambiguous_type_recovery`) follows clang: the declaration is
+    dropped and the statement skipped.
 - **Block-scope using-directives** ([namespace.udir]/2): a local
   scope's `using namespace N;` is collected while walking outwards, and
   `N`'s members are searched at the nearest enclosing namespace (or the
@@ -999,10 +1012,15 @@ specification as written (`TypeNames` prints ` noexcept`,
       `type::value` and `typename type::vt` nest through it.
     - At block scope in a template, a declarator with a dependent
       qualifier (`using E<T>::A;`, [namespace.udecl]/8: an enumerator)
-      is a local `UnresolvedUsingValue`; its uses are dependent, and
-      the instantiation redoes the declarator (`subst/stmts.rs`
-      `local_using_decl`), so a non-enumerator target is diagnosed
-      then.
+      is a local `UnresolvedUsingValue` (its `using` keyword in
+      `cold.begin_loc`); a use is an `UnresolvedLookupExpr` that finds
+      it, without ADL (clang's dump). The instantiation redoes the
+      declarator (`subst/stmts.rs` `local_using_decl`), so a
+      non-enumerator target is diagnosed then, with its note at the
+      `using`, and a use (`local_using_ref`) is looked up again in the
+      instantiated block. The uses of a declarator that failed
+      (`Substituter::failed_usings`) are errors without another
+      diagnostic (clang's invalid `UsingDecl`; WP-197).
     - A qualifier that is still dependent after substitution (a
       generic lambda in a function template specialization, or a
       local class in one) leaves the declarator unresolved, rebuilt

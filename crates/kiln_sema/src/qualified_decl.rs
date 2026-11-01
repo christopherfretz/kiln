@@ -46,13 +46,7 @@ impl Sema<'_, '_> {
         has_head: bool,
     ) -> QualifiedDecl {
         let Some(dc) = d.qualifier else { return QualifiedDecl::Keep };
-        let Some((name, loc)) = d.name else { return QualifiedDecl::Keep };
-        if ds.friend.is_some()
-            || d.friend
-            || d.special.is_some()
-            || d.op_name.is_some()
-            || !self.inst.stack.is_empty()
-        {
+        if ds.friend.is_some() || d.friend || !self.inst.stack.is_empty() {
             return QualifiedDecl::Keep;
         }
         let mut cur = self.ctx;
@@ -65,18 +59,33 @@ impl Sema<'_, '_> {
                 None => break,
             }
         }
-        let n = sym_str(self, name);
         let cur_kind = self.kind_of(cur);
         if self.ast.first(cur) == self.ast.first(dc) {
-            // `struct X { void X::f(); };`; the namespace case is
-            // `-Wextra-qualification` (not implemented).
+            // DR482: a qualifier naming the scope the declaration is in.
+            // `struct X { void X::f(); };` is an error (clang's
+            // `err_member_extra_qualification`; the qualifier is
+            // dropped), for constructor, destructor and operator names
+            // too; `namespace N { void N::f(); }` is
+            // `-Wextra-qualification`.
+            let Some((n, loc)) = self.qualified_declarator_name(d) else {
+                return QualifiedDecl::Keep;
+            };
             if is_record(cur_kind) {
                 let m = self.diag(DiagId::sema_member_extra_qualification, loc).arg(&n);
                 self.emit(m);
                 return QualifiedDecl::Unqualify;
             }
+            if d.special.is_none() && d.op_name.is_none() {
+                let m = self.diag(DiagId::sema_namespace_member_extra_qualification, loc).arg(&n);
+                self.emit(m);
+            }
             return QualifiedDecl::Keep;
         }
+        let Some((name, loc)) = d.name else { return QualifiedDecl::Keep };
+        if d.special.is_some() || d.op_name.is_some() {
+            return QualifiedDecl::Keep;
+        }
+        let n = sym_str(self, name);
         if !self.encloses(cur, dc) {
             if d.spec_id.is_some() || has_head {
                 return QualifiedDecl::Keep;
@@ -106,6 +115,33 @@ impl Sema<'_, '_> {
             return QualifiedDecl::Keep;
         }
         QualifiedDecl::Keep
+    }
+
+    /// The declarator-id of `d` as clang prints it in "extra
+    /// qualification on member", and where it is: an identifier, a
+    /// constructor or destructor name, or an operator-function-id (a
+    /// conversion-function-id is not checked).
+    fn qualified_declarator_name(&self, d: &Declarator) -> Option<(String, kiln_source::Loc)> {
+        use crate::declspec::SpecialName;
+        use kiln_ast::names::DeclName;
+        match d.special {
+            Some((SpecialName::Constructor(c), loc)) => Some((sym_str(self, c), loc)),
+            Some((SpecialName::Destructor(c), loc)) => {
+                Some((format!("~{}", sym_str(self, c)), loc))
+            }
+            Some((SpecialName::Operator(op), loc)) => {
+                Some((self.decl_name_str(DeclName::operator(op)), loc))
+            }
+            Some(_) => None,
+            None => {
+                let (name, loc) = d.name?;
+                match d.op_name {
+                    Some(op) => Some((self.decl_name_str(DeclName::operator(op)), loc)),
+                    None if d.lit_suffix.is_some() => None,
+                    None => Some((sym_str(self, name), loc)),
+                }
+            }
+        }
     }
 
     /// A namespace as clang prints a `NamedDecl` argument (qualified).
