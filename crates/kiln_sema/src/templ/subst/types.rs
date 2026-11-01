@@ -297,6 +297,10 @@ impl Substituter<'_, '_, '_> {
                 let e = self.ty(e, loc)?;
                 Ok(self.sema.ast.types.complex(e))
             }
+            TypeView::Atomic(v) => {
+                let v = self.ty(v, loc)?;
+                self.sema.act_on_atomic_type(v, loc).ok_or(SubstFail)
+            }
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
                 let n = self.nns(nns, loc)?;
                 let args = self.args(args, loc)?;

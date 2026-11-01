@@ -82,28 +82,52 @@ impl Sema<'_, '_> {
 
     /// One using-declarator `using qual name;` ([namespace.udecl]).
     /// `using_loc` is the `using` keyword; `if_exists` is set by the
-    /// `using_if_exists` attribute. Returns the `Using` declaration, or
-    /// `None` after an error.
+    /// `using_if_exists` attribute; `ellipsis` is the `...` of a pack
+    /// expansion (`using Bases::operator()...;`, [temp.variadic]/5), whose
+    /// qualifier names an unexpanded pack: the declarator stays an
+    /// `UnresolvedUsingValue` and instantiation expands it over the pack.
+    /// Returns the `Using` declaration, or `None` after an error.
     pub fn act_on_using_declarator(
         &mut self,
         using_loc: Loc,
         qual: Option<Qualifier>,
-        name: Symbol,
+        name: DeclName,
         name_loc: Loc,
         if_exists: bool,
+        ellipsis: Option<Loc>,
     ) -> Option<DeclId> {
         // [namespace.udecl]/1: the declarator's name is qualified.
         let Some(q) = qual else {
             self.error(DiagId::sema_using_requires_qualname, name_loc);
             return None;
         };
+        if let Some(l) = ellipsis {
+            let packs = self
+                .ast
+                .types
+                .nns_flags(q.nns)
+                .contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK);
+            if !packs {
+                self.error(DiagId::sema_pack_expansion_without_packs, l);
+                return None;
+            }
+            if self.member_spec_class().is_none() {
+                self.unsupported("a pack expansion in a non-member using-declaration", l);
+                return None;
+            }
+        }
         let qk = self.kind_of(q.ctx);
         if let Some(class) = self.member_spec_class()
             && qk != DeclKind::Enum
         {
             return self.class_using_declarator(class, q, name, name_loc, using_loc, false);
         }
-        let found = self.lookup_qualified(q.ctx, name, LookupKind::All);
+        if name.as_ident().is_none() && self.in_local_scope() {
+            // Block scopes hold identifiers only.
+            self.unsupported("an operator name in a block-scope using-declarator", name_loc);
+            return None;
+        }
+        let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
         // [namespace.udecl]/8: at namespace or block scope a
         // using-declarator may name a class member only if it is an
         // enumerator.
@@ -132,14 +156,14 @@ impl Sema<'_, '_> {
                 // clang's UnresolvedUsingIfExistsDecl: lookup ignores it
                 // while anything else is found; a use is an error.
                 let using = self.new_using_decl(name, name_loc, q.nns);
-                let h = DeclHead::new(self.ctx, DeclName::ident(name), using_loc);
+                let h = DeclHead::new(self.ctx, name, using_loc);
                 let uuie = self.builder().unresolved_using_if_exists(h);
                 let _ = self.introduce_shadow(name, name_loc, uuie);
                 return Some(using);
             }
             let msg = self
                 .diag(DiagId::sema_no_member, name_loc)
-                .arg(sym_str(self, name))
+                .arg(self.decl_name_str(name))
                 .arg(self.qualifier_desc(q.ctx));
             self.emit(msg);
             return None;
@@ -163,8 +187,8 @@ impl Sema<'_, '_> {
         Some(using)
     }
 
-    fn new_using_decl(&mut self, name: Symbol, name_loc: Loc, nns: NnsId) -> DeclId {
-        let h = DeclHead::new(self.ctx, DeclName::ident(name), name_loc);
+    fn new_using_decl(&mut self, name: DeclName, name_loc: Loc, nns: NnsId) -> DeclId {
+        let h = DeclHead::new(self.ctx, name, name_loc);
         self.builder().using_decl(h, Some(nns))
     }
 
@@ -177,7 +201,7 @@ impl Sema<'_, '_> {
         &mut self,
         class: DeclId,
         q: Qualifier,
-        name: Symbol,
+        name: DeclName,
         name_loc: Loc,
         using_loc: Loc,
         force_inheriting: bool,
@@ -190,7 +214,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        let inheriting = force_inheriting || self.nns_last_name(q.nns) == Some(name);
+        let inheriting = force_inheriting
+            || name.as_ident().is_some_and(|n| self.nns_last_name(q.nns) == Some(n));
         if self.is_dependent_ctx(q.ctx)
             || self
                 .ast
@@ -203,10 +228,10 @@ impl Sema<'_, '_> {
         }
         if self.ast.first(q.ctx) == self.ast.first(class) {
             self.error(DiagId::sema_using_decl_refers_to_own_class, q.loc);
-            if self.lookup_in(q.ctx, name, LookupKind::All).is_empty() {
+            if self.lookup_in_dn(q.ctx, name, LookupKind::All).is_empty() {
                 let msg = self
                     .diag(DiagId::sema_no_member, name_loc)
-                    .arg(sym_str(self, name))
+                    .arg(self.decl_name_str(name))
                     .arg(self.qualifier_desc(q.ctx));
                 self.emit(msg);
             }
@@ -239,17 +264,17 @@ impl Sema<'_, '_> {
         if inheriting {
             return Some(self.inheriting_using(class, q, name_loc));
         }
-        let found = self.lookup_qualified(q.ctx, name, LookupKind::All);
+        let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
         if found.is_empty() {
             let msg = self
                 .diag(DiagId::sema_no_member, name_loc)
-                .arg(sym_str(self, name))
+                .arg(self.decl_name_str(name))
                 .arg(self.qualifier_desc(q.ctx));
             self.emit(msg);
             return None;
         }
         let access = self.current_member_access();
-        let h = DeclHead::new(self.ctx, DeclName::ident(name), name_loc).access(access);
+        let h = DeclHead::new(self.ctx, name, name_loc).access(access);
         let using = self.builder().using_decl(h, Some(q.nns));
         for &t in &found.decls {
             let _ = self.introduce_shadow(name, name_loc, t);
@@ -265,7 +290,7 @@ impl Sema<'_, '_> {
     pub(crate) fn instantiate_class_using(
         &mut self,
         q: Qualifier,
-        name: Symbol,
+        name: DeclName,
         name_loc: Loc,
         inheriting: bool,
     ) -> Option<DeclId> {
@@ -340,7 +365,7 @@ impl Sema<'_, '_> {
         &mut self,
         class: DeclId,
         q: Qualifier,
-        name: Symbol,
+        name: DeclName,
         name_loc: Loc,
         inheriting: bool,
     ) -> DeclId {
@@ -352,7 +377,7 @@ impl Sema<'_, '_> {
                 let canon = self.ast.types.canonical(ty).ty();
                 self.ast.names.constructor(canon)
             }
-            _ => DeclName::ident(name),
+            _ => name,
         };
         let h = DeclHead::new(self.ctx, dn, name_loc).access(access);
         let d = self.builder().unresolved_using_value(h, q.nns, !inheriting);
@@ -478,14 +503,14 @@ impl Sema<'_, '_> {
     /// current scope, unless it conflicts with a declaration already
     /// there ([namespace.udecl]/11, [basic.scope.scope]/4). A repeated
     /// using-declaration of the same entity replaces the earlier shadow.
-    fn introduce_shadow(&mut self, name: Symbol, loc: Loc, target: DeclId) -> Option<DeclId> {
+    fn introduce_shadow(&mut self, name: DeclName, loc: Loc, target: DeclId) -> Option<DeclId> {
         let in_class = self.member_spec_class().is_some();
         let fnlike = |me: &Self, d| {
             let k = me.kind_of(d);
             k.is_function() || k == DeclKind::FunctionTemplate
         };
         let mut prev = None;
-        for e in self.current_scope_raw(name) {
+        for e in self.current_scope_raw_dn(name) {
             let es = self.ast.strip_shadow(e);
             if self.ast.first(es) == self.ast.first(target) {
                 if e != es {
@@ -523,13 +548,15 @@ impl Sema<'_, '_> {
                 return None;
             }
         }
-        let mut h = DeclHead::new(self.ctx, DeclName::ident(name), loc);
+        let mut h = DeclHead::new(self.ctx, name, loc);
         if in_class {
             h = h.access(self.current_member_access());
         }
         let s = self.builder().using_shadow(h, target, prev);
-        if self.in_local_scope() {
-            self.push_local(name, s);
+        if self.in_local_scope()
+            && let Some(n) = name.as_ident()
+        {
+            self.push_local(n, s);
         }
         Some(s)
     }
@@ -659,7 +686,7 @@ impl Sema<'_, '_> {
             .collect();
         for c in enumerators {
             if let Some(n) = self.ast.decls.get(c).name().as_ident() {
-                let _ = self.introduce_shadow(n, name_loc, c);
+                let _ = self.introduce_shadow(DeclName::ident(n), name_loc, c);
             }
         }
         Some(ud)

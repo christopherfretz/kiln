@@ -292,6 +292,10 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+        if let Some(l) = params.iter().find_map(|p| p.explicit_object) {
+            // P0847 lambdas (`[](this auto& self)`): a gap.
+            self.unsupported("explicit object parameters in a lambda", l);
+        }
         self.create_params(f, &params, &defaults);
         let mut attrs = specs.attrs.clone();
         attrs.extend(d.attrs.iter().copied());

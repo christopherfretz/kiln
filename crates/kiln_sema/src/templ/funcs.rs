@@ -666,7 +666,7 @@ impl Sema<'_, '_> {
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         fspec = fspec.with_variadic(variadic);
         let old = self.ast.decls.function(old).map(|x| x.spec).unwrap_or_default();
-        fspec.with_storage(old.storage())
+        fspec.with_storage(old.storage()).with_explicit_object(old.has_explicit_object())
     }
 
     /// The new declaration of an explicit specialization `s` (of a

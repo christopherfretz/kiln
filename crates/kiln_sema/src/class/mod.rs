@@ -430,7 +430,13 @@ impl Sema<'_, '_> {
             self.note_this_use(loc);
             self.builder().this_expr(t, false, loc)
         } else {
-            self.error(DiagId::sema_this_outside_member, loc);
+            let explicit_obj = self.func.as_ref().is_some_and(|f| self.has_explicit_object(f.decl));
+            let id = if explicit_obj {
+                DiagId::sema_explicit_object_this
+            } else {
+                DiagId::sema_this_outside_member
+            };
+            self.error(id, loc);
             self.act_on_error_expr(&[], loc)
         }
     }
