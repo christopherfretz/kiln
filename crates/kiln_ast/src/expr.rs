@@ -2158,9 +2158,9 @@ impl ExprArena {
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::CXXStdInitializerListExpr
-            | ExprKind::ExprWithCleanups => v.extend(id(n.a)),
+            | ExprKind::ExprWithCleanups
+            | ExprKind::PredefinedExpr => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
-            ExprKind::PredefinedExpr => v.extend(id(n.a)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.b)));
             }

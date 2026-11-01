@@ -2,7 +2,7 @@
 //! and simplification, clobber register names, and the assembler-template
 //! analysis that sema diagnoses and codegen lowers to LLVM inline asm.
 //! Ports of clang 19's `TargetInfo::validateOutputConstraint`,
-//! `validateInputConstraint`, the AArch64 and X86 `validateAsmConstraint`,
+//! `validateInputConstraint`, the `AArch64` and X86 `validateAsmConstraint`,
 //! `convertConstraint`, `isValidGCCRegisterName`,
 //! `getNormalizedGCCRegisterName`, `GCCAsmStmt::AnalyzeAsmString` and
 //! `SimplifyConstraint` (CGStmt.cpp).
@@ -81,7 +81,7 @@ impl ConstraintInfo {
             None | Some(ImmRange::Any) => true,
             Some(ImmRange::Range(lo, hi)) => v >= i128::from(lo) && v <= i128::from(hi),
             Some(ImmRange::Set(s)) => {
-                i32::try_from(v).is_ok() && s.iter().any(|&x| i128::from(x) == v as u32 as i128)
+                i32::try_from(v).is_ok() && s.iter().any(|&x| i128::from(x) == i128::from(v as u32))
             }
         }
     }
@@ -110,16 +110,12 @@ fn validate_target(arch: Arch, c: &[u8], i: &mut usize, info: &mut ConstraintInf
                 info.set(ALLOWS_MEMORY);
                 true
             }
-            b'U' => {
-                if (at(1) == b'p' && matches!(at(2), b'l' | b'a' | b'h'))
-                    || (at(1) == b'c' && matches!(at(2), b'i' | b'j'))
-                {
-                    info.set(ALLOWS_REGISTER);
-                    *i += 2;
-                    true
-                } else {
-                    false
-                }
+            b'U' if (at(1) == b'p' && matches!(at(2), b'l' | b'a' | b'h'))
+                || (at(1) == b'c' && matches!(at(2), b'i' | b'j')) =>
+            {
+                info.set(ALLOWS_REGISTER);
+                *i += 2;
+                true
             }
             _ => false,
         },
@@ -312,7 +308,7 @@ const AARCH64_REG_NAMES: &[&str] = &[
     "pn15", "za", "zt0",
 ];
 
-/// AArch64 `GCCRegAliases`: `(alias, register)`.
+/// `AArch64` `GCCRegAliases`: `(alias, register)`.
 fn aarch64_alias(name: &str) -> Option<&'static str> {
     Some(match name {
         "w31" => "wsp",
@@ -568,6 +564,41 @@ pub struct AsmOperandCounts<'a> {
     pub names: &'a [&'a str],
 }
 
+/// The operand named by `%[name]`, `p` just past the `[`; on success `p`
+/// is advanced past the `]`.
+fn named_operand(
+    s: &[u8],
+    p: &mut usize,
+    ops: &AsmOperandCounts<'_>,
+) -> Result<u32, (AsmStringError, u32)> {
+    let off = (*p - 1) as u32;
+    let Some(len) = s[*p..].iter().position(|&b| b == b']') else {
+        return Err((AsmStringError::UnterminatedName, off));
+    };
+    if len == 0 {
+        return Err((AsmStringError::EmptyName, off));
+    }
+    let name = &s[*p..*p + len];
+    let Some(n) = ops.names.iter().position(|nm| !nm.is_empty() && nm.as_bytes() == name) else {
+        return Err((AsmStringError::UnknownName, *p as u32));
+    };
+    *p += len + 1;
+    Ok(n as u32)
+}
+
+/// A simple asm string (no operands): only `$` is escaped, as `$$`.
+fn escape_simple(s: &[u8]) -> Vec<u8> {
+    let mut cur = Vec::with_capacity(s.len());
+    for &b in s {
+        if b == b'$' {
+            cur.extend_from_slice(b"$$");
+        } else {
+            cur.push(b);
+        }
+    }
+    cur
+}
+
 /// clang's `GCCAsmStmt::AnalyzeAsmString`: splits `s` into pieces, or the
 /// error and the byte offset it is reported at. `simple` is a basic asm
 /// (no `:`), where only `$` is escaped.
@@ -577,22 +608,11 @@ pub fn analyze_asm_string(
     simple: bool,
     ops: &AsmOperandCounts<'_>,
 ) -> Result<Vec<AsmPiece>, (AsmStringError, u32)> {
+    if simple {
+        return Ok(vec![AsmPiece::Text(escape_simple(s))]);
+    }
     let mut pieces = Vec::new();
     let mut cur = Vec::new();
-    let push_byte = |cur: &mut Vec<u8>, b: u8| {
-        cur.push(b);
-    };
-    if simple {
-        for &b in s {
-            if b == b'$' {
-                cur.extend_from_slice("$$".as_bytes());
-            } else {
-                push_byte(&mut cur, b);
-            }
-        }
-        pieces.push(AsmPiece::Text(cur));
-        return Ok(pieces);
-    }
     let variants = has_asm_variants(arch);
     let mut p = 0usize;
     let end = s.len();
@@ -624,7 +644,7 @@ pub fn analyze_asm_string(
             }
             b'%' => {}
             _ => {
-                push_byte(&mut cur, ch);
+                cur.push(ch);
                 continue;
             }
         }
@@ -635,7 +655,7 @@ pub fn analyze_asm_string(
         p += 1;
         match esc {
             b'%' | b'{' | b'}' => {
-                push_byte(&mut cur, esc);
+                cur.push(esc);
                 continue;
             }
             b'=' => {
@@ -672,20 +692,8 @@ pub fn analyze_asm_string(
             continue;
         }
         if esc == b'[' {
-            let off = (p - 1) as u32;
-            let Some(len) = s[p..].iter().position(|&b| b == b']') else {
-                return Err((AsmStringError::UnterminatedName, off));
-            };
-            if len == 0 {
-                return Err((AsmStringError::EmptyName, off));
-            }
-            let name = &s[p..p + len];
-            let Some(n) = ops.names.iter().position(|nm| !nm.is_empty() && nm.as_bytes() == name)
-            else {
-                return Err((AsmStringError::UnknownName, p as u32));
-            };
-            p += len + 1;
-            pieces.push(AsmPiece::Operand { no: n as u32, modifier, percent, end: p as u32 });
+            let n = named_operand(s, &mut p, ops)?;
+            pieces.push(AsmPiece::Operand { no: n, modifier, percent, end: p as u32 });
             continue;
         }
         return Err((AsmStringError::InvalidEscape, (p - 1) as u32));

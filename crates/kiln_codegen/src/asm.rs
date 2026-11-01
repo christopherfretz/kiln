@@ -85,7 +85,15 @@ impl Cg<'_> {
                 constraints.push(',');
             }
             let q = ast.exprs.get(o.expr).ty();
-            if !info.allows_memory() {
+            if info.allows_memory() {
+                arg_tys.push(LTy::PTR);
+                elem_tys.push(Some(dest.addr.ty));
+                args.push(dest.addr.v);
+                constraints.push_str("=*");
+                constraints.push_str(&oc);
+                read_only = false;
+                read_none = false;
+            } else {
                 constraints.push('=');
                 constraints.push_str(&oc);
                 let mt = self.mty(q);
@@ -111,14 +119,6 @@ impl Cg<'_> {
                 }
                 result_tys.push(rt);
                 dests.push((dest, q));
-            } else {
-                arg_tys.push(LTy::PTR);
-                elem_tys.push(Some(dest.addr.ty));
-                args.push(dest.addr.v);
-                constraints.push_str("=*");
-                constraints.push_str(&oc);
-                read_only = false;
-                read_none = false;
             }
             if info.is_read_write() {
                 inout.push(',');
@@ -242,14 +242,14 @@ impl Cg<'_> {
                 None => self.m.attr_set(&[]),
             })
             .collect();
-        let opts = CallOpts {
+        let call_opts = CallOpts {
             attrs: AttrList { func, params, ..AttrList::default() },
             ..CallOpts::default()
         };
         let call = self
             .f
             .fir
-            .push(Op::Call { fn_ty, callee: V::C(callee), args, opts: Box::new(opts) }, ret);
+            .push(Op::Call { fn_ty, callee: V::C(callee), args, opts: Box::new(call_opts) }, ret);
         let inst = Fir::last_inst(call);
         self.f.calls.push((inst, None, !can_throw));
         let mut locs = Vec::new();

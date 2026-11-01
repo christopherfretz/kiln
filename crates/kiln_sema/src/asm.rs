@@ -22,7 +22,7 @@ impl Sema<'_, '_> {
     /// (clang's `ActOnGCCAsmStmt`). Errors in constraints, clobbers or
     /// the template are reported and still build the statement, as
     /// clang does; invalid operands yield `None`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub fn act_on_gcc_asm_stmt(
         &mut self,
         loc: Loc,
@@ -62,12 +62,13 @@ impl Sema<'_, '_> {
             }
             if !self.asm_output_lvalue_ok(e) {
                 let b = self.begin_loc(e);
-                if !self.is_complete(t) && !self.ast.types.is_array(t) && !self.ast.types.is_void(t)
+                if !self.is_complete(t)
+                    && !self.ast.types.is_array(t)
+                    && !self.ast.types.is_void(t)
+                    && !self.require_complete(t, b)
                 {
-                    if !self.require_complete(t, b) {
-                        self.report_incomplete_operand(t, b);
-                        return None;
-                    }
+                    self.report_incomplete_operand(t, b);
+                    return None;
                 }
                 self.error(DiagId::sema_asm_invalid_lvalue_in_output, b);
                 return None;
@@ -308,14 +309,14 @@ impl Sema<'_, '_> {
         }
         // Operand names are unique (clang sorts them and reports the
         // first adjacent pair).
-        let mut named: Vec<(&str, usize)> = names
+        let mut by_name: Vec<(&str, usize)> = names
             .iter()
             .enumerate()
             .filter(|(_, n)| !n.is_empty())
             .map(|(k, n)| (n.as_str(), k))
             .collect();
-        named.sort_by(|a, b| a.0.cmp(b.0));
-        if let Some(w) = named.windows(2).find(|w| w[0].0 == w[1].0) {
+        by_name.sort_by(|a, b| a.0.cmp(b.0));
+        if let Some(w) = by_name.windows(2).find(|w| w[0].0 == w[1].0) {
             let (name, first, second) = (w[0].0.to_owned(), w[0].1, w[1].1);
             let b = self.begin_loc(ops[second].expr);
             let fb = self.begin_loc(ops[first].expr);

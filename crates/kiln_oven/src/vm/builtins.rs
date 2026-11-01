@@ -218,7 +218,7 @@ impl Oven {
         }
         let (t1, t2) = (self.designated(p, t1)?, self.designated(q, t2)?);
         if !wide {
-            if !str && !(is_narrow_char(ast, self, t1) && is_narrow_char(ast, self, t2)) {
+            if !(str || (is_narrow_char(ast, self, t1) && is_narrow_char(ast, self, t2))) {
                 return Err(Fault::Bi(BiFault::CmpType { t1, t2 }));
             }
             if let (Some(x), Some(y)) = (self.byte_run(p, t1, n), self.byte_run(q, t2, n)) {

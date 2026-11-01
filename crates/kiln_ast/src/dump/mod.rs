@@ -606,8 +606,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXPseudoDestructorExpr
-            | ExprKind::CompoundLiteralExpr
-            | ExprKind::PredefinedExpr => push(n.a()),
+            | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 // The parameter prints first (clang), then the replacement.
                 drop(push);
@@ -641,7 +640,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     push(c.raw());
                 }
             }
-            ExprKind::CXXRewrittenBinaryOperator => push(n.a()),
+            ExprKind::CXXRewrittenBinaryOperator | ExprKind::PredefinedExpr => push(n.a()),
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 push(n.a());
                 for c in lists.iter::<ExprId>(exprs.call_args(e)) {

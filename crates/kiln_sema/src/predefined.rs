@@ -88,6 +88,7 @@ impl Sema<'_, '_> {
     }
 
     /// clang `PredefinedExpr::ComputeName(kind, f)` for function `f`.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn compute_predefined_name(&self, kind: PredefinedKind, f: DeclId) -> String {
         let ast = &self.ast;
         let names = AstNames::new(ast);
@@ -201,7 +202,7 @@ impl Sema<'_, '_> {
     }
 
     /// The declared function type of `f`, with its sugar.
-    fn decl_sugared_proto<'s>(&'s self, f: DeclId) -> Option<&'s kiln_ast::types::FuncProto> {
+    fn decl_sugared_proto(&self, f: DeclId) -> Option<&kiln_ast::types::FuncProto> {
         let q = self.ast.decls.get(f).ty()?;
         let q = self.ast.types.desugar_top(q);
         self.ast.types.proto_of(q.ty()).or_else(|| self.ast.types.proto(q))
