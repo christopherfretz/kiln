@@ -1,7 +1,8 @@
 //! `cargo xtask gen-pp-corpus`: writes the generated header corpus under
 //! `tests/differential/pp/` (`spec/harness.md` "Generated pp corpus"), one
 //! tiny test per header that `#include`s it and is compared with clang's
-//! `-E -P` token-wise.
+//! `-E -P` token-wise. With `--no-crash` it writes the libc++ header
+//! no-crash guard under `tests/header-guard/` instead (WP-145).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -28,6 +29,10 @@ options:
   --sysroot <dir>   C library header directory (default /usr/include)
   --out <dir>       output directory (default <repo>/tests/differential/pp)
   --check           change nothing; exit 1 if the corpus is not up to date
+  --no-crash        write the libc++ header no-crash guard instead: one
+                    `expect: no-crash` test per libc++ header (libcxx/,
+                    libcxx/experimental/, libcxx-c/; no sysroot/) with
+                    -ferror-limit=0, default --out tests/header-guard
   -h, --help        this text
 ";
 
@@ -61,7 +66,13 @@ struct Options {
     sysroot: PathBuf,
     out: Option<PathBuf>,
     check: bool,
+    /// Generate the no-crash header guard rather than the pp corpus.
+    no_crash: bool,
 }
+
+/// The default output directories.
+const PP_OUT: &str = "tests/differential/pp";
+const NO_CRASH_OUT: &str = "tests/header-guard";
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Options>, String> {
     let mut o = Options {
@@ -70,6 +81,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Options>,
         sysroot: PathBuf::from("/usr/include"),
         out: None,
         check: false,
+        no_crash: false,
     };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -93,6 +105,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Options>,
             "--sysroot" => o.sysroot = PathBuf::from(value("--sysroot")?),
             "--out" => o.out = Some(PathBuf::from(value("--out")?)),
             "--check" if inline.is_none() => o.check = true,
+            "--no-crash" if inline.is_none() => o.no_crash = true,
             f => return Err(format!("unknown argument `{f}`")),
         }
     }
@@ -111,7 +124,8 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let out = opts.out.clone().unwrap_or_else(|| repo_root().join("tests/differential/pp"));
+    let default_out = if opts.no_crash { NO_CRASH_OUT } else { PP_OUT };
+    let out = opts.out.clone().unwrap_or_else(|| repo_root().join(default_out));
     let plan = match plan(&opts) {
         Ok(p) => p,
         Err(e) => {
@@ -163,6 +177,20 @@ pub fn test_source(header: &str, std: &str) -> String {
     )
 }
 
+/// The memory budget of a no-crash header test (MiB): every libc++ header
+/// fits in well under it today; a blow-up is a FAIL like a crash.
+const NO_CRASH_MEM_MIB: u32 = 2048;
+
+/// The content of the no-crash guard test for `#include <header>`: any
+/// number of errors is fine, a crash, hang or memory blow-up is not.
+pub fn no_crash_source(header: &str, std: &str) -> String {
+    format!(
+        "{BANNER}\n//@ expect: no-crash\n//@ std: {std}\n\
+         //@ args: -stdlib=libc++ -resource-dir %{{resource_dir}} -ferror-limit=0\n\
+         //@ mem<={NO_CRASH_MEM_MIB}\n#include <{header}>\n"
+    )
+}
+
 fn sorted_entries(dir: &Path) -> Result<Vec<(String, bool)>, String> {
     let rd = fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
     let mut v = Vec::new();
@@ -182,9 +210,13 @@ fn plan(o: &Options) -> Result<Plan, String> {
     let libcxx_dir = category_dir("libcxx", &o.std);
     let c_dir = category_dir("libcxx-c", &o.std);
     let sys_dir = category_dir("sysroot", &o.std);
-    p.dirs = vec![libcxx_dir.clone(), c_dir.clone(), sys_dir.clone()];
+    p.dirs = vec![libcxx_dir.clone(), c_dir.clone()];
+    if !o.no_crash {
+        p.dirs.push(sys_dir.clone());
+    }
+    let source = if o.no_crash { no_crash_source } else { test_source };
     let add = |p: &mut Plan, category: &str, rel: PathBuf, header: &str| {
-        p.files.insert(rel, test_source(header, &o.std));
+        p.files.insert(rel, source(header, &o.std));
         *p.counts.entry(category.to_owned()).or_insert(0) += 1;
     };
 
@@ -221,7 +253,8 @@ fn plan(o: &Options) -> Result<Plan, String> {
     for w in &wrappers {
         add(&mut p, "libcxx-c", c_dir.join(format!("{w}.cpp")), w);
     }
-    for (name, is_dir) in sorted_entries(&o.sysroot)? {
+    let sysroot = if o.no_crash { Vec::new() } else { sorted_entries(&o.sysroot)? };
+    for (name, is_dir) in sysroot {
         if is_dir || !is_dot_h(&name) {
             continue;
         }
@@ -361,13 +394,12 @@ mod tests {
         assert_eq!(parse_args(strings(&["-h"])).unwrap(), None);
     }
 
-    /// A fake libc++ and sysroot: categories, exclusions, std suffixes,
-    /// idempotence and stale-file removal.
-    #[test]
-    fn generates_idempotently() {
+    /// Builds a fake libc++ (`v1`) and sysroot (`include`) under a fresh
+    /// directory named after `tag`; returns (base, libcxx, sysroot, out).
+    fn fixture(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let base = crate::util::target_dir(&repo_root())
             .unwrap()
-            .join(format!("xtask-gen-pp-test-{}", std::process::id()));
+            .join(format!("xtask-{tag}-test-{}", std::process::id()));
         let (lib, sys, out) = (base.join("v1"), base.join("include"), base.join("out"));
         for d in [
             lib.join("experimental/__simd"),
@@ -394,12 +426,21 @@ mod tests {
         for f in ["stdio.h", "unistd.h", "regexp.h", "sys/types.h", "notes.txt"] {
             fs::write(sys.join(f), "").unwrap();
         }
+        (base, lib, sys, out)
+    }
+
+    /// A fake libc++ and sysroot: categories, exclusions, std suffixes,
+    /// idempotence and stale-file removal.
+    #[test]
+    fn generates_idempotently() {
+        let (base, lib, sys, out) = fixture("gen-pp");
         let opts = |std: &str| Options {
             std: std.into(),
             libcxx: lib.clone(),
             sysroot: sys.clone(),
             out: Some(out.clone()),
             check: false,
+            no_crash: false,
         };
         let p = plan(&opts("c++26")).unwrap();
         let names: Vec<String> =
@@ -458,6 +499,41 @@ mod tests {
         assert_eq!(st.removed, 0);
         assert!(out.join("libcxx.c++20/vector.cpp").is_file());
         assert!(out.join("libcxx/vector.cpp").is_file());
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// `--no-crash`: libc++ categories only, `expect: no-crash` tests
+    /// without an error limit.
+    #[test]
+    fn no_crash_plan() {
+        let (base, lib, sys, out) = fixture("gen-pp-no-crash");
+        let opts = |std: &str| Options {
+            std: std.into(),
+            libcxx: lib.clone(),
+            sysroot: sys.clone(),
+            out: Some(out.clone()),
+            check: false,
+            no_crash: true,
+        };
+        let nc = plan(&opts("c++26")).unwrap();
+        let names: Vec<String> =
+            nc.files.keys().map(|k| k.to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(
+            names,
+            [
+                "libcxx/cxxabi.h.cpp",
+                "libcxx/experimental/simd.cpp",
+                "libcxx/map.cpp",
+                "libcxx/vector.cpp",
+                "libcxx-c/stdio.h.cpp",
+            ]
+        );
+        for src in nc.files.values() {
+            let spec = crate::test::directives::parse(src, crate::test::directives::Lang::Cxx);
+            let spec = spec.unwrap();
+            assert_eq!(spec.expect, crate::test::directives::Expect::NoCrash, "{src}");
+            assert!(src.contains("-ferror-limit=0"), "{src}");
+        }
         fs::remove_dir_all(&base).unwrap();
     }
 }

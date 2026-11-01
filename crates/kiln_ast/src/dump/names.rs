@@ -12,7 +12,7 @@ use crate::consts::{
     Scalar, Shape,
 };
 use crate::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
-use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind};
+use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind, ValueCategory};
 use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_unit};
@@ -768,7 +768,7 @@ impl<'a> AstNames<'a> {
             }
             ExprKind::CStyleCastExpr => {
                 out.push('(');
-                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                self.written_cast_type(n.ty(), n.value_category(), out);
                 out.push(')');
                 self.expr(exprs.operand(e), d, out);
             }
@@ -796,7 +796,7 @@ impl<'a> AstNames<'a> {
                     ExprKind::CXXDynamicCastExpr => "dynamic_cast<",
                     _ => "__builtin_bit_cast(",
                 });
-                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                self.written_cast_type(n.ty(), n.value_category(), out);
                 out.push_str(if k == ExprKind::BuiltinBitCastExpr { ", " } else { ">(" });
                 self.expr(exprs.operand(e), d, out);
                 out.push(')');
@@ -1022,6 +1022,28 @@ impl<'a> AstNames<'a> {
 }
 
 impl AstNames<'_> {
+    /// An explicit cast's type as written (clang's `getTypeAsWritten`):
+    /// the expression's type `t` plus the reference its value category
+    /// implies, an lvalue cast naming `T &` and an xvalue cast `T &&`.
+    /// The interned reference node is preferred, so `int (&)[2]` prints
+    /// with its declarator parentheses (WP-145).
+    fn written_cast_type(&self, t: QualType, vk: ValueCategory, out: &mut String) {
+        let types = &self.ast.types;
+        let rvalue = match vk {
+            ValueCategory::PRValue => {
+                return write_type(types, self, t, self.expr_types, out);
+            }
+            ValueCategory::LValue => false,
+            ValueCategory::XValue => true,
+        };
+        if let Some(r) = types.find_reference_to(t, rvalue) {
+            write_type(types, self, r, self.expr_types, out);
+        } else {
+            write_type(types, self, t, self.expr_types, out);
+            out.push_str(if rvalue { " &&" } else { " &" });
+        }
+    }
+
     /// A return-type-requirement's type-constraint as written: the
     /// immediately-declared constraint `C<decltype((e)), args...>` printed
     /// as `C<args...>` (clang's `TypeConstraint::print`).

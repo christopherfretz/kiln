@@ -1840,6 +1840,8 @@ macro_rules! payload_getter {
         #[allow(dead_code, reason = "not every payload has a late setter yet")]
         fn $mut_name(&mut self, d: DeclId) -> &mut $ty {
             let n = self.nodes[d.index() as usize];
+            // Invariant: Sema only mutates a payload of the decl's own class
+            // (two Sema bugs that broke this were fixed in WP-141).
             assert!(
                 n.kind.payload() == PayloadClass::$class && n.data != 0,
                 concat!("decl has no ", stringify!($class), " payload")

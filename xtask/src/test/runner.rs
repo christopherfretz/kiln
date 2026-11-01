@@ -479,7 +479,10 @@ impl Test<'_> {
     /// [`Self::compile`]; any other exit code (70, 101, ...) is one too.
     /// The `diag:` lines are still checked.
     fn no_crash(&mut self, spec: &TestSpec) -> Check {
-        let o = self.compile(spec, &["-fsyntax-only"], None)?;
+        // No error limit by default: a crash must not hide behind the 20th
+        // error (WP-141's `<string>` panic did). It precedes the test's
+        // `args:`, so an explicit `-ferror-limit=N` there still wins.
+        let o = self.compile(spec, &["-fsyntax-only", "-ferror-limit=0"], None)?;
         let stderr = o.stderr_str();
         if !matches!(o.code(), Some(0 | 1)) {
             return Err(Problem::Fail(format!(

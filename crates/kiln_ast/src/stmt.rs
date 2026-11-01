@@ -355,6 +355,8 @@ impl StmtArena {
     }
 
     fn expect(&self, s: StmtId, kinds: &[StmtKind]) -> &StmtNode {
+        // Invariant (WP-145): accessors are called on the kind they read;
+        // a mismatch is a Sema/AST bug, never input (spec/ast.md).
         let n = self.get(s);
         assert!(kinds.contains(&n.kind), "expected one of {kinds:?}, found {:?}", n.kind);
         n
