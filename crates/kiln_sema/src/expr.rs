@@ -584,7 +584,28 @@ impl Sema<'_, '_> {
         let Some(init) = self.ast.decls.var(holder).and_then(|y| y.init) else { return false };
         let ty = n.ty().unwrap_or(QualType::ERROR);
         if self.ast.types.is_reference(ty) {
-            return self.is_static_lvalue(init);
+            // A reference is usable in constant expressions when its
+            // initializer is a constant expression ([expr.const]/4): a
+            // static lvalue (the common case, decided syntactically), or
+            // anything else the Oven evaluates to an lvalue constant
+            // (`const int& r = 5;`, `const P& r = P{1};`, `int& r = a[1];`
+            // at namespace scope; clang marks these `non_odr_use_constant`
+            // too, and codegen then reads through them, WP-231).
+            if self.is_static_lvalue(init) {
+                return true;
+            }
+            if let Some(&u) = self.ref_usable.get(&holder) {
+                return u;
+            }
+            if self.has_errors_in(init)
+                || self.expr_is_value_dependent(init)
+                || self.is_dependent_type(ty)
+            {
+                return false;
+            }
+            let u = self.is_constant_initialized(holder);
+            self.ref_usable.insert(holder, u);
+            return u;
         }
         let q = self.ast.types.effective_quals(ty);
         let ok = spec.is_constexpr()
