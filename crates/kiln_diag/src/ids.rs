@@ -392,7 +392,7 @@ diag_ids! {
     sema_float_literal_overflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too large for type {0}; maximum is {1}";
     sema_float_literal_underflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too small for type {0}; minimum is {1}";
     sema_invalid_float_suffix = Error (1) "invalid suffix '{0}' on floating constant";
-    sema_init_conversion_failed = Error (5) "cannot initialize {0:a variable|a parameter|return object|a value|a new value} of type {1} with an {2:rvalue|lvalue} of type {3}{4}";
+    sema_init_conversion_failed = Error (5) "cannot initialize {0:a variable|a parameter|return object|a value|a new value|a member subobject|an array element|a base class|an exception object|a lambda capture} of type {1} with an {2:rvalue|lvalue} of type {3}{4}";
     sema_no_viable_conversion = Error (2) "no viable conversion from {0} to {1}";
     sema_no_viable_conversion_return = Error (2) "no viable conversion from returned value of type {0} to function return type {1}";
     sema_assign_incompatible = Error (2) "assigning to {0} from incompatible type {1}";

@@ -358,7 +358,7 @@ impl Sema<'_, '_> {
         // `E{v}` for a fixed-underlying-type enumeration is
         // direct-list-initialization too ([dcl.init.list]/3.8). The
         // initialized entity is a temporary: "a value".
-        let entity = self.init_entity.replace("3");
+        let entity = self.init_entity.replace(crate::init::entity::VALUE);
         let init = match self.fixed_enum_list_init(to, l) {
             Some(e) => e,
             None => {
