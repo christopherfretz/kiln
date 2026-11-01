@@ -971,14 +971,48 @@ impl Sema<'_, '_> {
             } else {
                 // A designated clause is a `DesignatedInitExpr` (clang
                 // `ActOnDesignatedInitializer`), rebuilt at instantiation.
-                let ds: Vec<kiln_ast::expr::Designator> =
-                    it.designator.iter().map(|d| d.to_ast()).collect();
+                let ds: Vec<kiln_ast::expr::Designator> = it
+                    .designator
+                    .iter()
+                    .map(|d| self.designator_ast(d))
+                    .collect();
                 let loc = it.designator[0].loc();
-                self.builder().designated_init(&ds, e, loc)
+                // A designated pack expansion `.x = u...` is the
+                // expansion of the designated clause (clang parses the
+                // `...` after the whole designation).
+                match crate::templ::pack::expr_pattern(self, e) {
+                    Some(pat) => {
+                        let ellipsis = self.ast.exprs.get(e).loc();
+                        let d = self.builder().designated_init(&ds, pat, loc);
+                        self.builder().pack_expansion_expr(d, ellipsis)
+                    }
+                    None => self.builder().designated_init(&ds, e, loc),
+                }
             };
             inits.push(e);
         }
         self.builder().init_list(QualType::VOID, &inits, None, None, l.lbrace, l.rbrace)
+    }
+
+    /// The AST form of designator `d`: a value-dependent array index
+    /// stays as written; a constant one is wrapped in its
+    /// `ConstantExpr` (clang `CheckArrayDesignatorExpr`).
+    fn designator_ast(&mut self, d: &crate::init::Designator) -> kiln_ast::expr::Designator {
+        let crate::init::Designator::Index(e, loc) = *d else { return d.to_ast() };
+        if self.expr_is_value_dependent(e) || self.is_err_expr(e) {
+            return d.to_ast();
+        }
+        let c = crate::conv::lvalue_to_rvalue(self, e);
+        let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, loc);
+        let index = match self.eval_int(c, ctx) {
+            Ok(v) => {
+                let ty = self.ast.exprs.get(c).ty();
+                let cv = self.int_const(ty, v);
+                self.builder().constant_expr(c, Some(cv))
+            }
+            Err(_) => e,
+        };
+        kiln_ast::expr::Designator::Index { index, loc }
     }
 
     /// Records the written form of the semantic list `sem` built from

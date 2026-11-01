@@ -226,9 +226,21 @@ impl Sema<'_, '_> {
     /// when the list is parsed (not again at instantiation).
     pub fn act_on_init_list_syntax(&mut self, l: &InitList) {
         let Some(first) = l.items.first() else { return };
+        // A designated pack expansion `.m = e...` is a
+        // `PackExpansionExpr`, not a `DesignatedInitExpr`, to these
+        // checks (clang `ActOnInitList`).
+        let heads: Vec<Option<Designator>> = l
+            .items
+            .iter()
+            .map(|item| match item.value {
+                InitValue::Expr(e) if crate::templ::pack::expr_pattern(self, e).is_some() => None,
+                _ => item.designator.first().copied(),
+            })
+            .collect();
+        let first_designator = heads[0];
         let (mut nested, mut array, mut mixed) = (false, false, false);
-        for item in &l.items {
-            if let Some(d) = item.designator.first() {
+        for (item, head) in l.items.iter().zip(&heads) {
+            if let Some(d) = head {
                 if !nested && item.designator.len() > 1 {
                     nested = true;
                     let msg = self.diag(DiagId::sema_designated_init_nested, self.designator_begin(d));
@@ -243,13 +255,13 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                     }
                 }
-                if !mixed && first.designator.is_empty() {
+                if !mixed && first_designator.is_none() {
                     mixed = true;
                     let msg = self.diag(DiagId::sema_designated_init_mixed, self.designator_begin(d));
                     let note = self.diag(DiagId::note_designated_init_mixed, self.item_begin(first));
                     self.emit(msg.with_note(note));
                 }
-            } else if !mixed && let Some(d) = first.designator.first() {
+            } else if !mixed && let Some(d) = first_designator.as_ref() {
                 mixed = true;
                 let msg = self.diag(DiagId::sema_designated_init_mixed, self.designator_begin(d));
                 let note = self.diag(DiagId::note_designated_init_mixed, self.item_begin(item));

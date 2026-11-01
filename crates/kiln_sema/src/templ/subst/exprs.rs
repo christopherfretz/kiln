@@ -1098,26 +1098,28 @@ impl Substituter<'_, '_, '_> {
     fn init_items(&mut self, items: &[ExprId]) -> SubstResult<Vec<InitItem>> {
         let mut out = Vec::with_capacity(items.len());
         for &x in items {
-            if crate::templ::pack::expr_pattern(self.sema, x).is_some() {
-                for y in self.expand_exprs(&[x])? {
-                    out.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
-                }
-                continue;
-            }
-            if self.sema.ast.exprs.get(x).kind() == ExprKind::DesignatedInitExpr {
-                // `.m = e...`: one designated clause per element (clang
-                // expands the whole `DesignatedInitExpr`).
-                let init = self.sema.ast.exprs.designated_init(x);
-                if crate::templ::pack::expr_pattern(self.sema, init).is_some() {
-                    let ds = self.sema.ast.exprs.designators(x).to_vec();
-                    let designator = self.designators(&ds)?;
-                    for y in self.expand_exprs(&[init])? {
-                        out.push(InitItem { designator: designator.clone(), value: InitValue::Expr(y) });
+            match crate::templ::pack::expr_pattern(self.sema, x) {
+                Some(p) if self.sema.ast.exprs.get(p).kind() == ExprKind::DesignatedInitExpr => {
+                    // `.m = e...`: one designated clause per element
+                    // (clang expands the whole `DesignatedInitExpr`).
+                    let ellipsis = self.sema.ast.exprs.get(x).loc();
+                    match self.expand_pattern_at(Some(ellipsis), |s| s.init_value(p))? {
+                        crate::templ::pack::Expansion::Elements(v) => out.extend(v),
+                        crate::templ::pack::Expansion::Unexpanded(mut it) => {
+                            if let InitValue::Expr(y) = it.value {
+                                it.value = InitValue::Expr(self.sema.act_pack_expansion(y, ellipsis));
+                            }
+                            out.push(it);
+                        }
                     }
-                    continue;
                 }
+                Some(_) => {
+                    for y in self.expand_exprs(&[x])? {
+                        out.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
+                    }
+                }
+                None => out.push(self.init_value(x)?),
             }
-            out.push(self.init_value(x)?);
         }
         Ok(out)
     }
