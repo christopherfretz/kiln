@@ -657,8 +657,8 @@ fn bind_reference(
     // ([dcl.init.ref]/4).
     // A `T[N]` glvalue binds a `T (&)[]` (P0388R4); clang treats the
     // pair as unrelated when the binding would drop qualifiers.
-    let same = s.ast.types.same_type(f_un, r_un)
-        || (rq.contains(fq) && s.unknown_bound_of(r_un, f_un));
+    let same =
+        s.ast.types.same_type(f_un, r_un) || (rq.contains(fq) && s.unknown_bound_of(r_un, f_un));
     let base = match (s.ast.types.as_record(f_un), s.ast.types.as_record(r_un)) {
         (Some(d), Some(b)) if !same => find_base(s, d, b),
         _ => BaseSearch::NotDerived,

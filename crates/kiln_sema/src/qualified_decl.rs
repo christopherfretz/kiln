@@ -76,8 +76,7 @@ impl Sema<'_, '_> {
                 return QualifiedDecl::Unqualify;
             }
             if d.special.is_none() && d.op_name.is_none() {
-                let m =
-                    self.diag(DiagId::sema_namespace_member_extra_qualification, loc).arg(&n);
+                let m = self.diag(DiagId::sema_namespace_member_extra_qualification, loc).arg(&n);
                 self.emit(m);
             }
             return QualifiedDecl::Keep;

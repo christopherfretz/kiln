@@ -143,6 +143,10 @@ impl Sema<'_, '_> {
             // (`subst/stmts.rs` `local_using_decl`).
             let h = DeclHead::new(self.ctx, name, name_loc);
             let d = self.builder().unresolved_using_value(h, q.nns, false);
+            if using_loc != name_loc {
+                // The instantiation's notes point at the `using`.
+                let _ = self.ast.decls.cold.begin_loc.insert(d, using_loc);
+            }
             self.push_local(n, d);
             return Some(d);
         }

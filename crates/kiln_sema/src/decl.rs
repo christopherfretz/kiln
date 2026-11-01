@@ -5768,12 +5768,12 @@ impl Sema<'_, '_> {
         if !is_type_kind(k) || k == DeclKind::UnresolvedUsingTypename {
             return None;
         }
-        let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm)
-        {
-            self.ast.decls.get(d).ty()?
-        } else {
-            self.tag_type(d)
-        };
+        let ty =
+            if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm) {
+                self.ast.decls.get(d).ty()?
+            } else {
+                self.tag_type(d)
+            };
         Some(self.ast.types.canonical(ty))
     }
 
@@ -5807,9 +5807,9 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> bool {
         let qualifier = qualifier.map(|q| self.type_name_qualifier(q));
-        if qualifier.is_some_and(|q| {
-            self.kind_of(q) == DeclKind::ClassTemplate || self.is_dependent_ctx(q)
-        }) {
+        if qualifier
+            .is_some_and(|q| self.kind_of(q) == DeclKind::ClassTemplate || self.is_dependent_ctx(q))
+        {
             return false;
         }
         let found = match qualifier {

@@ -263,7 +263,10 @@ impl Substituter<'_, '_, '_> {
                     _ => self.unimplemented("this rewritten comparison", loc),
                 }
             }
-            ExprKind::UnresolvedLookupExpr => self.callee(e),
+            ExprKind::UnresolvedLookupExpr => match self.local_using_ref(e, false) {
+                Some(r) => Ok(r),
+                None => self.callee(e),
+            },
             ExprKind::MemberExpr => {
                 let base = ex(self).operand(e);
                 let m = ex(self).decl(e);
@@ -870,6 +873,33 @@ impl Substituter<'_, '_, '_> {
         Ok(self.sema.builder().unresolved_lookup(name, &ds, false, nns, targs, n.loc()))
     }
 
+    /// A name `e` found as a block-scope dependent using-declarator
+    /// (`using E<T>::a; ... a`): looked up again in the instantiation's
+    /// block scope, which now holds the instantiated declaration's
+    /// shadows (as a call's callee when `call`). A use of one whose
+    /// instantiation failed is an error already reported (clang finds
+    /// the invalid `UsingDecl`). `None` for any other name.
+    fn local_using_ref(&mut self, e: ExprId, call: bool) -> Option<ExprId> {
+        let decls = self.sema.ast.unresolved_decls(e);
+        let &[d] = decls.as_slice() else { return None };
+        if self.sema.kind_of(d) != DeclKind::UnresolvedUsingValue
+            || !self.sema.is_block_scope_decl(d)
+            || self.sema.ast.templates.expr_targs.get(e).is_some()
+        {
+            return None;
+        }
+        let loc = self.sema.ast.exprs.get(e).loc();
+        if self.failed_usings.contains(&d) {
+            return Some(self.sema.recover_err(&[], loc));
+        }
+        let name = self.sema.ast.unresolved_name(e);
+        Some(if call {
+            self.sema.act_on_call_name_dn(name, loc)
+        } else {
+            self.sema.act_on_id_expression_dn(name, loc, None)
+        })
+    }
+
     /// A callee: an unresolved name is looked up again from the
     /// instantiation context, which also stands in for the
     /// argument-dependent lookup at the point of instantiation
@@ -889,6 +919,9 @@ impl Substituter<'_, '_, '_> {
                 return self.expr(o);
             }
             return self.expr(c);
+        }
+        if let Some(r) = self.local_using_ref(c, true) {
+            return Ok(r);
         }
         let name = self.sema.ast.unresolved_name(c);
         let decls = self.sema.ast.unresolved_decls(c);

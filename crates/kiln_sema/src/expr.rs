@@ -1143,6 +1143,12 @@ impl Sema<'_, '_> {
         self.act_on_call_name_dn(DeclName::ident(name), loc)
     }
 
+    /// True if `d` is declared directly in a function body (a block-scope
+    /// declaration, [basic.scope.block]).
+    pub(crate) fn is_block_scope_decl(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).ctx().is_some_and(|c| self.kind_of(c).is_function())
+    }
+
     /// [`Sema::act_on_call_name`] for any unqualified-id (`operator()(x)`
     /// inside a member function names `this->operator()`; WP-121).
     pub fn act_on_call_name_dn(&mut self, name: DeclName, loc: Loc) -> ExprId {
@@ -1322,6 +1328,13 @@ impl Sema<'_, '_> {
         if self.kind_of(d) == DeclKind::UnresolvedUsingIfExists {
             self.diag_unresolved_using(d, loc);
             return self.recover_err(&[], loc);
+        }
+        if self.kind_of(d) == DeclKind::UnresolvedUsingValue && self.is_block_scope_decl(d) {
+            // A local named by a dependent block-scope using-declarator
+            // (`using E<T>::a; ... a`): a dependent name looked up again
+            // in the instantiation (clang's `UnresolvedLookupExpr` over
+            // the `UnresolvedUsingValueDecl`, without ADL).
+            return self.builder().unresolved_lookup_in(name, &[d], false, nns, None, true, loc);
         }
         if self.kind_of(d) == DeclKind::UnresolvedUsingValue {
             // A member named by a dependent using-declarator: an implicit

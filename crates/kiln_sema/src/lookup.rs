@@ -6,13 +6,13 @@
 //! plus the namespaces nominated by `using namespace` in that scope.
 //! Qualified lookup searches one context's table.
 
-use kiln_ast::{DeclId, QualType};
 use kiln_ast::decl::DeclKind;
 /// Lookup-table entry flags (owned by spec/sema-overload.md §2.3): a hidden
 /// friend's entry is `ADL_ONLY`, invisible to ordinary and qualified
 /// lookup ([namespace.memdef]/3) but seen by redeclaration lookup and ADL.
 pub use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::DeclName;
+use kiln_ast::{DeclId, QualType};
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
