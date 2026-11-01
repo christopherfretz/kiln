@@ -20,6 +20,7 @@ use crate::{Oven, SemaBridge};
 
 mod bitcast;
 mod builtins;
+mod life;
 mod virt;
 
 pub(crate) use builtins::BiFault;
@@ -136,6 +137,8 @@ const _: () = assert!(size_of::<Frame>() <= 32);
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Cleanup {
     pub this: u64,
+    /// The destroyed object's type.
+    pub ty: OTy,
     pub func: u32,
     pub pc: u32,
     pub depth: u32,
@@ -275,6 +278,13 @@ pub(crate) enum Fault {
     /// construction has not started or whose destruction has finished:
     /// its dynamic-type word is uninitialized ([class.cdtor]/1, CWG1517).
     NoDynamic(u32),
+    /// The implicit destruction (scope exit, `delete`) of the `ty` object
+    /// at `p`, whose lifetime an explicit destruction already ended
+    /// ([basic.life]/9; `vm/life.rs`).
+    DestroyEnded {
+        p: u64,
+        ty: OTy,
+    },
 }
 
 /// Why an array `new` bound is erroneous ([expr.new]/8).
@@ -919,6 +929,11 @@ impl Oven {
                             Err(f) => fail!(f),
                         }
                     }
+                    if kind != DynKind::Std
+                        && let Err(f) = self.delete_life(raw)
+                    {
+                        fail!(f);
+                    }
                     // aux 2: the checks only (before the destructors run).
                     let r = if aux & 2 != 0 {
                         self.mem.heap_check(raw, kind, Some(pointee), &self.types).map(drop)
@@ -968,6 +983,11 @@ impl Oven {
                         }
                         continue;
                     }
+                    if self.mem.life_frame
+                        && let Err(f) = self.scope_life(b.ast(), m as u64, life::Objs::All)
+                    {
+                        fail!(f);
+                    }
                     self.mem.release(m as u64, &self.types);
                     pc += 2;
                 }
@@ -992,6 +1012,7 @@ impl Oven {
                 }
                 Op::SetActive => {
                     let raw = reg!(0) as u64;
+                    self.revive_union(raw, OTy(arg!(2) as u32));
                     if let Err(f) =
                         self.set_active(raw, arg!(1) as u32, OTy(arg!(2) as u32), aux & 1 != 0)
                     {
@@ -1176,10 +1197,23 @@ impl Oven {
                         }
                         continue;
                     }
+                    if self.mem.life_frame
+                        && let Some(fr) = self.stack.last()
+                        && fr.mark != BOTTOM
+                        && let Err(f) = self.scope_life(b.ast(), fr.mark, life::Objs::Locals)
+                    {
+                        fail!(f);
+                    }
                     let v = reg!(0);
                     self.regs[fb] = v;
                     let Some(fr) = self.stack.pop() else { return Ok(()) };
                     if fr.mark != BOTTOM {
+                        // The caller destroys the parameters ([expr.call]/6).
+                        if self.mem.life_frame
+                            && let Err(f) = self.scope_life(b.ast(), fr.mark, life::Objs::Params)
+                        {
+                            return Err((f, fr.ret_pc as usize));
+                        }
                         self.mem.release(fr.mark, &self.types);
                     }
                     self.mem.cur_frame = self.stack.last().map_or(0, |f| f.serial);
@@ -1228,6 +1262,7 @@ impl Oven {
         fb: usize,
     ) -> Result<Option<(usize, usize)>, (Fault, usize)> {
         let Some(c) = self.cleanups.pop() else { return Ok(None) };
+        self.cleanup_life(&c).map_err(|f| (f, pc))?;
         // A const object is modifiable during its destruction
         // ([class.dtor]/5).
         let p = Ptr::decode(c.this);
@@ -1279,7 +1314,7 @@ impl Oven {
         self.cleanups.reserve(n as usize);
         for i in 0..n {
             let this = if i == 0 { raw } else { Ptr::with_off(raw, off + i * es, false) };
-            self.cleanups.push(Cleanup { this, func, pc: pc as u32, depth });
+            self.cleanups.push(Cleanup { this, ty: elem, func, pc: pc as u32, depth });
         }
         Ok(())
     }
@@ -2156,7 +2191,7 @@ impl Oven {
             if a.flags & flags::HAS_UNION != 0 {
                 self.union_path(raw, ty, ak::MEMBER_CALL)?;
             }
-            return Ok(());
+            return self.member_call_life(raw, ty);
         }
         let fault = |f| Fault::Mem { f, ak: ak::DESTROY, ty, p: raw };
         if aux & 1 != 0 {

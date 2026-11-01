@@ -194,7 +194,7 @@ pub(crate) mod flags {
     /// A frame or `new` object one of whose subobjects' lifetime an
     /// explicit destruction ended: `Space::life` is kept for its bytes
     /// from then on (`Memory::set_lifetime`; spec/oven.md "Object
-    /// lifetime outside std::allocator storage").
+    /// lifetime outside `std::allocator` storage").
     pub const LIFE: u8 = 128;
     /// Storage whose bytes' lifetime [`Memory::check`] consults.
     pub const TRACKED: u8 = STD_ALLOC | LIFE;

@@ -6,10 +6,10 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
-    BinaryOp, CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, TypeidOperand,
+    BinaryOp, CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, ExprNode, Radix, TypeidOperand,
     ValueCategory,
 };
-use kiln_ast::ids::RawId;
+use kiln_ast::ids::{ArgListId, RawId};
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::types::{ArgView, BuiltinType, Nns};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -817,6 +817,59 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// A non-ADL callee (`N::g`, `S::f<T>`): the decls were found in a
+    /// non-dependent scope; the reference is rebuilt as written.
+    fn qualified_callee(
+        &mut self,
+        c: ExprId,
+        n: &ExprNode,
+        name: DeclName,
+        decls: &[DeclId],
+        targs: Option<ArgListId>,
+    ) -> SubstResult<ExprId> {
+        if let [d] = decls {
+            let d = self.find_instantiated_decl(*d, n.loc())?;
+            // `v<args>` naming a member variable template of the
+            // current instantiation ([temp.dep.expr]/3).
+            if self.sema.kind_of(d) == DeclKind::VarTemplate
+                && let Some(&targs) = self.sema.ast.templates.expr_targs.get(c)
+            {
+                let l = self.args(targs, n.loc())?;
+                let args = self.sema.ast.types.args(l).to_vec();
+                let name = self.sema.template_name_for(d);
+                return match self.sema.act_template_id(name, &args, n.loc(), n.loc()) {
+                    Ok(crate::templ::actions::TemplateIdRef::Value(e)) => Ok(e),
+                    _ => Err(SubstFail),
+                };
+            }
+            let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
+                Some(q) => Some(self.nns(q, n.loc())?),
+                None => None,
+            };
+            if self.sema.kind_of(d) == DeclKind::FunctionTemplate || targs.is_some() {
+                return Ok(self.sema.builder().unresolved_lookup(
+                    name,
+                    &[d],
+                    false,
+                    nns,
+                    targs,
+                    n.loc(),
+                ));
+            }
+            return Ok(self.sema.build_decl_ref_qualified(d, n.loc(), None, nns));
+        }
+        // An overload set: resolved again at the call.
+        let mut ds = Vec::with_capacity(decls.len());
+        for &d in decls {
+            ds.push(self.find_instantiated_decl(d, n.loc())?);
+        }
+        let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
+            Some(q) => Some(self.nns(q, n.loc())?),
+            None => None,
+        };
+        Ok(self.sema.builder().unresolved_lookup(name, &ds, false, nns, targs, n.loc()))
+    }
+
     /// A callee: an unresolved name is looked up again from the
     /// instantiation context, which also stands in for the
     /// argument-dependent lookup at the point of instantiation
@@ -853,58 +906,7 @@ impl Substituter<'_, '_, '_> {
             // `N::g(p)` keeps its written begin (the qualifier) for the
             // call-site notes that report it ([expr.const]).
             let begin = self.sema.ast.templates.expr_begin.get(c).copied();
-            let r: SubstResult<ExprId> = 'q: {
-                // A qualified name: the decls were found in a non-dependent
-                // scope; rebuild the reference as written.
-                if let [d] = decls.as_slice() {
-                    let d = self.find_instantiated_decl(*d, n.loc())?;
-                    // `v<args>` naming a member variable template of the
-                    // current instantiation ([temp.dep.expr]/3).
-                    if self.sema.kind_of(d) == DeclKind::VarTemplate
-                        && let Some(&targs) = self.sema.ast.templates.expr_targs.get(c)
-                    {
-                        let l = self.args(targs, n.loc())?;
-                        let args = self.sema.ast.types.args(l).to_vec();
-                        let name = self.sema.template_name_for(d);
-                        break 'q match self.sema.act_template_id(name, &args, n.loc(), n.loc()) {
-                            Ok(crate::templ::actions::TemplateIdRef::Value(e)) => Ok(e),
-                            _ => Err(SubstFail),
-                        };
-                    }
-                    let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
-                        Some(q) => Some(self.nns(q, n.loc())?),
-                        None => None,
-                    };
-                    if self.sema.kind_of(d) == DeclKind::FunctionTemplate || targs.is_some() {
-                        break 'q Ok(self.sema.builder().unresolved_lookup(
-                            name,
-                            &[d],
-                            false,
-                            nns,
-                            targs,
-                            n.loc(),
-                        ));
-                    }
-                    break 'q Ok(self.sema.build_decl_ref_qualified(d, n.loc(), None, nns));
-                }
-                // An overload set: resolved again at the call.
-                let mut ds = Vec::with_capacity(decls.len());
-                for &d in &decls {
-                    ds.push(self.find_instantiated_decl(d, n.loc())?);
-                }
-                let nns = match self.sema.ast.templates.expr_nns.get(c).copied() {
-                    Some(q) => Some(self.nns(q, n.loc())?),
-                    None => None,
-                };
-                break 'q Ok(self.sema.builder().unresolved_lookup(
-                    name,
-                    &ds,
-                    false,
-                    nns,
-                    targs,
-                    n.loc(),
-                ));
-            };
+            let r = self.qualified_callee(c, &n, name, &decls, targs);
             if let (Ok(r), Some(b)) = (&r, begin) {
                 let _ = self.sema.ast.templates.expr_begin.insert(*r, b);
             }
