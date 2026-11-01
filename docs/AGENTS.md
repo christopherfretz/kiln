@@ -66,7 +66,14 @@ reviewable diff (roughly: one module, one spec section, < ~2k lines).
    (including a branch from before the split), run
    `cargo xtask diag-split --replay` during the merge: it takes main's
    tables and re-applies your branch's added, changed and removed rows by
-   name, then `git add crates/kiln_diag && git commit`.
+   name, then `git add crates/kiln_diag && git commit`. xtask links
+   kiln_diag, so it cannot build while any kiln_diag file (tables or area
+   files such as `groups/umbrellas.rs`) holds conflict markers; first reset
+   exactly the conflicted kiln_diag files to main's side, then replay:
+   `git diff --name-only --diff-filter=U -- crates/kiln_diag | xargs git
+   checkout MERGE_HEAD --` (your rows are replayed from `HEAD`, nothing is
+   lost; code changes outside the tables in those files must be re-applied
+   by hand, the tool warns).
 
 ## Review gates (supervisor)
 

@@ -275,6 +275,9 @@ pub struct TestSpec {
     /// target (its `--target`, else the host) must have; otherwise the test
     /// is a SKIP.
     pub requires_target: Option<String>,
+    /// `verify`: the outcome is clang's `-verify` check of the test's
+    /// `expected-*` comments, under the compiler and the oracle.
+    pub verify: bool,
     /// `requires: clang>=X[.Y[.Z]]`: the least version of every clang the
     /// test runs (the compiler under test, the oracle); otherwise a SKIP.
     pub requires_clang: Option<ClangVersion>,
@@ -398,6 +401,10 @@ struct Parser {
     ast_implicit: bool,
     mem_mib: Option<u64>,
     requires_target: Option<String>,
+    /// Line of `verify` (0: absent).
+    verify_line: usize,
+    /// Line of the first `diag:` / `strict-diags` (0: none).
+    diag_line: usize,
     requires_clang: Option<ClangVersion>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
@@ -438,6 +445,8 @@ impl Parser {
             ast_implicit: false,
             mem_mib: None,
             requires_target: None,
+            verify_line: 0,
+            diag_line: 0,
             requires_clang: None,
             run_only: Vec::new(),
             pp_only: Vec::new(),
@@ -502,6 +511,9 @@ impl Parser {
             }
             "diag" => match parse_diag(value, line) {
                 Ok(d) => {
+                    if self.diag_line == 0 {
+                        self.diag_line = line;
+                    }
                     if d.severity == Severity::Note && self.diags.is_empty() {
                         self.err(
                             line,
@@ -593,7 +605,20 @@ impl Parser {
             self.err(line, format!("`{name}` does not take a compiler qualifier"));
             return None;
         }
+        if name == "verify" {
+            if value.is_some() {
+                self.err(line, "`verify` takes no value");
+            } else if self.verify_line != 0 {
+                self.err(line, "duplicate `verify`");
+            } else {
+                self.verify_line = line;
+            }
+            return None;
+        }
         if name == "strict-diags" {
+            if self.diag_line == 0 {
+                self.diag_line = line;
+            }
             if value.is_some() {
                 self.err(line, "`strict-diags` takes no value");
             } else if self.strict_diags {
@@ -776,6 +801,26 @@ impl Parser {
         list.push(Marker { compiler, reason: reason.to_owned() });
     }
 
+    /// Validates `verify` against `expect` and `diag:`; returns whether
+    /// the test is a `verify` test.
+    fn check_verify(&mut self, expect: Expect) -> bool {
+        if self.verify_line == 0 {
+            return false;
+        }
+        if expect != Expect::CompileOk {
+            let line = self.verify_line;
+            self.err(
+                line,
+                "`verify` only applies to `compile-ok` tests (the outcome is the -verify check)",
+            );
+        }
+        if self.diag_line != 0 {
+            let line = self.diag_line;
+            self.err(line, "`diag:` and `strict-diags` do not apply to `verify` tests (use expected-* comments)");
+        }
+        true
+    }
+
     fn finish(mut self) -> Result<TestSpec, Vec<DirectiveError>> {
         let expect = self.expect.unwrap_or(Expect::CompileOk);
         if expect != Expect::Run {
@@ -793,8 +838,15 @@ impl Parser {
                 self.err(line, format!("`{key}` only applies to `expect: ast`"));
             }
         }
-        if self.oracle.is_some() && !matches!(expect, Expect::Run | Expect::Pp | Expect::Ast) {
-            self.err(self.oracle_line, "`oracle` only applies to `run`, `pp` and `ast` tests");
+        let verify = self.check_verify(expect);
+        if self.oracle.is_some()
+            && !verify
+            && !matches!(expect, Expect::Run | Expect::Pp | Expect::Ast)
+        {
+            self.err(
+                self.oracle_line,
+                "`oracle` only applies to `run`, `pp`, `ast` and `verify` tests",
+            );
         }
         // The oracle is a clang: a test clang cannot compile is not
         // compared with it (`skip(clang)` implies `oracle: none`).
@@ -852,11 +904,13 @@ impl Parser {
             env: self.env,
             // `layout` and `vtables` have no golden: the oracle is their
             // only reference, and `oracle:` does not apply to them.
-            oracle: self.oracle.unwrap_or(match expect {
-                Expect::Run | Expect::Pp => !skip_clang,
-                Expect::Layout | Expect::Vtables => true,
-                _ => false,
-            }),
+            oracle: self.oracle.unwrap_or(
+                if verify || matches!(expect, Expect::Run | Expect::Pp) {
+                    !skip_clang
+                } else {
+                    matches!(expect, Expect::Layout | Expect::Vtables)
+                },
+            ),
             oven: self.oven,
             skip: self.skip,
             xfail: self.xfail,
@@ -867,6 +921,7 @@ impl Parser {
             ast_implicit: self.ast_implicit,
             mem_mib: self.mem_mib,
             requires_target: self.requires_target,
+            verify,
             requires_clang: self.requires_clang,
         })
     }
@@ -1094,6 +1149,28 @@ mod tests {
         assert!(e.iter().any(|e| e.contains("requires a path")), "{e:?}");
     }
 
+    /// spec/harness.md "Directives" (`verify`): a bare flag, only on
+    /// `compile-ok` tests, exclusive with `diag:`/`strict-diags`; the
+    /// oracle defaults on and `oracle: none` turns it off.
+    #[test]
+    fn verify_directive() {
+        let s = ok("//@ verify\n");
+        assert!(s.verify && s.oracle);
+        assert!(!ok("int x;\n").verify);
+        let s = ok("//@ verify\n//@ oracle: none\n");
+        assert!(s.verify && !s.oracle);
+        let e = errs("//@ verify: yes\n");
+        assert_eq!(e, ["line 1: `verify` takes no value"]);
+        let e = errs("//@ verify\n//@ verify\n");
+        assert_eq!(e, ["line 2: duplicate `verify`"]);
+        let e = errs("//@ expect: compile-fail\n//@ verify\n");
+        assert!(e[0].starts_with("line 2: `verify` only applies to `compile-ok`"), "{e:?}");
+        let e = errs("//@ verify\n//@ diag: 3 error \"x\"\n");
+        assert!(e[0].starts_with("line 2: `diag:` and `strict-diags` do not apply"), "{e:?}");
+        let e = errs("//@ strict-diags\n//@ verify\n");
+        assert!(e[0].starts_with("line 1: `diag:` and `strict-diags`"), "{e:?}");
+    }
+
     #[test]
     fn requires_target_directive() {
         let s = ok("//@ expect: run\n//@ requires: target-aarch64\n");
@@ -1184,6 +1261,8 @@ mod tests {
             let s = ok(&format!("//@ expect: {expect}\n//@ skip(clang): x\n//@ oracle: none\n"));
             assert!(!s.oracle, "an explicit oracle: none is redundant, not an error");
         }
+        let s = ok("//@ verify\n//@ skip(clang): hangs\n");
+        assert!(!s.oracle, "skip(clang) implies oracle: none for `verify`");
         let e = errs("//@ expect: run\n//@ oracle: clang\n//@ skip(clang): hangs\n");
         assert_eq!(e, ["line 2: `oracle: clang` contradicts `skip(clang)`"]);
         let e = errs("//@ expect: ast\n//@ skip(clang): hangs\n//@ oracle: clang\n");
@@ -1357,7 +1436,7 @@ mod tests {
         let e = errs("//@ stdout: x\n");
         assert_eq!(e, ["line 1: `stdout` only applies to `expect: run`"]);
         let e = errs("//@ oracle: clang\n");
-        assert_eq!(e, ["line 1: `oracle` only applies to `run`, `pp` and `ast` tests"]);
+        assert_eq!(e, ["line 1: `oracle` only applies to `run`, `pp`, `ast` and `verify` tests"]);
         let e = errs("//@ diag: 1 note \"x\"\n");
         assert!(e[0].contains("must follow"));
         let e = errs("//@ expect: run\n//@ stdout: a\n//@ stdout-file: b\n");
@@ -1442,7 +1521,10 @@ mod tests {
             assert_eq!(s.expect.as_str(), text);
             assert!(s.oracle, "the oracle is the only reference of `{text}`");
             let e = errs(&format!("//@ expect: {text}\n//@ oracle: none\n"));
-            assert_eq!(e, ["line 2: `oracle` only applies to `run`, `pp` and `ast` tests"]);
+            assert_eq!(
+                e,
+                ["line 2: `oracle` only applies to `run`, `pp`, `ast` and `verify` tests"]
+            );
             let e = errs(&format!("//@ expect: {text}\n//@ ast-filter: f\n"));
             assert_eq!(e, ["line 2: `ast-filter` only applies to `expect: ast`"]);
         }

@@ -188,6 +188,16 @@ impl Substituter<'_, '_, '_> {
             {
                 self.sema.ast.templates.set_instantiated_from(x, t);
             }
+            // A friend template constrained on the enclosing class's
+            // parameters ([temp.friend]/9) keeps the pattern's constraints,
+            // checked with this specialization's levels outside its own,
+            // as a member template's (clang `getTemplateInstantiationArgs`
+            // through the friend's lexical context; WP-231).
+            if !self.sema.associated_constraints(t).is_empty()
+                && !self.sema.inst.concepts.member_constraints.contains_key(&x)
+            {
+                self.sema.inst.concepts.member_constraints.insert(x, (t, self.args.clone()));
+            }
         }
         Ok(fd)
     }

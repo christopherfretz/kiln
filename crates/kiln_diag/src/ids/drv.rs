@@ -31,3 +31,4 @@ drv_unknown_argument = Error (1) "unknown argument: '{0}'";
 drv_unknown_argument_suggest = Error (2) "unknown argument '{0}'; did you mean '{1}'?";
 drv_unsupported_option_argument = Error (2) "unsupported argument '{1}' to option '{0}'";
 drv_unsupported_target = Error (1) "unsupported target '{0}' (kiln supports aarch64 and x86_64 Linux)";
+drv_verify_prefix_spelling = Note (0) "-verify prefixes must start with a letter and contain only alphanumeric characters, hyphens, and underscores";

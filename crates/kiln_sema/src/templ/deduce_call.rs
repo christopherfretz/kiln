@@ -903,6 +903,10 @@ impl Sema<'_, '_> {
                 flags = flags.union(TdfFlags::PARAM_WITH_REFERENCE_TYPE);
             }
             _ => {
+                // /2: P's top-level cv is ignored (`void f(const T t)`; the
+                // written prototype keeps it, clang
+                // `AdjustFunctionParmAndArgTypesForDeduction`; WP-231).
+                p = t.unqualified(p);
                 if t.is_array(at) {
                     let e = t.element(at).unwrap_or(QualType::ERROR);
                     at = t.pointer_to(e);

@@ -846,7 +846,11 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   the base whose constructor is ultimately inherited, clang
   `InheritedConstructorInfo`), every other subobject as a defaulted default
   constructor would. The exception specification is clang's
-  `ComputeInheritingCtorExceptionSpec`.
+  `ComputeInheritingCtorExceptionSpec`. An inherited constexpr
+  constructor or constructor template that is not a copy or move
+  constructor counts as a constexpr constructor of the derived class for
+  the literal-type test ([basic.types.general]/10.5.2, clang `addedMember`
+  on a `ConstructorUsingShadowDecl`; `inherited_constexpr_ctor`, WP-241).
 - **Virtual bases** ([basic.types.general]/10). A class with a virtual
   base is not a literal type: a `constexpr` variable of it (or of an
   array of it) is clang's `RequireLiteralType` error "constexpr variable
@@ -1065,9 +1069,10 @@ through a local reference is `returning reference to local temporary
 object` (reference return) or `returning address of local temporary
 object`, with the same notes. Reference parameters, statics,
 `->` access, captured variables named inside a lambda and aggregate
-(non-lambda) prvalues are not followed. Kiln's per-`(id, span)`
-deduplication (diag.md §7.4) drops clang's repeat of a non-dependent
-return's warning in each instantiation.
+(non-lambda) prvalues are not followed. The warning is
+`per_instantiation` (diag.md §7.4): as in clang, a non-dependent return
+warns in the template definition and once more in each instantiation
+(WP-231).
 
 **Dangling local pointers (WP-227, clang `LK_Extended` on a pointer
 variable).** `check_dangling_pointer_var(v, init)` (`stack_addr.rs`) runs

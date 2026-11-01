@@ -837,7 +837,7 @@ the dependent template-specialization types there are the ones above
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
-`tests/mangle/constraints.cpp` (84 symbols, both triples):
+`tests/mangle/constraints.cpp` (86 symbols, both triples):
 - **`<template-param-decl>`** of an overloadable function template's
   parameter when clang's `needToMangleTemplateParam` says so: `Ty` is
   never written alone; a type-constrained type parameter is `Tk
@@ -872,9 +872,18 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
 - **Member-like constrained friends** (a non-template friend with a
   trailing requires-clause, [temp.friend]/9) mangle in their lexical
   class with `F` before the name: `_ZN1XIiEF2frES0_Q1CIT_E`.
-- A constraint expression kiln cannot mangle yet (a braced `new T{...}`)
-  falls back to `Qu7unknown`, so the symbol stays unique but differs
-  from clang.
+- **Braced new-initializers (WP-231).** `new T{a, b}` is `nw _ <type>
+  il <braced-expression>* E` (nested braced lists recurse as `il ... E`,
+  packs as `sp`); an array new `new T[2]{...}` is `na _ <element type>
+  il ... E` without the bound, as clang 19. A constraint expression kiln
+  still cannot mangle falls back to `Qu7unknown`, so the symbol stays
+  unique but differs from clang.
+- **Not implemented:** clang 19's member-like friend *template* mangling
+  (`F` before the name when a friend template's constraint names an
+  enclosing template parameter, and a nested name with no class prefix
+  for a specialization whose friend declaration has a trailing
+  requires-clause: `_ZNF1fIiEEi1XIiET_Q1CIS2_E`, `_ZF1gIiQ1CIT_EEi1XIiES0_`,
+  `_ZN1pIiEEi1XIiET_Q1CITL0__E`); kiln mangles these unscoped without `F`.
 - **Anonymous unions at namespace scope (WP-204).** The unnamed variable
   of a namespace-scope anonymous union ([class.union.anon]/2) is mangled
   with the source name of the union's first named data member, found

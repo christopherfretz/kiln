@@ -138,6 +138,15 @@ fn dedup_context() {
     endif(third, 7).emit(&e);
     endif(third, 0).emit(&e);
     assert_eq!(mem.take().len(), 5);
+    // `per_instantiation`: an instantiation repeats the definition's
+    // diagnostic, still once per context.
+    let fourth = sp(&sm, f, 4, 2, 5);
+    endif(fourth, 0).per_instantiation().emit(&e);
+    assert!(e.would_emit(&endif(fourth, 7).per_instantiation()));
+    endif(fourth, 7).per_instantiation().emit(&e);
+    endif(fourth, 7).per_instantiation().emit(&e); // dropped
+    endif(fourth, 9).per_instantiation().emit(&e);
+    assert_eq!(mem.take().len(), 3);
     // would_emit is false for an ignored diagnostic.
     let opts = DiagOptions::from_args(["-Wno-#warnings"]);
     let e = DiagEngine::new(&sm, &opts, MemorySink::new());

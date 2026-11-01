@@ -343,11 +343,12 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return Vec::new();
             }
+            let tl = self.loc();
             let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::NoDeduction) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
-            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs);
+            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, tl);
             self.s.note_alias_decl_loc(d, loc);
             self.expect_semi_after("alias declaration");
             return vec![d];
