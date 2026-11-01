@@ -1247,6 +1247,10 @@ impl Substituter<'_, '_, '_> {
                         if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
                             sub.sema.nsdmi_this.pop();
                         }
+                        // clang `InstantiateInClassInitializer`: the field
+                        // is invalid, so a constructor using the
+                        // initializer is quiet ([class.base.init]/9.1).
+                        sub.sema.ast.decls.set_flags(field, DeclFlags::INVALID);
                     }
                 }
             }

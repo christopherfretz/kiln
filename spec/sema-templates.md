@@ -1069,6 +1069,13 @@ Later uses of it are silent.
   clang's error: "default member initializer for 'x' needed within
   definition of enclosing class 'A<int>' outside of member functions".
 - The frame is `DefaultMemberInitializerInstantiation`.
+- An NSDMI whose substitution fails makes its field invalid (clang
+  `InstantiateInClassInitializer`), so a constructor or aggregate
+  initialization that uses it reports nothing more (WP-220;
+  `default_member_init` returns `None` for an invalid field). As landed,
+  kiln still instantiates NSDMIs with the class, so the error's notes
+  name the class instantiation, not the initializer and the constructor
+  (`tests/conformance/class.mem/nsdmi-subst-failure.cpp`).
 
 ### 4.10 Alias templates
 

@@ -640,6 +640,9 @@ impl Sema<'_, '_> {
         ctor: DeclId,
         loc: Loc,
     ) -> Option<ExprId> {
+        if self.ast.decls.get(field).has(DeclFlags::INVALID) {
+            return None;
+        }
         if self.ast.decls.field(field).and_then(|x| x.init).is_none() {
             // todo(WP-067b): clang's `default member initializer for 'x'
             // needed within definition of enclosing class` (the
