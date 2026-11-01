@@ -637,6 +637,7 @@ diag_ids! {
     sema_default_init_const = Error (1) "default initialization of an object of const type {0}";
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
     sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
+    sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
     sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
@@ -1412,6 +1413,8 @@ diag_ids! {
     note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
     note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
     note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
+    note_non_literal_virtual_base = Note (2) "{0:struct|interface|class} with virtual base {1:class|classes} is not a literal type";
+    note_constexpr_virtual_base_here = Note (0) "virtual base class declared here";
     // GNU asm statements (WP-140)
     parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
     parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', or '('";

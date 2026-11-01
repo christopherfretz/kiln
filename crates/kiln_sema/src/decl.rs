@@ -3049,6 +3049,10 @@ impl Sema<'_, '_> {
         }
         // clang reports at the variable (`CheckCompleteVariableDeclaration`).
         let loc = self.ast.decls.get(v).loc();
+        if self.constexpr_var_virtual_base(v, loc) {
+            self.ast.decls.finish_eval(v, None);
+            return;
+        }
         if self.has_errors_in(e)
             || self.expr_is_value_dependent(e)
             || self.ast.decls.get(v).ty().is_some_and(|t| self.is_dependent_type(t))
@@ -3073,6 +3077,35 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+
+    /// [dcl.constexpr]/6: a `constexpr` variable of a class type (or
+    /// array of it) with a virtual base has a non-literal type
+    /// ([basic.types.general]/10); clang `RequireLiteralType`'s notes.
+    /// Other non-literal types are left to the evaluation (WP-146).
+    fn constexpr_var_virtual_base(&mut self, v: DeclId, loc: Loc) -> bool {
+        let Some(q) = self.ast.decls.get(v).ty() else { return false };
+        if self.is_dependent_type(q) {
+            return false;
+        }
+        let Some(r) = self.ast.types.as_record(self.base_element(q)) else { return false };
+        let Some(def) = self.ast.definition(r) else { return false };
+        if !self.defn_bits(def).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return false;
+        }
+        let vbases = self.virtual_bases(def);
+        let tag = 2 * u8::from(self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Class));
+        let mut msg =
+            self.diag(DiagId::sema_constexpr_var_non_literal, loc).arg(self.ty_arg(q)).with_note(
+                self.diag(DiagId::note_non_literal_virtual_base, self.ast.decls.get(def).loc())
+                    .arg(tag)
+                    .arg(u8::from(vbases.len() != 1)),
+            );
+        for (_, b) in vbases {
+            msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+        }
+        self.emit(msg);
+        true
     }
 
     pub(crate) fn has_errors_in(&self, e: ExprId) -> bool {
