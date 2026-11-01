@@ -685,6 +685,40 @@ impl Parser<'_, '_> {
         ok.then(|| self.s.act_on_builtin_bit_cast(ty, e, loc, rparen))
     }
 
+    /// `__builtin_convertvector ( assignment-expression , type-id )`
+    /// (clang `ParseBuiltinPrimaryExpression`).
+    fn parse_builtin_convert_vector(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_convertvector'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let Some(e) = self.parse_assignment_expr() else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        if self.eat(Punct::Comma).is_none() {
+            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("','");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let ty = self.parse_type_id()?;
+        if !self.at(Punct::RParen) {
+            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("')'");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_convert_vector(e, ty, loc, rparen))
+    }
+
     /// `__builtin_FILE ( )` and the other source-location builtins (clang
     /// `ParseBuiltinPrimaryExpression`; [support.srcloc.cons]).
     fn parse_source_loc_expr(&mut self, kind: SourceLocKind) -> PExpr {
@@ -1056,6 +1090,7 @@ impl Parser<'_, '_> {
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
+                Kw::BuiltinConvertVector => self.parse_builtin_convert_vector(),
                 Kw::Func | Kw::FunctionName | Kw::PrettyFunction => {
                     self.bump();
                     let kind = match k {

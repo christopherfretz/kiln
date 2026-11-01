@@ -530,6 +530,10 @@ impl Sema<'_, '_> {
                 ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                     e = ex.operand(e);
                 }
+                // clang `getDeducedParameterFromExpr` looks through the
+                // substitution of an alias template's parameter (WP-156:
+                // `__simd_vector<_Tp, _Np>`).
+                ExprKind::SubstNonTypeTemplateParmExpr => e = ex.subst_replacement(e),
                 ExprKind::DeclRefExpr => {
                     let decl = ex.decl(e);
                     if self.ast.decls.get(decl).kind() != DeclKind::NonTypeTemplateParm {
@@ -936,11 +940,14 @@ impl Sema<'_, '_> {
     fn nttp_param_type(&self, e: Option<ExprId>) -> Option<QualType> {
         let mut e = e?;
         let ex = &self.ast.exprs;
-        while matches!(
-            ex.get(e).kind(),
-            ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr
-        ) {
-            e = ex.operand(e);
+        loop {
+            match ex.get(e).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                    e = ex.operand(e);
+                }
+                ExprKind::SubstNonTypeTemplateParmExpr => e = ex.subst_replacement(e),
+                _ => break,
+            }
         }
         let ty = self.ast.decls.get(ex.decl(e)).ty()?;
         (!self.ast.types.is_dependent(ty)).then_some(ty)

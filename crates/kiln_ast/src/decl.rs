@@ -2831,6 +2831,23 @@ pub mod builtin {
     /// `__builtin_unreachable` (clang `Builtins.td` signature `v`).
     pub const UNREACHABLE: u32 = 1347;
 
+    // WP-156: the vector reductions (clang `Builtins.td` signature `v.`,
+    // custom type-checking: the call has the vector's element type).
+    /// `__builtin_reduce_add`.
+    pub const REDUCE_ADD: u32 = 991;
+    /// `__builtin_reduce_and`.
+    pub const REDUCE_AND: u32 = 992;
+    /// `__builtin_reduce_max`.
+    pub const REDUCE_MAX: u32 = 993;
+    /// `__builtin_reduce_min`.
+    pub const REDUCE_MIN: u32 = 994;
+    /// `__builtin_reduce_mul`.
+    pub const REDUCE_MUL: u32 = 995;
+    /// `__builtin_reduce_or`.
+    pub const REDUCE_OR: u32 = 996;
+    /// `__builtin_reduce_xor`.
+    pub const REDUCE_XOR: u32 = 997;
+
     /// `__builtin_fabs` (clang `Builtins.td` signature `dd`).
     pub const FABS: u32 = 550;
     /// `__builtin_fabsf` (clang `Builtins.td` signature `ff`).
@@ -3082,6 +3099,14 @@ pub mod builtin {
         row(OPERATOR_NEW, "__builtin_operator_new", "v*z", C | T),
         row(OPERATOR_DELETE, "__builtin_operator_delete", "vv*", N | T),
         row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
+        // WP-156: the vector reductions.
+        row(REDUCE_ADD, "__builtin_reduce_add", "v.", N | C | T),
+        row(REDUCE_AND, "__builtin_reduce_and", "v.", N | C | T),
+        row(REDUCE_MAX, "__builtin_reduce_max", "v.", N | C | T),
+        row(REDUCE_MIN, "__builtin_reduce_min", "v.", N | C | T),
+        row(REDUCE_MUL, "__builtin_reduce_mul", "v.", N | C | T),
+        row(REDUCE_OR, "__builtin_reduce_or", "v.", N | C | T),
+        row(REDUCE_XOR, "__builtin_reduce_xor", "v.", N | C | T),
     ];
 
     /// The C library math functions ([c.math], C23 7.12) that are only

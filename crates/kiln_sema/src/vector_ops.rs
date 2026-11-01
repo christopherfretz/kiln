@@ -699,3 +699,80 @@ pub(crate) fn compound_base(op: BinaryOp) -> BinaryOp {
         other => other,
     }
 }
+
+impl Sema<'_, '_> {
+    /// `__builtin_convertvector(e, ty)` (clang `Sema::ConvertVectorExpr`):
+    /// `e` a vector, `ty` a vector type with as many elements. The operand
+    /// stays unconverted, as in clang's AST.
+    pub fn act_on_convert_vector(&mut self, e: ExprId, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        if self.is_err_expr(e) || self.is_error_type(ty) {
+            return self.recover(ty, &[e], loc);
+        }
+        let src = self.ety(e);
+        let src_dep = self.ast.types.is_dependent(src);
+        let dst_dep = self.ast.types.is_dependent(ty);
+        let sv = self.vector_parts(src);
+        if sv.is_none() && !src_dep {
+            self.error(DiagId::sema_convertvector_non_vector, loc);
+            return self.recover_err(&[e], loc);
+        }
+        let dv = self.vector_parts(ty);
+        if dv.is_none() && !dst_dep {
+            self.error(DiagId::sema_convertvector_non_vector_type, loc);
+            return self.recover_err(&[e], loc);
+        }
+        if let (Some(s), Some(d)) = (sv, dv)
+            && !src_dep
+            && !dst_dep
+            && s.count != d.count
+        {
+            self.error(DiagId::sema_convertvector_incompatible_vector, loc);
+            return self.recover_err(&[e], loc);
+        }
+        self.builder().convert_vector(e, ty, loc, rparen)
+    }
+
+    /// `__builtin_reduce_{add,mul,and,or,xor,min,max}(v)` (clang
+    /// `CheckBuiltinFunctionCall`, `PrepareBuiltinReduceMathOneArgCall`):
+    /// one argument after the usual unary conversions, a vector (of
+    /// integers, except for `min`/`max`); the call has the vector's
+    /// element type.
+    pub(crate) fn builtin_reduce(
+        &mut self,
+        id: u32,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        use kiln_ast::decl::builtin as b;
+        if args.len() != 1 {
+            let (d, at) = if args.is_empty() {
+                (DiagId::sema_call_too_few_args, rparen)
+            } else {
+                (DiagId::sema_call_too_many_args, self.begin_loc(args[1]))
+            };
+            let msg = self.diag(d, at).arg(1).arg(args.len());
+            self.emit(msg);
+            return None;
+        }
+        let a = conv::usual_unary_conversions(self, args[0]);
+        let t = self.ety(a);
+        let top = self.ast.types.desugar_top(t);
+        let elem = match self.ast.types.view(top.ty()) {
+            TypeView::Vector { elem, .. } => Some(elem),
+            _ => None,
+        };
+        let ints_only = !matches!(id, b::REDUCE_MIN | b::REDUCE_MAX);
+        let ok = elem.is_some_and(|el| !ints_only || conv::rank::is_integral_or_unscoped_enum(self, el));
+        let Some(elem) = elem.filter(|_| ok) else {
+            let what = if ints_only { "vector of integers" } else { "vector type" };
+            let msg = self
+                .diag(DiagId::sema_builtin_arg_must_be, self.begin_loc(a))
+                .arg(0)
+                .arg(what)
+                .arg(self.ty_arg(t));
+            self.emit(msg);
+            return None;
+        };
+        Some((vec![a], elem))
+    }
+}

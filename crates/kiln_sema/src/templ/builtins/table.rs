@@ -380,6 +380,14 @@ pub static TABLE: &[Row] = &[
     f("__builtin_abs", DONE, Oven::No),
     f("__builtin_labs", DONE, Oven::No),
     f("__builtin_llabs", DONE, Oven::No),
+    // WP-156: vectors
+    f("__builtin_reduce_add", DONE, Oven::No),
+    f("__builtin_reduce_and", DONE, Oven::No),
+    f("__builtin_reduce_max", DONE, Oven::No),
+    f("__builtin_reduce_min", DONE, Oven::No),
+    f("__builtin_reduce_mul", DONE, Oven::No),
+    f("__builtin_reduce_or", DONE, Oven::No),
+    f("__builtin_reduce_xor", DONE, Oven::No),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
