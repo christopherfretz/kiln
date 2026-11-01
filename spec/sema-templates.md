@@ -3069,10 +3069,16 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   template parameters than its corresponding template template parameter`
   at the argument with the arity / kind / pack / non-type-type note and
   `template parameter is declared here`
-  (`tests/conformance/temp.arg.template/`). Gap: a non-type parameter
-  whose type depends on an outer parameter (`template<class T,
-  template<T> class P>`) is compared unsubstituted, so `DP<int, IP>` with
-  `template<int*> class IP` is accepted where clang rejects it.
+  (`tests/conformance/temp.arg.template/`). A non-type parameter of P
+  whose type depends on an earlier parameter of the enclosing template
+  (`template<class T, template<T> class P>`) is compared with the prior
+  arguments substituted (`prior_levels`), as clang substitutes them into
+  P before matching; A's parameters are never substituted, and the roles
+  swap with the substitution in the nested recursion
+  (`dependent-nttp-type.cpp`). Gap: a mismatch found while instantiating
+  a member (`DP<V, IP>` in `Outer<int>`) is reported at the template-id,
+  not at the argument, since substituted types keep no argument
+  locations.
 - P0846 (ADL for an unknown name followed by `<`) is not implemented.
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
