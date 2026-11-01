@@ -130,6 +130,12 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        // [dcl.init.list]/3.1: a designated-initializer-list needs an
+        // aggregate class, before any constructor is considered (clang
+        // `FK_DesignatedInitForNonAggregate`, ahead of phase 1).
+        if l.items.iter().any(|i| !i.designator.is_empty()) {
+            return Some(self.designated_non_aggregate(ty, l, at));
+        }
         if !l.items.is_empty()
             && let Some(e) = self.std_initializer_list_init(ty, l, at)
         {
@@ -137,12 +143,6 @@ impl Sema<'_, '_> {
         }
         if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end) {
             return Some(e);
-        }
-        if let Some(item) = l.items.iter().find(|i| !i.designator.is_empty()) {
-            // todo(WP-067b follow-up): designators of a non-aggregate.
-            self.unsupported("this list-initialization of a class", item.value.loc(self));
-            let flat = Self::list_exprs(l);
-            return Some(self.recover(ty, &flat, l.lbrace));
         }
         let mut args = Vec::with_capacity(l.items.len());
         for item in &l.items {
@@ -163,6 +163,42 @@ impl Sema<'_, '_> {
         let mut site = ConstructSite::at(at);
         site.temp_end = temp_end;
         self.construct_class(ty, &args, style, site)
+    }
+
+    /// "initialization of non-aggregate type 'T' with a designated
+    /// initializer list" at the entity `at`, the list underlined
+    /// ([dcl.init.list]/3.1); the result is a recovery expression.
+    pub(crate) fn designated_non_aggregate(&mut self, ty: QualType, l: &InitList, at: Loc) -> ExprId {
+        let end = self.token_end(l.rbrace).unwrap_or(l.rbrace);
+        let msg = self
+            .diag(DiagId::sema_designated_init_non_aggregate, at)
+            .arg(self.ty_arg(ty))
+            .range(kiln_source::Span::new(l.lbrace, end));
+        self.emit(msg);
+        let flat = Self::list_exprs(l);
+        self.recover(ty, &flat, l.lbrace)
+    }
+
+    /// Whether the token before `at` is `=` (from the source text).
+    fn preceded_by_equal(&self, at: Loc) -> bool {
+        let sm = self.diags.sm();
+        let Some((file, pos)) = sm.offset_of(at) else { return false };
+        let text = sm.text(file).as_bytes();
+        let before = text.get(..pos as usize).unwrap_or_default();
+        before.iter().rev().find(|c| !c.is_ascii_whitespace()) == Some(&b'=')
+    }
+
+    /// The `.` of the field designator whose name is at `name`
+    /// (`name` itself when the source text has none).
+    fn period_before(&self, name: Loc) -> Loc {
+        let sm = self.diags.sm();
+        let Some((file, pos)) = sm.offset_of(name) else { return name };
+        let text = sm.text(file).as_bytes();
+        let before = text.get(..pos as usize).unwrap_or_default();
+        match before.iter().rposition(|c| !c.is_ascii_whitespace()) {
+            Some(i) if before[i] == b'.' => u32::try_from(i).map_or(name, |o| sm.loc(file, o)),
+            _ => name,
+        }
     }
 
     /// [over.match.list]/1.1 (phase 1): the initializer-list
@@ -849,11 +885,15 @@ impl Sema<'_, '_> {
         {
             return e;
         }
+        let designated = l.items.iter().any(|i| !i.designator.is_empty());
         if self.ast.types.is_reference(ty) {
             return self.reference_list_init(ty, l, entity, InitStyle::CopyList);
         }
         // Scalar ([dcl.init.list]/3.9-10).
         let at = entity.unwrap_or(l.lbrace);
+        if designated && !self.is_error_type(ty) {
+            return self.designated_non_aggregate(ty, l, at);
+        }
         if let Some(e) = self.class_element_list_init(ty, l, ConvCtx::Initialization, at, None) {
             return e;
         }
@@ -875,9 +915,8 @@ impl Sema<'_, '_> {
                 let list = self.ast.exprs.init_list_inits(e);
                 inits.extend(self.ast.lists.iter::<ExprId>(list));
             }
-            Some(item) => {
-                self.unsupported("a designator in a scalar initializer", item.value.loc(self));
-            }
+            // A designated list was rejected above.
+            Some(_) => {}
         }
         if let Some(extra) = l.items.get(1) {
             let at = entity.unwrap_or_else(|| extra.value.loc(self));
@@ -953,6 +992,14 @@ impl Sema<'_, '_> {
         let ur = conv::strip_cv(self, r);
         let cr = self.ast.types.canonical(ur);
         let at = entity.unwrap_or(l.lbrace);
+        // A reference to an aggregate takes a designated list (as clang
+        // and GCC); otherwise the reference type is named.
+        if l.items.iter().any(|i| !i.designator.is_empty())
+            && !self.is_aggregate(ur)
+            && !self.is_error_type(ur)
+        {
+            return self.designated_non_aggregate(ty, l, at);
+        }
         let lref =
             matches!(self.ast.types.canonical_view(ty), kiln_ast::types::TypeView::LValueRef(_));
         let q = self.ast.types.effective_quals(r);
@@ -1093,8 +1140,16 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         match &items[*pos].value {
             InitValue::List(sub) => {
+                // `.m{...}` (no `=`) is located at the designator, as
+                // clang; `.m = {...}` and `{...}` at the brace.
+                let entity = match items[*pos].designator.first() {
+                    Some(Designator::Field(_, d)) if !self.preceded_by_equal(sub.lbrace) => {
+                        Some(self.period_before(*d))
+                    }
+                    _ => None,
+                };
                 *pos += 1;
-                self.init_from_list(ty, sub)
+                self.init_from_list_at(ty, sub, entity)
             }
             InitValue::Expr(e) => {
                 let e = *e;
