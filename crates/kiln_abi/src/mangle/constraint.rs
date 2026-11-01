@@ -1,0 +1,384 @@
+//! Constrained templates (spec/abi.md §8.16, WP-204): the
+//! `<template-param-decl>` forms `Ty`/`Tk`/`Tt` (clang
+//! `mangleTemplateParamDecl`, cxx-abi issues 24 and 47), `Dk`/`DK`
+//! placeholder types, requires-clauses (`Q <expression>`) after a
+//! function template's arguments and after a function's bare type, and
+//! the constraint expressions they contain: concept-ids as unresolved
+//! names, fold-expressions, requires-expressions and references to
+//! function and requires-expression parameters (`fp`/`fL`).
+//!
+//! Template parameters inside a constraint keep their declared depth
+//! (constraints are not substituted when a member is instantiated), so
+//! they mangle with it: `TL0__` for the first parameter at depth 1, as
+//! clang's `mangleTemplateParameter`.
+
+use super::{AnonIds, Mangler, Structor};
+use kiln_ast::decl::DeclKind;
+use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind};
+use kiln_ast::ids::{ArgListId, DeclId, ExprId, TemplateParamListId};
+use kiln_ast::templates::Requirement;
+use kiln_ast::types::{ArgView, TemplateName};
+
+/// Where the requires-clause being mangled sits; it decides the
+/// `fp`/`fL` nesting of parameter references (clang's
+/// `FunctionTypeDepthState` around `mangleRequiresClause`).
+#[derive(Clone, Debug, Default)]
+pub(super) struct ReqCtx {
+    /// A function's trailing requires-clause (mangled after the bare
+    /// function type, inside its prototype), not a template-head's.
+    trailing: bool,
+    /// clang's "in result type" bit: set for a trailing clause and while
+    /// a requires-expression's parameter types are mangled, cleared
+    /// after them.
+    in_result: bool,
+    /// The bodies of the enclosing requires-expressions with parameters,
+    /// outermost first.
+    scopes: Vec<DeclId>,
+}
+
+impl Mangler<'_, '_> {
+    /// The concept and written arguments of type parameter `p`'s
+    /// immediately-declared constraint (a `ConceptSpecializationExpr`,
+    /// or a fold over one for a pack), without the implicit first
+    /// argument.
+    fn parm_constraint(&self, p: DeclId) -> Option<(DeclId, Vec<ArgView>)> {
+        let ast = self.ast;
+        let mut c = ast.template_parm(p)?.constraint?;
+        if ast.exprs.get(c).kind() == ExprKind::CXXFoldExpr {
+            c = ExprId::try_new(ast.exprs.get(c).a())?;
+        }
+        let x = ast.exprs.get(c);
+        if x.kind() != ExprKind::ConceptSpecializationExpr {
+            return None;
+        }
+        let concept = DeclId::try_new(x.a())?;
+        let args = ArgListId::try_new(x.b())
+            .map(|l| ast.types.args(l).iter().skip(1).map(|a| a.view()).collect())
+            .unwrap_or_default();
+        Some((concept, args))
+    }
+
+    /// Whether type parameter `p` has a type-constraint.
+    pub(super) fn is_constrained_type_parm(&self, p: DeclId) -> bool {
+        self.ast.template_parm(p).is_some_and(|x| x.constraint.is_some())
+    }
+
+    /// <type-constraint> (clang `mangleTypeConstraint`): the concept's
+    /// template name and arguments, or, without arguments, its unscoped
+    /// (not substitutable) or nested name.
+    pub(super) fn type_constraint(&mut self, concept: DeclId, args: &[ArgView]) {
+        let saved = std::mem::replace(&mut self.real_depth, true);
+        let at_top = self.parent(concept).is_none_or(|p| {
+            self.ast.decls.get(p).kind() == DeclKind::TranslationUnit || self.is_std(p)
+        });
+        let std = self.parent(concept).is_some_and(|p| self.is_std(p));
+        if !args.is_empty() {
+            if at_top {
+                self.unscoped_template(concept, std);
+            } else {
+                self.out.push('N');
+                self.template_prefix(concept, None, Structor::Complete);
+            }
+            self.arg_views(args);
+            if !at_top {
+                self.out.push('E');
+            }
+        } else if at_top {
+            if std {
+                self.out.push_str("St");
+            }
+            self.unqualified(concept, Structor::Complete);
+        } else {
+            self.out.push('N');
+            if let Some(p) = self.parent(concept) {
+                self.prefix(p, None);
+            }
+            self.unqualified(concept, Structor::Complete);
+            self.out.push('E');
+        }
+        self.real_depth = saved;
+    }
+
+    /// `I <template-arg>* E` from argument views.
+    fn arg_views(&mut self, args: &[ArgView]) {
+        self.out.push('I');
+        for a in args {
+            self.template_arg(*a);
+        }
+        self.out.push('E');
+    }
+
+    /// <template-param-decl> of type or template template parameter `p`
+    /// (non-type parameters are [`Mangler::template_param_decl`]'s).
+    pub(super) fn type_or_template_param_decl(&mut self, p: DeclId) {
+        let ast = self.ast;
+        let pack = ast.template_parm(p).is_some_and(|x| x.pack);
+        match ast.decls.get(p).kind() {
+            DeclKind::TemplateTypeParm => {
+                if pack {
+                    self.out.push_str("Tp");
+                }
+                if let Some((c, args)) = self.parm_constraint(p) {
+                    self.out.push_str("Tk");
+                    self.type_constraint(c, &args);
+                } else {
+                    self.out.push_str("Ty");
+                }
+            }
+            DeclKind::TemplateTemplateParm => {
+                if pack {
+                    self.out.push_str("Tp");
+                }
+                match ast.template_parm(p).and_then(|x| x.params) {
+                    Some(l) => self.template_param_list(l),
+                    None => self.out.push_str("TtE"),
+                }
+            }
+            _ => self.template_param_decl(p),
+        }
+    }
+
+    /// `Tt <template-param-decl>* [Q <requires-clause>] E` (clang
+    /// `mangleTemplateParameterList`).
+    fn template_param_list(&mut self, l: TemplateParamListId) {
+        let ast = self.ast;
+        let list = *ast.templates.param_list(l);
+        self.out.push_str("Tt");
+        let params: Vec<DeclId> = ast.lists.iter::<DeclId>(list.params).collect();
+        for p in params {
+            self.type_or_template_param_decl(p);
+        }
+        if let Some(r) = list.requires {
+            self.requires_clause(r, false);
+        }
+        self.out.push('E');
+    }
+
+    /// Whether template template parameter `p`'s template-head differs
+    /// from that of the template argument `a` (clang
+    /// `needToMangleTemplateParam`; heads are compared by their mangling,
+    /// ignoring depth).
+    pub(super) fn template_head_differs(&mut self, p: DeclId, a: ArgView) -> bool {
+        let ast = self.ast;
+        let n = match a {
+            ArgView::Pack(l) => match ast.types.args(l).first() {
+                None => return true,
+                Some(x) => return self.template_head_differs(p, x.view()),
+            },
+            ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. } => n,
+            _ => return true,
+        };
+        let n = ast.types.canonical_template_name(n);
+        let TemplateName::Template(t) = ast.types.template_name_view(n) else { return true };
+        let (Some(pl), Some(info)) =
+            (ast.template_parm(p).and_then(|x| x.params), ast.template_info(t))
+        else {
+            return true;
+        };
+        let head = |anon: &mut AnonIds, l: TemplateParamListId| {
+            let mut m = Mangler::new(ast, anon, "");
+            m.head_only = true;
+            m.template_param_list(l);
+            m.out
+        };
+        let ph = head(self.anon, pl);
+        let ah = head(self.anon, info.params);
+        ph != ah
+    }
+
+    /// `Q <expression>`: a requires-clause.
+    pub(super) fn requires_clause(&mut self, r: ExprId, trailing: bool) {
+        let ctx = ReqCtx { trailing, in_result: trailing, scopes: Vec::new() };
+        let saved_ctx = self.req.replace(ctx);
+        let saved_depth = std::mem::replace(&mut self.real_depth, true);
+        let (len, subs) = (self.out.len(), self.subs.len());
+        self.out.push('Q');
+        if !self.expression(r) {
+            // No encoding yet: keep the clause visible (and distinct from
+            // an unconstrained overload) without a wrong partial one.
+            self.out.truncate(len + 1);
+            self.subs.truncate(subs);
+            self.out.push_str("u7unknown");
+        }
+        self.real_depth = saved_depth;
+        self.req = saved_ctx;
+    }
+
+    /// The requires-clause of function template `t`'s template-head, when
+    /// one exists.
+    pub(super) fn head_requires(&self, t: DeclId) -> Option<ExprId> {
+        let info = self.ast.template_info(t)?;
+        self.ast.templates.param_list(info.params).requires
+    }
+
+    /// A `ConceptSpecializationExpr` in an expression: an unresolved name
+    /// `<source-name> <template-args>` with the arguments as written
+    /// (clang 18+; a converted pack is spelled out).
+    pub(super) fn concept_id_expr(&mut self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let x = ast.exprs.get(e);
+        let Some(concept) = DeclId::try_new(x.a()) else { return false };
+        if let Some(&nns) = ast.templates.expr_nns.get(e)
+            && !self.unresolved_prefix(nns, false)
+        {
+            return false;
+        }
+        let name = super::decl_name(ast, concept);
+        self.source_name(&name);
+        let Some(l) = ArgListId::try_new(x.b()) else { return true };
+        let mut flat = Vec::new();
+        for a in ast.types.args(l) {
+            match a.view() {
+                ArgView::Pack(p) => flat.extend(ast.types.args(p).iter().map(|x| x.view())),
+                v => flat.push(v),
+            }
+        }
+        self.arg_views(&flat);
+        true
+    }
+
+    /// A fold-expression: `fl`/`fr` (unary) or `fL`/`fR` (binary), the
+    /// operator, then the operands as written (clang `CXXFoldExprClass`).
+    pub(super) fn fold_expr(&mut self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let x = ast.exprs.get(e);
+        let (lhs, rhs) = (ExprId::try_new(x.a()), ExprId::try_new(x.b()));
+        let Some(op) = BinaryOp::from_u8(x.aux()) else { return false };
+        let right = lhs.is_some_and(|l| ast.exprs.get(l).deps().contains(ExprDeps::UNEXPANDED_PACK));
+        let init = lhs.is_some() && rhs.is_some();
+        self.out.push_str(match (right, init) {
+            (false, false) => "fl",
+            (false, true) => "fL",
+            (true, false) => "fr",
+            (true, true) => "fR",
+        });
+        let Some(code) = super::dep::binary_code(op) else { return false };
+        self.out.push_str(code);
+        lhs.is_none_or(|l| self.expression(l)) && rhs.is_none_or(|r| self.expression(r))
+    }
+
+    /// A requires-expression: `rQ <parameter types> _ <requirement>+ E`
+    /// with a parameter list, else `rq <requirement>+ E` (clang
+    /// `RequiresExprClass`, `mangleRequirement`).
+    pub(super) fn requires_expr(&mut self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let Some(data) = ast.requires_of(e) else { return false };
+        let params: Vec<DeclId> = ast.lists.iter::<DeclId>(data.params).collect();
+        let reqs: Vec<Requirement> = ast.templates.requirements(data).to_vec();
+        let body = data.body;
+        let scoped = !params.is_empty();
+        if scoped {
+            self.out.push_str("rQ");
+            let ctx = self.req.get_or_insert_with(ReqCtx::default);
+            ctx.in_result = true;
+            for p in params {
+                let q = ast.decls.get(p).ty().unwrap_or(kiln_ast::ids::QualType::INT);
+                self.ty(self.param_type(q));
+            }
+            self.out.push('_');
+            if let Some(ctx) = self.req.as_mut() {
+                ctx.in_result = false;
+                ctx.scopes.push(body);
+            }
+        } else {
+            self.out.push_str("rq");
+        }
+        let mut ok = true;
+        for r in reqs {
+            ok &= match r {
+                Requirement::Simple(x) => {
+                    self.out.push('X');
+                    self.expression(x)
+                }
+                Requirement::Compound { expr, noexcept, constraint } => {
+                    self.out.push('X');
+                    let mut ok = self.expression(expr);
+                    if noexcept.is_some() {
+                        self.out.push('N');
+                    }
+                    if let Some(c) = constraint {
+                        self.out.push('R');
+                        ok &= self.compound_constraint(c);
+                    }
+                    ok
+                }
+                Requirement::Type(t, _) => {
+                    self.out.push('T');
+                    self.ty(t);
+                    true
+                }
+                Requirement::Nested(x) => {
+                    self.out.push('Q');
+                    self.expression(x)
+                }
+            };
+            if !ok {
+                break;
+            }
+        }
+        if scoped && let Some(ctx) = self.req.as_mut() {
+            ctx.scopes.pop();
+        }
+        self.out.push('E');
+        ok
+    }
+
+    /// The type-constraint of a return-type-requirement (its
+    /// immediately-declared constraint, without the implicit argument).
+    fn compound_constraint(&mut self, c: ExprId) -> bool {
+        let ast = self.ast;
+        let x = ast.exprs.get(c);
+        if x.kind() != ExprKind::ConceptSpecializationExpr {
+            return false;
+        }
+        let Some(concept) = DeclId::try_new(x.a()) else { return false };
+        let args: Vec<ArgView> = ArgListId::try_new(x.b())
+            .map(|l| ast.types.args(l).iter().skip(1).map(|a| a.view()).collect())
+            .unwrap_or_default();
+        self.type_constraint(concept, &args);
+        true
+    }
+
+    /// A reference to a function or requires-expression parameter in a
+    /// requires-clause: `fp [<cv>] [<index - 1>] _` at nesting 0, else
+    /// `fL <nesting - 1> p ...` (clang `mangleFunctionParam`).
+    pub(super) fn function_param_ref(&mut self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let Some(ctx) = self.req.as_ref() else { return false };
+        let Some(pd) = ast.decls.param(d) else { return false };
+        let index = u32::from(pd.index);
+        let owner = ast.decls.get(d).ctx();
+        let depth = match owner {
+            Some(b) if ast.decls.get(b).kind() == DeclKind::RequiresExprBody => {
+                let pos = ctx.scopes.iter().position(|&s| s == b).unwrap_or(0);
+                u32::from(ctx.trailing) + pos as u32
+            }
+            _ => 0,
+        };
+        let nesting = 1u32.saturating_sub(depth).saturating_sub(u32::from(ctx.in_result));
+        if nesting == 0 {
+            self.out.push_str("fp");
+        } else {
+            self.out.push_str("fL");
+            self.out.push_str(&(nesting - 1).to_string());
+            self.out.push('p');
+        }
+        if let Some(t) = ast.decls.get(d).ty() {
+            let q = ast.types.effective_quals(t);
+            if q.is_restrict() {
+                self.out.push('r');
+            }
+            if q.is_volatile() {
+                self.out.push('V');
+            }
+            if q.is_const() {
+                self.out.push('K');
+            }
+        }
+        if index != 0 {
+            self.out.push_str(&(index - 1).to_string());
+        }
+        self.out.push('_');
+        true
+    }
+}
