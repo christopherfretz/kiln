@@ -4145,6 +4145,19 @@ explicit specialization errors remain. The blockers are:
     enclosing class's parameter ([temp.friend]/9, `requires C<T>` on
     `template<class U> friend int f(X, U)`) sees that specialization's
     arguments (WP-231);
+  - an atom of such a clause is substituted with the pattern classes
+    mapped to their instantiations ([`Sema::inst_context_pairs`]) from
+    the member's class, or for a friend (whose semantic context is the
+    namespace) from its lexical class (`inst_lexical_class`,
+    [temp.friend]/1): a hidden friend of a member class or member class
+    template of a class template (`view<V>::iterator`, libc++'s
+    `filter_view::__iterator`, `join_view::__iterator<Const>`) names
+    that member class, a member of the enclosing specialization, in its
+    parameter types and constraints ([temp.dep.type]/1), and without the
+    mapping `find_instantiated_decl` found no instantiated parent ("not
+    yet implemented: reference to a member of a dependent context"),
+    including when the friend is found only by argument-dependent lookup
+    inside a concept's requires-expression (WP-272);
   - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate

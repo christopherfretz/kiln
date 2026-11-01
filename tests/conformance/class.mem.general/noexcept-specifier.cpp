@@ -10,15 +10,19 @@
 // another specialization ([class.friend]/2).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 40:73 error "'x' is a private member of 'TS<long>'"
-//@ diag: 50:62 note "in instantiation of exception specification for 'h<long>' requested here"
-//@ diag: 46:5 note "declared private here"
-//@ diag: 71:26 error "exception specification is not available until end of class definition"
-//@ diag: 71:17 error "static assertion failed due to requirement 'noexcept(m())'"
-//@ diag: 73:26 error "exception specification is not available until end of class definition"
-//@ diag: 73:17 error "static assertion failed due to requirement 'noexcept(fe(*(Early *)nullptr))'"
-//@ diag: 79:14 error "exception specification in declaration does not match previous declaration"
-//@ diag: 77:5 note "previous declaration is here"
+//@ diag: 44:73 error "'x' is a private member of 'TS<long>'"
+//@ diag: 54:62 note "in instantiation of exception specification for 'h<long>' requested here"
+//@ diag: 50:5 note "declared private here"
+//@ diag: 75:26 error "exception specification is not available until end of class definition"
+//@ diag: 75:17 error "static assertion failed due to requirement 'noexcept(m())'"
+//@ diag: 77:26 error "exception specification is not available until end of class definition"
+//@ diag: 77:17 error "static assertion failed due to requirement 'noexcept(fe(*(Early *)nullptr))'"
+//@ diag: 83:14 error "exception specification in declaration does not match previous declaration"
+//@ diag: 81:5 note "previous declaration is here"
+//@ diag: 98:6 error "'gi' is missing exception specification 'noexcept(VT::v)'"
+//@ diag: 91:15 note "previous declaration is here"
+//@ diag: 105:15 error "'ml' is missing exception specification 'noexcept(Later::x)'"
+//@ diag: 104:15 note "previous declaration is here"
 int g(int) noexcept;
 long g(long);
 
@@ -78,4 +82,26 @@ int fd(const struct R&) noexcept;
 struct R {
   friend int fd(const R& r) noexcept(noexcept(g(r.y)));
   long y;
+};
+
+// [except.spec]/5 against a friend's delayed specification: a
+// redeclaration without one is missing it once it is known; one of a
+// class template specialization's friends is instantiated to compare.
+template <class T> struct Inst {
+  friend void gi(Inst) noexcept(T::v);
+  friend void hi(Inst) noexcept(T::v);
+};
+struct VT { static const bool v = true; };
+struct VF { static const bool v = false; };
+Inst<VT> ivt;
+Inst<VF> ivf;
+void gi(Inst<VT>);
+void gi(Inst<VF>);
+void hi(Inst<VT>) noexcept;
+static_assert(noexcept(hi(ivt)));
+static_assert(!noexcept(gi(ivf)));
+struct Later {
+  friend void ml() noexcept(Later::x);
+  friend void ml();
+  static constexpr bool x = true;
 };

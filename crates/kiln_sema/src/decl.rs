@@ -2456,6 +2456,7 @@ impl Sema<'_, '_> {
         let mut invalid_redecl = false;
         let late_exc =
             d.late_noexcept.is_some() || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
+        let mut delayed_prev = false;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,
@@ -2465,6 +2466,10 @@ impl Sema<'_, '_> {
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
+            // clang's `DeclarationName` printing: `operator new`.
+            Some(op) if op.spelling().starts_with(char::is_alphabetic) => {
+                format!("operator {}", op.spelling())
+            }
             Some(op) => format!("operator{}", op.spelling()),
             None => self.decl_name_str(dname),
         };
@@ -2533,6 +2538,27 @@ impl Sema<'_, '_> {
             let (t, p) = self.act_on_global_new_delete_decl(op, ty);
             ty = t;
             prev_ok = p;
+            if let Some(p) = p {
+                let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                if !self.ast.types.same_type(pty, ty) && self.written_exc_spec(ty) == ExcSpec::None
+                {
+                    let delete =
+                        matches!(op, OverloadedOperator::Delete | OverloadedOperator::ArrayDelete);
+                    let replaceable = self.is_replaceable_global_alloc(p, delete);
+                    let (t, err) = self.merge_missing_exc_spec(
+                        p,
+                        pty,
+                        ty,
+                        (d.name_loc(), &fname, crate::except::missing_exc_spec_fixit_loc(d)),
+                        replaceable,
+                    );
+                    ty = t;
+                    if err {
+                        prev_ok = None;
+                        invalid_redecl = true;
+                    }
+                }
+            }
         } else if friend && d.qualifier.is_some() && (prev.is_none() || method && !matches_member) {
             let msg = self
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
@@ -2592,19 +2618,57 @@ impl Sema<'_, '_> {
         } else if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
-                let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                let mut pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                // [except.spec]/13: a previous declaration's specification
+                // still uninstantiated is needed now (clang resolves the
+                // old one in `CheckEquivalentExceptionSpec`).
+                if !self.in_template()
+                    && matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
+                    && self.uninstantiated_exc.contains_key(&self.ast.first(p))
+                    && !self.exc_unparsed(p)
+                {
+                    self.resolve_exception_spec(p, d.name_loc());
+                    pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                }
                 // A friend whose noexcept-specifier waits for the end of
-                // its class (or, instantiated, until needed) matches
-                // whatever the previous declaration has; the
-                // specifications are compared once it is known (clang's
-                // `DelayedEquivalentExceptionSpecChecks`).
-                let cmp = if late_exc {
+                // its class (or, instantiated, until needed), or one
+                // redeclaring such a friend before its class is complete,
+                // matches whatever the other declaration has; the
+                // specifications are compared once both are known (clang's
+                // `DelayedEquivalentExceptionSpecChecks`), never as a
+                // missing specification.
+                let delayed = late_exc
+                    || matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
+                        && self.same_ignoring_exc_spec(pty, ty);
+                // [except.spec]/5: a redeclaration without a specification.
+                let mut missing_err = false;
+                if !delayed
+                    && !self.ast.types.same_type(pty, ty)
+                    && self.written_exc_spec(ty) == ExcSpec::None
+                    && self.same_ignoring_exc_spec(pty, ty)
+                {
+                    let (t, err) = self.merge_missing_exc_spec(
+                        p,
+                        pty,
+                        ty,
+                        (d.name_loc(), &fname, crate::except::missing_exc_spec_fixit_loc(d)),
+                        false,
+                    );
+                    ty = t;
+                    missing_err = err;
+                }
+                if delayed {
+                    delayed_prev = true;
+                }
+                let cmp = if delayed {
                     let pexc = self.written_exc_spec(pty);
                     self.with_exc_spec(ty, pexc)
                 } else {
                     ty
                 };
-                if self.ast.types.same_type(pty, cmp) {
+                if missing_err {
+                    invalid_redecl = true;
+                } else if self.ast.types.same_type(pty, cmp) {
                     prev_ok = Some(p);
                     // [dcl.spec.auto.general]/13: the redeclaration has
                     // the deduced return type.
@@ -2643,15 +2707,7 @@ impl Sema<'_, '_> {
                 } else if self.same_ignoring_exc_spec(pty, ty) {
                     // [except.spec]/5: every declaration of a function with
                     // a non-throwing specification has one, and only those.
-                    let msg = match self.written_exc_spec(ty) {
-                        ExcSpec::None => {
-                            let spelled = self.exc_spec_spelling(self.written_exc_spec(pty));
-                            self.diag(DiagId::sema_missing_exception_spec, d.name_loc())
-                                .arg(fname.clone())
-                                .arg(spelled)
-                        }
-                        _ => self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc()),
-                    };
+                    let msg = self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc());
                     let msg = self.note_prev(msg, p, false);
                     self.emit(msg);
                     invalid_redecl = true;
@@ -2774,7 +2830,7 @@ impl Sema<'_, '_> {
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
-        if late_exc && let Some(p) = prev_ok {
+        if delayed_prev && let Some(p) = prev_ok {
             self.delayed_exc_equiv.push((f, p));
         }
         if d.lit_suffix.is_some() {
