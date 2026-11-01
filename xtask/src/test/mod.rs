@@ -35,7 +35,7 @@ Runs tests/conformance, tests/differential and tests/stress (or the given
 files/directories) through a compiler. See spec/harness.md.
 
 options:
-  --compiler <path>   compiler under test (default: build and use the kiln binary)
+  --compiler <path>   compiler under test (default: build and use the kiln++ binary)
   --oracle <path>     oracle compiler for run/pp comparisons (default: clang++-19)
   --no-oracle         skip all oracle comparisons
   --filter <substr>   only tests whose path contains <substr>

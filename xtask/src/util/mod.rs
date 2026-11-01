@@ -91,8 +91,9 @@ pub fn json_string_field(json: &str, key: &str) -> Option<String> {
     Json::parse(json).ok()?.get(key)?.as_str().map(str::to_owned)
 }
 
-/// `cargo build [--release] -p kiln_driver`, returning the path of the `kiln`
-/// binary. `who` names the subcommand in the progress message.
+/// `cargo build [--release] -p kiln_driver`, returning the path of the
+/// `kiln++` binary (the C++ driver mode: spec/driver.md "Driver modes").
+/// `who` names the subcommand in the progress message.
 pub fn build_kiln(root: &Path, target: &Path, who: &str, release: bool) -> Result<PathBuf, String> {
     let profile = if release { "release" } else { "debug" };
     let flags: &[&str] = if release { &["--release"] } else { &[] };
@@ -109,13 +110,52 @@ pub fn build_kiln(root: &Path, target: &Path, who: &str, release: bool) -> Resul
     if !status.success() {
         return Err(format!("cargo build -p kiln_driver failed ({status})"));
     }
-    let exe = target.join(profile).join(format!("kiln{}", std::env::consts::EXE_SUFFIX));
-    if exe.is_file() { Ok(exe) } else { Err(format!("kiln binary not found at {}", exe.display())) }
+    kilnpp_beside(&target.join(profile))
+}
+
+/// `<dir>/kiln++`, made as a symlink to `<dir>/kiln` if it is missing
+/// (`kiln_driver`'s build script makes it once per build directory).
+pub fn kilnpp_beside(dir: &Path) -> Result<PathBuf, String> {
+    let exe = std::env::consts::EXE_SUFFIX;
+    let kiln = dir.join(format!("kiln{exe}"));
+    if !kiln.is_file() {
+        return Err(format!("kiln binary not found at {}", kiln.display()));
+    }
+    let kilnpp = dir.join(format!("kiln++{exe}"));
+    if !kilnpp.is_file() {
+        let _ = std::fs::remove_file(&kilnpp); // a dangling link
+        link_to(&kilnpp, &format!("kiln{exe}"))
+            .map_err(|e| format!("cannot make {}: {e}", kilnpp.display()))?;
+    }
+    Ok(kilnpp)
+}
+
+#[cfg(unix)]
+fn link_to(link: &Path, target: &str) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(not(unix))]
+fn link_to(link: &Path, target: &str) -> std::io::Result<()> {
+    std::fs::copy(link.with_file_name(target), link).map(drop)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kilnpp_is_made_beside_kiln() {
+        let d = std::env::temp_dir().join(format!("xtask-kilnpp-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(kilnpp_beside(&d).unwrap_err().starts_with("kiln binary not found"));
+        std::fs::write(d.join("kiln"), "#!/bin/sh\n").unwrap();
+        let p = kilnpp_beside(&d).unwrap();
+        assert_eq!(p, d.join("kiln++"));
+        assert!(p.is_file());
+        assert_eq!(kilnpp_beside(&d).unwrap(), p, "an existing kiln++ is kept");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 
     #[test]
     fn compiler_kind_from_version() {

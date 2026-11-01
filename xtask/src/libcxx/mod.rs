@@ -33,7 +33,7 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
   --gate m3              the M3 gate directories (spec/libcxx.md \"Gates\")
   --libcxx-tests <dir>   the llvm-project checkout (default:
                          .toolchain/llvm-project; scripts/fetch-libcxx-tests.sh)
-  --compiler <path>      kiln binary (default: cargo build -p kiln_driver)
+  --compiler <path>      kiln++ binary (default: cargo build -p kiln_driver)
   --filter <substring>   only tests whose path contains <substring>
   --list                 list the selected tests and their pre-run verdict
   -j, --jobs <n>         tests in parallel (default 2; an upper bound under a
