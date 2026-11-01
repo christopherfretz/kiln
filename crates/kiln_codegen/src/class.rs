@@ -1638,6 +1638,9 @@ impl Cg<'_> {
         let this = Some(this.v);
         let r =
             self.call_vals_ret(&sig, callee, Some(f), this, &vals, args, dest, &extra, &ret_extra)?;
+        if let Some(p) = r {
+            self.alloc_align_assume(callee_md, &vals, p);
+        }
         if nr {
             self.finish_noreturn_call();
         }

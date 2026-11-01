@@ -178,8 +178,8 @@ impl Cg<'_> {
     /// `operator new`'s implicit `alloc_size` and `returns_nonnull`, and
     /// `noalias` ("a sane operator new"); GNU `alloc_size` and `malloc`;
     /// and `alloc_align` with a constant power-of-two alignment, which
-    /// raises the result's alignment (clang `AllocAlignAttrEmitter`; the
-    /// `llvm.assume` clang emits for any other alignment is not).
+    /// raises the result's alignment (clang `AllocAlignAttrEmitter`; any
+    /// other alignment is `alloc_align_assume` after the call).
     pub(crate) fn alloc_call_attrs(
         &mut self,
         d: DeclId,
@@ -358,25 +358,16 @@ impl Cg<'_> {
             self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
         }
         // `alloc_align`: a constant power of two raises the return
-        // alignment; anything else would be an `llvm.assume`.
+        // alignment; anything else is an `llvm.assume` after the call.
         let mut ret_align = None;
         if af.replaceable
             && af.is_new
             && let Some(i) = af.align_param
+            && let Some(&CallArg::Scalar(v)) = vals.get(i)
+            && let Some((_, n, _)) = self.cint(v)
+            && n.is_power_of_two()
         {
-            let c = match vals.get(i) {
-                Some(&CallArg::Scalar(v)) => self.cint(v).map(|x| x.1),
-                _ => None,
-            };
-            match c {
-                Some(n) if n.is_power_of_two() => ret_align = Some(n as u64),
-                _ => {
-                    return err(
-                        loc,
-                        "a non-constant std::align_val_t allocation argument is not supported yet",
-                    );
-                }
-            }
+            ret_align = Some(n as u64);
         }
         let (ret, params) = self.sig_attrs(&sig, vals.len(), false);
         let mut fa = Vec::new();
@@ -412,7 +403,31 @@ impl Cg<'_> {
             Some(f),
             sig.nothrow,
         );
+        if af.replaceable && af.is_new {
+            self.alloc_align_assume(d, vals, r);
+        }
         Ok(r)
+    }
+
+    /// clang `AllocAlignAttrEmitter::EmitAsAnAssumption`: after a call of
+    /// `d` returning `r`, an `alloc_align` argument that is not a constant
+    /// power of two becomes `llvm.assume(i1 true) ["align"(ptr r, i64 a)]`
+    /// (the argument zero-extended to `i64`, clang `emitAlignmentAssumption`).
+    pub(crate) fn alloc_align_assume(&mut self, d: DeclId, vals: &[CallArg], r: V) {
+        let Some(i) = self.fn_alloc_align(d) else { return };
+        let Some(&CallArg::Scalar(v)) = vals.get(i) else { return };
+        if self.cint(v).is_some_and(|(_, n, _)| n.is_power_of_two()) || self.f.fir.cur().is_none()
+        {
+            return;
+        }
+        let a = self.int_cast(v, LTy::I64, false);
+        let f = kiln_llvm::intrinsics::assume(&mut self.m);
+        let fn_ty = self.m.func(f).ty();
+        let cond = self.m.const_bool(true);
+        self.f.fir.push(
+            Op::AssumeBundle { fn_ty, callee: Value::func(f), cond, tag: "align", args: vec![r, a] },
+            LTy::VOID,
+        );
     }
 
     /// The pointer value of `e` and, when its alignment comes from a

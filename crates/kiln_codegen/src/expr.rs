@@ -2245,6 +2245,9 @@ impl Cg<'_> {
         }
         let r =
             self.call_vals_ret(&sig, callee, fid, None, &vals, &args, dest, &extra, &ret_extra)?;
+        if let (Some(d), Some(p)) = (direct, r) {
+            self.alloc_align_assume(d, &vals, p);
+        }
         if noreturn {
             self.finish_noreturn_call();
         }
