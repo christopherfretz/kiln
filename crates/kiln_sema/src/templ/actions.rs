@@ -238,6 +238,21 @@ impl Sema<'_, '_> {
             let r = self.ast.types.as_record(ty)?;
             return Some((self.ast.definition(r).unwrap_or(r), n));
         }
+        // `template<class T> void P<T*>::f()`: a declarator qualifier
+        // naming a partial specialization by its own arguments
+        // ([temp.spec.partial.general]/7, [temp.class.general]/3).
+        if self.templ.entering_context
+            && let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty())
+        {
+            let canonical = self.ast.types.canonical_args(args);
+            let t = self.ast.first(tmpl);
+            if let Some(i) = self.ast.templates.find_partial(t, canonical)
+                && let Some(p) = self.ast.templates.partial(i)
+            {
+                let p = p.partial;
+                return Some((self.ast.definition(p).unwrap_or(p), n));
+            }
+        }
         Some((tmpl, n))
     }
 
@@ -270,13 +285,25 @@ impl Sema<'_, '_> {
             let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
             self.ast.templates.partial(i)?.partial
         };
-        if !self.templ.entering_context && !self.encloses(pat, self.ctx) {
+        if !self.templ.entering_context
+            && !self.encloses(pat, self.ctx)
+            && !self.in_declarator_scope_of(pat)
+        {
             // `X<P...>` outside `X` (an alias template's or another
             // template's own parameters at the same positions) is an
             // ordinary dependent specialization.
             return None;
         }
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// Whether the class scope of pattern `pat` was entered for the rest
+    /// of a qualified declarator (`A<T>::f(typename A<T>::X)`).
+    fn in_declarator_scope_of(&self, pat: DeclId) -> bool {
+        let pat = self.ast.first(pat);
+        self.scopes.iter().any(|s| {
+            s.kind == ScopeKind::Record && s.entity.is_some_and(|e| self.ast.first(e) == pat)
+        })
     }
 
     /// `template<int S> void B<1, S>::g()`: a dependent template-id keeps
@@ -406,7 +433,7 @@ impl Sema<'_, '_> {
 
     /// Records the written qualifier of the qualified function
     /// template-id `e` (an `UnresolvedLookupExpr`); dependent signatures
-    /// mangle it (`clsr3stdE7declvalIT_EE`, spec/abi.md §8.14).
+    /// mangle it (`clsr3stdE7declvalIT_EE`, spec/abi.md §8.15).
     pub fn set_template_id_qualifier(&mut self, e: ExprId, nns: NnsId) {
         if self.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr {
             let _ = self.ast.templates.expr_nns.insert(e, nns);
@@ -1303,7 +1330,14 @@ impl Sema<'_, '_> {
                 c = if semantic { sem.or(lex) } else { lex.or(sem) };
             }
         }
-        None
+        // The class scopes entered for the rest of a qualified declarator
+        // (`template<class T> void A<T>::f(const A&)`, [basic.lookup.unqual]/1).
+        self.scopes.iter().rev().filter(|s| s.kind == ScopeKind::Record).find_map(|s| {
+            let x = s.entity?;
+            (self.kind_of(x) == DeclKind::CXXRecord
+                && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl))
+            .then_some(x)
+        })
     }
 
     /// The injected-class-name of class template `tmpl` used without

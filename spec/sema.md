@@ -1893,7 +1893,14 @@ The vector operators themselves are summarized in spec/types.md
 - Function-try-blocks: `check_function_try_block` (from
   `act_on_finish_function_def`) diagnoses `return` in a constructor's
   handler (`return in the catch of a function try block of a
-  constructor is illegal`); falling off a constructor or destructor
+  constructor is illegal`) and warns (`-Wexceptions`, WP-118) at each
+  member access whose base is `this` (written or implicit, under
+  implicit casts only, so not `(this)->m` or `(*this).m`, and not in a
+  lambda) in a constructor's or destructor's handler: `cannot refer to
+  a non-static member from the handler of a constructor|destructor
+  function try block` ([except.handle]/10; clang
+  `IsInFnTryBlockHandler`, once for a template at its definition);
+  falling off a constructor or destructor
   handler rethrows ([except.handle]/14), so the fall-off analysis
   (§4.3) treats such handlers as not returning, and a value-returning
   function's handler that falls off is `-Wreturn-type`.
@@ -1904,19 +1911,28 @@ The vector operators themselves are summarized in spec/types.md
   destructor/deallocator note); in an instantiated function template
   specialization the name carries its arguments, unqualified (`'k<int>'`,
   `except.spec/throw-in-nothrow-specialization.cpp`); a `[[noreturn]]`
-  function that can fall off is `-Winvalid-noreturn`.
+  function that can fall off is `-Winvalid-noreturn`. Only throws reachable in clang's CFG
+  count (`try_stmt/reach.rs`, WP-118): a structured walk ends the live
+  path at `return`/`break`/`continue`/`goto`/a throw/a `noreturn` call;
+  prunes edges by `tryEvaluateBool` (constant folding, `&&`/`||` decided
+  by one side, `checkIncorrectLogicOperator`) in `if`, loops, `?:`,
+  `&&`/`||`; reaches only the matching case of a constant switch and not
+  the end of a switch with no default over a fully covered enumeration
+  (`isAllEnumCasesCovered`); reaches a handler only from a live throw in
+  its try-block (or in a nested try without a catch-all, as calls have
+  no exception edges); iterates `goto` labels and loop back edges to a
+  fixed point; and checks nothing in a function with an `if consteval`
+  (clang builds no CFG). Not modeled: unevaluated operands are walked,
+  indirect `goto`, GNU case ranges, and implicit destructors marked
+  `noreturn`.
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element
   instead (`brace-elision-class.cpp` AST golden).
-- **Left (WP-100):** the member-reference-in-handler warning of a
-  constructor/destructor function-try-block ([except.handle]/10); the
-  throw-escape reachability is clang's coarse form (no CFG); a written
-  vs implicit `noexcept` on deallocators in the note; a mem-initializer
-  `arr()` for an array of a class with a user constructor gives an
-  `ImplicitValueInitExpr` (should be a `CXXConstructExpr` per element);
-  `new K[2][3]` of a class with a default constructor has no
-  `CXXConstructExpr` initializer, so codegen calls no constructors.
+- **Left (WP-100):** a written vs implicit `noexcept` on deallocators in
+  the note. (The handler member-reference warning, throw reachability,
+  `arr()` member value-initialization of a class array and the
+  `new K[2][3]` constructor initializer landed in WP-118.)
 
 ### 7.6 Landed (WP-089): range-based `for` (`range_for.rs`)
 Sema desugars `for (init; decl : range) body` ([stmt.ranged]/1) the way

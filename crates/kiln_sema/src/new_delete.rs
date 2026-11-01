@@ -504,11 +504,14 @@ impl Sema<'_, '_> {
         }
         // The matching deallocation function, called if the
         // initialization throws ([expr.new]/28).
+        // clang treats any allocation function other than `(size_t)` as a
+        // placement one here, so an aligned `operator new` is matched by
+        // the unsized aligned `operator delete` (`isPlacementNew`).
         let op_delete = self.matching_operator_delete(
             elem,
             global,
             array_form,
-            placement.is_some(),
+            placement.is_some() || params.len() != 1 || variadic,
             &params,
             pass_align,
             tid.loc,
@@ -537,6 +540,11 @@ impl Sema<'_, '_> {
                 Err(()) => return self.recover_err(&kids, loc),
             }
         };
+        if array_form {
+            // [expr.new]/27: the destructor of an array's elements is
+            // potentially invoked (odr-used, [basic.def.odr]/8).
+            self.mark_element_dtor_referenced(elem, loc);
+        }
         let mut flags = ExprFlags::NONE;
         if global {
             flags = flags.with(ExprFlags::GLOBAL);
@@ -843,19 +851,22 @@ impl Sema<'_, '_> {
     }
 
     /// The default- or value-initialization of the class elements of a
-    /// new-expression by their default constructor ([expr.new]/23,
-    /// [dcl.init.general]/7, /9): a `CXXConstructExpr` of type `ty` (the
-    /// element, or the array of them). `None` when the element type is
+    /// new-expression (or of a value-initialized array member) by their
+    /// default constructor ([expr.new]/23, [dcl.init.general]/7, /9): a
+    /// `CXXConstructExpr` of type `ty` (the element, or the array of
+    /// them; `elem` may itself be an array). `None` when the element type is
     /// not a class, or a default-initialization needs no constructor call
     /// (a trivial default constructor). `Some(Err)` after an error.
-    fn new_class_default(
+    pub(crate) fn new_class_default(
         &mut self,
         elem: QualType,
         ty: QualType,
         value_init: bool,
         at: Loc,
     ) -> Option<Result<ExprId, ()>> {
-        let rec = self.ast.types.as_record(elem)?;
+        // `new K[n][3]`: the elements of the inner arrays are constructed
+        // too (clang's `CXXConstructExpr` of type `K[n][3]`).
+        let rec = self.ast.types.as_record(self.base_element(elem))?;
         self.instantiate_for_init(rec, at);
         let class = self.ast.definition(rec)?;
         let class = conv::bases::complete_class(self, class)?;
@@ -1347,20 +1358,8 @@ impl Sema<'_, '_> {
         while self.ast.types.is_array(elem) {
             elem = self.ast.types.element(elem).unwrap_or(QualType::ERROR);
         }
-        if complete
-            && let Some(rec) = self.ast.types.as_record(elem)
-            && let Some(def) = self.ast.definition(rec)
-        {
-            let defn = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
-            if !defn.contains(DefinitionBits::TRIVIAL_DTOR)
-                && let Selected::Found(m) =
-                    self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
-            {
-                // [expr.delete]/6: the destructor is invoked (odr-used,
-                // [basic.def.odr]/8).
-                self.mark_function_referenced(m, loc);
-            }
-        }
+        // [expr.delete]/6: the destructor is invoked.
+        let destructed = complete && self.mark_element_dtor_referenced(elem, loc);
         let align = if complete {
             crate::target::size_align(&self.ast, elem, &self.abi).map_or(1, |(_, a)| a)
         } else {
@@ -1368,9 +1367,10 @@ impl Sema<'_, '_> {
         };
         let aligned = align > self.abi.default_new_align;
         // [expr.delete]/10: a usual deallocation function; the sized one
-        // when the type is complete (and no array cookie is needed: a
-        // `delete[]` of a type without one is unsized, clang).
-        let want_sized = complete && !array;
+        // when the type is complete and the size is known: a `delete[]`
+        // knows it only from an array cookie, i.e. for elements with a
+        // non-trivial destructor (clang `CanProvideSize`).
+        let want_sized = complete && (!array || destructed);
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
         // Unless `::delete`, the class's own `operator delete` is looked
         // up first ([expr.delete]/9).
@@ -1392,6 +1392,30 @@ impl Sema<'_, '_> {
 }
 
 /// The expressions of the top-level clauses of `l`.
+impl Sema<'_, '_> {
+    /// Marks the destructor of `elem`'s innermost element class as
+    /// referenced (odr-used, [basic.def.odr]/8) when it is non-trivial,
+    /// returning whether it is.
+    fn mark_element_dtor_referenced(&mut self, mut elem: QualType, loc: Loc) -> bool {
+        while let Some(e) = self.ast.types.element(elem) {
+            elem = e;
+        }
+        let Some(def) = self.ast.types.as_record(elem).and_then(|r| self.ast.definition(r)) else {
+            return false;
+        };
+        let defn = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
+        if defn.contains(DefinitionBits::TRIVIAL_DTOR) {
+            return false;
+        }
+        if let Selected::Found(m) =
+            self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+        {
+            self.mark_function_referenced(m, loc);
+        }
+        true
+    }
+}
+
 fn list_exprs(l: &InitList) -> Vec<ExprId> {
     l.items
         .iter()

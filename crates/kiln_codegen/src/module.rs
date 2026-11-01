@@ -282,7 +282,8 @@ impl<'a> Cg<'a> {
             let n = ast.decls.get(d);
             // A templated declaration ([temp.pre]/8: an out-of-line
             // member of a class template) is emitted only as instantiated.
-            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) {
+            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) || self.is_templated(d)
+            {
                 return Ok(());
             }
             match n.kind() {
@@ -434,7 +435,19 @@ impl<'a> Cg<'a> {
             }
             match ast.decls.get(first).kind() {
                 DeclKind::Var => {
-                    if let Some(def) = self.instantiated_var_def(first) {
+                    // The out-of-line definition Sema instantiated, with or
+                    // without an initializer (`template<class T> T A<T>::s;`).
+                    let def = self.instantiated_var_def(first).or_else(|| {
+                        ast.redecls_of(first).filter(|&r| r != first).find(|&r| {
+                            let n = ast.decls.get(r);
+                            !n.has(DeclFlags::INVALID)
+                                && !n.has(DeclFlags::DEPENDENT_CTX)
+                                && ast.decls.var(r).is_some_and(|v| {
+                                    !matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                                })
+                        })
+                    });
+                    if let Some(def) = def {
                         self.emit_global_var(def)?;
                     }
                 }
@@ -494,6 +507,39 @@ impl<'a> Cg<'a> {
     }
 
     // ---- linkage -------------------------------------------------------
+
+    /// Whether `d` is a templated entity ([temp.pre]/8): the pattern of a
+    /// template or a partial specialization, or declared in one (an
+    /// out-of-line member definition `template<class T> void A<T>::g()
+    /// {}` is a member of `A`'s pattern). Templated entities are never
+    /// emitted; only their instantiations are (clang `isDependentContext`
+    /// in `EmitTopLevelDecl`).
+    pub(crate) fn is_templated(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let mut c = Some(d);
+        while let Some(x) = c {
+            let n = ast.decls.get(x);
+            if kiln_ast::templates::is_template_kind(n.kind()) {
+                return true;
+            }
+            if matches!(
+                ast.templ_link(x).get(),
+                Some((
+                    TemplLinkKind::Pattern
+                        | TemplLinkKind::PartialSpecialization
+                        | TemplLinkKind::DependentFriend,
+                    _
+                ))
+            ) {
+                return true;
+            }
+            if n.kind() == DeclKind::TranslationUnit {
+                return false;
+            }
+            c = n.ctx();
+        }
+        false
+    }
 
     /// Whether `d` is (a member of) an implicit template instantiation,
     /// which has vague (`linkonce_odr`) linkage.
@@ -738,6 +784,9 @@ impl<'a> Cg<'a> {
         // clang `ComputeRecordLayout`: the base-subobject type is created
         // before the complete type's body is filled in.
         if let Some(bm) = &rec.base_members {
+            // `addRecordTypeName(D, BaseTy, ".base")` spells the record's
+            // own name, uniquified on its own (an empty non-POD class
+            // consumes a counter value for an unused `.base`).
             let bt = self.m.types.named_struct(&format!("{name}.base"));
             self.named_base.insert(first, bt);
             let bf: Vec<LTy> = bm.iter().map(|x| self.ir(x)).collect();

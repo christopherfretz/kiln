@@ -24,9 +24,7 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Reading
 
-**Overall: 482/585 (82.4%)** on the WP-172 branch merged with main `269f849e` (unchanged from
-WP-176's 482; WP-172's fixes are codegen/mangling/diagnostic-text items the gate does not
-exercise). WP-176 measured 482 merged with main `1fafd3f2`, up from 443 on
+**Overall: 482/585 (82.4%)** on the WP-176 branch merged with main `1fafd3f2`, up from 443 on
 main (WP-178; 423 before it, 420 after WP-169, 415 after WP-166, 405 on WP-164, 364 at WP-167; 332
 before WP-154, 319 after WP-146, 254 after WP-141, 20 at the WP-081 baseline). Part of the gain over
 443 comes from WP-171 and WP-170 on main (lax overriding exception specifications, attributes), which
@@ -82,7 +80,7 @@ Per directory, WP-169 → main `e238afa8` → WP-178 → WP-176:
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `0e780a91` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `6b7a168f` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -91,7 +89,7 @@ Per directory, WP-169 → main `e238afa8` → WP-178 → WP-176:
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 767.3 s |
+| wall time | 697.1 s |
 | peak RSS | 84 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
@@ -130,7 +128,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | directory | clusters |
 |---|---|
 | `std/utilities/meta` | — |
-| `std/utilities/utility` | `compile: no member named '…' in '…'` (11); `compile: member initializer '…' does not name a non-static data member or base class` (9); `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` (6) |
+| `std/utilities/utility` | `compile: no member named '…' in '…'` (11); `compile: member initializer '…' does not name a non-static data member or base class` (8); `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` (6) |
 | `std/containers/sequences/array` | `compile: compound literals of an array temporary is not supported yet` (1); `compile: implicit assignment of an array of this type is not supported yet` (1); `compile: no struct named '…' in '…'` (1) |
 | `std/strings/string.view` | `compile: called object type '…' is not a function or function pointer` (8); `compile: static assertion expression is not an integral constant expression` (5); `compile: no struct named '…' in '…'` (5) |
 | `std/containers/views/views.span` | `compile: no struct named '…' in '…'` (4); `compile: static assertion expression is not an integral constant expression` (3); `compile: no matching function for call to '…'` (3) |
@@ -147,13 +145,13 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 1 | 15 | 15 | `compile: no struct named '…' in '…'` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `no struct named '__segmented_iterator_traits' in 'std'` |
 | 2 | 13 | 14 | `compile: call to non-static member function without an object argument` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `call to non-static member function without an object argument` |
 | 3 | 11 | 11 | `compile: no member named '…' in '…'` | `std/utilities/utility/pairs/pairs.pair/assign_const_pair_U_V.pass.cpp` | `no member named 'operator=' in 'ArchetypeBases::TrivialValueBase<>'` |
-| 4 | 9 | 13 | `compile: member initializer '…' does not name a non-static data member or base class` | `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_pair.pass.cpp` | `member initializer 'pair' does not name a non-static data member or base class` |
-| 5 | 8 | 29 | `compile: static assertion expression is not an integral constant expression` | `std/containers/views/views.span/span.cons/copy.pass.cpp` | `static assertion expression is not an integral constant expression` |
+| 4 | 8 | 29 | `compile: static assertion expression is not an integral constant expression` | `std/containers/views/views.span/span.cons/copy.pass.cpp` | `static assertion expression is not an integral constant expression` |
+| 5 | 8 | 13 | `compile: member initializer '…' does not name a non-static data member or base class` | `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_pair.pass.cpp` | `member initializer 'pair' does not name a non-static data member or base class` |
 | 6 | 8 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/comparison.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
 | 7 | 6 | 7 | `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` | `std/utilities/utility/mem.res/mem.res.aliases/header_list_synop.pass.cpp` | `static_cast from '__base_pointer' (aka 'std::__list_node_base<int, void *> *') to '__node_pointer' (aka 'std::__list_node<int, void *> *') is not allowed` |
-| 8 | 4 | 4 | `compile: a non-constant std::align_val_t allocation argument is not supported yet` | `std/strings/string.view/string.view.cons/from_string.pass.cpp` | `a non-constant std::align_val_t allocation argument is not supported yet` |
-| 9 | 4 | 4 | `compile: cast BaseToDerived is not supported yet` | `std/utilities/utility/mem.res/mem.res.aliases/header_unordered_map_synop.pass.cpp` | `cast BaseToDerived is not supported yet` |
-| 10 | 3 | 14 | `compile: no matching function for call to '…'` | `std/containers/views/views.span/span.cons/assign.pass.cpp` | `no matching function for call to 'size'` |
+| 8 | 4 | 14 | `compile: no matching function for call to '…'` | `std/containers/views/views.span/span.cons/assign.pass.cpp` | `no matching function for call to 'size'` |
+| 9 | 4 | 4 | `compile: a non-constant std::align_val_t allocation argument is not supported yet` | `std/strings/string.view/string.view.cons/from_string.pass.cpp` | `a non-constant std::align_val_t allocation argument is not supported yet` |
+| 10 | 4 | 4 | `compile: cast BaseToDerived is not supported yet` | `std/utilities/utility/mem.res/mem.res.aliases/header_unordered_map_synop.pass.cpp` | `cast BaseToDerived is not supported yet` |
 | 11 | 3 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` |
 | 12 | 3 | 3 | `compile: constexpr if condition is not a constant expression` | `std/containers/views/views.span/span.objectrep/as_bytes.pass.cpp` | `constexpr if condition is not a constant expression` |
 | 13 | 3 | 3 | `compile: no matching constructor for initialization of '…'` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `no matching constructor for initialization of 'std::span<const int>'` |
