@@ -122,7 +122,9 @@ impl Sema<'_, '_> {
             self.scopes.push(s);
         }
         self.ctx = ctx;
+        let access_ctx = self.access_ctx.take();
         let r = f(self);
+        self.access_ctx = access_ctx;
         self.scopes = saved.scopes;
         self.ctx = saved.ctx.unwrap_or(self.ast.tu);
         self.func = saved.func;
@@ -289,14 +291,37 @@ impl Sema<'_, '_> {
         // outside the class.
         let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
         let pairs = self.inst_context_pairs(ctx);
+        // Access in a namespace-scope alias is checked from the use, in a
+        // member alias from its class (clang's `CheckTemplateIdType`
+        // enters the alias's context only when that is not a file
+        // context).
+        let use_ctx = self.access_start();
+        let access_ctx = (!matches!(
+            self.kind_of(ctx),
+            DeclKind::CXXRecord
+                | DeclKind::ClassTemplateSpecialization
+                | DeclKind::ClassTemplatePartialSpecialization
+        ))
+        .then_some(use_ctx);
+        // clang substitutes the aliased type without its source
+        // locations: diagnostics on types point at the alias
+        // declaration's `using` (spec/sema-templates.md §4.10).
+        let at = self.templ.alias_using_loc.get(&pattern).copied().unwrap_or(loc);
+        let checks = self.access_checks;
         let r = self.in_inst_context(ctx, |s| {
+            s.access_ctx = access_ctx;
             let mut sub = Substituter::new(s, &args);
+            sub.written_locs = false;
             sub.map_contexts(&pairs);
-            sub.ty(u, loc)
+            sub.ty(u, at)
         });
         self.pop_inst_frame();
         let Ok(u) = r else { return Err(()) };
-        let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);
+        // A substitution that checked access depends on the context it
+        // was used from: redone at every use, as clang does.
+        if self.access_checks == checks {
+            let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);
+        }
         Ok(self.ast.types.template_specialization(name, list, Some(u), true))
     }
 
@@ -1196,6 +1221,12 @@ impl Substituter<'_, '_, '_> {
             let ctx = self.nns_context(nns, loc)?;
             let q = crate::using::Qualifier { ctx, nns, loc };
             let resolved = self.sema.kind_of(m) == DeclKind::Using;
+            // [namespace.udecl]/19: a dependent qualifier's members are
+            // access-checked once it is known (a resolved pattern was
+            // checked when it was parsed).
+            if !resolved && !inheriting {
+                self.sema.check_using_declarator_access(Some(q), name, loc);
+            }
             let reverse = std::mem::replace(&mut self.sema.reverse_using_shadows, resolved);
             last = self.sema.instantiate_class_using(q, name, loc, inheriting).or(last);
             self.sema.reverse_using_shadows = reverse;
@@ -1220,6 +1251,7 @@ impl Substituter<'_, '_, '_> {
         }
         let ctx = self.nns_context(nns, loc)?;
         let q = crate::using::Qualifier { ctx, nns, loc };
+        self.sema.check_using_declarator_access(Some(q), DeclName::ident(name), loc);
         Ok(self.sema.act_on_using_typename_declarator(
             loc,
             Some(q),

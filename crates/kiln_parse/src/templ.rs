@@ -813,7 +813,7 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(self.s.act_dependent_name(q.nns, name, targs, kw));
+            return Some(self.s.act_dependent_name_at(q.nns, name, targs, kw, name_loc));
         }
         let class = self.s.classify_name(name, Some(q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {

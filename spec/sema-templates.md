@@ -794,6 +794,20 @@ instantiation may not be `inline` ("explicit instantiation cannot be
 ("explicit instantiation cannot be 'constexpr'"); both are diagnosed and
 the instantiation proceeds (clang `ActOnExplicitInstantiation`).
 
+**An explicit instantiation definition of a function or static data
+member whose template is not yet defined** (clang
+`InstantiateFunctionDefinition`/`InstantiateVariableDefinition`) is
+queued (§4.4) and instantiated at the end of the TU, so a later
+definition is used and emitted. If the pattern is still undefined there,
+the explicit instantiation is an error at its point of instantiation:
+"explicit instantiation of undefined function template 'h'" for a
+function template specialization (a member template's included), else
+"explicit instantiation of undefined {member function|static data
+member} 'f' of class template 'X<int>'". Either has the note "explicit
+instantiation refers here" at the pattern declaration (WP-194). A
+class explicit instantiation skips undefined members, and an explicit
+instantiation declaration is never diagnosed.
+
 **An explicit instantiation declaration** (`extern template`) does not
 stop sema from instantiating inline and `constexpr` members when they
 are used. It only tells codegen not to emit them (WP-080).
@@ -991,6 +1005,23 @@ Later uses of it are silent.
 - A pack expansion as the argument for a non-pack parameter is
   diagnosed when the alias is dependent: "pack expansion used as argument
   for non-pack parameter of alias template" (clang, CWG1430).
+- **Locations and access (WP-194).** clang substitutes an alias's
+  aliased type with trivial `TypeLoc`s, so every error found in it is
+  reported at the alias's `using` keyword (`templ.alias_using_loc`), not
+  at the names as written (§5.8 is off: `Substituter::written_locs =
+  false`). The "in instantiation of template type alias 'X' requested
+  here" frame is still pushed at the use. Access checks
+  ([class.access]/4) use clang's context: the use site for an alias at
+  namespace scope, the alias's class for a member alias (clang's
+  `CheckTemplateIdType` enters the alias's context only when it is not a
+  file context). The override is `Sema::access_ctx`, read by
+  `access_start` and cleared by `in_inst_context`.
+- clang re-substitutes the alias at every use, so an access error repeats
+  per use. kiln does not cache a result whose substitution ran an access
+  check (`Sema::access_checks` changed), and a check made directly in an
+  alias frame is emitted with `allow_duplicate` (spec/diag.md §7.4).
+  The SFINAE outcome of such a use is therefore never taken from the
+  cache.
 
 ### 4.11 Variable templates and static data members (and the Oven)
 
@@ -1325,6 +1356,33 @@ pub enum Tdk { Invalid, InstantiationDepth, Incomplete, IncompletePack, Inconsis
 **Memory.** Types and nodes that a failed substitution created are
 retained, since the AST is append-only. They are metered as
 `templ.sfinae_discarded` (§11.3).
+
+### 5.8 Written locations of dependent names
+
+Kiln's types are interned and carry no `TypeLoc`, so the substituter
+only knows an anchor `loc` (the pattern declarator or the use). To report
+errors found after substitution where clang does, at the name as written,
+`templ.written_locs` (`templ/written.rs`) maps a dependent type or NNS
+(`WrittenKey::Type`/`Nns`) to the sorted locations where the parser
+formed it:
+
+- `act_dependent_name_at` (`T::type`, `T::template Z<int>` written with
+  `typename`), `act_on_nested_name_component` (a dependent `T::`/`T::N::`
+  prefix) and `act_template_id` (a dependent template-id) record the name's
+  location.
+- Recording happens only while parsing (the instantiation stack is
+  empty), so instantiation never grows the table.
+- `Substituter::written(key, loc)` returns the recorded location nearest
+  `loc` (ties to the earlier), or `loc` when none is recorded. The
+  DependentName, DependentTemplateSpecialization and TemplateSpecialization
+  arms of `ty` and the identifier arm of `nns` use it for "no type named",
+  "typename specifier refers to non-type member", "no member named",
+  "cannot be used prior to '::'" and access errors. The notes are
+  unchanged.
+- An interned type written at several places resolves to the occurrence
+  nearest the anchor. That is exact when each declarator writes its own
+  type. Two identical dependent types in one declaration may swap
+  locations.
 
 ## 6. Function templates
 

@@ -143,11 +143,16 @@ here` / `implicitly declared private here`.
 nested-name-specifier component (`A::Priv::X`), an elaborated reference
 (`struct A::Priv *`), a base-specifier (checked at once in the deriving class's
 context without its bases, as clang 19 does) and `T::type` after substitution
-(a SFINAE failure in a SFINAE context), a qualified member template name
+(a SFINAE failure in a SFINAE context; reported at the name as written,
+spec/sema-templates.md §5.8, or at an alias template's `using` with clang's
+access context, §4.10), a qualified member template name
 (`A::PT<int>`), a mem-initializer-id, and each member a member
 using-declarator names ([namespace.udecl]/19; named through an object of the
 current class, as clang's `BuildUsingDeclaration` does, so `using B::m;` of a
-protected member of a base is accessible). The parser's classification
+protected member of a base is accessible). A using-declarator with a dependent
+qualifier (`using T::f;`, `using typename T::type;`) is checked when the class
+is instantiated, at the declarator's name (`member_using`,
+`member_using_typename`; WP-194); inheriting constructors are not checked. The parser's classification
 (`classify_name`) is side-effect free; `Sema::check_type_name_access` redoes
 the lookup for a class member to learn the naming class and using-shadow. An
 injected-class-name is a public member of its own class (`struct G : F2 {
@@ -1868,9 +1873,7 @@ polymorphic classes) for `final_overrider`/vtable cache size.
 7. (WP-066b) `DeclRefExpr`/`MemberExpr` carry no nested-name-specifier;
    `(a.f)()` loses the parentheses when the call is rebuilt. Dumps that
    would show either differ.
-8. (WP-066b, WP-174) A type name checked after substitution (`T::type`) is
-   reported at the location the substitution was given (the declarator,
-   or the use of an alias template) rather than at the name; `&B::m`'s [class.protected] rule and member-pointer
+8. (WP-066b, WP-174) `&B::m`'s [class.protected] rule and member-pointer
    base-to-derived conversion access are not re-checked; an unqualified
    `&f` naming a member function gets no `must explicitly qualify name of
    member function` diagnostic; calls through member pointers get no

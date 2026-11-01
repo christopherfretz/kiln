@@ -78,8 +78,18 @@ impl Sema<'_, '_> {
     }
 
     fn effective_context(&self) -> EffectiveContext {
-        let start = self.initializing.and_then(|v| self.ast.decls.get(v).ctx()).unwrap_or(self.ctx);
-        self.effective_context_at(start)
+        self.effective_context_at(self.access_start())
+    }
+
+    /// The context access is checked from: the use's while a
+    /// namespace-scope alias template is substituted
+    /// ([`Sema::access_ctx`]), else the current one (the class of a
+    /// static data member being initialized out of line).
+    pub(crate) fn access_start(&self) -> DeclId {
+        if let Some(c) = self.access_ctx {
+            return c;
+        }
+        self.initializing.and_then(|v| self.ast.decls.get(v).ctx()).unwrap_or(self.ctx)
     }
 
     /// The effective context of a declaration in context `start`.
@@ -380,7 +390,15 @@ impl Sema<'_, '_> {
         if decl_access == Access::None || decl_access == Access::Public && own_class {
             return true;
         }
-        let check = AccessCheck { member: found, naming_class: naming, object_class: object, loc };
+        self.access_checks = self.access_checks.wrapping_add(1);
+        let repeat = self
+            .inst
+            .stack
+            .frames
+            .last()
+            .is_some_and(|f| f.kind == crate::templ::stack::FrameKind::AliasTemplate);
+        let check =
+            AccessCheck { member: found, naming_class: naming, object_class: object, loc, repeat };
         // Delayed only while still in the declaration's own context: a
         // class or function body (or lambda) inside the delayed region is
         // its own context (clang's `pushUndelayed`).
@@ -627,7 +645,7 @@ impl Sema<'_, '_> {
             .arg(u8::from(unpriv == Access::Protected))
             .arg(self.ty_arg(self.tag_type(t.declaring)));
         let msg = self.access_path_notes(msg, &ec, &t, naming);
-        self.emit(msg);
+        self.emit(if c.repeat { msg.allow_duplicate() } else { msg });
         false
     }
 
