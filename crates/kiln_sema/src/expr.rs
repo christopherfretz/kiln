@@ -936,7 +936,7 @@ impl Sema<'_, '_> {
             // Distinct entities found via using-directives ([namespace.udir]/6).
             let text = self.decl_name_str(name);
             let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
-            for &c in &found.decls {
+            for c in self.ambiguity_order(&found.decls, qualifier.is_none()) {
                 let n = self
                     .diag(DiagId::note_ambiguous_candidate, self.ast.decls.get(c).loc())
                     .arg(self.qualified_decl_name(c));

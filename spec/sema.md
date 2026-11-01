@@ -76,6 +76,16 @@ Constructors:
     [namespace.udir]/2 requires.
   - If several *different* entities are found at one level, lookup
     reports `reference to 'x' is ambiguous`, with candidate notes.
+    The notes follow clang's order (`ambiguity_order`, WP-179): for an
+    unqualified lookup that ends at a namespace scope, the names declared
+    in that open namespace definition come first, newest first (clang's
+    `IdentifierResolver` chain; `Scope::first_decl` marks the first
+    declaration created in the scope instance), then the namespace's
+    lookup table, and duplicates are removed by moving the last entry
+    into the duplicate's slot (`LookupResult::resolveKind`). A qualified
+    lookup lists table order. An ambiguous *type* name (`S s;` with `S`
+    in the namespace and in one of its inline namespaces) is not yet
+    diagnosed: `classify_name` takes the first declaration.
 - **Block-scope using-directives** ([namespace.udir]/2): a local
   scope's `using namespace N;` is collected while walking outwards, and
   `N`'s members are searched at the nearest enclosing namespace (or the
@@ -116,7 +126,15 @@ Constructors:
   qualifier. `act_on_nested_name_spelled` also returns the declaration
   as written, for `nns_component`.
 - **Redeclaration lookup** (`lookup_current_scope`) searches only the
-  current scope, and leaves out using-shadows
+  current scope. The members of a namespace's inline namespaces are in
+  other scopes ([basic.scope.scope]/4, [namespace.def.general]/6): an
+  unqualified declaration in the enclosing namespace never redeclares
+  one, it declares a distinct entity, and a later use that finds both
+  is ambiguous (clang's `FilterLookupForScope` without
+  `AllowInlineNamespace`; WP-179). A qualified declaration (`int I::x
+  = 1;`, `void N::f() {}`) and the template lookup of an explicit
+  specialization (`current_scope_with_inline_dn`, [temp.expl.spec]/3)
+  do see them. Redeclaration lookup leaves out using-shadows
   (`current_scope_shadows` returns those, for §4.8's conflict checks). If the current scope is the outermost block of a
   control statement (a Block directly above a Control scope), it also
   searches the Control scope, so `if (int x = 0) { int x; }` is

@@ -378,7 +378,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             rtti: true,
             range_lifetime_extension: false,
             pack: (0, Vec::new()),
-            scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
+            scopes: vec![scope::Scope {
+                first_decl: 0,
+                ..scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))
+            }],
             ctx: tu,
             func: None,
             unevaluated: 0,
