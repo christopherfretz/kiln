@@ -893,6 +893,33 @@ impl Parser<'_, '_> {
 
     // -- class and enum specifiers ----------------------------------------------------
 
+    /// The optional nested-name-specifier of a tag specifier: `N::C`, or
+    /// `X<A>::C` (the out-of-line definition of a member class of a class
+    /// template, [temp.mem.class]); the scope is entered as clang's
+    /// `ParseClassSpecifier` does.
+    fn parse_tag_qualifier(&mut self, ds: &mut DeclSpec) -> Option<DeclId> {
+        let template_id_qual = || {
+            self.ident().is_some()
+                && self.peek_is(1, Punct::Less)
+                && matches!(self.skip_template_args(self.pos() + 1),
+                    Some((close, false)) if self.tok_at(close + 1).kind
+                        == TokKind::Punct(Punct::ColonColon))
+        };
+        if !(self.at(Punct::ColonColon)
+            || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
+            || template_id_qual())
+        {
+            return None;
+        }
+        let saved = self.s.set_entering_context(true);
+        let q = self.parse_nested_name();
+        self.s.set_entering_context(saved);
+        q.unwrap_or_else(|()| {
+            ds.invalid = true;
+            None
+        })
+    }
+
     /// class-specifier, enum-specifier or elaborated-type-specifier
     /// ([class.pre], [dcl.enum], [dcl.type.elab]).
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
@@ -913,29 +940,7 @@ impl Parser<'_, '_> {
         }
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
-        let mut qualifier = None;
-        // `N::C`, or `X<A>::C` (the out-of-line definition of a member
-        // class of a class template, [temp.mem.class]); the scope is
-        // entered as clang's `ParseClassSpecifier` does.
-        let template_id_qual = || {
-            self.ident().is_some()
-                && self.peek_is(1, Punct::Less)
-                && matches!(self.skip_template_args(self.pos() + 1),
-                    Some((close, false)) if self.tok_at(close + 1).kind
-                        == TokKind::Punct(Punct::ColonColon))
-        };
-        if self.at(Punct::ColonColon)
-            || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
-            || template_id_qual()
-        {
-            let saved = self.s.set_entering_context(true);
-            let q = self.parse_nested_name();
-            self.s.set_entering_context(saved);
-            match q {
-                Ok(q) => qualifier = q,
-                Err(()) => ds.invalid = true,
-            }
-        }
+        let qualifier = self.parse_tag_qualifier(ds);
         let name = self.ident().map(|n| (n, self.bump().span.lo));
         if name.is_none() && qualifier.is_some() {
             self.error_here(DiagId::parse_expected_unqualified_id);
