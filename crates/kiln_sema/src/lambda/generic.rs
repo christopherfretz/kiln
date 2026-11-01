@@ -105,10 +105,11 @@ impl Sema<'_, '_> {
         // The specialization is named by the substituted target type,
         // its placeholder return type kept (clang: `operator auto
         // (*)(int)`); mangling uses the template's name.
-        let pattern_ret = self.ast.decls.get(op).ty().and_then(|t| match self.ast.types.view(t.ty()) {
-            TypeView::Function(f) => Some(f.ret()),
-            _ => None,
-        });
+        let pattern_ret =
+            self.ast.decls.get(op).ty().and_then(|t| match self.ast.types.view(t.ty()) {
+                TypeView::Function(f) => Some(f.ret()),
+                _ => None,
+            });
         // (In the pattern, the placeholder is deduced as dependent.)
         let is_placeholder = |r: QualType| {
             matches!(self.ast.types.canonical_view(r), TypeView::Auto { .. })

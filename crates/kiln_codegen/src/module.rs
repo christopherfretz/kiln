@@ -491,7 +491,10 @@ impl<'a> Cg<'a> {
             Some((TemplLinkKind::MemberOfSpecialization, i)) => {
                 match ast.templates.member_spec(i).map(|m| m.kind) {
                     Some(SpecKind::ExplicitInstantiationDeclaration) => return true,
-                    Some(SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDefinition) => {
+                    Some(
+                        SpecKind::ExplicitSpecialization
+                        | SpecKind::ExplicitInstantiationDefinition,
+                    ) => {
                         return false;
                     }
                     _ => {}
@@ -508,7 +511,10 @@ impl<'a> Cg<'a> {
                     }
                     match ast.spec_info(c).map(|(_, s)| s.kind) {
                         Some(SpecKind::ExplicitInstantiationDeclaration) => return true,
-                        Some(SpecKind::ExplicitInstantiationDefinition | SpecKind::ExplicitSpecialization) => {
+                        Some(
+                            SpecKind::ExplicitInstantiationDefinition
+                            | SpecKind::ExplicitSpecialization,
+                        ) => {
                             return false;
                         }
                         _ => {}
@@ -516,7 +522,8 @@ impl<'a> Cg<'a> {
                     if let Some((_, m)) = ast.member_spec_info(c) {
                         match m.kind {
                             SpecKind::ExplicitInstantiationDeclaration => return true,
-                            SpecKind::ExplicitInstantiationDefinition | SpecKind::ExplicitSpecialization => {
+                            SpecKind::ExplicitInstantiationDefinition
+                            | SpecKind::ExplicitSpecialization => {
                                 return false;
                             }
                             _ => {}

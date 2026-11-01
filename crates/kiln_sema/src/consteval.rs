@@ -316,9 +316,21 @@ impl Sema<'_, '_> {
                 Some(g) => {
                     let why = if ctor {
                         let loc = self.ast.decls.get(g).loc();
-                        Escalation { loc, callee, call: true, default_init: Some(decl), written: false }
+                        Escalation {
+                            loc,
+                            callee,
+                            call: true,
+                            default_init: Some(decl),
+                            written: false,
+                        }
                     } else {
-                        Escalation { loc: at, callee, call: true, default_init: None, written: false }
+                        Escalation {
+                            loc: at,
+                            callee,
+                            call: true,
+                            default_init: None,
+                            written: false,
+                        }
                     };
                     self.escalate(g, why);
                     return;
@@ -430,13 +442,8 @@ impl Sema<'_, '_> {
                             Some((f, w)) => (self.ast.decls.get(g).loc(), Some(f), w),
                             None => (self.begin_loc(c), None, false),
                         };
-                        let why = Escalation {
-                            loc,
-                            callee,
-                            call: true,
-                            default_init: field,
-                            written,
-                        };
+                        let why =
+                            Escalation { loc, callee, call: true, default_init: field, written };
                         self.escalate(g, why);
                     }
                     None => self.report_immediate_call(c, callee, fail, None),
@@ -458,7 +465,10 @@ impl Sema<'_, '_> {
             let loc = self.begin_loc(r);
             if let Some(g) = escalating {
                 self.ast.exprs.set_immediate_escalating(r);
-                self.escalate(g, Escalation { loc, callee: d, call: false, default_init: None, written: false });
+                self.escalate(
+                    g,
+                    Escalation { loc, callee: d, call: false, default_init: None, written: false },
+                );
                 continue;
             }
             let consteval = self.is_consteval_kind(d);
@@ -624,7 +634,11 @@ impl Sema<'_, '_> {
                     .arg(u8::from(!why.written)),
                 None => self
                     .diag(DiagId::note_immediate_function_reason, why.loc)
-                    .arg(if self.is_lambda_call_op(f) { self.unqualified_decl_name(f) } else { name(f) })
+                    .arg(if self.is_lambda_call_op(f) {
+                        self.unqualified_decl_name(f)
+                    } else {
+                        name(f)
+                    })
                     .arg(u8::from(why.call))
                     .arg(u8::from(self.is_consteval_kind(why.callee)))
                     .arg(name(why.callee))

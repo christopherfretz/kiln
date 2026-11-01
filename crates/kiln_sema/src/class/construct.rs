@@ -154,8 +154,10 @@ impl Sema<'_, '_> {
             self.unsupported("initialization by an initializer-list constructor", loc);
             return Some(self.recover(ty, args, loc));
         }
-        let actual =
-            matches!((entity, ck), (InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating));
+        let actual = matches!(
+            (entity, ck),
+            (InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating)
+        );
         let sel = self.resolve_ctor_ex(class, args, style, actual);
         if sel == Selected::Missing
             && style == InitStyle::Direct

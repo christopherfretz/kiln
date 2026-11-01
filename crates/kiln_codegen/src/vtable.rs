@@ -153,14 +153,14 @@ impl Cg<'_> {
     fn class_is_templated_or_instantiated(&self, def: DeclId) -> bool {
         let ast = self.ast;
         let n = ast.decls.get(def);
-        if n.has(DeclFlags::DEPENDENT_CTX)
-            || ast.described_template(def).is_some()
-        {
+        if n.has(DeclFlags::DEPENDENT_CTX) || ast.described_template(def).is_some() {
             return true;
         }
         let first = ast.first(def);
         ast.spec_info(first).is_some_and(|(_, s)| s.kind != SpecKind::ExplicitSpecialization)
-            || ast.member_spec_info(first).is_some_and(|(_, m)| m.kind != SpecKind::ExplicitSpecialization)
+            || ast
+                .member_spec_info(first)
+                .is_some_and(|(_, m)| m.kind != SpecKind::ExplicitSpecialization)
     }
 
     /// Whether class `first` is under an explicit instantiation
