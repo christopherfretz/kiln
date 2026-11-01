@@ -620,6 +620,7 @@ impl Substituter<'_, '_, '_> {
         };
         let base = self.ty(x.allocated_ty, x.type_loc)?;
         let mut declarator = Declarator::new(DeclaratorContext::TypeName, x.type_loc);
+        declarator.site = crate::declspec::DeclSite::New;
         if n.has(ExprFlags::ARRAY_FORM) {
             let size = self.opt_expr(x.array_size)?;
             declarator.chunks.push(Chunk::Array { size, loc: x.type_loc });
