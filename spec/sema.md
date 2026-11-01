@@ -1133,7 +1133,13 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
 - **References.** A `DeclRefExpr` (or `&C::m`) naming an immediate
   function that is not the callee of a candidate is `cannot take
   address of consteval function 'f' outside of an immediate
-  invocation`, with `declared here`.
+  invocation`, with `declared here`. For a qualified name (`&C::m`, also
+  inside a member function) the error is at the qualifier, as clang.
+  The Oven also rejects a constant result (or a subobject of one) that
+  is a pointer, reference or member pointer to an immediate function:
+  `pointer|reference to a consteval declaration is not a constant
+  expression` at the invocation's callee, then `declared here`
+  ([expr.const]/22; WP-137).
 - **Escalation** (P2564, [expr.const]/18-20). Immediate-escalating:
   a lambda call operator, a defaulted special member, a `constexpr`
   function instantiated from a templated entity, and any templated
@@ -1146,21 +1152,26 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   on a later failed call of `f`. Successful invocations in it are still
   wrapped and folded. A specialization starts non-escalated whatever
   its pattern is; refs already flagged are skipped. A lambda whose call
-  operator escalates gets an escalated `__invoke`.
+  operator escalates gets an escalated `__invoke`, and its conversion
+  function to a function pointer is escalated too
+  ([expr.prim.lambda.closure]/10; clang 19 instead rejects every use of
+  the conversion of a consteval lambda).
 - **Templates.** A template definition's non-dependent invocations are
   checked at the definition (they are shared with every instantiation);
   dependent ones are built and checked at instantiation, with
   `in instantiation of ...` notes. A `ConstantExpr` is substituted
-  through to its operand and re-wrapped by the rebuilt call.
+  through to its operand and re-wrapped by the rebuilt call. A shared
+  (not rebuilt) expression is walked at each instantiation and the
+  functions it odr-uses (named, constructors, bound destructors,
+  `operator new`/`delete`) are marked referenced, which defines or
+  instantiates them, as clang's rebuild does (`templ/subst/shared.rs`;
+  unevaluated operands and lambda bodies are not entered).
 - **Codegen.** A valued `ConstantExpr` lowers to its constant: scalars
   directly, aggregates by clang 19's `CreateCoercedStore` into the
   destination (one store per top-level element).
 - Gaps: default-argument and default-member-initializer invocations are
-  not checked where used; functions called only from shared
-  non-dependent template expressions are `referenced`, not `used`; the
-  lambda conversion function returns the escalated `__invoke` without
-  being immediate itself (as clang); `&C::m` inside a member function
-  reports at the name, not the qualifier.
+  not checked where used; the escalation of a generic lambda's
+  conversion function is not tracked per specialization.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
