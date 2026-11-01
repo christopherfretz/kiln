@@ -941,8 +941,8 @@ impl Sema<'_, '_> {
             return e;
         }
         let mut inits = Vec::new();
+        // (A designated list was rejected above.)
         match l.items.first() {
-            None => {}
             Some(InitItem { value: InitValue::Expr(e), designator }) if designator.is_empty() => {
                 self.check_narrowing(*e, ty, ty);
                 inits.push(self.convert_for_init(*e, ty, ConvCtx::Initialization));
@@ -958,8 +958,7 @@ impl Sema<'_, '_> {
                 let list = self.ast.exprs.init_list_inits(e);
                 inits.extend(self.ast.lists.iter::<ExprId>(list));
             }
-            // A designated list was rejected above.
-            Some(_) => {}
+            _ => {}
         }
         if let Some(extra) = l.items.get(1) {
             let at = entity.unwrap_or_else(|| extra.value.loc(self));

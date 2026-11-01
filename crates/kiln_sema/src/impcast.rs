@@ -207,17 +207,15 @@ impl Sema<'_, '_> {
         let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.' || c == b'\'';
         if text.get(i).is_some_and(|&c| word(c)) {
             while let Some(&c) = text.get(i) {
-                if word(c) {
-                    i += 1;
-                } else if (c == b'+' || c == b'-')
+                // An exponent sign continues a number (`1.5e+3`).
+                let exp_sign = (c == b'+' || c == b'-')
                     && i > start
                     && matches!(text[i - 1], b'e' | b'E' | b'p' | b'P')
-                    && (text[start].is_ascii_digit() || text[start] == b'.')
-                {
-                    i += 1;
-                } else {
+                    && (text[start].is_ascii_digit() || text[start] == b'.');
+                if !(word(c) || exp_sign) {
                     break;
                 }
+                i += 1;
             }
         } else {
             i += 1;

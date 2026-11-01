@@ -558,11 +558,11 @@ pub(crate) fn is_zero_value(kind: FloatKind, bits: u128) -> bool {
 
 /// `llvm::APFloat::toString(Str, FormatPrecision)` with its default
 /// padding (3) and zero truncation, for the precision clang's
-/// `DiagnoseFloatingImpCast` passes (`(p * 59 + 195) / 196` digits for a
+/// `DiagnoseFloatingImpCast` passes (`(p * 59).div_ceil(196)` digits for a
 /// `p`-bit significand): `1.5`, `123456789.5`, `1.5E+15`, `1.0E-5`.
 pub(crate) fn apfloat_diag_string(kind: FloatKind, bits: u128) -> String {
     let p = params(kind).0;
-    let prec = (p * 59 + 195) / 196;
+    let prec = (p * 59).div_ceil(196);
     let Some((neg, mut digits, k)) = sig_digits(kind, bits, prec.min(37)) else {
         return match decode(kind, bits) {
             Decoded::NaN => "NaN".into(),
@@ -592,7 +592,9 @@ pub(crate) fn apfloat_diag_string(kind: FloatKind, bits: u128) -> String {
         } else {
             out.push_str(&ds(1..nd as usize));
         }
-        out.push_str(&format!("E{}{}", if k >= 0 { '+' } else { '-' }, k.abs()));
+        out.push('E');
+        out.push(if k >= 0 { '+' } else { '-' });
+        out.push_str(&k.unsigned_abs().to_string());
     } else if exp >= 0 {
         out.push_str(&ds(0..nd as usize));
         out.extend(std::iter::repeat_n('0', exp as usize));

@@ -175,7 +175,7 @@ impl Sema<'_, '_> {
             match tag {
                 TagKind::Union => site::UNION_MEMBER,
                 TagKind::Class => site::CLASS_MEMBER,
-                _ => site::STRUCT_MEMBER,
+                TagKind::Struct => site::STRUCT_MEMBER,
             }
         };
         self.ctad_misplaced(base, ds.type_loc.unwrap_or(ds.loc), Misplaced::NotAllowed(s))
