@@ -279,7 +279,12 @@ impl Substituter<'_, '_, '_> {
             return Ok(());
         };
         let style = data.spec.init_style();
-        if let Ok(i) = self.initializer(init, style) {
+        // A lambda in the initializer is numbered in `v`'s context
+        // (spec/sema-lambda.md; clang `TemplatedVariable`).
+        let saved = self.sema.lambda_mangle.var.replace(v);
+        let i = self.initializer(init, style);
+        self.sema.lambda_mangle.var = saved;
+        if let Ok(i) = i {
             match i {
                 Some(i) => self.sema.act_on_init(v, i),
                 None => self.sema.act_on_uninit(v),

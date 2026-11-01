@@ -123,14 +123,27 @@ IR value names).
 ### 3.5 Linkage and mangling numbers
 
 [basic.def.odr]/14 and Itanium §5.1.8 (clang `handleLambdaNumbering`):
-a lambda in the body of an inline function, in a default argument in a
+a lambda in the body of an inline function or of a templated function
+(an instantiation in progress, or a dependent context such as a function
+template pattern or a generic lambda's body; clang
+`getCurrentMangleNumberContext`'s `inTemplateInstantiation() ||
+isDependentContext()`, WP-182), in a default argument in a
 class definition, in a default member initializer, or in the
-initializer of an inline variable (or variable template) gets a
+initializer of an inline variable or of a variable template pattern or
+non-explicit specialization (instantiation sets the numbering variable
+around the initializer, `subst::var_init`) gets a
 mangling number per (numbering context, call-operator parameter types,
 generic) and, for the last three, a context declaration that prefixes its
 name. `LambdaData.mangling` records both. Any other closure has no
 number and no linkage: its members are internal and it mangles as an
 anonymous class (`$_N`). See abi.md §8.9.
+`tests/codegen/lambda_in_template_mangling.cpp` checks the templated
+cases IR-exact. Known deviations (follow-ups): a lambda in a default
+argument of a function template mangles at namespace scope (`_ZN3$_0`;
+clang numbers it in the specialization's local scope,
+`_ZZ4dfltIiEiPFivEEN3$_0...`); and a nested generic lambda's `auto`
+return type is substituted (`S2_`) where clang writes `Da` (WP-117's
+substitution rework; inline functions too).
 
 ## 4. Captures
 

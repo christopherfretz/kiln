@@ -331,7 +331,8 @@ impl Sema<'_, '_> {
 
     /// Gives closure type `closure` of lambda `id` with call operator `f`
     /// its mangling number and context (clang `handleLambdaNumbering`):
-    /// lambdas in the body of an inline function, in a default argument
+    /// lambdas in the body of an inline or templated function (one in a
+    /// template definition or being instantiated), in a default argument
     /// in a class definition, in a default member initializer or in the
     /// initializer of an inline variable are numbered per context and
     /// call-operator parameter list; any other has internal linkage and
@@ -363,7 +364,12 @@ impl Sema<'_, '_> {
         let ctx = self.ast.decls.get(closure).ctx()?;
         let kind = self.kind_of(ctx);
         if is_function(kind) {
-            return self.in_inline_function(ctx).then_some((ctx, None));
+            // clang `getCurrentMangleNumberContext`: `inTemplateInstantiation()
+            // || CurContext->isDependentContext()` numbers it too; a
+            // template parameter list open at the introducer is the latter.
+            let templated = self.inst.stack.depth() > 0
+                || self.lambdas.last().is_some_and(|t| t.heads > 0);
+            return (templated || self.in_inline_function(ctx)).then_some((ctx, None));
         }
         if kind == DeclKind::CXXRecord {
             if let Some(p) = self.lambda_mangle.default_arg {
@@ -380,7 +386,14 @@ impl Sema<'_, '_> {
             .ast
             .redecls_of(v)
             .any(|r| self.ast.decls.var(r).is_some_and(|x| x.spec.is_inline()));
-        inline.then_some((v, Some(v)))
+        // clang `TemplatedVariable`: a variable template's pattern or an
+        // implicit specialization of one.
+        let templated = self.ast.described_template(v).is_some()
+            || self
+                .ast
+                .spec_info(v)
+                .is_some_and(|(_, i)| i.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization);
+        (inline || templated).then_some((v, Some(v)))
     }
 
     /// clang `isInLineFunction`: `dc` or a lexically enclosing function

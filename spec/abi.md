@@ -673,7 +673,9 @@ points, thunks and method indices are clang's.
   function's local scope with `d [<number>] _` (the parameter counted
   from the last, clang `mangleLocalName`); one created in the initializer
   of a variable or data member has `<closure-prefix> ::= [ <prefix> ]
-  <unqualified-name> M` (a substitution candidate). `decltype(auto)` is
+  <unqualified-name> M` (a substitution candidate), or `<template-prefix>
+  <template-args> M` for a variable template specialization (clang
+  `mangleClosurePrefix`; WP-182: `_ZNK2vtIiEMUliE_clEi`). `decltype(auto)` is
   `Dc`. `tests/codegen/lambda_names.cpp` checks it IR-exact (symbols
   included) against clang; the `S2_` substitution in some closure
   names inside templates is WP-117's.
