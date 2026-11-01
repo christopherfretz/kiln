@@ -637,6 +637,7 @@ diag_ids! {
     sema_default_init_const = Error (1) "default initialization of an object of const type {0}";
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
     sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
+    sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
     sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
@@ -646,6 +647,8 @@ diag_ids! {
     sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";
     sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
     note_immediate_function_reason = Note (4) "'{0}' is an immediate function because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} function '{3}'{1:| and that call is not a constant expression}";
+    note_immediate_default_init_reason = Note (5) "'{0}' is an immediate {1:function|constructor} because the default initializer of '{2}' contains a call to {3:an immediate|a consteval} function '{4}' and that call is not a constant expression";
+    note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
     sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
     sema_block_extern_init = Error (0) "declaration of block scope identifier with linkage cannot have an initializer";
     sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";
@@ -1006,13 +1009,14 @@ diag_ids! {
     sema_capture_not_variable = Error (1) "'{0}' in capture list does not name a variable";
     sema_capture_class_member = Error (1) "class member '{0}' cannot appear in capture list as it is not a variable";
     note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
-    note_deleted_subobject = Note (6) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
-    note_deleted_uninit_field = Note (4) "default constructor of {0} is implicitly deleted because field {1} of {2:reference|const-qualified} type {3} would not be initialized";
+    note_deleted_subobject = Note (6) "{0:default constructor of|copy constructor of|move constructor of|copy assignment operator of|move assignment operator of|destructor of|constructor inherited by} {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
+    note_deleted_uninit_field = Note (5) "{0:default constructor of|constructor inherited by} {1} is implicitly deleted because field {2} of {3:reference|const-qualified} type {4} would not be initialized";
     note_deleted_rvalue_ref_field = Note (3) "copy constructor of {0} is implicitly deleted because field {1} is of rvalue reference type {2}";
     note_deleted_assign_field = Note (5) "{0:copy|move} assignment operator of {1} is implicitly deleted because field {2} is of {3:reference|const-qualified} type {4}";
     note_deleted_copy_user_declared_move = Note (3) "copy {0:constructor|assignment operator} is implicitly deleted because {1} has a user-declared move {2:constructor|assignment operator}";
-    note_deleted_all_const = Note (2) "default constructor of {0} is implicitly deleted because all {1:data members|data members of an anonymous union member} are const-qualified";
+    note_deleted_all_const = Note (3) "{0:default constructor of|constructor inherited by} {1} is implicitly deleted because all {2:data members|data members of an anonymous union member} are const-qualified";
     sema_call_implicitly_deleted_ctor = Error (2) "call to implicitly-deleted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1}";
+    sema_deleted_inherited_ctor_use = Error (2) "constructor inherited by {0} from base class {1} is implicitly deleted";
     sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
     sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
     sema_use_deleted_function = Error (1) "attempt to use a deleted function{0}";
@@ -1418,6 +1422,8 @@ diag_ids! {
     note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
     note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
     note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
+    note_non_literal_virtual_base = Note (2) "{0:struct|interface|class} with virtual base {1:class|classes} is not a literal type";
+    note_constexpr_virtual_base_here = Note (0) "virtual base class declared here";
     // GNU asm statements (WP-140)
     parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
     parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', or '('";

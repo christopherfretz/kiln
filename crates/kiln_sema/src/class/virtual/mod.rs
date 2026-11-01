@@ -15,6 +15,7 @@ mod abstract_;
 mod cast;
 mod complete;
 mod graph;
+mod used;
 
 use kiln_ast::decl::{DeclFlags, FnSpec, FnStorage};
 use kiln_ast::names::DeclName;

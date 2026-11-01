@@ -45,6 +45,7 @@ impl Substituter<'_, '_, '_> {
             if self.lambda_bodies > 0 {
                 self.note_shared_this(e);
             }
+            self.sema.mark_shared_expr_referenced(e);
             return Ok(e);
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
@@ -1019,6 +1020,14 @@ impl Substituter<'_, '_, '_> {
         let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
         let out = self.init_items(&items)?;
         let rbrace = self.sema.ast.exprs.end_loc(e).unwrap_or(n.loc());
+        // A default member initializer the semantic list used is used
+        // again by the instantiation ([expr.const]/16).
+        for &x in &items {
+            if self.sema.ast.exprs.get(x).kind() == ExprKind::CXXDefaultInitExpr {
+                let f = self.sema.ast.exprs.default_init_field(x);
+                self.sema.note_default_use(x, f, rbrace);
+            }
+        }
         Ok(InitList { items: out, lbrace: n.loc(), rbrace })
     }
 

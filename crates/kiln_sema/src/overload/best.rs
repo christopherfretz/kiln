@@ -120,7 +120,7 @@ impl Sema<'_, '_> {
                 } else if kind == CandidateKind::Function || self.is_static_method(f) {
                     super::ignored_object(o.ty)
                 } else {
-                    self.object_ics(&o, f)
+                    self.object_ics_found(&o, f, found)
                 };
                 set.ics.push(x);
                 if x.is_bad() {

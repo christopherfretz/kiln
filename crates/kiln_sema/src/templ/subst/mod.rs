@@ -14,6 +14,7 @@ mod decls;
 mod exprs;
 mod lambda;
 mod local;
+mod shared;
 mod stmts;
 mod types;
 

@@ -185,7 +185,8 @@ impl Sema<'_, '_> {
         }
         let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
         if m.nns.is_some() && !self.is_err_expr(e) {
-            self.member_refs.insert(e, MemberRef { decl: d, error: false, qualified: true });
+            self.member_refs
+                .insert(e, MemberRef { decl: d, error: false, qualified: true, begin: None });
         }
         Some(e)
     }

@@ -12,10 +12,18 @@ template <class T> struct W : T { using T::T; };
 struct Q { Q(int, Q*, const Q&); };
 struct R : Q { using Q::Q; };
 namespace ns { struct P { P(P*); }; struct S : P { using P::P; }; }
+// A constructor template specialization: CI1/CI2 <base> <template-args>
+// with the pattern's parameter types (WP-146); its base variant is C2.
+struct VB { template <class... T> VB(T...); };
+struct VD : VB { using VB::VB; };
+struct VE : VB { VE() : VB(1, 2.0) {} };
+template <class T> struct TB { template <class U> TB(U, T*); };
+struct TD : TB<int> { using TB<int>::TB; };
 void use() {
   R r(1, nullptr, r); ns::S s(nullptr);
   B b(1); B b2(2.0);
   M1 m1(5); M2 m2(6);
   long l = 0; D<long> d(9, &l);
   W<A> w(3); W<W<A>> ww(4.0);
+  VD vd(1, 'c'); VE ve; TD td(2L, nullptr);
 }

@@ -1464,8 +1464,12 @@ impl Sema<'_, '_> {
             self.set_member_access(t);
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
-        if d.qualifier.is_none() && d.op_name.is_none() && d.lit_suffix.is_none() {
-            self.check_using_shadow_conflict(decl, name);
+        if d.qualifier.is_none() {
+            // Operator and conversion function names too: a member
+            // `operator[]` hides a using-declared base one
+            // ([namespace.udecl]/14).
+            let dn = self.ast.decls.get(decl).name();
+            self.check_using_shadow_conflict(decl, dn);
         }
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
@@ -1502,6 +1506,12 @@ impl Sema<'_, '_> {
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
+        }
+        if d.qualifier.is_none() && self.kind_of(decl) == DeclKind::CXXConversion {
+            // A conversion function hides a using-declared base one with
+            // the same target type ([namespace.udecl]/14).
+            let dn = self.ast.decls.get(decl).name();
+            self.check_using_shadow_conflict(decl, dn);
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -1844,7 +1854,7 @@ impl Sema<'_, '_> {
         if let Some(t) = self.finish_template_pattern(td) {
             self.set_member_access(t);
         }
-        self.check_using_shadow_conflict(td, name);
+        self.check_using_shadow_conflict(td, DeclName::ident(name));
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(td, &attrs);
         }
@@ -3053,6 +3063,10 @@ impl Sema<'_, '_> {
         }
         // clang reports at the variable (`CheckCompleteVariableDeclaration`).
         let loc = self.ast.decls.get(v).loc();
+        if self.constexpr_var_virtual_base(v, loc) {
+            self.ast.decls.finish_eval(v, None);
+            return;
+        }
         if self.has_errors_in(e)
             || self.expr_is_value_dependent(e)
             || self.ast.decls.get(v).ty().is_some_and(|t| self.is_dependent_type(t))
@@ -3077,6 +3091,35 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+
+    /// [dcl.constexpr]/6: a `constexpr` variable of a class type (or
+    /// array of it) with a virtual base has a non-literal type
+    /// ([basic.types.general]/10); clang `RequireLiteralType`'s notes.
+    /// Other non-literal types are left to the evaluation (WP-146).
+    fn constexpr_var_virtual_base(&mut self, v: DeclId, loc: Loc) -> bool {
+        let Some(q) = self.ast.decls.get(v).ty() else { return false };
+        if self.is_dependent_type(q) {
+            return false;
+        }
+        let Some(r) = self.ast.types.as_record(self.base_element(q)) else { return false };
+        let Some(def) = self.ast.definition(r) else { return false };
+        if !self.defn_bits(def).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return false;
+        }
+        let vbases = self.virtual_bases(def);
+        let tag = 2 * u8::from(self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Class));
+        let mut msg =
+            self.diag(DiagId::sema_constexpr_var_non_literal, loc).arg(self.ty_arg(q)).with_note(
+                self.diag(DiagId::note_non_literal_virtual_base, self.ast.decls.get(def).loc())
+                    .arg(tag)
+                    .arg(u8::from(vbases.len() != 1)),
+            );
+        for (_, b) in vbases {
+            msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+        }
+        self.emit(msg);
+        true
     }
 
     pub(crate) fn has_errors_in(&self, e: ExprId) -> bool {
@@ -3268,6 +3311,11 @@ impl Sema<'_, '_> {
             let loc = self.ast.decls.get(f).loc();
             self.mark_base_and_member_dtors_referenced(loc, class);
             self.check_destructor_delete(f, class);
+            // [basic.def.odr]/8: and uses the vtable.
+            self.mark_vtable_used(class, loc);
+        }
+        if !self.in_template() {
+            self.mark_key_function_vtable_used(f);
         }
         self.pop_scope();
         if let Some(saved) = self.fn_saved.pop() {
@@ -3518,7 +3566,7 @@ impl Sema<'_, '_> {
             && qualifier.is_none()
             && prev.is_none()
         {
-            self.check_using_shadow_conflict(d, n);
+            self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
     }

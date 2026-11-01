@@ -153,6 +153,11 @@ pub(crate) struct Fx {
     /// The indices of the enclosing `ArrayInitLoopExpr`s, innermost last
     /// (clang `ArrayInitIndex`).
     pub array_index: Vec<V>,
+    /// The evaluated arguments (and their types) of the C-variadic
+    /// inheriting constructor being inlined at its call site (clang
+    /// `CXXInheritedCtorInitExprArgs`), forwarded by its
+    /// `CXXInheritedCtorInitExpr`.
+    pub inh_args: Option<(Vec<CallArg>, Vec<QualType>)>,
 }
 
 impl Fx {
@@ -193,6 +198,7 @@ impl Fx {
             conds: Vec::new(),
             opaque: FxHashMap::default(),
             array_index: Vec::new(),
+            inh_args: None,
         }
     }
 }
