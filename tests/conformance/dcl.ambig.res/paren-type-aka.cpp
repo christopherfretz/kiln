@@ -10,7 +10,7 @@
 typedef int I;
 int (*p1);
 I (*p2);
-int (&r1)[2] = *(int(*)[2])0;
+int arr[2], (&r1)[2] = arr;
 long *l1 = p1;
 long *l2 = p2;
 long *l3 = r1;
