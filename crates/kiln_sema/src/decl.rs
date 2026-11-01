@@ -5688,7 +5688,8 @@ impl Sema<'_, '_> {
         let clang_scope = scope_s.as_deref() == Some("clang");
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")
-            && !(clang_scope && n == "using_if_exists")
+            && !(clang_scope
+                && matches!(n.as_str(), "using_if_exists" | "exclude_from_explicit_instantiation"))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
             self.emit(msg);
@@ -6142,6 +6143,9 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
+        ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
+            AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION
+        }
         _ => return None,
     })
 }

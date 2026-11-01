@@ -769,7 +769,10 @@ impl Sema<'_, '_> {
                 return;
             }
             let n = *self.ast.decls.get(m);
-            if n.flags().contains(DeclFlags::IMPLICIT) || self.ast.instantiated_from(m).is_none() {
+            if n.flags().contains(DeclFlags::IMPLICIT)
+                || self.ast.instantiated_from(m).is_none()
+                || self.ast.excluded_from_explicit_instantiation(m)
+            {
                 continue;
             }
             // An explicitly specialized member is not instantiated from

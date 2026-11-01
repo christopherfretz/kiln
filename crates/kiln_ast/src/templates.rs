@@ -757,6 +757,30 @@ impl Ast {
         }
     }
 
+    /// Whether `d`, or the pattern it was instantiated from (through
+    /// enclosing instantiations), is declared with clang's
+    /// `exclude_from_explicit_instantiation` on any of its declarations:
+    /// an explicit instantiation of its class neither instantiates nor
+    /// suppresses it, so it stays an implicit instantiation (clang
+    /// `InstantiateClassMembers`; libc++'s `_LIBCPP_HIDE_FROM_ABI`).
+    pub fn excluded_from_explicit_instantiation(&self, d: DeclId) -> bool {
+        let mut cur = Some(d);
+        for _ in 0..16 {
+            let Some(x) = cur else { return false };
+            let marked = self.redecls_of(x).any(|r| {
+                self.lists.iter::<crate::AttrId>(self.attrs.of_decl(r)).any(|a| {
+                    self.attrs.get(a).kind
+                        == crate::attr::AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION
+                })
+            });
+            if marked {
+                return true;
+            }
+            cur = self.instantiated_from(self.first(x));
+        }
+        false
+    }
+
     /// The partial specialization record of `d` with its index, when `d`
     /// is (a declaration of) a class template partial specialization.
     pub fn partial_spec_info(&self, d: DeclId) -> Option<(u32, &PartialSpecInfo)> {

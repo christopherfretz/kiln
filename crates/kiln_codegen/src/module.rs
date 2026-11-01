@@ -739,7 +739,12 @@ impl<'a> Cg<'a> {
                     return k;
                 }
                 // The member's own kind is implicit: the innermost
-                // explicitly instantiated enclosing class decides.
+                // explicitly instantiated enclosing class decides, unless
+                // the member (or a member class on the way) is excluded
+                // from explicit instantiation.
+                if ast.excluded_from_explicit_instantiation(first) {
+                    return None;
+                }
                 let mut ctx = ast.decls.get(first).ctx();
                 while let Some(c) = ctx {
                     if !matches!(
@@ -747,6 +752,11 @@ impl<'a> Cg<'a> {
                         DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
                     ) {
                         break;
+                    }
+                    if ast.member_spec_info(c).is_some()
+                        && ast.excluded_from_explicit_instantiation(c)
+                    {
+                        return None;
                     }
                     if let Some(k) = ast.spec_info(c).and_then(|(_, s)| explicit(s.kind)) {
                         return k;

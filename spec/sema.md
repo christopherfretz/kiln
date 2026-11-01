@@ -655,6 +655,13 @@ and returns the scope it names:
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)
+  - `exclude_from_explicit_instantiation` (GNU syntax or `clang::`,
+    `AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION`, WP-214): an explicit
+    instantiation definition of the enclosing class does not instantiate
+    the member (`instantiate_members_of`), and codegen keeps it an
+    implicit instantiation (spec/codegen.md §7h). It is not copied to
+    instantiated members; `Ast::excluded_from_explicit_instantiation`
+    follows the pattern chain.
   - `ext_vector_type(N)` / `vector_size(N)` (GNU syntax; `vector.rs`).
     They take exactly one expression and are consumed into the declared
     type, never attached. `ext_vector_type` applies only to a typedef or
