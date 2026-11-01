@@ -1282,7 +1282,7 @@ impl Sema<'_, '_> {
                 ValueCategory::LValue,
                 Some(path),
             );
-            match self.assign_subobject(spec.ty, to, from, loc) {
+            match self.assign_subobject(f, spec.ty, to, from, loc, 0) {
                 Some(s) => stmts.push(s),
                 None => invalid = true,
             }
@@ -1323,7 +1323,7 @@ impl Sema<'_, '_> {
             let from = self.field_access(from, m, fq, false, loc);
             let this = self.builder().this_expr(this_ty, false, loc);
             let to = self.field_access(this, m, obj_q, true, loc);
-            match self.assign_subobject(fty, to, from, loc) {
+            match self.assign_subobject(f, fty, to, from, loc, 0) {
                 Some(s) => stmts.push(s),
                 None => invalid = true,
             }
@@ -1341,13 +1341,16 @@ impl Sema<'_, '_> {
     }
 
     /// clang `buildSingleCopyAssign`: the assignment of the subobject `to`
-    /// of type `ty` from `from`.
+    /// of type `ty` from `from`, in the assignment operator `f`; `depth`
+    /// counts the enclosing array loops.
     fn assign_subobject(
         &mut self,
+        f: DeclId,
         ty: QualType,
         to: ExprId,
         from: ExprId,
         loc: Loc,
+        depth: u32,
     ) -> Option<StmtId> {
         if self.ast.types.is_array(ty) {
             let q = self.ast.types.effective_quals(ty);
@@ -1368,10 +1371,7 @@ impl Sema<'_, '_> {
                     return Some(self.memcpy_assign(ty, to, from, loc));
                 }
             }
-            // todo(WP-067b): the element-wise loop of
-            // [class.copy.assign]/12.2 (clang's `ArrayInitIndexExpr` loop).
-            self.unsupported("implicit assignment of an array of this type", loc);
-            return None;
+            return self.assign_array_loop(f, ty, to, from, loc, depth);
         }
         if let Some(r) = self.ast.types.as_record(ty) {
             let c = self.ast.definition(r)?;
@@ -1402,6 +1402,65 @@ impl Sema<'_, '_> {
         let lt = self.ety(to);
         let e = self.builder().binary(BinaryOp::Assign, to, rhs, lt, loc);
         Some(self.builder().expr_stmt(e))
+    }
+
+    /// [class.copy.assign]/12.2, clang `buildSingleCopyAssignRecursively`:
+    /// an array whose elements are not copied by `memcpy` is assigned
+    /// element by element,
+    /// `for (size_t __iN = 0; __iN != n; ++__iN) to[__iN] = from[__iN];`
+    /// (an xvalue `from` gives xvalue elements).
+    fn assign_array_loop(
+        &mut self,
+        f: DeclId,
+        ty: QualType,
+        to: ExprId,
+        from: ExprId,
+        loc: Loc,
+        depth: u32,
+    ) -> Option<StmtId> {
+        let Some(n) = self.ast.types.array_size(ty).filter(|_| depth < 32) else {
+            self.unsupported("implicit assignment of an array of this type", loc);
+            return None;
+        };
+        let q = self.ast.types.effective_quals(ty);
+        let elem = self.ast.types.element(ty)?;
+        let elem = if q.is_empty() { elem } else { self.ast.types.qualify(elem, q) };
+        let moving = self.ast.exprs.get(from).value_category() == ValueCategory::XValue;
+        let sz = self.size_type();
+        let name = self.intern(&format!("__i{depth}"));
+        let v = self.builder().var(
+            DeclHead::new(f, DeclName::ident(name), loc),
+            sz,
+            kiln_ast::decl::VarSpec::new(),
+            None,
+        );
+        let zero = self.builder().int_literal(sz, 0, Radix::Decimal, loc);
+        let _ = self.builder().set_var_init(v, zero);
+        let init = self.builder().decl_stmt(&[v], loc);
+        let i = self.build_decl_ref(v, loc);
+        let bound = self.builder().int_literal(sz, n, Radix::Decimal, loc);
+        let cond = self.builtin_binary(BinaryOp::NE, i, bound, loc);
+        let i = self.build_decl_ref(v, loc);
+        let inc = self.builtin_unary(UnaryOp::PreInc, i, loc);
+        let i = self.build_decl_ref(v, loc);
+        let a = self.builtin_subscript(to, i, loc);
+        let i = self.build_decl_ref(v, loc);
+        let mut b = self.builtin_subscript(from, i, loc);
+        if self.is_err_expr(a) || self.is_err_expr(b) {
+            return None;
+        }
+        if moving {
+            b = self.cast_for_moving(b);
+        }
+        let body = self.assign_subobject(f, elem, a, b, loc, depth + 1)?;
+        let data = kiln_ast::stmt::LoopData {
+            init: Some(init),
+            cond_var: None,
+            cond: Some(cond),
+            inc: Some(inc),
+            body: Some(body),
+        };
+        Some(self.builder().for_stmt(data, loc))
     }
 
     /// clang `QualType::isTriviallyCopyableType` ([basic.types.general]/9).

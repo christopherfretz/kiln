@@ -898,7 +898,10 @@ Looking a member up by offset (`Types::field_at`, `subobject_at`,
 `has_member_at`) skips zero-size members (libc++'s `char __padding_[0]`
 shares its offset with the next member). Within a union, extents are
 computed per member, so a path through a bit-field member of a union
-resolves (WP-201). A function named by a `DeclRefExpr` or a member access
+resolves (WP-201). Extents compare element types up to array-element
+qualifiers (`Types::same_unqualified`): `p[1][2]` through a `const S&`
+designates the member `P[2][3]` although the subscript's element type is
+`const P[3]` (WP-201). A function named by a `DeclRefExpr` or a member access
 (`t.f` with `f` a static member function) is an lvalue whose address is
 `fn_ptr(func_index)`; references to functions evaluate to it (WP-201).
 

@@ -597,7 +597,7 @@ impl Types {
         loop {
             match self.kind(t) {
                 TyKind::Array { elem, n } => {
-                    if elem == p {
+                    if self.same_unqualified(elem, p) {
                         return Some((base, n, true));
                     }
                     let es = self.size(elem);
@@ -608,7 +608,7 @@ impl Types {
                     base += i * es;
                     t = elem;
                 }
-                _ if t == p => return Some((base, 1, false)),
+                _ if self.same_unqualified(t, p) => return Some((base, 1, false)),
                 TyKind::Record { union: true, .. } => {
                     let rel = o - base;
                     for f in self.fields(t) {
