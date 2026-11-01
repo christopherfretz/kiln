@@ -158,6 +158,12 @@ not close; `/*` inside records `NestedBlockComment`; unterminated →
 (sets `LEADING_SPACE`) unless `keep_comments`, which returns `Comment`
 tokens with the usual flags.
 
+`set_record_comments(true)` additionally records the span of every
+comment lexed, whether or not it becomes a token; `take_comments` drains
+them in source order (`has_comments` is the cheap check). The
+preprocessor's comment handler is built on it (spec/pp.md "Comment
+handler"). Recording is off by default and costs nothing then.
+
 ### Flags
 - `START_OF_LINE`: first token of the buffer or after a newline that is not
   inside a comment or spliced. A multi-line block comment does not start a

@@ -759,7 +759,10 @@ impl Parser {
         let verify = self.verify_line != 0;
         if verify && expect != Expect::CompileOk {
             let line = self.verify_line;
-            self.err(line, "`verify` only applies to `compile-ok` tests (the outcome is the -verify check)");
+            self.err(
+                line,
+                "`verify` only applies to `compile-ok` tests (the outcome is the -verify check)",
+            );
         }
         if verify && self.diag_line != 0 {
             let line = self.diag_line;
@@ -769,7 +772,10 @@ impl Parser {
             && !verify
             && !matches!(expect, Expect::Run | Expect::Pp | Expect::Ast)
         {
-            self.err(self.oracle_line, "`oracle` only applies to `run`, `pp`, `ast` and `verify` tests");
+            self.err(
+                self.oracle_line,
+                "`oracle` only applies to `run`, `pp`, `ast` and `verify` tests",
+            );
         }
         if self.inst_report.is_some() && !matches!(expect, Expect::CompileOk | Expect::CompileFail)
         {
@@ -823,7 +829,10 @@ impl Parser {
             // only reference, and `oracle:` does not apply to them.
             oracle: self.oracle.unwrap_or(
                 verify
-                    || matches!(expect, Expect::Run | Expect::Pp | Expect::Layout | Expect::Vtables),
+                    || matches!(
+                        expect,
+                        Expect::Run | Expect::Pp | Expect::Layout | Expect::Vtables
+                    ),
             ),
             oven: self.oven,
             skip: self.skip,
@@ -1340,7 +1349,10 @@ mod tests {
             assert_eq!(s.expect.as_str(), text);
             assert!(s.oracle, "the oracle is the only reference of `{text}`");
             let e = errs(&format!("//@ expect: {text}\n//@ oracle: none\n"));
-            assert_eq!(e, ["line 2: `oracle` only applies to `run`, `pp`, `ast` and `verify` tests"]);
+            assert_eq!(
+                e,
+                ["line 2: `oracle` only applies to `run`, `pp`, `ast` and `verify` tests"]
+            );
             let e = errs(&format!("//@ expect: {text}\n//@ ast-filter: f\n"));
             assert_eq!(e, ["line 2: `ast-filter` only applies to `expect: ast`"]);
         }

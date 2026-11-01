@@ -534,7 +534,11 @@ mod tests {
         };
         assert_eq!(keys(judge(Stage::Compile, &m(0, ""), false)).0, ["ok"]);
         assert_eq!(
-            keys(judge(Stage::Compile, &m(256, "a.h:1:2: error: 'asm' statements is not supported yet\n"), false)),
+            keys(judge(
+                Stage::Compile,
+                &m(256, "a.h:1:2: error: 'asm' statements is not supported yet\n"),
+                false
+            )),
             (vec!["compile: '…' statements is not supported yet".to_owned()], false)
         );
         let crash = "t.h:1:1: error: expected '>'\nthread 'kiln' panicked at crates/kiln_ast/src/decl.rs:1907:5:\ndecl has no Function payload\n";
@@ -558,7 +562,11 @@ mod tests {
             ["link: undefined reference to '…'"]
         );
         assert_eq!(
-            keys(judge(Stage::Run, &m(6, "t.exe: t.cpp:3: int main(): Assertion `x == 1' failed.\n"), false)),
+            keys(judge(
+                Stage::Run,
+                &m(6, "t.exe: t.cpp:3: int main(): Assertion `x == 1' failed.\n"),
+                false
+            )),
             (vec!["run: assertion failed".to_owned()], false)
         );
         assert_eq!(keys(judge(Stage::Run, &m(256, ""), false)).0, ["run: exit code 1"]);

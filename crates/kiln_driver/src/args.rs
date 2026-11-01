@@ -755,7 +755,8 @@ mod tests {
         assert_eq!(a.errors, []);
         let v = parse("-verify -verify-ignore-unexpected t.cpp").verify.unwrap();
         assert_eq!(v.ignore_unexpected, [true; 4]);
-        let v = parse("-verify -Xclang -verify-ignore-unexpected=note,warning t.cpp").verify.unwrap();
+        let v =
+            parse("-verify -Xclang -verify-ignore-unexpected=note,warning t.cpp").verify.unwrap();
         let mut want = [false; 4];
         want[VerifyLevel::Note as usize] = true;
         want[VerifyLevel::Warning as usize] = true;

@@ -28,7 +28,9 @@ fn comment_handler_sees_lexed_comments() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     {
         let mut pp = Preprocessor::new(&sm, &engine, &interner, opts);
-        pp.set_include_resolver(Box::new(MemoryResolver::new().with_header("a.h", "/* in a */ int a;\n")));
+        pp.set_include_resolver(Box::new(
+            MemoryResolver::new().with_header("a.h", "/* in a */ int a;\n"),
+        ));
         pp.enter_main_file(main);
         let (seen2, sm2) = (seen.clone(), &sm);
         pp.set_comment_handler(Box::new(move |s| {

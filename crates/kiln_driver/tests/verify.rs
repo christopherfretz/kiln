@@ -49,10 +49,30 @@ const MATCHED: &str = r#"int x = y; // expected-error {{use of undeclared identi
 static_assert(false); // expected-error {{static assertion failed}}
 "#;
 
+/// A fatal error stops the parse; the directives after it are still read.
+const FATAL: &str = r#"#include "nope.h" // expected-error {{not found}}
+int a = q; // expected-error {{undeclared}}
+"#;
+
+/// The error limit stops the diagnostics, not the comment scan.
+const LIMIT: &str = r#"int v0 = q0; // expected-error {{undeclared}}
+int v1 = q1; // expected-error {{undeclared}}
+int v2 = q2; // expected-error {{undeclared}}
+int v3 = q3; // expected-error {{undeclared}}
+"#;
+
 fn setup(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("kiln-verify-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for (name, text) in [("h.h", H_H), ("f1.cpp", F1), ("f2.cpp", F2), ("f3.cpp", F3), ("m.cpp", MATCHED)] {
+    for (name, text) in [
+        ("h.h", H_H),
+        ("f1.cpp", F1),
+        ("f2.cpp", F2),
+        ("f3.cpp", F3),
+        ("m.cpp", MATCHED),
+        ("fat.cpp", FATAL),
+        ("lim.cpp", LIMIT),
+    ] {
         std::fs::write(dir.join(name), text).unwrap();
     }
     dir
@@ -100,6 +120,23 @@ fn all_matched_is_success() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// spec/driver.md "-verify": after a fatal error the preprocessor still
+/// lexes to the end of the file, so a later directive is "expected but
+/// not seen" (its diagnostic was suppressed), as in clang.
+#[test]
+fn directives_after_fatal_error_are_read() {
+    let dir = setup("fatal");
+    let want = "\
+error: 'expected-error' diagnostics expected but not seen: \n  File fat.cpp Line 2: undeclared
+1 error generated.
+";
+    assert_eq!(kiln(&dir, &["-verify", "fat.cpp"]), (1, want.to_string()));
+    let (code, err) = kiln(&dir, &["-verify", "-ferror-limit=2", "lim.cpp"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("File lim.cpp Line 4: undeclared"), "{err}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// spec/driver.md "-verify": verify needs `-fsyntax-only` for now.
 #[test]
 fn verify_requires_syntax_only() {
@@ -127,11 +164,13 @@ fn same_as_clang_19() {
         &["-verify", "f3.cpp"],
         &["-verify", "-verify-ignore-unexpected", "f3.cpp"],
         &["-verify", "m.cpp"],
+        &["-verify", "fat.cpp"],
+        &["-verify", "-ferror-limit=2", "lim.cpp"],
     ];
     for case in cases {
         let mut c = vec!["-std=c++2c", "-fsyntax-only"];
         for a in *case {
-            if a.starts_with('-') {
+            if a.starts_with("-verify") {
                 c.push("-Xclang");
             }
             c.push(a);

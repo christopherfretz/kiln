@@ -129,7 +129,14 @@ impl Regex {
 
     /// Adds the thread at `pc` (following empty transitions) to `t`;
     /// true if it reaches `Match`.
-    fn add(&self, t: &mut Threads, stack: &mut Vec<usize>, pc: usize, pos: usize, len: usize) -> bool {
+    fn add(
+        &self,
+        t: &mut Threads,
+        stack: &mut Vec<usize>,
+        pc: usize,
+        pos: usize,
+        len: usize,
+    ) -> bool {
         stack.push(pc);
         while let Some(pc) = stack.pop() {
             if !t.insert(pc) {
@@ -228,7 +235,11 @@ impl Parser<'_> {
                 break;
             }
         }
-        Ok(if branches.len() == 1 { branches.pop().unwrap_or(Node::Concat(Vec::new())) } else { Node::Alt(branches) })
+        Ok(if branches.len() == 1 {
+            branches.pop().unwrap_or(Node::Concat(Vec::new()))
+        } else {
+            Node::Alt(branches)
+        })
     }
 
     /// Spencer `p_ere_exp`: one atom and at most one repetition.
@@ -648,7 +659,10 @@ mod tests {
 
     #[test]
     fn escape_metachars() {
-        assert_eq!(escape("a(b)*[c]{d}.$^|+?\\"), "a\\(b\\)\\*\\[c\\]\\{d\\}\\.\\$\\^\\|\\+\\?\\\\");
+        assert_eq!(
+            escape("a(b)*[c]{d}.$^|+?\\"),
+            "a\\(b\\)\\*\\[c\\]\\{d\\}\\.\\$\\^\\|\\+\\?\\\\"
+        );
         assert!(m(&escape("f(int) [T = int]"), "in f(int) [T = int] here"));
     }
 }

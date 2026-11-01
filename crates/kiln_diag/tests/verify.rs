@@ -2,10 +2,8 @@
 //! (`spec/diag.md` section 11), checked against clang 19's
 //! `VerifyDiagnosticConsumer` output.
 
-use kiln_diag::verify::{VerifyLevel, VerifyOptions, Verifier};
-use kiln_diag::{
-    Diag, DiagEngine, DiagId, DiagOptions, MemorySink, SharedBuffer, TextSink,
-};
+use kiln_diag::verify::{Verifier, VerifyLevel, VerifyOptions};
+use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, MemorySink, SharedBuffer, TextSink};
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
 /// The spans of the comments in `file` (enough of a lexer for tests: no
@@ -67,7 +65,8 @@ impl Case {
     ) -> (String, i32) {
         let sm = &self.sm;
         let sink = MemorySink::new();
-        let engine = DiagEngine::new(sm, &DiagOptions::from_args(&["-ferror-limit=0"]), sink.clone());
+        let engine =
+            DiagEngine::new(sm, &DiagOptions::from_args(&["-ferror-limit=0"]), sink.clone());
         let header = self.header;
         let lookup = Box::new(move |_: &SourceManager, _: Loc, name: &str| {
             (name == "h.h").then_some(header).flatten()

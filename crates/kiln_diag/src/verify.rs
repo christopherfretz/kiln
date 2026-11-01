@@ -495,15 +495,7 @@ impl<'a> Verifier<'a> {
                     .emit(engine);
                 return false;
             }
-            let ud = Unattached {
-                level,
-                regex,
-                directive_loc: pos,
-                content_loc,
-                text,
-                min,
-                max,
-            };
+            let ud = Unattached { level, regex, directive_loc: pos, content_loc, text, min, max };
             match marker {
                 None => self.attach(&ud, expected, any_file_and_line, any_line, engine),
                 Some(m) => self.add_directive_at_marker(m, ud, engine),

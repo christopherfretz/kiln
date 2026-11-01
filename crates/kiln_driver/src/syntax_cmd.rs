@@ -100,8 +100,9 @@ impl SyntaxJob<'_> {
             self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result);
             verifier = Some(v);
         }
-        let verifier = verifier
-            .unwrap_or_else(|| Rc::new(RefCell::new(Verifier::new(&sm, opts, None, Box::new(|_, _, _| None)))));
+        let verifier = verifier.unwrap_or_else(|| {
+            Rc::new(RefCell::new(Verifier::new(&sm, opts, None, Box::new(|_, _, _| None))))
+        });
         verifier.borrow_mut().finish(&engine);
         engine.flush();
         let report = verifier.borrow().check(&sink.take());

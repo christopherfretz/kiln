@@ -26,8 +26,8 @@ mod options;
 mod policy;
 mod pragma;
 pub mod template;
-pub mod verify;
 mod text;
+pub mod verify;
 
 pub use diag::{Diag, Diagnostic, FixIt, Label, Level, NoteMsg};
 pub use engine::{DiagEngine, DiagSink, MemorySink, SharedBuffer};

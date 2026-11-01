@@ -143,12 +143,10 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::InvalidFlagValue(a, v) => {
             Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(v)
         }
-        ArgError::InvalidVerifyPrefix(p) => {
-            Diag::new(DiagId::drv_invalid_value, Span::INVALID)
-                .arg("-verify=")
-                .arg(p)
-                .note(DiagId::drv_verify_prefix_spelling, Span::INVALID)
-        }
+        ArgError::InvalidVerifyPrefix(p) => Diag::new(DiagId::drv_invalid_value, Span::INVALID)
+            .arg("-verify=")
+            .arg(p)
+            .note(DiagId::drv_verify_prefix_spelling, Span::INVALID),
     };
     d.emit(engine);
 }
