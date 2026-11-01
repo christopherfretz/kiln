@@ -421,99 +421,11 @@ pub(crate) fn float_truth(kind: FloatKind, a: u128) -> bool {
     !is_zero(kind, a)
 }
 
-/// The precision (significand bits) of a format.
-fn precision(kind: FloatKind) -> u32 {
-    match kind {
-        FloatKind::Half => 11,
-        FloatKind::BFloat16 => 8,
-        FloatKind::Single => 24,
-        FloatKind::Double => 53,
-        FloatKind::X87Extended => 64,
-        FloatKind::Quad => 113,
-    }
-}
-
-/// `llvm::APFloat::toString` with the default arguments (natural
-/// precision, padding 3, zeros truncated): how clang prints a float in
-/// `note_constexpr_overflow`.
+/// How clang prints a float in a constant-evaluation note such as
+/// `note_constexpr_overflow` (`OptionalDiagnostic << APFloat`); see
+/// [`crate::fltstr::note_string`].
 pub(crate) fn apfloat_to_string(kind: FloatKind, a: u128) -> String {
-    let neg = a >> (kind.bits() - 1) & 1 == 1;
-    let mut out = String::new();
-    if is_nan(kind, a) {
-        return "NaN".into();
-    }
-    let v = to_f64(kind, a);
-    if v.is_infinite() {
-        return if neg { "-Inf".into() } else { "+Inf".into() };
-    }
-    if neg {
-        out.push('-');
-    }
-    if v == 0.0 {
-        out.push_str("0.0E+0");
-        return out;
-    }
-    let prec = 2 + precision(kind) * 59 / 196;
-    // Correctly rounded to `prec` significant digits.
-    let s = format!("{:.*e}", (prec - 1) as usize, v.abs());
-    let (mant, exp) = s.split_once('e').unwrap_or((&s, "0"));
-    let mut digits: Vec<u8> = mant.bytes().filter(u8::is_ascii_digit).collect();
-    let e10: i32 = exp.parse().unwrap_or(0);
-    while digits.len() > 1 && digits.last() == Some(&b'0') {
-        digits.pop();
-    }
-    let nd = digits.len() as i32;
-    // Exponent of the last digit.
-    let mut exp = e10 - (nd - 1);
-    let scientific = if exp >= 0 {
-        exp > 3 || nd + exp > prec as i32
-    } else {
-        let msd = exp + nd - 1;
-        msd < 0 && -msd > 3
-    };
-    if scientific {
-        exp += nd - 1;
-        out.push(digits[0] as char);
-        out.push('.');
-        if nd == 1 {
-            out.push('0');
-        } else {
-            for &d in &digits[1..] {
-                out.push(d as char);
-            }
-        }
-        out.push('E');
-        out.push(if exp >= 0 { '+' } else { '-' });
-        out.push_str(&exp.unsigned_abs().to_string());
-        return out;
-    }
-    if exp >= 0 {
-        for &d in &digits {
-            out.push(d as char);
-        }
-        for _ in 0..exp {
-            out.push('0');
-        }
-        return out;
-    }
-    let whole = exp + nd;
-    let mut i = 0usize;
-    if whole > 0 {
-        while i < whole as usize {
-            out.push(digits[i] as char);
-            i += 1;
-        }
-        out.push('.');
-    } else {
-        out.push_str("0.");
-        for _ in 0..-whole {
-            out.push('0');
-        }
-    }
-    for &d in &digits[i..] {
-        out.push(d as char);
-    }
-    out
+    crate::fltstr::note_string(kind, a)
 }
 
 /// `raw_ostream << double` (`%e`): how clang prints a float argument in
@@ -561,10 +473,7 @@ mod tests {
         assert_eq!(apfloat_to_string(FloatKind::Double, u128::from(3e9f64.to_bits())), "3.0E+9");
         assert_eq!(apfloat_to_string(FloatKind::Double, u128::from(2.5f64.to_bits())), "2.5");
         assert_eq!(apfloat_to_string(FloatKind::Double, u128::from(300.0f64.to_bits())), "300");
-        assert_eq!(
-            apfloat_to_string(FloatKind::Single, u128::from(1e20f32.to_bits())),
-            "1.00000002E+20"
-        );
+        assert_eq!(apfloat_to_string(FloatKind::Single, u128::from(1e20f32.to_bits())), "1.0E+20");
         assert_eq!(
             float_arg_string(FloatKind::Double, u128::from(1.0f64.to_bits())),
             "1.000000e+00"

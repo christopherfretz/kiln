@@ -150,6 +150,18 @@ the evaluator's flattened type table.
   member the pointer was formed through: the union's recorded active
   member when it holds the pointee at that offset, else the first member
   that does (WP-213).
+- A float in a note's message (`value V is outside the range of
+  representable values of type 'T'`) is spelled as clang's
+  `OptionalDiagnostic << APFloat`: `APFloat::toString` with
+  `ceil(p * log10 2)` significant digits (`(p * 59 + 195) / 196` for a
+  `p`-bit significand: 3 for `__bf16`, 4 `_Float16`, 8 `float`, 16
+  `double`, 20 x87 and 35 binary128 `long double`), taken from the exact
+  decimal value and rounded half up on the first dropped digit; plain
+  notation unless that would pad more than three zeros or imply more
+  digits than that precision, else `D.DDDE+X` (`1.0E+300`, `128.1`,
+  `9.999999999999999E+22`, `6.55E+4`); `+Inf`, `-Inf`, `NaN`, `0`, `-0`
+  (WP-237; `fltstr.rs`). A float argument in an "in call to" note is
+  clang's `%e` (`f(1.000000e+10)`).
 - `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
   frame limit; 0 shows every frame.
 - `try_fold`, `is_constant_initialized` and `fold_constant_init` never
