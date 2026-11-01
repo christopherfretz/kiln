@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 mod bench;
 mod clang_ast;
+mod diag_split;
 mod gen_pp;
 mod jobs;
 mod libcxx;
@@ -21,6 +22,9 @@ commands:
               (`cargo xtask bench --help` for options; contract in spec/bench.md)
   clang-ast   print clang 19's AST of a file in the kiln dump format (spec/ast-dump.md §6;
               `cargo xtask clang-ast --help` for options)
+  diag-split  move new kiln_diag id/group rows into their area files; --check fails on
+              misplaced rows (part of ci); --replay merges a pre-split branch
+              (`cargo xtask diag-split --help`; spec/diag.md §2.4)
   gen-pp-corpus
               write the generated per-header preprocessor corpus under
               tests/differential/pp (`cargo xtask gen-pp-corpus --help`)
@@ -32,7 +36,7 @@ commands:
               in spec/libcxx.md; needs scripts/fetch-libcxx-tests.sh)
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
-  ci          the merge gate: fmt --check, clippy -D warnings, cargo test, then the
+  ci          the merge gate: diag-split --check, fmt --check, clippy -D warnings, cargo test, then the
               corpus twice: xtask test --compiler clang++-19 (the corpus self-check;
               skipped when clang++-19 is not on PATH) and xtask test with kiln; fails
               on any FAIL, XPASS, ERROR or KILLED in either (contract in spec/harness.md
@@ -46,6 +50,7 @@ fn main() -> ExitCode {
         Some("test") => test::main(args),
         Some("bench") => bench::main(args),
         Some("clang-ast") => clang_ast::main(args),
+        Some("diag-split") => diag_split::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("libcxx") => libcxx::main(args),
         Some("stress") => stress(args),
@@ -104,6 +109,14 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
                 return ExitCode::from(2);
             }
         }
+    }
+    // The diagnostic tables are split per area (spec/diag.md §2.4).
+    if let Err(problems) = diag_split::check(&util::repo_root()) {
+        for p in &problems {
+            eprintln!("xtask ci: diag-split: {p}");
+        }
+        eprintln!("xtask ci: FAILED: run `cargo xtask diag-split` (spec/diag.md §2.4)");
+        return ExitCode::FAILURE;
     }
     let steps: &[&[&str]] = &[
         &["fmt", "--all", "--check"],

@@ -1,11 +1,17 @@
 //! Warning groups (`-W<group>`), with clang's names (`spec/diag.md`
-//! section "Warning groups").
+//! sections 3, 2.4).
 //!
 //! A group's members are the ids whose [`DiagId::group`] is the group, the
 //! members of its subgroups (transitively), and, for [`Group::Pedantic`],
-//! every extension diagnostic without a group. Adding a group is a one-line
-//! change to the `diag_groups!` invocation below:
-//! `Variant = "clang-name" [Subgroup, ...];`.
+//! every extension diagnostic without a group. The rows,
+//! `Variant = "clang-name" [Subgroup, ...];`, live under `src/groups/`:
+//! groups with subgroups (the umbrellas `-Wall`, `-Wmost`, `-Wgnu`, ...)
+//! and `Pedantic` in `umbrellas.rs`, every other group in the file of the
+//! id prefix that uses it (`groups/sema.rs`, ...) or `misc.rs`, each sorted
+//! by name. `build.rs` joins them into the `diag_group_table!` macro, which
+//! passes every row to `diag_groups!` below. To add a group, add its row
+//! there, or to the tail block at the end of this file and run `cargo xtask
+//! diag-split`.
 //!
 //! Group names clang knows but kiln has no member for are listed in
 //! [`CLANG_GROUP_NAMES`](crate::clang_groups::CLANG_GROUP_NAMES); options
@@ -26,7 +32,8 @@ macro_rules! diag_groups {
         }
 
         impl Group {
-            /// Every group, in table order.
+            /// Every group, in table order (the area files in file-name
+            /// order, each sorted by name, then the tail).
             pub const ALL: &'static [Group] = &[$(Group::$variant),*];
 
             /// The option name (`-W<name>`), as clang spells it.
@@ -42,209 +49,8 @@ macro_rules! diag_groups {
     };
 }
 
-diag_groups! {
-    All = "all" [Most, Switch, SwitchBool];
-    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized, RangeLoopConstruct, Unused];
-    Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
-    Pedantic = "pedantic" [];
-    BackslashNewlineEscape = "backslash-newline-escape" [];
-    AmbiguousReversedOperator = "ambiguous-reversed-operator" [];
-    RewriteNotBool = "rewrite-not-bool" [];
-    InvalidPpToken = "invalid-pp-token" [];
-    MacroRedefined = "macro-redefined" [];
-    UnusedMacros = "unused-macros" [];
-    PoundWarning = "#warnings" [];
-    PoundPragmaMessage = "#pragma-messages" [];
-    ExtraTokens = "extra-tokens" [];
-    UnknownPragmas = "unknown-pragmas" [];
-    IgnoredPragmas = "ignored-pragmas" [];
-    UnknownWarningOption = "unknown-warning-option" [];
-    // ----- WP-048 (parser and sema)
-    UnknownEscapeSequence = "unknown-escape-sequence" [];
-    Multichar = "multichar" [];
-    Attributes = "attributes" [UnknownAttributes, IgnoredAttributes];
-    UnknownAttributes = "unknown-attributes" [];
-    IgnoredAttributes = "ignored-attributes" [];
-    DuplicateDeclSpecifier = "duplicate-decl-specifier" [];
-    MissingDeclarations = "missing-declarations" [];
-    ExternInitializer = "extern-initializer" [];
-    VlaCxxExtension = "vla-cxx-extension" [];
-    BitfieldWidth = "bitfield-width" [];
-    PointerArith = "pointer-arith" [GnuPointerArith];
-    DivisionByZero = "division-by-zero" [];
-    ShiftCountNegative = "shift-count-negative" [];
-    ShiftCountOverflow = "shift-count-overflow" [];
-    VecElemSize = "vec-elem-size" [];
-    EnumConstexprConversion = "enum-constexpr-conversion" [];
-    ConstantEvaluated = "constant-evaluated" [];
-    Unused = "unused" [UnusedValue, UnusedVariable, UnusedButSetVariable];
-    UnusedValue = "unused-value" [UnusedComparison, UnusedResult];
-    UnusedComparison = "unused-comparison" [];
-    UnusedResult = "unused-result" [];
-    DeprecatedDeclarations = "deprecated-declarations" [];
-    ReturnType = "return-type" [];
-    // sema conversions (WP-049)
-    ImplicitlyUnsignedLiteral = "implicitly-unsigned-literal" [];
-    LiteralRange = "literal-range" [];
-    Cxx11Narrowing = "c++11-narrowing" [];
-    Narrowing = "narrowing" [Cxx11Narrowing];
-    DynamicExceptionSpec = "dynamic-exception-spec" [];
-    StaticFloatInit = "static-float-init" [];
-    BuiltinMacroRedefined = "builtin-macro-redefined" [];
-    Comment = "comment" [];
-    C23Extensions = "c23-extensions" [];
-    C2yExtensions = "c2y-extensions" [];
-    Cxx20Compat = "c++20-compat" [];
-    RangeLoopConstruct = "range-loop-construct" [];
-    RangeLoopBindReference = "range-loop-bind-reference" [];
-    RangeLoopAnalysis = "range-loop-analysis" [RangeLoopConstruct, RangeLoopBindReference];
-    DateTime = "date-time" [];
-    DelimitedEscapeSequenceExtension = "delimited-escape-sequence-extension" [];
-    DisabledMacroExpansion = "disabled-macro-expansion" [];
-    DollarInIdentifierExtension = "dollar-in-identifier-extension" [];
-    EmbeddedDirective = "embedded-directive" [];
-    ExpansionToDefined = "expansion-to-defined" [];
-    GnuCaseRange = "gnu-case-range" [];
-    GnuIncludeNext = "gnu-include-next" [];
-    GnuLineMarker = "gnu-line-marker" [];
-    GnuZeroLineDirective = "gnu-zero-line-directive" [];
-    GnuZeroVariadicMacroArguments = "gnu-zero-variadic-macro-arguments" [];
-    IncludeNextAbsPath = "include-next-absolute-path" [];
-    IncludeNextOutsideHeader = "include-next-outside-header" [];
-    KeywordAsMacro = "keyword-macro" [];
-    MalformedWarningCheck = "malformed-warning-check" [];
-    NewlineEof = "newline-eof" [];
-    NullCharacter = "null-character" [];
-    PragmaOnceOutsideHeader = "pragma-once-outside-header" [];
-    PragmaSystemHeaderOutsideHeader = "pragma-system-header-outside-header" [];
-    ReservedMacroIdentifier = "reserved-macro-identifier" [];
-    ReservedUserDefinedLiteral = "reserved-user-defined-literal" [];
-    Trigraphs = "trigraphs" [];
-    Unicode = "unicode" [];
-    UnicodeWhitespace = "unicode-whitespace" [];
-    VariadicMacros = "variadic-macros" [];
-    // #if expressions and literals (WP-015)
-    Undef = "undef" [];
-    FourByteMultiChar = "four-char-constants" [];
-    Cxx11LongLong = "c++11-long-long" [];
-    Cxx11Extensions = "c++11-extensions" [Cxx11LongLong];
-    CxxAttributeExtension = "cxx-attribute-extension" [];
-    Cxx14BinaryLiteral = "c++14-binary-literal" [];
-    Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
-    Cxx17Extensions = "c++17-extensions" [];
-    Cxx20Extensions = "c++20-extensions" [];
-    Cxx23Extensions = "c++23-extensions" [];
-    Cxx23AttributeExtensions = "c++23-attribute-extensions" [];
-    // WP-064
-    VexingParse = "vexing-parse" [];
-    BracedScalarInit = "braced-scalar-init" [];
-    ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];
-    InvalidOffsetof = "invalid-offsetof" [];
-    // driver codegen path (WP-052b)
-    UnusedCommandLineArgument = "unused-command-line-argument" [];
-    DeleteIncomplete = "delete-incomplete" [];
-    // WP-159
-    MissingConstinit = "missing-constinit" [];
-    Varargs = "varargs" [];
-    // WP-171
-    NonPodVarargs = "non-pod-varargs" [];
-    // WP-067a
-    DefaultedFunctionDeleted = "defaulted-function-deleted" [];
-    ClassConversion = "class-conversion" [];
-    // WP-078a
-    OverloadedVirtual = "overloaded-virtual" [];
-    InconsistentMissingOverride = "inconsistent-missing-override" [];
-    AbstractFinalClass = "abstract-final-class" [];
-    InaccessibleBase = "inaccessible-base" [];
-    // WP-165
-    IncrementBool = "increment-bool" [];
-    AtomicAlignment = "atomic-alignment" [];
-    GnuFoldingConstant = "gnu-folding-constant" [];
-    GnuImaginaryConstant = "gnu-imaginary-constant" [];
-    // WP-074
-    DeprecatedBuiltins = "deprecated-builtins" [];
-    // WP-087
-    UnevaluatedExpression = "unevaluated-expression" [PotentiallyEvaluatedExpression];
-    // WP-160
-    Assume = "assume" [];
-    InvalidPartialSpecialization = "invalid-partial-specialization" [];
-    UnusablePartialSpecialization = "unusable-partial-specialization" [];
-    InstantiationAfterSpecialization = "instantiation-after-specialization" [];
-    Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture];
-    // WP-075
-    DeprecatedThisCapture = "deprecated-this-capture" [];
-    DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
-    ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
-    ReturnStackAddress = "return-stack-address" [];
-    Reorder = "reorder" [ReorderCtor, ReorderInitList];
-    ReorderCtor = "reorder-ctor" [];
-    Uninitialized = "uninitialized" [StaticSelfInit];
-    StaticSelfInit = "static-self-init" [];
-    DelegatingCtorCycles = "delegating-ctor-cycles" [];
-    CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
-    Dangling = "dangling" [DanglingField, ReturnStackAddress];
-    DanglingField = "dangling-field" [];
-    // ----- WP-122 (structured bindings)
-    EmptyDecomposition = "empty-decomposition" [];
-    BindingInCondition = "binding-in-condition" [];
-    // ----- WP-100 (exceptions)
-    Exceptions = "exceptions" [];
-    InvalidNoreturn = "invalid-noreturn" [];
-    // ----- WP-131 (literal operators)
-    UserDefinedLiterals = "user-defined-literals" [];
-    GnuStringLiteralOperatorTemplate = "gnu-string-literal-operator-template" [];
-    // WP-140
-    AsmOperandWidths = "asm-operand-widths" [];
-    Asm = "asm" [AsmOperandWidths];
-    PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
-    // ----- WP-154 (atomic builtins)
-    AtomicMemoryOrdering = "atomic-memory-ordering" [];
-    // ----- WP-177 (implicit conversion warnings)
-    LiteralConversion = "literal-conversion" [];
-    Conversion = "conversion" [LiteralConversion, ConstantConversion];
-    // ----- WP-192 (designated initializers)
-    ReorderInitList = "reorder-init-list" [];
-    C99Designator = "c99-designator" [];
-    C99Extensions = "c99-extensions" [C99Designator];
-    InitializerOverrides = "initializer-overrides" [];
-    OverrideInit = "override-init" [InitializerOverrides];
-    // ----- WP-182 (statement attributes)
-    Cxx17AttributeExtensions = "c++17-attribute-extensions" [];
-    Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
-    AddressOfPackedMember = "address-of-packed-member" [];
-    UnusedVariable = "unused-variable" [UnusedConstVariable];
-    // ----- WP-193 (GNU designators)
-    GnuDesignator = "gnu-designator" [];
-    // ----- WP-219 (switch coverage, typeid, the GNU umbrella)
-    Switch = "switch" [];
-    SwitchEnum = "switch-enum" [];
-    CoveredSwitchDefault = "covered-switch-default" [];
-    SwitchDefault = "switch-default" [];
-    SwitchBool = "switch-bool" [];
-    PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
-    GnuPointerArith = "gnu-pointer-arith" [];
-    VlaExtension = "vla-extension" [VlaCxxExtension];
-    // ----- WP-191 (vexing parse, null dereference, empty body)
-    RedundantParens = "redundant-parens" [];
-    NullDereference = "null-dereference" [];
-    EmptyBody = "empty-body" [];
-    // ----- WP-217 (unused / fallthrough / constant-conversion warnings)
-    UnusedButSetVariable = "unused-but-set-variable" [];
-    UnusedConstVariable = "unused-const-variable" [];
-    UnusedExceptionParameter = "unused-exception-parameter" [];
-    ConstantConversion = "constant-conversion" [];
-    ImplicitFallthrough = "implicit-fallthrough" [];
-    UnreachableCodeFallthrough = "unreachable-code-fallthrough" [];
-    UnreachableCode = "unreachable-code" [UnreachableCodeFallthrough];
-    UnreachableCodeAggressive = "unreachable-code-aggressive" [UnreachableCode];
-    Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
-    // ----- WP-220 (undefined variable templates)
-    UndefinedVarTemplate = "undefined-var-template" [];
-    // ----- WP-228 (driver flags a target does not support)
-    OptionIgnored = "option-ignored" [];
-    // ----- WP-197 (DR482 namespace extra qualification)
-    ExtraQualification = "extra-qualification" [];
-}
+// The table: `src/groups/*.rs`, joined by `build.rs` (spec/diag.md §2.4).
+include!(concat!(env!("OUT_DIR"), "/diag_group_table.rs"));
 
 impl Group {
     /// Looks a kiln group up by option name.
@@ -349,3 +155,8 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     }
     row[b.len()]
 }
+
+// The tail block (spec/diag.md §2.4): rows here compile, but `cargo xtask
+// diag-split --check` (run by `cargo xtask ci`) fails until `cargo xtask
+// diag-split` has moved them into their area file under `src/groups/`.
+diag_group_table! {}

@@ -56,6 +56,17 @@ reviewable diff (roughly: one module, one spec section, < ~2k lines).
 8. Hand back with: the branch head, a summary, the test evidence (commands +
    results, quick-CI log path), open questions, and concrete follow-ups
    (file:line) for a BACKLOG row.
+9. New diagnostic ids and warning groups go in kiln_diag's area files
+   (`crates/kiln_diag/src/ids/<prefix>*.rs`, `src/groups/*.rs`; spec/diag.md
+   §2.4), sorted by name, never appended to one shared table end. Either
+   write the row in place or append it to the `diag_id_table! { }` /
+   `diag_group_table! { }` tail at the end of `ids.rs`/`groups.rs` and run
+   `cargo xtask diag-split`; `cargo xtask ci` rejects a non-empty tail or a
+   misplaced row. When merging origin/main conflicts in those files
+   (including a branch from before the split), run
+   `cargo xtask diag-split --replay` during the merge: it takes main's
+   tables and re-applies your branch's added, changed and removed rows by
+   name, then `git add crates/kiln_diag && git commit`.
 
 ## Review gates (supervisor)
 
