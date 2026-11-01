@@ -261,20 +261,26 @@ impl Sema<'_, '_> {
         if x.rewrite.is_reversed() != y.rewrite.is_reversed() {
             return !x.rewrite.is_reversed();
         }
-        // /2.10: a user-declared deduction guide over an implicit one;
-        // /2.11: the copy deduction candidate over any other
-        // ([over.match.class.deduct], WP-071b). /2.12 (a non-template
-        // constructor's guide over a constructor template's) waits for
-        // constructor-template guides.
-        if let (Some((i1, c1)), Some((i2, c2))) = (
+        // [over.match.class.deduct] tie-breakers (WP-071b, WP-134):
+        // /2.11: a user-declared deduction guide over an implicit one;
+        // /2.12: the copy deduction candidate over any other; /2.13: the
+        // guide of a non-template constructor over a constructor
+        // template's.
+        if let (Some(g1), Some(g2)) = (
             x.decl.and_then(|f| self.ctad_guide_kind(f, x.template)),
             y.decl.and_then(|f| self.ctad_guide_kind(f, y.template)),
         ) {
-            if i1 != i2 {
-                return !i1;
+            use crate::templ::ctad::GuideOrigin;
+            let implicit = |g: Option<GuideOrigin>| g.is_some();
+            if implicit(g1) != implicit(g2) {
+                return !implicit(g1);
             }
-            if c1 != c2 {
-                return c1;
+            let copy = |g: Option<GuideOrigin>| g == Some(GuideOrigin::Copy);
+            if copy(g1) != copy(g2) {
+                return copy(g1);
+            }
+            if g1 == Some(GuideOrigin::Ctor) && g2 == Some(GuideOrigin::CtorTemplate) {
+                return true;
             }
         }
         false

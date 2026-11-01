@@ -156,9 +156,9 @@ pub struct TemplState {
     /// The implicit deduction guides of each class template (first
     /// declaration), formed on first use ([over.match.class.deduct]/1).
     pub(crate) ctad_guides: kiln_source::fx::FxHashMap<DeclId, Vec<DeclId>>,
-    /// The copy deduction candidates among them (template decls;
-    /// [over.match.class.deduct]/1.3, [over.match.best.general]/2.12).
-    pub(crate) ctad_copy: kiln_source::fx::FxHashSet<DeclId>,
+    /// What each implicit guide among them (template decl) was formed
+    /// from ([over.match.class.deduct]/1, [over.match.best.general]/2.12-13).
+    pub(crate) ctad_origin: kiln_source::fx::FxHashMap<DeclId, ctad::GuideOrigin>,
 }
 
 /// The class an object expression names for the lookup of the first

@@ -474,10 +474,21 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
 }
 
 impl Substituter<'_, '_, '_> {
-    /// True if none of the outermost `n` levels is substituted.
+    /// True if none of the outermost `n` levels is substituted (a level of
+    /// undeduced arguments keeps its parameters, as a class template's
+    /// does in the guide of a constructor template, WP-134).
     fn levels_retained(&self, n: u16) -> bool {
         (0..n).all(|k| {
-            self.args.level(k).is_none_or(|l| l.mode == crate::templ::args::LevelMode::Retain)
+            self.args.level(k).is_none_or(|l| {
+                l.mode == crate::templ::args::LevelMode::Retain
+                    || self
+                        .sema
+                        .ast
+                        .types
+                        .args(l.args)
+                        .iter()
+                        .all(|a| matches!(a.view(), ArgView::Null))
+            })
         })
     }
 }
