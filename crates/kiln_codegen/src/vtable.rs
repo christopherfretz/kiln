@@ -9,7 +9,8 @@ use std::rc::Rc;
 
 use kiln_abi::mangle::{self, Structor};
 use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout, VttComponent};
-use kiln_ast::decl::{Access, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
@@ -132,14 +133,61 @@ impl Cg<'_> {
     // ---- linkage -------------------------------------------------------
 
     /// The key function of `rd` and its definition in this translation
-    /// unit, if any.
+    /// unit, if any. Template patterns and instantiations have none
+    /// (Itanium C++ ABI 5.2.6; clang `computeKeyFunction`).
     fn key_function(&self, rd: DeclId) -> Option<(DeclId, Option<DeclId>)> {
         let ast = self.ast;
         let def = self.class_def(rd)?;
+        if self.class_is_templated_or_instantiated(def) {
+            return None;
+        }
         let &k = ast.decls.cold.key_function.get(def)?;
         let body =
             ast.redecls_of(k).find(|&r| ast.decls.function(r).is_some_and(|f| f.body.is_some()));
         Some((k, body))
+    }
+
+    /// Whether class `def` is a template pattern, is dependent, or is a
+    /// (member) class instantiated from a template (any specialization
+    /// kind but an explicit specialization).
+    fn class_is_templated_or_instantiated(&self, def: DeclId) -> bool {
+        let ast = self.ast;
+        let n = ast.decls.get(def);
+        if n.has(DeclFlags::DEPENDENT_CTX)
+            || ast.described_template(def).is_some()
+        {
+            return true;
+        }
+        let first = ast.first(def);
+        ast.spec_info(first).is_some_and(|(_, s)| s.kind != SpecKind::ExplicitSpecialization)
+            || ast.member_spec_info(first).is_some_and(|(_, m)| m.kind != SpecKind::ExplicitSpecialization)
+    }
+
+    /// Whether class `first` is under an explicit instantiation
+    /// declaration, itself (`extern template struct X<int>;`) or as a
+    /// member class of one.
+    fn class_explicit_inst_declaration(&self, first: DeclId) -> bool {
+        let ast = self.ast;
+        let mut c = Some(first);
+        while let Some(d) = c {
+            if !matches!(
+                ast.decls.get(d).kind(),
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+            ) {
+                return false;
+            }
+            let kind = ast
+                .spec_info(d)
+                .map(|(_, s)| s.kind)
+                .or_else(|| ast.member_spec_info(d).map(|(_, m)| m.kind));
+            match kind {
+                Some(SpecKind::ExplicitInstantiationDeclaration) => return true,
+                Some(SpecKind::ImplicitInstantiation | SpecKind::Undeclared) => {}
+                _ => return false,
+            }
+            c = ast.decls.get(d).ctx();
+        }
+        false
     }
 
     /// clang `getVTableLinkage` / `isVTableExternal` (at `-O0`).
@@ -150,6 +198,11 @@ impl Cg<'_> {
         }
         if self.is_implicit_instantiation(first) {
             return VtLinkage::LinkOnce;
+        }
+        // [temp.explicit]/14: `extern template` — the vtable is defined
+        // by the explicit instantiation definition elsewhere.
+        if self.class_explicit_inst_declaration(first) {
+            return VtLinkage::External;
         }
         match self.key_function(rd) {
             None => VtLinkage::LinkOnce,
@@ -216,7 +269,7 @@ impl Cg<'_> {
             .collect();
         classes.sort_unstable();
         for (_, c) in classes {
-            if ast.decls.get(c).has(kiln_ast::decl::DeclFlags::INVALID) {
+            if ast.decls.get(c).has(DeclFlags::INVALID) {
                 continue;
             }
             if self.vtable_linkage(c) == VtLinkage::Strong {

@@ -180,6 +180,9 @@ impl Cg<'_> {
     /// The definition of structor `first` to emit, if any.
     fn structor_def(&self, first: DeclId) -> Option<DeclId> {
         let ast = self.ast;
+        if self.is_explicit_inst_declaration(first) {
+            return None;
+        }
         ast.redecls_of(first).find(|&r| {
             ast.decls.function(r).is_some_and(|f| {
                 f.body.is_some()
@@ -481,6 +484,9 @@ impl Cg<'_> {
             return Ok(());
         }
         let first = ast.first(d);
+        if self.is_explicit_inst_declaration(first) {
+            return Ok(());
+        }
         let is_ctor = ast.decls.get(d).kind() == DeclKind::CXXConstructor;
         let abstract_ = ast
             .decls
