@@ -26,8 +26,9 @@ use crate::{Oven, SemaBridge};
 /// clang's default `-fconstexpr-backtrace-limit`.
 pub(crate) const BACKTRACE_LIMIT: usize = 10;
 
-/// Elements of an aggregate argument printed before eliding.
-const MAX_ELEMS: u64 = 16;
+/// Elements of an array argument printed before eliding (clang's
+/// `APValue::printPretty`).
+const MAX_ELEMS: u64 = 10;
 
 pub(crate) fn notes_name(ast: &Ast, d: DeclId) -> String {
     name_of(ast, d)
@@ -196,7 +197,17 @@ impl Oven {
                     ),
                 )
             }
-            Fault::Mem { f, ak: k, ty, p } => self.mem_msg(ast, site, f, k, ty, p, &mut extra),
+            Fault::Mem { f, ak: k, ty, p } => {
+                let (loc, msg) = self.mem_msg(ast, site, f, k, ty, p, &mut extra);
+                match self.trivial_copy_src(pc) {
+                    Some((src, whole)) => {
+                        let (at, call) = self.trivial_copy_frame(ast, site, src, whole);
+                        frame = Some(call);
+                        (at, msg)
+                    }
+                    None => (loc, msg),
+                }
+            }
             Fault::NullArith => {
                 (site.loc, "cannot perform pointer arithmetic on null pointer".into())
             }
@@ -286,8 +297,16 @@ impl Oven {
             }
             Fault::Mutable { ak: k, field } => {
                 extra.push(Note::new(ast.decls.get(field).loc(), "declared here"));
+                // A trivial copy's read carries its call frame, as for
+                // `Fault::Mem` (clang `handleTrivialCopy` runs in a frame).
+                let mut loc = site.loc;
+                if let Some((src, whole)) = self.trivial_copy_src(pc) {
+                    let (at, call) = self.trivial_copy_frame(ast, site, src, whole);
+                    frame = Some(call);
+                    loc = at;
+                }
                 (
-                    site.loc,
+                    loc,
                     format!(
                         "{} mutable member '{}' is not allowed in a constant expression",
                         ak::verb(k),
@@ -457,6 +476,19 @@ impl Oven {
         self.call_stack(ast, &mut notes);
         notes.extend(extra);
         notes
+    }
+
+    /// The source pointer and type of the trivial copy/move constructor
+    /// or assignment call that `pc` runs inline (an `Op::Copy` with aux
+    /// bit 4), if it is one.
+    fn trivial_copy_src(&self, pc: usize) -> Option<(u64, OTy)> {
+        let w = *self.code.get(pc)?;
+        if Op::from_u8(w as u8) != Op::Copy || (w >> 8) & 4 == 0 {
+            return None;
+        }
+        let fb = self.stack.last()?.fb as usize;
+        let src = *self.regs.get(fb + *self.code.get(pc + 2)? as usize)?;
+        Some((src as u64, OTy(*self.code.get(pc + 3)?)))
     }
 
     /// A trivial copy constructor or assignment operator runs inline (an
@@ -722,6 +754,20 @@ impl Oven {
             TyKind::Array { .. } | TyKind::Record { .. } => {
                 self.write_object(ast, s, t, v as u64, depth);
             }
+            // clang: `&C::m` (the member's class and the member,
+            // unqualified), `0` for the null member pointer.
+            TyKind::MemPtr { .. } => match self.mp.get(v) {
+                Some(m) => {
+                    let names = AstNames::new(ast);
+                    s.push('&');
+                    if let Some(c) = ast.decls.get(m.member).ctx() {
+                        names.write_name(c, s);
+                        s.push_str("::");
+                    }
+                    names.write_name(m.member, s);
+                }
+                None => s.push('0'),
+            },
             _ => s.push_str("<unknown>"),
         }
     }
@@ -843,7 +889,14 @@ impl Oven {
                 s.push_str(&name_of(ast, d));
             }
             Origin::Str(id, _) => ast.strings.write_literal(id, &mut s),
-            Origin::Temp(_) | Origin::Let(_) | Origin::Const(_) | Origin::None => {
+            // clang's `APValue::printPretty`: an expression base (a
+            // materialized temporary) prints as that expression, as
+            // written (`h(S{3, 'b'})`, `k(3)`).
+            Origin::Temp(x) => ast.write_expr(x, &mut s),
+            Origin::Let(t) if let Some(x) = crate::value::let_mte(ast, t) => {
+                ast.write_expr(x, &mut s);
+            }
+            Origin::Let(_) | Origin::Const(_) | Origin::None => {
                 s.push_str("{temporary}");
             }
             // clang: `{*new T#N}`, N its allocation number.

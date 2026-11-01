@@ -166,6 +166,23 @@ impl Sema<'_, '_> {
         at: Loc,
         temp_end: Option<Loc>,
     ) -> Option<ExprId> {
+        self.list_construct_at(ty, l, style, at, temp_end, at)
+    }
+
+    /// [`Self::list_construct`] with the constructor call (and an access
+    /// error) at `ctor_at`: clang `PerformConstructorInitialization` puts
+    /// a variable's copy-list-initialization `S s = {a}` at the `{` (its
+    /// `EqualLoc` side); overload and deletion errors stay at the entity
+    /// `at`.
+    fn list_construct_at(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        style: InitStyle,
+        at: Loc,
+        temp_end: Option<Loc>,
+        ctor_at: Loc,
+    ) -> Option<ExprId> {
         if let Some(r) = self.ast.types.as_record(ty) {
             // Whether it is an aggregate needs its definition.
             self.instantiate_for_init(r, at);
@@ -203,7 +220,7 @@ impl Sema<'_, '_> {
         {
             return Some(e);
         }
-        if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end) {
+        if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end, ctor_at) {
             return Some(e);
         }
         let mut args = Vec::with_capacity(l.items.len());
@@ -224,6 +241,8 @@ impl Sema<'_, '_> {
         }
         let mut site = ConstructSite::at(at);
         site.temp_end = temp_end;
+        site.loc = ctor_at;
+        site.sites.access = ctor_at;
         self.construct_class(ty, &args, style, site)
     }
 
@@ -485,6 +504,7 @@ impl Sema<'_, '_> {
         style: InitStyle,
         at: Loc,
         temp_end: Option<Loc>,
+        ctor_at: Loc,
     ) -> Option<ExprId> {
         use crate::class::{CtorCall, Selected, SpecialKind};
         use crate::overload::{ArgInfo, IcsOptions, SetKind};
@@ -541,10 +561,11 @@ impl Sema<'_, '_> {
             reject_explicit: style == InitStyle::CopyList,
             ..CtorCall::new(std::slice::from_ref(&arg))
         };
-        let site = ConstructSite::at(at);
+        let mut site = ConstructSite::at(at);
+        site.sites.access = ctor_at;
         let built =
-            self.use_ctor(sel, ty, class, SpecialKind::CopyCtor, call, at, entity, site.sites);
-        Some(built.unwrap_or_else(|| self.recover(ty, &[arg], at)))
+            self.use_ctor(sel, ty, class, SpecialKind::CopyCtor, call, ctor_at, entity, site.sites);
+        Some(built.unwrap_or_else(|| self.recover(ty, &[arg], ctor_at)))
     }
 
     /// [dcl.init.list]/3.6, /5: list-initialization of
@@ -679,7 +700,8 @@ impl Sema<'_, '_> {
                 if self.ast.types.is_reference(ty) {
                     return self.reference_list_init(ty, &l, Some(loc), style);
                 }
-                if let Some(e) = self.list_construct(ty, &l, style, loc, None) {
+                let ctor_at = if direct_list { loc } else { l.lbrace };
+                if let Some(e) = self.list_construct_at(ty, &l, style, loc, None, ctor_at) {
                     return e;
                 }
                 self.init_from_list_at(ty, &l, Some(loc))
@@ -1499,7 +1521,8 @@ impl Sema<'_, '_> {
         // ([dcl.init.list]/3.10: copy- or direct-), and a failed
         // constructor call names the reference type.
         self.ctor_diag_ty = Some(ty);
-        let tmp = self.list_construct(r, l, style, at, None);
+        let ctor_at = if style == InitStyle::CopyList { l.lbrace } else { at };
+        let tmp = self.list_construct_at(r, l, style, at, None, ctor_at);
         self.ctor_diag_ty = None;
         let tmp = if let Some(t) = tmp {
             t

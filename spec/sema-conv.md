@@ -130,6 +130,7 @@ target's formats (`format_subset`). bf16 and f16 are unordered.
 - Error and dependent types pass through unchanged.
 - A reference target binds directly to a reference-compatible glvalue ([dcl.init.ref]/5.1, 5.3.1, the xvalue case). The result is `NoOp` or `DerivedToBase` (with path) to `cv T`, keeping the category.
   - P0388R4 ([dcl.init.ref]/4, WP-197): `T[N]` is reference-compatible with `T[]` (`unknown_bound_of`: same canonical element type), so `int (&r)[] = a;` binds directly with a `NoOp` to `int[]`. As in clang, the pair is unrelated when the binding would drop qualifiers, so a mismatch is `sema_reference_bind_failed` (`lvalue` only for an lvalue) rather than a temporary. In ranking, `h(int(&)[])` against `h(int(&)[3])` is ambiguous (clang 19; the deeper similarity of non-top-level bounds is not modelled).
+  - A variable of type reference to `T[]` initialized by a braced list binds a lifetime-extended `T[N]` temporary ([dcl.init.ref]/5.4.2, [class.temporary]/6), and its declared type becomes reference to `T[N]` (`Sema::ref_to_bound_array`, as clang's `VarDecl` type update for an `InitListExpr`; one bound to an lvalue keeps `T[]`), so `sizeof` and `decltype` see the bound (WP-233). Tests: `tests/conformance/dcl.init.ref/unknown-bound-braced-temporary.cpp`, `binding-failure-wording.cpp`, `implicit-move-return.cpp`.
 - A class target, or a class source, goes through overload resolution
   (WP-068a, spec/sema-overload.md §10.3): `try_implicit_conversion` computes
   the implicit conversion sequence and a user-defined one is applied by
@@ -162,6 +163,8 @@ Wording table (all verified against clang 19; tests in `conv_errors.rs`):
 - **References:**
   - "{non-const|volatile} lvalue reference … cannot bind to a temporary / a value of unrelated type". The select is `volatile` iff the referee is volatile.
   - "rvalue reference … cannot bind to lvalue".
+  - "reference to {type|incomplete type} T could not bind to an {rvalue|lvalue} of type U" (`sema_reference_bind_failed`, clang `FK_ReferenceInitFailed`): an unrelated non-class pair that creates no temporary — arrays (P0388), a function lvalue bound to a reference to another function type (`void (&&r)() = h;` with `int h(int)`), a referee that is an incomplete class. An xvalue prints as "rvalue".
+  - A related non-class glvalue that is not an lvalue (an xvalue, also the implicitly moved `return x;` of P2266, [class.copy.elision]/3) binds no non-const lvalue reference: "non-const lvalue reference to type 'int' cannot bind to a temporary of type 'int'" (clang `FK_NonConstLValueReferenceBindingToTemporary`), checked before the bit-field, vector-element and dropped-qualifier failures.
   - "binding reference of type T to value of type U drops 'cv' qualifier[s]". T is the referee, and the qualifiers are quoted and space-joined.
 - **Ambiguous base:** the message lists each path, one per line, as `\n    struct D -> B -> A`. The member-pointer conversions use the same format, plus the via-virtual-base error.
 

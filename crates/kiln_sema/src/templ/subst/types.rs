@@ -190,9 +190,14 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::Function(p) => {
                 let ret = self.ty(p.ret(), loc)?;
-                self.check_return_type(ret, loc)?;
+                // clang reports at the function type's begin (its return
+                // type, the declaration's decl-specifiers), not the name.
+                self.check_return_type(ret, self.type_begin.unwrap_or(loc))?;
                 let params = self.sema.ast.types.params(&p).to_vec();
-                let out = self.expand_types(&params, loc)?;
+                let outer = self.type_begin.take();
+                let out = self.expand_types(&params, loc);
+                self.type_begin = outer;
+                let out = out?;
                 let exc = match self.sema.ast.types.exc_spec(&p) {
                     ExcSpec::NoexceptExpr {
                         expr,

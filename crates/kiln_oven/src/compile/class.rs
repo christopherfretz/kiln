@@ -561,7 +561,8 @@ impl Compiler<'_> {
                     if self.node(a).value_category().is_glvalue() {
                         let src = self.lv_mem(a, Access::Read);
                         let full = matches!(self.kind(ty), TyKind::Record { union: false, .. });
-                        self.emit_at(Op::Copy, 1 | if full { 2 } else { 0 }, &[p, src, ty.0], e);
+                        let aux = 1 | 4 | if full { 2 } else { 0 };
+                        self.emit_at(Op::Copy, aux, &[p, src, ty.0], e);
                     } else {
                         self.init_inner(a, p, ty);
                     }
@@ -882,7 +883,7 @@ impl Compiler<'_> {
             && let TyKind::Record { union, .. } = self.kind(cls)
         {
             let s = self.lv_mem(*src, Access::Read);
-            self.emit_site(Op::Copy, if union { 0 } else { 2 }, &[this, s, cls.0], e, loc);
+            self.emit_site(Op::Copy, 4 | if union { 0 } else { 2 }, &[this, s, cls.0], e, loc);
             return this;
         }
         let r = self.call_frame(e, callee, rty, sret, Some(this), args, &refs, Some(loc));

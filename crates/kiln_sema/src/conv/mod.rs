@@ -625,9 +625,29 @@ fn unsupported(what: &str) -> ConvError {
     ConvError::new(DiagId::sema_conv_unsupported, vec![what.into()])
 }
 
+/// clang `FK_ReferenceInitFailed` for binding a reference to `referee`
+/// (as written) to `e` of type `from`: "reference to {type|incomplete
+/// type} T1 could not bind to an {rvalue|lvalue} of type T2", where an
+/// xvalue is an rvalue (clang `isLValue`).
+fn reference_bind_failed(
+    s: &mut Sema<'_, '_>,
+    referee: QualType,
+    from: QualType,
+    vk: ValueCategory,
+) -> ConvError {
+    // A function type is not incomplete (clang `isIncompleteType`).
+    let incomplete = !s.ast.types.is_function(referee) && !s.is_complete(referee);
+    let incomplete = if incomplete { "1" } else { "0" };
+    let sel = if vk == ValueCategory::LValue { "1" } else { "0" };
+    let (to_str, from_str) = s.ty_diff(referee, from);
+    ConvError::new(
+        DiagId::sema_reference_bind_failed,
+        vec![to_str, incomplete.into(), sel.into(), from_str],
+    )
+}
+
 /// Binds a reference of type `to` to the glvalue `e` ([dcl.init.ref]/5.1,
-/// 5.3 for reference-compatible glvalues). Temporaries and conversion
-/// functions are not supported yet (M3).
+/// 5.3 for reference-compatible glvalues, /5.4 through a temporary).
 #[allow(clippy::too_many_lines, reason = "one step per bullet of [dcl.init.ref]/5")]
 fn bind_reference(
     s: &mut Sema<'_, '_>,
@@ -702,10 +722,7 @@ fn bind_reference(
         let target = s.ast.types.qualify(r_un, rq);
         // clang `FK_ReferenceInitFailed`: the referee as written.
         let Some(scs) = standard_conversion(s, e, r_un, ConvCtx::Initialization) else {
-            let sel = if vk.is_glvalue() { "1" } else { "0" };
-            let (to_str, from_str) = strs(s);
-            let args = vec![to_str, sel.into(), from_str];
-            return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
+            return Err(reference_bind_failed(s, to_ty, from, vk));
         };
         let mut x = apply_standard_conversion(s, e, &scs, r_un)?;
         if !rq.is_empty() {
@@ -748,10 +765,7 @@ fn bind_reference(
                 // clang `FK_ReferenceInitFailed`: no implicit conversion
                 // sequence to the /5.4.1 temporary (no conversion
                 // function set to report).
-                let sel = if vk.is_glvalue() { "1" } else { "0" };
-                let (to_str, from_str) = strs(s);
-                let args = vec![to_str, sel.into(), from_str];
-                return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
+                return Err(reference_bind_failed(s, to_ty, from, vk));
             }
             let lref_opts =
                 if ctx.is_direct() { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };
@@ -775,18 +789,24 @@ fn bind_reference(
             let (to_str, from_str) = strs(s);
             return Err(ConvError::new(id, vec![sel.into(), to_str, from_str]));
         }
-        if s.ast.types.is_array(r_un) {
-            // No temporary of array type is copy-initialized from an
-            // unrelated array ([dcl.init.ref]/5.4.2; clang
-            // `FK_ReferenceInitFailed`, which says "rvalue" for an xvalue).
-            let sel = if vk == ValueCategory::LValue { "1" } else { "0" };
-            let (to_str, from_str) = strs(s);
-            return Err(ConvError::new(
-                DiagId::sema_reference_bind_failed,
-                vec![to_str, sel.into(), from_str],
-            ));
-        }
-        return Err(unsupported("binding a reference to a temporary"));
+        // No temporary of array type is copy-initialized from an
+        // unrelated array, and no temporary of function type exists
+        // ([dcl.init.ref]/5.4.2; clang `FK_ReferenceInitFailed`).
+        return Err(reference_bind_failed(s, to_ty, from, vk));
+    }
+    if related && plain_lref && vk != ValueCategory::LValue {
+        // [dcl.init.ref]/5.2: a non-const lvalue reference binds only an
+        // lvalue; an rvalue, including an xvalue (`static_cast<T&&>(x)`,
+        // or a returned local under P2266's implicit move,
+        // [expr.prim.id.unqual]/3), is diagnosed as a temporary even when
+        // the binding would also drop qualifiers or name a bit-field (clang
+        // `FK_NonConstLValueReferenceBindingToTemporary`).
+        let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
+        let (to_str, from_str) = strs(s);
+        return Err(ConvError::new(
+            DiagId::sema_lvalue_ref_bind_to_temporary,
+            vec![sel.into(), to_str, from_str],
+        ));
     }
     if related
         && vk.is_glvalue()
@@ -848,22 +868,11 @@ fn bind_reference(
         ));
     }
     if !bind_ok_category {
-        if rvalue_ref && vk == ValueCategory::LValue {
-            let (to_str, from_str) = strs(s);
-            return Err(ConvError::new(
-                DiagId::sema_rvalue_ref_bind_to_lvalue,
-                vec![to_str, from_str],
-            ));
-        }
-        if plain_lref && vk == ValueCategory::PRValue {
-            let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
-            let (to_str, from_str) = strs(s);
-            return Err(ConvError::new(
-                DiagId::sema_lvalue_ref_bind_to_temporary,
-                vec![sel.into(), to_str, from_str],
-            ));
-        }
-        return Err(unsupported("binding a reference to a temporary"));
+        // The remaining case: an rvalue reference and an lvalue (a
+        // non-const lvalue reference and an rvalue was diagnosed above).
+        debug_assert!(rvalue_ref && vk == ValueCategory::LValue, "bind category");
+        let (to_str, from_str) = strs(s);
+        return Err(ConvError::new(DiagId::sema_rvalue_ref_bind_to_lvalue, vec![to_str, from_str]));
     }
     // A direct binding (clang `SK_BindReference`).
     s.check_null_reference_binding(e);

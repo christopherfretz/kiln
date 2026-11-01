@@ -550,16 +550,13 @@ impl Mangler<'_, '_> {
     }
 
     /// clang `CXXNewExprClass`: `[gs] nw|na <expression>* _ <type>
-    /// (pi <expression>* E | E)` (a braced initializer has no
-    /// encoding here).
+    /// (pi <expression>* E | il <braced-expression>* E | E)`; an array
+    /// new mangles its element type, not the bound (as clang 19).
     fn new_expression(&mut self, expr: ExprId) -> bool {
         let ast = self.ast;
         let node = ast.exprs.get(expr);
         let x = *ast.exprs.new_extra(expr);
         let style = ast.exprs.new_init_style(expr);
-        if style == kiln_ast::expr::NewInitStyle::Braces {
-            return false;
-        }
         if node.has(kiln_ast::expr::ExprFlags::GLOBAL) {
             self.out.push_str("gs");
         }
@@ -590,9 +587,37 @@ impl Mangler<'_, '_> {
                 }
             }
             self.out.push('E');
+        } else if style == kiln_ast::expr::NewInitStyle::Braces {
+            // `new T{a, b}` (clang `mangleInitListElements`, WP-231).
+            match x.init {
+                Some(i) if ast.exprs.get(i).kind() == ExprKind::InitListExpr => {
+                    if !self.init_list(i) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
         } else {
             self.out.push('E');
         }
+        true
+    }
+
+    /// `il <braced-expression>* E`: a braced-init-list's elements.
+    fn init_list(&mut self, list: ExprId) -> bool {
+        let ast = self.ast;
+        self.out.push_str("il");
+        for e in ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(list)) {
+            let ok = if ast.exprs.get(e).kind() == ExprKind::InitListExpr {
+                self.init_list(e)
+            } else {
+                self.expression(e)
+            };
+            if !ok {
+                return false;
+            }
+        }
+        self.out.push('E');
         true
     }
 

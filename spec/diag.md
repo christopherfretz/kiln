@@ -501,7 +501,11 @@ instead of rebuilding them, so it never re-diagnoses them; sema marks
 the exceptions `allow_duplicate`, e.g. the unused-result warnings of an
 expression statement, which clang does rebuild). The reverse
 does not hold: a context-free diagnostic after an instantiation's still
-prints.
+prints. A diagnostic marked `per_instantiation` skips only the second
+rule: it is for checks clang re-runs on the node it rebuilds in every
+instantiation even when the construct is non-dependent, so it prints in
+the definition and once more per instantiation (`-Wreturn-stack-address`,
+WP-231).
 
 Diagnostics with invalid spans are never deduplicated. Ignored
 diagnostics are not recorded.

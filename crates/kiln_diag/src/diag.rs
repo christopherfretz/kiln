@@ -137,6 +137,9 @@ pub struct Diag {
     pub(crate) fixits: Vec<FixIt>,
     pub(crate) notes: Vec<Diag>,
     pub(crate) allow_duplicate: bool,
+    /// Not a duplicate of the same `(id, span)` reported with context 0
+    /// (spec/diag.md §7.4): a check clang re-runs on each instantiation.
+    pub(crate) per_instantiation: bool,
     /// Part of the deduplication key: the context the diagnostic was
     /// emitted in (sema's instantiation stack; 0 = none). The same
     /// `(id, span)` under two contexts prints twice.
@@ -155,6 +158,7 @@ impl Diag {
             fixits: Vec::new(),
             notes: Vec::new(),
             allow_duplicate: false,
+            per_instantiation: false,
             context: 0,
         }
     }
@@ -252,6 +256,15 @@ impl Diag {
     /// Exempts this diagnostic from `(id, span, context)` deduplication.
     pub fn allow_duplicate(mut self) -> Diag {
         self.allow_duplicate = true;
+        self
+    }
+
+    /// Keeps `(id, span, context)` deduplication but drops the rule that
+    /// an instantiation's diagnostic repeats one from the template
+    /// definition (spec/diag.md §7.4): for checks clang re-runs on the
+    /// rebuilt node of every instantiation, e.g. `-Wreturn-stack-address`.
+    pub fn per_instantiation(mut self) -> Diag {
+        self.per_instantiation = true;
         self
     }
 
