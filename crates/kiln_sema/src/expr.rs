@@ -3154,7 +3154,7 @@ impl Sema<'_, '_> {
     }
 
     /// `e1[args]` ([expr.sub], [over.sub]): `loc` is the `[`, `end` the
-    /// `]`.
+    /// `]`, recorded as a built-in subscript's end location.
     pub fn act_on_subscript_args(
         &mut self,
         base: ExprId,
@@ -3162,6 +3162,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> ExprId {
+        let r = self.subscript_args(base, args, loc, end);
+        self.builder().set_subscript_end(r, end);
+        r
+    }
+
+    fn subscript_args(&mut self, base: ExprId, args: &[ExprId], loc: Loc, end: Loc) -> ExprId {
         let braced: Vec<Option<InitList>> = args.iter().map(|&a| self.take_braced_arg(a)).collect();
         let mut kids = vec![base];
         kids.extend_from_slice(args);

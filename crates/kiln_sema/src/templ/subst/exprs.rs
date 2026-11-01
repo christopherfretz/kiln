@@ -189,7 +189,11 @@ impl Substituter<'_, '_, '_> {
                 let [b, i] = ex(self).operands(e);
                 let b = self.expr(b)?;
                 let i = self.expr(i)?;
-                Ok(self.sema.act_on_subscript(b, i, loc))
+                let r = self.sema.act_on_subscript(b, i, loc);
+                if let Some(end) = self.sema.ast.exprs.end_loc(e) {
+                    self.sema.builder().set_subscript_end(r, end);
+                }
+                Ok(r)
             }
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
                 let callee = ex(self).callee(e);
