@@ -367,8 +367,8 @@ impl Sema<'_, '_> {
             // clang `getCurrentMangleNumberContext`: `inTemplateInstantiation()
             // || CurContext->isDependentContext()` numbers it too; a
             // template parameter list open at the introducer is the latter.
-            let templated = self.inst.stack.depth() > 0
-                || self.lambdas.last().is_some_and(|t| t.heads > 0);
+            let templated =
+                self.inst.stack.depth() > 0 || self.lambdas.last().is_some_and(|t| t.heads > 0);
             return (templated || self.in_inline_function(ctx)).then_some((ctx, None));
         }
         if kind == DeclKind::CXXRecord {
@@ -389,10 +389,9 @@ impl Sema<'_, '_> {
         // clang `TemplatedVariable`: a variable template's pattern or an
         // implicit specialization of one.
         let templated = self.ast.described_template(v).is_some()
-            || self
-                .ast
-                .spec_info(v)
-                .is_some_and(|(_, i)| i.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization);
+            || self.ast.spec_info(v).is_some_and(|(_, i)| {
+                i.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
+            });
         (inline || templated).then_some((v, Some(v)))
     }
 
