@@ -471,12 +471,13 @@ The normative description is spec/driver.md "Code generation". In short:
 - Every job calls `ConstexprOpts::write_report`.
 
 ## 6. Validation
-- **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 74
+- **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
   inline C++ programs, lowered for `aarch64-unknown-linux-gnu` straight
   from `parse_tu` (no driver). Every case must pass
   `opt-19 -S -passes=verify`. `Exact` cases must also equal
-  `clang++-19 -S -emit-llvm -O0 -std=c++26 --target=aarch64-unknown-linux-gnu`
-  after normalization. A case that differs but is marked `VerifyOnly` is
+  `clang++-19 -S -emit-llvm -O0 -std=c++26 --target=aarch64-unknown-linux-gnu
+  -moutline-atomics` after normalization (the flag for the same reason as
+  in the IR-diff corpus below; kiln's default is on, WP-228). A case that differs but is marked `VerifyOnly` is
   a documented deviation (below); one that becomes exact is reported so
   it can be promoted. `KILN_CASE=<name>` prints both texts.
 - **Normalization:** both texts go through `opt-19 -S -passes=verify`,
@@ -499,12 +500,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines after it (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 208 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 211 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
   `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
-  work packages' cases): 413/416 pairs exact; `DEVIATIONS` holds
+  work packages' cases): 419/422 pairs exact; `DEVIATIONS` holds
   `global_init_array_eh`, `eh_array_destroy_throwing_global` and
   `array_temporary_global` on aarch64 (§7f, §7m).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
