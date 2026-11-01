@@ -2454,12 +2454,25 @@ impl Parser<'_, '_> {
     }
 
     /// braced-init-list ([dcl.init.general]), with C++20 designators.
+    /// A list with an invalid designation (or containing such a list) is
+    /// parsed through its `}` and then dropped, as clang's
+    /// `ParseBraceInitializer` does: `Err` without further diagnostics.
     pub(crate) fn parse_init_list(&mut self) -> Result<InitList, ()> {
+        match self.parse_init_list_checked()? {
+            (l, true) => Ok(l),
+            (_, false) => Err(()),
+        }
+    }
+
+    /// [`Self::parse_init_list`], with whether the designations were
+    /// valid instead of dropping the list.
+    fn parse_init_list_checked(&mut self) -> Result<(InitList, bool), ()> {
         if !self.stack_ok() {
             return Err(());
         }
         let lbrace = self.bump().span.lo;
         let mut items = Vec::new();
+        let mut valid = true;
         while !self.at(Punct::RBrace) && !self.at_eof() {
             let mut designator = Vec::new();
             loop {
@@ -2480,11 +2493,29 @@ impl Parser<'_, '_> {
                         self.skip_until(&[Punct::RBrace], false, true);
                         return Err(());
                     };
+                    // A GNU array range designator `[first ... last]`.
+                    let range = if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
+                        let d = self.s.diag(DiagId::sema_gnu_array_range, ellipsis);
+                        self.emit(d);
+                        let Some(last) = self.parse_constant_expr() else {
+                            self.skip_until(&[Punct::RBrace], false, true);
+                            return Err(());
+                        };
+                        Some((last, ellipsis))
+                    } else {
+                        None
+                    };
                     self.expect_closing(Punct::RSquare, Punct::LSquare, l);
-                    designator.push(Designator::Index(e, l));
+                    designator.push(match range {
+                        Some((last, ellipsis)) => Designator::Range(e, last, l, ellipsis),
+                        None => Designator::Index(e, l),
+                    });
                 } else {
                     break;
                 }
+            }
+            if !designator.is_empty() && !self.s.act_on_designation(&designator) {
+                valid = false;
             }
             if !designator.is_empty()
                 && !self.at(Punct::LBrace)
@@ -2494,12 +2525,13 @@ impl Parser<'_, '_> {
                 return Err(());
             }
             let mut value = if self.at(Punct::LBrace) {
-                let Ok(l) = self.parse_init_list() else {
+                let Ok((l, ok)) = self.parse_init_list_checked() else {
                     // The inner list skipped through its `}`; skip
                     // through ours too (clang's `ParseBraceInitializer`).
                     self.skip_until(&[Punct::RBrace], false, true);
                     return Err(());
                 };
+                valid &= ok;
                 InitValue::List(l)
             } else {
                 let Some(e) = self.parse_assignment_expr() else {
@@ -2522,8 +2554,10 @@ impl Parser<'_, '_> {
         }
         let rbrace = self.expect_closing(Punct::RBrace, Punct::LBrace, lbrace);
         let l = InitList { items, lbrace, rbrace };
-        self.s.act_on_init_list_syntax(&l);
-        Ok(l)
+        if valid {
+            self.s.act_on_init_list_syntax(&l);
+        }
+        Ok((l, valid))
     }
 }
 

@@ -2239,8 +2239,12 @@ impl<'a> AstBuilder<'a> {
     ) -> ExprId {
         let mut deps = self.deps(init);
         for d in designators {
-            if let crate::expr::Designator::Index { index, .. } = *d {
-                deps |= self.deps(index);
+            match *d {
+                crate::expr::Designator::Index { index, .. } => deps |= self.deps(index),
+                crate::expr::Designator::Range { first, last, .. } => {
+                    deps |= self.deps(first) | self.deps(last);
+                }
+                crate::expr::Designator::Field { .. } => {}
             }
         }
         let vk = self.vk(init);

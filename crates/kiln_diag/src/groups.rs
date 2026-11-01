@@ -213,6 +213,8 @@ diag_groups! {
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
     AddressOfPackedMember = "address-of-packed-member" [];
     UnusedVariable = "unused-variable" [];
+    // ----- WP-193 (GNU designators)
+    GnuDesignator = "gnu-designator" [];
 }
 
 impl Group {

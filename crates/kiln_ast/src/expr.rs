@@ -1056,6 +1056,17 @@ pub enum Designator {
         /// The `[`.
         loc: Loc,
     },
+    /// `[first ... last]` (a GNU extension); `loc` is the `[`.
+    Range {
+        /// The first index.
+        first: ExprId,
+        /// The last index (inclusive).
+        last: ExprId,
+        /// The `[`.
+        loc: Loc,
+        /// The `...`.
+        ellipsis: Loc,
+    },
 }
 
 /// Side record of an `InitListExpr` (semantic form, §5.6).
@@ -1959,13 +1970,16 @@ impl ExprArena {
     }
 
     /// The index expressions of a `DesignatedInitExpr`'s array
-    /// designators, in order.
+    /// designators, in order (both bounds of a range).
     pub fn designated_indices(&self, e: ExprId) -> impl Iterator<Item = ExprId> + '_ {
         self.cold.designators.get(e).into_iter().flat_map(|d| {
-            d.iter().filter_map(|x| match *x {
-                Designator::Index { index, .. } => Some(index),
-                Designator::Field { .. } => None,
-            })
+            d.iter()
+                .flat_map(|x| match *x {
+                    Designator::Index { index, .. } => [Some(index), None],
+                    Designator::Range { first, last, .. } => [Some(first), Some(last)],
+                    Designator::Field { .. } => [None, None],
+                })
+                .flatten()
         })
     }
 

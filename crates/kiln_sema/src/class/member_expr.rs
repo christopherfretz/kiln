@@ -408,7 +408,6 @@ impl Sema<'_, '_> {
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
-        let _ = tilde;
         let obj = match self.destructor_object(base, loc, op_loc, arrow) {
             Ok(o) => o,
             Err(e) => return e,
@@ -435,7 +434,10 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[obj.base], loc);
         };
-        self.finish_member_destructor(obj, destroyed, Some(td), loc, op_loc)
+        // clang's destructor name starts at the `~` (`GetNameFromUnqualifiedId`):
+        // a use of a deleted destructor is diagnosed there.
+        let name_loc = if tilde.is_valid() { tilde } else { loc };
+        self.finish_member_destructor(obj, destroyed, Some(td), loc, name_loc, op_loc)
     }
 
     /// A pseudo-destructor `base.~T` / `base->~T` formed again at
@@ -451,7 +453,7 @@ impl Sema<'_, '_> {
         arrow: bool,
     ) -> ExprId {
         match self.destructor_object(base, loc, op_loc, arrow) {
-            Ok(obj) => self.finish_member_destructor(obj, destroyed, None, loc, op_loc),
+            Ok(obj) => self.finish_member_destructor(obj, destroyed, None, loc, loc, op_loc),
             Err(e) => e,
         }
     }
@@ -531,13 +533,16 @@ impl Sema<'_, '_> {
     }
 
     /// The destructor member access of `obj` naming `destroyed` (found as
-    /// `td` by destructor name lookup, `None` when substituted).
+    /// `td` by destructor name lookup, `None` when substituted). `name_loc`
+    /// is where the destructor name begins (the `~`; the destroyed type
+    /// when substituted, as clang's `RebuildCXXPseudoDestructorExpr`).
     fn finish_member_destructor(
         &mut self,
         obj: DtorObject,
         destroyed: QualType,
         td: Option<DeclId>,
         loc: Loc,
+        name_loc: Loc,
         op_loc: Loc,
     ) -> ExprId {
         let DtorObject { base, b, ty: obj_ty, def, arrow } = obj;
@@ -570,7 +575,7 @@ impl Sema<'_, '_> {
             self.ensure_implicit(def, crate::class::special::SpecialKind::Dtor);
             let canon = self.ast.types.canonical(self.class_type(def)).ty();
             let dn = self.ast.names.destructor(canon);
-            return self.member_access(base, b, obj_ty, def, arrow, dn, None, loc);
+            return self.member_access(base, b, obj_ty, def, arrow, dn, None, name_loc);
         }
         if !self.is_scalar(obj_ty) {
             let msg = self
