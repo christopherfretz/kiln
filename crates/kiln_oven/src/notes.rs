@@ -963,7 +963,12 @@ impl Oven {
                 let name = name_of(ast, d);
                 {
                     let vi = var_info(ast, d);
-                    if vi.usable && vi.init.is_none() {
+                    if ast.decls.get(d).kind() == DeclKind::ParmVar {
+                        // clang note_constexpr_function_param_value_unknown.
+                        format!(
+                            "function parameter '{name}' with unknown value cannot be used in a constant expression"
+                        )
+                    } else if vi.usable && vi.init.is_none() {
                         format!("initializer of '{name}' is unknown")
                     } else if vi.usable {
                         format!("initializer of '{name}' is not a constant expression")

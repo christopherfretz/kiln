@@ -181,6 +181,17 @@ the evaluator's flattened type table.
   is a local variable read as a global): "pointer to '…' is not a
   constant expression" (or "reference to …" when the frozen type is a
   reference; clang `note_constexpr_non_global`), with "declared here".
+- A **function parameter outside its call** (named in a template
+  argument or a `static_assert` in the body, where it has no frame;
+  WP-183) takes the same globals path as an external object that is never
+  usable (`var_info` returns early for `ParmVar`; a default argument is
+  not an initializer). So `X<&q>` and `Y<q>` (`const int&` parameter)
+  fail in the freeze above, as clang's `VisitVarDecl` `Success(VD)` does,
+  and only a read (`Z<q>`, `static_assert(r == 0)` through a reference)
+  is clang's `note_constexpr_function_param_value_unknown` ("function
+  parameter 'q' with unknown value cannot be used in a constant
+  expression") with "declared here" (`MemFault::External`, `notes.rs`).
+  This is a lowering change only; it is not on the interpreter hot path.
 
 - **Variable length arrays** (WP-183, GNU extension): a VLA local lowers
   to a zero-sized opaque object, so declaring one in a constant

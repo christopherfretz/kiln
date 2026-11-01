@@ -78,6 +78,11 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
         }
         return info;
     }
+    // A parameter outside its call: never usable, whatever its type (its
+    // value is the caller's; a default argument is not an initializer).
+    if ast.decls.get(d).kind() == DeclKind::ParmVar {
+        return info;
+    }
     let mut constexpr = false;
     for r in ast.redecls_of(d) {
         if let Some(v) = ast.decls.var(r) {
