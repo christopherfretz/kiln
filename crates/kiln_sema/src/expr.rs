@@ -1616,6 +1616,19 @@ impl Sema<'_, '_> {
             return false;
         }
         if n.value_category() != ValueCategory::LValue {
+            // clang's `CM_LValueCast`: an explicit cast of an lvalue, for a
+            // better diagnostic than the generic one (GCC's cast-as-lvalue).
+            let inner = self.ignore_parens(e);
+            if n.value_category() == ValueCategory::PRValue
+                && self.ast.exprs.get(inner).kind().is_explicit_cast()
+            {
+                let sub = self.ignore_paren_imp_casts(self.ast.exprs.operand(inner));
+                if self.ast.exprs.get(sub).value_category() == ValueCategory::LValue {
+                    let at = self.begin_loc(inner);
+                    self.error(DiagId::sema_lvalue_cast_not_supported, at);
+                    return false;
+                }
+            }
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }

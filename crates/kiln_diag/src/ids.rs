@@ -1547,6 +1547,7 @@ diag_ids! {
     sema_atomic_builtin_bit_int_prohibited = Error (0) "argument to atomic builtin of type '_BitInt' is not supported";
     sema_atomic_op_invalid_memory_order = Warning [AtomicMemoryOrdering] (1) "{0:|success |failure }memory order argument to atomic operation is invalid";
     parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
+    sema_lvalue_cast_not_supported = Error (0) "assignment to cast is illegal, lvalue casts are not supported";
 }
 
 impl DiagId {

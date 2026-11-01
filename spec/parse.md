@@ -756,6 +756,7 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   | `T(e) = 1;` | declaration | same |
   | `T(e), b;` / `T(e), y = 2;` | declarations | same |
   | `T(a)++;`, `T(a, 5) << c;`, `T(a)->m = 7;` | expressions | same |
+  | `int(a)++;` | expression; `assignment to cast is illegal, lvalue casts are not supported` | same (fixed in WP-180) |
   | `T(f) = {1};` | declaration | same |
   | `T(*g)(nullptr);` | declaration, type sugar `T (*)` | declaration, `T *` (no ParenType sugar) |
   | `T(n) [[maybe_unused]];` | declaration; `an attribute list cannot appear here` | same (fixed in WP-180) |
