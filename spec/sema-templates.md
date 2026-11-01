@@ -1274,6 +1274,12 @@ immediate context: errors are hard.
   error). The note is "in instantiation of default function argument
   expression for 'f<int>' required here". The instantiated argument is
   cached per instantiated `ParmVar` in `default_args`.
+- A braced default argument (`C<sizeof(T)> c = {}`, `int y = {sizeof(T)}`)
+  is stored in the pattern as its `InitListExpr`. When it needs a rebuild,
+  substitution rebuilds the list's elements and hands them to
+  `act_on_param_default_list`, which list-initializes the instantiated
+  parameter's type (the same path as a non-template braced default
+  argument; WP-136).
 
 ### 6.5 Integration with overload resolution; when bodies are instantiated
 

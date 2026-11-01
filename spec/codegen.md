@@ -37,7 +37,8 @@ panic and never silently wrong IR.
   matching clang's IR). Calls of builtins with an integral or floating
   result are candidates too (clang `EmitBuiltinExpr` tries
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
-  (WP-088).
+  (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
+  its parameter's default argument once, at the first use (WP-136).
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
