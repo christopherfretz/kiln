@@ -1646,10 +1646,19 @@ impl Cg<'_> {
                 Some(v) => v,
                 None => self.emit_call_args(&sig, args)?,
             };
-            let (extra, nr) = self.call_extra(md, cfty, &mut sig);
+            let (mut extra, nr) = self.call_extra(md, cfty, &mut sig);
+            // The allocation attributes of the method named by the call
+            // (clang `ConstructAttributeList` with the virtual callee's
+            // `CGCalleeInfo`), then its `alloc_align` assumption.
+            let mut ret_extra = Vec::new();
+            self.alloc_call_attrs(md, &vals, &mut extra, &mut ret_extra);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
+            let this = Some(this.v);
             let r =
-                self.call_vals_to(&sig, fp, None, Some(this.v), &vals, args, dest, &extra, &[])?;
+                self.call_vals_to(&sig, fp, None, this, &vals, args, dest, &extra, &ret_extra)?;
+            if let Some(p) = r {
+                self.alloc_align_assume(md, &vals, p);
+            }
             if nr {
                 self.finish_noreturn_call();
             }
