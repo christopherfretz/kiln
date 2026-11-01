@@ -407,6 +407,8 @@ impl Compiler<'_> {
             | id::VA_COPY => self.trap_loc(begin, INVALID.into()),
             // The libm functions and the rounding intrinsics.
             _ if id::is_libm(bid) || is_rounding(bid) => self.trap_loc(begin, INVALID.into()),
+            // WP-171: clang constant-evaluates no coroutine builtin.
+            _ if id::is_coro(bid) => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {
                 let x = arg(0)?;
                 let q = self.ast().exprs.get(x).ty();

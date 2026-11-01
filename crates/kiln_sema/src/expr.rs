@@ -2911,6 +2911,11 @@ impl Sema<'_, '_> {
         {
             return self.recover_err(&kids, loc);
         }
+        if let Some(id) = named.and_then(|d| self.ast.decls.builtin_id(d))
+            && !self.check_builtin_ice_args(id, callee, &conv_args)
+        {
+            return self.recover_err(&kids, loc);
+        }
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
         let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);

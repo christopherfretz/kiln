@@ -2920,6 +2920,40 @@ pub mod builtin {
     /// noexcept` (signature `vAA`).
     pub const VA_COPY: u32 = 1365;
 
+    // WP-171: the coroutine builtins ([`CORO`]; clang `CoroLangBuiltin`s).
+    /// `void __builtin_coro_resume(void *)` (signature `vv*`).
+    pub const CORO_RESUME: u32 = 373;
+    /// `void __builtin_coro_destroy(void *)` (signature `vv*`).
+    pub const CORO_DESTROY: u32 = 365;
+    /// `bool __builtin_coro_done(void *) noexcept` (signature `bv*`).
+    pub const CORO_DONE: u32 = 366;
+    /// `void *__builtin_coro_promise(void *, int, bool) noexcept`
+    /// (signature `v*v*IiIb`: the alignment and direction are integer
+    /// constant expressions).
+    pub const CORO_PROMISE: u32 = 372;
+    /// `void *__builtin_coro_noop() noexcept` (signature `v*`).
+    pub const CORO_NOOP: u32 = 371;
+    /// `size_t __builtin_coro_size() noexcept` (signature `z`).
+    pub const CORO_SIZE: u32 = 374;
+    /// `size_t __builtin_coro_align() noexcept` (signature `z`).
+    pub const CORO_ALIGN: u32 = 362;
+    /// `void *__builtin_coro_frame() noexcept` (signature `v*`).
+    pub const CORO_FRAME: u32 = 368;
+    /// `void *__builtin_coro_free(void *) noexcept` (signature `v*v*`).
+    pub const CORO_FREE: u32 = 369;
+    /// `void *__builtin_coro_id(int, void *, void *, void *) noexcept`
+    /// (signature `v*Iiv*v*v*`).
+    pub const CORO_ID: u32 = 370;
+    /// `bool __builtin_coro_alloc() noexcept` (signature `b`).
+    pub const CORO_ALLOC: u32 = 363;
+    /// `void *__builtin_coro_begin(void *) noexcept` (signature `v*v*`).
+    pub const CORO_BEGIN: u32 = 364;
+    /// `bool __builtin_coro_end(void *, bool) noexcept` (signature
+    /// `bv*Ib`).
+    pub const CORO_END: u32 = 367;
+    /// `char __builtin_coro_suspend(bool) noexcept` (signature `cIb`).
+    pub const CORO_SUSPEND: u32 = 375;
+
     /// `__builtin_fabs` (clang `Builtins.td` signature `dd`).
     pub const FABS: u32 = 550;
     /// `__builtin_fabsf` (clang `Builtins.td` signature `ff`).
@@ -3056,7 +3090,8 @@ pub mod builtin {
         /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
         /// `&` lvalue reference, `C` const, `D` volatile; `A` is a
         /// `__builtin_va_list` parameter (a reference to it, or the decayed
-        /// pointer when it is an array).
+        /// pointer when it is an array). An `I` prefix marks an argument
+        /// that must be an integer constant expression.
         pub sig: &'static str,
         /// [`attr`] bits.
         pub attrs: u8,
@@ -3183,6 +3218,26 @@ pub mod builtin {
         row(VA_START, "__builtin_va_start", "vA.", N | T),
         row(VA_END, "__builtin_va_end", "vA", N),
         row(VA_COPY, "__builtin_va_copy", "vAA", N),
+    ];
+
+    /// WP-171: the coroutine builtins the libc++ headers name (clang 19
+    /// `Builtins.td` `CoroLangBuiltin`s). Sema type-checks calls; codegen
+    /// and the Oven do not implement them.
+    pub const CORO: &[Info] = &[
+        row(CORO_RESUME, "__builtin_coro_resume", "vv*", 0),
+        row(CORO_DESTROY, "__builtin_coro_destroy", "vv*", 0),
+        row(CORO_DONE, "__builtin_coro_done", "bv*", N),
+        row(CORO_PROMISE, "__builtin_coro_promise", "v*v*IiIb", N),
+        row(CORO_NOOP, "__builtin_coro_noop", "v*", N),
+        row(CORO_SIZE, "__builtin_coro_size", "z", N),
+        row(CORO_ALIGN, "__builtin_coro_align", "z", N),
+        row(CORO_FRAME, "__builtin_coro_frame", "v*", N),
+        row(CORO_FREE, "__builtin_coro_free", "v*v*", N),
+        row(CORO_ID, "__builtin_coro_id", "v*Iiv*v*v*", N),
+        row(CORO_ALLOC, "__builtin_coro_alloc", "b", N),
+        row(CORO_BEGIN, "__builtin_coro_begin", "v*v*", N),
+        row(CORO_END, "__builtin_coro_end", "bv*Ib", N),
+        row(CORO_SUSPEND, "__builtin_coro_suspend", "cIb", N),
     ];
 
     /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,
@@ -3623,12 +3678,47 @@ pub mod builtin {
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
-        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).find(|e| e.name == name).map(|e| e.id)
+        ALL.iter()
+            .chain(INT_MEM)
+            .chain(LIBM)
+            .chain(ATOMIC)
+            .chain(CORO)
+            .find(|e| e.name == name)
+            .map(|e| e.id)
     }
 
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
-        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).find(|e| e.id == id)
+        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).chain(CORO).find(|e| e.id == id)
+    }
+
+    /// The parameters of builtin `id` that must be integer constant
+    /// expressions (an `I` prefix in its signature), as a bit mask by
+    /// parameter index (clang `ASTContext::GetBuiltinType`'s
+    /// `IntegerConstantArgs`).
+    pub fn ice_params(id: u32) -> u32 {
+        let Some(e) = info(id) else { return 0 };
+        let (mut mask, mut idx, mut ice) = (0u32, 0i32, false);
+        for &c in e.sig.as_bytes() {
+            match c {
+                b'I' => ice = true,
+                b'U' | b'L' | b'C' | b'D' | b'*' | b'&' => {}
+                b'.' => break,
+                _ => {
+                    if ice && idx > 0 {
+                        mask |= 1 << (idx - 1);
+                    }
+                    ice = false;
+                    idx += 1;
+                }
+            }
+        }
+        mask
+    }
+
+    /// Whether builtin `id` is a [`CORO`] builtin.
+    pub fn is_coro(id: u32) -> bool {
+        CORO.iter().any(|e| e.id == id)
     }
 
     /// Whether builtin `id` is a [`LIBM`] function.

@@ -214,6 +214,9 @@ impl Sema<'_, '_> {
             match c {
                 b'U' => unsigned = true,
                 b'L' => longs += 1,
+                // An integer constant expression argument (checked by
+                // `check_builtin_ice_args`).
+                b'I' => {}
                 _ => break,
             }
             s = &s[1..];
@@ -479,6 +482,35 @@ impl Sema<'_, '_> {
             let d = self.diag(DiagId::sema_probability_out_of_range, at);
             self.emit(d);
             return false;
+        }
+        true
+    }
+
+    /// The arguments of a builtin call that must be integer constant
+    /// expressions (clang `CheckBuiltinFunctionCall` -> `BuiltinConstantArg`:
+    /// `argument to '<name>' must be a constant integer` at the call's
+    /// start). Value-dependent arguments wait for instantiation.
+    pub(crate) fn check_builtin_ice_args(
+        &mut self,
+        id: u32,
+        callee: ExprId,
+        args: &[ExprId],
+    ) -> bool {
+        let mask = builtin::ice_params(id);
+        if mask == 0 {
+            return true;
+        }
+        for (i, &a) in args.iter().enumerate().take(32) {
+            if mask & (1 << i) == 0 || self.expr_is_value_dependent(a) {
+                continue;
+            }
+            if self.fold_int(a).is_none() {
+                let name = builtin::info(id).map_or("", |e| e.name);
+                let at = self.begin_loc(callee);
+                let d = self.diag(DiagId::sema_constant_integer_arg_type, at).arg(name.to_string());
+                self.emit(d);
+                return false;
+            }
         }
         true
     }
