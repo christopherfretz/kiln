@@ -2125,7 +2125,7 @@ pub struct InstFrame {          // 20 B
 
 | `FrameKind` | SFINAE | Note (clang 19 text; `%0` is printed with the template args) |
 |---|---|---|
-| `ClassInstantiation` | hard | in instantiation of template class '%0' requested here |
+| `ClassInstantiation` | hard | in instantiation of template class '%0' requested here (`%0` is the specialization's own type, canonical and scoped: `'ns::S<unsigned long>'`) |
 | `FunctionInstantiation` | hard | in instantiation of function template specialization '%0' requested here |
 | `MemberFunctionInstantiation` | hard | in instantiation of member function '%0' requested here |
 | `StaticDataMemberInstantiation` | hard | in instantiation of static data member '%0' requested here |

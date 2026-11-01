@@ -435,8 +435,9 @@ impl Sema<'_, '_> {
     fn frame_name(&self, f: &InstFrame) -> String {
         match f.kind {
             FrameKind::ClassInstantiation => {
+                // clang: `Context.getTypeDeclType(Record)`, scoped.
                 let t = self.ast.decls.get(f.entity).ty().unwrap_or(kiln_ast::QualType::ERROR);
-                self.ty_str(t)
+                self.decl_ty_str(t)
             }
             FrameKind::DefaultTemplateArg if f.args.is_some() => {
                 let mut s = self.qualified_decl_name(f.template);
