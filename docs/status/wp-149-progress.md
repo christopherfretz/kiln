@@ -47,9 +47,12 @@ Branch `wp/149-gate-unblockers-3`, worktree `kiln/.worktrees/wp-149`, base
      diagnostic, which kiln reports at `)` where clang points at the
      qualifier.
    - Tests: `dcl.fct/explicit-object-call.cpp`, `explicit-object-diags.cpp`.
-6. [ ] Braced default arguments: WP-136 did this. Verified after the merge
-   (see below).
-7. [ ] The WP-142 divergences. All three are filed, not fixed: none of them
+6. [x] **Braced default arguments**: WP-136 did this. Verified after the
+   merge: `g(P p = {})`, `h(int x = {})`, a member function's
+   `m(P p = {5, 6})` and a function template's `k(T t = {3})` all match
+   clang's run output. One divergence: kiln warns `braces around scalar
+   initializer` on the template's `{3}`, and clang does not.
+7. [x] The WP-142 divergences. All three are filed, not fixed: none of them
    affects valid code, so no gate test depends on them.
    - (a) Not a divergence. clang 19 also accepts an explicit
      instantiation of a static data member whose declared type differs
@@ -73,8 +76,16 @@ Branch `wp/149-gate-unblockers-3`, worktree `kiln/.worktrees/wp-149`, base
 - `__functional/function.h:377`: the composite pointer type of `void*` and
   `const T*`. `function.h:927`: the out-of-line constructor of a partial
   specialization, `function<_Rp(_ArgTypes...)>::function`.
-- `variant:1141`: a member alias template with a pack expansion
-  ("pack expansion in this context"). This is now the first `<variant>`
-  error.
 - `__is_trivially_constructible` and `__is_trivially_assignable` are not
   implemented.
+- Out-of-line definitions of member classes of class templates,
+  `class basic_ostream<_CharT, _Traits>::sentry { ... }`
+  (`basic_ostream.h:132`, `istream:302`, `format_arg.h:358`), give
+  `expected '(' for function-style cast` (58 any) and `expected expression`
+  (60 any). Only 3 tests fail on them first, but they block `<chrono>`,
+  `<ostream>` and `<format>`.
+- `variant:1141` needs partial substitution of a non-type template
+  parameter pack, `All<O<T, I>...>` with `I` known and `T` not. clang
+  models this with `SubstNonTypeTemplateParmPackExpr`. kiln's §7.2
+  partial expansion handles only type packs
+  (`SubstTemplateTypeParmPack`).
