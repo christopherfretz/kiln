@@ -13,12 +13,13 @@
 
 use kiln_ast::decl::{CtorInit, CtorInitKind, DeclFlags, DeclKind, DefinitionBits};
 use kiln_ast::expr::{BinaryOp, CastKind, ConstructionKind, ExprKind, TraitKind, UnaryOp};
+use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, ExprId, QualType, TypeId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
-use super::special::{ImplicitInit, InitEntity, SpecialKind};
+use super::special::{ImplicitInit, InitEntity, Selected, SpecialKind};
 use super::temporary::BindingSite;
 use super::{MemInitId, MemInitInfo};
 use crate::lookup::LookupKind;
@@ -298,6 +299,15 @@ impl Sema<'_, '_> {
         let _ = self.builder().set_ctor_inits(ctor, &[ci]);
         if let Some(target) = self.constructor_called(ci.init) {
             self.delegating.push((self.ast.first(ctor), target, ci.loc));
+        }
+        // [class.base.init]/12 (clang `SetDelegatingInitializer`): the
+        // class's own destructor is potentially invoked.
+        if let Some(class) = self.ast.decls.get(ctor).ctx()
+            && let Selected::Found(dtor) | Selected::Deleted(dtor) =
+                self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+        {
+            self.mark_function_referenced(dtor, ci.loc);
+            self.diagnose_deleted_use(dtor, ci.loc);
         }
     }
 
