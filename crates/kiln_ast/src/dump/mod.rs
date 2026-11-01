@@ -755,6 +755,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per statement kind")]
     fn stmt_children(&self, s: StmtId, kids: &mut Vec<(Node, Option<&'static str>)>) {
         let stmts = &self.ast.stmts;
         let lists = &self.ast.lists;

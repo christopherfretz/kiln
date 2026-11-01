@@ -124,6 +124,7 @@ impl Sema<'_, '_> {
     /// initializers, the default arguments and member initializers used,
     /// and any dependent or erroneous node (conservatively). Macro
     /// expansions are not exempt.
+    #[allow(clippy::too_many_lines, reason = "one arm per expression kind")]
     pub(crate) fn has_possible_side_effects(&self, e: ExprId) -> bool {
         let exprs = &self.ast.exprs;
         let dependent = ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::UNEXPANDED_PACK;
