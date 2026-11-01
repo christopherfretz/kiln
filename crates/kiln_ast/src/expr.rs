@@ -1810,7 +1810,6 @@ impl ExprArena {
         self.expect_kind(e, ExprKind::CXXThisExpr).aux & 1 != 0
     }
 
-    /// The explicit initializers of a `CXXParenListInitExpr`.
     /// The operation of an `AtomicExpr`: its builtin id
     /// ([`crate::decl::builtin::atomic`]).
     pub fn atomic_op(&self, e: ExprId) -> u32 {
@@ -1823,6 +1822,7 @@ impl ExprArena {
         ListId::new(self.expect_kind(e, ExprKind::AtomicExpr).a)
     }
 
+    /// The explicit initializers of a `CXXParenListInitExpr`.
     pub fn paren_list_inits(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_kind(e, ExprKind::CXXParenListInitExpr).a)
     }
