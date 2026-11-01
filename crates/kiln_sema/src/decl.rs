@@ -3311,6 +3311,11 @@ impl Sema<'_, '_> {
             let loc = self.ast.decls.get(f).loc();
             self.mark_base_and_member_dtors_referenced(loc, class);
             self.check_destructor_delete(f, class);
+            // [basic.def.odr]/8: and uses the vtable.
+            self.mark_vtable_used(class, loc);
+        }
+        if !self.in_template() {
+            self.mark_key_function_vtable_used(f);
         }
         self.pop_scope();
         if let Some(saved) = self.fn_saved.pop() {

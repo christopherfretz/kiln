@@ -221,6 +221,12 @@ pub struct Sema<'a, 'sm> {
     /// innermost last: diagnostics emitted meanwhile get the note `in
     /// implicit ... for 'T' first required here`.
     pub(crate) synth: Vec<class::SynthContext>,
+    /// Classes whose vtables are used ([basic.def.odr]/8; clang
+    /// `VTableUses`), with the use: their virtual members are marked
+    /// referenced at the end of the TU (spec/sema-class.md §3.5).
+    pub(crate) vtable_uses: Vec<(DeclId, Loc)>,
+    /// The classes ever pushed on `vtable_uses` (first declarations).
+    pub(crate) vtables_used: kiln_source::fx::FxHashSet<DeclId>,
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
@@ -386,6 +392,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cleanup: class::CleanupState::default(),
             cleanup_saved: Vec::new(),
             synth: Vec::new(),
+            vtable_uses: Vec::new(),
+            vtables_used: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             memcpy_decl: None,
             delegating: Vec::new(),

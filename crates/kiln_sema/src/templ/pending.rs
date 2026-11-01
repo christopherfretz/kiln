@@ -30,6 +30,25 @@ impl Sema<'_, '_> {
     /// while draining ([temp.point]/7: the end of the TU is a point of
     /// instantiation of every specialization).
     pub fn end_of_tu_instantiations(&mut self) {
+        // clang `ActOnEndOfTranslationUnit`: the used vtables' virtual
+        // members, then the pending instantiations, until neither adds
+        // more (class/virtual/used.rs).
+        loop {
+            self.define_used_vtables();
+            if self.inst.fatal {
+                break;
+            }
+            if self.inst.pending.is_empty() {
+                if self.vtable_uses.is_empty() {
+                    break;
+                }
+                continue;
+            }
+            self.drain_pending_instantiations();
+        }
+    }
+
+    fn drain_pending_instantiations(&mut self) {
         while let Some(p) = self.inst.pending.pop_front() {
             if self.inst.fatal {
                 self.inst.pending.clear();

@@ -448,6 +448,26 @@ Landed (WP-078b): the struct also carries
 point after the RTTI slot. The `method_indices` include the methods of
 the primary-base chain. Full contract and signatures: abi.md §1, §8.5.
 
+**Vtable uses** ([basic.def.odr]/8; clang `MarkVTableUsed`,
+`DefineUsedVTables`, `MarkVirtualMembersReferenced`; `virtual/used.rs`,
+WP-137). A class's vtable is used, once per class, by:
+- a constructor definition: a user-written one at the end of its
+  ctor-initializer completion (located at the constructor name), an
+  implicit one at the use site that defined it;
+- a destructor definition, written or implicit, at the same locations;
+- the definition of the key function (outside a template), at its name.
+
+Only a dynamic, non-dependent class outside an unevaluated context counts.
+A local class is marked at once; any other class is queued in
+`Sema.vtable_uses`. At the end of the TU, `end_of_tu_instantiations`
+alternates `define_used_vtables` with draining the pending instantiations
+until both are empty, as clang does. `define_used_vtables` skips a class
+whose key function is declared but not defined in this TU. Otherwise it
+marks each non-pure final overrider referenced (in method order, which
+instantiates it). It then recurses into each direct base that has virtual
+bases, for the VTT. Not modelled: explicit-instantiation-declaration
+suppression of the vtable.
+
 ## 4. Special member functions
 ### 4.1 Implicit declaration
 | member | declared implicitly when | parameter |
