@@ -776,28 +776,88 @@ impl Sema<'_, '_> {
             inits.push(x);
             pos = 1;
         } else {
-            while pos < count && pos < l.items.len() {
-                let item = &l.items[pos];
-                if !item.designator.is_empty() {
-                    self.unsupported("a designator in a vector initializer", item.value.loc(self));
-                    return self.recover(ty, &[], l.lbrace);
-                }
-                let x = match &item.value {
-                    InitValue::Expr(e) => {
-                        self.check_narrowing(*e, elem, elem);
-                        self.convert_for_init(*e, elem, ConvCtx::Initialization)
-                    }
-                    InitValue::List(inner) => self.init_from_list(elem, inner),
-                };
-                inits.push(x);
-                pos += 1;
-            }
+            let Some(xs) = self.vector_elements(elem, count, &l.items, &mut pos, true) else {
+                return self.recover(ty, &[], l.lbrace);
+            };
+            inits = xs;
         }
         if let Some(extra) = l.items.get(pos) {
             let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
             self.emit(msg);
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
+    }
+
+    /// Up to `count` vector elements of type `elem` from `items[*pos..]`
+    /// (clang `CheckVectorType`), one item each. A designator is not
+    /// supported in a braced vector list (`None`, diagnosed) and ends a
+    /// brace-elided one after its first item.
+    fn vector_elements(
+        &mut self,
+        elem: QualType,
+        count: usize,
+        items: &[InitItem],
+        pos: &mut usize,
+        braced: bool,
+    ) -> Option<Vec<ExprId>> {
+        let mut inits = Vec::new();
+        while inits.len() < count && *pos < items.len() {
+            let item = &items[*pos];
+            // The designator of the item that started a brace-elided
+            // list names this vector, not one of its elements.
+            if !item.designator.is_empty() && (braced || !inits.is_empty()) {
+                if braced {
+                    self.unsupported("a designator in a vector initializer", item.value.loc(self));
+                    return None;
+                }
+                break;
+            }
+            let x = match &item.value {
+                InitValue::Expr(e) => self.vector_element(*e, elem),
+                InitValue::List(inner) => self.init_from_list(elem, inner),
+            };
+            inits.push(x);
+            *pos += 1;
+        }
+        Some(inits)
+    }
+
+    /// One vector element of type `elem` from `e` (clang
+    /// `CheckScalarType` with a vector-element entity): a vector operand
+    /// is "cannot initialize a vector element".
+    fn vector_element(&mut self, e: ExprId, elem: QualType) -> ExprId {
+        let et = self.ety(e);
+        if self.is_vector_type(et) && !self.expr_is_type_dependent(e) {
+            let lv = self.ast.exprs.get(e).value_category() == ValueCategory::LValue;
+            let at = self.begin_loc(e);
+            let msg = self
+                .diag(DiagId::sema_init_vector_element_failed, at)
+                .arg(self.ty_arg(elem))
+                .arg(if lv { "1" } else { "0" })
+                .arg(self.ty_arg(et));
+            self.emit(msg);
+            return self.recover(elem, &[e], at);
+        }
+        self.check_narrowing(e, elem, elem);
+        self.convert_for_init(e, elem, ConvCtx::Initialization)
+    }
+
+    /// A brace-elided GNU vector member ([dcl.init.aggr]/16; clang
+    /// `CheckImplicitInitList` of a vector): up to N scalar items.
+    fn elided_vector_init(
+        &mut self,
+        ty: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        at: Loc,
+    ) -> ExprId {
+        let top = self.ast.types.desugar_top(ty);
+        let (elem, count) = match self.ast.types.view(top.ty()) {
+            kiln_ast::types::TypeView::Vector { elem, count, .. } => (elem, count as usize),
+            _ => return self.recover(ty, &[], at),
+        };
+        let inits = self.vector_elements(elem, count, items, pos, false).unwrap_or_default();
+        self.builder().init_list(ty, &inits, None, None, at, at)
     }
 
     /// List-initialization of reference `ty` ([dcl.init.list]/3.9-10):
@@ -960,10 +1020,22 @@ impl Sema<'_, '_> {
                                 && !conv::is_derived_from(self, x, r)
                         })
                         && !self.is_error_type(ety)
+                } else if let Some(p) = self.vector_parts(ty) {
+                    // A GNU vector is not initialized from a scalar (no
+                    // implicit splat), so brace elision is assumed; an
+                    // ext vector splats the scalar (clang
+                    // `CheckSubElementType`).
+                    !p.is_ext()
+                        && !self.is_vector_type(ety)
+                        && self.ast.types.as_record(ety).is_none()
+                        && !self.is_error_type(ety)
+                        && !self.expr_is_type_dependent(e)
                 } else {
                     false
                 };
-                if elide {
+                if elide && self.is_vector_type(ty) {
+                    self.elided_vector_init(ty, items, pos, at)
+                } else if elide {
                     self.check_aggregate(ty, items, pos, false, at, at)
                 } else {
                     *pos += 1;

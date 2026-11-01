@@ -1059,6 +1059,42 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   constructed reports the lifetime note where clang reports CWG1517
   (`no_dynamic` keys on the running constructor's object and class).
 
+### Vectors — Landed (WP-173)
+GNU `vector_size` and clang `ext_vector_type` values are stored as an
+array of their lanes (`TyKind::Array`, `Types::is_vector`). The array is
+padded to the vector's own size and alignment, so an `ext_vector_type(3)`
+occupies 4 lanes and the 4th is indeterminate. A vector of `bool` (bits)
+stays `Opaque`: it has no value model yet. The operations are in
+`compile/vector.rs`. The accept/reject boundary is clang 19's
+`VectorExprEvaluator`:
+- **Folded:** arithmetic, bitwise, shift and comparison operators, lane
+  by lane, with scalars splatted. A comparison yields -1/0 lanes, but a
+  true lane of vector `&&`/`||` folds to **1**. This is a clang 19 quirk:
+  at run time the lane is -1. Also folded:
+  - unary `+ - ~ !`;
+  - casts between vectors and lax casts to and from scalars of the same
+    size, as bit reinterpretations through `compile/bitcast.rs`;
+  - `__builtin_convertvector`, lane by lane;
+  - compound assignment;
+  - `?:` with a scalar condition;
+  - `__builtin_bit_cast` to and from vectors;
+  - multi-element compound literals and list-initialization, including
+    brace-elided members.
+- **Diagnosed per lane:** signed overflow, division by zero and shift
+  counts carry the usual notes, with the vector type in the operand text
+  (`notes.rs` `vector_suffix`). An uninitialized vector read is
+  diagnosed.
+- **Rejected with "subexpression not valid in a constant expression"**
+  at the expression's begin, as clang 19 does: a subscript `v[i]`,
+  `__builtin_reduce_*`, and a bit cast from a vector to a scalar of a
+  different class.
+- **Rejected without a note** (clang 19 fails silently): a `?:` with a
+  vector condition, and ext-vector element access `.x`.
+- clang 20+ folds subscripts, reductions and vector-condition `?:`. The
+  boundary moves with the oracle at the clang 22 switch (M3 to M4).
+- Codegen emits folded vector values as `<N x T>` constants
+  (`kiln_codegen/src/consts.rs`).
+
 ### Reflection runtime (M6)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's entity tables;
   it is a scalar in memory (8 bytes) with shadow kind `Reflection`.
@@ -1079,7 +1115,7 @@ pub trait SemaBridge {
     fn ast(&self) -> &Ast;                                        // re-borrowed per use, never held
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>; // instantiates / defines implicit members if needed; may evaluate (nested)
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout; // via kiln_abi
-    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32);  // via kiln_abi: size/align of a type with no value model (vector types, WP-151); default (0, 1)
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32);  // via kiln_abi: size/align of a vector type, whose lanes the Oven lays out inside it (WP-151, WP-173); default (0, 1), so every bridge that folds vectors (sema's, codegen's prepass) must implement it
     fn final_overrider(&mut self, most_derived: DeclId, at: SubobjectId, method: DeclId)
         -> Option<(DeclId, SubobjectId)>;                         // spec/sema-class.md §3.5
     fn subobjects(&mut self, record: DeclId) -> &[Subobject];     // indexed by SubobjectId

@@ -1533,6 +1533,7 @@ diag_ids! {
     sema_conditional_vector_mismatched = Error (2) "vector operands to the vector conditional must be the same type ({0} and {1})}}";
     sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
     sema_conditional_vector_element_size = Error (2) "vector condition type {0} and result type {1} do not have elements of the same size";
+    sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
 }
 
 impl DiagId {
