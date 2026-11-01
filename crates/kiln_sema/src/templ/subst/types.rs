@@ -417,6 +417,8 @@ impl Substituter<'_, '_, '_> {
                 }
                 // `T::template X<args>` ([temp.names]/5): the member
                 // template of the substituted class, diagnosed at `X`.
+                // A non-class qualifier is diagnosed at the `T` (§5.8).
+                self.nns_context(n, self.written(WrittenKey::Nns(nns), loc))?;
                 let loc = self.written(WrittenKey::Type(q), loc);
                 let d = self.member_template_named(n, name, loc)?;
                 let underlying = self.sema.template_name_for(d);
