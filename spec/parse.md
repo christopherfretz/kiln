@@ -811,6 +811,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   unscoped in `[[...]]` with `(...)`, even empty, reports `attribute 'x'
   cannot have an argument list` at the `(`; its tokens are skipped and
   the attribute is dropped.
+- **Attribute-list recovery (WP-182):** after an attribute in `[[...]]`,
+  anything but `,` or `]` reports `expected ','` after the previous token
+  (`[[assume x]]`, `[[assume(x)(x)]]`), then skips to the `]` (stopping
+  at `;`) without consuming it, as clang's
+  `ParseCXX11AttributeSpecifierInternal` does; there is no
+  `expected ']'` / `to match this '['` pair. The argument-count error of
+  an `assume` without `(...)` still comes from Sema.
 
 ## 7. Driver (`kiln -fsyntax-only [-fdump-ast]`)
 - The driver builds the preprocessor exactly as `-E` does

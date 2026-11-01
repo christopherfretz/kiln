@@ -1565,6 +1565,11 @@ diag_ids! {
     sema_likelihood_if_conflict = Warning [IgnoredAttributes] (1) "conflicting attributes '{0}' are ignored";
     sema_fallthrough_outside_switch = Error (0) "fallthrough annotation is outside switch statement";
     parse_attribute_forbids_arguments = Error (1) "attribute '{0}' cannot have an argument list";
+    // [expr.comma] -Wunused-value (WP-182)
+    sema_unused_comma_left_operand = Warning [UnusedValue] (0) "left operand of comma operator has no effect";
+    sema_unused_call = Warning [UnusedValue] (1) "ignoring return value of function declared with {0} attribute";
+    note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
+    note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
 }
 
 impl DiagId {

@@ -197,7 +197,14 @@ impl Parser<'_, '_> {
             {
                 out.push(a);
             }
-            if !self.at(Punct::Comma) {
+            // clang `ParseCXX11AttributeSpecifierInternal`: anything but
+            // `]` after an attribute is "expected ','" (after the previous
+            // token), then skip to the `]` without consuming it.
+            if self.at(Punct::RSquare) || self.at_eof() {
+                break;
+            }
+            if self.expect(Punct::Comma).is_none() {
+                self.skip_until(&[Punct::RSquare], true, false);
                 break;
             }
         }

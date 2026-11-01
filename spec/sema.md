@@ -1222,6 +1222,28 @@ for them.
   class is `[[nodiscard]]` (`ignoring temporary created by a constructor
   declared with 'nodiscard' attribute[: msg]`, -Wunused-value). A braced
   or scalar functional cast warns `expression result unused`.
+  - `emit_unused` (WP-182) follows clang's order: a comparison is
+    `-Wunused-comparison` only when it is the unused expression itself
+    (`top_comparison`: not parenthesized, not a comma's right operand or
+    a conditional's arm, which are `expression result unused`); an `==`
+    / `!=` (built-in or overloaded) whose left operand is an lvalue (not
+    a materialized temporary) adds the note `use '=' to turn this
+    equality comparison into an assignment` / `use '|=' to turn this
+    inequality comparison into an or-assignment`. A call to a `pure` or
+    `const` function with a non-`void` result warns `ignoring return
+    value of function declared with pure|const attribute` [-Wunused-value]
+    at the call's start. Nothing but `nodiscard` is diagnosed for an
+    expression spelled in a macro body (clang `ShouldSuppress`).
+  - **Comma (WP-182)**: the left operand of a built-in comma is checked
+    the same way when the comma is built (clang `CheckCommaOperands`),
+    with the generic warning spelled `left operand of comma operator has
+    no effect` [-Wunused-value] (not in a SFINAE context). Nothing is
+    checked in an unevaluated operand or for a type-dependent operand
+    (it is checked on instantiation, with the instantiation note), and
+    an `[[assume(...)]]` argument is checked like any other expression.
+  - Unlike clang, the warnings are emitted at once, not deferred to the
+    end of the function and dropped when unreachable (`DiagIfReachable`),
+    and a macro-argument location gets no `expanded from macro` note.
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
