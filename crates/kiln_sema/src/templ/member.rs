@@ -35,6 +35,7 @@ impl Substituter<'_, '_, '_> {
             if !self.sema.associated_constraints(t).is_empty() {
                 self.sema.inst.concepts.member_constraints.insert(x, (t, self.args.clone()));
             }
+            self.out_of_line_member_partials(t);
             return Ok(x);
         }
         Err(SubstFail)
@@ -73,6 +74,36 @@ impl Substituter<'_, '_, '_> {
         self.sema.act_on_finish_template_decl();
         self.sema.templ.cur = None;
         r
+    }
+
+    /// Redeclares the partial specializations of member class template
+    /// `t` declared out of line (`template<class T> template<class U>
+    /// struct Outer<T>::Inner<U*> {...}`, [temp.spec.partial.member]/1):
+    /// they are not in the pattern class's member list, so the member
+    /// walk does not reach them (clang's `VisitClassTemplateDecl`
+    /// instantiates every partial specialization of the member
+    /// template). Those declared in the class come with the walk.
+    fn out_of_line_member_partials(&mut self, t: DeclId) {
+        if self.sema.kind_of(t) != DeclKind::ClassTemplate {
+            return;
+        }
+        let class = self.sema.ast.decls.get(t).ctx();
+        let partials: Vec<DeclId> = self
+            .sema
+            .ast
+            .templates
+            .partials_of(t)
+            .iter()
+            .filter_map(|&i| self.sema.ast.templates.partial(i))
+            .map(|p| p.partial)
+            .filter(|&p| self.sema.ast.decls.lexical_ctx(p) != class)
+            .collect();
+        for p in partials {
+            // A partial specialization whose redeclaration fails is not
+            // matched; the primary template is used, as for one that
+            // fails in the member walk.
+            let _ = self.member_partial_spec(p);
+        }
     }
 
     /// Opens the head of a member template (or a generic lambda's call

@@ -246,6 +246,9 @@ pub fn run_with_input(
     input: Option<&[u8]>,
     timeout: Duration,
 ) -> io::Result<Output> {
+    // One jobserver slot for the child's lifetime (released on every return
+    // path, kill or panic by `Drop`); the timeout starts once it is held.
+    let _slot = crate::jobs::global().acquire();
     let start = Instant::now();
     let stdin = if input.is_some() { Stdio::piped() } else { Stdio::null() };
     let mut child = cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
@@ -402,6 +405,9 @@ pub fn run_measured(
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let _ = std::fs::remove_file(rss_file);
 
+    // As in `run_with_input`: a jobserver slot for the child's lifetime,
+    // taken before the wall clock starts.
+    let _slot = crate::jobs::global().acquire();
     let start = Instant::now();
     let mut child = cmd.spawn()?;
     let pid = child.id();

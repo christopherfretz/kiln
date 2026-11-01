@@ -101,7 +101,7 @@ impl Sema<'_, '_> {
         qualifier: Option<DeclId>,
         use_: TagUse,
         name_loc: Loc,
-        r_angle: Loc,
+        (l_angle, r_angle): (Loc, Loc),
         kw_loc: Loc,
     ) -> Result<(Option<DeclId>, QualType), ()> {
         let range = Span::new(name_loc, r_angle.with_offset(1));
@@ -156,7 +156,7 @@ impl Sema<'_, '_> {
                 if use_ == TagUse::Friend && self.take_template_head(qualifier).is_some() {
                     let d = self
                         .diag(DiagId::sema_partial_spec_friend, kw_loc)
-                        .range(Span::new(name_loc, r_angle.with_offset(1)));
+                        .range(Span::new(l_angle, r_angle.with_offset(1)));
                     self.emit(d);
                     return Err(());
                 }
@@ -422,7 +422,7 @@ impl Sema<'_, '_> {
             }
             s.push_str(&self.decl_name(p));
             s.push_str(" = ");
-            s.push_str(&self.arg_str(a));
+            s.push_str(&self.binding_arg_str(a));
         }
         s.push(']');
         s

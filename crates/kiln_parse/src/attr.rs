@@ -19,7 +19,15 @@ use crate::parser::Parser;
 /// True for the attributes whose arguments are expressions.
 fn takes_expr_args(name: &str) -> bool {
     let n = name.trim_start_matches("__").trim_end_matches("__");
-    matches!(n, "deprecated" | "nodiscard" | "aligned" | "warn_unused_result")
+    matches!(
+        n,
+        "deprecated"
+            | "nodiscard"
+            | "aligned"
+            | "warn_unused_result"
+            | "ext_vector_type"
+            | "vector_size"
+    )
 }
 
 impl Parser<'_, '_> {

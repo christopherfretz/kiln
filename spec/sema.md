@@ -514,6 +514,21 @@ and returns the scope it names:
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)
+  - `ext_vector_type(N)` / `vector_size(N)` (GNU syntax; `vector.rs`).
+    They take exactly one expression and are consumed into the declared
+    type, never attached. `ext_vector_type` applies only to a typedef or
+    alias-declaration (`'ext_vector_type' attribute only applies to
+    typedefs`); `vector_size` also to the type of a variable, field or
+    parameter (on a function declaration: unsupported). The element
+    type must be integral or floating (`vector_size`: a non-`bool`
+    builtin), else `invalid vector element type 'T'`; N must be an
+    integral constant (`ext_vector_type attribute requires an integer
+    constant`), nonzero (`zero vector size`) and, for `vector_size`, a
+    multiple of the element size (`vector size not an integral multiple
+    of component size`). A value-dependent N (or a dependent element of
+    a `vector_size` vector) gives a `DependentVector` (spec/types.md);
+    after substitution it is diagnosed at the size operand (clang: at
+    the attribute name).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -675,9 +690,12 @@ specification as written (`TypeNames` prints ` noexcept`,
     conflicts with declaration already in scope`, with notes at the
     target and the conflicting declaration; no shadow is made.
   - A later declaration that conflicts with a shadow
-    (`check_using_shadow_conflict`, from variable, function and typedef
-    declarations) reports `declaration conflicts with target of using
-    declaration already in scope`, and is marked invalid.
+    (`check_using_shadow_conflict`, from variable, function, typedef
+    and tag declarations, including operator, literal-operator and
+    conversion function names, WP-146) reports `declaration conflicts with
+    target of using declaration already in scope`, and is marked invalid;
+    in a class a member function instead hides the shadow
+    ([namespace.udecl]/14, `Decls::hidden_shadow`).
   - Repeating a using-declaration of the same entity is allowed; the new
     shadow redeclares the old one.
 - **Class scope:** kiln has no base classes yet (M3), so every
@@ -1187,10 +1205,40 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   consteval|immediate function 'f' is not a constant expression` with
   the Oven's notes. Default arguments and default member initializers
   are not checked at their definition (`note_default_init_full_expr`).
+- **Default uses** ([expr.const]/16, [dcl.fct.default]/5, [class.mem]/10;
+  WP-137). Each use of a default argument (`convert_call_args`,
+  `ctor_args`) or default member initializer (aggregate `field_filler`,
+  a constructor's implicit member init in `collect_field_init`) whose
+  definition holds an unvalued invocation is recorded with
+  `note_default_use` and checked at the end of the using
+  full-expression (`check_default_use`): each invocation is evaluated
+  afresh, and a failure is `call to consteval function 'h' is not a
+  constant expression` at the invocation, then `in the default
+  initializer of 'p'` at the use (callee begin, construct loc, ctor
+  name, or the closing `}`/`)` of an aggregate init) and `declared here`
+  at the parameter or field. A default used inside another default
+  argument or initializer is checked at that definition only. In an
+  immediate-escalating function (defaulted or implicit constructor,
+  `constexpr` template specialization, lambda) the failure escalates
+  instead; a constructor's reason note is `'D' is an immediate
+  constructor because the default initializer of 'm' contains a call to
+  a consteval function 'h' and that call is not a constant expression`.
+  An instantiation re-checks the defaults its shared expressions and
+  rebuilt init lists use (`templ/subst/shared.rs`, `subst/exprs.rs`),
+  so a template use is reported at the definition and at each
+  instantiation. Codegen folds each use separately (WP-144). clang 19's
+  extra report at a class template's NSDMI instantiation and inside
+  `sizeof` are not replicated.
 - **References.** A `DeclRefExpr` (or `&C::m`) naming an immediate
   function that is not the callee of a candidate is `cannot take
   address of consteval function 'f' outside of an immediate
-  invocation`, with `declared here`.
+  invocation`, with `declared here`. For a qualified name (`&C::m`, also
+  inside a member function) the error is at the qualifier, as clang.
+  The Oven also rejects a constant result (or a subobject of one) that
+  is a pointer, reference or member pointer to an immediate function:
+  `pointer|reference to a consteval declaration is not a constant
+  expression` at the invocation's callee, then `declared here`
+  ([expr.const]/22; WP-137).
 - **Escalation** (P2564, [expr.const]/18-20). Immediate-escalating:
   a lambda call operator, a defaulted special member, a `constexpr`
   function instantiated from a templated entity, and any templated
@@ -1203,21 +1251,27 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   on a later failed call of `f`. Successful invocations in it are still
   wrapped and folded. A specialization starts non-escalated whatever
   its pattern is; refs already flagged are skipped. A lambda whose call
-  operator escalates gets an escalated `__invoke`.
+  operator escalates gets an escalated `__invoke`, and its conversion
+  function to a function pointer is escalated too
+  ([expr.prim.lambda.closure]/10; clang 19 instead rejects every use of
+  the conversion of a consteval lambda).
 - **Templates.** A template definition's non-dependent invocations are
   checked at the definition (they are shared with every instantiation);
   dependent ones are built and checked at instantiation, with
   `in instantiation of ...` notes. A `ConstantExpr` is substituted
-  through to its operand and re-wrapped by the rebuilt call.
+  through to its operand and re-wrapped by the rebuilt call. A shared
+  (not rebuilt) expression is walked at each instantiation and the
+  functions it odr-uses (named, constructors, bound destructors,
+  `operator new`/`delete`) are marked referenced, which defines or
+  instantiates them, as clang's rebuild does (`templ/subst/shared.rs`;
+  unevaluated operands and lambda bodies are not entered).
 - **Codegen.** A valued `ConstantExpr` lowers to its constant: scalars
   directly, aggregates by clang 19's `CreateCoercedStore` into the
   destination (one store per top-level element).
-- Gaps: default-argument and default-member-initializer invocations are
-  not checked where used; functions called only from shared
-  non-dependent template expressions are `referenced`, not `used`; the
-  lambda conversion function returns the escalated `__invoke` without
-  being immediate itself (as clang); `&C::m` inside a member function
-  reports at the name, not the qualifier.
+- Gaps: the escalation of a generic lambda's conversion function is not
+  tracked per specialization; an implicit constructor does not escalate
+  through a member whose (non-NSDMI) default construction is a failed
+  consteval constructor call.
 
 ### 5.11 Atomics (`builtins/atomic.rs`, WP-154)
 - **Builtins.** `__c11_atomic_*` and `__atomic_*` calls (the ids in
@@ -1252,7 +1306,9 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)
   - aggregates, with brace elision, designators (C++20, in order) and
-    unions (first member, or the designated one)
+    unions (first member, or the designated one); an aggregate class
+    whose list holds one undesignated element of the same or a derived
+    class type is initialized from that element ([dcl.init.list]/3.2)
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **Results** are attached with `act_on_init`. `act_on_uninit` handles
@@ -1337,7 +1393,25 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
 - `goto` to an undeclared label is reported at the end of the function
   (`use of undeclared label 'x'`).
 - A redefinition is an error, with a note.
-- Jumps past initializations are not checked yet (M3, [stmt.dcl]/3).
+- **Landed (WP-153): jump-scope checking** (`jump_scope.rs`, clang
+  `JumpScopeChecker`), run at the end of every function body with a
+  label, `switch` or `asm goto` (in templates, at instantiation).
+  Protected scopes: a variable whose initialization a jump would bypass
+  ([stmt.dcl]/3: non-trivial default init, any initializer, a VLA or a
+  non-trivial destructor), try blocks and handlers ([except.handle]/2),
+  each arm of a constexpr/consteval `if` ([stmt.if]/2), GNU statement
+  expressions and lifetime-extended temporaries with a destructor. A
+  `goto` or `case` entering one is `cannot jump from this goto statement
+  to its label` / `cannot jump from switch statement to this case label`
+  with one `jump bypasses …` note per scope entered; an `asm goto` may
+  neither enter nor leave a scope with a destructor (`cannot jump from
+  this asm goto statement to one of its possible targets`, the
+  `possible target of asm goto statement` note and `jump exits …`
+  notes). Leaving scopes through `goto` is fine; codegen runs their
+  cleanups (spec/codegen.md).
+- `[[noreturn]]`: the fall-off analysis (§4.3) treats a call as not
+  returning when any redeclaration of the callee is `[[noreturn]]`,
+  including member calls.
 
 ### 7.5 Landed (WP-100): try-blocks (`try_stmt.rs`)
 - `act_on_exception_decl` ([except.handle]/1-3): an rvalue-reference

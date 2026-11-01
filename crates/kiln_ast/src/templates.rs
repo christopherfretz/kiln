@@ -595,6 +595,25 @@ impl Ast {
         }
     }
 
+    /// Writes template parameter `index` of template `associated` as
+    /// clang prints a substituted pack's replaced parameter (its name,
+    /// or `type-parameter-<index>` when it has none).
+    pub fn write_replaced_param(&self, associated: DeclId, index: u32, out: &mut String) {
+        let name = self
+            .template_info(associated)
+            .map(|i| *self.templates.param_list(i.params))
+            .and_then(|l| self.lists.iter::<DeclId>(l.params).nth(index as usize))
+            .and_then(|p| self.decls.get(p).name().as_ident())
+            .map(|s| self.symbols().as_str(s))
+            .filter(|s| !s.is_empty());
+        if let Some(n) = name {
+            out.push_str(n);
+        } else {
+            out.push_str("type-parameter-");
+            out.push_str(&index.to_string());
+        }
+    }
+
     /// The template arguments a class template specialization's name
     /// prints with (`None` for other declarations).
     pub fn spec_print_args(&self, d: DeclId) -> Option<ArgListId> {
@@ -1848,6 +1867,31 @@ impl AstBuilder<'_> {
             loc,
             param.raw(),
             replacement.raw(),
+        )
+    }
+
+    /// A non-type template parameter pack substituted while its
+    /// expansion is still dependent on a retained level ([temp.variadic]/5;
+    /// clang's `SubstNonTypeTemplateParmPackExpr`, spec/sema-templates.md
+    /// §7.2): `param` is the pack and `args` its argument pack. A prvalue
+    /// of `ty`, value-dependent and naming an unexpanded pack, so an
+    /// enclosing expansion selects its element per index.
+    pub fn subst_nttp_pack_expr(
+        &mut self,
+        param: DeclId,
+        args: ArgListId,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        self.simple(
+            ExprKind::SubstNonTypeTemplateParmPackExpr,
+            ValueCategory::PRValue,
+            ExprDeps::VALUE_INST.with(ExprDeps::UNEXPANDED_PACK),
+            0,
+            ty,
+            loc,
+            param.raw(),
+            args.raw(),
         )
     }
 

@@ -20,7 +20,7 @@ cargo xtask test [options] [paths...]
 | `--update` | Rewrite existing pp and ast `.expected` goldens with the actual output. |
 | `--pp-compare tokens\|text` | Override every pp test's `pp-compare:` directive (see "pp comparison"). |
 | `--report-parity <file>` | After the run, write a parity table into `<file>` (see "Parity report"). A relative path is relative to the repo root. |
-| `-j, --jobs <N>` | Parallel tests. Default `min(available CPUs, 8)`, capped at the test count. |
+| `-j, --jobs <N>` | Parallel tests. Default `min(available CPUs, 8)`, capped at the test count. Under an inherited jobserver an upper bound (see "Jobserver"). |
 | `--timeout <secs>` | Run-time limit for test binaries (float seconds, default 10). Compiles have a fixed 120 s limit. |
 | `--mem-limit <MiB>` | Address-space cap of every process a test runs: compiler, oracle and the built binaries. Default 8192; `0` disables the default cap (a test's `mem<=N` still applies). See "Resource limits". |
 | `-v, --verbose` | Print every result and every command that was run. |
@@ -450,6 +450,41 @@ The run header names the default cap (`mem limit: <N> MiB` or `none`).
 `cargo xtask bench` applies the same cap to its measured compiles
 (`spec/bench.md` "Resource limits").
 
+## Jobserver
+
+Every agent on the host shares one CPU/memory budget, so xtask is a GNU
+make **jobserver client** (`xtask/src/jobs.rs`), like the cargo and rustc
+it runs alongside:
+
+- **What is honoured.** `MAKEFLAGS` containing `--jobserver-auth=fifo:<path>`
+  (make 4.4's fifo style; the last such word wins). `scripts/env.sh` exports
+  it when the host pool is live. The fifo is opened read+write; a token is
+  one byte read from it, and the same byte is written back on release.
+- **Scope.** Every child started through `util::process` (`run`,
+  `run_with_input`, `run_measured`) holds one token for its whole lifetime:
+  each compiler, oracle and test-binary process of `cargo xtask test`, each
+  compile and run of `cargo xtask libcxx`, each measured compile of
+  `cargo xtask bench`, and the `--version` probes. Timeouts and the
+  measured wall clock start once the token is held. Helper invocations of
+  `git` and `cargo` are not counted (cargo is a client itself).
+- **The implicit token.** As with make, the xtask process owns one token
+  that is not in the pool: one child may run without reading the fifo;
+  each further concurrent child needs a pool byte. So N concurrent xtask
+  processes on a pool of P tokens run at most P + N children.
+- **`-j`** stays the number of worker threads, so it is an upper bound on
+  in-flight children; the pool can only lower the effective parallelism.
+- **Release.** Tokens are released by `Drop`: on a normal exit, an error
+  return, a worker panic, and a child killed by the memory cap or a timeout.
+  Only a hard kill of xtask itself loses the tokens it holds (as for make
+  and cargo).
+- **Fallback.** With no `MAKEFLAGS`, the descriptor forms
+  (`--jobserver-auth=R,W`, `--jobserver-fds=R,W`, which need inherited
+  descriptors), a path that is not a fifo or cannot be opened (a warning
+  is printed), or a later fifo I/O error (warning; acquisition becomes
+  free), `-j` alone bounds the parallelism exactly as without a jobserver.
+- The run header names the pool: `N jobs (jobserver fifo:<path>)`
+  (`xtask libcxx`: `(-j N, jobserver fifo:<path>)`).
+
 ## Outcomes
 
 The outcomes are evaluated in this order:
@@ -564,6 +599,12 @@ from `tests/conformance/stress/`, with
   arguments, working directory and environment survive the wrapper;
   `mem_limit_stops_a_hog`; `out_of_memory_signatures`;
   `kiln_stack_reservation`).
+- `xtask/src/jobs.rs`: the jobserver client ("Jobserver") over a private
+  fifo: `MAKEFLAGS` parsing (fifo form, last word wins, descriptor forms
+  ignored), no jobserver is free, a non-fifo is rejected, concurrency stays
+  within pool + implicit token with every byte returned
+  (`bounds_concurrency_by_pool_plus_implicit`), a freed implicit token
+  wakes a waiter, and a panicking holder returns its token.
 - `xtask/src/gen_pp.rs`: the generator's options, and idempotent generation
   over a fake header tree.
 - `xtask/src/test/tests.rs`:

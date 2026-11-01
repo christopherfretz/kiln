@@ -21,6 +21,7 @@ use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
 use kiln_ast::types::{Nns, TagKeyword};
 use kiln_ast::{Ast, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
+use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
@@ -286,6 +287,7 @@ impl Sema<'_, '_> {
             | builtin::ISZERO
             | builtin::ISSIGNALING => self.builtin_fp_classification(args, rparen),
             builtin::FPCLASSIFY => self.builtin_fpclassify(args, rparen),
+            builtin::ISFPCLASS => self.builtin_isfpclass(callee, args, rparen),
             builtin::ISGREATER
             | builtin::ISGREATEREQUAL
             | builtin::ISLESS
@@ -428,6 +430,81 @@ impl Sema<'_, '_> {
             return None;
         }
         Some((vec![a], QualType::INT))
+    }
+
+    /// The probability argument of `__builtin_expect_with_probability`
+    /// (already converted to `double`): a constant expression in
+    /// [0.0, 1.0] (clang `Sema::BuiltinExpectWithProbability`). A
+    /// value-dependent argument is checked at instantiation.
+    pub(crate) fn check_expect_probability(&mut self, p: ExprId) -> bool {
+        if self.expr_is_value_dependent(p) {
+            return true;
+        }
+        let at = self.begin_loc(p);
+        let v = match self.eval_const(p, EvalContext::new(EvalKind::Other, at)) {
+            Ok(v) => v,
+            Err(f) => {
+                let d = self.diag(DiagId::sema_probability_not_constant_float, at);
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                return false;
+            }
+        };
+        let x = match self.ast.consts.scalar(v) {
+            Some(Scalar::Float { kind, bits, .. }) if kind.bits() == 64 => {
+                f64::from_bits(bits as u64)
+            }
+            _ => {
+                let d = self.diag(DiagId::sema_probability_not_constant_float, at);
+                self.emit(d);
+                return false;
+            }
+        };
+        if !(0.0..=1.0).contains(&x) {
+            let d = self.diag(DiagId::sema_probability_out_of_range, at);
+            self.emit(d);
+            return false;
+        }
+        true
+    }
+
+    /// `__builtin_isfpclass(x, mask)` (clang's `BuiltinFPClassification`
+    /// with `IsFPClass`): `x` real floating, `mask` an integer constant
+    /// in [0, 1023] (`llvm::fcAllFlags`), left unconverted; reported at
+    /// the call's start (clang `BuiltinConstantArgRange`).
+    fn builtin_isfpclass(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let (mut out, _) = self.builtin_fp_classification(&args[..1], rparen)?;
+        let m = args[1];
+        if !self.expr_is_value_dependent(m) {
+            let at = self.begin_loc(callee);
+            let v = if self.ast.types.is_integral(self.ety(m)) { self.fold_int(m) } else { None };
+            let Some(v) = v else {
+                let msg = self
+                    .diag(DiagId::sema_constant_integer_arg_type, at)
+                    .arg("__builtin_isfpclass".to_string());
+                self.emit(msg);
+                return None;
+            };
+            if !(0..=1023).contains(&v) {
+                let msg = self
+                    .diag(DiagId::sema_argument_invalid_range, at)
+                    .arg(v.to_string())
+                    .arg("0".to_string())
+                    .arg("1023".to_string());
+                self.emit(msg);
+                return None;
+            }
+        }
+        out.push(m);
+        Some((out, QualType::INT))
     }
 
     /// `__builtin_fpclassify(nan, inf, normal, subnormal, zero, x)`
@@ -1308,8 +1385,33 @@ impl Sema<'_, '_> {
 
     /// Whether `param`'s default argument holds an immediate invocation
     /// (a `ConstantExpr`), through nested default arguments.
+    /// Records the source-location values at a use of `field`'s default
+    /// member initializer (the `CXXDefaultInitExpr` `e`, built at `loc`:
+    /// the constructor's name, or the `}` / `)` of an aggregate
+    /// initialization, in context `ctx`) when the initializer evaluates a
+    /// source-location builtin ([support.srcloc.cons]/2; clang
+    /// `CXXDefaultInitExpr::getUsedLocation` / `getUsedContext`).
+    pub(crate) fn note_default_init_use(
+        &mut self,
+        e: ExprId,
+        field: DeclId,
+        loc: Loc,
+        ctx: DeclId,
+    ) {
+        let kinds = self.default_arg_srcloc_kinds(field);
+        if kinds != 0 {
+            self.record_source_loc(e, loc, ctx, kinds & SRC_LOC_STRUCT_BIT != 0);
+            if self.default_arg_has_immediate(field, 0) {
+                self.srcloc.deferred.retain(|&(x, _)| x != e);
+            }
+            if kinds & (SRC_LOC_STRUCT_BIT | 1 << SourceLocKind::Function as u8) != 0 {
+                self.mark_function_name_dependent(e, ctx);
+            }
+        }
+    }
+
     fn default_arg_has_immediate(&self, param: DeclId, depth: u32) -> bool {
-        let Some(init) = self.ast.decls.param(param).and_then(|p| p.default_arg) else {
+        let Some(init) = self.default_init_of(param) else {
             return false;
         };
         if depth > 32 {
@@ -1322,6 +1424,12 @@ impl Sema<'_, '_> {
                 ExprKind::CXXDefaultArgExpr => {
                     let p = self.ast.exprs.default_arg_param(x);
                     if self.default_arg_has_immediate(p, depth + 1) {
+                        return true;
+                    }
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    let f = self.ast.exprs.default_init_field(x);
+                    if self.default_arg_has_immediate(f, depth + 1) {
                         return true;
                     }
                 }
@@ -1341,15 +1449,25 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The source-location builtins `param`'s default argument evaluates
-    /// (a mask of `1 << kind`), through nested default arguments.
+    /// The default argument of parameter `d` or the default member
+    /// initializer of field `d`.
+    fn default_init_of(&self, d: DeclId) -> Option<ExprId> {
+        match self.ast.decls.param(d) {
+            Some(p) => p.default_arg,
+            None => self.ast.decls.field(d).and_then(|f| f.init),
+        }
+    }
+
+    /// The source-location builtins `param`'s default argument (or field
+    /// `param`'s default member initializer) evaluates (a mask of
+    /// `1 << kind`), through nested default arguments and initializers.
     fn default_arg_srcloc_kinds(&mut self, param: DeclId) -> u8 {
         if let Some(&k) = self.srcloc.param_kinds.get(&param) {
             return k;
         }
         // Guards recursion through `void f(int = f())`.
         self.srcloc.param_kinds.insert(param, 0);
-        let Some(init) = self.ast.decls.param(param).and_then(|p| p.default_arg) else {
+        let Some(init) = self.default_init_of(param) else {
             return 0;
         };
         let mut kinds = 0u8;
@@ -1362,6 +1480,10 @@ impl Sema<'_, '_> {
                 ExprKind::CXXDefaultArgExpr => {
                     let p = self.ast.exprs.default_arg_param(x);
                     kinds |= self.default_arg_srcloc_kinds(p);
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    let f = self.ast.exprs.default_init_field(x);
+                    kinds |= self.default_arg_srcloc_kinds(f);
                 }
                 _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
             }

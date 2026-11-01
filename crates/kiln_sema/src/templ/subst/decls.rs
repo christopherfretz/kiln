@@ -320,7 +320,7 @@ impl Substituter<'_, '_, '_> {
                 // A function parameter pack ([temp.variadic]/2): one
                 // parameter per element (§7.1).
                 let loc = n.loc();
-                let tys = match self.expand_pattern(|s| s.ty(pat, loc))? {
+                let tys = match self.expand_pattern(|s| s.element_ty(pat, loc))? {
                     crate::templ::pack::Expansion::Elements(v) => v,
                     crate::templ::pack::Expansion::Unexpanded(x) => {
                         // Still a pack: a parameter pack of a template
@@ -753,7 +753,13 @@ impl Substituter<'_, '_, '_> {
         if fd.and_then(|x| x.init).is_some() {
             dr.init_style = Some(InitStyle::C);
         }
-        self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)
+        let f = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
+        // Where the declaration begins ("declared here" for its default
+        // member initializer).
+        if let Some(&b) = self.sema.ast.decls.cold.begin_loc.get(d) {
+            let _ = self.sema.ast.decls.cold.begin_loc.insert(f, b);
+        }
+        Ok(f)
     }
 
     /// A typedef or alias-declaration of the pattern.

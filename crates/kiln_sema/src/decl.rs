@@ -801,6 +801,9 @@ impl Sema<'_, '_> {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
         }
+        let mut attrs = ds.attrs.clone();
+        attrs.extend(d.attrs.iter().copied());
+        ty = self.apply_vector_attrs(ty, &mut attrs, false);
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             ty = self.ast.types.pointer_to(elem);
@@ -811,8 +814,6 @@ impl Sema<'_, '_> {
             // [dcl.fct]/16: a function parameter pack `T... x`.
             ty = self.act_pack_expansion_type(ty, l);
         }
-        let mut attrs = ds.attrs.clone();
-        attrs.extend(d.attrs.iter().copied());
         ParamInfo {
             name: d.name,
             ty,
@@ -1448,6 +1449,7 @@ impl Sema<'_, '_> {
         if ds.is_typedef() || !self.ast.types.is_function(ty) {
             self.virtual_on_non_function(ds, d);
         }
+        let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
         let decl = if ds.is_typedef() {
             self.act_on_typedef(ds, ty, d, name, false)
         } else if self.ast.types.is_function(ty) {
@@ -1476,8 +1478,12 @@ impl Sema<'_, '_> {
             self.set_member_access(t);
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
-        if d.qualifier.is_none() && d.op_name.is_none() && d.lit_suffix.is_none() {
-            self.check_using_shadow_conflict(decl, name);
+        if d.qualifier.is_none() {
+            // Operator and conversion function names too: a member
+            // `operator[]` hides a using-declared base one
+            // ([namespace.udecl]/14).
+            let dn = self.ast.decls.get(decl).name();
+            self.check_using_shadow_conflict(decl, dn);
         }
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
@@ -1514,6 +1520,12 @@ impl Sema<'_, '_> {
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
+        }
+        if d.qualifier.is_none() && self.kind_of(decl) == DeclKind::CXXConversion {
+            // A conversion function hides a using-declared base one with
+            // the same target type ([namespace.udecl]/14).
+            let dn = self.ast.decls.get(decl).name();
+            self.check_using_shadow_conflict(decl, dn);
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -1850,13 +1862,15 @@ impl Sema<'_, '_> {
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
+        let mut attrs = attrs.to_vec();
+        let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
         if let Some(t) = self.finish_template_pattern(td) {
             self.set_member_access(t);
         }
-        self.check_using_shadow_conflict(td, name);
+        self.check_using_shadow_conflict(td, DeclName::ident(name));
         if !attrs.is_empty() {
-            let _ = self.builder().attach_attrs(td, attrs);
+            let _ = self.builder().attach_attrs(td, &attrs);
         }
         td
     }
@@ -3063,6 +3077,10 @@ impl Sema<'_, '_> {
         }
         // clang reports at the variable (`CheckCompleteVariableDeclaration`).
         let loc = self.ast.decls.get(v).loc();
+        if self.constexpr_var_virtual_base(v, loc) {
+            self.ast.decls.finish_eval(v, None);
+            return;
+        }
         if self.has_errors_in(e)
             || self.expr_is_value_dependent(e)
             || self.ast.decls.get(v).ty().is_some_and(|t| self.is_dependent_type(t))
@@ -3087,6 +3105,35 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+    }
+
+    /// [dcl.constexpr]/6: a `constexpr` variable of a class type (or
+    /// array of it) with a virtual base has a non-literal type
+    /// ([basic.types.general]/10); clang `RequireLiteralType`'s notes.
+    /// Other non-literal types are left to the evaluation (WP-146).
+    fn constexpr_var_virtual_base(&mut self, v: DeclId, loc: Loc) -> bool {
+        let Some(q) = self.ast.decls.get(v).ty() else { return false };
+        if self.is_dependent_type(q) {
+            return false;
+        }
+        let Some(r) = self.ast.types.as_record(self.base_element(q)) else { return false };
+        let Some(def) = self.ast.definition(r) else { return false };
+        if !self.defn_bits(def).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return false;
+        }
+        let vbases = self.virtual_bases(def);
+        let tag = 2 * u8::from(self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Class));
+        let mut msg =
+            self.diag(DiagId::sema_constexpr_var_non_literal, loc).arg(self.ty_arg(q)).with_note(
+                self.diag(DiagId::note_non_literal_virtual_base, self.ast.decls.get(def).loc())
+                    .arg(tag)
+                    .arg(u8::from(vbases.len() != 1)),
+            );
+        for (_, b) in vbases {
+            msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+        }
+        self.emit(msg);
+        true
     }
 
     pub(crate) fn has_errors_in(&self, e: ExprId) -> bool {
@@ -3278,6 +3325,11 @@ impl Sema<'_, '_> {
             let loc = self.ast.decls.get(f).loc();
             self.mark_base_and_member_dtors_referenced(loc, class);
             self.check_destructor_delete(f, class);
+            // [basic.def.odr]/8: and uses the vtable.
+            self.mark_vtable_used(class, loc);
+        }
+        if !self.in_template() {
+            self.mark_key_function_vtable_used(f);
         }
         self.pop_scope();
         if let Some(saved) = self.fn_saved.pop() {
@@ -3528,7 +3580,7 @@ impl Sema<'_, '_> {
             && qualifier.is_none()
             && prev.is_none()
         {
-            self.check_using_shadow_conflict(d, n);
+            self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
     }
@@ -3707,7 +3759,7 @@ impl Sema<'_, '_> {
         }
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
-        self.classes.push(ClassBuild::new(r, tag));
+        self.classes.push(ClassBuild::new(r, tag, self.ctx));
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;
@@ -3725,12 +3777,16 @@ impl Sema<'_, '_> {
             None
         };
         self.defining.retain(|&d| d != r);
-        self.ctx = self
-            .ast
-            .decls
-            .lexical_ctx(r)
-            .or_else(|| self.ast.decls.get(r).ctx())
-            .unwrap_or(self.ast.tu);
+        self.ctx = build.as_ref().map_or_else(
+            || {
+                self.ast
+                    .decls
+                    .lexical_ctx(r)
+                    .or_else(|| self.ast.decls.get(r).ctx())
+                    .unwrap_or(self.ast.tu)
+            },
+            |b| b.outer,
+        );
         let mut bits = DefinitionBits::COMPLETE
             .with(DefinitionBits::AGGREGATE)
             .with(DefinitionBits::STANDARD_LAYOUT)
@@ -4788,6 +4844,8 @@ impl Sema<'_, '_> {
             ("const", _, true) => AttrKind::CONST,
             ("pure", _, true) => AttrKind::PURE,
             ("cold", _, true) => AttrKind::COLD,
+            ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
+            ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
             ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
             ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
             ("visibility" | "section" | "format", _, true) => {
@@ -4801,6 +4859,9 @@ impl Sema<'_, '_> {
                 return None;
             }
         };
+        if matches!(kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE) {
+            return self.vector_attribute(kind, syntax, &raw, args, loc);
+        }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED => 1,
             AttrKind::ALIGNED => {

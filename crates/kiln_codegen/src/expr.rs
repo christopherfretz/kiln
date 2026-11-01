@@ -165,7 +165,10 @@ impl Cg<'_> {
                 let Some(init) = self.default_member_init(e) else {
                     return err(self.loc_of(e), "default member initializer not yet parsed");
                 };
-                return self.emit_scalar_opt(init);
+                let saved = self.enter_default_arg(e);
+                let r = self.emit_scalar_opt(init);
+                self.srcloc = saved;
+                return r;
             }
             ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
@@ -1296,7 +1299,12 @@ impl Cg<'_> {
                 r
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
-                Some(init) => self.emit_lvalue(init),
+                Some(init) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.emit_lvalue(init);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
             },
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
@@ -1415,7 +1423,28 @@ impl Cg<'_> {
                 let sq = ast.exprs.get(s).ty();
                 let tmp = self.temp(sq);
                 if self.is_aggregate(sq) {
-                    self.emit_agg_into(s, tmp, false)?;
+                    // clang `EmitAnyExprToMem`: a materialized temporary is
+                    // a `MayOverlap` slot, which only a constructor call or
+                    // an immediate invocation consumes.
+                    let mut inner = s;
+                    loop {
+                        let k = ast.exprs.get(inner).kind();
+                        if k == ExprKind::ParenExpr
+                            || (k.is_cast() && ast.exprs.cast_kind(inner) == CastKind::NoOp)
+                        {
+                            inner = ast.exprs.operand(inner);
+                        } else {
+                            break;
+                        }
+                    }
+                    let overlap = n.kind() == ExprKind::MaterializeTemporaryExpr
+                        && matches!(
+                            ast.exprs.get(inner).kind(),
+                            ExprKind::ConstantExpr
+                                | ExprKind::CXXConstructExpr
+                                | ExprKind::CXXTemporaryObjectExpr
+                        );
+                    self.emit_agg_into(s, tmp, overlap)?;
                 } else {
                     let v = self.emit_scalar(s)?;
                     self.store_scalar(v, tmp, sq);
@@ -1841,18 +1870,57 @@ impl Cg<'_> {
             (p, fty, false, None)
         };
         let sig = self.call_sig(fty, extern_c, &arg_tys);
-        let extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
-        let noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
+        let mut extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
+        let mut noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
+        if !noreturn {
+            let (site, unreachable) = self.noreturn_call(direct, fty);
+            if site {
+                extra.push(Attr::Flag(AttrKind::NoReturn));
+            }
+            noreturn = unreachable;
+        }
         let r = self.call_with(&sig, callee, fid, None, &args, dest, &extra)?;
         if noreturn {
-            // clang `EmitCall` of a `noreturn` library builtin
-            // (`__builtin_abort`): `unreachable`, then a dummy block.
-            self.f.fir.push(Op::Unreachable, LTy::VOID);
-            self.f.fir.set_cur(None);
-            let cont = self.f.fir.create_block();
-            self.emit_block(cont, false);
+            self.finish_noreturn_call();
         }
         Ok(r)
+    }
+
+    /// Whether a call of function `d` (`None`: through a pointer) of type
+    /// `fty` gets the `noreturn` call-site attribute, and whether it is
+    /// followed by `unreachable` (clang `ConstructAttributeList`: a
+    /// `[[noreturn]]` virtual function's overriders may return, so only
+    /// the GNU spelling and a `noreturn` function type mark its call
+    /// site; `EmitCall` still ends the block).
+    pub(crate) fn noreturn_call(&self, d: Option<DeclId>, fty: QualType) -> (bool, bool) {
+        let ast = self.ast;
+        let ty_nr = ast.types.proto(fty).is_some_and(|p| p.info().noreturn());
+        let Some(d) = d else { return (ty_nr, ty_nr) };
+        if !ast.is_noreturn_fn(d) {
+            return (ty_nr, ty_nr);
+        }
+        let virt =
+            ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_virtual()));
+        let gnu = ast.redecls_of(d).any(|r| {
+            ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).any(|a| {
+                let n = ast.attrs.get(a);
+                n.kind == kiln_ast::attr::AttrKind::NORETURN
+                    && n.syntax == kiln_ast::attr::AttrSyntax::Gnu
+            })
+        });
+        (ty_nr || gnu || !virt, true)
+    }
+
+    /// clang `EmitCall` of a call that does not return: `unreachable`,
+    /// then a dummy block for the unreachable code that follows.
+    pub(crate) fn finish_noreturn_call(&mut self) {
+        if self.f.fir.cur().is_none() {
+            return;
+        }
+        self.f.fir.push(Op::Unreachable, LTy::VOID);
+        self.f.fir.set_cur(None);
+        let cont = self.f.fir.create_block();
+        self.emit_block(cont, false);
     }
 
     /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
@@ -1959,6 +2027,8 @@ impl Cg<'_> {
             let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
             fa.extend(extra.iter().cloned());
             self.m.attr_set(&fa)
+        } else if !extra.is_empty() {
+            self.m.attr_set(extra)
         } else {
             AttrList::default().func
         };
@@ -2124,9 +2194,18 @@ impl Cg<'_> {
             ExprKind::ConstantExpr if self.immediate_value(e).is_some() => {
                 // clang `AggExprEmitter::VisitConstantExpr`: the value of
                 // an immediate invocation, stored by `CreateCoercedStore`.
+                // The destination size is `AggValueSlot::getPreferredSize`:
+                // the data size when the slot may overlap.
+                let overlap = std::mem::take(&mut self.f.overlap);
                 let c = self.immediate_value(e).expect("guarded");
                 let k = self.const_value(c, q, Some(e), true)?;
-                self.coerced_store_const(k, dest, self.is_volatile(q));
+                let size = match ast.types.as_record(q) {
+                    Some(rd) if overlap && self.array_elem(q).is_none() => {
+                        Some(self.copy_size(rd, true))
+                    }
+                    _ => None,
+                };
+                self.coerced_store_const(k, dest, size, self.is_volatile(q));
                 Ok(())
             }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
@@ -2165,7 +2244,12 @@ impl Cg<'_> {
                 Ok(())
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
-                Some(init) => self.agg_visit(init, dest, zeroed),
+                Some(init) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.agg_visit(init, dest, zeroed);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
             },
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
@@ -2806,17 +2890,18 @@ impl Cg<'_> {
             (Addr { v: a, ty, align }, None)
         };
         self.f.locals.insert(d, addr);
-        // Default-initialization by a trivial constructor emits nothing.
-        let Some(init) = v.init.filter(|&i| {
+        // Default-initialization by a trivial constructor emits nothing
+        // (but a non-trivial destructor still gets its cleanup).
+        let init = v.init.filter(|&i| {
             !ast.is_trivial_default_construction(i) || ast.exprs.construct_info(i).zeroing
-        }) else {
-            return Ok(());
-        };
-        if self.f.fir.cur().is_none() {
-            return Ok(());
+        });
+        if let Some(init) = init
+            && self.f.fir.cur().is_some()
+        {
+            self.emit_var_init(d, q, addr, init)?;
         }
-        self.emit_var_init(d, q, addr, init)?;
-        // clang `EmitAutoVarCleanups`.
+        // clang `EmitAutoVarCleanups`: no insertion point, no cleanup
+        // (sema rejects jumps into the variable's scope).
         if self.f.fir.cur().is_none() {
             return Ok(());
         }
@@ -2992,19 +3077,27 @@ impl Cg<'_> {
     /// clang 19 `CreateCoercedStore` of constant `k` into `dst` (whose
     /// size is that of its IR type), with `BuildAggStore` splitting a
     /// first-class struct into one store per element.
-    fn coerced_store_const(&mut self, k: Value, dst: Addr, vol: bool) {
-        let dst_size = self.alloc_size(dst.ty);
+    fn coerced_store_const(&mut self, k: Value, dst: Addr, size: Option<u64>, vol: bool) {
+        let dst_size = size.unwrap_or_else(|| self.alloc_size(dst.ty));
         if dst_size == 0 {
             return;
         }
         let st = self.m.const_type(k);
-        let ssize = self.alloc_size(st);
+        let src_size = self.alloc_size(st);
         let mut dst = dst;
         if st != dst.ty {
-            dst = self.enter_struct_for_coerce(dst, ssize);
+            dst = self.enter_struct_for_coerce(dst, src_size);
         }
-        if ssize > dst_size {
-            let a = self.ir_layout(st).1.max(dst.align);
+        if src_size > dst_size {
+            // `CreateTempAllocaForCoercion`: at least the preferred
+            // alignment (8 for a struct, `a:0:64` on both targets).
+            let pref = if self.m.types.struct_fields(st).is_some() {
+                let abi = if self.m.types.struct_is_packed(st) { 1 } else { self.ir_layout(st).1 };
+                abi.max(8)
+            } else {
+                self.ir_layout(st).1
+            };
+            let a = pref.max(dst.align);
             let tmp = self.f.fir.alloca(st, a);
             self.store(V::C(k), tmp, a, vol);
             self.memcpy_v(dst, tmp, a, dst_size);

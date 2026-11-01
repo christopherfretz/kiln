@@ -104,7 +104,11 @@ panic and never silently wrong IR.
       the `g` forms with a fallback use true and `select (x == 0)`;
       popcount is `llvm.ctpop`, bswap `llvm.bswap`;
     - isfinite/isinf/isnan/isnormal are `llvm.is.fpclass` (tests 504,
-      516, 3, 264) zero-extended; signbit bitcasts to an integer of the
+      516, 3, 264) zero-extended; `__builtin_isfpclass(x, m)` is
+      `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
+      prepass collects it); `__builtin_expect_with_probability` at -O0 is
+      its first operand (the expected value emitted, the probability
+      not); signbit bitcasts to an integer of the
       float's width and tests `slt 0`; the isgreater family is one
       `fcmp` (`ogt oge olt ole one uno`) zero-extended;
     - memcpy/memmove are `llvm.memcpy`/`llvm.memmove` (`i64` length,
@@ -140,8 +144,9 @@ panic and never silently wrong IR.
     holding the frozen `__impl` object (clang
     `GetAddrOfUnnamedGlobalConstantDecl`), one per frozen value
     (`ModuleGen::const_object`), its initializer, and so its strings,
-    emitted first. Inside a `CXXDefaultArgExpr` (and nested default
-    arguments) the outermost use's recorded values are taken
+    emitted first. Inside a `CXXDefaultArgExpr` or a
+    `CXXDefaultInitExpr` (and nested ones) the outermost use's recorded
+    values are taken
     (`enter_default_arg`), so each call site gets its own location.
   - a conversion to bool of a `zext` from `i1` is the `i1`, and the
     `zext` is erased when unused (clang `EmitIntToBoolConversion`);
@@ -267,6 +272,19 @@ array cookies).
   condition and an empty body clears `mustprogress` on the function and
   gets no loop metadata.
 - Case ranges (GNU) are an error.
+- A goto (forward, backward, out of nested scopes, loops and try blocks)
+  branches through the cleanups of every scope it leaves (`cleanup.rs`
+  branch fixups). A local default-initialized by a trivial constructor
+  still pushes its destructor cleanup whenever there is an insertion
+  point (clang `EmitAutoVarCleanups`). Sema rejects jumps into a
+  protected scope, so codegen never sees one (WP-153).
+- `noreturn` (WP-153): a function some declaration of which carries
+  `[[noreturn]]` / `__attribute__((noreturn))`, or whose type is
+  `noreturn`, gets the `noreturn` function attribute on its declaration
+  and definition. Its calls get the `noreturn` call-site attribute —
+  except a `[[noreturn]]` (C++11 spelling) virtual function's, whose
+  overriders may return — and are followed by `unreachable` and a dummy
+  block (`noreturn_call`, `finish_noreturn_call`).
 
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
@@ -306,11 +324,11 @@ The normative description is spec/driver.md "Code generation". In short:
   same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 64 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 105 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
-  WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, and the WP-079
-  `class_*` cases of §7): 128/128 pairs
+  WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
+  `class_*` cases of §7, and the WP-137 `consteval_oversized` case): 210/210 pairs
   exact, `DEVIATIONS` is empty.
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
@@ -336,9 +354,21 @@ The normative description is spec/driver.md "Code generation". In short:
   `getMinimumObjectSize` uses the full size for a `final` class; with no
   virtual bases in M2 the two agree.
 - **Call results stored through a coercion** (`CreateCoercedStore`) use
-  the object size, where clang uses the type's data size. They differ
-  only for a class with tail padding reusable by a derived class, which
-  M2 does not have.
+  the object size, where clang uses the type's data size when the slot
+  may overlap (`AggValueSlot::getPreferredSize`). They differ only for a
+  class with tail padding reusable by a derived class: a base subobject
+  initialized from a call writes the whole object where clang goes
+  through a temporary and copies the data size. An immediate invocation
+  (a valued `ConstantExpr`, WP-137) does use the data size of a
+  `MayOverlap` slot (a materialized temporary): an oversized constant is
+  stored to a temporary of its own type and the data size copied out,
+  as clang 19.
+- **Record constants** follow `ConstantAggregateBuilder::buildFrom`: the
+  fields at their offsets with `undef` padding for gaps, unpacked when
+  the natural layout fits the type's size (tail-padded with `undef`),
+  packed otherwise; the named type only when layout-identical. A class
+  that is not POD for layout (packed IR type with tail padding) is
+  therefore a literal `{ i32, i8 }`, as clang.
 - Sema gaps (kiln_sema) that keep `run` tests and corpus cases simple:
   casts to reference types (`static_cast<int&&>`), binding
   `const T(&)[N]` to a `T[N]` argument, copy-initializing a class object
@@ -608,10 +638,21 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   constructor comes through one, the base variant takes no parameters
   beyond `this`/VTT (clang `inheritingCtorHasParams`), yet a call still
   passes the evaluated arguments, as clang does. Corpus
-  `class_inheriting_ctors`, mangle `inheriting_ctors`. Gap: a variadic
-  base constructor is defined like any other; clang instead inlines the
-  inheriting constructor at each call
-  (`EmitInlinedInheritingCXXConstructorCall`), so its IR differs.
+  `class_inheriting_ctors`, mangle `inheriting_ctors`. An inheriting
+  constructor of a C-variadic base constructor cannot forward its
+  variadic arguments, so, as clang does (`canEmitDelegateCallArgs` →
+  `EmitInlinedInheritingCXXConstructorCall`), every call is inlined at
+  the call site (`emit_inlined_inheriting_ctor`): `this` spilled and
+  reloaded, then the ctor-initializers emitted with the call's evaluated
+  arguments (`Fx::inh_args`) forwarded by the `CXXInheritedCtorInitExpr`,
+  recursively when that base constructor is itself such an inheriting
+  constructor; no `CI` symbol is emitted. Gap: inlining the base variant
+  of a class with virtual bases (it needs the caller's VTT) is a
+  "not supported yet" error. An inherited constructor template
+  specialization is mangled `CI1`/`CI2` <base> <template-args> with the
+  pattern's signature (clang `InheritedTemplateArgs`), and a constructor
+  template specialization's base variant is `C2` (WP-146; corpus
+  `class_inheriting_ctors_variadic`).
 - Explicit instantiation definitions (`template struct X<int>;`) emit
   nothing: the members are instantiated by sema but codegen emits only
   used functions, with `linkonce_odr`. clang emits every member
@@ -734,8 +775,6 @@ off and sema rejects `try`/`throw`).
   differs only when D1 can throw (a `noexcept(false)` destructor, which
   sema rejects until WP-112 lands member exception specifications).
 - A conditional `new` with a class-type placement argument.
-- Calls of user `[[noreturn]]` functions are not followed by
-  `unreachable`.
 - Static locals with dynamic initialization (`__cxa_guard_*`, its EH
   abort) are M3.
 - The LLVM name of an anonymous union member type is

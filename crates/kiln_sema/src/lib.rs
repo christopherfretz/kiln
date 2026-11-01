@@ -28,6 +28,7 @@ pub mod expr;
 mod forms;
 mod gnu;
 pub mod init;
+mod jump_scope;
 pub mod lambda;
 pub mod literal;
 mod literal_op;
@@ -48,6 +49,7 @@ pub mod target;
 pub mod templ;
 mod try_stmt;
 pub mod using;
+mod vector;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
@@ -196,6 +198,20 @@ pub struct Sema<'a, 'sm> {
     pub(crate) delayed_access: Vec<class::AccessCheck>,
     /// `delayed_access.len()` at each open delay point, innermost last.
     pub(crate) delayed_access_depth: Vec<usize>,
+    /// Access checks in a class template pattern (or partial
+    /// specialization) that passed only because the class may instantiate
+    /// to a befriended specialization, keyed by the pattern's first
+    /// declaration; re-run in each instantiation (clang's dependent access
+    /// diagnostics; spec/sema-templates.md §4.8).
+    pub(crate) dependent_access: kiln_source::fx::FxHashMap<DeclId, Vec<class::AccessCheck>>,
+    /// Set by the access check when friendship came only from such a
+    /// befriended specialization.
+    pub(crate) speculative_friend: std::cell::Cell<bool>,
+    /// Access errors reported, as (member, location, innermost context),
+    /// so a replayed check does not repeat one its instantiation redid.
+    pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
+    /// True while [`Sema::replay_dependent_access`] runs.
+    pub(crate) replaying_access: bool,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
     pub(crate) cleanup: class::CleanupState,
@@ -206,6 +222,12 @@ pub struct Sema<'a, 'sm> {
     /// innermost last: diagnostics emitted meanwhile get the note `in
     /// implicit ... for 'T' first required here`.
     pub(crate) synth: Vec<class::SynthContext>,
+    /// Classes whose vtables are used ([basic.def.odr]/8; clang
+    /// `VTableUses`), with the use: their virtual members are marked
+    /// referenced at the end of the TU (spec/sema-class.md §3.5).
+    pub(crate) vtable_uses: Vec<(DeclId, Loc)>,
+    /// The classes ever pushed on `vtable_uses` (first declarations).
+    pub(crate) vtables_used: kiln_source::fx::FxHashSet<DeclId>,
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
@@ -364,9 +386,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             special: class::SpecialState::default(),
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
+            dependent_access: kiln_source::fx::FxHashMap::default(),
+            speculative_friend: std::cell::Cell::new(false),
+            access_failed: kiln_source::fx::FxHashSet::default(),
+            replaying_access: false,
             cleanup: class::CleanupState::default(),
             cleanup_saved: Vec::new(),
             synth: Vec::new(),
+            vtable_uses: Vec::new(),
+            vtables_used: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             memcpy_decl: None,
             delegating: Vec::new(),

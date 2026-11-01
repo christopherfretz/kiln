@@ -6,6 +6,7 @@ use std::process::ExitCode;
 mod bench;
 mod clang_ast;
 mod gen_pp;
+mod jobs;
 mod libcxx;
 mod test;
 mod util;

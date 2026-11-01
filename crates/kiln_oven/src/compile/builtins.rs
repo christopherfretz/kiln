@@ -143,6 +143,19 @@ fn is_rounding(b: u32) -> bool {
     )
 }
 
+/// The `bi::INT_OP` operation of the GCC integer builtin `b` (WP-150).
+fn int_op(b: u32) -> Option<u32> {
+    Some(match b {
+        id::FFS | id::FFSL | id::FFSLL => bi::FFS,
+        id::PARITY | id::PARITYL | id::PARITYLL => bi::PARITY,
+        id::CLRSB | id::CLRSBL | id::CLRSBLL => bi::CLRSB,
+        id::BITREVERSE8 | id::BITREVERSE16 | id::BITREVERSE32 | id::BITREVERSE64 => bi::BITREVERSE,
+        id::ROTATELEFT8 | id::ROTATELEFT16 | id::ROTATELEFT32 | id::ROTATELEFT64 => bi::ROTL,
+        id::ROTATERIGHT8 | id::ROTATERIGHT16 | id::ROTATERIGHT32 | id::ROTATERIGHT64 => bi::ROTR,
+        _ => return None,
+    })
+}
+
 impl Compiler<'_> {
     fn int_width(&mut self, e: ExprId) -> u32 {
         let t = self.ety(e);
@@ -274,6 +287,17 @@ impl Compiler<'_> {
                 };
                 op(self, bi::FP_CLASS, float_code(fk) | class << 4, [a, dst, dst], [0, 0], begin);
             }
+            // clang: the mask (an integer constant) first, then the value.
+            id::ISFPCLASS => {
+                let (x, m) = (arg(0)?, arg(1)?);
+                let Some(fk) = self.float_kind(x) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let b = self.rv(m);
+                let a = self.rv(x);
+                op(self, bi::FP_CLASS, float_code(fk) | bi::MASK << 4, [a, b, dst], [0, 0], begin);
+            }
             id::FPCLASSIFY => {
                 // clang: the operand, then only the argument its class
                 // selects (nan, infinite, normal, subnormal, zero).
@@ -351,7 +375,7 @@ impl Compiler<'_> {
             id::LAUNDER => self.rv_into(arg(0)?, dst),
             // clang: the value of the first operand (the expected value is
             // not evaluated).
-            id::EXPECT => self.rv_into(arg(0)?, dst),
+            id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),
             // clang: the assumption is not evaluated.
             id::ASSUME => self.konst(dst, 0),
             id::OPERATOR_NEW => self.trap_loc(begin, UNTYPED_NEW.into()),
@@ -373,7 +397,9 @@ impl Compiler<'_> {
             | id::ABORT
             | id::STRRCHR
             | id::STRPBRK
-            | id::STRSTR => self.trap_loc(begin, INVALID.into()),
+            | id::STRSTR
+            | id::MEMSET
+            | id::MEMPCPY => self.trap_loc(begin, INVALID.into()),
             // The libm functions and the rounding intrinsics.
             _ if id::is_libm(bid) || is_rounding(bid) => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {
@@ -386,7 +412,13 @@ impl Compiler<'_> {
                 let loc = self.ast().exprs.get(x).loc();
                 op(self, bi::STRLEN, 0, [a, dst, dst], [t, 0], loc);
             }
-            id::MEMCMP | id::WMEMCMP | id::STRCMP | id::STRNCMP | id::WCSCMP | id::WCSNCMP => {
+            id::MEMCMP
+            | id::BCMP
+            | id::WMEMCMP
+            | id::STRCMP
+            | id::STRNCMP
+            | id::WCSCMP
+            | id::WCSNCMP => {
                 let (x, y) = (arg(0)?, arg(1)?);
                 let mut sub = u32::from(matches!(bid, id::WMEMCMP | id::WCSCMP | id::WCSNCMP));
                 if matches!(bid, id::STRCMP | id::STRNCMP | id::WCSCMP | id::WCSNCMP) {
@@ -434,11 +466,27 @@ impl Compiler<'_> {
                     max | u32::from(any) << 8 | u32::from(bid == id::atomic::ALWAYS_LOCK_FREE) << 9;
                 op(self, bi::LOCK_FREE, sub, [a, dst, dst], [align, 0], begin);
             }
-            id::MEMCPY | id::MEMMOVE => {
+            id::MEMCPY | id::MEMMOVE | id::WMEMCPY | id::WMEMMOVE => {
                 let (d, s, n) = (arg(0)?, arg(1)?, arg(2)?);
                 let t = [self.designator(d), self.designator(s)];
                 let r = [self.rv(d), self.rv(s), self.rv(n)];
-                op(self, bi::MEMCPY, u32::from(bid == id::MEMMOVE) * bi::MOVE, r, t, begin);
+                let mut sub = u32::from(matches!(bid, id::MEMMOVE | id::WMEMMOVE)) * bi::MOVE;
+                if matches!(bid, id::WMEMCPY | id::WMEMMOVE) {
+                    sub |= bi::WCHAR;
+                }
+                op(self, bi::MEMCPY, sub, r, t, begin);
+            }
+            // WP-150: the GCC integer builtins.
+            _ if int_op(bid).is_some() => {
+                let k = int_op(bid)?;
+                let x = arg(0)?;
+                let w = self.int_width(x);
+                let a = self.rv(x);
+                let b = match arg(1) {
+                    Some(n) => self.rv(n),
+                    None => dst,
+                };
+                op(self, bi::INT_OP, w | k << 8, [a, b, dst], [0, 0], begin);
             }
             _ => {
                 self.next = dst;

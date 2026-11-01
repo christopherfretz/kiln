@@ -716,8 +716,23 @@ arguments are substituted with the enclosing level, so `In<T, B>` of
 original partial as its pattern (`instantiated_from_map`). A
 specialization that matches it is instantiated from the original
 partial's definition, with the enclosing arguments as the outer levels
-plus the deduced arguments (§4.6). Out-of-class partial specializations
-of a member template are not redeclared yet (a follow-up).
+plus the deduced arguments (§4.6).
+
+Out-of-class partial specializations of a member template (WP-150):
+`template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
+- The parser takes `Outer<T>::` as a tag qualifier and enters its scope
+  for the body ([class.nest]/3); the qualifier consumes the outer head
+  (`match_template_lists_to_scope`), the inner one heads the partial.
+- The partial is created on the member template of the pattern with
+  `Outer` as its semantic context and the namespace as its lexical one,
+  so it is not in `Outer`'s member list. A definition of one declared in
+  the class completes that declaration; `}` returns to the context the
+  definition began in (`ClassBuild::outer`), not the lexical one.
+- When the member template is redeclared in `Outer<X>`
+  (`Substituter::member_template`), each partial of it not lexically in
+  the class is redeclared as above (clang's `VisitClassTemplateDecl`).
+  One declared after `Outer<X>` was instantiated is not part of it, as
+  with clang.
 
 ### 4.5 Explicit specializations and instantiations
 
@@ -847,9 +862,14 @@ Later uses of it are silent.
   template. In the pattern (or a partial specialization) of `X`, a
   member access befriended through a specialization of `X` is accepted:
   whether the instantiation is the befriended one is decided then
-  (clang's dependent access result; kiln does not re-check a
-  non-dependent access at instantiation, a known gap shared with friend
-  function specializations).
+  (clang's dependent access result). Such a check is recorded against the
+  innermost pattern function or class (`Sema::dependent_access`) and
+  re-run in each instantiation of it (a class at the end of its
+  instantiation, a member function after its body; clang
+  `PerformDependentDiagnostics`, WP-151); an error the instantiation
+  already reported is not repeated. Known gaps: function template
+  specializations and lambdas are not replayed, and access of type names
+  is not checked at all (spec/sema-class.md open issue 8).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 
@@ -1069,6 +1089,12 @@ recomputed exactly as for non-template code (clang's
   `__end` variables.
 - **`return` in a deduced-return function** deduces from the first
   non-discarded `return` (§6.3).
+- **Labels and `goto`** (WP-153). A `LabelStmt`, a `GotoStmt` and the
+  labels of an `asm goto` are rebuilt by name (`act_on_label`,
+  `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
+  `LabelDecl`s and the jump-scope checker (spec/sema.md §7.4) runs on it.
+  Not yet: `CXXTryStmt` (needs the handler's exception declaration
+  substituted through `act_on_exception_decl`).
 
 ### 5.6 Declarations
 
@@ -1540,7 +1566,15 @@ flag, to name the first pack.
    `pack_index`, and give `PackExpansion(subst_pattern)`.
 3. **Check the lengths.** They must all be equal. Otherwise: "pack
    expansion contains parameter packs 'T' and 'U' that have different
-   lengths (2 vs. 3)". This is SFINAE-able.
+   lengths (2 vs. 3)". This is SFINAE-able. When exactly one of the two
+   is an *outer* pack (a pack kept from an earlier substitution,
+   `SubstTemplateTypeParmPack` / `SubstNonTypeTemplateParmPackExpr`, or
+   one of a shallower depth than the other), clang's multilevel text is
+   used instead, naming the inner pack: "pack expansion contains
+   parameter pack 'U' that has a different length (2 vs. 1) from outer
+   parameter packs" (outer length first). clang's "(at least 3 vs. 2)"
+   variant, for an explicitly specified pack that deduction may still
+   extend, is not produced: kiln reports the plain multilevel text.
 4. **Expand.** For k in 0..N, substitute the pattern with
    `pack_index = Some(k)`. Restore the previous index afterwards. Inner
    expansions keep their own packs untouched.
@@ -1558,9 +1592,30 @@ type parameter pack becomes `SubstTemplateTypeParmPack {associated,
 index, pack}`, which is dependent and unexpanded, and the result is
 `PackExpansion(pattern')`. A later substitution that expands the
 pattern takes element *i* of the recorded pack (clang's
-`SubstTemplateTypeParmPackType`). Only type packs are kept so far.
-Non-type and function parameter packs in keep mode are still "not yet
-implemented".
+`SubstTemplateTypeParmPackType`).
+
+A substituted non-type pack is kept the same way, as
+`SubstNonTypeTemplateParmPackExpr {param, pack}` (value- and
+instantiation-dependent, unexpanded; its type is the first element's).
+`All<O<T, I>...>` in a member alias of `Imp<Seq<I...>>` thus keeps `I`
+until `T` is supplied (libc++ `<variant>` `__all_overloads`). Both kept
+forms count as outer packs for the length check (step 3) and print as
+their parameter's name (`P<T, U>...`).
+
+A function parameter pack whose type is partially substituted
+(`P<T, U>... ps` in a member template of `S<T...>`) stays one pack
+parameter of type `PackExpansion(P<SubstPack(T), U>)`. Deduction against
+it substitutes the kept pack element by element: while deducing element
+*i* of the expansion, a `SubstTemplateTypeParmPack` in P is matched as
+element *i* of its pack. kiln has no final [temp.deduct.call]/4
+"deduced A" compatibility check, so an element mismatch is reported as
+"could not match 'P<T, U>' against 'P<char, long>'" where clang says
+"deduced type 'P<int, [...]>' of 1st parameter does not match adjusted
+type 'P<char, [...]>' of argument".
+
+Function parameter packs and pack expansion expressions met in keep
+mode (`FunctionParmPackExpr`, `PackExpansionExpr` patterns) are still
+"not yet implemented".
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
@@ -1744,6 +1799,18 @@ Its requirements are processed **in order**, each under
 
 A `requires`-expression outside any template whose requirement is
 ill-formed is a hard error ([expr.prim.req.general]/5, clang).
+
+A parameter pack in the parameter list (`requires(T... t, U u)`) is
+expanded like a function parameter pack (§7.2): one parameter per
+element, numbered consecutively with the other parameters. When the
+pack's expansion names a retained level, it stays one pack parameter.
+A requirement whose substituted form is still dependent (it names a
+retained level: a generic lambda's `auto` inside an instantiated
+function template) is not checked. The requires-expression is then
+rebuilt as a dependent `RequiresExpr` with the substituted parameters
+and requirements, and evaluated when the remaining level is
+substituted. A compound requirement's type-constraint keeps its
+invented first argument in that case.
 
 The expression is a `bool` prvalue. `RequiresExpr` stores the value plus
 the index of the failed requirement.
@@ -1969,8 +2036,17 @@ location, `FILE` as written and `FILE_NAME` as its last path component,
 and `__builtin_source_location()` as a frozen `std::source_location::__impl`
 built from that record's layout. When a default argument containing a
 `SourceLocExpr` is used by a call, sema records the call's values on the
-`CXXDefaultArgExpr`; the Oven and codegen read them from the outermost
-such default argument in scope. `std::source_location::__impl` must be a
+`CXXDefaultArgExpr`; likewise a use of a default member initializer
+containing one records, on the `CXXDefaultInitExpr`, the values of the
+constructor's name (the class name for an implicit constructor) or of the
+`}`/`)` of an aggregate initialization, with the constructor or the
+enclosing function as the function (clang `CXXDefaultInitExpr::
+getUsedLocation`/`getUsedContext`). The Oven and codegen read them from
+the outermost such default argument or member initializer in scope, and
+the codegen prepass evaluates the immediate invocations of such a member
+initializer per use (`fold_immediate_in`). Substitution drops the trailing
+`CXXDefaultInitExpr` fillers of a braced list; the rebuilt list adds them
+in the instantiation's context. `std::source_location::__impl` must be a
 complete, standard-layout, non-union class without bases whose only
 fields are `_M_file_name`, `_M_function_name` (`const char *`), `_M_line`
 and `_M_column` (integral); otherwise clang's
@@ -1980,6 +2056,9 @@ The counts are 49 type predicates (§9.1), `__array_extent`, 15 transforms,
 2 builtin templates and 76 `__builtin_*` names (2 of them in §9.4). That gives 143
 builtins in total (§13.3). `TABLE` also holds the 6 source-location
 names, for 82 function rows (91 with WP-140's string builtins, §9.5).
+WP-150 adds 26 function rows (`builtin::INT_MEM`: the GCC integer builtins,
+`bcmp`, `wmemcpy`/`wmemmove`, `memset`, `mempcpy`; folding status in
+spec/oven.md "Builtins").
 
 ## 10. Diagnostics
 
@@ -2959,6 +3038,19 @@ explicit specialization errors remain. The blockers are:
   defaulted argument) and the `std::source_location::__impl` check.
   `Sema::fold_lone_invalid` keeps clang's single "subexpression not
   valid" note for `__builtin_unreachable`.
+- Landed (WP-153): `__builtin_isfpclass(x, mask)` (custom: `x` a real
+  floating type, else `floating point classification requires argument
+  of floating point type`; `mask` an integer constant expression in
+  [0, 1023], else `argument to '__builtin_isfpclass' must be a constant
+  integer` / `argument value N is outside the valid range [0, 1023]`;
+  result `int`), and `__builtin_expect_with_probability(e, c, p)`, whose
+  `p` must be a `double` constant expression (`probability argument to
+  __builtin_expect_with_probability must be constant floating-point
+  expression`, with the evaluation notes) in [0.0, 1.0] (`probability
+  argument to __builtin_expect_with_probability is outside the range
+  [0.0, 1.0]`); checked after `convert_call_args`
+  (`check_expect_probability`). Not yet: `-Wassume` (needs clang's
+  possible-effects flavour of `HasSideEffects`).
 - `kiln_ast`: `ExprKind::SourceLocExpr`, `SourceLocKind`,
   `SourceLocValues` and `exprs.cold.source_loc` (spec/ast.md §5.8);
   `kiln_parse` parses the six keywords.
@@ -2976,8 +3068,8 @@ explicit specialization errors remain. The blockers are:
 - Gaps: `__builtin_source_location` in a function with a deduced return
   type prints `auto` (clang prints the deduced type). (The
   `[T = int]` template-argument suffix inside templates: Landed (WP-140),
-  spec/sema.md §7.8.) A `CXXDefaultInitExpr` does not yet take the
-  location of the constructor that uses it (owner: WP-067b).
+  spec/sema.md §7.8.) (`CXXDefaultInitExpr` use locations: Landed (WP-153), see
+  **Source location** above.)
 
 **Landed (WP-071): function templates.**
 - `deduce_call` (`templ/deduce_call.rs`, §6.1) builds each candidate's

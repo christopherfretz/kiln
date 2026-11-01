@@ -202,7 +202,7 @@ built-in path silently (as clang).
 | copy-init of `T` from `T` or derived | `resolve_ctor(T, [e], Copy)` | converting constructors |
 | [over.match.copy] copy-init of `T` from class `S` not derived | `resolve_conversion(T, e, Copy)` | converting ctors of `T` + non-explicit conversion functions of `S`/bases yielding (cv) `T`, a derived class, or a reference to one |
 | [over.match.conv] non-class `T` from class `S` | `resolve_conversion(T, e, ToNonClass)` | conversion functions yielding a type convertible to `T` by a standard conversion; explicit ones only in direct-init |
-| [over.match.ref] reference to `cv2 T2` | `resolve_conversion(T, e, ToReference{lvalue})` | conversion functions yielding lvalue `cv2 T2&` (lvalue ref) or rvalue `cv2 T2`/`T2&&`, reference-compatible |
+| [over.match.ref] reference to `cv2 T2` | `resolve_conversion(T, e, ToReference{lvalue})` | conversion functions yielding lvalue `cv2 T2&` (lvalue ref) or rvalue `cv2 T2`/`T2&&`, reference-compatible; explicit ones only in direct-init (`IcsOptions::EXPLICIT_REF_CONV`) |
 | [over.match.list] list-init of class `T` | `resolve_ctor(T, list, List)` | phase 1: initializer-list ctors with the list as sole argument; phase 2 (none viable): all ctors with the elements |
 
 **`explicit`** (clang behaviour): in copy-init, explicit constructors and
@@ -214,6 +214,17 @@ never in call-argument notes (there `tg(1)` with `explicit G(int)` just says
 copy-list-init explicit ctors stay viable and choosing one is "chosen
 constructor is explicit in copy-initialization" + "explicit constructor
 declared here".
+
+**Reference direct-initialization** (`int&& r(Ex{})`, `static_cast<T&&>`;
+clang `allowExplicitConversionFunctionsInRefBinding`): `bind_reference`
+passes `IcsOptions::EXPLICIT_REF_CONV` when its `ConvCtx` is direct. The
+[over.match.ref] sets then admit explicit conversion functions (as
+`ALLOW_EXPLICIT`), and so does a non-class /5.4 temporary's
+[over.match.conv] set (a prvalue `int` from `explicit operator int()` binds
+`int&&`/`const int&`, subject to the same-type filter, so `const long&`
+from it fails). A class temporary's constructors stay non-explicit-only
+([dcl.init.ref]/5.4.1 copy-initializes it). Copy-initialization keeps "no
+viable conversion" + "explicit conversion function is not a candidate".
 
 ### 2.7 [over.best.ics]/4 restrictions
 `IcsOptions::SUPPRESS_UDC`, passed by the nested resolution, forbids
@@ -264,7 +275,10 @@ notes "requires N argument(s), but M was/were provided" (`min == max`),
 
 ### 3.2 Object parameter ([over.match.funcs]/4–5)
 The implicit object parameter is `cv X&` (no ref-qualifier or `&`) or `cv
-X&&` (`&&`), `X` the naming class, `cv` from `FuncInfo::this_quals`. The
+X&&` (`&&`), `X` the naming class, `cv` from `FuncInfo::this_quals`; a
+member found through a using-declaration (a `UsingShadow`) takes the
+using-declaration's class as `X` ([over.match.funcs.general]/4, clang's
+`ActingContext`; `object_ics_found`, WP-146). The
 object argument is an lvalue for `x.f`, `p->f`, implicit `this`; a prvalue
 for `S().f()`. `object_ics(obj_ty, obj_vk, method)` binds directly — no UDC,
 no temporary (/5); a method without ref-qualifier lets an rvalue bind to
@@ -298,7 +312,8 @@ OBJECT_NO_REF_QUAL IGNORED`) and `SecondStep::DerivedToBase` (class to base
 by value or reference; Conversion rank, [over.best.ics]/6).
 `try_implicit_conversion(arg: ArgInfo, to, opts: IcsOptions) -> Ics` is
 pure. `IcsOptions`: `SUPPRESS_UDC`, `NO_UDC`, `NO_TEMPORARY`,
-`ALLOW_EXPLICIT` (direct-init, contextual bool).
+`ALLOW_EXPLICIT` (direct-init, contextual bool), `CANDIDATE_ARG`,
+`EXPLICIT_REF_CONV` (reference direct-init, §2.6).
 
 **[over.ics.ref]** (target `cv1 T1&`/`&&`): (1) direct binding
 (reference-compatible with the right value category) → identity,

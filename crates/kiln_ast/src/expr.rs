@@ -2018,6 +2018,17 @@ impl ExprArena {
         DeclId::new(self.expect_kind(e, ExprKind::SubstNonTypeTemplateParmExpr).a)
     }
 
+    /// The parameter pack of a `SubstNonTypeTemplateParmPackExpr`.
+    pub fn subst_pack_parameter(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::SubstNonTypeTemplateParmPackExpr).a)
+    }
+
+    /// The argument pack of a `SubstNonTypeTemplateParmPackExpr`.
+    pub fn subst_pack_args(&self, e: ExprId) -> ArgListId {
+        let b = self.expect_kind(e, ExprKind::SubstNonTypeTemplateParmPackExpr).b;
+        ArgListId::try_new(b).unwrap_or(ArgListId::EMPTY)
+    }
+
     /// The cached value of a `ConstantExpr`.
     pub fn constant_value(&self, e: ExprId) -> Option<ConstValueId> {
         ConstValueId::from_raw(self.expect_kind(e, ExprKind::ConstantExpr).b)

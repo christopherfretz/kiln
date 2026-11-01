@@ -115,7 +115,7 @@ impl Sema<'_, '_> {
             if matches!(a.view(), kiln_ast::types::ArgView::Null) {
                 continue;
             }
-            parts.push(format!("{} = {}", self.decl_name(*p), self.arg_str(a)));
+            parts.push(format!("{} = {}", self.decl_name(*p), self.binding_arg_str(a)));
         }
         format!("[with {}]", parts.join(", "))
     }

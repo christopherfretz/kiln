@@ -894,6 +894,33 @@ impl Parser<'_, '_> {
 
     // -- class and enum specifiers ----------------------------------------------------
 
+    /// The optional nested-name-specifier of a tag specifier: `N::C`, or
+    /// `X<A>::C` (the out-of-line definition of a member class of a class
+    /// template, [temp.mem.class]); the scope is entered as clang's
+    /// `ParseClassSpecifier` does.
+    fn parse_tag_qualifier(&mut self, ds: &mut DeclSpec) -> Option<DeclId> {
+        let template_id_qual = || {
+            self.ident().is_some()
+                && self.peek_is(1, Punct::Less)
+                && matches!(self.skip_template_args(self.pos() + 1),
+                    Some((close, false)) if self.tok_at(close + 1).kind
+                        == TokKind::Punct(Punct::ColonColon))
+        };
+        if !(self.at(Punct::ColonColon)
+            || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
+            || template_id_qual())
+        {
+            return None;
+        }
+        let saved = self.s.set_entering_context(true);
+        let q = self.parse_nested_name();
+        self.s.set_entering_context(saved);
+        q.unwrap_or_else(|()| {
+            ds.invalid = true;
+            None
+        })
+    }
+
     /// class-specifier, enum-specifier or elaborated-type-specifier
     /// ([class.pre], [dcl.enum], [dcl.type.elab]).
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
@@ -914,15 +941,7 @@ impl Parser<'_, '_> {
         }
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
-        let mut qualifier = None;
-        if self.at(Punct::ColonColon)
-            || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
-        {
-            match self.parse_nested_name() {
-                Ok(q) => qualifier = q,
-                Err(()) => ds.invalid = true,
-            }
-        }
+        let qualifier = self.parse_tag_qualifier(ds);
         let name = self.ident().map(|n| (n, self.bump().span.lo));
         if name.is_none() && qualifier.is_some() {
             self.error_here(DiagId::parse_expected_unqualified_id);
@@ -964,11 +983,15 @@ impl Parser<'_, '_> {
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs);
         if use_ == TagUse::Definition {
+            // `struct A::B { ... }`: names in the body are looked up in
+            // `A` too ([basic.lookup.unqual]/2, [class.nest]/3).
+            let entered = qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
             if keyword == TagKeyword::Enum {
                 self.parse_enum_body(d);
             } else {
                 self.parse_record_body(d, final_loc);
             }
+            self.s.act_on_exit_declarator_scope(entered);
         }
         ds.tag = Some(d);
         ds.tag_declares = use_ != TagUse::Reference;
@@ -1028,7 +1051,7 @@ impl Parser<'_, '_> {
         ctx: DeclaratorContext,
     ) {
         let _ = ctx;
-        let Some((args, _, r_angle)) = self.parse_template_arg_list() else {
+        let Some((args, l_angle, r_angle)) = self.parse_template_arg_list() else {
             ds.invalid = true;
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
@@ -1036,12 +1059,27 @@ impl Parser<'_, '_> {
         let final_loc = self.parse_class_virt_specifiers();
         let use_ = self.tag_use(ds, true, final_loc);
         let r = self.s.act_on_class_template_id_tag(
-            keyword, tmpl, &args, qualifier, use_, name_loc, r_angle, kw_loc,
+            keyword,
+            tmpl,
+            &args,
+            qualifier,
+            use_,
+            name_loc,
+            (l_angle, r_angle),
+            kw_loc,
         );
         let ty = if let Ok((rec, ty)) = r {
             if use_ == TagUse::Definition {
                 match rec {
-                    Some(d) => self.parse_record_body(d, final_loc),
+                    Some(d) => {
+                        // `template<class T> template<class U> struct
+                        // Outer<T>::Inner<U*> {...}`: names in the body
+                        // are looked up in `Outer<T>` too ([class.nest]/3).
+                        let entered =
+                            qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
+                        self.parse_record_body(d, final_loc);
+                        self.s.act_on_exit_declarator_scope(entered);
+                    }
                     None => self.skip_class_body(),
                 }
             }

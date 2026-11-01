@@ -378,6 +378,11 @@ impl Types {
                 }
                 self.push(info)
             }
+            // No value model yet (M4): only its size and alignment.
+            TypeView::Vector { .. } => {
+                let (size, align) = bridge.opaque_size_align(c);
+                self.simple(c, size, align.max(1), TyKind::Opaque)
+            }
             _ => self.simple(c, 0, 1, TyKind::Opaque),
         }
     }

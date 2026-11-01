@@ -1154,6 +1154,10 @@ impl TypeNames for AstNames<'_> {
         out.push_str(self.ast.symbols().as_str(sym));
     }
 
+    fn write_template_param(&self, associated: DeclId, index: u32, out: &mut String) {
+        self.ast.write_replaced_param(associated, index, out);
+    }
+
     fn is_anonymous_namespace(&self, ns: DeclId) -> bool {
         self.ast
             .decls
@@ -1219,6 +1223,10 @@ impl TypeNames for Ast {
 
     fn write_symbol(&self, sym: Symbol, out: &mut String) {
         out.push_str(self.symbols().as_str(sym));
+    }
+
+    fn write_template_param(&self, associated: DeclId, index: u32, out: &mut String) {
+        self.write_replaced_param(associated, index, out);
     }
 
     fn is_anonymous_namespace(&self, ns: DeclId) -> bool {

@@ -153,6 +153,11 @@ pub(crate) struct Fx {
     /// The indices of the enclosing `ArrayInitLoopExpr`s, innermost last
     /// (clang `ArrayInitIndex`).
     pub array_index: Vec<V>,
+    /// The evaluated arguments (and their types) of the C-variadic
+    /// inheriting constructor being inlined at its call site (clang
+    /// `CXXInheritedCtorInitExprArgs`), forwarded by its
+    /// `CXXInheritedCtorInitExpr`.
+    pub inh_args: Option<(Vec<CallArg>, Vec<QualType>)>,
 }
 
 impl Fx {
@@ -193,6 +198,7 @@ impl Fx {
             conds: Vec::new(),
             opaque: FxHashMap::default(),
             array_index: Vec::new(),
+            inh_args: None,
         }
     }
 }
@@ -473,7 +479,14 @@ impl Cg<'_> {
 
         // Attributes.
         let nothrow_def = sig.nothrow || !self.opts.exceptions || self.no_throw_calls();
-        let fa = self.def_fn_attrs(is_main, nothrow_def, self.f.mustprogress, self.f.vector_width);
+        let noreturn = self.ast.is_noreturn_fn(d);
+        let fa = self.def_fn_attrs(crate::module::DefFnAttrs {
+            is_main,
+            nounwind: nothrow_def,
+            mustprogress: self.f.mustprogress,
+            vector_width: self.f.vector_width,
+            noreturn,
+        });
         let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), true);
         if thunk.is_some() {
             (ret, params) = self.thunk_attrs(&sig, ret, params);

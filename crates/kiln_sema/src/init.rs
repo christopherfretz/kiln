@@ -472,6 +472,7 @@ impl Sema<'_, '_> {
         if self.field_has_nsdmi(f) {
             let ctx = self.context();
             if let Some(e) = self.default_member_init(f, ctx, at) {
+                self.note_default_use(e, f, at);
                 return e;
             }
             return self.recover(fty, &[], at);
@@ -675,6 +676,17 @@ impl Sema<'_, '_> {
             self.instantiate_for_init(r, l.lbrace);
         }
         if self.is_aggregate(ty) {
+            // [dcl.init.list]/3.2: an aggregate class initialized from a
+            // single element of the same or a derived class type is
+            // initialized from that element.
+            if let Some(r) = self.ast.types.as_record(ty)
+                && let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+                && designator.is_empty()
+                && let Some(u) = self.ast.types.as_record(self.ety(*x))
+                && self.derived_inclusive(u, r)
+            {
+                return self.init_from_expr(ty, *x, ConvCtx::Initialization, l.lbrace);
+            }
             if self.ast.types.as_record(ty).is_some() && !self.require_complete(ty, l.lbrace) {
                 let msg = self
                     .diag(DiagId::sema_typecheck_decl_incomplete_type, l.lbrace)
