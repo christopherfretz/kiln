@@ -881,7 +881,7 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   through nested anonymous records (clang `getFirstNamedDataMember`),
   and gets no internal-linkage `L` even though it is `static`:
   `static union { int ga; };` is `_Z2ga`. `tests/codegen/anon_union_global.cpp`.
-### 8.16 Landed (WP-211): `_Complex` lowering and mangling
+### 8.17 Landed (WP-211): `_Complex` lowering and mangling
 - **IR type.** `_Complex T` is `{ T, T }` (clang `ConvertType`). The layout
   is in §3: twice the size of `T`, aligned to `T`.
 - **Argument passing.** The call classification follows clang, and

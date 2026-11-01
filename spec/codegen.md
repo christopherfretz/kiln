@@ -1623,7 +1623,7 @@ range (`CX_Full`).
   complex floating divisors. A real divisor divides each part directly.
   Integer division uses clang's inline formula.
 - **Calls.** A complex argument or return goes through the target
-  classification (spec/abi.md §8.16). A returned pair is unpacked from
+  classification (spec/abi.md §8.17). A returned pair is unpacked from
   the coerced type (`cx_call_result`). Delegating calls (inheriting
   constructors, lambda static invokers) forward the parts unchanged.
 - **Validation.** `tests/codegen/complex_{arith,calls,ops,types,delegate,
