@@ -881,6 +881,22 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   through nested anonymous records (clang `getFirstNamedDataMember`),
   and gets no internal-linkage `L` even though it is `static`:
   `static union { int ga; };` is `_Z2ga`. `tests/codegen/anon_union_global.cpp`.
+### 8.17 Landed (WP-211): `_Complex` lowering and mangling
+- **IR type.** `_Complex T` is `{ T, T }` (clang `ConvertType`). The layout
+  is in §3: twice the size of `T`, aligned to `T`.
+- **Argument passing.** The call classification follows clang, and
+  `tests/codegen/complex_calls.cpp` checks it on both targets.
+  - **AAPCS64:** a complex floating type is a homogeneous aggregate of
+    two elements, passed as `[2 x T]` with `alignstack`. A complex
+    integer type is coerced to integer registers like a two-member
+    struct.
+  - **x86-64 SysV:** `_Complex float` is `<2 x float>`; `_Complex double`
+    is two SSE eightbytes. `_Complex long double` is `ComplexX87`: it is
+    returned as `{ x86_fp80, x86_fp80 }` and passed in memory. Complex
+    integers are classified as `Integer`.
+- **Mangling** (Itanium `<type> ::= C <type>`): `Cf`, `Cd`, `Ce`, `Ci`,
+  `Ch`, ..., including through pointers, references and template
+  arguments. `tests/mangle/complex.cpp` checks it.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

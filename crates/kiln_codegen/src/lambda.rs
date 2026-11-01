@@ -8,7 +8,7 @@ use kiln_llvm::{TypeId as LTy, Value};
 
 use crate::expr::LV;
 use crate::fir::V;
-use crate::func::{Addr, CallArg};
+use crate::func::Addr;
 use crate::module::{Cg, R};
 
 impl Cg<'_> {
@@ -93,13 +93,7 @@ impl Cg<'_> {
         for &p in params {
             let q = ast.decls.get(p).ty().expect("param type");
             let a = self.f.locals[&p];
-            vals.push(if self.referee(q).is_some() {
-                CallArg::Scalar(self.load(LTy::PTR, a.v, a.align, false))
-            } else if self.is_aggregate(q) {
-                CallArg::Agg(a)
-            } else {
-                CallArg::Scalar(self.load_scalar(a, q))
-            });
+            vals.push(self.delegate_call_arg(a, q));
             ptys.push(q);
         }
         let fty = ast.decls.get(first).ty().expect("call operator type");
@@ -130,6 +124,7 @@ impl Cg<'_> {
         if sig.sret() {
             return Ok(());
         }
+        self.delegate_cx_return(rq, sig.sret());
         if let Some(slot) = self.f.ret_slot {
             if agg {
                 if let Some(tmp) = dest {

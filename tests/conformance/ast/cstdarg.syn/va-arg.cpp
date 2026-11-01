@@ -2,6 +2,7 @@
 // written type (a prvalue); the `va_list` operand is an lvalue (a
 // parameter of `va_list` type on AAPCS64 is the struct itself).
 //@ expect: ast
+//@ args: --target=aarch64-unknown-linux-gnu
 //@ ast-filter: vaget
 struct P { int a, b; };
 int vaget(__builtin_va_list ap, int n, ...) {

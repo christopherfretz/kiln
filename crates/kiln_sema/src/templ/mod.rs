@@ -205,6 +205,10 @@ pub struct TemplState {
     /// Where each dependent type and nested-name-specifier component was
     /// written, sorted (§5.8; [`Sema::written_loc`]).
     pub(crate) written_locs: kiln_source::fx::FxHashMap<written::WrittenKey, Vec<Loc>>,
+    /// The `->` of each function declared with a dependent trailing
+    /// return type: its dependent names are found after it (§5.8), not
+    /// among the parameters' (`auto f(int (*p)(T::type)) -> T::type`).
+    pub(crate) trailing_arrow: kiln_source::fx::FxHashMap<DeclId, Loc>,
 }
 
 /// The class an object expression names for the lookup of the first

@@ -1661,6 +1661,49 @@ diag_ids! {
     sema_access_dtor = Error (2) "calling a {1:private|protected} destructor of class {0}";
     sema_default_member_init_not_yet_parsed = Error (2) "default member initializer for {1} needed within definition of enclosing class {0} outside of member functions";
     note_default_member_init_not_yet_parsed = Note (0) "default member initializer declared here";
+    sema_parens_disambiguated_as_variable = Warning [VexingParse] (1) "parentheses were disambiguated as redundant parentheses around declaration of variable named '{0}'";
+    sema_redundant_parens_around_declarator = WarningOff [RedundantParens] (0) "redundant parentheses surrounding declarator";
+    note_raii_guard_add_name = Note (2) "add a variable name to declare a {0} initialized with '{1}'";
+    note_function_style_cast_add_parentheses = Note (0) "add enclosing parentheses to perform a function-style cast";
+    note_remove_parens_for_variable_declaration = Note (0) "remove parentheses to silence this warning";
+    sema_invalid_declarator_global_scope = Error (1) "definition or redeclaration of '{0}' cannot name the global scope";
+    sema_invalid_declarator_in_function = Error (1) "definition or redeclaration of '{0}' not allowed inside a function";
+    sema_invalid_declarator_scope = Error (3) "cannot define or redeclare '{0}' here because namespace '{1}' does not enclose namespace '{2}'";
+    sema_member_qualification = Error (1) "non-friend class member '{0}' cannot have a qualified name";
+    sema_member_extra_qualification = Error (1) "extra qualification on member '{0}'";
+    sema_indirection_through_null = Warning [NullDereference] (0) "indirection of non-volatile null pointer will be deleted, not trap";
+    note_indirection_through_null = Note (0) "consider using __builtin_trap() or qualifying pointer with 'volatile'";
+    sema_binding_null_to_reference = Warning [NullDereference] (0) "binding dereferenced null pointer to reference has undefined behavior";
+    sema_empty_if_body = Warning [EmptyBody] (0) "if statement has empty body";
+    sema_empty_switch_body = Warning [EmptyBody] (0) "switch statement has empty body";
+    sema_empty_for_body = Warning [EmptyBody] (0) "for loop has empty body";
+    sema_empty_range_for_body = Warning [EmptyBody] (0) "range-based for loop has empty body";
+    sema_empty_while_body = Warning [EmptyBody] (0) "while loop has empty body";
+    note_empty_body_on_separate_line = Note (0) "put the semicolon on a separate line to silence this warning";
+    sema_unused_but_set_variable = WarningOff [UnusedButSetVariable] (1) "variable {0} set but not used";
+    sema_unused_exception_param = WarningOff [UnusedExceptionParameter] (1) "unused exception parameter {0}";
+    sema_unused_const_variable = WarningOff [UnusedConstVariable] (1) "unused variable {0}";
+    sema_constant_conversion = Warning [ConstantConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
+    sema_implicit_fallthrough = WarningOff [ImplicitFallthrough] (0) "unannotated fall-through between switch labels";
+    note_insert_fallthrough_fixit = Note (1) "insert '{0};' to silence this warning";
+    note_insert_break_fixit = Note (0) "insert 'break;' to avoid fall-through";
+    sema_unreachable_fallthrough_attr = WarningOff [UnreachableCodeFallthrough] (0) "fallthrough annotation in unreachable code";
+    // ----- WP-211 (GNU _Complex)
+    sema_plain_complex = Warning (0) "plain '_Complex' requires a type specifier; assuming '_Complex double'";
+    sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
+    sema_complex_to_real_cxx = Error (2) "implicit conversion from {0} to {1} is not permitted in C++";
+    sema_realimag_invalid_type = Error (2) "invalid type {0} to {1} operator";
+    sema_call_requires_real_fp = Error (1) "argument type {0} is not a real floating point type";
+    sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";
+    sema_increment_complex = Extension [C2yExtensions] (1) "'{0}' on an object of complex type is a C2y extension";
+    parse_c99_complex = Extension [C99Extensions] (0) "'_Complex' is a C99 extension";
+    sema_imaginary_constant = Extension [GnuImaginaryConstant] (0) "imaginary constants are a GNU extension";
+    // ----- WP-220 (-Wundefined-var-template; clang `InstantiateVariableDefinition`)
+    sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
+    note_forward_template_decl = Note (0) "forward declaration of template entity is here";
+    note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration to suppress this warning if '{0}' is explicitly instantiated in another translation unit";
+    // ----- WP-228 (driver flags a target does not support)
+    drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 }
 
 impl DiagId {

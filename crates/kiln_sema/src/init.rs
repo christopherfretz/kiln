@@ -1229,6 +1229,9 @@ impl Sema<'_, '_> {
         if self.is_vector_type(ty) {
             return self.vector_list_init(ty, l);
         }
+        if let Some(e) = self.complex_list_init(ty, l) {
+            return e;
+        }
         if let Some(e) =
             self.list_construct(ty, l, InitStyle::CopyList, entity.unwrap_or(l.lbrace), None)
         {
@@ -1503,7 +1506,7 @@ impl Sema<'_, '_> {
     /// ([dcl.init.list]/7, clang's `-Wc++11-narrowing` errors).
     /// `entity` is the initialized type as diagnosed (`to` itself, or
     /// the enumeration for [dcl.init.list]/3.8).
-    fn check_narrowing(&mut self, e: ExprId, to: QualType, entity: QualType) {
+    pub(crate) fn check_narrowing(&mut self, e: ExprId, to: QualType, entity: QualType) {
         self.check_narrowing_impl(e, to, entity);
     }
 

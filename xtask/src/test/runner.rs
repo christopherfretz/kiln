@@ -175,6 +175,11 @@ impl Test<'_> {
         if let Some(r) = spec.skip_reason(kind) {
             return (Status::Skip, Some(r.to_owned()), String::new());
         }
+        // The compiler under test (and the oracle) target this host by
+        // default.
+        if let Some(r) = spec.unmet_requirement(std::env::consts::ARCH) {
+            return (Status::Skip, Some(r), String::new());
+        }
         if spec.is_kiln_specific() && kind != CompilerKind::Kiln {
             let directive = if spec.oven.is_empty() { "inst-report:" } else { "oven:" };
             let reason =

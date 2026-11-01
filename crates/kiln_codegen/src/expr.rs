@@ -609,6 +609,7 @@ impl Cg<'_> {
             CastKind::LValueToRValue => {
                 if let Some(c) = self.folds.get(e)
                     && !self.is_aggregate(q)
+                    && !self.is_complex(q)
                 {
                     return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
                 }
@@ -758,6 +759,18 @@ impl Cg<'_> {
                 let v = self.emit_scalar(s)?;
                 self.conv(v, sq, q)
             }
+            // clang `ScalarExprEmitter::VisitCastExpr`: the real part only,
+            // or both parts tested against zero.
+            CastKind::FloatingComplexToReal | CastKind::IntegralComplexToReal => {
+                match self.emit_cx(s, (false, true))?.0 {
+                    Some(v) => v,
+                    None => return err(self.loc_of(e), "a complex value without a real part"),
+                }
+            }
+            CastKind::FloatingComplexToBoolean | CastKind::IntegralComplexToBoolean => {
+                let v = self.emit_complex(s)?;
+                self.cx_to_scalar(v, sq, q)
+            }
             k => return err(self.loc_of(e), format!("cast {k:?} is not supported yet")),
         }))
     }
@@ -824,6 +837,25 @@ impl Cg<'_> {
             op @ (UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec) => {
                 let lv = self.emit_lvalue(s)?;
                 self.inc_dec(e, lv, op)
+            }
+            // clang `VisitUnaryReal`/`VisitUnaryImag`: a part of a complex
+            // operand; `__real__` of a real operand is the operand and
+            // `__imag__` zero (after the operand's side effects).
+            op @ (UnaryOp::Real | UnaryOp::Imag) => {
+                let imag = op == UnaryOp::Imag;
+                if let Some(v) = self.emit_real_imag(e, imag)? {
+                    return Ok(v);
+                }
+                if !imag {
+                    return self.emit_scalar(s);
+                }
+                if self.is_glvalue(s) {
+                    self.emit_lvalue(s)?;
+                } else {
+                    self.emit_scalar(s)?;
+                }
+                let t = self.lty(q);
+                Ok(V::C(self.m.const_zero(t)))
             }
             op => err(self.loc_of(e), format!("unary {op:?} is not supported yet")),
         }
@@ -898,6 +930,12 @@ impl Cg<'_> {
             BinaryOp::PtrMemD | BinaryOp::PtrMemI => {
                 let lv = self.emit_lvalue(e)?;
                 self.load_lv(lv)
+            }
+            BinaryOp::EQ | BinaryOp::NE
+                if self.is_complex(ast.exprs.get(l).ty())
+                    || self.is_complex(ast.exprs.get(r).ty()) =>
+            {
+                self.cx_compare(e)?
             }
             BinaryOp::EQ | BinaryOp::NE if self.is_mp(ast.exprs.get(l).ty()) => {
                 let lv = self.emit_scalar(l)?;
@@ -1175,7 +1213,7 @@ impl Cg<'_> {
     /// Runs `f` as conditionally evaluated code (clang
     /// `ConditionalEvaluation::begin`/`end`); `start` is the block the
     /// condition was branched from.
-    fn cond_eval<T>(
+    pub(crate) fn cond_eval<T>(
         &mut self,
         start: Option<crate::fir::Blk>,
         f: impl FnOnce(&mut Self) -> R<T>,
@@ -1262,7 +1300,7 @@ impl Cg<'_> {
         Ok(ops)
     }
 
-    fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
+    pub(crate) fn opaque_of(&self, e: ExprId) -> Option<Opaque> {
         // A handler's copy-initialization source has no source
         // expression: it is bound by itself.
         let src = self.ast.exprs.opaque_source(e).unwrap_or(e);
@@ -1400,6 +1438,15 @@ impl Cg<'_> {
     fn emit_compound_assign(&mut self, e: ExprId) -> R<(LV, V)> {
         let ast = self.ast;
         let ca = *ast.exprs.compound_assign(e);
+        if self.is_complex(ca.result_ty) {
+            // clang `EmitScalarCompoundAssignWithComplex` (and
+            // `EmitComplexCompoundAssignmentLValue` for an lvalue).
+            let (lv, (v, _)) = self.cx_compound_assign(e)?;
+            let v = v.unwrap_or_else(|| V::C(self.m.const_zero(LTy::I1)));
+            let v =
+                if !self.is_complex(lv.q) && self.is_volatile(lv.q) { self.load_lv(lv) } else { v };
+            return Ok((lv, v));
+        }
         let l = self.sub(e);
         let op = match ast.exprs.binary_op(e) {
             BinaryOp::MulAssign => BinaryOp::Mul,
@@ -1616,8 +1663,15 @@ impl Cg<'_> {
                 }
                 op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
-                    self.inc_dec(e, lv, op)?;
+                    if self.is_complex(lv.q) {
+                        self.cx_inc_dec(lv, op == UnaryOp::PreInc)?;
+                    } else {
+                        self.inc_dec(e, lv, op)?;
+                    }
                     Ok(lv)
+                }
+                op @ (UnaryOp::Real | UnaryOp::Imag) => {
+                    self.real_imag_lvalue(e, op == UnaryOp::Imag)
                 }
                 UnaryOp::Extension => self.emit_lvalue(ast.exprs.operand(e)),
                 op => err(self.loc_of(e), format!("lvalue unary {op:?} is not supported yet")),
@@ -1645,6 +1699,9 @@ impl Cg<'_> {
                             self.f.slot_volatile = false;
                             self.atomic_agg_store(t, lv);
                             return Ok(LV { addr: t, q, bf: None, vidx: None });
+                        }
+                        if self.is_complex(q) {
+                            return Ok(self.cx_assign(e)?.0);
                         }
                         let v = self.emit_scalar(r)?;
                         let lv = self.emit_lvalue(l)?;
@@ -1724,6 +1781,9 @@ impl Cg<'_> {
                                 | ExprKind::CXXTemporaryObjectExpr
                         );
                     self.emit_agg_into(s, tmp, overlap)?;
+                } else if self.is_complex(sq) {
+                    let v = self.emit_complex(s)?;
+                    self.cx_store(v, tmp, sq);
                 } else {
                     let v = self.emit_scalar(s)?;
                     self.store_scalar(v, tmp, sq);
@@ -2134,7 +2194,7 @@ impl Cg<'_> {
     /// `EmitCompoundStmt` with `GetLast`): the statements in order; the
     /// result statement (the last non-null one, through labels) is
     /// evaluated as the value.
-    fn emit_stmt_expr(&mut self, e: ExprId) -> R<Option<V>> {
+    pub(crate) fn emit_stmt_expr(&mut self, e: ExprId) -> R<Option<V>> {
         let ast = self.ast;
         let body = ast.exprs.stmt_expr_body(e);
         if ast.types.is_void(ast.exprs.get(e).ty()) {
@@ -2170,6 +2230,15 @@ impl Cg<'_> {
         let r = ast.stmts.expr_stmt_expr(s);
         let q = ast.exprs.get(r).ty();
         let tmp = self.temp(q);
+        if self.is_complex(q) {
+            // A complex result is loaded into `cx_ret`.
+            let v = self.emit_complex(r)?;
+            self.cx_store(v, tmp, q);
+            self.end_scope(scope);
+            let (re, im) = self.cx_load(tmp, q, (false, false));
+            self.f.cx_ret = re.zip(im);
+            return Ok(None);
+        }
         let v = self.emit_scalar(r)?;
         self.store_scalar(v, tmp, q);
         self.end_scope(scope);
@@ -2209,6 +2278,10 @@ impl Cg<'_> {
                 }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
+            }
+            if self.is_complex(q) {
+                self.emit_cx(e, (true, true))?;
+                return Ok(());
             }
             self.emit_scalar_opt(e)?;
             return Ok(());
@@ -2416,6 +2489,9 @@ impl Cg<'_> {
                 self.f.dest_destructed = saved;
                 r?;
                 CallArg::Agg(t)
+            } else if self.is_complex(arg_tys[i]) {
+                let (re, im) = self.emit_complex(a)?;
+                CallArg::Complex(re, im)
             } else {
                 CallArg::Scalar(self.emit_scalar(a)?)
             };
@@ -2550,6 +2626,12 @@ impl Cg<'_> {
             {
                 return Ok(Some(self.load_scalar(a, rq)));
             }
+            if self.is_complex(rq) {
+                self.f.cx_ret = match self.cx_load(a, rq, (false, false)) {
+                    (Some(re), Some(im)) => Some((re, im)),
+                    _ => None,
+                };
+            }
             return Ok(None);
         }
         if rty == LTy::VOID {
@@ -2558,6 +2640,11 @@ impl Cg<'_> {
                 // aggregate result still gets its (unused) temporary.
                 self.temp(rq);
             }
+            return Ok(None);
+        }
+        if self.is_complex(rq) {
+            let kind = sig.info.ret.kind.clone();
+            self.f.cx_ret = Some(self.cx_call_result(&kind, r, rq));
             return Ok(None);
         }
         if self.is_aggregate(rq) || self.is_atomic_aggregate(rq) {
@@ -3077,6 +3164,11 @@ impl Cg<'_> {
             self.f.dest_destructed = saved;
             return r;
         }
+        if self.is_complex(lv.q) {
+            let v = self.emit_complex(e)?;
+            self.cx_store(v, lv.addr, lv.q);
+            return Ok(());
+        }
         let v = self.emit_scalar(e)?;
         self.store_lv(v, lv, false);
         Ok(())
@@ -3087,7 +3179,7 @@ impl Cg<'_> {
         if zeroed && self.zero_init(lv.q) {
             return Ok(());
         }
-        if self.is_aggregate(lv.q) {
+        if self.is_aggregate(lv.q) || self.is_complex(lv.q) {
             let size = self.size_align(lv.q).0;
             return self.emit_null_init(lv.addr, lv.q, size);
         }
@@ -3582,6 +3674,20 @@ impl Cg<'_> {
             }
             return self.emit_agg_into(init, addr, false);
         }
+        if self.is_complex(q) {
+            // clang `EmitAutoVarInit`: a constexpr variable stores its
+            // constant pair whole, otherwise `EmitComplexExprIntoLValue`.
+            let constexpr = ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
+            if let Some(c) = fold.filter(|_| constexpr) {
+                let k = self.const_value(c, q, Some(init), true)?;
+                let vol = self.is_volatile(q);
+                self.store(V::C(k), addr.v, addr.align, vol);
+                return Ok(());
+            }
+            let v = self.emit_complex(init)?;
+            self.cx_store(v, addr, q);
+            return Ok(());
+        }
         let v = match fold {
             Some(c) => V::C(self.const_scalar_value(c, q)?),
             None => self.emit_scalar(init)?,
@@ -3590,7 +3696,7 @@ impl Cg<'_> {
         Ok(())
     }
 
-    fn const_elems(&mut self, k: Value) -> Option<Vec<Value>> {
+    pub(crate) fn const_elems(&mut self, k: Value) -> Option<Vec<Value>> {
         match self.m.const_of(k)?.clone() {
             ConstData::Array { elems, .. } | ConstData::Struct { elems, .. } => {
                 Some(elems.to_vec())

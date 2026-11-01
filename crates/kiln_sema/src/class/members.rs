@@ -248,6 +248,11 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        // The decl-specifiers' start, for the instantiation's written
+        // locations (§5.8): `static int (*s)(typename T::type);`.
+        if ds.loc.is_valid() && ds.loc != loc && self.is_dependent_type(ty) {
+            let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
+        }
         self.lambda_mangle.var = Some(v);
         if invalid {
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);

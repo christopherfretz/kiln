@@ -196,7 +196,8 @@ id each, no representation change.
 | `Using` | I | S | pairs [UsingShadow `DeclId`, underlying QualType] | a type named through a using-declaration (*M3*) |
 | `Elaborated` | I | S | aux = keyword (none/struct/class/union/enum/typename), pairs [NnsId or 0, named QualType] | created **only** when a keyword or a qualifier was written (§15 R4) |
 | `QualifiedArray` | I | S | aux = Quals, data = base TypeId | §2.1 |
-| `Paren`, `Decayed`, `Adjusted` | — | — | — | **not represented** (§15 R6): parameter types are stored adjusted; `ParmVar` keeps the written type if it differs |
+| `Paren` | I | S | data = inner QualType | declarator grouping parentheses (clang's `ParenType`, WP-191; `paren_type`), created only around a pointer, reference or member-pointer declarator (`int (*p)`, `int ((&r))`): never around the outermost type or a function or array type, which clang's printer shows no differently. Prints as `(inner)` in the declarator position; `PrintOptions::no_parens` prints the inner type instead (the `aka` check, clang's `desugarForDiagnostic` looking through it) |
+| `Decayed`, `Adjusted` | — | — | — | **not represented** (§15 R6): parameter types are stored adjusted; `ParmVar` keeps the written type if it differs |
 | `TemplateTypeParm` | D | S | data = `TemplateTypeParm` `DeclId` | the name a template uses; canonical = the canonical parm below |
 | `CanonTemplateTypeParm` dep | I | C | aux = depth (15 bits) \| pack bit, data = index | prints `type-parameter-D-I`; makes `template<class T> f(T)` and `template<class U> f(U)` the same type |
 
@@ -661,8 +662,9 @@ stores ids.
   §13 Q8); parallelism is across TUs. A lock per type construction costs
   ~20 ns on the hottest path of template instantiation. `TypeContext`
   takes `&mut self` for construction and is `Send` but not shared.
-- **R6 `TypeLoc` (clang's per-occurrence source-location tree), `Paren`,
-  `Decayed`, `Adjusted` nodes.** TypeLoc roughly doubles type-related
+- **R6 `TypeLoc` (clang's per-occurrence source-location tree),
+  `Decayed`, `Adjusted` nodes** (`Paren` is represented since WP-191, for
+  AST dump parity). TypeLoc roughly doubles type-related
   memory for declarations and exists for tooling (rewriters, IDE ranges)
   that kiln does not have. Diagnostics point at the declarator's
   location stored in the declaration. Parameter types are stored

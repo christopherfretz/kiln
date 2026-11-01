@@ -1078,6 +1078,13 @@ are still instantiated on use (`a.g()` after `A<int> a;`).
   clang's error: "default member initializer for 'x' needed within
   definition of enclosing class 'A<int>' outside of member functions".
 - The frame is `DefaultMemberInitializerInstantiation`.
+- An NSDMI whose substitution fails makes its field invalid (clang
+  `InstantiateInClassInitializer`), so a constructor or aggregate
+  initialization that uses it reports nothing more (WP-220;
+  `default_member_init` returns `None` for an invalid field). As landed,
+  kiln still instantiates NSDMIs with the class, so the error's notes
+  name the class instantiation, not the initializer and the constructor
+  (`tests/conformance/class.mem/nsdmi-subst-failure.cpp`).
 
 ### 4.10 Alias templates
 
@@ -1133,6 +1140,39 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
 
 This is why the chain `R<N>::v = R<N-1>::v` recurses one frame per level
 in clang (the d1 test in §10.2). Kiln matches its notes exactly.
+
+**Undefined variables at the end of the TU** (`-Wundefined-var-template`,
+WP-220; clang `InstantiateVariableDefinition`). When the pending queue is
+drained (`instantiate_pending`) and an implicitly instantiated variable
+specialization or static data member still has no definition to
+instantiate from, kiln warns "instantiation of variable 'v<int>' required
+here, but no definition is available" at its point of instantiation,
+with the notes "forward declaration of template entity is here" (the
+pattern's latest declaration) and "add an explicit instantiation
+declaration to suppress this warning if 'v<int>' is explicitly
+instantiated in another translation unit" (the POI again). The rules
+follow clang:
+- Only odr-uses queue the variable; a variable usable in constant
+  expressions is never queued (it is instantiated at the reference), so
+  it is never warned about.
+- The POI is the first reference, even an unevaluated one
+  (`InstState.undefined_var_uses`).
+- A variable template specialization is queued again on every odr-use,
+  so each use warns again (same POI; `allow_duplicate`). A static data
+  member is queued once.
+- No warning for explicit specializations, explicit instantiation
+  declarations (`extern template int v<long>;`), members of a class
+  named in `extern template struct S<char>;`
+  (`in_explicit_inst_declaration`), patterns in a system header, or once
+  any error has been reported (clang checks `hasErrorOccurred()` at the
+  end of the TU).
+- An explicit instantiation definition of the class (`template struct
+  U<int>;`) leaves an undefined static member implicit, so it warns.
+
+`tests/conformance/temp.inst/undefined-var-template.cpp` pins all of
+this. A variable template defined later in the TU is instantiated
+silently, but codegen still emits it as an external declaration
+(follow-up).
 
 **Member variable templates defined out of line** (`template<class T>
 T A::v = T(1);`, WP-206). The implicit specialization `A::v<int>` is a
@@ -1513,29 +1553,49 @@ formed it:
   - The scope applies only while the anchor matches. A type substituted
     at another anchor (a default argument, an initializer) falls back to
     the nearest occurrence.
+  - Under an *after* scope, a dependent type substituted again takes
+    its next occurrence (`Substituter::written_used`, WP-220), so `T::type
+    (*m)(T::type)` reports both access errors where clang does. Types are
+    substituted in written order (a leading return type, then the
+    parameters). Nested-name-specifiers do not advance: one occurrence
+    looks them up more than once.
 - The rule each declaration uses (`subst/decls.rs`):
-  - A parameter, field or variable whose decl-specifiers' start is
-    recorded (`decls.cold.begin_loc`) uses *after* that start. This finds
-    `int (*p)(T::type)`'s own occurrence, which is written after `p`.
-    Otherwise it uses *before* the declarator-id, or before where an
+  - A parameter, field, variable, static data member or typedef whose
+    decl-specifiers' start is recorded (`decls.cold.begin_loc`) uses
+    *after* that start. This finds `int (*p)(T::type)`'s own occurrence,
+    which is written after `p`. Variables, static data members and
+    typedefs record it only when their type is dependent (WP-220), and
+    an instantiation keeps it while its type is still dependent.
+    Otherwise the rule is *before* the declarator-id, or before where an
     unnamed parameter's name would be.
   - A leading return type uses *before* the function's name.
-  - A typedef uses *before* its name. An alias-declaration uses *after*
-    its name.
-  - A trailing return type, and a conversion function's type, use
-    *after* the last parameter's location.
+  - An alias-declaration uses *after* its name.
+  - A trailing return type uses *after* its `->`
+    (`TemplState.trailing_arrow`, recorded when the trailing type is
+    dependent; WP-220), so `auto f(int (*p)(T::type)) -> T::type` finds
+    its own occurrence. A conversion function's type, and a trailing
+    return type with no recorded `->`, use *after* the last parameter's
+    location.
 - Order. A leading return type is substituted before the parameters, so
   the first error reported is the first one written, as in clang's
   `TransformFunctionProtoType`. A trailing return type is substituted
   after them. The parameters still enter scope before the exception
   specification.
-- Known gaps. A typedef or variable whose declarator writes the type
-  again after the name (`typedef int (*f)(T::type)`) has no recorded
-  begin, so it can pick an earlier occurrence. So can a trailing return
-  type after a parameter of function-pointer type.
-- Dependent names inside expressions (`T::x` in a default argument,
-  `sizeof(typename T::type)`) are not affected. The expression keeps its
-  own location, so these are exact without the table. A partially
+- Known gap. clang reports an error once per declarator: in `typedef
+  T::type g, (*h)(T::type);` both `g` and `h` fail at the first `T::type`
+  and clang reports it twice. Kiln's diagnostic engine drops the
+  identical second report (same id, location and context).
+- Dependent names inside expressions (`T::x` in a default argument) are
+  not affected. The expression keeps its own location, so these are
+  exact without the table. A type operand of `sizeof`, `alignof` or
+  `typeid` is a type, though: it uses *after* the keyword
+  (`Substituter::ty_written_after`, WP-220), so `T::type f(int =
+  sizeof(T::type))` reports the default argument's own occurrence, not
+  the nearer return type's.
+- `typename T::template Z<int>` checks the access of a member class or
+  alias template when it is substituted ([class.access]/4; WP-220), as
+  `typename T::type` does. A function template's access is checked by
+  overload resolution. A partially
   substituted member template is instantiated from its original pattern
   with all levels of arguments at once (`MultiLevelArgs`), so its types
   keep their written keys. Types formed during instantiation therefore

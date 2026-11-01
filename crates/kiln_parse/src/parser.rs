@@ -174,10 +174,15 @@ impl std::fmt::Debug for Parser<'_, '_> {
 impl<'a, 'sm> Parser<'a, 'sm> {
     /// A parser over `src`. `s`'s AST must use the preprocessor's
     /// interner.
-    pub fn new(s: Sema<'a, 'sm>, mut src: TokenSource<'a, 'sm>, lit_opts: LiteralOptions) -> Self {
+    pub fn new(
+        mut s: Sema<'a, 'sm>,
+        mut src: TokenSource<'a, 'sm>,
+        lit_opts: LiteralOptions,
+    ) -> Self {
         let kw = Keywords::new(s.ast.symbols());
         let lex_opts = src.lex_options();
         let std = lex_opts.std;
+        s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);
         let mut p = Parser {

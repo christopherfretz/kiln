@@ -2746,6 +2746,9 @@ pub mod builtin {
     /// `void *__builtin_addressof(void &) noexcept` ([specialized.addressof];
     /// custom type-checking: the result is a pointer to the operand's type).
     pub const ADDRESSOF: u32 = 200;
+    /// `__builtin_complex(re, im)` (custom type-checking: `_Complex T`
+    /// from two `T` operands).
+    pub const COMPLEX: u32 = 210;
     /// `__builtin_clz` (clang `Builtins.td` signature `iUi`).
     pub const CLZ: u32 = 341;
     /// `__builtin_clzl` (clang `Builtins.td` signature `iULi`).
@@ -3185,6 +3188,7 @@ pub mod builtin {
     pub const ALL: &[Info] = &[
         row(IS_CONSTANT_EVALUATED, "__builtin_is_constant_evaluated", "b", N),
         row(ADDRESSOF, "__builtin_addressof", "v*v&", N | C | T),
+        row(COMPLEX, "__builtin_complex", "v.", N | C | T),
         row(CLZ, "__builtin_clz", "iUi", N | C),
         row(CLZL, "__builtin_clzl", "iULi", N | C),
         row(CLZLL, "__builtin_clzll", "iULLi", N | C),

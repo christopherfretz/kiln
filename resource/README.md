@@ -107,7 +107,10 @@ and `include-paths/<triple>.libc++.txt` (`-stdlib=libc++`): the
 Lines starting with a space are search directories, in order. clang's
 `ignoring nonexistent directory` lines are kept as `#` comments. These paths
 are specific to this container and are a reference for the driver, not
-something kiln hardcodes.
+something kiln hardcodes. `kiln_driver`'s `verbose_search_lists_match_clang`
+test takes only the (target, stdlib) pairs from these files and compares
+kiln's `-v` block with clang++-19's on the host it runs on, since the lists
+depend on the host's GCC installations (WP-228).
 
 - **libstdc++ (aarch64):** `.../include/c++/14`, `.../include/aarch64-linux-gnu/c++/14`,
   `.../include/c++/14/backward`, then resource dir, `/usr/local/include`,

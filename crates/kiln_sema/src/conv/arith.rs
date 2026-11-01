@@ -74,6 +74,38 @@ fn compound_lhs_type(s: &Sema<'_, '_>, l: ExprId, lt: QualType) -> QualType {
     promoted_type(s, lt, bit_field_width(s, l)).unwrap_or(lt)
 }
 
+/// The enumeration operand errors of the usual arithmetic conversions
+/// (C++20 [expr.arith.conv]/1.2–1.3, clang's wording): an unscoped
+/// enumeration with a floating type, or two different enumerations.
+fn check_enum_operands(
+    s: &Sema<'_, '_>,
+    lt0: QualType,
+    rt0: QualType,
+    kind: ArithConvKind,
+) -> Result<(), ConvError> {
+    let ca = kind == ArithConvKind::CompoundAssign;
+    let (le, re) = (is_unscoped_enum(s, lt0), is_unscoped_enum(s, rt0));
+    let (lf, rf) = (s.ast.types.is_floating(lt0), s.ast.types.is_floating(rt0));
+    if (!ca && le && rf) || (re && lf) {
+        return Err(ConvError::new(
+            DiagId::sema_arith_enum_float,
+            vec![
+                kind.select().into(),
+                if le { "1" } else { "0" }.into(),
+                s.ty_arg(lt0),
+                s.ty_arg(rt0),
+            ],
+        ));
+    }
+    if !ca && le && re && !s.ast.types.same_unqualified(lt0, rt0) {
+        return Err(ConvError::new(
+            DiagId::sema_arith_enum_enum,
+            vec![kind.select().into(), s.ty_arg(lt0), s.ty_arg(rt0)],
+        ));
+    }
+    Ok(())
+}
+
 /// The usual arithmetic conversions ([expr.arith.conv]) on the operands
 /// `l` and `r` of an operator of kind `kind`: the usual unary
 /// conversions, then conversion to the common type, which is returned
@@ -111,25 +143,7 @@ pub fn usual_arithmetic_conversions_kind(
         return Ok((l, r, QualType::ERROR));
     }
     let ca = kind == ArithConvKind::CompoundAssign;
-    let (le, re) = (is_unscoped_enum(s, lt0), is_unscoped_enum(s, rt0));
-    let (lf, rf) = (s.ast.types.is_floating(lt0), s.ast.types.is_floating(rt0));
-    if (!ca && le && rf) || (re && lf) {
-        return Err(ConvError::new(
-            DiagId::sema_arith_enum_float,
-            vec![
-                kind.select().into(),
-                if le { "1" } else { "0" }.into(),
-                s.ty_arg(lt0),
-                s.ty_arg(rt0),
-            ],
-        ));
-    }
-    if !ca && le && re && !s.ast.types.same_unqualified(lt0, rt0) {
-        return Err(ConvError::new(
-            DiagId::sema_arith_enum_enum,
-            vec![kind.select().into(), s.ty_arg(lt0), s.ty_arg(rt0)],
-        ));
-    }
+    check_enum_operands(s, lt0, rt0, kind)?;
     let l = if ca { l } else { usual_unary_conversions(s, l) };
     let r = usual_unary_conversions(s, r);
     let (lt, rt) = (super::strip_cv(s, ty(s, l)), super::strip_cv(s, ty(s, r)));
@@ -143,7 +157,7 @@ pub fn usual_arithmetic_conversions_kind(
     // (the other kinds' left operands were promoted above). An unscoped
     // enumeration is arithmetic here through its promotion, as in clang.
     let lt = if ca { compound_lhs_type(s, l, lt) } else { lt };
-    let arith = |q: QualType| s.ast.types.is_arithmetic(q);
+    let arith = |q: QualType| s.ast.types.is_arithmetic(q) || s.ast.types.as_complex(q).is_some();
     if !arith(lt) || !arith(rt) {
         return Err(ConvError::new(
             DiagId::sema_invalid_operands,
@@ -152,6 +166,9 @@ pub fn usual_arithmetic_conversions_kind(
     }
     if ca && s.ast.types.same_unqualified(lt, rt) {
         return Ok((l, r, common_sugar(s, lt, rt)));
+    }
+    if s.ast.types.as_complex(lt).is_some() || s.ast.types.as_complex(rt).is_some() {
+        return complex_conversions(s, l, r, lt, rt, kind);
     }
     let (lfl, rfl) = (s.ast.types.is_floating(lt), s.ast.types.is_floating(rt));
     if lfl && rfl {
@@ -208,4 +225,125 @@ pub fn usual_arithmetic_conversions_kind(
         (l2, r2, u)
     };
     Ok(out)
+}
+
+/// The common type of two (promoted) integer types ([expr.arith.conv]/1.5).
+fn int_common(s: &mut Sema<'_, '_>, lt: QualType, rt: QualType) -> QualType {
+    if s.ast.types.same_unqualified(lt, rt) {
+        return lt;
+    }
+    let (lr, rr) = (integer_rank(s, lt).unwrap_or(0), integer_rank(s, rt).unwrap_or(0));
+    let (ls, rs) = (int_signed(s, lt), int_signed(s, rt));
+    if ls == rs {
+        if lr >= rr { lt } else { rt }
+    } else if (ls && rr >= lr) || (rs && lr >= rr) {
+        if rs { lt } else { rt }
+    } else if int_width(s, lt) != int_width(s, rt) {
+        if ls { lt } else { rt }
+    } else {
+        unsigned_counterpart(s, if ls { lt } else { rt })
+    }
+}
+
+/// The usual arithmetic conversions with a GNU complex operand (clang's
+/// `handleComplexConversion`, the complex arm of `handleFloatConversion`
+/// and `handleComplexIntConversion`). A real floating operand keeps its
+/// realness (only its precision is promoted); an integer operand of a
+/// complex floating type, and a real operand of a complex integer type,
+/// become complex. The left operand of a compound assignment is left
+/// unconverted.
+fn complex_conversions(
+    s: &mut Sema<'_, '_>,
+    l: ExprId,
+    r: ExprId,
+    lt: QualType,
+    rt: QualType,
+    kind: ArithConvKind,
+) -> Result<(ExprId, ExprId, QualType), ConvError> {
+    let ca = kind == ArithConvKind::CompoundAssign;
+    let (lc, rc) = (s.ast.types.as_complex(lt), s.ast.types.as_complex(rt));
+    let fl = |s: &Sema<'_, '_>, t: QualType| s.ast.types.is_floating(t);
+    let elem = |t: QualType, c: Option<QualType>| c.unwrap_or(t);
+    let (le, re) = (elem(lt, lc), elem(rt, rc));
+    if !fl(s, le) && !fl(s, re) {
+        // Complex integers: the elements' common integer type.
+        let common = int_common(s, le, re);
+        let ct = s.ast.types.complex(common);
+        let conv = |s: &mut Sema<'_, '_>, e: ExprId, t: QualType, complex: bool| {
+            let e = if s.ast.types.same_unqualified(t, common) {
+                e
+            } else {
+                let (ck, to) = if complex {
+                    (CastKind::IntegralComplexCast, ct)
+                } else {
+                    (CastKind::IntegralCast, common)
+                };
+                cast_to(s, ck, e, to, None)
+            };
+            if complex { e } else { cast_to(s, CastKind::IntegralRealToComplex, e, ct, None) }
+        };
+        let l = if ca { l } else { conv(s, l, le, lc.is_some()) };
+        let r = conv(s, r, re, rc.is_some());
+        return Ok((l, r, ct));
+    }
+    // An integer operand converts to the other side's element type and a
+    // complex integer one to its complex floating type (clang
+    // `handleIntegerToComplexFloatConversion`); with a real floating
+    // other side both become the complex of that type
+    // (`handleIntToFloatConversion`). The result keeps the complex
+    // floating operand's type as written.
+    let to_float = |s: &mut Sema<'_, '_>, e: ExprId, c: bool, f: QualType, ct: QualType| {
+        if c {
+            cast_to(s, CastKind::IntegralComplexToFloatingComplex, e, ct, None)
+        } else {
+            cast_to(s, CastKind::IntegralToFloating, e, f, None)
+        }
+    };
+    if !fl(s, re) {
+        let ct = if lc.is_some() { lt } else { s.ast.types.complex(le) };
+        let l = if lc.is_none() && !ca {
+            cast_to(s, CastKind::FloatingRealToComplex, l, ct, None)
+        } else {
+            l
+        };
+        return Ok((l, to_float(s, r, rc.is_some(), le, ct), ct));
+    }
+    if !fl(s, le) {
+        let ct = if rc.is_some() { rt } else { s.ast.types.complex(re) };
+        let r =
+            if rc.is_none() { cast_to(s, CastKind::FloatingRealToComplex, r, ct, None) } else { r };
+        let l = if ca { l } else { to_float(s, l, lc.is_some(), re, ct) };
+        return Ok((l, r, ct));
+    }
+    // Both floating: the more precise element type wins; the other side
+    // is promoted in precision only (clang `handleComplexFloatConversion`:
+    // the result is the longer operand's type if it is complex).
+    let order = match (s.ast.types.builtin(le), s.ast.types.builtin(re)) {
+        (Some(a), Some(b)) => float_order(s, a, b),
+        _ => FloatOrder::Unordered,
+    };
+    let promote = |s: &mut Sema<'_, '_>, e: ExprId, c: bool, f: QualType, ct: QualType| {
+        if c {
+            cast_to(s, CastKind::FloatingComplexCast, e, ct, None)
+        } else {
+            cast_to(s, CastKind::FloatingCast, e, f, None)
+        }
+    };
+    match order {
+        FloatOrder::Unordered => Err(ConvError::new(
+            DiagId::sema_arith_float_unordered,
+            vec![kind.select().into(), s.ty_arg(lt), s.ty_arg(rt)],
+        )),
+        FloatOrder::Less => {
+            let ct = if rc.is_some() { rt } else { s.ast.types.complex(re) };
+            let l = if ca { l } else { promote(s, l, lc.is_some(), re, ct) };
+            Ok((l, r, ct))
+        }
+        FloatOrder::Equal => Ok((l, r, if lc.is_some() { lt } else { s.ast.types.complex(le) })),
+        FloatOrder::Greater => {
+            let ct = if lc.is_some() { lt } else { s.ast.types.complex(le) };
+            let r = promote(s, r, rc.is_some(), le, ct);
+            Ok((l, r, ct))
+        }
+    }
 }

@@ -1,0 +1,106 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct P definition
+| |-FieldDecl a 'int'
+| `-FieldDecl referenced b 'int'
+|-CXXRecordDecl referenced struct D definition
+| |-FieldDecl referenced a 'int'
+| `-CXXDestructorDecl used ~D 'void () noexcept'
+|-CXXRecordDecl referenced struct Q definition
+| |-CXXConstructorDecl used Q 'void (int)'
+| | `-ParmVarDecl 'int'
+| `-FieldDecl referenced v 'int'
+|-CXXRecordDecl referenced struct E definition
+| |-CXXConstructorDecl used E 'void (int, int)'
+| | |-ParmVarDecl 'int'
+| | `-ParmVarDecl 'int'
+| |-CXXDestructorDecl used ~E 'void () noexcept'
+| `-FieldDecl referenced v 'int'
+|-FunctionDecl used take 'void (D)'
+| `-ParmVarDecl 'D' destroyed
+|-FunctionDecl f 'int ()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ExprWithCleanups 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-MemberExpr 'int' xvalue .b
+|           `-MaterializeTemporaryExpr 'P' xvalue
+|             `-CompoundLiteralExpr 'P'
+|               `-InitListExpr 'P'
+|                 |-IntegerLiteral 'int' 1
+|                 `-IntegerLiteral 'int' 2
+|-FunctionDecl g 'D ()'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl d 'D' cinit destroyed
+|   |   `-ExprWithCleanups 'D'
+|   |     `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+|   |       `-CompoundLiteralExpr 'D'
+|   |         `-InitListExpr 'D'
+|   |           `-IntegerLiteral 'int' 3
+|   |-ExprWithCleanups 'void'
+|   | `-CallExpr 'void'
+|   |   |-ImplicitCastExpr 'void (*)(D)' <FunctionToPointerDecay>
+|   |   | `-DeclRefExpr 'void (D)' lvalue Function 'take' 'void (D)'
+|   |   `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+|   |     `-CompoundLiteralExpr 'D'
+|   |       `-InitListExpr 'D'
+|   |         `-IntegerLiteral 'int' 4
+|   |-DeclStmt
+|   | `-VarDecl r 'const D &' cinit
+|   |   `-ExprWithCleanups 'const D' lvalue
+|   |     `-MaterializeTemporaryExpr 'const D' lvalue extended by Var 'r' 'const D &'
+|   |       `-ImplicitCastExpr 'const D' <NoOp>
+|   |         `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+|   |           `-CompoundLiteralExpr 'D'
+|   |             `-InitListExpr 'D'
+|   |               `-IntegerLiteral 'int' 5
+|   `-ReturnStmt
+|     `-ExprWithCleanups 'D'
+|       `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+|         `-CompoundLiteralExpr 'D'
+|           `-InitListExpr 'D'
+|             `-IntegerLiteral 'int' 6
+|-FunctionDecl h 'int ()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ExprWithCleanups 'int'
+|       `-BinaryOperator 'int' '+'
+|         |-BinaryOperator 'int' '+'
+|         | |-ImplicitCastExpr 'int' <LValueToRValue>
+|         | | `-MemberExpr 'int' xvalue .a
+|         | |   `-MaterializeTemporaryExpr 'D' xvalue
+|         | |     `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+|         | |       `-CompoundLiteralExpr 'D'
+|         | |         `-InitListExpr 'D'
+|         | |           `-IntegerLiteral 'int' 1
+|         | `-ImplicitCastExpr 'int' <LValueToRValue>
+|         |   `-MemberExpr 'int' xvalue .v
+|         |     `-MaterializeTemporaryExpr 'Q' xvalue
+|         |       `-CompoundLiteralExpr 'Q'
+|         |         `-CXXTemporaryObjectExpr 'Q' 'void (int)' list
+|         |           `-IntegerLiteral 'int' 7
+|         `-ImplicitCastExpr 'int' <LValueToRValue>
+|           `-MemberExpr 'int' xvalue .v
+|             `-MaterializeTemporaryExpr 'E' xvalue
+|               `-CXXBindTemporaryExpr 'E' (CXXTemporary)
+|                 `-CompoundLiteralExpr 'E'
+|                   `-CXXTemporaryObjectExpr 'E' 'void (int, int)' list
+|                     |-IntegerLiteral 'int' 1
+|                     `-IntegerLiteral 'int' 2
+|-FunctionDecl used constexpr k 'int ()' implicit-inline
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ExprWithCleanups 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-MemberExpr 'int' xvalue .b
+|           `-MaterializeTemporaryExpr 'P' xvalue
+|             `-CompoundLiteralExpr 'P'
+|               `-InitListExpr 'P'
+|                 |-IntegerLiteral 'int' 8
+|                 `-IntegerLiteral 'int' 9
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-CallExpr 'int'
+    | `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+    |   `-DeclRefExpr 'int ()' lvalue Function 'k' 'int ()'
+    `-IntegerLiteral 'int' 9

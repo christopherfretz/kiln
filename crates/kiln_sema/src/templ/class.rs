@@ -851,7 +851,18 @@ impl Sema<'_, '_> {
         if !deferred && !self.inst.member_defs.contains(&v) {
             if self.is_var_spec(v) && self.var_pattern_def(v).is_none() {
                 let used = self.unevaluated == 0;
-                self.inst.undefined_var_uses.entry(v).or_insert((loc, used)).1 |= used;
+                let poi = self.inst.undefined_var_uses.entry(v).or_insert((loc, used));
+                poi.1 |= used;
+                let poi = poi.0;
+                // clang `DoMarkVarDeclReferenced`: every odr-use of a
+                // specialization that cannot be constant queues it at its
+                // first reference (clang's FIXME: it cannot tell whether
+                // the definition was requested already), so a definition
+                // still missing at the end of the TU is reported once
+                // per use (-Wundefined-var-template, §4.5).
+                if used && !self.might_be_constant_var(v) && self.is_implicit_var_spec(v) {
+                    self.inst.pending.push_back(super::pending::PendingInst { decl: v, poi });
+                }
             }
             return;
         }
@@ -866,6 +877,12 @@ impl Sema<'_, '_> {
         } else {
             self.queue_instantiation(v, loc);
         }
+    }
+
+    /// Whether variable template specialization `v` is implicitly
+    /// instantiated (not explicitly specialized or instantiated).
+    fn is_implicit_var_spec(&self, v: DeclId) -> bool {
+        self.ast.spec_info(v).is_some_and(|(_, s)| s.kind == SpecKind::ImplicitInstantiation)
     }
 
     /// clang's `mightBeUsableInConstantExpressions`: `constexpr`, or a
@@ -1252,13 +1269,16 @@ impl Substituter<'_, '_, '_> {
                 } else {
                     sub.expr(init).map(Initializer::Expr)
                 };
-                match i {
-                    Ok(i) => sub.sema.act_on_field_init(field, i),
-                    Err(SubstFail) => {
-                        if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
-                            sub.sema.nsdmi_this.pop();
-                        }
+                if let Ok(i) = i {
+                    sub.sema.act_on_field_init(field, i);
+                } else {
+                    if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
+                        sub.sema.nsdmi_this.pop();
                     }
+                    // clang `InstantiateInClassInitializer`: the field
+                    // is invalid, so a constructor using the
+                    // initializer is quiet ([class.base.init]/9.1).
+                    sub.sema.ast.decls.set_flags(field, DeclFlags::INVALID);
                 }
             }
             sub.sema.act_on_finish_delayed_class(spec);

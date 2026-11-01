@@ -186,9 +186,20 @@ fn dependencies() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
-/// `-v` prints clang's search list for each `resource/include-paths` file
-/// (generated from clang 19 on the reference container). Skipped where the
-/// LLVM 19 installation the goldens describe is missing.
+/// The search block of a `-v` run (`ignoring ...` lines, both
+/// `#include ... search starts here:` headers and the directories): from the
+/// line after `<name> -cc1 version` through `End of search list.`.
+fn search_block(stderr: &str, cc1: &str) -> String {
+    let start = stderr.find(cc1).unwrap_or_else(|| panic!("no `{cc1}` line in\n{stderr}"));
+    let rest = stderr[start..].split_once('\n').unwrap().1;
+    rest.split("End of search list.\n").next().unwrap().to_owned() + "End of search list.\n"
+}
+
+/// `-v` prints clang's search list for each (target, stdlib) pair that has a
+/// `resource/include-paths` file. The lists depend on the host's GCC
+/// installations, so kiln is compared with clang++-19 run live on this host;
+/// the files themselves are the reference container's (WP-228). Skipped
+/// where clang++-19 or its resource directory is missing.
 #[test]
 fn verbose_search_lists_match_clang() {
     let clang_res = "/usr/lib/llvm-19/lib/clang/19";
@@ -204,32 +215,19 @@ fn verbose_search_lists_match_clang() {
         let cmd = text.lines().nth(1).unwrap();
         let target = cmd.split_whitespace().find_map(|w| w.strip_prefix("--target=")).unwrap();
         let stdlib = cmd.split_whitespace().find(|w| w.starts_with("-stdlib=")).unwrap();
-        let want: String = text
-            .lines()
-            .filter_map(|l| {
-                if let Some(m) = l.strip_prefix("# ignoring") {
-                    Some(format!("ignoring{m}\n"))
-                } else if l.starts_with("# ") {
-                    None
-                } else {
-                    Some(format!("{l}\n"))
-                }
-            })
-            .collect();
-        // Driver -> cc1 lines end where the search block ends.
-        let want = want.split("End of search list.\n").next().unwrap().to_owned()
-            + "End of search list.\n";
         let tflag = format!("--target={target}");
-        let o = kiln(
-            &[&tflag, stdlib, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"],
-            "",
-        );
+        let args =
+            [&tflag, stdlib, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"];
+        let Ok(clang) = std::process::Command::new("clang++-19").args(args).output() else {
+            eprintln!("skipped: no clang++-19");
+            return;
+        };
+        assert!(clang.status.success(), "clang++-19 {args:?} failed");
+        let want = search_block(&String::from_utf8_lossy(&clang.stderr), "clang -cc1 version");
+        let o = kiln(&args, "");
         assert_eq!(o.code, 0, "{}", o.stderr);
-        let start = o.stderr.find("kiln -cc1 version").expect("cc1 line");
-        let got = o.stderr[start..].split_once('\n').unwrap().1;
-        let got =
-            got.split("End of search list.\n").next().unwrap().to_owned() + "End of search list.\n";
-        assert_eq!(got, want, "{}", path.display());
+        let got = search_block(&o.stderr, "kiln -cc1 version");
+        assert_eq!(got, want, "{target} {stdlib} ({})", path.display());
         n += 1;
     }
     assert!(n >= 4);
@@ -363,4 +361,39 @@ fn system_header_warnings_like_clang() {
     assert_eq!(o.code, 0);
     assert_eq!(o.stderr, SYSTEM_HEADER_ALL_GOLDEN.replace('@', dir));
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `-m[no-]outline-atomics` on x86-64: clang 19's `-Woption-ignored` text,
+/// naming the last spelling, in every mode; `-Werror` makes it an error
+/// (no job runs), `-w` silences it, and `AArch64` takes the flag (WP-228).
+#[test]
+fn outline_atomics_ignored_on_x86_64() {
+    let x86 = "--target=x86_64-unknown-linux-gnu";
+    let warn = |flag: &str| {
+        format!(
+            "kiln: warning: 'x86_64' does not support '{flag}'; flag ignored [-Woption-ignored]\n"
+        )
+    };
+    let o = kiln(&[x86, "-moutline-atomics", "-fsyntax-only", "-x", "c++", "-"], "int x;\n");
+    assert_eq!((o.code, o.stderr.as_str()), (0, warn("-moutline-atomics").as_str()));
+    let o = kiln(
+        &[x86, "-moutline-atomics", "-mno-outline-atomics", "-E", "-x", "c++", "-"],
+        "int x;\n",
+    );
+    assert_eq!((o.code, o.stderr.as_str()), (0, warn("-mno-outline-atomics").as_str()));
+    let o = kiln(&[x86, "-mno-outline-atomics", "-Werror", "-E", "-x", "c++", "-"], "int x;\n");
+    assert_eq!(o.code, 1);
+    assert_eq!(
+        o.stderr,
+        "kiln: error: 'x86_64' does not support '-mno-outline-atomics'; flag ignored \
+         [-Werror,-Woption-ignored]\n"
+    );
+    assert_eq!(o.stdout, "");
+    for quiet in ["-w", "-Wno-option-ignored"] {
+        let o = kiln(&[x86, "-moutline-atomics", quiet, "-fsyntax-only", "-x", "c++", "-"], "");
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{quiet}");
+    }
+    let a64 = "--target=aarch64-unknown-linux-gnu";
+    let o = kiln(&[a64, "-mno-outline-atomics", "-fsyntax-only", "-x", "c++", "-"], "int x;\n");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
 }

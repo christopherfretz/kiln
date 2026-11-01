@@ -2113,7 +2113,8 @@ impl ExprArena {
     /// The single operand of a unary operator, cast, `ParenExpr`,
     /// `ConstantExpr`, `MemberExpr` (its base), `MaterializeTemporaryExpr`,
     /// `CXXBindTemporaryExpr`, `CXXStdInitializerListExpr` (its backing
-    /// array), `ExprWithCleanups` or `PackExpansionExpr` (its pattern).
+    /// array), `ExprWithCleanups`, `PackExpansionExpr` (its pattern) or
+    /// `ImaginaryLiteral` (its real literal).
     pub fn operand(&self, e: ExprId) -> ExprId {
         let n = self.get(e);
         assert!(
@@ -2130,6 +2131,7 @@ impl ExprArena {
                         | ExprKind::ExprWithCleanups
                         | ExprKind::ConvertVectorExpr
                         | ExprKind::PackExpansionExpr
+                        | ExprKind::ImaginaryLiteral
                 ),
             "{:?} has no single operand",
             n.kind
@@ -2333,6 +2335,7 @@ impl ExprArena {
             | ExprKind::CXXStdInitializerListExpr
             | ExprKind::ExprWithCleanups
             | ExprKind::ConvertVectorExpr
+            | ExprKind::ImaginaryLiteral
             | ExprKind::PredefinedExpr => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {

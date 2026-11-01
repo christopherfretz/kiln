@@ -4,7 +4,7 @@
 //! Each case is a small C++ program. It is parsed with `parse_tu` for
 //! `aarch64-unknown-linux-gnu`, lowered, printed and run through
 //! `opt-19 -S -passes=verify`. `Exact` cases are also compiled by
-//! `clang++-19 -S -emit-llvm -O0 -std=c++26` and, after both texts are
+//! `clang++-19 -S -emit-llvm -O0 -std=c++26 -moutline-atomics` and, after both texts are
 //! normalized (see [`normalize`]), must be identical. `VerifyOnly` cases
 //! have a documented deviation (spec/codegen.md "Deviations"). Without
 //! `opt-19` / `clang++-19` the corresponding checks are skipped.
@@ -94,11 +94,27 @@ fn opt(ir: &str) -> Option<Result<String, String>> {
     pipe("opt-19", &["-S", "-passes=verify", "-o", "-"], ir)
 }
 
+/// `-moutline-atomics`: clang 19 enables the feature by default only when
+/// it finds a GCC installation for the target, which an x86-64 host
+/// cross-targeting aarch64 lacks (see `ir_vs_clang`'s `pinned_flags`); kiln's
+/// [`CodegenOptions`] default is on.
 fn clang_ir(src: &str) -> Option<Result<String, String>> {
     let target = format!("--target={TRIPLE}");
     pipe(
         "clang++-19",
-        &["-x", "c++", "-", "-S", "-emit-llvm", "-O0", "-std=c++26", &target, "-o", "-"],
+        &[
+            "-x",
+            "c++",
+            "-",
+            "-S",
+            "-emit-llvm",
+            "-O0",
+            "-std=c++26",
+            &target,
+            "-moutline-atomics",
+            "-o",
+            "-",
+        ],
         src,
     )
 }

@@ -74,7 +74,7 @@ starting with `-` are inputs.
 | `-fdump-vtable-layouts` | with `-fsyntax-only`: the vtable groups (`spec/abi.md` §8.5) to the output |
 | `-c`, `-S`, `-emit-llvm` | code generation (see "Code generation") |
 | `-###` | with a codegen action: print the steps instead of running them |
-| `-moutline-atomics`, `-mno-outline-atomics` | AArch64: `+outline-atomics` (the default, as clang 19 on an AArch64 Linux host with GCC >= 9.3.1) or `-outline-atomics` in every function's `target-features` (spec/codegen.md); the last wins. Ignored on x86-64, where clang warns `-Woption-ignored` and kiln does not yet |
+| `-moutline-atomics`, `-mno-outline-atomics` | AArch64: `+outline-atomics` (the default, as clang 19 on an AArch64 Linux host with GCC >= 9.3.1) or `-outline-atomics` in every function's `target-features` (spec/codegen.md); the last wins. Ignored on x86-64 with clang's warning `'x86_64' does not support '<last spelling>'; flag ignored [-Woption-ignored]`, once per source input (clang warns once per compile job) and in every mode; `-Werror` makes it an error and no job runs (WP-228) |
 | `-g`, `-g0`..`-g3`, `-ggdb`, `-ggdb0`..`-ggdb3` | accepted and ignored (no debug info yet) |
 | `-l<lib>`, `-L<dir>`, `-Wl,<args>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD`, `-dI` | parsed; "not implemented yet" (WP-017) |
@@ -337,6 +337,7 @@ Driver diagnostics, in clang's wording:
 - `<backend|linker> command failed due to signal (use -v to see invocation)`
 - warning `<x>: 'linker' input unused [-Wunused-command-line-argument]`
 - warning `argument unused during compilation: '<o>' [-Wunused-command-line-argument]`
+- warning `'<arch>' does not support '<flag>'; flag ignored [-Woption-ignored]`
 
 ## `-v`, `--version`, `--help`
 

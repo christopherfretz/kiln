@@ -216,3 +216,31 @@ fn lex_icon_diag_ranges() {
     let n = classify_number("12xyz", Std::Cxx26);
     assert_eq!(n.diags[0].range, 2..5);
 }
+
+/// GNU imaginary constants (clang `NumericLiteralParser`): one `i`/`j`
+/// among the standard suffixes; a valid ud-suffix such as `if` or `il`
+/// is kept beside the flag so sema can fall back from a failed literal
+/// operator lookup to the imaginary constant.
+#[test]
+fn gnu_imaginary_suffix() {
+    let im = |sp: &str| {
+        let n = classify_number(sp, Std::Cxx26);
+        assert!(n.diags.is_empty(), "{sp}: {:?}", n.diags);
+        match n.class {
+            NumberClass::Integer(i) => (i.imaginary, i.ud_suffix.map(str::to_owned)),
+            NumberClass::Floating(f) => (f.imaginary, f.ud_suffix.map(str::to_owned)),
+            NumberClass::Invalid => panic!("{sp}"),
+        }
+    };
+    assert_eq!(im("1i"), (true, Some("i".into())));
+    assert_eq!(im("1il"), (true, Some("il".into())));
+    assert_eq!(im("1.5if"), (true, Some("if".into())));
+    assert_eq!(im("7ui"), (true, None));
+    assert_eq!(im("2.0j"), (true, None));
+    assert_eq!(im("1.5fi"), (true, None));
+    assert_eq!(im("3LLJ"), (true, None));
+    assert_eq!(im("1"), (false, None));
+    assert_eq!(im("1_i"), (false, Some("_i".into())));
+    // A second `i` is not a suffix.
+    assert_eq!(diags("1ii"), [D::InvalidSuffix { floating: false }]);
+}

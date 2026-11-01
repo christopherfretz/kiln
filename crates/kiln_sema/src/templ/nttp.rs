@@ -193,7 +193,7 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) || self.has_errors_in(c) {
             return Err(());
         }
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         match self.eval_const(c, EvalContext::converted(at)) {
             Ok(v) => {
                 self.builder().template_param_object(cty, v);
@@ -265,7 +265,7 @@ impl Sema<'_, '_> {
         let pt = self.ast.types.pointer_to(rt);
         let loc = self.ast.exprs.get(c).loc();
         let a = self.builder().unary(UnaryOp::AddrOf, c, pt, loc, ExprFlags::NONE);
-        let a = self.act_on_full_expr(a);
+        let a = self.act_on_constant_full_expr(a);
         let r = self.eval_const(a, EvalContext::converted(at));
         // The Oven reports the address of an automatic variable as a
         // pointer: here it is the reference's referent.
