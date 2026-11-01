@@ -409,6 +409,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         Self::with_abi(ast, diags, abi, types)
     }
 
+    // One line per `Sema` field; the struct literal grows with every WP and
+    // is not control flow (follow-up: derive `Default` for the state groups).
+    #[allow(clippy::too_many_lines)]
     fn with_abi(
         mut ast: Ast,
         diags: &'a DiagEngine<'sm>,
