@@ -271,7 +271,12 @@ impl Cg<'_> {
             }
         }
         if !from_vbase && self.inlines_inheriting_ctor(ctor) {
-            return self.emit_inlined_inheriting_ctor(ctor, dest, Structor::Base, vals, ptys);
+            let vtt = if self.structor_has_vbases(first) {
+                Some(self.vtt_arg(rd, kind == ConstructionKind::VirtualBase, false)?)
+            } else {
+                None
+            };
+            return self.emit_inlined_inheriting_ctor(ctor, dest, Structor::Base, vals, ptys, vtt);
         }
         let fty = ast.decls.get(first).ty().expect("constructor type");
         let mut sig = self.call_sig_this(fty, false, &ptys, Some(rd));
@@ -307,7 +312,10 @@ impl Cg<'_> {
     /// clang `EmitInlinedInheritingCXXConstructorCall`: variant `v` of
     /// inheriting constructor `ctor` emitted in place on the object at
     /// `dest`, its `CXXInheritedCtorInitExpr`s forwarding the call's
-    /// evaluated arguments `vals` (of types `tys`).
+    /// evaluated arguments `vals` (of types `tys`). `vtt` is the VTT
+    /// argument of a base-object variant of a class with virtual bases,
+    /// computed by the caller (`addImplicitConstructorArgs`); it becomes
+    /// the inlined body's VTT parameter.
     pub(crate) fn emit_inlined_inheriting_ctor(
         &mut self,
         ctor: DeclId,
@@ -315,6 +323,7 @@ impl Cg<'_> {
         v: Structor,
         vals: Vec<CallArg>,
         tys: Vec<QualType>,
+        vtt: Option<V>,
     ) -> R<()> {
         let ast = self.ast;
         let first = ast.first(ctor);
@@ -325,12 +334,11 @@ impl Cg<'_> {
         else {
             return err(Some(ast.decls.get(ctor).loc()), "inheriting constructor is not defined");
         };
-        if v == Structor::Base && self.structor_has_vbases(first) {
-            return err(
-                Some(ast.decls.get(ctor).loc()),
-                "inlined C-variadic inheriting constructor of a base with virtual bases is not supported yet",
-            );
-        }
+        debug_assert_eq!(
+            vtt.is_some(),
+            v == Structor::Base && self.structor_has_vbases(first),
+            "VTT argument of an inlined inheriting constructor"
+        );
         let saved = (
             self.f.decl,
             self.f.this,
@@ -340,11 +348,17 @@ impl Cg<'_> {
             self.f.vtt.take(),
             self.f.inh_args.take(),
         );
-        // The simplified prolog: `this` is spilled and reloaded as by a
-        // function prolog (`EmitParmDecl` + `EmitInstanceFunctionProlog`).
+        // The simplified prolog: `this` and the VTT are spilled and
+        // reloaded as by a function prolog (`EmitParmDecl` +
+        // `EmitInstanceFunctionProlog`).
         let a = self.f.fir.alloca(LTy::PTR, 8);
+        let vtt_addr = vtt.map(|_| self.f.fir.alloca(LTy::PTR, 8));
         self.store(dest.v, a, 8, false);
+        if let (Some(t), Some(va)) = (vtt, vtt_addr) {
+            self.store(t, va, 8, false);
+        }
         let this = self.load(LTy::PTR, a, 8, false);
+        self.f.vtt = vtt_addr.map(|va| self.load(LTy::PTR, va, 8, false));
         self.f.decl = Some(def);
         self.f.this = Some(this);
         self.f.this_class = Some(rd);
@@ -1397,7 +1411,14 @@ impl Cg<'_> {
         self.f.dest_destructed = saved;
         let vals = vals?;
         if self.inlines_inheriting_ctor(ctor) {
-            return self.emit_inlined_inheriting_ctor(ctor, dest, v, vals, arg_tys);
+            let vtt = if needs_vtt {
+                let virt = info.kind == ConstructionKind::VirtualBase;
+                let delegating = info.kind == ConstructionKind::Delegating;
+                Some(self.vtt_arg(rd, virt, delegating)?)
+            } else {
+                None
+            };
+            return self.emit_inlined_inheriting_ctor(ctor, dest, v, vals, arg_tys, vtt);
         }
         if needs_vtt {
             let virt = info.kind == ConstructionKind::VirtualBase;
