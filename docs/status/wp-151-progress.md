@@ -4,7 +4,12 @@ Branch `wp/151-ambiguous-member-simd`, worktree `kiln/.worktrees/wp-151`,
 base c4fb6bd (merged with main 0b5156c before CI). Also carries the WP-150
 simd_utils.h:101 item.
 
-libc++ M3 gate before: 312 pass / 273 fail (642 files).
+libc++ M3 gate: before 312 pass / 273 fail; after 314 pass / 271 fail
+(642 files, 57 unsupported). The `call to 'operator new' is ambiguous`
+cluster (14 first / 29 any) and the simd_utils mask static_assert (44 any)
+are gone. simd_utils.h now fails one layer deeper, with 31 first errors /
+44 any: a GNU attribute between a lambda's parameter list and `noexcept`
+(:114, :129), and `__builtin_convertvector` (:121).
 
 ## Items
 1. [x] "call to member function '…' is ambiguous" (`::operator new(n, al,
