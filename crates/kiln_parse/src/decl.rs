@@ -824,6 +824,14 @@ impl Parser<'_, '_> {
         let start = self.pos();
         let loc = self.name_begin();
         if self.at_template_type_name(ctx) {
+            // `X<int>` with `X` naming class templates of two namespaces
+            // (an inline namespace's and its parent's): ambiguous
+            // ([basic.lookup.general]/1), recovering with the first.
+            if let Some(name) = self.ident()
+                && self.peek_is(1, Punct::Less)
+            {
+                self.s.diagnose_ambiguous_name(name, None, loc);
+            }
             let ty = self.parse_template_type_name(ctx);
             if ty.is_none() {
                 ds.invalid = true;
@@ -1026,6 +1034,7 @@ impl Parser<'_, '_> {
         }
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
+        let qual_loc = self.tok().span.lo;
         let qualifier = self.parse_tag_qualifier(ds);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
@@ -1070,6 +1079,9 @@ impl Parser<'_, '_> {
             ds.invalid = true;
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
+        }
+        if use_ == TagUse::Declaration && qualifier.is_some() {
+            self.s.check_standalone_tag_qualifier(keyword, qual_loc);
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs);

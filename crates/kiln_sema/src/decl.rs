@@ -4285,6 +4285,7 @@ impl Sema<'_, '_> {
         use_: TagUse,
         templ: bool,
         opaque_enum: bool,
+        nloc: Loc,
     ) -> Vec<DeclId> {
         match (qualifier, use_) {
             (None, _) if templ => self
@@ -4303,7 +4304,17 @@ impl Sema<'_, '_> {
                 .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
                 .collect(),
             (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
-            (None, TagUse::Reference) if !opaque_enum => self.lookup_name(n, LookupKind::Tag).decls,
+            // `struct X *p;` naming tags of two namespaces, e.g. an inline
+            // namespace's and its parent's ([namespace.def.general]/7,
+            // [basic.lookup.general]/1): clang's `err_ambiguous_reference`,
+            // recovering with the last tag found.
+            (None, TagUse::Reference) if !opaque_enum => {
+                let found = self.lookup_name(n, LookupKind::Tag);
+                if self.is_ambiguous_lookup(&found) {
+                    self.diagnose_ambiguous_reference(DeclName::ident(n), &found.decls, true, nloc);
+                }
+                found.decls
+            }
             (None, _) => self
                 .lookup_current_scope(n)
                 .into_iter()
@@ -4361,6 +4372,7 @@ impl Sema<'_, '_> {
                 let t = self.this_class_type(q);
                 format!("'{}'", self.ty_str(t))
             }
+            DeclKind::Namespace | DeclKind::TranslationUnit => self.qualifier_desc(q),
             _ => format!("'{}'", self.decl_name(q)),
         };
         let msg = self
@@ -4461,6 +4473,23 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// `struct N::X;` outside an explicit specialization or instantiation
+    /// ([dcl.type.elab]/1, [dcl.enum]/1: a standalone class or opaque enum
+    /// declaration cannot be qualified); clang's
+    /// `err_standalone_class_nested_name_specifier` at the qualifier.
+    pub fn check_standalone_tag_qualifier(&mut self, keyword: TagKeyword, qual_loc: Loc) {
+        if self.at_explicit_head() {
+            return;
+        }
+        let kind = match keyword {
+            TagKeyword::Class => 0u8,
+            TagKeyword::Union => 2,
+            TagKeyword::Enum => 3,
+            _ => 1,
+        };
+        self.emit(self.diag(DiagId::sema_standalone_tag_qualifier, qual_loc).arg(kind));
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -4489,7 +4518,7 @@ impl Sema<'_, '_> {
                 self.check_template_param_shadow(n, nloc);
             }
             let opaque_enum = is_enum && fixed.is_some();
-            let found = self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum);
+            let found = self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc);
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);

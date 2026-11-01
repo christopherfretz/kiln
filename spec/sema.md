@@ -719,7 +719,15 @@ and returns the scope it names:
 ### 4.4 Tags, enumerations, bit-fields and anonymous records
 - **`act_on_tag(kind, name, TagUse, …)`** implements [dcl.type.elab]
   and [class.name]:
-  - A reference finds or injects the tag.
+  - A reference finds or injects the tag. An unqualified reference
+    whose lookup finds tags of two namespaces (an inline namespace's
+    and its parent's, [namespace.def.general]/7) is "reference to 'X'
+    is ambiguous" with candidate notes, recovering with the last tag;
+    the parser reports a class template-id `X<int>` the same way.
+  - `struct N::X;` (or an opaque `enum N::E : int;`) outside an
+    explicit specialization or instantiation is "forward declaration
+    of struct cannot have a nested name specifier" at the qualifier
+    ([dcl.type.elab]/1, [dcl.enum]/1), reported before the lookup.
   - A declaration redeclares the tag in the current scope.
   - A definition checks for redefinition and kind mismatch.
 - **Enumerations** ([dcl.enum]):
@@ -859,6 +867,19 @@ and returns the scope it names:
     The storage class itself stays `None`, so the AST dump shows no
     `extern`, as in clang. `extern "C" int x; extern "C" int x = 1;`
     is a declaration followed by its definition.
+  - [dcl.link]/6-7 (`extern_c.rs`): `Sema::extern_c` maps each name
+    declared as a C-linkage function or variable (non-template,
+    non-local) to its latest declaration. An unqualified function or
+    variable declared with C language linkage that finds no
+    redeclaration by ordinary lookup links to that entity's redecl
+    group, so two `extern "C" void f();` in different namespaces are
+    one entity (lookup through both using-directives is then not
+    ambiguous). A function whose parameters differ is "conflicting
+    types for 'f'" (the note names the first declaration; a
+    variable's names the latest, as in clang). A global-scope variable
+    and a C-linkage entity of the same name in a namespace conflict
+    either way (`err_extern_c_global_conflict` and its note); a
+    global function does not.
 - **Redefinition through an initializer** (clang
   `AddInitializerToDecl`): a namespace-scope variable that was a
   declaration before its initializer (`extern`, or a single-line
