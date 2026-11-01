@@ -105,6 +105,18 @@ on any FAIL, XPASS, ERROR or KILLED in either run:
 merges use the full form. The contract is spec/harness.md "CI". An oracle
 that hangs or crashes makes the test an ERROR, never a kiln FAIL.
 
+A test that hits a known oracle defect carries `skip(clang): <the defect>`,
+so the self-check stays green and kiln keeps the coverage; a `run` test also
+needs `oracle: none`, since its oracle compile is not skipped in kiln mode.
+A timeout kills the compile's whole process group (the clang driver's `cc1`
+included). The defects found so far, each with the test that records it:
+
+- clang 19.1.7 never terminates on a use of an explicitly specialized member
+  class template (`template<> template<class U> struct X<int>::M`) whose
+  specialization has a default member initializer, and crashes when that
+  initializer is dependent. kiln is not changed to match.
+  `temp.expl.spec/member-class-template-spec-nsdmi.cpp`.
+
 `cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
 tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
 with kiln. It reimplements the subset of lit that the gates need: suffix
