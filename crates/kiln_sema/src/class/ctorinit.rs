@@ -400,6 +400,17 @@ impl Sema<'_, '_> {
                     self.unsupported("value-initialization of a reference member", info.loc);
                     return self.recover(ty, &[], info.loc);
                 }
+                if self.ast.types.is_array(ty) {
+                    // `arr()` for an array of classes: each element is
+                    // value-initialized by its default constructor
+                    // ([dcl.init.general]/9.2), a `CXXConstructExpr` of
+                    // the array type as clang's.
+                    match self.new_class_default(ty, ty, true, info.loc) {
+                        Some(Ok(e)) => return e,
+                        Some(Err(())) => return self.recover(ty, &[], info.loc),
+                        None => {}
+                    }
+                }
                 self.paren_value_init(ty, info.loc)
             }
             init => {

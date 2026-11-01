@@ -5,7 +5,7 @@
 //! destructors).
 
 use kiln_abi::mangle;
-use kiln_ast::decl::{DeclKind, NamespaceData, TagKind};
+use kiln_ast::decl::{DeclKind, DefinitionBits, NamespaceData, TagKind};
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind, NewExtra, UnaryOp};
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::TypeView;
@@ -892,21 +892,28 @@ impl Cg<'_> {
             let ctor = ast.exprs.constructor(init);
             let zeroing = ast.exprs.construct_info(init).zeroing;
             let trivial = ast.decls.function(ctor).is_some_and(|f| f.spec.is_trivial());
-            if trivial && !zeroing {
+            let rd = ast.decls.get(ctor).ctx();
+            let empty = rd.is_some_and(|r| self.class_bits(r).contains(DefinitionBits::EMPTY));
+            if trivial && (!zeroing || empty) {
                 return Ok(());
             }
-            if zeroing {
-                return err(
-                    loc,
-                    "zero-initializing array new with constructors is not supported yet",
-                );
+            if trivial {
+                // TryMemsetInitialization.
+                let mut rem = size;
+                if n_init > 0 {
+                    let s = self.i64c(i128::from(esize.wrapping_mul(n_init)));
+                    rem = self.bin(BinOp::Sub, Flags::NONE, size, s);
+                }
+                self.memset_v(Addr { v: cur, ty: base_ty, align: cur_align }, 0, rem, false);
+                return Ok(());
             }
             let mut rem = num;
             if n_init > 0 {
                 let k = self.i64c(i128::from(n_init));
                 rem = self.bin(BinOp::Sub, Flags::NONE, num, k);
             }
-            return self.construct_array_n(init, cur, base_ty, min_align(cur_align, esize), rem);
+            let ea = min_align(cur_align, esize);
+            return self.construct_array_n(init, cur, base_ty, ea, rem, zeroing);
         }
         // TryMemsetInitialization.
         if self.memset_init(init) {
@@ -1196,7 +1203,7 @@ impl Cg<'_> {
                 ast.definition(r).is_none_or(|d| {
                     !ast.decls
                         .record(d)
-                        .is_some_and(|x| x.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE))
+                        .is_some_and(|x| x.defn.contains(DefinitionBits::COMPLETE))
                 })
             });
         if let Some(&q) = params.get(i)

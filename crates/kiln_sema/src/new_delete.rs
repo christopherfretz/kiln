@@ -843,19 +843,22 @@ impl Sema<'_, '_> {
     }
 
     /// The default- or value-initialization of the class elements of a
-    /// new-expression by their default constructor ([expr.new]/23,
-    /// [dcl.init.general]/7, /9): a `CXXConstructExpr` of type `ty` (the
-    /// element, or the array of them). `None` when the element type is
+    /// new-expression (or of a value-initialized array member) by their
+    /// default constructor ([expr.new]/23, [dcl.init.general]/7, /9): a
+    /// `CXXConstructExpr` of type `ty` (the element, or the array of
+    /// them; `elem` may itself be an array). `None` when the element type is
     /// not a class, or a default-initialization needs no constructor call
     /// (a trivial default constructor). `Some(Err)` after an error.
-    fn new_class_default(
+    pub(crate) fn new_class_default(
         &mut self,
         elem: QualType,
         ty: QualType,
         value_init: bool,
         at: Loc,
     ) -> Option<Result<ExprId, ()>> {
-        let rec = self.ast.types.as_record(elem)?;
+        // `new K[n][3]`: the elements of the inner arrays are constructed
+        // too (clang's `CXXConstructExpr` of type `K[n][3]`).
+        let rec = self.ast.types.as_record(self.base_element(elem))?;
         self.instantiate_for_init(rec, at);
         let class = self.ast.definition(rec)?;
         let class = conv::bases::complete_class(self, class)?;

@@ -2598,12 +2598,23 @@ impl Cg<'_> {
         inits.iter().map(|&i| self.non_zero_bytes(i)).sum()
     }
 
+    /// `CheckAggExprForMemSetUse`: objects (or arrays of objects) of a
+    /// class with a user-declared constructor are never pre-zeroed.
+    fn user_ctor_elements(&self, mut q: QualType) -> bool {
+        while let Some(e) = self.array_elem(q) {
+            q = e;
+        }
+        self.ast.types.as_record(q).is_some_and(|rd| {
+            self.class_bits(rd).contains(kiln_ast::decl::DefinitionBits::USER_DECLARED_CTOR)
+        })
+    }
+
     /// clang `EmitAggExpr` (with `CheckAggExprForMemSetUse`).
     pub(crate) fn emit_agg(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         let mut zeroed = zeroed;
-        if !zeroed && !self.is_volatile(q) {
+        if !zeroed && !self.is_volatile(q) && !self.user_ctor_elements(q) {
             let size = self.size_align(q).0;
             if size > 16 && self.non_zero_bytes(e) * 4 <= size {
                 self.memset(dest, 0, size, false);

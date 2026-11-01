@@ -1344,13 +1344,15 @@ impl Cg<'_> {
         let elem_size = self.alloc_size(elem);
         let elem_align = min_align(dest.align, elem_size);
         let nn = self.i64c(i128::from(n));
-        self.construct_array_n(e, begin, elem, elem_align, nn)
+        self.construct_array_n(e, begin, elem, elem_align, nn, false)
     }
 
     /// The element loop of clang `EmitCXXAggrConstructorCall`: `num`
     /// objects of type `elem` from `begin`, each constructed by `e` in
     /// its own cleanup scope; a non-constant count is checked for zero
-    /// first (`isempty`).
+    /// first (`isempty`). With `zero_each` every element is
+    /// zero-initialized before its constructor runs (an array new's
+    /// value-initialization, clang's `zeroInitialize`).
     pub(crate) fn construct_array_n(
         &mut self,
         e: ExprId,
@@ -1358,6 +1360,7 @@ impl Cg<'_> {
         elem: LTy,
         elem_align: u64,
         num: V,
+        zero_each: bool,
     ) -> R<()> {
         let ast = self.ast;
         let mut out = None;
@@ -1383,7 +1386,13 @@ impl Cg<'_> {
             let c = Cleanup::PartialArray { begin, end: phi, elem, record: ctor_class };
             self.push_full_expr_cleanup(c, false, true);
         }
-        let r = self.construct_one(e, Addr { v: phi, ty: elem, align: elem_align }, false);
+        let at = Addr { v: phi, ty: elem, align: elem_align };
+        if zero_each && !self.class_bits(ctor_class).contains(DefinitionBits::EMPTY) {
+            // clang `EmitNullInitialization` of the element.
+            let size = self.alloc_size(elem);
+            self.memset(at, 0, size, false);
+        }
+        let r = self.construct_one(e, at, false);
         self.end_scope(sc);
         r?;
         let one = self.i64c(1);
