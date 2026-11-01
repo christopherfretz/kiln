@@ -1812,7 +1812,7 @@ impl<'a> Cg<'a> {
 /// Whether `ty` (or its array element type) is a class with a `mutable`
 /// member, directly or in a subobject: a `const` object of such a type
 /// is not emitted `constant` (clang `isTypeConstant`, `hasMutableFields`).
-fn has_mutable(ast: &Ast, ty: QualType) -> bool {
+pub(crate) fn has_mutable(ast: &Ast, ty: QualType) -> bool {
     let mut t = ast.types.canonical(ty);
     while let Some(e) = ast.types.element(t) {
         t = ast.types.canonical(e);

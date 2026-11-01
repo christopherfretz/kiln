@@ -84,7 +84,10 @@ the evaluator's flattened type table.
   current evaluation; the *static* space holds globals and thawed constants
   and persists for the TU. Each space keeps the bytes, a per-byte
   initialized bitmap and a per-8-byte-granule "holds a pointer" bit; unions
-  keep their active member in a side map keyed by (allocation, offset).
+  keep their active member in a side map keyed by (allocation, offset,
+  union type) (`mem::UKey`), so unions nested at one offset (`union {
+  char c; union { int x; float y; } q; }`) each have their own entry
+  (WP-224); two members of one union type at one offset share it.
 - **Lifetime**: leaving a scope releases its objects (`release(mark)`); a
   released slot is reused first-in first-out with its generation bumped, so
   a dangling pointer is detected (generation mismatch) and still names its
@@ -769,7 +772,15 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   in `STD_ALLOC` storage is preceded by `EndLife` aux 4, which only checks
   that the object is within its lifetime ("member call on ..."). Outside
   `STD_ALLOC` storage `EndLife` checks only the storage (null, deleted,
-  bounds) and does not track the lifetime (below).
+  bounds) and does not track the lifetime (below). In an allocation with
+  `HAS_UNION`, aux 4 also checks the active members on the path to the
+  object (`union_path` with `ak::MEMBER_CALL`: "member call on member 'x'
+  of union with active member 'c' ...", clang's `AK_MemberCall`, at the
+  member name or the operator); only a union member that reaches the
+  object is reported, not one that merely contains its offset, since an
+  empty base is not laid out and may share an offset with a union (libc++'s
+  `__compressed_pair`) (WP-224,
+  `tests/conformance/class.union/constexpr-member-call-inactive.cpp`).
 - *Deallocation.* Inside `deallocate`, `operator delete(p, ...)` lowers to
   `Delete` aux 8 (`STD`): `p` must be the start of a live heap allocation
   made by `allocate` ([allocator.members]/9). The checks and notes are
@@ -798,6 +809,20 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   that array (`Types::field_at` skips zero-size members, WP-201, "Classes")
   (`tests/conformance/class.union/constexpr-trivial-assign.cpp`,
   `tests/conformance/expr.add/constexpr-zero-size-member.cpp`).
+- *Trivial copies.* A trivial copy/move constructor runs inline as
+  `Copy [p, src, T]` aux 1, and a trivial copy/move assignment operator,
+  called by either syntax, as `Copy [this, src, T]` (clang's
+  `handleTrivialCopy`; no frame). For a class (not a union, whose object
+  representation is copied) the instruction carries aux 2: the source is
+  read whole, so every subobject of its value must be initialized
+  (`first_uninit`, the walk freezing does: bases walked into, arrays by
+  their member, unnamed and zero-width bit-fields, padding and inactive
+  union members not read). A failure is `Fault::Uninit`: "subobject 'b' is
+  not initialized" (or "subobject of type 'T' ..." unnamed) at the source
+  argument, then the trivial call's frame note clang has ("in call to
+  'S(s)'" at the construct expression, "in call to 't.operator=(s)'" at
+  the call), the call stack, and "subobject declared here" (WP-224,
+  `tests/conformance/expr.const/constexpr-trivial-copy-uninit.cpp`).
 
 *Deviations from clang 19.* Lifetime is tracked only in `STD_ALLOC`
 storage: destroying a local or a `new`-allocated object twice, or reading
@@ -1020,7 +1045,10 @@ mem-initializer or an assignment to a member of non-class type activates
 it, also through an anonymous union; so does a call of a trivial copy or
 move assignment operator on a member access chain, whose object operand
 is lowered as a write, clang's `MaybeHandleUnionActiveMemberChange`,
-WP-207). The active-member check on the path to an access reaches a
+WP-207; only the operator syntax does: `u.m.operator=(x)` is a member call
+on `m`, checked as above, WP-224). Nested unions are tracked per union
+subobject, so `n.q.x = 1` activates `q` in `n` and `x` in `q`
+(`tests/conformance/class.union/constexpr-nested-same-offset.cpp`). The active-member check on the path to an access reaches a
 bit-field's storage unit inside a member of class type
 (`Types::has_bit_unit`; a bit-field is not a `has_subobject` target),
 so libc++'s short-string `__s.__is_long_` reads and writes check against

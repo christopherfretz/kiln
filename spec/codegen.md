@@ -125,6 +125,14 @@ clang's `CodeGenModule` pipeline:
    then `to_emit`, recursing depth-first into the names each definition
    newly references.
 
+No deviation from clang's function order is known for constexpr
+function templates: one first instantiated inside a constant expression
+(a `static constexpr` initializer, a `constexpr` function pointer, a
+call from a dependent body) lands at the same module position as in
+clang, so callers get the same `nounwind` inference (WP-117 reported a
+difference that WP-172's pipeline already removes; checked again in
+WP-204). Validation: `tests/codegen/constexpr_instantiation_order.cpp`.
+
 Deviation: clang's `applyReplacements` moves a base-object structor
 (`D2`/`C2`) that replaces a complete-object alias to the position of the
 replaced declaration; `kiln_llvm` cannot reorder functions, so kiln keeps
@@ -1200,19 +1208,39 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   the Oven folded it (the fold bridge now records
   `set_temporary_value`), else initialized in the variable's init
   function with its destructor registered via `__cxa_atexit`.
-- **Backing arrays (WP-117).** A `_ZGR` temporary is `constant` only
-  when it is a constant-initialized `const` array with no destructor:
-  the backing array of a namespace-scope `std::initializer_list`. A scalar
-  or class temporary is materialized without cv-qualifiers, so it stays
-  `global` (clang `GetAddrOfGlobalTemporary`).
-  `tests/codegen/init_list_global.cpp`.
+- **`constant` temporaries (WP-117, WP-204).** A `_ZGR` temporary is
+  `constant` exactly as in clang's `GetAddrOfGlobalTemporary`: it has a
+  constant initializer, and its *materialized type* is `const`, has no
+  `mutable` member (`module::has_mutable`) and no destructor. The
+  materialized type (`GlobalInit::materialized_type`) is found by
+  locating the `MaterializeTemporaryExpr` whose
+  `lifetime_extended_temporary` is the temporary in the extending
+  variable's initializer and stripping what clang's
+  `skipRValueSubobjectAdjustments` skips: parens, `NoOp` casts,
+  derived-to-base casts of a record, and non-arrow member accesses of a
+  non-bitfield, non-reference field. If anything was stripped it is the
+  type of what remains, else the temporary's own type. A prvalue of
+  class or scalar type is unqualified, so `const int& r = 5;`, `const P&
+  r = P{1, 2};`, `const int& r = P{7, 8}.a;` and `int&& r = 6;` stay
+  `global`; a temporary created by converting to the referenced type
+  (`const double& r = 1;`, `const long& r = r1;`) or from a braced list
+  (`const P& r = {3, 4};`) has the referenced `const` type and is
+  `constant` unless it has a `mutable` member (`const M& r = {1};`). The
+  backing array of a namespace-scope `std::initializer_list` is a
+  `const` array, so it is `constant` when constant-initialized.
+  `tests/codegen/init_list_global.cpp`,
+  `tests/codegen/ref_temporary_constant.cpp`.
 - Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
   `tests/conformance/basic.start.dynamic/order-run.cpp`,
   `tests/conformance/stmt.dcl/static-local-run.cpp`.
 - **Not implemented:** `init_priority`, `thread_local` dynamic
   initialization (TLS wrappers), folding of uses of constant-initialized
   references and of reads of `const` class objects that clang permits
-  ([basic.start.static]/3).
+  ([basic.start.static]/3),
+  and a constant-initialized lifetime-extended temporary of a class
+  with a non-trivial destructor (`const D& r = D{1};`): clang emits a
+  `zeroinitializer` `_ZGR` global and stores the value in the init
+  function, kiln emits the folded value as the global's initializer.
 
 ## 7g. Landed (WP-118): WP-100 follow-ups
 - **Constructor loops.** Sema gives `new K[2][3]` / `new K[n][3]()` a

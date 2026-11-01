@@ -437,10 +437,15 @@ impl Sema<'_, '_> {
     }
 
     /// Records the written qualifier of the qualified function
-    /// template-id `e` (an `UnresolvedLookupExpr`); dependent signatures
-    /// mangle it (`clsr3stdE7declvalIT_EE`, spec/abi.md §8.15).
+    /// template-id or concept-id `e` (an `UnresolvedLookupExpr` or
+    /// `ConceptSpecializationExpr`); dependent signatures and
+    /// requires-clauses mangle it (`clsr3stdE7declvalIT_EE`,
+    /// `Qsr3stdE7same_asIT_iE`, spec/abi.md §8.15–§8.16).
     pub fn set_template_id_qualifier(&mut self, e: ExprId, nns: NnsId) {
-        if self.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr {
+        if matches!(
+            self.ast.exprs.get(e).kind(),
+            ExprKind::UnresolvedLookupExpr | ExprKind::ConceptSpecializationExpr
+        ) {
             let _ = self.ast.templates.expr_nns.insert(e, nns);
         }
     }
