@@ -6,7 +6,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
-    CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, TypeidOperand, ValueCategory,
+    BinaryOp, CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, TypeidOperand, ValueCategory,
 };
 use kiln_ast::ids::RawId;
 use kiln_ast::names::{DeclName, DeclNameView};
@@ -168,17 +168,13 @@ impl Substituter<'_, '_, '_> {
             ExprKind::BinaryOperator => {
                 let op = ex(self).binary_op(e);
                 let [l, r] = ex(self).operands(e);
-                let l = self.expr(l)?;
-                let r = self.expr(r)?;
-                Ok(self.sema.act_on_binary(op, l, r, loc))
+                self.binary(op, l, r, loc)
             }
             ExprKind::CompoundAssignOperator => {
                 let op = ex(self).binary_op(e);
                 let l = ExprId::new(n.a());
                 let r = ex(self).compound_assign(e).rhs;
-                let l = self.expr(l)?;
-                let r = self.expr(r)?;
-                Ok(self.sema.act_on_binary(op, l, r, loc))
+                self.binary(op, l, r, loc)
             }
             ExprKind::ConditionalOperator => {
                 let c = ExprId::new(n.a());
@@ -1151,6 +1147,19 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(out)
+    }
+
+    /// A binary operator of the pattern. A braced right operand
+    /// (`x = {...}`, [expr.assign]/8) is assigned again from the
+    /// rebuilt list ([`crate::Sema::act_on_assign_list`]).
+    fn binary(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        let l = self.expr(l)?;
+        if op.is_assignment() && self.sema.ast.exprs.get(r).kind() == ExprKind::InitListExpr {
+            let il = self.init_list(r)?;
+            return Ok(self.sema.act_on_assign_list(op, l, &il, loc));
+        }
+        let r = self.expr(r)?;
+        Ok(self.sema.act_on_binary(op, l, r, loc))
     }
 
     /// A braced-init-list of the pattern. A semantic list built from a

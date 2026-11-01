@@ -4197,6 +4197,13 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> DeclId {
         let ns = self.enclosing_namespace().unwrap_or(self.ast.tu);
+        if let (Some((n, nloc)), Some(q)) = (name, qualifier)
+            && keyword != TagKeyword::Enum
+            && self.has_pending_head()
+            && let Some(d) = self.act_on_qualified_friend_class_template(keyword, n, nloc, q)
+        {
+            return d;
+        }
         let (Some((n, nloc)), None, false) = (name, qualifier, keyword == TagKeyword::Enum) else {
             return self.act_on_tag(
                 keyword,
@@ -4307,6 +4314,62 @@ impl Sema<'_, '_> {
         let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
         self.friend_class_template = self.finish_template_pattern(d);
         d
+    }
+
+    /// `template<class U> friend class N::X;` ([temp.friend]/1,
+    /// [dcl.type.elab]/4): a qualified name befriends the class template
+    /// `N::X` that qualified lookup finds (a member template of the
+    /// current instantiation too: `template<bool> friend class A<T>::B;`);
+    /// no declaration is introduced. The template is left in
+    /// [`Sema::friend_class_template`] for `act_on_friend`. Another kind
+    /// of entity is clang's "redefinition as different kind of symbol";
+    /// nothing found in a namespace is its "friend declaration does not
+    /// match". `None` when nothing is found in a class (the caller
+    /// reports it).
+    fn act_on_qualified_friend_class_template(
+        &mut self,
+        keyword: TagKeyword,
+        n: Symbol,
+        nloc: Loc,
+        q: DeclId,
+    ) -> Option<DeclId> {
+        let found = self.lookup_qualified(q, n, LookupKind::All).decls;
+        let t = found.iter().copied().find(|&d| self.kind_of(d) == DeclKind::ClassTemplate);
+        if t.is_none() && found.is_empty() && self.kind_of(q) != DeclKind::Namespace {
+            return None;
+        }
+        // The friend's own template head declares nothing (clang matches
+        // it against the template's only on instantiation).
+        let _ = self.take_template_head(None);
+        self.templ.cur = None;
+        let Some((t, p)) = t.and_then(|t| self.pattern_of(t).map(|p| (t, p))) else {
+            let msg = if let Some(&other) = found.first() {
+                let msg = self
+                    .diag(DiagId::sema_redefinition_different_kind, nloc)
+                    .arg(sym_str(self, n));
+                self.note_prev(msg, other, true)
+            } else {
+                self.diag(DiagId::sema_friend_def_no_match, nloc)
+                    .arg(sym_str(self, n))
+                    .arg(self.qualifier_desc(q))
+            };
+            self.emit(msg);
+            // Recovery: an invalid class, hidden from lookup.
+            let mut h = DeclHead::new(q, DeclName::ident(n), nloc);
+            h.lexical = Some(self.ctx);
+            h.misc = h.misc.with_friend(FriendKind::Undeclared);
+            let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
+            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            return Some(d);
+        };
+        if !self.tag_matches(p, keyword) {
+            let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+            let msg = self.note_prev(msg, p, false);
+            self.emit(msg);
+        }
+        self.mark_type_referenced(p);
+        self.friend_class_template = Some(t);
+        Some(p)
     }
 
     fn check_enum_redecl(

@@ -197,9 +197,17 @@ impl Sema<'_, '_> {
             kids.extend(flat);
             return self.recover_err(&kids, op_loc);
         }
+        // [temp.dep.expr]/3: a type-dependent left operand or list
+        // element makes the assignment dependent; the written list is
+        // kept and assigned again at instantiation (clang's
+        // `BuildOverloadedBinOp` on a type-dependent operand).
+        if self.expr_is_type_dependent(lhs) || self.init_list_type_dependent(l) {
+            let r = self.dependent_init_list(l);
+            return self.builder().dependent_binary(op, lhs, r, op_loc);
+        }
         let lt = self.ast.exprs.get(lhs).ty();
         let lt = conv::strip_cv(self, self.non_reference(lt));
-        if self.ast.types.as_record(lt).is_some() && !self.expr_is_type_dependent(lhs) {
+        if self.ast.types.as_record(lt).is_some() {
             // [expr.assign]/8: the list is the argument of the
             // assignment operator function ([over.match.oper]).
             let r = self.act_on_braced_arg(l.clone());
