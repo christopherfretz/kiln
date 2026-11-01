@@ -300,11 +300,18 @@ impl Sema<'_, '_> {
             return self.recover(ty, &flat, loc);
         }
         let to = conv::strip_cv(self, ty);
-        let init =
-            match self.class_element_list_init(to, l, ConvCtx::DirectInitialization, loc, None) {
-                Some(e) => e,
-                None => self.init_from_list_at(to, l, Some(loc)),
-            };
+        // `E{v}` for a fixed-underlying-type enumeration is
+        // direct-list-initialization too ([dcl.init.list]/3.8).
+        let init = match self.fixed_enum_list_init(to, l) {
+            Some(e) => e,
+            None => {
+                match self.class_element_list_init(to, l, ConvCtx::DirectInitialization, loc, None)
+                {
+                    Some(e) => e,
+                    None => self.init_from_list_at(to, l, Some(loc)),
+                }
+            }
+        };
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], loc);
         }
