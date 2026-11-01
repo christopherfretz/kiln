@@ -12,7 +12,7 @@ else: conformance goldens, the dump loader (ast.md §12, WP E), and
 differential tests against clang. It is deterministic, address-free,
 location-free by default, and stable: a format change is a spec change.
 ```
-kiln -fsyntax-only -fdump-ast[=<opt>,...] [-fdump-ast-filter=<substr>] t.cpp   # to stdout
+kiln++ -fsyntax-only -fdump-ast[=<opt>,...] [-fdump-ast-filter=<substr>] t.cpp   # to stdout
   opts: ids        print node ids (#d12, #e5, #s3) and decl references by id
         locs       print @L:C (main file) / @file:L:C (other files) after the class name
         canonical  always print 'sugared':'canonical' pairs
@@ -545,7 +545,7 @@ normalizer rejects their `Attr` kinds). `tests/conformance/ast/stmt.label/`,
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]
 [--all-files] [--filter=<substr>] [-- <clang args>]` prints clang's AST of
-`<file>` in this format: what `kiln -fsyntax-only -fdump-ast[=implicit,
+`<file>` in this format: what `kiln++ -fsyntax-only -fdump-ast[=implicit,
 all-files] [-fdump-ast-filter=]` should print. It is the oracle of
 `expect: ast` goldens (§7) and how a golden is first written. Its
 contract:

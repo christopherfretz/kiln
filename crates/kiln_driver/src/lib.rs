@@ -1,4 +1,6 @@
-//! The `kiln` driver: a clang-compatible command line over the frontend.
+//! The `kiln` driver: a clang-compatible command line over the frontend,
+//! one binary under two names as clang and clang++ (`kiln`, `kiln++`;
+//! spec/driver.md "Driver modes").
 //! See `spec/driver.md` and `docs/ARCHITECTURE.md` ("Driver").
 //!
 //! Preprocessing (`-E`, `-M`, `-MM`), `-fsyntax-only [-fdump-ast]`

@@ -182,7 +182,7 @@ the local run is still the merge gate (docs/AGENTS.md rule 3).
   - one generated test per header (`cargo xtask gen-pp-corpus`): every
     libc++ 19 public header including `experimental/`, the C headers libc++
     wraps, and the top-level `/usr/include/*.h` headers it does not. This is
-    the M1 exit criterion: `kiln -E` must agree with `clang -E` on all of
+    the M1 exit criterion: `kiln++ -E` must agree with `clang -E` on all of
     them;
   - `torture/`: hand-written tests of the hard corners (hide sets,
     placemarkers, `__VA_OPT__`, stringizing, `#include` of macro-expanded
@@ -195,7 +195,7 @@ the local run is still the merge gate (docs/AGENTS.md rule 3).
   docs/status/pp-parity.md` refreshes the parity table on
   `docs/status/pp-parity.md`.
 - `run`: stdout and exit code must match a clang-built binary.
-- layout: `kiln -fdump-record-layouts` vs clang's for every class in the
+- layout: `kiln++ -fdump-record-layouts` vs clang's for every class in the
   corpus; mangled names vs clang's for every external symbol.
   `expect: layout` and `expect: vtables` tests make this a corpus feature:
   the harness runs kiln with `-fsyntax-only -fdump-record-layouts` (or
