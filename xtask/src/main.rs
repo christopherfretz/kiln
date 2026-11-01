@@ -9,6 +9,7 @@ mod diag_split;
 mod gen_pp;
 mod jobs;
 mod libcxx;
+mod libstdcxx;
 mod test;
 mod util;
 
@@ -34,6 +35,9 @@ commands:
   libcxx      run libc++'s own tests (llvmorg-19.1.7 libcxx/test) with kiln; --gate m3
               is the M3 gate; not part of ci (`cargo xtask libcxx --help`; contract
               in spec/libcxx.md; needs scripts/fetch-libcxx-tests.sh)
+  libstdcxx   compile each public libstdc++ header alone with kiln and clang++-19 and
+              report per-header status (docs/status/libstdcxx.md); informational, not
+              part of ci (`cargo xtask libstdcxx --help`; contract in spec/libstdcxx.md)
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
   ci          the merge gate: diag-split --check, fmt --check, clippy -D warnings, cargo test, then the
@@ -53,6 +57,7 @@ fn main() -> ExitCode {
         Some("diag-split") => diag_split::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("libcxx") => libcxx::main(args),
+        Some("libstdcxx") => libstdcxx::main(args),
         Some("stress") => stress(args),
         Some("jobserver") => jobs::main(args),
         Some("ci") => ci(args),

@@ -499,7 +499,8 @@ it runs alongside:
 - **Scope.** Every child started through `util::process` (`run`,
   `run_with_input`, `run_measured`) holds one token for its whole lifetime:
   each compiler, oracle and test-binary process of `cargo xtask test`, each
-  compile and run of `cargo xtask libcxx`, each measured compile of
+  compile and run of `cargo xtask libcxx`, each compile of
+  `cargo xtask libstdcxx`, each measured compile of
   `cargo xtask bench`, and the `--version` probes. Timeouts and the
   measured wall clock start once the token is held. Helper invocations of
   `git` and `cargo` are not counted (cargo is a client itself).
@@ -599,6 +600,9 @@ removed at the end of the run.
 
 The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a
 separate manual or periodic gate, and its contract is `spec/libcxx.md`.
+Neither is the libstdc++ header status (`cargo xtask libstdcxx`), which is
+informational (exit status non-zero only on tool errors); its contract is
+`spec/libstdcxx.md`.
 
 `cargo xtask ci [--quick]` is the merge gate (`docs/AGENTS.md` rule 3). It
 runs, stopping at the first failing step:
