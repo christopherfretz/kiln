@@ -84,12 +84,17 @@ impl Sema<'_, '_> {
         if let Some(l) = frame_args {
             self.set_frame_args(l);
         }
-        let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
-        self.in_inst_context(ctx, |s| {
+        // The default argument is instantiated in `f`'s context (clang
+        // `SubstDefaultArgument`'s `ContextRAII(FD)`): a closure type
+        // created in it is a local class of `f`, numbered per the
+        // parameter (or not at all) rather than in `f`'s body.
+        self.in_inst_context(f, |s| {
+            let saved = s.lambda_mangle.default_arg.replace(p);
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(entity);
             sub.map_contexts(&pairs);
             sub.lazy_default_arg(pat, a, f, p);
+            s.lambda_mangle.default_arg = saved;
         });
         self.pop_inst_frame();
         true

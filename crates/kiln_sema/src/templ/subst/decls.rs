@@ -190,6 +190,7 @@ impl Substituter<'_, '_, '_> {
             self.sema.inst.concepts.placeholder_locs.insert(v, l);
         }
         self.var_init(d, v)?;
+        self.sema.diagnose_unused_inst_var(d, v);
         Ok(v)
     }
 

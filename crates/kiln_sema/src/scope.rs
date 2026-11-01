@@ -68,6 +68,10 @@ pub struct Scope {
     /// definition of the namespace (clang's `Scope::isDeclScope`, which
     /// orders the names of an ambiguous lookup). `u32::MAX` for none.
     pub first_decl: u32,
+    /// The error count when the scope was entered: an error inside it
+    /// suppresses its unused-declaration warnings (clang
+    /// `Scope::hasUnrecoverableErrorOccurred`).
+    pub errors: u32,
 }
 
 /// The name space (C's "tag" vs "ordinary" split) of a local entry.
@@ -90,6 +94,7 @@ impl Scope {
             nrvo: NrvoState::default(),
             try_barrier: false,
             first_decl: u32::MAX,
+            errors: 0,
         }
     }
 

@@ -77,7 +77,8 @@ impl Sema<'_, '_> {
             }
             let msg = self
                 .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
-                .arg(self.decl_name(d));
+                .arg(self.decl_name(d))
+                .range(self.expr_range(callee));
             let ics = self.list_arg_ics(to, l);
             let detail = self.bad_conversion_detail(&ics, Some(i));
             let fl = self.ast.decls.get(d).loc();
