@@ -116,7 +116,20 @@ impl Sema<'_, '_> {
         };
         let n = DeclName::ident(self.ast.symbols().intern("__builtin_va_list"));
         let h = DeclHead::new(tu, n, Loc::INVALID).flags(DeclFlags::IMPLICIT);
-        let _ = self.builder().typedef(h, DeclKind::Typedef, ty, None);
+        let td = self.builder().typedef(h, DeclKind::Typedef, ty, None);
+        self.va_list_type = Some(self.ast.types.typedef_type(td, ty).into());
+    }
+
+    /// The parameter type a `Builtins.td` `A` spells (clang's
+    /// `DecodeTypeFromStr`): `__builtin_va_list &`, or the decayed pointer
+    /// when the target's `va_list` is an array (x86-64).
+    fn builtin_va_list_param(&mut self) -> QualType {
+        let Some(t) = self.va_list_type else { return QualType::ERROR };
+        if self.ast.types.is_array(t) {
+            conv::array_decayed(self, t)
+        } else {
+            self.ast.types.lvalue_ref_to(t)
+        }
     }
 
     /// Declares the builtin function `name` (first used at `loc`) if it
@@ -224,6 +237,7 @@ impl Sema<'_, '_> {
             (b'd', _, 0) => QualType::DOUBLE,
             (b'd', ..) => QualType::LONGDOUBLE,
             (b'z', ..) => self.size_type(),
+            (b'A', ..) => self.builtin_va_list_param(),
             _ => QualType::VOID,
         };
         while let Some(&c) = s.first() {
@@ -296,6 +310,7 @@ impl Sema<'_, '_> {
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
+            builtin::VA_START => self.builtin_va_start(callee, args, rparen),
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
                 return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
             }
@@ -653,6 +668,83 @@ impl Sema<'_, '_> {
                 None
             }
         }
+    }
+
+    /// `__builtin_va_start(ap, last)` ([cstdarg.syn]/1, C 7.16.1.4; clang's
+    /// `BuiltinVAStart`): two arguments; `ap` binds to the
+    /// `__builtin_va_list` parameter; the call must be in a variadic
+    /// function, else `'va_start' used in function with fixed args` (or
+    /// `cannot be used outside a function`) at the callee. `last` is kept
+    /// as written; one that is not the last named parameter, or that
+    /// names a parameter of reference or promotable type, gets a
+    /// `-Wvarargs` warning (undefined behavior, [cstdarg.syn]/1).
+    fn builtin_va_start(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let pt = self.builtin_va_list_param();
+        let ap = match conv::implicit_convert(self, args[0], pt, ConvCtx::Argument) {
+            Ok(x) => x,
+            Err(err) => {
+                let msg = err.diag(self, args[0]);
+                self.emit(msg);
+                return None;
+            }
+        };
+        let at = self.begin_loc(callee);
+        let f = self.ctx;
+        if !self.ast.decls.get(f).kind().is_function() {
+            let msg = self.diag(DiagId::sema_va_start_outside_function, at);
+            self.emit(msg);
+            return None;
+        }
+        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        if !self.ast.types.proto(fty).is_some_and(|p| p.info().variadic()) {
+            let msg = self.diag(DiagId::sema_va_start_fixed_function, at);
+            self.emit(msg);
+            return None;
+        }
+        let last =
+            self.ast.decls.function(f).and_then(|x| self.ast.lists.iter::<DeclId>(x.params).last());
+        let x = self.ignore_paren_imp_casts(args[1]);
+        let named = Some(x)
+            .filter(|&x| self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr)
+            .map(|x| self.ast.exprs.decl(x))
+            .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::ParmVar);
+        let arg_at = self.begin_loc(args[1]);
+        match named {
+            Some(p) if Some(p) == last => {
+                let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                let promotable = self.ast.types.canonical(t).without_quals() == QualType::FLOAT
+                    || conv::rank::promoted_type(self, t, None).is_some_and(|q| {
+                        self.ast.types.canonical(q) != self.ast.types.canonical(t)
+                    });
+                let reason = if self.ast.types.is_reference(t) {
+                    Some(1)
+                } else if promotable {
+                    Some(0)
+                } else {
+                    None
+                };
+                if let Some(r) = reason {
+                    let msg = self.diag(DiagId::sema_va_start_type_is_undefined, arg_at).arg(r);
+                    let pl = self.ast.decls.get(p).loc();
+                    let note =
+                        self.diag(DiagId::note_va_start_parameter_type, pl).arg(self.ty_arg(t));
+                    self.emit(msg.with_note(note));
+                }
+            }
+            _ => {
+                let msg = self.diag(DiagId::sema_va_start_not_last_named_param, arg_at);
+                self.emit(msg);
+            }
+        }
+        Some((vec![ap, args[1]], QualType::VOID))
     }
 
     /// `__builtin_operator_new` / `__builtin_operator_delete` (clang's

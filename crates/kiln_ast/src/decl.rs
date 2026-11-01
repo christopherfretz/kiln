@@ -2909,6 +2909,16 @@ pub mod builtin {
     pub const OPERATOR_DELETE: u32 = 223;
     /// `__builtin_unreachable` (clang `Builtins.td` signature `v`).
     pub const UNREACHABLE: u32 = 1347;
+    /// `void __builtin_va_start(__builtin_va_list &, ...) noexcept`
+    /// ([cstdarg.syn], C 7.16.1.4; clang `Builtins.td` signature `vA.`,
+    /// custom type-checking: sema checks the enclosing function and the
+    /// last named parameter).
+    pub const VA_START: u32 = 233;
+    /// `void __builtin_va_end(__builtin_va_list &) noexcept` (signature `vA`).
+    pub const VA_END: u32 = 1367;
+    /// `void __builtin_va_copy(__builtin_va_list &, __builtin_va_list &)
+    /// noexcept` (signature `vAA`).
+    pub const VA_COPY: u32 = 1365;
 
     /// `__builtin_fabs` (clang `Builtins.td` signature `dd`).
     pub const FABS: u32 = 550;
@@ -3044,7 +3054,9 @@ pub mod builtin {
         /// `b` bool, `c` char, `w` `wchar_t`, `s` short, `i` int, `f`
         /// float, `d` double, `z` `size_t`; prefixes `U` unsigned, `L`
         /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
-        /// `&` lvalue reference, `C` const, `D` volatile.
+        /// `&` lvalue reference, `C` const, `D` volatile; `A` is a
+        /// `__builtin_va_list` parameter (a reference to it, or the decayed
+        /// pointer when it is an array).
         pub sig: &'static str,
         /// [`attr`] bits.
         pub attrs: u8,
@@ -3168,6 +3180,9 @@ pub mod builtin {
         row(OPERATOR_NEW, "__builtin_operator_new", "v*z", C | T),
         row(OPERATOR_DELETE, "__builtin_operator_delete", "vv*", N | T),
         row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
+        row(VA_START, "__builtin_va_start", "vA.", N | T),
+        row(VA_END, "__builtin_va_end", "vA", N),
+        row(VA_COPY, "__builtin_va_copy", "vAA", N),
     ];
 
     /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,

@@ -639,6 +639,16 @@ diag_ids! {
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
     sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
     sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
+    sema_constinit_local = Error (0) "local variable cannot be declared 'constinit'";
+    sema_constinit_non_constant = Error (0) "variable does not have a constant initializer";
+    sema_missing_constinit = Warning [MissingConstinit] (1) "'constinit' specifier missing on initializing declaration of '{0}'";
+    sema_va_start_fixed_function = Error (0) "'va_start' used in function with fixed args";
+    sema_va_start_outside_function = Error (0) "'va_start' cannot be used outside a function";
+    sema_va_start_not_last_named_param = Warning [Varargs] (0) "second argument to 'va_start' is not the last named parameter";
+    sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object that undergoes default argument promotion|an object of reference type|a parameter declared with the 'register' keyword} to 'va_start' has undefined behavior";
+    note_va_start_parameter_type = Note (1) "parameter of type {0} is declared here";
+    sema_refconst_no_ctor = Warning (2) "{0:struct|interface|union|class|enum} {1} does not declare any constructor to initialize its non-modifiable members";
+    note_refconst_member_not_initialized = Note (2) "{0:const|reference} member {1} will never be initialized";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
     sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
@@ -1450,10 +1460,12 @@ diag_ids! {
     note_not_structural_subobject = Note (3) "{0} is not a structural type because it has a {1:non-static data member|base class} of non-structural type {2}";
     note_non_literal_no_constexpr_ctors = Note (1) "{0} is not literal because it is not an aggregate and has no constexpr constructors other than copy or move constructors";
     note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
-    note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
+    note_non_literal_field = Note (4) "{0} is not literal because it has data member {1} of {3:non-literal|volatile} type {2}";
     note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
     note_non_literal_virtual_base = Note (2) "{0:struct|interface|class} with virtual base {1:class|classes} is not a literal type";
     note_constexpr_virtual_base_here = Note (0) "virtual base class declared here";
+    note_constinit_specified_here = Note (0) "required by 'constinit' specifier here";
+    note_constinit_missing_here = Note (0) "variable declared constinit here";
     // GNU asm statements (WP-140)
     parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
     parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', or '('";

@@ -1,0 +1,47 @@
+Dumping vafmt:
+FunctionDecl vafmt 'int (char *, const char *, ...)'
+|-ParmVarDecl used buf 'char *'
+|-ParmVarDecl used f 'const char *'
+`-CompoundStmt
+  |-DeclStmt
+  | |-VarDecl used ap '__builtin_va_list':'std::__va_list' callinit
+  | | `-CXXConstructExpr '__builtin_va_list':'std::__va_list' 'void () noexcept'
+  | `-VarDecl used aq '__builtin_va_list':'std::__va_list' callinit
+  |   `-CXXConstructExpr '__builtin_va_list':'std::__va_list' 'void () noexcept'
+  |-CallExpr 'void'
+  | |-ImplicitCastExpr 'void (*)(__builtin_va_list &, ...) noexcept' <BuiltinFnToFnPtr>
+  | | `-DeclRefExpr '<builtin fn type>' Function '__builtin_va_start' 'void (__builtin_va_list &, ...) noexcept'
+  | |-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'ap' '__builtin_va_list':'std::__va_list'
+  | `-DeclRefExpr 'const char *' lvalue ParmVar 'f' 'const char *'
+  |-CallExpr 'void'
+  | |-ImplicitCastExpr 'void (*)(__builtin_va_list &, __builtin_va_list &) noexcept' <BuiltinFnToFnPtr>
+  | | `-DeclRefExpr '<builtin fn type>' Function '__builtin_va_copy' 'void (__builtin_va_list &, __builtin_va_list &) noexcept'
+  | |-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'aq' '__builtin_va_list':'std::__va_list'
+  | `-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'ap' '__builtin_va_list':'std::__va_list'
+  |-DeclStmt
+  | `-VarDecl used r 'int' cinit
+  |   `-CallExpr 'int'
+  |     |-ImplicitCastExpr 'int (*)(char *, unsigned long, const char *, __builtin_va_list)' <FunctionToPointerDecay>
+  |     | `-DeclRefExpr 'int (char *, unsigned long, const char *, __builtin_va_list)' lvalue Function 'vsnprintf' 'int (char *, unsigned long, const char *, __builtin_va_list)'
+  |     |-ImplicitCastExpr 'char *' <LValueToRValue>
+  |     | `-DeclRefExpr 'char *' lvalue ParmVar 'buf' 'char *'
+  |     |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+  |     | `-IntegerLiteral 'int' 64
+  |     |-ImplicitCastExpr 'const char *' <LValueToRValue>
+  |     | `-DeclRefExpr 'const char *' lvalue ParmVar 'f' 'const char *'
+  |     `-CXXConstructExpr '__builtin_va_list':'std::__va_list' 'void (const __va_list &) noexcept'
+  |       `-ImplicitCastExpr 'const __va_list':'const std::__va_list' lvalue <NoOp>
+  |         `-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'aq' '__builtin_va_list':'std::__va_list'
+  |-CallExpr 'void'
+  | |-ImplicitCastExpr 'void (*)(__builtin_va_list &) noexcept' <BuiltinFnToFnPtr>
+  | | `-DeclRefExpr '<builtin fn type>' Function '__builtin_va_end' 'void (__builtin_va_list &) noexcept'
+  | `-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'aq' '__builtin_va_list':'std::__va_list'
+  |-CallExpr 'void'
+  | |-ImplicitCastExpr 'void (*)(__builtin_va_list &) noexcept' <BuiltinFnToFnPtr>
+  | | `-DeclRefExpr '<builtin fn type>' Function '__builtin_va_end' 'void (__builtin_va_list &) noexcept'
+  | `-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'ap' '__builtin_va_list':'std::__va_list'
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-ImplicitCastExpr 'int' xvalue <NoOp>
+        `-DeclRefExpr 'int' lvalue Var 'r' 'int'
+

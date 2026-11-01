@@ -187,6 +187,17 @@ pub(crate) enum BuiltinCall {
 }
 
 impl Cg<'_> {
+    /// clang `EmitVAListRef`: the address of the `va_list` operand `x`, a
+    /// `__builtin_va_list` lvalue, or the decayed pointer when the
+    /// target's `va_list` is an array (x86-64).
+    fn va_list_ref(&mut self, x: ExprId) -> R<V> {
+        if self.ast.types.is_pointer(self.ast.exprs.get(x).ty()) {
+            self.emit_scalar(x)
+        } else {
+            Ok(self.emit_lvalue(x)?.addr.v)
+        }
+    }
+
     /// clang `EmitBuiltinExpr` for the call `e` of builtin `b`:
     /// [`BuiltinCall::Library`] for a library builtin, which the caller
     /// emits as an ordinary call of [`Cg::lib_fn`].
@@ -404,6 +415,25 @@ impl Cg<'_> {
                 let c = self.emit_scalar(a0)?;
                 let f = kiln_llvm::intrinsics::assume(&mut self.m);
                 self.intrinsic_call(f, vec![c]);
+                return Ok(BuiltinCall::Emitted(None));
+            }
+            id::VA_START | id::VA_END | id::VA_COPY => {
+                // clang `EmitVAStartEnd` / `__builtin_va_copy`: the
+                // `llvm.va_*` intrinsics on the `va_list`'s address (the
+                // second `va_start` operand is not evaluated).
+                let mut ops = vec![self.va_list_ref(a0)?];
+                let f = match b {
+                    id::VA_START => kiln_llvm::intrinsics::va_start(&mut self.m),
+                    id::VA_END => kiln_llvm::intrinsics::va_end(&mut self.m),
+                    _ => {
+                        let Some(src) = arg(1) else {
+                            return err(self.loc_of(e), "__builtin_va_copy without two arguments");
+                        };
+                        ops.push(self.va_list_ref(src)?);
+                        kiln_llvm::intrinsics::va_copy(&mut self.m)
+                    }
+                };
+                self.intrinsic_call(f, ops);
                 return Ok(BuiltinCall::Emitted(None));
             }
             id::TRAP => {

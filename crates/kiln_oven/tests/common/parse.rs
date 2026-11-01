@@ -531,7 +531,7 @@ impl Parser<'_> {
             }
             self.expect(";");
         }
-        self.ast.builder().complete_record_definition(d, DefinitionBits::empty());
+        self.ast.builder().complete_record_definition(d, DefinitionBits::LITERAL); // C-subset records are literal
         kiln_abi::ensure_layout(&mut self.ast, d, self.target);
         self.fields.insert(d, fields);
         ty
