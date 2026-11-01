@@ -7,6 +7,7 @@ use kiln_ast::consts::{
 };
 use kiln_ast::decl::{DeclKind, VarEvalState};
 use kiln_ast::strings::StringEncoding;
+use kiln_ast::expr::ExprKind;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StringLitId};
 use kiln_source::Loc;
 
@@ -170,7 +171,7 @@ impl Oven {
         // initializer (`EvaluateAsInitializer`), else the expression.
         let loc = match object {
             Some(d) => b.ast().decls.get(d).loc(),
-            None => b.ast().exprs.get(e).loc(),
+            None => expr_loc(b.ast(), e),
         };
         let r = match self.funcs[f as usize].ret {
             RetKind::Void => {
@@ -292,6 +293,9 @@ impl Oven {
         loc: Loc,
     ) -> Result<ConstValueId, Freeze> {
         if let TyKind::MemPtr { .. } = self.types.kind(ty) {
+            if let Some(m) = self.mp.get(v).filter(|e| e.func).map(|e| e.member) {
+                self.check_not_immediate(b, m, false, loc)?;
+            }
             return self.mp_freeze(b, ty, v).map_err(|_| Freeze::Fault(FailKind::MemoryLimit));
         }
         let s = self.scalar_of(b, ty, v, loc)?;
@@ -330,6 +334,34 @@ impl Oven {
         })
     }
 
+    /// [expr.const]/22: a constant expression's value does not point
+    /// to (or refer to, or name as a member) an immediate function
+    /// (clang `note_consteval_address_accessible`).
+    fn check_not_immediate(
+        &self,
+        b: &dyn SemaBridge,
+        d: DeclId,
+        reference: bool,
+        loc: Loc,
+    ) -> Result<(), Freeze> {
+        let ast = b.ast();
+        let immediate = ast.decls.function(d).is_some_and(|f| {
+            f.spec.constexpr_kind() == kiln_ast::decl::ConstexprKind::Consteval
+                || f.spec.escalated()
+        });
+        if !immediate {
+            return Ok(());
+        }
+        if self.run.silent {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        }
+        let what = if reference { "reference" } else { "pointer" };
+        Err(Freeze::Notes(vec![
+            Note::new(loc, format!("{what} to a consteval declaration is not a constant expression")),
+            Note::new(ast.decls.get(d).loc(), "declared here"),
+        ]))
+    }
+
     fn ptr_of(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -344,7 +376,11 @@ impl Oven {
         let p = Ptr::decode(raw);
         if p.is_fn() {
             return match self.funcs.get(p.off as usize).and_then(|f| f.decl) {
-                Some(d) => Ok(Scalar::Pointer { ty: q, base: PtrBase::Function(d), offset: 0 }),
+                Some(d) => {
+                    let r = b.ast().types.is_reference(q);
+                    self.check_not_immediate(b, d, r, loc)?;
+                    Ok(Scalar::Pointer { ty: q, base: PtrBase::Function(d), offset: 0 })
+                }
                 None => Err(Freeze::Fault(FailKind::NotConstant)),
             };
         }
@@ -992,7 +1028,7 @@ pub(crate) fn let_mte(ast: &Ast, t: DeclId) -> Option<ExprId> {
     let init = ast.redecls_of(ext).find_map(|r| ast.decls.var(r).and_then(|v| v.init))?;
     let mut work = vec![init];
     while let Some(e) = work.pop() {
-        if ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MaterializeTemporaryExpr
+        if ast.exprs.get(e).kind() == ExprKind::MaterializeTemporaryExpr
             && ast.exprs.lifetime_extended_temporary(e) == Some(t)
         {
             return Some(e);
@@ -1000,4 +1036,35 @@ pub(crate) fn let_mte(ast: &Ast, t: DeclId) -> Option<ExprId> {
         work.extend(ast.exprs.children(e, &ast.lists));
     }
     None
+}
+
+/// clang's `Expr::getExprLoc` for an evaluation root, as far as it
+/// differs from kiln's node location: wrappers are looked through, a
+/// `CallExpr` is at its callee's start and a `CXXMemberCallExpr` at the
+/// member name.
+fn expr_loc(ast: &Ast, mut e: ExprId) -> Loc {
+    let x = &ast.exprs;
+    loop {
+        let k = x.get(e).kind();
+        e = match k {
+            ExprKind::ConstantExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ImplicitCastExpr => x.operand(e),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
+                let c = x.callee(e);
+                let c = if x.get(c).kind() == ExprKind::ImplicitCastExpr { x.operand(c) } else { c };
+                let ck = x.get(c).kind();
+                if ck == ExprKind::DeclRefExpr {
+                    return ast.templates.expr_begin.get(c).copied().unwrap_or(x.get(c).loc());
+                }
+                if ck == ExprKind::MemberExpr {
+                    return x.get(c).loc();
+                }
+                return x.get(e).loc();
+            }
+            _ => return x.get(e).loc(),
+        };
+    }
 }
