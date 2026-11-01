@@ -127,7 +127,7 @@ fn filter_names_contexts_by_side_channel_arguments() {
         .filter(|l| {
             !l.contains("TemplateArgument template") && !l.contains("TemplateArgument integral")
         })
-        .map(|l| format!("{l}\n"))
+        .flat_map(|l| [l, "\n"])
         .collect();
     let mut text = || Ok(side.clone());
     let e = normalize(&json, "filter_args.cpp", &f, &mut text).unwrap_err();
