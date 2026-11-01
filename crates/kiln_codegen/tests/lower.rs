@@ -96,7 +96,7 @@ fn opt(ir: &str) -> Option<Result<String, String>> {
 
 /// `-moutline-atomics`: clang 19 enables the feature by default only when
 /// it finds a GCC installation for the target, which an x86-64 host
-/// cross-targeting aarch64 lacks (see ir_vs_clang's `pinned_flags`); kiln's
+/// cross-targeting aarch64 lacks (see `ir_vs_clang`'s `pinned_flags`); kiln's
 /// [`CodegenOptions`] default is on.
 fn clang_ir(src: &str) -> Option<Result<String, String>> {
     let target = format!("--target={TRIPLE}");
