@@ -75,7 +75,7 @@ impl Compiler<'_> {
     /// The note for a type the Oven cannot bit-cast (clang's buffer
     /// converters' unsupported cases, plus classes with bases, which the
     /// Oven's object model does not lay out), the source checked first.
-    fn bit_cast_unsupported(&self, t: OTy, src: bool) -> Option<String> {
+    pub(super) fn bit_cast_unsupported(&self, t: OTy, src: bool) -> Option<String> {
         let types = &self.o.types;
         match types.kind(t) {
             TyKind::Opaque => {

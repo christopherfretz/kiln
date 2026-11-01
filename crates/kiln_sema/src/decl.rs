@@ -774,8 +774,11 @@ impl Sema<'_, '_> {
             return None;
         }
         let t = &self.ast.types;
+        // The lvalue conversion of an `_Atomic(T)` bound is a `T` (clang
+        // `DefaultLvalueConversion`).
+        let vty = t.as_atomic(ety).unwrap_or(ety);
         let integral =
-            t.is_integral(ety) || t.as_enum(ety).is_some_and(|en| !self.is_scoped_enum(en));
+            t.is_integral(vty) || t.as_enum(vty).is_some_and(|en| !self.is_scoped_enum(en));
         if !integral {
             let msg = self.diag(DiagId::sema_array_size_non_int, loc).arg(self.ty_arg(ety));
             self.emit(msg);
@@ -804,11 +807,40 @@ impl Sema<'_, '_> {
                 }
                 u64::try_from(v).ok()
             }
-            _ => {
-                self.error(DiagId::sema_vla_unsupported, loc);
-                None
-            }
+            Err(f) => self.folded_array_bound(c, d, loc, f),
         }
+    }
+
+    /// A bound that is not a constant expression makes a variable length
+    /// array; at namespace or class scope, where one is not allowed,
+    /// clang folds the bound if it can (`EvaluateAsInt`: a `const double`
+    /// or `const _Atomic(int)` variable reads as its value) and makes a
+    /// constant array as an extension (`TryToFixInvalidVariablyModifiedType`,
+    /// after `-Wvla-cxx-extension` with the failure's notes). Anything
+    /// else is a variable length array, which kiln does not support.
+    fn folded_array_bound(
+        &mut self,
+        c: ExprId,
+        d: &Declarator,
+        loc: Loc,
+        mut f: kiln_oven::EvalFailure,
+    ) -> Option<u64> {
+        let at = d.name.map_or(d.loc, |(_, l)| l);
+        let folded = match d.ctx {
+            DeclaratorContext::File | DeclaratorContext::Member => {
+                self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
+            }
+            _ => None,
+        };
+        let Some(v) = folded else {
+            self.error(DiagId::sema_vla_unsupported, loc);
+            return None;
+        };
+        let wloc = Self::fold_lone_invalid(&mut f, loc);
+        let w = Self::with_failure_notes(self.diag(DiagId::sema_vla_cxx_extension, wloc), f);
+        self.emit(w);
+        self.error(DiagId::sema_vla_folded_to_constant, at);
+        u64::try_from(v).ok()
     }
 
     pub(crate) fn is_scoped_enum(&self, en: DeclId) -> bool {
@@ -1576,6 +1608,9 @@ impl Sema<'_, '_> {
         }
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
+        }
+        self.add_known_function_attrs(decl, &mut attrs);
+        if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)
@@ -3073,10 +3108,7 @@ impl Sema<'_, '_> {
             }
         }
         if self.contains_undeduced_auto(ty) {
-            ty = match self.deduce_var_auto(v, ty, &init, loc, direct) {
-                Some(t) => t,
-                None => QualType::ERROR,
-            };
+            ty = self.deduce_var_auto(v, ty, &init, loc, direct).unwrap_or(QualType::ERROR);
             self.ast.decls.set_ty(v, ty);
             // `auto x = {...};` deduced `std::initializer_list<U>`; the
             // list initializes it below ([dcl.init.list]/3.6, WP-106).
@@ -3129,6 +3161,7 @@ impl Sema<'_, '_> {
             let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);
             self.ast.decls.mark_var(v, style);
         }
+        self.check_self_reference(v, e, direct);
         self.note_var_init_full_expr(v);
         let name_loc = self.ast.decls.get(v).loc();
         let e = self.act_on_full_expr_at(e, name_loc);
@@ -3536,8 +3569,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let ret =
-            self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+        // The return type as written: diagnostics name its typedef.
+        let ret = self.sugared_proto(fty).map_or(QualType::ERROR, |p| p.ret());
         let pushed = self.enter_definition_scopes(f);
         self.fn_saved.push(crate::class::SavedFn { func: self.func.take(), pushed });
         self.scopes.push(Scope::new(ScopeKind::Function, None));

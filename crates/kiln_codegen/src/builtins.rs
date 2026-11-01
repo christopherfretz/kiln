@@ -166,6 +166,34 @@ fn lib_attrs(b: u32, out: &mut Vec<Attr>) {
     out.push(Attr::Memory(MemoryEffects::all(mem)));
 }
 
+/// The function attributes a written or implicit `const` / `pure`
+/// attribute on some declaration of `d` gives its declaration and call
+/// sites (clang `ConstructAttributeList`: `nounwind willreturn` plus
+/// `memory(none)` / `memory(read)`); none for a builtin, whose
+/// [`lib_attrs`] already say so. Returns whether it added any.
+pub(crate) fn const_pure_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) -> bool {
+    if ast.decls.builtin_id(d).is_some() {
+        return false;
+    }
+    let has = |k: kiln_ast::attr::AttrKind| {
+        ast.redecls_of(d).any(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == k)
+        })
+    };
+    let mem = if has(kiln_ast::attr::AttrKind::CONST) {
+        ModRef::None
+    } else if has(kiln_ast::attr::AttrKind::PURE) {
+        ModRef::Read
+    } else {
+        return false;
+    };
+    out.push(Attr::Flag(AttrKind::WillReturn));
+    out.push(Attr::Memory(MemoryEffects::all(mem)));
+    true
+}
+
 /// Whether `q` is a complete object type (an incomplete class has no
 /// natural alignment to speak of).
 fn is_complete(ast: &Ast, q: QualType) -> bool {
@@ -766,7 +794,7 @@ impl Cg<'_> {
 
     /// The pointer value of `e` and the alignment it is known to have
     /// (clang `EmitPointerWithAlignment`).
-    fn ptr_align(&mut self, e: ExprId) -> R<(V, u64)> {
+    pub(crate) fn ptr_align(&mut self, e: ExprId) -> R<(V, u64)> {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
         if n.kind() == ExprKind::ParenExpr {

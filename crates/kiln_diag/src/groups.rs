@@ -144,6 +144,8 @@ diag_groups! {
     // WP-159
     MissingConstinit = "missing-constinit" [];
     Varargs = "varargs" [];
+    // WP-171
+    NonPodVarargs = "non-pod-varargs" [];
     // WP-067a
     DefaultedFunctionDeleted = "defaulted-function-deleted" [];
     ClassConversion = "class-conversion" [];
@@ -152,6 +154,10 @@ diag_groups! {
     InconsistentMissingOverride = "inconsistent-missing-override" [];
     AbstractFinalClass = "abstract-final-class" [];
     InaccessibleBase = "inaccessible-base" [];
+    // WP-165
+    IncrementBool = "increment-bool" [];
+    AtomicAlignment = "atomic-alignment" [];
+    GnuFoldingConstant = "gnu-folding-constant" [];
     // WP-074
     DeprecatedBuiltins = "deprecated-builtins" [];
     // WP-087
@@ -169,7 +175,8 @@ diag_groups! {
     ReturnStackAddress = "return-stack-address" [];
     Reorder = "reorder" [ReorderCtor];
     ReorderCtor = "reorder-ctor" [];
-    Uninitialized = "uninitialized" [];
+    Uninitialized = "uninitialized" [StaticSelfInit];
+    StaticSelfInit = "static-self-init" [];
     DelegatingCtorCycles = "delegating-ctor-cycles" [];
     CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
     Dangling = "dangling" [DanglingField, ReturnStackAddress];

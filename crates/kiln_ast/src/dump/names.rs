@@ -870,6 +870,14 @@ impl<'a> AstNames<'a> {
                 }
                 out.push(')');
             }
+            ExprKind::VAArgExpr => {
+                let (list, written, _) = exprs.va_arg(e);
+                out.push_str("__builtin_va_arg(");
+                self.expr(list, d, out);
+                out.push_str(", ");
+                write_type(&ast.types, self, written, self.expr_types, out);
+                out.push(')');
+            }
             ExprKind::CXXNoexceptExpr => {
                 out.push_str("noexcept(");
                 self.expr(exprs.noexcept_operand(e), d, out);

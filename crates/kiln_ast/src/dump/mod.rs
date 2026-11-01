@@ -648,7 +648,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
-            k if k.is_cast() => push(n.a()),
+            k if k.is_cast() || k == ExprKind::VAArgExpr => push(n.a()),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 for c in lists.iter::<ExprId>(exprs.construct_args(e)) {
                     push(c.raw());

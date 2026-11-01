@@ -42,6 +42,7 @@ mod predefined;
 mod range_for;
 mod rtti;
 pub mod scope;
+mod self_ref;
 mod side_effects;
 pub mod stack_guard;
 pub mod stmt;

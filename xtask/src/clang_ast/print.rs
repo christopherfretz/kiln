@@ -1423,6 +1423,7 @@ impl<'a> Printer<'a, '_> {
             "CXXNullPtrLiteralExpr"
             | "CXXNoexceptExpr"
             | "AtomicExpr"
+            | "VAArgExpr"
             | "CXXPseudoDestructorExpr"
             | "ConditionalOperator"
             | "ParenExpr"

@@ -1001,7 +1001,7 @@ impl Sema<'_, '_> {
 
     /// clang `QualType::isPODType` (C++11 POD: scalar, or a trivial
     /// standard-layout class, or an array of such).
-    fn is_pod_for_uninit_check(&self, ty: QualType) -> bool {
+    pub(crate) fn is_pod_for_uninit_check(&self, ty: QualType) -> bool {
         let t = self.base_element(ty);
         if self.ast.types.is_reference(t) {
             return false;
