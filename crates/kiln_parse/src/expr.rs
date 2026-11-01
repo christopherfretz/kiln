@@ -1371,7 +1371,12 @@ impl Parser<'_, '_> {
                     }
                     Some(e)
                 }
-                Ok(TemplateIdRef::Value(e)) => Some(e),
+                Ok(TemplateIdRef::Value(e)) => {
+                    if let Some(q) = qual {
+                        self.s.set_template_id_qualifier(e, q.nns);
+                    }
+                    Some(e)
+                }
                 Ok(TemplateIdRef::Type(_)) => {
                     let t = self.s.ast.symbols().as_str(name).to_owned();
                     let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, nl).arg(t);

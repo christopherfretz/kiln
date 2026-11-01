@@ -1600,10 +1600,20 @@ impl Sema<'_, '_> {
                     // Only an aggregate takes brace elision; a class with
                     // a user constructor is copy-initialized from the
                     // element ([dcl.init.aggr]/16).
+                    // An element of another class type initializes the
+                    // member when an implicit conversion sequence exists
+                    // ([dcl.init.aggr]/4.2, clang `CheckSubElementType`'s
+                    // `InitializationSequence` probe): `D{c}` with
+                    // `C::operator B()` initializes `D::b` from `c`.
                     self.is_aggregate(ty)
                         && self.ast.types.as_record(ety).is_none_or(|x| {
                             self.ast.first(x) != self.ast.first(r)
                                 && !conv::is_derived_from(self, x, r)
+                                && {
+                                    let a = self.arg_info(e);
+                                    let opts = crate::overload::IcsOptions::NONE;
+                                    self.try_implicit_conversion(&a, ty, opts).is_bad()
+                                }
                         })
                         && !self.is_error_type(ety)
                 } else if let Some(p) = self.vector_parts(ty) {

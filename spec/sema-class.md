@@ -987,6 +987,34 @@ collected, and only the temporary bound directly to `__range` is extended.
 Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 `range_for`).
 
+**Returned locals (WP-204, `class/temporary/stack_addr.rs`).**
+`Sema::check_return_lifetime(c, ret)` runs on every converted
+non-dependent return operand (clang `checkExprLifetime`, `LK_Return`). A
+reference return first gets the direct-temporary check above
+(`check_dangling_temporary`); then the operand is walked like clang's
+`visitLocalsRetainedByReferenceBinding` (reference return: through
+parens, no-op / derived-to-base casts, `.` member access, subscripts of
+arrays, `*` of a pointer, the comma's right operand, both `?:` arms, and
+the initializer of a local reference) or `visitLocalsRetainedByInitializer`
+(otherwise: `&`, array decay, no-op / bit / base casts, pointer `+`/`-`,
+both `?:` arms, the initializer of a `const` local read by
+lvalue-to-rvalue conversion, and each capture initializer of a lambda).
+Each automatic variable or parameter reached is `{address of|reference to}
+stack memory associated with {local variable|parameter} 'x' returned`
+[-Wreturn-stack-address] at the first reference/`const` variable or
+capture on the path (else at the name), with one note per path step:
+`binding reference variable 'r' here` / `via initialization of variable
+'p' here`, `captured by reference here`, `implicitly captured by
+reference due to use here` (located at the capture-default), `captured by
+reference via initialization of lambda capture 'r'`. A temporary reached
+through a local reference is `returning reference to local temporary
+object` (reference return) or `returning address of local temporary
+object`, with the same notes. Reference parameters, statics,
+`->` access, captured variables named inside a lambda and aggregate
+(non-lambda) prvalues are not followed. Kiln's per-`(id, span)`
+deduplication (diag.md §7.4) drops clang's repeat of a non-dependent
+return's warning in each instantiation.
+
 ### 5.5 Copy elision and NRVO ([class.copy.elision])
 - **Guaranteed elision** ([dcl.init.general]/16.6.1): a prvalue of the same
   class (ignoring cv) initializes the object directly; no copy or move

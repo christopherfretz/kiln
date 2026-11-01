@@ -625,8 +625,20 @@ impl<'a> AstNames<'a> {
                 out.push_str("()");
             }
             ExprKind::MemberExpr => {
-                self.expr(exprs.operand(e), d, out);
-                out.push_str(if n.has(ExprFlags::ARROW) { "->" } else { "." });
+                // clang `VisitMemberExpr`: an anonymous struct or union
+                // member prints nothing, nor does the separator after it
+                // (`h.s` for `h.<anonymous union>.s`).
+                let anon = |m: DeclId| ast.decls.get(m).name().is_empty();
+                let base = exprs.operand(e);
+                self.expr(base, d, out);
+                let after_anon =
+                    exprs.get(base).kind() == ExprKind::MemberExpr && anon(exprs.decl(base));
+                if !after_anon {
+                    out.push_str(if n.has(ExprFlags::ARROW) { "->" } else { "." });
+                }
+                if anon(exprs.decl(e)) {
+                    return;
+                }
                 self.write_name(exprs.decl(e), out);
                 // clang `VisitMemberExpr`: explicit template arguments as
                 // written (`s.get<0>`).

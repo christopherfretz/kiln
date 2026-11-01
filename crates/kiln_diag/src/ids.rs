@@ -1647,6 +1647,12 @@ diag_ids! {
     // the GNU extension of C (WP-219)
     sema_arith_void_pointer_cxx = Error (1) "arithmetic on{0: a|} pointer{0:|s} to void";
     sema_arith_function_pointer_cxx = Error (2) "arithmetic on{0: a|} pointer{0:|s} to the function type {1}";
+    // WP-204: clang's `checkExprLifetime` for a return ([stmt.return],
+    // spec/sema-class.md §5.6).
+    sema_ret_stack_addr = Warning [ReturnStackAddress] (3) "{0:address of|reference to} stack memory associated with {1:local variable|parameter} {2} returned";
+    note_local_var_init = Note (2) "{0:via initialization of|binding reference} variable {1} here";
+    note_lambda_capture_here = Note (1) "{0:captured|captured by reference|implicitly captured due to use|implicitly captured by reference due to use} here";
+    note_lambda_init_capture = Note (2) "captured{0:| by reference} via initialization of lambda capture {1}";
     sema_template_arg_template_params_mismatch = Error (0) "template template argument has different template parameters than its corresponding template template parameter";
     note_template_param_list_different_arity = Note (1) "{0:too few|too many} template parameters in template template argument";
     note_template_param_different_kind = Note (0) "template parameter has a different kind in template argument";
