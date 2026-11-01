@@ -29,7 +29,7 @@ const TRIPLES: &[(&str, Arch)] =
     &[("aarch64-unknown-linux-gnu", Arch::AArch64), ("x86_64-unknown-linux-gnu", Arch::X86_64)];
 
 /// The minimum number of distinct clang symbols checked per triple.
-const MIN_SYMBOLS: usize = 500;
+const MIN_SYMBOLS: usize = 800;
 
 /// Name prefixes outside this differential: vtables, VTTs, RTTI,
 /// construction vtables and thunks (WP-080).

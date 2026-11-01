@@ -192,7 +192,7 @@ impl Mangler<'_, '_> {
     fn template_template_parm(&mut self, depth: u32, index: u32) {
         let key = Sub::TemplateParm(depth, index);
         if !self.try_sub(key) {
-            self.template_param(index);
+            self.template_param_at(depth, index);
             self.subs.push(key);
         }
     }
@@ -282,7 +282,7 @@ impl Mangler<'_, '_> {
 
     /// One expression; `false` when it (or a subexpression) has no
     /// supported encoding.
-    fn expression(&mut self, e: ExprId) -> bool {
+    pub(super) fn expression(&mut self, e: ExprId) -> bool {
         let ast = self.ast;
         let e = self.skip_transparent(e);
         let n = ast.exprs.get(e);
@@ -306,12 +306,20 @@ impl Mangler<'_, '_> {
             ExprKind::CXXNullPtrLiteralExpr => self.out.push_str("LDnE"),
             ExprKind::DeclRefExpr => {
                 let d = ast.exprs.decl(e);
-                if ast.decls.get(d).kind() != DeclKind::NonTypeTemplateParm {
-                    return false;
+                match ast.decls.get(d).kind() {
+                    DeclKind::NonTypeTemplateParm => {
+                        let (depth, idx) = ast
+                            .template_parm(d)
+                            .map_or((0, 0), |p| (u32::from(p.depth), u32::from(p.index)));
+                        self.template_param_at(depth, idx);
+                    }
+                    DeclKind::ParmVar => return self.function_param_ref(d),
+                    _ => return false,
                 }
-                let idx = ast.template_parm(d).map_or(0, |p| u32::from(p.index));
-                self.template_param(idx);
             }
+            ExprKind::ConceptSpecializationExpr => return self.concept_id_expr(e),
+            ExprKind::CXXFoldExpr => return self.fold_expr(e),
+            ExprKind::RequiresExpr => return self.requires_expr(e),
             ExprKind::DependentScopeDeclRefExpr => {
                 let Some(nns) = NnsId::try_new(n.a()) else { return false };
                 let DeclNameView::Identifier(name) =
@@ -347,7 +355,7 @@ impl Mangler<'_, '_> {
                 let Some(d) = DeclId::try_new(n.a()) else { return false };
                 let Some(p) = ast.template_parm(d) else { return false };
                 self.out.push_str("sZ");
-                self.template_param(u32::from(p.index));
+                self.template_param_at(u32::from(p.depth), u32::from(p.index));
             }
             // A vendor trait: `u <source-name> <type>* E`.
             ExprKind::TypeTraitExpr => {
@@ -400,7 +408,7 @@ impl Mangler<'_, '_> {
                 return self.expression(ast.exprs.operand(expr));
             }
             ExprKind::BinaryOperator => {
-                let Some(code) = binary_code(ast.exprs.binary_op(expr)) else { return false };
+                let code = binary_code(ast.exprs.binary_op(expr));
                 self.out.push_str(code);
                 let [lhs, rhs] = ast.exprs.operands(expr);
                 return self.expression(lhs) && self.expression(rhs);
@@ -433,6 +441,15 @@ impl Mangler<'_, '_> {
                     return self.expression(sub);
                 }
             }
+            ExprKind::ArraySubscriptExpr => {
+                self.out.push_str("ix");
+                let [lhs, rhs] = ast.exprs.operands(expr);
+                return self.expression(lhs) && self.expression(rhs);
+            }
+            ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::CXXNewExpr => return self.member_or_construct_expression(expr),
             ExprKind::PackExpansionExpr => {
                 self.out.push_str("sp");
                 return self.expression(ast.exprs.operand(expr));
@@ -457,10 +474,132 @@ impl Mangler<'_, '_> {
         true
     }
 
+    /// The member-access, pseudo-destructor, functional-cast and
+    /// `new` forms of [`Self::operator_expression`].
+    fn member_or_construct_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        match node.kind() {
+            // clang `mangleMemberExpr`: `dt`/`pt <expression>
+            // <unresolved-name>`.
+            ExprKind::CXXDependentScopeMemberExpr => {
+                let Some(base) = ExprId::try_new(node.a()) else { return false };
+                self.out.push_str(if node.aux() & 1 != 0 { "pt" } else { "dt" });
+                if !self.expression(base) {
+                    return false;
+                }
+                if let Some(&nns) = ast.templates.expr_nns.get(expr)
+                    && !self.unresolved_prefix(nns, false)
+                {
+                    return false;
+                }
+                let DeclNameView::Identifier(name) =
+                    ast.names.view(ast.dependent_member_name(expr))
+                else {
+                    return false;
+                };
+                self.symbol(name);
+                if let Some(&args) = ast.templates.expr_targs.get(expr) {
+                    self.template_args(args);
+                }
+            }
+            // `p.~T`: `dt <expression> dn <destructor-name>`.
+            ExprKind::CXXPseudoDestructorExpr => {
+                let (base, arrow, t) = ast.exprs.pseudo_destructor(expr);
+                self.out.push_str(if arrow { "pt" } else { "dt" });
+                if !self.expression(base) {
+                    return false;
+                }
+                self.out.push_str("dn");
+                self.ty(t);
+            }
+            // `T(args)` is `cv <type> <expression>` for one argument, else
+            // `cv <type> _ <expression>* E`; `T{args}` is
+            // `tl <type> <braced-expression>* E`.
+            ExprKind::CXXUnresolvedConstructExpr => {
+                let mut args: Vec<ExprId> = kiln_ast::ids::ListId::try_new(node.a())
+                    .map(|l| ast.lists.iter::<ExprId>(l).collect())
+                    .unwrap_or_default();
+                let list = node.aux() != 0;
+                // `T{a, b}` spells the braced list's elements.
+                if list
+                    && let [one] = args[..]
+                    && ast.exprs.get(one).kind() == ExprKind::InitListExpr
+                {
+                    args = ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(one)).collect();
+                }
+                self.out.push_str(if list { "tl" } else { "cv" });
+                self.ty(node.ty());
+                let wrap = !list && args.len() != 1;
+                if wrap {
+                    self.out.push('_');
+                }
+                for a in args {
+                    if !self.expression(a) {
+                        return false;
+                    }
+                }
+                if list || wrap {
+                    self.out.push('E');
+                }
+            }
+            ExprKind::CXXNewExpr => return self.new_expression(expr),
+            _ => return false,
+        }
+        true
+    }
+
+    /// clang `CXXNewExprClass`: `[gs] nw|na <expression>* _ <type>
+    /// (pi <expression>* E | E)` (a braced initializer has no
+    /// encoding here).
+    fn new_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        let x = *ast.exprs.new_extra(expr);
+        let style = ast.exprs.new_init_style(expr);
+        if style == kiln_ast::expr::NewInitStyle::Braces {
+            return false;
+        }
+        if node.has(kiln_ast::expr::ExprFlags::GLOBAL) {
+            self.out.push_str("gs");
+        }
+        self.out.push_str(if x.array_size.is_some() { "na" } else { "nw" });
+        let placement: Vec<ExprId> =
+            x.placement.map(|l| ast.lists.iter::<ExprId>(l).collect()).unwrap_or_default();
+        for p in placement {
+            if !self.expression(p) {
+                return false;
+            }
+        }
+        self.out.push('_');
+        self.ty(x.allocated_ty);
+        if style == kiln_ast::expr::NewInitStyle::Parens {
+            self.out.push_str("pi");
+            let args: Vec<ExprId> = match x.init {
+                Some(i) if ast.exprs.get(i).kind() == ExprKind::ParenListExpr => {
+                    kiln_ast::ids::ListId::try_new(ast.exprs.get(i).a())
+                        .map(|l| ast.lists.iter::<ExprId>(l).collect())
+                        .unwrap_or_default()
+                }
+                Some(i) => vec![i],
+                None => Vec::new(),
+            };
+            for a in args {
+                if !self.expression(a) {
+                    return false;
+                }
+            }
+            self.out.push('E');
+        } else {
+            self.out.push('E');
+        }
+        true
+    }
+
     /// clang `mangleUnresolvedPrefix`: `sr` levels of a dependent
     /// qualifier as written, closed by `E` unless the innermost level is
     /// an unresolved type (a template parameter or `decltype`).
-    fn unresolved_prefix(&mut self, nns: NnsId, recursive: bool) -> bool {
+    pub(super) fn unresolved_prefix(&mut self, nns: NnsId, recursive: bool) -> bool {
         let ast = self.ast;
         let lead = |m: &mut Self, prefix: Option<NnsId>| {
             if let Some(p) = prefix {
@@ -557,8 +696,8 @@ impl Mangler<'_, '_> {
 }
 
 /// <operator-name> of a binary operator in an expression.
-const fn binary_code(op: BinaryOp) -> Option<&'static str> {
-    Some(match op {
+pub(super) const fn binary_code(op: BinaryOp) -> &'static str {
+    match op {
         BinaryOp::PtrMemD => "ds",
         BinaryOp::PtrMemI => "pm",
         BinaryOp::Mul => "ml",
@@ -581,6 +720,16 @@ const fn binary_code(op: BinaryOp) -> Option<&'static str> {
         BinaryOp::LAnd => "aa",
         BinaryOp::LOr => "oo",
         BinaryOp::Comma => "cm",
-        _ => return None,
-    })
+        BinaryOp::Assign => "aS",
+        BinaryOp::MulAssign => "mL",
+        BinaryOp::DivAssign => "dV",
+        BinaryOp::RemAssign => "rM",
+        BinaryOp::AddAssign => "pL",
+        BinaryOp::SubAssign => "mI",
+        BinaryOp::ShlAssign => "lS",
+        BinaryOp::ShrAssign => "rS",
+        BinaryOp::AndAssign => "aN",
+        BinaryOp::XorAssign => "eO",
+        BinaryOp::OrAssign => "oR",
+    }
 }
