@@ -199,15 +199,7 @@ impl Parser<'_, '_> {
             let sub = self.parse_labeled_sub(in_stmt_expr);
             return Some(self.s.act_on_label_stmt(l, sub, loc));
         }
-        // An unqualified name whose lookup is ambiguous starts neither a
-        // declaration nor an expression: reported, and the statement
-        // skipped ([basic.lookup.general]/1; clang's `ClassifyName`
-        // error in `ParseStatementOrDeclaration`).
-        if let Some(name) = self.ident()
-            && !self.peek_is(1, Punct::ColonColon)
-            && self.s.diagnose_ambiguous_name(name, None, loc)
-        {
-            self.skip_to_semi();
+        if self.skip_ambiguous_name_stmt(loc) {
             return None;
         }
         if self.is_cxx_declaration_statement(false) {
@@ -219,6 +211,19 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_decl_stmt(&decls, loc));
         }
         self.parse_expression_statement(in_stmt_expr)
+    }
+
+    /// An unqualified name whose lookup is ambiguous starts neither a
+    /// declaration nor an expression: reported, and the statement
+    /// skipped ([basic.lookup.general]/1; clang's `ClassifyName` error
+    /// in `ParseStatementOrDeclaration`). True when skipped.
+    fn skip_ambiguous_name_stmt(&mut self, loc: Loc) -> bool {
+        let Some(name) = self.ident() else { return false };
+        if self.peek_is(1, Punct::ColonColon) || !self.s.diagnose_ambiguous_name(name, None, loc) {
+            return false;
+        }
+        self.skip_to_semi();
+        true
     }
 
     /// `goto identifier ;` ([stmt.goto]).
