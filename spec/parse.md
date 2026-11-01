@@ -358,6 +358,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     chunk carries `qual: None`. The same form is accepted in abstract
     declarators and in new-declarators (`new int C::*`).
   - the bit-width, attributes, and `init_style`
+  - `parens`: every pair of grouping parentheses, in the order they
+    close, as (number of chunks inside, `(`, `)`) (clang's
+    `DeclaratorChunk::Paren`; WP-191), for `ParenType` sugar and the
+    redundant-parentheses warning; `after_comma`: a `,` precedes the
+    declarator in its declaration (clang `!isFirstDeclarator()`)
   - a special declarator-id (`Declarator::special`, `SpecialName`):
     a constructor (the class's own name in member context, or `C::C`
     out of line, followed by `(`), `~C` (`expected a class name after

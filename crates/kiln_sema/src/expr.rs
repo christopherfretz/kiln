@@ -2533,6 +2533,7 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_null_indirection(l);
         let lt = self.ety(l);
         let to = conv::strip_cv(self, lt);
         let conv = match conv::atomic_class_assign(self, to, r) {
@@ -2625,6 +2626,7 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_null_indirection(l);
         // [expr.ass]/6: the result `E1 op E2` is assigned back to `E1`. An
         // arithmetic computation type converts implicitly to any arithmetic
         // left type, but not to an unscoped enumeration ([conv.prom]/3

@@ -212,6 +212,8 @@ diag_groups! {
     AddressOfPackedMember = "address-of-packed-member" [];
     UnusedVariable = "unused-variable" [];
     RedundantParens = "redundant-parens" [];
+    NullDereference = "null-dereference" [];
+    EmptyBody = "empty-body" [];
 }
 
 impl Group {

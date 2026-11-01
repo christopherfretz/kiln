@@ -165,6 +165,10 @@ Constructors:
     exception specification Sema built from the declarator (§4.7);
     `ExcSpec::None` when none was written (WP-058 added the field)
   - attributes, bit-width, `init_style`, and context
+  - `parens` and `after_comma` (spec/parse.md §4): applying the chunks
+    wraps the type in `Paren` sugar for each pair of parentheses around
+    exactly the chunks applied so far (`declarator_parens`; none around
+    the outermost type or a function or array type, spec/types.md)
 
 ### 4.2 Declarator to declaration
 `act_on_declarator` turns a `Declarator` into a declaration:
@@ -265,6 +269,36 @@ Redeclaration and linkage rules:
   (-Wextern-initializer) unless its base element type is const, it is
   `extern "C"`, or it is a template instantiation (clang
   `AddInitializerToDecl`). Explicit and partial specializations warn.
+
+- **Redundant parentheses** (`vexing.rs`, clang
+  `warnAboutRedundantParens`, WP-191): when the outermost declarator
+  operator is a pair of grouping parentheses (`T(x);`), a block-scope,
+  condition or for-init declarator of class or dependent type with only
+  a type specifier, a simple name that ordinary lookup finds, no
+  function, reference, member-pointer or unbounded array chunk, and no
+  preceding comma could be a function-style cast: "parentheses were
+  disambiguated as redundant parentheses around declaration of variable
+  named 'x'" [-Wvexing-parse] with clang's notes (`add a variable name
+  to declare a ...`, unless the class is complete with a trivial
+  destructor; `add enclosing parentheses to perform a function-style
+  cast`; `remove parentheses to silence this warning`). Otherwise the
+  off-by-default "redundant parentheses surrounding declarator"
+  [-Wredundant-parens], except for `A (::B)`. Not in an instantiation.
+- **Qualified declarator-ids** (`qualified_decl.rs`, clang
+  `diagnoseQualifiedDeclaration`, WP-191): a qualified name must be
+  declared in a scope that encloses its qualifier's: "definition or
+  redeclaration of 'a' cannot name the global scope" (`T(::a);`), "...
+  not allowed inside a function", "cannot define or redeclare 'a' here
+  because namespace 'N' does not enclose namespace 'M'", and for members
+  "non-friend class member 'f' cannot have a qualified name" / "extra
+  qualification on member 'f'". The declaration is then dropped, or (for
+  the recoverable ones) declared unqualified.
+- **Default-initialization without a default constructor**
+  (`check_class_default_init`, WP-191): a class variable with no
+  initializer whose default constructor is missing is resolved as
+  `T x()`'s overload set, so the error is "no matching constructor for
+  initialization of 'S'" with a note per candidate (clang
+  `InitializationSequence` with no arguments).
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.
@@ -1418,6 +1452,9 @@ for them.
     `lambda_mangle.var`); otherwise at once.
   - The warning carries the expression's range, so a macro-argument
     location gets clang's `expanded from macro` note (spec/diag.md §8.4).
+  - The run-time diagnostics of §5.15 use the same queue. kiln has no
+    constant-evaluated or discarded-statement context, where clang's
+    `DiagRuntimeBehavior` drops them too.
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **Unused variables (WP-203; clang `ShouldDiagnoseUnusedDecl` /
@@ -1476,9 +1513,18 @@ for them.
     error;
   - an incomplete type is diagnosed with the forward-declaration note.
 
-  Class and array literals (temporary materialization) and literals
-  at namespace scope (constant elements, `ConstantExpr` wrapping) are
-  reported as not supported yet.
+  - a class literal (WP-191) is list-initialized as a direct-list
+    initialization (`list_construct`, `InitStyle::DirectList`): a
+    class with constructors holds a `CXXTemporaryObjectExpr`, an
+    aggregate its `InitListExpr`; an abstract class is an error, and a
+    class with a non-trivial destructor wraps the literal in a
+    `CXXBindTemporaryExpr`;
+  - a dependent literal holds the list as written (an `InitListExpr`
+    of type `void`) until instantiation.
+
+  Array literals of a dependent type and literals at namespace scope
+  (constant elements, `ConstantExpr` wrapping) are reported as not
+  supported yet.
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
@@ -1805,6 +1851,40 @@ and `DiagnoseMisalignedMembers`:
   - An anonymous union or struct member as the culprit prints as `''`.
     clang prints `C::(anonymous union at ...)`.
 - Test: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`.
+
+### 5.15 `-Wnull-dereference` (`null_deref.rs`, WP-191)
+The two syntactic `*null` checks of clang 19
+(`CheckForNullPointerDereference`). The pattern is a `*p` found under the
+expression with parentheses, casts, full-expressions and materialized
+temporaries ignored, where `p` (also with those ignored) is a null
+pointer constant: a zero integer literal, a `std::nullptr_t` value or
+`__null` (`(1 - 1)` is not one).
+- **Indirection** (`check_null_indirection`): run from
+  `conv::lvalue_to_rvalue` (clang `DefaultLvalueConversion`) and on the
+  left operand of a builtin simple or compound assignment (clang
+  `CheckAssignmentOperands`; not for `++`/`--`). The operand must have
+  pointer type and the dereference must not be volatile. The warning
+  "indirection of non-volatile null pointer will be deleted, not trap"
+  [-Wnull-dereference] carries the operand's range and the note
+  "consider using __builtin_trap() or qualifying pointer with
+  'volatile'", both at the `*`.
+- **Reference binding** (`check_null_reference_binding`): run where
+  `conv::bind_reference` binds a glvalue directly (clang
+  `SK_BindReference`): "binding dereferenced null pointer to reference
+  has undefined behavior" [-Wnull-dereference], volatile or not. A
+  binding through a converted temporary (`const long &r = *(int *)0`)
+  loads instead and gets the indirection warning.
+- Both go through `diag_if_reachable` and are dropped in an unevaluated
+  operand or an immediate function context (§5.1 reachability). Member
+  access, subscripts, `&*`, `(void)` and discarded operands load nothing
+  and are not diagnosed.
+- **Deviations:** a non-dependent `*null` in a template is reported at
+  the definition only, because instantiation shares non-dependent
+  subtrees; clang re-diagnoses it in each instantiation. A dependent
+  one (`*(T *)0`) is reported per instantiation, as clang does. kiln
+  does not parse `__null` yet.
+- Tests: `tests/conformance/expr.unary.op/null-dereference-indirection.cpp`,
+  `tests/conformance/dcl.init.ref/null-dereference-binding.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -2282,6 +2362,36 @@ Tests: `tests/conformance/dcl.fct.def.general/predefined-*.cpp`,
 `expr.const/builtins-srcloc-template-run.cpp`, `tests/codegen/predefined.cpp`.
 Gap: a function with a deduced return type prints `auto` where clang
 evaluates the source-location name after deduction.
+
+### 7.9 `-Wempty-body` (`empty_body.rs`, WP-191)
+clang 19's `DiagnoseEmptyStmtBody` / `DiagnoseEmptyLoopBody`. The body is
+a null statement whose `;` is spelled on the presumed line of the
+statement's `)` (for `switch`, of the condition's end). The warning
+("if statement has empty body", "switch statement has empty body",
+"range-based for loop has empty body", "for loop has empty body",
+"while loop has empty body" [-Wempty-body]) and the note "put the
+semicolon on a separate line to silence this warning" are both at the
+`;`.
+- The parser calls `check_empty_body` for an `if` without `else` (not
+  `if consteval`; `if constexpr` counts) and a range-based `for`, and
+  `check_empty_switch_body` for a `switch`, when the statement is built.
+- A `for` or `while` is recorded (`note_loop_body`, in
+  `Sema::empty_loop_bodies`). When its enclosing compound statement is
+  finished, `check_empty_loop_bodies` warns if the next statement of
+  that block is a compound statement or begins in a later presumed
+  column than the loop. `do ; while (c);` never warns.
+- A `;` preceded by a macro that expanded to nothing (`if (c) EMPTY;`)
+  does not warn. clang reads `NullStmt::hasLeadingEmptyMacro`, a
+  preprocessor token flag. kiln reads the source instead: anything other
+  than whitespace and comments between the `)` and the `;`. A `;` that
+  comes from a macro is spelled on another line and does not warn.
+- Nothing is diagnosed in a template instantiation; a template definition
+  warns once.
+- **Deviation:** a block-scope declaration with leading attributes
+  (`[[maybe_unused]] int q;`) begins at its decl-specifiers in kiln, so
+  a loop before it may warn where clang (which begins at the `[[`) does
+  not.
+- Test: `tests/conformance/stmt.pre/empty-body-warning.cpp`.
 
 ## 8. Constant evaluation (`oven_bridge.rs`)
 

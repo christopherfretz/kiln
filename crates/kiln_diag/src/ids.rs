@@ -1636,6 +1636,15 @@ diag_ids! {
     sema_invalid_declarator_scope = Error (3) "cannot define or redeclare '{0}' here because namespace '{1}' does not enclose namespace '{2}'";
     sema_member_qualification = Error (1) "non-friend class member '{0}' cannot have a qualified name";
     sema_member_extra_qualification = Error (1) "extra qualification on member '{0}'";
+    sema_indirection_through_null = Warning [NullDereference] (0) "indirection of non-volatile null pointer will be deleted, not trap";
+    note_indirection_through_null = Note (0) "consider using __builtin_trap() or qualifying pointer with 'volatile'";
+    sema_binding_null_to_reference = Warning [NullDereference] (0) "binding dereferenced null pointer to reference has undefined behavior";
+    sema_empty_if_body = Warning [EmptyBody] (0) "if statement has empty body";
+    sema_empty_switch_body = Warning [EmptyBody] (0) "switch statement has empty body";
+    sema_empty_for_body = Warning [EmptyBody] (0) "for loop has empty body";
+    sema_empty_range_for_body = Warning [EmptyBody] (0) "range-based for loop has empty body";
+    sema_empty_while_body = Warning [EmptyBody] (0) "while loop has empty body";
+    note_empty_body_on_separate_line = Note (0) "put the semicolon on a separate line to silence this warning";
 }
 
 impl DiagId {
