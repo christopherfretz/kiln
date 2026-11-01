@@ -371,6 +371,22 @@ impl Oven {
                 };
                 (site.loc, format!("reference dynamic_cast failed: {what}"))
             }
+            Fault::DestroyEnded { p, ty } => {
+                let d = self.ptr_string(ast, p, ty);
+                // clang diagnoses a variable's destruction at its
+                // declaration, other objects' at the destroying expression.
+                let at = match self.mem.alloc_any(Ptr::decode(p)).map(|a| a.origin) {
+                    Some(Origin::Var(v)) => ast.decls.get(v).loc(),
+                    _ => site.loc,
+                };
+                (
+                    at,
+                    format!(
+                        "destroying object '{}' whose lifetime has already ended",
+                        d.trim_start_matches('&')
+                    ),
+                )
+            }
             Fault::NoDynamic(k) => (
                 site.loc,
                 format!(

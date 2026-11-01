@@ -1,0 +1,16 @@
+Dumping n::X::N:
+CXXRecordDecl struct N definition
+`-FieldDecl a 'T'
+
+Dumping n::X<int>::N:
+CXXRecordDecl parent struct N definition
+`-FieldDecl z 'long'
+
+Dumping n::X<char>::N:
+CXXRecordDecl struct N definition
+`-FieldDecl y 'int'
+
+Dumping n::X<type-parameter-0-0 *, true>::N:
+CXXRecordDecl struct N definition
+`-FieldDecl p 'T *'
+

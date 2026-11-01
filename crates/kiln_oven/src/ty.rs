@@ -189,6 +189,18 @@ impl Types {
         }
     }
 
+    /// A class holding no data: no vptr, and every base and member is
+    /// itself such a class (an empty class, [class.prop]/1, or one of
+    /// only empty subobjects). Its storage may overlap another
+    /// subobject's (an empty base at offset 0, `[[no_unique_address]]`),
+    /// so zero-initializing it writes no byte ([dcl.init.general]/6.2).
+    pub fn holds_no_data(&self, t: OTy) -> bool {
+        let i = self.info(t);
+        matches!(i.kind, TyKind::Record { union: false, .. })
+            && !i.has_vptr
+            && self.fields(t).iter().all(|f| f.width.is_none() && self.holds_no_data(f.ty))
+    }
+
     /// The non-bit-field member (or base) of the record `t` that holds
     /// byte `off`. A member of non-zero size wins over a zero-size one at
     /// the same offset (a zero-length array, GNU `T x[0]`, holds no byte:

@@ -78,6 +78,26 @@ fn namespaces_and_using_declarations() {
 }
 
 #[test]
+fn filter_names_specialization_contexts() {
+    // A member explicitly specialized for an implicit instantiation is
+    // named by it (`n::X<int>::N`, defaulted trailing arguments dropped);
+    // an explicit (partial) specialization's members by it; the members
+    // of implicit and explicit instantiations, and a function template's
+    // specializations, are not visited (clang's `RecursiveASTVisitor`).
+    let f = DumpOptions { filter: Some("N".into()), ..DumpOptions::default() };
+    let (r, calls) = run_fixture("spec_ctx", &f);
+    assert_eq!(r.unwrap(), fixture("spec_ctx.filter-N.expected"));
+    assert_eq!(calls, 1, "an explicit specialization's kind is in the text dump");
+    let f = DumpOptions { filter: Some("uu".into()), ..DumpOptions::default() };
+    let r = run_fixture("spec_ctx", &f).0.unwrap();
+    assert_eq!(r.matches("Dumping ").count(), 1, "{r}");
+    // A class defined outside its namespace names its members by it.
+    let f = DumpOptions { filter: Some("sx".into()), ..DumpOptions::default() };
+    let r = run_fixture("spec_ctx", &f).0.unwrap();
+    assert!(r.starts_with("Dumping n::S::sx:\n"), "{r}");
+}
+
+#[test]
 fn constexpr_values_come_from_the_text_dump() {
     let (r, calls) = run_fixture("values", &DumpOptions::default());
     assert_eq!(r.unwrap(), fixture("values.expected"));

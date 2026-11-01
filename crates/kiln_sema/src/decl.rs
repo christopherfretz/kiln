@@ -2667,6 +2667,12 @@ impl Sema<'_, '_> {
         {
             let _ = self.templ.trailing_arrow.insert(f, *arrow);
         }
+        if let Some(tl) = ds.type_loc
+            && tl != d.name_loc()
+            && self.ast.types.proto(ty).is_some_and(|p| self.ast.types.is_dependent(p.ret()))
+        {
+            self.ret_type_locs.insert(f, tl);
+        }
         // A pure virtual function's notes point at its decl-specifiers
         // (clang `getBeginLoc`, §4.11), as does the `->` note on an
         // `operator->` result ([over.ref]).
