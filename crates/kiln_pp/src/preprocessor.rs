@@ -273,6 +273,9 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) diag_pushes: u32,
     /// Scratch buffers holding `#embed` byte spellings.
     pub(crate) embed_bufs: HashSet<FileId>,
+    /// Attribute-macro definition history (see [`crate::AttrMacro`]).
+    pub(crate) attr_macros: Vec<crate::AttrMacro>,
+    pub(crate) attr_macro_gen: u32,
     /// clang's `CommentHandler` ([`Preprocessor::set_comment_handler`]).
     pub(crate) comment_handler: Option<Box<dyn FnMut(Span) + 'd>>,
 }
@@ -345,6 +348,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             quiet_lex: false,
             diag_pushes: 0,
             embed_bufs: HashSet::new(),
+            attr_macros: Vec::new(),
+            attr_macro_gen: 0,
             comment_handler: None,
         };
         pp.define_builtins();

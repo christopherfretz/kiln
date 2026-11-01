@@ -524,6 +524,20 @@ will print, so a dropped duplicate does not consume them.
 ` generated.` (singular for 1). The driver prints it after the sink's
 output.
 
+`error_count()` counts every error, including warnings promoted by
+`-Werror`; it decides the exit status. Two narrower counters serve the
+analyses that stop after an error:
+- `uncompilable_error_count()` (clang `hasUncompilableErrorOccurred`):
+  errors whose id is an error by default, and fatal errors. Sema's flow
+  warnings at the end of a function body stop once it is non-zero.
+- `unrecoverable_error_count()` (clang `hasUnrecoverableErrorOccurred`):
+  errors whose id is of class error (not a warning or extension made an
+  error by default or by `-Werror`), and fatal errors. A scope that saw
+  one does not report its unused variables.
+
+So a warning promoted by `-Werror` makes the run fail but does not
+silence the later warnings.
+
 ### 7.6 Thread safety
 
 `DiagEngine` is `Send + Sync` and every method takes `&self`, so one

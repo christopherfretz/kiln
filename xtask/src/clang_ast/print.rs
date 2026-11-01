@@ -620,7 +620,27 @@ impl<'a> Printer<'a, '_> {
                 }
                 true
             })
-            .try_for_each(|c| self.find(c, f, ctx, out))
+            .try_for_each(|c| {
+                // A template parameter's context is a class template's
+                // class (`n::S::T`) or a function template's function (an
+                // unqualified name); otherwise the enclosing scope.
+                let parm = matches!(
+                    kind(c),
+                    "TemplateTypeParmDecl" | "NonTypeTemplateParmDecl" | "TemplateTemplateParmDecl"
+                );
+                let scope = match k {
+                    "ClassTemplateDecl" if parm => {
+                        Some(Ctx::Named(name(n).unwrap_or("").to_owned()))
+                    }
+                    "FunctionTemplateDecl" if parm => Some(Ctx::Function(String::new())),
+                    _ => None,
+                };
+                let Some(scope) = scope else { return self.find(c, f, ctx, out) };
+                ctx.push(scope);
+                let r = self.find(c, f, ctx, out);
+                ctx.pop();
+                r
+            })
     }
 
     /// Whether class template specialization `n`, printed at its lexical
@@ -638,7 +658,7 @@ impl<'a> Printer<'a, '_> {
     /// [`ctx_of`], or for a class template (partial) specialization its
     /// name with its arguments (`X<int, 3>::`; `printQualifiedName`
     /// prints a specialization context with `printTemplateArgumentList`).
-    fn ctx_of_node(&self, n: &Json) -> Res<Option<Ctx>> {
+    fn ctx_of_node(&mut self, n: &Json) -> Res<Option<Ctx>> {
         if !SPEC_CTX_KINDS.contains(&kind(n)) {
             return Ok(ctx_of(n));
         }
@@ -666,29 +686,64 @@ impl<'a> Printer<'a, '_> {
         // default (`SuppressDefaultTemplateArgs`), unless one is a pack.
         let mut end = args.len();
         if !args.iter().any(|a| flag(a, "isPack")) {
-            while end > 0
-                && is_default_arg(params[end - 1], args[end - 1], param_ty(params[end - 1]))?
-            {
+            while end > 0 && is_default_arg(params[end - 1], &args, end - 1)? {
                 end -= 1;
             }
         }
         let mut parts = Vec::new();
-        for (a, p) in args[..end].iter().zip(&params) {
+        for (i, (a, p)) in args[..end].iter().zip(&params).enumerate() {
             if flag(a, "isPack") {
                 // An empty pack prints nothing.
                 for e in kids(a).filter(|c| kind(c) == "TemplateArgument") {
                     parts.push(qualified_name_arg(e, param_ty(p))?);
                 }
             } else {
-                parts.push(qualified_name_arg(a, param_ty(p))?);
+                match qualified_name_arg(a, param_ty(p)) {
+                    Ok(s) => parts.push(s),
+                    Err(e) => parts.push(self.side_ctx_arg(n, i, param_ty(p)).ok_or(e)?),
+                }
             }
         }
         Ok(Some(Ctx::Named(format!("{nm}<{}>", parts.join(", ")))))
     }
 
+    /// Argument `i` of class template specialization `n` as it prints in
+    /// a qualified name, from the side channel, for what the JSON omits:
+    /// a template template argument's name (`template 'q::F'`) and an
+    /// enumeration argument's enumerator (`integral 'K::b'`; a value
+    /// that names no enumerator, `(K)7`, prints without its cast unless
+    /// the parameter's type is deduced). `None` when the side channel
+    /// has nothing usable.
+    fn side_ctx_arg(&mut self, n: &Json, i: usize, param: Option<&str>) -> Option<String> {
+        let pos = *self.ix.order.get(id(n))?;
+        let line = self.side().ok()?.get(pos)?.args.get(i)?.clone();
+        let quoted = |w: &str| line.strip_prefix(w)?.strip_suffix('\'').map(str::to_owned);
+        if param.is_none() {
+            return quoted("template '");
+        }
+        let v = quoted("integral '")?;
+        let enumerator = |s: &str| {
+            !s.is_empty()
+                && s.split("::").all(|w| {
+                    w.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                        && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                })
+        };
+        if enumerator(&v) {
+            return Some(v);
+        }
+        let p = param?;
+        if p == "auto" || p.contains("auto ") || p == "decltype(auto)" {
+            return None;
+        }
+        let bare = v.strip_prefix('(')?.strip_prefix(p)?.strip_prefix(')')?;
+        (!bare.is_empty() && bare.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()))
+            .then(|| bare.to_owned())
+    }
+
     /// The context chain of the declaration context `id` (a declaration's
     /// semantic parent), outermost first.
-    fn semantic_ctx(&self, id: &str) -> Res<Vec<Ctx>> {
+    fn semantic_ctx(&mut self, id: &str) -> Res<Vec<Ctx>> {
         let mut chain = Vec::new();
         let mut cur = self.ix.contexts.get(id).copied();
         // Bounded by the nesting depth; the cap guards a cycle.
@@ -2503,14 +2558,18 @@ fn desugared(ty: &Json) -> Option<&str> {
     text(ty, "desugaredQualType").or_else(|| text(ty, "qualType"))
 }
 
-/// Whether specialization argument `arg` equals the default argument of
-/// template parameter `parm` (clang `isSubstitutedDefaultArgument`): a
-/// non-dependent type compared desugared, or a literal value. A default
-/// the tool cannot compare is an error.
-fn is_default_arg(parm: &Json, arg: &Json, nttp_ty: Option<&str>) -> Res<bool> {
+/// Whether specialization argument `args[i]` equals the default argument
+/// of template parameter `parm` (clang `isSubstitutedDefaultArgument`): a
+/// non-dependent type compared desugared, a literal value, or a default
+/// that is an earlier parameter of the same template (`class U = T`),
+/// compared with that parameter's argument. A default the tool cannot
+/// compare is an error.
+fn is_default_arg(parm: &Json, args: &[&Json], i: usize) -> Res<bool> {
     if parm.get("defaultArg").is_none() {
         return Ok(false);
     }
+    let arg = args[i];
+    let nttp_ty = param_ty(parm);
     let unsupported = || {
         format!(
             "clang-ast: filter mode cannot compare a specialization context's argument with \
@@ -2523,7 +2582,18 @@ fn is_default_arg(parm: &Json, arg: &Json, nttp_ty: Option<&str>) -> Res<bool> {
         let dependent = kids(def).any(|c| flag(c, "isDependent"))
             || desugared(dt).is_none_or(|q| q.contains("type-parameter"));
         if dependent {
-            return Err(unsupported());
+            // An earlier parameter of the same template: its argument.
+            let earlier = kids(def).next().filter(|t| {
+                kind(t) == "TemplateTypeParmType"
+                    && t.get("depth").and_then(exact_int) == parm.get("depth").and_then(exact_int)
+            });
+            let ix = earlier
+                .and_then(|t| t.get("index").and_then(exact_int))
+                .and_then(|x| usize::try_from(x).ok())
+                .filter(|&x| x < i)
+                .ok_or_else(unsupported)?;
+            let sub = args[ix].get("type").and_then(desugared).ok_or_else(unsupported)?;
+            return Ok(arg.get("type").and_then(desugared) == Some(sub));
         }
         return Ok(arg.get("type").and_then(desugared) == desugared(dt));
     }

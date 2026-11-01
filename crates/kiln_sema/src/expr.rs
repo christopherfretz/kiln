@@ -1721,6 +1721,8 @@ impl Sema<'_, '_> {
         }
         if n.kind() == DeclKind::Var {
             self.note_var_referenced(d, loc);
+        }
+        if matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar) {
             self.count_var_ref(d);
         }
         self.diagnose_deprecated(d, loc);
@@ -3042,7 +3044,6 @@ impl Sema<'_, '_> {
     }
 
     /// `c ? t : f` ([expr.cond]).
-    #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cond]")]
     pub fn act_on_conditional(&mut self, c: ExprId, t: ExprId, f: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
             return self.recover_err(&[c, t, f], loc);
@@ -3074,132 +3075,160 @@ impl Sema<'_, '_> {
         {
             return self.builder().dependent_conditional(c2, t, f, loc);
         }
-        let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
-        let (tt, ft) = (tn.ty(), fnn.ty());
-        let (tv, fv) = (self.ast.types.is_void(tt), self.ast.types.is_void(ft));
-        if tv || fv {
-            // [expr.cond]/2.1: exactly one throw-expression operand gives
-            // the other operand's type and value category.
-            let (tthrow, fthrow) = (self.is_throw_expr(t), self.is_throw_expr(f));
-            if tthrow != fthrow {
-                let other = if tthrow { f } else { t };
-                let ty = self.ety(other);
-                let res = self.builder().conditional(c2, t, f, ty, loc);
-                if self.is_bitfield(other) {
-                    self.ast.exprs.mark_bitfield(res);
-                }
-                return res;
-            }
-            // [expr.cond]/2.2: both `void`.
-            if tv && fv {
-                return self.builder().conditional(c2, t, f, QualType::VOID, loc);
-            }
-            let msg = self
-                .diag(DiagId::sema_conditional_void_nonvoid, loc)
-                .arg(if tv { "0" } else { "1" })
-                .arg(self.ty_arg(if tv { ft } else { tt }));
-            self.emit(msg);
-            return self.recover_err(&[c, t, f], loc);
+        let (tt, ft) = (self.ety(t), self.ety(f));
+        if self.ast.types.is_void(tt) || self.ast.types.is_void(ft) {
+            return self.void_conditional(CondOps { c, c2, t, f, loc });
         }
         // [expr.cond]/4: operands of different types, one of class type:
         // each is tried as converted to match the other; exactly one
         // conversion is applied (clang `TryClassUnification`).
-        let (t, f, tn, fnn, tt, ft) = if !tv
-            && !self.ast.types.same_type(tt, ft)
+        let (t, f) = if !self.ast.types.same_type(tt, ft)
             && (self.ast.types.as_record(tt).is_some() || self.ast.types.as_record(ft).is_some())
         {
-            let l2r = self.try_class_unification(t, f);
-            let r2l = self.try_class_unification(f, t);
-            let (t, f) = match (l2r, r2l) {
-                (Err(()), _) | (_, Err(())) => return self.recover_err(&[c, t, f], loc),
-                (Ok(Some(_)), Ok(Some(_))) => {
-                    let msg =
-                        self.diag(DiagId::sema_conditional_ambiguous, loc).diff_args(self, tt, ft);
-                    self.emit(msg);
-                    return self.recover_err(&[c, t, f], loc);
-                }
-                (Ok(Some(ty)), Ok(None)) => {
-                    match conv::implicit_convert(self, t, ty, ConvCtx::Initialization) {
-                        Ok(x) => (x, f),
-                        Err(err) => return self.conv_failed(&err, t, f, loc),
-                    }
-                }
-                (Ok(None), Ok(Some(ty))) => {
-                    match conv::implicit_convert(self, f, ty, ConvCtx::Initialization) {
-                        Ok(x) => (t, x),
-                        Err(err) => return self.conv_failed(&err, t, f, loc),
-                    }
-                }
-                (Ok(None), Ok(None)) => (t, f),
-            };
-            if self.is_err_expr(t) || self.is_err_expr(f) {
-                return self.recover_err(&[c, t, f], loc);
+            match self.unify_class_arms(CondOps { c, c2, t, f, loc }) {
+                Ok(x) => x,
+                Err(res) => return res,
             }
-            let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
-            (t, f, tn, fnn, tn.ty(), fnn.ty())
         } else {
-            (t, f, tn, fnn, tt, ft)
+            (t, f)
         };
+        let ops = CondOps { c, c2, t, f, loc };
+        if let Some(res) = self.same_category_conditional(ops) {
+            return res;
+        }
+        if let Some(res) = self.arith_conditional(ops) {
+            return res;
+        }
+        self.other_conditional(ops)
+    }
+
+    /// [expr.cond]/2: a `void` operand. Exactly one throw-expression gives
+    /// the other operand's type and value category (/2.1); both `void`
+    /// give `void` (/2.2); otherwise ill-formed.
+    fn void_conditional(&mut self, o: CondOps) -> ExprId {
+        let CondOps { c, c2, t, f, loc } = o;
+        let (tt, ft) = (self.ety(t), self.ety(f));
+        let (tv, fv) = (self.ast.types.is_void(tt), self.ast.types.is_void(ft));
+        let (tthrow, fthrow) = (self.is_throw_expr(t), self.is_throw_expr(f));
+        if tthrow != fthrow {
+            let other = if tthrow { f } else { t };
+            let ty = self.ety(other);
+            let res = self.builder().conditional(c2, t, f, ty, loc);
+            if self.is_bitfield(other) {
+                self.ast.exprs.mark_bitfield(res);
+            }
+            return res;
+        }
+        if tv && fv {
+            return self.builder().conditional(c2, t, f, QualType::VOID, loc);
+        }
+        let msg = self
+            .diag(DiagId::sema_conditional_void_nonvoid, loc)
+            .arg(if tv { "0" } else { "1" })
+            .arg(self.ty_arg(if tv { ft } else { tt }));
+        self.emit(msg);
+        self.recover_err(&[c, t, f], loc)
+    }
+
+    /// [expr.cond]/4: the class-type arms converted to match each other
+    /// (clang `TryClassUnification` both ways); `Err` carries the
+    /// recovery expression after a diagnosed failure.
+    fn unify_class_arms(&mut self, o: CondOps) -> Result<(ExprId, ExprId), ExprId> {
+        let CondOps { c, t, f, loc, .. } = o;
+        let (tt, ft) = (self.ety(t), self.ety(f));
+        let l2r = self.try_class_unification(t, f);
+        let r2l = self.try_class_unification(f, t);
+        let (t, f) = match (l2r, r2l) {
+            (Err(()), _) | (_, Err(())) => return Err(self.recover_err(&[c, t, f], loc)),
+            (Ok(Some(_)), Ok(Some(_))) => {
+                let msg =
+                    self.diag(DiagId::sema_conditional_ambiguous, loc).diff_args(self, tt, ft);
+                self.emit(msg);
+                return Err(self.recover_err(&[c, t, f], loc));
+            }
+            (Ok(Some(ty)), Ok(None)) => {
+                match conv::implicit_convert(self, t, ty, ConvCtx::Initialization) {
+                    Ok(x) => (x, f),
+                    Err(err) => return Err(self.conv_failed(&err, t, f, loc)),
+                }
+            }
+            (Ok(None), Ok(Some(ty))) => {
+                match conv::implicit_convert(self, f, ty, ConvCtx::Initialization) {
+                    Ok(x) => (t, x),
+                    Err(err) => return Err(self.conv_failed(&err, t, f, loc)),
+                }
+            }
+            (Ok(None), Ok(None)) => (t, f),
+        };
+        if self.is_err_expr(t) || self.is_err_expr(f) {
+            return Err(self.recover_err(&[c, t, f], loc));
+        }
+        Ok((t, f))
+    }
+
+    /// [expr.cond]/4 and /5: glvalues of the same type and value category
+    /// give that glvalue; an lvalue of a less cv-qualified type binds to a
+    /// reference to the other operand's type (/4.1).
+    fn same_category_conditional(&mut self, o: CondOps) -> Option<ExprId> {
+        let CondOps { c2, t, f, loc, .. } = o;
+        let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
+        let (tt, ft) = (tn.ty(), fnn.ty());
         if tn.value_category().is_glvalue()
             && tn.value_category() == fnn.value_category()
             && self.ast.types.same_type(tt, ft)
-            && !tv
         {
             let res = self.builder().conditional(c2, t, f, tt, loc);
             if self.is_bitfield(t) || self.is_bitfield(f) {
                 self.ast.exprs.mark_bitfield(res);
             }
-            return res;
+            return Some(res);
         }
-        // [expr.cond]/4.1: an lvalue of a less cv-qualified type binds to a
-        // reference to the other operand's type.
-        if tn.value_category() == ValueCategory::LValue
-            && fnn.value_category() == ValueCategory::LValue
-            && !tv
-            && !fv
-            && self.ast.types.as_record(tt).is_none()
-            && self.ast.types.same_unqualified(tt, ft)
+        if tn.value_category() != ValueCategory::LValue
+            || fnn.value_category() != ValueCategory::LValue
+            || self.ast.types.as_record(tt).is_some()
+            || !self.ast.types.same_unqualified(tt, ft)
         {
-            let (tq, fq) = (self.ast.types.effective_quals(tt), self.ast.types.effective_quals(ft));
-            let lv = ValueCategory::LValue;
-            let pair = if tq.contains(fq) {
-                Some((t, conv::raw_cast(self, CastKind::NoOp, f, tt, lv, None), tt))
-            } else if fq.contains(tq) {
-                Some((conv::raw_cast(self, CastKind::NoOp, t, ft, lv, None), f, ft))
-            } else {
-                None
-            };
-            if let Some((t2, f2, ty)) = pair {
-                let res = self.builder().conditional(c2, t2, f2, ty, loc);
-                if self.is_bitfield(t) || self.is_bitfield(f) {
-                    self.ast.exprs.mark_bitfield(res);
-                }
-                return res;
-            }
+            return None;
         }
+        let (tq, fq) = (self.ast.types.effective_quals(tt), self.ast.types.effective_quals(ft));
+        let lv = ValueCategory::LValue;
+        let (t2, f2, ty) = if tq.contains(fq) {
+            (t, conv::raw_cast(self, CastKind::NoOp, f, tt, lv, None), tt)
+        } else if fq.contains(tq) {
+            (conv::raw_cast(self, CastKind::NoOp, t, ft, lv, None), f, ft)
+        } else {
+            return None;
+        };
+        let res = self.builder().conditional(c2, t2, f2, ty, loc);
+        if self.is_bitfield(t) || self.is_bitfield(f) {
+            self.ast.exprs.mark_bitfield(res);
+        }
+        Some(res)
+    }
+
+    /// [expr.cond]/7.2: arithmetic or enumeration arms. After the standard
+    /// conversions, operands of the same type give that type (no
+    /// promotion: `b ? s1 : s2` is `short`); otherwise the usual
+    /// arithmetic conversions.
+    fn arith_conditional(&mut self, o: CondOps) -> Option<ExprId> {
+        let CondOps { c2, t, f, loc, .. } = o;
+        let (tt, ft) = (self.ety(t), self.ety(f));
         let arith = |s: &Self, q: QualType| {
             s.ast.types.is_arithmetic(q)
                 || s.ast.types.as_enum(q).is_some()
                 || s.ast.types.as_complex(q).is_some()
         };
-        // [expr.cond]/7: after the standard conversions, operands of the
-        // same type give that type (no promotion: `b ? s1 : s2` is
-        // `short`).
-        if !tv && !fv && arith(self, tt) && arith(self, ft) {
-            let t2 = conv::decay(self, t);
-            let f2 = conv::decay(self, f);
-            let (t2ty, f2ty) = (self.ety(t2), self.ety(f2));
-            if self.ast.types.same_type(t2ty, f2ty) {
-                return self.builder().conditional(c2, t2, f2, t2ty, loc);
-            }
+        if !arith(self, tt) || !arith(self, ft) {
+            return None;
         }
-        if arith(self, tt) && arith(self, ft) {
-            return match conv::usual_arithmetic_conversions_kind(
-                self,
-                t,
-                f,
-                ArithConvKind::Conditional,
-            ) {
+        let t2 = conv::decay(self, t);
+        let f2 = conv::decay(self, f);
+        let (t2ty, f2ty) = (self.ety(t2), self.ety(f2));
+        if self.ast.types.same_type(t2ty, f2ty) {
+            return Some(self.builder().conditional(c2, t2, f2, t2ty, loc));
+        }
+        Some(
+            match conv::usual_arithmetic_conversions_kind(self, t, f, ArithConvKind::Conditional) {
                 Ok((t2, f2, ty)) => {
                     // clang's `PrepareScalarCast` to the result type: a
                     // real arm of a complex result becomes complex.
@@ -3208,10 +3237,17 @@ impl Sema<'_, '_> {
                     self.builder().conditional(c2, t2, f2, ty, loc)
                 }
                 Err(err) => self.conv_failed(&err, t, f, loc),
-            };
-        }
-        // Extension: a vector arm (clang `CheckVectorOperands`).
-        if !tv && !fv && (self.is_vector_type(tt) || self.is_vector_type(ft)) {
+            },
+        )
+    }
+
+    /// [expr.cond]/7.3-7.5 and the vector extension (clang
+    /// `CheckVectorOperands`): vector arms, the composite pointer type,
+    /// and same-class prvalues; otherwise the operands are incompatible.
+    fn other_conditional(&mut self, o: CondOps) -> ExprId {
+        let CondOps { c, c2, t, f, loc } = o;
+        let (tt, ft) = (self.ety(t), self.ety(f));
+        if self.is_vector_type(tt) || self.is_vector_type(ft) {
             let mut t2 = conv::decay(self, t);
             let mut f2 = conv::decay(self, f);
             return match self.scalar_cond_vector_operands(&mut t2, &mut f2, loc) {
@@ -3219,16 +3255,14 @@ impl Sema<'_, '_> {
                 None => self.recover_err(&[c, t, f], loc),
             };
         }
-        if !tv && !fv {
-            let t2 = conv::decay(self, t);
-            let f2 = conv::decay(self, f);
-            if let Some((t3, f3, ty)) = self.composite_pointer(t2, f2) {
-                return self.builder().conditional(c2, t3, f3, ty, loc);
-            }
-            if self.ast.types.as_record(tt).is_some() && self.ast.types.same_unqualified(tt, ft) {
-                let ty = conv::strip_cv(self, tt);
-                return self.builder().conditional(c2, t2, f2, ty, loc);
-            }
+        let t2 = conv::decay(self, t);
+        let f2 = conv::decay(self, f);
+        if let Some((t3, f3, ty)) = self.composite_pointer(t2, f2) {
+            return self.builder().conditional(c2, t3, f3, ty, loc);
+        }
+        if self.ast.types.as_record(tt).is_some() && self.ast.types.same_unqualified(tt, ft) {
+            let ty = conv::strip_cv(self, tt);
+            return self.builder().conditional(c2, t2, f2, ty, loc);
         }
         let msg = self.diag(DiagId::sema_incompatible_cond_operands, loc).diff_args(self, tt, ft);
         self.emit(msg);
@@ -4900,4 +4934,16 @@ pub(crate) struct CallCallee {
 /// newest first, as for a non-template set (spec/sema-overload.md §2.1).
 fn lookup_set_order(decls: &[DeclId], unqualified: bool) -> Vec<DeclId> {
     if unqualified { decls.iter().rev().copied().collect() } else { decls.to_vec() }
+}
+
+/// The operands of a non-dependent conditional expression being checked
+/// ([expr.cond]): the original condition `c`, its converted form `c2`,
+/// the arms and the location.
+#[derive(Clone, Copy, Debug)]
+struct CondOps {
+    c: ExprId,
+    c2: ExprId,
+    t: ExprId,
+    f: ExprId,
+    loc: Loc,
 }

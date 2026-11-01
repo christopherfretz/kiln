@@ -33,7 +33,9 @@ impl Sema<'_, '_> {
     /// function.
     pub(crate) fn late_analysis(&mut self, f: DeclId, body: StmtId, has_fallthrough: bool) {
         // clang `DiagnoseSwitchLabelsFallthrough`: the unannotated
-        // fall-throughs, then the misplaced annotations.
+        // fall-throughs, then the misplaced annotations; the unreachable
+        // code (clang `CheckUnreachable`) comes first.
+        self.check_unreachable_code(body);
         self.check_implicit_fallthrough(body);
         if has_fallthrough {
             self.check_fallthrough_placement(body);
@@ -140,6 +142,9 @@ impl Sema<'_, '_> {
     fn ft_before(&self, c: StmtId, next: Next, skip: Next) -> (Next, Next) {
         match self.ast.stmts.get(c).kind() {
             StmtKind::CaseStmt | StmtKind::DefaultStmt => (Some(c), Some(c)),
+            // `do { case 1: } while (c);`: the label starts the body's
+            // block, which the statement before the `do` falls into.
+            StmtKind::DoStmt if let Some(l) = self.ft_do_entry_label(c) => (Some(l), Some(l)),
             // `[[likely]] case 1:`: only a fallthrough statement is a CFG
             // element of its own (clang `CFGBuilder::VisitAttributedStmt`).
             StmtKind::AttributedStmt if !self.is_fallthrough_stmt(c) => {
@@ -148,6 +153,24 @@ impl Sema<'_, '_> {
             _ if self.ft_transparent(c) => (next, skip),
             StmtKind::ExprStmt | StmtKind::DeclStmt => (None, skip),
             _ => (None, None),
+        }
+    }
+
+    /// The case or default label that starts the body of `do` statement
+    /// `d`, past null statements, empty blocks and non-fallthrough
+    /// attributes.
+    fn ft_do_entry_label(&self, d: StmtId) -> Option<StmtId> {
+        let st = &self.ast.stmts;
+        let mut s = st.loop_data(d).body?;
+        loop {
+            match st.get(s).kind() {
+                StmtKind::CaseStmt | StmtKind::DefaultStmt => return Some(s),
+                StmtKind::CompoundStmt => {
+                    s = self.children(s).into_iter().find(|&c| !self.ft_transparent(c))?;
+                }
+                StmtKind::AttributedStmt if !self.is_fallthrough_stmt(s) => s = st.sub_stmt(s),
+                _ => return None,
+            }
         }
     }
 

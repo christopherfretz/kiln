@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-use kiln_lex::{Symbol, Token};
+use kiln_lex::{Punct, Symbol, TokKind, Token};
 use kiln_source::{Loc, Span};
 
+use crate::Preprocessor;
 use crate::builtin::Builtin;
 use crate::tok::PpTok;
 
@@ -145,5 +146,78 @@ impl MacroTable {
 
     pub(crate) fn get_rc(&self, name: Symbol) -> Option<&Rc<MacroDef>> {
         self.map.get(&name)
+    }
+}
+
+/// One definition of an object-like macro whose replacement list starts
+/// `[ [` (an attribute spelling such as `#define FALLTHROUGH
+/// [[fallthrough]]`). The preprocessor keeps the history of these few
+/// definitions so a later diagnostic can name the macro a user would
+/// write in a fix-it (clang `Preprocessor::getLastMacroWithSpelling`, used
+/// by `-Wimplicit-fallthrough`'s note).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttrMacro {
+    /// The macro name.
+    pub name: Box<str>,
+    /// The location of the name in the `#define` (or of the `#pragma
+    /// pop_macro` that restored the definition).
+    pub def: Loc,
+    /// Where the definition stopped being in effect (`#undef`, a
+    /// redefinition, `#pragma pop_macro`); invalid while it is in effect.
+    pub end: Loc,
+    /// The replacement list's token spellings joined by single spaces
+    /// (punctuators in their primary spelling, so `<:` reads `[`); clang
+    /// compares tokens by kind and identifier, ignoring whitespace.
+    pub tokens: Box<str>,
+}
+
+impl Preprocessor<'_, '_> {
+    /// The attribute-macro definitions seen so far, oldest first, and a
+    /// generation number that changes whenever the list does (so a client
+    /// can copy it only when it changed).
+    pub fn attr_macros(&self) -> (u32, &[AttrMacro]) {
+        (self.attr_macro_gen, &self.attr_macros)
+    }
+
+    /// Records that `name`'s definition changed at `at`: `def` is the new
+    /// definition (`None` for `#undef`). Cheap unless an attribute macro
+    /// is involved.
+    pub(crate) fn note_macro_change(&mut self, name: Symbol, def: Option<&MacroDef>, at: Loc) {
+        let attr = def.filter(|d| {
+            !d.function_like
+                && d.body.len() >= 2
+                && d.body[..2].iter().all(|t| matches!(t.tok.kind, TokKind::Punct(Punct::LSquare)))
+        });
+        if attr.is_none() && self.attr_macros.is_empty() {
+            return;
+        }
+        let text = self.interner.as_str(name);
+        if let Some(live) =
+            self.attr_macros.iter_mut().rev().find(|m| !m.end.is_valid() && *m.name == *text)
+        {
+            live.end = at;
+            self.attr_macro_gen = self.attr_macro_gen.wrapping_add(1);
+        }
+        let Some(d) = attr else { return };
+        let mut tokens = String::new();
+        for t in &d.body {
+            let s = match t.tok.kind {
+                TokKind::Punct(p) => p.as_str(),
+                TokKind::Identifier(s) => self.interner.as_str(s),
+                // Literals and the like: not a spelling Sema looks for.
+                _ => return,
+            };
+            if !tokens.is_empty() {
+                tokens.push(' ');
+            }
+            tokens.push_str(s);
+        }
+        self.attr_macros.push(AttrMacro {
+            name: text.into(),
+            def: at,
+            end: Loc::INVALID,
+            tokens: tokens.into(),
+        });
+        self.attr_macro_gen = self.attr_macro_gen.wrapping_add(1);
     }
 }

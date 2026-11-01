@@ -74,7 +74,6 @@ pub fn apply_standard_conversion(
     Ok(e)
 }
 
-#[allow(clippy::too_many_lines, reason = "one arm per second-step kind")]
 fn apply_second(
     s: &mut Sema<'_, '_>,
     e: ExprId,
@@ -114,133 +113,159 @@ fn apply_second(
             cast_to(s, ck, e, to, None)
         }
         SecondStep::ComplexReal => return complex_real(s, e, from, to),
-        SecondStep::BooleanConversion => {
-            let mut e = e;
-            let mut from = from;
-            if s.ast.types.builtin(from) == Some(BuiltinType::Half) {
-                e = cast_to(s, CastKind::FloatingCast, e, QualType::FLOAT, None);
-                from = QualType::FLOAT;
-            }
-            let ck = if s.ast.types.is_pointer(from)
-                || s.ast.types.builtin(from) == Some(BuiltinType::NullPtr)
-            {
-                CastKind::PointerToBoolean
-            } else if member_pointer_parts(s, from).is_some() {
-                CastKind::MemberPointerToBoolean
-            } else if let Some(el) = s.ast.types.as_complex(from) {
-                if s.ast.types.is_floating(el) {
-                    CastKind::FloatingComplexToBoolean
-                } else {
-                    CastKind::IntegralComplexToBoolean
-                }
-            } else if s.ast.types.is_floating(from) {
-                CastKind::FloatingToBoolean
-            } else if is_integral_or_unscoped_enum(s, from) {
-                CastKind::IntegralToBoolean
-            } else {
-                CastKind::NoOp
-            };
-            cast_to(s, ck, e, to, None)
+        SecondStep::BooleanConversion => boolean_conversion(s, e, from, to),
+        SecondStep::PointerConversion => pointer_conversion(s, e, scs, from, to)?,
+        SecondStep::DerivedToBase => derived_to_base(s, e, from, to)?,
+        SecondStep::MemberPointerConversion => member_pointer_conversion(s, e, scs, from, to)?,
+    })
+}
+
+/// [conv.bool]: the cast to `bool` by the source type's kind (a `__fp16`
+/// first widens to `float`).
+fn boolean_conversion(s: &mut Sema<'_, '_>, e: ExprId, from: QualType, to: QualType) -> ExprId {
+    let mut e = e;
+    let mut from = from;
+    if s.ast.types.builtin(from) == Some(BuiltinType::Half) {
+        e = cast_to(s, CastKind::FloatingCast, e, QualType::FLOAT, None);
+        from = QualType::FLOAT;
+    }
+    let ck = if s.ast.types.is_pointer(from)
+        || s.ast.types.builtin(from) == Some(BuiltinType::NullPtr)
+    {
+        CastKind::PointerToBoolean
+    } else if member_pointer_parts(s, from).is_some() {
+        CastKind::MemberPointerToBoolean
+    } else if let Some(el) = s.ast.types.as_complex(from) {
+        if s.ast.types.is_floating(el) {
+            CastKind::FloatingComplexToBoolean
+        } else {
+            CastKind::IntegralComplexToBoolean
         }
-        SecondStep::PointerConversion => {
-            if scs.null_pointer || s.ast.types.builtin(from) == Some(BuiltinType::NullPtr) {
-                return Ok(cast_to(s, CastKind::NullToPointer, e, to, None));
-            }
-            let (fp, tp) = (s.ast.types.pointee(from), s.ast.types.pointee(to));
-            let classes = match (fp, tp) {
-                (Some(fp), Some(tp)) => {
-                    match (s.ast.types.as_record(fp), s.ast.types.as_record(tp)) {
-                        (Some(d), Some(b)) if !s.ast.types.same_unqualified(fp, tp) => {
-                            Some((d, b, fp, tp))
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            match classes {
-                Some((d, b, fp, tp)) => match find_base(s, d, b) {
-                    BaseSearch::Unique(p) => {
-                        // [conv.ptr]/3: the base must be accessible
-                        // (diagnosed; the conversion still applies).
-                        let at = s.begin_loc(e);
-                        s.check_base_access(strip_cv(s, fp), strip_cv(s, tp), &p, at);
-                        let list = path_list(s, &p);
-                        cast_to(s, CastKind::DerivedToBase, e, to, Some(list))
-                    }
-                    BaseSearch::Ambiguous(paths) => {
-                        let shown = ambiguous_paths_string(s, fp, &paths);
-                        let (fa, ta) = (s.ty_arg(strip_cv(s, fp)), s.ty_arg(strip_cv(s, tp)));
-                        return Err(ConvError::new(
-                            DiagId::sema_ambiguous_derived_to_base,
-                            vec![fa, ta, shown],
-                        ));
-                    }
-                    BaseSearch::NotDerived => cast_to(s, CastKind::BitCast, e, to, None),
-                },
-                None => cast_to(s, CastKind::BitCast, e, to, None),
-            }
+    } else if s.ast.types.is_floating(from) {
+        CastKind::FloatingToBoolean
+    } else if is_integral_or_unscoped_enum(s, from) {
+        CastKind::IntegralToBoolean
+    } else {
+        CastKind::NoOp
+    };
+    cast_to(s, ck, e, to, None)
+}
+
+/// [conv.ptr]: a null pointer constant, a derived-to-base pointer
+/// conversion (access-checked; ambiguity is an error) or a bit cast.
+fn pointer_conversion(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    scs: &StandardConversion,
+    from: QualType,
+    to: QualType,
+) -> Result<ExprId, ConvError> {
+    if scs.null_pointer || s.ast.types.builtin(from) == Some(BuiltinType::NullPtr) {
+        return Ok(cast_to(s, CastKind::NullToPointer, e, to, None));
+    }
+    let (fp, tp) = (s.ast.types.pointee(from), s.ast.types.pointee(to));
+    let classes = match (fp, tp) {
+        (Some(fp), Some(tp)) => match (s.ast.types.as_record(fp), s.ast.types.as_record(tp)) {
+            (Some(d), Some(b)) if !s.ast.types.same_unqualified(fp, tp) => Some((d, b, fp, tp)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let Some((d, b, fp, tp)) = classes else {
+        return Ok(cast_to(s, CastKind::BitCast, e, to, None));
+    };
+    Ok(match find_base(s, d, b) {
+        BaseSearch::Unique(p) => {
+            // [conv.ptr]/3: the base must be accessible (diagnosed; the
+            // conversion still applies).
+            let at = s.begin_loc(e);
+            s.check_base_access(strip_cv(s, fp), strip_cv(s, tp), &p, at);
+            let list = path_list(s, &p);
+            cast_to(s, CastKind::DerivedToBase, e, to, Some(list))
         }
-        SecondStep::DerivedToBase => {
-            // [over.best.ics]/6: a class prvalue converted to its base only
-            // ranks as a conversion; initialization performs it through a
-            // constructor, so only a glvalue view reaches here.
-            let (Some(d), Some(b)) = (s.ast.types.as_record(from), s.ast.types.as_record(to))
-            else {
-                return Ok(e);
-            };
-            match find_base(s, d, b) {
-                BaseSearch::Unique(p) => {
-                    let at = s.begin_loc(e);
-                    s.check_base_access(strip_cv(s, from), strip_cv(s, to), &p, at);
-                    let list = path_list(s, &p);
-                    let vk = s.ast.exprs.get(e).value_category();
-                    super::raw_cast(s, CastKind::DerivedToBase, e, to, vk, Some(list))
-                }
-                BaseSearch::Ambiguous(paths) => {
-                    let shown = ambiguous_paths_string(s, from, &paths);
-                    let (fa, ta) = (s.ty_arg(strip_cv(s, from)), s.ty_arg(strip_cv(s, to)));
-                    return Err(ConvError::new(
-                        DiagId::sema_ambiguous_derived_to_base,
-                        vec![fa, ta, shown],
-                    ));
-                }
-                BaseSearch::NotDerived => e,
-            }
+        BaseSearch::Ambiguous(paths) => {
+            let shown = ambiguous_paths_string(s, fp, &paths);
+            let (fa, ta) = (s.ty_arg(strip_cv(s, fp)), s.ty_arg(strip_cv(s, tp)));
+            return Err(ConvError::new(
+                DiagId::sema_ambiguous_derived_to_base,
+                vec![fa, ta, shown],
+            ));
         }
-        SecondStep::MemberPointerConversion => {
-            if scs.null_pointer || s.ast.types.builtin(from) == Some(BuiltinType::NullPtr) {
-                return Ok(cast_to(s, CastKind::NullToMemberPointer, e, to, None));
-            }
-            let (Some((_, fc)), Some((_, tc))) =
-                (member_pointer_parts(s, from), member_pointer_parts(s, to))
-            else {
-                return Ok(e);
-            };
-            let (Some(b), Some(d)) = (class_decl(s, fc), class_decl(s, tc)) else { return Ok(e) };
-            let (fq, tq) = (QualType::unqual(fc), QualType::unqual(tc));
-            match find_base(s, d, b) {
-                BaseSearch::Unique(p) => {
-                    if let Some(v) = p.first_virtual {
-                        let vt = QualType::unqual(s.ast.types.record_type(v));
-                        return Err(ConvError::new(
-                            DiagId::sema_member_pointer_conv_via_virtual,
-                            vec![s.ty_arg(fq), s.ty_arg(tq), s.ty_arg(vt)],
-                        ));
-                    }
-                    let list = path_list(s, &p);
-                    cast_to(s, CastKind::BaseToDerivedMemberPointer, e, to, Some(list))
-                }
-                BaseSearch::Ambiguous(paths) => {
-                    let shown = ambiguous_paths_string(s, tq, &paths);
-                    return Err(ConvError::new(
-                        DiagId::sema_ambiguous_member_pointer_conv,
-                        vec!["0".into(), s.ty_arg(fq), s.ty_arg(tq), shown],
-                    ));
-                }
-                BaseSearch::NotDerived => e,
-            }
+        BaseSearch::NotDerived => cast_to(s, CastKind::BitCast, e, to, None),
+    })
+}
+
+/// A class glvalue converted to its base: [over.best.ics]/6 ranks a class
+/// prvalue converted to its base only as a conversion; initialization
+/// performs it through a constructor, so only a glvalue view reaches here.
+fn derived_to_base(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    from: QualType,
+    to: QualType,
+) -> Result<ExprId, ConvError> {
+    let (Some(d), Some(b)) = (s.ast.types.as_record(from), s.ast.types.as_record(to)) else {
+        return Ok(e);
+    };
+    Ok(match find_base(s, d, b) {
+        BaseSearch::Unique(p) => {
+            let at = s.begin_loc(e);
+            s.check_base_access(strip_cv(s, from), strip_cv(s, to), &p, at);
+            let list = path_list(s, &p);
+            let vk = s.ast.exprs.get(e).value_category();
+            super::raw_cast(s, CastKind::DerivedToBase, e, to, vk, Some(list))
         }
+        BaseSearch::Ambiguous(paths) => {
+            let shown = ambiguous_paths_string(s, from, &paths);
+            let (fa, ta) = (s.ty_arg(strip_cv(s, from)), s.ty_arg(strip_cv(s, to)));
+            return Err(ConvError::new(
+                DiagId::sema_ambiguous_derived_to_base,
+                vec![fa, ta, shown],
+            ));
+        }
+        BaseSearch::NotDerived => e,
+    })
+}
+
+/// [conv.mem]: a null member pointer, or a base-to-derived member pointer
+/// conversion (not through a virtual base; ambiguity is an error).
+fn member_pointer_conversion(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    scs: &StandardConversion,
+    from: QualType,
+    to: QualType,
+) -> Result<ExprId, ConvError> {
+    if scs.null_pointer || s.ast.types.builtin(from) == Some(BuiltinType::NullPtr) {
+        return Ok(cast_to(s, CastKind::NullToMemberPointer, e, to, None));
+    }
+    let (Some((_, fc)), Some((_, tc))) =
+        (member_pointer_parts(s, from), member_pointer_parts(s, to))
+    else {
+        return Ok(e);
+    };
+    let (Some(b), Some(d)) = (class_decl(s, fc), class_decl(s, tc)) else { return Ok(e) };
+    let (fq, tq) = (QualType::unqual(fc), QualType::unqual(tc));
+    Ok(match find_base(s, d, b) {
+        BaseSearch::Unique(p) => {
+            if let Some(v) = p.first_virtual {
+                let vt = QualType::unqual(s.ast.types.record_type(v));
+                return Err(ConvError::new(
+                    DiagId::sema_member_pointer_conv_via_virtual,
+                    vec![s.ty_arg(fq), s.ty_arg(tq), s.ty_arg(vt)],
+                ));
+            }
+            let list = path_list(s, &p);
+            cast_to(s, CastKind::BaseToDerivedMemberPointer, e, to, Some(list))
+        }
+        BaseSearch::Ambiguous(paths) => {
+            let shown = ambiguous_paths_string(s, tq, &paths);
+            return Err(ConvError::new(
+                DiagId::sema_ambiguous_member_pointer_conv,
+                vec!["0".into(), s.ty_arg(fq), s.ty_arg(tq), shown],
+            ));
+        }
+        BaseSearch::NotDerived => e,
     })
 }
 

@@ -149,8 +149,11 @@ fn fp_compare(b: u32) -> Option<FloatPredicate> {
 }
 
 /// The extra function attributes of a library builtin's declaration and
-/// call sites: `Pure` and `Const` (clang `ConstructAttributeList`).
-fn lib_attrs(b: u32, out: &mut Vec<Attr>) {
+/// call sites: `Pure` and `Const` (clang `ConstructAttributeList`). A
+/// return or argument passed by address (`indirect`; `__builtin_cprojl`'s
+/// x86-64 `long double _Complex`) adds `argmem: readwrite` (clang
+/// `AddPotentialArgAccess`).
+fn lib_attrs(b: u32, indirect: bool, out: &mut Vec<Attr>) {
     let bits = id::info(b).map_or(0, |i| i.attrs);
     if bits & attr::NORETURN != 0 {
         out.push(Attr::Flag(AttrKind::NoReturn));
@@ -162,8 +165,12 @@ fn lib_attrs(b: u32, out: &mut Vec<Attr>) {
     } else {
         return;
     };
+    let mut effects = MemoryEffects::all(mem);
+    if indirect {
+        effects.argmem = ModRef::ReadWrite;
+    }
     out.push(Attr::Flag(AttrKind::WillReturn));
-    out.push(Attr::Memory(MemoryEffects::all(mem)));
+    out.push(Attr::Memory(effects));
 }
 
 /// The function attributes a written or implicit `const` / `pure`
@@ -958,15 +965,15 @@ impl Cg<'_> {
         let Some(name) = lib_name(b) else {
             return err(Some(ast.decls.get(d).loc()), "not a library builtin");
         };
-        let mut extra = Vec::new();
-        lib_attrs(b, &mut extra);
-        if let Some(f) = self.m.get_function(name) {
-            return Ok((f, extra));
-        }
         let Some(fty) = ast.decls.get(d).ty() else {
             return err(None, "builtin without a type");
         };
         let sig = self.sig(fty, true);
+        let mut extra = Vec::new();
+        lib_attrs(b, sig.passes_indirect(), &mut extra);
+        if let Some(f) = self.m.get_function(name) {
+            return Ok((f, extra));
+        }
         let f = match self.m.add_function(name, sig.fn_ty) {
             Ok(f) => f,
             Err(x) => {

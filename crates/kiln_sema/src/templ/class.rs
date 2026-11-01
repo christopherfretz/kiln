@@ -888,7 +888,7 @@ impl Sema<'_, '_> {
     /// clang's `mightBeUsableInConstantExpressions`: `constexpr`, or a
     /// `const` non-volatile integral, enumeration or reference variable
     /// ([expr.const]/4, before its initializer is known).
-    fn might_be_constant_var(&self, v: DeclId) -> bool {
+    pub(crate) fn might_be_constant_var(&self, v: DeclId) -> bool {
         if self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr()) {
             return true;
         }

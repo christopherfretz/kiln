@@ -1,0 +1,77 @@
+Dumping n::A::B::C:
+CXXRecordDecl struct C definition
+|-FieldDecl t 'T'
+`-FieldDecl u 'U'
+
+Dumping n::A::B<type-parameter-1-0 *>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl pu 'U *'
+
+Dumping n::A::C:
+CXXRecordDecl struct C definition
+`-FieldDecl c 'int'
+
+Dumping n::A<type-parameter-0-0, 1>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl x 'T'
+
+Dumping n::A<type-parameter-0-0, 1>::B::C:
+CXXRecordDecl struct C definition
+`-FieldDecl y 'U'
+
+Dumping n::A<long, 2>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl z 'long'
+
+Dumping n::A<long, 2>::B::C:
+CXXRecordDecl struct C definition
+`-FieldDecl w 'U'
+
+Dumping n::A<char>::B::C:
+CXXRecordDecl struct C definition
+`-FieldDecl v 'U'
+
+Dumping n::A<char>::B<int>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl q 'int'
+
+Dumping n::A<short>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl s 'short'
+
+Dumping X::C:
+CXXRecordDecl struct C definition
+`-FieldDecl x 'int'
+
+Dumping X<type-parameter-0-0 *>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl p 'int'
+
+Dumping X<type-parameter-0-0 &, true>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl r 'int'
+
+Dumping X<type-parameter-0-0[], false, int>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl a 'int'
+
+Dumping X<int>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl i 'int'
+
+Dumping X<int, false, long>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl j 'int'
+
+Dumping D::C:
+CXXRecordDecl struct C definition
+`-FieldDecl m 'TT<T>'
+
+Dumping D<E, int>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl e 'int'
+
+Dumping D<q::F, int>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl f 'int'
+
