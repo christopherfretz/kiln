@@ -688,6 +688,7 @@ diag_ids! {
     sema_vla_decl_in_file_scope = Error (0) "variable length array declaration not allowed at file scope";
     sema_vla_cxx_extension = Warning [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
     sema_vla_unsupported = Error (0) "variable length arrays are not supported yet";
+    sema_vla_folded_to_constant = ExtWarn [GnuFoldingConstant] (0) "variable length array folded to constant array as an extension";
     sema_expr_not_ice = Error (0) "expression is not an integral constant expression";
     sema_bitfield_negative_width = Error (2) "bit-field '{0}' has negative width ({1})";
     sema_anon_bitfield_negative_width = Error (1) "anonymous bit-field has negative width ({0})";

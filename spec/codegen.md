@@ -42,6 +42,16 @@ panic and never silently wrong IR.
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
   (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
   its parameter's default argument once, at the first use (WP-136).
+  Non-initializer candidates (a load of a const variable, a builtin
+  call) fold with `Oven::fold_rvalue` (lax mode, WP-165): like clang's
+  `tryEmitAsConstant`, a read of any `const` non-volatile variable with an
+  initializer folds, even one not usable in constant expressions (`const
+  double`, `const _Atomic(int)`, a `const` array or class element), so a
+  global whose every use folds is not emitted. A load of a const variable
+  is recognized through parentheses and `NoOp` casts (the xvalue cast of
+  an implicitly moved `return x;`). Variables with a `mutable` member are
+  not folded (clang folds their non-mutable members; deviation).
+  Validation: `tests/codegen/const_fold_lax.cpp`.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string

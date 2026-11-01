@@ -155,8 +155,18 @@ Constructors:
    - arrays of references, functions, `void` or abstract types
    - functions returning arrays or functions
    - references to references, pointers to references
-   - array bounds: converted constant expressions, which must be
-     positive
+   - array bounds: converted constant expressions of integral,
+     unscoped enumeration or `_Atomic` integral type, which must be
+     positive. A bound that is not a constant expression is a VLA, which
+     kiln does not support (`sema_vla_unsupported`), except at namespace
+     or class scope, where a bound that `OvenBridge::fold_rvalue_int`
+     folds (lax mode: e.g. a `const _Atomic(int)` or `const` variable
+     with a non-constant-expression initializer that is still a constant)
+     gives clang's `TryToFixInvalidVariablyModifiedType` result: a
+     constant array, `-Wvla-cxx-extension` at the bound (with the strict
+     evaluation's notes) and the ExtWarn "variable length array folded
+     to constant array as an extension" [-Wgnu-folding-constant] at the
+     declarator name (WP-165)
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
    are compatible, and links the redeclaration chain.

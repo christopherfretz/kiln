@@ -261,6 +261,10 @@ pub struct Oven {
     /// Globals resolved to an unknown value because they had no
     /// initializer yet: re-resolved by the next evaluation.
     pub(crate) provisional: Vec<u32>,
+    /// Globals whose resolution depends on the lax mode
+    /// ([`value::VarInfo::lax`]), and the mode they were resolved in.
+    pub(crate) lax_globals: Vec<u32>,
+    pub(crate) lax_resolved: bool,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -319,6 +323,8 @@ impl Oven {
             globals: Vec::new(),
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
+            lax_globals: Vec::new(),
+            lax_resolved: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             lets: FxHashMap::default(),
@@ -393,6 +399,22 @@ impl Oven {
     /// yields false.
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
         self.eval_ctx(bridge, e, None, true, false, false).0.ok()
+    }
+
+    /// As [`Oven::try_fold`], laxly (clang `Expr::EvaluateAsRValue`, as
+    /// codegen's `tryEmitAsConstant` and a folded array bound use it): a
+    /// `const` non-volatile variable with an initializer is read even if
+    /// it is not usable in constant expressions (a `const double`, a
+    /// `const _Atomic(int)`; [expr.const]/4 rejects such a read, clang
+    /// only notes it). Strict outside an outermost evaluation.
+    pub fn fold_rvalue(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
+        if self.ctx_depth != 0 {
+            return self.try_fold(bridge, e);
+        }
+        self.run.lax = true;
+        let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        self.run.lax = false;
+        r
     }
 
     /// Evaluates immediate invocation `e` ([expr.const]/16; manifestly
@@ -471,6 +493,7 @@ impl Oven {
             + cap(&self.globals)
             + map(&self.global_map)
             + cap(&self.provisional)
+            + cap(&self.lax_globals)
             + map(&self.lit_exprs)
             + map(&self.thawed)
             + map(&self.lets)
@@ -546,6 +569,12 @@ impl Oven {
     ) -> (Result<ConstValueId, EvalFailure>, vm::Counters) {
         for g in self.provisional.drain(..) {
             self.globals[g as usize].state = compile::GState::Unresolved;
+        }
+        if self.lax_resolved != self.run.lax {
+            self.lax_resolved = self.run.lax;
+            for g in self.lax_globals.drain(..) {
+                self.globals[g as usize].state = compile::GState::Unresolved;
+            }
         }
         self.run.silent = silent;
         self.run.enum_check = enum_check;

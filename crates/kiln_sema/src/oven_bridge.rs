@@ -199,6 +199,18 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.with_oven(None, |oven, b| oven.try_fold(b, e))
     }
 
+    /// [`Sema::try_fold`], laxly ([`Oven::fold_rvalue`], clang
+    /// `EvaluateAsInt`): a `const` non-volatile variable with an
+    /// initializer reads as its value even when it is not usable in
+    /// constant expressions.
+    pub fn fold_rvalue_int(&mut self, e: ExprId) -> Option<i128> {
+        if !self.eval_stack_ok(e) {
+            return None;
+        }
+        let v = self.with_oven(None, |oven, b| oven.fold_rvalue(b, e))?;
+        self.const_int(v)
+    }
+
     /// The stack guard's check before entering the Oven (P4 (c)): the
     /// evaluation may instantiate, which re-enters sema.
     #[inline]
