@@ -1742,11 +1742,16 @@ impl Oven {
                                 continue;
                             }
                         }
-                        let Some(f) = fields
-                            .iter()
-                            .find(|f| reach(f))
-                            .or_else(|| fields.iter().find(|f| contains(f)))
-                        else {
+                        // The object of a member call can be one the
+                        // layout does not model (an empty base sharing
+                        // the union's offset, libc++'s `__compressed_pair`
+                        // allocator): only a member holding it is wrong.
+                        let fallback = || {
+                            (k != ak::MEMBER_CALL)
+                                .then(|| fields.iter().find(|f| contains(f)))
+                                .flatten()
+                        };
+                        let Some(f) = fields.iter().find(|f| reach(f)).or_else(fallback) else {
                             return Ok(());
                         };
                         return Err(Fault::Union {
