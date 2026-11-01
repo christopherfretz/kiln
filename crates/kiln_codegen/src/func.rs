@@ -39,8 +39,12 @@ pub(crate) struct Jump {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SwitchCtx {
     pub inst: u32,
+    pub cond: V,
     pub cond_ty: LTy,
     pub default: Blk,
+    /// The head of the `sw.caserange` test chain (clang
+    /// `CaseRangeBlock`), the switch's final default destination.
+    pub range_head: Blk,
 }
 
 /// An active loop (clang `LoopInfo`).
