@@ -204,6 +204,11 @@ impl<'a> IrTypes<'a> {
                 IrType::Array(Box::new(self.convert_mem(a.elem)), n)
             }
             TypeView::IncompleteArray(e) => IrType::Array(Box::new(self.convert_mem(e)), 0),
+            // clang `ConvertType`: `_Complex T` is the pair `{ T, T }`.
+            TypeView::Complex(e) => {
+                let t = self.convert_mem(e);
+                IrType::Struct(vec![t.clone(), t], false)
+            }
             // clang `ConvertType`: a variable length array is its element.
             TypeView::VariableArray { elem, .. } => self.convert_mem(elem),
             TypeView::Record(d) => {

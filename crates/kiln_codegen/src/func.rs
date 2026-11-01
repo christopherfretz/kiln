@@ -71,6 +71,9 @@ pub(crate) enum CallArg {
     Scalar(V),
     /// An aggregate in memory (`agg.tmp`).
     Agg(Addr),
+    /// A `_Complex` value `(real, imag)`, stored to a temporary when the
+    /// call is lowered (clang `CallArg::copyInto`).
+    Complex(V, V),
 }
 
 /// How the function returns.
@@ -150,6 +153,9 @@ pub(crate) struct Fx {
     /// clang `LargestVectorWidth`: the widest vector in the signature or
     /// any call's IR arguments and result (x86 `min-legal-vector-width`).
     pub vector_width: u64,
+    /// The `(real, imag)` value of the last call returning `_Complex`
+    /// (`call_vals_to` returns no scalar for it; spec/codegen.md §3.12).
+    pub cx_ret: Option<(V, V)>,
     /// Calls: (instruction, callee, call-site nounwind).
     pub calls: Vec<(u32, Option<FuncId>, bool)>,
     pub loop_mp: Option<MetadataId>,
@@ -209,6 +215,7 @@ impl Fx {
             loops: Vec::new(),
             mustprogress: true,
             vector_width: 0,
+            cx_ret: None,
             calls: Vec::new(),
             loop_mp: None,
             conds: Vec::new(),
@@ -923,7 +930,11 @@ impl Cg<'_> {
         loc: Option<Loc>,
     ) -> R<ParamVal> {
         let mt = self.mty(pq);
-        let agg = self.is_aggregate(pq) || self.is_atomic_aggregate(pq);
+        // A `_Complex` parameter lives in memory like an aggregate (clang
+        // `EmitFunctionProlog`: not of scalar evaluation kind).
+        let agg = self.is_aggregate(pq)
+            || self.is_atomic_aggregate(pq)
+            || self.ast.types.as_complex(pq).is_some();
         match kind {
             ArgKind::Ignore => {
                 if agg {
@@ -1026,6 +1037,12 @@ impl Cg<'_> {
                         self.store_scalar(v, Addr { v: t, ty: mt, align: *align }, q);
                         out.push(t);
                     }
+                    CallArg::Complex(re, im) => {
+                        let mt = self.mty(q);
+                        let t = Addr { v: self.f.fir.alloca(mt, *align), ty: mt, align: *align };
+                        self.cx_store((re, im), t, false);
+                        out.push(t.v);
+                    }
                 }
                 Ok(())
             }
@@ -1044,6 +1061,11 @@ impl Cg<'_> {
                         t
                     }
                     CallArg::Agg(a) => a,
+                    CallArg::Complex(re, im) => {
+                        let t = self.temp(q);
+                        self.cx_store((re, im), t, false);
+                        t
+                    }
                 };
                 if offset != 0 {
                     return err(loc, "an argument at a nonzero ABI offset is not supported yet");
