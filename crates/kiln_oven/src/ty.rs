@@ -236,6 +236,23 @@ impl Types {
         t
     }
 
+    /// Whether `a` and `b` are the same type but for the qualifiers of
+    /// array elements (`const char[2]` and `char[2]` intern apart; every
+    /// other type is interned unqualified).
+    pub fn same_unqualified(&self, mut a: OTy, mut b: OTy) -> bool {
+        loop {
+            if a == b {
+                return true;
+            }
+            match (self.kind(a), self.kind(b)) {
+                (TyKind::Array { elem: x, n }, TyKind::Array { elem: y, n: m }) if n == m => {
+                    (a, b) = (x, y);
+                }
+                _ => return false,
+            }
+        }
+    }
+
     /// A synthetic array of `n` elements of `elem` (string literal objects
     /// thawed from the store, array `new`); its `q` is the element's, so
     /// notes name it with [`Types::array_name`].

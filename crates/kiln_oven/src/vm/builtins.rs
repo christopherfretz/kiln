@@ -475,9 +475,15 @@ impl Oven {
         }
         let t = self.designated(dst, t1)?;
         let st = self.designated(src, t2)?;
-        if t != st {
+        if !self.types.same_unqualified(t, st) {
             return Err(Fault::Bi(BiFault::CopyPun { mv, src: st, dst: t }));
         }
+        // A pointer to a whole array (an implicit copy of an array
+        // member) copies its elements.
+        let t = match self.types.kind(t) {
+            TyKind::Array { elem, .. } => elem,
+            _ => t,
+        };
         if !self.trivially_copyable(ast, t) {
             return Err(Fault::Bi(BiFault::CopyNontrivial { mv, t }));
         }
