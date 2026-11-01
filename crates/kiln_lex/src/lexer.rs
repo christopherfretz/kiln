@@ -94,6 +94,9 @@ pub struct Lexer<'a> {
     clean_until: usize,
     diags: Vec<LexDiag>,
     scratch: String,
+    /// Spans of the comments lexed since the last
+    /// [`take_comments`](Lexer::take_comments), when recording is on.
+    comments: Option<Vec<Span>>,
 }
 
 impl<'a> Lexer<'a> {
@@ -155,6 +158,7 @@ impl<'a> Lexer<'a> {
             clean_until: 0,
             diags: Vec::new(),
             scratch: String::new(),
+            comments: None,
         }
     }
 
@@ -185,6 +189,24 @@ impl<'a> Lexer<'a> {
     /// Return comments as [`TokKind::Comment`] tokens (`-C`/`-CC`).
     pub fn set_keep_comments(&mut self, on: bool) {
         self.opts.keep_comments = on;
+    }
+
+    /// Records the span of every comment lexed from now on, whether or
+    /// not it is returned as a token (clang's `CommentHandler` feed, used
+    /// by `-verify`); `false` stops recording and drops what was recorded.
+    pub fn set_record_comments(&mut self, on: bool) {
+        self.comments = on.then(Vec::new);
+    }
+
+    /// Whether comments were recorded since the last
+    /// [`take_comments`](Self::take_comments).
+    pub fn has_comments(&self) -> bool {
+        self.comments.as_ref().is_some_and(|c| !c.is_empty())
+    }
+
+    /// Removes and returns the recorded comment spans, in source order.
+    pub fn take_comments(&mut self) -> Vec<Span> {
+        self.comments.as_mut().map(std::mem::take).unwrap_or_default()
     }
 
     /// The options in effect.
@@ -655,6 +677,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn comment_token(&mut self, start: usize, end: usize) -> Option<Token> {
+        if self.comments.is_some() {
+            let span = self.span(start, end);
+            self.comments.get_or_insert_default().push(span);
+        }
         if self.opts.keep_comments {
             let mut flags = self.take_line_flags();
             if self.phase2(start, end, false, false) {
