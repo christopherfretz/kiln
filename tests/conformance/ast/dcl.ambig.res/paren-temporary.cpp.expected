@@ -1,0 +1,66 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct M definition
+| |-CXXRecordDecl referenced class Arg definition
+| `-CXXConstructorDecl used M 'void (Arg)'
+|   `-ParmVarDecl 'Arg':'M::Arg'
+|-CXXRecordDecl referenced struct C definition
+| |-CXXConstructorDecl used C 'void ()'
+| `-CXXConstructorDecl used C 'void (int)'
+|   `-ParmVarDecl 'int'
+|-VarDecl used g 'int'
+|-VarDecl amb_m 'M' static callinit
+| `-CXXConstructExpr 'M' 'void (Arg)'
+|   `-ParenExpr 'M::Arg'
+|     `-CXXTemporaryObjectExpr 'M::Arg' 'void () noexcept' zeroing
+|-VarDecl amb_t 'C' callinit
+| `-ParenExpr 'C'
+|   `-CXXTemporaryObjectExpr 'C' 'void ()'
+|-VarDecl amb_tt 'C' callinit
+| `-ParenExpr 'C'
+|   `-ParenExpr 'C'
+|     `-CXXTemporaryObjectExpr 'C' 'void ()'
+|-VarDecl amb_a 'C' callinit
+| `-CXXConstructExpr 'C' 'void (int)'
+|   `-ImplicitCastExpr 'int' <LValueToRValue>
+|     `-ParenExpr 'int' lvalue
+|       `-DeclRefExpr 'int' lvalue Var 'g' 'int'
+|-VarDecl amb_ta 'C' callinit
+| `-ParenExpr 'C'
+|   `-CXXFunctionalCastExpr 'C' functional cast to C <ConstructorConversion>
+|     `-CXXConstructExpr 'C' 'void (int)'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue Var 'g' 'int'
+|-VarDecl amb_i 'int' callinit
+| `-ParenExpr 'int'
+|   `-CXXScalarValueInitExpr 'int'
+|-FunctionDecl amb_f1 'C (C)'
+| `-ParmVarDecl h 'C'
+|-FunctionDecl amb_f2 'C (C (*))'
+| `-ParmVarDecl p 'C (*)'
+|-FunctionDecl amb_f3 'C (C (*)())'
+| `-ParmVarDecl 'C (*)()'
+|-FunctionDecl amb_f4 'C (C)'
+| `-ParmVarDecl q 'C'
+`-FunctionDecl amb_body 'void ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl m 'M' callinit
+    |   `-CXXConstructExpr 'M' 'void (Arg)'
+    |     `-ParenExpr 'M::Arg'
+    |       `-CXXTemporaryObjectExpr 'M::Arg' 'void () noexcept' zeroing
+    |-DeclStmt
+    | `-VarDecl c 'C' callinit
+    |   `-ParenExpr 'C'
+    |     `-CXXFunctionalCastExpr 'C' functional cast to C <ConstructorConversion>
+    |       `-CXXConstructExpr 'C' 'void (int)'
+    |         `-ImplicitCastExpr 'int' <LValueToRValue>
+    |           `-DeclRefExpr 'int' lvalue Var 'g' 'int'
+    |-DeclStmt
+    | `-VarDecl y 'int' cinit
+    |   `-BinaryOperator 'int' '/'
+    |     |-ParenExpr 'int'
+    |     | `-CXXScalarValueInitExpr 'int'
+    |     `-IntegerLiteral 'int' 2
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-ParenExpr 'C'
+        `-CXXTemporaryObjectExpr 'C' 'void ()'
