@@ -1136,7 +1136,8 @@ recomputed exactly as for non-template code (clang's
   (`body` of a non-compound body).
 - **`[[assume]]`** (WP-160): an `AttributedStmt`'s assumptions are
   substituted, converted and checked again (`build_cxx_assume_expr`,
-  -Wassume at instantiation).
+  -Wassume at instantiation). Its other attributes (`likely`,
+  `unlikely`, `fallthrough`; WP-182) are kept as they are.
 
 ### 5.6 Declarations
 

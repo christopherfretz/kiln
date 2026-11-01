@@ -683,7 +683,9 @@ impl Sema<'_, '_> {
             };
             let e = match args.get(i) {
                 Some(&a) if i < nb => match self.take_braced_arg(a) {
-                    Some(l) => self.init_list_entity(ety, &l, l.lbrace, ConvCtx::Initialization, None),
+                    Some(l) => {
+                        self.init_list_entity(ety, &l, l.lbrace, ConvCtx::Initialization, None)
+                    }
                     None => self.init_base_element(ety, a),
                 },
                 Some(&a) => self.paren_element_init(ety, a),

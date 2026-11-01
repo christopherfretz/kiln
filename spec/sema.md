@@ -362,8 +362,50 @@ Redeclaration and linkage rules:
     dependent assumption, and codegen and the oven skip those.
   - A dependent assumption is converted and checked again on
     instantiation (`templ/subst/stmts.rs`).
-  - Not kept yet: `likely`/`unlikely`/`fallthrough` in the
-    `AttributedStmt`.
+- **`[[likely]]`, `[[unlikely]]`, `[[fallthrough]]`**
+  ([dcl.attr.likelihood], [dcl.attr.fallthrough]; WP-182, `stmt.rs`
+  `act_on_attributed_stmt`). They are kept in the same `AttributedStmt`
+  (clang `ProcessStmtAttributes`), in written order:
+  - On a declaration: `'likely' attribute cannot be applied to a
+    declaration` (each name).
+  - `fallthrough` on a statement that is not null: `'fallthrough'
+    attribute only applies to empty statements`; outside a switch of the
+    current function (a lambda body has its own): `fallthrough annotation
+    is outside switch statement` (clang `handleFallThroughAttr`, checked
+    in a template definition). Whether it directly precedes a case label
+    (`fallthrough annotation does not directly precede switch label`) is
+    clang's CFG analysis and is not checked.
+  - A `likely` after an `unlikely` (or the reverse) in the same
+    sequence: `'unlikely' and 'likely' attributes are not compatible` at
+    the second, with `note: conflicting attribute is here` at the first;
+    the second is dropped.
+  - `-pedantic` before C++17 (`fallthrough`) or C++20 (`likely`,
+    `unlikely`): `use of the 'x' attribute is a C++17/C++20 extension`
+    (`-Wc++17-attribute-extensions`, `-Wc++20-attribute-extensions`,
+    not under `-Wc++NN-extensions`). Under `[[clang::fallthrough]]`
+    the scope is not recorded, so the C++17 extension warns for it too
+    (clang does not).
+  - `act_on_if`: both branches `AttributedStmt`s with the same
+    likelihood warn `conflicting attributes 'likely' are ignored`
+    (`-Wignored-attributes`) at the then-branch attribute, with the
+    note at the else-branch one. As clang's `Diags.Report`, it goes
+    straight to the engine (`allow_duplicate`, no instantiation notes),
+    so each instantiation repeats it.
+  - Instantiation keeps these attributes unchanged
+    (`templ/subst/stmts.rs`); they are not checked again.
+  - The parser rejects an argument list on a standard attribute that
+    takes none (`carries_dependency`, `fallthrough`, `noreturn`,
+    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`, even
+    `()`): `attribute 'likely' cannot have an argument list` at the `(`,
+    and drops the attribute (clang `ParseCXX11AttributeArgs`).
+  - Codegen ignores them: clang 19 consults likelihood only when
+    optimizing (no `!prof` weights or `llvm.expect` at `-O0`;
+    `tests/codegen/likelihood_attrs.cpp`). The oven evaluates an
+    `AttributedStmt` as its statement with one step, and a switch body
+    child that is an `AttributedStmt` directly on a `case`/`default`
+    label (`[[likely]] case 1:`) is a link in the label chain
+    (`attributed_label`), charging its step on the way in, as clang's
+    `EvaluateStmt`.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 

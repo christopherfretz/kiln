@@ -86,12 +86,20 @@ impl Parser<'_, '_> {
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
             // Statement attributes are applied once the statement is
-            // parsed (clang's `ProcessStmtAttributes`); only `[[assume]]`
-            // is kept so far (spec/parse.md §6).
-            if attrs.iter().any(|&a| self.s.ast.attrs.get(a).kind == AttrKind::ASSUME) {
+            // parsed (clang's `ProcessStmtAttributes`); `[[assume]]`,
+            // `[[likely]]`, `[[unlikely]]` and `[[fallthrough]]` are kept
+            // (spec/parse.md §6).
+            if attrs.iter().any(|&a| {
+                matches!(
+                    self.s.ast.attrs.get(a).kind,
+                    AttrKind::ASSUME
+                        | AttrKind::LIKELY
+                        | AttrKind::UNLIKELY
+                        | AttrKind::FALLTHROUGH
+                )
+            }) {
                 let sub = self.parse_statement_after_attrs()?;
-                let pre23 = self.std < Std::Cxx23;
-                return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, pre23));
+                return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, self.std));
             }
         }
         self.parse_statement_after_attrs()

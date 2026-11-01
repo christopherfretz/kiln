@@ -1557,6 +1557,14 @@ diag_ids! {
     sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
     // [dcl.init.general]/16 (WP-182)
     sema_list_init_in_parens = Error (2) "cannot initialize {0:non-class|reference} type {1} with a parenthesized initializer list";
+    // [dcl.attr.likelihood], [dcl.attr.fallthrough] (WP-182)
+    ext_cxx17_attr = Extension [Cxx17AttributeExtensions] (1) "use of the '{0}' attribute is a C++17 extension";
+    ext_cxx20_attr = Extension [Cxx20AttributeExtensions] (1) "use of the '{0}' attribute is a C++20 extension";
+    sema_attributes_not_compatible = Error (2) "'{0}' and '{1}' attributes are not compatible";
+    note_conflicting_attribute = Note (0) "conflicting attribute is here";
+    sema_likelihood_if_conflict = Warning [IgnoredAttributes] (1) "conflicting attributes '{0}' are ignored";
+    sema_fallthrough_outside_switch = Error (0) "fallthrough annotation is outside switch statement";
+    parse_attribute_forbids_arguments = Error (1) "attribute '{0}' cannot have an argument list";
 }
 
 impl DiagId {
