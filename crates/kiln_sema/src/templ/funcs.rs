@@ -78,7 +78,8 @@ impl Sema<'_, '_> {
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
-            sub.function_spec_signature(pattern, spec)
+            sub.function_spec_signature(pattern, spec)?;
+            sub.function_spec_explicit(pattern, spec)
         });
         if r.is_err() {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);

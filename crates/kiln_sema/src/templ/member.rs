@@ -40,6 +40,41 @@ impl Substituter<'_, '_, '_> {
         Err(SubstFail)
     }
 
+    /// Redeclares partial specialization `m` of a member class template
+    /// of the pattern class for the member template it was redeclared as
+    /// ([temp.spec.partial.member]/2, [temp.mem]; clang's
+    /// `InstantiateClassTemplatePartialSpecialization`): its parameter
+    /// list and arguments substituted, so matching sees the enclosing
+    /// specialization's arguments (`In<T, B>` in `Outer<int>` matches
+    /// `In<int, char>`). A specialization instantiated from it uses the
+    /// original partial's definition, recorded as its pattern, with the
+    /// enclosing arguments as the outer levels (§4.6).
+    pub(crate) fn member_partial_spec(&mut self, m: DeclId) -> SubstResult<()> {
+        let Some((_, info)) = self.sema.ast.partial_spec_info(m) else { return Err(SubstFail) };
+        let (tmpl, params, args) = (info.template, info.params, info.args);
+        let n = *self.sema.ast.decls.get(m);
+        let Some(pattern) = self.sema.pattern_of(tmpl) else { return Err(SubstFail) };
+        let Some(&DeclOrPack::Decl(new_pattern)) = self.locals.get(&pattern) else {
+            return Err(SubstFail);
+        };
+        let Some(new_tmpl) = self.sema.template_of(new_pattern) else { return Err(SubstFail) };
+        self.open_substituted_head(params)?;
+        let r = (|| {
+            let list = self.sema.templ.heads.last().and_then(|h| h.list).ok_or(SubstFail)?;
+            let args = self.args(args, n.loc())?;
+            let ctx = self.sema.ast.decls.get(new_tmpl).ctx().unwrap_or(self.sema.ast.tu);
+            let h = kiln_ast::DeclHead::new(ctx, n.name(), n.loc());
+            let tag =
+                self.sema.ast.decls.record(m).map_or(kiln_ast::decl::TagKind::Struct, |r| r.tag);
+            let p = self.sema.builder().class_partial_spec(h, new_tmpl, list, args, tag);
+            self.sema.ast.templates.set_instantiated_from(p, m);
+            Ok(())
+        })();
+        self.sema.act_on_finish_template_decl();
+        self.sema.templ.cur = None;
+        r
+    }
+
     /// Opens the head of a member template (or a generic lambda's call
     /// operator) being redeclared: template parameter list `params`
     /// substituted ([`Self::param_list`]), its parameters in scope, one

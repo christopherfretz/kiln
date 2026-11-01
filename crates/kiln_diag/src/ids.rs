@@ -1250,6 +1250,7 @@ diag_ids! {
     sema_explicit_spec_non_template = Error (1) "explicit specialization of non-template {0}";
     note_explicit_spec_template_declared = Note (0) "explicitly specialized declaration is here";
     sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
+    sema_partial_spec_friend = Error (0) "partial specialization cannot be declared as a friend";
     sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
     sema_partial_spec_redecl_scope = Error (2) "class template partial specialization of '{0}' not in a namespace enclosing '{1}'";
     sema_explicit_inst_after_spec_ignored = Warning [InstantiationAfterSpecialization] (1) "explicit instantiation of '{0}' that occurs after an explicit specialization has no effect";

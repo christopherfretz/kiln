@@ -997,6 +997,24 @@ impl Sema<'_, '_> {
         self.note_this_use(loc);
         let this = self.builder().this_expr(this_ty, true, loc);
         let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
+        if self.ast.types.is_dependent(obj_ty) {
+            // [temp.dep.expr]/3: `this` is type-dependent in a member of a
+            // class template, so the call of an overloaded member through
+            // it is resolved at instantiation, as `this->f(…)` is
+            // (`try_dependent_member_q`). Overloads that differ only in a
+            // dependent `enable_if_t<…, int> = 0` cannot be told apart
+            // before then (libc++ `__shared_ptr_emplace`).
+            let b = conv::decay_dependent(self, this);
+            return Some(self.builder().dependent_member(
+                Some(b),
+                true,
+                name,
+                false,
+                nns,
+                None,
+                loc,
+            ));
+        }
         let set = crate::overload::OvlMember {
             name,
             decls,
