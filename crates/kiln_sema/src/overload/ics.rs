@@ -375,7 +375,7 @@ impl Sema<'_, '_> {
     /// derived)`. A class template specialization `t2` is instantiated
     /// first (clang `CompareReferenceRelationship`'s `isCompleteType`).
     pub(crate) fn ref_related(&mut self, t1: QualType, t2: QualType) -> (bool, bool) {
-        if t1 == t2 {
+        if t1 == t2 || self.unknown_bound_of(t1, t2) {
             return (true, false);
         }
         if let (Some(d), Some(b)) = (self.ast.types.as_record(t2), self.ast.types.as_record(t1))
@@ -392,6 +392,22 @@ impl Sema<'_, '_> {
                 (true, true)
             }
             _ => (false, false),
+        }
+    }
+
+    /// True if `t1` is an array of unknown bound of the element type of
+    /// the array of known bound `t2`, both canonical and unqualified: a
+    /// `T[N]` glvalue binds a `T (&)[]` directly ([dcl.init.ref]/4: the
+    /// types are similar and `T (*)[N]` converts to `T (*)[]` by a
+    /// qualification conversion, [conv.qual]/3, P0388R4). clang
+    /// reports the binding as unrelated when it would drop qualifiers.
+    pub(crate) fn unknown_bound_of(&self, t1: QualType, t2: QualType) -> bool {
+        let t = &self.ast.types;
+        match (t.view(t1.ty()), t.view(t2.ty())) {
+            (TypeView::IncompleteArray(e1), TypeView::ConstantArray(a)) => {
+                t.same_type(t.canonical(e1), t.canonical(a.elem))
+            }
+            _ => false,
         }
     }
 
@@ -421,7 +437,10 @@ impl Sema<'_, '_> {
         let is_fn = types.is_function(u1);
         let class_src = types.as_record(u2).is_some();
         let class_or_array = class_src || types.is_array(u2);
-        let (related, derived) = self.ref_related(u1, u2);
+        let (mut related, derived) = self.ref_related(u1, u2);
+        if related && !q1.contains(q2) && self.unknown_bound_of(u1, u2) {
+            related = false;
+        }
         let compatible = related && q1.contains(q2);
         let lv = a.vk == ValueCategory::LValue;
         let base =

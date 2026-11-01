@@ -5729,7 +5729,29 @@ impl Sema<'_, '_> {
         if found.ambiguity.is_some() {
             return true;
         }
-        found.decls.len() > 1
+        // Declarations of one entity, and type names of one type, are
+        // not ambiguous ([basic.lookup.general]/1, [dcl.typedef]/3;
+        // clang `resolveKind`'s `UniqueTypes`).
+        let mut types: Vec<QualType> = Vec::new();
+        let mut decls: Vec<DeclId> = Vec::new();
+        for &x in &found.decls {
+            let d = self.ast.strip_shadow(x);
+            let k = self.kind_of(d);
+            if is_type_kind(k) && k != DeclKind::UnresolvedUsingTypename {
+                let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm) {
+                    self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
+                } else {
+                    self.tag_type(d)
+                };
+                let c = self.ast.types.canonical(ty);
+                if !types.contains(&c) {
+                    types.push(c);
+                }
+            } else if !decls.contains(&self.ast.first(d)) {
+                decls.push(self.ast.first(d));
+            }
+        }
+        types.len() + decls.len() > 1
             && !found.decls.iter().any(|&x| {
                 matches!(
                     self.kind_of(self.ast.strip_shadow(x)),
