@@ -796,6 +796,12 @@ impl Parser {
         if self.oracle.is_some() && !matches!(expect, Expect::Run | Expect::Pp | Expect::Ast) {
             self.err(self.oracle_line, "`oracle` only applies to `run`, `pp` and `ast` tests");
         }
+        // The oracle is a clang: a test clang cannot compile is not
+        // compared with it (`skip(clang)` implies `oracle: none`).
+        let skip_clang = self.skip.iter().any(|m| m.compiler == Some(CompilerKind::Clang));
+        if skip_clang && self.oracle == Some(true) {
+            self.err(self.oracle_line, "`oracle: clang` contradicts `skip(clang)`");
+        }
         if self.inst_report.is_some() && !matches!(expect, Expect::CompileOk | Expect::CompileFail)
         {
             let line = self.inst_report_line;
@@ -846,10 +852,11 @@ impl Parser {
             env: self.env,
             // `layout` and `vtables` have no golden: the oracle is their
             // only reference, and `oracle:` does not apply to them.
-            oracle: self.oracle.unwrap_or(matches!(
-                expect,
-                Expect::Run | Expect::Pp | Expect::Layout | Expect::Vtables
-            )),
+            oracle: self.oracle.unwrap_or(match expect {
+                Expect::Run | Expect::Pp => !skip_clang,
+                Expect::Layout | Expect::Vtables => true,
+                _ => false,
+            }),
             oven: self.oven,
             skip: self.skip,
             xfail: self.xfail,
@@ -1163,6 +1170,24 @@ mod tests {
         assert!(e.iter().any(|e| e.contains("duplicate `requires: clang>=`")), "{e:?}");
         assert_eq!(parse_version("19.1.7"), Some([19, 1, 7]));
         assert_eq!(parse_version("19."), None);
+    }
+
+    #[test]
+    fn skip_clang_implies_oracle_none() {
+        // spec/harness.md, directives: a test clang cannot compile is not
+        // compared with the (clang) oracle.
+        for expect in ["run", "pp"] {
+            let s = ok(&format!("//@ expect: {expect}\n//@ skip(clang): hangs\n"));
+            assert!(!s.oracle, "skip(clang) implies oracle: none for `{expect}`");
+            let s = ok(&format!("//@ expect: {expect}\n//@ skip(kiln): not yet\n"));
+            assert!(s.oracle, "skip(kiln) keeps the oracle for `{expect}`");
+            let s = ok(&format!("//@ expect: {expect}\n//@ skip(clang): x\n//@ oracle: none\n"));
+            assert!(!s.oracle, "an explicit oracle: none is redundant, not an error");
+        }
+        let e = errs("//@ expect: run\n//@ oracle: clang\n//@ skip(clang): hangs\n");
+        assert_eq!(e, ["line 2: `oracle: clang` contradicts `skip(clang)`"]);
+        let e = errs("//@ expect: ast\n//@ skip(clang): hangs\n//@ oracle: clang\n");
+        assert_eq!(e, ["line 3: `oracle: clang` contradicts `skip(clang)`"]);
     }
 
     #[test]
