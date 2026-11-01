@@ -143,7 +143,6 @@ pub(crate) use member_expr::MemberRef;
 pub(crate) use special::{CtorCall, DeletedAs, DiagSites, InitEntity, SpecialState, SynthContext};
 // WP-074: the builtin type traits select special members.
 pub(crate) use special::{Selected, SpecialKind};
-pub(crate) use temporary::BindingSite;
 pub(crate) use r#virtual::{AbstractUse, VirtualSite, ensure_virtuals, is_virtual};
 
 /// Bits of [`Sema`]'s `implicit_declared` map: which implicit special
