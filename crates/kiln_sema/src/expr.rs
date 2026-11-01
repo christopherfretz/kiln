@@ -541,7 +541,13 @@ impl Sema<'_, '_> {
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
             Err(err) => {
-                let d = err.diag(self, e);
+                // clang's `InitializationKind::CreateCopy` of a return
+                // operand or argument is at the expression's start.
+                let d = if matches!(ctx, ConvCtx::Return | ConvCtx::Argument) {
+                    err.diag_at(self, self.begin_loc(e))
+                } else {
+                    err.diag(self, e)
+                };
                 self.emit(d);
                 let loc = self.eloc(e);
                 self.recover(ty, &[e], loc)
