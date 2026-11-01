@@ -1862,11 +1862,16 @@ cost is small.
     (`bool`) is fixed at construction.
 - **The associated constraints of a templated entity**
   ([temp.constr.decl]/3) are the conjunction, in this order, of:
-  1. the template-head's requires-clause;
-  2. each parameter's immediately-declared constraint, in order;
+  1. each parameter's immediately-declared constraint, in order;
+  2. the template-head's requires-clause;
   3. the trailing requires-clause.
   For abbreviated templates, the invented parameters come first in that
-  order, as clang does.
+  order, as clang does (`TemplateParameterList::getAssociatedConstraints`).
+  Satisfaction stops at the first unsatisfied conjunct, so the order is
+  observable: a requires-clause that would be a hard error is not
+  substituted when a type-constraint fails, and the notes name the
+  type-constraint (WP-207; until then the requires-clause came first).
+  `head_constraints` in `concepts/sat.rs` builds 1-2.
 
 ### 8.2 Normalization and atomic-constraint identity
 

@@ -28,8 +28,8 @@ const MAX_NOTE_DEPTH: u32 = 64;
 
 impl Sema<'_, '_> {
     /// The associated constraints of template `tmpl` in order
-    /// ([temp.constr.decl]/3): the template-head's requires-clause, each
-    /// parameter's immediately-declared constraint, the trailing
+    /// ([temp.constr.decl]/3): each parameter's immediately-declared
+    /// constraint, the template-head's requires-clause, the trailing
     /// requires-clause.
     pub(crate) fn associated_constraints(&self, tmpl: DeclId) -> Vec<ExprId> {
         if let Some(&(pattern, _)) = self.inst.concepts.member_constraints.get(&tmpl)
@@ -50,21 +50,26 @@ impl Sema<'_, '_> {
         out
     }
 
-    /// A template-head's constraints: its requires-clause, then each
-    /// parameter's immediately-declared constraint.
+    /// A template-head's constraints ([temp.constr.decl]/3.1-3.2): each
+    /// parameter's immediately-declared constraint, then its
+    /// requires-clause (clang `TemplateParameterList::
+    /// getAssociatedConstraints`). The order matters: satisfaction stops
+    /// at the first unsatisfied conjunct, so a requires-clause that is
+    /// ill-formed outside the parameters' constraints is never
+    /// substituted (`template <__pair_like T> requires(... get<1>(T) ...)`).
     pub(crate) fn head_constraints(
         &self,
         params: kiln_ast::ids::ListId,
         requires: Option<ExprId>,
         out: &mut Vec<ExprId>,
     ) {
-        if let Some(r) = requires {
-            out.push(r);
-        }
         for p in self.ast.lists.iter::<DeclId>(params) {
             if let Some(c) = self.ast.template_parm(p).and_then(|i| i.constraint) {
                 out.push(c);
             }
+        }
+        if let Some(r) = requires {
+            out.push(r);
         }
     }
 
