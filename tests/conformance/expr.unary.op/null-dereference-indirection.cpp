@@ -2,8 +2,9 @@
 // DefaultLvalueConversion and CheckAssignmentOperands, WP-191): a load from
 // or builtin assignment to `*p`, `p` a null pointer constant with parens and
 // casts ignored, unless volatile. Not for member access, subscripts, `&*`,
-// discarded or unevaluated operands, `++`, or unreachable code; a template
-// definition warns, a dependent dereference per instantiation.
+// discarded or unevaluated operands, `++`, or unreachable code; a function
+// template definition warns, and each instantiation again
+// (temp.inst/null-dereference-rewarn.cpp).
 //@ expect: compile-ok
 //@ strict-diags
 //@ diag: 34:11 warning "indirection of non-volatile null pointer will be deleted, not trap"

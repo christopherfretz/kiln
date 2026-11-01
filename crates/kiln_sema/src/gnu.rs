@@ -3,8 +3,8 @@
 //! `( T ) { ... }`. Each matches clang's behaviour for C++.
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
-use kiln_ast::ids::RawId;
 use kiln_ast::expr::ExprKind;
+use kiln_ast::ids::RawId;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, ListId, QualType, StmtId};
@@ -563,8 +563,7 @@ impl Sema<'_, '_> {
         lparen: Loc,
         lbrace: Loc,
     ) -> bool {
-        let aggregate =
-            self.ast.types.is_array(ty) || self.ast.types.as_record(ty).is_some();
+        let aggregate = self.ast.types.is_array(ty) || self.ast.types.as_record(ty).is_some();
         let culprit = if aggregate && self.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
             self.constant_init_culprit(init)
         } else if aggregate {
@@ -603,9 +602,9 @@ impl Sema<'_, '_> {
             e = self.ast.exprs.operand(e);
         }
         match self.ast.exprs.get(e).kind() {
-            ExprKind::BinaryOperator
-            | ExprKind::CompoundAssignOperator
-            | ExprKind::MemberExpr => self.ast.exprs.get(e).loc(),
+            ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator | ExprKind::MemberExpr => {
+                self.ast.exprs.get(e).loc()
+            }
             _ => self.begin_loc(e),
         }
     }

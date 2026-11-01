@@ -8,8 +8,10 @@
 //! rebuilding the expression (`MarkDeclRefReferenced`, `MarkFunctionReferenced`).
 //! The default arguments and default member initializers it uses have
 //! their immediate invocations evaluated again, and so are its own
-//! immediate invocations that failed at the definition. Unevaluated
-//! operands and lambda bodies are not entered.
+//! immediate invocations that failed at the definition, and the
+//! null dereferences the definition warned about are warned about again
+//! (spec/sema.md §5.15). Unevaluated operands and lambda bodies are not
+//! entered.
 
 use kiln_ast::ExprId;
 use kiln_ast::expr::{ExprKind, NonOdrUse};
@@ -18,11 +20,14 @@ use crate::Sema;
 
 impl Sema<'_, '_> {
     /// Marks the functions that the shared expression `e` odr-uses
-    /// referenced (which defines or instantiates them on use).
+    /// referenced (which defines or instantiates them on use), and warns
+    /// again about its null dereferences ([`Sema::reissue_null_derefs`]).
     pub(crate) fn mark_shared_expr_referenced(&mut self, e: ExprId) {
         if self.unevaluated > 0 || self.in_template() {
             return;
         }
+        let rewarn = self.null_deref_rewarn_active();
+        let mut derefs = Vec::new();
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             let kind = self.ast.exprs.get(x).kind();
@@ -64,6 +69,7 @@ impl Sema<'_, '_> {
                         self.mark_function_referenced(f, loc);
                     }
                 }
+                ExprKind::UnaryOperator if rewarn => derefs.push(x),
                 // A failed immediate invocation is reported again.
                 ExprKind::ConstantExpr => self.recheck_shared_invocation(x),
                 ExprKind::CXXDeleteExpr => {
@@ -99,6 +105,9 @@ impl Sema<'_, '_> {
                 }
             }
             stack.extend(kids);
+        }
+        if !derefs.is_empty() {
+            self.reissue_null_derefs(&derefs);
         }
     }
 }

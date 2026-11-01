@@ -253,6 +253,15 @@ pub struct Sema<'a, 'sm> {
     /// shares the non-dependent list but issues them again, as clang's
     /// re-checked list does (spec/sema.md §3.7, WP-196).
     pub(crate) designator_rewarn: kiln_source::fx::FxHashMap<ExprId, Vec<Diag>>,
+    /// The `-Wnull-dereference` warnings of a template definition, by
+    /// the dereference they point at, numbered in the order they were
+    /// checked: an instantiation sharing the non-dependent expression
+    /// issues them again, as clang's rebuilt one does (spec/sema.md
+    /// §5.15, WP-235).
+    pub(crate) null_deref_rewarn: kiln_source::fx::FxHashMap<ExprId, (usize, Diag)>,
+    /// The null dereferences warned about per instantiation context
+    /// (`queue_null_deref`).
+    pub(crate) null_deref_seen: kiln_source::fx::FxHashSet<(ExprId, u64)>,
     /// The warnings of the list being checked in a template definition,
     /// collected for `designator_rewarn`.
     pub(crate) designator_pending: Option<Vec<Diag>>,
@@ -501,6 +510,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
+            null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
+            null_deref_seen: kiln_source::fx::FxHashSet::default(),
             designator_pending: None,
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),

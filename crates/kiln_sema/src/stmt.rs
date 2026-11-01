@@ -1176,7 +1176,7 @@ impl Sema<'_, '_> {
             };
             self.set_deduced_return(f, ret);
         }
-        let Some(state) = self.func.take() else { return };
+        let Some(mut state) = self.func.take() else { return };
         for &r in &state.returns {
             if let Some(v) = self.ast.stmts.return_nrvo(r)
                 && !self.ast.decls.var(v).is_some_and(|x| x.spec.is_nrvo())
@@ -1198,11 +1198,20 @@ impl Sema<'_, '_> {
             self.check_jump_scopes(body);
         }
         // The deferred runtime-behavior diagnostics, ahead of the flow
-        // warnings (clang `PopFunctionScopeInfo` / `IssueWarnings`); a
-        // template's too (clang flushes them unfiltered there), and an
-        // instantiation re-checks. With no error and outside a template,
-        // those anchored to an expression that is unreachable in the
-        // body are dropped.
+        // warnings (clang `PopFunctionScopeInfo` / `IssueWarnings`). A
+        // function template's are flushed unfiltered (clang finishes its
+        // `FunctionTemplateDecl` without an analysis policy); any other
+        // function of a dependent context (a member of a class template,
+        // a lambda or local class in a template) drops the anchored ones
+        // (clang's `IssueWarnings` returns for a dependent context): its
+        // instantiations warn instead (rebuilt expressions re-check,
+        // shared null dereferences replay, `reissue_null_derefs`). The
+        // unanchored ones are kept: an instantiation does not re-check
+        // them. With no error and outside a template, those anchored to
+        // an expression that is unreachable in the body are dropped.
+        if self.in_template() && !self.is_named_function_template(state.decl) {
+            state.runtime_diags.retain(|(_, anchor)| anchor.is_none());
+        }
         let dead = if self.diags.error_count() > 0 || self.in_template() {
             None
         } else {
@@ -1302,6 +1311,15 @@ impl Sema<'_, '_> {
             }
         }
         self.emit(msg);
+    }
+
+    /// Whether `f` is the pattern of a function template declared by
+    /// name (a generic lambda's call operator is not: clang finishes it
+    /// as a function of a dependent context).
+    fn is_named_function_template(&self, f: DeclId) -> bool {
+        !self.is_lambda_call_op(f)
+            && (self.ast.described_template(f).is_some()
+                || self.ast.described_template(self.ast.first(f)).is_some())
     }
 
     /// Whether function `f` is declared `[[noreturn]]`.

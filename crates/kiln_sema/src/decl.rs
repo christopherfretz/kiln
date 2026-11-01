@@ -3354,7 +3354,7 @@ impl Sema<'_, '_> {
             self.diag(id, loc).arg(&n).diff_args(self, ty, pty)
         } else if new_static && old_extern {
             self.diag(DiagId::sema_static_non_static, loc).arg(&n)
-        } else if !(new_extern && old_linkage) && !new_static && old_static {
+        } else if (!new_extern || !old_linkage) && !new_static && old_static {
             self.diag(DiagId::sema_non_static_static, loc).arg(&n)
         } else if new_extern && !old_linkage {
             self.diag(DiagId::sema_extern_non_extern, loc).arg(&n)

@@ -1342,7 +1342,9 @@ recomputed exactly as for non-template code (clang's
   `CXXBindTemporaryExpr`, `ExprWithCleanups` and the `ConstantExpr`
   wrappers. `ParenExpr` is kept.
 - **Sharing.** A non-dependent subtree is always shared (§3.3; there is
-  no switch).
+  no switch). The checks clang would redo by rebuilding it are replayed
+  from what the definition recorded: designator warnings of a list
+  (WP-196) and `-Wnull-dereference` (spec/sema.md §5.15, WP-235).
 - **Dependent forms** are resolved:
   - `DependentScopeDeclRefExpr` becomes qualified lookup;
   - `UnresolvedLookupExpr` becomes an overload set plus ADL (§3.5);

@@ -2031,7 +2031,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   so clang's CFG reachability filter does not apply to them
   (`if (0) va_arg(ap, char)` is silent there, reported here), and a
   non-dependent expression shared by a template and its instantiation is
-  checked once, at definition.
+  checked once, at definition, except for `-Wnull-dereference` (§5.15).
+  At the end of a body in a dependent context the queue is flushed
+  unfiltered for a function template declared by name. For any other
+  function (a member of a class template, a lambda or local class in a
+  template, a generic lambda's call operator) the anchored entries are
+  dropped, and their instantiations warn instead: clang finishes a
+  `FunctionTemplateDecl` without an analysis policy, and its
+  `IssueWarnings` returns early for a dependent context. The unanchored
+  ones (`-Wvarargs` `va_arg` promotion, `-Wuninitialized` self-reference)
+  are still reported at the definition, because the instantiation shares
+  and does not re-check them (clang reports them per instantiation).
 
 ### 5.13 Vector conditionals (`vector_ops.rs`, WP-173)
 The vector operators themselves are summarized in spec/types.md
@@ -2134,13 +2144,30 @@ pointer constant: a zero integer literal, a `std::nullptr_t` value or
   operand or an immediate function context (§5.1 reachability). Member
   access, subscripts, `&*`, `(void)` and discarded operands load nothing
   and are not diagnosed.
-- **Deviations:** a non-dependent `*null` in a template is reported at
-  the definition only, because instantiation shares non-dependent
-  subtrees; clang re-diagnoses it in each instantiation. A dependent
-  one (`*(T *)0`) is reported per instantiation, as clang does. kiln
-  does not parse `__null` yet.
+- **Templates** (WP-235): a dependent `*(T *)0` is checked when the
+  instantiation rebuilds it. A non-dependent one is shared by the
+  instantiation (spec/sema-templates.md §5.4), so the definition keeps
+  each warning it computed, keyed by the dereference and numbered in
+  check order (`null_deref_rewarn`). The walk that marks a shared
+  expression's functions referenced (`mark_shared_expr_referenced`,
+  which skips unevaluated operands and lambda bodies) collects the
+  recorded dereferences it meets and queues their warnings again, in
+  that order, under the instantiation's notes and reachability, unless
+  the context is quiet. It costs nothing while no template has warned.
+  Inside an instantiation these warnings are exempt from the engine's
+  deduplication against the definition's report (spec/diag.md §7.4)
+  and deduplicated per dereference and instantiation context instead
+  (`null_deref_seen`), so a shared dereference that a rebuilt parent
+  re-checks warns once. Other run-time warnings (division by zero,
+  shift counts) are not repeated, as in clang.
+- **Deviations:** kiln does not parse `__null` yet. A default member
+  initializer of a class template does not warn again when a
+  constructor uses it (clang instantiates it then), and a variable
+  template specialization's warning can print later than clang's,
+  which instantiates it at its first use.
 - Tests: `tests/conformance/expr.unary.op/null-dereference-indirection.cpp`,
-  `tests/conformance/dcl.init.ref/null-dereference-binding.cpp`.
+  `tests/conformance/dcl.init.ref/null-dereference-binding.cpp`,
+  `tests/conformance/temp.inst/null-dereference-rewarn.cpp`.
 ### 5.16 GNU `_Complex` (`complex.rs`, `conv/`, WP-211)
 clang 19's C99/GNU complex support in C++:
 - **Types.** `_Complex` combines with `float`, `double`, `long double`
