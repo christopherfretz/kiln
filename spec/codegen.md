@@ -362,7 +362,10 @@ The normative description is spec/driver.md "Code generation". In short:
   `if constexpr`/`if consteval` landed with WP-058: `calls_noexcept`,
   `noexcept_operator`, `if_constexpr_true`, `if_constexpr_false` and
   `if_consteval` are exact; a `CXXNoexceptExpr` lowers to its stored
-  `bool` constant and `fold.rs` does not look inside it.)
+  `bool` constant and `fold.rs` does not look inside it. A
+  `ConceptSpecializationExpr` or `RequiresExpr` likewise lowers to the
+  satisfaction Sema recorded (`i1` constant; an unrecorded one is an
+  error), and `fold.rs` skips its operands; WP-136.)
 
 ## 7. Landed (WP-079): classes
 Lowering of non-polymorphic classes (`class.rs`, `cleanup.rs`,

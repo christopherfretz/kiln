@@ -281,7 +281,9 @@ impl Collect<'_> {
             ExprKind::CXXNoexceptExpr
             | ExprKind::TypeTraitExpr
             | ExprKind::ArrayTypeTraitExpr
-            | ExprKind::ExpressionTraitExpr => return,
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::RequiresExpr => return,
             ExprKind::BinaryOperator
                 if matches!(ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
             {
