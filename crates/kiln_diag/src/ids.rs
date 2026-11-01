@@ -1626,6 +1626,12 @@ diag_ids! {
     sema_enum_template = Error (0) "enumeration cannot be a template";
     sema_no_declarators_error = Error (0) "declaration does not declare anything";
     sema_explicit_inst_undefined_var_template = Error (1) "explicit instantiation of undefined variable template '{0}'";
+    // WP-204: clang's `checkExprLifetime` for a return ([stmt.return],
+    // spec/sema-class.md §5.6).
+    sema_ret_stack_addr = Warning [ReturnStackAddress] (3) "{0:address of|reference to} stack memory associated with {1:local variable|parameter} {2} returned";
+    note_local_var_init = Note (2) "{0:via initialization of|binding reference} variable {1} here";
+    note_lambda_capture_here = Note (1) "{0:captured|captured by reference|implicitly captured due to use|implicitly captured by reference due to use} here";
+    note_lambda_init_capture = Note (2) "captured{0:| by reference} via initialization of lambda capture {1}";
 }
 
 impl DiagId {

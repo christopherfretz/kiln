@@ -771,8 +771,7 @@ GPR/SSE counts (both zero means the argument is read from memory).
   A template template parameter is `T_` (a substitution candidate,
   `Sub::TemplateParm`, the same one used when it is a template argument)
   followed by its arguments. `tests/mangle/dependent_spec.cpp`.
-- **Not implemented:** `Tk`/`Tt`/`Q` (constrained parameters and
-  requires-clauses) and constrained `Dk` placeholders.
+- Constrained parameters, requires-clauses and `Dk` placeholders: §8.16.
 
 ### 8.15 Landed (WP-172): abi tags and dependent signature types
 **abi_tag.** `[[gnu::abi_tag("a","b")]]` / `__attribute__((abi_tag(...)))`
@@ -835,6 +834,47 @@ mangles as `XLi0EE` in a template argument and `u7unknown` as a
 template-parameter-declaration prefixes `Tn`/`Tp` are §8.14's (WP-117);
 the dependent template-specialization types there are the ones above
 (`dependent_tst`, with a pack's arguments grouped by `converted_args`).
+
+### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
+clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
+`tests/mangle/constraints.cpp` (84 symbols, both triples):
+- **`<template-param-decl>`** of an overloadable function template's
+  parameter when clang's `needToMangleTemplateParam` says so: `Ty` is
+  never written alone; a type-constrained type parameter is `Tk
+  <type-constraint>`; a template template parameter whose head (mangled
+  with depths ignored, `Mangler::head_only`) differs from the argument
+  template's head is `Tt <param-decls> [Q <constraint>] E`; `Tp` prefixes
+  a pack. `Tn` is as in §8.14.
+- **`<type-constraint>`**: the concept's unscoped name (a substitution
+  candidate; `St`-prefixed in `std`) followed by `I <args> E` when it has
+  explicit arguments, or `N <prefix> <name> [I <args> E] E` when the
+  concept is nested in a class or namespace other than `std`.
+- **requires-clauses** `Q <constraint-expression>`: the template-head
+  clause inside `I ... E` after the arguments, the trailing clause after
+  the bare function type (from the pattern of a specialization, or from
+  the uninstantiated member of an instantiated class template).
+  Template parameters inside a constraint keep their depth
+  (`TL<d-1>_<i-1>_`, `Mangler::real_depth`).
+- **Constraint expressions** (`dep.rs`): a concept-id is an unresolved
+  name (`[sr <nns> E] <source-name> I <args> E`, packs flattened, the
+  written qualifier kept by `Sema::set_template_id_qualifier`); folds are
+  `fl`/`fr`/`fL`/`fR` + operator code (a right fold iff the left operand
+  holds the unexpanded pack); requires-expressions are `rQ <param-types>
+  _ <requirements> E` / `rq <requirements> E` with `X <expr> [N] [R
+  <type-constraint>]`, `T <type>` and `Q <expr>` requirements; parameter
+  references are `fp [cv] [n-1] _` or `fL<nest-1>p...` (a requires-
+  expression's parameters count as one level per enclosing `rQ`). Member
+  access (`dt`/`pt`), pseudo-destructors (`dn`), `ix`, `cv`/`tl`
+  construction, `nw`/`na` new-expressions and the assignment operators
+  (`aS`, `pL`, ...) are added for these.
+- **Constrained placeholders** `Dk`/`DK <type-constraint>` (`C auto`,
+  `C decltype(auto)`); never substitution candidates.
+- **Member-like constrained friends** (a non-template friend with a
+  trailing requires-clause, [temp.friend]/9) mangle in their lexical
+  class with `F` before the name: `_ZN1XIiEF2frES0_Q1CIT_E`.
+- A constraint expression kiln cannot mangle yet (a braced `new T{...}`)
+  falls back to `Qu7unknown`, so the symbol stays unique but differs
+  from clang.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
