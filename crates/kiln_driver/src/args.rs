@@ -801,10 +801,7 @@ mod tests {
         let a = p(&["--driver-mode=g++", "a.c", "--driver-mode=gcc"]);
         assert_eq!((a.mode, a.errors), (DriverMode::Gcc, vec![]));
         let a = p(&["--driver-mode=cl", "a.c"]);
-        assert_eq!(
-            a.errors,
-            [ArgError::UnsupportedValue("--driver-mode=".into(), "cl".into())]
-        );
+        assert_eq!(a.errors, [ArgError::UnsupportedValue("--driver-mode=".into(), "cl".into())]);
         assert_eq!(parse("a.c").mode, DriverMode::Gxx);
     }
 

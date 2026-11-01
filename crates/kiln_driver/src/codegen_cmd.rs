@@ -261,7 +261,8 @@ pub fn compile(
 ) -> i32 {
     let phase = Phase::of(args);
     let dsm = SourceManager::new();
-    let drv = make_engine(&dsm, &driver_diag_options(diag_opts), io.stderr.clone(), Some(&args.program));
+    let drv =
+        make_engine(&dsm, &driver_diag_options(diag_opts), io.stderr.clone(), Some(&args.program));
     if phase == Phase::Link && args.compile.emit_llvm {
         Diag::new(DiagId::drv_emit_llvm_link, Span::INVALID).emit(&drv);
         drv.flush();

@@ -66,7 +66,9 @@ fn argument_errors() {
          kiln++: error: no input files\n"
     );
     let o = kiln(&["-E", "-o"], "");
-    assert!(o.stderr.starts_with("kiln++: error: argument to '-o' is missing (expected 1 value)\n"));
+    assert!(
+        o.stderr.starts_with("kiln++: error: argument to '-o' is missing (expected 1 value)\n")
+    );
     let o = kiln(&["-E", "-std=c++27", "-"], "");
     assert_eq!((o.code, o.stderr.as_str()), (1, "error: invalid value 'c++27' in '-std=c++27'\n"));
     let o = kiln(&["-E", "-std=c11", "-"], "");
@@ -97,7 +99,10 @@ fn syntax_only() {
         "error: invalid value 'bogus' in '-fdump-ast=bogus'\n1 error generated.\n"
     );
     let o = kiln(&["-E", "-fdump-ast", "-"], "");
-    assert_eq!(o.stderr, "kiln++: error: -fdump-ast without -fsyntax-only is not implemented yet\n");
+    assert_eq!(
+        o.stderr,
+        "kiln++: error: -fdump-ast without -fsyntax-only is not implemented yet\n"
+    );
     let o = kiln(&["-fsyntax-only", "-x", "c", "-"], "");
     assert_eq!(o.stderr, "error: -fsyntax-only for C is not implemented yet\n");
 }
@@ -415,28 +420,28 @@ fn outline_atomics_ignored_on_x86_64() {
 /// one winning.
 #[test]
 fn driver_modes() {
-    let d = scratch("modes");
+    let dir = scratch("modes");
     for (f, src) in [("a.c", "int a = __cplusplus;\n"), ("b.h", "int b;\n"), ("c.i", "int c;\n")] {
-        std::fs::write(d.join(f), src).unwrap();
+        std::fs::write(dir.join(f), src).unwrap();
     }
-    let p = |f: &str| d.join(f).display().to_string();
-    let (a, b, c) = (p("a.c"), p("b.h"), p("c.i"));
+    let path = |f: &str| dir.join(f).display().to_string();
+    let (c_src, h_src, i_src) = (path("a.c"), path("b.h"), path("c.i"));
     let warn = |from: &str, to: &str| {
         format!(
             "kiln++: warning: treating '{from}' input as '{to}' when in C++ mode, this behavior \
              is deprecated [-Wdeprecated]\n"
         )
     };
-    let o = kiln(&["-E", "-P", &a, &b, &c], "");
+    let o = kiln(&["-E", "-P", &c_src, &h_src, &i_src], "");
     assert_eq!(o.code, 0);
     assert_eq!(
         o.stderr,
         warn("c", "c++") + &warn("c-header", "c++-header") + &warn("cpp-output", "c++-cpp-output")
     );
     assert!(o.stdout.starts_with("int a = 201703L;"), "{}", o.stdout);
-    let o = kiln_named(Some("/usr/local/bin/kiln++"), &["-fsyntax-only", &a], "");
+    let o = kiln_named(Some("/usr/local/bin/kiln++"), &["-fsyntax-only", &c_src], "");
     assert_eq!((o.code, o.stderr), (0, warn("c", "c++")));
-    let o = kiln(&["-fsyntax-only", "-Werror", &a], "");
+    let o = kiln(&["-fsyntax-only", "-Werror", &c_src], "");
     assert_eq!(o.code, 1);
     assert_eq!(
         o.stderr,
@@ -444,35 +449,38 @@ fn driver_modes() {
          deprecated [-Werror,-Wdeprecated]\n"
     );
     for quiet in ["-w", "-Wno-deprecated"] {
-        let o = kiln(&["-fsyntax-only", quiet, &a], "");
+        let o = kiln(&["-fsyntax-only", quiet, &c_src], "");
         assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{quiet}");
     }
     // `-x` beats the mode: no promotion, C.
-    let o = kiln(&["-E", "-P", "-x", "c", &a], "");
+    let o = kiln(&["-E", "-P", "-x", "c", &c_src], "");
     assert_eq!((o.code, o.stderr.as_str(), o.stdout.as_str()), (0, "", "int a = __cplusplus;\n"));
 
     // `kiln`: C by extension (C is preprocessed, not compiled yet), C++
     // otherwise, standard input C.
-    let o = kiln_named(Some("kiln"), &["-E", "-P", &a], "");
+    let o = kiln_named(Some("kiln"), &["-E", "-P", &c_src], "");
     assert_eq!((o.code, o.stderr.as_str(), o.stdout.as_str()), (0, "", "int a = __cplusplus;\n"));
-    let o = kiln_named(Some("kiln"), &["-fsyntax-only", &b], "");
-    assert_eq!((o.code, o.stderr.as_str()), (1, "error: -fsyntax-only for C is not implemented yet\n"));
+    let o = kiln_named(Some("kiln"), &["-fsyntax-only", &h_src], "");
+    assert_eq!(
+        (o.code, o.stderr.as_str()),
+        (1, "error: -fsyntax-only for C is not implemented yet\n")
+    );
     let o = kiln_named(Some("kiln"), &["-E", "-P", "-"], "__cplusplus __STDC_VERSION__\n");
     assert_eq!((o.code, o.stdout.as_str()), (0, "__cplusplus 201710L\n"));
-    let o = kiln_named(Some("kiln"), &["-E", "-P", "-x", "c++", &a], "");
+    let o = kiln_named(Some("kiln"), &["-E", "-P", "-x", "c++", &c_src], "");
     assert!(o.stdout.starts_with("int a = 201703L;"), "{}", o.stdout);
     let o = kiln_named(Some("kiln"), &[], "");
     assert_eq!((o.code, o.stderr.as_str()), (1, "kiln: error: no input files\n"));
 
     // `--driver-mode=`: the last wins; the prefix stays the program's.
-    let o = kiln_named(Some("kiln"), &["--driver-mode=g++", "-fsyntax-only", &a], "");
+    let o = kiln_named(Some("kiln"), &["--driver-mode=g++", "-fsyntax-only", &c_src], "");
     assert_eq!((o.code, o.stderr), (0, warn("c", "c++").replace("kiln++:", "kiln:")));
-    let o = kiln(&["--driver-mode=gcc", "-E", "-P", &a, "--driver-mode=gcc"], "");
+    let o = kiln(&["--driver-mode=gcc", "-E", "-P", &c_src, "--driver-mode=gcc"], "");
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
-    let o = kiln(&["--driver-mode=cl", &a], "");
+    let o = kiln(&["--driver-mode=cl", &c_src], "");
     assert_eq!(
         (o.code, o.stderr.as_str()),
         (1, "kiln++: error: unsupported argument 'cl' to option '--driver-mode='\n")
     );
-    let _ = std::fs::remove_dir_all(&d);
+    let _ = std::fs::remove_dir_all(&dir);
 }

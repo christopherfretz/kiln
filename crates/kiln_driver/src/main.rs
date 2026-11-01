@@ -12,9 +12,9 @@ use kiln_sema::stack_guard::StackGuard;
 /// fatal diagnostic (§1 P4, §10.3). The program name (`argv[0]`) picks the
 /// driver mode.
 fn main() {
-    let mut argv = std::env::args();
-    let argv0 = argv.next().unwrap_or_else(|| "kiln".to_owned());
-    let args: Vec<String> = argv.collect();
+    let mut command_line = std::env::args();
+    let argv0 = command_line.next().unwrap_or_else(|| "kiln".to_owned());
+    let args: Vec<String> = command_line.collect();
     let size = kiln_driver::templ_opts::stack_size_of(&args);
     let code = std::thread::Builder::new()
         .name("kiln".into())

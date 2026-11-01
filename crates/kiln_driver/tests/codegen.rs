@@ -190,7 +190,10 @@ fn kiln_and_kilnpp() {
     let warning = "treating 'c' input as 'c++' when in C++ mode, this behavior is deprecated \
                    [-Wdeprecated]\n";
     let o = kiln_in(&d, &["-S", "-emit-llvm", "c.c"]);
-    assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), format!("kiln++: warning: {warning}")));
+    assert_eq!(
+        (o.status.code(), text(&o.stderr)),
+        (Some(0), format!("kiln++: warning: {warning}"))
+    );
     assert!(std::fs::read_to_string(d.join("c.ll")).unwrap().contains("define"));
     let o = kiln(&["--driver-mode=g++", "-S", "-emit-llvm", "c.c", "-o", "-"]);
     assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), format!("kiln: warning: {warning}")));
