@@ -243,11 +243,11 @@ impl Sema<'_, '_> {
                 | ExprKind::TypeTraitExpr
                 | ExprKind::ArrayTypeTraitExpr
                 | ExprKind::ExpressionTraitExpr
-                | ExprKind::CXXTypeidExpr => continue,
+                | ExprKind::CXXTypeidExpr
                 // [expr.prim.id.dtor]/2: as clang, the object expression
                 // of a pseudo-destructor is not looked at either, so
                 // `noexcept(f().~I())` is true for any `f`.
-                ExprKind::CXXPseudoDestructorExpr => continue,
+                | ExprKind::CXXPseudoDestructorExpr => continue,
                 ExprKind::CXXThrowExpr | ExprKind::CXXNewExpr => return true,
                 ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
                     if self.callee_can_throw(exprs.callee(x)) =>
