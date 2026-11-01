@@ -1,0 +1,86 @@
+TranslationUnitDecl
+|-VarDecl referenced a 'int'
+|-FunctionTemplateDecl d1
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+| `-FunctionDecl d1 'void ()'
+|   `-CompoundStmt
+|     `-DeclStmt
+|       `-VarDecl e 'U'
+|-FunctionTemplateDecl d2
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+| `-FunctionDecl d2 'void ()'
+|   `-CompoundStmt
+|     `-DeclStmt
+|       `-VarDecl p 'U (*)(int)'
+|-FunctionTemplateDecl d4
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+| `-FunctionDecl d4 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-CStyleCastExpr 'U' <Dependent>
+|         `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|-FunctionTemplateDecl d5
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+| `-FunctionDecl d5 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-ParenExpr 'U'
+|         `-CXXUnresolvedConstructExpr 'U'
+|           `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|-FunctionTemplateDecl d6
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+| `-FunctionDecl d6 'int ()'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-BinaryOperator '<dependent type>' '+'
+|         |-CXXUnresolvedConstructExpr 'U'
+|         | `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|         `-IntegerLiteral 'int' 1
+|-FunctionTemplateDecl d7
+| |-TemplateTypeParmDecl class depth 0 index 0 U
+| `-FunctionDecl d7 'void ()'
+|   `-CompoundStmt
+|     `-DeclStmt
+|       `-VarDecl e 'typename U::type'
+|-FunctionTemplateDecl d8
+| |-TemplateTypeParmDecl class depth 0 index 0 U
+| `-FunctionDecl d8 'void ()'
+|   `-CompoundStmt
+|     `-CallExpr '<dependent type>'
+|       |-DependentScopeDeclRefExpr '<dependent type>' lvalue
+|       `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|-FunctionTemplateDecl d9
+| |-TemplateTypeParmDecl class depth 0 index 0 U
+| `-FunctionDecl d9 'void ()'
+|   `-CompoundStmt
+|     `-DeclStmt
+|       `-VarDecl q 'typename U::type (*)(int)'
+|-FunctionTemplateDecl d10
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+| `-FunctionDecl d10 'void ()'
+|   `-CompoundStmt
+|     `-DeclStmt
+|       |-VarDecl f 'U'
+|       `-VarDecl g 'U' cinit
+|         `-IntegerLiteral 'int' 1
+|-FunctionTemplateDecl d11
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+| `-FunctionDecl d11 'void ()'
+|   `-CompoundStmt
+|     `-DeclStmt
+|       `-VarDecl h 'U[2]'
+|-FunctionTemplateDecl d12
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+| `-FunctionDecl d12 'void ()'
+|   `-CompoundStmt
+|     `-ForStmt has_init
+|       |-DeclStmt
+|       | `-VarDecl i 'U'
+|       `-BreakStmt
+`-FunctionTemplateDecl d13
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 U
+  `-FunctionDecl d13 'void ()'
+    `-CompoundStmt
+      `-CXXDependentScopeMemberExpr '<dependent type>' lvalue ->m
+        `-CXXUnresolvedConstructExpr 'U'
+          `-DeclRefExpr 'int' lvalue Var 'a' 'int'

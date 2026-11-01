@@ -377,6 +377,18 @@ impl Sema<'_, '_> {
     /// operand of an lvalue-to-rvalue conversion is not odr-used
     /// (`non_odr_use_constant`); every other named variable is `used`.
     pub fn act_on_full_expr(&mut self, e: ExprId) -> ExprId {
+        let cc = match self.ast.exprs.get(e).kind() {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => self.begin_loc(e),
+            _ => self.eloc(e),
+        };
+        self.act_on_full_expr_at(e, cc)
+    }
+
+    /// [`Sema::act_on_full_expr`] with conversion context `cc` for the
+    /// implicit-conversion warnings (clang's `CheckCompletedExpr`
+    /// location: the declared variable, `return`).
+    pub(crate) fn act_on_full_expr_at(&mut self, e: ExprId, cc: Loc) -> ExprId {
+        self.check_implicit_conversions(e, cc);
         self.flush_member_refs();
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();
@@ -1626,6 +1638,19 @@ impl Sema<'_, '_> {
             return false;
         }
         if n.value_category() != ValueCategory::LValue {
+            // clang's `CM_LValueCast`: an explicit cast of an lvalue, for a
+            // better diagnostic than the generic one (GCC's cast-as-lvalue).
+            let inner = self.ignore_parens(e);
+            if n.value_category() == ValueCategory::PRValue
+                && self.ast.exprs.get(inner).kind().is_explicit_cast()
+            {
+                let sub = self.ignore_paren_imp_casts(self.ast.exprs.operand(inner));
+                if self.ast.exprs.get(sub).value_category() == ValueCategory::LValue {
+                    let at = self.begin_loc(inner);
+                    self.error(DiagId::sema_lvalue_cast_not_supported, at);
+                    return false;
+                }
+            }
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }
@@ -1690,6 +1715,11 @@ impl Sema<'_, '_> {
         }
         let t0 = self.ety(e);
         if self.is_dependent_overloadable(t0) {
+            // `&C::m` of a member of dependent type: formed at
+            // instantiation, where the qualified name is rebuilt.
+            if op == UnaryOp::AddrOf && self.member_refs.get(&e).is_some_and(|r| r.qualified) {
+                self.member_refs.remove(&e);
+            }
             return self.builder().dependent_unary(op, e, loc);
         }
         match self.try_overloaded_operator(OperForm::Unary(op), &[e], &[], loc, Loc::INVALID) {
@@ -2564,6 +2594,45 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[c, t, f], loc);
         }
+        // [expr.cond]/4: operands of different types, one of class type:
+        // each is tried as converted to match the other; exactly one
+        // conversion is applied (clang `TryClassUnification`).
+        let (t, f, tn, fnn, tt, ft) = if !tv
+            && !self.ast.types.same_type(tt, ft)
+            && (self.ast.types.as_record(tt).is_some() || self.ast.types.as_record(ft).is_some())
+        {
+            let l2r = self.try_class_unification(t, f);
+            let r2l = self.try_class_unification(f, t);
+            let (t, f) = match (l2r, r2l) {
+                (Err(()), _) | (_, Err(())) => return self.recover_err(&[c, t, f], loc),
+                (Ok(Some(_)), Ok(Some(_))) => {
+                    let msg =
+                        self.diag(DiagId::sema_conditional_ambiguous, loc).diff_args(self, tt, ft);
+                    self.emit(msg);
+                    return self.recover_err(&[c, t, f], loc);
+                }
+                (Ok(Some(ty)), Ok(None)) => {
+                    match conv::implicit_convert(self, t, ty, ConvCtx::Initialization) {
+                        Ok(x) => (x, f),
+                        Err(err) => return self.conv_failed(&err, t, f, loc),
+                    }
+                }
+                (Ok(None), Ok(Some(ty))) => {
+                    match conv::implicit_convert(self, f, ty, ConvCtx::Initialization) {
+                        Ok(x) => (t, x),
+                        Err(err) => return self.conv_failed(&err, t, f, loc),
+                    }
+                }
+                (Ok(None), Ok(None)) => (t, f),
+            };
+            if self.is_err_expr(t) || self.is_err_expr(f) {
+                return self.recover_err(&[c, t, f], loc);
+            }
+            let (tn, fnn) = (*self.ast.exprs.get(t), *self.ast.exprs.get(f));
+            (t, f, tn, fnn, tn.ty(), fnn.ty())
+        } else {
+            (t, f, tn, fnn, tt, ft)
+        };
         if tn.value_category().is_glvalue()
             && tn.value_category() == fnn.value_category()
             && self.ast.types.same_type(tt, ft)
@@ -2649,6 +2718,85 @@ impl Sema<'_, '_> {
         let msg = self.diag(DiagId::sema_incompatible_cond_operands, loc).diff_args(self, tt, ft);
         self.emit(msg);
         self.recover_err(&[c, t, f], loc)
+    }
+
+    /// [expr.cond]/4: the type operand `from` is converted to so that it
+    /// matches operand `to`, if there is one (clang
+    /// `TryClassUnification`); `Err` when that conversion is ambiguous
+    /// (diagnosed).
+    fn try_class_unification(&mut self, from: ExprId, to: ExprId) -> Result<Option<QualType>, ()> {
+        use crate::conv::scs::RefBinding;
+        use crate::overload::ics::{Ics, IcsOptions};
+        let tn = *self.ast.exprs.get(to);
+        let tty = tn.ty();
+        let a = self.arg_info(from);
+        let from_glvalue = a.vk.is_glvalue() && a.bit_field.is_none();
+        let ambiguous = |s: &mut Self, ty: QualType| {
+            if let Err(err) = conv::implicit_convert(s, from, ty, ConvCtx::Initialization) {
+                let at = s.begin_loc(from);
+                s.emit_conv_error(err, at);
+            }
+            Err(())
+        };
+        // /4.1, /4.2: a reference to `to`'s type that binds directly to a
+        // glvalue.
+        if tn.value_category().is_glvalue() {
+            let r = if tn.value_category() == ValueCategory::LValue {
+                self.ast.types.lvalue_ref_to(tty)
+            } else {
+                self.ast.types.rvalue_ref_to(tty)
+            };
+            match self.try_implicit_conversion(&a, r, IcsOptions::NONE) {
+                Ics::Standard(scs) if scs.rb.contains(RefBinding::DIRECT) && from_glvalue => {
+                    return Ok(Some(r));
+                }
+                Ics::UserDefined(u)
+                    if u.after.rb.contains(RefBinding::DIRECT)
+                        && u.func.is_some_and(|f| {
+                            let ft = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+                            self.ast
+                                .types
+                                .proto(ft)
+                                .is_some_and(|p| self.ast.types.is_reference(p.ret()))
+                        }) =>
+                {
+                    return Ok(Some(r));
+                }
+                Ics::Ambiguous { .. } => return ambiguous(self, r),
+                _ => {}
+            }
+        }
+        // /4.3.1, /4.3.2: the same class or a base of it, at least as
+        // cv-qualified.
+        let fty = a.ty;
+        if let (Some(fr), Some(tr)) = (self.ast.types.as_record(fty), self.ast.types.as_record(tty))
+        {
+            let same = conv::scs::class_decl(self, fty.ty())
+                == conv::scs::class_decl(self, tty.ty())
+                || self.ast.types.same_unqualified(fty, tty);
+            let fd = self.ast.definition(fr).unwrap_or(fr);
+            let td = self.ast.definition(tr).unwrap_or(tr);
+            if same || (self.ast.definition(fr).is_some() && self.derived_inclusive(fd, td)) {
+                let (fq, tq) =
+                    (self.ast.types.effective_quals(fty), self.ast.types.effective_quals(tty));
+                if tq.contains(fq & kiln_ast::types::Quals::CV) {
+                    return match self.try_implicit_conversion(&a, tty, IcsOptions::NONE) {
+                        Ics::Ambiguous { .. } => ambiguous(self, tty),
+                        Ics::Bad(_) | Ics::Ellipsis => Ok(None),
+                        _ => Ok(Some(tty)),
+                    };
+                }
+                return Ok(None);
+            }
+        }
+        // /4.3.3: the type `to` has as a prvalue.
+        let target =
+            if self.ast.types.as_record(tty).is_some() { tty } else { conv::strip_cv(self, tty) };
+        match self.try_implicit_conversion(&a, target, IcsOptions::NONE) {
+            Ics::Ambiguous { .. } => ambiguous(self, target),
+            Ics::Bad(_) | Ics::Ellipsis => Ok(None),
+            _ => Ok(Some(target)),
+        }
     }
 
     // -- postfix -----------------------------------------------------------------
@@ -3240,11 +3388,12 @@ impl Sema<'_, '_> {
         at: Loc,
     ) -> (QualType, ValueCategory) {
         let (ty, vk) = if self.ast.types.is_reference(ret) {
-            let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_));
-            (
-                self.non_reference(ret),
-                if lvalue { ValueCategory::LValue } else { ValueCategory::XValue },
-            )
+            // [expr.call]/14: an rvalue reference to function is an
+            // lvalue too (clang `Expr::getValueKindForType`).
+            let r = self.non_reference(ret);
+            let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_))
+                || self.ast.types.is_function(r);
+            (r, if lvalue { ValueCategory::LValue } else { ValueCategory::XValue })
         } else {
             (conv::strip_cv(self, ret), ValueCategory::PRValue)
         };

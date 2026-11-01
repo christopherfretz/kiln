@@ -196,6 +196,9 @@ diag_groups! {
     PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
     // ----- WP-154 (atomic builtins)
     AtomicMemoryOrdering = "atomic-memory-ordering" [];
+    // ----- WP-177 (implicit conversion warnings)
+    LiteralConversion = "literal-conversion" [];
+    Conversion = "conversion" [LiteralConversion];
     AddressOfPackedMember = "address-of-packed-member" [];
 }
 

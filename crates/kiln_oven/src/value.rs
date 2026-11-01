@@ -428,6 +428,10 @@ impl Oven {
                 Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
                 Origin::Const(c) => PtrBase::Const(c),
                 Origin::Let(t) => PtrBase::Temporary(t),
+                // `&typeid(T)` ([expr.const]/14: the type_info object has
+                // static storage duration), e.g. libc++'s
+                // `static constexpr __policy` in <functional> (WP-176).
+                Origin::TypeInfo(t) => PtrBase::TypeInfo(t),
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
             return Ok(Scalar::Pointer { ty: q, base, offset });
@@ -1038,11 +1042,9 @@ impl Oven {
             }
             PtrBase::Const(c) => self.thaw(b, c, top),
             PtrBase::Temporary(d) => self.resolve_let(b, d, top),
-            PtrBase::TypeInfo(_) => {
-                let t = pointee.unwrap_or(ty);
-                let size = self.types.size(t);
-                self.mem.alloc_static(t, size, flags::CONST, Origin::None)
-            }
+            // The one object `typeid` evaluates to, so a thawed `&typeid(T)`
+            // compares equal to a fresh one.
+            PtrBase::TypeInfo(q) => self.type_info(q, pointee.unwrap_or(ty)),
         };
         let rp = Ptr::decode(root);
         let Some(a) = self.alloc_any(rp).copied() else { return root };

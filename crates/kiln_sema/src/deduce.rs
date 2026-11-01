@@ -44,8 +44,13 @@ impl Sema<'_, '_> {
         }
         let exempt = e.and_then(|e| self.decltype_top_call(e));
         for c in calls {
-            if Some(c.loc) != exempt {
-                let _ = self.check_call_return(c);
+            if Some(c.loc) != exempt && self.check_call_return(c) {
+                // The destructor check `maybe_bind_temporary` deferred.
+                if let Some(class) =
+                    self.ast.types.as_record(c.ty).and_then(|r| self.ast.definition(r))
+                {
+                    let _ = self.check_temporary_dtor(class, c.ty, c.at);
+                }
             }
         }
     }

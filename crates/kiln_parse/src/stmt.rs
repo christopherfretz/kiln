@@ -276,7 +276,7 @@ impl Parser<'_, '_> {
             return None;
         };
         let mut init = None;
-        if let Some((_, Punct::Semi)) = self.scan_for(&[Punct::Semi, Punct::RParen]) {
+        if self.condition_has_init_statement() {
             init = self.parse_statement();
         }
         let Some(c) = self.parse_condition() else {
@@ -285,6 +285,32 @@ impl Parser<'_, '_> {
         };
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         Some((init, c))
+    }
+
+    /// Whether a `;` comes before the `)` closing a condition, skipping
+    /// nested brackets and braces (clang's `SkipUntil(r_paren, semi)` in
+    /// `isCXXConditionDeclarationOrInitStatement`): then the condition
+    /// has an init-statement, which may hold braces (`if (int n{1}; n)`,
+    /// `if (auto g = [] { return 1; }; g())`).
+    fn condition_has_init_statement(&self) -> bool {
+        let mut depth = 0u32;
+        let mut i = self.pos();
+        loop {
+            let t = self.tok_at(i);
+            match t.kind {
+                TokKind::Eof => return false,
+                TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => depth += 1,
+                TokKind::Punct(Punct::RParen | Punct::RSquare | Punct::RBrace) => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                TokKind::Punct(Punct::Semi) if depth == 0 => return true,
+                _ => {}
+            }
+            i += 1;
+        }
     }
 
     /// condition ([stmt.pre]/1): an expression, or a declaration of a

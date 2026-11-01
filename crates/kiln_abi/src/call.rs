@@ -1185,7 +1185,6 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
     let bits = r.defn;
     let mut copy_decl = false;
     let mut move_decl = false;
-    let mut copy_trivial = false;
     // Declared constructors (implicit ones included once declared).
     let ctors: Vec<DeclId> = ast.constructors(def).iter().collect();
     let mut declared = Vec::new();
@@ -1196,9 +1195,6 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
             move_decl = true;
         } else {
             copy_decl = true;
-            if !spec.is_deleted() && spec.is_trivial() {
-                copy_trivial = true;
-            }
         }
         declared.push((c, spec));
     }
@@ -1211,18 +1207,10 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
         && !bits.contains(B::USER_DECLARED_MOVE_ASSIGN)
         && !bits.contains(B::USER_DECLARED_DTOR);
     let needs_dtor = dtor.is_none();
-    if needs_copy && !bits.contains(B::DEFAULTED_COPY_CTOR_DELETED) {
-        copy_trivial = bits.contains(B::TRIVIAL_COPY_CTOR);
-    }
-    let dtor_trivial = if needs_dtor {
-        !bits.contains(B::DEFAULTED_DTOR_DELETED) && bits.contains(B::TRIVIAL_DTOR)
-    } else {
-        dtor.and_then(|d| ast.decls.function(d))
-            .is_some_and(|f| !f.spec.is_deleted() && f.spec.is_trivial())
-    };
-    if copy_trivial && dtor_trivial {
-        return true;
-    }
+    // No "one trivial copy constructor suffices" shortcut: that is the
+    // MSVC x64 rule. Under Itanium a non-trivial move constructor (or any
+    // non-trivial, non-deleted copy/move constructor or destructor) makes
+    // the class indirect even when its copy constructor is trivial.
     let mut has_copy_or_move = false;
     if needs_copy && !bits.contains(B::DEFAULTED_COPY_CTOR_DELETED) {
         if !bits.contains(B::TRIVIAL_COPY_CTOR) {

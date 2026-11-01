@@ -9,6 +9,7 @@ use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
+use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
@@ -320,7 +321,7 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return Vec::new();
             }
-            let Some(ty) = self.parse_type_id_into(Some(&mut attrs)) else {
+            let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::NoDeduction) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
@@ -400,6 +401,7 @@ impl Parser<'_, '_> {
             }
             self.parse_attributes(&mut attrs);
             let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
+            self.s.check_using_declarator_access(qual, name, nl);
             let d = if typename {
                 self.s.act_on_using_typename_declarator(
                     using_loc, qual, name, nl, if_exists, ellipsis,
@@ -825,11 +827,12 @@ impl Parser<'_, '_> {
                 }
                 true
             }
-            Some((end, NameClass::Type(ty, d), _)) => {
+            Some((end, NameClass::Type(ty, d), name)) => {
                 while self.pos() < end {
                     self.bump();
                 }
                 self.s.mark_type_referenced(d);
+                self.s.check_type_name_access(name, None, d, loc);
                 let kind = self.s.ast.decls.get(d).kind();
                 let ty = if kiln_sema::lookup::is_tag_kind(kind) {
                     self.s.elaborated_tag_type(d, TagKeyword::None)
@@ -940,6 +943,38 @@ impl Parser<'_, '_> {
         })
     }
 
+    /// `class-key M<args>` with `M` a template template parameter
+    /// ([dcl.type.elab]/1, a dependent specialization; libc++'s
+    /// `friend struct _MapOrSetSpecifics<...>;` in `<__node_handle>`): the
+    /// type as written, a friend type in `friend class-key M<args>;`.
+    /// False (nothing consumed) when the next tokens are not that form.
+    fn parse_ttp_elaborated(
+        &mut self,
+        ds: &mut DeclSpec,
+        kw_loc: Loc,
+        ctx: DeclaratorContext,
+    ) -> bool {
+        let Some(n) = self.ident() else { return false };
+        if Self::punct_of(self.tok_at(self.pos() + 1)) != Some(Punct::Less) {
+            return false;
+        }
+        let NameClass::TypeTemplate(t) = self.s.classify_name(n, None) else { return false };
+        if self.s.ast.decls.get(t).kind() != kiln_ast::decl::DeclKind::TemplateTemplateParm {
+            return false;
+        }
+        let ty = self.parse_template_type_name(ctx);
+        if ty.is_none() {
+            ds.invalid = true;
+        }
+        if let Err(e) =
+            ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), kw_loc)
+        {
+            ds.invalid = true;
+            self.spec_error(&e, kw_loc);
+        }
+        true
+    }
+
     /// class-specifier, enum-specifier or elaborated-type-specifier
     /// ([class.pre], [dcl.enum], [dcl.type.elab]).
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
@@ -961,6 +996,12 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qualifier = self.parse_tag_qualifier(ds);
+        if keyword != TagKeyword::Enum
+            && qualifier.is_none()
+            && self.parse_ttp_elaborated(ds, kw_loc, ctx)
+        {
+            return;
+        }
         let name = self.ident().map(|n| (n, self.bump().span.lo));
         if name.is_none() && qualifier.is_some() {
             self.error_here(DiagId::parse_expected_unqualified_id);
@@ -1070,13 +1111,24 @@ impl Parser<'_, '_> {
         ctx: DeclaratorContext,
     ) {
         let _ = ctx;
-        let Some((args, l_angle, r_angle)) = self.parse_template_arg_list() else {
+        // The template arguments of a partial or explicit specialization's
+        // class-head are not access checked ([temp.spec.partial.general]/10,
+        // [temp.spec.general]/6); a reference's join the declaration's.
+        let level = self.s.delayed_access_level();
+        self.s.begin_delayed_access();
+        let parsed = self.parse_template_arg_list().map(|a| {
+            let final_loc = self.parse_class_virt_specifiers();
+            (a, final_loc, self.tag_use(ds, true, final_loc))
+        });
+        let declares = parsed
+            .as_ref()
+            .is_some_and(|p| matches!(p.2, TagUse::Definition | TagUse::Declaration));
+        self.s.end_delayed_access_to_enclosing(level, declares);
+        let Some(((args, l_angle, r_angle), final_loc, use_)) = parsed else {
             ds.invalid = true;
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
         };
-        let final_loc = self.parse_class_virt_specifiers();
-        let use_ = self.tag_use(ds, true, final_loc);
         let r = self.s.act_on_class_template_id_tag(
             keyword,
             tmpl,
@@ -1410,6 +1462,8 @@ impl Parser<'_, '_> {
             self.parse_declarator(d);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
+            d.outer_paren = Some((d.chunks.len(), open));
+            self.discard_prohibited_cxx11_attrs();
         } else if self.at_kw(Kw::Operator)
             && d.ctx != DeclaratorContext::TypeName
             && matches!(self.kw_of(self.peek(1)), Some(Kw::New | Kw::Delete))
@@ -1636,7 +1690,7 @@ impl Parser<'_, '_> {
         let delay_args = delayable && self.late_fn.delay_args;
         let open = self.bump().span.lo;
         self.s.act_on_start_prototype();
-        let (params, variadic) = self.parse_param_clause(d, delay_args);
+        let (params, variadic) = self.parse_param_clause(d, delay_args, DeclSite::Plain);
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         let (exc, quals, ref_qual, trailing) = self.parse_function_qualifiers(d, delayable);
         self.s.act_on_end_prototype();
@@ -1678,6 +1732,7 @@ impl Parser<'_, '_> {
         &mut self,
         d: &mut Declarator,
         delay_args: bool,
+        site: DeclSite,
     ) -> (Vec<ParamInfo>, bool) {
         let mut params = Vec::new();
         let mut variadic = false;
@@ -1701,6 +1756,7 @@ impl Parser<'_, '_> {
                 break;
             }
             let mut pd = Declarator::new(DeclaratorContext::Prototype, start);
+            pd.site = site;
             pd.explicit_object = this_loc;
             let placeholder = matches!(ds.base, TypeSpecKind::Auto);
             let hint = placeholder
@@ -1852,7 +1908,7 @@ impl Parser<'_, '_> {
                     // function's trailing return type.
                     let this =
                         self.s.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
-                    let ty = self.parse_type_id().unwrap_or(QualType::ERROR);
+                    let ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
                     self.s.act_on_end_this_scope(this);
                     trailing = Some((ty, loc));
                     return (exc.unwrap_or_default(), quals, ref_qual, trailing);
@@ -1913,13 +1969,25 @@ impl Parser<'_, '_> {
 
     /// type-id ([dcl.name]).
     pub(crate) fn parse_type_id(&mut self) -> Option<QualType> {
-        self.parse_type_id_into(None)
+        self.parse_type_id_into(None, DeclSite::Plain)
+    }
+
+    /// A type-id where clang's parser forms no placeholder for a deduced
+    /// class type (a trailing return type, a template argument;
+    /// [dcl.type.class.deduct]/2): a class template name alone lacks its
+    /// arguments.
+    pub(crate) fn parse_type_id_no_ctad(&mut self) -> Option<QualType> {
+        self.parse_type_id_into(None, DeclSite::NoDeduction)
     }
 
     /// A type-id whose vector attributes in the decl-specifiers
     /// (`int __attribute__((ext_vector_type(4)))`) move to `out`, as clang
     /// `ParseTypeName`'s `Attrs` hands them to an alias-declaration.
-    pub(crate) fn parse_type_id_into(&mut self, out: Option<&mut Vec<AttrId>>) -> Option<QualType> {
+    pub(crate) fn parse_type_id_into(
+        &mut self,
+        out: Option<&mut Vec<AttrId>>,
+        site: DeclSite,
+    ) -> Option<QualType> {
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         if let Some(out) = out {
             let ast = &self.s.ast;
@@ -1934,6 +2002,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
+        d.site = site;
         self.parse_declarator(&mut d);
         let base = self.s.type_from_declspec(&ds);
         Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))
@@ -2017,6 +2086,26 @@ impl Parser<'_, '_> {
         ctx: DeclaratorContext,
         allow_fn_def: bool,
     ) -> Vec<DeclId> {
+        // [class.access]/7: the names in the decl-specifiers and the first
+        // declarator are checked in the context of the declared entity
+        // (`A::I A::f()`, a befriended `A::I g(A::I)`; clang's
+        // `ParsingDeclSpec`), together with those of a template head.
+        let level = match self.template_delay_level.take() {
+            Some(l) => l,
+            None => self.s.delayed_access_level(),
+        };
+        self.s.begin_delayed_access();
+        let decls = self.parse_simple_declaration_delayed(ctx, allow_fn_def, level);
+        self.s.end_delayed_access_to(level, None);
+        decls
+    }
+
+    fn parse_simple_declaration_delayed(
+        &mut self,
+        ctx: DeclaratorContext,
+        allow_fn_def: bool,
+        level: usize,
+    ) -> Vec<DeclId> {
         let ds = self.parse_decl_specifiers(ctx);
         let mut decls = Vec::new();
         if ds.tag_declares
@@ -2026,6 +2115,7 @@ impl Parser<'_, '_> {
         }
         if self.eat(Punct::Semi).is_some() {
             decls.extend(self.s.act_on_decl_spec_only(&ds));
+            self.s.end_delayed_access_to(level, ds.tag);
             return decls;
         }
         if ds.is_empty() && !self.at_special_declarator(ctx) {
@@ -2087,7 +2177,9 @@ impl Parser<'_, '_> {
             // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
             if first && d.is_function_declarator() && d.asm_label.is_none() {
                 if allow_fn_def && self.at_function_definition_start() {
-                    self.parse_function_definition_after_declarator(&ds, base, &d, &mut decls);
+                    self.parse_function_definition_after_declarator(
+                        &ds, base, &d, &mut decls, level,
+                    );
                     return decls;
                 }
                 if !allow_fn_def && self.at(Punct::LBrace) {
@@ -2099,6 +2191,7 @@ impl Parser<'_, '_> {
             first = false;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
+            self.s.end_delayed_access_to(level, v);
             if let Some(v) = v {
                 self.s.act_on_group_declarator(&mut group, v);
             }
@@ -2163,10 +2256,12 @@ impl Parser<'_, '_> {
         base: QualType,
         d: &Declarator,
         decls: &mut Vec<DeclId>,
+        level: usize,
     ) {
         self.s.act_function_def_next(true);
         let f = self.s.act_on_declarator(ds, base, d);
         self.s.act_function_def_next(false);
+        self.s.end_delayed_access_to(level, f);
         // An invalid declarator sema did not make a function (an unknown
         // return type, say): the error is reported; the body is skipped.
         let f = f.filter(|&f| self.s.ast.decls.function(f).is_some());

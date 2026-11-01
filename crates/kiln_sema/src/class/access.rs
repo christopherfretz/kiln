@@ -10,10 +10,12 @@ use kiln_ast::decl::{Access, DeclKind, FriendKind};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
 
 use super::AccessCheck;
 use crate::Sema;
 use crate::conv::bases::{BasePath, base_paths, is_derived_from, same_class};
+use crate::lookup::LookupKind;
 
 /// Restrictiveness: public < protected < private < none (clang's
 /// `AccessSpecifier` order).
@@ -368,17 +370,174 @@ impl Sema<'_, '_> {
     ) -> bool {
         // A public member named in its own class is accessible; through a
         // base its access is that along the path ([class.access.base]/1).
-        let decl_access = self.ast.decls.get(found).misc().access();
-        let own_class = self.declaring_class(found).is_some_and(|c| same_class(self, c, naming));
+        let (decl_access, own_class) = match self.injected_class(found, naming) {
+            Some(c) => (Access::Public, same_class(self, c, naming)),
+            None => (
+                self.ast.decls.get(found).misc().access(),
+                self.declaring_class(found).is_some_and(|c| same_class(self, c, naming)),
+            ),
+        };
         if decl_access == Access::None || decl_access == Access::Public && own_class {
             return true;
         }
         let check = AccessCheck { member: found, naming_class: naming, object_class: object, loc };
-        if !self.delayed_access_depth.is_empty() {
+        // Delayed only while still in the declaration's own context: a
+        // class or function body (or lambda) inside the delayed region is
+        // its own context (clang's `pushUndelayed`).
+        if self.delayed_access_depth.last().is_some_and(|&(_, ctx, _)| ctx == self.ctx) {
             self.delayed_access.push(check);
             return true;
         }
         self.run_access_check(check)
+    }
+
+    /// The access check of a name lookup `found` found by class member
+    /// lookup ([class.access]/4: every name, including type names,
+    /// nested-name-specifier components and template names), at `loc`.
+    /// Nothing for a name not found in a class.
+    pub(crate) fn check_found_access(&mut self, found: &crate::lookup::Found, loc: Loc) -> bool {
+        let Some(naming) = found.naming else { return true };
+        let Some(&via) = found.found.first().or(found.decls.first()) else { return true };
+        self.check_member_access(via, naming, None, loc)
+    }
+
+    /// The access check of a type or template name `name` that
+    /// [`Sema::classify_name`] classified as declaration `d` (after the
+    /// nested-name-specifier naming `qualifier`, if any), when the parser
+    /// commits to it ([class.access]/4; spec/sema-class.md §2.4). The
+    /// lookup is redone only for a class member: it gives the naming
+    /// class and the using-shadow the name was found through.
+    pub fn check_type_name_access(
+        &mut self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        d: DeclId,
+        loc: Loc,
+    ) {
+        self.check_name_access_as(name, qualifier, d, loc, LookupKind::Ordinary);
+    }
+
+    /// [`Sema::check_type_name_access`] for a name `d` found by a lookup
+    /// of kind `kind` (`Tag` for an elaborated-type-specifier).
+    pub(crate) fn check_name_access_as(
+        &mut self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        d: DeclId,
+        loc: Loc,
+        kind: LookupKind,
+    ) {
+        // A non-member is checked only as an injected-class-name found
+        // in a class scope (through a base).
+        if self.declaring_class(d).is_none()
+            && (self.kind_of(d) != DeclKind::CXXRecord || !self.in_class_scope(qualifier))
+        {
+            return;
+        }
+        let qualifier = qualifier.map(|q| self.type_name_qualifier(q));
+        if qualifier.is_some_and(|q| self.is_dependent_ctx(q)) {
+            return;
+        }
+        // Fast path: a member of an enclosing class, named in that class
+        // (unqualified or `C::m`), is accessible to its members.
+        let owner = self.declaring_class(d).unwrap_or(d);
+        if qualifier.is_none_or(|q| same_class(self, q, owner)) && self.encloses_ctx(owner) {
+            return;
+        }
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified(q, name, kind),
+            None => self.lookup_name(name, kind),
+        };
+        if found.decls.first().is_some_and(|&x| self.ast.first(x) == self.ast.first(d)) {
+            self.check_found_access(&found, loc);
+        }
+    }
+
+    /// The class whose injected-class-name `found` is, when it was found
+    /// by a lookup in (a class derived from) `naming`: a public member of
+    /// that class ([class.pre]/2), not of the class enclosing it.
+    fn injected_class(&self, found: DeclId, naming: DeclId) -> Option<DeclId> {
+        if self.kind_of(found) != DeclKind::CXXRecord {
+            return None;
+        }
+        let def = self.ast.definition(found)?;
+        let naming = self.ast.definition(naming).unwrap_or(naming);
+        self.derived_inclusive(naming, def).then_some(def)
+    }
+
+    /// Whether class `c` is (or encloses) the current context.
+    fn encloses_ctx(&self, c: DeclId) -> bool {
+        let mut cur = Some(self.ctx);
+        for _ in 0..256 {
+            let Some(x) = cur else { return false };
+            if self.kind_of(x) == DeclKind::CXXRecord && same_class(self, x, c) {
+                return true;
+            }
+            cur = self.ast.decls.get(x).ctx();
+        }
+        false
+    }
+
+    /// Whether a lookup qualified by `qualifier` (or unqualified, from
+    /// the current context) searches a class scope.
+    fn in_class_scope(&self, qualifier: Option<DeclId>) -> bool {
+        if let Some(q) = qualifier {
+            return self.kind_of(self.type_name_qualifier(q)) == DeclKind::CXXRecord;
+        }
+        let mut cur = Some(self.ctx);
+        for _ in 0..256 {
+            let Some(c) = cur else { return false };
+            if self.kind_of(c) == DeclKind::CXXRecord {
+                return true;
+            }
+            cur = self.ast.decls.get(c).ctx();
+        }
+        false
+    }
+
+    fn injected_target(&self, found: DeclId, naming: DeclId) -> Option<Target> {
+        let declaring = self.injected_class(found, naming)?;
+        Some(Target {
+            member: Some(found),
+            decl_access: Access::Public,
+            declaring,
+            instance_member: false,
+            object: None,
+        })
+    }
+
+    /// The access check of the members a member using-declarator names
+    /// ([namespace.udecl]/19: each must be accessible), at `loc`. Nothing
+    /// outside a class, for a dependent or non-class qualifier, or for
+    /// inherited constructors.
+    pub fn check_using_declarator_access(
+        &mut self,
+        qual: Option<crate::using::Qualifier>,
+        name: kiln_ast::names::DeclName,
+        loc: Loc,
+    ) {
+        let Some(q) = qual else { return };
+        if self.kind_of(self.ctx) != DeclKind::CXXRecord
+            || self.kind_of(q.ctx) != DeclKind::CXXRecord
+            || self.is_dependent_ctx(q.ctx)
+        {
+            return;
+        }
+        let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
+        let Some(naming) = found.naming else { return };
+        // clang names the members through an object of the current class
+        // (`setBaseObjectType` in `BuildUsingDeclaration`), so a derived
+        // class may redeclare a protected base member ([class.protected]).
+        let object = Some(self.ast.first(self.ctx));
+        for (i, &d) in found.decls.iter().enumerate() {
+            if self.kind_of(d) == DeclKind::CXXConstructor
+                || self.injected_class(d, naming).is_some()
+            {
+                continue;
+            }
+            let via = found.found.get(i).copied().unwrap_or(d);
+            self.check_member_access(via, naming, object, loc);
+        }
     }
 
     fn member_target(&self, found: DeclId, object: Option<DeclId>) -> Option<Target> {
@@ -392,6 +551,24 @@ impl Sema<'_, '_> {
             instance_member,
             object: object.filter(|_| instance_member),
         })
+    }
+
+    /// The entity whose instantiations replay a dependent check made in
+    /// `ec` ([`Sema::replay_dependent_access`]): the innermost function or
+    /// class, except a non-generic lambda's call operator and closure
+    /// type, which are instantiated with their enclosing function
+    /// (a generic lambda's call operator is instantiated on its own).
+    fn dependent_access_key(&self, ec: &EffectiveContext) -> Option<DeclId> {
+        let f = ec
+            .functions
+            .iter()
+            .find(|&&g| !self.is_lambda_call_op(g) || self.ast.described_template(g).is_some());
+        let r = || {
+            ec.records
+                .iter()
+                .find(|&&r| self.ast.decls.record(r).is_none_or(|x| x.lambda.is_none()))
+        };
+        f.or_else(r).map(|&k| self.ast.first(k))
     }
 
     /// A non-static member other than an explicit object member function
@@ -415,7 +592,10 @@ impl Sema<'_, '_> {
     }
 
     fn run_access_check(&mut self, c: AccessCheck) -> bool {
-        let Some(t) = self.member_target(c.member, c.object_class) else { return true };
+        let t = self.injected_target(c.member, c.naming_class);
+        let Some(t) = t.or_else(|| self.member_target(c.member, c.object_class)) else {
+            return true;
+        };
         let naming = self.ast.definition(c.naming_class).unwrap_or(c.naming_class);
         let ec = self.effective_context();
         let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
@@ -426,14 +606,14 @@ impl Sema<'_, '_> {
             // each instantiation of the innermost function or class
             // ([`Sema::replay_dependent_access`]).
             if self.speculative_friend.take()
-                && let Some(&k) = ec.functions.first().or(ec.records.first())
+                && let Some(k) = self.dependent_access_key(&ec)
             {
-                self.dependent_access.entry(self.ast.first(k)).or_default().push(c);
+                self.dependent_access.entry(k).or_default().push(c);
             }
             return true;
         }
         // Not repeated by the replay of a check the instantiation redid.
-        let key = ec.functions.first().or(ec.records.first()).map(|&k| self.ast.first(k));
+        let key = self.dependent_access_key(&ec);
         if let Some(k) = key
             && !self.access_failed.insert((c.member, c.loc, k))
             && self.replaying_access
@@ -790,22 +970,81 @@ impl Sema<'_, '_> {
         (self.ctx, self.initializing) = saved;
     }
 
+    /// Makes the instantiations of `new` (a generic lambda's call
+    /// operator rebuilt from `pattern`) replay `pattern`'s dependent
+    /// access checks.
+    pub(crate) fn copy_dependent_access(&mut self, pattern: DeclId, new: DeclId) {
+        let (p, n) = (self.ast.first(pattern), self.ast.first(new));
+        if p == n {
+            return;
+        }
+        if let Some(checks) = self.dependent_access.get(&p).cloned() {
+            self.dependent_access.entry(n).or_default().extend(checks);
+        }
+    }
+
     /// Opens a delay point: access checks until the matching
     /// [`Sema::end_delayed_access`] wait for the declaration they belong
     /// to ([class.access]/7, spec/sema-class.md §2.4). For the parser,
     /// around a member declaration's decl-specifiers and declarator.
     pub fn begin_delayed_access(&mut self) {
-        self.delayed_access_depth.push(self.delayed_access.len());
+        let exempt = std::mem::take(&mut self.exempt_next_delay);
+        self.delayed_access_depth.push((self.delayed_access.len(), self.ctx, exempt));
+    }
+
+    /// Makes the next delay point drop its checks instead of running
+    /// them: the names in the decl-specifiers and declarator of an
+    /// explicit instantiation or explicit specialization are not access
+    /// checked ([temp.spec.general]/6; clang's `SuppressAccessChecks`).
+    /// Its function body, initializer, base-clause and
+    /// member-specification are checked as usual. `false` withdraws an
+    /// unused request.
+    pub fn exempt_next_delayed_access(&mut self, exempt: bool) {
+        self.exempt_next_delay = exempt;
+    }
+
+    /// The number of open delay points, for
+    /// [`Sema::end_delayed_access_to`].
+    pub fn delayed_access_level(&self) -> usize {
+        self.delayed_access_depth.len()
+    }
+
+    /// Closes the delay points opened above `level` (none if they were
+    /// already closed), running their checks as
+    /// [`Sema::end_delayed_access`] does.
+    pub fn end_delayed_access_to(&mut self, level: usize, decl: Option<DeclId>) {
+        while self.delayed_access_depth.len() > level {
+            self.end_delayed_access(decl);
+        }
+    }
+
+    /// Closes the delay points opened above `level` without running
+    /// their checks: `drop` discards them (the template arguments of a
+    /// partial or explicit specialization's class-head; [temp.spec.general]/6,
+    /// [temp.spec.partial.general]/10); otherwise they join the enclosing
+    /// delay point (clang's `redelay`), or run now if there is none.
+    pub fn end_delayed_access_to_enclosing(&mut self, level: usize, drop: bool) {
+        let mut start = None;
+        while self.delayed_access_depth.len() > level {
+            start = self.delayed_access_depth.pop().map(|(s, _, _)| s);
+        }
+        let Some(start) = start else { return };
+        if drop {
+            self.delayed_access.truncate(start.min(self.delayed_access.len()));
+        } else if self.delayed_access_depth.is_empty() {
+            self.delayed_access_depth.push((start, self.ctx, false));
+            self.end_delayed_access(None);
+        }
     }
 
     /// Closes the innermost delay point, running its checks in the
     /// context of `decl` (the declaration they belong to; `None` runs
     /// them in the current context).
     pub fn end_delayed_access(&mut self, decl: Option<DeclId>) {
-        let Some(start) = self.delayed_access_depth.pop() else { return };
+        let Some((start, _, exempt)) = self.delayed_access_depth.pop() else { return };
         let start = start.min(self.delayed_access.len());
         let checks: Vec<AccessCheck> = self.delayed_access.drain(start..).collect();
-        if checks.is_empty() {
+        if checks.is_empty() || exempt {
             return;
         }
         let saved = self.ctx;
@@ -829,8 +1068,13 @@ impl Sema<'_, '_> {
         if n.kind() == DeclKind::Friend {
             return n.ctx().unwrap_or(self.ctx);
         }
-        if n.kind().is_function() {
+        if n.kind().is_function() || n.kind() == DeclKind::CXXRecord {
             return d;
+        }
+        if kiln_ast::templates::is_template_kind(n.kind())
+            && let Some(p) = self.pattern_of(d)
+        {
+            return self.access_context_of(p);
         }
         n.ctx().unwrap_or(self.ctx)
     }
