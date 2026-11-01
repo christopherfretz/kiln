@@ -116,6 +116,11 @@ pub(crate) struct LambdaScope {
     saved_mangle_var: Option<DeclId>,
     saved_default_arg: Option<DeclId>,
     body_open: bool,
+    /// The body names a parameter pack of an enclosing template that it
+    /// does not expand: the lambda-expression contains an unexpanded
+    /// pack ([temp.variadic]/5; clang's
+    /// `LambdaScopeInfo::ContainsUnexpandedParameterPack`).
+    has_packs: bool,
     /// `constexpr` was written (the static invoker is then constexpr too).
     explicit_constexpr: bool,
     /// `templ.heads.len()` at the introducer: a deeper head after the
@@ -162,6 +167,7 @@ impl Sema<'_, '_> {
             saved_mangle_var: None,
             saved_default_arg: None,
             body_open: false,
+            has_packs: false,
             explicit_constexpr: false,
             heads: self.templ.heads.len(),
             scope_base: self.scopes.len(),
@@ -564,7 +570,7 @@ impl Sema<'_, '_> {
         self.finish_closure(closure);
         let ty = self.tag_type(closure);
         let lbracket = self.ast.exprs.lambdas.get(id).lbracket;
-        let e = self.builder().lambda_expr(id, ty, lbracket, rbrace);
+        let e = self.builder().lambda_expr(id, ty, top.has_packs, lbracket, rbrace);
         // clang `MaybeBindToTemporary` marks even a trivial destructor
         // referenced, outside a decltype operand.
         let in_decltype = self.decltype_calls.last().is_some_and(|x| x.0 == self.unevaluated);
@@ -579,6 +585,18 @@ impl Sema<'_, '_> {
             self.mark_function_referenced(dtor, lbracket);
         }
         self.maybe_bind_temporary(e)
+    }
+
+    /// A full-expression or declaration in the innermost lambda's body
+    /// that contains an unexpanded parameter pack: the pack is expanded
+    /// by an expansion enclosing the lambda (`[] { return sizeof(T);
+    /// }()...`; clang `DiagnoseUnexpandedParameterPacks` inside a lambda).
+    pub(crate) fn note_unexpanded_in_lambda(&mut self) {
+        if let Some(top) = self.lambdas.last_mut()
+            && top.body_open
+        {
+            top.has_packs = true;
+        }
     }
 
     /// Abandons the innermost lambda (its body failed to parse): the

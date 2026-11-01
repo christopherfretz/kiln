@@ -107,10 +107,30 @@ impl Parser<'_, '_> {
         self.s.act_on_end_abbreviated();
     }
 
+    /// `__extension__` before an alias- or using-declaration (libc++
+    /// `__extension__ using __calc_type = unsigned __int128;`): the GNU
+    /// keyword only silences extension diagnostics, so it is dropped and
+    /// the declaration parsed as usual (clang skips it in
+    /// `ParseExternalDeclaration`, `ParseCXXClassMemberDeclaration` and
+    /// `ParseCompoundStatementBody`). Elsewhere it stays a decl-specifier
+    /// or the unary operator.
+    pub(crate) fn skip_extension_before_using(&mut self) {
+        let mut n = 0;
+        while self.kw_of(self.peek(n)) == Some(Kw::Extension) {
+            n += 1;
+        }
+        if n > 0 && self.kw_of(self.peek(n)) == Some(Kw::Using) {
+            for _ in 0..n {
+                self.bump();
+            }
+        }
+    }
+
     fn parse_external_declaration_inner(&mut self) {
         if !self.stack_ok() {
             return;
         }
+        self.skip_extension_before_using();
         let loc = self.loc();
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {

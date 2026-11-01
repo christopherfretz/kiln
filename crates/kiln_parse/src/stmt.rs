@@ -111,6 +111,7 @@ impl Parser<'_, '_> {
     fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
         let lead_attrs = std::mem::take(&mut self.stmt_attrs);
         let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
+        self.skip_extension_before_using();
         let loc = self.loc();
         match Self::punct_of(self.tok()) {
             Some(Punct::LBrace) => return Some(self.parse_compound(true).0),

@@ -173,7 +173,15 @@ impl Substituter<'_, '_, '_> {
         let t = self.decl_ty(d);
         let ty = self.named_decl_ty(d, t, loc)?;
         let ds = self.pattern_declspec(d, ty);
-        let dr = self.pattern_declarator(d, ctx)?;
+        let mut dr = self.pattern_declarator(d, ctx)?;
+        // The initialization's form as written (`T v{...}` is
+        // direct-list-initialization, which may choose an explicit
+        // constructor; [dcl.init.general]/16).
+        if let Some(x) = self.sema.ast.decls.var(d)
+            && x.init.is_some()
+        {
+            dr.init_style = Some(x.spec.init_style());
+        }
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
         self.locals.insert(d, DeclOrPack::Decl(v));
         // A constrained placeholder's diagnostics point at its
@@ -578,12 +586,21 @@ impl Substituter<'_, '_, '_> {
         // A friend defined in the class: its definition is instantiated
         // from the pattern when used ([temp.inst]/4, clang's
         // `isThisDeclarationInstantiatedFromAFriendDefinition`).
-        if friend.is_some()
-            && self.sema.ast.decls.function(d).is_some_and(|x| x.body.is_some())
-            && self.sema.ast.definition(f).is_none()
-            && self.sema.ast.instantiated_from(f).is_none()
-        {
-            self.member_link(f, d);
+        if friend.is_some() && self.sema.ast.decls.function(d).is_some_and(|x| x.body.is_some()) {
+            if let Some(prev) = self.friend_prior_definition(f) {
+                // [temp.inst]/4, [basic.def.odr]/1: the function was
+                // already defined, or will be by another friend
+                // definition already instantiated (clang
+                // `TemplateDeclInstantiator::VisitFunctionDecl`).
+                let msg = self
+                    .sema
+                    .diag(kiln_diag::DiagId::sema_redefinition, self.sema.ast.decls.get(f).loc())
+                    .arg(self.sema.decl_name(f));
+                let msg = self.sema.note_prev(msg, prev, true);
+                self.sema.emit(msg);
+            } else if self.sema.ast.instantiated_from(f).is_none() {
+                self.member_link(f, d);
+            }
         }
         // Defined in its class: inline before its body is instantiated.
         if fs.is_some_and(kiln_ast::decl::FnSpec::implicit_inline) {
@@ -994,6 +1011,24 @@ impl Substituter<'_, '_, '_> {
         if let Some(spec) = self.entity {
             self.sema.builder().member_of_spec(spec, inst, pattern);
         }
+    }
+
+    /// The definition of the function a friend definition instantiated
+    /// as `f` redeclares, if there already is one: a declaration with a
+    /// body, or another instantiated friend whose pattern has one.
+    fn friend_prior_definition(&self, f: DeclId) -> Option<DeclId> {
+        if let Some(def) = self.sema.ast.definition(f)
+            && def != f
+        {
+            return Some(def);
+        }
+        self.sema.ast.redecls_of(f).filter(|&y| y != f).find(|&y| {
+            self.sema
+                .ast
+                .instantiated_from(y)
+                .and_then(|p| self.sema.ast.decls.function(p))
+                .is_some_and(|x| x.body.is_some())
+        })
     }
 
     /// A friend declaration of the pattern ([temp.friend]).
