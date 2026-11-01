@@ -1124,7 +1124,7 @@ fn act_on_friend(&mut self, ds: &DeclSpec, base: QualType, d: Option<&Declarator
 fn act_on_defaulted(&mut self, f: DeclId, loc: Loc);
 fn act_on_deleted(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>);
 fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId);
-fn act_on_param_default_list(&mut self, p: DeclId, l: InitList);
+fn act_on_param_default_list(&mut self, p: DeclId, l: &InitList);
 fn act_on_exception_spec(&mut self, f: DeclId, spec: ExcSpec);
 fn act_on_field_init(&mut self, field: DeclId, init: Initializer);
 fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc);

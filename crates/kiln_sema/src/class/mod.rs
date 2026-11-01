@@ -285,10 +285,10 @@ impl Sema<'_, '_> {
     /// parser for a replayed member function default argument, and by
     /// instantiation for a pattern's dependent braced default argument
     /// (WP-136). Write-once, like [`Sema::act_on_param_default_arg`].
-    pub fn act_on_param_default_list(&mut self, p: DeclId, l: crate::init::InitList) {
+    pub fn act_on_param_default_list(&mut self, p: DeclId, l: &crate::init::InitList) {
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let loc = self.ast.decls.get(p).loc();
-        let e = self.init_list_entity(pty, &l, loc);
+        let e = self.init_list_entity(pty, l, loc);
         self.note_default_init_full_expr();
         let e = self.act_on_full_expr(e);
         let _ = self.ast.decls.set_default_arg(p, e);

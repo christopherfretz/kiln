@@ -313,10 +313,10 @@ impl Collect<'_> {
             // The default argument is emitted at each call that uses it.
             ExprKind::CXXDefaultArgExpr => {
                 let p = ast.exprs.default_arg_param(e);
-                if self.defaults.insert(p) {
-                    if let Some(d) = ast.decls.param(p).and_then(|x| x.default_arg) {
-                        self.expr(d);
-                    }
+                if self.defaults.insert(p)
+                    && let Some(d) = ast.decls.param(p).and_then(|x| x.default_arg)
+                {
+                    self.expr(d);
                 }
             }
             ExprKind::ImplicitCastExpr

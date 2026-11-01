@@ -630,7 +630,7 @@ impl Parser<'_, '_> {
                     }
                     if let Some(&p) = params.get(i) {
                         self.trace(|_| format!("default_arg({i})"));
-                        self.s.act_on_param_default_list(p, l);
+                        self.s.act_on_param_default_list(p, &l);
                     }
                 }
             } else if let Some(e) = self.parse_assignment_expr() {

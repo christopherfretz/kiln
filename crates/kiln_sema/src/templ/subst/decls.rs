@@ -665,7 +665,7 @@ impl Substituter<'_, '_, '_> {
                 // as written, list-initializing the substituted type.
                 kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
                     if let Ok(l) = self.init_list(def) {
-                        self.sema.act_on_param_default_list(b, l);
+                        self.sema.act_on_param_default_list(b, &l);
                     }
                     continue;
                 }
