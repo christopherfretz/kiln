@@ -90,7 +90,10 @@ impl Sema<'_, '_> {
                     let e = self.ast.types.element(r).unwrap_or(r);
                     self.ast.types.pointer_to(e)
                 } else if self.ast.types.is_function(r) {
-                    self.ast.types.pointer_to(r)
+                    // clang `BuiltinDecay` defers to `BuiltinAddPointer`:
+                    // an abominable function type (cv- or ref-qualified)
+                    // has no pointer type and decays to itself.
+                    if self.referenceable(r) { self.ast.types.pointer_to(r) } else { t }
                 } else {
                     self.remove_quals(r, Quals::CV)
                 }

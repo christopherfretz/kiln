@@ -604,6 +604,11 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
+        // clang `CheckConvertibilityForTypeTraits`: `To test()` needs a
+        // non-abstract return type ([class.abstract]/3).
+        if self.abstract_class(to.0).is_some() {
+            return Some(false);
+        }
         let (fty, vc) = match self.ast.types.canonical_view(from.0) {
             TypeView::LValueRef(p) => (p, ValueCategory::LValue),
             TypeView::RValueRef(p) if self.ast.types.is_function(p) => (p, ValueCategory::LValue),

@@ -629,7 +629,7 @@ diag_ids! {
     sema_enum_fixed_redecl_unfixed = Error (0) "enumeration previously declared with fixed underlying type";
     sema_enum_unfixed_redecl_fixed = Error (0) "enumeration previously declared with nonfixed underlying type";
     sema_enum_invalid_underlying = Error (1) "non-integral type {0} is an invalid underlying type";
-    sema_cce_narrowing_value = Error (3) "{0} evaluates to {1}, which cannot be narrowed to type {2}";
+    sema_cce_narrowing_value = WarningError [Cxx11Narrowing] (3) "{0} evaluates to {1}, which cannot be narrowed to type {2}";
     sema_enumerator_too_large = Error (2) "enumerator value {0} is not representable in the underlying type {1}";
     sema_enumerator_wrapped = Error (0) "enumerator value is not representable in any integral type";
     sema_no_declarators = ExtWarn [MissingDeclarations] (0) "declaration does not declare anything";

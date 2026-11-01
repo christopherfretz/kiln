@@ -65,8 +65,9 @@ impl Sema<'_, '_> {
                         .arg("noexcept specifier argument")
                         .arg(v.to_string())
                         .arg(self.ty_arg(QualType::BOOL));
+                    // A `-Wc++11-narrowing` error by default; clang goes
+                    // on with the converted value.
                     self.emit(d);
-                    return self.invalid_noexcept_spec(loc);
                 }
             }
             BoolCce::NotAllowed => {
