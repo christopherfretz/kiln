@@ -2787,7 +2787,13 @@ impl Cg<'_> {
                 let destructed = std::mem::take(&mut self.f.dest_destructed);
                 self.agg_visit(self.sub(e), dest, zeroed)?;
                 if !destructed && let Some(rd) = self.destructed_class(q) {
-                    let c = Cleanup::Dtor { addr: dest.v, record: rd, base: false };
+                    // clang `EmitCXXTemporary`: `pushDestroy` of the
+                    // temporary's type, an array destroyed element-wise.
+                    let c = if self.array_elem(q).is_some() {
+                        Cleanup::ArrayDtor { addr: dest, record: rd }
+                    } else {
+                        Cleanup::Dtor { addr: dest.v, record: rd, base: false }
+                    };
                     self.push_full_expr_cleanup(c, true, true);
                 }
                 Ok(())

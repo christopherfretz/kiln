@@ -1313,6 +1313,10 @@ impl Sema<'_, '_> {
             self.ref_temp_note.set(saved);
             t
         };
+        // The temporary is bound (clang `shouldBindAsTemporary` of
+        // `EK_Temporary`): an aggregate or array of a class with a
+        // non-trivial destructor is destroyed with its full-expression.
+        let tmp = if self.is_err_expr(tmp) { tmp } else { self.maybe_bind_temporary(tmp) };
         self.init_from_expr(ty, tmp, ConvCtx::Initialization, at)
     }
 
