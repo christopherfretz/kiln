@@ -3,7 +3,13 @@
 Branch `wp/154-atomics`, worktree `kiln/.worktrees/wp-154`. clang 19 at -O0
 is the oracle throughout.
 
-Result: GATE_RESULT
+Result: the M3 gate is 331/585, up from 319 on main at `64c78be` (meta +1,
+utility +1, support.limits +10). The `use of undeclared identifier` cluster
+(the atomic builtins) drops from 60 first / 158 any to 2 / 61, with no atomic
+diagnostic left. The next top cluster is 40 link failures, all one bug: the
+`__shared_ptr_pointer<...>` vtable's virtual members are mangled without
+template arguments and not emitted. CI is green (`.build/ci-wp154.log` in the
+helper repo).
 
 ## Items
 1. [x] **Atomic builtins as `AtomicExpr`** (clang `Sema::BuildAtomicExpr`):
