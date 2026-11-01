@@ -1285,7 +1285,7 @@ impl Cg<'_> {
                 ConstructionKind::Complete | ConstructionKind::Delegating => {
                     if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                         let size = self.size_align(q).0;
-                        self.memset(dest, 0, size, false);
+                        self.emit_null_init(dest, q, size)?;
                     }
                 }
                 _ => {
@@ -1295,9 +1295,7 @@ impl Cg<'_> {
                         // clang `EmitNullBaseClassInitialization`: the
                         // store range is addressed as a byte offset (0;
                         // Itanium has no vbptr gaps) from the subobject.
-                        let z = V::C(self.m.const_int(LTy::I64, 0));
-                        let v = self.gep(LTy::I8, dest.v, vec![z], true);
-                        self.memset(Addr { v, ..dest }, 0, nv, false);
+                        self.emit_null_base_init(dest, def, nv)?;
                     }
                 }
             }
@@ -1399,7 +1397,11 @@ impl Cg<'_> {
         if zero_each && !self.class_bits(ctor_class).contains(DefinitionBits::EMPTY) {
             // clang `EmitNullInitialization` of the element.
             let size = self.alloc_size(elem);
-            self.memset(at, 0, size, false);
+            let mut eq = ast.exprs.get(e).ty();
+            while let Some(x) = self.array_elem(eq) {
+                eq = x;
+            }
+            self.emit_null_init(at, eq, size)?;
         }
         let r = self.construct_one(e, at, false);
         self.end_scope(sc);
@@ -1644,10 +1646,19 @@ impl Cg<'_> {
                 Some(v) => v,
                 None => self.emit_call_args(&sig, args)?,
             };
-            let (extra, nr) = self.call_extra(md, cfty, &mut sig);
+            let (mut extra, nr) = self.call_extra(md, cfty, &mut sig);
+            // The allocation attributes of the method named by the call
+            // (clang `ConstructAttributeList` with the virtual callee's
+            // `CGCalleeInfo`), then its `alloc_align` assumption.
+            let mut ret_extra = Vec::new();
+            self.alloc_call_attrs(md, &vals, &mut extra, &mut ret_extra);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
+            let this = Some(this.v);
             let r =
-                self.call_vals_to(&sig, fp, None, Some(this.v), &vals, args, dest, &extra, &[])?;
+                self.call_vals_to(&sig, fp, None, this, &vals, args, dest, &extra, &ret_extra)?;
+            if let Some(p) = r {
+                self.alloc_align_assume(md, &vals, p);
+            }
             if nr {
                 self.finish_noreturn_call();
             }

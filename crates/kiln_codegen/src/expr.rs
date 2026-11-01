@@ -253,8 +253,12 @@ impl Cg<'_> {
                 if ast.types.is_void(q) {
                     return Ok(None);
                 }
-                let t = self.lty(q);
-                V::C(self.m.const_zero(t))
+                if self.zero_init(q) {
+                    let t = self.lty(q);
+                    V::C(self.m.const_zero(t))
+                } else {
+                    V::C(self.null_const(q)?)
+                }
             }
             ExprKind::OffsetOfExpr => {
                 let t = self.lty(q);
@@ -363,8 +367,12 @@ impl Cg<'_> {
                 if let Some(&x) = ast.lists.get(ast.exprs.init_list_inits(e)).first() {
                     return self.emit_scalar_opt(ExprId::new(x));
                 }
-                let t = self.lty(q);
-                V::C(self.m.const_zero(t))
+                if self.zero_init(q) {
+                    let t = self.lty(q);
+                    V::C(self.m.const_zero(t))
+                } else {
+                    V::C(self.null_const(q)?)
+                }
             }
             // clang `ScalarExprEmitter::VisitArraySubscriptExpr`: a vector
             // subscript is the vector's value and `extractelement`.
@@ -2615,9 +2623,13 @@ impl Cg<'_> {
     }
 
     /// clang `isSimpleZero`.
-    fn is_simple_zero(&self, e: ExprId) -> bool {
+    fn is_simple_zero(&mut self, e: ExprId) -> bool {
         let ast = self.ast;
         let mut e = e;
+        let k = ast.exprs.get(e).kind();
+        if matches!(k, ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr) {
+            return self.zero_init(ast.exprs.get(e).ty());
+        }
         loop {
             let n = ast.exprs.get(e);
             match n.kind() {
@@ -2649,7 +2661,6 @@ impl Cg<'_> {
                         _ => false,
                     });
                 }
-                ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr => return true,
                 ExprKind::CharacterLiteral => return ast.exprs.char_value(e) == 0,
                 _ => return false,
             }
@@ -2664,7 +2675,7 @@ impl Cg<'_> {
             return 0;
         }
         let q = ast.exprs.get(e).ty();
-        if ast.exprs.get(e).kind() != ExprKind::InitListExpr {
+        if ast.exprs.get(e).kind() != ExprKind::InitListExpr || !self.zero_init(q) {
             return self.size_align(q).0;
         }
         let inits: Vec<ExprId> = ast.lists.iter(ast.exprs.init_list_inits(e)).collect();
@@ -2829,9 +2840,9 @@ impl Cg<'_> {
                 Ok(())
             }
             ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr => {
-                if !zeroed {
+                if !(zeroed && self.zero_init(q)) {
                     let size = self.size_align(q).0;
-                    self.memset(dest, 0, size, false);
+                    self.emit_null_init(dest, q, size)?;
                 }
                 Ok(())
             }
@@ -3064,16 +3075,14 @@ impl Cg<'_> {
 
     /// clang `EmitNullInitializationToLValue`.
     pub(crate) fn null_init_lvalue(&mut self, lv: LV, zeroed: bool) -> R<()> {
-        if zeroed {
+        if zeroed && self.zero_init(lv.q) {
             return Ok(());
         }
         if self.is_aggregate(lv.q) {
             let size = self.size_align(lv.q).0;
-            self.memset(lv.addr, 0, size, false);
-            return Ok(());
+            return self.emit_null_init(lv.addr, lv.q, size);
         }
-        let t = self.mty(lv.q);
-        let z = V::C(self.m.const_zero(t));
+        let z = V::C(self.null_const(lv.q)?);
         if lv.bf.is_some() {
             self.store_lv(z, lv, false);
         } else {
@@ -3336,6 +3345,7 @@ impl Cg<'_> {
             let z = V::C(self.m.const_bool(false));
             let dominator =
                 self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+            let mark = self.f.fir.mark();
             let al = self.pref_align(LTy::PTR);
             let slot = self.f.fir.alloca(LTy::PTR, al);
             self.store(begin, slot, al, false);
@@ -3346,9 +3356,17 @@ impl Cg<'_> {
                 depth += 1;
             }
             let elem = self.mty(inner);
-            let p =
-                IrregularPartialArray { begin, end_slot: slot, outer: ety, depth, elem, record };
+            let p = IrregularPartialArray {
+                begin,
+                saved: false,
+                end_slot: slot,
+                outer: ety,
+                depth,
+                elem,
+                record,
+            };
             self.push_full_expr_cleanup(Cleanup::IrregularPartialArray(Box::new(p)), false, true);
+            self.add_aux_allocas(mark);
             partial = Some((self.f.cl.depth(), dominator, slot, al));
         }
         for (i, &init) in inits.iter().enumerate() {
@@ -3370,7 +3388,7 @@ impl Cg<'_> {
             None => true,
             Some(f) => self.is_trivial_filler(f),
         };
-        if inits.len() as u64 != n_elems && !(zeroed && trivial) {
+        if inits.len() as u64 != n_elems && !(zeroed && trivial && self.zero_init(eq)) {
             let mut el = begin;
             if !inits.is_empty() {
                 let c = self.i64c(inits.len() as i128);

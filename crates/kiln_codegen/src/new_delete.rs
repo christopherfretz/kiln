@@ -16,7 +16,7 @@ use kiln_llvm::{
 };
 use kiln_source::Loc;
 
-use crate::cleanup::{ArrayDelete, Cleanup, NewDelete, Saved};
+use crate::cleanup::{ArrayDelete, Cleanup, Depth, IrregularPartialArray, NewDelete, Saved};
 use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
@@ -38,6 +38,17 @@ pub(crate) struct AllocFn {
     pub nothrow_t: bool,
     /// Replaceable, with a `std::align_val_t` parameter at this index.
     pub align_param: Option<usize>,
+}
+
+/// The irregular partial-array cleanup of an array new-initializer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NewPartial {
+    depth: Depth,
+    /// clang's `dominatingIP` placeholder.
+    dominator: V,
+    /// `array.init.end`.
+    slot: V,
+    align: u64,
 }
 
 impl Cg<'_> {
@@ -540,9 +551,6 @@ impl Cg<'_> {
             asm = asm.wrapping_mul(a.size);
             base = a.elem;
         }
-        if matches!(t.canonical_view(base), TypeView::MemberPointer { .. }) {
-            return err(loc, "new of a member pointer is not supported yet");
-        }
         // The array cookie (`GetArrayCookieSize`); none for the reserved
         // placement form (Itanium `requiresArrayCookie`).
         let cookie = if is_array
@@ -879,7 +887,9 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `EmitNewArrayInitializer` (no constructors, no cookies).
+    /// clang `EmitNewArrayInitializer` (no constructors, no cookies). Its
+    /// `CleanupDeactivationScope` deactivates the irregular partial-array
+    /// cleanup of a list initializer on every exit.
     #[allow(clippy::too_many_arguments, reason = "mirrors clang's parameter list")]
     fn emit_new_array_init(
         &mut self,
@@ -891,6 +901,54 @@ impl Cg<'_> {
         num: V,
         size: V,
         loc: Option<Loc>,
+    ) -> R<()> {
+        let mut partial = None;
+        let geom = (base, esize, begin, align, num, size);
+        let r = self.new_array_init_body(x, geom, loc, &mut partial);
+        if let Some(p) = partial {
+            let d = Fir::last_inst(p.dominator);
+            self.deactivate_cleanup_block(p.depth, d);
+            self.f.fir.erase(d);
+        }
+        r
+    }
+
+    /// [except.ctor]/3 for the explicit elements of `new T[n]{...}`: an
+    /// EH cleanup destroying `[begin, *array.init.end)`
+    /// (`pushIrregularPartialArrayCleanup`, only when `needsEHCleanup`).
+    fn push_new_partial(&mut self, base: QualType, begin: V, record: DeclId) -> NewPartial {
+        let z = V::C(self.m.const_bool(false));
+        let dominator =
+            self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+        let mark = self.f.fir.mark();
+        let al = self.pref_align(LTy::PTR);
+        let slot = self.f.fir.alloca(LTy::PTR, al);
+        // The cleanup walks base elements: clang passes it the base
+        // element type of a multidimensional allocation.
+        let elem = self.mty(base);
+        let p = IrregularPartialArray {
+            begin,
+            saved: false,
+            end_slot: slot,
+            outer: elem,
+            depth: 0,
+            elem,
+            record,
+        };
+        self.push_full_expr_cleanup(Cleanup::IrregularPartialArray(Box::new(p)), false, true);
+        self.add_aux_allocas(mark);
+        NewPartial { depth: self.f.cl.depth(), dominator, slot, align: al }
+    }
+
+    /// The body of [`Cg::emit_new_array_init`]; `geom` is the base element
+    /// type, its size, the first element, its alignment, the element count
+    /// and the byte size.
+    fn new_array_init_body(
+        &mut self,
+        x: &NewExtra,
+        (base, esize, begin, align, num, size): (QualType, u64, V, u64, V, V),
+        loc: Option<Loc>,
+        partial: &mut Option<NewPartial>,
     ) -> R<()> {
         let ast = self.ast;
         let t = &ast.types;
@@ -922,8 +980,14 @@ impl Cg<'_> {
                 }
                 n_init = n_init.wrapping_mul(count);
             }
+            if let Some(record) = self.destructed_class(base).filter(|_| self.opts.exceptions) {
+                *partial = Some(self.push_new_partial(base, begin, record));
+            }
             let start_align = cur_align;
             for (k, &ie) in elems.iter().enumerate() {
+                if let Some(p) = *partial {
+                    self.store(cur, p.slot, p.align, false);
+                }
                 let q = ast.exprs.get(ie).ty();
                 let lv = LV {
                     addr: Addr { v: cur, ty: cur_ty, align: cur_align },
@@ -963,7 +1027,7 @@ impl Cg<'_> {
             if trivial && (!zeroing || empty) {
                 return Ok(());
             }
-            if trivial {
+            if trivial && self.zero_init(base) {
                 // TryMemsetInitialization.
                 let mut rem = size;
                 if n_init > 0 {
@@ -973,6 +1037,9 @@ impl Cg<'_> {
                 self.memset_v(Addr { v: cur, ty: base_ty, align: cur_align }, 0, rem, false);
                 return Ok(());
             }
+            if let Some(p) = *partial {
+                self.store(cur, p.slot, p.align, false);
+            }
             let mut rem = num;
             if n_init > 0 {
                 let k = self.i64c(i128::from(n_init));
@@ -981,8 +1048,8 @@ impl Cg<'_> {
             let ea = min_align(cur_align, esize);
             return self.construct_array_n(init, cur, base_ty, ea, rem, zeroing);
         }
-        // TryMemsetInitialization.
-        if self.memset_init(init) {
+        // TryMemsetInitialization (only for a zero-initializable element).
+        if self.zero_init(base) && self.memset_init(init) {
             let mut rem = size;
             if n_init > 0 {
                 let s = self.i64c(i128::from(esize.wrapping_mul(n_init)));
@@ -990,6 +1057,22 @@ impl Cg<'_> {
             }
             self.memset_v(Addr { v: cur, ty: base_ty, align: cur_align }, 0, rem, false);
             return Ok(());
+        }
+        let ivie = ast.exprs.get(init).kind() == ExprKind::ImplicitValueInitExpr;
+        if ivie && let Some(rd) = t.as_record(base) {
+            // Sema value-initializes the elements of `new T[n]()` with an
+            // `ImplicitValueInitExpr` where clang builds a zeroing trivial
+            // `CXXConstructExpr`: clang's `EmitCXXAggrConstructorCall` loop.
+            if self.class_bits(rd).contains(DefinitionBits::EMPTY) {
+                return Ok(());
+            }
+            let mut rem = num;
+            if n_init > 0 {
+                let k = self.i64c(i128::from(n_init));
+                rem = self.bin(BinOp::Sub, Flags::NONE, num, k);
+            }
+            let ea = min_align(cur_align, esize);
+            return self.null_init_array_n(cur, base_ty, base, ea, rem);
         }
         // The element loop.
         let Some(entry) = self.f.fir.cur() else {
@@ -1004,7 +1087,12 @@ impl Cg<'_> {
         }
         self.emit_block(lp, false);
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(cur, entry)] }, LTy::PTR);
-        let iq = ast.exprs.get(init).ty();
+        if let Some(p) = *partial {
+            self.store(phi, p.slot, p.align, false);
+        }
+        // clang switches a value-initialization to one of the element
+        // type (multidimensional `new` of member pointers).
+        let iq = if ivie { base } else { ast.exprs.get(init).ty() };
         let ity = self.mty(iq);
         let lv =
             LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None, vidx: None };
@@ -1018,6 +1106,47 @@ impl Cg<'_> {
         };
         self.f.fir.add_incoming(Fir::last_inst(phi), next, cb);
         self.emit_block(cont, false);
+        Ok(())
+    }
+
+    /// clang `EmitCXXAggrConstructorCall` with `zeroInitialize` for a
+    /// trivial default constructor: each of the `num` elements of type `eq`
+    /// from `begin` is null-initialized (`EmitNullInitialization`).
+    fn null_init_array_n(
+        &mut self,
+        begin: V,
+        elem: LTy,
+        eq: QualType,
+        elem_align: u64,
+        num: V,
+    ) -> R<()> {
+        let mut out = None;
+        if self.cint(num).is_none() {
+            let z = self.i64c(0);
+            let empty = self.icmp(IntPredicate::Eq, num, z);
+            let lp = self.f.fir.create_block();
+            let o = self.f.fir.create_block();
+            self.cond_br(empty, o, lp);
+            self.emit_block(lp, false);
+            out = Some(o);
+        } else if self.cint(num).is_some_and(|(_, c, _)| c == 0) {
+            return Ok(());
+        }
+        let end = self.gep(elem, begin, vec![num], true);
+        let entry = self.f.fir.cur().expect("insertion point");
+        let body = self.f.fir.create_block();
+        self.emit_block(body, false);
+        let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(begin, entry)] }, LTy::PTR);
+        let size = self.alloc_size(elem);
+        self.emit_null_init(Addr { v: phi, ty: elem, align: elem_align }, eq, size)?;
+        let one = self.i64c(1);
+        let next = self.gep(elem, phi, vec![one], true);
+        let cur = self.f.fir.cur().expect("insertion point");
+        self.f.fir.add_incoming(Fir::last_inst(phi), next, cur);
+        let done = self.icmp(IntPredicate::Eq, next, end);
+        let out = out.unwrap_or_else(|| self.f.fir.create_block());
+        self.cond_br(done, out, body);
+        self.emit_block(out, false);
         Ok(())
     }
 

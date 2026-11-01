@@ -20,3 +20,19 @@ void* j(unsigned short x) { return m2(1, x); }
 void* k() { return m(1, 6); }
 struct S { __attribute__((alloc_align(2))) void* q(int); };
 void* l(S& s, int x) { return s.q(x); }
+// Virtual calls carry the allocation attributes of the method the call
+// names: `alloc_align` (an assume, or `align N` for a constant),
+// `alloc_size` and `malloc`.
+struct V {
+  virtual void* al(unsigned long a) __attribute__((alloc_align(2)));
+  virtual void* al2(int x, unsigned long a) __attribute__((alloc_align(3)));
+  virtual void* sz(unsigned long n) __attribute__((alloc_size(2)));
+  virtual void* ml(unsigned long n) __attribute__((malloc));
+};
+void* v1(V* a, unsigned long n) { return a->al(n); }
+void* v2(V* a) { return a->al(16); }
+void* v3(V* a, unsigned long n) { return a->al2(1, n); }
+void* v4(V* a, unsigned long n) { return a->sz(n); }
+void* v5(V* a, unsigned long n) { return a->ml(n); }
+void* v6(V& a, unsigned long n) { return a.al(n); }
+void* v7(V* a, unsigned long n) { return a->V::al(n); }

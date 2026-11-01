@@ -123,6 +123,10 @@ impl AttrNode {
     /// the assumption (`ExprId`) and `b` the raw `Loc` of its clang
     /// `getExprLoc`, where constant evaluation reports it false.
     pub const ASSUME_IGNORED: u8 = 4;
+    /// `[[fallthrough]]` flag (bit 2): written with an attribute scope
+    /// (`[[clang::fallthrough]]`, `[[gnu::fallthrough]]`), so not a C++17
+    /// extension before C++17 (clang `handleFallThroughAttr`).
+    pub const FALLTHROUGH_SCOPED: u8 = 4;
 }
 
 /// Attribute nodes and the declaration → attributes map.

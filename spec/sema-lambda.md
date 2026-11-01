@@ -138,12 +138,14 @@ name. `LambdaData.mangling` records both. Any other closure has no
 number and no linkage: its members are internal and it mangles as an
 anonymous class (`$_N`). See abi.md §8.9.
 `tests/codegen/lambda_in_template_mangling.cpp` checks the templated
-cases IR-exact. Known deviations (follow-ups): a lambda in a default
-argument of a function template mangles at namespace scope (`_ZN3$_0`;
-clang numbers it in the specialization's local scope,
-`_ZZ4dfltIiEiPFivEEN3$_0...`); and a nested generic lambda's `auto`
-return type is substituted (`S2_`) where clang writes `Da` (WP-117's
-substitution rework; inline functions too).
+cases IR-exact. An instantiated default argument (`templ/default_args.rs`)
+is substituted in the function's own context with
+`ManglingState.default_arg` set to the parameter (clang
+`SubstDefaultArgument`'s `ContextRAII(FD)`): a closure created there is
+numbered per parameter (`d_` in the local name) when the function is a
+member defined in its class, and otherwise has no number and mangles as
+the function's local `$_N` (`_ZZ4dfltIiEiPFivEEN3$_0clEv`; WP-203,
+`tests/codegen/lambda_default_arg_template.cpp`).
 
 ## 4. Captures
 
@@ -352,9 +354,7 @@ Uses of `this` in a rebuilt body capture it again (`note_this_use`);
    ([expr.prim.lambda.capture]/17), also in templates; `consteval`
    lambdas; a lambda-expression as a template argument and calling an
    `auto` template parameter whose default is a closure
-   (`template-argument.cpp`); `x.template operator()<T>()` (WP-121);
-   the `S2_` substitution in some closure manglings inside templates
-   (WP-117).
+   (`template-argument.cpp`); `x.template operator()<T>()` (WP-121).
 
 ## Landed (WP-075)
 

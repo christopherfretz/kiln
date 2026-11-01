@@ -381,6 +381,14 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The source range of `e` (clang `getSourceRange`) for a diagnostic:
+    /// from its first token to the end of its last (to the last token's
+    /// start in a macro expansion, whose text `token_end` cannot read).
+    pub(crate) fn expr_range(&self, e: ExprId) -> kiln_source::Span {
+        let end = self.expr_end_loc(e);
+        kiln_source::Span::new(self.begin_loc(e), self.token_end(end).unwrap_or(end))
+    }
+
     /// The location of the last token of `e` (clang's `getEndLoc`): the
     /// stored closing token (`)`, `}`) when there is one, else the end of
     /// the last operand for a node that ends with one (a binary or prefix
@@ -710,11 +718,45 @@ impl Sema<'_, '_> {
         if !Self::is_nodiscard_warning(id) && self.in_macro_body(e) {
             return;
         }
+        // The expression's range (clang `<< R1 << R2` / `getSourceRange`):
+        // a diagnostic with a range keeps its "expanded from macro" notes
+        // for a macro argument.
         let mut d = args.into_iter().fold(self.diag(id, loc), Diag::arg);
-        if let Some(n) = note {
-            d = d.with_note(self.diag(n, loc));
+        if id == DiagId::sema_unused_voidptr {
+            // clang's only range is the fix-it removing the `*`.
+            if let Some(star) = self.voidptr_star(e) {
+                d = d.fixit(kiln_diag::FixIt::remove(kiln_source::Span::new(
+                    star,
+                    star.with_offset(1),
+                )));
+            }
+        } else {
+            d = d.range(self.expr_range(e));
         }
-        self.emit(d);
+        if let Some(n) = note {
+            // The fix-it's range (clang `FixItHint::CreateReplacement` of
+            // the operator) keeps the note's macro-argument backtrace too.
+            let text = if n == DiagId::note_equality_comparison_to_assign { "=" } else { "|=" };
+            let op = kiln_source::Span::new(loc, loc.with_offset(2));
+            d = d.with_note(self.diag(n, loc).fixit(kiln_diag::FixIt::replace(op, text)));
+        }
+        // Only the generic warnings go through clang's `DiagIfReachable`.
+        if matches!(id, DiagId::sema_unused_expr | DiagId::sema_unused_comma_left_operand) {
+            self.diag_if_reachable(d, e);
+        } else {
+            self.emit(d);
+        }
+    }
+
+    /// The `*` of the `(void*)` cast `e` (the last one spelled before
+    /// the operand).
+    fn voidptr_star(&self, e: ExprId) -> Option<Loc> {
+        let x = self.ignore_parens(e);
+        let at = self.ast.exprs.get(x).loc();
+        let end = self.begin_loc(self.ast.exprs.operand(x));
+        let text = self.diags.sm().span_text(kiln_source::Span::new(at, end))?;
+        let i = text.rfind('*')?;
+        Some(at.with_offset(u32::try_from(i).ok()?))
     }
 
     /// The `nodiscard` forms of the unused-result warning.
@@ -830,41 +872,42 @@ impl Sema<'_, '_> {
             ExprKind::CXXRewrittenBinaryOperator => {
                 Some((DiagId::sema_unused_expr, loc, Vec::new()))
             }
-            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
-                let callee = self.ignore_paren_imp_casts(self.ast.exprs.callee(x));
-                if self.ast.exprs.get(callee).kind() == ExprKind::DeclRefExpr {
-                    let f = self.ast.exprs.decl(callee);
-                    // A nodiscard class or enumeration returned by value
-                    // counts too ([dcl.attr.nodiscard]/2).
-                    let by_type = || {
-                        let t = n.ty();
-                        let tag = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t));
-                        tag.and_then(|d| self.find_attr(d, AttrKind::NODISCARD))
-                    };
-                    if let Some(a) = self.find_attr(f, AttrKind::NODISCARD).or_else(by_type) {
-                        // clang points at the callee and appends the
-                        // attribute's message ([dcl.attr.nodiscard]/4).
-                        let at = self.begin_loc(callee);
-                        let attr = *self.ast.attrs.get(a);
-                        let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
-                        let name = "'nodiscard'".to_owned();
-                        return Some(match text {
-                            Some(t) => (DiagId::sema_unused_result_msg, at, vec![name, t]),
-                            None => (DiagId::sema_unused_result, at, vec![name]),
-                        });
-                    }
-                    // clang `warn_unused_call`: a `pure` / `const` callee
-                    // whose result is not `void` (WP-182).
-                    if !self.ast.types.is_void(n.ty()) {
-                        for (k, name) in [(AttrKind::PURE, "pure"), (AttrKind::CONST, "const")] {
-                            if self.find_attr(f, k).is_some() {
-                                return Some((
-                                    DiagId::sema_unused_call,
-                                    self.begin_loc(x),
-                                    vec![name.to_owned()],
-                                ));
-                            }
-                        }
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr => {
+                // clang `isUnusedResultAWarning`: a call with a callee
+                // declaration (`getCalleeDecl`), reported at the callee's
+                // start.
+                let callee = self.ast.exprs.callee(x);
+                let f = self.referenced_decl_of_callee(callee)?;
+                if self.ast.types.is_void(n.ty()) {
+                    return None;
+                }
+                let at = self.begin_loc(callee);
+                // clang `getUnusedResultAttr`: a nodiscard class or
+                // enumeration returned by value first, then the callee
+                // ([dcl.attr.nodiscard]/2).
+                let t = n.ty();
+                let by_type = if self.call_returns_reference(x) {
+                    None
+                } else {
+                    let tag = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t));
+                    tag.and_then(|d| self.find_attr(d, AttrKind::NODISCARD))
+                };
+                if let Some(a) = by_type.or_else(|| self.find_attr(f, AttrKind::NODISCARD)) {
+                    // clang appends the attribute's message
+                    // ([dcl.attr.nodiscard]/4).
+                    let attr = *self.ast.attrs.get(a);
+                    let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
+                    let name = "'nodiscard'".to_owned();
+                    return Some(match text {
+                        Some(t) => (DiagId::sema_unused_result_msg, at, vec![name, t]),
+                        None => (DiagId::sema_unused_result, at, vec![name]),
+                    });
+                }
+                // clang `warn_unused_call`: a `pure` / `const` callee
+                // whose result is not `void` (WP-182).
+                for (k, name) in [(AttrKind::PURE, "pure"), (AttrKind::CONST, "const")] {
+                    if self.find_attr(f, k).is_some() {
+                        return Some((DiagId::sema_unused_call, at, vec![name.to_owned()]));
                     }
                 }
                 None
@@ -923,6 +966,16 @@ impl Sema<'_, '_> {
                     CastKind::ConstructorConversion => self
                         .unused_warning(self.ast.exprs.operand(x))
                         .map(|(id, _, args)| (id, loc, args)),
+                    // clang `warn_unused_voidptr`: `(void*)x` written so
+                    // (not through a typedef) is taken for a typo of
+                    // `(void)x`.
+                    _ if n.kind() == ExprKind::CStyleCastExpr
+                        && n.ty().quals_bits() == 0
+                        && matches!(self.ast.types.view(n.ty().ty()),
+                            TypeView::Pointer(p) if p == QualType::VOID) =>
+                    {
+                        Some((DiagId::sema_unused_voidptr, loc, Vec::new()))
+                    }
                     _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
                 }
             }
@@ -987,6 +1040,43 @@ impl Sema<'_, '_> {
             | ExprKind::LambdaExpr => Some((DiagId::sema_unused_expr, loc, Vec::new())),
             _ => None,
         }
+    }
+
+    /// clang `Expr::getReferencedDeclOfCallee`: the declaration a callee
+    /// names, under parens, implicit casts and substituted template
+    /// parameters, through `.*` / `->*` (its right operand) and unary
+    /// `*`, `&` and `+`.
+    pub(crate) fn referenced_decl_of_callee(&self, callee: ExprId) -> Option<DeclId> {
+        let ex = &self.ast.exprs;
+        let mut e = self.ignore_paren_imp_casts(callee);
+        for _ in 0..256 {
+            let n = ex.get(e);
+            e = match n.kind() {
+                ExprKind::SubstNonTypeTemplateParmExpr => {
+                    self.ignore_paren_imp_casts(ex.subst_replacement(e))
+                }
+                ExprKind::BinaryOperator if ex.binary_op(e).is_ptr_mem() => {
+                    self.ignore_paren_imp_casts(ex.operands(e)[1])
+                }
+                ExprKind::UnaryOperator
+                    if matches!(
+                        ex.unary_op(e),
+                        UnaryOp::Deref | UnaryOp::AddrOf | UnaryOp::Plus
+                    ) =>
+                {
+                    self.ignore_paren_imp_casts(ex.operand(e))
+                }
+                ExprKind::DeclRefExpr | ExprKind::MemberExpr => return Some(ex.decl(e)),
+                _ => return None,
+            };
+        }
+        None
+    }
+
+    /// clang `CallExpr::getCallReturnType` is a reference: the callee's
+    /// declared result (a call's own type drops the reference).
+    fn call_returns_reference(&self, call: ExprId) -> bool {
+        self.ast.exprs.get(call).value_category().is_glvalue()
     }
 
     pub(crate) fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
@@ -1594,7 +1684,7 @@ impl Sema<'_, '_> {
     }
 
     /// `[[deprecated]]` ([dcl.attr.deprecated]).
-    fn diagnose_deprecated(&self, d: DeclId, loc: Loc) {
+    pub(crate) fn diagnose_deprecated(&self, d: DeclId, loc: Loc) {
         let Some(a) = self.find_attr(d, AttrKind::DEPRECATED) else { return };
         let attr = *self.ast.attrs.get(a);
         // clang `getNameForDiagnostic`: a function template
@@ -2218,7 +2308,12 @@ impl Sema<'_, '_> {
 
     pub(crate) fn invalid_operands(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         let (a, b) = self.ty_arg_pair(self.ety(l), self.ety(r));
-        let msg = self.diag(DiagId::sema_invalid_operands, loc).arg(a).arg(b);
+        let msg = self
+            .diag(DiagId::sema_invalid_operands, loc)
+            .arg(a)
+            .arg(b)
+            .range(self.expr_range(l))
+            .range(self.expr_range(r));
         self.emit(msg);
         self.recover_err(&[l, r], loc)
     }
@@ -3075,7 +3170,7 @@ impl Sema<'_, '_> {
     }
 
     /// `e1[args]` ([expr.sub], [over.sub]): `loc` is the `[`, `end` the
-    /// `]`.
+    /// `]`, recorded as a built-in subscript's end location.
     pub fn act_on_subscript_args(
         &mut self,
         base: ExprId,
@@ -3083,6 +3178,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> ExprId {
+        let r = self.subscript_args(base, args, loc, end);
+        self.builder().set_subscript_end(r, end);
+        r
+    }
+
+    fn subscript_args(&mut self, base: ExprId, args: &[ExprId], loc: Loc, end: Loc) -> ExprId {
         let braced: Vec<Option<InitList>> = args.iter().map(|&a| self.take_braced_arg(a)).collect();
         let mut kids = vec![base];
         kids.extend_from_slice(args);
@@ -3214,7 +3315,8 @@ impl Sema<'_, '_> {
     ) {
         let msg = self
             .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
-            .arg(self.decl_name(d));
+            .arg(self.decl_name(d))
+            .range(self.expr_range(callee));
         let info = self.arg_info(a);
         let ics =
             self.try_implicit_conversion(&info, pt, crate::overload::IcsOptions::CANDIDATE_ARG);
@@ -3488,7 +3590,8 @@ impl Sema<'_, '_> {
                     let d = c.decl;
                     let msg = self
                         .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
-                        .arg(self.decl_name(d));
+                        .arg(self.decl_name(d))
+                        .range(self.expr_range(callee));
                     let detail = self.arity_detail(d, n, min, have, variadic);
                     let fl = self.ast.decls.get(d).loc();
                     let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);

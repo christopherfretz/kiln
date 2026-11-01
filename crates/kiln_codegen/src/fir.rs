@@ -688,6 +688,26 @@ impl Fir {
         V::I(n)
     }
 
+    /// The index the next instruction will get (a mark for
+    /// [`Fir::allocas_from`]).
+    pub fn mark(&self) -> u32 {
+        self.insts.len() as u32
+    }
+
+    /// The live allocas created since `mark` (clang `AllocaTrackerRAII`).
+    pub fn allocas_from(&self, mark: u32) -> Vec<V> {
+        self.allocas.iter().filter(|&&i| i >= mark).map(|&i| V::I(i)).collect()
+    }
+
+    /// Erases alloca `a` and every instruction using it
+    /// (`EHCleanupScope::RemoveAuxAllocas`).
+    pub fn erase_with_users(&mut self, a: V) {
+        for u in self.users(a) {
+            self.erase(u);
+        }
+        self.erase(Self::last_inst(a));
+    }
+
     /// Index of the last instruction pushed.
     pub fn last_inst(v: V) -> u32 {
         match v {
