@@ -29,6 +29,31 @@ as clang's `-ast-dump-filter` prints it. The search does not descend into
 a printed tree, and still skips implicit decls and (without `all-files`)
 top-level decls of other files.
 
+The search follows clang's `RecursiveASTVisitor`, which does not visit
+template instantiations ([temp.spec], [temp.expl.spec], [temp.explicit]):
+- A template's parameters and its pattern are searched; its implicit
+  specializations are not. An explicit (or partial) specialization is
+  searched where it is declared. An explicitly instantiated class or
+  variable is matched by its own name but its members are not searched;
+  an explicitly instantiated function is not searched at all.
+- A member of a class template specialization is named by the
+  specialization with its arguments (`n::X<int>::N`, `printTemplate
+  ArgumentList`), trailing arguments equal to their parameter's default
+  dropped (`SuppressDefaultTemplateArgs`; none when one is a pack); a
+  template template argument prints its (qualified) name, an
+  enumeration argument its enumerator or, naming none, its value
+  (`G<K::b>`, `G<7>`). A member of a partial specialization is named by
+  its canonical arguments (`X<type-parameter-0-0 *, true>::C`), with the
+  same default trimming: a default naming an earlier parameter
+  (`class U = T`) is compared with that parameter's argument, a literal
+  default with the argument's value. A member of a template's pattern
+  is named by the template's name (`n::A::B::C`).
+- A template parameter is named by its template's context: a class
+  template's class (`n::A::T`), a partial specialization's
+  specialization; a function template's parameter is unqualified (the
+  function is its context); a variable template's, alias template's or
+  concept's parameter by the enclosing scope (`n::T`).
+
 Library API (`kiln_ast::dump`; the driver calls `dump_to_string`):
 ```
 pub fn dump<W: io::Write>(ast: &Ast, opts: &DumpOptions<'_>, out: W) -> io::Result<()>
@@ -607,7 +632,14 @@ contract:
   top-level decls of other files and implicit decls are dropped unless
   `--all-files`/`--implicit`. `--filter` follows §1; a declaration's
   qualified name is built from its semantic context (`D::s` matches the
-  in-class declaration and the out-of-line definition of `s`).
+  in-class declaration and the out-of-line definition of `s`). A
+  specialization context's arguments come from the JSON (types and
+  integral values printed by their parameter's type) or, for what it
+  omits (a template template argument's name, an enumeration
+  argument's enumerator), from the side channel's `TemplateArgument`
+  lines of the specialization; a default argument compared for
+  trimming is a non-dependent type, a literal, or an earlier parameter
+  of the same template. Any other argument or default is an error.
 
 Anything the tool cannot render exactly is an error naming the construct
 and the enclosing top-level decl. It never prints a guess, so a mismatch
