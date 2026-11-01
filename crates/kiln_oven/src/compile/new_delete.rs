@@ -11,6 +11,7 @@
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::expr::{CastKind, ExprFlags, ExprKind};
 use kiln_ast::names::OverloadedOperator;
+use kiln_ast::types::ArgView;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 
 use super::class::Callee;
@@ -20,6 +21,56 @@ use crate::mem::Origin;
 use crate::ty::{OTy, TyKind};
 
 impl Compiler<'_> {
+    /// `::new (p) T(init)` in a std function: begins the lifetime of the
+    /// `T` subobject `p` designates (spec/oven.md "Transient allocation").
+    fn placement_new(&mut self, e: ExprId, dst: u32) {
+        let ast = self.ast();
+        let x = *ast.exprs.new_extra(e);
+        let Some(arg) = x.placement.and_then(|l| ast.lists.iter::<ExprId>(l).next()) else {
+            self.unsupported(e);
+            return;
+        };
+        let loc = ast.exprs.get(e).loc();
+        let elem = self.ty(x.allocated_ty);
+        let p = self.rv(arg);
+        self.emit_site(Op::Placement, 0, &[p, elem.0], e, loc);
+        self.emit(Op::Mov, 0, &[dst, p]);
+        if let Some(i) = x.init {
+            self.init(i, dst, elem);
+        }
+    }
+
+    /// A direct call of `::operator new(n)` (`alloc`) or `::operator
+    /// delete(p)`, or of `__builtin_operator_new`/`delete`: constant only
+    /// within `std::allocator<T>::allocate` / `deallocate`, where it
+    /// allocates `T[n / sizeof(T)]` (elements outside their lifetime) or
+    /// frees such an allocation ([allocator.members], [expr.const]/5.20).
+    pub(super) fn global_alloc_call(&mut self, e: ExprId, alloc: bool, args: &[ExprId]) -> u32 {
+        let begin = self.begin(e);
+        let dst = self.reg();
+        let ast = self.ast();
+        let name = if alloc { "allocate" } else { "deallocate" };
+        let elem = self.cur_fn.and_then(|f| std_allocator_elem(ast, f, name));
+        let (Some(elem), Some(&first)) = (elem, args.first()) else {
+            let msg = if alloc { super::builtins::UNTYPED_NEW } else { super::builtins::INVALID };
+            self.trap_loc(begin, msg.into());
+            return dst;
+        };
+        let elem = self.ty(elem);
+        let v = self.rv(first);
+        for &a in &args[1..] {
+            self.effect(a);
+        }
+        if alloc {
+            let oi = self.o.push_origin(Origin::Heap(e, 0));
+            let aux = new_aux::ARRAY | new_aux::STD;
+            self.emit_site(Op::New, aux, &[dst, elem.0, v, oi, 0], e, begin);
+        } else {
+            self.emit_site(Op::Delete, 8, &[v, elem.0], e, begin);
+        }
+        dst
+    }
+
     /// `new T`, `new T(init)`, `new T{init}`, `new T[n]...` into `dst`.
     pub(super) fn new_expr(&mut self, e: ExprId, dst: u32) {
         let ast = self.ast();
@@ -28,6 +79,15 @@ impl Compiler<'_> {
             self.unsupported(e);
             return;
         };
+        // `::new (p) T(...)` inside namespace std (clang 19's
+        // `isStdFunction` placement path, used by `std::construct_at`).
+        if x.array_size.is_none()
+            && is_reserved_placement_new(ast, op_new)
+            && self.cur_fn.is_some_and(|f| is_std_function(ast, f))
+        {
+            self.placement_new(e, dst);
+            return;
+        }
         // [expr.const]/5.20: only a replaceable global allocation function
         // may be called (clang: `note_constexpr_new_non_replaceable`).
         if !is_replaceable_global_alloc(ast, op_new) {
@@ -420,13 +480,85 @@ pub(crate) fn is_replaceable_global_alloc(ast: &Ast, d: DeclId) -> bool {
     rest.is_empty()
 }
 
-/// Whether `d` is a member of `std::allocator` whose call the Oven treats
-/// as a transient allocation ([allocator.members]/6, [expr.const]/5.20:
-/// `std::allocator<T>::allocate`/`deallocate`). Always `false` until the
-/// templates wave: the library's allocator is a class template, and its
-/// calls run as ordinary calls (reaching `::operator new`, which is not
-/// constant). spec/oven.md "Transient allocation" records the deferral,
-/// with `__builtin_operator_new`/`__builtin_operator_delete`.
-pub(crate) fn is_std_allocator_call(_ast: &Ast, _d: DeclId) -> bool {
+/// Whether `d` is a replaceable global allocation (`Some(true)`) or
+/// deallocation (`Some(false)`) function, called directly as
+/// `::operator new(n)` / `::operator delete(p)`.
+pub(crate) fn global_alloc_form(ast: &Ast, d: DeclId) -> Option<bool> {
+    if !is_replaceable_global_alloc(ast, d) {
+        return None;
+    }
+    Some(matches!(
+        ast.decls.get(d).name().as_operator(),
+        Some(OverloadedOperator::New | OverloadedOperator::ArrayNew)
+    ))
+}
+
+/// The element type `T` when `f` is `std::allocator<T>::<name>` (clang's
+/// `EvalInfo::getStdAllocatorCaller`: a member named `name` of a class
+/// template specialization named `allocator` in namespace std whose first
+/// template argument is a type).
+pub(crate) fn std_allocator_elem(ast: &Ast, f: DeclId, name: &str) -> Option<QualType> {
+    let node = ast.decls.get(f);
+    if node.kind() != DeclKind::CXXMethod || !is_named(ast, f, name) {
+        return None;
+    }
+    let rec = node.ctx()?;
+    if !is_std_named(ast, rec, "allocator") {
+        return None;
+    }
+    let (_, info) = ast.spec_info(rec)?;
+    match ast.types.args(info.args).first()?.view() {
+        ArgView::Type(q) => Some(q),
+        _ => None,
+    }
+}
+
+/// clang's `FunctionDecl::isReservedGlobalPlacementOperator` for an
+/// allocation function: the global `operator new(std::size_t, void*)` /
+/// `operator new[](std::size_t, void*)` ([new.delete.placement]).
+fn is_reserved_placement_new(ast: &Ast, d: DeclId) -> bool {
+    let decls = &ast.decls;
+    let node = decls.get(d);
+    if node.kind() != DeclKind::Function
+        || !matches!(
+            node.name().as_operator(),
+            Some(OverloadedOperator::New | OverloadedOperator::ArrayNew)
+        )
+    {
+        return false;
+    }
+    let mut ctx = node.ctx();
+    while let Some(c) = ctx
+        && matches!(decls.get(c).kind(), DeclKind::LinkageSpec | DeclKind::Export)
+    {
+        ctx = decls.get(c).ctx();
+    }
+    if !ctx.is_some_and(|c| decls.get(c).kind() == DeclKind::TranslationUnit) {
+        return false;
+    }
+    let Some(proto) = node.ty().and_then(|t| ast.types.proto(t)) else {
+        return false;
+    };
+    match ast.types.params(proto) {
+        [_, p] => ast.types.pointee(*p).is_some_and(|v| ast.types.is_void(v)),
+        _ => false,
+    }
+}
+
+/// clang's `CallStackFrame::isStdFunction`: `f` is declared in namespace
+/// std (or a class or function nested in it).
+fn is_std_function(ast: &Ast, f: DeclId) -> bool {
+    let decls = &ast.decls;
+    let mut c = decls.get(f).ctx();
+    while let Some(d) = c {
+        let up = decls.get(d).ctx();
+        if decls.get(d).kind() == DeclKind::Namespace
+            && is_named(ast, d, "std")
+            && up.is_some_and(|tu| decls.get(tu).kind() == DeclKind::TranslationUnit)
+        {
+            return true;
+        }
+        c = up;
+    }
     false
 }

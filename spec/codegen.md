@@ -299,7 +299,14 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
     elements without an initializer.
 - Constants (`consts.rs`): a union constant is its active member followed
   by `[N x i8] undef` padding, typed as the union when the element types
-  match its IR type, else as a literal struct. A record with bit-fields
+  match its IR type, else as a literal struct. The active member is the
+  one the initializer list names, else the one the Oven recorded in the
+  frozen image (`ByteImage::unions`; matched by offset and by the
+  member's context, so nested unions at one offset resolve), so a union
+  made active by an assignment in a constructor body or by a trivial copy
+  assignment (libc++'s `std::string` constructors) is emitted, as clang
+  emits its `APValue` (WP-212). An image with no recorded member is
+  `zeroinitializer` when all its bytes are zero, else an error. A record with bit-fields
   is built like any other, each bit-field storage unit read from the
   image's bytes as its IR type (the Oven's object representation already
   packs the fields in target bit order; WP-207). Base classes are still

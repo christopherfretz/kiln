@@ -842,11 +842,35 @@ impl Compiler<'_> {
             self.patch_here(ok);
             self.next = m;
         }
-        let callee = match self.method_class(md) {
+        let callee_e = callee;
+        let cls = self.method_class(md);
+        let callee = match cls {
             Some(cls) if dispatch => Callee::Virtual(md, cls),
             _ => Callee::Direct(md),
         };
-        self.call_frame(e, callee, rty, sret, Some(this), args, &refs, Some(loc))
+        // An explicit destructor call ends the object's lifetime
+        // ([basic.life]/1.4; spec/oven.md "Transient allocation").
+        let dtor = cls.filter(|_| self.ast().decls.get(md).kind() == DeclKind::CXXDestructor);
+        if let Some(cls) = cls {
+            let (aux, at) = if dtor.is_some() { (1, loc) } else { (4, self.node(callee_e).loc()) };
+            self.emit_site(Op::EndLife, aux, &[this, cls.0], e, at);
+        }
+        // A union's trivial assignment operator copies the object, its
+        // active member included (clang's `handleTrivialCopy`; sema
+        // defines it with an empty body).
+        if trivial_assign
+            && let (Some(cls), [src]) = (cls, args)
+            && matches!(self.kind(cls), TyKind::Record { union: true, .. })
+        {
+            let s = self.lv_mem(*src, Access::Read);
+            self.emit_at(Op::Copy, 0, &[this, s, cls.0], e);
+            return this;
+        }
+        let r = self.call_frame(e, callee, rty, sret, Some(this), args, &refs, Some(loc));
+        if let Some(cls) = dtor {
+            self.emit_site(Op::EndLife, 2, &[this, cls.0], e, loc);
+        }
+        r
     }
 
     /// The class type of member `md`.

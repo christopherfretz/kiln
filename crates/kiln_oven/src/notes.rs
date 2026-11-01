@@ -17,7 +17,7 @@ use crate::arith::{self, FloatErr, IntErr};
 use crate::compile::{FState, Site, designator_type, skip_parens};
 use crate::failure::Note;
 use crate::kbc::{Op, ak};
-use crate::mem::{MemFault, Origin, Ptr, Sp, flags};
+use crate::mem::{DynKind, MemFault, Origin, Ptr, Sp, flags};
 use crate::ty::{OTy, TyKind};
 use crate::value::var_info;
 use crate::vm::{BiFault, BoundErr, Fault, value_len};
@@ -308,6 +308,22 @@ impl Oven {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 (site.loc, format!("pure virtual function '{}' called", qualified_name(ast, d)))
             }
+            Fault::NewBadSize { bytes, elem } => (
+                site.loc,
+                format!(
+                    "allocated size {bytes} is not a multiple of size {} of element type '{}'",
+                    self.types.size(elem),
+                    self.tname(ast, elem)
+                ),
+            ),
+            Fault::PlacementType { from, to } => (
+                site.loc,
+                format!(
+                    "placement new would change type of storage from '{}' to '{}'",
+                    self.tname(ast, from),
+                    self.tname(ast, to)
+                ),
+            ),
             Fault::DeleteNonVirtual { stat, dynamic } => (
                 site.loc,
                 format!(
@@ -1035,17 +1051,28 @@ impl Oven {
             MemFault::Subobject => {
                 format!("delete of pointer to subobject '{}' ", self.ptr_string(ast, p, ty))
             }
-            MemFault::DeleteMismatch { array_new } => {
+            MemFault::DeleteMismatch { alloc, dealloc } => {
                 let a = self.alloc_any(Ptr::decode(p)).copied();
                 let t = a.map_or_else(|| self.tname(ast, ty), |a| self.tname(ast, a.ty));
                 if let Some(Origin::Heap(e, _)) = a.map(|a| a.origin) {
                     extra.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
                 }
-                if array_new {
-                    format!("non-array delete used to delete pointer to array object of type '{t}'")
-                } else {
-                    format!("array delete used to delete pointer to non-array object of type '{t}'")
+                match (alloc, dealloc) {
+                    (DynKind::Std, _) => "'delete' used to delete pointer to object allocated with 'std::allocator<...>::allocate'".into(),
+                    (_, DynKind::Std) => "'std::allocator<...>::deallocate' used to delete pointer to object allocated with 'new'".into(),
+                    (DynKind::ArrayNew, _) => format!(
+                        "non-array delete used to delete pointer to array object of type '{t}'"
+                    ),
+                    _ => format!(
+                        "array delete used to delete pointer to non-array object of type '{t}'"
+                    ),
                 }
+            }
+            MemFault::DeallocNull => {
+                "'std::allocator<...>::deallocate' used to delete a null pointer".into()
+            }
+            MemFault::Lifetime => {
+                format!("{verb} object outside its lifetime is not allowed in a constant expression")
             }
         };
         (site.loc, msg)
