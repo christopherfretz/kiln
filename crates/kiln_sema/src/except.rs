@@ -502,7 +502,9 @@ impl Sema<'_, '_> {
             return self.recover(QualType::VOID, &[e], loc);
         }
         let moved = if self.thrown_var_in_scope(e) { self.implicit_move(e) } else { e };
-        let init = self.convert_for_init(moved, obj, ConvCtx::Initialization);
+        let init = self.with_init_entity(crate::init::entity::EXCEPTION, |s| {
+            s.convert_for_init(moved, obj, ConvCtx::Initialization)
+        });
         if self.is_err_expr(init) {
             return self.recover(QualType::VOID, &[init], loc);
         }

@@ -611,18 +611,24 @@ impl Cg<'_> {
     }
 
     /// clang `pushTemporaryCleanup` for `SD_Static`: the destructor of a
-    /// class temporary `m` at `a` runs at exit (an array temporary's
-    /// elements are not destroyed, as clang).
+    /// class temporary `m` at `a` runs at exit; an array temporary is
+    /// destroyed by a `__cxx_global_array_dtor` helper
+    /// (`generateDestroyHelper`).
     pub(crate) fn register_temporary_dtor(&mut self, m: ExprId, a: Addr) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(m).ty();
-        if self.array_elem(q).is_some() {
-            return Ok(());
+        let Some(rd) = self.destructed_class(q) else { return Ok(()) };
+        if self.array_elem(q).is_none() {
+            return self.register_global_dtor(rd, a.v);
         }
-        match self.destructed_class(q) {
-            Some(rd) => self.register_global_dtor(rd, a.v),
-            None => Ok(()),
-        }
+        let Some(t) = ast.exprs.lifetime_extended_temporary(m) else {
+            return err(self.loc_of(m), "static temporary without an extending declaration");
+        };
+        let extending = ast.decls.lifetime_extended(t).map_or(t, |l| l.extending);
+        let helper = self.global_array_dtor(extending, a, rd)?;
+        let null = V::C(self.m.const_null(LTy::PTR));
+        self.register_global_dtor_fn(helper, null);
+        Ok(())
     }
 
     // ---- the module trailer --------------------------------------------

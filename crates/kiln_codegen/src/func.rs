@@ -307,6 +307,13 @@ impl Cg<'_> {
         self.f.structor = structor;
         self.f.this_class = sig.this;
         self.set_def_linkage(f, d);
+        if thunk.is_some() && self.m.func(f).comdat.is_some() {
+            // clang `setThunkLinkage`: a thunk has its own comdat, not
+            // its structor's `D5` one.
+            let name = self.m.func(f).name().to_owned();
+            let c = self.m.comdat(&name, kiln_llvm::ComdatKind::Any);
+            self.m.func_mut(f).comdat = Some(c);
+        }
         let kind = ast.decls.get(d).kind();
         if self.is_x86()
             && matches!(
