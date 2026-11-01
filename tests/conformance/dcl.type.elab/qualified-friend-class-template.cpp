@@ -35,3 +35,13 @@ public:
   int peek(S<!B> &o) { return o.p; }
 };
 int b(TV<int>::S<true> &s, TV<int>::S<false> &f) { return s.peek(f) + f.peek(s); }
+
+// A member template of a non-template class, befriended from a class
+// template: substitution leaves it unchanged.
+struct Outer { template <class> struct In; };
+template <class T> class H {
+  int v = 3;
+  template <class> friend struct Outer::In;
+};
+template <class U> struct Outer::In { static int g(H<U> &h) { return h.v; } };
+int z(H<int> &h) { return Outer::In<int>::g(h); }
