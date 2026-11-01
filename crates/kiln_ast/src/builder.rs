@@ -1185,6 +1185,22 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A GNU imaginary constant (clang `ImaginaryLiteral`, `2.0i`): the
+    /// literal `sub` (of the element type) times *i*, of complex type `ty`.
+    pub fn imaginary_literal(&mut self, sub: ExprId, ty: QualType, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(
+            ExprKind::ImaginaryLiteral,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            sub.raw(),
+            0,
+        )
+    }
+
     /// A character literal ([lex.ccon]) with code-unit value `value`.
     pub fn char_literal(&mut self, ty: QualType, kind: CharKind, value: u32, loc: Loc) -> ExprId {
         let deps = self.type_deps(ty);

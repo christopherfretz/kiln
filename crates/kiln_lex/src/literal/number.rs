@@ -85,10 +85,16 @@ pub struct IntegerLiteral<'s> {
     /// The digits, without base prefix and digit separators (the leading
     /// `0` of an octal literal is included).
     pub digits: Cow<'s, str>,
-    /// The integer-suffix (all `false`/`None` with a ud-suffix).
+    /// The integer-suffix (all `false`/`None` with a ud-suffix, unless
+    /// `imaginary`).
     pub suffix: IntSuffix,
     /// The ud-suffix as spelled, if any.
     pub ud_suffix: Option<&'s str>,
+    /// A GNU `i`/`j` imaginary suffix was read (clang
+    /// `NumericLiteralParser::isImaginary`): with a ud-suffix (`1i`,
+    /// `1il`), sema falls back to the GNU imaginary literal when literal
+    /// operator lookup finds nothing.
+    pub imaginary: bool,
 }
 
 impl IntegerLiteral<'_> {
@@ -119,6 +125,9 @@ pub struct FloatLiteral<'s> {
     pub suffix: FloatSuffix,
     /// The ud-suffix as spelled, if any.
     pub ud_suffix: Option<&'s str>,
+    /// A GNU `i`/`j` imaginary suffix was read (see
+    /// [`IntegerLiteral::imaginary`]).
+    pub imaginary: bool,
 }
 
 impl FloatLiteral<'_> {
@@ -293,7 +302,7 @@ fn is_digit_of(b: u8, radix: u32) -> bool {
 
 /// clang's `isValidUDSuffix`: `_` not followed by `_`, or (C++14) a
 /// standard library suffix.
-fn is_valid_ud_suffix(s: &str, std: Std) -> bool {
+pub fn is_valid_ud_suffix(s: &str, std: Std) -> bool {
     if std < Std::Cxx11 || s.is_empty() {
         return false;
     }
@@ -545,6 +554,7 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
     let mut size = IntSize::None;
     let mut fsuffix = FloatSuffix::None;
     let mut has_size = false;
+    let mut imaginary = false;
     let cxx23 = std >= Std::Cxx23;
     while let Some(&c) = b.get(i) {
         let rest = &b[i..];
@@ -605,6 +615,12 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
                 i += 1;
                 true
             }
+            // GNU imaginary constants (once).
+            b'i' | b'I' | b'j' | b'J' if !imaginary => {
+                imaginary = true;
+                i += 1;
+                true
+            }
             _ => false,
         };
         if !ok {
@@ -612,13 +628,19 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
         }
     }
     let mut ud_suffix = None;
-    if i < b.len() {
-        let suffix = &spelling[suffix_begin..];
+    let suffix = &spelling[suffix_begin..];
+    if imaginary && is_valid_ud_suffix(suffix, std) {
+        // clang: `1i`, `1.0if`, `1il` (and the integer `1if`) keep the
+        // parsed suffix pieces and are also ud-suffixed (lookup failure
+        // falls back to the imaginary literal).
+        ud_suffix = Some(suffix);
+    } else if i < b.len() {
         if is_valid_ud_suffix(suffix, std) {
             ud_suffix = Some(suffix);
             unsigned = false;
             size = IntSize::None;
             fsuffix = FloatSuffix::None;
+            imaginary = false;
         } else {
             p.diags.push(LexDiagKind::InvalidSuffix { floating }, suffix_begin, b.len());
             return invalid(p);
@@ -634,6 +656,7 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
             exponent,
             suffix: fsuffix,
             ud_suffix,
+            imaginary,
         })
     } else {
         NumberClass::Integer(IntegerLiteral {
@@ -641,6 +664,7 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
             digits: digits(&spelling[int_range]),
             suffix: IntSuffix { unsigned, size },
             ud_suffix,
+            imaginary,
         })
     };
     let has_error = p.diags.error;

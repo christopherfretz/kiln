@@ -160,6 +160,7 @@ diag_groups! {
     IncrementBool = "increment-bool" [];
     AtomicAlignment = "atomic-alignment" [];
     GnuFoldingConstant = "gnu-folding-constant" [];
+    GnuImaginaryConstant = "gnu-imaginary-constant" [];
     // WP-074
     DeprecatedBuiltins = "deprecated-builtins" [];
     // WP-087

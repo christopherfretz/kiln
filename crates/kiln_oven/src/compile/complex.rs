@@ -89,6 +89,7 @@ impl Compiler<'_> {
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
             ),
             ExprKind::CallExpr => self.builtin_complex_args(e).is_some(),
+            ExprKind::ImaginaryLiteral => true,
             k if k.is_cast() => matches!(
                 ast.exprs.cast_kind(e),
                 CastKind::IntegralRealToComplex
@@ -168,6 +169,13 @@ impl Compiler<'_> {
                     return [self.reg(), self.reg()];
                 };
                 [self.rv_copy(a), self.rv_copy(b)]
+            }
+            ExprKind::ImaginaryLiteral => {
+                // GNU `2.0i`: a `+0` real part (the zero bit pattern).
+                let re = self.reg();
+                self.konst(re, 0);
+                let sub = self.ast().exprs.operand(e);
+                [re, self.rv_copy(sub)]
             }
             _ => self.cx_cast(e, elem),
         }

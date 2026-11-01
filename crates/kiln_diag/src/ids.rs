@@ -1634,6 +1634,7 @@ diag_ids! {
     sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";
     sema_increment_complex = Extension [C2yExtensions] (1) "'{0}' on an object of complex type is a C2y extension";
     parse_c99_complex = Extension [C99Extensions] (0) "'_Complex' is a C99 extension";
+    sema_imaginary_constant = Extension [GnuImaginaryConstant] (0) "imaginary constants are a GNU extension";
 }
 
 impl DiagId {

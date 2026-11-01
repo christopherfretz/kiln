@@ -192,6 +192,12 @@ impl Cg<'_> {
                     }
                 }
             }
+            ExprKind::ImaginaryLiteral => {
+                // clang `VisitImaginaryLiteral`: a null real part.
+                let i = self.emit_scalar(ast.exprs.operand(e))?;
+                let (r, _) = self.cx_zero(q);
+                Ok((Some(r), Some(i)))
+            }
             ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr => {
                 let (r, i) = self.cx_zero(q);
                 Ok((Some(r), Some(i)))

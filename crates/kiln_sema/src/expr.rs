@@ -1819,13 +1819,14 @@ impl Sema<'_, '_> {
                     let d = w.diag(self, loc);
                     self.emit(d);
                 }
-                if let Ok(v) = u64::try_from(t.value) {
+                let e = if let Ok(v) = u64::try_from(t.value) {
                     self.builder().int_literal(t.ty, v, radix, loc)
                 } else {
                     #[allow(clippy::cast_possible_wrap, reason = "bit pattern")]
                     let cv = self.int_const(t.ty, t.value as i128);
                     self.builder().wide_int_literal(t.ty, cv, radix, loc)
-                }
+                };
+                if lit.imaginary { self.imaginary_literal(e, loc) } else { e }
             }
             Err(err) => {
                 let d = err.diag(self, loc);
@@ -1852,7 +1853,8 @@ impl Sema<'_, '_> {
                     self.emit(d);
                 }
                 let cv = literal::float_const(self, t.ty, t.bits);
-                self.builder().float_literal(t.ty, cv, loc)
+                let e = self.builder().float_literal(t.ty, cv, loc);
+                if lit.imaginary { self.imaginary_literal(e, loc) } else { e }
             }
             Err(err) => {
                 let d = err.diag(self, loc);
@@ -1860,6 +1862,15 @@ impl Sema<'_, '_> {
                 self.recover_err(&[], loc)
             }
         }
+    }
+
+    /// The GNU imaginary constant of real literal `sub` (clang
+    /// `ActOnNumericConstant`: `ext_imaginary_constant`).
+    fn imaginary_literal(&mut self, sub: ExprId, loc: Loc) -> ExprId {
+        self.error(DiagId::sema_imaginary_constant, loc);
+        let ty = self.ety(sub);
+        let cty = self.ast.types.complex(ty);
+        self.builder().imaginary_literal(sub, cty, loc)
     }
 
     /// A character literal ([lex.ccon]).

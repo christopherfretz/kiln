@@ -815,6 +815,11 @@ impl<'a> AstNames<'a> {
                 self.expr(exprs.operand(e), d, out);
                 out.push(')');
             }
+            ExprKind::ImaginaryLiteral => {
+                // clang `StmtPrinter::VisitImaginaryLiteral`.
+                self.expr(exprs.operand(e), d, out);
+                out.push('i');
+            }
             ExprKind::ConvertVectorExpr => {
                 out.push_str("__builtin_convertvector(");
                 self.expr(exprs.operand(e), d, out);
