@@ -28,7 +28,7 @@ const USAGE: &str = "\
 usage: cargo xtask clang-ast <file> [options] [-- <extra clang args>]
 
 Runs clang on <file> and prints its AST in the kiln dump format
-(spec/ast-dump.md), as `kiln -fsyntax-only -fdump-ast` would.
+(spec/ast-dump.md), as `kiln++ -fsyntax-only -fdump-ast` would.
 
 options:
   --compiler=<clang>   the clang to run (default: clang++-19)

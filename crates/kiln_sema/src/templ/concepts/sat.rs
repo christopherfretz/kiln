@@ -671,6 +671,18 @@ impl Sema<'_, '_> {
         s
     }
 
+    /// `e` as written (clang's `printPretty` with the default policy,
+    /// as an expression requirement's substitution failure prints it).
+    pub(crate) fn expr_text_as_written(&self, e: ExprId) -> String {
+        let mut s = String::new();
+        kiln_ast::types::TypeNames::write_expr(
+            &kiln_ast::dump::AstNames::new(&self.ast),
+            e,
+            &mut s,
+        );
+        s
+    }
+
     /// The notes of satisfaction `id`, as a chain starting "because".
     pub(crate) fn sat_notes(&self, id: SatId) -> Vec<Diag> {
         let mut out = Vec::new();

@@ -12,7 +12,7 @@ else: conformance goldens, the dump loader (ast.md §12, WP E), and
 differential tests against clang. It is deterministic, address-free,
 location-free by default, and stable: a format change is a spec change.
 ```
-kiln -fsyntax-only -fdump-ast[=<opt>,...] [-fdump-ast-filter=<substr>] t.cpp   # to stdout
+kiln++ -fsyntax-only -fdump-ast[=<opt>,...] [-fdump-ast-filter=<substr>] t.cpp   # to stdout
   opts: ids        print node ids (#d12, #e5, #s3) and decl references by id
         locs       print @L:C (main file) / @file:L:C (other files) after the class name
         canonical  always print 'sugared':'canonical' pairs
@@ -181,6 +181,8 @@ no category).
 | `CXXInheritedCtorInitExpr`, `ArrayInitLoopExpr`, `ArrayInitIndexExpr`, `OpaqueValueExpr` | class and type; an `ArrayInitLoopExpr` has the `OpaqueValueExpr` and the per-element initializer as children; an `OpaqueValueExpr` prints its source expression under every use (as clang) |
 | `InitListExpr` | `InitListExpr 'type' [field=name]`; `array_filler:` child first, then elements; `field=` names the initialized member of a union |
 | `ImplicitValueInitExpr` | `ImplicitValueInitExpr 'type'` |
+| `DesignatedInitUpdateExpr` | `DesignatedInitUpdateExpr 'type'`; children: the base initializer, then the updater `InitListExpr` of the same type (WP-196) |
+| `NoInitExpr` | `NoInitExpr 'type'` (an updater slot or filler that keeps the base's value) |
 | `DesignatedInitExpr` | `DesignatedInitExpr 'void' [lvalue\|xvalue]` (a designated clause of a dependent `InitListExpr`, in template patterns only; WP-192); children: the initializer, then the array designators' index expressions. The designators are not printed (clang 19 prints none) |
 | WP-064 forms | `CXXScalarValueInitExpr`, `CXXDefaultArgExpr`, `CXXThrowExpr`, `StmtExpr`, `CompoundLiteralExpr`, `OpaqueValueExpr`, `BinaryConditionalOperator`, `OffsetOfExpr`, `CXXTypeidExpr`: class, type, category only. Children: a `CXXDefaultArgExpr` the parameter's default argument; a `CXXThrowExpr` its operand, if any; a `StmtExpr` its `CompoundStmt`; a `CompoundLiteralExpr` its `InitListExpr`; an `OpaqueValueExpr` its source expression; a `BinaryConditionalOperator` the common expression, condition, true arm and false arm; an `OffsetOfExpr` its array index expressions; a `CXXTypeidExpr` its expression operand (a type operand is not printed) |
 | `ConstantExpr` | `ConstantExpr 'type' value=V` (M2: integral, `bool` and enumeration values; WP-133: aggregates of those, `{1, {2, 3}}`); no `value=` on an immediate invocation not evaluated in place (nested in another, or in a constant initializer; WP-133) |
@@ -545,7 +547,7 @@ normalizer rejects their `Attr` kinds). `tests/conformance/ast/stmt.label/`,
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]
 [--all-files] [--filter=<substr>] [-- <clang args>]` prints clang's AST of
-`<file>` in this format: what `kiln -fsyntax-only -fdump-ast[=implicit,
+`<file>` in this format: what `kiln++ -fsyntax-only -fdump-ast[=implicit,
 all-files] [-fdump-ast-filter=]` should print. It is the oracle of
 `expect: ast` goldens (§7) and how a golden is first written. Its
 contract:

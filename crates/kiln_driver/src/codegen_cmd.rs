@@ -23,7 +23,7 @@ use kiln_source::{SourceManager, Span};
 
 use crate::args::{Action, Args, Input, Lang, LinkOptKind};
 use crate::link::Command;
-use crate::pp_cmd::{Job, PpInputs, input_lang};
+use crate::pp_cmd::{Job, PpInputs};
 use crate::toolchain::{StdLib, Tool, Toolchain};
 use crate::{Io, input_std, make_engine, print_version, report_output_error, write_output};
 
@@ -261,7 +261,8 @@ pub fn compile(
 ) -> i32 {
     let phase = Phase::of(args);
     let dsm = SourceManager::new();
-    let drv = make_engine(&dsm, &driver_diag_options(diag_opts), io.stderr.clone(), Some("kiln"));
+    let drv =
+        make_engine(&dsm, &driver_diag_options(diag_opts), io.stderr.clone(), Some(&args.program));
     if phase == Phase::Link && args.compile.emit_llvm {
         Diag::new(DiagId::drv_emit_llvm_link, Span::INVALID).emit(&drv);
         drv.flush();
@@ -535,7 +536,7 @@ fn frontend(
     diag_opts: &DiagOptions,
     io: &Io,
 ) -> Option<String> {
-    let lang = input_lang(input.lang, &input.path);
+    let lang = args.input_lang(input);
     let report = |d: Diag| {
         let sm = SourceManager::new();
         let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);

@@ -471,6 +471,7 @@ impl Sema<'_, '_> {
                     || self.has_deducible_pack_expansion(p, &d))
             {
                 self.resugar_mismatch(p, &mut d);
+                self.resugar_arg_mismatch(a.ty, &mut d);
                 return Err(DeductionFailure::new(r, d));
             }
             if r == Tdk::Success
@@ -961,6 +962,61 @@ impl Sema<'_, '_> {
                     next
                 }
             };
+        }
+    }
+
+    /// The `A` of a mismatch as the argument's type spells it (`I`, not
+    /// the canonical `int`, so the note adds `(aka 'int')`): the
+    /// argument type, unqualified, or what it refers or points to or its
+    /// element, at any depth, as [`Self::resugar_mismatch`] does for `P`.
+    fn resugar_arg_mismatch(&mut self, a: QualType, d: &mut DeducedArgs) {
+        let t = &mut self.ast.types;
+        let Some(second) = d.info.second else { return };
+        let ArgView::Type(sq) = second.view() else { return };
+        let want = t.canonical(sq);
+        let mut starts = vec![a];
+        // An array argument decays for a non-reference `P` (`I *` from
+        // `I[3]`).
+        let mut x = t.unqualified(a);
+        for _ in 0..64 {
+            match t.view(x.ty()) {
+                TypeView::ConstantArray(arr) => starts.push(arr.elem),
+                TypeView::IncompleteArray(e) => starts.push(e),
+                _ => {
+                    let next = t.desugar_once(x);
+                    if next != x {
+                        x = next;
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+        if let Some(&e) = starts.get(1) {
+            starts[1] = t.pointer_to(e);
+        }
+        for mut cur in starts {
+            for _ in 0..64 {
+                let bare = t.unqualified(cur);
+                for cand in [cur, bare] {
+                    if t.canonical(cand) == want {
+                        d.info.second = Some(TemplateArg::ty(cand));
+                        return;
+                    }
+                }
+                cur = match t.view(cur.ty()) {
+                    TypeView::LValueRef(x) | TypeView::RValueRef(x) | TypeView::Pointer(x) => x,
+                    TypeView::ConstantArray(a) => a.elem,
+                    TypeView::IncompleteArray(e) => e,
+                    _ => {
+                        let next = t.desugar_once(cur);
+                        if next == cur {
+                            break;
+                        }
+                        next
+                    }
+                };
+            }
         }
     }
 

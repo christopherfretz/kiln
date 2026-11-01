@@ -1,6 +1,6 @@
 # Preprocessor differential corpus
 
-Every test here is `expect: pp` with the clang oracle: `kiln -E` must produce
+Every test here is `expect: pp` with the clang oracle: `kiln++ -E` must produce
 the same token stream as `clang -E` (rules: `spec/harness.md`
 "pp comparison"). Parity is tracked on `docs/status/pp-parity.md`.
 

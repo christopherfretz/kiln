@@ -342,7 +342,7 @@ Byte-identical to clang 19's `DumpRecordLayout` in non-simple mode:
   `RecDef::pack` included). It will be retired for parser-built ASTs
   once the parser accepts every construct it generates.
 - **Corpus (`tests/layout/*.cpp`, `kiln_driver/tests/record_layouts.rs`).**
-  At least 40 programs parsed by the real front end. `kiln -fsyntax-only
+  At least 40 programs parsed by the real front end. `kiln++ -fsyntax-only
   -fdump-record-layouts` must equal `clang -Xclang
   -fdump-record-layouts-complete` byte for byte on both triples, block by
   block, after dropping clang's builtin records (`__NSConstantString_tag`,
@@ -350,7 +350,7 @@ Byte-identical to clang 19's `DumpRecordLayout` in non-simple mode:
   checks that kiln accepts each program. Base classes join the corpus
   once the parser accepts base clauses (WP-065).
 - **`kiln_driver/tests/vtable_layouts.rs`** (WP-078b). Small programs
-  run through the real front end. `kiln -fsyntax-only
+  run through the real front end. `kiln++ -fsyntax-only
   -fdump-vtable-layouts` must match clang's emission-time dump as a set
   of blocks, with `Original map` sections removed (spec/driver.md).
 
@@ -439,7 +439,7 @@ up to N.
   expanded recursively like a member, with no footer. The fields follow.
 - **Footer.** It prints `dsize`/`nvsize`, which differ from `sizeof`
   for a non-POD class.
-- **Driver.** `kiln -fsyntax-only -fdump-record-layouts[-complete]`
+- **Driver.** `kiln++ -fsyntax-only -fdump-record-layouts[-complete]`
   (driver.md) calls `dump_all_record_layouts`. It dumps every class of
   `record_definitions(ast)`, the order clang 19's
   `-fdump-record-layouts-complete` uses:

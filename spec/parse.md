@@ -882,7 +882,7 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   `expected ']'` / `to match this '['` pair. The argument-count error of
   an `assume` without `(...)` still comes from Sema.
 
-## 7. Driver (`kiln -fsyntax-only [-fdump-ast]`)
+## 7. Driver (`kiln++ -fsyntax-only [-fdump-ast]`)
 - The driver builds the preprocessor exactly as `-E` does
   (`Job::build_preprocessor`: search list, predefines, `-D`/`-U`/
   `-include`, `#if` evaluation, feature queries; spec/driver.md). It

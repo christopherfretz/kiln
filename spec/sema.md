@@ -2166,8 +2166,26 @@ clang 19's C99/GNU complex support in C++:
     again merges with its prior initialization, seeded from the prior
     `InitListExpr` (`prior_list`). Seeded slots count as explicit unless
     they are fillers (`ImplicitValueInitExpr`, `CXXDefaultInitExpr`).
-    Descending into a subobject that an expression initialized is
-    unsupported, since clang would build `DesignatedInitUpdateExpr`.
+    Descending into a subobject that an expression initialized keeps
+    that object and re-initializes only part of it ([dcl.init.aggr]/4,
+    C99 6.7.9p19): the slot becomes a `DesignatedInitUpdateExpr` whose
+    base is the old initializer and whose updater is an `InitListExpr`
+    of the subobject's type, with `NoInitExpr` in the slots it does not
+    touch (an array updater runs to its highest index, with
+    `NoInitExpr` holes and filler; a union updater holds only the
+    designated member). Lists nested in an updater fill with
+    `NoInitExpr` too (`Sub::update`, clang `FillWithNoInit`), except a
+    braced value, which value-initializes, and a merged prior list,
+    which keeps its own fill (`is_update_list`). The next designator
+    warns `initializer partially overrides prior initialization of
+    this subobject` with the old initializer noted; keeping the old
+    object of a class with a non-trivial destructor is an error
+    (`initializer would partially override prior initialization of
+    object of type T with non-trivial destruction`). A full override
+    of an initializer that may have side effects notes that they will
+    not occur. Codegen emits the base and then the updater; the Oven
+    does not evaluate it, as clang's evaluator does not (`constexpr
+    variable must be initialized by a constant expression`).
     - out of declaration order: `-Wreorder-init-list` (ExtWarn, in
       `-Wreorder`), at the later value, with the note
       `previous initialization for field` on the earlier one. It covers
@@ -2176,6 +2194,17 @@ clang 19's C99/GNU complex support in C++:
       value, with the note `previous initialization is here`. A union
       initialized through a different member is the DefaultError form,
       at the designator.
+    - Order and override diagnostics are substitution failures
+      whatever their severity (clang's `SFINAEFailure` ExtWarns;
+      `is_sfinae_failure`), so a constraint or a SFINAE'd signature
+      using them fails. The `-Wc99-designator` warnings are not.
+    - In overload resolution ([over.ics.list]/8), a list that
+      initializes a subobject twice converts to no aggregate
+      (`designators_override`, clang `InOverloadResolution`): the same
+      path, a whole object after a part of it, a part after the whole,
+      another member of the same union, through anonymous members.
+      Order does not matter there, and a braced value's own designators
+      are not compared.
     - an unknown field: `field designator 'q' does not refer to any field
       in type T`, at the name.
     - a field designator into a scalar: `field designator cannot
@@ -2199,18 +2228,18 @@ clang 19's C99/GNU complex support in C++:
     designators are carried in `DesignatedInitExpr`s and in the written
     form of non-dependent lists. The semantic checks run on the
     instantiated type at the written locations. A designated pack
-    expansion gives one designated clause per element.
+    expansion gives one designated clause per element. A non-dependent
+    list that the instantiation shares rather than rebuilds keeps the
+    order and override diagnostics its definition check issued
+    (`designator_rewarn`), and each instantiation issues them again
+    under its instantiation note (`reissue_designator_warnings`), as
+    clang's rebuilt list does; a rebuilt list warns again by itself.
+    Neither is deduplicated against the definition's.
   - Deviations:
-    - A non-dependent designated list in a template pattern is not
-      re-checked at instantiation, so clang's repeated
-      `-Wreorder-init-list` under the instantiation note is missing.
     - A range designator whose clause has side effects evaluates the
       clause once per element. clang's codegen refuses it ("cannot
       compile this GNU array range designator extension yet"), and GCC
       evaluates it once.
-    - Reorder and override warnings do not cause a substitution failure
-      (clang's are warnings too, but SFINAE-visible as errors under
-      `-Werror`).
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
