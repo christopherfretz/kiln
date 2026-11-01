@@ -4020,7 +4020,16 @@ impl Sema<'_, '_> {
         let first = self.ast.first(d);
         // (Not a class a friend declaration introduced: clang leaves it
         // unreferenced once a later declaration makes the name visible.)
-        if first != d && self.ast.decls.get(first).misc().friend() != FriendKind::Undeclared {
+        // (Nor a member of an implicit specialization explicitly
+        // specialized: lookup finds the specialization, [temp.expl.spec]/1.)
+        let explicit_member = self
+            .ast
+            .member_spec_info(first)
+            .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization);
+        if first != d
+            && self.ast.decls.get(first).misc().friend() != FriendKind::Undeclared
+            && !explicit_member
+        {
             self.ast.decls.set_flags(first, DeclFlags::REFERENCED);
         }
     }
