@@ -27,8 +27,8 @@ no third-party crate. It contains no `unsafe` (`#![forbid(unsafe_code)]`).
 
 ### 2.1 The id table
 
-`DiagId` is a `#[repr(u16)]` enum generated from one table in `src/ids.rs`.
-Each row is
+`DiagId` is a `#[repr(u16)]` enum generated from the table in
+`src/ids/*.rs` (laid out per §2.4). Each row is
 
 ```text
 name = Kind [Group] (nargs) "template";
@@ -39,7 +39,10 @@ name = Kind [Group] (nargs) "template";
   for shared notes). The name is the stable identifier: it appears verbatim
   in JSON output and test expectations, and MUST NOT be renamed once
   merged. `DiagId::ALL[id as usize] == id`; `DiagId::from_name` inverts
-  `name`.
+  `name`. `ALL` follows the table: area files in file-name order, rows by
+  name within a file, then any tail rows (§2.4). Discriminants are
+  internal indexes only (never serialized), so adding an id may renumber
+  others.
 - `Kind` (`DiagKind`) fixes the class and default severity, mirroring
   clang's TableGen classes:
 
@@ -82,9 +85,62 @@ render as nothing; a malformed template renders its remaining text
 verbatim. The builder (§6) debug-asserts that the number of `.arg()` calls
 equals `nargs`.
 
+### 2.4 Table layout (WP-236)
+
+The id and group tables are split into area files so parallel branches
+add rows to different files, or at least different places in a file,
+instead of all appending to one table end. `build.rs` concatenates
+`src/ids/*.rs` and `src/groups/*.rs` (file-name order, comments and blank
+lines dropped) into the `diag_id_table!` / `diag_group_table!` macros,
+which `src/ids.rs` / `src/groups.rs` expand together with their *tail*
+block, a `diag_id_table! { }` / `diag_group_table! { }` at the end of the
+file. Area files hold one row per line, sorted by name; a comment directly
+above a row belongs to it; each file starts with a generated header.
+
+- Id `P_rest` lives in `ids/P.rs`, `P` being the text before its first
+  `_`. A large area is split by name range into `ids/P_<lo>_<hi>.rs`
+  (`sema_a_b`, `sema_c_d`, …): the row goes to the file with the greatest
+  `lo` not above the first letter of `rest` (the first range also takes
+  anything below its `lo`). Ranges of an area MUST be contiguous, and an
+  area is either one file or ranges, never both. A new prefix gets a new
+  `P.rs`.
+- Groups with subgroups, and `Pedantic`, live in `groups/umbrellas.rs`,
+  which names children by variant. A leaf group lives in
+  `groups/<prefix>.rs` for the prefix of one of the ids naming it (it stays
+  in its current file while that holds; otherwise the most common prefix,
+  ties to the smaller name), and in `groups/misc.rs` if no id names it.
+- The tail blocks and `ids/_pending.rs` / `groups/_pending.rs` are landing
+  zones: rows there compile, but MUST be moved before merging.
+
+`cargo xtask diag-split` moves tail and `_pending` rows into their area
+files and re-sorts and re-places every row; it is idempotent.
+`cargo xtask diag-split --check` (run by `cargo xtask ci`) fails if a tail
+or `_pending` file holds rows or a row or file is out of place.
+`cargo xtask diag-split --replay [<base> <head>]` re-applies the table
+edits of `<base>..<head>` to the working tree by row name (3-way: added,
+changed and removed rows; for a group changed on both sides, subgroup
+additions and removals are merged), reporting rows changed on both sides
+as conflicts. With no revisions it runs inside a merge: base is
+`merge-base HEAD MERGE_HEAD`, head is `HEAD`, and a conflicted or
+pre-split `ids.rs`/`groups.rs`, and any conflicted area file, is first
+reset to `MERGE_HEAD`'s version. Code outside the tables that the branch
+changed in `ids.rs`/`groups.rs` is not replayed; the tool warns.
+
+Bringing a branch up to date with main when the tables conflict
+(including a branch from before the split):
+
+```text
+git merge origin/main             # conflicts in kiln_diag ids/groups files
+cargo xtask diag-split --replay   # takes main's tables, replays your rows
+git add crates/kiln_diag && git commit
+```
+
+To add ids by hand, append rows to the tail block (or `_pending.rs`) and
+run `cargo xtask diag-split`, or write them straight into the area file.
+
 ## 3. Warning groups
 
-`Group` is generated from a table in `src/groups.rs`:
+`Group` is generated from the table in `src/groups/*.rs` (§2.4):
 `Variant = "clang-name" [Subgroup, ...];`. A group's members are the ids
 naming it, the members of its subgroups (transitively), and, for
 `pedantic` only, every `Extension`/`ExtWarn` id without a group (clang
