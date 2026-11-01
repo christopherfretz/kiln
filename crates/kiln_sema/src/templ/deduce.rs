@@ -843,10 +843,6 @@ impl Sema<'_, '_> {
                 let TypeView::Complex(ae) = av else { return mismatch(d) };
                 self.deduce_ty(pe, ae, TdfFlags::NONE, d, next)
             }
-            TypeView::Atomic(pe) => {
-                let TypeView::Atomic(ae) = av else { return mismatch(d) };
-                self.deduce_ty(pe, ae, TdfFlags::NONE, d, next)
-            }
             TypeView::Vector { elem: pe, count: pc, kind: pk } => {
                 let TypeView::Vector { elem: ae, count: ac, kind: ak } = av else {
                     return mismatch(d);
@@ -878,7 +874,9 @@ impl Sema<'_, '_> {
             }
             // Non-deduced contexts ([temp.deduct.type]/5): the
             // qualifier of a qualified-id, `decltype`, pack indexing,
-            // type transforms.
+            // type transforms. clang 19 also does not deduce through
+            // `_Atomic(T)` (its `DeduceTemplateArgumentsByTypeMatch`
+            // treats it as non-deduced: "couldn't infer template argument").
             TypeView::DependentName { .. }
             | TypeView::DependentTemplateSpecialization { .. }
             | TypeView::DependentDecltype(_)
@@ -887,7 +885,8 @@ impl Sema<'_, '_> {
             | TypeView::TypeOf { .. }
             | TypeView::UnaryTransform { .. }
             | TypeView::DependentBitInt { .. }
-            | TypeView::Splice { .. } => Tdk::Success,
+            | TypeView::Splice { .. }
+            | TypeView::Atomic(_) => Tdk::Success,
             // A dependent record (a member of the current instantiation)
             // and anything else: exact match.
             _ => {
