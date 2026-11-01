@@ -794,6 +794,7 @@ impl Sema<'_, '_> {
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
         let base = self.type_from_declspec(ds);
+        let base = self.apply_declspec_vector_attrs(base, ds);
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if let Some((s, loc)) = ds.storage
             && s != StorageSpec::Register
@@ -808,7 +809,7 @@ impl Sema<'_, '_> {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
         }
-        let mut attrs = ds.attrs.clone();
+        let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
         if self.ast.types.is_array(ty) {
@@ -943,20 +944,8 @@ impl Sema<'_, '_> {
                 }
             }
             Initializer::Expr(e) => {
-                if self.is_err_expr(e) {
-                    e
-                } else {
-                    match conv::implicit_convert(self, e, p.ty, ConvCtx::Argument) {
-                        Ok(x) => x,
-                        Err(err) => {
-                            let d = err.diag_at(self, p.loc);
-                            let d = self.with_param_note(d, p);
-                            self.emit(d);
-                            let loc = self.ast.exprs.get(e).loc();
-                            self.recover(p.ty, &[e], loc)
-                        }
-                    }
-                }
+                let note = self.with_param_note_only(p);
+                self.convert_default_arg(e, p.ty, p.loc, note)
             }
             Initializer::Paren(v, l, _) => self.recover(p.ty, &v, l),
         };
@@ -1002,13 +991,59 @@ impl Sema<'_, '_> {
 
     /// Attaches clang's "passing argument to parameter 'p' here" note.
     pub(crate) fn with_param_note(&self, d: kiln_diag::Diag, p: &ParamInfo) -> kiln_diag::Diag {
-        let note = match p.name {
+        d.with_note(self.with_param_note_only(p))
+    }
+
+    /// clang's "passing argument to parameter 'p' here" note for the
+    /// parameter being declared.
+    fn with_param_note_only(&self, p: &ParamInfo) -> kiln_diag::Diag {
+        match p.name {
             None => self.diag(DiagId::note_parameter_here, p.loc),
             Some((n, _)) => self
                 .diag(DiagId::note_parameter_named_here, p.loc)
                 .arg(self.ast.symbols().as_str(n).to_string()),
-        };
-        d.with_note(note)
+        }
+    }
+
+    /// Copy-initializes a parameter of type `pty` declared at `ploc` from
+    /// its default argument `e` ([dcl.fct.default]/5). As clang does
+    /// (`InitializationKind::CreateCopy(Param->getLocation(), ..)`), a
+    /// failure is reported at the parameter with the "passing argument to
+    /// parameter here" note `note`.
+    pub(crate) fn convert_default_arg(
+        &mut self,
+        e: ExprId,
+        pty: QualType,
+        ploc: Loc,
+        note: kiln_diag::Diag,
+    ) -> ExprId {
+        if self.is_err_expr(e) {
+            return e;
+        }
+        let to = if self.ast.types.is_reference(pty) { pty } else { conv::strip_cv(self, pty) };
+        if self.ast.types.as_record(to).is_some()
+            && !self.ast.types.is_dependent(to)
+            && !self.expr_is_type_dependent(e)
+        {
+            let why = crate::class::DeletedAs::Param(note.clone());
+            let built = if self.ast.types.as_record(self.ety(e)).is_some() {
+                self.construct_from_class(e, to, ConvCtx::Argument, ploc, why)
+            } else {
+                self.convert_to_class(e, to, ConvCtx::Argument, ploc, why)
+            };
+            if let Some(x) = built {
+                return x;
+            }
+        }
+        match conv::implicit_convert(self, e, pty, ConvCtx::Argument) {
+            Ok(x) => x,
+            Err(err) => {
+                let d = err.diag_at(self, ploc).with_note(note);
+                self.emit(d);
+                let loc = self.ast.exprs.get(e).loc();
+                self.recover(pty, &[e], loc)
+            }
+        }
     }
 
     /// clang's "passing argument to parameter 'p' here" note (the name is
@@ -1401,6 +1436,10 @@ impl Sema<'_, '_> {
             self.templ.cur = None;
             return None;
         }
+        // GNU vector attributes among the decl-specifiers apply to the
+        // decl-specifier type (clang `processTypeAttrs(TAL_DeclSpec)`),
+        // so `__attribute__((vector_size(8))) short f();` returns a vector.
+        let base = self.apply_declspec_vector_attrs(base, ds);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {
@@ -1449,7 +1488,7 @@ impl Sema<'_, '_> {
         if d.qualifier.is_none() {
             self.check_template_param_shadow(name, name_loc);
         }
-        let mut attrs = ds.attrs.clone();
+        let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         if let Some(op) = d.op_name
             && (ds.is_typedef() || !self.ast.types.is_function(ty))

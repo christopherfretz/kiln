@@ -708,6 +708,9 @@ impl Sema<'_, '_> {
             }
             return e;
         }
+        if self.is_vector_type(ty) {
+            return self.vector_list_init(ty, l);
+        }
         if let Some(e) =
             self.list_construct(ty, l, InitStyle::CopyList, entity.unwrap_or(l.lbrace), None)
         {
@@ -742,6 +745,56 @@ impl Sema<'_, '_> {
         if let Some(extra) = l.items.get(1) {
             let at = entity.unwrap_or_else(|| extra.value.loc(self));
             let msg = self.diag(DiagId::sema_excess_initializers, at).arg("2");
+            self.emit(msg);
+        }
+        self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
+    }
+
+    /// List-initialization of a vector (clang `InitListChecker::
+    /// CheckVectorType`, C++ rules): a leading non-list vector element
+    /// copy-initializes the whole vector; otherwise each element
+    /// initializes one vector element, the rest are zero (no filler in
+    /// the list, as clang), and an element past the last is "excess
+    /// elements in vector initializer".
+    fn vector_list_init(&mut self, ty: QualType, l: &InitList) -> ExprId {
+        let top = self.ast.types.desugar_top(ty);
+        let (elem, count) = match self.ast.types.view(top.ty()) {
+            kiln_ast::types::TypeView::Vector { elem, count, .. } => (elem, count as usize),
+            _ => return self.recover(ty, &[], l.lbrace),
+        };
+        let mut inits = Vec::new();
+        let mut pos = 0;
+        if let Some(InitItem { value: InitValue::Expr(e), designator }) = l.items.first()
+            && designator.is_empty()
+            && self.is_vector_type(self.ety(*e))
+        {
+            let at = self.begin_loc(*e);
+            let x = self.init_from_expr(ty, *e, ConvCtx::Initialization, at);
+            if self.is_err_expr(x) {
+                return self.recover(ty, &[x], l.lbrace);
+            }
+            inits.push(x);
+            pos = 1;
+        } else {
+            while pos < count && pos < l.items.len() {
+                let item = &l.items[pos];
+                if !item.designator.is_empty() {
+                    self.unsupported("a designator in a vector initializer", item.value.loc(self));
+                    return self.recover(ty, &[], l.lbrace);
+                }
+                let x = match &item.value {
+                    InitValue::Expr(e) => {
+                        self.check_narrowing(*e, elem, elem);
+                        self.convert_for_init(*e, elem, ConvCtx::Initialization)
+                    }
+                    InitValue::List(inner) => self.init_from_list(elem, inner),
+                };
+                inits.push(x);
+                pos += 1;
+            }
+        }
+        if let Some(extra) = l.items.get(pos) {
+            let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
             self.emit(msg);
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)

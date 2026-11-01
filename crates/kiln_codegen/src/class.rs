@@ -118,7 +118,13 @@ impl Cg<'_> {
         }
         let params: Vec<DeclId> = ast.lists.iter(fd.params).collect();
         let pty = |p: DeclId| ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let has_default = |p: DeclId| ast.decls.param(p).is_some_and(|x| x.default_arg.is_some());
+        // A default not instantiated yet ([temp.inst]/12) still counts.
+        let has_default = |p: DeclId| {
+            ast.decls.param(p).is_some_and(|x| {
+                x.default_arg.is_some()
+                    || x.flags & kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING != 0
+            })
+        };
         let is_class = |t: QualType| ast.types.as_record(t).is_some_and(|r| ast.first(r) == class);
         if kind == DeclKind::CXXConstructor {
             let &p0 = params.first()?;
