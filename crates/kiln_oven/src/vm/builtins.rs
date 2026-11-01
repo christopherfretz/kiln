@@ -533,7 +533,7 @@ impl Oven {
                 let v = self.load(s, t, ak::READ)?;
                 self.store(d, t, v, ak::ASSIGN, false)?;
             } else {
-                self.copy_obj(d, s, t, false)?;
+                self.copy_obj(d, s, t, false, None)?;
             }
         }
         Ok(())

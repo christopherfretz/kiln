@@ -151,6 +151,9 @@ sema_reference_var_requires_init = Error (1) "declaration of reference variable 
 sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
 sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";
+// WP-204: clang's `checkExprLifetime` for a return ([stmt.return],
+// spec/sema-class.md §5.6).
+sema_ret_stack_addr = Warning [ReturnStackAddress] (3) "{0:address of|reference to} stack memory associated with {1:local variable|parameter} {2} returned";
 sema_return_has_expr = Error (1) "void function '{0}' should not return a value";
 sema_return_in_ctor_handler = Error (0) "return in the catch of a function try block of a constructor is illegal";
 sema_return_init_list = Error (1) "void function '{0}' must not return a value";

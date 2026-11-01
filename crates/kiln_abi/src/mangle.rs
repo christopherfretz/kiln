@@ -17,6 +17,7 @@ use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView};
 use kiln_source::fx::FxHashMap;
 
+mod constraint;
 mod dep;
 
 /// The ids of unnamed classes that have no mangling number (`$_N`; clang
@@ -108,7 +109,23 @@ fn effective_ctx(ast: &Ast, d: DeclId) -> Option<DeclId> {
     if let Some(p) = closure_param_ctx(ast, d) {
         return ast.decls.get(p).ctx();
     }
+    if let Some(c) = constrained_friend_class(ast, d) {
+        return Some(c);
+    }
     ast.decls.get(d).ctx()
+}
+
+/// The class of a member-like constrained friend ([temp.friend]/9,
+/// clang `isMemberLikeConstrainedFriend`): a non-template friend
+/// function with a requires-clause mangles in its class's scope, its
+/// name prefixed by `F` (`_ZN1XIiEF2frES0_Q1CIT_E`).
+fn constrained_friend_class(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    if !is_function_kind(ast.decls.get(d).kind()) || !ast.templates.trailing_requires.contains(d) {
+        return None;
+    }
+    let lex = ast.decls.lexical_ctx(d)?;
+    (is_record_kind(ast.decls.get(lex).kind()) && ast.decls.get(d).ctx() != Some(lex))
+        .then_some(lex)
 }
 
 /// The parameter whose default argument created closure type `d`.
@@ -754,11 +771,27 @@ struct Mangler<'a, 'b> {
     subs: Vec<Sub>,
     /// A structor comdat name: the base-object variant is `C5`/`D5`.
     comdat: bool,
+    /// Template parameters mangle with their declared depth (`TL0__`):
+    /// inside type-constraints and requires-clauses (constraint.rs).
+    real_depth: bool,
+    /// Comparing template-heads (constraint.rs): depths are ignored.
+    head_only: bool,
+    /// The requires-clause being mangled, for `fp`/`fL` references.
+    req: Option<constraint::ReqCtx>,
 }
 
 impl<'a, 'b> Mangler<'a, 'b> {
     fn new(ast: &'a Ast, anon: &'b mut AnonIds, prefix: &str) -> Self {
-        Mangler { ast, anon, out: String::from(prefix), subs: Vec::new(), comdat: false }
+        Mangler {
+            ast,
+            anon,
+            out: String::from(prefix),
+            subs: Vec::new(),
+            comdat: false,
+            real_depth: false,
+            head_only: false,
+            req: None,
+        }
     }
 
     /// The semantic parent of `d`, looking through linkage
@@ -842,6 +875,17 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
         if p.variadic() {
             self.out.push('z');
+        }
+        // A trailing requires-clause (clang 18+, cxx-abi issue 24): the
+        // template pattern's, or an instantiated member's (uninstantiated)
+        // copy.
+        let trailing = ast
+            .templates
+            .trailing_requires
+            .get(src)
+            .or_else(|| ast.templates.trailing_requires.get(d));
+        if let Some(&r) = trailing {
+            self.requires_clause(r, true);
         }
     }
 
@@ -998,6 +1042,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if internal_by_storage(self.ast, d)
             && !in_anon_ns(self.ast, d)
             && self.ast.decls.decomp_bindings(d).is_none()
+            && anon_union_var_field(self.ast, d).is_none()
         {
             self.out.push('L');
         }
@@ -1102,6 +1147,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// <unqualified-name>: operator, constructor, destructor, conversion
     /// or literal-operator names, else the <source-name>.
     fn unqualified(&mut self, d: DeclId, v: Structor) {
+        if constrained_friend_class(self.ast, d).is_some() {
+            self.out.push('F');
+        }
         self.unqualified_untagged(d, v);
         // <abi-tags> follow the unqualified name (clang `writeAbiTags`).
         if let Some(tags) = abi_tags(self.ast, d) {
@@ -1188,6 +1236,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     && let Some(l) = ast.closure_lambda(d)
                 {
                     self.closure_name(d, l);
+                } else if nm.is_empty()
+                    && let Some(f) = anon_union_var_field(ast, d)
+                {
+                    // A variable of anonymous union type is named by the
+                    // union's first named data member (clang
+                    // `mangleUnqualifiedName`, no `L`).
+                    let fname = decl_name(ast, f);
+                    self.source_name(&fname);
                 } else if nm.is_empty() {
                     // An unnamed class without a typedef name for linkage.
                     self.out.push_str("Ut_");
@@ -1294,19 +1350,22 @@ impl<'a, 'b> Mangler<'a, 'b> {
             if let Some(&p) = p
                 && self.needs_param_decl(p, a)
             {
-                self.template_param_decl(p);
+                self.type_or_template_param_decl(p);
             }
             self.template_arg(a);
+        }
+        if let Some(r) = self.head_requires(t) {
+            self.requires_clause(r, false);
         }
         self.out.push('E');
     }
 
     /// clang `needToMangleTemplateParam`.
-    fn needs_param_decl(&self, p: DeclId, a: ArgView) -> bool {
+    fn needs_param_decl(&mut self, p: DeclId, a: ArgView) -> bool {
         let ast = self.ast;
         match ast.decls.get(p).kind() {
-            // A constrained type parameter's `Tk <type-constraint>` is not
-            // mangled yet.
+            DeclKind::TemplateTypeParm => return self.is_constrained_type_parm(p),
+            DeclKind::TemplateTemplateParm => return self.template_head_differs(p, a),
             DeclKind::NonTypeTemplateParm => {}
             _ => return false,
         }
@@ -1404,7 +1463,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
                 let key = Sub::TemplateParm(depth, index);
                 if !self.try_sub(key) {
-                    self.template_param(index);
+                    self.template_param_at(depth, index);
                     self.subs.push(key);
                 }
             }
@@ -1863,6 +1922,23 @@ impl<'a, 'b> Mangler<'a, 'b> {
             && self.member_zero(img, first, at)
     }
 
+    /// A template parameter: its depth appears inside constraints only
+    /// (`T [L <depth - 1> _] [<index - 1>] _`, clang
+    /// `mangleTemplateParameter`).
+    fn template_param_at(&mut self, depth: u32, index: u32) {
+        if self.real_depth && !self.head_only && depth > 0 {
+            self.out.push_str("TL");
+            self.out.push_str(&(depth - 1).to_string());
+            self.out.push('_');
+            if index > 0 {
+                self.out.push_str(&(index - 1).to_string());
+            }
+            self.out.push('_');
+        } else {
+            self.template_param(index);
+        }
+    }
+
     fn template_param(&mut self, index: u32) {
         if index == 0 {
             self.out.push_str("T_");
@@ -1927,6 +2003,21 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             // An undeduced `auto` / `decltype(auto)` is not a candidate
             // (clang `isTypeSubstitutable`, ABI compat > Clang 6).
+            // A constrained placeholder (`Dk`/`DK <type-constraint>`) is
+            // not a candidate either.
+            TypeView::Auto { keyword, concept: Some(c), args, .. } => {
+                self.out.push_str(match keyword {
+                    kiln_ast::types::AutoKeyword::DecltypeAuto => "DK",
+                    _ => "Dk",
+                });
+                let args: Vec<ArgView> = args
+                    .map(|l| {
+                        ast.types.args(l).iter().map(kiln_ast::types::TemplateArg::view).collect()
+                    })
+                    .unwrap_or_default();
+                self.type_constraint(c, &args);
+                return;
+            }
             TypeView::Auto { keyword, .. } => {
                 self.out.push_str(match keyword {
                     kiln_ast::types::AutoKeyword::DecltypeAuto => "Dc",
@@ -1997,10 +2088,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push('_');
             }
             TypeView::TemplateTypeParm(d) => {
-                let idx = ast.template_parm(d).map_or(0, |p| u32::from(p.index));
-                self.template_param(idx);
+                let (depth, idx) = ast
+                    .template_parm(d)
+                    .map_or((0, 0), |p| (u32::from(p.depth), u32::from(p.index)));
+                self.template_param_at(depth, idx);
             }
-            TypeView::CanonTemplateTypeParm { index, .. } => self.template_param(index),
+            TypeView::CanonTemplateTypeParm { depth, index, .. } => {
+                self.template_param_at(depth, index);
+            }
             TypeView::PackExpansion { pattern, .. } => {
                 self.out.push_str("Dp");
                 self.ty(pattern);
@@ -2232,5 +2327,28 @@ fn read_bits(bytes: &[u8], start: u64, width: u32) -> Vec<u64> {
 fn read_le(bytes: &[u8], at: u64, n: u32) -> u128 {
     (0..u64::from(n.min(16))).rev().fold(0u128, |acc, i| {
         (acc << 8) | u128::from(bytes.get((at + i) as usize).copied().unwrap_or(0))
+    })
+}
+
+/// For the unnamed variable of a namespace-scope anonymous union, the
+/// union's first named data member, looking through nested anonymous
+/// records (clang `getFirstNamedDataMember`).
+fn anon_union_var_field(ast: &Ast, d: DeclId) -> Option<DeclId> {
+    if ast.decls.get(d).kind() != DeclKind::Var || !decl_name(ast, d).is_empty() {
+        return None;
+    }
+    first_named_field(ast, ast.types.as_record(ast.decls.get(d).ty()?)?)
+}
+
+fn first_named_field(ast: &Ast, r: DeclId) -> Option<DeclId> {
+    if !decl_name(ast, r).is_empty() {
+        return None;
+    }
+    ast.members(r).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).find_map(|f| {
+        if decl_name(ast, f).is_empty() {
+            first_named_field(ast, ast.types.as_record(ast.decls.get(f).ty()?)?)
+        } else {
+            Some(f)
+        }
     })
 }

@@ -22,6 +22,8 @@ use kiln_source::Loc;
 use super::special::SpecialKind;
 use crate::Sema;
 
+mod stack_addr;
+
 /// Where a reference is bound, for the diagnostics of a temporary that
 /// would not live long enough (clang `checkExprLifetime`'s entity kinds).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
