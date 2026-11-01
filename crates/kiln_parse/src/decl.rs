@@ -365,11 +365,7 @@ impl Parser<'_, '_> {
     fn parse_using_declaration(&mut self, using_loc: Loc, leading_if_exists: bool) -> Vec<DeclId> {
         let mut out = Vec::new();
         loop {
-            if let Some(l) = self.eat_kw(Kw::Typename) {
-                self.unsupported("'typename' using-declarators", l);
-                self.skip_to_semi();
-                return out;
-            }
+            let typename = self.eat_kw(Kw::Typename).is_some();
             let Ok(qual) = self.parse_nested_name_nns() else {
                 self.skip_to_semi();
                 return out;
@@ -404,9 +400,14 @@ impl Parser<'_, '_> {
             }
             self.parse_attributes(&mut attrs);
             let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
-            if let Some(d) =
+            let d = if typename {
+                self.s.act_on_using_typename_declarator(
+                    using_loc, qual, name, nl, if_exists, ellipsis,
+                )
+            } else {
                 self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists, ellipsis)
-            {
+            };
+            if let Some(d) = d {
                 out.push(d);
             }
             if self.eat(Punct::Comma).is_none() {
@@ -1703,6 +1704,7 @@ impl Parser<'_, '_> {
                     pd.ellipsis.is_some(),
                     constraint,
                     pname,
+                    d.qualifier,
                 );
                 ds.base = TypeSpecKind::Named;
                 ds.named = Some(ty);

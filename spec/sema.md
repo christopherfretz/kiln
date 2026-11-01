@@ -698,6 +698,19 @@ specification as written (`TypeNames` prints ` noexcept`,
     the qualifier, and one `UsingShadow` per declaration found is entered
     in the current scope (a local scope's `locals`, or the context's
     table).
+  - `using typename q::x;` ([namespace.udecl]/1, /12;
+    `act_on_using_typename_declarator`, WP-169): with a dependent
+    qualifier in a class member specification, the declarator is kept
+    as a member alias `x` of the dependent type `typename q::x`
+    (recorded in `Sema::using_typename`); at instantiation
+    (`templ/class.rs` `member_using_typename`) it is redone as an
+    ordinary using-declarator, and references to the alias in
+    instantiated members resolve to the type of its shadow's target
+    (`subst/types.rs` `decl_type`). With a non-dependent qualifier, or
+    at instantiation, a target that is not a type reports `'typename'
+    keyword used on a non-type` at the name, with the `target of using
+    declaration` note (clang's `err_using_typename_non_type`). Kiln has
+    no `UnresolvedUsingTypename` node; the dump shows the alias.
 - **Conflicts** ([namespace.udecl]/11, [basic.scope.scope]/4), as in
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:

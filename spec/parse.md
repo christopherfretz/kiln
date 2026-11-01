@@ -411,6 +411,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     leading `auto` and diagnosed otherwise by Sema.
   - `decltype ( expression )` and `decltype(auto)` are type specifiers;
     the operand is unevaluated.
+    A concept name followed by `auto` or `decltype ( auto` begins a
+    declaration in the statement disambiguator (`tentative.rs`), so
+    `std::same_as<X> decltype(auto) r = e;` in a block is a constrained
+    placeholder declaration (WP-169).
   - `_Atomic ( type-id )` (a clang extension in C++, C11 6.7.2.4) is a
     type specifier, built by `Sema::act_on_atomic_type` (array, function,
     reference, atomic and qualified operands are

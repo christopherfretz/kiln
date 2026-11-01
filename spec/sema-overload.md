@@ -867,11 +867,21 @@ Where the code differs from (or details) the design above:
   conversion (clang `FindConversionForRefInit`), so the candidate is not
   viable; a declaration's initialization still diagnoses the deleted
   function.
-- **[over.match.list].** Phase 1 runs only when an initializer-list
-  constructor is viable for the arguments (`init_list_phase1_viable`; an
-  empty list with a default constructor value-initializes); otherwise
-  phase 2 over all constructors. Building the `std::initializer_list`
-  object itself is still unsupported.
+- **[over.match.list].** `init_list_ctor_init` (`init.rs`) runs phase 1
+  as overload resolution over the initializer-list constructors and
+  constructor templates (a template's dependent `initializer_list<U>` is
+  recognized through `initializer_list_param` and `U` deduced from the
+  list), with the whole list as the one argument; an empty list with a
+  default constructor value-initializes. When nothing is viable,
+  `construct_class` runs phase 2 over all constructors with the elements;
+  a nested braced-init-list element is a placeholder argument
+  (`act_on_braced_arg`) as in a call (WP-169). The /3.1.1 bit is
+  `StandardConversion::std_init_list` (set on the `std::initializer_list`
+  row of [over.ics.list], for a standard or user-defined sequence);
+  `compare_ics` checks it after the /2 class and before /3.2, so
+  `S({1, 2})` prefers `S(initializer_list<int>)` to
+  `S(const int (&)[2])` (clang). The array-bound tie-breaker of /3.1.2 is
+  not implemented.
 - **Casts.** `static_cast` / functional / C-style casts from a class to a
   non-class type run the direct-initialization's user-defined conversion
   (explicit conversion functions are candidates) with clang's
