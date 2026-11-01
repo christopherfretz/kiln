@@ -26,6 +26,17 @@ pub(crate) enum Opaque {
     Lv(LV),
 }
 
+/// The callee of [`Cg::call_vals_to`] (clang `CGCallee`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Callee {
+    /// A function pointer already computed.
+    Value(V),
+    /// Virtual method `md` of the object at `this` (alignment `align`):
+    /// its vtable slot is loaded after the arguments are lowered
+    /// (clang `CGCallee::forVirtual`).
+    Virtual { md: DeclId, this: V, align: u64 },
+}
+
 /// An lvalue: an address, its source type and the bit-field access.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LV {
@@ -1974,6 +1985,24 @@ impl Cg<'_> {
         let q = ast.exprs.get(e).ty();
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
+                // clang `AggExprEmitter::withReturnValueSlot`: an ignored
+                // slot gives the call no address, so `EmitCall` makes its
+                // `sret`/coerce temporary after the arguments' `agg.tmp`s.
+                let mut c = e;
+                while ast.exprs.get(c).kind() == ExprKind::ParenExpr {
+                    c = ast.exprs.operand(c);
+                }
+                match ast.exprs.get(c).kind() {
+                    ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
+                        self.emit_call(c, None)?;
+                        return Ok(());
+                    }
+                    ExprKind::CXXMemberCallExpr => {
+                        self.emit_member_call(c, None)?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
             }
@@ -2183,6 +2212,25 @@ impl Cg<'_> {
         dest: Option<Addr>,
         extra: &[Attr],
     ) -> R<Option<V>> {
+        self.call_vals_to(sig, Callee::Value(callee), fid, this, vals, args, dest, extra)
+    }
+
+    /// [`Self::call_vals`] with a callee that may be computed only after
+    /// the arguments are lowered (clang `EmitCall` step 2,
+    /// `prepareConcreteCallee`: a virtual call loads its vtable slot after
+    /// the argument coercions).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_vals_to(
+        &mut self,
+        sig: &Sig,
+        callee: Callee,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        vals: &[CallArg],
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+    ) -> R<Option<V>> {
         self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
         let rq = sig.ret;
         let mut ir_args = Vec::new();
@@ -2218,6 +2266,10 @@ impl Cg<'_> {
             let loc = args.get(i).and_then(|&a| self.loc_of(a));
             self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
         }
+        let callee = match callee {
+            Callee::Value(v) => v,
+            Callee::Virtual { md, this, align } => self.virtual_fn_ptr(md, None, this, align)?,
+        };
         let rty = match &sig.info.ret.kind {
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
                 let c = coerce.clone();

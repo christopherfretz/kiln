@@ -1566,9 +1566,9 @@ impl Cg<'_> {
             // The arguments come first; `prepareConcreteCallee` then
             // loads the slot.
             let vals = self.emit_call_args(&sig, args)?;
-            let fp = self.virtual_fn_ptr(md, None, this.v, this.align)?;
             let (extra, nr) = self.noreturn_extra(Some(md), cfty);
-            let r = self.call_vals(&sig, fp, None, Some(this.v), &vals, args, dest, &extra)?;
+            let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
+            let r = self.call_vals_to(&sig, fp, None, Some(this.v), &vals, args, dest, &extra)?;
             if nr {
                 self.finish_noreturn_call();
             }
