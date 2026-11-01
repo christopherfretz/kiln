@@ -14,7 +14,7 @@ pub(crate) mod props;
 mod record;
 mod subobject;
 
-use kiln_ast::types::{BuiltinType, RecordLayout, TypeView};
+use kiln_ast::types::{BuiltinType, RecordLayout, TypeView, VectorKind};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
@@ -293,9 +293,17 @@ impl<'a> Layouter<'a> {
                 }
                 i
             }
-            TypeView::Vector { elem, count, .. } => {
+            TypeView::Vector { elem, count, kind } => {
+                // clang `getTypeInfo`: an ext_vector of `bool` packs one
+                // bit per element (`isExtVectorBoolType`).
+                let bool_ext = kind == VectorKind::Ext
+                    && matches!(
+                        ast.types.canonical_view(elem),
+                        TypeView::Builtin(BuiltinType::Bool)
+                    );
                 let e = self.type_info(elem);
-                let mut width = e.width.saturating_mul(u64::from(count)).max(8);
+                let bits = if bool_ext { 1 } else { e.width };
+                let mut width = bits.saturating_mul(u64::from(count)).max(8);
                 let mut align = width;
                 if !align.is_power_of_two() {
                     align = align.checked_next_power_of_two().unwrap_or(1 << 63);

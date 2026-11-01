@@ -85,6 +85,13 @@ impl Sema<'_, '_> {
             return;
         }
         self.global_ops.declared = true;
+        // The first new-expression may sit in a template definition; the
+        // implicit declarations (above all an implicit `std::align_val_t`)
+        // are not members of it and must not get dependent types, or every
+        // later `operator new(std::size_t, std::align_val_t)` accepts any
+        // argument (`::operator new(n, nothrow)` was ambiguous after a
+        // `requires { ::new T; }` in `<concepts>`).
+        let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
         let al = self.std_align_val_t();
         self.global_ops.align_val_t = Some(al);
         let size = self.size_type();
@@ -98,6 +105,7 @@ impl Sema<'_, '_> {
                 self.declare_global_op(op, QualType::VOID, params, ExcSpec::BasicNoexcept);
             }
         }
+        self.ast.templates.dependent_depth = saved;
     }
 
     fn declare_global_op(

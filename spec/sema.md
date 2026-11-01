@@ -514,6 +514,21 @@ and returns the scope it names:
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)
+  - `ext_vector_type(N)` / `vector_size(N)` (GNU syntax; `vector.rs`).
+    They take exactly one expression and are consumed into the declared
+    type, never attached. `ext_vector_type` applies only to a typedef or
+    alias-declaration (`'ext_vector_type' attribute only applies to
+    typedefs`); `vector_size` also to the type of a variable, field or
+    parameter (on a function declaration: unsupported). The element
+    type must be integral or floating (`vector_size`: a non-`bool`
+    builtin), else `invalid vector element type 'T'`; N must be an
+    integral constant (`ext_vector_type attribute requires an integer
+    constant`), nonzero (`zero vector size`) and, for `vector_size`, a
+    multiple of the element size (`vector size not an integral multiple
+    of component size`). A value-dependent N (or a dependent element of
+    a `vector_size` vector) gives a `DependentVector` (spec/types.md);
+    after substitution it is diagnosed at the size operand (clang: at
+    the attribute name).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -1229,7 +1244,9 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)
   - aggregates, with brace elision, designators (C++20, in order) and
-    unions (first member, or the designated one)
+    unions (first member, or the designated one); an aggregate class
+    whose list holds one undesignated element of the same or a derived
+    class type is initialized from that element ([dcl.init.list]/3.2)
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **Results** are attached with `act_on_init`. `act_on_uninit` handles

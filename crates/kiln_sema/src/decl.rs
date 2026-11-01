@@ -787,6 +787,9 @@ impl Sema<'_, '_> {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
         }
+        let mut attrs = ds.attrs.clone();
+        attrs.extend(d.attrs.iter().copied());
+        ty = self.apply_vector_attrs(ty, &mut attrs, false);
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             ty = self.ast.types.pointer_to(elem);
@@ -797,8 +800,6 @@ impl Sema<'_, '_> {
             // [dcl.fct]/16: a function parameter pack `T... x`.
             ty = self.act_pack_expansion_type(ty, l);
         }
-        let mut attrs = ds.attrs.clone();
-        attrs.extend(d.attrs.iter().copied());
         ParamInfo {
             name: d.name,
             ty,
@@ -1434,6 +1435,7 @@ impl Sema<'_, '_> {
         if ds.is_typedef() || !self.ast.types.is_function(ty) {
             self.virtual_on_non_function(ds, d);
         }
+        let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
         let decl = if ds.is_typedef() {
             self.act_on_typedef(ds, ty, d, name, false)
         } else if self.ast.types.is_function(ty) {
@@ -1836,13 +1838,15 @@ impl Sema<'_, '_> {
         d.name = Some((name, name_loc));
         let ds = DeclSpec::new(name_loc);
         let _ = self.take_template_head(None);
+        let mut attrs = attrs.to_vec();
+        let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
         if let Some(t) = self.finish_template_pattern(td) {
             self.set_member_access(t);
         }
         self.check_using_shadow_conflict(td, name);
         if !attrs.is_empty() {
-            let _ = self.builder().attach_attrs(td, attrs);
+            let _ = self.builder().attach_attrs(td, &attrs);
         }
         td
     }
@@ -4774,6 +4778,8 @@ impl Sema<'_, '_> {
             ("const", _, true) => AttrKind::CONST,
             ("pure", _, true) => AttrKind::PURE,
             ("cold", _, true) => AttrKind::COLD,
+            ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
+            ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
             ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
             ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
             ("visibility" | "section" | "format", _, true) => {
@@ -4787,6 +4793,9 @@ impl Sema<'_, '_> {
                 return None;
             }
         };
+        if matches!(kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE) {
+            return self.vector_attribute(kind, syntax, &raw, args, loc);
+        }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED => 1,
             AttrKind::ALIGNED => {
