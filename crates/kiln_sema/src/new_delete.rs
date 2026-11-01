@@ -1449,9 +1449,7 @@ impl Sema<'_, '_> {
         match self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
             Selected::Found(m) => {
                 let msg = self.special_member_access(m, def, |s, prot| {
-                    s.diag(access.1, access.0)
-                        .arg(s.ty_arg(elem))
-                        .arg(u8::from(prot))
+                    s.diag(access.1, access.0).arg(s.ty_arg(elem)).arg(u8::from(prot))
                 });
                 if let Some(msg) = msg {
                     self.emit(msg);

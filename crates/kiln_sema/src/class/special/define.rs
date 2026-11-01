@@ -678,7 +678,8 @@ impl Sema<'_, '_> {
         let name = self.decl_arg(field);
         let at = self.ast.decls.get(field).loc();
         let note = self.diag(DiagId::note_default_member_init_not_yet_parsed, at);
-        let d = self.diag(DiagId::sema_default_member_init_not_yet_parsed, loc).arg(class).arg(name);
+        let d =
+            self.diag(DiagId::sema_default_member_init_not_yet_parsed, loc).arg(class).arg(name);
         self.emit(d.with_note(note));
         if !self.inst.stack.is_sfinae() {
             self.ast.decls.set_flags(field, DeclFlags::INVALID);
