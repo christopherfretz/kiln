@@ -57,11 +57,20 @@ pub struct CodegenOptions {
     pub exceptions: bool,
     /// The `llvm.ident` string; empty for none.
     pub ident: String,
+    /// `AArch64` only: `+outline-atomics` in the functions'
+    /// `target-features` (`-moutline-atomics`, the default), else
+    /// `-outline-atomics` (`-mno-outline-atomics`). Ignored on x86-64.
+    pub outline_atomics: bool,
 }
 
 impl Default for CodegenOptions {
     fn default() -> Self {
-        CodegenOptions { source_filename: String::new(), exceptions: true, ident: String::new() }
+        CodegenOptions {
+            source_filename: String::new(),
+            exceptions: true,
+            ident: String::new(),
+            outline_atomics: true,
+        }
     }
 }
 

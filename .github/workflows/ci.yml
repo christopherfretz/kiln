@@ -2,16 +2,35 @@ name: ci
 on:
   push: { branches: [main] }
   pull_request:
+  merge_group:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
-    runs-on: ubuntu-24.04
+    # The reference environment (docs/VALIDATION.md "GitHub Actions"): an
+    # aarch64 Debian 13 host with Debian's clang 19.1.7 and GCC 14, as the
+    # development container. The differential tests and goldens compare
+    # against that clang on that host (search paths, target defaults,
+    # va_list), so an Ubuntu or x86-64 runner does not reproduce them.
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    env:
+      KILN_REQUIRE_LLVM: "1"
     steps:
+      - name: Install the toolchain packages
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            ca-certificates curl git build-essential procps time \
+            clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev >/dev/null
+          clang++-19 --version | head -1
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with: { toolchain: "1.99.1", components: "rustfmt, clippy" }
+      # Saved even when `ci` fails, so the next run starts warm.
       - uses: Swatinem/rust-cache@v2
-      # clang 19 + libc++ 19: the corpus oracle and the reference compiler of
-      # the harness self-tests (spec/harness.md "CI").
-      - run: sudo apt-get update && sudo apt-get install -y clang-19 libc++-19-dev libc++abi-19-dev
-      # fmt, clippy, cargo test, then the corpus self-check with clang++-19.
+        with: { cache-on-failure: true }
+      # fmt, clippy, cargo test, then both corpus runs (clang self-check and
+      # kiln), as `cargo xtask ci` locally.
       - run: cargo xtask ci

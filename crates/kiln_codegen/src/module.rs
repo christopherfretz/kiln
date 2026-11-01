@@ -1288,7 +1288,16 @@ impl<'a> Cg<'a> {
             out.push(Attr::string("tune-cpu", "generic"));
         } else {
             out.push(Attr::string("target-cpu", "generic"));
-            out.push(Attr::string("target-features", "+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"));
+            // clang 19 sorts the `+` features and appends the explicit
+            // `-mno-outline-atomics` after `-fmv`.
+            out.push(Attr::string(
+                "target-features",
+                if self.opts.outline_atomics {
+                    "+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"
+                } else {
+                    "+fp-armv8,+neon,+v8a,-fmv,-outline-atomics"
+                },
+            ));
         }
     }
 
