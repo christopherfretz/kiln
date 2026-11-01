@@ -1273,7 +1273,9 @@ impl Sema<'_, '_> {
             && valid.iter().any(|&x| self.member_via_dependent_base(x))
             && let Some((this_ty, _)) = self.this_class()
         {
-            return self.dependent_implicit_member(this_ty, name, nns, loc);
+            let e = self.dependent_implicit_member(this_ty, name, nns, loc);
+            self.set_overload_begin(e, begin, loc);
+            return e;
         }
         if fns && (valid.len() > 1 || self.call_uses_adl(&valid, qualifier.is_none())) {
             let e = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);

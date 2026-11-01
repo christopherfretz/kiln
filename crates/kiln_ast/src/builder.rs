@@ -1366,11 +1366,13 @@ impl<'a> AstBuilder<'a> {
             // (rank() > 0)` in a member of `extents` waits for
             // instantiation, where `rank()` reads `__rank_`.
             DeclKind::CXXMethod
-                if self.ast.decls.function(d).is_some_and(|f| {
-                    f.spec.storage() == crate::decl::FnStorage::Static
-                }) && n
-                    .ctx()
-                    .is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)) =>
+                if self
+                    .ast
+                    .decls
+                    .function(d)
+                    .is_some_and(|f| f.spec.storage() == crate::decl::FnStorage::Static)
+                    && n.ctx()
+                        .is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)) =>
             {
                 deps |= ExprDeps::VALUE_INST;
             }
