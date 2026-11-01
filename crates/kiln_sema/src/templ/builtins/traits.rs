@@ -716,6 +716,16 @@ impl Sema<'_, '_> {
         self.defn_bits(r)
     }
 
+    /// `__is_aggregate`: clang also reports vector and complex types as
+    /// aggregates (they support aggregate initialization).
+    fn is_aggregate_trait(&self, q: QualType) -> bool {
+        let tys = &self.ast.types;
+        tys.is_array(q)
+            || tys.as_complex(q).is_some()
+            || self.is_vector_type(q)
+            || self.record_bit(q, DefinitionBits::AGGREGATE)
+    }
+
     /// clang's `EvaluateUnaryTypeTrait`.
     #[allow(clippy::too_many_lines, reason = "one arm per trait")]
     fn eval_unary_trait(&mut self, t: TypeTrait, q: QualType, loc: Loc) -> bool {
@@ -788,7 +798,7 @@ impl Sema<'_, '_> {
             T::IsEmpty => self.defined_record(q).is_some_and(|r| {
                 !self.is_union(r) && self.bits_of(r).contains(DefinitionBits::EMPTY)
             }),
-            T::IsAggregate => tys.is_array(q) || self.record_bit(q, DefinitionBits::AGGREGATE),
+            T::IsAggregate => self.is_aggregate_trait(q),
             T::IsTriviallyCopyable => self.is_trivially_copyable_type(q),
             T::IsTrivial => self.is_trivial_type(q),
             T::IsPod => self.is_pod_type(q),

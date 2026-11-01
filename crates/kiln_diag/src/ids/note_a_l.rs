@@ -52,6 +52,7 @@ note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: coul
 note_deduction_underqualified = Note (3) "candidate template ignored: cannot deduce a type for '{0}' that would make '{1}' equal '{2}'";
 note_default_arg_instantiation_here = Note (1) "in instantiation of default argument for '{0}' required here";
 note_default_function_arg_instantiation_here = Note (1) "in instantiation of default function argument expression for '{0}' required here";
+note_default_member_init_not_yet_parsed = Note (0) "default member initializer declared here";
 note_defaulted_cmp_ambiguous = Note (4) "defaulted '{0}' is implicitly deleted because implied {1:|'==' |'<' }comparison {2:|for member {3} |for base class {3} }is ambiguous";
 note_defaulted_cmp_calls_deleted = Note (3) "defaulted '{0}' is implicitly deleted because it would invoke a deleted comparison function{1:| for member {2}| for base class {2}}";
 note_defaulted_cmp_cannot_deduce = Note (3) "return type of defaulted 'operator<=>' cannot be deduced because return type {0} of three-way comparison for {1:|member |base class }{2} is not a standard comparison category type";
@@ -79,6 +80,7 @@ note_designated_init_mixed = Note (0) "first non-designated initializer is here"
 note_dtor_type_found = Note (1) "type {0} found by destructor name lookup";
 note_duplicate_asm_operand_name = Note (1) "asm operand name \"{0}\" first referenced here";
 note_duplicate_case_prev = Note (0) "previous case defined here";
+note_empty_body_on_separate_line = Note (0) "put the semicolon on a separate line to silence this warning";
 note_empty_parens_default_ctor = Note (0) "remove parentheses to declare a variable";
 note_empty_parens_zero_initialize = Note (0) "replace parentheses with an initializer to declare a variable";
 note_empty_using_if_exists_here = Note (0) "using declaration annotated with 'using_if_exists' here";
@@ -105,6 +107,8 @@ note_for_range_begin_end = Note (4) "selected '{0:begin|end}' {1:function|templa
 note_for_range_invalid_iterator = Note (2) "in implicit call to 'operator{0:!=|*|++}' for iterator of type {1}";
 note_for_range_member_begin_end_ignored = Note (2) "member is not a candidate because range type {0} has no '{1:end|begin}' member";
 note_forward_declaration = Note (1) "forward declaration of {0}";
+note_forward_template_decl = Note (0) "forward declaration of template entity is here";
+note_function_style_cast_add_parentheses = Note (0) "add enclosing parentheses to perform a function-style cast";
 note_function_template_deduction_instantiation_here = Note (1) "while substituting deduced template arguments into function template {0}";
 note_function_template_spec_here = Note (1) "in instantiation of function template specialization '{0}' requested here";
 note_hidden_overloaded_virtual = Note (2) "hidden overloaded virtual function '{0}' declared here{1}";
@@ -115,9 +119,13 @@ note_in_binding_decl_init = Note (1) "in implicit initialization of binding decl
 note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
 note_in_for_range = Note (2) "when looking up '{0:begin|end}' function for range expression of type {1}";
 note_indirect_goto_target = Note (1) "possible target of {0:indirect|asm} goto statement";
+note_indirection_through_null = Note (0) "consider using __builtin_trap() or qualifying pointer with 'volatile'";
 note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
 note_init_list_narrowing_silence = Note (0) "insert an explicit cast to silence this issue";
 note_init_previous = Note (0) "previous initialization is here";
+note_insert_break_fixit = Note (0) "insert 'break;' to avoid fall-through";
+note_insert_fallthrough_fixit = Note (1) "insert '{0};' to silence this warning";
+note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration to suppress this warning if '{0}' is explicitly instantiated in another translation unit";
 note_instantiation_contexts_suppressed = Note (2) "(skipping {0} context{1} in backtrace; use -ftemplate-backtrace-limit=0 to see all)";
 note_instantiation_required_here = Note (1) "{0:implicit|explicit} instantiation first required here";
 note_it_delegates_to = Note (0) "it delegates to";

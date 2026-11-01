@@ -34,6 +34,7 @@
 
 mod arith;
 mod compile;
+mod complex;
 mod failure;
 mod kbc;
 mod mem;

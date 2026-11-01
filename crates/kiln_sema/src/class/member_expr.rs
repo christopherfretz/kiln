@@ -257,6 +257,27 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// True if `b` is an implicit `this` and `decls` an overload set of
+    /// non-static member functions (clang builds an implicit-access
+    /// `UnresolvedMemberExpr` for it, diagnosed without an object).
+    fn implicit_overload_without_object(&self, b: ExprId, decls: &[DeclId]) -> bool {
+        let x = self.ignore_parens(b);
+        let implicit = self.ast.exprs.get(x).kind() == ExprKind::CXXThisExpr
+            && self.ast.exprs.this_is_implicit(x);
+        let overloaded = decls.len() > 1
+            || decls.first().is_some_and(|&d| self.kind_of(d) == DeclKind::FunctionTemplate);
+        implicit
+            && overloaded
+            && decls.iter().all(|&d| {
+                let f = if self.kind_of(d) == DeclKind::FunctionTemplate {
+                    self.templated_function(d)
+                } else {
+                    Some(d)
+                };
+                !f.is_some_and(|f| self.is_static_method(f))
+            })
+    }
+
     /// `base.name` / `base->name` once the object type is known
     /// ([expr.ref]/2-7): class member lookup in `def` (the object's
     /// complete class), ambiguity and access checks, then the access.
@@ -298,6 +319,17 @@ impl Sema<'_, '_> {
         if let Some(q) = qual
             && !self.qualifier_names_base(q.ctx, def)
         {
+            if self.implicit_overload_without_object(b, &found.decls) {
+                // clang's `DiagnoseQualifiedMemberReference` of an
+                // implicit-access overload set (`B::f()` through a
+                // dependent base that is not `B`): `diagnoseInstanceReference`.
+                let end = self.token_end(loc).unwrap_or(loc);
+                let msg = self
+                    .diag(DiagId::sema_member_call_without_object, loc)
+                    .range(kiln_source::Span::new(q.loc, end));
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            }
             // clang's `CheckQualifiedMemberReference`.
             let msg = self
                 .diag(DiagId::sema_qualified_member_of_unrelated, loc)

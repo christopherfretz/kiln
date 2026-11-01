@@ -13,6 +13,7 @@ parse_attribute_requires_string = Error (1) "expected string literal as argument
 parse_attribute_wrong_arg_count = Error (2) "'{0}' attribute takes {1:no arguments|one argument}";
 parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
 parse_bad_pure_specifier = Error (0) "initializer on function does not look like a pure-specifier";
+parse_c99_complex = Extension [C99Extensions] (0) "'_Complex' is a C99 extension";
 parse_capture_default_first = Error (0) "capture default must be first";
 parse_concept_has_constraints = Error (0) "concept cannot have associated constraints";
 parse_concept_legacy_bool = Error (0) "ISO C++ does not permit the 'bool' keyword after 'concept'";

@@ -1185,6 +1185,22 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A GNU imaginary constant (clang `ImaginaryLiteral`, `2.0i`): the
+    /// literal `sub` (of the element type) times *i*, of complex type `ty`.
+    pub fn imaginary_literal(&mut self, sub: ExprId, ty: QualType, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(
+            ExprKind::ImaginaryLiteral,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            sub.raw(),
+            0,
+        )
+    }
+
     /// A character literal ([lex.ccon]) with code-unit value `value`.
     pub fn char_literal(&mut self, ty: QualType, kind: CharKind, value: u32, loc: Loc) -> ExprId {
         let deps = self.type_deps(ty);
@@ -1360,6 +1376,22 @@ impl<'a> AstBuilder<'a> {
         }
         match n.kind() {
             DeclKind::NonTypeTemplateParm => deps |= ExprDeps::VALUE_INST,
+            // [temp.dep.constexpr]/2.3: a static member function that is
+            // a dependent member of the current instantiation (clang's
+            // `computeDependence` for `DeclRefExpr`): `if constexpr
+            // (rank() > 0)` in a member of `extents` waits for
+            // instantiation, where `rank()` reads `__rank_`.
+            DeclKind::CXXMethod
+                if self
+                    .ast
+                    .decls
+                    .function(d)
+                    .is_some_and(|f| f.spec.storage() == crate::decl::FnStorage::Static)
+                    && n.ctx()
+                        .is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)) =>
+            {
+                deps |= ExprDeps::VALUE_INST;
+            }
             DeclKind::Var => {
                 if let Some(v) = self.ast.decls.var(d) {
                     let potentially_constant =
@@ -1505,8 +1537,8 @@ impl<'a> AstBuilder<'a> {
 
     /// A built-in unary operator ([expr.unary.op], [expr.post.incr],
     /// [expr.pre.incr]): `*` and prefix `++`/`--` are lvalues, `__real` /
-    /// `__imag` / `__extension__` keep the operand's category, the rest are
-    /// prvalues.
+    /// `__imag` / `__extension__` keep the operand's category (`__imag` of
+    /// a real operand is a prvalue), the rest are prvalues.
     pub fn unary(
         &mut self,
         op: UnaryOp,
@@ -1517,6 +1549,12 @@ impl<'a> AstBuilder<'a> {
     ) -> ExprId {
         let vk = match op {
             UnaryOp::Deref | UnaryOp::PreInc | UnaryOp::PreDec => ValueCategory::LValue,
+            // `__imag` of a real operand is a prvalue (its zero).
+            UnaryOp::Imag
+                if self.ast.types.as_complex(self.ast.exprs.get(operand).ty()).is_none() =>
+            {
+                ValueCategory::PRValue
+            }
             UnaryOp::Real | UnaryOp::Imag | UnaryOp::Extension => self.vk(operand),
             _ => ValueCategory::PRValue,
         };

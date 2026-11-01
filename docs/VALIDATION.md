@@ -134,10 +134,19 @@ plus `build-essential procps time`). The environment is pinned because the
 differential tests depend on the host as well as on clang. They check
 search paths, `__has_builtin`/feature tables, target defaults and the
 host's `va_list` against goldens recorded with that clang on that host.
-Ubuntu's clang 19.1.1 fails a handful of them. An x86-64 host fails about
-16 corpus tests and several unit differentials (WP-226 evaluation). Other
-hosts are a follow-up (see BACKLOG). `KILN_REQUIRE_LLVM=1` turns a missing
-LLVM tool into a failure instead of a skip.
+Ubuntu's clang 19.1.1 fails a handful of them. `KILN_REQUIRE_LLVM=1` turns a
+missing LLVM tool into a failure instead of a skip.
+
+A second job, `check-x86_64`, runs the same steps in the same container on
+the x86-64 `ubuntu-24.04` runner (WP-228), so the host-dependent paths
+(default target, GCC detection, `run` tests compiled for and run on
+x86-64) are exercised too. Tests whose expectations are aarch64-specific
+pin `//@ args: --target=aarch64-unknown-linux-gnu` (compile-only kinds) or
+carry `//@ requires: target-aarch64` (`run` tests, which cannot cross-run;
+spec/harness.md). The `-v` search-list test compares with clang++-19 live
+rather than with the reference container's goldens. `check` is the
+required status check; whether `check-x86_64` is too is a branch-rule
+decision.
 
 `Swatinem/rust-cache` keeps `~/.cargo` and the dependency builds, and
 saves them even when the run fails. A warm run takes about 6 minutes:

@@ -4,10 +4,12 @@
 
 sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
 sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
+sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";
 sema_call_function_incomplete_return = Error (1) "calling function with incomplete return type {0}";
 sema_call_implicitly_deleted_ctor = Error (2) "call to implicitly-deleted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1}";
 sema_call_incomplete_return = Error (2) "calling {0} with incomplete return type {1}";
 sema_call_not_function = Error (1) "called object type {0} is not a function or function pointer";
+sema_call_requires_real_fp = Error (1) "argument type {0} is not a real floating point type";
 sema_call_too_few_args = Error (2) "too few arguments to function call, expected {0}, have {1}";
 sema_call_too_few_args_at_least = Error (2) "too few arguments to function call, expected at least {0}, have {1}";
 sema_call_too_few_args_one = Error (1) "too few arguments to function call, single argument '{0}' was not specified";
@@ -36,6 +38,7 @@ sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization o
 sema_cmp_category_not_found = Error (2) "cannot {1:use builtin operator '<=>'|default 'operator<=>'} because type '{0}' was not found; include <compare>";
 sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer types ({0} and {1})";
 sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
+sema_complex_to_real_cxx = Error (2) "implicit conversion from {0} to {1} is not permitted in C++";
 sema_compound_qualified_function_type = Error (4) "{0:pointer|reference} to function type {1:|{2} }cannot have '{3}' qualifier";
 sema_conditional_ambiguous = Error (2) "conditional expression is ambiguous; {0} can be converted to {1} and vice versa";
 sema_conditional_vector_cond_result_mismatch = Error (0) "cannot mix vectors and extended vectors in a vector conditional";
@@ -47,6 +50,7 @@ sema_conditional_vector_operand_type = Error (1) "enumeration type {0} is not al
 sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
 sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
 sema_const_member_assign = Error (1) "cannot assign to non-static data member within const member function '{0}'";
+sema_constant_conversion = Warning [ConstantConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
 sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant integer";
 sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
 sema_consteval_overrides = Error (2) "{0:consteval|non-consteval} function '{1}' cannot override a {0:non-consteval|consteval} function";
@@ -128,6 +132,7 @@ sema_default_arg_in_partial_spec = Error (0) "default template argument in a cla
 sema_default_arg_redefinition = Error (0) "redefinition of default argument";
 sema_default_init_const = Error (1) "default initialization of an object of const type {0}";
 sema_default_init_const_no_ctor = Error (1) "default initialization of an object of const type {0} without a user-provided default constructor";
+sema_default_member_init_not_yet_parsed = Error (2) "default member initializer for {1} needed within definition of enclosing class {0} outside of member functions";
 sema_default_not_in_switch = Error (0) "'default' statement not in switch statement";
 sema_default_not_special = Error (0) "only special member functions and comparison operators may be defaulted";
 sema_defaulted_assign_return = Error (2) "explicitly-defaulted {0:copy|move} assignment operator must return {1}";

@@ -313,6 +313,16 @@ impl Cg<'_> {
         let Some(a0) = arg(0).or(Some(e)) else { unreachable!() };
         let v = match b {
             id::IS_CONSTANT_EVALUATED => V::C(self.m.const_bool(false)),
+            // clang `Builtin::BI__builtin_complex`: the two parts.
+            id::COMPLEX => {
+                let re = self.emit_scalar(a0)?;
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "__builtin_complex needs two arguments");
+                };
+                let im = self.emit_scalar(a1)?;
+                self.f.cx_ret = Some((re, im));
+                return Ok(BuiltinCall::Emitted(None));
+            }
             // An argument that did not fold (the fold prepass made the call
             // 1 or 0 when it could evaluate it) is not a constant, as at
             // clang -O0; it is not evaluated.

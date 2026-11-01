@@ -1,27 +1,28 @@
 // [over.built]: selected built-in candidates convert class operands by
 // their conversion functions ([over.match.oper]/11).
 //@ expect: compile-fail
+//@ args: --target=aarch64-unknown-linux-gnu
 //@ strict-diags
-//@ diag: 36:5 error "no viable overloaded '='"
-//@ diag: 25:8 note "candidate function (the implicit copy assignment operator) not viable: no known conversion from 'int' to 'const I' for 1st argument"
-//@ diag: 25:8 note "candidate function (the implicit move assignment operator) not viable: no known conversion from 'int' to 'I' for 1st argument"
-//@ diag: 38:12 error "use of overloaded operator '+' is ambiguous (with operand types 'D' and 'int')"
-//@ diag: 38:12 note "because of ambiguity in conversion of 'D' to 'float'"
-//@ diag: 27:12 note "candidate function"
-//@ diag: 27:37 note "candidate function"
-//@ diag: 38:12 note "built-in candidate operator+(float, int)"
-//@ diag: 38:12 note "built-in candidate operator+(double, int)"
-//@ diag: 38:12 note "built-in candidate operator+(long double, int)"
-//@ diag: 38:12 note "built-in candidate operator+(int, int)"
-//@ diag: 38:12 note "built-in candidate operator+(long, int)"
-//@ diag: 38:12 note "built-in candidate operator+(long long, int)"
-//@ diag: 38:12 note "built-in candidate operator+(__int128, int)"
-//@ diag: 38:12 note "built-in candidate operator+(unsigned int, int)"
-//@ diag: 38:12 note "built-in candidate operator+(unsigned long, int)"
-//@ diag: 38:12 note "built-in candidate operator+(unsigned long long, int)"
-//@ diag: 38:12 note "built-in candidate operator+(unsigned __int128, int)"
-//@ diag: 45:13 error "invalid operands to binary expression ('SEC' and 'SEC')"
-//@ diag: 46:12 error "invalid operands to binary expression ('Pt' and 'int')"
+//@ diag: 37:5 error "no viable overloaded '='"
+//@ diag: 26:8 note "candidate function (the implicit copy assignment operator) not viable: no known conversion from 'int' to 'const I' for 1st argument"
+//@ diag: 26:8 note "candidate function (the implicit move assignment operator) not viable: no known conversion from 'int' to 'I' for 1st argument"
+//@ diag: 39:12 error "use of overloaded operator '+' is ambiguous (with operand types 'D' and 'int')"
+//@ diag: 39:12 note "because of ambiguity in conversion of 'D' to 'float'"
+//@ diag: 28:12 note "candidate function"
+//@ diag: 28:37 note "candidate function"
+//@ diag: 39:12 note "built-in candidate operator+(float, int)"
+//@ diag: 39:12 note "built-in candidate operator+(double, int)"
+//@ diag: 39:12 note "built-in candidate operator+(long double, int)"
+//@ diag: 39:12 note "built-in candidate operator+(int, int)"
+//@ diag: 39:12 note "built-in candidate operator+(long, int)"
+//@ diag: 39:12 note "built-in candidate operator+(long long, int)"
+//@ diag: 39:12 note "built-in candidate operator+(__int128, int)"
+//@ diag: 39:12 note "built-in candidate operator+(unsigned int, int)"
+//@ diag: 39:12 note "built-in candidate operator+(unsigned long, int)"
+//@ diag: 39:12 note "built-in candidate operator+(unsigned long long, int)"
+//@ diag: 39:12 note "built-in candidate operator+(unsigned __int128, int)"
+//@ diag: 46:13 error "invalid operands to binary expression ('SEC' and 'SEC')"
+//@ diag: 47:12 error "invalid operands to binary expression ('Pt' and 'int')"
 struct I { operator int&(); };
 struct C { operator int() const; };
 struct D { operator double() const; operator int() const; };

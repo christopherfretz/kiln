@@ -479,12 +479,13 @@ The normative description is spec/driver.md "Code generation". In short:
 - Every job calls `ConstexprOpts::write_report`.
 
 ## 6. Validation
-- **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 74
+- **Unit corpus** (`crates/kiln_codegen/tests/lower.rs`, WP-052): 90
   inline C++ programs, lowered for `aarch64-unknown-linux-gnu` straight
   from `parse_tu` (no driver). Every case must pass
   `opt-19 -S -passes=verify`. `Exact` cases must also equal
-  `clang++-19 -S -emit-llvm -O0 -std=c++26 --target=aarch64-unknown-linux-gnu`
-  after normalization. A case that differs but is marked `VerifyOnly` is
+  `clang++-19 -S -emit-llvm -O0 -std=c++26 --target=aarch64-unknown-linux-gnu
+  -moutline-atomics` after normalization (the flag for the same reason as
+  in the IR-diff corpus below; kiln's default is on, WP-228). A case that differs but is marked `VerifyOnly` is
   a documented deviation (below); one that becomes exact is reported so
   it can be promoted. `KILN_CASE=<name>` prints both texts.
 - **Normalization:** both texts go through `opt-19 -S -passes=verify`,
@@ -507,12 +508,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines after it (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 208 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 215 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
   `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
-  work packages' cases): 413/416 pairs exact; `DEVIATIONS` holds
+  work packages' cases): 427/430 pairs exact; `DEVIATIONS` holds
   `global_init_array_eh`, `eh_array_destroy_throwing_global` and
   `array_temporary_global` on aarch64 (§7f, §7m).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
@@ -1163,8 +1164,7 @@ clang 19 `CGAtomic` at -O0, mirrored:
   structs. Call sites keep the recursive `CallInfo::max_vector_width`.
 - **Validation:** `tests/codegen/va_arg.cpp` exact on aarch64 and
   x86_64; `tests/conformance/cstdarg.syn/va-arg.cpp` (run).
-- **Not implemented:** `_Complex` operands (unsupported in codegen
-  generally).
+- **Not implemented:** `_Complex` operands of `va_arg`.
 
 ## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
 Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
@@ -1228,9 +1228,18 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   (`const P& r = {3, 4};`) has the referenced `const` type and is
   `constant` unless it has a `mutable` member (`const M& r = {1};`). The
   backing array of a namespace-scope `std::initializer_list` is a
-  `const` array, so it is `constant` when constant-initialized.
+  `const` array, so it is `constant` when constant-initialized. A
+  scalar braced list materializes directly (`const int& r = {};` is
+  `constant`), but `const int& r = {7};` materializes the `int` operand
+  of a `NoOp` cast inside the list and stays `global`. The rule is the
+  same for a temporary first reached through a frozen constant pointer
+  (`consts.rs` `ptr_base`, `PtrBase::Temporary`: a reference member of a
+  constexpr aggregate, `constexpr R x{{}};`, or a constexpr pointer to a
+  temporary), since `let_global` decides constness from the materialized
+  type, not the type it is passed (WP-224).
   `tests/codegen/init_list_global.cpp`,
-  `tests/codegen/ref_temporary_constant.cpp`.
+  `tests/codegen/ref_temporary_constant.cpp`,
+  `tests/codegen/ref_temporary_braced.cpp`.
 - Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
   `tests/conformance/basic.start.dynamic/order-run.cpp`,
   `tests/conformance/stmt.dcl/static-local-run.cpp`.
@@ -1597,6 +1606,41 @@ Tests: `tests/codegen/array_temporary.cpp`, `array_temporary_global.cpp`
 `dcl.fct.default/run-default-arg-temporary`; constexpr tests
 `class.temporary/constexpr-array`,
 `dcl.fct.default/constexpr-default-arg-temporary`.
+
+## 7n. Landed (WP-211): GNU `_Complex` (`complex.rs`)
+Mirrors clang 19's `ComplexExprEmitter` at `-O0` with the full complex
+range (`CX_Full`).
+- **Representation.** A complex value is the pair `(real, imag)` of
+  element values. In memory it is the IR struct `{ T, T }` (kiln_abi
+  `irtype.rs`), with parts at struct GEP 0/1. A part is `None` when the
+  consumer ignores it (clang `IgnoreReal`/`IgnoreImag`) or when the
+  operand of an arithmetic operator is real.
+- **Expressions.** These are lowered like clang's visitors:
+  - loads, `__real`/`__imag` (lvalue and rvalue);
+  - casts between real and complex;
+  - unary `+ - ~` (conjugate), `++`/`--` (real part only);
+  - `+ - * /`, assignment and compound assignment (the left value
+    converted to the computation type and back);
+  - `==`/`!=`, `?:` (phi of both parts), and conversion to `bool`;
+  - list initialization, `__builtin_complex`;
+  - folded constants (`extractvalue` of the constant pair);
+  - `ImaginaryLiteral` (a null real part).
+- **Multiplication.** For floating types it uses the four products, then
+  the NaN check on both results (`fcmp uno`, branch weights 1:1048575),
+  then the library call `__mul{s,d,x,t}c3`. Integer multiplication is
+  inline. A real operand uses the shortened forms.
+- **Division.** It calls the library routine `__div{s,d,x,t}c3` for
+  complex floating divisors. A real divisor divides each part directly.
+  Integer division uses clang's inline formula.
+- **Calls.** A complex argument or return goes through the target
+  classification (spec/abi.md §8.17). A returned pair is unpacked from
+  the coerced type (`cx_call_result`). Delegating calls (inheriting
+  constructors, lambda static invokers) forward the parts unchanged.
+- **Validation.** `tests/codegen/complex_{arith,calls,ops,types,delegate,
+  imaginary}.cpp` are exact on aarch64 and x86_64.
+- **Not implemented:** `_Complex _Float16` (kiln has no `_Float16`), and
+  complex ranges other than full (`-fcx-limited-range`,
+  `-fcomplex-arithmetic=`).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

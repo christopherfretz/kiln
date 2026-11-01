@@ -1,0 +1,369 @@
+//! Unannotated fall-through between switch labels (WP-217; clang
+//! `DiagnoseSwitchLabelsFallthrough` / `FallthroughMapper::
+//! checkFallThroughIntoBlock`, spec/sema.md "Statement attributes"):
+//! `-Wimplicit-fallthrough` at a case or default label that control can
+//! fall into from a statement that is not `[[fallthrough]]`, and
+//! `-Wunreachable-code-fallthrough` at a `[[fallthrough]]` in unreachable
+//! code that falls into a label.
+//!
+//! kiln has no CFG: the predecessors of a label are found structurally
+//! (the statements before it in its block, the branches of an `if`
+//! ending there), their reachability from the walk of
+//! [`Sema::stmt_flow`], which mirrors the CFG with every case label
+//! reachable (clang `fillReachableBlocks`).
+
+use std::collections::HashMap;
+
+use kiln_ast::StmtId;
+use kiln_ast::attr::AttrKind;
+use kiln_ast::stmt::StmtKind;
+use kiln_diag::{DiagId, FixIt};
+use kiln_lex::Std;
+
+use crate::Sema;
+
+/// What precedes a statement in the body: its parent and its index
+/// there (a compound statement's child), or `None` for the body.
+type Parents = HashMap<StmtId, (StmtId, usize)>;
+
+/// The predecessors falling into one label.
+#[derive(Default)]
+struct Preds {
+    /// Reachable predecessors not ending in `[[fallthrough]]`.
+    unannotated: u32,
+    /// Predecessors ending in `[[fallthrough]]` (or holding one, when
+    /// unreachable).
+    annotated: u32,
+    /// The `[[fallthrough]]` statements of unreachable predecessors.
+    dead: Vec<StmtId>,
+}
+
+/// Whether the end of a statement adds a predecessor (`Done`) or the
+/// search goes on before it (`Empty`: it holds no CFG element).
+#[derive(PartialEq, Eq)]
+enum End {
+    Done,
+    Empty,
+}
+
+/// Reachability before and after each statement.
+struct Flow {
+    before: HashMap<StmtId, bool>,
+    after: HashMap<StmtId, bool>,
+}
+
+impl Flow {
+    fn before(&self, s: StmtId) -> bool {
+        self.before.get(&s).copied().unwrap_or(false)
+    }
+
+    fn after(&self, s: StmtId) -> bool {
+        self.after.get(&s).copied().unwrap_or(false)
+    }
+}
+
+impl Sema<'_, '_> {
+    /// Records the language standard (by the parser).
+    pub fn set_std(&mut self, std: Std) {
+        self.std = std;
+    }
+
+    /// `-Wimplicit-fallthrough` and `-Wunreachable-code-fallthrough` over
+    /// the switch labels of function body `body`, in source order (clang
+    /// visits the CFG blocks in order). Not in an instantiation for the
+    /// unreachable annotation (it may be reachable in another one).
+    pub(crate) fn check_implicit_fallthrough(&mut self, body: StmtId) {
+        let in_inst = !self.inst.stack.is_empty();
+        let warn = self.diags.is_enabled(DiagId::sema_implicit_fallthrough);
+        let dead_on = !in_inst && self.diags.is_enabled(DiagId::sema_unreachable_fallthrough_attr);
+        if !warn && !dead_on {
+            return;
+        }
+        let mut labels = Vec::new();
+        let mut parents = Parents::new();
+        let mut switch_bodies = Vec::new();
+        self.ift_collect(body, &mut labels, &mut parents, &mut switch_bodies);
+        if labels.is_empty() {
+            return;
+        }
+        let Some((before, after)) = self.stmt_flow(body) else { return };
+        let flow = Flow { before, after };
+        for l in labels {
+            let mut into = Preds::default();
+            self.ift_label_preds(l, &parents, &switch_bodies, &flow, &mut into);
+            if dead_on {
+                for s in std::mem::take(&mut into.dead) {
+                    let loc = self.ast.stmts.get(s).loc();
+                    let d = self.diag(DiagId::sema_unreachable_fallthrough_attr, loc);
+                    self.emit(d);
+                }
+            }
+            if into.unannotated == 0 || !warn {
+                continue;
+            }
+            let at = self.ast.stmts.get(l).loc();
+            let mut d = self.diag(DiagId::sema_implicit_fallthrough, at);
+            if into.annotated == 0 && !at.is_macro() {
+                if !self.ift_break_only(l, &parents) {
+                    let spelling = if self.std >= Std::Cxx17 {
+                        "[[fallthrough]]"
+                    } else {
+                        "[[clang::fallthrough]]"
+                    };
+                    let n = self
+                        .diag(DiagId::note_insert_fallthrough_fixit, at)
+                        .arg(spelling)
+                        .fixit(FixIt::insert(at, format!("{spelling}; ")));
+                    d = d.with_note(n);
+                }
+                let n = self
+                    .diag(DiagId::note_insert_break_fixit, at)
+                    .fixit(FixIt::insert(at, "break; "));
+                d = d.with_note(n);
+            }
+            self.emit(d);
+        }
+    }
+
+    /// Collects, in source order, the case and default labels of `s`, the
+    /// position of each compound statement's children and the switch
+    /// bodies.
+    fn ift_collect(
+        &self,
+        s: StmtId,
+        labels: &mut Vec<StmtId>,
+        parents: &mut Parents,
+        switch_bodies: &mut Vec<StmtId>,
+    ) {
+        let kind = self.ast.stmts.get(s).kind();
+        match kind {
+            StmtKind::CaseStmt | StmtKind::DefaultStmt => labels.push(s),
+            StmtKind::SwitchStmt => {
+                switch_bodies.push(self.ast.stmts.switch_data(s).body);
+            }
+            // Not part of the function's CFG.
+            StmtKind::DeclStmt | StmtKind::ExprStmt => return,
+            _ => {}
+        }
+        for (i, c) in self.ift_kids(s).into_iter().enumerate() {
+            parents.insert(c, (s, i));
+            self.ift_collect(c, labels, parents, switch_bodies);
+        }
+    }
+
+    /// The sub-statements of `s` that can hold a label.
+    fn ift_kids(&self, s: StmtId) -> Vec<StmtId> {
+        let st = &self.ast.stmts;
+        match st.get(s).kind() {
+            StmtKind::CaseStmt => vec![st.case_data(s).sub],
+            StmtKind::DefaultStmt => vec![st.default_sub(s)],
+            StmtKind::LabelStmt | StmtKind::AttributedStmt => vec![st.sub_stmt(s)],
+            StmtKind::SwitchStmt => vec![st.switch_data(s).body],
+            _ => self.children(s),
+        }
+    }
+
+    /// The predecessors falling into label `l`.
+    fn ift_label_preds(
+        &self,
+        l: StmtId,
+        parents: &Parents,
+        switch_bodies: &[StmtId],
+        flow: &Flow,
+        into: &mut Preds,
+    ) {
+        let mut cur = l;
+        loop {
+            let Some(&(p, i)) = parents.get(&cur) else { return };
+            match self.ast.stmts.get(p).kind() {
+                StmtKind::CompoundStmt => {
+                    let kids = self.children(p);
+                    for &k in kids[..i].iter().rev() {
+                        if self.ift_end(k, flow, into, &kids) == End::Done {
+                            return;
+                        }
+                    }
+                    if switch_bodies.contains(&p) {
+                        // The switch itself: good.
+                        return;
+                    }
+                    cur = p;
+                }
+                // `case 1: case 2:` and `L: case 2:`: good; a
+                // `[[likely]]` on the label is transparent.
+                StmtKind::CaseStmt | StmtKind::DefaultStmt | StmtKind::LabelStmt if cur == l => {
+                    return;
+                }
+                // `[[likely]] case 1:` and `L: case 1:` (not the label's own
+                // sub-statement): transparent.
+                StmtKind::AttributedStmt | StmtKind::LabelStmt => cur = p,
+                // `case 1: { case 2: }`: the first label's block is empty
+                // and its sub-statement is clang's last statement.
+                StmtKind::CaseStmt | StmtKind::DefaultStmt => {
+                    into.unannotated += 1;
+                    return;
+                }
+                // `if (c) { case 1: }`, `while (c) { case 1: }`: the
+                // block entered from the condition (clang's condition
+                // block, an unannotated predecessor when reached).
+                StmtKind::IfStmt | StmtKind::WhileStmt | StmtKind::ForStmt
+                    if self.ift_branch_of(p, cur) =>
+                {
+                    if flow.before(cur) {
+                        into.unannotated += 1;
+                    }
+                    return;
+                }
+                // A label in a `do` or range-`for` body, or elsewhere: not
+                // followed.
+                _ => return,
+            }
+        }
+    }
+
+    /// Whether `s` is a branch of `if` statement `p`, or the body of
+    /// `while` or `for` statement `p`.
+    fn ift_branch_of(&self, p: StmtId, s: StmtId) -> bool {
+        let st = &self.ast.stmts;
+        if st.get(p).kind() == StmtKind::IfStmt {
+            let d = st.if_data(p);
+            d.then == Some(s) || d.els == Some(s)
+        } else {
+            st.loop_data(p).body == Some(s)
+        }
+    }
+
+    /// Adds the predecessor ending with statement `s` to `into`; `End::
+    /// Empty` when `s` holds no CFG element. `kids` are the statements of
+    /// the block holding `s` (an unreachable predecessor is searched
+    /// backwards for an annotation).
+    fn ift_end(&self, s: StmtId, flow: &Flow, into: &mut Preds, kids: &[StmtId]) -> End {
+        let st = &self.ast.stmts;
+        match st.get(s).kind() {
+            StmtKind::NullStmt => End::Empty,
+            StmtKind::CompoundStmt => {
+                let inner = self.children(s);
+                for &k in inner.iter().rev() {
+                    if self.ift_end(k, flow, into, &inner) == End::Done {
+                        return End::Done;
+                    }
+                }
+                End::Empty
+            }
+            StmtKind::CaseStmt | StmtKind::DefaultStmt => {
+                let sub = self.ift_kids(s)[0];
+                if self.ift_end(sub, flow, into, &[]) == End::Empty {
+                    // clang `getLastStmt`: an empty case block ends with its
+                    // sub-statement (`case 1: ;`, `case 1: {}`).
+                    into.unannotated += 1;
+                }
+                End::Done
+            }
+            StmtKind::LabelStmt => self.ift_end(st.sub_stmt(s), flow, into, &[]),
+            StmtKind::AttributedStmt if self.ift_is_fallthrough(s) => {
+                into.annotated += 1;
+                if !flow.before(s) {
+                    into.dead.push(s);
+                }
+                End::Done
+            }
+            StmtKind::AttributedStmt => self.ift_end(st.sub_stmt(s), flow, into, kids),
+            _ if !flow.before(s) => {
+                // An unreachable straight-line run falling into the label:
+                // its last annotation, if any.
+                if matches!(st.get(s).kind(), StmtKind::ExprStmt | StmtKind::DeclStmt) {
+                    let at = kids.iter().position(|&k| k == s).unwrap_or(0);
+                    for &k in kids[..at].iter().rev() {
+                        match st.get(k).kind() {
+                            StmtKind::AttributedStmt if self.ift_is_fallthrough(k) => {
+                                into.annotated += 1;
+                                into.dead.push(k);
+                                break;
+                            }
+                            StmtKind::ExprStmt | StmtKind::DeclStmt | StmtKind::NullStmt => {}
+                            _ => break,
+                        }
+                    }
+                }
+                End::Done
+            }
+            StmtKind::IfStmt => {
+                let d = *st.if_data(s);
+                for b in [d.then, d.els].into_iter().flatten() {
+                    // An empty branch ends with the condition.
+                    if flow.after(b) && self.ift_end(b, flow, into, &[]) == End::Empty {
+                        into.unannotated += 1;
+                    }
+                }
+                // The false edge of an `if` with no else.
+                if d.els.is_none() && flow.after(s) {
+                    into.unannotated += 1;
+                }
+                End::Done
+            }
+            _ => {
+                if flow.after(s) {
+                    into.unannotated += 1;
+                }
+                End::Done
+            }
+        }
+    }
+
+    /// clang: the block of label `l`, past empty case blocks, holds
+    /// nothing but a `break` (only the `break;` note).
+    fn ift_break_only(&self, l: StmtId, parents: &Parents) -> bool {
+        let st = &self.ast.stmts;
+        let mut s = l;
+        loop {
+            if let Some(f) = self.ift_first(s) {
+                return st.get(f).kind() == StmtKind::BreakStmt;
+            }
+            // The block goes on with the next statement.
+            let mut cur = s;
+            loop {
+                let Some(&(p, i)) = parents.get(&cur) else { return false };
+                match st.get(p).kind() {
+                    StmtKind::CompoundStmt => {
+                        let kids = self.children(p);
+                        if let Some(&n) = kids.get(i + 1) {
+                            s = n;
+                            break;
+                        }
+                        cur = p;
+                    }
+                    StmtKind::CaseStmt
+                    | StmtKind::DefaultStmt
+                    | StmtKind::LabelStmt
+                    | StmtKind::AttributedStmt => cur = p,
+                    _ => return false,
+                }
+            }
+        }
+    }
+
+    /// The first CFG element (or terminator) of `s`, past labels; `None`
+    /// when it has none.
+    fn ift_first(&self, s: StmtId) -> Option<StmtId> {
+        let st = &self.ast.stmts;
+        match st.get(s).kind() {
+            StmtKind::NullStmt => None,
+            StmtKind::CompoundStmt => self.children(s).into_iter().find_map(|c| self.ift_first(c)),
+            StmtKind::CaseStmt | StmtKind::DefaultStmt | StmtKind::LabelStmt => {
+                self.ift_first(self.ift_kids(s)[0])
+            }
+            StmtKind::AttributedStmt if !self.ift_is_fallthrough(s) => {
+                self.ift_first(st.sub_stmt(s))
+            }
+            _ => Some(s),
+        }
+    }
+
+    /// `s` is an attributed statement with `[[fallthrough]]`.
+    fn ift_is_fallthrough(&self, s: StmtId) -> bool {
+        self.ast
+            .lists
+            .iter::<kiln_ast::AttrId>(self.ast.stmts.stmt_attrs(s))
+            .any(|a| self.ast.attrs.get(a).kind == AttrKind::FALLTHROUGH)
+    }
+}

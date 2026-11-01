@@ -12,6 +12,7 @@ use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
+use crate::class::InitStyle as CtorStyle;
 use crate::conv::{self, ConvCtx};
 use crate::init::InitList;
 use crate::lookup::LookupKind;
@@ -457,6 +458,16 @@ impl Sema<'_, '_> {
             let init = self.init_from_list_at(ty, l, Some(lparen));
             return self.builder().compound_literal(ty, init, lparen);
         }
+        if self.is_dependent_type(ty) || self.init_list_type_dependent(l) {
+            // Initialized at instantiation (clang's dependent
+            // `InitializationSequence` keeps the list as written).
+            if self.func.is_none() {
+                self.unsupported("compound literals at namespace scope", lparen);
+                return self.recover(ty, &flat, lparen);
+            }
+            let il = self.dependent_init_list(l);
+            return self.builder().compound_literal(ty, il, lparen);
+        }
         if self.ast.types.is_array(ty) {
             return self.array_compound_literal(ty, l, lparen, &flat);
         }
@@ -473,11 +484,15 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(msg, ty));
             return self.recover(ty, &flat, lparen);
         }
-        if let Some(what) = self.temporary_unsupported(ty) {
+        let class = self.ast.types.as_record(ty).is_some();
+        if class && self.require_non_abstract_alloc(lparen, ty) {
+            return self.recover(ty, &flat, lparen);
+        }
+        if !class && let Some(what) = self.temporary_unsupported(ty) {
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, &flat, lparen);
         }
-        if l.items.len() > 1 && !self.is_vector_type(ty) {
+        if l.items.len() > 1 && !class && !self.is_vector_type(ty) {
             self.error(DiagId::sema_builtin_func_cast_more_than_one_arg, lparen);
             return self.recover(ty, &flat, lparen);
         }
@@ -486,11 +501,21 @@ impl Sema<'_, '_> {
             return self.recover(ty, &flat, lparen);
         }
         let to = conv::strip_cv(self, ty);
-        let init = self.init_from_list_at(to, l, Some(lparen));
+        // A class with constructors: [over.match.list] as for an explicit
+        // cast, a `CXXTemporaryObjectExpr` (clang `CreateCStyleCast` with
+        // `InitList`, entity `EK_CompoundLiteralInit`).
+        let constructed = if class {
+            self.list_construct(to, l, CtorStyle::DirectList, lparen, Some(l.rbrace))
+        } else {
+            None
+        };
+        let init = constructed.unwrap_or_else(|| self.init_from_list_at(to, l, Some(lparen)));
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], lparen);
         }
-        self.builder().compound_literal(ty, init, lparen)
+        let e = self.builder().compound_literal(ty, init, lparen);
+        // A class literal is a temporary ([class.temporary]/4).
+        if class { self.maybe_bind_temporary(e) } else { e }
     }
 
     /// An array compound literal: a prvalue of the written array type, its

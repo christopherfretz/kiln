@@ -13,8 +13,8 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Setup
 
-- kiln: debug build of the WP-212 branch (commit in the generated "Run" table below), with main
-  `54936d99` (WP-201 merged) merged in.
+- kiln: debug build of the WP-211 branch (commit in the generated "Run" table below), with main
+  `00061c4e` (WP-193 merged) merged in.
 - Tests and headers: libc++ `llvmorg-19.1.7`. The tests come from the sparse checkout. The headers,
   `libc++.so`, `libc++experimental.a` and `libc++abi` come from the clang 19 packages in the
   container.
@@ -24,7 +24,12 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Reading
 
-**Overall: 581/585 (99.3%)** on main `ae178da1` (WP-212/215/213/206 batch + WP-214), up from
+**Overall: 585/585 (100.0%)** on the WP-211 branch (main `00061c4e` merged in), up from 581,
+with no test newly failing. WP-211 clears the last four: GNU `_Complex` (support.limits
+`is_specialized` and `complex.version`, utility `pairs.by.type`) and the `if constexpr` on a
+static member function of the current instantiation in mdspan's `__rank_` (`mdspan.version`).
+
+Before WP-211: **581/585 (99.3%)** on main `ae178da1` (WP-212/215/213/206 batch + WP-214), up from
 576 (WP-212's branch run) and 571 (main after WP-214), with no test newly failing. Per directory:
 utility 144/145, support.limits 109/112, string.view 86/88 → 88/88, span 35/35, array 37/37,
 bit 15/15, meta 148/148, initlist 5/5. The four remaining failures are all in WP-211's scope
@@ -94,24 +99,22 @@ KILLED, TIMEOUT or hang results. Every failure is at the compile stage except on
 utility.
 
 Per directory, WP-169 → main `e238afa8` → WP-178 → WP-176 → WP-199 (merged with main `f6eed8fa`) →
-WP-207 (merged with main `b7fc2cf7`) → WP-201 (main `58cb7724`) → WP-212 (main `54936d99`):
+WP-207 (merged with main `b7fc2cf7`) → WP-201 (main `58cb7724`) → WP-212 (main `54936d99`) →
+WP-211 (main `00061c4e`):
 
-| directory | WP-169 | main | WP-178 | WP-176 | WP-199 | WP-207 | WP-201 | WP-212 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| meta | 131/148 | 131/148 | 131/148 | 148/148 | 148/148 | 148/148 | 148/148 | 148/148 |
-| utility | 83/145 | 84/145 | 102/145 | 104/145 | 116/145 | 116/145 | 141/145 | 141/145 |
-| array | 32/37 | 32/37 | 32/37 | 33/37 | 36/37 | 36/37 | 37/37 | 37/37 |
-| string.view | 54/88 | 56/88 | 56/88 | 65/88 | 68/88 | 73/88 | 79/88 | 86/88 |
-| span | 18/35 | 18/35 | 20/35 | 20/35 | 22/35 | 34/35 | 34/35 | 35/35 |
-| bit | 14/15 | 14/15 | 14/15 | 14/15 | 14/15 | 14/15 | 15/15 | 15/15 |
-| support.limits | 83/112 | 83/112 | 83/112 | 93/112 | 108/112 | 108/112 | 109/112 | 109/112 |
-| initlist | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 |
+| directory | WP-169 | main | WP-178 | WP-176 | WP-199 | WP-207 | WP-201 | WP-212 | WP-211 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| meta | 131/148 | 131/148 | 131/148 | 148/148 | 148/148 | 148/148 | 148/148 | 148/148 | 148/148 |
+| utility | 83/145 | 84/145 | 102/145 | 104/145 | 116/145 | 116/145 | 141/145 | 141/145 | 145/145 |
+| array | 32/37 | 32/37 | 32/37 | 33/37 | 36/37 | 36/37 | 37/37 | 37/37 | 37/37 |
+| string.view | 54/88 | 56/88 | 56/88 | 65/88 | 68/88 | 73/88 | 79/88 | 86/88 | 88/88 |
+| span | 18/35 | 18/35 | 20/35 | 20/35 | 22/35 | 34/35 | 34/35 | 35/35 | 35/35 |
+| bit | 14/15 | 14/15 | 14/15 | 14/15 | 14/15 | 14/15 | 15/15 | 15/15 | 15/15 |
+| support.limits | 83/112 | 83/112 | 83/112 | 93/112 | 108/112 | 108/112 | 109/112 | 109/112 | 112/112 |
+| initlist | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 |
 
-**What blocks the rest** (first-error counts; see the generated cluster table):
-
-1. `use of undeclared identifier '_Complex'` (3 first): GNU `_Complex` in support.limits
-   `is_specialized`/`numeric_limits` tests and `pairs.by.type` (WP-211).
-2. `constexpr if condition is not a constant expression` (1): `mdspan.version` (WP-211).
+**What blocks the rest:** nothing in the gate list; every non-UNSUPPORTED test passes. The 51
+driver-UNSUPPORTED tests (mostly `.verify.cpp`, which needs `-verify`) are the next frontier.
 
 **Caveats.**
 - The driver only checks that a `.compile.fail.cpp` test fails to compile without a crash, not
@@ -126,17 +129,17 @@ WP-207 (merged with main `b7fc2cf7`) → WP-201 (main `58cb7724`) → WP-212 (ma
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `28f73100` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `607aa3d3` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
 | command | `cargo xtask libcxx --gate m3 -j 2` |
-| compile flags | `-std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL -I <repo>/.toolchain/llvm-project/libcxx/test/support <ADDITIONAL_COMPILE_FLAGS> <test>` |
+| compile flags | `-std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL -I <llvm-project>/libcxx/test/support <ADDITIONAL_COMPILE_FLAGS> <test>` |
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 412.9 s |
-| peak RSS | 84 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
+| wall time | 392.2 s |
+| peak RSS | 77 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -145,26 +148,26 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 | directory | total | pass | fail | xfail | xpass | unsupported (driver) | killed | timeout | error | pass rate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | `std/utilities/meta` | 155 | 148 | 0 | 0 | 0 | 7 (6) | 0 | 0 | 0 | 100.0% |
-| `std/utilities/utility` | 168 | 144 | 1 | 0 | 0 | 23 (19) | 0 | 0 | 0 | 99.3% |
+| `std/utilities/utility` | 168 | 145 | 0 | 0 | 0 | 23 (19) | 0 | 0 | 0 | 100.0% |
 | `std/containers/sequences/array` | 47 | 37 | 0 | 0 | 0 | 10 (10) | 0 | 0 | 0 | 100.0% |
 | `std/strings/string.view` | 93 | 88 | 0 | 0 | 0 | 5 (5) | 0 | 0 | 0 | 100.0% |
 | `std/containers/views/views.span` | 45 | 35 | 0 | 0 | 0 | 10 (9) | 0 | 0 | 0 | 100.0% |
 | `std/numerics/bit` | 17 | 15 | 0 | 0 | 0 | 2 (2) | 0 | 0 | 0 | 100.0% |
-| `std/language.support/support.limits` | 112 | 109 | 3 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 97.3% |
+| `std/language.support/support.limits` | 112 | 112 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
 | `std/language.support/support.initlist` | 5 | 5 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
-| **total** | 642 | 581 | 4 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 99.3% |
+| **total** | 642 | 585 | 0 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 100.0% |
 
 ### Failures by stage
 
 | directory | compile | link | run | expected-fail-but-succeeded |
 |---|---:|---:|---:|---:|
 | `std/utilities/meta` | 0 | 0 | 0 | 0 |
-| `std/utilities/utility` | 1 | 0 | 0 | 0 |
+| `std/utilities/utility` | 0 | 0 | 0 | 0 |
 | `std/containers/sequences/array` | 0 | 0 | 0 | 0 |
 | `std/strings/string.view` | 0 | 0 | 0 | 0 |
 | `std/containers/views/views.span` | 0 | 0 | 0 | 0 |
 | `std/numerics/bit` | 0 | 0 | 0 | 0 |
-| `std/language.support/support.limits` | 3 | 0 | 0 | 0 |
+| `std/language.support/support.limits` | 0 | 0 | 0 | 0 |
 | `std/language.support/support.initlist` | 0 | 0 | 0 | 0 |
 
 ### Dominant first errors per directory
@@ -174,27 +177,20 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | directory | clusters |
 |---|---|
 | `std/utilities/meta` | — |
-| `std/utilities/utility` | `compile: use of undeclared identifier '…'` (1) |
+| `std/utilities/utility` | — |
 | `std/containers/sequences/array` | — |
 | `std/strings/string.view` | — |
 | `std/containers/views/views.span` | — |
 | `std/numerics/bit` | — |
-| `std/language.support/support.limits` | `compile: use of undeclared identifier '…'` (2); `compile: constexpr if condition is not a constant expression` (1) |
+| `std/language.support/support.limits` | — |
 | `std/language.support/support.initlist` | — |
 
 ### Error clusters
 
-7 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 7:
+0 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 0:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
-| 1 | 3 | 3 | `compile: use of undeclared identifier '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `use of undeclared identifier '_Complex'` |
-| 2 | 1 | 1 | `compile: constexpr if condition is not a constant expression` | `std/language.support/support.limits/support.limits.general/mdspan.version.compile.pass.cpp` | `constexpr if condition is not a constant expression` |
-| 3 | 0 | 3 | `compile: a type specifier is required for all declarations` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `a type specifier is required for all declarations` |
-| 4 | 0 | 3 | `compile: expected '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected '>'` |
-| 5 | 0 | 3 | `compile: expected '…' at end of declaration list` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected ';' at end of declaration list` |
-| 6 | 0 | 3 | `compile: expected parameter declarator` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected parameter declarator` |
-| 7 | 0 | 3 | `compile: non-static data member cannot be constexpr; did you intend to make it static?` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `non-static data member cannot be constexpr; did you intend to make it static?` |
 
 ### Crashes
 

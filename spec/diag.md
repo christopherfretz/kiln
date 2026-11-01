@@ -450,7 +450,9 @@ each with its own context notes, even when the messages are identical
 location twice prints once; and a diagnostic already reported in the
 template definition is not repeated by an instantiation that re-checks
 the same non-dependent construct (clang reuses non-dependent nodes
-instead of rebuilding them, so it never re-diagnoses them). The reverse
+instead of rebuilding them, so it never re-diagnoses them; sema marks
+the exceptions `allow_duplicate`, e.g. the unused-result warnings of an
+expression statement, which clang does rebuild). The reverse
 does not hold: a context-free diagnostic after an instantiation's still
 prints.
 
