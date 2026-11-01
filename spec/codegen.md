@@ -966,8 +966,15 @@ clang 19 `CGAtomic` at -O0, mirrored:
   yielding `true`; post-increment is `atomicrmw xchg i8 1` (never
   volatile) yielding the old byte in its memory form (`i8`), which clang
   then stores or extends as if it were the `i1` value. Where the value
-  must meet an `i1` (a conditional operator's `phi`) clang 19 emits
-  invalid IR; kiln reports an IR lowering error there.
+  must meet an `i1` clang 19 emits invalid IR; kiln deviates there
+  (WP-183): `eval_bool` (a branch condition, `!`, `&&`, `||`, a `?:`
+  condition) truncates an `i8` value of a `bool` expression to `i1`, and
+  `emit_conditional` converts its second arm to the first arm's type
+  when one is `i1` and the other `i8` (`trunc`, or `zext` that folds a
+  constant), so the `phi` keeps clang's type (the first arm's). Two `i8`
+  arms stay an `i8` `phi`, as in clang (valid IR, oracle-checked in
+  `tests/codegen/atomic_bool_inc.cpp`); the invalid-in-clang cases are a
+  run test with no oracle (`ext.c11.atomic/bool-postinc-run.cpp`).
 - **`_Atomic` aggregates in calls (WP-183).** `_Atomic(T)` with `T` an
   aggregate is evaluated as an aggregate (`is_atomic_aggregate`, clang's
   `getEvaluationKind`) for a `return` operand, a parameter, an argument

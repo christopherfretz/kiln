@@ -561,7 +561,13 @@ impl Cg<'_> {
     pub(crate) fn eval_bool(&mut self, e: ExprId) -> R<V> {
         let q = self.ast.exprs.get(e).ty();
         let v = self.emit_scalar(e)?;
-        Ok(if self.is_bool(q) { v } else { self.conv_to_bool(v, q) })
+        if !self.is_bool(q) {
+            return Ok(self.conv_to_bool(v, q));
+        }
+        // A post-increment of `_Atomic(bool)` yields its old byte in memory
+        // form (`i8`, `atomic_incdec`); clang 19 branches on it as is
+        // (invalid IR), kiln truncates it (spec/codegen.md, WP-183).
+        Ok(if self.f.fir.ty(&self.m, v) == LTy::I8 { self.cast(CastOp::Trunc, v, LTy::I1) } else { v })
     }
 
     fn zext_or_same(&mut self, v: V, to: LTy) -> V {
@@ -1258,7 +1264,19 @@ impl Cg<'_> {
         let lb = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(rb, false);
-        let y = self.cond_eval(start, |cg| cg.emit_scalar_opt(b))?;
+        let mut y = self.cond_eval(start, |cg| cg.emit_scalar_opt(b))?;
+        // A `bool` arm that is a post-increment of `_Atomic(bool)` is an
+        // `i8` (`atomic_incdec`); clang 19 feeds it to a phi of the other
+        // arm's type (invalid IR). Kiln converts the second arm to the
+        // first's type, which stays the phi's type as in clang
+        // (spec/codegen.md, WP-183).
+        if let (Some(xv), Some(yv)) = (x, y) {
+            let (xt, yt) = (self.f.fir.ty(&self.m, xv), self.f.fir.ty(&self.m, yv));
+            if xt != yt && matches!((xt, yt), (LTy::I1, LTy::I8) | (LTy::I8, LTy::I1)) {
+                let op = if xt == LTy::I1 { CastOp::Trunc } else { CastOp::ZExt };
+                y = Some(self.cast(op, yv, xt));
+            }
+        }
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
         Ok(match (x, y) {
