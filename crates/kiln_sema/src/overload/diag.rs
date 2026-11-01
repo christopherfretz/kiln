@@ -294,6 +294,7 @@ impl Sema<'_, '_> {
             .filter(|&c| {
                 let cand = set.cand(c);
                 !matches!(cand.failure, CandidateFailure::InhCtorSlice { .. })
+                    || cand.template.is_some()
                     || !matches!(
                         self.special_kind_of(cand.func()),
                         Some(SpecialKind::CopyCtor | SpecialKind::MoveCtor)

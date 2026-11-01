@@ -109,6 +109,43 @@ impl Oven {
                     bi::SUBNORMAL => c == Class::Subnormal,
                     bi::ZERO => c == Class::Zero,
                     bi::SIGNALING => softfloat::is_signaling(float_of(sub & 15), a),
+                    bi::MASK => {
+                        let k = float_of(sub & 15);
+                        let neg = a & softfloat::sign_bit(k) != 0;
+                        let bit = match c {
+                            Class::NaN if softfloat::is_signaling(k, a) => 0x1,
+                            Class::NaN => 0x2,
+                            Class::Inf => {
+                                if neg {
+                                    0x4
+                                } else {
+                                    0x200
+                                }
+                            }
+                            Class::Normal => {
+                                if neg {
+                                    0x8
+                                } else {
+                                    0x100
+                                }
+                            }
+                            Class::Subnormal => {
+                                if neg {
+                                    0x10
+                                } else {
+                                    0x80
+                                }
+                            }
+                            Class::Zero => {
+                                if neg {
+                                    0x20
+                                } else {
+                                    0x40
+                                }
+                            }
+                        };
+                        b & bit != 0
+                    }
                     _ => c == Class::Normal,
                 };
                 Ok(u128::from(r))

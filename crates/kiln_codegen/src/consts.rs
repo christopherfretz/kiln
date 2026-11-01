@@ -322,17 +322,16 @@ impl Cg<'_> {
                     .members(self.ast.first(*d))
                     .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
                     .collect();
-                let mut elems = Vec::with_capacity(rec.members.len());
+                // clang `ConstStructBuilder`: the field constants at their
+                // offsets; padding (and the byte of an empty class) is left
+                // to `ConstantAggregateBuilder::buildFrom`.
+                let mut elems: Vec<(u64, Value)> = Vec::with_capacity(rec.members.len());
                 for (i, m) in rec.members.iter().enumerate() {
                     let sub = by_member[i]
                         .and_then(|f| fields.iter().position(|&x| x == f))
                         .and_then(|p| inits.get(p).copied());
                     if by_member[i].is_none() {
-                        let mt = self.ir(m);
-                        // clang `ConstantAggregateBuilder`: padding (and
-                        // the byte of an empty class) is `undef`.
                         if matches!(m, IrType::Array(..) | IrType::Int(8)) {
-                            elems.push(self.m.const_undef(mt));
                             continue;
                         }
                         return err(
@@ -340,17 +339,9 @@ impl Cg<'_> {
                             "base-class subobjects in constants are not supported yet (M3)",
                         );
                     }
-                    elems.push(self.image_const(img, off + offs[i], m, sub)?);
+                    elems.push((offs[i], self.image_const(img, off + offs[i], m, sub)?));
                 }
-                // clang's ConstantAggregateBuilder: the named type when the
-                // element types match it, else a literal struct.
-                let want = self.m.types.struct_fields(t).map(<[LTy]>::to_vec).unwrap_or_default();
-                let got: Vec<LTy> = elems.iter().map(|&v| self.m.const_type(v)).collect();
-                if want == got {
-                    self.m.const_struct(t, &elems).map_err(|e| ir_err(&e))
-                } else {
-                    self.m.const_anon_struct(&elems, rec.packed).map_err(|e| ir_err(&e))
-                }
+                self.build_struct_const(t, rec.size, &elems)
             }
             IrType::Struct(ms, packed) => {
                 let offs = self.tys.struct_offsets(ms, *packed);
@@ -368,6 +359,80 @@ impl Cg<'_> {
             | IrType::ScalableVector(..)
             | IrType::TargetExt(_) => err(None, "vector constants are not supported yet (M3)"),
         }
+    }
+
+    /// clang 19 `ConstantAggregateBuilder::buildFrom` for a struct of
+    /// `elems` (offset, constant) whose IR type `t` has alloc size `size`:
+    /// the natural unpacked layout when it fits (tail-padded with `undef`
+    /// bytes), else a packed one with explicit padding; the named type
+    /// when layout-identical, else a literal struct.
+    fn build_struct_const(&mut self, t: LTy, size: u64, fields: &[(u64, Value)]) -> R<Value> {
+        // `ConstantAggregateBuilder::add`, appending: padding fills a gap
+        // the natural layout would leave; a misaligned element makes the
+        // layout unnatural.
+        let mut natural = true;
+        let mut elems: Vec<(u64, Value)> = Vec::with_capacity(fields.len());
+        let mut end = 0u64;
+        for &(o, v) in fields {
+            let (s, a) = self.ir_layout(self.m.const_type(v));
+            let aligned = end.next_multiple_of(a);
+            if aligned > o || !o.is_multiple_of(a) {
+                natural = false;
+            } else if aligned < o {
+                let pad = self.padding_const(o - end);
+                elems.push((end, pad));
+            }
+            elems.push((o, v));
+            end = o + s;
+        }
+        // `buildFrom`.
+        let desired = size.max(end);
+        let align =
+            elems.iter().map(|&(_, v)| self.ir_layout(self.m.const_type(v)).1).max().unwrap_or(1);
+        let aligned = end.next_multiple_of(align);
+        let mut packed = false;
+        let mut unpacked: Vec<Value> = elems.iter().map(|&(_, v)| v).collect();
+        if desired < aligned || !desired.is_multiple_of(align) {
+            natural = false;
+            packed = true;
+        } else if desired > aligned {
+            let pad = self.padding_const(desired - end);
+            unpacked.push(pad);
+        }
+        let mut packed_elems = Vec::new();
+        if !natural {
+            let mut so_far = 0u64;
+            for &(o, v) in &elems {
+                let (s, a) = self.ir_layout(self.m.const_type(v));
+                if so_far.next_multiple_of(a) != o {
+                    packed = true;
+                }
+                if o != so_far {
+                    let pad = self.padding_const(o - so_far);
+                    packed_elems.push(pad);
+                }
+                packed_elems.push(v);
+                so_far = o + s;
+            }
+            if packed && so_far < desired {
+                let pad = self.padding_const(desired - so_far);
+                packed_elems.push(pad);
+            }
+        }
+        let out = if packed { packed_elems } else { unpacked };
+        let got: Vec<LTy> = out.iter().map(|&v| self.m.const_type(v)).collect();
+        let want = self.m.types.struct_fields(t).map(<[LTy]>::to_vec);
+        if want.as_deref() == Some(&got[..]) && self.m.types.struct_is_packed(t) == packed {
+            self.m.const_struct(t, &out).map_err(|e| ir_err(&e))
+        } else {
+            self.m.const_anon_struct(&out, packed).map_err(|e| ir_err(&e))
+        }
+    }
+
+    /// clang `ConstantAggregateBuilderUtils::getPadding`.
+    fn padding_const(&mut self, n: u64) -> Value {
+        let t = if n > 1 { self.m.types.array(LTy::I8, n) } else { LTy::I8 };
+        self.m.const_undef(t)
     }
 
     /// A union constant (clang `ConstStructBuilder` for unions): the active

@@ -721,6 +721,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     fn bare_function_type(&mut self, d: DeclId) {
         let ast = self.ast;
         let kind = ast.decls.get(d).kind();
+        // An inheriting constructor has the inherited constructor's
+        // signature (clang `mangleFunctionEncoding`).
+        let d = ast.decls.inherited_ctor(d).unwrap_or(d);
         let mut src = d;
         let mut with_ret = false;
         if let Some((t, _)) = self.spec_of(d) {
@@ -879,7 +882,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         self.method_quals(d);
         let p = parent.expect("nested name has a parent");
         if let Some((t, args)) = spec {
-            self.template_prefix(t, stop);
+            self.template_prefix(t, stop, v);
             self.template_args(args);
         } else {
             self.prefix(p, stop);
@@ -955,7 +958,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             return;
         }
         if let Some((t, args)) = self.spec_of(dc) {
-            self.template_prefix(t, stop);
+            self.template_prefix(t, stop, Structor::Complete);
             self.template_args(args);
         } else {
             if let Some(c) = self.closure_prefix_decl(dc) {
@@ -969,7 +972,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     }
 
     /// <template-prefix> of template `t` within a nested name.
-    fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>) {
+    /// `v` is the structor variant of a constructor template
+    /// specialization (`C1`/`C2`).
+    fn template_prefix(&mut self, t: DeclId, stop: Option<DeclId>, v: Structor) {
         let key = Sub::Template(self.ast.first(t));
         if self.try_sub(key) {
             return;
@@ -977,7 +982,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some(p) = self.parent(t) {
             self.prefix(p, stop);
         }
-        self.unqualified(t, Structor::Complete);
+        self.unqualified(t, v);
         self.subs.push(key);
     }
 
@@ -1024,6 +1029,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     match ast.types.canonical_view(QualType::unqual(t)) {
                         TypeView::Record(base) => self.name(base, Structor::Complete),
                         _ => self.ty(QualType::unqual(t)),
+                    }
+                    // The inherited constructor template specialization's
+                    // arguments follow (clang `mangleUnqualifiedName`'s
+                    // `InheritedTemplateArgs`).
+                    if let Some(bc) = ast.decls.inherited_ctor(d)
+                        && let Some((_, args)) = self.spec_of(bc)
+                    {
+                        self.template_args(args);
                     }
                 } else {
                     self.out.push_str(if v == Structor::Base { "C2" } else { "C1" });

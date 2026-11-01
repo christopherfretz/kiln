@@ -638,6 +638,7 @@ diag_ids! {
     sema_default_init_const = Error (1) "default initialization of an object of const type {0}";
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
     sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
+    sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
     sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
@@ -647,6 +648,8 @@ diag_ids! {
     sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";
     sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
     note_immediate_function_reason = Note (4) "'{0}' is an immediate function because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} function '{3}'{1:| and that call is not a constant expression}";
+    note_immediate_default_init_reason = Note (5) "'{0}' is an immediate {1:function|constructor} because the default initializer of '{2}' contains a call to {3:an immediate|a consteval} function '{4}' and that call is not a constant expression";
+    note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
     sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
     sema_block_extern_init = Error (0) "declaration of block scope identifier with linkage cannot have an initializer";
     sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";
@@ -847,6 +850,22 @@ diag_ids! {
     sema_switch_into_protected_scope = Error (0) "cannot jump from switch statement to this case label";
     sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
     note_protected_by_variable_init = Note (0) "jump bypasses variable initialization";
+    // ----- jump-scope checking (WP-153; clang JumpDiagnostics.cpp)
+    sema_indirect_goto_in_protected_scope = Error (1) "cannot jump from this {0:indirect|asm} goto statement to one of its possible targets";
+    note_indirect_goto_target = Note (1) "possible target of {0:indirect|asm} goto statement";
+    note_protected_by_variable_nontriv_destructor = Note (0) "jump bypasses variable with a non-trivial destructor";
+    note_protected_by_vla = Note (0) "jump bypasses initialization of variable length array";
+    note_protected_by_vla_typedef = Note (0) "jump bypasses initialization of VLA typedef";
+    note_protected_by_vla_type_alias = Note (0) "jump bypasses initialization of VLA type alias";
+    note_protected_by_constexpr_if = Note (0) "jump enters controlled statement of constexpr if";
+    note_protected_by_consteval_if = Note (0) "jump enters controlled statement of consteval if";
+    note_protected_by_cxx_try = Note (0) "jump bypasses initialization of try block";
+    note_protected_by_cxx_catch = Note (0) "jump bypasses initialization of catch block";
+    note_enters_statement_expression = Note (0) "jump enters a statement expression";
+    note_exits_dtor = Note (0) "jump exits scope of variable with non-trivial destructor";
+    note_exits_temporary_dtor = Note (0) "jump exits scope of lifetime-extended temporary with non-trivial destructor";
+    note_exits_cxx_try = Note (0) "jump exits try block";
+    note_exits_cxx_catch = Note (0) "jump exits catch block";
     // ----- classes (WP-066b; clang SemaDeclCXX.cpp, SemaAccess.cpp,
     // SemaExprMember.cpp, SemaExprCXX.cpp)
     sema_base_not_class = Error (0) "base specifier must name a class";
@@ -1012,13 +1031,14 @@ diag_ids! {
     sema_capture_not_variable = Error (1) "'{0}' in capture list does not name a variable";
     sema_capture_class_member = Error (1) "class member '{0}' cannot appear in capture list as it is not a variable";
     note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
-    note_deleted_subobject = Note (6) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
-    note_deleted_uninit_field = Note (4) "default constructor of {0} is implicitly deleted because field {1} of {2:reference|const-qualified} type {3} would not be initialized";
+    note_deleted_subobject = Note (6) "{0:default constructor of|copy constructor of|move constructor of|copy assignment operator of|move assignment operator of|destructor of|constructor inherited by} {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
+    note_deleted_uninit_field = Note (5) "{0:default constructor of|constructor inherited by} {1} is implicitly deleted because field {2} of {3:reference|const-qualified} type {4} would not be initialized";
     note_deleted_rvalue_ref_field = Note (3) "copy constructor of {0} is implicitly deleted because field {1} is of rvalue reference type {2}";
     note_deleted_assign_field = Note (5) "{0:copy|move} assignment operator of {1} is implicitly deleted because field {2} is of {3:reference|const-qualified} type {4}";
     note_deleted_copy_user_declared_move = Note (3) "copy {0:constructor|assignment operator} is implicitly deleted because {1} has a user-declared move {2:constructor|assignment operator}";
-    note_deleted_all_const = Note (2) "default constructor of {0} is implicitly deleted because all {1:data members|data members of an anonymous union member} are const-qualified";
+    note_deleted_all_const = Note (3) "{0:default constructor of|constructor inherited by} {1} is implicitly deleted because all {2:data members|data members of an anonymous union member} are const-qualified";
     sema_call_implicitly_deleted_ctor = Error (2) "call to implicitly-deleted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1}";
+    sema_deleted_inherited_ctor_use = Error (2) "constructor inherited by {0} from base class {1} is implicitly deleted";
     sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
     sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
     sema_use_deleted_function = Error (1) "attempt to use a deleted function{0}";
@@ -1180,6 +1200,10 @@ diag_ids! {
     sema_call_too_many_args_at_most = Error (2) "too many arguments to function call, expected at most {0}, have {1}";
     sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
     sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";
+    sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant integer";
+    sema_argument_invalid_range = Error (3) "argument value {0} is outside the valid range [{1}, {2}]";
+    sema_probability_not_constant_float = Error (0) "probability argument to __builtin_expect_with_probability must be constant floating-point expression";
+    sema_probability_out_of_range = Error (0) "probability argument to __builtin_expect_with_probability is outside the range [0.0, 1.0]";
     sema_builtin_passing_incompatible = Error (2) "passing {0} to parameter of incompatible type {1}";
     sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";
     sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";
@@ -1423,6 +1447,8 @@ diag_ids! {
     note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
     note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
     note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
+    note_non_literal_virtual_base = Note (2) "{0:struct|interface|class} with virtual base {1:class|classes} is not a literal type";
+    note_constexpr_virtual_base_here = Note (0) "virtual base class declared here";
     // GNU asm statements (WP-140)
     parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
     parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', or '('";

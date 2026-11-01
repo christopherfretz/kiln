@@ -1552,6 +1552,10 @@ pub struct ColdDeclData {
     /// constructor materializes, [class.inhctor.init]) → the
     /// `ConstructorUsingShadow` it was made for (WP-114).
     pub inheriting_ctor: ColdMap<DeclId, DeclId>,
+    /// Inheriting constructor → the base constructor it stands for (the
+    /// shadow's target or a specialization of it; clang
+    /// `getInheritedConstructor().getConstructor()`; WP-146).
+    pub inherited_ctor: ColdMap<DeclId, DeclId>,
     /// Using-shadow in a class → the member of the class that hides it
     /// ([namespace.udecl]/14; recorded at the class's `}`).
     pub hidden_shadow: ColdMap<DeclId, DeclId>,
@@ -1585,13 +1589,14 @@ impl Default for ColdDeclData {
             binding_var: ColdMap::new("binding_var"),
             ctor_shadow_nominated: ColdMap::new("ctor_shadow_nominated"),
             inheriting_ctor: ColdMap::new("inheriting_ctor"),
+            inherited_ctor: ColdMap::new("inherited_ctor"),
             hidden_shadow: ColdMap::new("hidden_shadow"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 26] {
+    fn rows(&self) -> [MemRow; 27] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1618,6 +1623,7 @@ impl ColdDeclData {
             self.binding_var.mem_row(),
             self.ctor_shadow_nominated.mem_row(),
             self.inheriting_ctor.mem_row(),
+            self.inherited_ctor.mem_row(),
             self.hidden_shadow.mem_row(),
         ]
     }
@@ -2088,6 +2094,21 @@ impl DeclArena {
     /// If `c` is already recorded.
     pub fn set_inheriting_ctor(&mut self, c: DeclId, s: DeclId) -> Result<(), AlreadySet> {
         self.cold.inheriting_ctor.insert(c, s)
+    }
+
+    /// The base constructor inheriting constructor `c` stands for, if
+    /// `c` is one ([class.inhctor.init]).
+    pub fn inherited_ctor(&self, c: DeclId) -> Option<DeclId> {
+        self.cold.inherited_ctor.get(c).copied()
+    }
+
+    /// Records `b` as the base constructor inheriting constructor `c`
+    /// stands for.
+    ///
+    /// # Errors
+    /// If `c` is already recorded.
+    pub fn set_inherited_ctor(&mut self, c: DeclId, b: DeclId) -> Result<(), AlreadySet> {
+        self.cold.inherited_ctor.insert(c, b)
     }
 
     /// The class member hiding using-shadow `s`, if any.
@@ -2921,6 +2942,11 @@ pub mod builtin {
     pub const ISSIGNALING: u32 = 739;
     /// `__builtin_expect` (clang `Builtins.td` signature `LiLiLi`).
     pub const EXPECT: u32 = 528;
+    /// `__builtin_expect_with_probability` (clang `Builtins.td` signature
+    /// `LiLiLid`).
+    pub const EXPECT_WITH_PROBABILITY: u32 = 529;
+    /// `__builtin_isfpclass` (clang `Builtins.td` signature `i.`).
+    pub const ISFPCLASS: u32 = 726;
     /// `__builtin_assume` (clang `Builtins.td` signature `vb`).
     pub const ASSUME: u32 = 148;
     /// `__builtin_trap` (clang `Builtins.td` signature `v`).
@@ -3075,6 +3101,8 @@ pub mod builtin {
         row(ISZERO, "__builtin_iszero", "i.", N | C | T),
         row(ISSIGNALING, "__builtin_issignaling", "i.", N | C | T),
         row(EXPECT, "__builtin_expect", "LiLiLi", N | C),
+        row(EXPECT_WITH_PROBABILITY, "__builtin_expect_with_probability", "LiLiLid", N | C),
+        row(ISFPCLASS, "__builtin_isfpclass", "i.", N | C | T),
         row(ASSUME, "__builtin_assume", "vb", N),
         row(TRAP, "__builtin_trap", "v", N | R),
         row(ABORT, "__builtin_abort", "v", N | R),

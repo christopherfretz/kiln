@@ -262,6 +262,14 @@ impl Sema<'_, '_> {
             return None;
         }
         if inheriting {
+            // [namespace.udecl]/10: `using B::B;` cannot be repeated.
+            if let Some(prev) = self.previous_inheriting_using(class, q.ctx) {
+                let msg = self
+                    .diag(DiagId::sema_using_decl_redeclaration, name_loc)
+                    .with_note(self.diag(DiagId::note_previous_using_decl, prev));
+                self.emit(msg);
+                return None;
+            }
             return Some(self.inheriting_using(class, q, name_loc));
         }
         let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
@@ -427,6 +435,22 @@ impl Sema<'_, '_> {
             let _ = self.builder().constructor_using_shadow(h, target, nominated);
         }
         using
+    }
+
+    /// The location of an earlier `using B::B;` of class `class` naming
+    /// base `base` (found by the `ConstructorUsingShadow`s it made).
+    fn previous_inheriting_using(&self, class: DeclId, base: DeclId) -> Option<Loc> {
+        let def = self.ast.definition(class).unwrap_or(class);
+        let base = self.ast.first(base);
+        self.ast
+            .decls
+            .members(def)
+            .filter(|&m| self.kind_of(m) == DeclKind::ConstructorUsingShadow)
+            .find(|&m| {
+                let ns = self.ast.decls.ctor_shadow_nominated(m);
+                self.ast.shadow_base_class(ns, m) == Some(base)
+            })
+            .map(|m| self.ast.decls.get(m).loc())
     }
 
     /// The constructors class `base` offers to a class inheriting them:
@@ -601,8 +625,9 @@ impl Sema<'_, '_> {
     /// Checks a new declaration `d` named `name` against the using-shadows
     /// of the current scope ([namespace.udecl]/11); on a conflict, reports
     /// it, marks `d` invalid and returns true.
-    pub(crate) fn check_using_shadow_conflict(&mut self, d: DeclId, name: Symbol) -> bool {
-        let shadows = self.current_scope_shadows(name);
+    pub(crate) fn check_using_shadow_conflict(&mut self, d: DeclId, name: DeclName) -> bool {
+        let mut shadows = self.current_scope_raw_dn(name);
+        shadows.retain(|&s| self.kind_of(s) == DeclKind::UsingShadow);
         for s in shadows.into_iter().rev() {
             let t = self.ast.strip_shadow(s);
             if self.ast.first(t) == self.ast.first(d) || !self.using_conflicts(t, d) {
