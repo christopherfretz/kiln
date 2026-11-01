@@ -1593,6 +1593,22 @@ conflict check, the C++17 "asm in constexpr function" extension warning;
 `!srcloc` values in headers and macro expansions do not match clang's
 encoding.
 
+**Deferred (WP-160 item 4): macro `!srcloc` parity.** For a string from a
+macro expansion, clang emits `2^31 + offset`, where the offset is into
+clang's unified source-location space. That space holds, in order: entry 0
+(2 bytes), the main file (size + 1), the predefines buffer (20928 bytes on
+aarch64 for C++26, which is the `-dM` text plus 4213 bytes of other
+builtins), and then one entry of length + 1 per macro expansion. Matching
+it needs two things:
+- kiln_source keeping a clang-compatible offset counter across files.
+- The same sequence of expansion entries as clang: argument
+  pre-expansion runs, the 4060-byte scratch buffer, expansions inside
+  `#if`, and included files.
+
+That is an ABI-free, preprocessor-wide change with no effect on codegen.
+The `!srcloc` value only labels inline-asm backend diagnostics, so it is
+left for a pp/source WP.
+
 ### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
 `act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing
 function (or, outside one, the translation unit with

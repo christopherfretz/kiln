@@ -29,6 +29,11 @@ pub(crate) struct ConstructSite {
     /// The `)` of a parenthesized initializer (the end of a
     /// `CXXParenListInitExpr`).
     pub rparen: Option<Loc>,
+    /// The end of a parenthesized aggregate initialization (P0960) when
+    /// it is neither `rparen` nor `temp_end`: the `)` of `S(x)` and
+    /// `static_cast<S>(x)`, where clang's default member initializers
+    /// take their source location (WP-160).
+    pub agg_end: Option<Loc>,
     /// Where the access and deletion errors go, and their form.
     pub sites: DiagSites,
 }
@@ -41,6 +46,7 @@ impl ConstructSite {
             loc: at,
             temp_end: None,
             rparen: None,
+            agg_end: None,
             sites: DiagSites { access: at, deleted: at, deleted_as: DeletedAs::Call },
         }
     }
@@ -152,7 +158,7 @@ impl Sema<'_, '_> {
         {
             // [dcl.init.general]/16.6.2.2: no constructor is viable, so
             // the aggregate is initialized from the parenthesized list.
-            let rparen = site.rparen.or(site.temp_end).unwrap_or(loc);
+            let rparen = site.rparen.or(site.temp_end).or(site.agg_end).unwrap_or(loc);
             return Some(self.paren_aggregate_init(ty, args, loc, rparen));
         }
         if let Selected::Found(f) | Selected::Deleted(f) = sel
@@ -246,6 +252,7 @@ impl Sema<'_, '_> {
             loc: self.begin_loc(e),
             temp_end: None,
             rparen: None,
+            agg_end: None,
             sites: DiagSites { access: at, deleted: at, deleted_as },
         };
         let c = self.construct_class(to, &[e], InitStyle::Copy, site)?;

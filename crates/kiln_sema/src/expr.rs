@@ -3591,6 +3591,10 @@ impl Sema<'_, '_> {
                 loc,
                 temp_end: None,
                 rparen: None,
+                // clang `InitializationKind::CreateFunctionalCast` /
+                // `CreateCast`: the `)`. A C-style cast's range ends at its
+                // operand's last token, which kiln does not record.
+                agg_end: (style != CastStyle::CStyle).then_some(rparen),
                 sites: crate::class::DiagSites {
                     access: loc,
                     deleted: loc,
