@@ -2002,7 +2002,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     _ => "Dk",
                 });
                 let args: Vec<ArgView> = args
-                    .map(|l| ast.types.args(l).iter().map(|a| a.view()).collect())
+                    .map(|l| {
+                        ast.types.args(l).iter().map(kiln_ast::types::TemplateArg::view).collect()
+                    })
                     .unwrap_or_default();
                 self.type_constraint(c, &args);
                 return;

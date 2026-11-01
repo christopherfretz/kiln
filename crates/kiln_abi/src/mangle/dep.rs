@@ -408,7 +408,7 @@ impl Mangler<'_, '_> {
                 return self.expression(ast.exprs.operand(expr));
             }
             ExprKind::BinaryOperator => {
-                let Some(code) = binary_code(ast.exprs.binary_op(expr)) else { return false };
+                let code = binary_code(ast.exprs.binary_op(expr));
                 self.out.push_str(code);
                 let [lhs, rhs] = ast.exprs.operands(expr);
                 return self.expression(lhs) && self.expression(rhs);
@@ -446,6 +446,40 @@ impl Mangler<'_, '_> {
                 let [lhs, rhs] = ast.exprs.operands(expr);
                 return self.expression(lhs) && self.expression(rhs);
             }
+            ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::CXXUnresolvedConstructExpr
+            | ExprKind::CXXNewExpr => return self.member_or_construct_expression(expr),
+            ExprKind::PackExpansionExpr => {
+                self.out.push_str("sp");
+                return self.expression(ast.exprs.operand(expr));
+            }
+            ExprKind::CStyleCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXConstCastExpr
+            | ExprKind::CXXReinterpretCastExpr
+            | ExprKind::CXXDynamicCastExpr => {
+                self.out.push_str(match node.kind() {
+                    ExprKind::CStyleCastExpr => "cv",
+                    ExprKind::CXXStaticCastExpr => "sc",
+                    ExprKind::CXXConstCastExpr => "cc",
+                    ExprKind::CXXReinterpretCastExpr => "rc",
+                    _ => "dc",
+                });
+                self.ty(node.ty());
+                return self.expression(ast.exprs.operand(expr));
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The member-access, pseudo-destructor, functional-cast and
+    /// `new` forms of [`Self::operator_expression`].
+    fn member_or_construct_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        match node.kind() {
             // clang `mangleMemberExpr`: `dt`/`pt <expression>
             // <unresolved-name>`.
             ExprKind::CXXDependentScopeMemberExpr => {
@@ -509,69 +543,55 @@ impl Mangler<'_, '_> {
                     self.out.push('E');
                 }
             }
-            // clang `CXXNewExprClass`: `[gs] nw|na <expression>* _ <type>
-            // (pi <expression>* E | E)` (a braced initializer has no
-            // encoding here).
-            ExprKind::CXXNewExpr => {
-                let x = ast.exprs.new_extra(expr).clone();
-                let style = ast.exprs.new_init_style(expr);
-                if style == kiln_ast::expr::NewInitStyle::Braces {
+            ExprKind::CXXNewExpr => return self.new_expression(expr),
+            _ => return false,
+        }
+        true
+    }
+
+    /// clang `CXXNewExprClass`: `[gs] nw|na <expression>* _ <type>
+    /// (pi <expression>* E | E)` (a braced initializer has no
+    /// encoding here).
+    fn new_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        let x = *ast.exprs.new_extra(expr);
+        let style = ast.exprs.new_init_style(expr);
+        if style == kiln_ast::expr::NewInitStyle::Braces {
+            return false;
+        }
+        if node.has(kiln_ast::expr::ExprFlags::GLOBAL) {
+            self.out.push_str("gs");
+        }
+        self.out.push_str(if x.array_size.is_some() { "na" } else { "nw" });
+        let placement: Vec<ExprId> =
+            x.placement.map(|l| ast.lists.iter::<ExprId>(l).collect()).unwrap_or_default();
+        for p in placement {
+            if !self.expression(p) {
+                return false;
+            }
+        }
+        self.out.push('_');
+        self.ty(x.allocated_ty);
+        if style == kiln_ast::expr::NewInitStyle::Parens {
+            self.out.push_str("pi");
+            let args: Vec<ExprId> = match x.init {
+                Some(i) if ast.exprs.get(i).kind() == ExprKind::ParenListExpr => {
+                    kiln_ast::ids::ListId::try_new(ast.exprs.get(i).a())
+                        .map(|l| ast.lists.iter::<ExprId>(l).collect())
+                        .unwrap_or_default()
+                }
+                Some(i) => vec![i],
+                None => Vec::new(),
+            };
+            for a in args {
+                if !self.expression(a) {
                     return false;
                 }
-                if node.has(kiln_ast::expr::ExprFlags::GLOBAL) {
-                    self.out.push_str("gs");
-                }
-                self.out.push_str(if x.array_size.is_some() { "na" } else { "nw" });
-                let placement: Vec<ExprId> =
-                    x.placement.map(|l| ast.lists.iter::<ExprId>(l).collect()).unwrap_or_default();
-                for p in placement {
-                    if !self.expression(p) {
-                        return false;
-                    }
-                }
-                self.out.push('_');
-                self.ty(x.allocated_ty);
-                if style == kiln_ast::expr::NewInitStyle::Parens {
-                    self.out.push_str("pi");
-                    let args: Vec<ExprId> = match x.init {
-                        Some(i) if ast.exprs.get(i).kind() == ExprKind::ParenListExpr => {
-                            kiln_ast::ids::ListId::try_new(ast.exprs.get(i).a())
-                                .map(|l| ast.lists.iter::<ExprId>(l).collect())
-                                .unwrap_or_default()
-                        }
-                        Some(i) => vec![i],
-                        None => Vec::new(),
-                    };
-                    for a in args {
-                        if !self.expression(a) {
-                            return false;
-                        }
-                    }
-                    self.out.push('E');
-                } else {
-                    self.out.push('E');
-                }
             }
-            ExprKind::PackExpansionExpr => {
-                self.out.push_str("sp");
-                return self.expression(ast.exprs.operand(expr));
-            }
-            ExprKind::CStyleCastExpr
-            | ExprKind::CXXStaticCastExpr
-            | ExprKind::CXXConstCastExpr
-            | ExprKind::CXXReinterpretCastExpr
-            | ExprKind::CXXDynamicCastExpr => {
-                self.out.push_str(match node.kind() {
-                    ExprKind::CStyleCastExpr => "cv",
-                    ExprKind::CXXStaticCastExpr => "sc",
-                    ExprKind::CXXConstCastExpr => "cc",
-                    ExprKind::CXXReinterpretCastExpr => "rc",
-                    _ => "dc",
-                });
-                self.ty(node.ty());
-                return self.expression(ast.exprs.operand(expr));
-            }
-            _ => return false,
+            self.out.push('E');
+        } else {
+            self.out.push('E');
         }
         true
     }
@@ -676,8 +696,8 @@ impl Mangler<'_, '_> {
 }
 
 /// <operator-name> of a binary operator in an expression.
-pub(super) const fn binary_code(op: BinaryOp) -> Option<&'static str> {
-    Some(match op {
+pub(super) const fn binary_code(op: BinaryOp) -> &'static str {
+    match op {
         BinaryOp::PtrMemD => "ds",
         BinaryOp::PtrMemI => "pm",
         BinaryOp::Mul => "ml",
@@ -711,5 +731,5 @@ pub(super) const fn binary_code(op: BinaryOp) -> Option<&'static str> {
         BinaryOp::AndAssign => "aN",
         BinaryOp::XorAssign => "eO",
         BinaryOp::OrAssign => "oR",
-    })
+    }
 }

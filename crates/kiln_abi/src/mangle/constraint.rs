@@ -17,7 +17,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind};
 use kiln_ast::ids::{ArgListId, DeclId, ExprId, TemplateParamListId};
 use kiln_ast::templates::Requirement;
-use kiln_ast::types::{ArgView, TemplateName};
+use kiln_ast::types::{ArgView, TemplateArg, TemplateName};
 
 /// Where the requires-clause being mangled sits; it decides the
 /// `fp`/`fL` nesting of parameter references (clang's
@@ -53,7 +53,7 @@ impl Mangler<'_, '_> {
         }
         let concept = DeclId::try_new(x.a())?;
         let args = ArgListId::try_new(x.b())
-            .map(|l| ast.types.args(l).iter().skip(1).map(|a| a.view()).collect())
+            .map(|l| ast.types.args(l).iter().skip(1).map(TemplateArg::view).collect())
             .unwrap_or_default();
         Some((concept, args))
     }
@@ -154,31 +154,31 @@ impl Mangler<'_, '_> {
         self.out.push('E');
     }
 
-    /// Whether template template parameter `p`'s template-head differs
-    /// from that of the template argument `a` (clang
+    /// Whether template template parameter `parm`'s template-head differs
+    /// from that of the template argument `arg` (clang
     /// `needToMangleTemplateParam`; heads are compared by their mangling,
     /// ignoring depth).
-    pub(super) fn template_head_differs(&mut self, p: DeclId, a: ArgView) -> bool {
+    pub(super) fn template_head_differs(&mut self, parm: DeclId, arg: ArgView) -> bool {
         let ast = self.ast;
-        let n = match a {
+        let name = match arg {
             ArgView::Pack(l) => match ast.types.args(l).first() {
                 None => return true,
-                Some(x) => return self.template_head_differs(p, x.view()),
+                Some(x) => return self.template_head_differs(parm, x.view()),
             },
             ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. } => n,
             _ => return true,
         };
-        let n = ast.types.canonical_template_name(n);
-        let TemplateName::Template(t) = ast.types.template_name_view(n) else { return true };
+        let name = ast.types.canonical_template_name(name);
+        let TemplateName::Template(t) = ast.types.template_name_view(name) else { return true };
         let (Some(pl), Some(info)) =
-            (ast.template_parm(p).and_then(|x| x.params), ast.template_info(t))
+            (ast.template_parm(parm).and_then(|x| x.params), ast.template_info(t))
         else {
             return true;
         };
-        let head = |anon: &mut AnonIds, l: TemplateParamListId| {
+        let head = |anon: &mut AnonIds, list: TemplateParamListId| {
             let mut m = Mangler::new(ast, anon, "");
             m.head_only = true;
-            m.template_param_list(l);
+            m.template_param_list(list);
             m.out
         };
         let ph = head(self.anon, pl);
@@ -229,7 +229,7 @@ impl Mangler<'_, '_> {
         let mut flat = Vec::new();
         for a in ast.types.args(l) {
             match a.view() {
-                ArgView::Pack(p) => flat.extend(ast.types.args(p).iter().map(|x| x.view())),
+                ArgView::Pack(p) => flat.extend(ast.types.args(p).iter().map(TemplateArg::view)),
                 v => flat.push(v),
             }
         }
@@ -253,7 +253,7 @@ impl Mangler<'_, '_> {
             (true, false) => "fr",
             (true, true) => "fR",
         });
-        let Some(code) = super::dep::binary_code(op) else { return false };
+        let code = super::dep::binary_code(op);
         self.out.push_str(code);
         lhs.is_none_or(|l| self.expression(l)) && rhs.is_none_or(|r| self.expression(r))
     }
@@ -334,7 +334,7 @@ impl Mangler<'_, '_> {
         }
         let Some(concept) = DeclId::try_new(x.a()) else { return false };
         let args: Vec<ArgView> = ArgListId::try_new(x.b())
-            .map(|l| ast.types.args(l).iter().skip(1).map(|a| a.view()).collect())
+            .map(|l| ast.types.args(l).iter().skip(1).map(TemplateArg::view).collect())
             .unwrap_or_default();
         self.type_constraint(concept, &args);
         true
