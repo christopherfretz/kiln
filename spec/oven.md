@@ -316,6 +316,11 @@ literal is one instruction and one step, not an interpreted loop.
   `always_lock_free` is false and `is_lock_free` is not a constant.
   `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops. Every other
   `AtomicExpr` is not a constant (clang's generic note).
+- **`__builtin_va_arg` (WP-171):** a `VAArgExpr` is never a constant: the
+  generic "subexpression not valid in a constant expression" note at the
+  expression (clang has no `VisitVAArgExpr`), as for `va_start`/`va_end`/
+  `va_copy`. It counts as a side effect for `__builtin_constant_p`-style
+  folding (`has_side_effects`).
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
   constant expression", as clang 19): `__builtin_signbit`, the six
   ordered comparisons, the math functions; `__builtin_unreachable` when

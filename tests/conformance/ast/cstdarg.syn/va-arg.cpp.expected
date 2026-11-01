@@ -1,0 +1,35 @@
+Dumping vaget:
+FunctionDecl vaget 'int (__builtin_va_list, int, ...)'
+|-ParmVarDecl used ap '__builtin_va_list':'std::__va_list'
+|-ParmVarDecl used n 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl used aq '__builtin_va_list':'std::__va_list' callinit
+  |   `-CXXConstructExpr '__builtin_va_list':'std::__va_list' 'void () noexcept'
+  |-CallExpr 'void'
+  | |-ImplicitCastExpr 'void (*)(__builtin_va_list &, ...) noexcept' <BuiltinFnToFnPtr>
+  | | `-DeclRefExpr '<builtin fn type>' Function '__builtin_va_start' 'void (__builtin_va_list &, ...) noexcept'
+  | |-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'aq' '__builtin_va_list':'std::__va_list'
+  | `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+  |-DeclStmt
+  | `-VarDecl used p 'P' cinit
+  |   `-VAArgExpr 'P'
+  |     `-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'aq' '__builtin_va_list':'std::__va_list'
+  |-DeclStmt
+  | `-VarDecl used d 'double' cinit
+  |   `-VAArgExpr 'double'
+  |     `-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue ParmVar 'ap' '__builtin_va_list':'std::__va_list'
+  |-CallExpr 'void'
+  | |-ImplicitCastExpr 'void (*)(__builtin_va_list &) noexcept' <BuiltinFnToFnPtr>
+  | | `-DeclRefExpr '<builtin fn type>' Function '__builtin_va_end' 'void (__builtin_va_list &) noexcept'
+  | `-DeclRefExpr '__builtin_va_list':'std::__va_list' lvalue Var 'aq' '__builtin_va_list':'std::__va_list'
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-ImplicitCastExpr 'int' <LValueToRValue>
+      | `-MemberExpr 'int' lvalue .a
+      |   `-DeclRefExpr 'P' lvalue Var 'p' 'P'
+      `-CStyleCastExpr 'int' <NoOp>
+        `-ImplicitCastExpr 'int' <FloatingToIntegral> part_of_explicit_cast
+          `-ImplicitCastExpr 'double' <LValueToRValue> part_of_explicit_cast
+            `-DeclRefExpr 'double' lvalue Var 'd' 'double'
+

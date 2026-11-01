@@ -544,6 +544,7 @@ impl Parser<'_, '_> {
                         | Kw::Extension
                         | Kw::BuiltinOffsetof
                         | Kw::BuiltinBitCast
+                        | Kw::BuiltinVaArg
                         | Kw::BuiltinConvertVector
                         | Kw::BuiltinFile
                         | Kw::BuiltinFileName
@@ -803,6 +804,39 @@ impl Parser<'_, '_> {
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         let (ty, e) = (ty?, e?);
         ok.then(|| self.s.act_on_builtin_bit_cast(ty, e, loc, rparen))
+    }
+
+    /// `__builtin_va_arg ( assignment-expression , type-id )` ([cstdarg.syn],
+    /// C 7.16.1.1; clang `ParseBuiltinPrimaryExpression`).
+    fn parse_builtin_va_arg(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_va_arg'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let e = self.parse_assignment_expr();
+        if self.expect(Punct::Comma).is_none() {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        // The type's checks report where clang's `TypeLoc` begins: past
+        // leading cv-qualifiers (a `QualifiedTypeLoc` has no location of
+        // its own).
+        let mut n = 0;
+        while matches!(self.kw_of(self.peek(n)), Some(Kw::Const | Kw::Volatile)) {
+            n += 1;
+        }
+        let ty_loc = self.peek(n).span.lo;
+        let ty = self.parse_type_id();
+        let ok = self.at(Punct::RParen);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let (e, ty) = (e?, ty?);
+        ok.then(|| self.s.act_on_va_arg(e, ty, ty_loc, loc, rparen))
     }
 
     /// `__builtin_convertvector ( assignment-expression , type-id )`
@@ -1210,6 +1244,7 @@ impl Parser<'_, '_> {
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
+                Kw::BuiltinVaArg => self.parse_builtin_va_arg(),
                 Kw::BuiltinConvertVector => self.parse_builtin_convert_vector(),
                 Kw::Func | Kw::FunctionName | Kw::PrettyFunction => {
                     self.bump();

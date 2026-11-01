@@ -673,9 +673,11 @@ u8_enum!(
 u8_enum!(
     /// The clang type-trait keywords (spec/sema-templates.md §9.1, §9.4):
     /// the `aux` of `TypeTraitExpr`, `ArrayTypeTraitExpr` and
-    /// `ExpressionTraitExpr`. Spellings are the keywords; aliases
-    /// (`__is_same_as`, `__is_convertible_to`, `__is_literal`) are their
-    /// own rows because clang dumps the spelling's trait. Arity, status and
+    /// `ExpressionTraitExpr`. Spellings are the keywords. The clang
+    /// `ALIAS` keywords `__is_same_as` and `__is_literal_type` have rows
+    /// for `__has_builtin`, but a built expression names the aliased
+    /// trait (`__is_same`, `__is_literal`), as clang prints it;
+    /// `__is_convertible_to` is a trait of its own. Arity, status and
     /// the evaluator live in `kiln_sema::templ::builtins::TABLE`.
     TypeTrait {
         /// `__has_nothrow_assign`.
@@ -736,9 +738,9 @@ u8_enum!(
         IsFundamental = "__is_fundamental",
         /// `__is_integral`.
         IsIntegral = "__is_integral",
-        /// `__is_literal` (an alias of `__is_literal_type`).
+        /// `__is_literal`.
         IsLiteral = "__is_literal",
-        /// `__is_literal_type`.
+        /// `__is_literal_type` (an alias of `__is_literal`).
         IsLiteralType = "__is_literal_type",
         /// `__is_lvalue_reference`.
         IsLvalueReference = "__is_lvalue_reference",
@@ -808,7 +810,7 @@ u8_enum!(
         IsAssignable = "__is_assignable",
         /// `__is_convertible`.
         IsConvertible = "__is_convertible",
-        /// `__is_convertible_to` (an alias of `__is_convertible`).
+        /// `__is_convertible_to` (clang's own trait, not an alias).
         IsConvertibleTo = "__is_convertible_to",
         /// `__is_layout_compatible`.
         IsLayoutCompatible = "__is_layout_compatible",
@@ -1108,7 +1110,8 @@ pub struct ColdExprData {
     pub array_trait: ColdMap<ExprId, ArrayTraitExtra>,
     /// `TypeTraitExpr`: the location of the second type argument of a
     /// binary trait (clang reports `__is_base_of`'s incomplete derived
-    /// type there).
+    /// type there); `VAArgExpr`: the begin location of the written type
+    /// (clang's `TypeLoc::getBeginLoc`, where its checks report).
     pub trait_rhs_loc: ColdMap<ExprId, Loc>,
     /// The values of the source-location builtins at a use (§5.8): for a
     /// `SourceLocExpr` its own location and context, for a
@@ -1903,6 +1906,14 @@ impl ExprArena {
         n.has(ExprFlags::ARG_IS_TYPE).then(|| QualType::from_raw(n.a)).flatten()
     }
 
+    /// The `va_list` operand, the written type and the written type's
+    /// begin location of a `VAArgExpr`.
+    pub fn va_arg(&self, e: ExprId) -> (ExprId, QualType, Loc) {
+        let n = self.expect_kind(e, ExprKind::VAArgExpr);
+        let ty_loc = self.cold.trait_rhs_loc.get(e).copied().unwrap_or(n.loc);
+        (ExprId::new(n.a), QualType::from_raw(n.b).expect("VAArgExpr: written type"), ty_loc)
+    }
+
     /// The (unevaluated) operand of a `CXXNoexceptExpr`.
     pub fn noexcept_operand(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CXXNoexceptExpr).a)
@@ -2236,6 +2247,7 @@ impl ExprArena {
             // `CXXDependentScopeMemberExpr` and `PackExpansionExpr` are
             // template expressions (spec/sema-templates.md §2.4).
             ExprKind::CXXNoexceptExpr
+            | ExprKind::VAArgExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CompoundLiteralExpr

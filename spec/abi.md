@@ -713,6 +713,12 @@ errors) with `generate_asm_string` producing LLVM's `$`-syntax as bytes.
 Not implemented: other targets, immediate range validation of operand
 sizes.
 
+### 8.12 Landed (WP-171): `va_arg` classification
+`call::classify_va_arg(tys, q) -> VaArgInfo { kind, needed_int,
+needed_sse }`: on aarch64 the parameter classification (`aarch64_arg`;
+the register counts are unused), on x86_64 `x86_arg(q, 0)` with its
+GPR/SSE counts (both zero means the argument is read from memory).
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

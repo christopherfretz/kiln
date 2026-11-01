@@ -1099,6 +1099,24 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 - **Evaluation:** the Oven answers `true` in a manifestly
   constant-evaluated context and `false` otherwise (spec/oven.md);
   codegen emits `i1 false` (spec/codegen.md).
+- **Library functions** (WP-171, clang `ActOnFunctionDeclarator`'s
+  library-builtin recognition + `AddKnownFunctionAttributes`,
+  `add_known_function_attrs`): the first declaration of a function
+  named in `builtin::LIB` (clang 19's library builtins carrying
+  `NoThrow` / `Const` / `Pure`: `<string.h>`, `<stdio.h>` `*printf`,
+  `<ctype.h>`, `<wchar.h>`, `<math.h>` d/f/l), declared in a namespace
+  scope context (TU or namespace, through linkage specs) with C
+  language linkage and with the row's type ignoring the exception
+  specification, gets implicit `NoThrow` and `Const`/`Pure` attributes
+  (after its written ones). Sig letter `a` is `__builtin_va_list`
+  (decayed when an array), `P` the type of the TU-scope `FILE`
+  typedef (none yet: not recognized). Redeclarations inherit them
+  (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
+  a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
+  true). No `Builtin` attribute is attached, so the call stays an
+  ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
+  calls to intrinsics and its implicit `format` / `alloc_size`
+  attributes (`-Wformat*`) are not modelled.
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:
@@ -1404,6 +1422,32 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   `_Atomic` target are reported at the operator, as clang's C path.
 - `-Watomic-alignment` is reported by codegen (spec/codegen.md §7d).
 
+### 5.12 `__builtin_va_arg` (`builtins.rs`, WP-171)
+- **`act_on_va_arg(list, ty, ty_loc, loc, rparen)`** is clang's
+  `Sema::BuildVAArgExpr`. The operand initializes a
+  `__builtin_va_list &` (an AAPCS64 struct) or, for the x86-64 array
+  `va_list`, decays and must be `__va_list_tag *` (otherwise the
+  reference-binding / conversion error). The type must be complete
+  (`sema_va_arg_incomplete`, with the forward-declaration note),
+  non-abstract (`sema_va_arg_abstract`, with the pure-virtual notes) and
+  POD (`sema_va_arg_non_pod`, `-Wnon-pod-varargs`, an error by default;
+  a reference type is non-POD). A type that undergoes default argument
+  promotion (`va_arg_promotion`: `float`, or a type whose integral
+  promotion differs from it, an enum compared through its underlying
+  type, so `E : short` warns and `enum class` does not) is
+  `sema_va_arg_promotable` (`-Wvarargs`) through `diag_runtime_behavior`.
+  Dependent operands build a dependent `VAArgExpr`; substitution rebuilds
+  through `act_on_va_arg`.
+- **Runtime-behavior diagnostics** (`stmt.rs`, clang
+  `DiagRuntimeBehavior`): inside a function body they are queued on
+  `FnState::runtime_diags` and flushed in `end_function_body`; in an
+  unevaluated operand or an immediate context they are dropped; outside a
+  function (a namespace-scope initializer) they are emitted at once.
+  **Gaps:** clang filters queued diagnostics by CFG reachability
+  (`if (0) va_arg(ap, char)` is silent there, reported here), and a
+  non-dependent expression shared by a template and its instantiation is
+  checked once, at definition.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -1443,6 +1487,27 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   initializer of a `constexpr` variable, and of a const integral
   variable, which is usable in constant expressions. The value is
   stored (§8.3).
+- **Self-reference** (`self_ref.rs`, WP-171; clang `CheckSelfReference`):
+  after the initialization is performed, `act_on_init` walks the
+  converted initializer of a variable without automatic storage
+  duration, or of class or reference type, for uses of the variable
+  itself ([basic.life]/7). A use warns
+  `variable {0} is uninitialized when used within its own
+  initialization` (namespace scope, or class type),
+  `reference {0} is not yet bound to a value ...` (references, any use)
+  or `static variable {0} is suspiciously used ...` (static locals,
+  `-Wstatic-self-init`, inside `-Wuninitialized`), through
+  `diag_runtime_behavior`. As in clang: a value use is an
+  lvalue-to-rvalue conversion, increment/decrement, compound-assignment
+  operand, overloaded-operator argument, copy-constructor argument,
+  `std::move` argument, or a non-static member function call on the
+  variable; `T a = a;` with non-class `T` and copy-initialization is
+  the silencing idiom; a member read in an aggregate initializer list
+  is fine once that member is initialized; unevaluated operands,
+  `constexpr` variables, static data members of non-class type and
+  variables in a linkage specification (clang checks the declaration
+  context) are not diagnosed. Other locals are left to a CFG
+  uninitialized-values analysis kiln does not have.
 
 ### 6.1 Braced lists in expressions and explicit type conversions (`forms.rs`)
 - **Call arguments** `f({...})` ([expr.call]/7):

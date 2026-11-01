@@ -315,6 +315,7 @@ impl Cg<'_> {
             }
             ExprKind::StmtExpr => return self.emit_stmt_expr(e),
             ExprKind::AtomicExpr => return self.emit_atomic_expr(e, None),
+            ExprKind::VAArgExpr => return self.emit_va_arg(e, None),
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
             // clang `VisitInitListExpr` on a vector: `insertelement` of
@@ -1990,6 +1991,11 @@ impl Cg<'_> {
         let q = ast.exprs.get(e).ty();
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
+                if ast.exprs.get(e).kind() == ExprKind::VAArgExpr {
+                    // An ignored slot: the `va_list` advances, nothing is
+                    // copied (clang `EmitAggFinalDestCopy`).
+                    return self.emit_va_arg(e, None).map(|_| ());
+                }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
             }
@@ -2088,8 +2094,14 @@ impl Cg<'_> {
             let fty = ast.types.pointee(pq).expect("function pointer");
             (p, fty, false, None)
         };
-        let sig = self.call_sig(fty, extern_c, &arg_tys);
+        let mut sig = self.call_sig(fty, extern_c, &arg_tys);
         let mut extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
+        // A callee with a `NoThrowAttr` (a recognized C library function)
+        // or a `const` / `pure` attribute.
+        if let Some(d) = direct {
+            let const_pure = crate::builtins::const_pure_attrs(ast, d, &mut extra);
+            sig.nothrow |= const_pure || ast.has_nothrow_attr(d);
+        }
         let mut noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
         if !noreturn {
             let (site, unreachable) = self.noreturn_call(direct, fty);
@@ -2463,6 +2475,7 @@ impl Cg<'_> {
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
             ExprKind::AtomicExpr => self.emit_atomic_expr(e, Some(dest)).map(|_| ()),
+            ExprKind::VAArgExpr => self.emit_va_arg(e, Some(dest)).map(|_| ()),
             ExprKind::CXXThrowExpr => self.emit_throw(e, true),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)

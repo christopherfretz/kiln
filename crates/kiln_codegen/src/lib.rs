@@ -34,6 +34,7 @@ mod module;
 mod new_delete;
 mod stmt;
 mod try_catch;
+mod va_arg;
 mod vtable;
 
 use kiln_abi::Target;
