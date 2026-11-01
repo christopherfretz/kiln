@@ -271,6 +271,10 @@ impl Sema<'_, '_> {
                 _ => None,
             })
             .collect();
+        // Parentheses counted the drained chunks (WP-191 `ParenType`).
+        for p in &mut d.parens {
+            p.0 = p.0.saturating_sub(n_arrays);
+        }
         kids.extend(arrays.iter().filter_map(|a| a.0));
         // [expr.new]/7: only the first bound may be omitted, and only
         // with an initializer.
@@ -316,6 +320,10 @@ impl Sema<'_, '_> {
                 .map(|&(size, loc)| Chunk::Array { size, loc })
                 .chain(rest)
                 .collect();
+            let later = arrays.len().saturating_sub(1);
+            for p in d.parens.iter_mut().filter(|p| p.0 > 0) {
+                p.0 += later;
+            }
             let elem = self.type_for_declarator(tid.base, &d);
             if self.is_error_type(elem) {
                 return self.recover_err(&kids, loc);
