@@ -154,7 +154,8 @@ impl Sema<'_, '_> {
         if l.broken || (!has_default && self.fold_rvalue_int(cond).is_some()) {
             return false;
         }
-        self.switch_cond_enum(cond).is_some_and(|def| self.unhandled_enumerators(def, &l).is_empty())
+        self.switch_cond_enum(cond)
+            .is_some_and(|def| self.unhandled_enumerators(def, &l).is_empty())
     }
 
     /// The checks of the finished switch `sw` on `cond` (clang
@@ -238,8 +239,7 @@ impl Sema<'_, '_> {
         let Some(var) = self.ast.decls.var(v) else { return false };
         let t = &self.ast.types;
         let ty = self.ast.decls.get(v).ty().unwrap_or(kiln_ast::QualType::ERROR);
-        let global =
-            self.has_static_storage(v) || var.spec.tls() != kiln_ast::decl::TlsKind::None;
+        let global = self.has_static_storage(v) || var.spec.tls() != kiln_ast::decl::TlsKind::None;
         global
             && t.effective_quals(ty).contains(kiln_ast::types::Quals::CONST)
             && t.as_enum(t.canonical(ty)).and_then(|d| self.ast.definition(d)) == Some(def)
