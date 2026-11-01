@@ -4060,6 +4060,33 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether a qualified class head is `template<> struct O<long>::I`
+    /// ([temp.expl.spec]/1, a member class of an implicit
+    /// specialization). The header then belongs to the qualifier, and the
+    /// class's own members are ordinary declarations, not explicit
+    /// specializations, so the pending explicit specialization is taken.
+    fn begin_member_class_spec(&mut self, qualified: bool, use_: TagUse) -> bool {
+        let spec = qualified
+            && matches!(use_, TagUse::Definition | TagUse::Declaration)
+            && self.templ.explicit_spec.is_some()
+            && self.at_explicit_head();
+        if spec {
+            self.templ.explicit_spec = None;
+        }
+        spec
+    }
+
+    /// Marks member class `d` explicitly specialized when `spec` (clang
+    /// `CheckMemberSpecialization`): its out-of-line members are then
+    /// defined without `template<>` ([temp.expl.spec]/5).
+    fn finish_member_class_spec(&mut self, spec: bool, d: DeclId) {
+        if spec && let Some((i, _)) = self.ast.member_spec_info(self.ast.first(d)) {
+            self.ast.templates.update_member_spec(i, |m| {
+                m.kind = kiln_ast::templates::SpecKind::ExplicitSpecialization;
+            });
+        }
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -4085,17 +4112,7 @@ impl Sema<'_, '_> {
         {
             self.check_member_spec_header(qualifier, nloc, loc);
         }
-        let member_class_spec = qualifier.is_some()
-            && matches!(use_, TagUse::Definition | TagUse::Declaration)
-            && self.templ.explicit_spec.is_some()
-            && self.at_explicit_head();
-        if member_class_spec {
-            // `template<> struct O<long>::I { ... };` ([temp.expl.spec]/1,
-            // a member class of an implicit specialization): the header
-            // belongs to the qualifier, and the class's own members are
-            // ordinary declarations, not explicit specializations.
-            self.templ.explicit_spec = None;
-        }
+        let member_class_spec = self.begin_member_class_spec(qualifier.is_some(), use_);
         let head = if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
             self.take_template_head(qualifier)
         } else {
@@ -4171,13 +4188,7 @@ impl Sema<'_, '_> {
             self.mark_pattern_next();
             self.builder().record(h, Self::tag_kind_of(keyword), prev)
         };
-        if member_class_spec && let Some((i, _)) = self.ast.member_spec_info(self.ast.first(d)) {
-            // clang `CheckMemberSpecialization`: its out-of-line members
-            // are then defined without `template<>` ([temp.expl.spec]/5).
-            self.ast.templates.update_member_spec(i, |m| {
-                m.kind = kiln_ast::templates::SpecKind::ExplicitSpecialization
-            });
-        }
+        self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
             self.set_member_access(d);
         }

@@ -343,72 +343,6 @@ impl Mangler<'_, '_> {
                     self.template_args(args);
                 }
             }
-            ExprKind::CallExpr => {
-                self.out.push_str("cl");
-                if !self.expression(ast.exprs.callee(e)) {
-                    return false;
-                }
-                let args: Vec<ExprId> = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).collect();
-                for a in args {
-                    if !self.expression(a) {
-                        return false;
-                    }
-                }
-                self.out.push('E');
-            }
-            ExprKind::UnaryOperator => {
-                let code = match ast.exprs.unary_op(e) {
-                    UnaryOp::PostInc | UnaryOp::PreInc => "pp",
-                    UnaryOp::PostDec | UnaryOp::PreDec => "mm",
-                    UnaryOp::AddrOf => "ad",
-                    UnaryOp::Deref => "de",
-                    UnaryOp::Plus => "ps",
-                    UnaryOp::Minus => "ng",
-                    UnaryOp::Not => "co",
-                    UnaryOp::LNot => "nt",
-                    _ => return false,
-                };
-                self.out.push_str(code);
-                return self.expression(ast.exprs.operand(e));
-            }
-            ExprKind::BinaryOperator => {
-                let Some(code) = binary_code(ast.exprs.binary_op(e)) else { return false };
-                self.out.push_str(code);
-                let [l, r] = ast.exprs.operands(e);
-                return self.expression(l) && self.expression(r);
-            }
-            ExprKind::ConditionalOperator => {
-                let Some(c) = ExprId::try_new(n.a()) else { return false };
-                let [t, f] = ast.exprs.cond_arms(e);
-                self.out.push_str("qu");
-                return self.expression(c) && self.expression(t) && self.expression(f);
-            }
-            ExprKind::UnaryExprOrTypeTraitExpr => {
-                // A non-dependent operand is encoded as the integer result,
-                // which needs the evaluator: not supported here.
-                if !n.deps().intersects(ExprDeps::VALUE_INST) {
-                    return false;
-                }
-                let (t, x) = match ast.exprs.trait_kind(e) {
-                    TraitKind::SizeOf => ("st", "sz"),
-                    TraitKind::AlignOf => ("at", "az"),
-                    _ => return false,
-                };
-                if let Some(q) = ast.exprs.trait_type_arg(e) {
-                    self.out.push_str(t);
-                    self.ty(q);
-                } else {
-                    let Some(&sub) = ast.exprs.children(e, &ast.lists).first() else {
-                        return false;
-                    };
-                    self.out.push_str(x);
-                    return self.expression(sub);
-                }
-            }
-            ExprKind::PackExpansionExpr => {
-                self.out.push_str("sp");
-                return self.expression(ast.exprs.operand(e));
-            }
             ExprKind::SizeOfPackExpr => {
                 let Some(d) = DeclId::try_new(n.a()) else { return false };
                 let Some(p) = ast.template_parm(d) else { return false };
@@ -426,20 +360,97 @@ impl Mangler<'_, '_> {
                 }
                 self.out.push('E');
             }
+            _ => return self.operator_expression(e),
+        }
+        true
+    }
+
+    /// An operator, call, cast, `sizeof`/`alignof` or pack expansion.
+    fn operator_expression(&mut self, expr: ExprId) -> bool {
+        let ast = self.ast;
+        let node = ast.exprs.get(expr);
+        match node.kind() {
+            ExprKind::CallExpr => {
+                self.out.push_str("cl");
+                if !self.expression(ast.exprs.callee(expr)) {
+                    return false;
+                }
+                let args: Vec<ExprId> =
+                    ast.lists.iter::<ExprId>(ast.exprs.call_args(expr)).collect();
+                for arg in args {
+                    if !self.expression(arg) {
+                        return false;
+                    }
+                }
+                self.out.push('E');
+            }
+            ExprKind::UnaryOperator => {
+                let code = match ast.exprs.unary_op(expr) {
+                    UnaryOp::PostInc | UnaryOp::PreInc => "pp",
+                    UnaryOp::PostDec | UnaryOp::PreDec => "mm",
+                    UnaryOp::AddrOf => "ad",
+                    UnaryOp::Deref => "de",
+                    UnaryOp::Plus => "ps",
+                    UnaryOp::Minus => "ng",
+                    UnaryOp::Not => "co",
+                    UnaryOp::LNot => "nt",
+                    _ => return false,
+                };
+                self.out.push_str(code);
+                return self.expression(ast.exprs.operand(expr));
+            }
+            ExprKind::BinaryOperator => {
+                let Some(code) = binary_code(ast.exprs.binary_op(expr)) else { return false };
+                self.out.push_str(code);
+                let [lhs, rhs] = ast.exprs.operands(expr);
+                return self.expression(lhs) && self.expression(rhs);
+            }
+            ExprKind::ConditionalOperator => {
+                let Some(cond) = ExprId::try_new(node.a()) else { return false };
+                let [then, els] = ast.exprs.cond_arms(expr);
+                self.out.push_str("qu");
+                return self.expression(cond) && self.expression(then) && self.expression(els);
+            }
+            ExprKind::UnaryExprOrTypeTraitExpr => {
+                // A non-dependent operand is encoded as the integer result,
+                // which needs the evaluator: not supported here.
+                if !node.deps().intersects(ExprDeps::VALUE_INST) {
+                    return false;
+                }
+                let (type_code, expr_code) = match ast.exprs.trait_kind(expr) {
+                    TraitKind::SizeOf => ("st", "sz"),
+                    TraitKind::AlignOf => ("at", "az"),
+                    _ => return false,
+                };
+                if let Some(arg) = ast.exprs.trait_type_arg(expr) {
+                    self.out.push_str(type_code);
+                    self.ty(arg);
+                } else {
+                    let Some(&sub) = ast.exprs.children(expr, &ast.lists).first() else {
+                        return false;
+                    };
+                    self.out.push_str(expr_code);
+                    return self.expression(sub);
+                }
+            }
+            ExprKind::PackExpansionExpr => {
+                self.out.push_str("sp");
+                return self.expression(ast.exprs.operand(expr));
+            }
             ExprKind::CStyleCastExpr
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXConstCastExpr
             | ExprKind::CXXReinterpretCastExpr
             | ExprKind::CXXDynamicCastExpr => {
-                self.out.push_str(match n.kind() {
+                self.out.push_str(match node.kind() {
                     ExprKind::CStyleCastExpr => "cv",
                     ExprKind::CXXStaticCastExpr => "sc",
                     ExprKind::CXXConstCastExpr => "cc",
                     ExprKind::CXXReinterpretCastExpr => "rc",
                     _ => "dc",
                 });
-                self.ty(n.ty());
-                return self.expression(ast.exprs.operand(e));
+                self.ty(node.ty());
+                return self.expression(ast.exprs.operand(expr));
             }
             _ => return false,
         }
@@ -451,9 +462,10 @@ impl Mangler<'_, '_> {
     /// an unresolved type (a template parameter or `decltype`).
     fn unresolved_prefix(&mut self, nns: NnsId, recursive: bool) -> bool {
         let ast = self.ast;
-        let lead = |m: &mut Self, prefix: Option<NnsId>| match prefix {
-            Some(p) => m.unresolved_prefix(p, true),
-            None => {
+        let lead = |m: &mut Self, prefix: Option<NnsId>| {
+            if let Some(p) = prefix {
+                m.unresolved_prefix(p, true)
+            } else {
                 m.out.push_str("sr");
                 true
             }

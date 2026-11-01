@@ -2004,7 +2004,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
             TypeView::TemplateSpecialization { name, args, .. } => self.dependent_tst(name, args),
             TypeView::DependentName { keyword, nns, name } => {
-                self.dependent_name(keyword, nns, name)
+                self.dependent_name(keyword, nns, name);
             }
             TypeView::DependentTemplateSpecialization { nns, name, args, .. } => {
                 self.dependent_template_spec(nns, name, args);
