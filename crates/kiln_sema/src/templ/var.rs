@@ -220,6 +220,18 @@ impl Sema<'_, '_> {
         s
     }
 
+    /// How a specialization declaration of `tmpl` with arguments `args`
+    /// names itself (clang `getNameForDiagnostic`): its canonical
+    /// arguments, every type scoped (`std::v<std::D<int>>`, not the
+    /// typedef `v<_Del>` the arguments were written with).
+    pub(crate) fn spec_decl_name(&self, tmpl: DeclId, args: ArgListId) -> String {
+        let mut s = self.qualified_decl_name(tmpl);
+        let names = crate::names::SemaNames::new(self);
+        let canon = self.ast.types.canonical_args(args);
+        kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut s);
+        s
+    }
+
     /// Whether `d` is a variable template specialization (clang's
     /// `VarTemplateSpecializationDecl`).
     pub(crate) fn is_var_spec(&self, d: DeclId) -> bool {
@@ -362,7 +374,7 @@ impl Sema<'_, '_> {
                 if Self::declares_definition(d, vspec) && self.is_var_definition(spec) {
                     let msg = self
                         .diag(DiagId::sema_redefinition, loc)
-                        .arg(self.spec_name(tmpl, info.print_args));
+                        .arg(self.spec_decl_name(tmpl, info.print_args));
                     let msg = self.note_prev(msg, spec, true);
                     self.emit(msg);
                     return Err(());

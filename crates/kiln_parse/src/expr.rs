@@ -1359,8 +1359,9 @@ impl Parser<'_, '_> {
             return match self.parse_template_id_rest(class, name, nl) {
                 Ok(TemplateIdRef::Overload(e)) => {
                     let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
-                    if qual.is_some() {
+                    if let Some(q) = qual {
                         self.s.set_template_id_begin(e, begin, nl);
+                        self.s.set_template_id_qualifier(e, q.nns);
                     }
                     if !self.at(Punct::LParen) {
                         return Some(self.s.resolve_single_template_id(e));

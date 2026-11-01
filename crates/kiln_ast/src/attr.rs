@@ -77,6 +77,9 @@ impl AttrKind {
     pub const ALLOC_ALIGN: AttrKind = AttrKind(99);
     /// `clang::using_if_exists` on a using-declaration (WP-062).
     pub const USING_IF_EXISTS: AttrKind = AttrKind(100);
+    /// GNU `hot` on a function (clang `HotAttr`): the declaration and its
+    /// direct call sites are `hot` (WP-172).
+    pub const HOT: AttrKind = AttrKind(101);
 }
 
 /// Attribute syntax.

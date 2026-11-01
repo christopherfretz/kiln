@@ -650,7 +650,8 @@ and returns the scope it names:
   - `likely`/`unlikely`
   - `no_unique_address`
   - `alignas`/`aligned`, `packed`
-  - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`
+  - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
+    `hot` (`AttrKind::HOT`, WP-172)
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)

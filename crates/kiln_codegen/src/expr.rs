@@ -660,18 +660,15 @@ impl Cg<'_> {
                     self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0
                 }
             }
-            // A downcast ([expr.static.cast]/11), never through a virtual
-            // base: the path runs from the derived class to the operand's.
+            // clang `CK_BaseToDerived`: `GetAddressOfDerivedClass`, null-checked
+            // unless the operand is `this` (`ShouldNullCheckClassCastValue`).
             CastKind::BaseToDerived => {
                 let p = self.emit_scalar(s)?;
                 let Some(derived) = ast.types.pointee(q).and_then(|t| ast.types.as_record(t))
                 else {
-                    return err(self.loc_of(e), "base-to-derived cast to a non-class pointer");
+                    return err(self.loc_of(e), "base-to-derived cast of a non-class pointer");
                 };
-                let (vb, off) = self.base_path(e, derived)?;
-                if vb.is_some() {
-                    return err(self.loc_of(e), "base-to-derived cast through a virtual base");
-                }
+                let off = self.derived_cast_offset(e, derived)?;
                 let null_check = !self.is_this_expr(s);
                 self.derived_ptr(p, off, null_check)
             }
@@ -1753,22 +1750,19 @@ impl Cg<'_> {
                     let ty = self.mty(q);
                     Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
                 }
-                CastKind::Dynamic => {
-                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
-                    let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
-                    Ok(self.ref_lvalue(p, q))
-                }
-                // `static_cast<D&>(b)` ([expr.static.cast]/2): no null check.
+                // clang `EmitCastLValue` `CK_BaseToDerived`: never null-checked.
                 CastKind::BaseToDerived => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
                     let Some(derived) = ast.types.as_record(q) else {
-                        return err(self.loc_of(e), "base-to-derived cast to a non-class");
+                        return err(self.loc_of(e), "base-to-derived cast of a non-class");
                     };
-                    let (vb, off) = self.base_path(e, derived)?;
-                    if vb.is_some() {
-                        return err(self.loc_of(e), "base-to-derived cast through a virtual base");
-                    }
-                    let p = self.derived_ptr(lv.addr.v, off, false);
+                    let off = self.derived_cast_offset(e, derived)?;
+                    let v = self.derived_ptr(lv.addr.v, off, false);
+                    Ok(self.ref_lvalue(v, q))
+                }
+                CastKind::Dynamic => {
+                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                    let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
                     Ok(self.ref_lvalue(p, q))
                 }
                 k => err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet")),
@@ -2279,6 +2273,13 @@ impl Cg<'_> {
         }
         // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
+        // `std::move(x)` and its kin fold to the address of `x`.
+        if let Some(d) = direct
+            && self.is_std_builtin(d)
+            && let Some(a) = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).next()
+        {
+            return Ok(Some(self.emit_lvalue(a)?.addr.v));
+        }
         let mut lib = None;
         if let Some(d) = direct
             && let Some(id) = ast.decls.builtin_id(d)
@@ -2326,6 +2327,9 @@ impl Cg<'_> {
         }
         let r =
             self.call_vals_ret(&sig, callee, fid, None, &vals, &args, dest, &extra, &ret_extra)?;
+        if let (Some(d), Some(p)) = (direct, r) {
+            self.alloc_align_assume(d, &vals, p);
+        }
         if noreturn {
             self.finish_noreturn_call();
         }
@@ -2541,6 +2545,11 @@ impl Cg<'_> {
             return Ok(None);
         }
         if rty == LTy::VOID {
+            if matches!(sig.info.ret.kind, ArgKind::Ignore) && self.is_aggregate(rq) {
+                // clang `EmitCall` -> `GetUndefRValue`: an ignored
+                // aggregate result still gets its (unused) temporary.
+                self.temp(rq);
+            }
             return Ok(None);
         }
         if self.is_aggregate(rq) || self.is_atomic_aggregate(rq) {
@@ -2733,6 +2742,11 @@ impl Cg<'_> {
             }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
+            // clang `VisitCompoundLiteralExpr`: `EmitAggExpr` of the
+            // initializer into the slot (C++: not destroyed here).
+            ExprKind::CompoundLiteralExpr => {
+                self.emit_agg(ast.exprs.compound_literal_init(e), dest, zeroed)
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {

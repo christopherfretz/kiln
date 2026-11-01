@@ -465,7 +465,7 @@ impl Sema<'_, '_> {
             },
             FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit => {
                 match self.ast.spec_info(f.entity) {
-                    Some((_, i)) => self.spec_name(i.template, i.print_args),
+                    Some((_, i)) => self.spec_decl_name(i.template, i.print_args),
                     None => self.qualified_decl_name(f.entity),
                 }
             }

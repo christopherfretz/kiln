@@ -172,7 +172,9 @@ fn lib_attrs(b: u32, out: &mut Vec<Attr>) {
 /// `memory(none)` / `memory(read)`); none for a builtin, whose
 /// [`lib_attrs`] already say so. A return or argument passed by
 /// address (`sig`) adds `argmem: readwrite` (clang
-/// `AddPotentialArgAccess`). Returns whether it added any.
+/// `AddPotentialArgAccess`). Returns whether it added any. A GNU
+/// `cold` / `hot` attribute adds `cold` / `hot` the same way (WP-172);
+/// it does not count toward the result.
 pub(crate) fn const_pure_attrs(
     ast: &Ast,
     d: DeclId,
@@ -189,6 +191,7 @@ pub(crate) fn const_pure_attrs(
                 .any(|a| ast.attrs.get(a).kind == k)
         })
     };
+    cold_hot_attrs(ast, d, out);
     let mem = if has(kiln_ast::attr::AttrKind::CONST) {
         ModRef::None
     } else if has(kiln_ast::attr::AttrKind::PURE) {
@@ -203,6 +206,25 @@ pub(crate) fn const_pure_attrs(
     out.push(Attr::Flag(AttrKind::WillReturn));
     out.push(Attr::Memory(effects));
     true
+}
+
+/// The `cold` / `hot` function attributes a GNU `cold` / `hot` attribute
+/// on some declaration of `d` gives its declaration and direct call sites
+/// (clang `ConstructAttributeList`; WP-172).
+pub(crate) fn cold_hot_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) {
+    let has = |k: kiln_ast::attr::AttrKind| {
+        ast.redecls_of(d).any(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == k)
+        })
+    };
+    if has(kiln_ast::attr::AttrKind::COLD) {
+        out.push(Attr::Flag(AttrKind::Cold));
+    }
+    if has(kiln_ast::attr::AttrKind::HOT) {
+        out.push(Attr::Flag(AttrKind::Hot));
+    }
 }
 
 /// Whether `q` is a complete object type (an incomplete class has no
@@ -226,6 +248,44 @@ pub(crate) enum BuiltinCall {
 }
 
 impl Cg<'_> {
+    /// Whether `d` is one of the standard functions clang treats as a
+    /// builtin and folds at every optimization level (spec/codegen.md §3,
+    /// "Calls"; clang `isStdBuiltin` + `CheckBuiltinFunctionCall`):
+    /// `std::move`, `move_if_noexcept`, `forward`, `forward_like`,
+    /// `as_const`, `addressof` and `__addressof`, declared in namespace
+    /// `std` (through inline namespaces) with one non-variadic parameter of
+    /// reference type, returning a reference or pointer to the same type up
+    /// to qualifiers. A call of one is the address of its argument's
+    /// lvalue; the function itself is not referenced.
+    pub(crate) fn is_std_builtin(&self, d: DeclId) -> bool {
+        const NAMES: [&str; 7] = [
+            "move",
+            "move_if_noexcept",
+            "forward",
+            "forward_like",
+            "as_const",
+            "addressof",
+            "__addressof",
+        ];
+        let ast = self.ast;
+        if ast.decls.get(d).kind() != DeclKind::Function || !NAMES.iter().any(|n| self.in_std(d, n))
+        {
+            return false;
+        }
+        let Some(fty) = ast.decls.get(d).ty() else { return false };
+        let Some(p) = ast.types.proto(fty) else { return false };
+        let [param] = ast.types.params(p) else { return false };
+        if p.variadic() || !ast.types.is_reference(*param) {
+            return false;
+        }
+        let ret = p.ret();
+        (ast.types.is_reference(ret) || ast.types.is_pointer(ret))
+            && match (ast.types.pointee(*param), ast.types.pointee(ret)) {
+                (Some(a), Some(b)) => ast.types.same_unqualified(a, b),
+                _ => false,
+            }
+    }
+
     /// clang `EmitVAListRef`: the address of the `va_list` operand `x`, a
     /// `__builtin_va_list` lvalue, or the decayed pointer when the
     /// target's `va_list` is an array (x86-64).
