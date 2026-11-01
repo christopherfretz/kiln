@@ -20,6 +20,9 @@ sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates 
 sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";
 sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
+sema_splice_not_constant = Error (0) "splice operand must be a constant expression";
+sema_splice_not_info = Error (1) "splice operand of type {0} is not a reflection";
+sema_splice_not_type = Error (0) "splice in a type position does not designate a type";
 sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
 sema_standalone_tag_qualifier = Error (1) "forward declaration of {0:class|struct|union|enum} cannot have a nested name specifier";
 sema_statement_requires_integer = Error (1) "statement requires expression of integer type ({0} invalid)";

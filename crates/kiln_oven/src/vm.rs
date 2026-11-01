@@ -2075,7 +2075,9 @@ impl Oven {
             TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
                 (!s.is_init(abs, value_len(info.size, info.kind))).then_some((field, t))
             }
-            TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } => Some((field, t)),
+            TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } | TyKind::Reflection => {
+                Some((field, t))
+            }
             TyKind::Array { elem, n } => {
                 let es = self.types.size(elem);
                 (0..n).find_map(|i| {

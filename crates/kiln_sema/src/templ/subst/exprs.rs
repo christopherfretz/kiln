@@ -536,6 +536,15 @@ impl Substituter<'_, '_, '_> {
                     .collect();
                 Ok(self.sema.build_type_trait(t, &args, loc, end))
             }
+            // -freflection spike: `^^T` reflects the substituted type; a
+            // reflected declaration is not dependent in the spike.
+            ExprKind::CXXReflectExpr => match ex(self).reflect_operand(e) {
+                kiln_ast::reflect::Reflectee::Type(q) => {
+                    let q = self.ty(q, loc)?;
+                    Ok(self.sema.act_on_reflect_type(q, loc, end))
+                }
+                _ => Ok(e),
+            },
             ExprKind::ArrayTypeTraitExpr => {
                 let t = ex(self).type_trait(e);
                 let q = ex(self).array_trait_type(e);

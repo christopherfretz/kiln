@@ -750,6 +750,7 @@ impl Oven {
             TyKind::Int { signed, .. } => s.push_str(&arith::int_to_string(v, signed)),
             TyKind::Float(k) => s.push_str(&arith::float_arg_string(k, v)),
             TyKind::NullPtr => s.push_str("nullptr"),
+            TyKind::Reflection => s.push_str(&format!("^^#{v}")),
             TyKind::Ptr(pt) => s.push_str(&self.ptr_string(ast, v as u64, pt)),
             TyKind::Array { .. } | TyKind::Record { .. } => {
                 self.write_object(ast, s, t, v as u64, depth);

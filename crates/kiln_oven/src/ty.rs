@@ -45,6 +45,10 @@ pub(crate) enum TyKind {
     MemPtr {
         func: bool,
     },
+    /// `std::meta::info` (WP-267 spike): a `ReflectionId` index stored as
+    /// 8 plain bytes, 0 for the null reflection; frozen as
+    /// `Scalar::Reflection`.
+    Reflection,
     /// Incomplete or not representable in M2 (member pointers,
     /// vectors, ...): it has no storage the VM can touch.
     Opaque,
@@ -356,6 +360,7 @@ impl Types {
                     BuiltinType::Void => TyKind::Void,
                     BuiltinType::Bool => TyKind::Bool,
                     BuiltinType::NullPtr => TyKind::NullPtr,
+                    BuiltinType::MetaInfo => TyKind::Reflection,
                     BuiltinType::Char => TyKind::Int { width: 8, signed: target.char_signed },
                     BuiltinType::WChar => {
                         TyKind::Int { width: (size * 8) as u8, signed: target.wchar_signed }

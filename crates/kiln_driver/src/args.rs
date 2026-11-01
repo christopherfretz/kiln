@@ -189,6 +189,10 @@ pub struct PredefArgs {
     pub threadsafe_statics: Option<bool>,
     /// `-f[no-]sized-deallocation`.
     pub sized_deallocation: Option<bool>,
+    /// `-f[no-]reflection` (P2996 spike, WP-267): the `^^`/`[: :]` tokens
+    /// and the kiln reflection intrinsics. Default off; `__cpp_reflection`
+    /// is not defined either way.
+    pub reflection: bool,
 }
 
 /// What to do.
@@ -661,6 +665,8 @@ impl Args {
             "-Os" | "-Oz" => (p.opt, p.ofast) = (OptLevel::Size, false),
             "-fexceptions" | "-fcxx-exceptions" => p.exceptions = Some(true),
             "-fno-exceptions" | "-fno-cxx-exceptions" => p.exceptions = Some(false),
+            "-freflection" => p.reflection = true,
+            "-fno-reflection" => p.reflection = false,
             "-frtti" => p.rtti = Some(true),
             "-fno-rtti" => p.rtti = Some(false),
             "-fchar8_t" => p.char8_t = Some(true),

@@ -143,6 +143,7 @@ impl Job<'_> {
         o.dollar_in_identifiers = a.dollars.unwrap_or(true);
         o.keep_comments = a.print.comments || a.print.macro_comments;
         o.keep_macro_comments = a.print.macro_comments;
+        o.reflection = a.predef.reflection;
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
             let (date, t, stamp) = time::spellings(epoch);

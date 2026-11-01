@@ -51,6 +51,7 @@ mod packed;
 mod predefined;
 mod qualified_decl;
 mod range_for;
+mod reflect;
 mod rtti;
 pub mod scope;
 mod self_ref;
@@ -118,6 +119,10 @@ pub struct Sema<'a, 'sm> {
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
     /// `typeid` is an error otherwise.
     pub rtti: bool,
+    /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
+    /// splices and the kiln reflection intrinsics (spec/sema.md
+    /// "Reflection (spike, -freflection)").
+    pub reflection: bool,
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
@@ -487,6 +492,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pragma_packs: Vec::new(),
             exceptions: true,
             rtti: true,
+            reflection: false,
             range_lifetime_extension: false,
             gnu: false,
             pack: (0, Vec::new()),

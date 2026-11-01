@@ -286,7 +286,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     }
                 }
                 Kw::Typename => {
-                    let Some((end, _, _)) = self.p.scan_name(self.i + 1) else {
+                    let Some(end) =
+                        self.p.splice_end(self.i + 1).or_else(|| self.p.scan_name(self.i + 1).map(|n| n.0))
+                    else {
                         return Tpr::Error;
                     };
                     self.after_simple_type(end, braced)
@@ -403,6 +405,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 if !self.skip_attributes() {
                     return Tpr::Error;
                 }
+            }
+            Some(Kw::Typename) if self.p.splice_end(self.i + 1).is_some() => {
+                self.i = self.p.splice_end(self.i + 1).unwrap_or(self.i + 1);
             }
             Some(Kw::Typename | Kw::Struct | Kw::Class | Kw::Union | Kw::Enum) => {
                 self.i += 1;

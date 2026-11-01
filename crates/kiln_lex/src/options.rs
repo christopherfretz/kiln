@@ -38,12 +38,22 @@ pub struct LexOptions {
     /// instead of treating them as whitespace. Default: `false`. Can be
     /// changed later with [`crate::Lexer::set_keep_comments`].
     pub keep_comments: bool,
+    /// `-freflection` (P2996): lex `^^`, `[:` and `:]` as single tokens
+    /// (C++26 only). Default: `false`; like clang and GCC 16, the tokens
+    /// exist only in reflection mode, so `^^` is otherwise `^` `^`.
+    pub reflection: bool,
 }
 
 impl LexOptions {
     /// Options for `std` with every other field at its default.
     pub const fn new(std: Std) -> Self {
-        LexOptions { std, trigraphs: false, dollar_in_identifiers: true, keep_comments: false }
+        LexOptions {
+            std,
+            trigraphs: false,
+            dollar_in_identifiers: true,
+            keep_comments: false,
+            reflection: false,
+        }
     }
 }
 

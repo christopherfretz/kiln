@@ -1,8 +1,8 @@
 //! Operators and punctuators: [lex.operators], [lex.digraph],
 //! [lex.pptoken]/3.
 mod common;
-use common::{cxx26, diag_kinds, dump_of, kinds, kinds_with, lex, spellings, std};
-use kiln_lex::{LexDiagKind as D, Punct, Std, TokFlags, TokKind};
+use common::{cxx26, diag_kinds, dump_of, kinds, kinds_with, lex, lex_with, spellings, std};
+use kiln_lex::{LexDiagKind as D, LexOptions, Punct, Std, TokFlags, TokKind};
 
 /// [lex.pptoken]/3.3: maximal munch.
 #[test]
@@ -19,7 +19,7 @@ fn lex_pptoken_maximal_munch() {
 fn lex_operators_all() {
     for p in Punct::ALL {
         let s = p.as_str();
-        let l = lex(&format!("{s}\n"));
+        let l = lex_with(&format!("{s}\n"), refl(Std::Cxx26));
         assert_eq!(l.tokens.len(), 1, "{s}");
         assert_eq!(l.tokens[0].kind, TokKind::Punct(*p), "{s}");
         assert_eq!(l.spellings[0], s);
@@ -55,23 +55,34 @@ fn lex_pptoken_less_colon_colon() {
     assert_eq!(kinds_with("<::b\n", std(Std::Cxx03)), "l_square colon identifier");
 }
 
-/// [lex.pptoken]/3.2 (C++26, P2996): `[::` is `[` `::` unless followed by `:`,
-/// and `[:>` is `[` `:>`.
-#[test]
-fn lex_pptoken_splice_brackets() {
-    assert_eq!(spellings("[: x :]\n"), "[: x :]");
-    assert_eq!(kinds("[: :]\n"), "l_splice r_splice");
-    assert_eq!(spellings("[::x]\n"), "[ :: x ]");
-    assert_eq!(spellings("[:::]\n"), "[: :: ]");
-    assert_eq!(spellings("[:>\n"), "[ :>");
-    assert_eq!(kinds_with("[: :]\n", std(Std::Cxx23)), "l_square colon colon r_square");
+/// `-freflection` options for `std`.
+fn refl(s: Std) -> LexOptions {
+    LexOptions { reflection: true, ..std(s) }
 }
 
-/// [lex.operators] (C++26, P2996): `^^` is a reflection operator token.
+/// [lex.pptoken]/3.2 (C++26, P2996): `[::` is `[` `::` unless followed by `:`,
+/// and `[:>` is `[` `:>`. The splice tokens exist only with `-freflection`.
+#[test]
+fn lex_pptoken_splice_brackets() {
+    let r = refl(Std::Cxx26);
+    let sp = |t: &str| lex_with(t, r).spellings.join(" ");
+    assert_eq!(sp("[: x :]\n"), "[: x :]");
+    assert_eq!(kinds_with("[: :]\n", r), "l_splice r_splice");
+    assert_eq!(sp("[::x]\n"), "[ :: x ]");
+    assert_eq!(sp("[:::]\n"), "[: :: ]");
+    assert_eq!(sp("[:>\n"), "[ :>");
+    assert_eq!(kinds_with("[: :]\n", refl(Std::Cxx23)), "l_square colon colon r_square");
+    assert_eq!(kinds("[: :]\n"), "l_square colon colon r_square");
+}
+
+/// [lex.operators] (C++26, P2996): `^^` is a reflection operator token
+/// (only with `-freflection`).
 #[test]
 fn lex_operators_reflect() {
-    assert_eq!(kinds("^^x ^^^\n"), "caretcaret identifier caretcaret caret");
-    assert_eq!(kinds_with("^^x\n", std(Std::Cxx23)), "caret caret identifier");
+    let r = refl(Std::Cxx26);
+    assert_eq!(kinds_with("^^x ^^^\n", r), "caretcaret identifier caretcaret caret");
+    assert_eq!(kinds_with("^^x\n", refl(Std::Cxx23)), "caret caret identifier");
+    assert_eq!(kinds("^^x\n"), "caret caret identifier");
 }
 
 /// [lex.operators] (C++20): `<=>`; before C++20 it is `<=` `>`.

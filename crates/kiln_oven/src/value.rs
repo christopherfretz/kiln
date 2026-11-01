@@ -365,6 +365,15 @@ impl Oven {
                 Scalar::Float { ty: info.q, kind, bits: m }
             }
             TyKind::NullPtr => Scalar::Null { ty: info.q, kind: NullKind::Pointer },
+            TyKind::Reflection => match kiln_ast::ids::ReflectionId::from_bits(v) {
+                Some(id) => Scalar::Reflection { ty: info.q, id },
+                None => {
+                    return Err(Freeze::Notes(vec![Note::new(
+                        loc,
+                        "kiln: value is not a reflection the compiler produced",
+                    )]));
+                }
+            },
             TyKind::Ptr(pointee) => self.ptr_of(b, info.q, pointee, v as u64, loc)?,
             _ => {
                 return Err(Freeze::Notes(vec![Note::new(
@@ -641,7 +650,7 @@ impl Oven {
                 s.bytes[at..at + len as usize].copy_from_slice(&sp.bytes[a0..a1]);
                 s.cover[at..at + len as usize].fill(1);
             }
-            TyKind::Ptr(_) | TyKind::NullPtr => {
+            TyKind::Ptr(_) | TyKind::NullPtr | TyKind::Reflection => {
                 let sp = self.mem.space(st);
                 if !sp.is_init(abs, info.size) {
                     return Err(self.uninit(b, field, t, loc));
@@ -983,6 +992,14 @@ impl Oven {
                 self.mem.stat.write(base + at, n, v);
                 continue;
             }
+            if let TyKind::Reflection = self.types.kind(ty) {
+                let v = match b.consts().scalar(r.value) {
+                    Some(Scalar::Reflection { id, .. }) => u128::from(id.bits()),
+                    _ => 0,
+                };
+                self.mem.stat.write(base + at, 8, v);
+                continue;
+            }
             let raw = self.thaw_ptr(b, r.value, ty, top);
             self.mem.stat.write(base + at, 8, u128::from(raw));
             self.mem.stat.set_ptr(base + at, 8, raw != 0);
@@ -1016,6 +1033,7 @@ impl Oven {
             Some(Scalar::Float { bits, .. }) => (bits, false),
             Some(Scalar::Pointer { .. }) => (0, true),
             Some(Scalar::MemberPtr { .. }) => (self.mp_thaw(b, cv), false),
+            Some(Scalar::Reflection { id, .. }) => (u128::from(id.bits()), false),
             _ => (0, false),
         };
         let v = if is_ptr { u128::from(self.thaw_ptr(b, cv, ty, top)) } else { v };
