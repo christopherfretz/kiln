@@ -239,3 +239,31 @@ fn determinism() {
     assert_eq!(a, build());
     common::assert_fixed_point(&a);
 }
+
+/// `move_function_to_end` changes the print order, and with it the
+/// numbering of attribute groups and unnamed functions, not the ids.
+#[test]
+fn move_function_to_end() {
+    let mut m = module();
+    let fty = m.types.function(TypeId::VOID, &[], false);
+    let a = m.add_function("a", fty).unwrap();
+    let b = m.add_function("b", fty).unwrap();
+    let c = m.add_function("", fty).unwrap();
+    let nounwind = m.attr_set(&[Attr::Flag(AttrKind::NoUnwind)]);
+    let optnone = m.attr_set(&[Attr::Flag(AttrKind::OptimizeNone)]);
+    m.func_mut(a).attrs.func = nounwind;
+    m.func_mut(b).attrs.func = optnone;
+    m.move_function_to_end(a);
+    let order: Vec<FuncId> = m.functions().map(|(f, _)| f).collect();
+    assert_eq!(order, [b, c, a]);
+    let text = m.to_string();
+    let (pb, pc, pa) = (
+        text.find("declare void @b() #0").unwrap(),
+        text.find("declare void @0()").unwrap(),
+        text.find("declare void @a() #1").unwrap(),
+    );
+    assert!(pb < pc && pc < pa, "{text}");
+    assert!(text.contains("attributes #0 = { optnone }"), "{text}");
+    assert!(text.contains("attributes #1 = { nounwind }"), "{text}");
+    assert_eq!(m.func(a).name(), "a");
+}

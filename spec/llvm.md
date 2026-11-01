@@ -84,7 +84,11 @@ constants print as `fastcc`, `coldcc`, `swiftcc`, `x86_stdcallcc`, ...;
 any other number prints as `ccN`), `attrs` (§5), `section`, `align`,
 `comdat`, `gc`, `personality`, `addrspace` (program address space). Argument
 names are optional (`set_arg_name`). Functions print in creation order,
-definitions and declarations interleaved, exactly like LLVM's module list.
+definitions and declarations interleaved, exactly like LLVM's module list;
+`move_function_to_end(f)` moves one to the end of that list (LLVM's
+`removeFromParent` + `insertAfter`; ids are unchanged), and `functions()`
+iterates in that print order. Attribute groups, unnamed function slots,
+comdats and metadata are numbered in print order.
 
 `dso_local` is not printed where LLVM implies it (local linkage, or
 non-default visibility); the printer omits it there so text is canonical.
