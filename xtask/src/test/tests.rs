@@ -202,6 +202,7 @@ fn seed_corpus_passes_with_clang() {
         "header-test",
         "inst-report",
         "layout",
+        "no-crash",
         "oracle",
         "oven",
         "pp",
@@ -259,11 +260,12 @@ fn fixtures_produce_expected_statuses() {
     let mut o = clang_opts(&[dir]);
     o.run_timeout = Duration::from_secs(1);
     let results = execute(&o).unwrap();
-    // 33 tests: helper.h and Inputs/* are not discovered.
-    check_fixture_statuses(&results, 33);
+    // 35 tests: helper.h and Inputs/* are not discovered.
+    check_fixture_statuses(&results, 35);
     let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
     assert!(by_name("fail-timeout.cpp").details.contains("timed out"));
     assert!(by_name("fail-crash.cpp").details.contains("signal"));
+    assert!(by_name("fail-no-crash-crash.cpp").details.contains("compiler crashed"));
     assert!(by_name("fail-wrong-stdout.cpp").details.contains("-no\n    +yes"));
     assert!(
         by_name("fail-wrong-exit.cpp").details.contains("expected exit code 0, got exit code 4")

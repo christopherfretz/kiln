@@ -205,6 +205,7 @@ impl Test<'_> {
             Expect::Ast => self.ast(&spec),
             Expect::Layout => self.dump(&spec, DumpKind::Layout),
             Expect::Vtables => self.dump(&spec, DumpKind::Vtables),
+            Expect::NoCrash => self.no_crash(&spec),
         };
         // Budgets are checked once the kind's own checks pass.
         let outcome = outcome.and_then(|()| self.check_oven(&spec));
@@ -471,6 +472,23 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diags)
+    }
+
+    /// `expect: no-crash`: the compile ends normally, with or without
+    /// errors (exit 0 or 1). A crash or hang is already a FAIL in
+    /// [`Self::compile`]; any other exit code (70, 101, ...) is one too.
+    /// The `diag:` lines are still checked.
+    fn no_crash(&mut self, spec: &TestSpec) -> Check {
+        let o = self.compile(spec, &["-fsyntax-only"], None)?;
+        let stderr = o.stderr_str();
+        if !matches!(o.code(), Some(0 | 1)) {
+            return Err(Problem::Fail(format!(
+                "expected no-crash (exit code 0 or 1), but the compiler ended with {}\n{}",
+                o.describe_end(),
+                indent(&stderr)
+            )));
+        }
+        self.check_diags(spec, &diag_parse::parse(&stderr))
     }
 
     fn scratch(&self) -> Result<&Path, Problem> {
