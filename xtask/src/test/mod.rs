@@ -38,7 +38,8 @@ files/directories) through a compiler. See spec/harness.md.
 
 options:
   --compiler <path>   compiler under test (default: build and use the kiln++ binary)
-  --oracle <path>     oracle compiler for run/pp comparisons (default: clang++-19)
+  --oracle <path>     oracle compiler for run/pp comparisons (default: clang++-N,
+                      N from KILN_ORACLE)
   --no-oracle         skip all oracle comparisons
   --filter <substr>   only tests whose path contains <substr>
   --update            rewrite existing pp `.expected` files with the actual output
@@ -58,6 +59,11 @@ options:
   -v, --verbose       print every result and the commands that were run
   -h, --help          this text
 
+environment:
+  KILN_ORACLE         the oracle clang/LLVM release, 19 (default) or 22: the default
+                      --oracle is clang++-N, and kiln++ runs with
+                      KILN_LLVM_DIR=/usr/lib/llvm-N (spec/harness.md \"Oracle toolchain\")
+
 exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored/was killed,
 2 usage or infrastructure error.
 ";
@@ -66,7 +72,8 @@ exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored/
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
     pub compiler: Option<PathBuf>,
-    pub oracle: PathBuf,
+    /// `--oracle`; `None` is `clang++-N` of [`crate::oracle::Oracle::from_env`].
+    pub oracle: Option<PathBuf>,
     pub no_oracle: bool,
     pub filter: Option<String>,
     pub update: bool,
@@ -84,7 +91,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             compiler: None,
-            oracle: PathBuf::from("clang++-19"),
+            oracle: None,
             no_oracle: false,
             filter: None,
             update: false,
@@ -114,7 +121,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
         match flag.as_str() {
             "-h" | "--help" => return Ok(None),
             "--compiler" => o.compiler = Some(PathBuf::from(value("--compiler")?)),
-            "--oracle" => o.oracle = PathBuf::from(value("--oracle")?),
+            "--oracle" => o.oracle = Some(PathBuf::from(value("--oracle")?)),
             "--filter" => o.filter = Some(value("--filter")?),
             "-j" | "--jobs" => {
                 let v = value("--jobs")?;
@@ -184,6 +191,8 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
 /// `Err` is an infrastructure problem (exit status 2).
 pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     let start = Instant::now();
+    // First, so a bad `KILN_ORACLE` fails before anything is built or run.
+    let toolchain = crate::oracle::Oracle::from_env()?;
     let root = repo_root();
     let target = target_dir(&root)?;
 
@@ -209,9 +218,10 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     let (oracle, oracle_kind, oracle_clang) = if opts.no_oracle {
         (None, CompilerKind::Other, None)
     } else {
-        let id = crate::util::identify(&opts.oracle)
+        let oracle = opts.oracle.clone().unwrap_or_else(|| PathBuf::from(toolchain.clang()));
+        let id = crate::util::identify(&oracle)
             .map_err(|e| format!("{e} (pass --no-oracle to skip oracle comparisons)"))?;
-        (Some(opts.oracle.clone()), id.kind, id.clang_version())
+        (Some(oracle), id.kind, id.clang_version())
     };
 
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -227,6 +237,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         oracle,
         oracle_kind,
         oracle_clang,
+        llvm_dir: toolchain.llvm_dir(),
         update: opts.update,
         scratch,
         compile_timeout: Duration::from_secs(120),

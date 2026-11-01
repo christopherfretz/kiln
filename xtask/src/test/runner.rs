@@ -33,6 +33,9 @@ pub struct Config {
     pub oracle_kind: CompilerKind,
     /// The oracle's clang version, when it is clang (`requires: clang>=`).
     pub oracle_clang: Option<directives::ClangVersion>,
+    /// `/usr/lib/llvm-N` of the oracle release: kiln++ runs with it as
+    /// `KILN_LLVM_DIR` (`spec/harness.md` "Oracle toolchain").
+    pub llvm_dir: PathBuf,
     pub update: bool,
     /// Per-run scratch directory (under the cargo target dir).
     pub scratch: PathBuf,
@@ -267,6 +270,9 @@ impl Test<'_> {
     ) -> Command {
         let mut c = Command::new(program);
         c.current_dir(&self.cfg.root);
+        if self.is_kiln(program) {
+            c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
+        }
         match (self.case.lang, self.case.is_header) {
             (Lang::C, _) => {
                 c.args(["-x", "c"]);
@@ -297,15 +303,19 @@ impl Test<'_> {
         Some(path.to_string_lossy().into_owned())
     }
 
+    /// Whether `program` is kiln (as the compiler under test or the oracle).
+    fn is_kiln(&self, program: &Path) -> bool {
+        (program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Kiln)
+            || (self.cfg.oracle.as_deref() == Some(program)
+                && self.cfg.oracle_kind == CompilerKind::Kiln)
+    }
+
     /// The cap of a compile by `program`: the test's cap, plus the stack
     /// kiln reserves when `program` is kiln (`spec/harness.md` "Resource
     /// limits").
     fn compile_cap(&self, program: &Path, cmd: &Command) -> Option<MemLimit> {
         let cap = self.mem_limit?;
-        let kiln = (program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Kiln)
-            || (self.cfg.oracle.as_deref() == Some(program)
-                && self.cfg.oracle_kind == CompilerKind::Kiln);
-        if !kiln {
+        if !self.is_kiln(program) {
             return Some(cap);
         }
         let args: Vec<_> = cmd.get_args().collect();
