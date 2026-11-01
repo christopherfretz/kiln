@@ -1105,15 +1105,19 @@ impl Cg<'_> {
             self.emit_trap_unreachable();
             return Ok(());
         }
-        let fty = ast.decls.get(d).ty().expect("destructor type");
-        let (callee, fid) = self.structor_ref(d, Structor::Complete)?;
-        let sig = self.call_sig_this(fty, false, &[], Some(rd));
-        self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[])?;
         let Some(&od) = ast.decls.cold.dtor_delete.get(ast.first(d)) else {
             return err(loc, "virtual destructor without a deallocation function");
         };
+        // EnterDtorCleanups: the deallocation is a normal-and-EH cleanup
+        // around the complete-object destructor call.
         let ty = self.class_type(rd);
-        self.emit_delete_call(od, this.v, ty, loc)
+        self.push_cleanup(Cleanup::DtorDelete { op_delete: od, ptr: this.v, ty });
+        let fty = ast.decls.get(ast.first(d)).ty().expect("destructor type");
+        let (callee, fid) = self.structor_ref(d, Structor::Complete)?;
+        let sig = self.call_sig_this(fty, false, &[], Some(rd));
+        let r = self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[]);
+        self.pop_cleanup_block(false);
+        r.map(|_| ())
     }
 
     /// `DestroyField`: destroys field `field` of `*this` (class `record`);
