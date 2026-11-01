@@ -830,7 +830,11 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   the base whose constructor is ultimately inherited, clang
   `InheritedConstructorInfo`), every other subobject as a defaulted default
   constructor would. The exception specification is clang's
-  `ComputeInheritingCtorExceptionSpec`.
+  `ComputeInheritingCtorExceptionSpec`. An inherited constexpr
+  constructor or constructor template that is not a copy or move
+  constructor counts as a constexpr constructor of the derived class for
+  the literal-type test ([basic.types.general]/10.5.2, clang `addedMember`
+  on a `ConstructorUsingShadowDecl`; `inherited_constexpr_ctor`, WP-241).
 - **Virtual bases** ([basic.types.general]/10). A class with a virtual
   base is not a literal type: a `constexpr` variable of it (or of an
   array of it) is clang's `RequireLiteralType` error "constexpr variable
