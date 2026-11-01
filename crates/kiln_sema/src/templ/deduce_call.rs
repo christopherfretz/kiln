@@ -837,6 +837,9 @@ impl Sema<'_, '_> {
                 return Tdk::Success;
             };
             let n = u64::try_from(items.len()).unwrap_or(u64::MAX);
+            // clang `DeduceFromInitializerList`: a non-dependent `P'`
+            // (`to_array<long>({1, 2})`) deduces nothing from the elements.
+            let items = if self.ast.types.is_dependent(elem) { items } else { Vec::new() };
             for v in items {
                 let crate::init::InitValue::Expr(e) = v else { continue };
                 let info = self.arg_info(e);
