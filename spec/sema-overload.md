@@ -694,6 +694,11 @@ was used). Type sugar (`'Z':'N::Z'`) is the printer's job (ast-dump.md).
 | `warn_ambiguous_reversed_operator` [ambiguous-reversed-operator] + 2 notes | §5.3 |
 | notes | `note_ovl_candidate` "candidate {kind}{tmpl}" with `_not_viable` ("… not viable: {detail}"), `_deleted` ("candidate function has been explicitly deleted"), `_explicit`, `_type_mismatch`; `note_ovl_builtin_candidate` "built-in candidate {0}"; `note_ovl_surrogate` "conversion candidate of type '{0}'"; `note_ambiguous_conversion_of`; `note_possible_target` "possible target for call"; `note_explicit_ctor_here`; `note_arrow_produces`; `note_rewriting_operator_as_spaceship` |
 
+The name in "call to deleted function '{0}'" (and the other call
+diagnostics) is the name as looked up, without qualifier or template
+arguments (clang `ULE->getName()`): `show<int>(2)` and `ns::r(1)` print
+'show' and 'r', not the selected specialization.
+
 `{kind}` (clang `note_ovl_candidate` select): "function", "function (with
 reversed parameter order)", "constructor", "constructor (the implicit
 default constructor)" / "(… copy constructor)" / "(… move constructor)",
