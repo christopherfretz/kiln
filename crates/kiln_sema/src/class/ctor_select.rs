@@ -157,6 +157,15 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// The constructors of class `c` and the base constructors its
+    /// visible `ConstructorUsingShadow`s inherit ([namespace.udecl]/13:
+    /// inherited constructors are candidates of [over.match.list] too).
+    fn ctors_and_inherited(&self, c: DeclId) -> Vec<DeclId> {
+        let mut out: Vec<DeclId> = self.ast.constructors(c).iter().collect();
+        out.extend(self.ctor_shadows(c).into_iter().filter_map(|s| self.ast.using_target(s)));
+        out
+    }
+
     /// Whether some constructor of `class` is an initializer-list
     /// constructor ([dcl.init.list]/2): its first parameter is
     /// `std::initializer_list<E>` (or a reference to it) and the others
@@ -164,7 +173,7 @@ impl Sema<'_, '_> {
     pub(crate) fn has_init_list_ctor(&mut self, class: DeclId) -> bool {
         let c = self.class_def(class);
         let name = DeclName::ident(self.intern("initializer_list"));
-        for f in self.ast.constructors(c).iter().collect::<Vec<_>>() {
+        for f in self.ctors_and_inherited(c) {
             let f = match self.kind_of(f) {
                 DeclKind::CXXConstructor => f,
                 DeclKind::FunctionTemplate => {
@@ -215,7 +224,7 @@ impl Sema<'_, '_> {
         {
             return true;
         }
-        for f in self.ast.constructors(c).iter().collect::<Vec<_>>() {
+        for f in self.ctors_and_inherited(c) {
             match self.kind_of(f) {
                 DeclKind::FunctionTemplate => return true,
                 DeclKind::CXXConstructor if self.is_init_list_ctor(f) => {}

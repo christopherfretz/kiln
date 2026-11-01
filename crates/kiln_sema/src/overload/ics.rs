@@ -521,11 +521,25 @@ impl Sema<'_, '_> {
     /// `m` and object `o` ([over.match.funcs]/4–5, clang
     /// `TryObjectArgumentInitialization`).
     pub(crate) fn object_ics(&mut self, o: &ArgInfo, m: DeclId) -> Ics {
+        self.object_ics_found(o, m, m)
+    }
+
+    /// [`Self::object_ics`] for method `m` found as `found`: a member
+    /// nominated by a using-declaration is a member of the class of the
+    /// using-declaration for the type of its implicit object parameter
+    /// ([over.match.funcs.general]/4; clang's `ActingContext`).
+    pub(crate) fn object_ics_found(&mut self, o: &ArgInfo, m: DeclId, found: DeclId) -> Ics {
         self.ovl.stats.ics += 1;
         if self.ics_is_error(o.ty) {
             return super::ignored_object(o.ty);
         }
-        let Some(cls) = self.declaring_class(m) else { return super::ignored_object(o.ty) };
+        let acting = (found != m && self.kind_of(found) == DeclKind::UsingShadow)
+            .then(|| self.ast.decls.get(found).ctx())
+            .flatten()
+            .filter(|&c| self.kind_of(c) == DeclKind::CXXRecord);
+        let Some(cls) = acting.or_else(|| self.declaring_class(m)) else {
+            return super::ignored_object(o.ty);
+        };
         let cty = self.ast.decls.get(cls).ty().unwrap_or(QualType::ERROR);
         let (q, rq) = self.method_object_quals(m);
         let param = self.ast.types.qualify(cty, q);
@@ -923,7 +937,15 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(cand) = set.cands.get(n) else { return };
-        if !cand.viable {
+        // clang checks the slice before the arity and the conversions, so
+        // it overrides those failures (not a failed deduction or an
+        // illegal constructor specialization, checked earlier).
+        if !cand.viable
+            && matches!(
+                cand.failure,
+                CandidateFailure::BadDeduction | CandidateFailure::IllegalCtor
+            )
+        {
             return;
         }
         let f = cand.func();
