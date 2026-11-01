@@ -215,9 +215,11 @@ impl Sema<'_, '_> {
         match self.ast.exprs.get(e).kind() {
             ExprKind::DeclRefExpr => self.self_ref_found(st, e),
             ExprKind::ConditionalOperator => {
-                let [c, _] = self.ast.exprs.operands(e);
+                let kids = self.ast.exprs.children(e, &self.ast.lists);
                 let [t, f] = self.ast.exprs.cond_arms(e);
-                self.self_ref_visit(st, c, depth + 1);
+                if let Some(&c) = kids.first() {
+                    self.self_ref_visit(st, c, depth + 1);
+                }
                 self.self_ref_value(st, t, depth + 1);
                 self.self_ref_value(st, f, depth + 1);
             }
