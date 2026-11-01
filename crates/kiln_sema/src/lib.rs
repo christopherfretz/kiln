@@ -197,6 +197,20 @@ pub struct Sema<'a, 'sm> {
     pub(crate) delayed_access: Vec<class::AccessCheck>,
     /// `delayed_access.len()` at each open delay point, innermost last.
     pub(crate) delayed_access_depth: Vec<usize>,
+    /// Access checks in a class template pattern (or partial
+    /// specialization) that passed only because the class may instantiate
+    /// to a befriended specialization, keyed by the pattern's first
+    /// declaration; re-run in each instantiation (clang's dependent access
+    /// diagnostics; spec/sema-templates.md §4.8).
+    pub(crate) dependent_access: kiln_source::fx::FxHashMap<DeclId, Vec<class::AccessCheck>>,
+    /// Set by the access check when friendship came only from such a
+    /// befriended specialization.
+    pub(crate) speculative_friend: std::cell::Cell<bool>,
+    /// Access errors reported, as (member, location, innermost context),
+    /// so a replayed check does not repeat one its instantiation redid.
+    pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
+    /// True while [`Sema::replay_dependent_access`] runs.
+    pub(crate) replaying_access: bool,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
     pub(crate) cleanup: class::CleanupState,
@@ -365,6 +379,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             special: class::SpecialState::default(),
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
+            dependent_access: Default::default(),
+            speculative_friend: std::cell::Cell::new(false),
+            access_failed: Default::default(),
+            replaying_access: false,
             cleanup: class::CleanupState::default(),
             cleanup_saved: Vec::new(),
             synth: Vec::new(),

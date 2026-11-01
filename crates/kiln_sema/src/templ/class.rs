@@ -589,6 +589,7 @@ impl Sema<'_, '_> {
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let outer = self.inst_context_pairs(parent);
         self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &outer));
+        self.replay_dependent_access(def, spec);
         self.pop_inst_frame();
         self.ast.definition(spec).is_some()
     }
@@ -622,6 +623,7 @@ impl Sema<'_, '_> {
         }
         let parent = self.ast.decls.get(r).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(parent, |s| s.instantiate_class_body(r, def, &args, &outer));
+        self.replay_dependent_access(def, r);
         self.pop_inst_frame();
         self.ast.definition(r).is_some()
     }
@@ -693,6 +695,7 @@ impl Sema<'_, '_> {
             sub.map_contexts(&pairs);
             sub.function_def(f, pdef, body);
         });
+        self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
     }
 
