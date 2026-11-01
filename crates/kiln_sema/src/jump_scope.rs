@@ -122,39 +122,7 @@ impl Checker<'_, '_, '_> {
                 }
             }
             StmtKind::ExprStmt => self.expr(st.expr_stmt_expr(s), parent),
-            StmtKind::IfStmt => {
-                let d = *st.if_data(s);
-                let kind = st.if_kind(s);
-                if kind == IfKind::Ordinary {
-                    self.opt_stmt(d.init, p);
-                    if let Some(v) = d.cond_var {
-                        self.decl(v, p);
-                    }
-                    self.opt_expr(d.cond, p);
-                    self.opt_stmt(d.then, p);
-                    self.opt_stmt(d.els, p);
-                    return;
-                }
-                let diag = if kind == IfKind::Constexpr {
-                    DiagId::note_protected_by_constexpr_if
-                } else {
-                    DiagId::note_protected_by_consteval_if
-                };
-                if let Some(v) = d.cond_var {
-                    self.decl(v, p);
-                }
-                // Neither the condition nor either arm may be entered.
-                let mut np = self.push(*p, Some(diag), None, n.loc());
-                if kind == IfKind::Constexpr {
-                    self.opt_expr(d.cond, &mut np);
-                }
-                let mut np = self.push(*p, Some(diag), None, n.loc());
-                self.opt_stmt(d.then, &mut np);
-                if let Some(e) = d.els {
-                    let mut np = self.push(*p, Some(diag), None, n.loc());
-                    self.stmt(e, &mut np);
-                }
-            }
+            StmtKind::IfStmt => self.if_stmt(s, p),
             StmtKind::SwitchStmt => {
                 let d = *st.switch_data(s);
                 self.opt_stmt(d.init, p);
@@ -206,28 +174,72 @@ impl Checker<'_, '_, '_> {
                 self.stmt(d.body, p);
             }
             StmtKind::ReturnStmt => self.opt_expr(st.return_value(s), p),
-            StmtKind::CXXTryStmt => {
-                let loc = n.loc();
-                let mut np = self.push(
-                    *p,
-                    Some(DiagId::note_protected_by_cxx_try),
-                    Some(DiagId::note_exits_cxx_try),
-                    loc,
-                );
-                self.stmt(st.try_block(s), &mut np);
-                // A jump from a handler into the try block (or another
-                // handler) is not allowed either.
-                for h in ast.lists.iter::<StmtId>(st.try_handlers(s)).collect::<Vec<_>>() {
-                    let mut np = self.push(
-                        *p,
-                        Some(DiagId::note_protected_by_cxx_catch),
-                        Some(DiagId::note_exits_cxx_catch),
-                        st.get(h).loc(),
-                    );
-                    self.stmt(st.catch_block(h), &mut np);
-                }
-            }
+            StmtKind::CXXTryStmt => self.try_stmt(s, p),
             _ => {}
+        }
+    }
+
+    /// An `if`: the arms of a constexpr / consteval `if` are protected
+    /// ([stmt.if]/2), as is a constexpr `if`'s condition.
+    fn if_stmt(&mut self, s: StmtId, p: &mut u32) {
+        let st = &self.sema.ast.stmts;
+        let n = *st.get(s);
+        let d = *st.if_data(s);
+        let kind = st.if_kind(s);
+        if kind == IfKind::Ordinary {
+            self.opt_stmt(d.init, p);
+            if let Some(v) = d.cond_var {
+                self.decl(v, p);
+            }
+            self.opt_expr(d.cond, p);
+            self.opt_stmt(d.then, p);
+            self.opt_stmt(d.els, p);
+            return;
+        }
+        let diag = if kind == IfKind::Constexpr {
+            DiagId::note_protected_by_constexpr_if
+        } else {
+            DiagId::note_protected_by_consteval_if
+        };
+        if let Some(v) = d.cond_var {
+            self.decl(v, p);
+        }
+        // Neither the condition nor either arm may be entered.
+        let mut np = self.push(*p, Some(diag), None, n.loc());
+        if kind == IfKind::Constexpr {
+            self.opt_expr(d.cond, &mut np);
+        }
+        let mut np = self.push(*p, Some(diag), None, n.loc());
+        self.opt_stmt(d.then, &mut np);
+        if let Some(e) = d.els {
+            let mut np = self.push(*p, Some(diag), None, n.loc());
+            self.stmt(e, &mut np);
+        }
+    }
+
+    /// A try block and each handler are protected scopes
+    /// ([except.handle]/2).
+    fn try_stmt(&mut self, s: StmtId, p: &mut u32) {
+        let ast = &self.sema.ast;
+        let st = &ast.stmts;
+        let loc = st.get(s).loc();
+        let mut np = self.push(
+            *p,
+            Some(DiagId::note_protected_by_cxx_try),
+            Some(DiagId::note_exits_cxx_try),
+            loc,
+        );
+        self.stmt(st.try_block(s), &mut np);
+        // A jump from a handler into the try block (or another
+        // handler) is not allowed either.
+        for h in ast.lists.iter::<StmtId>(st.try_handlers(s)).collect::<Vec<_>>() {
+            let mut np = self.push(
+                *p,
+                Some(DiagId::note_protected_by_cxx_catch),
+                Some(DiagId::note_exits_cxx_catch),
+                st.get(h).loc(),
+            );
+            self.stmt(st.catch_block(h), &mut np);
         }
     }
 
@@ -295,17 +307,14 @@ impl Checker<'_, '_, '_> {
         let ex = &self.sema.ast.exprs;
         for _ in 0..1024 {
             let k = ex.get(e).kind();
-            let next = if k.is_cast()
-                && matches!(
-                    ex.cast_kind(e),
-                    CastKind::NoOp | CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase
-                ) {
-                ex.children(e, &self.sema.ast.lists).first().copied()
-            } else if k == ExprKind::MemberExpr {
-                ex.children(e, &self.sema.ast.lists).first().copied()
-            } else {
-                None
-            };
+            let peel = k == ExprKind::MemberExpr
+                || (k.is_cast()
+                    && matches!(
+                        ex.cast_kind(e),
+                        CastKind::NoOp | CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase
+                    ));
+            let next =
+                if peel { ex.children(e, &self.sema.ast.lists).first().copied() } else { None };
             match next {
                 Some(x) => e = x,
                 None => break,
