@@ -754,7 +754,20 @@ impl Sema<'_, '_> {
         // with an equivalent head (alias templates are checked by
         // `act_on_typedef`, function templates with other heads are
         // overloads).
-        let old = prev.and_then(|t| self.ast.template_info(t)).map(|i| i.params);
+        // A friend class template in a dependent context (`template<C U>
+        // friend class X;` in a class template) is compared with neither
+        // side here: its head is deeper than the namespace scope
+        // template's and may name the enclosing parameters (clang's
+        // `CheckClassTemplate`). A friend redeclaration is compared when
+        // the enclosing class is instantiated (`check_friend_class_head`).
+        let dependent_friend = kind == DeclKind::ClassTemplate
+            && self.ast.decls.get(pattern).misc().friend() != kiln_ast::decl::FriendKind::None
+            && self.ast.templates.param_list(list).depth > 0;
+        let old = prev
+            .filter(|_| !dependent_friend)
+            .and_then(|t| self.head_comparable_decl(t))
+            .and_then(|t| self.ast.template_info(t))
+            .map(|i| i.params);
         let heads_match = match old {
             Some(old) if matches!(kind, DeclKind::ClassTemplate | DeclKind::VarTemplate) => {
                 self.check_template_heads_match(list, old)
