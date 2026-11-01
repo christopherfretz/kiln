@@ -2963,21 +2963,9 @@ impl Sema<'_, '_> {
             // recurse forever).
             QualType::ERROR
         } else if !invalid
-            && self.require_non_abstract(d.name_loc(), ty, crate::class::AbstractUse::Field)
+            && (self.require_non_abstract(d.name_loc(), ty, crate::class::AbstractUse::Field)
+                || self.union_reference_member(ctx, ty, nm.as_deref(), d.name_loc()))
         {
-            QualType::ERROR
-        } else if !invalid
-            && self.ast.types.is_reference(ty)
-            && self.ast.decls.record(ctx).is_some_and(|r| r.tag == TagKind::Union)
-        {
-            // [class.union.general]/2: no non-static data member of
-            // reference type (clang `err_union_member_of_reference_type`;
-            // the field is invalid).
-            let msg = self
-                .diag(DiagId::sema_union_member_reference, d.name_loc())
-                .arg(nm.clone().unwrap_or_default())
-                .arg(self.ty_arg(ty));
-            self.emit(msg);
             QualType::ERROR
         } else {
             ty
@@ -2997,6 +2985,29 @@ impl Sema<'_, '_> {
             self.special.nsdmi.insert(f);
         }
         f
+    }
+
+    /// [class.union.general]/2: a union has no non-static data member of
+    /// reference type (clang `err_union_member_of_reference_type`, at the
+    /// name; the field is invalid). True when diagnosed.
+    fn union_reference_member(
+        &mut self,
+        ctx: DeclId,
+        ty: QualType,
+        name: Option<&str>,
+        loc: Loc,
+    ) -> bool {
+        if !self.ast.types.is_reference(ty)
+            || !self.ast.decls.record(ctx).is_some_and(|r| r.tag == TagKind::Union)
+        {
+            return false;
+        }
+        let msg = self
+            .diag(DiagId::sema_union_member_reference, loc)
+            .arg(name.unwrap_or_default().to_owned())
+            .arg(self.ty_arg(ty));
+        self.emit(msg);
+        true
     }
 
     /// Checks a bit-field width ([class.bit]/1): an integral constant
