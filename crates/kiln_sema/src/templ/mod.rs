@@ -246,6 +246,12 @@ pub struct InstState {
     /// is not instantiated yet ([temp.inst]/4: when odr-used or needed
     /// for constant evaluation).
     pub(crate) member_defs: kiln_source::fx::FxHashSet<DeclId>,
+    /// The first reference to each variable template specialization
+    /// whose pattern had no definition there (clang's point of
+    /// instantiation), and whether it was odr-used since: an explicit
+    /// instantiation definition still undefined at the end of the TU is
+    /// then reported there (clang queues the use, §4.5).
+    pub(crate) undefined_var_uses: kiln_source::fx::FxHashMap<DeclId, (Loc, bool)>,
     /// Declaring such a member: its `constexpr` does not imply `inline`
     /// until the initializer is instantiated (as clang).
     pub(crate) deferring_init: bool,

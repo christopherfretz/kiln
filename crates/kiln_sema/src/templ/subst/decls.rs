@@ -21,6 +21,7 @@ use crate::declspec::{
     StorageSpec, TypeSpecKind,
 };
 use crate::templ::stack::{FrameKind, SfinaeState};
+use crate::templ::written::{WrittenScope, WrittenSide};
 
 impl Substituter<'_, '_, '_> {
     /// The decl-specifiers of pattern declaration `d` naming type `ty`.
@@ -161,7 +162,8 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<QualType> {
         let name = self.sema.ast.decls.get(d).name().as_ident().map(|n| (n, loc));
         let saved = std::mem::replace(&mut self.declarator_name, name);
-        let r = self.ty(t, loc);
+        let scope = self.decl_written_scope(d, loc);
+        let r = self.with_written_scope(scope, |s| s.ty(t, loc));
         self.declarator_name = saved;
         r
     }
@@ -414,7 +416,8 @@ impl Substituter<'_, '_, '_> {
                 self.locals.insert(p, DeclOrPack::Pack(l));
                 continue;
             }
-            let ty = self.ty(t, n.loc())?;
+            let scope = self.decl_written_scope(p, n.loc());
+            let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()))?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
             // ([basic.scope.param]); the function adopts it.
@@ -439,6 +442,81 @@ impl Substituter<'_, '_, '_> {
         Ok(out)
     }
 
+    /// The occurrence rule of pattern declaration `d`'s type at `loc`
+    /// (§5.8): the first occurrence from its decl-specifiers when their
+    /// start is known (a parameter, a field), so a declarator such as
+    /// `int (*p)(T::type)` finds its own; else the last one before the
+    /// declarator-id, or where it would be.
+    fn decl_written_scope(&self, d: DeclId, loc: Loc) -> WrittenScope {
+        match self.sema.ast.decls.cold.begin_loc.get(d) {
+            Some(&begin) if begin < loc => {
+                WrittenScope { anchor: loc, side: WrittenSide::After, bound: begin }
+            }
+            _ => WrittenScope { anchor: loc, side: WrittenSide::Before, bound: loc },
+        }
+    }
+
+    /// The occurrence rule of pattern function `d`'s return type (§5.8),
+    /// and whether it is substituted before the parameters: a leading
+    /// return type is written before the declarator-id; a conversion
+    /// function's type after `operator`; a trailing return type after the
+    /// last parameter.
+    fn ret_written_scope(&self, d: DeclId, trailing: bool, loc: Loc) -> (WrittenScope, bool) {
+        let ast = &self.sema.ast;
+        let conversion = ast.decls.get(d).name().kind() == DeclNameKind::Conversion;
+        if !trailing && !conversion {
+            return (WrittenScope { anchor: loc, side: WrittenSide::Before, bound: loc }, true);
+        }
+        let last = ast.decls.function(d).and_then(|f| ast.lists.iter::<DeclId>(f.params).last());
+        let bound = last.map_or(loc, |p| ast.decls.get(p).loc().max(loc));
+        (WrittenScope { anchor: loc, side: WrittenSide::After, bound }, false)
+    }
+
+    /// The substituted parameters, return type and exception
+    /// specification of pattern function `d` of type `p`. On failure the
+    /// pattern's parameters are forgotten.
+    fn function_sig(
+        &mut self,
+        d: DeclId,
+        p: &kiln_ast::types::FuncProto,
+        friend: Option<Loc>,
+        loc: Loc,
+    ) -> SubstResult<(Vec<ParamInfo>, QualType, kiln_ast::types::ExcSpec)> {
+        let info = p.info();
+        // A leading return type first, as written (clang
+        // `TransformFunctionProtoType`: the first error is the first
+        // written); otherwise the parameters first: a trailing return type
+        // and the exception specification may name them
+        // ([basic.scope.param]), and `this` ([expr.prim.this]/2).
+        let (ret_scope, leading) = self.ret_written_scope(d, info.trailing_return(), loc);
+        let early_ret = leading.then(|| self.with_written_scope(ret_scope, |s| s.ty(p.ret(), loc)));
+        let params = match early_ret {
+            Some(Err(e)) => Err(e),
+            _ => self.param_infos(d),
+        };
+        let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
+        let lazy_exc = friend.is_none() && self.sema.lazy_exc_spec(d, p);
+        let this = self.sema.act_on_start_this_scope(method, info.this_quals());
+        let sig = params.and_then(|params| {
+            let ret = match early_ret {
+                Some(r) => r?,
+                None => self.with_written_scope(ret_scope, |s| s.ty(p.ret(), loc))?,
+            };
+            // A dependent `noexcept(expr)` waits until needed (WP-112).
+            let exc = if lazy_exc {
+                kiln_ast::types::ExcSpec::Deferred(d)
+            } else {
+                self.exc_spec(p, loc)?
+            };
+            Ok((params, ret, exc))
+        });
+        self.sema.act_on_end_this_scope(this);
+        if sig.is_err() {
+            self.forget_pattern_params(d);
+        }
+        sig
+    }
+
     /// A function of the pattern (member or friend): declared with the
     /// substituted signature; its definition is instantiated when used
     /// (§4.4). Default arguments are substituted now (a gap: clang
@@ -459,31 +537,8 @@ impl Substituter<'_, '_, '_> {
             return self.unimplemented("function declared with a typedef of function type", loc);
         };
         let info = p.info();
-        // The parameters first: the return type and exception
-        // specification may name them ([basic.scope.param]), and `this`
-        // ([expr.prim.this]/2).
-        let params = self.param_infos(d);
-        let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
-        let lazy_exc = friend.is_none() && self.sema.lazy_exc_spec(d, &p);
-        let this = self.sema.act_on_start_this_scope(method, info.this_quals());
-        let sig = params.and_then(|params| {
-            let ret = self.ty(p.ret(), loc)?;
-            // A dependent `noexcept(expr)` waits until needed (WP-112).
-            let exc = if lazy_exc {
-                kiln_ast::types::ExcSpec::Deferred(d)
-            } else {
-                self.exc_spec(&p, loc)?
-            };
-            Ok((params, ret, exc))
-        });
-        self.sema.act_on_end_this_scope(this);
-        let (params, ret, exc) = match sig {
-            Ok(x) => x,
-            Err(e) => {
-                self.forget_pattern_params(d);
-                return Err(e);
-            }
-        };
+        let (params, ret, exc) = self.function_sig(d, &p, friend, loc)?;
+        let lazy_exc = matches!(exc, kiln_ast::types::ExcSpec::Deferred(x) if x == d);
         let mut ds = self.pattern_declspec(d, ret);
         // `explicit(expr)`: substituted, so the declaration resolves it
         // when it no longer depends on these levels ([dcl.fct.spec]/3,
@@ -583,24 +638,8 @@ impl Substituter<'_, '_, '_> {
         if requires.is_some() {
             self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
         }
-        // A friend defined in the class: its definition is instantiated
-        // from the pattern when used ([temp.inst]/4, clang's
-        // `isThisDeclarationInstantiatedFromAFriendDefinition`).
-        if friend.is_some() && self.sema.ast.decls.function(d).is_some_and(|x| x.body.is_some()) {
-            if let Some(prev) = self.friend_prior_definition(f) {
-                // [temp.inst]/4, [basic.def.odr]/1: the function was
-                // already defined, or will be by another friend
-                // definition already instantiated (clang
-                // `TemplateDeclInstantiator::VisitFunctionDecl`).
-                let msg = self
-                    .sema
-                    .diag(kiln_diag::DiagId::sema_redefinition, self.sema.ast.decls.get(f).loc())
-                    .arg(self.sema.decl_name(f));
-                let msg = self.sema.note_prev(msg, prev, true);
-                self.sema.emit(msg);
-            } else if self.sema.ast.instantiated_from(f).is_none() {
-                self.member_link(f, d);
-            }
+        if friend.is_some() {
+            self.friend_definition(f, d);
         }
         // Defined in its class: inline before its body is instantiated.
         if fs.is_some_and(kiln_ast::decl::FnSpec::implicit_inline) {
@@ -625,6 +664,29 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(r)
+    }
+
+    /// A friend defined in the class: its definition is instantiated
+    /// from the pattern `d` when used ([temp.inst]/4, clang's
+    /// `isThisDeclarationInstantiatedFromAFriendDefinition`).
+    fn friend_definition(&mut self, f: DeclId, d: DeclId) {
+        if self.sema.ast.decls.function(d).is_none_or(|x| x.body.is_none()) {
+            return;
+        }
+        if let Some(prev) = self.friend_prior_definition(f) {
+            // [temp.inst]/4, [basic.def.odr]/1: the function was
+            // already defined, or will be by another friend
+            // definition already instantiated (clang
+            // `TemplateDeclInstantiator::VisitFunctionDecl`).
+            let msg = self
+                .sema
+                .diag(kiln_diag::DiagId::sema_redefinition, self.sema.ast.decls.get(f).loc())
+                .arg(self.sema.decl_name(f));
+            let msg = self.sema.note_prev(msg, prev, true);
+            self.sema.emit(msg);
+        } else if self.sema.ast.instantiated_from(f).is_none() {
+            self.member_link(f, d);
+        }
     }
 
     /// The signature of function template specialization `spec` of
@@ -928,7 +990,11 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.decls.get(d);
         let loc = n.loc();
         let u = self.sema.ast.decls.typedef(d).map(|x| x.underlying).ok_or(SubstFail)?;
-        let ty = self.ty(u, loc)?;
+        // `typedef T x;` names its type before `x`, `using x = T;` after.
+        let side =
+            if n.kind() == DeclKind::TypeAlias { WrittenSide::After } else { WrittenSide::Before };
+        let scope = WrittenScope { anchor: loc, side, bound: loc };
+        let ty = self.with_written_scope(scope, |s| s.ty(u, loc))?;
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
             return Ok(self.sema.act_on_alias_decl(name, loc, ty, &[]));
