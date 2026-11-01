@@ -72,13 +72,16 @@ pub enum Designator {
     Field(Symbol, Loc),
     /// `[index]` (a GNU extension in C++).
     Index(ExprId, Loc),
+    /// `[first ... last]` (a GNU extension): the bounds, the `[` and
+    /// the `...`.
+    Range(ExprId, ExprId, Loc, Loc),
 }
 
 impl Designator {
     /// The location of the designator (the name of `.name`, the `[`).
     pub fn loc(&self) -> Loc {
         match *self {
-            Designator::Field(_, l) | Designator::Index(_, l) => l,
+            Designator::Field(_, l) | Designator::Index(_, l) | Designator::Range(_, _, l, _) => l,
         }
     }
 
@@ -87,6 +90,9 @@ impl Designator {
         match *self {
             Designator::Field(name, loc) => kiln_ast::expr::Designator::Field { name, loc },
             Designator::Index(index, loc) => kiln_ast::expr::Designator::Index { index, loc },
+            Designator::Range(first, last, loc, ellipsis) => {
+                kiln_ast::expr::Designator::Range { first, last, loc, ellipsis }
+            }
         }
     }
 }
@@ -269,7 +275,7 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                 }
                 for d in &item.designator {
-                    if let Designator::Index(_, at) = *d
+                    if let Designator::Index(_, at) | Designator::Range(_, _, at, _) = *d
                         && !array
                     {
                         array = true;
@@ -294,11 +300,104 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The checks clang makes on a designation as it is parsed
+    /// (`ActOnDesignatedInitializer`): each non-dependent array index is
+    /// an integral constant expression that is not negative, and a GNU
+    /// range `[a ... b]` is not empty. False if one failed (diagnosed);
+    /// the parser then drops the whole braced-init-list, as clang does.
+    pub fn act_on_designation(&mut self, ds: &[Designator]) -> bool {
+        let mut ok = true;
+        for d in ds {
+            match *d {
+                Designator::Field(..) => {}
+                Designator::Index(e, _) => {
+                    if !self.expr_is_value_dependent(e) && self.designator_index(e).is_none() {
+                        ok = false;
+                    }
+                }
+                Designator::Range(a, b, _, ellipsis) => {
+                    let va = if self.expr_is_value_dependent(a) {
+                        Some(None)
+                    } else {
+                        self.designator_index(a).map(Some)
+                    };
+                    let vb = if self.expr_is_value_dependent(b) {
+                        Some(None)
+                    } else {
+                        self.designator_index(b).map(Some)
+                    };
+                    match (va, vb) {
+                        (Some(Some(x)), Some(Some(y))) if y < x => {
+                            self.empty_range(a, b, ellipsis, x, y);
+                            ok = false;
+                        }
+                        (Some(_), Some(_)) => {}
+                        _ => ok = false,
+                    }
+                }
+            }
+        }
+        ok
+    }
+
+    /// "array designator range [a, b] is empty" at the `...`.
+    fn empty_range(&mut self, a: ExprId, b: ExprId, ellipsis: Loc, x: u64, y: u64) {
+        let msg = self
+            .diag(DiagId::sema_array_designator_empty_range, ellipsis)
+            .arg(x.to_string())
+            .arg(y.to_string())
+            .range(self.expr_range(a))
+            .range(self.expr_range(b));
+        self.emit(msg);
+    }
+
+    /// The value of the array designator index `ie` (clang
+    /// `CheckArrayDesignatorExpr`), diagnosed at the index when it is
+    /// not an integral constant expression or is negative.
+    pub(crate) fn designator_index(&mut self, ie: ExprId) -> Option<u64> {
+        let at = self.begin_loc(ie);
+        let ty = self.ast.exprs.get(ie).ty();
+        if self.is_err_expr(ie) || self.is_error_type(ty) {
+            return None;
+        }
+        let t = &self.ast.types;
+        let integral =
+            t.is_integral(ty) || t.as_enum(ty).is_some_and(|en| !self.is_scoped_enum(en));
+        if !integral {
+            let msg = self
+                .diag(DiagId::sema_ice_not_integral, at)
+                .arg(self.ty_arg(ty))
+                .range(self.expr_range(ie));
+            self.emit(msg);
+            return None;
+        }
+        let c = conv::lvalue_to_rvalue(self, ie);
+        let c = self.act_on_full_expr(c);
+        match self.eval_int(c, kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, at)) {
+            Ok(v) if v < 0 => {
+                let msg = self
+                    .diag(DiagId::sema_array_designator_negative, at)
+                    .arg(v.to_string())
+                    .range(self.expr_range(ie));
+                self.emit(msg);
+                None
+            }
+            Ok(v) => Some(u64::try_from(v).unwrap_or(u64::MAX)),
+            Err(mut f) => {
+                let at = Self::fold_lone_invalid(&mut f, at);
+                let d = self.diag(DiagId::sema_expr_not_ice, at);
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                None
+            }
+        }
+    }
+
     /// Where a designator begins: the `.` of `.name`, the `[` of `[i]`.
     fn designator_begin(&self, d: &Designator) -> Loc {
         match *d {
             Designator::Field(_, at) => self.period_before(at),
-            Designator::Index(_, at) => at,
+            Designator::Index(_, at) | Designator::Range(_, _, at, _) => at,
         }
     }
 
@@ -1631,7 +1730,7 @@ impl Sema<'_, '_> {
             if let Some(k) = k {
                 let (name, dloc) = match item.designator[k] {
                     Designator::Field(n, l) => (n, l),
-                    ref d @ Designator::Index(..) => {
+                    ref d @ (Designator::Index(..) | Designator::Range(..)) => {
                         self.designator_mismatch(ty, d);
                         *pos += 1;
                         continue;
@@ -1739,6 +1838,12 @@ impl Sema<'_, '_> {
             if let Some(f) = union_field {
                 let i = fields.iter().position(|&x| x == f).unwrap_or(0);
                 inits.extend(slots[i]);
+            } else if let Some(f) = self.union_default_member(&fields) {
+                // [dcl.init.aggr]/5 (C++20): an empty list initializes the
+                // variant member with a default member initializer (clang
+                // `CheckStructUnionTypes`, then a `CXXDefaultInitExpr`).
+                inits.push(self.field_filler(f, rbrace));
+                union_field = Some(f);
             } else if let Some(&f) = fields.first() {
                 let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
                 inits.push(self.filler(fty, rbrace));
@@ -1793,9 +1898,15 @@ impl Sema<'_, '_> {
                 None => Some(0),
             };
             let mut descend = None;
+            // The last index a range designator `[cur ... last]` names.
+            let mut last = None;
             if let Some(k) = k {
-                let (ie, dloc) = match item.designator[k] {
-                    Designator::Index(ie, l) => (ie, l),
+                // The index expression the bound is checked against: the
+                // index, or a range's end (clang
+                // `CheckDesignatedInitializer`).
+                let (first, end) = match item.designator[k] {
+                    Designator::Index(ie, _) => (ie, None),
+                    Designator::Range(a, b, _, _) => (a, Some(b)),
                     ref d @ Designator::Field(..) => {
                         self.designator_mismatch(ty, d);
                         *pos += 1;
@@ -1805,24 +1916,41 @@ impl Sema<'_, '_> {
                 if k + 1 < item.designator.len() {
                     descend = Some(k + 1);
                 }
-                let c = conv::lvalue_to_rvalue(self, ie);
-                let c = self.act_on_full_expr(c);
-                match self
-                    .eval_int(c, kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, dloc))
-                {
-                    Ok(v) if v >= 0 => {
-                        cur = u64::try_from(v).unwrap_or(u64::MAX);
-                    }
-                    r => {
-                        let d = self.diag(DiagId::sema_expr_not_ice, dloc);
-                        let d = match r {
-                            Err(f) => Self::with_failure_notes(d, f),
-                            Ok(_) => d,
+                let Some(v) = self.designator_index(first) else {
+                    *pos += 1;
+                    continue;
+                };
+                cur = v;
+                if let Some(b) = end {
+                    let Some(w) = self.designator_index(b) else {
+                        *pos += 1;
+                        continue;
+                    };
+                    if w < v {
+                        let ellipsis = match item.designator[k] {
+                            Designator::Range(_, _, _, e) => e,
+                            _ => item.designator[k].loc(),
                         };
-                        self.emit(d);
+                        self.empty_range(first, b, ellipsis, v, w);
                         *pos += 1;
                         continue;
                     }
+                    last = Some(w);
+                }
+                // An index past a known bound is clang's
+                // `err_array_designator_too_large`, at the (end) index.
+                if let Some(n) = bound
+                    && last.unwrap_or(v) >= n
+                {
+                    let at_e = end.unwrap_or(first);
+                    let msg = self
+                        .diag(DiagId::sema_array_designator_too_large, self.begin_loc(at_e))
+                        .arg(last.unwrap_or(v).to_string())
+                        .arg(n.to_string())
+                        .range(self.expr_range(at_e));
+                    self.emit(msg);
+                    *pos += 1;
+                    continue;
                 }
             }
             if bound.is_some_and(|b| cur >= b) {
@@ -1833,26 +1961,35 @@ impl Sema<'_, '_> {
                 break;
             }
             let i = usize::try_from(cur).unwrap_or(usize::MAX);
-            if slots.len() <= i {
-                slots.resize(i + 1, None);
-                explicit.resize(i + 1, false);
+            let j = last.map_or(i, |w| usize::try_from(w).unwrap_or(usize::MAX));
+            if slots.len() <= j {
+                slots.resize(j + 1, None);
+                explicit.resize(j + 1, false);
             }
-            let e = if let Some(k2) = descend {
-                let prior = self.descend_prior(slots[i], explicit[i], item);
-                let at = self.designator_begin(&item.designator[0]);
-                let s = Sub { braced: false, entry: Some(k2), prior };
-                self.check_aggregate_in(elem, items, pos, s, at, at)
-            } else {
-                if explicit[i]
-                    && let Some(old) = slots[i]
-                {
-                    self.override_warning(item, old);
-                }
-                self.with_init_entity(entity::ELEMENT, |s| s.init_element(elem, items, pos, lbrace))
-            };
-            slots[i] = Some(e);
-            explicit[i] = true;
-            cur += 1;
+            let start = *pos;
+            for x in i..=j {
+                // Each element of a range is initialized from the same
+                // clause (clang re-checks it per element).
+                *pos = start;
+                let e = if let Some(k2) = descend {
+                    let prior = self.descend_prior(slots[x], explicit[x], item);
+                    let at = self.designator_begin(&item.designator[0]);
+                    let s = Sub { braced: false, entry: Some(k2), prior };
+                    self.check_aggregate_in(elem, items, pos, s, at, at)
+                } else {
+                    if explicit[x]
+                        && let Some(old) = slots[x]
+                    {
+                        self.override_warning(item, old);
+                    }
+                    self.with_init_entity(entity::ELEMENT, |s| {
+                        s.init_element(elem, items, pos, lbrace)
+                    })
+                };
+                slots[x] = Some(e);
+                explicit[x] = true;
+            }
+            cur = j as u64 + 1;
         }
         let n = bound.unwrap_or(slots.len() as u64);
         let mut inits = Vec::with_capacity(slots.len());
@@ -1878,6 +2015,27 @@ impl Sema<'_, '_> {
         self.builder().init_list(lty, &inits, filler, None, lbrace, rbrace)
     }
 
+    /// The variant member of a union (one of `fields`) that has a
+    /// default member initializer, directly or in an anonymous member.
+    fn union_default_member(&self, fields: &[DeclId]) -> Option<DeclId> {
+        fields.iter().copied().find(|&f| self.field_or_anonymous_has_nsdmi(f))
+    }
+
+    /// Whether field `f` has a default member initializer, or is an
+    /// anonymous member one of whose members (recursively) has one.
+    fn field_or_anonymous_has_nsdmi(&self, f: DeclId) -> bool {
+        if self.field_has_nsdmi(f) {
+            return true;
+        }
+        if !self.is_anonymous_member(f) {
+            return false;
+        }
+        let Some(r) = self.ast.decls.get(f).ty().and_then(|t| self.ast.types.as_record(t)) else {
+            return false;
+        };
+        self.init_fields(r).into_iter().any(|g| self.field_or_anonymous_has_nsdmi(g))
+    }
+
     /// "field designator cannot initialize a non-class type" /
     /// "array designator cannot initialize non-array type" for the
     /// designator `d` applied to `ty`.
@@ -1889,7 +2047,9 @@ impl Sema<'_, '_> {
             Designator::Field(_, l) => {
                 (DiagId::sema_field_designator_non_record, self.period_before(l))
             }
-            Designator::Index(_, l) => (DiagId::sema_array_designator_non_array, l),
+            Designator::Index(_, l) | Designator::Range(_, _, l, _) => {
+                (DiagId::sema_array_designator_non_array, l)
+            }
         };
         let msg = self.diag(id, at).arg(self.ty_arg(ty));
         self.emit(msg);

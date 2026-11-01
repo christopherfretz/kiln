@@ -102,6 +102,9 @@ member cannot be redeclared`, `constructor cannot be redeclared`, `duplicate
 member 'a'`); `mutable` with `const` or a reference; `constexpr` non-static
 data member; incomplete or abstract field type (`field has incomplete type
 'In'` + note `definition of 'In' is not complete until the closing '}'`);
+a union member of reference type (`union member 'r' has reference type 'int
+&'`, at the name, also substituted; [class.union.general]/2, WP-193; the
+field's type becomes the error type);
 static data member in a local class or in an anonymous/unnamed class;
 `virtual`/`explicit`/pure on the wrong kind of member.
 
@@ -1660,7 +1663,11 @@ access, out-of-line declarator scope.**
   `act_on_member_dn`, `act_on_id_expression_dn`, `act_on_call_name_dn`,
   `act_on_undeclared_call_name_dn` (the `Symbol` forms wrap them).
   Destructor calls: `act_on_member_destructor`, `rebuild_member_destructor`
-  (instantiation). A pseudo-destructor on a scalar or dependent object is
+  (instantiation). The destructor `MemberExpr` is located at the `~` (clang's
+  name start), so a deleted destructor's use is diagnosed there; when
+  rebuilt at instantiation it is at the destroyed type, as clang (WP-193).
+  A qualified destructor name (`p->D::~D()`) is not parsed yet.
+  A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
   expression only, and the Oven does not end the object's lifetime (as

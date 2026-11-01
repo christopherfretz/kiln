@@ -59,7 +59,7 @@ fn structure() {
     assert_eq!(lines.len(), 3, "{lines:#?}");
     assert_eq!(
         lines[0],
-        r#"{"id":"diag_unknown_warning_option","severity":"warning","file":null,"line":null,"col":null,"message":"unknown warning option '-Wbogus'; did you mean '-Wmost'?","group":"unknown-warning-option","option":"-Wunknown-warning-option","notes":[],"spans":[],"fixits":[]}"#
+        r#"{"id":"diag_unknown_warning_option","severity":"warning","file":null,"line":null,"col":null,"message":"unknown warning option '-Wbogus'","group":"unknown-warning-option","option":"-Wunknown-warning-option","notes":[],"spans":[],"fixits":[]}"#
     );
     assert_eq!(
         lines[1],
