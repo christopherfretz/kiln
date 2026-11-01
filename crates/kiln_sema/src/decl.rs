@@ -21,6 +21,7 @@ use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
 use crate::class::ClassBuild;
+use crate::qualified_decl::QualifiedDecl;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
@@ -1689,6 +1690,22 @@ impl Sema<'_, '_> {
             // drops the declaration.
             return None;
         }
+        let unqualified;
+        let d = match if d.dropped {
+            QualifiedDecl::Keep
+        } else {
+            self.diagnose_qualified_declaration(ds, d, head.is_some())
+        } {
+            QualifiedDecl::Keep => d,
+            QualifiedDecl::Unqualify => {
+                unqualified = Declarator { qualifier: None, ..d.clone() };
+                &unqualified
+            }
+            QualifiedDecl::Drop => {
+                self.templ.cur = None;
+                return None;
+            }
+        };
         if !d.dropped
             && ds.friend.is_none()
             && let Some((SpecialName::DeductionGuide(t), _)) = d.special
@@ -1711,6 +1728,7 @@ impl Sema<'_, '_> {
         // so `__attribute__((vector_size(8))) short f();` returns a vector.
         let base = self.apply_declspec_vector_attrs(base, ds);
         let base = self.ctad_decl_spec_check(ds, base, d);
+        self.warn_redundant_parens(ds, base, d);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {

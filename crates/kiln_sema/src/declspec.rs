@@ -624,6 +624,9 @@ pub struct Declarator {
     /// (clang's `DeclaratorChunk::Paren`; `ParenType` sugar and
     /// `-Wvexing-parse`'s redundant-parentheses warning, WP-191).
     pub parens: Vec<(usize, Loc, Loc)>,
+    /// Not the first declarator of its declaration (clang's
+    /// `!isFirstDeclarator()`: a comma precedes it).
+    pub after_comma: bool,
 }
 
 /// Where a declarator appears, refining [`DeclaratorContext`] for the
@@ -723,6 +726,7 @@ impl Declarator {
             site: DeclSite::Plain,
             outer_paren: None,
             parens: Vec::new(),
+            after_comma: false,
             virt_override: None,
             virt_final: None,
             pure: None,

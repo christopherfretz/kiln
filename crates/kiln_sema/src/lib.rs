@@ -41,6 +41,7 @@ mod oven_bridge;
 pub mod overload;
 mod packed;
 mod predefined;
+mod qualified_decl;
 mod range_for;
 mod rtti;
 pub mod scope;
@@ -58,6 +59,7 @@ mod unused_var;
 pub mod using;
 mod vector;
 mod vector_ops;
+mod vexing;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};

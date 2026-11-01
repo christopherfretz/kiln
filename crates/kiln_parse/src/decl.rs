@@ -2216,6 +2216,7 @@ impl Parser<'_, '_> {
                 }
             }
             first = false;
+            d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
             self.s.end_delayed_access_to(level, v);

@@ -1631,6 +1631,11 @@ diag_ids! {
     note_raii_guard_add_name = Note (2) "add a variable name to declare a {0} initialized with '{1}'";
     note_function_style_cast_add_parentheses = Note (0) "add enclosing parentheses to perform a function-style cast";
     note_remove_parens_for_variable_declaration = Note (0) "remove parentheses to silence this warning";
+    sema_invalid_declarator_global_scope = Error (1) "definition or redeclaration of '{0}' cannot name the global scope";
+    sema_invalid_declarator_in_function = Error (1) "definition or redeclaration of '{0}' not allowed inside a function";
+    sema_invalid_declarator_scope = Error (3) "cannot define or redeclare '{0}' here because namespace '{1}' does not enclose namespace '{2}'";
+    sema_member_qualification = Error (1) "non-friend class member '{0}' cannot have a qualified name";
+    sema_member_extra_qualification = Error (1) "extra qualification on member '{0}'";
 }
 
 impl DiagId {
