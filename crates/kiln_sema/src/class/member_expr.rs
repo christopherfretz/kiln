@@ -163,6 +163,7 @@ impl Sema<'_, '_> {
         // up in the qualifier's scope, which must be the object's class
         // or one of its bases.
         let look = qual.map_or(def, |q| q.ctx);
+        self.declare_implicit_named(look, name);
         let found = match qual {
             Some(q) => self.lookup_qualified_dn(q.ctx, name, LookupKind::Ordinary),
             None => self.lookup_in_class_dn(def, name, LookupKind::Ordinary),

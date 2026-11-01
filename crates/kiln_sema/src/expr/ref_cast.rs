@@ -120,6 +120,11 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<(CastKind, Option<ListId>)> {
         let (fu, tu) = (conv::strip_cv(self, from), conv::strip_cv(self, to));
+        // The relation is only known for complete classes: a class
+        // template specialization is instantiated first ([temp.inst]/2;
+        // clang `isCompleteType` in `TryStaticDowncast`).
+        let _ = self.require_complete_silent(fu, loc);
+        let _ = self.require_complete_silent(tu, loc);
         match find_base(self, fc, tc) {
             BaseSearch::Unique(p) => {
                 self.check_base_access(fu, tu, &p, loc);
@@ -166,11 +171,16 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        let (fu, tu) = (conv::strip_cv(self, fp), conv::strip_cv(self, tp));
+        // clang `TryStaticDowncast`: the derived class must be complete,
+        // instantiating a class template specialization ([temp.inst]/2).
+        if !self.require_complete_silent(tu, loc) {
+            return None;
+        }
         let BaseSearch::Unique(p) = find_base(self, tc, fc) else { return None };
         if p.first_virtual.is_some() {
             return None;
         }
-        let (fu, tu) = (conv::strip_cv(self, fp), conv::strip_cv(self, tp));
         self.check_base_access(tu, fu, &p, loc);
         let path = Some(path_list(self, &p));
         let vk = ValueCategory::PRValue;
