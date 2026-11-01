@@ -1451,6 +1451,15 @@ diagnostics and IR.
   two-pointer form naming both pointees when the pointer types differ
   (`arithmetic on pointers to function types 'void ()' and 'void
   (int)'`); otherwise an incomplete pointee, left side first.
+- **Relational operators and `std::nullptr_t`** ([expr.rel]/1, CWG583;
+  clang's `CheckCompareOperands`, WP-276): the operands of `<`, `>`,
+  `<=`, `>=` have arithmetic, enumeration or pointer type, so a
+  `std::nullptr_t` operand on either side is `invalid operands to binary
+  expression ('std::nullptr_t' and 'int *')` (a SFINAE failure in a
+  template argument, as libc++'s `nullptr_t.pass.cpp` `has_less`
+  checks); a pointer against an integral null pointer constant is
+  `ordered comparison between pointer and zero ('int *' and 'int')`. The
+  composite pointer type is formed only for `==`/`!=` or two pointers.
 - **Member-pointer equality** ([expr.eq]/4, clang's
   `CheckCompareOperands`, WP-085): when either operand of a comparison
   is a member pointer:
