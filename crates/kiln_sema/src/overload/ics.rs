@@ -624,6 +624,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records on `r` that it converts list `l` to an array of `elem`
+    /// (`to`), for the [over.ics.rank]/3.1.2 tie-breaker.
+    fn with_list_array(&self, mut r: Ics, l: &InitList, elem: QualType, to: QualType) -> Ics {
+        let len = self.ast.types.array_size(to);
+        let la =
+            ListArray { elem, len: len.unwrap_or(l.items.len() as u64), unbounded: len.is_none() };
+        match &mut r {
+            Ics::Standard(s) => s.list_array = Some(la),
+            Ics::UserDefined(u) => u.after.list_array = Some(la),
+            _ => {}
+        }
+        r
+    }
+
     /// The ICS of a braced-init-list ([over.ics.list]).
     pub(crate) fn list_ics(&mut self, l: &InitList, to: QualType, opts: IcsOptions) -> Ics {
         let void_from = QualType::VOID;
@@ -680,19 +694,8 @@ impl Sema<'_, '_> {
             {
                 return Ics::bad(BadKind::InitList, void_from, to);
             }
-            let len = self.ast.types.array_size(to);
-            let mut r = self.worst_element(l, elem, to, opts);
-            let la = ListArray {
-                elem,
-                len: len.unwrap_or(l.items.len() as u64),
-                unbounded: len.is_none(),
-            };
-            match &mut r {
-                Ics::Standard(s) => s.list_array = Some(la),
-                Ics::UserDefined(u) => u.after.list_array = Some(la),
-                _ => {}
-            }
-            return r;
+            let r = self.worst_element(l, elem, to, opts);
+            return self.with_list_array(r, l, elem, to);
         }
         if let Some(c) = self.ast.types.as_record(to) {
             // /5: std::initializer_list<X>.

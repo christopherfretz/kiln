@@ -5269,7 +5269,11 @@ impl Sema<'_, '_> {
                 }
                 Some(self.ast.definition(d).unwrap_or(d))
             }
-            DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm => Some(d),
+            // A dependent `using typename B<T>::x;` member nests like a
+            // template parameter (`x::value`, WP-179).
+            DeclKind::TemplateTypeParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::UnresolvedUsingTypename => Some(d),
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
                 let what = if self.kind_of(d) == DeclKind::ClassTemplate {
                     "class template"
@@ -5284,7 +5288,6 @@ impl Sema<'_, '_> {
                 None
             }
             DeclKind::Typedef | DeclKind::TypeAlias if self.is_dependent_ctx(d) => Some(d),
-            DeclKind::UnresolvedUsingTypename => Some(d),
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.mark_type_referenced(d);
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
