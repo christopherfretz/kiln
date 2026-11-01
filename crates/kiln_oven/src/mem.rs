@@ -169,6 +169,13 @@ pub(crate) mod flags {
     /// for `T[n]` whose elements are outside their lifetime until
     /// constructed (`Space::life`, spec/oven.md "Transient allocation").
     pub const STD_ALLOC: u8 = 64;
+    /// A frame or `new` object one of whose subobjects' lifetime an
+    /// explicit destruction ended: `Space::life` is kept for its bytes
+    /// from then on (`Memory::set_lifetime`; spec/oven.md "Object
+    /// lifetime outside std::allocator storage").
+    pub const LIFE: u8 = 128;
+    /// Storage whose bytes' lifetime [`Memory::check`] consults.
+    pub const TRACKED: u8 = STD_ALLOC | LIFE;
 }
 
 /// How a heap object was allocated, and how one is deallocated (clang's
@@ -221,8 +228,8 @@ pub(crate) struct Space {
     /// Per granule: holds a pointer.
     pub ptr: Vec<u8>,
     /// Per granule: bit i = byte i is within the lifetime of an object.
-    /// Kept for [`flags::STD_ALLOC`] heap storage only, and empty until
-    /// the first such allocation (spec/oven.md "Transient allocation").
+    /// Meaningful for [`flags::TRACKED`] allocations only, and empty
+    /// until the first one (spec/oven.md "Transient allocation").
     pub life: Vec<u8>,
     pub top: u64,
 }
@@ -425,6 +432,9 @@ pub(crate) struct Memory {
     /// Serial of the running call frame, and the last serial handed out.
     pub cur_frame: u32,
     pub serial: u32,
+    /// A frame object has been [`flags::LIFE`]-tracked in this evaluation:
+    /// leaving a scope checks the objects it releases (`Oven::scope_life`).
+    pub life_frame: bool,
     /// Open checkpoints and their undo log (spec/oven.md "Trial
     /// evaluation").
     trial: Trial,
@@ -466,6 +476,7 @@ impl Memory {
             limit,
             cur_frame: 0,
             serial: 0,
+            life_frame: false,
             trial: Trial::default(),
         }
     }
@@ -488,6 +499,7 @@ impl Memory {
     /// evaluation); buffers are kept.
     pub fn reset(&mut self) {
         self.frame.top = 0;
+        self.life_frame = false;
         self.slots.truncate(1);
         self.free.clear();
         self.live.clear();
@@ -669,14 +681,14 @@ impl Memory {
     #[inline]
     pub fn check(&self, raw: u64, len: u64, write: bool) -> Result<(Sp, u64, &Alloc), MemFault> {
         let r = self.check_storage(raw, len, write)?;
-        if r.2.flags & flags::STD_ALLOC != 0 && !self.heap.is_live(r.1, len) {
+        if r.2.flags & flags::TRACKED != 0 && !self.space(r.0).is_live(r.1, len) {
             return Err(MemFault::Lifetime);
         }
         Ok(r)
     }
 
-    /// [`Memory::check`] without the lifetime check of `std::allocator`
-    /// storage: the checks of a placement new, which begins a lifetime.
+    /// [`Memory::check`] without the lifetime check of tracked storage:
+    /// the checks of a placement new, which begins a lifetime.
     pub fn check_storage(
         &self,
         raw: u64,
@@ -928,21 +940,72 @@ impl Memory {
     /// Begins (`live`, a placement new: the bytes become uninitialized
     /// for the initialization that follows) or ends (an explicit
     /// destruction) the lifetime of the `len`-byte object at `raw`
-    /// (checked). Lifetime is tracked for [`flags::STD_ALLOC`] storage
-    /// only; elsewhere ending one does nothing (spec/oven.md "Transient
-    /// allocation").
+    /// (checked). `std::allocator` storage is tracked from its
+    /// allocation; a frame or `new` object from the first end of a
+    /// lifetime in it (`track_life`). Static objects are not tracked
+    /// (spec/oven.md "Transient allocation").
     pub fn set_lifetime(&mut self, raw: u64, len: u64, live: bool) -> Result<(), MemFault> {
         let (sp, abs, a) = self.check_storage(raw, len, true)?;
-        let std = a.flags & flags::STD_ALLOC != 0;
-        if !live && !std {
+        let mut tracked = a.flags & flags::TRACKED != 0;
+        if !live && !tracked && sp != Sp::Static {
+            self.track_life(raw)?;
+            tracked = true;
+        }
+        if !live && !tracked {
             return Ok(());
         }
         self.trial_write(raw, len)?;
         let s = self.space_mut(sp);
         s.set_init(abs, len, false);
-        if std {
+        if tracked {
             s.set_life(abs, len, live);
         }
+        Ok(())
+    }
+
+    /// Starts tracking the lifetime of the bytes of the (frame or heap)
+    /// allocation holding `raw`, all within their lifetime so far. O(size
+    /// of the allocation), once per allocation; the bitmask is the
+    /// space's, so no memory is held beyond it.
+    fn track_life(&mut self, raw: u64) -> Result<(), MemFault> {
+        let p = Ptr::decode(raw);
+        let a = *self.alloc_of(p)?;
+        let base_raw = Ptr { off: 0, past: false, ..p }.encode();
+        self.trial_write(base_raw, u64::from(a.size))?;
+        self.set_flags(p, a.flags | flags::LIFE);
+        let sp = p.space();
+        if sp == Sp::Frame {
+            self.life_frame = true;
+        }
+        let s = self.space_mut(sp);
+        s.ensure_life();
+        s.set_life(u64::from(a.base), u64::from(a.size), true);
+        Ok(())
+    }
+
+    /// Whether no byte of the `len`-byte object at `raw` is within its
+    /// lifetime, in [`flags::TRACKED`] storage (an object an explicit
+    /// destruction ended and nothing re-created).
+    pub fn ended(&self, raw: u64, len: u64) -> bool {
+        let Ok((sp, abs, a)) = self.check_storage(raw, len.max(1), false) else { return false };
+        if a.flags & flags::TRACKED == 0 {
+            return false;
+        }
+        let s = self.space(sp);
+        (abs..abs + len.max(1)).all(|i| !s.is_live(i, 1))
+    }
+
+    /// Re-begins the lifetime of the `len` bytes at `raw` in
+    /// [`flags::LIFE`]-tracked storage: a union member made active by
+    /// assignment ([class.union.general]/6) after another member's
+    /// destruction.
+    pub fn revive(&mut self, raw: u64, len: u64) -> Result<(), MemFault> {
+        let (sp, abs, a) = self.check_storage(raw, len, true)?;
+        if a.flags & flags::LIFE == 0 || self.space(sp).is_live(abs, len) {
+            return Ok(());
+        }
+        self.trial_write(raw, len)?;
+        self.space_mut(sp).set_life(abs, len, true);
         Ok(())
     }
 
