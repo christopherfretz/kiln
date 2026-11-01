@@ -327,6 +327,31 @@ fn arg_list_with_scope(
     *out = p.out;
 }
 
+/// [`write_arg_list`] of the first `len` arguments of `l` (`<>` when
+/// `len` is 0): a name printed without its trailing default arguments.
+pub fn write_arg_list_prefix(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    len: usize,
+    out: &mut String,
+) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: false,
+        suppress_tag: false,
+        c_policy: false,
+        no_parens: false,
+        inside_cc_attr: false,
+        depth: 0,
+    };
+    p.arg_list_prefix(l, false, len);
+    *out = p.out;
+}
+
 /// Renders one template argument as written (no brackets), appending to
 /// `out`.
 pub fn write_template_arg(
@@ -1417,6 +1442,11 @@ impl Printer<'_> {
 
     /// clang's `printTemplateArgumentList` (`printTo`).
     fn arg_list(&mut self, l: ArgListId, is_pack: bool) {
+        self.arg_list_prefix(l, is_pack, usize::MAX);
+    }
+
+    /// [`Self::arg_list`] of the first `len` arguments of `l`.
+    fn arg_list_prefix(&mut self, l: ArgListId, is_pack: bool, len: usize) {
         if self.depth >= MAX_DEPTH {
             self.push(if is_pack { "..." } else { "<...>" });
             return;
@@ -1427,7 +1457,7 @@ impl Printer<'_> {
             self.push("<");
         }
         let mut first = true;
-        for a in ctx.args(l) {
+        for a in ctx.args(l).iter().take(len) {
             let start;
             match a.view() {
                 ArgView::Pack(inner) => {
