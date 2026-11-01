@@ -75,6 +75,7 @@ impl Sema<'_, '_> {
             self.ast.decls.mark_function(dc, FnSpec::new().with_deleted(true));
         }
         let _ = self.ast.decls.set_inheriting_ctor(dc, shadow);
+        let _ = self.ast.decls.set_inherited_ctor(dc, bc);
         self.inh_ctors.insert((d, bc), dc);
         self.inh_ctor_base.insert(dc, bc);
         if !bspec.is_deleted() && self.inheriting_ctor_should_delete(dc) {

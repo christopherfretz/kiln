@@ -608,10 +608,21 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   constructor comes through one, the base variant takes no parameters
   beyond `this`/VTT (clang `inheritingCtorHasParams`), yet a call still
   passes the evaluated arguments, as clang does. Corpus
-  `class_inheriting_ctors`, mangle `inheriting_ctors`. Gap: a variadic
-  base constructor is defined like any other; clang instead inlines the
-  inheriting constructor at each call
-  (`EmitInlinedInheritingCXXConstructorCall`), so its IR differs.
+  `class_inheriting_ctors`, mangle `inheriting_ctors`. An inheriting
+  constructor of a C-variadic base constructor cannot forward its
+  variadic arguments, so, as clang does (`canEmitDelegateCallArgs` →
+  `EmitInlinedInheritingCXXConstructorCall`), every call is inlined at
+  the call site (`emit_inlined_inheriting_ctor`): `this` spilled and
+  reloaded, then the ctor-initializers emitted with the call's evaluated
+  arguments (`Fx::inh_args`) forwarded by the `CXXInheritedCtorInitExpr`,
+  recursively when that base constructor is itself such an inheriting
+  constructor; no `CI` symbol is emitted. Gap: inlining the base variant
+  of a class with virtual bases (it needs the caller's VTT) is a
+  "not supported yet" error. An inherited constructor template
+  specialization is mangled `CI1`/`CI2` <base> <template-args> with the
+  pattern's signature (clang `InheritedTemplateArgs`), and a constructor
+  template specialization's base variant is `C2` (WP-146; corpus
+  `class_inheriting_ctors_variadic`).
 - Explicit instantiation definitions (`template struct X<int>;`) emit
   nothing: the members are instantiated by sema but codegen emits only
   used functions, with `linkonce_odr`. clang emits every member
