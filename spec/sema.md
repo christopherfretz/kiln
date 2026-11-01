@@ -519,7 +519,11 @@ and returns the scope it names:
     type, never attached. `ext_vector_type` applies only to a typedef or
     alias-declaration (`'ext_vector_type' attribute only applies to
     typedefs`); `vector_size` also to the type of a variable, field or
-    parameter (on a function declaration: unsupported). The element
+    parameter. Among the decl-specifiers they modify the decl-specifier
+    type (so a function can return a vector); after a declarator, the
+    whole declared type (on a function, pointer or array declarator:
+    an invalid element type, after which the type is left unchanged,
+    as clang). The element
     type must be integral or floating (`vector_size`: a non-`bool`
     builtin), else `invalid vector element type 'T'`; N must be an
     integral constant (`ext_vector_type attribute requires an integer

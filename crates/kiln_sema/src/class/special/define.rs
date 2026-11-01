@@ -1205,6 +1205,12 @@ impl Sema<'_, '_> {
         }
         if args.len() < params.len() {
             for &p in &params[args.len()..] {
+                // [temp.inst]/12: instantiated at this use.
+                if self.inst.lazy_defaults.contains_key(&p)
+                    && !self.instantiate_lazy_default(m, p, loc)
+                {
+                    return None;
+                }
                 let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) else { break };
                 let x = *self.ast.exprs.get(d);
                 let used = self.ctx;

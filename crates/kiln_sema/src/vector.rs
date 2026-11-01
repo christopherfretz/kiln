@@ -10,7 +10,12 @@
 //! written (the element count for `ext_vector_type`, the byte size for
 //! `vector_size`, as clang's `DependentVectorType` /
 //! `DependentSizedExtVectorType`); substitution rebuilds it through
-//! [`Sema::build_vector_type`]. Operations on vector values are M4.
+//! [`Sema::build_vector_type`]. Among the decl-specifiers the attributes
+//! modify the decl-specifier type (`__attribute__((vector_size(8))) short
+//! f();` returns a vector); after a declarator they modify the whole
+//! declared type, and an invalid one leaves the type unchanged (clang
+//! `processTypeAttrs`, `HandleVectorSizeAttr`). Operations on vector
+//! values are in `vector_ops.rs` (WP-156); their constant evaluation is M4.
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::ids::RawId;
@@ -23,6 +28,7 @@ use kiln_source::Loc;
 use crate::Sema;
 use crate::conv;
 use crate::decl::AttrArg;
+use crate::declspec::DeclSpec;
 
 impl Sema<'_, '_> {
     /// `ext_vector_type(N)` / `vector_size(N)` as written: exactly one
@@ -79,22 +85,47 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_ext_vector_type_on_non_typedef, node.loc);
                 continue;
             }
-            if !typedef && self.ast.types.is_function(ty) {
-                // clang applies it to the return type; not supported yet.
-                let msg = self
-                    .diag(DiagId::parse_unsupported, node.loc)
-                    .arg("'vector_size' on a function declaration");
-                self.emit(msg);
-                continue;
-            }
             if self.is_error_type(ty) {
                 continue;
             }
             let kind = if ext { VectorKind::Ext } else { VectorKind::Generic };
             let Some(size) = ExprId::from_raw(node.a) else { continue };
-            ty = self.build_vector_type(ty, size, kind, node.loc);
+            // clang `HandleVectorSizeAttr` / `HandleExtVectorTypeAttr`
+            // leave the type unchanged after a diagnostic.
+            let v = self.build_vector_type(ty, size, kind, node.loc);
+            if v != QualType::ERROR {
+                ty = v;
+            }
         }
         ty
+    }
+
+    /// `base` with the vector attributes among `ds`'s decl-specifiers
+    /// applied: they modify the decl-specifier type, not the declarator's
+    /// (clang `processTypeAttrs(TAL_DeclSpec)`); the declarator's own
+    /// trailing attributes apply to the whole declared type.
+    pub(crate) fn apply_declspec_vector_attrs(
+        &mut self,
+        base: QualType,
+        ds: &DeclSpec,
+    ) -> QualType {
+        let mut attrs = ds.attrs.clone();
+        self.apply_vector_attrs(base, &mut attrs, ds.is_typedef())
+    }
+
+    /// `attrs` without the vector attributes (applied separately by
+    /// [`Self::apply_declspec_vector_attrs`]).
+    pub(crate) fn non_vector_attrs(&self, attrs: &[AttrId]) -> Vec<AttrId> {
+        attrs
+            .iter()
+            .copied()
+            .filter(|&a| {
+                !matches!(
+                    self.ast.attrs.get(a).kind,
+                    AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE
+                )
+            })
+            .collect()
     }
 
     /// The vector of `elem` sized by `size` (the element count for
@@ -131,6 +162,7 @@ impl Sema<'_, '_> {
         }
         if self.expr_is_value_dependent(size) || (!ext && elem_dep) {
             let p = self.dependent_profile(size);
+            self.inst.vector_attr_locs.insert(size, loc);
             return self.ast.types.dependent_vector(elem, size, p, kind);
         }
         let name = if ext { "ext_vector_type" } else { "vector_size" };

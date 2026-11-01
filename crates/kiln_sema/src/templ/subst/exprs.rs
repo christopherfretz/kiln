@@ -433,6 +433,11 @@ impl Substituter<'_, '_, '_> {
                 let o = self.expr(ex(self).operand(e))?;
                 Ok(self.sema.act_on_builtin_bit_cast(ty, o, loc, end))
             }
+            ExprKind::ConvertVectorExpr => {
+                let ty = self.ty(n.ty(), loc)?;
+                let o = self.expr(ex(self).operand(e))?;
+                Ok(self.sema.act_on_convert_vector(o, ty, loc, end))
+            }
             ExprKind::CXXUnresolvedConstructExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let l = kiln_ast::ids::ListId::new(n.a());
