@@ -25,7 +25,8 @@ struct F(FloatKind);
 
 impl F {
     fn bin(self, op: Op, a: u128, b: u128) -> u128 {
-        arith::float_bin_raw(op, self.0, a, b).unwrap_or_else(|| softfloat::make_nan(self.0, 0, false))
+        arith::float_bin_raw(op, self.0, a, b)
+            .unwrap_or_else(|| softfloat::make_nan(self.0, 0, false))
     }
     fn add(self, a: u128, b: u128) -> u128 {
         self.bin(Op::FAdd, a, b)
@@ -133,10 +134,7 @@ fn mul(f: F, v: [u128; 4]) -> [u128; 2] {
         return [rr, ri];
     }
     let inf = f.infinity(false);
-    [
-        f.mul(inf, f.sub(f.mul(a, c), f.mul(b, d))),
-        f.mul(inf, f.add(f.mul(a, d), f.mul(b, c))),
-    ]
+    [f.mul(inf, f.sub(f.mul(a, c), f.mul(b, d))), f.mul(inf, f.add(f.mul(a, d), f.mul(b, c)))]
 }
 
 /// clang's `HandleComplexComplexDiv`.
@@ -160,10 +158,7 @@ fn div(f: F, v: [u128; 4]) -> [u128; 2] {
     } else if (f.inf(a) || f.inf(b)) && f.finite(c) && f.finite(d) {
         (a, b) = (f.unit(a), f.unit(b));
         let inf = f.infinity(false);
-        [
-            f.mul(inf, f.add(f.mul(a, c), f.mul(b, d))),
-            f.mul(inf, f.sub(f.mul(b, c), f.mul(a, d))),
-        ]
+        [f.mul(inf, f.add(f.mul(a, c), f.mul(b, d))), f.mul(inf, f.sub(f.mul(b, c), f.mul(a, d)))]
     } else if f.inf(max_cd) && f.finite(a) && f.finite(b) {
         (c, d) = (f.unit(c), f.unit(d));
         [f.mul(0, f.add(f.mul(a, c), f.mul(b, d))), f.mul(0, f.sub(f.mul(b, c), f.mul(a, d)))]

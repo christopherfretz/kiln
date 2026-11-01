@@ -2640,8 +2640,8 @@ impl Sema<'_, '_> {
         // left type, but not to an unscoped enumeration ([conv.prom]/3
         // promoted it), so `e += 1` is ill-formed (clang's
         // `CheckAssignmentOperands` with the computation result type).
-        let real_from_complex = self.ast.types.as_complex(res_ty).is_some()
-            && self.ast.types.as_complex(lt).is_none();
+        let real_from_complex =
+            self.ast.types.as_complex(res_ty).is_some() && self.ast.types.as_complex(lt).is_none();
         if (real_from_complex || conv::is_unscoped_enum(self, lt))
             && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
         {
@@ -2827,7 +2827,8 @@ impl Sema<'_, '_> {
         if !self.is_scalar(lt) || !self.is_scalar(rt) {
             return self.invalid_operands(l, r, loc);
         }
-        let complex = self.ast.types.as_complex(lt).is_some() || self.ast.types.as_complex(rt).is_some();
+        let complex =
+            self.ast.types.as_complex(lt).is_some() || self.ast.types.as_complex(rt).is_some();
         if complex && !matches!(op, BinaryOp::EQ | BinaryOp::NE) {
             return self.invalid_operands(l, r, loc);
         }
@@ -3759,7 +3760,10 @@ impl Sema<'_, '_> {
                             let mut d = err.diag(self, a);
                             let builtin =
                                 named.is_some_and(|c| self.ast.decls.builtin_id(c.decl).is_some());
-                            if !builtin && err.at.is_none() && let Some(&p) = pdecls.get(i) {
+                            if !builtin
+                                && err.at.is_none()
+                                && let Some(&p) = pdecls.get(i)
+                            {
                                 d = d.with_note(self.param_decl_note(p));
                             }
                             self.emit(d);

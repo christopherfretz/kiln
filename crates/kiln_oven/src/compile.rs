@@ -28,6 +28,7 @@ use crate::{Oven, SemaBridge};
 mod bitcast;
 mod builtins;
 mod class;
+mod complex;
 mod lambda;
 mod mptr;
 mod new_delete;
@@ -216,6 +217,9 @@ fn is_plain_binary(ast: &kiln_ast::Ast, e: ExprId) -> bool {
     !matches!(op, BinaryOp::Comma | BinaryOp::LAnd | BinaryOp::LOr | BinaryOp::Assign)
         && !op.is_compound_assignment()
         && !op.is_ptr_mem()
+        && ![e, ast.exprs.operands(e)[0], ast.exprs.operands(e)[1]]
+            .iter()
+            .any(|&x| ast.types.as_complex(ast.exprs.get(x).ty()).is_some())
 }
 
 pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
@@ -2502,6 +2506,7 @@ impl Compiler<'_> {
                 let r = self.rv(x);
                 self.emit(Op::LNot, 0, &[dst, r]);
             }
+            UnaryOp::Real | UnaryOp::Imag => self.real_imag(e, dst),
             UnaryOp::AddrOf => {
                 if matches!(self.kind(ty), TyKind::MemPtr { .. }) {
                     self.mp_const(e, x, dst);
@@ -2698,6 +2703,9 @@ impl Compiler<'_> {
     /// right-deep (`a + (b + (c + d))`) spine of such operators (R-WALK,
     /// sema-templates.md Q16: fold expressions over 65,536 elements).
     fn arith_spine(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        if self.cx_operands(e) {
+            return self.cx_compare(e, dst);
+        }
         let ast = self.ast();
         let [a, b] = ast.exprs.operands(e);
         let (la, rb) = (skip_parens(ast, a), skip_parens(ast, b));
@@ -3008,6 +3016,10 @@ impl Compiler<'_> {
                 self.class_cast(e, p, dst, true, ck == CastKind::BaseToDerived);
             }
             CastKind::Dynamic => self.dynamic_cast(e, dst, false),
+            CastKind::IntegralComplexToReal
+            | CastKind::FloatingComplexToReal
+            | CastKind::IntegralComplexToBoolean
+            | CastKind::FloatingComplexToBoolean => self.cx_to_scalar(e, dst),
             CastKind::ToVoid => self.effect(op),
             CastKind::NullToPointer | CastKind::NullToMemberPointer => {
                 self.effect(op);
@@ -3387,6 +3399,7 @@ impl Compiler<'_> {
                 let x = self.ast().exprs.operand(e);
                 match op {
                     UnaryOp::Deref => Place::Mem(self.rv(x)),
+                    UnaryOp::Real | UnaryOp::Imag => self.real_imag_lv(e, acc),
                     UnaryOp::PreInc | UnaryOp::PreDec => {
                         let place = self.lv_rmw(x, e);
                         let xty = self.ety(x);
@@ -3642,6 +3655,9 @@ impl Compiler<'_> {
         if self.lanes(ty).is_some() {
             return self.vec_assign(e, ty);
         }
+        if let Some(elem) = self.cx_elem(ty) {
+            return self.cx_assign(e, elem);
+        }
         if self.o.types.is_aggregate(ty) {
             let src = self.lv_mem(b, Access::Read);
             let dstp = self.lv_mem(a, Access::Write);
@@ -3666,6 +3682,9 @@ impl Compiler<'_> {
         let lty = self.ety(lhs);
         if self.lanes(lty).is_some() {
             return self.vec_compound_assign(e, lty);
+        }
+        if self.cx_elem(lty).is_some() || self.is_complex_expr(x.rhs) {
+            return self.cx_compound_assign(e);
         }
         let r = self.rv_copy(x.rhs);
         let place = self.lv_rmw(lhs, e);
@@ -3806,6 +3825,9 @@ impl Compiler<'_> {
         }
         if self.vec_op(e) && self.lanes(ty).is_some() {
             return self.vec_init(e, p, ty);
+        }
+        if self.cx_op(e) && self.cx_elem(ty).is_some() {
+            return self.cx_init(e, p, ty);
         }
         if !self.o.types.is_aggregate(ty) {
             let r = self.rv(e);

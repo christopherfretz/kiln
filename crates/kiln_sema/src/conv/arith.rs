@@ -294,7 +294,8 @@ fn complex_conversions(
     }
     if !fl(s, le) {
         let ct = s.ast.types.complex(re);
-        let r = if rc.is_none() { cast_to(s, CastKind::FloatingRealToComplex, r, ct, None) } else { r };
+        let r =
+            if rc.is_none() { cast_to(s, CastKind::FloatingRealToComplex, r, ct, None) } else { r };
         let l = if ca { l } else { to_float(s, l, lc.is_some(), re) };
         return Ok((l, r, ct));
     }

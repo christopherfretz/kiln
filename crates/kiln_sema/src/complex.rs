@@ -9,6 +9,7 @@ use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
+use crate::init::{InitItem, InitList, InitValue};
 use crate::{Sema, conv};
 
 impl Sema<'_, '_> {
@@ -110,10 +111,48 @@ impl Sema<'_, '_> {
             _ => None,
         };
         if let Some(name) = spelled {
-            let msg = self.diag(DiagId::sema_invalid_complex_spec, self.begin_loc(args[0])).arg(name);
+            let msg =
+                self.diag(DiagId::sema_invalid_complex_spec, self.begin_loc(args[0])).arg(name);
             self.emit(msg);
             return None;
         }
         Some((conv_args, self.ast.types.complex(el)))
+    }
+
+    /// `_Complex T z = {re, im}` (clang's `CheckComplexType`): a list of
+    /// two or more clauses initializes the real and imaginary parts, each
+    /// converted to `T` as a list element (narrowing is checked); a third
+    /// clause is excess. Shorter lists initialize a scalar.
+    pub(crate) fn complex_list_init(&mut self, ty: QualType, l: &InitList) -> Option<ExprId> {
+        let elem = self.ast.types.as_complex(ty)?;
+        let parts: Vec<ExprId> = l.items[..l.items.len().min(2)]
+            .iter()
+            .filter_map(|i| match i {
+                InitItem { value: InitValue::Expr(e), designator } if designator.is_empty() => {
+                    Some(*e)
+                }
+                _ => None,
+            })
+            .collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        let elem = conv::strip_cv(self, elem);
+        let inits: Vec<ExprId> = parts
+            .into_iter()
+            .map(|e| {
+                self.check_narrowing(e, elem, elem);
+                self.convert_for_init(e, elem, conv::ConvCtx::Initialization)
+            })
+            .collect();
+        if let Some(extra) = l.items.get(2) {
+            let at = match &extra.value {
+                InitValue::Expr(e) => self.ast.exprs.get(*e).loc(),
+                InitValue::List(inner) => inner.lbrace,
+            };
+            let msg = self.diag(DiagId::sema_excess_initializers, at).arg("2");
+            self.emit(msg);
+        }
+        Some(self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace))
     }
 }

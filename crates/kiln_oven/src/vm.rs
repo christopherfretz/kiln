@@ -10,8 +10,8 @@ use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use crate::arith::{self, FloatErr, IntErr, canon};
-use crate::complex;
 use crate::compile::{FState, GState, float_of};
+use crate::complex;
 use crate::failure::{EvalFailure, FailKind};
 use crate::kbc::{Op, ak, cmp, new_aux};
 use crate::mem::{Alloc, MemFault, Origin, Ptr, Sp, TrialMode, flags};
