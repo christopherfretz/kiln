@@ -807,6 +807,47 @@ operands, MMX type adjustment.
 in a constant initializer outside a function it is an ordinary `.str`
 literal. `tests/codegen/predefined.cpp`.
 
+## 7d. Landed (WP-154): atomics (`atomic.rs`)
+clang 19 `CGAtomic` at -O0, mirrored:
+- **`AtomicExpr`** (`emit_atomic_expr`): the pointer and its alignment
+  (the pointee's, or the operand's before an implicit cast for the generic
+  forms); value operands are stored to `iN` temporaries of the atomic
+  width (`atomic.tmp`/`.atomictmp`) and reloaded. A constant memory order
+  picks one LLVM ordering (an order invalid for the op emits nothing, as
+  clang); a non-constant one is a `switch` over the C ABI values
+  (`monotonic`, `acquire`, `release`, `acqrel`, `seqcst` blocks, default
+  monotonic). `cmpxchg` maps the failure order the same way (a nested
+  switch when not constant; `weak` is a switch when not constant). Ops:
+  `load atomic`, `store atomic`, `atomicrmw` (`xchg`, `add`, `sub`, `and`,
+  `or`, `xor`, `nand`, `min`/`max`/`umin`/`umax`, `fadd`/`fsub`/`fmin`/
+  `fmax` for floating types), the `*_fetch` forms recomputing the new
+  value, and `cmpxchg` with the old value stored back on failure. The
+  `__c11_*` forms use the `_Atomic` type's size; floating values travel
+  through same-width integers except for `atomicrmw` float ops.
+- **Builtins `CGBuiltin` lowers** (`emit_atomic_builtin`):
+  `__atomic_test_and_set` (`atomicrmw xchg i8`, then `!= 0`),
+  `__atomic_clear`, `__atomic_thread_fence`/`__c11_atomic_thread_fence`
+  (`fence`), `__atomic_signal_fence`/`__c11_atomic_signal_fence`
+  (`fence syncscope("singlethread")`), each with the order switch when
+  not constant; the lock-free queries are folded by the Oven, and a
+  non-constant `__atomic_is_lock_free` calls the libatomic function.
+- **`_Atomic` lvalues** (`atomic_load_lv`/`atomic_store_lv`): reads are
+  `load atomic seq_cst`, assignment is `store atomic seq_cst`;
+  initialization is a plain store. `++`/`--` are `atomicrmw add/sub
+  seq_cst` (pointer steps scaled by the pointee size; floats are
+  `atomicrmw fadd/fsub`, or a `cmpxchg` loop for x87 `long double`), compound assignment is `atomicrmw` for `+ - & | ^` on
+  integers and a `cmpxchg` loop (`atomic_cont`/`atomic_exit`) otherwise.
+  On x86_64 a 16-byte `_Atomic` lvalue load/store is the
+  `__atomic_load`/`__atomic_store` libcall with order 5, as clang.
+- **Validation:** `tests/codegen/atomic_{builtins,orders,lvalues,wide,
+  qualifier}.cpp` exact on aarch64 and x86_64; `run` tests under
+  `tests/conformance/ext.c11.atomic/`.
+- **Not implemented** (a codegen error): `AtomicExpr` library calls (size
+  above the inline width or not a power of two), padded `_Atomic` types,
+  floating `min`/`max_fetch` (clang 19 emits invalid IR), aggregate
+  `_Atomic` lvalue loads and stores, `++` of `_Atomic(bool)`, a `cmpxchg`
+  loop that needs a libcall (x86_64 16 bytes, x87 `long double`).
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

@@ -286,6 +286,15 @@ literal is one instruction and one step, not an interpreted loop.
   parsed as clang's `StringRef::getAsInteger(0)`: decimal, `0` octal,
   `0x` hex, `0b` binary, `0o` octal; an empty string is payload 0; any
   other argument is not a constant), and the source-location builtins (below).
+- **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
+  and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
+  19's `IntExprEvaluator`: a power-of-two size within the target's inline
+  width (`Target::max_atomic_inline_bytes`: aarch64 16, x86_64 8 bytes) is
+  lock-free for the c11 form, a null object, a single byte, or an object
+  whose pointee alignment is at least the size; otherwise
+  `always_lock_free` is false and `is_lock_free` is not a constant.
+  `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops. Every other
+  `AtomicExpr` is not a constant (clang's generic note).
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
   constant expression", as clang 19): `__builtin_signbit`, the six
   ordered comparisons, the math functions; `__builtin_unreachable` when

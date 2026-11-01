@@ -1480,6 +1480,18 @@ diag_ids! {
     // Predefined identifiers (WP-140)
     sema_predefined_identifier_outside_function = Warning [PredefinedIdentifierOutsideFunction] (0) "predefined identifier is only valid inside function";
     sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
+    // Atomic builtins (WP-154; clang's `BuildAtomicExpr`)
+    sema_atomic_builtin_must_be_pointer = Error (2) "address argument to atomic builtin must be a pointer {1:|to a non-zero-sized object }({0} invalid)";
+    sema_atomic_op_needs_atomic = Error (1) "address argument to atomic operation must be a pointer to _Atomic type ({0} invalid)";
+    sema_atomic_op_needs_non_const_atomic = Error (2) "address argument to atomic operation must be a pointer to non-{0:const|constant} _Atomic type ({1} invalid)";
+    sema_atomic_op_needs_non_const_pointer = Error (1) "address argument to atomic operation must be a pointer to non-const type ({0} invalid)";
+    sema_atomic_op_needs_trivial_copy = Error (1) "address argument to atomic operation must be a pointer to a trivially-copyable type ({0} invalid)";
+    sema_atomic_op_needs_atomic_int_ptr_or_fp = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer, pointer or supported floating point type ({1} invalid)";
+    sema_atomic_op_needs_atomic_int_or_fp = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer or supported floating point type ({1} invalid)";
+    sema_atomic_op_needs_atomic_int = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer ({1} invalid)";
+    sema_atomic_op_needs_atomic_int_or_ptr = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer or pointer ({1} invalid)";
+    sema_atomic_builtin_bit_int_prohibited = Error (0) "argument to atomic builtin of type '_BitInt' is not supported";
+    sema_atomic_op_invalid_memory_order = Warning [AtomicMemoryOrdering] (1) "{0:|success |failure }memory order argument to atomic operation is invalid";
 }
 
 impl DiagId {

@@ -1812,6 +1812,18 @@ impl ExprArena {
         self.expect_kind(e, ExprKind::CXXThisExpr).aux & 1 != 0
     }
 
+    /// The operation of an `AtomicExpr`: its builtin id
+    /// ([`crate::decl::builtin::atomic`]).
+    pub fn atomic_op(&self, e: ExprId) -> u32 {
+        u32::from(self.expect_kind(e, ExprKind::AtomicExpr).aux)
+    }
+
+    /// The operands of an `AtomicExpr` in clang's order: `ptr`, `order`,
+    /// then (as the form has them) `val1`, `order_fail`, `val2`, `weak`.
+    pub fn atomic_subs(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::AtomicExpr).a)
+    }
+
     /// The explicit initializers of a `CXXParenListInitExpr`.
     pub fn paren_list_inits(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_kind(e, ExprKind::CXXParenListInitExpr).a)
@@ -2247,6 +2259,7 @@ impl ExprArena {
             // expressions (spec/sema-templates.md §2.4).
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
+            | ExprKind::AtomicExpr
             | ExprKind::CXXUnresolvedConstructExpr
             | ExprKind::ParenListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));

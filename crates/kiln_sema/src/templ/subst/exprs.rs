@@ -202,6 +202,24 @@ impl Substituter<'_, '_, '_> {
                 let lparen = self.sema.begin_loc(callee);
                 Ok(self.sema.act_on_call(callee, &args, lparen, end))
             }
+            ExprKind::AtomicExpr => {
+                // clang `TransformAtomicExpr`: the operands in source
+                // order, rebuilt (and re-checked) as the builtin call.
+                let op = ex(self).atomic_op(e);
+                let subs: Vec<ExprId> =
+                    self.sema.ast.lists.iter::<ExprId>(ex(self).atomic_subs(e)).collect();
+                let Some(form) = kiln_ast::decl::builtin::atomic::form(op) else {
+                    return self.unimplemented("this atomic operation", loc);
+                };
+                let mut args = Vec::with_capacity(subs.len());
+                for &s in form.arg_to_sub() {
+                    args.push(self.expr(subs[s])?);
+                }
+                match self.sema.builtin_atomic_op(loc, op, &args, end) {
+                    Some(r) => Ok(r),
+                    None => Err(SubstFail),
+                }
+            }
             ExprKind::CXXOperatorCallExpr => {
                 use crate::overload::oper::{binary_of, unary_of};
                 use kiln_ast::names::OverloadedOperator as OO;

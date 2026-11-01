@@ -270,6 +270,12 @@ pub(crate) mod bi {
     /// sub = float kind | `FABS`..`ISINF_SIGN` << 4 (clang 19's
     /// `FloatExprEvaluator::VisitCallExpr`).
     pub const FP_OP: u32 = 11;
+    /// `__atomic_always_lock_free`/`__atomic_is_lock_free`/
+    /// `__c11_atomic_is_lock_free` of size `a`: `t1` the object's
+    /// alignment (0: unknown); sub = the target's inline width in bytes
+    /// | any object qualifies << 8 | `always` (an unknown answer is 0,
+    /// not a failure) << 9.
+    pub const LOCK_FREE: u32 = 12;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
