@@ -436,10 +436,8 @@ impl Sema<'_, '_> {
             && self.is_braced_arg(*a)
         {
             // clang's FK_ParenthesizedListInitForScalar: `int({1})`.
-            let msg = self
-                .diag(DiagId::sema_list_init_in_parens, loc)
-                .arg(0u8)
-                .arg(self.ty_arg(ty));
+            let msg =
+                self.diag(DiagId::sema_list_init_in_parens, loc).arg(0u8).arg(self.ty_arg(ty));
             self.emit(msg);
             return self.recover_dropping_braced(ty, args, loc);
         }
