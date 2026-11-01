@@ -888,6 +888,7 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         };
+        self.s.diagnose_ambiguous_name(name, Some(q.ctx), name_loc);
         self.s.mark_type_referenced(d);
         self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
         let kind = self.s.ast.decls.get(d).kind();

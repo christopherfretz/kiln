@@ -680,7 +680,32 @@ or `LifetimeExtendedTemporary` whose type is destructed ([basic.life], clang
 declaration order. Sema's obligation when such a variable is declared: the
 destructor is accessible (`variable of type 'X' has private destructor`) and
 not deleted (`attempt to use a deleted function`), and is marked referenced
-(implicit definition).
+(implicit definition). An array variable's element destructor is marked
+referenced without a check (clang's `FinalizeVarWithDestructor` skips
+arrays); it is checked where each element is initialized instead.
+
+**Element destructors** (WP-227, clang `checkDestructorReference`;
+`init_dtor.rs` with hooks in `init.rs` and `class/construct.rs`): each
+subobject an initialization creates must be destructible, so an
+inaccessible destructor is `temporary of type 'X' has private destructor`
+and a deleted one `attempt to use a deleted function` (+ `'~X' has been
+explicitly marked deleted here`), at clang's locations:
+- an array's element type once per array (its own list's `}`, or the
+  outermost list's `}` under brace elision), before its elements; also
+  for a default- or constructor-initialized array (the declarator);
+- an aggregate's field before its initializer (at its begin), or after
+  it when designated (at the designator); a base after its initializer;
+  the fields left implicit, after the last element (all of them once any
+  designator appears; every field of an empty union list), at the `}`;
+- a converted element that is destroyed but not bound to a temporary
+  (a user-defined conversion initializing a variable, member or element),
+  at the converted expression.
+A deleted destructor stops the list (the rest is not checked, clang's
+`hadError`). Deviations: clang reports access errors at the end of the
+declaration and deleted ones at once, so their relative order differs in
+a declaration that has both; subobjects reached through a designator's
+path (`.a.b = ...`) are not checked; clang's same-location repeats are
+deduplicated (diag.md §7.4).
 
 ### 4.9 Ctor-initializers ([class.base.init])
 `act_on_mem_initializers(ctor, &[MemInitInfo], colon_loc)`, `MemInitInfo { id:
@@ -712,7 +737,11 @@ constructor`. Each written initializer is a full-expression; so is each implicit
 (a default-initializing construction of a member with no NSDMI), which is
 an immediate-escalation site for an implicitly defined constructor
 ([expr.const]/20; WP-158: `struct E { B b; }` with a consteval `B()`
-escalates `E()`, the reason naming the member). `reference member
+escalates `E()`, the reason naming the member). In a template the list is
+kept unbuilt until instantiation (`inst.pattern_mem_inits`), but the
+non-dependent immediate invocations of each written initializer are
+finished at the definition (`finish_immediate_parts`), and checked again
+in each instantiation (sema.md §8 "Templates"; WP-227). `reference member
 'r' binds to a temporary object whose lifetime would be shorter than the
 lifetime of the constructed object` + `reference member declared here`.
 Warnings: `field 'b' will be initialized after field 'a'` [-Wreorder-ctor],
@@ -726,6 +755,15 @@ cycles at TU end: `constructor for 'S' creates a delegation cycle`
 ctor → `ListId`, written once with the body. Dump `CXXCtorInitializer 'S'` /
 `CXXCtorInitializer Field 'm' 'int'`; JSON `baseInit` / `anyInit` /
 `delegatingInit`.
+
+**Deviation: default member initializers of a class template** (WP-227).
+clang instantiates an NSDMI lazily, when a constructor first uses it
+(`in instantiation of default member initializer 'S<P>::b' requested
+here`), and reports its errors there and again at the use. kiln
+instantiates NSDMIs with the class and reports an error of one once, at
+the constructor's use (`in the default initializer of 'b'` + `declared
+here`, under the constructor's instantiation note), after the written
+mem-initializers' errors rather than before them.
 
 ### 4.10 Inheriting constructors ([namespace.udecl]/3, [class.inhctor.init])
 **Landed (WP-114).** Modules `kiln_sema/src/using.rs` (class-scope
@@ -1014,6 +1052,20 @@ object`, with the same notes. Reference parameters, statics,
 (non-lambda) prvalues are not followed. Kiln's per-`(id, span)`
 deduplication (diag.md §7.4) drops clang's repeat of a non-dependent
 return's warning in each instantiation.
+
+**Dangling local pointers (WP-227, clang `LK_Extended` on a pointer
+variable).** `check_dangling_pointer_var(v, init)` (`stack_addr.rs`) runs
+after lifetime extension on the initializer of a non-dependent
+pointer-typed variable (through `ExprWithCleanups` and a one-element
+braced list): it is walked like a returned value, and each temporary
+reached only through `&`/array decay (`const int* p = U{1, 2};`, a
+member array of a class prvalue, a `?:` arm) is `temporary whose address
+is used as value of local variable 'p' will be destroyed at the end of
+the full-expression` [-Wdangling] at the temporary. A lifetime-extended
+temporary or a named array is not. Not covered: a reference variable
+bound through a pointer (`const int* const& r = U{5};`, clang's `bound
+to local reference`), assignments (`-Wdangling-assignment`) and pointer
+members with an NSDMI.
 
 ### 5.5 Copy elision and NRVO ([class.copy.elision])
 - **Guaranteed elision** ([dcl.init.general]/16.6.1): a prvalue of the same

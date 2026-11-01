@@ -1,0 +1,34 @@
+TranslationUnitDecl
+|-VarDecl used a 'int[3]'
+|-VarDecl referenced r 'int (&)[]' cinit
+| `-ImplicitCastExpr 'int[]' lvalue <NoOp>
+|   `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
+|-VarDecl cr 'const int (&)[]' cinit
+| `-ImplicitCastExpr 'const int[]' lvalue <NoOp>
+|   `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
+|-VarDecl rr 'int (&&)[]' cinit
+| `-ImplicitCastExpr 'int[]' xvalue <NoOp>
+|   `-CXXStaticCastExpr 'int[3]' xvalue static_cast<int[3] &&> <NoOp>
+|     `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
+|-FunctionDecl used f 'void (int (&)[])'
+| `-ParmVarDecl 'int (&)[]'
+|-FunctionDecl g 'void ()'
+| `-CompoundStmt
+|   |-CallExpr 'void'
+|   | |-ImplicitCastExpr 'void (*)(int (&)[])' <FunctionToPointerDecay>
+|   | | `-DeclRefExpr 'void (int (&)[])' lvalue Function 'f' 'void (int (&)[])'
+|   | `-ImplicitCastExpr 'int[]' lvalue <NoOp>
+|   |   `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
+|   |-DeclStmt
+|   | `-VarDecl used p 'int (*)[]' cinit
+|   |   `-ImplicitCastExpr 'int (*)[]' <NoOp>
+|   |     `-UnaryOperator 'int (*)[3]' prefix '&' cannot overflow
+|   |       `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
+|   `-CStyleCastExpr 'void' <ToVoid>
+|     `-DeclRefExpr 'int (*)[]' lvalue Var 'p' 'int (*)[]'
+|-VarDecl r2 'int (&)[]' cinit
+| `-DeclRefExpr 'int[]' lvalue Var 'r' 'int (&)[]' non_odr_use_constant
+|-VarDecl used m 'int[3][2]'
+`-VarDecl rm 'const int (&)[][2]' cinit
+  `-ImplicitCastExpr 'const int[][2]' lvalue <NoOp>
+    `-DeclRefExpr 'int[3][2]' lvalue Var 'm' 'int[3][2]'

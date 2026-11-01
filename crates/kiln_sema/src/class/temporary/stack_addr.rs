@@ -47,7 +47,7 @@ enum Local {
     /// A `DeclRefExpr` naming an automatic variable or parameter.
     Var(ExprId),
     /// A `MaterializeTemporaryExpr`.
-    Temp,
+    Temp(ExprId),
 }
 
 /// The walk's state: the current path and the locals found.
@@ -89,6 +89,46 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `-Wdangling` for the pointer variable `v` initialized by `init`:
+    /// the address of a temporary (an array decayed, directly or through
+    /// a member or a conditional arm) dangles once the full-expression
+    /// ends ([class.temporary]/4; clang's `checkExprLifetime` for an
+    /// `EK_Variable` entity, WP-227). The reference forms and pointers
+    /// reached through another variable's initializer are not diagnosed
+    /// yet (spec/sema-class.md §5.6).
+    pub(crate) fn check_dangling_pointer_var(&mut self, v: DeclId, init: ExprId) {
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        if !self.ast.types.is_pointer(ty) || self.expr_is_type_dependent(init) {
+            return;
+        }
+        // `p{e}`: the list's element initialized the pointer.
+        let ex = &self.ast.exprs;
+        let mut e = init;
+        if ex.get(e).kind() == ExprKind::ExprWithCleanups {
+            e = ex.operand(e);
+        }
+        if ex.get(e).kind() == ExprKind::InitListExpr {
+            let mut inits = self.ast.lists.iter::<ExprId>(ex.init_list_inits(e));
+            match (inits.next(), inits.next()) {
+                (Some(x), None) => e = x,
+                _ => return,
+            }
+        }
+        let mut w = Walk::default();
+        self.retained_by_value(e, &mut w, 0);
+        for (local, path) in w.found {
+            let Local::Temp(mte) = local else { continue };
+            if !path.iter().all(|s| matches!(s, Step::AddressOf)) {
+                continue;
+            }
+            let msg = self
+                .diag(DiagId::sema_dangling_variable, self.begin_loc(mte))
+                .arg("0")
+                .arg(self.decl_arg(v));
+            self.emit(msg);
+        }
+    }
+
     fn diagnose_returned_local(&mut self, local: Local, path: &[Step], by_ref: bool) {
         let first = path.iter().find_map(|s| match *s {
             Step::VarInit { at, .. } | Step::Capture { at, .. } => Some(at),
@@ -105,8 +145,8 @@ impl Sema<'_, '_> {
                     .arg(self.decl_arg(d))
             }
             // A temporary bound directly is `check_dangling_temporary`'s.
-            Local::Temp if first.is_none() => return,
-            Local::Temp => {
+            Local::Temp(_) if first.is_none() => return,
+            Local::Temp(_) => {
                 let id = if by_ref {
                     DiagId::sema_temp_return_local
                 } else {
@@ -338,7 +378,7 @@ impl Sema<'_, '_> {
                     w.path.pop();
                 }
             }
-            ExprKind::MaterializeTemporaryExpr => w.record(Local::Temp),
+            ExprKind::MaterializeTemporaryExpr => w.record(Local::Temp(e)),
             _ => {}
         }
     }
