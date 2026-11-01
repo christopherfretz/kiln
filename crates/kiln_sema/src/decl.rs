@@ -5696,7 +5696,7 @@ impl Sema<'_, '_> {
         let clang_scope = scope_s.as_deref() == Some("clang");
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")
-            && !(clang_scope && n == "using_if_exists")
+            && !(clang_scope && matches!(n.as_str(), "using_if_exists" | "fallthrough"))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
             self.emit(msg);
@@ -5768,7 +5768,12 @@ impl Sema<'_, '_> {
             self.error(DiagId::parse_expected_expression, loc);
             return None;
         }
-        let node = AttrNode { kind, syntax, flags: 0, loc, a, b };
+        let flags = if kind == AttrKind::FALLTHROUGH && scope.is_some() {
+            AttrNode::FALLTHROUGH_SCOPED
+        } else {
+            0
+        };
+        let node = AttrNode { kind, syntax, flags, loc, a, b };
         Some(self.ast.attrs.push(node))
     }
 

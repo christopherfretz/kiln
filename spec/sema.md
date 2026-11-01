@@ -409,9 +409,30 @@ Redeclaration and linkage rules:
     attribute only applies to empty statements`; outside a switch of the
     current function (a lambda body has its own): `fallthrough annotation
     is outside switch statement` (clang `handleFallThroughAttr`, checked
-    in a template definition). Whether it directly precedes a case label
-    (`fallthrough annotation does not directly precede switch label`) is
-    clang's CFG analysis and is not checked.
+    in a template definition). `[[clang::fallthrough]]` is accepted
+    (WP-203).
+  - **Placement (WP-203; `fallthrough.rs`, clang
+    `DiagnoseSwitchLabelsFallthrough`)**: when the body built a
+    fallthrough statement (`FnState::has_fallthrough`; an instantiation
+    copies them and is not checked, as clang's `HasFallthroughStmt` is
+    only set by `ProcessStmtAttributes`), `end_function_body` checks,
+    after the return-type check and before the throw-in-nothrow check
+    and like them only with no error so far and outside a template,
+    that each one directly precedes a switch label: `fallthrough
+    annotation does not directly precede switch label` at the
+    `AttributedStmt`. A reachable one must be followed, past null
+    statements and empty blocks and out of a compound, branch, try block,
+    handler or inner switch, by a `case`/`default` label (a loop body
+    flows back, a named label starts a new block); an unreachable one
+    (`unreachable_attributed_stmts`, every case label reachable, clang
+    `fillReachableBlocks`) needs only be the last fallthrough of a
+    straight-line run (expression and declaration statements) that
+    falls into a label. With no CFG (`if consteval`) nothing is checked.
+    The errors come in clang's `SmallPtrSet<_, 8>` order: source order,
+    each valid one erased (by its label's order) moving the last element
+    into its hole; past 8, source order (clang's is by pointer).
+    -Wimplicit-fallthrough and -Wunreachable-code-fallthrough are not
+    implemented.
   - A `likely` after an `unlikely` (or the reverse) in the same
     sequence: `'unlikely' and 'likely' attributes are not compatible` at
     the second, with `note: conflicting attribute is here` at the first;
@@ -419,15 +440,16 @@ Redeclaration and linkage rules:
   - `-pedantic` before C++17 (`fallthrough`) or C++20 (`likely`,
     `unlikely`): `use of the 'x' attribute is a C++17/C++20 extension`
     (`-Wc++17-attribute-extensions`, `-Wc++20-attribute-extensions`,
-    not under `-Wc++NN-extensions`). Under `[[clang::fallthrough]]`
-    the scope is not recorded, so the C++17 extension warns for it too
-    (clang does not).
+    not under `-Wc++NN-extensions`). A scoped `[[clang::fallthrough]]`
+    / `[[gnu::fallthrough]]` (`AttrNode::FALLTHROUGH_SCOPED`) is no
+    extension (WP-203).
   - `act_on_if`: both branches `AttributedStmt`s with the same
     likelihood warn `conflicting attributes 'likely' are ignored`
     (`-Wignored-attributes`) at the then-branch attribute, with the
     note at the else-branch one. As clang's `Diags.Report`, it goes
     straight to the engine (`allow_duplicate`, no instantiation notes),
-    so each instantiation repeats it.
+    so each instantiation repeats it, as clang 19 does (checked, WP-203:
+    `conflict-per-instantiation.cpp`).
   - Instantiation keeps these attributes unchanged
     (`templ/subst/stmts.rs`); they are not checked again.
   - The parser rejects an argument list on a standard attribute that

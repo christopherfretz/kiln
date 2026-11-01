@@ -1615,6 +1615,7 @@ diag_ids! {
     sema_address_of_packed_member = Warning [AddressOfPackedMember] (2) "taking address of packed member {0} of class or structure {1} may result in an unaligned pointer value";
     sema_unused_voidptr = Warning [UnusedValue] (0) "expression result unused; should this cast be to 'void'?";
     sema_unused_variable = WarningOff [UnusedVariable] (1) "unused variable {0}";
+    sema_fallthrough_invalid_placement = Error (0) "fallthrough annotation does not directly precede switch label";
 }
 
 impl DiagId {

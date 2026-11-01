@@ -25,6 +25,7 @@ pub mod declspec;
 mod deduce;
 pub mod except;
 pub mod expr;
+mod fallthrough;
 mod forms;
 mod gnu;
 mod impcast;

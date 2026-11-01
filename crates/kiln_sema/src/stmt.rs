@@ -71,6 +71,10 @@ pub struct FnState {
     /// The body has a `switch` (a goto or `asm goto` shows in `labels`):
     /// the jump-scope check runs (clang `NeedsScopeChecking`).
     pub(crate) has_switch: bool,
+    /// A `[[fallthrough]]` statement was built for the body (not by an
+    /// instantiation, which copies it): its placement is checked at the
+    /// end (clang `FunctionScopeInfo::HasFallthroughStmt`).
+    pub(crate) has_fallthrough: bool,
     /// Runtime-behavior diagnostics of the body (clang
     /// `FunctionScopeInfo::PossiblyUnreachableDiags`), emitted at its
     /// end (`diag_runtime_behavior`, `diag_if_reachable`), each with
@@ -92,6 +96,7 @@ impl FnState {
             this_override: None,
             returns: Vec::new(),
             has_switch: false,
+            has_fallthrough: false,
             runtime_diags: Vec::new(),
         }
     }
@@ -268,7 +273,8 @@ impl Sema<'_, '_> {
     /// ([dcl.attr.assume]/1, [dcl.attr.fallthrough]/1), a fallthrough
     /// statement only inside a switch (clang
     /// `err_fallthrough_attr_outside_switch`; whether it directly precedes
-    /// a case label is clang's CFG analysis, not checked). `likely` and
+    /// a case label is checked at the end of the body, `fallthrough.rs`).
+    /// `likely` and
     /// `unlikely` exclude each other ([dcl.attr.likelihood]/1). The
     /// assumption is contextually converted to `bool` unless dependent.
     /// Each attribute newer than `std` is an extension warning
@@ -317,9 +323,15 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         continue;
                     }
-                    if std < Std::Cxx17 && node.syntax == kiln_ast::attr::AttrSyntax::Cxx11 {
+                    if std < Std::Cxx17
+                        && node.syntax == kiln_ast::attr::AttrSyntax::Cxx11
+                        && node.flags & kiln_ast::attr::AttrNode::FALLTHROUGH_SCOPED == 0
+                    {
                         let msg = self.diag(DiagId::ext_cxx17_attr, node.loc).arg(name);
                         self.emit(msg);
+                    }
+                    if let Some(f) = self.func.as_mut() {
+                        f.has_fallthrough = true;
                     }
                     kept.push(a);
                 }
@@ -1057,11 +1069,11 @@ impl Sema<'_, '_> {
             if self.falls_off(body) != Falloff::Never {
                 self.error(DiagId::sema_falloff_noreturn, rbrace);
             }
-            self.check_throw_in_nothrow(state.decl, body);
+            self.late_analysis(state.decl, body, state.has_fallthrough);
             return;
         }
         if self.ast.types.is_void(ret) || self.is_error_type(ret) {
-            self.check_throw_in_nothrow(state.decl, body);
+            self.late_analysis(state.decl, body, state.has_fallthrough);
             return;
         }
         let is_main = self.decl_name(state.decl) == "main"
@@ -1085,7 +1097,7 @@ impl Sema<'_, '_> {
                 Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
             }
         }
-        self.check_throw_in_nothrow(state.decl, body);
+        self.late_analysis(state.decl, body, state.has_fallthrough);
     }
 
     /// A diagnostic about behavior at run time (clang
