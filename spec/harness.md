@@ -602,6 +602,8 @@ removed at the end of the run.
 
 The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a
 separate manual or periodic gate, and its contract is `spec/libcxx.md`.
+`cargo xtask features` ("Feature table") is not part of `ci` either: it is a
+manual / M4-gate check.
 
 `cargo xtask ci [--quick]` is the merge gate (`docs/AGENTS.md` rule 3). It
 runs, stopping at the first failing step:
@@ -667,6 +669,52 @@ Landed (WP-125): the address-space cap ("Resource limits"), on by default in
 from `tests/conformance/stress/`, with
 `tests/stress/dump-friend-template-cycle.cpp`, the AST dumper cycle of
 2026-10-31, under `mem<=512`); and the E0463 retry (WP-124).
+
+## Feature table
+
+`docs/status/cxx-features.md` is the M4 language-feature checklist
+(`docs/ROADMAP.md` M4), and `cargo xtask features` checks it. The command
+is a manual / M4-gate check and is not part of `ci`: a table edit, or a
+corpus change that breaks a `done` row, would otherwise fail unrelated
+merges.
+
+Format. A feature table is a Markdown table whose header row's first cell
+is `Paper`. The file may hold several (C++23, C++26, DR-level). The header
+cells must start with, in order, `Paper`, `Feature`, `` `__cpp_*` macro ``,
+`Status`, `Corpus tests` and `Notes`. A `|---` separator follows, then one
+row per paper, up to the first line that does not start with `|`. A `|`
+inside a backtick span, or written `\|`, does not split cells.
+
+| Cell | Form |
+|---|---|
+| Paper | `P<n>R<rev>`, unique across the file |
+| Feature | free text |
+| Macro | `—` (or `-`): the paper has no macro of its own; else `` `__cpp_name` KILN / CLANG22 ``, each value either a number with an optional `L` suffix or `—` for undefined. KILN is `kiln++ -std=c++26 -dM -E`, CLANG22 is `clang++-22 -std=c++26 -dM -E -x c++ /dev/null` |
+| Status | `done` (kiln passes tests covering the core forms), `partial` (some pass, or some are `xfail(kiln)`), `todo` (nothing covers it, or kiln fails) |
+| Corpus tests | backticked paths relative to `tests/`, separated by `<br>` |
+| Notes | free text: clang 19 values that differ, why a test is `xfail`, written reasons for C++26 rows clang 22 lacks |
+
+A paper with no other test gets a probe at
+`tests/conformance/<std-section>/<paper>-probe.cpp` (`strict-diags`,
+`xfail(kiln)` with a reason while kiln fails, `xfail(clang)` naming the clang
+versions that lack the feature).
+
+`cargo xtask features [--compiler <kiln++>] [--table <path>]` builds kiln
+unless `--compiler` is given, then checks:
+
+- (a) every `done` row names at least one test, and every test any row
+  names exists;
+- (b) every test of a `done` row passes (`PASS`, not `XFAIL`) under kiln. All
+  of them go through one `xtask test` runner invocation (`test::execute`, as
+  `ci` uses it), with the default oracle and limits;
+- (c) on a `done` row with a macro, kiln's `-dM -E` value equals the table's
+  CLANG22 value. On every row with a macro, the KILN value must be what kiln
+  defines today, so that column cannot go stale.
+
+It prints `N rows: D done, P partial, T todo`, then one `FAIL  <paper>
+(<feature>, line <n>): <problems>` line per failing row. Exit status: 0 for
+all rows clean; 1 for a failing row; 2 for a usage, table parse or
+infrastructure error. Parse errors name their line.
 
 ## Tests backing this spec
 
@@ -744,6 +792,12 @@ from `tests/conformance/stress/`, with
 - `xtask/src/clang_ast/tests.rs`: the clang-ast normalizer (the mapping
   table covers M2, unknown kinds and keys are errors, the spec example,
   values, strings, the side channel), over `xtask/fixtures/ast/normalize/`.
+
+- `xtask/src/features.rs` tests: the feature-table parser over
+  `xtask/fixtures/features/{good,bad}.md` (cells, macro forms, code-span
+  pipes, line-numbered errors), the static checks (a) and (c), and a check
+  that `docs/status/cxx-features.md` itself parses and names only existing
+  tests.
 
 ## Open questions
 
