@@ -520,7 +520,15 @@ impl Substituter<'_, '_, '_> {
             _ => self.param_infos(d),
         };
         let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
-        let lazy_exc = friend.is_none() && self.sema.lazy_exc_spec(d, p);
+        // A friend defined in the class waits too ([temp.inst]/14: its
+        // *noexcept-specifier* is needed only once it is selected, never
+        // while its constraints are unsatisfied; clang
+        // `InitFunctionInstantiation`'s `EST_Uninstantiated`). A friend
+        // that only redeclares stays eager: its specification is checked
+        // against the prior declaration's ([except.spec]/6).
+        let hidden = friend.is_some()
+            && self.sema.ast.decls.function(d).is_some_and(|x| x.body.is_some());
+        let lazy_exc = (friend.is_none() || hidden) && self.sema.lazy_exc_spec(d, p);
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = match early_ret {

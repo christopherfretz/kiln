@@ -423,7 +423,8 @@ impl Sema<'_, '_> {
         let method = self.kind_of(f) == kiln_ast::decl::DeclKind::CXXMethod;
         let at = self.ast.exprs.get(expr).loc();
         let start = self.begin_loc(expr);
-        let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
+        // A friend's: in the class that declared it ([temp.friend]/1).
+        let ctx = self.inst_lexical_class(f);
         let r = self.in_inst_context(ctx, |s| {
             let this = s.act_on_start_this_scope(method, quals);
             let mut sub = Substituter::new(s, &args);
