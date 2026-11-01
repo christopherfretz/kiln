@@ -311,6 +311,14 @@ impl Sema<'_, '_> {
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
             builtin::VA_START => self.builtin_va_start(callee, args, rparen),
+            // WP-156: the vector reductions (vector_ops.rs).
+            builtin::REDUCE_ADD
+            | builtin::REDUCE_MUL
+            | builtin::REDUCE_AND
+            | builtin::REDUCE_OR
+            | builtin::REDUCE_XOR
+            | builtin::REDUCE_MIN
+            | builtin::REDUCE_MAX => self.builtin_reduce(id, args, rparen),
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
                 return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
             }

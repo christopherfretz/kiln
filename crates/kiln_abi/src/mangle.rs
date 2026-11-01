@@ -1338,7 +1338,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let ast = self.ast;
         let q = ast.types.canonical(q);
         let quals = ast.types.effective_quals(q);
-        let is_array = ast.types.element(q).is_some();
+        // Arrays carry their element's qualifiers; a vector or complex
+        // type is qualified itself (`PKDv4_i`, `PKCd`).
+        let is_array = ast.types.element(q).is_some()
+            && !matches!(
+                ast.types.canonical_view(q),
+                TypeView::Vector { .. } | TypeView::DependentVector { .. } | TypeView::Complex(_)
+            );
         if !quals.is_empty() && !is_array {
             let key = Sub::Type(q);
             if self.try_sub(key) {

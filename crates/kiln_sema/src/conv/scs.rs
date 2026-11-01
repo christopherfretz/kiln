@@ -14,6 +14,7 @@ use super::rank::{
 };
 use super::{ConvCtx, array_decayed, bit_field_width, is_null_pointer_constant, strip_cv};
 use crate::Sema;
+use crate::vector_ops::VecParts;
 
 /// The first conversion of a standard conversion sequence ([conv.lval],
 /// [conv.array], [conv.func]).
@@ -54,6 +55,12 @@ pub enum SecondStep {
     /// A class argument for a parameter (or reference) of a base class
     /// type ([over.best.ics]/6, [over.ics.ref]/1): Conversion rank.
     DerivedToBase,
+    /// A scalar splatted to an ext vector (clang `ICK_Vector_Splat`; an
+    /// extension).
+    VectorSplat,
+    /// A bitcast between vectors of compatible types or (lax) the same
+    /// size (clang `ICK_Vector_Conversion`; an extension).
+    VectorConversion,
 }
 
 /// The third conversion ([conv.fctptr], [conv.qual]).
@@ -402,6 +409,8 @@ fn standard_conversion_non_atomic(
     } else if let Some(t) = member_pointer_conversion(s, cur, to, npc) {
         scs.null_pointer = npc && !is_member_pointer(s, cur);
         (SecondStep::MemberPointerConversion, t)
+    } else if let Some(step) = vector_conversion(s, cur, to) {
+        (step, to)
     } else {
         (SecondStep::Identity, cur)
     };
@@ -429,6 +438,36 @@ fn standard_conversion_non_atomic(
     scs.third = third;
     scs.to_types[2] = to;
     Some(scs)
+}
+
+/// clang's `IsVectorConversion`: a splat of an arithmetic value to an ext
+/// vector, or a bitcast between compatible or same-size vectors (never
+/// between two distinct ext vector types).
+fn vector_conversion(s: &Sema<'_, '_>, from: QualType, to: QualType) -> Option<SecondStep> {
+    let (fv, tv) = (s.vector_parts(from), s.vector_parts(to));
+    if fv.is_none() && tv.is_none() {
+        return None;
+    }
+    if s.ast.types.same_unqualified(from, to) {
+        return None;
+    }
+    if let Some(t) = tv
+        && t.is_ext()
+    {
+        if fv.is_some_and(VecParts::is_ext) {
+            return None;
+        }
+        if super::rank::is_arithmetic_or_unscoped_enum(s, from) {
+            return Some(SecondStep::VectorSplat);
+        }
+    }
+    if fv.is_some()
+        && tv.is_some()
+        && (s.compatible_vectors(from, to) || s.lax_vector_conversion(from, to))
+    {
+        return Some(SecondStep::VectorConversion);
+    }
+    None
 }
 
 fn types_pointer_like(s: &Sema<'_, '_>, q: QualType) -> bool {

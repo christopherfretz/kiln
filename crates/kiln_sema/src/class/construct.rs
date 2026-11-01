@@ -300,7 +300,11 @@ impl Sema<'_, '_> {
         let ctor = self.ast.exprs.constructor(c);
         let zeroing = !self.is_user_provided(ctor);
         let info = ConstructInfo { zeroing, ..ConstructInfo::COMPLETE };
-        let t = self.builder().temporary_object(ty, ctor, &[], info, ExprFlags::NONE, loc, rparen);
+        // The default constructor's default arguments, if any.
+        let args: Vec<ExprId> =
+            self.ast.lists.iter::<ExprId>(self.ast.exprs.construct_args(c)).collect();
+        let t =
+            self.builder().temporary_object(ty, ctor, &args, info, ExprFlags::NONE, loc, rparen);
         let t = self.check_immediate_invocation(t, ctor, None);
         Some(self.maybe_bind_temporary(t))
     }

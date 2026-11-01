@@ -322,12 +322,21 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::DependentVector { elem, size: ExprOperand::Expr(s), kind } => {
                 let e = self.ty(elem, loc)?;
-                // Diagnosed at the size operand (clang: at the attribute,
-                // whose location the type does not keep).
-                let at = self.sema.begin_loc(s);
+                // Diagnosed at the attribute, as clang does.
+                let at = match self.sema.inst.vector_attr_locs.get(&s) {
+                    Some(&l) => l,
+                    None => self.sema.begin_loc(s),
+                };
                 let s = self.expr(s)?;
                 let v = self.sema.build_vector_type(e, s, kind, at);
-                if self.sema.is_error_type(v) { Err(SubstFail) } else { Ok(v) }
+                if !self.sema.is_error_type(v) {
+                    Ok(v)
+                } else if self.sema.inst.stack.is_sfinae() {
+                    Err(SubstFail)
+                } else {
+                    // clang leaves the type unchanged after the error.
+                    Ok(e)
+                }
             }
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
                 let n = self.nns(nns, loc)?;

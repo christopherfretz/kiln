@@ -320,7 +320,7 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return Vec::new();
             }
-            let Some(ty) = self.parse_type_id() else {
+            let Some(ty) = self.parse_type_id_into(Some(&mut attrs)) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
@@ -1430,7 +1430,12 @@ impl Parser<'_, '_> {
                     }
                 }
                 self.expect_closing(Punct::RSquare, Punct::LSquare, open);
-                self.skip_attributes();
+                // clang `ParseBracketDeclarator` takes only C++11
+                // attributes here; GNU ones after the declarator apply to
+                // the whole declared type (`int b[2] __attribute__((..))`).
+                if self.at_cxx11_attr() {
+                    self.skip_attributes();
+                }
                 d.chunks.push(Chunk::Array { size, loc: open });
             } else if self.at(Punct::LParen) {
                 // [dcl.ambig.res]/1: after a name that could take a direct
@@ -1878,7 +1883,22 @@ impl Parser<'_, '_> {
 
     /// type-id ([dcl.name]).
     pub(crate) fn parse_type_id(&mut self) -> Option<QualType> {
-        let ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
+        self.parse_type_id_into(None)
+    }
+
+    /// A type-id whose vector attributes in the decl-specifiers
+    /// (`int __attribute__((ext_vector_type(4)))`) move to `out`, as clang
+    /// `ParseTypeName`'s `Attrs` hands them to an alias-declaration.
+    pub(crate) fn parse_type_id_into(&mut self, out: Option<&mut Vec<AttrId>>) -> Option<QualType> {
+        let mut ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
+        if let Some(out) = out {
+            let ast = &self.s.ast;
+            let is_vec = |a: &AttrId| {
+                matches!(ast.attrs.get(*a).kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE)
+            };
+            out.extend(ds.attrs.iter().copied().filter(is_vec));
+            ds.attrs.retain(|a| !is_vec(a));
+        }
         if !ds.has_type_specifier() {
             self.error_here(DiagId::parse_expected_type);
             return None;
