@@ -966,8 +966,11 @@ impl Cg<'_> {
                 self.call_dtor(record, addr, false);
                 self.emit_block(skip, false);
             }
-            Cleanup::ArrayDtor { addr, record } => self.array_destroy_at(addr, record),
-            Cleanup::Field { field, record } => self.destroy_field_of_this(field, record),
+            // clang `isForNormalCleanup() && useEHCleanupForArray`.
+            Cleanup::ArrayDtor { addr, record } => self.array_destroy_at(addr, record, !for_eh),
+            Cleanup::Field { field, record } => {
+                self.destroy_field_of_this(field, record, !for_eh);
+            }
             Cleanup::BaseOfThis { base, offset, virt } => {
                 let this = self.this_value();
                 let p = self.byte_offset(this, offset);
@@ -1031,10 +1034,10 @@ impl Cg<'_> {
     }
 
     /// `emitArrayDestroy` for a non-empty array of constant length.
-    pub(crate) fn array_destroy(&mut self, begin: V, n: u64, elem: LTy, record: DeclId) {
+    pub(crate) fn array_destroy(&mut self, begin: V, n: u64, elem: LTy, record: DeclId, eh: bool) {
         let nn = self.i64c(i128::from(n));
         let end = self.gep(elem, begin, vec![nn], true);
-        self.array_destroy_range(begin, end, elem, record, false, false);
+        self.array_destroy_range(begin, end, elem, record, false, eh);
     }
 
     /// `emitArrayDestroy` of `[begin, end)`; `check_zero` tests for an

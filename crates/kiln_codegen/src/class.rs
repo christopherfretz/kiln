@@ -1110,8 +1110,9 @@ impl Cg<'_> {
         self.emit_delete_call(od, this.v, ty, loc)
     }
 
-    /// `DestroyField`: destroys field `field` of `*this` (class `record`).
-    pub(crate) fn destroy_field_of_this(&mut self, field: DeclId, record: DeclId) {
+    /// `DestroyField`: destroys field `field` of `*this` (class `record`);
+    /// `eh` as for [`Self::array_destroy_at`].
+    pub(crate) fn destroy_field_of_this(&mut self, field: DeclId, record: DeclId, eh: bool) {
         let ast = self.ast;
         let _ = record;
         let this = self.this_addr();
@@ -1123,22 +1124,24 @@ impl Cg<'_> {
                 return;
             }
         };
-        self.destroy_object(lv.addr, q);
+        self.destroy_object(lv.addr, q, eh);
     }
 
     /// clang `emitDestroy` with `destroyCXXObject`.
-    pub(crate) fn destroy_object(&mut self, a: Addr, q: QualType) {
+    pub(crate) fn destroy_object(&mut self, a: Addr, q: QualType, eh: bool) {
         let Some(rd) = self.destructed_class(q) else { return };
         if self.array_elem(q).is_some() {
-            self.array_destroy_at(a, rd);
+            self.array_destroy_at(a, rd, eh);
         } else {
             self.call_dtor(rd, a.v, false);
         }
     }
 
     /// `emitArrayLength` + `emitArrayDestroy` for the constant-length
-    /// array at `a` (IR type `a.ty`) of objects of class `rd`.
-    pub(crate) fn array_destroy_at(&mut self, a: Addr, rd: DeclId) {
+    /// array at `a` (IR type `a.ty`) of objects of class `rd`; `eh`
+    /// destroys the rest if a destructor throws (clang
+    /// `useEHCleanupForArray`, on the normal path only).
+    pub(crate) fn array_destroy_at(&mut self, a: Addr, rd: DeclId, eh: bool) {
         let mut idx = vec![self.icn(LTy::I32, 0)];
         let mut t = a.ty;
         let mut n = 1u64;
@@ -1151,7 +1154,7 @@ impl Cg<'_> {
             return;
         }
         let begin = self.gep(a.ty, a.v, idx, true);
-        self.array_destroy(begin, n, t, rd);
+        self.array_destroy(begin, n, t, rd, eh);
     }
 
     /// Calls the destructor of `record` on the object at `addr` (`base`:

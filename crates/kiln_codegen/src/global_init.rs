@@ -319,7 +319,7 @@ impl Cg<'_> {
         // at -O0.
         let p = self.f.fir.alloca(LTy::PTR, 8);
         self.store(V::Arg(0), p, 8, false);
-        self.array_destroy_at(a, record);
+        self.array_destroy_at(a, record, true);
         let r = self.finish_init_fn(f, d);
         self.f = saved;
         r?;
