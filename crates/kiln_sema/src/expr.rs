@@ -377,6 +377,18 @@ impl Sema<'_, '_> {
     /// operand of an lvalue-to-rvalue conversion is not odr-used
     /// (`non_odr_use_constant`); every other named variable is `used`.
     pub fn act_on_full_expr(&mut self, e: ExprId) -> ExprId {
+        let cc = match self.ast.exprs.get(e).kind() {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => self.begin_loc(e),
+            _ => self.eloc(e),
+        };
+        self.act_on_full_expr_at(e, cc)
+    }
+
+    /// [`Sema::act_on_full_expr`] with conversion context `cc` for the
+    /// implicit-conversion warnings (clang's `CheckCompletedExpr`
+    /// location: the declared variable, `return`).
+    pub(crate) fn act_on_full_expr_at(&mut self, e: ExprId, cc: Loc) -> ExprId {
+        self.check_implicit_conversions(e, cc);
         self.flush_member_refs();
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();

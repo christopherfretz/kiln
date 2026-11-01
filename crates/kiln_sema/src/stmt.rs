@@ -753,7 +753,7 @@ impl Sema<'_, '_> {
                     if self.ast.types.is_reference(ret) && !self.is_err_expr(c) {
                         self.check_dangling_temporary(crate::class::BindingSite::Return, c);
                     }
-                    Some(self.act_on_full_expr(c))
+                    Some(self.act_on_full_expr_at(c, loc))
                 }
             }
         };

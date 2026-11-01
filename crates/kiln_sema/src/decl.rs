@@ -3130,7 +3130,8 @@ impl Sema<'_, '_> {
             self.ast.decls.mark_var(v, style);
         }
         self.note_var_init_full_expr(v);
-        let e = self.act_on_full_expr(e);
+        let name_loc = self.ast.decls.get(v).loc();
+        let e = self.act_on_full_expr_at(e, name_loc);
         let _ = self.builder().set_var_init(v, e);
         // [class.temporary]/6: the temporaries the variable binds live as
         // long as it does (spec/sema-class.md §5.4).

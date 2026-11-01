@@ -1537,6 +1537,9 @@ diag_ids! {
     // Placeholders for a deduced class type where none may appear (WP-177;
     // clang's `err_auto_not_allowed` with a deduced class template)
     sema_ctad_auto_not_allowed = Error (3) "use of {0} {1} requires template arguments; argument deduction not allowed {2:in function prototype|in non-static struct member|in struct member|in non-static union member|in union member|in non-static class member|in interface member|in exception declaration|in template parameter until C++17|in block literal|in template argument|in typedef|in type alias|in function return type|in conversion function type|here|in lambda parameter|in type allocated by 'new'|in K&R-style function parameter|in template parameter|in friend declaration|in function prototype that is not a function declaration|in requires expression parameter}";
+    sema_literal_conversion = Warning [LiteralConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
+    sema_literal_conversion_out_of_range = Warning [LiteralConversion] (2) "implicit conversion of out of range value from {0} to {1} is undefined";
+    sema_designated_init_non_aggregate = Error (1) "initialization of non-aggregate type {0} with a designated initializer list";
 }
 
 impl DiagId {
