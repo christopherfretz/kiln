@@ -252,6 +252,7 @@ impl Sema<'_, '_> {
         // locations (§5.8): `static int (*s)(typename T::type);`.
         if ds.loc.is_valid() && ds.loc != loc && self.is_dependent_type(ty) {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
+            self.note_type_spec_loc(v, ds, loc);
         }
         self.lambda_mangle.var = Some(v);
         if invalid {

@@ -125,7 +125,9 @@ ops! {
     LoadBits = 4,
     // [p, src, type, bit | width << 8]; aux = 1 for an initialization
     StoreBits = 4,
-    // [dst p, src p, type]; aux = 1 for an initialization
+    // [dst p, src p, type]; aux = 1 for an initialization, | 2 to require
+    // a fully initialized source, | 4 for a trivial copy/move constructor
+    // or assignment call run inline (its failure notes the call's frame)
     Copy = 3,
     // [p, type]: zero-initialization ([dcl.init.general]/6)
     ZeroInit = 2,
