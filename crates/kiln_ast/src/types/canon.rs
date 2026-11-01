@@ -211,6 +211,15 @@ impl TypeContext {
         t.into()
     }
 
+    /// The already-interned `T&` (`rvalue == false`) or `T&&` node over
+    /// exactly `t`, if any: a read-only lookup for printers that hold
+    /// only `&TypeContext` (the type of an explicit cast to a reference,
+    /// WP-145). `None` when no such node was created.
+    pub(crate) fn find_reference_to(&self, t: QualType, rvalue: bool) -> Option<QualType> {
+        let kind = if rvalue { TypeKind::RValueRef } else { TypeKind::LValueRef };
+        self.lookup(&Key::inline(kind, 0, raw(t))).ok().map(QualType::from)
+    }
+
     /// If `t` is a reference type: the kind of the reference and its
     /// referenced type (through sugar).
     fn ref_node(&self, t: QualType) -> Option<(TypeKind, QualType)> {
