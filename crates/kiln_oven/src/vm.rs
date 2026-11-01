@@ -826,13 +826,19 @@ impl Oven {
                 Op::ZeroInit => {
                     let ty = OTy(arg!(1) as u32);
                     let raw = reg!(0) as u64;
-                    let size = self.types.size(ty);
+                    // An empty class writes nothing: its byte may be
+                    // another subobject's (libc++'s `__compressed_pair`
+                    // value-initializes its empty deleter base over the
+                    // pointer).
+                    let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
                     match self.mem.check(raw, size, true).map(|(st, abs, _)| (st, abs)) {
                         Ok((st, abs)) => {
                             if let Err(f) = self.mem.trial_write(raw, size) {
                                 fail!(Fault::Mem { f, ak: ak::INIT, ty, p: raw });
                             }
-                            self.mem.zero(st, abs, size);
+                            if size != 0 {
+                                self.mem.zero(st, abs, size);
+                            }
                             if self.types.info(ty).has_union {
                                 self.zero_unions(raw, u64::from(Ptr::decode(raw).off), ty);
                             }
@@ -1911,7 +1917,8 @@ impl Oven {
     }
 
     fn copy_obj(&mut self, dst: u64, src: u64, ty: OTy, init: bool) -> Result<(), Fault> {
-        let size = self.types.size(ty);
+        // An empty class copies no byte (see `Op::ZeroInit`).
+        let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
         let (ss, sa, sa_alloc) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
             f,
             ak: ak::READ,

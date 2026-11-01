@@ -85,6 +85,11 @@ the evaluator's flattened type table.
   and persists for the TU. Each space keeps the bytes, a per-byte
   initialized bitmap and a per-8-byte-granule "holds a pointer" bit; unions
   keep their active member in a side map keyed by (allocation, offset).
+  Any write into a granule clears its pointer bit, so a class holding no
+  data (`Types::holds_no_data`: an empty class, or one of only such
+  subobjects) is zero-initialized and copied as zero bytes: an empty base
+  or `[[no_unique_address]]` member may share its address with a pointer
+  (libc++'s `__compressed_pair` in `std::unique_ptr`).
 - **Lifetime**: leaving a scope releases its objects (`release(mark)`); a
   released slot is reused first-in first-out with its generation bumped, so
   a dangling pointer is detected (generation mismatch) and still names its
