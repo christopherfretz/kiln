@@ -362,3 +362,38 @@ fn system_header_warnings_like_clang() {
     assert_eq!(o.stderr, SYSTEM_HEADER_ALL_GOLDEN.replace('@', dir));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// `-m[no-]outline-atomics` on x86-64: clang 19's `-Woption-ignored` text,
+/// naming the last spelling, in every mode; `-Werror` makes it an error
+/// (no job runs), `-w` silences it, and `AArch64` takes the flag (WP-228).
+#[test]
+fn outline_atomics_ignored_on_x86_64() {
+    let x86 = "--target=x86_64-unknown-linux-gnu";
+    let warn = |flag: &str| {
+        format!(
+            "kiln: warning: 'x86_64' does not support '{flag}'; flag ignored [-Woption-ignored]\n"
+        )
+    };
+    let o = kiln(&[x86, "-moutline-atomics", "-fsyntax-only", "-x", "c++", "-"], "int x;\n");
+    assert_eq!((o.code, o.stderr.as_str()), (0, warn("-moutline-atomics").as_str()));
+    let o = kiln(
+        &[x86, "-moutline-atomics", "-mno-outline-atomics", "-E", "-x", "c++", "-"],
+        "int x;\n",
+    );
+    assert_eq!((o.code, o.stderr.as_str()), (0, warn("-mno-outline-atomics").as_str()));
+    let o = kiln(&[x86, "-mno-outline-atomics", "-Werror", "-E", "-x", "c++", "-"], "int x;\n");
+    assert_eq!(o.code, 1);
+    assert_eq!(
+        o.stderr,
+        "kiln: error: 'x86_64' does not support '-mno-outline-atomics'; flag ignored \
+         [-Werror,-Woption-ignored]\n"
+    );
+    assert_eq!(o.stdout, "");
+    for quiet in ["-w", "-Wno-option-ignored"] {
+        let o = kiln(&[x86, "-moutline-atomics", quiet, "-fsyntax-only", "-x", "c++", "-"], "");
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{quiet}");
+    }
+    let a64 = "--target=aarch64-unknown-linux-gnu";
+    let o = kiln(&[a64, "-mno-outline-atomics", "-fsyntax-only", "-x", "c++", "-"], "int x;\n");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+}

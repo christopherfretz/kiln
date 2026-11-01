@@ -218,7 +218,7 @@ impl CodegenJob<'_> {
 /// The driver's warning options for its own diagnostics: the `-W` options
 /// naming groups kiln knows (unknown ones are reported by each input's
 /// engine, not again here).
-fn driver_diag_options(opts: &DiagOptions) -> DiagOptions {
+pub(crate) fn driver_diag_options(opts: &DiagOptions) -> DiagOptions {
     let mut o = opts.clone();
     o.pending.clear();
     o.remarks.clear();

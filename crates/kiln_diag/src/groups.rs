@@ -223,6 +223,8 @@ diag_groups! {
     GnuPointerArith = "gnu-pointer-arith" [];
     VlaExtension = "vla-extension" [VlaCxxExtension];
     Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
+    // ----- WP-228 (driver flags a target does not support)
+    OptionIgnored = "option-ignored" [];
 }
 
 impl Group {

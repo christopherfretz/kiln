@@ -1647,6 +1647,8 @@ diag_ids! {
     // the GNU extension of C (WP-219)
     sema_arith_void_pointer_cxx = Error (1) "arithmetic on{0: a|} pointer{0:|s} to void";
     sema_arith_function_pointer_cxx = Error (2) "arithmetic on{0: a|} pointer{0:|s} to the function type {1}";
+    // ----- WP-228 (driver flags a target does not support)
+    drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
 }
 
 impl DiagId {
