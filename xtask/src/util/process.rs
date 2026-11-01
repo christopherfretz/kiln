@@ -251,7 +251,13 @@ pub fn run_with_input(
     let _slot = crate::jobs::global().acquire();
     let start = Instant::now();
     let stdin = if input.is_some() { Stdio::piped() } else { Stdio::null() };
+    // Its own process group, so that a timeout kills the whole tree: the
+    // clang driver forks `cc1`, which inherits our pipes, and killing only
+    // the driver left the readers blocked on a running `cc1` forever.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(cmd, 0);
     let mut child = cmd.stdin(stdin).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let pid = child.id();
     let writer = input.map(|bytes| {
         let mut pipe = child.stdin.take().expect("stdin is piped");
         let bytes = bytes.to_vec();
@@ -269,7 +275,9 @@ pub fn run_with_input(
             break Some(s);
         }
         if start.elapsed() >= timeout {
-            // The child may exit between try_wait and kill; both are fine.
+            // The child may exit between try_wait and kill; both are fine
+            // (the pid is not reaped, so not reused, until `wait`).
+            kill_group(pid);
             let _ = child.kill();
             let _ = child.wait();
             break None;
@@ -503,6 +511,18 @@ mod tests {
         assert!(o.timed_out());
         assert!(o.elapsed < Duration::from_secs(4));
         assert!(o.describe_end().starts_with("timed out"));
+    }
+
+    /// A timeout kills the child's descendants too: a grandchild that holds
+    /// the output pipes (clang's `cc1` under the driver) would otherwise keep
+    /// the readers, and the run, blocked until it exits.
+    #[cfg(unix)]
+    #[test]
+    fn times_out_and_kills_the_group() {
+        let o = run(Command::new("sh").args(["-c", "sleep 30; :"]), Duration::from_millis(200))
+            .unwrap();
+        assert!(o.timed_out());
+        assert!(o.elapsed < Duration::from_secs(10), "{:?}", o.elapsed);
     }
 
     fn scratch(tag: &str) -> PathBuf {
