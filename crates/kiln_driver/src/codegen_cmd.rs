@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use kiln_codegen::{CodegenOptions, emit};
+use kiln_codegen::{CodegenOptions, emit_with_diags};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Group};
 use kiln_lex::Interner;
 use kiln_parse::{ParseOptions, parse_preprocessed};
@@ -190,7 +190,11 @@ impl CodegenJob<'_> {
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 ident: ident(),
             };
-            match emit(&mut tu.ast, &mut tu.oven, &target, &opts) {
+            let (r, warnings) = emit_with_diags(&mut tu.ast, &mut tu.oven, &target, &opts);
+            for w in warnings {
+                w.emit(engine);
+            }
+            match r {
                 Ok(m) => ir = Some(m.to_string()),
                 Err(e) => {
                     let span = e.loc.map_or(Span::INVALID, Span::empty);

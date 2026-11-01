@@ -10,7 +10,8 @@
 //! skipped.
 //!
 //! `KILN_CASE=<name>` (the file stem) runs one case and prints both IR
-//! texts for each triple.
+//! texts for each triple. A `//@ args: <opts>` line in a case adds
+//! `<opts>` (whitespace-separated) to both command lines.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -30,6 +31,16 @@ fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen")
 }
 
+/// The case's extra options, from its `//@ args:` lines (split on whitespace).
+fn extra_flags(file: &Path) -> Vec<String> {
+    let src = std::fs::read_to_string(file).unwrap_or_default();
+    src.lines()
+        .filter_map(|l| l.strip_prefix("//@ args:"))
+        .flat_map(str::split_whitespace)
+        .map(str::to_owned)
+        .collect()
+}
+
 /// Compiles `file` for `triple` with the in-process driver.
 fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     let out = SharedBuffer::new();
@@ -43,6 +54,7 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
         ["-S", "-emit-llvm", "-O0", "-std=c++26", &format!("--target={triple}"), "-o", "-"]
             .iter()
             .map(|s| (*s).to_owned())
+            .chain(extra_flags(file))
             .chain(std::iter::once(file.display().to_string()))
             .collect();
     let code = run(&args, io);
@@ -82,7 +94,10 @@ fn opt(ir: &str) -> Option<Result<String, String>> {
 fn clang_ir(file: &Path, triple: &str) -> Option<Result<String, String>> {
     let target = format!("--target={triple}");
     let path = file.display().to_string();
-    let args = ["-S", "-emit-llvm", "-O0", "-std=c++26", target.as_str(), "-o", "-", path.as_str()];
+    let extra = extra_flags(file);
+    let mut args = vec!["-S", "-emit-llvm", "-O0", "-std=c++26", target.as_str(), "-o", "-"];
+    args.extend(extra.iter().map(String::as_str));
+    args.push(path.as_str());
     pipe("clang++-19", &args, "")
 }
 

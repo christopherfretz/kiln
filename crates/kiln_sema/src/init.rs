@@ -385,6 +385,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return e;
         }
+        if let Some(x) = self.atomic_class_init(ty, e, ctx, at) {
+            return x;
+        }
         if let Some(x) = self.construct_from_class(e, ty, ctx, at, DeletedAs::Call) {
             return x;
         }
@@ -415,6 +418,30 @@ impl Sema<'_, '_> {
                 self.recover(ty, &[e], loc)
             }
         }
+    }
+
+    /// Initialization of `_Atomic(T)`, `T` a class, from `e` of class
+    /// type `T` or derived from `T` (clang `InitializeFrom`
+    /// `NeedAtomicConversion`): `T` is initialized from `e`, then
+    /// converted by `NonAtomicToAtomic` (WP-165).
+    fn atomic_class_init(
+        &mut self,
+        ty: QualType,
+        e: ExprId,
+        ctx: ConvCtx,
+        at: Loc,
+    ) -> Option<ExprId> {
+        let v = self.ast.types.as_atomic(ty)?;
+        let vr = self.ast.types.as_record(v)?;
+        let er = self.ast.types.as_record(self.ety(e))?;
+        if !self.derived_inclusive(er, vr) {
+            return None;
+        }
+        let v = conv::strip_cv(self, v);
+        let x = self.init_from_expr(v, e, ctx, at);
+        let to = conv::strip_cv(self, ty);
+        let ck = kiln_ast::expr::CastKind::NonAtomicToAtomic;
+        Some(conv::cast_to(self, ck, x, to, None))
     }
 
     /// `char s[N] = "..."` ([dcl.init.string]).
@@ -465,6 +492,9 @@ impl Sema<'_, '_> {
         let e = *e;
         if !designator.is_empty()
             || self.ast.types.as_record(ty).is_some()
+            // `_Atomic(T)` from a `T` of class type is `atomic_class_init`
+            // (WP-165), not a conversion function call.
+            || self.ast.types.as_atomic(ty).is_some()
             || self.ast.types.is_reference(ty)
             || self.ast.types.is_array(ty)
             || self.ast.types.is_dependent(ty)
@@ -604,13 +634,19 @@ impl Sema<'_, '_> {
             }
             let n = bound.unwrap_or(args.len() as u64);
             let filler = if n > args.len() as u64 {
-                if self.ast.types.as_record(self.base_element(elem)).is_some() {
-                    // todo(WP-067b follow-up): value-initialized class
-                    // elements of a parenthesized array initialization.
+                if self.ast.types.as_record(elem).is_some() {
+                    // Value-initialized class elements: clang's filler is
+                    // the default construction (`zeroing` unless the
+                    // constructor is user-provided).
+                    Some(self.paren_value_init(elem, at))
+                } else if self.ast.types.as_record(self.base_element(elem)).is_some() {
+                    // todo(WP-067b follow-up): value-initialized arrays of
+                    // classes inside a parenthesized array initialization.
                     self.unsupported("parenthesized initialization of an array of classes", at);
                     return self.recover(ty, args, at);
+                } else {
+                    Some(self.builder().implicit_value_init(elem))
                 }
-                Some(self.builder().implicit_value_init(elem))
             } else {
                 None
             };
@@ -623,10 +659,7 @@ impl Sema<'_, '_> {
         };
         let def = self.ast.definition(r).unwrap_or(r);
         if self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union) {
-            // todo(WP-067b follow-up): the builder records no active member
-            // of a `CXXParenListInitExpr`.
-            self.unsupported("parenthesized initialization of a union", at);
-            return self.recover(ty, args, at);
+            return self.paren_union_init(ty, def, args, at, rparen);
         }
         let bases = self.init_bases(def);
         let fields = self.init_fields(def);
@@ -655,9 +688,7 @@ impl Sema<'_, '_> {
                     if self.field_has_nsdmi(f) {
                         self.field_filler(f, rparen)
                     } else if self.ast.types.is_reference(ety) {
-                        // todo(WP-067b follow-up): clang's
-                        // `err_init_reference_member_uninitialized`.
-                        self.unsupported("an uninitialized reference member", at);
+                        self.uninit_reference_member(f, ety, rparen);
                         return self.recover(ty, args, at);
                     } else {
                         self.paren_value_init(ety, at)
@@ -670,6 +701,47 @@ impl Sema<'_, '_> {
             return self.recover(ty, args, at);
         }
         self.builder().paren_list_init(ty, &inits, None, at, rparen)
+    }
+
+    /// Parenthesized aggregate initialization of the union `ty` (definition
+    /// `def`): the single argument copy-initializes the first member
+    /// ([dcl.init.general]/16.6.2.2); a second argument is excess.
+    fn paren_union_init(
+        &mut self,
+        ty: QualType,
+        def: DeclId,
+        args: &[ExprId],
+        at: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let fields = self.init_fields(def);
+        let (Some(&f), Some(&a)) = (fields.first(), args.first()) else {
+            return self.recover(ty, args, at);
+        };
+        if args.len() > 1 {
+            let msg = self.diag(DiagId::sema_excess_initializers, at).arg("3");
+            self.emit(msg);
+            return self.recover(ty, args, at);
+        }
+        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        let loc = self.begin_loc(a);
+        let init = self.init_from_expr(fty, a, ConvCtx::Initialization, loc);
+        if self.is_err_expr(init) {
+            return self.recover(ty, args, at);
+        }
+        self.builder().paren_list_init_union(ty, init, f, at, rparen)
+    }
+
+    /// clang's `err_init_reference_member_uninitialized`: the reference
+    /// member `f` of type `ty` takes no argument of a parenthesized
+    /// aggregate initialization ([dcl.init.general]/16.6.2.3).
+    fn uninit_reference_member(&mut self, f: DeclId, ty: QualType, at: Loc) {
+        let t = self.ty_arg(ty);
+        let floc = self.ast.decls.get(f).loc();
+        let note = self.diag(DiagId::note_uninit_reference_member, floc);
+        let msg =
+            self.diag(DiagId::sema_init_reference_member_uninitialized, at).arg(t).with_note(note);
+        self.emit(msg);
     }
 
     /// A value-initialized element of a parenthesized aggregate
@@ -762,8 +834,16 @@ impl Sema<'_, '_> {
         l: &InitList,
         entity: Option<Loc>,
     ) -> ExprId {
-        // `_Atomic(T)` takes no braces (clang `InitListChecker`).
+        // `_Atomic(T)` takes no braces (clang `InitListChecker`), but a
+        // single element of class type initializes it (WP-165).
         if self.ast.types.as_atomic(ty).is_some() {
+            if let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+                && designator.is_empty()
+                && self.ast.types.as_record(self.ety(*x)).is_some()
+            {
+                let at = entity.unwrap_or(l.lbrace);
+                return self.init_from_expr(ty, *x, ConvCtx::Initialization, at);
+            }
             let msg =
                 self.diag(DiagId::sema_illegal_initializer_type, l.lbrace).arg(self.ty_arg(ty));
             self.emit(msg);

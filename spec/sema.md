@@ -155,8 +155,18 @@ Constructors:
    - arrays of references, functions, `void` or abstract types
    - functions returning arrays or functions
    - references to references, pointers to references
-   - array bounds: converted constant expressions, which must be
-     positive
+   - array bounds: converted constant expressions of integral,
+     unscoped enumeration or `_Atomic` integral type, which must be
+     positive. A bound that is not a constant expression is a VLA, which
+     kiln does not support (`sema_vla_unsupported`), except at namespace
+     or class scope, where a bound that `OvenBridge::fold_rvalue_int`
+     folds (lax mode: e.g. a `const _Atomic(int)` or `const` variable
+     with a non-constant-expression initializer that is still a constant)
+     gives clang's `TryToFixInvalidVariablyModifiedType` result: a
+     constant array, `-Wvla-cxx-extension` at the bound (with the strict
+     evaluation's notes) and the ExtWarn "variable length array folded
+     to constant array as an extension" [-Wgnu-folding-constant] at the
+     declarator name (WP-165)
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
    are compatible, and links the redeclaration chain.
@@ -325,6 +335,35 @@ Redeclaration and linkage rules:
   `expression with side effects has no effect in an unevaluated
   context`, at clang's expression location. Not in instantiations, not
   for type- or value-dependent operands, not for macro locations.
+- **`[[assume(e)]]`** ([dcl.attr.assume]; WP-160, `stmt.rs`
+  `act_on_attributed_stmt`). Clang's order is followed for each attribute:
+  - On a declaration: `'assume' attribute cannot be applied to a
+    declaration`.
+  - On a statement that is not null: `'assume' attribute only applies to
+    empty statements`.
+  - Otherwise, `build_cxx_assume_expr` contextually converts the
+    assumption to `bool` and makes it a full-expression. It warns
+    `assumption is ignored because it contains (potential) side-effects`
+    (`-Wassume`, at the expression's begin location) when
+    `side_effects.rs` `has_possible_side_effects` holds. That predicate is
+    clang's `HasSideEffects(IncludePossibleEffects=true)`: a call to a
+    function that is not `const`/`pure`, a volatile read, a `dynamic_cast`
+    to a reference, a non-trivial construction, a temporary with a
+    destructor, `new`/`delete`/`throw`, assignment, increment or
+    decrement, any dependent or unresolved node, and, through
+    default-argument, default-member-initializer and lambda-capture
+    initializers, whatever they contain.
+  - Before C++23, `-pedantic` adds `use of the 'assume' attribute is a C++23
+    extension` (`-Wc++23-attribute-extensions`, which is not under
+    `-Wc++23-extensions`).
+  - The result is an `AttributedStmt` with one `ASSUME` attribute per
+    assumption kept: `a` is the expression and `b` is clang's
+    `getExprLoc`. `AttrNode::ASSUME_IGNORED` marks a side-effecting or
+    dependent assumption, and codegen and the oven skip those.
+  - A dependent assumption is converted and checked again on
+    instantiation (`templ/subst/stmts.rs`).
+  - Not kept yet: `likely`/`unlikely`/`fallthrough` in the
+    `AttributedStmt`.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 
@@ -938,7 +977,9 @@ diagnostics and IR.
       by width, and an unscoped-enumeration left operand is then an
       error: sema-conv.md §6)
     - `?:`, the comma operator
-    - increment and decrement
+    - increment and decrement (of `bool`, or `_Atomic(bool)`: `++` is
+      clang's DefaultError `-Wincrement-bool` extension and is then
+      accepted, `--` is always an error; WP-165)
   - **calls:** argument conversion, arity notes, variadic default
     promotions
   - **member access:** `.` and `->` on records and through
@@ -1351,8 +1392,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   and compound assignment are allowed on a modifiable `_Atomic` lvalue
   and yield an lvalue of `T` (`++`) or `_Atomic(T)` (compound assignment),
   as clang 19's `decltype` shows. A braced list initializing an `_Atomic`
-  object is `sema_illegal_initializer_type`, as clang.
-- **Not done:** `-Watomic-alignment` (the libcall-size warning).
+  object is `sema_illegal_initializer_type`, as clang, unless it holds
+  one element of class type.
+- **`_Atomic(T)` of class type `T` (WP-165).** Initialized from a `T` or
+  a class derived from `T` (copy, direct, or a one-element braced list)
+  as `T` is, then `NonAtomicToAtomic` (clang `InitializeFrom`
+  `NeedAtomicConversion`; `Sema::atomic_class_init`); other class sources
+  fail as a conversion to `_Atomic(T)`. Assignment from `T` or `_Atomic(T)`
+  is the right side's lvalue conversion then `NonAtomicToAtomic`
+  (`conv::atomic_class_assign`, C11 6.5.16.1). Assignment errors to any
+  `_Atomic` target are reported at the operator, as clang's C path.
+- `-Watomic-alignment` is reported by codegen (spec/codegen.md §7d).
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -1507,7 +1557,11 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   unambiguous derived class of, an earlier one gets `-Wexceptions`
   `exception of type T will be caught by earlier handler` with the note
   `for type U` (clang `CheckCXXTryBlock`, references and pointers
-  compared by their pointee).
+  compared by their pointee). Exact duplicates use clang's
+  `CatchHandlerType` key (WP-160): the top-level cv-qualifiers are dropped
+  first, then a reference or pointer is stripped and the pointee keeps its
+  cv-qualifiers. So `int` then `const int &` is not a duplicate, while
+  `const int` then `int &` is. The public-base search ignores cv.
 - `push_try_scope` marks the scope a try barrier (`Scope::try_barrier`)
   for the implicit move of thrown locals (§5.5).
 - Function-try-blocks: `check_function_try_block` (from
@@ -1628,6 +1682,22 @@ variables (`register int r asm("x0")`) as operands and their clobber
 conflict check, the C++17 "asm in constexpr function" extension warning;
 `!srcloc` values in headers and macro expansions do not match clang's
 encoding.
+
+**Deferred (WP-160 item 4): macro `!srcloc` parity.** For a string from a
+macro expansion, clang emits `2^31 + offset`, where the offset is into
+clang's unified source-location space. That space holds, in order: entry 0
+(2 bytes), the main file (size + 1), the predefines buffer (20928 bytes on
+aarch64 for C++26, which is the `-dM` text plus 4213 bytes of other
+builtins), and then one entry of length + 1 per macro expansion. Matching
+it needs two things:
+- kiln_source keeping a clang-compatible offset counter across files.
+- The same sequence of expansion entries as clang: argument
+  pre-expansion runs, the 4060-byte scratch buffer, expansions inside
+  `#if`, and included files.
+
+That is an ABI-free, preprocessor-wide change with no effect on codegen.
+The `!srcloc` value only labels inline-asm backend diagnostics, so it is
+left for a pp/source WP.
 
 ### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
 `act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing

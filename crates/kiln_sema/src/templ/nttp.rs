@@ -266,7 +266,18 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(c).loc();
         let a = self.builder().unary(UnaryOp::AddrOf, c, pt, loc, ExprFlags::NONE);
         let a = self.act_on_full_expr(a);
-        let r = self.eval_const(a, EvalContext::converted(at)).and_then(|v| {
+        let r = self.eval_const(a, EvalContext::converted(at));
+        // The Oven reports the address of an automatic variable as a
+        // pointer: here it is the reference's referent.
+        let r = r.map_err(|mut f| {
+            if let Some(n) = f.notes.first_mut()
+                && n.msg.starts_with("pointer to '")
+            {
+                n.msg.replace_range(.."pointer".len(), "reference");
+            }
+            f
+        });
+        let r = r.and_then(|v| {
             // [temp.arg.nontype]/3: the referent has static storage
             // duration (an automatic variable's address is not constant).
             match self.ast.consts.scalar(v) {

@@ -773,8 +773,11 @@ impl Sema<'_, '_> {
             return None;
         }
         let t = &self.ast.types;
+        // The lvalue conversion of an `_Atomic(T)` bound is a `T` (clang
+        // `DefaultLvalueConversion`).
+        let vty = t.as_atomic(ety).unwrap_or(ety);
         let integral =
-            t.is_integral(ety) || t.as_enum(ety).is_some_and(|en| !self.is_scoped_enum(en));
+            t.is_integral(vty) || t.as_enum(vty).is_some_and(|en| !self.is_scoped_enum(en));
         if !integral {
             let msg = self.diag(DiagId::sema_array_size_non_int, loc).arg(self.ty_arg(ety));
             self.emit(msg);
@@ -803,11 +806,40 @@ impl Sema<'_, '_> {
                 }
                 u64::try_from(v).ok()
             }
-            _ => {
-                self.error(DiagId::sema_vla_unsupported, loc);
-                None
-            }
+            Err(f) => self.folded_array_bound(c, d, loc, f),
         }
+    }
+
+    /// A bound that is not a constant expression makes a variable length
+    /// array; at namespace or class scope, where one is not allowed,
+    /// clang folds the bound if it can (`EvaluateAsInt`: a `const double`
+    /// or `const _Atomic(int)` variable reads as its value) and makes a
+    /// constant array as an extension (`TryToFixInvalidVariablyModifiedType`,
+    /// after `-Wvla-cxx-extension` with the failure's notes). Anything
+    /// else is a variable length array, which kiln does not support.
+    fn folded_array_bound(
+        &mut self,
+        c: ExprId,
+        d: &Declarator,
+        loc: Loc,
+        mut f: kiln_oven::EvalFailure,
+    ) -> Option<u64> {
+        let at = d.name.map_or(d.loc, |(_, l)| l);
+        let folded = match d.ctx {
+            DeclaratorContext::File | DeclaratorContext::Member => {
+                self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
+            }
+            _ => None,
+        };
+        let Some(v) = folded else {
+            self.error(DiagId::sema_vla_unsupported, loc);
+            return None;
+        };
+        let wloc = Self::fold_lone_invalid(&mut f, loc);
+        let w = Self::with_failure_notes(self.diag(DiagId::sema_vla_cxx_extension, wloc), f);
+        self.emit(w);
+        self.error(DiagId::sema_vla_folded_to_constant, at);
+        u64::try_from(v).ok()
     }
 
     pub(crate) fn is_scoped_enum(&self, en: DeclId) -> bool {
@@ -5177,6 +5209,7 @@ impl Sema<'_, '_> {
             ("deprecated", _, _) => AttrKind::DEPRECATED,
             ("noreturn", _, _) => AttrKind::NORETURN,
             ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
+            ("assume", true, _) => AttrKind::ASSUME,
             ("likely", true, _) => AttrKind::LIKELY,
             ("unlikely", true, _) => AttrKind::UNLIKELY,
             ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
@@ -5208,14 +5241,16 @@ impl Sema<'_, '_> {
             return self.vector_attribute(kind, syntax, &raw, args, loc);
         }
         let takes = match kind {
-            AttrKind::NODISCARD | AttrKind::DEPRECATED => 1,
+            AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
             AttrKind::ALIGNED => {
                 usize::from(syntax != AttrSyntax::Keyword)
                     + usize::from(syntax == AttrSyntax::Keyword)
             }
             _ => 0,
         };
-        if args.len() > takes {
+        // [dcl.attr.assume]/1: exactly one argument (clang's
+        // `ActOnCXXAssumeAttr`).
+        if args.len() > takes || (kind == AttrKind::ASSUME && args.is_empty()) {
             let msg = self
                 .diag(DiagId::parse_attribute_wrong_arg_count, loc)
                 .arg(n.clone())
@@ -5230,6 +5265,9 @@ impl Sema<'_, '_> {
                 a = e.raw();
             }
             (AttrKind::ALIGNED, Some(AttrArg::Type(t))) => b = t.to_raw(),
+            // The assumption as written; converted by
+            // `act_on_attributed_stmt` once its statement is known.
+            (AttrKind::ASSUME, Some(AttrArg::Expr(e))) => a = e.raw(),
             (AttrKind::NODISCARD | AttrKind::DEPRECATED, Some(AttrArg::Expr(e))) => {
                 if self.string_lit_of(*e).is_none() {
                     let msg = self
@@ -5303,6 +5341,12 @@ impl Sema<'_, '_> {
         let kind = self.ast.decls.get(d).kind();
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::ASSUME {
+                // [dcl.attr.assume]/1: a statement attribute.
+                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg("assume");
+                self.emit(msg);
+                continue;
+            }
             let bad = match node.kind {
                 AttrKind::NODISCARD => {
                     // Every function kind, constructors included

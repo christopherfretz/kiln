@@ -24,7 +24,10 @@ A construct outside M2 is a `CodegenError` ("not supported in M2"), never a
 panic and never silently wrong IR.
 
 ## 2. Architecture
-- `lib.rs`: `emit(ast, oven, target, opts) -> Result<Module, CodegenError>`.
+- `lib.rs`: `emit(ast, oven, target, opts) -> Result<Module, CodegenError>`;
+  `emit_with_diags` also returns the warnings codegen reports itself
+  (`Cg::diags`, `kiln_diag::Diag`s in emission order, as clang's
+  `CGM.getDiags()`; WP-165), returned even when emission fails.
 - `fold.rs`: a pre-pass that asks the Oven to fold initializers and
   constant-reference loads (the `Folds` table). A const var is foldable
   only when it is non-volatile and either static storage, integral or enum
@@ -39,6 +42,16 @@ panic and never silently wrong IR.
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
   (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
   its parameter's default argument once, at the first use (WP-136).
+  Non-initializer candidates (a load of a const variable, a builtin
+  call) fold with `Oven::fold_rvalue` (lax mode, WP-165): like clang's
+  `tryEmitAsConstant`, a read of any `const` non-volatile variable with an
+  initializer folds, even one not usable in constant expressions (`const
+  double`, `const _Atomic(int)`, a `const` array or class element), so a
+  global whose every use folds is not emitted. A load of a const variable
+  is recognized through parentheses and `NoOp` casts (the xvalue cast of
+  an implicitly moved `return x;`). Variables with a `mutable` member are
+  not folded (clang folds their non-mutable members; deviation).
+  Validation: `tests/codegen/const_fold_lax.cpp`.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
@@ -286,6 +299,13 @@ array cookies).
   overriders may return — and are followed by `unreachable` and a dummy
   block (`noreturn_call`, `finish_noreturn_call`).
 
+- `[[assume(e)]]` (WP-160): when there is an insertion point, each
+  assumption that is not `ASSUME_IGNORED` is emitted as a scalar and
+  passed to `llvm.assume`, in source order and before the (null)
+  sub-statement (`emit_assumptions`; `tests/codegen/assume_attr.cpp`).
+  Not yet: call-site attributes (`memory(none)`/`memory(read)`) on calls
+  to `const`/`pure` functions, which clang emits.
+
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
 - `-S -emit-llvm` writes a `.ll` file; `-c -emit-llvm` pipes it to
@@ -321,7 +341,8 @@ The normative description is spec/driver.md "Code generation". In short:
   `kiln_driver::run` (`-S -emit-llvm -O0 -std=c++26 --target=<t> -o -`)
   and through `clang++-19` with the same flags, on
   `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, under the
-  same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
+  same normalization. A `//@ args: <opts>` line in a case appends
+  `<opts>` to both command lines (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
   corpus is 105 programs (ABI classification of 1- to 32-byte structs,
@@ -855,14 +876,56 @@ clang 19 `CGAtomic` at -O0, mirrored:
   integers and a `cmpxchg` loop (`atomic_cont`/`atomic_exit`) otherwise.
   On x86_64 a 16-byte `_Atomic` lvalue load/store is the
   `__atomic_load`/`__atomic_store` libcall with order 5, as clang.
+- **Library calls (WP-165).** An `AtomicExpr` whose size is not a power
+  of two or exceeds 16 bytes is the generic libatomic call
+  (`__atomic_load(size, obj, ret, order)`, `__atomic_store(size, obj,
+  val, order)`, `__atomic_exchange(size, obj, val, ret, order)`,
+  `__atomic_compare_exchange(size, obj, expected, desired, success,
+  failure)` returning `i1`, `noundef` and on x86_64 `zeroext`); every
+  argument `noundef`, the declaration `nounwind willreturn`, orders passed
+  as given (no switch). A `cmpxchg` loop on an `_Atomic` lvalue that needs
+  a libcall (x86_64 16-byte x87 `long double` and `__int128`) materializes
+  expected and desired in `_Atomic` temporaries (zeroed first when the
+  value does not fill them) and reads the old value back from the
+  expected buffer.
+- **Padded and aggregate `_Atomic` (WP-165).** `_Atomic(T)` of at most 16
+  bytes is laid out as `{ T, [n x i8] }` rounded to a power of two
+  (`size_align`); operands whose memory size (x87: 80 bits) differs from
+  the atomic width are copied into an `_Atomic`-typed temporary first
+  (`convertToAtomicIntPointer`). Initialization is `EmitAtomicInit`
+  (`atomic_init`, used for locals, `init_to_lvalue` and
+  `__c11_atomic_init`): the object is zeroed when padded or not filled by
+  its value, and the value goes into field 0. Aggregate `_Atomic` reads
+  load the atomic integer straight into the slot (or `__atomic_load`
+  into it); `NonAtomicToAtomic`/`AtomicToNonAtomic` aggregate casts
+  follow `AggExprEmitter::VisitCastExpr` (peephole of a reverse pair;
+  zero + field 0 for a padded destination; through an atomic temporary
+  otherwise); assignment evaluates the right side into a temporary of the
+  assignment's type (the result) and stores it with
+  `store atomic`/`__atomic_store` (`atomic_agg_store`).
+- **`++` of `_Atomic(bool)` (WP-165)**, accepted under
+  `-Wno-increment-bool`: as clang's `EmitScalarPrePostIncDec`,
+  pre-increment is `store atomic i8 1` (volatile when the object is)
+  yielding `true`; post-increment is `atomicrmw xchg i8 1` (never
+  volatile) yielding the old byte in its memory form (`i8`), which clang
+  then stores or extends as if it were the `i1` value. Where the value
+  must meet an `i1` (a conditional operator's `phi`) clang 19 emits
+  invalid IR; kiln reports an IR lowering error there.
+- **Floating `min`/`max_fetch` (WP-165), a deviation:** clang 19 compares
+  the old value and the operand with an `icmp` (invalid IR); kiln yields
+  `llvm.minnum` / `llvm.maxnum` of the two, the value `atomicrmw fmin` /
+  `fmax` stored. `fetch_min`/`fetch_max` match clang.
+- **`-Watomic-alignment` (WP-165)**, clang `EmitAtomicExpr`: for every
+  atomic builtin except `__c11_atomic_init` (never for `_Atomic` lvalue
+  accesses), at the expression's start, `cg_atomic_misaligned` (size,
+  pointer alignment) when the pointer's alignment is not a multiple of
+  the size, then `cg_atomic_oversized` (size, max inline width: 16 on
+  aarch64, 8 on x86_64) when the size exceeds it; clang's texts, the
+  latter with its double space before "bytes".
 - **Validation:** `tests/codegen/atomic_{builtins,orders,lvalues,wide,
-  qualifier}.cpp` exact on aarch64 and x86_64; `run` tests under
-  `tests/conformance/ext.c11.atomic/`.
-- **Not implemented** (a codegen error): `AtomicExpr` library calls (size
-  above the inline width or not a power of two), padded `_Atomic` types,
-  floating `min`/`max_fetch` (clang 19 emits invalid IR), aggregate
-  `_Atomic` lvalue loads and stores, `++` of `_Atomic(bool)`, a `cmpxchg`
-  loop that needs a libcall (x86_64 16 bytes, x87 `long double`).
+  qualifier,libcall,lv_libcall,padded,aggregate,bool_inc,alignment}.cpp` exact on
+  aarch64 and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`
+  (`fp-minmax-fetch-run.cpp` without an oracle).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

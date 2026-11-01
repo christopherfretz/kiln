@@ -1,0 +1,45 @@
+Dumping f:
+FunctionDecl f 'int (int)'
+|-ParmVarDecl used x 'int'
+`-CompoundStmt
+  |-GCCAsmStmt
+  | `-ImplicitCastExpr 'int' <LValueToRValue>
+  |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  |-IfStmt
+  | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+  | | `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  | `-GotoStmt 'err'
+  |-LabelStmt 'again'
+  | `-UnaryOperator 'int' postfix '--'
+  |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  |-IfStmt
+  | |-BinaryOperator 'bool' '>'
+  | | |-ImplicitCastExpr 'int' <LValueToRValue>
+  | | | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  | | `-IntegerLiteral 'int' 3
+  | `-GotoStmt 'again'
+  |-LabelStmt 'out'
+  | `-ReturnStmt
+  |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     `-ImplicitCastExpr 'int' xvalue <NoOp>
+  |       `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  `-LabelStmt 'err'
+    `-ReturnStmt
+      `-UnaryOperator 'int' prefix '-'
+        `-IntegerLiteral 'int' 1
+
+Dumping ft:
+FunctionTemplateDecl ft
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+`-FunctionDecl ft 'T (T)'
+  |-ParmVarDecl referenced x 'T'
+  `-CompoundStmt
+    |-GCCAsmStmt
+    | `-DeclRefExpr 'T' lvalue ParmVar 'x' 'T'
+    |-GotoStmt 'done'
+    `-LabelStmt 'done'
+      `-ReturnStmt
+        `-ImplicitCastExpr 'T' xvalue <NoOp>
+          `-DeclRefExpr 'T' lvalue ParmVar 'x' 'T'
+

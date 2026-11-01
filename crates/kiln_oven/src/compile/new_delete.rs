@@ -96,14 +96,19 @@ impl Compiler<'_> {
         let ai = match init.map(|i| (i, self.node(i).kind())) {
             None => ArrInit::None,
             Some((_, ExprKind::ImplicitValueInitExpr)) => ArrInit::Zero,
-            Some((i, ExprKind::InitListExpr)) => {
+            Some((i, kind @ (ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr))) => {
                 let ast = self.ast();
                 let lty = ast.exprs.get(i).ty();
                 let Some(k) = ast.types.array_size(lty) else {
                     self.unsupported(i);
                     return;
                 };
-                let filler = ast.exprs.init_list(i).array_filler;
+                // `new T[n](a, b)` (P0960) carries its filler like a list.
+                let filler = if kind == ExprKind::InitListExpr {
+                    ast.exprs.init_list(i).array_filler
+                } else {
+                    ast.exprs.paren_list_filler(i)
+                };
                 let zero_rest = filler.is_some_and(|f| self.is_zero_init(f));
                 ArrInit::List { list: i, k, filler, zero_rest }
             }
@@ -148,10 +153,15 @@ impl Compiler<'_> {
             self.jmp_if(c, false)
         });
         let ast = self.ast();
-        let inits: Vec<ExprId> =
-            ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(list)).collect();
+        let paren = ast.exprs.get(list).kind() == ExprKind::CXXParenListInitExpr;
+        let inits: Vec<ExprId> = if paren {
+            ast.lists.iter::<ExprId>(ast.exprs.paren_list_inits(list)).collect()
+        } else {
+            ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(list)).collect()
+        };
         let lty = self.ety(list);
-        let from = if inits.len() == 1
+        let from = if !paren
+            && inits.len() == 1
             && self.node(skip_parens(self.ast(), inits[0])).kind() == ExprKind::StringLiteral
         {
             // `new char[n]{"..."}`: the leading `k` elements as a whole.
