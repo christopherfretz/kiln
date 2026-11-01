@@ -54,7 +54,7 @@ pub use include::{
     NoIncludes, ResolvedInclude,
 };
 pub use macros::{AttrMacro, MacroDef, MacroTable};
-pub use options::PpOptions;
+pub use options::{ClangCompat, PpOptions};
 pub use predef::{CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};
 pub use preprocessor::{Marker, PpItem, Preprocessor};
 pub use print::{PrintOptions, print_macros, print_preprocessed};
