@@ -6,7 +6,9 @@
 //! its functions were only *referenced* ([temp.res.general]/6), so the
 //! instantiation must odr-use them itself, as clang's TreeTransform does by
 //! rebuilding the expression (`MarkDeclRefReferenced`, `MarkFunctionReferenced`).
-//! Unevaluated operands and lambda bodies are not entered.
+//! The default arguments and default member initializers it uses have
+//! their immediate invocations evaluated again. Unevaluated operands and
+//! lambda bodies are not entered.
 
 use kiln_ast::ExprId;
 use kiln_ast::expr::{ExprKind, NonOdrUse};
@@ -68,7 +70,32 @@ impl Sema<'_, '_> {
                 }
                 _ => {}
             }
-            stack.extend(self.ast.exprs.children(x, &self.ast.lists));
+            let kids = self.ast.exprs.children(x, &self.ast.lists);
+            // The default arguments and member initializers it uses are
+            // used again here: their immediate invocations are evaluated
+            // (clang's rebuilt `CXXDefaultArgExpr`/`CXXDefaultInitExpr`).
+            let at = match kind {
+                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                    Some(self.begin_loc(self.ast.exprs.callee(x)))
+                }
+                ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => Some(loc),
+                ExprKind::InitListExpr => self.ast.exprs.end_loc(x),
+                _ => None,
+            };
+            if let Some(at) = at {
+                for &k in &kids {
+                    match self.ast.exprs.get(k).kind() {
+                        ExprKind::CXXDefaultArgExpr => {
+                            self.note_default_use(k, self.ast.exprs.default_arg_param(k), at);
+                        }
+                        ExprKind::CXXDefaultInitExpr => {
+                            self.note_default_use(k, self.ast.exprs.default_init_field(k), at);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            stack.extend(kids);
         }
     }
 }
