@@ -815,8 +815,12 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
-            "FunctionDecl" | "CXXMethodDecl" | "CXXConstructorDecl" | "CXXDestructorDecl"
-            | "CXXConversionDecl" | "CXXDeductionGuideDecl" => {
+            "FunctionDecl"
+            | "CXXMethodDecl"
+            | "CXXConstructorDecl"
+            | "CXXDestructorDecl"
+            | "CXXConversionDecl"
+            | "CXXDeductionGuideDecl" => {
                 let (l, pre) = self.function(n, k)?;
                 line = l;
                 kids_out = pre;

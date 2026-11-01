@@ -1416,13 +1416,9 @@ impl Sema<'_, '_> {
                     IcsOptions::NONE,
                     loc,
                 ),
-                None => self.add_candidate(
-                    set,
-                    pattern,
-                    g,
-                    CandidateKind::Function,
-                    IcsOptions::NONE,
-                ),
+                None => {
+                    self.add_candidate(set, pattern, g, CandidateKind::Function, IcsOptions::NONE)
+                }
             }
         }
     }
