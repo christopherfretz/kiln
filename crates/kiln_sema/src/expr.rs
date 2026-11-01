@@ -1507,6 +1507,11 @@ impl Sema<'_, '_> {
         {
             // [temp.param]/8: an lvalue of type `const T`.
             self.ast.types.qualify(declared, kiln_ast::types::Quals::CONST)
+        } else if n.kind() == DeclKind::NonTypeTemplateParm && self.is_ctad_placeholder(declared) {
+            // `template<C V>` of a class template `C`: the type is
+            // deduced per argument, so a use is type-dependent (clang's
+            // dependent `DeducedTemplateSpecializationType`).
+            QualType::DEPENDENT
         } else if n.kind() == DeclKind::EnumConstant
             && let Some(t) = self.enumerator_pre_brace_type(d)
         {
