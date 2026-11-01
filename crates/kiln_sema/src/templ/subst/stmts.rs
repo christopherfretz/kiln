@@ -23,6 +23,7 @@ impl Substituter<'_, '_, '_> {
         if self.check_stack(|_| loc).is_err() {
             return self.sema.act_on_null_stmt(loc);
         }
+        let (init_failures, errors) = (self.init_failures, self.sema.diags.error_count());
         match self.stmt_node(s) {
             Ok(x) => x,
             // The failure was diagnosed (an error in the instantiation, or
@@ -31,6 +32,19 @@ impl Substituter<'_, '_, '_> {
             // without a follow-on note (dropping it would report, e.g.,
             // "control reached end of constexpr function" for a `return`).
             Err(SubstFail) if self.sema.has_errors() => {
+                // An error reported in this statement makes the body
+                // invalid (clang: the statement is `StmtError`), except
+                // in a declaration statement whose variable's initializer
+                // failed (clang keeps the invalid variable) and in a
+                // lambda body (clang rebuilds the lambda). A statement
+                // that only names an invalid entity is a `RecoveryExpr`
+                // in clang, not an error.
+                let decl_init = self.sema.ast.stmts.get(s).kind() == StmtKind::DeclStmt
+                    && self.init_failures != init_failures;
+                let reported = self.sema.diags.error_count() != errors;
+                if reported && !decl_init && self.lambda_bodies == 0 {
+                    self.stmt_failed = true;
+                }
                 let e = self.sema.recover_err(&[], loc);
                 self.sema.builder().expr_stmt(e)
             }

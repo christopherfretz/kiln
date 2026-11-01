@@ -1074,6 +1074,24 @@ recomputed exactly as for non-template code (clang's
   `__end` variables.
 - **`return` in a deduced-return function** deduces from the first
   non-discarded `return` (§6.3).
+- **A failed statement invalidates the specialization** (clang 19's
+  `TransformCompoundStmt` `SubStmtInvalid` → `InstantiateFunctionDefinition`
+  `setInvalidDecl`; WP-145). When a statement of a function body fails to
+  substitute *and reported a new error while doing so*, the function
+  template specialization is marked `INVALID`. Consequences:
+  - a later `deduce_call` that forms the same specialization reports
+    `candidate template ignored: substitution failure [with ...]`
+    (`get_function_spec` returns `Err` for an invalid spec);
+  - a placeholder (`auto`) return type left undeduced by the failed body
+    deduces to the error type, not `void`, so no "cannot be used before
+    it is defined"/void cascade follows.
+  The exceptions match clang, which keeps the statement:
+  - a `DeclStmt` whose variable *initializer* failed (the variable is
+    invalid, the statement is not; `Substituter::init_failures`);
+  - errors inside a lambda body (the lambda's own body is invalid, the
+    enclosing function is not);
+  - a statement that only refers to an already-invalid entity (it fails
+    without a new error: clang builds a `RecoveryExpr`).
 
 ### 5.6 Declarations
 

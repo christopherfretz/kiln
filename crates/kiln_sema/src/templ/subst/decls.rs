@@ -282,6 +282,7 @@ impl Substituter<'_, '_, '_> {
             // clang marks the declaration invalid: no follow-up
             // "must be initialized" diagnostic.
             self.sema.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.init_failures += 1;
             Err(SubstFail)
         }
     }

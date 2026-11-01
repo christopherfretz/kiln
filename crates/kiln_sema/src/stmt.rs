@@ -764,7 +764,15 @@ impl Sema<'_, '_> {
             && !st.deduced
         {
             let f = st.decl;
-            self.set_deduced_return(f, QualType::VOID);
+            // A specialization whose body failed to instantiate (a
+            // dropped `return`) deduces nothing (clang leaves the type
+            // undeduced): the error type, so uses are silent.
+            let ret = if self.ast.decls.get(f).has(DeclFlags::INVALID) {
+                QualType::ERROR
+            } else {
+                QualType::VOID
+            };
+            self.set_deduced_return(f, ret);
         }
         let Some(state) = self.func.take() else { return };
         for &r in &state.returns {
