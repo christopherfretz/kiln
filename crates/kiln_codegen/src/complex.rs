@@ -13,6 +13,7 @@ use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::{ExprId, QualType};
 use kiln_llvm::{BinOp, Flags, FloatPredicate, IntPredicate, TypeId as LTy, Value};
 
+use crate::ComplexRange;
 use crate::expr::{Callee, LV, Opaque};
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
@@ -208,6 +209,15 @@ impl Cg<'_> {
             },
             ExprKind::CXXRewrittenBinaryOperator => {
                 self.emit_cx(ast.exprs.rewritten_semantic(e), ign)
+            }
+            ExprKind::VAArgExpr => {
+                // clang 19 `VisitVAArgExpr`: the target walk's address,
+                // loaded as a whole (`EmitLoadOfAnyValue`), whatever is
+                // ignored.
+                let Some(a) = self.va_arg_addr(e)? else {
+                    return err(self.loc_of(e), "va_arg of an empty complex type");
+                };
+                Ok(self.cx_load(a, q, ALL))
             }
             _ if self.is_glvalue(e) => {
                 let lv = self.emit_lvalue(e)?;
@@ -511,6 +521,9 @@ impl Cg<'_> {
         let bc = self.bin(BinOp::FMul, fl, b, c);
         let re = self.bin(BinOp::FSub, fl, ac, bd);
         let im = self.bin(BinOp::FAdd, fl, ad, bc);
+        if self.opts.complex_range != ComplexRange::Full {
+            return Ok((re, im));
+        }
         let cont = self.f.fir.create_block();
         let inan = self.f.fir.create_block();
         let lib_blk = self.f.fir.create_block();
@@ -560,8 +573,9 @@ impl Cg<'_> {
         Ok(())
     }
 
-    /// clang `EmitBinDiv` (full range: a library call unless the divisor
-    /// is real).
+    /// clang `EmitBinDiv`: a real divisor divides each part; otherwise
+    /// by [`ComplexRange`] a library call (full), Smith's algorithm
+    /// (improved) or the algebraic quotient (basic).
     fn cx_div(&mut self, o: &Ops, a: V, b: Option<V>, c: V, d: Option<V>) -> R<(V, V)> {
         let t = self.f.fir.ty(&self.m, a);
         let fl = Flags::NONE;
@@ -572,6 +586,11 @@ impl Cg<'_> {
                 return Ok((re, self.bin(BinOp::FDiv, fl, b, c)));
             };
             let b = b.unwrap_or_else(|| V::C(self.m.const_zero(t)));
+            match self.opts.complex_range {
+                ComplexRange::Full => {}
+                ComplexRange::Improved => return Ok(self.cx_div_smith(t, a, b, c, d)),
+                ComplexRange::Basic => return Ok(self.cx_div_algebraic(true, a, b, c, d)),
+            }
             let name = match self.m.types.float_width(t) {
                 Some(16) => "__divhc3",
                 Some(32) => "__divsc3",
@@ -584,19 +603,78 @@ impl Cg<'_> {
         let (Some(b), Some(d)) = (b, d) else {
             return err(None, "integer complex arithmetic on a real operand");
         };
-        let t1 = self.bin(BinOp::Mul, fl, a, c);
-        let t2 = self.bin(BinOp::Mul, fl, b, d);
-        let t3 = self.bin(BinOp::Add, fl, t1, t2);
-        let t4 = self.bin(BinOp::Mul, fl, c, c);
-        let t5 = self.bin(BinOp::Mul, fl, d, d);
-        let t6 = self.bin(BinOp::Add, fl, t4, t5);
-        let t7 = self.bin(BinOp::Mul, fl, b, c);
-        let t8 = self.bin(BinOp::Mul, fl, a, d);
-        let t9 = self.bin(BinOp::Sub, fl, t7, t8);
         let eq = self.cx_elem(o.ty).expect("complex type");
-        let dop = if self.is_signed(eq) { BinOp::SDiv } else { BinOp::UDiv };
-        let re = self.bin(dop, fl, t3, t6);
-        Ok((re, self.bin(dop, fl, t9, t6)))
+        Ok(self.cx_div_algebraic(self.is_signed(eq), a, b, c, d))
+    }
+
+    /// `(a + ib) / (c + id)` as `((ac + bd) + i(bc - ad)) / (cc + dd)`:
+    /// clang `EmitAlgebraicDiv` on floats (`signed` ignored), the integer
+    /// quotient of `EmitBinDiv` otherwise.
+    fn cx_div_algebraic(&mut self, signed: bool, a: V, b: V, c: V, d: V) -> (V, V) {
+        let float = {
+            let t = self.f.fir.ty(&self.m, a);
+            self.is_float_ty(t)
+        };
+        let (mul, add, sub, div) = if float {
+            (BinOp::FMul, BinOp::FAdd, BinOp::FSub, BinOp::FDiv)
+        } else {
+            (BinOp::Mul, BinOp::Add, BinOp::Sub, if signed { BinOp::SDiv } else { BinOp::UDiv })
+        };
+        let fl = Flags::NONE;
+        let t1 = self.bin(mul, fl, a, c);
+        let t2 = self.bin(mul, fl, b, d);
+        let t3 = self.bin(add, fl, t1, t2);
+        let t4 = self.bin(mul, fl, c, c);
+        let t5 = self.bin(mul, fl, d, d);
+        let t6 = self.bin(add, fl, t4, t5);
+        let t7 = self.bin(mul, fl, b, c);
+        let t8 = self.bin(mul, fl, a, d);
+        let t9 = self.bin(sub, fl, t7, t8);
+        let re = self.bin(div, fl, t3, t6);
+        (re, self.bin(div, fl, t9, t6))
+    }
+
+    /// clang `EmitRangeReductionDiv` (Smith's algorithm): branch on
+    /// `|c| > |d|` (`fcmp ugt` of `llvm.fabs`), scale by `d/c` or `c/d`,
+    /// and join the two quotients in a `phi`.
+    fn cx_div_smith(&mut self, t: LTy, a: V, b: V, c: V, d: V) -> (V, V) {
+        let fl = Flags::NONE;
+        let cont = self.f.fir.create_block();
+        let ge = self.f.fir.create_block();
+        let lt = self.f.fir.create_block();
+        let fabs = kiln_llvm::intrinsics::fabs(&mut self.m, t);
+        let ac = self.intrinsic_call(fabs, vec![c]);
+        let ad = self.intrinsic_call(fabs, vec![d]);
+        let is_r = self.fcmp(FloatPredicate::Ugt, ac, ad);
+        self.cond_br(is_r, ge, lt);
+        self.emit_block(ge, false);
+        let r = self.bin(BinOp::FDiv, fl, d, c);
+        let rd = self.bin(BinOp::FMul, fl, r, d);
+        let den = self.bin(BinOp::FAdd, fl, c, rd);
+        let br = self.bin(BinOp::FMul, fl, b, r);
+        let num = self.bin(BinOp::FAdd, fl, a, br);
+        let tr = self.bin(BinOp::FDiv, fl, num, den);
+        let ar = self.bin(BinOp::FMul, fl, a, r);
+        let num = self.bin(BinOp::FSub, fl, b, ar);
+        let ti = self.bin(BinOp::FDiv, fl, num, den);
+        let ge_end = self.f.fir.cur().expect("insert point");
+        self.br(cont);
+        self.emit_block(lt, false);
+        let r = self.bin(BinOp::FDiv, fl, c, d);
+        let rc = self.bin(BinOp::FMul, fl, r, c);
+        let den = self.bin(BinOp::FAdd, fl, d, rc);
+        let ar = self.bin(BinOp::FMul, fl, a, r);
+        let num = self.bin(BinOp::FAdd, fl, ar, b);
+        let fr = self.bin(BinOp::FDiv, fl, num, den);
+        let br = self.bin(BinOp::FMul, fl, b, r);
+        let num = self.bin(BinOp::FSub, fl, br, a);
+        let fi = self.bin(BinOp::FDiv, fl, num, den);
+        let lt_end = self.f.fir.cur().expect("insert point");
+        self.br(cont);
+        self.emit_block(cont, false);
+        let re = self.f.fir.push(Op::Phi { ty: t, inc: vec![(tr, ge_end), (fr, lt_end)] }, t);
+        let im = self.f.fir.push(Op::Phi { ty: t, inc: vec![(ti, ge_end), (fi, lt_end)] }, t);
+        (re, im)
     }
 
     /// clang `EmitComplexBinOpLibCall`: `name(a, b, c, d)` returning the

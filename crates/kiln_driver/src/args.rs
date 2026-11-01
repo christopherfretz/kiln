@@ -2,6 +2,7 @@
 //! implements (`spec/driver.md` "Options"). Anything else is an
 //! `unknown argument` error, never silently ignored.
 
+use kiln_codegen::ComplexRange;
 use kiln_pp::{CmdMacro, DirGroup, OptLevel, PicModel};
 
 use crate::toolchain::StdLib;
@@ -359,6 +360,11 @@ pub struct Args {
     /// `-Woption-ignored` warning naming the last spelling. `None` is the
     /// target's default (on, as clang 19 on an `AArch64` Linux host).
     pub outline_atomics: Option<bool>,
+    /// The `_Complex` multiply/divide algorithm, the last of
+    /// `-f[no-]cx-limited-range`, `-f[no-]cx-fortran-rules`,
+    /// `-fcomplex-arithmetic=` and `-ffast-math` (basic); `None` is
+    /// clang's default (full, or basic under `-Ofast`).
+    pub complex_range: Option<ComplexRange>,
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -424,7 +430,11 @@ impl Args {
             }
             if let Some(r) = a.constexpr.parse_arg(arg).or_else(|| a.templ.parse_arg(arg)) {
                 a.errors.extend(r.err());
-            } else if !a.flag(arg) && !a.predef_flag(arg) && !a.diag_flag(arg) {
+            } else if !a.flag(arg)
+                && !a.complex_flag(arg)
+                && !a.predef_flag(arg)
+                && !a.diag_flag(arg)
+            {
                 a.errors.push(ArgError::Unknown(arg.to_owned()));
             }
         }
@@ -573,8 +583,46 @@ impl Args {
         true
     }
 
+    /// clang's complex-range flags (`RenderComplexRangeOption`), the last
+    /// wins. `-fcomplex-arithmetic=promoted` is an unsupported value.
+    fn complex_flag(&mut self, arg: &str) -> bool {
+        self.complex_range = Some(match arg {
+            "-fcx-limited-range" => ComplexRange::Basic,
+            "-fcx-fortran-rules" => ComplexRange::Improved,
+            "-fno-cx-limited-range" | "-fno-cx-fortran-rules" => ComplexRange::Full,
+            _ => {
+                let Some(v) = arg.strip_prefix("-fcomplex-arithmetic=") else { return false };
+                let Some(r) = ComplexRange::from_arg(v) else {
+                    self.errors.push(ArgError::UnsupportedValue(
+                        "-fcomplex-arithmetic=".to_owned(),
+                        v.to_owned(),
+                    ));
+                    return true;
+                };
+                r
+            }
+        });
+        true
+    }
+
+    /// The complex range in effect: the last complex-range flag, else
+    /// basic under `-Ofast` (unless `-fno-fast-math`), else full.
+    #[must_use]
+    pub fn complex_range(&self) -> ComplexRange {
+        self.complex_range.unwrap_or(if self.predef.ofast && self.predef.fast_math != Some(false) {
+            ComplexRange::Basic
+        } else {
+            ComplexRange::Full
+        })
+    }
+
     /// Flags that change predefined macros.
     fn predef_flag(&mut self, arg: &str) -> bool {
+        if arg == "-ffast-math" {
+            // clang 19 renders `-complex-range=basic`; `-fno-fast-math`
+            // leaves the range alone.
+            self.complex_range = Some(ComplexRange::Basic);
+        }
         if matches!(
             arg,
             "-O0" | "-O" | "-O1" | "-O2" | "-O3" | "-O4" | "-Og" | "-Ofast" | "-Os" | "-Oz"
@@ -744,6 +792,29 @@ mod tests {
         assert_eq!(parse("-mno-outline-atomics a.cpp").outline_atomics, Some(false));
         let a = parse("-mno-outline-atomics -moutline-atomics a.cpp");
         assert_eq!((a.outline_atomics, a.errors), (Some(true), vec![]));
+    }
+
+    #[test]
+    fn complex_range_last_wins() {
+        use ComplexRange::{Basic, Full, Improved};
+        let r = |s| parse(s).complex_range();
+        assert_eq!(r("a.cpp"), Full);
+        assert_eq!(r("-fcx-limited-range a.cpp"), Basic);
+        assert_eq!(r("-fcx-limited-range -fno-cx-limited-range a.cpp"), Full);
+        assert_eq!(r("-fcx-fortran-rules a.cpp"), Improved);
+        assert_eq!(r("-fcx-fortran-rules -fno-cx-fortran-rules a.cpp"), Full);
+        assert_eq!(r("-fcomplex-arithmetic=improved -fcx-limited-range a.cpp"), Basic);
+        assert_eq!(r("-fcx-limited-range -fcomplex-arithmetic=full a.cpp"), Full);
+        assert_eq!(r("-ffast-math a.cpp"), Basic);
+        assert_eq!(r("-ffast-math -fno-cx-limited-range a.cpp"), Full);
+        assert_eq!(r("-fcx-limited-range -fno-fast-math a.cpp"), Basic);
+        assert_eq!(r("-Ofast a.cpp"), Basic);
+        assert_eq!(r("-Ofast -fno-fast-math a.cpp"), Full);
+        for v in ["promoted", "bogus"] {
+            let a = parse(&format!("-fcomplex-arithmetic={v} a.cpp"));
+            let e = ArgError::UnsupportedValue("-fcomplex-arithmetic=".into(), v.into());
+            assert_eq!((a.complex_range, a.errors), (None, vec![e]));
+        }
     }
 
     #[test]

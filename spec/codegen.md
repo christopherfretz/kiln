@@ -1162,9 +1162,14 @@ clang 19 `CGAtomic` at -O0, mirrored:
   only IR vector parameters/returns, as clang's
   `CodeGenFunction::StartFunction` does, not vectors nested in coerced
   structs. Call sites keep the recursive `CallInfo::max_vector_width`.
-- **Validation:** `tests/codegen/va_arg.cpp` exact on aarch64 and
-  x86_64; `tests/conformance/cstdarg.syn/va-arg.cpp` (run).
-- **Not implemented:** `_Complex` operands of `va_arg`.
+- **`_Complex T`** (WP-237): clang 19's `ComplexExprEmitter::VisitVAArgExpr`
+  takes the address from the same target walk (`va_arg_addr`; AAPCS64
+  classifies a complex floating type as a two-element HFA and a complex
+  integer as a general-register slot, x86-64 as for an argument, §8.17)
+  and loads both parts whatever the consumer ignores.
+- **Validation:** `tests/codegen/va_arg.cpp` and `va_arg_complex.cpp`
+  exact on aarch64 and x86_64; `tests/conformance/cstdarg.syn/va-arg.cpp`
+  and `va-arg-complex.cpp` (run).
 
 ## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
 Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
@@ -1623,8 +1628,8 @@ Tests: `tests/codegen/array_temporary.cpp`, `array_temporary_global.cpp`
 `dcl.fct.default/constexpr-default-arg-temporary`.
 
 ## 7n. Landed (WP-211): GNU `_Complex` (`complex.rs`)
-Mirrors clang 19's `ComplexExprEmitter` at `-O0` with the full complex
-range (`CX_Full`).
+Mirrors clang 19's `ComplexExprEmitter` at `-O0`, by default with the
+full complex range (`CX_Full`; `CodegenOptions::complex_range`, below).
 - **Representation.** A complex value is the pair `(real, imag)` of
   element values. In memory it is the IR struct `{ T, T }` (kiln_abi
   `irtype.rs`), with parts at struct GEP 0/1. A part is `None` when the
@@ -1647,15 +1652,31 @@ range (`CX_Full`).
 - **Division.** It calls the library routine `__div{s,d,x,t}c3` for
   complex floating divisors. A real divisor divides each part directly.
   Integer division uses clang's inline formula.
+- **Complex range** (WP-237; `CodegenOptions::complex_range`, clang's
+  `LangOptions::ComplexRange`, set by the driver, spec/driver.md). Only
+  floating `*`/`/` with two complex operands (a real dividend gets a
+  zero imaginary part) depend on it:
+  - `Full`: the NaN-checked product and the library call above.
+  - `Basic` (`-fcx-limited-range`, `-ffast-math`): the four products
+    without the NaN check; `EmitAlgebraicDiv`, `((ac+bd) + i(bc-ad)) /
+    (cc+dd)`, in clang's instruction order.
+  - `Improved` (`-fcx-fortran-rules`, `-fcomplex-arithmetic=improved`):
+    the plain product; `EmitRangeReductionDiv` (Smith): `fcmp ugt` of
+    the `llvm.fabs` of `c` and `d`, a block scaling by `d/c`, one by
+    `c/d`, and a `phi` per part.
+  - `promoted` is not supported (the driver rejects it, spec/abi.md
+    §8.17).
 - **Calls.** A complex argument or return goes through the target
   classification (spec/abi.md §8.17). A returned pair is unpacked from
   the coerced type (`cx_call_result`). Delegating calls (inheriting
   constructors, lambda static invokers) forward the parts unchanged.
 - **Validation.** `tests/codegen/complex_{arith,calls,ops,types,delegate,
-  imaginary}.cpp` are exact on aarch64 and x86_64.
-- **Not implemented:** `_Complex _Float16` (kiln has no `_Float16`), and
-  complex ranges other than full (`-fcx-limited-range`,
-  `-fcomplex-arithmetic=`).
+  imaginary,limited_range,improved_range}.cpp` and `va_arg_complex.cpp`
+  are exact on aarch64 and x86_64; `tests/conformance/ext.complex/
+  {limited,improved,full}-range.cpp` (run) observe each range.
+- **Not implemented:** `_Complex _Float16` (kiln has no `_Float16`),
+  `-fcomplex-arithmetic=promoted`, and `#pragma STDC CX_LIMITED_RANGE`
+  (spec/abi.md §8.17 "Deviations").
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

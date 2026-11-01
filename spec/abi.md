@@ -906,6 +906,30 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
 - **Mangling** (Itanium `<type> ::= C <type>`): `Cf`, `Cd`, `Ce`, `Ci`,
   `Ch`, ..., including through pointers, references and template
   arguments. `tests/mangle/complex.cpp` checks it.
+- **`va_arg`** (WP-237) reads `_Complex T` with the argument's
+  classification: on AAPCS64 a complex floating type is an HFA of two
+  (each part from its own 16-byte `v` register slot, copied into a
+  contiguous temporary; 8 or 16 bytes on the stack), a complex integer
+  one or two general-register slots; on x86-64 `_Complex float` is one
+  SSE eightbyte, `_Complex double` two (reassembled from `fp_offset`
+  slots 16 apart), `_Complex long double` comes from the overflow area
+  and complex integers are INTEGER. `tests/codegen/va_arg_complex.cpp`.
+- **Multiply and divide** follow clang's complex range (spec/codegen.md
+  §7n): full (`__mul?c3` behind a NaN check, `__div?c3`; the library
+  routines' names come from the element type: `s` float, `d` double,
+  `x` x87, `t` binary128), basic (algebraic) or improved (Smith's
+  division). Constant evaluation always computes the full-range result
+  (spec/oven.md "Complex values"), as clang does.
+- **Deviations.** `-fcomplex-arithmetic=promoted` (clang widens a
+  division's operands to the next type with twice the exponent range,
+  warning when none exists) is rejected with "unsupported argument";
+  clang's `-Woverriding-option` warnings between complex-range flags are
+  not issued. `_Complex _Float16` is unsupported: kiln knows neither
+  `_Float16` nor `__bf16` ("unknown type name"; clang itself rejects
+  `_Complex __bf16` as invalid). `__float128` is not diagnosed on
+  AArch64, where clang 19 rejects it ("__float128 is not supported on
+  this target"; `Target::has_float128` is false there but unread): kiln
+  accepts it as binary128.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

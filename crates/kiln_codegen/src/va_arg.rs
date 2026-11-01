@@ -36,7 +36,7 @@ impl Cg<'_> {
 
     /// The address `__builtin_va_arg` `e` reads its value from, after
     /// advancing the `va_list`; `None` for an ignored (empty) type.
-    fn va_arg_addr(&mut self, e: ExprId) -> R<Option<Addr>> {
+    pub(crate) fn va_arg_addr(&mut self, e: ExprId) -> R<Option<Addr>> {
         let ast = self.ast;
         let (list, _, _) = ast.exprs.va_arg(e);
         let q = ast.exprs.get(e).ty();

@@ -61,6 +61,42 @@ pub struct CodegenOptions {
     /// `target-features` (`-moutline-atomics`, the default), else
     /// `-outline-atomics` (`-mno-outline-atomics`). Ignored on x86-64.
     pub outline_atomics: bool,
+    /// How `_Complex` floating multiply and divide are lowered
+    /// (`-fcx-limited-range`, `-fcomplex-arithmetic=`; clang's
+    /// `LangOptions::ComplexRange`).
+    pub complex_range: ComplexRange,
+}
+
+/// clang's `LangOptions::ComplexRangeKind` (spec/abi.md §8.17): the
+/// algorithm for `_Complex` floating `*` and `/` when both operands are
+/// complex.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ComplexRange {
+    /// `full` (the default, `-fno-cx-limited-range`): the algebraic
+    /// product with a NaN check falling back to `__mul?c3`; division by
+    /// `__div?c3`.
+    #[default]
+    Full,
+    /// `improved` (`-fcx-fortran-rules`): the algebraic product; Smith's
+    /// range-reducing division (`EmitRangeReductionDiv`).
+    Improved,
+    /// `basic` (`-fcx-limited-range`, `-ffast-math`): the algebraic
+    /// product and quotient (`EmitAlgebraicDiv`).
+    Basic,
+}
+
+impl ComplexRange {
+    /// The `-fcomplex-arithmetic=` value kiln supports (`promoted` is
+    /// not: it widens the operands, spec/abi.md §8.17).
+    #[must_use]
+    pub fn from_arg(v: &str) -> Option<ComplexRange> {
+        match v {
+            "full" => Some(ComplexRange::Full),
+            "improved" => Some(ComplexRange::Improved),
+            "basic" => Some(ComplexRange::Basic),
+            _ => None,
+        }
+    }
 }
 
 impl Default for CodegenOptions {
@@ -70,6 +106,7 @@ impl Default for CodegenOptions {
             exceptions: true,
             ident: String::new(),
             outline_atomics: true,
+            complex_range: ComplexRange::Full,
         }
     }
 }
