@@ -76,7 +76,7 @@ impl Sema<'_, '_> {
     /// `0` once the declaration ends.
     pub fn act_member_template_spec_prefix(&mut self, n: u16) {
         self.templ.empty_prefix = n;
-        self.templ.empty_prefix_taken = false;
+        self.templ.empty_prefix_taken = 0;
     }
 
     /// `[extern] template` without `<` was parsed: the class template-id

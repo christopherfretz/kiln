@@ -143,9 +143,9 @@ pub struct TemplState {
     /// matching one implicitly instantiated class of the qualifier
     /// ([`Sema::act_member_template_spec_prefix`]).
     pub(crate) empty_prefix: u16,
-    /// A `template<>` of [`TemplState::empty_prefix`] was matched: the
-    /// member template being redeclared is member-specialized.
-    pub(crate) empty_prefix_taken: bool,
+    /// How many `template<>`s of [`TemplState::empty_prefix`] were matched;
+    /// nonzero: the member template being redeclared is member-specialized.
+    pub(crate) empty_prefix_taken: u16,
     /// `[extern] template` without `<` was just parsed (the `extern`
     /// and `template` locations): the next class template-id declared
     /// is explicitly instantiated ([temp.explicit]).
@@ -709,7 +709,7 @@ impl Sema<'_, '_> {
                 }
                 ScopeSlot::Empty(_) if self.templ.empty_prefix > 0 => {
                     self.templ.empty_prefix -= 1;
-                    self.templ.empty_prefix_taken = true;
+                    self.templ.empty_prefix_taken += 1;
                 }
                 ScopeSlot::Empty(class) if check_empty => {
                     let Some(&i) = it.peek() else { break };
@@ -899,7 +899,7 @@ impl Sema<'_, '_> {
             self.check_template_param_list(kind, list, prev);
         }
         let t = self.builder().template_decl(kind, pattern, list, prev);
-        if self.templ.empty_prefix_taken
+        if self.templ.empty_prefix_taken > 0
             && let Some(p) = prev
         {
             let p = self.ast.first(p);
