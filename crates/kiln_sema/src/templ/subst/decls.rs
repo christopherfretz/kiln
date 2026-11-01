@@ -502,6 +502,10 @@ impl Substituter<'_, '_, '_> {
                 Some(r) => r?,
                 None => self.with_written_scope(ret_scope, |s| s.ty(p.ret(), loc))?,
             };
+            // [dcl.fct]/11, at the return type as written (clang's
+            // `BuildFunctionType` after the parameters).
+            let ret_loc = self.sema.ret_type_locs.get(&d).copied().unwrap_or(loc);
+            self.check_return_type(ret, ret_loc)?;
             // A dependent `noexcept(expr)` waits until needed (WP-112).
             let exc = if lazy_exc {
                 kiln_ast::types::ExcSpec::Deferred(d)
