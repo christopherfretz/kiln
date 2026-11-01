@@ -94,11 +94,11 @@ in the profile directory (`target/<profile>/kiln++ -> kiln`); xtask's
 `build_kiln` makes it again if it is missing and returns its path.
 
 The mode comes from the program name (`argv[0]`), as clang's driver name
-parsing: take the basename, drop a `.exe`; if that does not end in `++`
-or `-cpp`, also drop a trailing version (`[0-9.]*` and then one `-`:
-`kiln++-0.1`, `clang++-19`) and look again. A name ending in `++`
-(`kiln++`, `c++`) or `-cpp` is C++ mode (clang's `g++` mode); anything
-else is `kiln` mode (clang's `gcc` mode). The hidden
+parsing: take the basename, drop a `.exe`; if that does not end in `++`,
+also drop a trailing version (`[0-9.]*` and then one `-`: `kiln++-0.1`,
+`clang++-19`) and look again. A name ending in `++` (`kiln++`, `c++`) is
+C++ mode (clang's `g++` mode); every other name is `kiln` mode (clang's
+`gcc` mode). The hidden
 `--driver-mode=g++|gcc` overrides the name (the last one wins);
 any other value is the error `unsupported argument '<v>' to option
 '--driver-mode='`. `kiln_driver::run` runs as `kiln++`;
@@ -436,11 +436,9 @@ Each deviation is covered by a test or a test note.
    C has no C++ keywords-as-operators and no C++ ud-suffix rules. The pp
    corpus is unaffected, but a C file using `and` as an identifier would
    be.
-2. **Driver modes and names.** A name ending in `-cpp` is C++ mode (in
-   clang, `clang-cpp` is the preprocessor-only `cpp` mode).
-   `--driver-mode=` takes only `g++` and `gcc` (clang also takes `cpp`,
-   `cl`, `flang`, `dxc`). `kiln++` is a symlink made by the build script,
-   not a second binary target. Standard input is compiled in the mode's
+2. **Driver modes and names.** `--driver-mode=` takes only `g++` and
+   `gcc` (clang also takes `cpp`, `cl`, `flang`, `dxc`). `kiln++` is a
+   symlink made by the build script, not a second binary target. Standard input is compiled in the mode's
    language with any action, where clang asks for `-E` or `-x` unless
    preprocessing. An input with an unknown extension is C++ for `-E` and
    `-fsyntax-only` (clang takes it as a linker input). Pass `-x c++` to

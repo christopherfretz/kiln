@@ -74,12 +74,12 @@ impl DriverMode {
     /// The mode of a program name (`argv[0]`), as clang's driver name
     /// parsing: the basename without `.exe`, then, if that does not decide
     /// it, without a trailing version (`kiln++-0.1`, `clang++-19`). A name
-    /// ending in `++` (`kiln++`, `c++`) or `-cpp` is C++ mode; anything else
-    /// is `Gcc`.
+    /// ending in `++` (`kiln++`, `c++`) is C++ mode; anything else is `Gcc`
+    /// (clang's preprocessor-only `*-cpp` names too: there is no such mode).
     pub fn from_program_name(argv0: &str) -> DriverMode {
         let base = program_basename(argv0);
         let base = base.strip_suffix(".exe").unwrap_or(base);
-        let cxx = |n: &str| n.ends_with("++") || n.ends_with("-cpp");
+        let cxx = |n: &str| n.ends_with("++");
         let unversioned = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
         let unversioned = unversioned.strip_suffix('-').unwrap_or(unversioned);
         if cxx(base) || cxx(unversioned) { DriverMode::Gxx } else { DriverMode::Gcc }
@@ -781,8 +781,8 @@ mod tests {
         for n in ["kiln++", "/usr/bin/kiln++", "kiln++.exe", "kiln++-0.1", "x/clang++-19", "c++"] {
             assert_eq!(DriverMode::from_program_name(n), Gxx, "{n}");
         }
-        assert_eq!(DriverMode::from_program_name("kiln-cpp"), Gxx);
-        for n in ["kiln", "/a/b/kiln", "kiln.exe", "kiln-0.1", "clang-19", "", "kiln++/kiln"] {
+        let gcc = ["kiln", "/a/b/kiln", "kiln.exe", "kiln-0.1", "clang-19", "", "kiln++/kiln"];
+        for n in gcc.into_iter().chain(["kiln-cpp", "clang-cpp-19", "cpp"]) {
             assert_eq!(DriverMode::from_program_name(n), Gcc, "{n}");
         }
         assert_eq!(program_basename("/usr/bin/kiln++"), "kiln++");
