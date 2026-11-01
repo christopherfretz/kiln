@@ -1370,8 +1370,13 @@ impl Cg<'_> {
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
         if self.memcpy_equivalent(ctor) {
             let src = self.emit_lvalue(args[0])?;
-            let size = self.copy_size(rd, overlap);
-            self.memcpy(dest, src.addr.v, src.addr.align, size, false);
+            // clang `EmitAggregateCopy` ignores empty classes: an empty
+            // base shares its address with another subobject ([intro.object]
+            // /8), which a one-byte copy would clobber.
+            if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
+                let size = self.copy_size(rd, overlap);
+                self.memcpy(dest, src.addr.v, src.addr.align, size, false);
+            }
             return Ok(());
         }
         let v = match info.kind {
@@ -1504,8 +1509,11 @@ impl Cg<'_> {
             }
             if matches!(self.special_of(md), Some(Special::CopyAssign | Special::MoveAssign)) {
                 let src = self.emit_lvalue(args[0])?;
-                let size = self.copy_size(rd, true);
-                self.memcpy(this, src.addr.v, src.addr.align, size, false);
+                // clang `EmitAggregateCopy`: empty classes are ignored.
+                if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
+                    let size = self.copy_size(rd, true);
+                    self.memcpy(this, src.addr.v, src.addr.align, size, false);
+                }
                 return Ok(Some(this.v));
             }
         }
