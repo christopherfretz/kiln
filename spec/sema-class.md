@@ -312,7 +312,13 @@ replayed tokens were written in:
   not.)
 - `act_on_start_field_init(field)` precedes each NSDMI (clang's
   `ActOnStartCXXInClassMemberInitializer`); `act_on_field_init` follows
-  it only when the initializer parsed.
+  it only when the initializer parsed. `= {…}` is copy-list-initialization
+  (an explicit constructor is `chosen constructor is explicit in
+  copy-initialization`), `{…}` direct-list (`FieldData::init_style`, also
+  copied to an instantiated field). An initializer that fails marks the
+  field `INVALID`: constructors then skip it, and an aggregate
+  initialization or `field_filler` using it recovers silently (clang's
+  failed `BuildCXXDefaultInitExpr`).
 
 Per outermost class the parser calls, after
 `act_on_finish_record_definition(r, _)`: for each phase in order,
@@ -324,7 +330,18 @@ trace tests in `kiln_parse/src/class.rs` (parse.md §10).
 
 Needing an unparsed NSDMI earlier (a nested class's implicit default ctor used
 in the enclosing class) is an error: `default member initializer for 'x'
-needed within definition of enclosing class 'S' outside of member functions`.
+needed within definition of enclosing class 'S' outside of member functions`
+(`sema_default_member_init_not_yet_parsed`, clang `BuildCXXDefaultInitExpr`)
+at the use, `S` the outermost lexically enclosing class, with the note
+`default member initializer declared here` at the field's name. The field
+becomes invalid (outside SFINAE), so later uses of it are quiet: an aggregate
+initialization recovers and an implicit constructor's definition fails
+silently (`define.rs` `default_member_init`). Gap: clang meets the unparsed
+initializer first while computing the implicit constructor's exception
+specification (note `in evaluation of exception specification for 'W::X::X'
+needed here`), and later uses of that now-invalid constructor fail
+silently; kiln reports it from the constructor's definition and still
+diagnoses later uses (`undefined constructor`, `no matching constructor`).
 
 ### 2.8 Unions and variant members
 [class.union]: at most one variant member has an NSDMI or appears in a

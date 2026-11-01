@@ -1251,6 +1251,16 @@ impl FieldData {
     pub const fn no_unique_address(&self) -> bool {
         self.flags & Self::NO_UNIQUE_ADDRESS != 0
     }
+    /// The default member initializer's syntax: `= ...` ([`InitStyle::C`])
+    /// or `{...}` ([`InitStyle::List`]); `C` when there is none.
+    pub const fn init_style(&self) -> InitStyle {
+        match (self.flags >> 2) & 3 {
+            1 => InitStyle::Call,
+            2 => InitStyle::List,
+            3 => InitStyle::ParenList,
+            _ => InitStyle::C,
+        }
+    }
 }
 
 /// Payload of `Enum` (32 bytes).

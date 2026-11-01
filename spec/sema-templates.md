@@ -986,7 +986,16 @@ errors.
    the frame.
 
 Any error during instantiation marks the specialization `invalid` (P7).
-Later uses of it are silent.
+Later uses of it are silent. As in clang's `InstantiateClass`, the class
+body's own failures do so too (`class_body_with`): a failed base
+specifier, an invalid data member (field or static data member) of the
+pattern, which is skipped, or a data member whose instantiation fails.
+The specialization is then still completed with its implicit special
+members (`ensure_implicit` exempts invalid specializations), its default
+member initializers are not instantiated, and the use that required the
+definition fails without a further "incomplete type" error
+(`undefined_diagnosed`). Gap: member functions of such a specialization
+are still instantiated on use (`a.g()` after `A<int> a;`).
 
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
@@ -1490,7 +1499,11 @@ formed it:
   arms of `ty` and the identifier arm of `nns` use it for "no type named",
   "typename specifier refers to non-type member", "no member named",
   "cannot be used prior to '::'" and access errors. The notes are
-  unchanged.
+  unchanged. A DependentTemplateSpecialization (`typename
+  T::template X<int>`) substitutes its qualifier with the written NNS
+  location as context, so an error in `T::` is reported at the `T`.
+  A member alias-declaration gets its access (`set_member_access`), so
+  an access check through it names the right member access.
 - An interned type written at several places resolves by occurrence,
   not by distance (WP-214). While a declaration's type is substituted,
   `Substituter::written_scope` (a `WrittenScope`: anchor, side, bound)
@@ -2981,11 +2994,25 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   against `TT`'s own list (`check_ttp_arity`: "too few/many template
   arguments for template template parameter 'TT'", note at `TT`); a pack
   parameter or a pack-expansion argument skips it, and argument kinds are
-  not checked. Matching a template template argument's parameter list
-  against the parameter's ([temp.arg.template]/3-4, clang's "template
-  template argument has different template parameters") is not
-  implemented: `Q<P>` with a mismatched `P` is accepted
-  (`tests/conformance/temp.names/ttp-specialization-arity.cpp`).
+  not checked.
+- Template template argument matching ([temp.arg.template]/3-4, P0522;
+  `templ/ttarg.rs`, from `check_template_arg`) approximates clang's
+  "at least as specialized" check structurally instead of deducing through
+  an invented specialization: P's parameters are walked against A's (a P
+  pack fills the remaining A parameters, an A pack absorbs P's, leftover A
+  parameters need a default or must be packs); kinds must match; a
+  non-type parameter fits when either type is dependent or contains an
+  undeduced `auto`, or both are the same or both integral; a template
+  template parameter recurses with the roles swapped. On failure clang's
+  `TemplateParameterListsAreEqual(A, P, TemplateTemplateArgumentMatch)`
+  supplies the diagnostics: `template template argument has different
+  template parameters than its corresponding template template parameter`
+  at the argument with the arity / kind / pack / non-type-type note and
+  `template parameter is declared here`
+  (`tests/conformance/temp.arg.template/`). Gap: a non-type parameter
+  whose type depends on an outer parameter (`template<class T,
+  template<T> class P>`) is compared unsubstituted, so `DP<int, IP>` with
+  `template<int*> class IP` is accepted where clang rejects it.
 - P0846 (ADL for an unknown name followed by `<`) is not implemented.
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is

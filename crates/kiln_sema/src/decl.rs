@@ -2235,6 +2235,9 @@ impl Sema<'_, '_> {
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        // [class.access.spec]/1: a member alias-declaration has the
+        // current access, as a member typedef does.
+        self.set_member_access(td);
         if let Some(t) = self.finish_template_pattern(td) {
             self.set_member_access(t);
         }

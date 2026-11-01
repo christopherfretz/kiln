@@ -163,9 +163,11 @@ impl Sema<'_, '_> {
         args.extend_from_slice(&set.args);
         match self.deduce_call(ft, explicit, &args, loc) {
             Ok(spec) => {
+                let nondep = self.templ.explicit_nondep;
                 self.add_candidate(set, spec, found, kind, first_opts);
                 if let Some(c) = set.cands.last_mut() {
                     c.template = Some(ft);
+                    c.explicit_nondep = nondep;
                 }
             }
             Err(fail) => {

@@ -1653,6 +1653,14 @@ diag_ids! {
     note_local_var_init = Note (2) "{0:via initialization of|binding reference} variable {1} here";
     note_lambda_capture_here = Note (1) "{0:captured|captured by reference|implicitly captured due to use|implicitly captured by reference due to use} here";
     note_lambda_init_capture = Note (2) "captured{0:| by reference} via initialization of lambda capture {1}";
+    sema_template_arg_template_params_mismatch = Error (0) "template template argument has different template parameters than its corresponding template template parameter";
+    note_template_param_list_different_arity = Note (1) "{0:too few|too many} template parameters in template template argument";
+    note_template_param_different_kind = Note (0) "template parameter has a different kind in template argument";
+    note_template_parameter_pack_non_pack = Note (2) "{0:template type|non-type template|template template} parameter{1:| pack} does not match {0:template type|non-type template|template template} parameter{1: pack|} in template argument";
+    note_template_nontype_parm_different_type = Note (1) "template non-type parameter has a different type {0} in template argument";
+    sema_access_dtor = Error (2) "calling a {1:private|protected} destructor of class {0}";
+    sema_default_member_init_not_yet_parsed = Error (2) "default member initializer for {1} needed within definition of enclosing class {0} outside of member functions";
+    note_default_member_init_not_yet_parsed = Note (0) "default member initializer declared here";
     sema_parens_disambiguated_as_variable = Warning [VexingParse] (1) "parentheses were disambiguated as redundant parentheses around declaration of variable named '{0}'";
     sema_redundant_parens_around_declarator = WarningOff [RedundantParens] (0) "redundant parentheses surrounding declarator";
     note_raii_guard_add_name = Note (2) "add a variable name to declare a {0} initialized with '{1}'";
