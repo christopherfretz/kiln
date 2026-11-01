@@ -10,9 +10,16 @@
 //! only kiln's side runs.
 #![forbid(unsafe_code)]
 
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use kiln_abi::dump_blocks::vtable_blocks as blocks;
+
+/// The `kiln++` beside the `kiln` binary under test (`kiln_driver`'s build
+/// script makes it): the C++ driver mode, spec/driver.md "Driver modes".
+fn kilnpp() -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++")
+}
 
 const CLANG: &str = "clang++-19";
 const TRIPLES: [&str; 2] = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
@@ -50,8 +57,8 @@ fn clang_available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-fn kiln_dump(src: &std::path::Path, triple: &str) -> String {
-    let o = Command::new(env!("CARGO_BIN_EXE_kiln"))
+fn kiln_dump(src: &Path, triple: &str) -> String {
+    let o = Command::new(kilnpp())
         .args(["-std=c++2c", "-fsyntax-only", "-fdump-vtable-layouts"])
         .arg(format!("--target={triple}"))
         .arg(src)
@@ -118,7 +125,7 @@ fn flag_action() {
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join("s.cpp");
     std::fs::write(&src, "struct S { int i; };\nstruct P { virtual void f(); };\n").unwrap();
-    let o = Command::new(env!("CARGO_BIN_EXE_kiln"))
+    let o = Command::new(kilnpp())
         .args(["-fsyntax-only", "-fdump-vtable-layouts", "--target=x86_64-unknown-linux-gnu"])
         .arg(&src)
         .output()
@@ -127,7 +134,7 @@ fn flag_action() {
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(out.starts_with("Vtable for 'P' (3 entries).\n"), "{out}");
     assert!(!out.contains("'S'"), "{out}");
-    let o = Command::new(env!("CARGO_BIN_EXE_kiln"))
+    let o = Command::new(kilnpp())
         .args(["-S", "-emit-llvm", "-o", "-", "-fdump-vtable-layouts"])
         .arg(&src)
         .output()
