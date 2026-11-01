@@ -170,6 +170,9 @@ pub struct DeclSpec {
     pub friend: Option<Loc>,
     /// cv-qualifiers.
     pub cv: Quals,
+    /// The C11 `_Atomic` type qualifier (no parenthesis; a clang
+    /// extension in C++) written at.
+    pub atomic_qual: Option<Loc>,
     /// `short`/`long`.
     pub width: Width,
     /// `signed`/`unsigned`.
@@ -221,6 +224,7 @@ impl DeclSpec {
             && self.inline.is_none()
             && self.thread_local.is_none()
             && self.cv.is_empty()
+            && self.atomic_qual.is_none()
             && self.consteval.is_none()
             && self.virtual_.is_none()
             && self.explicit.is_none()

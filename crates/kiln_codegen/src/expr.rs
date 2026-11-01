@@ -52,7 +52,7 @@ impl Cg<'_> {
         self.ast.exprs.get(e).value_category() != ValueCategory::PRValue
     }
 
-    fn is_volatile(&self, q: QualType) -> bool {
+    pub(crate) fn is_volatile(&self, q: QualType) -> bool {
         self.ast.types.effective_quals(q).is_volatile()
     }
 
@@ -73,7 +73,7 @@ impl Cg<'_> {
     }
 
     /// A floating constant `x` (±1.0 and 0.0 only) of type `ty`.
-    fn fconst(&mut self, ty: LTy, x: f64) -> V {
+    pub(crate) fn fconst(&mut self, ty: LTy, x: f64) -> V {
         let bits: u128 = match self.m.types.float_width(ty) {
             Some(32) => u128::from((x as f32).to_bits()),
             Some(64) => u128::from(x.to_bits()),
@@ -98,7 +98,7 @@ impl Cg<'_> {
         V::C(self.m.const_float_bits(ty, bits))
     }
 
-    fn is_float_ty(&self, t: LTy) -> bool {
+    pub(crate) fn is_float_ty(&self, t: LTy) -> bool {
         self.m.types.float_width(t).is_some()
     }
 
@@ -287,6 +287,7 @@ impl Cg<'_> {
                 return Ok(None);
             }
             ExprKind::StmtExpr => return self.emit_stmt_expr(e),
+            ExprKind::AtomicExpr => return self.emit_atomic_expr(e, None),
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
             ExprKind::InitListExpr if !self.is_aggregate(q) => {
@@ -311,7 +312,12 @@ impl Cg<'_> {
 
     /// clang `EmitLoadOfLValue` for scalars.
     pub(crate) fn load_lv(&mut self, lv: LV) -> V {
-        let Some(bf) = lv.bf else { return self.load_scalar(lv.addr, lv.q) };
+        let Some(bf) = lv.bf else {
+            if let Some(vq) = self.ast.types.as_atomic(lv.q) {
+                return self.atomic_load_lv(lv, vq);
+            }
+            return self.load_scalar(lv.addr, lv.q);
+        };
         let vol = self.is_volatile(lv.q);
         let st = lv.addr.ty;
         let mut v = self.load(st, lv.addr.v, lv.addr.align, vol);
@@ -344,7 +350,11 @@ impl Cg<'_> {
     /// bit-field after the store.
     pub(crate) fn store_lv(&mut self, v: V, lv: LV, want: bool) -> V {
         let Some(bf) = lv.bf else {
-            self.store_scalar(v, lv.addr, lv.q);
+            if let Some(vq) = self.ast.types.as_atomic(lv.q) {
+                self.atomic_store_lv(v, lv, vq);
+            } else {
+                self.store_scalar(v, lv.addr, lv.q);
+            }
             return v;
         };
         let vol = self.is_volatile(lv.q);
@@ -504,6 +514,8 @@ impl Cg<'_> {
             CastKind::NoOp
             | CastKind::BitCast
             | CastKind::LValueBitCast
+            | CastKind::AtomicToNonAtomic
+            | CastKind::NonAtomicToAtomic
             | CastKind::UserDefinedConversion
             | CastKind::ConstructorConversion => {
                 return self.emit_scalar_opt(s);
@@ -658,13 +670,24 @@ impl Cg<'_> {
 
     /// clang `EmitScalarPrePostIncDec`.
     fn inc_dec(&mut self, e: ExprId, lv: LV, op: UnaryOp) -> R<V> {
-        let ast = self.ast;
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
         let pre = matches!(op, UnaryOp::PreInc | UnaryOp::PreDec);
-        let q = lv.q;
+        if lv.bf.is_none()
+            && let Some(vq) = self.ast.types.as_atomic(lv.q)
+        {
+            return self.atomic_inc_dec(e, lv, vq, inc, pre);
+        }
         let old = self.load_lv(lv);
+        let new = self.inc_dec_value(e, lv.q, old, inc)?;
+        let stored = self.store_lv(new, lv, lv.bf.is_some());
+        Ok(if pre { stored } else { old })
+    }
+
+    /// The incremented (`inc`) or decremented value `old` of type `q`.
+    pub(crate) fn inc_dec_value(&mut self, e: ExprId, q: QualType, old: V, inc: bool) -> R<V> {
+        let ast = self.ast;
         let amount: i128 = if inc { 1 } else { -1 };
-        let new = if self.is_bool(q) && inc {
+        Ok(if self.is_bool(q) && inc {
             V::C(self.m.const_bool(true))
         } else if ast.types.is_pointer(q) {
             let pq = ast.types.pointee(q).expect("pointee");
@@ -686,9 +709,7 @@ impl Cg<'_> {
                 let fl = if can_overflow && self.is_signed(q) { Flags::NSW } else { Flags::NONE };
                 self.bin(BinOp::Add, fl, old, c)
             }
-        };
-        let stored = self.store_lv(new, lv, lv.bf.is_some());
-        Ok(if pre { stored } else { old })
+        })
     }
 
     fn emit_binary(&mut self, e: ExprId) -> R<Option<V>> {
@@ -736,7 +757,7 @@ impl Cg<'_> {
     /// Binary arithmetic, comparison and pointer arithmetic on emitted
     /// operands (`q` is the computation type).
     #[allow(clippy::too_many_arguments)]
-    fn arith(
+    pub(crate) fn arith(
         &mut self,
         e: ExprId,
         op: BinaryOp,
@@ -1141,6 +1162,12 @@ impl Cg<'_> {
         let rv = self.emit_scalar(ca.rhs)?;
         let lv = self.emit_lvalue(l)?;
         let lq = lv.q;
+        if lv.bf.is_none()
+            && let Some(vq) = ast.types.as_atomic(lq)
+        {
+            let v = self.atomic_compound_assign(e, op, lv, vq, rv, rq, ca.lhs_ty, ca.result_ty)?;
+            return Ok((lv, v));
+        }
         let old = self.load_lv(lv);
         let lhs = if ast.types.is_pointer(lq) { old } else { self.conv(old, lq, ca.lhs_ty) };
         let res = self.arith(e, op, lhs, rv, ca.lhs_ty, rq, ca.result_ty)?;
@@ -2200,6 +2227,7 @@ impl Cg<'_> {
                 r
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
+            ExprKind::AtomicExpr => self.emit_atomic_expr(e, Some(dest)).map(|_| ()),
             ExprKind::CXXThrowExpr => self.emit_throw(e, true),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)
@@ -2433,7 +2461,12 @@ impl Cg<'_> {
             return r;
         }
         let v = self.emit_scalar(e)?;
-        self.store_lv(v, lv, false);
+        if lv.bf.is_none() && self.ast.types.as_atomic(lv.q).is_some() {
+            // An initialization of an `_Atomic` object is a plain store.
+            self.store_scalar(v, lv.addr, lv.q);
+        } else {
+            self.store_lv(v, lv, false);
+        }
         Ok(())
     }
 

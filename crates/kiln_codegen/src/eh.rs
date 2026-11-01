@@ -322,7 +322,7 @@ impl Cg<'_> {
         r
     }
 
-    fn call_or_invoke_to(
+    pub(crate) fn call_or_invoke_to(
         &mut self,
         fn_ty: LTy,
         callee: V,

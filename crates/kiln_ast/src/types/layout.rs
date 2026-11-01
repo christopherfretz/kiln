@@ -50,6 +50,9 @@ pub struct TargetTypes {
     pub intptr_t: TypeId,
     /// Size of a data pointer in bytes.
     pub pointer_bytes: u8,
+    /// The widest atomic operation, in bytes, the target inlines (clang
+    /// `MaxAtomicInlineWidth` / 8; 0 for an unknown target).
+    pub max_atomic_inline_bytes: u8,
 }
 
 impl Default for TargetTypes {
@@ -63,6 +66,7 @@ impl Default for TargetTypes {
             ptrdiff_t: TypeId::LONG,
             intptr_t: TypeId::LONG,
             pointer_bytes: 0,
+            max_atomic_inline_bytes: 0,
         }
     }
 }

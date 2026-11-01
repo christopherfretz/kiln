@@ -143,6 +143,13 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The type of `e` as an operand reads it: `T` for an `_Atomic(T)`
+    /// (clang `DefaultLvalueConversion`).
+    pub(crate) fn value_ty(&self, e: ExprId) -> QualType {
+        let t = self.ety(e);
+        self.ast.types.as_atomic(t).unwrap_or(t)
+    }
+
     pub(crate) fn is_integral_or_enum(&self, t: QualType) -> bool {
         self.ast.types.is_integral(t) || self.ast.types.as_enum(t).is_some()
     }
@@ -1612,19 +1619,22 @@ impl Sema<'_, '_> {
             s.emit(msg);
             s.recover_err(&[e], loc)
         };
+        // An `_Atomic(T)` operand is checked as its `T` (the lvalue
+        // conversion strips it, clang `DefaultLvalueConversion`).
+        let tv = self.ast.types.as_atomic(t0).unwrap_or(t0);
         match op {
             UnaryOp::Plus | UnaryOp::Minus => {
-                let ok = self.ast.types.is_arithmetic(t0)
-                    || conv::is_unscoped_enum(self, t0)
+                let ok = self.ast.types.is_arithmetic(tv)
+                    || conv::is_unscoped_enum(self, tv)
                     || (op == UnaryOp::Plus
-                        && (self.ast.types.is_pointer(t0) || self.ast.types.is_array(t0)));
+                        && (self.ast.types.is_pointer(tv) || self.ast.types.is_array(t0)));
                 if !ok {
                     return bad(self, e);
                 }
                 let x = conv::usual_unary_conversions(self, e);
                 let ty = self.ety(x);
                 let flags =
-                    if op == UnaryOp::Plus || self.narrower_than_int(conv::strip_cv(self, t0)) {
+                    if op == UnaryOp::Plus || self.narrower_than_int(conv::strip_cv(self, tv)) {
                         ExprFlags::CANNOT_OVERFLOW
                     } else {
                         ExprFlags::NONE
@@ -1632,7 +1642,7 @@ impl Sema<'_, '_> {
                 self.builder().unary(op, x, ty, loc, flags)
             }
             UnaryOp::Not => {
-                if !(self.ast.types.is_integral(t0) || conv::is_unscoped_enum(self, t0)) {
+                if !(self.ast.types.is_integral(tv) || conv::is_unscoped_enum(self, tv)) {
                     return bad(self, e);
                 }
                 let x = conv::usual_unary_conversions(self, e);
@@ -1743,7 +1753,11 @@ impl Sema<'_, '_> {
     }
 
     fn inc_dec(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
-        let t = self.ety(e);
+        // clang `CheckIncrementDecrementOperand`: an `_Atomic` operand is
+        // checked, and yields, its value type.
+        let operand_t = self.ety(e);
+        let atomic = self.ast.types.as_atomic(operand_t);
+        let t = atomic.unwrap_or(operand_t);
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
         if self.ast.types.builtin(t) == Some(BuiltinType::Bool) {
             let msg = self.diag(DiagId::sema_incdec_bool, loc).arg(if inc { "0" } else { "1" });
@@ -1775,7 +1789,7 @@ impl Sema<'_, '_> {
         }
         let flags =
             if self.narrower_than_int(t) { ExprFlags::CANNOT_OVERFLOW } else { ExprFlags::NONE };
-        let ty = if op.is_postfix() { conv::strip_cv(self, t) } else { t };
+        let ty = if op.is_postfix() || atomic.is_some() { conv::strip_cv(self, t) } else { t };
         let r = self.builder().unary(op, e, ty, loc, flags);
         self.mark_bitfield_if(r, e);
         r
@@ -1897,7 +1911,7 @@ impl Sema<'_, '_> {
             }
             BinaryOp::Add | BinaryOp::Sub => self.additive(op, l, r, loc),
             BinaryOp::Shl | BinaryOp::Shr => {
-                let (lt, rt) = (self.ety(l), self.ety(r));
+                let (lt, rt) = (self.value_ty(l), self.value_ty(r));
                 let int_like = |s: &Self, t: QualType| {
                     s.ast.types.is_integral(t) || conv::is_unscoped_enum(s, t)
                 };
@@ -1921,7 +1935,7 @@ impl Sema<'_, '_> {
                 } else {
                     ArithConvKind::Arithmetic
                 };
-                let (lt, rt) = (self.ety(l), self.ety(r));
+                let (lt, rt) = (self.value_ty(l), self.value_ty(r));
                 let arith = |s: &Self, t: QualType| {
                     s.ast.types.is_arithmetic(t) || conv::is_unscoped_enum(s, t)
                 };
@@ -2020,8 +2034,12 @@ impl Sema<'_, '_> {
     fn compound_assign(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         // The operands are checked as for `E1 op E2` before `E1` is
         // checked to be modifiable (clang's `CreateBuiltinBinOp`).
-        let lt = self.ety(l);
+        // An `_Atomic` target is checked by its value type (clang's
+        // `CreateBuiltinBinOp` via `UsualArithmeticConversions`).
+        let target_t = self.ety(l);
+        let lt = self.ast.types.as_atomic(target_t).unwrap_or(target_t);
         let rt = self.ety(r);
+        let rt = self.ast.types.as_atomic(rt).unwrap_or(rt);
         let (r2, lhs_ty, res_ty) = match op {
             BinaryOp::AddAssign | BinaryOp::SubAssign if self.ast.types.is_pointer(lt) => {
                 if !self.is_integral_or_enum(rt) || conv::is_scoped_enum(self, rt) {
@@ -2095,7 +2113,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[l, r], loc);
         }
-        let res = self.builder().compound_assign(op, l, r2, lt, lhs_ty, res_ty, loc);
+        let res = self.builder().compound_assign(op, l, r2, target_t, lhs_ty, res_ty, loc);
         self.mark_bitfield_if(res, l);
         res
     }

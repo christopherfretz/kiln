@@ -204,6 +204,20 @@ impl Sema<'_, '_> {
             }
             TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
         };
+        // clang `BuildQualifiedType`: the `_Atomic` qualifier makes the
+        // unqualified type atomic and keeps its qualifiers outside.
+        let base = match ds.atomic_qual {
+            Some(aloc) if self.ast.types.as_atomic(base).is_none() => {
+                let q = self.ast.types.effective_quals(base);
+                let un = if q.is_empty() { base } else { self.ast.types.unqualified(base) };
+                match self.act_on_atomic_type(un, aloc) {
+                    Some(t) if q.is_empty() => t,
+                    Some(t) => self.ast.types.qualify(t, q),
+                    None => QualType::ERROR,
+                }
+            }
+            _ => base,
+        };
         let cv = ds.cv;
         if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
     }

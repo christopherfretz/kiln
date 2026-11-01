@@ -1282,6 +1282,29 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   through a member whose (non-NSDMI) default construction is a failed
   consteval constructor call.
 
+### 5.11 Atomics (`builtins/atomic.rs`, WP-154)
+- **Builtins.** `__c11_atomic_*` and `__atomic_*` calls (the ids in
+  `kiln_ast::decl::builtin::atomic`) become an `AtomicExpr`, as clang's
+  `Sema::BuildAtomicExpr`: the pointer operand is checked
+  (`sema_atomic_builtin_must_be_pointer`, `_op_needs_atomic` for the c11
+  forms, `_needs_non_const_atomic`/`_pointer`, incomplete types, `_BitInt`
+  prohibited), the value kind per op (int / int-or-fp / int-ptr-or-fp /
+  trivially copyable), value operands are converted to the value type (or
+  `ptrdiff_t` for pointer arithmetic, or pointers for the generic
+  `__atomic_load`/`store`/`exchange`/`compare_exchange` forms), orders to
+  `int`, and a constant order invalid for the op is
+  `-Watomic-memory-ordering` (`sema_atomic_op_invalid_memory_order`). The
+  result type is clang's (void, the value, or `bool`).
+- **Lvalues of `_Atomic(T)`.** Lvalue-to-rvalue conversion adds
+  `AtomicToNonAtomic`; assignment and initialization from `T` add
+  `NonAtomicToAtomic`. Operand checks of the arithmetic, shift, bitwise,
+  unary and `switch` conditions use the value type (`value_ty`). `++`/`--`
+  and compound assignment are allowed on a modifiable `_Atomic` lvalue
+  and yield an lvalue of `T` (`++`) or `_Atomic(T)` (compound assignment),
+  as clang 19's `decltype` shows. A braced list initializing an `_Atomic`
+  object is `sema_illegal_initializer_type`, as clang.
+- **Not done:** `-Watomic-alignment` (the libcall-size warning).
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit

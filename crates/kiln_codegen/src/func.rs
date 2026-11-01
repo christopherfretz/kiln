@@ -745,13 +745,13 @@ impl Cg<'_> {
     pub fn load_scalar(&mut self, a: Addr, q: QualType) -> V {
         let vol = self.ast.types.effective_quals(q).is_volatile();
         let v = self.load(a.ty, a.v, a.align, vol);
-        if self.is_bool(q) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
+        if self.is_bool_value(q) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
     }
 
     /// clang `EmitStoreOfScalar` (bools are zero-extended to memory).
     pub fn store_scalar(&mut self, v: V, a: Addr, q: QualType) {
         let vol = self.ast.types.effective_quals(q).is_volatile();
-        let v = if self.is_bool(q) && self.f.fir.ty(&self.m, v) == LTy::I1 {
+        let v = if self.is_bool_value(q) && self.f.fir.ty(&self.m, v) == LTy::I1 {
             self.cast(CastOp::ZExt, v, a.ty)
         } else {
             v
