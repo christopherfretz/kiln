@@ -6,6 +6,7 @@ use std::process::ExitCode;
 mod bench;
 mod clang_ast;
 mod diag_split;
+mod features;
 mod gen_pp;
 mod jobs;
 mod libcxx;
@@ -38,6 +39,9 @@ commands:
   libstdcxx   compile each public libstdc++ header alone with kiln and clang++-19 and
               report per-header status (docs/status/libstdcxx.md); informational, not
               part of ci (`cargo xtask libstdcxx --help`; contract in spec/libstdcxx.md)
+  features    check docs/status/cxx-features.md: done rows name passing tests and
+              kiln's __cpp_* values match clang 22's; an M4-gate check, not part of
+              ci (`cargo xtask features --help`; spec/harness.md \"Feature table\")
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
   ci          the merge gate: diag-split --check, fmt --check, clippy -D warnings, cargo test, then the
@@ -58,6 +62,7 @@ fn main() -> ExitCode {
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("libcxx") => libcxx::main(args),
         Some("libstdcxx") => libstdcxx::main(args),
+        Some("features") => features::main(args),
         Some("stress") => stress(args),
         Some("jobserver") => jobs::main(args),
         Some("ci") => ci(args),

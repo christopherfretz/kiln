@@ -21,6 +21,7 @@ sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be na
 sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
 sema_stack_exhausted = Fatal (1) "kiln: stack exhausted during {0:parsing|template instantiation|constant evaluation}; reduce nesting or raise -fkiln-stack-size";
+sema_standalone_tag_qualifier = Error (1) "forward declaration of {0:class|struct|union|enum} cannot have a nested name specifier";
 sema_statement_requires_integer = Error (1) "statement requires expression of integer type ({0} invalid)";
 sema_static_assert_failed = Error (0) "static assertion failed";
 sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";

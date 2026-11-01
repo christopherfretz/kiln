@@ -181,7 +181,16 @@ at once (clang's `pushUndelayed`). Member declarations are not delayed
 The delay point of an explicit instantiation's or explicit specialization's
 declaration drops its checks instead ([temp.spec.general]/6,
 `exempt_next_delayed_access`); its function body, initializer, base-clause and
-member-specification are checked as usual. The template arguments of a
+member-specification are checked as usual, and so is any SFINAE substitution
+it triggers (deduction of the specialization, default template arguments, the
+substituted signature): checks made while the instantiation stack is in a
+SFINAE context are never delayed, so they run in the template's context and
+an inaccessible name is a substitution failure (`candidate template ignored:
+substitution failure [with T = C, U = typename C::P]: 'P' is a private member
+of 'C'`), for an explicit instantiation and for a call in any declaration's
+declarator alike (tests/conformance/temp.explicit/access-in-substitution.cpp).
+A default template argument that was formed but diagnosed is shown in the
+note's argument list, as clang keeps it (`deduce_call.rs`). The template arguments of a
 class-head `X<args>` that declares or defines a specialization (partial or
 explicit) are dropped too ([temp.spec.partial.general]/10); a reference's join
 the enclosing delay point (`end_delayed_access_to_enclosing`). In
@@ -335,13 +344,20 @@ needed within definition of enclosing class 'S' outside of member functions`
 at the use, `S` the outermost lexically enclosing class, with the note
 `default member initializer declared here` at the field's name. The field
 becomes invalid (outside SFINAE), so later uses of it are quiet: an aggregate
-initialization recovers and an implicit constructor's definition fails
-silently (`define.rs` `default_member_init`). Gap: clang meets the unparsed
-initializer first while computing the implicit constructor's exception
-specification (note `in evaluation of exception specification for 'W::X::X'
-needed here`), and later uses of that now-invalid constructor fail
-silently; kiln reports it from the constructor's definition and still
-diagnoses later uses (`undefined constructor`, `no matching constructor`).
+initialization recovers and an implicit constructor's definition skips it
+(`define.rs` `collect_field_init`). An implicit default constructor's
+exception specification ([except.spec]/8), resolved before the constructor is
+defined (`mark_function_referenced`, also for `noexcept(X())` and the
+`__is_nothrow_*` traits), meets the unparsed initializers first
+(`excspec.rs` `exc_spec_needs_unparsed_inits`, clang's
+`SpecialMemberExceptionSpecInfo`): each such field of the class is diagnosed
+at the constructor's location, the diagnostic not deduplicated (one per
+field), under a single context note `in evaluation of exception
+specification for 'W::X::X' needed here` at the use (`SynthKind::
+ExceptionSpec`, note `note_exception_spec_evaluation_here`); the fields are
+then invalid, so the definition, its constant evaluation and the enclosing
+class's implicit default constructor raise nothing more. These fields are
+reported before the bases are visited (clang visits the bases first).
 
 ### 2.8 Unions and variant members
 [class.union]: at most one variant member has an NSDMI or appears in a

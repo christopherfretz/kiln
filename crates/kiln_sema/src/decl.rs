@@ -2485,6 +2485,21 @@ impl Sema<'_, '_> {
         } else {
             self.find_prev_function(dname, d.qualifier, new_fn)
         };
+        // [dcl.link]/6: a C-linkage function of another scope.
+        let mut extern_c_redecl = false;
+        let prev = match prev {
+            None if !method
+                && !friend
+                && d.qualifier.is_none()
+                && self.templ.cur.is_none()
+                && dname.as_ident().is_some() =>
+            {
+                let p = self.extern_c_prev(name, false, d.name_loc());
+                extern_c_redecl = p.is_some();
+                p
+            }
+            p => p,
+        };
         let matches_member = prev.is_some_and(|p| {
             self.kind_of(p) == DeclKind::CXXMethod
                 && self.ast.decls.get(p).ty().is_some()
@@ -2624,6 +2639,9 @@ impl Sema<'_, '_> {
                     };
                     let msg = if same_params {
                         self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc())
+                    } else if extern_c_redecl {
+                        invalid_redecl = true;
+                        self.diag(DiagId::sema_conflicting_types, d.name_loc()).arg(fname.clone())
                     } else {
                         self.diag(DiagId::sema_ovl_static_nonstatic_member, d.name_loc())
                     };
@@ -2718,6 +2736,9 @@ impl Sema<'_, '_> {
         }
         if d.op_name.is_none() && d.lit_suffix.is_none() {
             self.note_local_extern(name, f);
+            if !method && !friend && d.qualifier.is_none() {
+                self.record_extern_c(name, f);
+            }
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
@@ -3299,6 +3320,11 @@ impl Sema<'_, '_> {
             None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
         };
+        // [dcl.link]/6-7: a C-linkage variable of another scope.
+        let prev = match prev {
+            None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
+            p => p,
+        };
         if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             let block = local.is_some() && self.in_local_scope();
@@ -3374,6 +3400,9 @@ impl Sema<'_, '_> {
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
             self.note_local_extern(name, v);
+        }
+        if d.qualifier.is_none() {
+            self.record_extern_c(name, v);
         }
         v
     }
@@ -3574,6 +3603,13 @@ impl Sema<'_, '_> {
             return;
         }
         if self.reject_incomplete_array_init(v, ty, loc, &init) {
+            return;
+        }
+        // clang `AddInitializerToDecl`'s `RequireCompleteType`: a class
+        // template specialization failing to instantiate here leaves the
+        // variable invalid, quietly.
+        if self.invalid_by_failed_spec(v, ty, loc) {
+            self.discard_initializer(&init);
             return;
         }
         // A variable names itself, even when declared inside the
@@ -4037,16 +4073,7 @@ impl Sema<'_, '_> {
         if spec.storage() == VarStorage::Extern {
             return;
         }
-        // clang checks (and names) the element type of a bounded array.
-        let elem = self.bounded_array_element(ty);
-        if !self.require_complete(elem, self.ast.decls.get(v).loc()) {
-            let msg = if self.ast.types.is_void(elem) {
-                self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(elem))
-            } else {
-                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(elem))
-            };
-            self.emit(self.incomplete_note(msg, elem));
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        if self.uninit_incomplete(v, ty, loc) {
             return;
         }
         let quals = self.ast.types.effective_quals(ty);
@@ -4151,6 +4178,11 @@ impl Sema<'_, '_> {
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            // clang `CheckParmsForFunctionDef`: a parameter whose class
+            // template specialization fails to instantiate is invalid.
+            if self.invalid_by_failed_spec(p, pty, self.ast.decls.get(p).loc()) {
+                continue;
+            }
             if !self.require_complete(pty, self.ast.decls.get(p).loc())
                 && !self.ast.types.is_reference(pty)
                 && !self.is_error_type(pty)
@@ -4309,6 +4341,7 @@ impl Sema<'_, '_> {
         use_: TagUse,
         templ: bool,
         opaque_enum: bool,
+        nloc: Loc,
     ) -> Vec<DeclId> {
         match (qualifier, use_) {
             (None, _) if templ => self
@@ -4327,7 +4360,17 @@ impl Sema<'_, '_> {
                 .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
                 .collect(),
             (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
-            (None, TagUse::Reference) if !opaque_enum => self.lookup_name(n, LookupKind::Tag).decls,
+            // `struct X *p;` naming tags of two namespaces, e.g. an inline
+            // namespace's and its parent's ([namespace.def.general]/7,
+            // [basic.lookup.general]/1): clang's `err_ambiguous_reference`,
+            // recovering with the last tag found.
+            (None, TagUse::Reference) if !opaque_enum => {
+                let found = self.lookup_name(n, LookupKind::Tag);
+                if self.is_ambiguous_lookup(&found) {
+                    self.diagnose_ambiguous_reference(DeclName::ident(n), &found.decls, true, nloc);
+                }
+                found.decls
+            }
             (None, _) => self
                 .lookup_current_scope(n)
                 .into_iter()
@@ -4385,6 +4428,7 @@ impl Sema<'_, '_> {
                 let t = self.this_class_type(q);
                 format!("'{}'", self.ty_str(t))
             }
+            DeclKind::Namespace | DeclKind::TranslationUnit => self.qualifier_desc(q),
             _ => format!("'{}'", self.decl_name(q)),
         };
         let msg = self
@@ -4485,6 +4529,56 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// An uninitialized definition of `v` whose type `ty` (for a bounded
+    /// array, its element type, which clang checks and names) is
+    /// incomplete or fails to instantiate: reported, and `v` is invalid.
+    fn uninit_incomplete(&mut self, v: DeclId, ty: QualType, loc: Loc) -> bool {
+        let elem = self.bounded_array_element(ty);
+        let vloc = self.ast.decls.get(v).loc();
+        if self.invalid_by_failed_spec(v, elem, vloc) {
+            return true;
+        }
+        if self.require_complete(elem, vloc) {
+            return false;
+        }
+        let msg = if self.ast.types.is_void(elem) {
+            self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(elem))
+        } else {
+            self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(elem))
+        };
+        self.emit(self.incomplete_note(msg, elem));
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        true
+    }
+
+    /// A variable or parameter `d` of (non-reference) type `ty` whose class
+    /// template specialization fails to instantiate at `loc` is marked
+    /// invalid, quietly (clang's `RequireCompleteType` recovery).
+    fn invalid_by_failed_spec(&mut self, d: DeclId, ty: QualType, loc: Loc) -> bool {
+        if self.ast.types.is_reference(ty) || !self.instantiation_fails(ty, loc) {
+            return false;
+        }
+        self.ast.decls.set_flags(d, DeclFlags::INVALID);
+        true
+    }
+
+    /// `struct N::X;` outside an explicit specialization or instantiation
+    /// ([dcl.type.elab]/1, [dcl.enum]/1: a standalone class or opaque enum
+    /// declaration cannot be qualified); clang's
+    /// `err_standalone_class_nested_name_specifier` at the qualifier.
+    pub fn check_standalone_tag_qualifier(&mut self, keyword: TagKeyword, qual_loc: Loc) {
+        if self.at_explicit_head() || self.templ.member_spec.is_some() {
+            return;
+        }
+        let kind = match keyword {
+            TagKeyword::Class => 0u8,
+            TagKeyword::Union => 2,
+            TagKeyword::Enum => 3,
+            _ => 1,
+        };
+        self.emit(self.diag(DiagId::sema_standalone_tag_qualifier, qual_loc).arg(kind));
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -4513,7 +4607,8 @@ impl Sema<'_, '_> {
                 self.check_template_param_shadow(n, nloc);
             }
             let opaque_enum = is_enum && fixed.is_some();
-            let found = self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum);
+            let found =
+                self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc);
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);

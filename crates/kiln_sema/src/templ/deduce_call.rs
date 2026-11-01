@@ -505,7 +505,18 @@ impl Sema<'_, '_> {
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
                 Some((Ok(a), Ok(()))) => d.args[j] = a,
-                Some((_, failed)) => {
+                Some((formed, failed)) => {
+                    // A default that was formed but diagnosed (an
+                    // inaccessible `typename T::P`) is shown with the
+                    // failure, as clang keeps it in the deduced list.
+                    let shown = match formed {
+                        Ok(a) => {
+                            let mut with = prior.clone();
+                            with.push(a);
+                            self.ast.types.arg_list(&with)
+                        }
+                        Err(()) => shown,
+                    };
                     let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                     f.args = Some(shown);
                     f.diag = failed.err().flatten();

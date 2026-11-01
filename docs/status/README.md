@@ -9,5 +9,7 @@
 
 libstdc++ consumption track (WP-188): [libstdcxx.md](libstdcxx.md), every public GCC 14 libstdc++ header as a one-line TU (`cargo xtask libstdcxx`): 39/109 ok at c++26, 44/109 at c++20; blocker clusters with corpus repros.
 
+C++23/C++26 language features (M4 checklist): [cxx-features.md](cxx-features.md), checked by `cargo xtask features`.
+
 Harness through kiln: 565/575 pass, 8 xfail (among them the 5 header-dependent `run` tests: `decltype` in libstdc++'s c++config.h), 2 fail (reflection, contracts).
 Workspace: ~1,400 Rust tests across 12 crates, all `#![forbid(unsafe_code)]`.

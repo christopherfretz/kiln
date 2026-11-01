@@ -200,6 +200,12 @@ pub struct InstantiationStack {
     /// The stack depth at which the context was last printed; 0 = never
     /// (clang's `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) last_emitted: Cell<u32>,
+    /// The pattern member a class instantiation is substituting now
+    /// (`DeclId::index`, 0 = none), mixed into [`Self::context_key`]: clang
+    /// substitutes each declarator of `typedef typename T::type g, (*h)(...)`
+    /// on its own and reports a shared decl-specifier error once per
+    /// declarator ([temp.inst]/3; spec/sema-templates.md §10.2).
+    pub(crate) member_salt: u32,
 }
 
 impl InstantiationStack {
@@ -241,6 +247,9 @@ impl InstantiationStack {
         let mut h = FxHasher::default();
         for f in &self.frames {
             (f.kind, f.entity, f.args, f.poi).hash(&mut h);
+        }
+        if self.member_salt != 0 {
+            self.member_salt.hash(&mut h);
         }
         // 0 means "no context"; keep it reserved.
         h.finish().max(1)
