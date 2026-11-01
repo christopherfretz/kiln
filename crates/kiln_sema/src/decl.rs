@@ -2757,6 +2757,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Checks the expressions of an initializer that will not initialize
+    /// anything (the variable is invalid).
+    fn discard_initializer(&mut self, init: &Initializer) {
+        let es = match init {
+            Initializer::Expr(e) => vec![*e],
+            Initializer::Paren(es, ..) => es.clone(),
+            Initializer::List(l) => Self::list_exprs(l),
+        };
+        for e in es {
+            self.act_on_full_expr(e);
+        }
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -2794,14 +2807,7 @@ impl Sema<'_, '_> {
             self.ast.decls.set_ty(v, ty);
             if self.is_error_type(ty) {
                 self.ast.decls.set_flags(v, DeclFlags::INVALID);
-                let es = match &init {
-                    Initializer::Expr(e) => vec![*e],
-                    Initializer::Paren(es, ..) => es.clone(),
-                    Initializer::List(l) => Self::list_exprs(l),
-                };
-                for e in es {
-                    self.act_on_full_expr(e);
-                }
+                self.discard_initializer(&init);
                 return;
             }
         }
@@ -2820,14 +2826,7 @@ impl Sema<'_, '_> {
                 let msg = self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty));
                 self.emit(msg);
                 self.ast.decls.set_flags(v, DeclFlags::INVALID);
-                let es = match &init {
-                    Initializer::Expr(e) => vec![*e],
-                    Initializer::Paren(es, ..) => es.clone(),
-                    Initializer::List(l) => Self::list_exprs(l),
-                };
-                for e in es {
-                    self.act_on_full_expr(e);
-                }
+                self.discard_initializer(&init);
                 return;
             }
         }

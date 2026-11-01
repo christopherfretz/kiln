@@ -40,7 +40,7 @@ impl Substituter<'_, '_, '_> {
         let kw = match rec.tag {
             TagKind::Class => TagKeyword::Class,
             TagKind::Union => TagKeyword::Union,
-            _ => TagKeyword::Struct,
+            TagKind::Struct => TagKeyword::Struct,
         };
         let anonymous = rec.defn.contains(DefinitionBits::ANONYMOUS);
         let parent = self.entity;

@@ -1251,43 +1251,56 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             if !stop {
                 self.expect(Punct::ColonColon);
             }
-            let prefix_nns = qual.map(|q| q.1);
-            qual = Some(match (class, qual) {
-                (NameClass::TypeTemplate(d), _) if !dep_prefix => {
-                    let tn = self.s.template_name_for(d);
-                    let Ok(kiln_sema::templ::actions::TemplateIdRef::Type(ty)) =
-                        self.s.act_template_id(tn, &args, loc, loc)
-                    else {
-                        return Err(());
-                    };
-                    self.s
-                        .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, loc)
-                        .ok_or(())?
-                }
-                (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
-                    let list = self.s.ast.types.arg_list(&args);
-                    let ty = self.s.act_dependent_name(
-                        pn,
-                        name,
-                        Some(list),
-                        kiln_ast::types::TagKeyword::None,
-                    );
-                    self.s
-                        .act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc)
-                        .ok_or(())?
-                }
-                _ => {
-                    let text = self.s.ast.symbols().as_str(name).to_owned();
-                    let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
-                    self.emit(d);
-                    return Err(());
-                }
-            });
+            qual =
+                Some(self.nested_name_template_id(class, qual, name, &args, template_kw, loc)?);
             if stop {
                 break;
             }
         }
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
+    }
+
+    /// The `name<args>::` component of a nested-name-specifier after `qual`.
+    fn nested_name_template_id(
+        &mut self,
+        class: NameClass,
+        qual: Option<(DeclId, NnsId)>,
+        name: Symbol,
+        args: &[kiln_ast::types::TemplateArg],
+        template_kw: bool,
+        loc: Loc,
+    ) -> Result<(DeclId, NnsId), ()> {
+        let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
+        let prefix_nns = qual.map(|q| q.1);
+        Ok(match (class, qual) {
+            (NameClass::TypeTemplate(d), _) if !dep_prefix => {
+                let tn = self.s.template_name_for(d);
+                let Ok(kiln_sema::templ::actions::TemplateIdRef::Type(ty)) =
+                    self.s.act_template_id(tn, args, loc, loc)
+                else {
+                    return Err(());
+                };
+                self.s
+                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, loc)
+                    .ok_or(())?
+            }
+            (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
+                let list = self.s.ast.types.arg_list(args);
+                let ty = self.s.act_dependent_name(
+                    pn,
+                    name,
+                    Some(list),
+                    kiln_ast::types::TagKeyword::None,
+                );
+                self.s.act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc).ok_or(())?
+            }
+            _ => {
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
+                self.emit(d);
+                return Err(());
+            }
+        })
     }
 }
 
