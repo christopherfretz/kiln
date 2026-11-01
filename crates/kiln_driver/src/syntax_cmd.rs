@@ -5,15 +5,19 @@
 //! AST dumps (`spec/driver.md` "Syntax checking", `spec/ast-dump.md`,
 //! `spec/abi.md` §8).
 
+use std::cell::RefCell;
 use std::io::Write as _;
+use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use kiln_ast::dump::{DumpOptions, Filter, dump};
-use kiln_diag::{Diag, DiagEngine, DiagId};
+use kiln_diag::verify::{FileLookup, Verifier, VerifyOptions};
+use kiln_diag::{Diag, DiagEngine, DiagId, MemorySink};
 use kiln_lex::Interner;
 use kiln_parse::{ParseOptions, parse_preprocessed};
 use kiln_sema::target::Target;
-use kiln_source::{FileId, SourceManager, Span};
+use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::make_engine;
 use crate::pp_cmd::{Job, JobResult, PpInputs};
@@ -55,6 +59,9 @@ impl SyntaxJob<'_> {
     pub fn run(self) -> JobResult {
         use std::io::Write as _;
         let job = &self.0;
+        if let Some(v) = &job.args.verify {
+            return self.run_verify(v.clone());
+        }
         let sm = SourceManager::new();
         // The preprocessor and the AST share the interner; it outlives
         // the engine.
@@ -62,7 +69,7 @@ impl SyntaxJob<'_> {
         let engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
         let mut result = JobResult::default();
         if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-            self.parse(&sm, &engine, &interner, inputs, &mut result);
+            self.parse(&sm, &engine, &interner, inputs, None, &mut result);
         }
         engine.flush();
         if let Some(s) = engine.summary()
@@ -75,12 +82,49 @@ impl SyntaxJob<'_> {
         result
     }
 
-    fn parse<'sm>(
+    /// `-verify` (spec/driver.md "-verify", spec/diag.md §11): the
+    /// diagnostics are buffered, the comments scanned as the
+    /// preprocessor lexes them, and only the verifier's report printed.
+    fn run_verify(self, opts: VerifyOptions) -> JobResult {
+        let job = &self.0;
+        let sm = SourceManager::new();
+        let interner = Arc::new(Interner::new());
+        let sink = MemorySink::new();
+        let engine = DiagEngine::new(&sm, job.diag_opts, sink.clone());
+        let mut result = JobResult::default();
+        let mut verifier = None;
+        if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+            let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
+            let v = Verifier::new(&sm, opts.clone(), Some(inputs.main), quoted_lookup(dirs));
+            let v = Rc::new(RefCell::new(v));
+            self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result);
+            verifier = Some(v);
+        }
+        let verifier = verifier
+            .unwrap_or_else(|| Rc::new(RefCell::new(Verifier::new(&sm, opts, None, Box::new(|_, _, _| None)))));
+        verifier.borrow_mut().finish(&engine);
+        engine.flush();
+        let report = verifier.borrow().check(&sink.take());
+        let out = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
+        report.emit(&out);
+        out.flush();
+        if let Some(s) = report.summary()
+            && job.diag_opts.format == kiln_diag::Format::Text
+        {
+            let mut err = job.stderr.clone();
+            let _ = writeln!(err, "{s}");
+        }
+        result.errors = report.problems;
+        result
+    }
+
+    fn parse<'sm, 'e>(
         &self,
         sm: &'sm SourceManager,
-        engine: &DiagEngine<'sm>,
+        engine: &'e DiagEngine<'sm>,
         interner: &'sm Arc<Interner>,
         inputs: PpInputs,
+        verify: Option<&Rc<RefCell<Verifier<'sm>>>>,
         result: &mut JobResult,
     ) {
         let job = &self.0;
@@ -105,9 +149,14 @@ impl SyntaxJob<'_> {
             return;
         };
         // `-MD` with `-fsyntax-only` is rejected before this (no deps).
-        let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs, true) else {
+        let Some((mut pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
+        else {
             return;
         };
+        if let Some(v) = verify {
+            let v = Rc::clone(v);
+            pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
+        }
         let popts = ParseOptions {
             std: job.std.lex,
             gnu: job.std.gnu,
@@ -143,4 +192,24 @@ impl SyntaxJob<'_> {
             }
         }
     }
+}
+
+/// clang `Preprocessor::LookupFile` for a quoted name, as `-verify`'s
+/// `@<file>:<line>` uses it: the directory of the file holding the
+/// directive, then the search list; an absolute name as is.
+fn quoted_lookup<'a>(dirs: Vec<String>) -> FileLookup<'a> {
+    Box::new(move |sm: &SourceManager, at: Loc, name: &str| {
+        let path = Path::new(name);
+        if path.is_absolute() {
+            return sm.load_file(path).ok();
+        }
+        let here = sm
+            .offset_of(at)
+            .map(|(f, _)| Path::new(sm.file_name(f)).parent().unwrap_or(Path::new("")).to_owned());
+        here.into_iter()
+            .chain(dirs.iter().map(|d| Path::new(d).to_owned()))
+            .map(|d| d.join(path))
+            .find(|p| p.is_file())
+            .and_then(|p| sm.load_file(&p).ok())
+    })
 }

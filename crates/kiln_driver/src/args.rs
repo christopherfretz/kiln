@@ -180,6 +180,9 @@ pub enum ArgError {
     MissingValue(String),
     /// An option with a bad value: `(option as written, value)`.
     InvalidValue(String, String),
+    /// A `-verify=` prefix that is not a letter followed by letters,
+    /// digits, `-` and `_`.
+    InvalidVerifyPrefix(String),
     /// `-stdlib=` with an unknown library.
     InvalidStdlib(String),
     /// An option with a bad integer value: `(argument, value)`.
@@ -205,6 +208,10 @@ pub struct Args {
     /// (`-fsyntax-only`; clang's `-Xclang` options of those names): the
     /// layout of every complete class, spec/driver.md.
     pub dump_record_layouts: bool,
+    /// `-verify[=<prefixes>]` (clang's `-Xclang` option; `-fsyntax-only`):
+    /// check the diagnostics against `expected-*` comments, spec/driver.md
+    /// "-verify". `None` without `-verify`, or with an invalid prefix.
+    pub verify: Option<kiln_diag::verify::VerifyOptions>,
     /// `-fdump-vtable-layouts` (`-fsyntax-only`; clang's `-Xclang` option
     /// of that name): the vtable group of every complete dynamic class,
     /// spec/driver.md.
@@ -313,10 +320,24 @@ impl Args {
     pub fn parse(argv: &[String]) -> Args {
         let mut a = Args { argv: argv.to_vec(), ..Args::default() };
         let mut x: Option<Lang> = None;
+        let mut verify = VerifyRaw::default();
         let mut i = 0;
         while i < argv.len() {
-            let arg = argv[i].as_str();
+            let mut arg = argv[i].as_str();
             i += 1;
+            // `-Xclang <arg>`: kiln has no separate frontend command line;
+            // the argument is parsed like any other.
+            if arg == "-Xclang" {
+                let Some(next) = argv.get(i) else {
+                    a.errors.push(ArgError::MissingValue(arg.to_owned()));
+                    continue;
+                };
+                arg = next.as_str();
+                i += 1;
+            }
+            if verify.parse_arg(arg) {
+                continue;
+            }
             if arg == "-" || !arg.starts_with('-') {
                 a.inputs.push(Input { path: arg.to_owned(), lang: x });
                 continue;
@@ -339,6 +360,7 @@ impl Args {
                 a.errors.push(ArgError::Unknown(arg.to_owned()));
             }
         }
+        a.verify = verify.finish(&mut a.errors);
         a
     }
 
@@ -509,6 +531,73 @@ impl Args {
         } else {
             false
         }
+    }
+}
+
+/// The `-verify` family as given (clang `ParseDiagnosticArgs`).
+#[derive(Default)]
+struct VerifyRaw {
+    /// `-verify` or `-verify=` seen.
+    on: bool,
+    /// Plain `-verify` seen (adds the `expected` prefix).
+    bare: bool,
+    /// The `-verify=` values, comma-split, in order.
+    prefixes: Vec<String>,
+    /// `-verify-ignore-unexpected[=...]`.
+    ignore: [bool; 4],
+    /// Invalid `-verify-ignore-unexpected=` values, reported after the
+    /// prefix errors (clang's `ParseDiagnosticArgs` order).
+    bad_levels: Vec<String>,
+}
+
+impl VerifyRaw {
+    fn parse_arg(&mut self, arg: &str) -> bool {
+        use kiln_diag::verify::VerifyLevel;
+        if arg == "-verify" {
+            (self.on, self.bare) = (true, true);
+        } else if let Some(v) = arg.strip_prefix("-verify=") {
+            self.on = true;
+            self.prefixes.extend(v.split(',').map(str::to_owned));
+        } else if arg == "-verify-ignore-unexpected" {
+            self.ignore = [true; 4];
+        } else if let Some(v) = arg.strip_prefix("-verify-ignore-unexpected=") {
+            for level in v.split(',') {
+                match VerifyLevel::from_name(level) {
+                    Some(l) => self.ignore[l as usize] = true,
+                    None => self.bad_levels.push(level.to_owned()),
+                }
+            }
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// clang `checkVerifyPrefixes`: an invalid prefix is an error and
+    /// turns `-verify` off.
+    fn finish(mut self, errors: &mut Vec<ArgError>) -> Option<kiln_diag::verify::VerifyOptions> {
+        if self.bare {
+            self.prefixes.push("expected".to_owned());
+        }
+        let mut ok = self.on;
+        for p in &self.prefixes {
+            if !kiln_diag::verify::VerifyOptions::is_valid_prefix(p) {
+                errors.push(ArgError::InvalidVerifyPrefix(p.clone()));
+                ok = false;
+            }
+        }
+        for level in self.bad_levels.drain(..) {
+            errors.push(ArgError::InvalidFlagValue("-verify-ignore-unexpected=".to_owned(), level));
+        }
+        if !ok {
+            return None;
+        }
+        self.prefixes.sort();
+        self.prefixes.dedup();
+        Some(kiln_diag::verify::VerifyOptions {
+            prefixes: self.prefixes,
+            ignore_unexpected: self.ignore,
+        })
     }
 }
 

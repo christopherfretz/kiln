@@ -115,7 +115,8 @@ Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -isysroot --sysroot -resource-dir -stdlib= --target= --embed-dir= -M -MM
 -MD -MMD -MF -MT -MQ -MP -W... -w -pedantic -ferror-limit=
 -fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
--fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -fconstexpr-steps=
+-fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -verify[=<prefixes>]
+-verify-ignore-unexpected[=<levels>] -Xclang <arg> -fconstexpr-steps=
 -fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
 -fconstexpr-report= -ftemplate-depth= -ftemplate-backtrace-limit=
 -fkiln-instantiation-report[=all|json] -fkiln-stack-size= -c -S -emit-llvm -O<n> -g (ignored) -l -L -Wl,
@@ -141,6 +142,12 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         }
         ArgError::InvalidFlagValue(a, v) => {
             Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(v)
+        }
+        ArgError::InvalidVerifyPrefix(p) => {
+            Diag::new(DiagId::drv_invalid_value, Span::INVALID)
+                .arg("-verify=")
+                .arg(p)
+                .note(DiagId::drv_verify_prefix_spelling, Span::INVALID)
         }
     };
     d.emit(engine);
@@ -232,7 +239,9 @@ fn check_action(args: &Args, drv: &DiagEngine<'_>) {
         .or((action != Action::SyntaxOnly && args.dump_record_layouts)
             .then_some("-fdump-record-layouts without -fsyntax-only"))
         .or((action != Action::SyntaxOnly && args.dump_vtable_layouts)
-            .then_some("-fdump-vtable-layouts without -fsyntax-only"));
+            .then_some("-fdump-vtable-layouts without -fsyntax-only"))
+        .or((action != Action::SyntaxOnly && args.verify.is_some())
+            .then_some("-verify without -fsyntax-only"));
     if let Some(what) = not_impl {
         Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg(what).emit(drv);
     }
