@@ -160,7 +160,10 @@ pub fn clang_ir(name: &str) -> Option<String> {
     let clang = missing("clang")?;
     let out = Command::new(clang)
         .current_dir(cprogs_dir())
+        // `-moutline-atomics`: clang's default depends on the host's GCC
+        // installation (see kiln_codegen's ir_vs_clang `pinned_flags`).
         .args(["-S", "-emit-llvm", "-O0", "-fno-ident", "--target=aarch64-unknown-linux-gnu"])
+        .arg("-moutline-atomics")
         .arg(format!("{name}.c"))
         .args(["-o", "-"])
         .output()

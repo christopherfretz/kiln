@@ -276,6 +276,10 @@ pub struct Args {
     pub opt_flag: Option<String>,
     /// `-###`: print the commands instead of running them.
     pub print_commands: bool,
+    /// `-m[no-]outline-atomics` (the last wins): AArch64's
+    /// `+outline-atomics` target feature; ignored on x86-64. `None` is the
+    /// target's default (on, as clang 19 on an AArch64 Linux host).
+    pub outline_atomics: Option<bool>,
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -380,6 +384,8 @@ impl Args {
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
             "-###" => self.print_commands = true,
+            "-moutline-atomics" => self.outline_atomics = Some(true),
+            "-mno-outline-atomics" => self.outline_atomics = Some(false),
             // Debug information is not generated (spec/codegen.md §5).
             "-g" | "-g0" | "-g1" | "-g2" | "-g3" | "-ggdb" | "-ggdb0" | "-ggdb1" | "-ggdb2"
             | "-ggdb3" => {}
@@ -615,6 +621,14 @@ mod tests {
         assert_eq!(a.predef.pic, Some(PicModel::Pic(2)));
         assert!(a.predef.pthread);
         assert_eq!(a.errors, []);
+    }
+
+    #[test]
+    fn outline_atomics_last_wins() {
+        assert_eq!(parse("a.cpp").outline_atomics, None);
+        assert_eq!(parse("-mno-outline-atomics a.cpp").outline_atomics, Some(false));
+        let a = parse("-mno-outline-atomics -moutline-atomics a.cpp");
+        assert_eq!((a.outline_atomics, a.errors), (Some(true), vec![]));
     }
 
     #[test]
