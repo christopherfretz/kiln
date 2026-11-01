@@ -940,7 +940,8 @@ impl Sema<'_, '_> {
                     l.items.truncate(1);
                     self.init_from_list_at(p.ty, &l, Some(p.loc))
                 } else {
-                    self.init_list_entity(p.ty, &l, p.loc)
+                    let note = Some(self.param_info_note(p));
+                    self.init_list_entity(p.ty, &l, p.loc, ConvCtx::Argument, note)
                 }
             }
             Initializer::Expr(e) => {
@@ -1003,13 +1004,17 @@ impl Sema<'_, '_> {
 
     /// Attaches clang's "passing argument to parameter 'p' here" note.
     pub(crate) fn with_param_note(&self, d: kiln_diag::Diag, p: &ParamInfo) -> kiln_diag::Diag {
-        let note = match p.name {
+        d.with_note(self.param_info_note(p))
+    }
+
+    /// The "passing argument to parameter here" note for `p`.
+    fn param_info_note(&self, p: &ParamInfo) -> kiln_diag::Diag {
+        match p.name {
             None => self.diag(DiagId::note_parameter_here, p.loc),
             Some((n, _)) => self
                 .diag(DiagId::note_parameter_named_here, p.loc)
                 .arg(self.ast.symbols().as_str(n).to_string()),
-        };
-        d.with_note(note)
+        }
     }
 
     /// clang's "passing argument to parameter 'p' here" note (the name is

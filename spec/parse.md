@@ -399,6 +399,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (sema.md §4.3); a member's exception specification and trailing
     return type are bracketed by `act_on_start_this_scope` /
     `act_on_end_this_scope`.
+    An unnamed parameter (and an abstract `for`-range or condition
+    declarator) is located where its name would be (`set_abstract_loc`,
+    clang `ParseDirectDeclarator`): the first array bound, else the token
+    after the declarator.
   - `-> type-id` after the exception specification is a trailing
     return type (`Chunk::Function::trailing`), required with a
     leading `auto` and diagnosed otherwise by Sema.

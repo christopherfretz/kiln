@@ -544,7 +544,7 @@ impl Sema<'_, '_> {
         // the parameter ([dcl.init.list]).
         if let Some(l) = self.take_braced_arg(e) {
             let to = if self.ast.types.is_reference(ty) { ty } else { conv::strip_cv(self, ty) };
-            return self.init_list_entity(to, &l, l.lbrace);
+            return self.init_list_entity(to, &l, l.lbrace, ctx, None);
         }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
@@ -2659,7 +2659,14 @@ impl Sema<'_, '_> {
     /// The note details the candidate's bad conversion sequence (clang
     /// `DiagnoseBadConversion`: a temporary's referent, an lvalue
     /// required, lost qualifiers).
-    fn bad_argument(&mut self, d: DeclId, callee: ExprId, a: ExprId, pt: QualType, i: usize) {
+    pub(crate) fn bad_argument(
+        &mut self,
+        d: DeclId,
+        callee: ExprId,
+        a: ExprId,
+        pt: QualType,
+        i: usize,
+    ) {
         let msg = self
             .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
             .arg(self.decl_name(d));
@@ -2955,6 +2962,7 @@ impl Sema<'_, '_> {
                     callee,
                     &l,
                     params[i],
+                    (i, pdecls.get(i).copied()),
                 )?);
                 continue;
             }

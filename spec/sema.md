@@ -1318,6 +1318,15 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived
     class type is initialized from that element ([dcl.init.list]/3.2)
+  - a non-class `T` list-initialized from one class-type element (or
+    `bool` from `nullptr`) is initialized from the element itself
+    (`class_element_list_init`; clang's core-24034 rewrite in
+    `TryListInitialization`): direct-initialization for a direct list
+    (an explicit conversion function is a candidate), failures at the
+    entity (variable name, `T` of `T{e}`, the `{` of an argument or
+    return value; an argument adds its "passing argument" note), no
+    `-Wbraced-scalar-init`, and narrowing checked on the user
+    conversion's result
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
@@ -1345,7 +1354,10 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   - Viability follows [over.ics.list]: a scalar takes at most one
     unbraced, convertible element; an aggregate at most as many
     elements as brace elision reaches. A non-viable list is clang's
-    `cannot convert initializer list argument to 'T'` candidate note.
+    `cannot convert initializer list argument to 'T'` candidate note,
+    except that a single class-type element for a non-class parameter
+    notes the element's own conversion ([over.ics.list]/10: `no known
+    conversion from 'N' to 'int' for 1st argument`).
   - A list for the ellipsis of a variadic function is an error.
 - **`return {...};`** ([stmt.return]/2, `act_on_return_list`):
   copy-list-initialization of the returned object.

@@ -1639,6 +1639,22 @@ impl Parser<'_, '_> {
     /// ([dcl.fct]/1) after the `(` (and `act_on_start_prototype`), up to
     /// the `)`: the parameters and whether `...` ends the list. With
     /// `delay_args`, default arguments are saved in `late_fn`.
+    /// An abstract declarator's identifier location is where the name
+    /// would be (clang `ParseDirectDeclarator`): the first array bound,
+    /// else the token after the declarator. Named declarators keep theirs.
+    pub(crate) fn set_abstract_loc(&self, d: &mut Declarator) {
+        if d.name.is_none() && d.special.is_none() && d.decomp.is_none() {
+            d.loc = d
+                .chunks
+                .iter()
+                .find_map(|c| match c {
+                    Chunk::Array { loc, .. } => Some(*loc),
+                    _ => None,
+                })
+                .unwrap_or_else(|| self.loc());
+        }
+    }
+
     pub(crate) fn parse_param_clause(
         &mut self,
         d: &mut Declarator,
@@ -1674,6 +1690,7 @@ impl Parser<'_, '_> {
             let saved = std::mem::replace(&mut self.pack_hint, hint);
             self.parse_declarator(&mut pd);
             self.pack_hint = saved;
+            self.set_abstract_loc(&mut pd);
             if placeholder && !ds.invalid {
                 // An abbreviated function template's invented parameter
                 // ([dcl.fct]/22).

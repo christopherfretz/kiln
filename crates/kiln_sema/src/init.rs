@@ -339,6 +339,14 @@ impl Sema<'_, '_> {
                     return e;
                 }
                 let style = if direct_list { InitStyle::DirectList } else { InitStyle::CopyList };
+                let ctx = if direct_list {
+                    ConvCtx::DirectInitialization
+                } else {
+                    ConvCtx::Initialization
+                };
+                if let Some(e) = self.class_element_list_init(ty, &l, ctx, loc, None) {
+                    return e;
+                }
                 if self.ast.types.is_reference(ty) {
                     return self.reference_list_init(ty, &l, Some(loc), style);
                 }
@@ -429,12 +437,86 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// [dcl.init.list]/3.9 for a single class-type element of a non-class
+    /// `ty` (or `nullptr` for `bool`): clang initializes from the element
+    /// itself (`TryListInitialization`'s core-24034 rewrite), so a direct
+    /// list may use an explicit conversion function, a failure is reported
+    /// at the entity `at` (with the "passing argument" note `param`) and not
+    /// as a braced scalar, and the user conversion's second standard
+    /// conversion must not narrow. `None` if the rule does not apply.
+    pub(crate) fn class_element_list_init(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        ctx: ConvCtx,
+        at: Loc,
+        param: Option<kiln_diag::Diag>,
+    ) -> Option<ExprId> {
+        use kiln_ast::types::BuiltinType;
+        let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
+            return None;
+        };
+        let e = *e;
+        if !designator.is_empty()
+            || self.ast.types.as_record(ty).is_some()
+            || self.ast.types.is_reference(ty)
+            || self.ast.types.is_array(ty)
+            || self.ast.types.is_dependent(ty)
+            || self.is_error_type(ty)
+            || self.expr_is_type_dependent(e)
+        {
+            return None;
+        }
+        let ety = self.ety(e);
+        let nullptr_bool = self.ast.types.builtin(ety) == Some(BuiltinType::NullPtr)
+            && self.ast.types.builtin(conv::strip_cv(self, ty)) == Some(BuiltinType::Bool);
+        if self.ast.types.as_record(ety).is_none() && !nullptr_bool {
+            return None;
+        }
+        let r = if nullptr_bool {
+            conv::implicit_convert(self, e, ty, ctx)
+        } else {
+            conv::user_conversion(self, e, ty, ctx, at)
+        };
+        let x = match r {
+            Ok(x) => {
+                if !nullptr_bool {
+                    let inner = self.ignore_paren_imp_casts(x);
+                    self.check_narrowing(inner, ty, ty);
+                }
+                x
+            }
+            Err(err) => {
+                let mut d = err.diag_at(self, at);
+                if let Some(n) = param {
+                    d = d.with_note(n);
+                }
+                self.emit(d);
+                let loc = self.ast.exprs.get(e).loc();
+                self.recover(ty, &[e], loc)
+            }
+        };
+        Some(self.builder().init_list(ty, &[x], None, None, l.lbrace, l.rbrace))
+    }
+
     /// List-initialization of a parameter (`f({1})`, `int x = {1}` as a
     /// default argument) or a return value (`return {1};`): a single
     /// braced scalar warns `-Wbraced-scalar-init` ([dcl.init.list]/3.9).
-    pub(crate) fn init_list_entity(&mut self, ty: QualType, l: &InitList, entity: Loc) -> ExprId {
+    /// `ctx` is the entity's conversion context and `param` the
+    /// "passing argument" note of a failure.
+    pub(crate) fn init_list_entity(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        entity: Loc,
+        ctx: ConvCtx,
+        param: Option<kiln_diag::Diag>,
+    ) -> ExprId {
         if self.is_error_type(ty) {
             return self.perform_init(ty, Initializer::List(l.clone()), entity, false);
+        }
+        if let Some(e) = self.class_element_list_init(ty, l, ctx, entity, param) {
+            return e;
         }
         // Scalars only: a class (aggregate or not, complete or not yet
         // instantiated) takes its braces.
@@ -713,6 +795,10 @@ impl Sema<'_, '_> {
             return self.reference_list_init(ty, l, entity, InitStyle::CopyList);
         }
         // Scalar ([dcl.init.list]/3.9-10).
+        let at = entity.unwrap_or(l.lbrace);
+        if let Some(e) = self.class_element_list_init(ty, l, ConvCtx::Initialization, at, None) {
+            return e;
+        }
         let mut inits = Vec::new();
         match l.items.first() {
             None => {}
