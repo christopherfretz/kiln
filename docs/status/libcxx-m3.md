@@ -24,7 +24,9 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Reading
 
-**Overall: 415/585 (70.9%)** on the WP-166 branch merged with main `f948983a`. The same branch
+**Overall: 415/585 (70.9%)** on the WP-152 branch merged with main `81c84b7f` (unchanged from
+that main; WP-152 is CTAD/list-init/diagnostic follow-ups). Earlier: 415 on the WP-166 branch
+merged with main `f948983a`. The same branch
 measured 410/585 merged with main `f5dc929c` (405 on that main), and 364 on its base `b61aa714`.
 There are no crashes and no KILLED, TIMEOUT, link or run failures. Every failure is at the compile
 stage. (The kiln binary was rebuilt partway through this run with the zero-length-array fix; the
@@ -79,7 +81,7 @@ Per directory, WP-149 → WP-164 → WP-166 (merged with main `f948983a`):
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `f1b66824` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `5ad3b24e` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -88,8 +90,8 @@ Per directory, WP-149 → WP-164 → WP-166 (merged with main `f948983a`):
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 378.4 s |
-| peak RSS | 72 MiB (largest single process, `std/utilities/utility/pairs/pairs.pair/ctor.pair_U_V_const_move.pass.cpp`; gnu-time) |
+| wall time | 426.8 s |
+| peak RSS | 72 MiB (largest single process, `std/strings/string.view/string.view.template/contains.char.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -137,7 +139,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 
 ### Error clusters
 
-66 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
+65 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
@@ -154,7 +156,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 11 | 6 | 22 | `compile: out-of-line definition of '…' does not match any declaration in '…'` | `std/language.support/support.limits/support.limits.general/unordered_map.version.compile.pass.cpp` | `out-of-line definition of '__node_insert_unique' does not match any declaration in 'std::__1::__hash_table'` |
 | 12 | 6 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/equal.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
 | 13 | 6 | 9 | `compile: too few template arguments for concept '…'` | `std/containers/sequences/array/iterators.pass.cpp` | `too few template arguments for concept 'std::__1::same_as'` |
-| 14 | 5 | 38 | `compile: static assertion expression is not an integral constant expression` | `std/strings/string.view/string.view.find/find_first_of_pointer_size.pass.cpp` | `static assertion expression is not an integral constant expression` |
+| 14 | 5 | 37 | `compile: static assertion expression is not an integral constant expression` | `std/strings/string.view/string.view.find/find_first_of_pointer_size.pass.cpp` | `static assertion expression is not an integral constant expression` |
 | 15 | 4 | 11 | `compile: static assertion failed due to requirement '…'` | `std/numerics/bit/bit.cast/bit_cast.compile.pass.cpp` | `static assertion failed due to requirement '!...'` |
 | 16 | 4 | 4 | `compile: aggregate expression ConditionalOperator is not supported yet` | `std/strings/string.view/string.view.template/ends_with.ptr.pass.cpp` | `aggregate expression ConditionalOperator is not supported yet` |
 | 17 | 3 | 17 | `compile: no matching function for call to '…'` | `std/containers/views/views.span/span.cons/iterator_len.pass.cpp` | `no matching function for call to 'size'` |
