@@ -39,9 +39,9 @@ const DEVIATIONS: &[(&str, &str)] = &[
 /// Flags given to both compilers ahead of a case's own, to pin target
 /// defaults that clang derives from the host rather than the triple.
 ///
-/// clang 19 turns AArch64's `+outline-atomics` on by default only when it
+/// clang 19 turns `AArch64`'s `+outline-atomics` on by default only when it
 /// finds a GCC >= 9.3.1 installation for the target (or compiler-rt):
-/// natively on an AArch64 host it does, cross-compiling from x86-64 (the
+/// natively on an `AArch64` host it does, cross-compiling from x86-64 (the
 /// GitHub runner) it does not. kiln defaults to on; the explicit flag
 /// makes the comparison host-independent.
 fn pinned_flags(triple: &str) -> &'static [&'static str] {
