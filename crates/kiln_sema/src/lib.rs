@@ -48,6 +48,7 @@ pub mod target;
 pub mod templ;
 mod try_stmt;
 pub mod using;
+mod vector;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};

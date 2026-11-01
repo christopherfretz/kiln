@@ -682,6 +682,12 @@ diag_ids! {
     sema_alignment_not_power_of_two = Error (0) "requested alignment is not a power of 2";
     sema_alignas_underaligned = Error (2) "requested alignment is less than minimum alignment of {0} for type {1}";
     sema_alignment_too_big = Error (1) "requested alignment must be {0} bytes or smaller";
+    sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";
+    sema_vector_zero_size = Error (0) "zero vector size";
+    sema_vector_size_too_large = Error (0) "vector size too large";
+    sema_vector_size_not_multiple = Error (0) "vector size not an integral multiple of component size";
+    sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";
+    sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
     sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
     sema_static_assert_failed = Error (0) "static assertion failed";
     sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";

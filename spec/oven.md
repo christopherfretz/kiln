@@ -1040,6 +1040,7 @@ pub trait SemaBridge {
     fn ast(&self) -> &Ast;                                        // re-borrowed per use, never held
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>; // instantiates / defines implicit members if needed; may evaluate (nested)
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout; // via kiln_abi
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32);  // via kiln_abi: size/align of a type with no value model (vector types, WP-151); default (0, 1)
     fn final_overrider(&mut self, most_derived: DeclId, at: SubobjectId, method: DeclId)
         -> Option<(DeclId, SubobjectId)>;                         // spec/sema-class.md §3.5
     fn subobjects(&mut self, record: DeclId) -> &[Subobject];     // indexed by SubobjectId
