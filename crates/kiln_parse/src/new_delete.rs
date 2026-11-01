@@ -90,7 +90,10 @@ impl Parser<'_, '_> {
             let open = self.bump().span.lo;
             let mut args = Vec::new();
             if !self.at(Punct::RParen) {
-                args = self.parse_new_expr_list()?;
+                // The new-initializer's expression-list may hold
+                // braced-init-lists (`new int[2][2]({1, 2}, {3})`), as
+                // any parenthesized initializer.
+                args = self.parse_expr_list(Punct::RParen)?;
             }
             let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
             end = rparen;
@@ -162,7 +165,7 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// expression-list in a new-placement or new-initializer; `None`
+    /// expression-list in a new-placement; `None`
     /// after a syntax error (the tokens up to the `)` are skipped).
     fn parse_new_expr_list(&mut self) -> Option<Vec<ExprId>> {
         let mut args = Vec::new();

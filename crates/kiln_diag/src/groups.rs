@@ -205,6 +205,9 @@ diag_groups! {
     C99Extensions = "c99-extensions" [C99Designator];
     InitializerOverrides = "initializer-overrides" [];
     OverrideInit = "override-init" [InitializerOverrides];
+    // ----- WP-182 (statement attributes)
+    Cxx17AttributeExtensions = "c++17-attribute-extensions" [];
+    Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
 }
 
 impl Group {

@@ -369,6 +369,60 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The location of the last token of `e` (clang's `getEndLoc`): the
+    /// stored closing token (`)`, `}`) when there is one, else the end of
+    /// the last operand for a node that ends with one (a binary or prefix
+    /// operator, a conditional, a C-style cast, an implicit node), else
+    /// the node's own location (a name, a literal, a member name, a
+    /// postfix operator).
+    pub(crate) fn expr_end_loc(&self, mut e: ExprId) -> Loc {
+        loop {
+            if let Some(l) = self.ast.exprs.end_loc(e) {
+                return l;
+            }
+            let n = self.ast.exprs.get(e);
+            let last = match n.kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::ConditionalOperator
+                | ExprKind::BinaryConditionalOperator => true,
+                ExprKind::UnaryOperator => !self.ast.exprs.unary_op(e).is_postfix(),
+                ExprKind::CXXRewrittenBinaryOperator => {
+                    e = self.ast.exprs.rewritten_semantic(e);
+                    continue;
+                }
+                ExprKind::CXXOperatorCallExpr => {
+                    use kiln_ast::names::OverloadedOperator as O;
+                    let op = self.ast.exprs.operator_call_op(e);
+                    let args = self.ast.lists.get(self.ast.exprs.call_args(e));
+                    let postfix = matches!(op, O::PlusPlus | O::MinusMinus) && args.len() == 2;
+                    if matches!(op, O::Call | O::Subscript | O::Arrow) || postfix {
+                        return n.loc();
+                    }
+                    match args.last() {
+                        Some(&a) => {
+                            e = ExprId::new(a);
+                            continue;
+                        }
+                        None => return n.loc(),
+                    }
+                }
+                _ => false,
+            };
+            let kids = if last { self.ast.exprs.children(e, &self.ast.lists) } else { Vec::new() };
+            match kids.last() {
+                Some(&k) => e = k,
+                None => return n.loc(),
+            }
+        }
+    }
+
     // -- full-expressions --------------------------------------------------------
 
     /// The end of a full-expression ([intro.execution]/5): resolves the
@@ -583,10 +637,139 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) || self.expr_is_type_dependent(e) {
             return;
         }
-        if let Some((id, loc, arg)) = self.unused_warning(e) {
-            let d = arg.into_iter().fold(self.diag(id, loc), Diag::arg);
-            self.emit(d);
+        if let Some(w) = self.unused_warning(e) {
+            self.emit_unused(e, w, false);
         }
+    }
+
+    /// clang `CheckCommaOperands` → `DiagnoseUnusedExprResult(LHS,
+    /// warn_unused_comma_left_operand)`: the left operand of a built-in
+    /// comma whose value is unused. Not in an unevaluated operand, and the
+    /// generic warning not in a SFINAE context.
+    pub(crate) fn diagnose_comma_lhs(&mut self, l: ExprId) {
+        if self.unevaluated > 0 || self.is_err_expr(l) || self.expr_is_type_dependent(l) {
+            return;
+        }
+        if let Some(w) = self.unused_warning(l) {
+            self.emit_unused(l, w, true);
+        }
+    }
+
+    /// Emits `unused_warning(e)` as clang's `DiagnoseUnusedExprResult`
+    /// does: a comparison is `-Wunused-comparison` only when it is the
+    /// unused expression itself (clang `DiagnoseUnusedComparison` sees the
+    /// top expression, so `(x == 1);` and `y, x == 1;` are the generic
+    /// warning), with the `=` / `|=` fix-it note; the generic warning is
+    /// the comma form for a comma's left operand (`comma`); nothing but
+    /// `nodiscard` is diagnosed for an expression spelled in a macro body
+    /// (clang `ShouldSuppress` / `isMacroBodyExpansion`).
+    fn emit_unused(&mut self, e: ExprId, w: (DiagId, Loc, Vec<String>), comma: bool) {
+        let (mut id, loc, mut args) = w;
+        let mut note = None;
+        if id == DiagId::sema_unused_comparison {
+            let (top, n) = self.top_comparison(e, loc);
+            note = n;
+            if !top {
+                id = DiagId::sema_unused_expr;
+                args.clear();
+            }
+        }
+        if comma && id == DiagId::sema_unused_expr {
+            if self.inst.stack.is_sfinae() {
+                return;
+            }
+            id = DiagId::sema_unused_comma_left_operand;
+        }
+        if !Self::is_nodiscard_warning(id) && self.in_macro_body(e) {
+            return;
+        }
+        let mut d = args.into_iter().fold(self.diag(id, loc), Diag::arg);
+        if let Some(n) = note {
+            d = d.with_note(self.diag(n, loc));
+        }
+        self.emit(d);
+    }
+
+    /// The `nodiscard` forms of the unused-result warning.
+    fn is_nodiscard_warning(id: DiagId) -> bool {
+        matches!(
+            id,
+            DiagId::sema_unused_result
+                | DiagId::sema_unused_result_msg
+                | DiagId::sema_unused_constructor
+                | DiagId::sema_unused_constructor_msg
+        )
+    }
+
+    /// clang `SourceManager::isMacroBodyExpansion` of the expression's
+    /// location (its operator, for an operator expression).
+    fn in_macro_body(&self, e: ExprId) -> bool {
+        let at = self.eloc(self.ignore_paren_imp_casts(e));
+        self.diags
+            .sm()
+            .expansion_info(at)
+            .is_some_and(|x| matches!(x.kind, kiln_source::ExpansionKind::Macro { .. }))
+    }
+
+    /// clang `DiagnoseUnusedComparison`: whether `e` itself (not
+    /// parenthesized, not nested) is the comparison at `loc`, and then the
+    /// fix-it note for an `==` / `!=` (built-in or overloaded) whose left
+    /// operand is an lvalue: `=` / `|=`.
+    fn top_comparison(&self, e: ExprId, loc: Loc) -> (bool, Option<DiagId>) {
+        use kiln_ast::names::OverloadedOperator as O;
+        let mut x = e;
+        while matches!(
+            self.ast.exprs.get(x).kind(),
+            ExprKind::ExprWithCleanups
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ImplicitCastExpr
+        ) {
+            x = self.ast.exprs.operand(x);
+        }
+        if self.ast.exprs.get(x).loc() != loc {
+            return (false, None);
+        }
+        let (eq, lhs) = match self.ast.exprs.get(x).kind() {
+            ExprKind::BinaryOperator => match self.ast.exprs.binary_op(x) {
+                BinaryOp::EQ => (Some(true), self.ast.exprs.operands(x)[0]),
+                BinaryOp::NE => (Some(false), self.ast.exprs.operands(x)[0]),
+                BinaryOp::LT | BinaryOp::GT | BinaryOp::LE | BinaryOp::GE | BinaryOp::Cmp => {
+                    return (true, None);
+                }
+                _ => return (false, None),
+            },
+            ExprKind::CXXOperatorCallExpr => {
+                let eq = match self.ast.exprs.operator_call_op(x) {
+                    O::EqualEqual => true,
+                    O::ExclaimEqual => false,
+                    O::Less | O::Greater | O::LessEqual | O::GreaterEqual | O::Spaceship => {
+                        return (true, None);
+                    }
+                    _ => return (false, None),
+                };
+                let args = self.ast.lists.get(self.ast.exprs.call_args(x));
+                let Some(&a) = args.first() else { return (false, None) };
+                (Some(eq), ExprId::new(a))
+            }
+            _ => return (false, None),
+        };
+        // clang `IgnoreParenImpCasts` also looks through a materialized
+        // temporary (`M{} == 1` is not assignable).
+        let mut lhs = self.ignore_paren_imp_casts(lhs);
+        while self.ast.exprs.get(lhs).kind() == ExprKind::MaterializeTemporaryExpr {
+            lhs = self.ignore_paren_imp_casts(self.ast.exprs.operand(lhs));
+        }
+        if self.ast.exprs.get(lhs).value_category() != ValueCategory::LValue {
+            return (true, None);
+        }
+        let note = eq.map(|eq| {
+            if eq {
+                DiagId::note_equality_comparison_to_assign
+            } else {
+                DiagId::note_inequality_comparison_to_or_assign
+            }
+        });
+        (true, note)
     }
 
     #[allow(clippy::too_many_lines, reason = "one flat classification of expression kinds")]
@@ -642,6 +825,19 @@ impl Sema<'_, '_> {
                             Some(t) => (DiagId::sema_unused_result_msg, at, vec![name, t]),
                             None => (DiagId::sema_unused_result, at, vec![name]),
                         });
+                    }
+                    // clang `warn_unused_call`: a `pure` / `const` callee
+                    // whose result is not `void` (WP-182).
+                    if !self.ast.types.is_void(n.ty()) {
+                        for (k, name) in [(AttrKind::PURE, "pure"), (AttrKind::CONST, "const")] {
+                            if self.find_attr(f, k).is_some() {
+                                return Some((
+                                    DiagId::sema_unused_call,
+                                    self.begin_loc(x),
+                                    vec![name.to_owned()],
+                                ));
+                            }
+                        }
                     }
                 }
                 None
@@ -1351,7 +1547,16 @@ impl Sema<'_, '_> {
     fn diagnose_deprecated(&self, d: DeclId, loc: Loc) {
         let Some(a) = self.find_attr(d, AttrKind::DEPRECATED) else { return };
         let attr = *self.ast.attrs.get(a);
-        let name = self.decl_name(d);
+        // clang `getNameForDiagnostic`: a function template
+        // specialization (whose attributes are the pattern's) prints its
+        // template arguments, `f<int>`.
+        let mut name = self.decl_name(d);
+        if self.ast.decls.function(d).is_some()
+            && let Some((_, i)) = self.ast.spec_info(d)
+        {
+            let names = crate::names::SemaNames::new(self);
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, i.args, &mut name);
+        }
         let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
         let msg = match text {
             Some(t) => self.diag(DiagId::sema_deprecated_msg, loc).arg(name.clone()).arg(t),
@@ -2036,6 +2241,7 @@ impl Sema<'_, '_> {
             BinaryOp::Assign => self.assign(l, r, loc),
             _ if op.is_compound_assignment() => self.compound_assign(op, l, r, loc),
             BinaryOp::Comma => {
+                self.diagnose_comma_lhs(l);
                 let ty = self.ety(r);
                 let res = self.builder().binary(op, l, r, ty, loc);
                 self.mark_bitfield_if(res, r);
@@ -3893,9 +4099,13 @@ impl Sema<'_, '_> {
                 temp_end: None,
                 rparen: None,
                 // clang `InitializationKind::CreateFunctionalCast` /
-                // `CreateCast`: the `)`. A C-style cast's range ends at its
-                // operand's last token, which kiln does not record.
-                agg_end: (style != CastStyle::CStyle).then_some(rparen),
+                // `CreateCast`: the `)`; a C-style cast's range ends at its
+                // operand's last token (WP-182).
+                agg_end: Some(if style == CastStyle::CStyle {
+                    self.expr_end_loc(e)
+                } else {
+                    rparen
+                }),
                 sites: crate::class::DiagSites {
                     access: loc,
                     deleted: loc,

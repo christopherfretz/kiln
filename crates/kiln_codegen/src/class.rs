@@ -1515,8 +1515,8 @@ impl Cg<'_> {
             // A static member function called through an object.
             self.emit_ignored(base)?;
             let f = self.get_fn(md)?;
-            let sig = self.call_sig(fty, false, &arg_tys);
-            let (extra, nr) = self.noreturn_extra(Some(md), fty);
+            let mut sig = self.call_sig(fty, false, &arg_tys);
+            let (extra, nr) = self.call_extra(md, fty, &mut sig);
             let r =
                 self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &extra)?;
             if nr {
@@ -1572,12 +1572,12 @@ impl Cg<'_> {
             let (callee, fid) = self.structor_ref(callee_md, Structor::Complete)?;
             return self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[]);
         }
-        let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
+        let mut sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
         if use_virtual {
             // The arguments come first; `prepareConcreteCallee` then
             // loads the slot.
             let vals = self.emit_call_args(&sig, args)?;
-            let (extra, nr) = self.noreturn_extra(Some(md), cfty);
+            let (extra, nr) = self.call_extra(md, cfty, &mut sig);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
             let r =
                 self.call_vals_to(&sig, fp, None, Some(this.v), &vals, args, dest, &extra, &[])?;
@@ -1587,7 +1587,7 @@ impl Cg<'_> {
             return Ok(r);
         }
         let f = self.get_fn(callee_md)?;
-        let (mut extra, nr) = self.noreturn_extra(Some(callee_md), cfty);
+        let (mut extra, nr) = self.call_extra(callee_md, cfty, &mut sig);
         let vals = self.emit_call_args(&sig, args)?;
         let mut ret_extra = Vec::new();
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
@@ -1613,6 +1613,16 @@ impl Cg<'_> {
             },
             unreachable,
         )
+    }
+
+    /// [`Cg::noreturn_extra`] plus the `const` / `pure` attributes of
+    /// method `d` (clang `ConstructAttributeList` on a member call's
+    /// target decl, the method named even when the call is virtual),
+    /// which also make the call `nounwind`.
+    fn call_extra(&self, d: DeclId, fty: QualType, sig: &mut Sig) -> (Vec<kiln_llvm::Attr>, bool) {
+        let (mut extra, nr) = self.noreturn_extra(Some(d), fty);
+        sig.nothrow |= crate::builtins::const_pure_attrs(self.ast, d, sig, &mut extra);
+        (extra, nr)
     }
 
     // ---- expressions ---------------------------------------------------

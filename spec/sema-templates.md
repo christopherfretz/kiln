@@ -848,6 +848,19 @@ errors.
      can recurse.
    - **attributes** that affect layout (`alignas`, `packed`,
      `trivial_abi`).
+   - A member function's declaration, and a function template
+     specialization's (at `function_spec_signature`), gets the pattern's
+     attributes (`class_attrs`; clang `InitFunctionInstantiation` →
+     `InstantiateAttrs`; WP-182): `const`/`pure`, `[[noreturn]]`,
+     `[[nodiscard]]`, `[[deprecated]]`, ... — so codegen, `-Wunused-result`
+     and `-Wdeprecated-declarations` see them on the specialization. A
+     dependent `alignas` operand is substituted; other arguments are
+     shared with the pattern (no attribute kind that kiln evaluates takes
+     a dependent operand on a function yet). A friend is skipped (it may
+     redeclare a function with its own attributes), as is a declaration
+     that already has attributes. `[[deprecated]]` names a function
+     template specialization with its arguments (`'f<int>' is
+     deprecated`, clang `getNameForDiagnostic`).
    - **member declarations**. [temp.inst]/3 decides what happens to each
      kind of member:
 
@@ -1205,7 +1218,8 @@ recomputed exactly as for non-template code (clang's
   (`body` of a non-compound body).
 - **`[[assume]]`** (WP-160): an `AttributedStmt`'s assumptions are
   substituted, converted and checked again (`build_cxx_assume_expr`,
-  -Wassume at instantiation).
+  -Wassume at instantiation). Its other attributes (`likely`,
+  `unlikely`, `fallthrough`; WP-182) are kept as they are.
 
 ### 5.6 Declarations
 
@@ -2225,7 +2239,14 @@ containing one records, on the `CXXDefaultInitExpr`, the values of the
 constructor's name (the class name for an implicit constructor) or of the
 `}`/`)` of an aggregate initialization, with the constructor or the
 enclosing function as the function (clang `CXXDefaultInitExpr::
-getUsedLocation`/`getUsedContext`). The Oven and codegen read them from
+getUsedLocation`/`getUsedContext`). For a parenthesized aggregate
+initialization by a C-style cast `(S)x` that is the operand's last token
+(`Sema::expr_end_loc`, clang `getEndLoc`; WP-182): a stored closing token
+(a call's or a parenthesized operand's `)`, a `}`), else the end of the
+last operand of an implicit node, cast, prefix/binary operator or
+conditional, else the node's own location (a name, literal, member name,
+postfix operator). A built-in subscript records no `]`, so `(S)a[i]`
+takes the `[` (clang: the `]`). The Oven and codegen read them from
 the outermost such default argument or member initializer in scope, and
 the codegen prepass evaluates the immediate invocations of such a member
 initializer per use (`fold_immediate_in`). Substitution drops the trailing
