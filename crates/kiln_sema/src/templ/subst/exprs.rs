@@ -316,7 +316,7 @@ impl Substituter<'_, '_, '_> {
             }
             ExprKind::CXXDependentScopeMemberExpr => {
                 let Some(base) = ExprId::from_raw(n.a()) else {
-                    return self.unimplemented("implicit dependent member access", loc);
+                    return self.implicit_dependent_member(e, loc);
                 };
                 let name = self.sema.ast.dependent_member_name(e);
                 let name = self.member_name(name, loc)?;
@@ -768,6 +768,34 @@ impl Substituter<'_, '_, '_> {
             return Ok(self.this_expr(implicit, b.loc()));
         }
         self.expr(base)
+    }
+
+    /// A member named by a dependent using-declarator with no object
+    /// (`using B<T>::m; ... m`, `Sema::act_on_id_expression_dn`): the
+    /// instantiated class now has the using-declaration's shadows, so
+    /// the name is looked up again from the instantiation context and
+    /// becomes an implicit member access or a static member reference
+    /// (clang's `TransformUnresolvedLookupExpr` over the
+    /// `UnresolvedUsingValueDecl`, then `BuildPossibleImplicitMemberExpr`).
+    fn implicit_dependent_member(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        let name = self.sema.ast.dependent_member_name(e);
+        let name = self.member_name(name, loc)?;
+        if self.sema.ast.templates.expr_targs.get(e).is_some() {
+            return self.unimplemented("implicit dependent member template-id", loc);
+        }
+        let qual = match self.sema.ast.templates.expr_nns.get(e).copied() {
+            Some(q) => {
+                let at = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
+                let nns = self.nns(q, at)?;
+                if self.nns_still_dependent(nns) {
+                    return self.unimplemented("implicit dependent member access", loc);
+                }
+                let ctx = self.nns_context(nns, at)?;
+                Some(crate::using::Qualifier { ctx, nns, loc: at })
+            }
+            None => None,
+        };
+        Ok(self.sema.act_on_id_expression_dn(name, loc, qual))
     }
 
     fn this_expr(&mut self, implicit: bool, loc: Loc) -> ExprId {

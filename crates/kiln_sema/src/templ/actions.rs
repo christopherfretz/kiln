@@ -50,7 +50,8 @@ impl Sema<'_, '_> {
             | DeclKind::TemplateTemplateParm
             | DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
-            | DeclKind::BuiltinTemplate => true,
+            | DeclKind::BuiltinTemplate
+            | DeclKind::UnresolvedUsingTypename => true,
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.ast.decls.get(d).ty().is_some_and(|t| {
                     self.is_dependent_type(t) && self.ast.types.as_record(t).is_none()

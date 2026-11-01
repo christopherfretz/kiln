@@ -76,6 +76,16 @@ Constructors:
     [namespace.udir]/2 requires.
   - If several *different* entities are found at one level, lookup
     reports `reference to 'x' is ambiguous`, with candidate notes.
+    The notes follow clang's order (`ambiguity_order`, WP-179): for an
+    unqualified lookup that ends at a namespace scope, the names declared
+    in that open namespace definition come first, newest first (clang's
+    `IdentifierResolver` chain; `Scope::first_decl` marks the first
+    declaration created in the scope instance), then the namespace's
+    lookup table, and duplicates are removed by moving the last entry
+    into the duplicate's slot (`LookupResult::resolveKind`). A qualified
+    lookup lists table order. An ambiguous *type* name (`S s;` with `S`
+    in the namespace and in one of its inline namespaces) is not yet
+    diagnosed: `classify_name` takes the first declaration.
 - **Block-scope using-directives** ([namespace.udir]/2): a local
   scope's `using namespace N;` is collected while walking outwards, and
   `N`'s members are searched at the nearest enclosing namespace (or the
@@ -116,7 +126,15 @@ Constructors:
   qualifier. `act_on_nested_name_spelled` also returns the declaration
   as written, for `nns_component`.
 - **Redeclaration lookup** (`lookup_current_scope`) searches only the
-  current scope, and leaves out using-shadows
+  current scope. The members of a namespace's inline namespaces are in
+  other scopes ([basic.scope.scope]/4, [namespace.def.general]/6): an
+  unqualified declaration in the enclosing namespace never redeclares
+  one, it declares a distinct entity, and a later use that finds both
+  is ambiguous (clang's `FilterLookupForScope` without
+  `AllowInlineNamespace`; WP-179). A qualified declaration (`int I::x
+  = 1;`, `void N::f() {}`) and the template lookup of an explicit
+  specialization (`current_scope_with_inline_dn`, [temp.expl.spec]/3)
+  do see them. Redeclaration lookup leaves out using-shadows
   (`current_scope_shadows` returns those, for §4.8's conflict checks). If the current scope is the outermost block of a
   control statement (a Block directly above a Control scope), it also
   searches the Control scope, so `if (int x = 0) { int x; }` is
@@ -780,17 +798,42 @@ specification as written (`TypeNames` prints ` noexcept`,
     table).
   - `using typename q::x;` ([namespace.udecl]/1, /12;
     `act_on_using_typename_declarator`, WP-169): with a dependent
-    qualifier in a class member specification, the declarator is kept
-    as a member alias `x` of the dependent type `typename q::x`
-    (recorded in `Sema::using_typename`); at instantiation
-    (`templ/class.rs` `member_using_typename`) it is redone as an
-    ordinary using-declarator, and references to the alias in
-    instantiated members resolve to the type of its shadow's target
+    qualifier in a class member specification, the declarator is an
+    `UnresolvedUsingTypename` member `x` (entered in lookup; a type
+    name) whose type is its own dependent `UnresolvedUsing` type
+    (spec/types.md §5.3, WP-179); at instantiation (`templ/class.rs`
+    `member_using_typename`) it is redone as an ordinary
+    using-declarator, and the `UnresolvedUsing` type in instantiated
+    members resolves to the type of its shadow's target
     (`subst/types.rs` `decl_type`). With a non-dependent qualifier, or
     at instantiation, a target that is not a type reports `'typename'
     keyword used on a non-type` at the name, with the `target of using
-    declaration` note (clang's `err_using_typename_non_type`). Kiln has
-    no `UnresolvedUsingTypename` node; the dump shows the alias.
+    declaration` note (clang's `err_using_typename_non_type`).
+  - Dependent using-declarators in templates (WP-179):
+    - A class member `using B<T>::m;` is an `UnresolvedUsingValue`
+      member (spec/sema-class.md). An unqualified use of `m` in the
+      class (`act_on_id_expression_dn`) is a baseless
+      `CXXDependentScopeMemberExpr`, also when the class's own
+      overloads of `m` join the set (no ambiguity, and the pattern's
+      own `f(char)` is not a redefinition of the unresolved `f`,
+      `overload/redecl.rs`). The instantiation (`subst/exprs.rs`
+      `implicit_dependent_member`) looks the name up again from the
+      instantiation context: an implicit member access or a static
+      member reference.
+    - An `UnresolvedUsingTypename` is a dependent context, so
+      `type::value` and `typename type::vt` nest through it.
+    - At block scope in a template, a declarator with a dependent
+      qualifier (`using E<T>::A;`, [namespace.udecl]/8: an enumerator)
+      is a local `UnresolvedUsingValue`; its uses are dependent, and
+      the instantiation redoes the declarator (`subst/stmts.rs`
+      `local_using_decl`), so a non-enumerator target is diagnosed
+      then.
+    - A qualifier that is still dependent after substitution (a
+      generic lambda in a function template specialization, or a
+      local class in one) leaves the declarator unresolved, rebuilt
+      with the substituted qualifier, until the inner specialization
+      (`still_dependent_class_using`,
+      `still_dependent_using_typename`).
 - **Conflicts** ([namespace.udecl]/11, [basic.scope.scope]/4), as in
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:

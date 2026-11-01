@@ -1,0 +1,33 @@
+Dumping UTBase:
+ClassTemplateDecl UTBase
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-CXXRecordDecl struct UTBase definition
+| `-TypeAliasDecl type 'T'
+`-ClassTemplateSpecializationDecl struct UTBase definition implicit_instantiation
+  |-TemplateArgument type 'int'
+  `-TypeAliasDecl type 'int'
+
+Dumping UTDerived:
+ClassTemplateDecl UTDerived
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-CXXRecordDecl struct UTDerived definition
+| |-public 'UTBase<T>'
+| |-UnresolvedUsingTypenameDecl referenced type
+| |-FieldDecl referenced m 'type':'UTDerived::type'
+| `-CXXMethodDecl get 'type () const' implicit-inline
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-MemberExpr 'const type':'const UTDerived::type' lvalue ->m
+|         `-CXXThisExpr 'const UTDerived<T> *' implicit this
+`-ClassTemplateSpecializationDecl struct UTDerived definition implicit_instantiation
+  |-TemplateArgument type 'int'
+  |-public 'UTBase<int>'
+  |-UsingDecl UTBase<int>::type
+  |-FieldDecl referenced m 'type':'int'
+  `-CXXMethodDecl used get 'type () const' implicit-inline
+    `-CompoundStmt
+      `-ReturnStmt
+        `-ImplicitCastExpr 'type':'int' <LValueToRValue>
+          `-MemberExpr 'const type':'const int' lvalue ->m
+            `-CXXThisExpr 'const UTDerived<int> *' implicit this
+

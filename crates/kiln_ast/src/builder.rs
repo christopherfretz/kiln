@@ -311,6 +311,19 @@ impl<'a> AstBuilder<'a> {
         d
     }
 
+    /// `using typename nns name;` with a dependent qualifier in a class
+    /// template (clang `UnresolvedUsingTypenameDecl`, WP-179): a member
+    /// type name entered in lookup whose `ty` is its own canonical,
+    /// dependent [`TypeKind::UnresolvedUsing`](crate::types::TypeKind)
+    /// type under keyword-less `Elaborated` sugar (clang's type for the
+    /// name as written). Redone as a using-declaration at instantiation.
+    pub fn unresolved_using_typename(&mut self, h: DeclHead, nns: crate::ids::NnsId) -> DeclId {
+        let d = self.ast.decls.next_id();
+        let t = QualType::unqual(self.ast.types.unresolved_using_type(d));
+        let ty = self.ast.types.elaborated(crate::types::TagKeyword::None, None, t);
+        self.add(h, DeclKind::UnresolvedUsingTypename, Some(ty), Payload::None(nns.raw()), None)
+    }
+
     /// `using enum E;` ([enum.udecl]); `e` is the enumeration. Not
     /// entered in lookup (its enumerators' shadows are).
     pub fn using_enum(&mut self, h: DeclHead, e: DeclId) -> DeclId {

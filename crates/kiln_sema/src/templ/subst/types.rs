@@ -240,6 +240,14 @@ impl Substituter<'_, '_, '_> {
                 }
                 self.ty(injected, loc)
             }
+            TypeView::UnresolvedUsing(d) => {
+                // The instantiated using-declaration's named type.
+                let i = self.find_instantiated_decl(d, loc)?;
+                if i == d {
+                    return Err(SubstFail);
+                }
+                Ok(self.decl_type(i))
+            }
             TypeView::Record(d) | TypeView::Enum(d) => {
                 let i = self.find_instantiated_decl(d, loc)?;
                 Ok(self.sema.tag_type(i))

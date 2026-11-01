@@ -551,14 +551,21 @@ impl Substituter<'_, '_, '_> {
         let nns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
         let nns = self.nns(nns, loc)?;
         if self.nns_still_dependent(nns) {
-            return self.unimplemented("dependent using-declarations in templates", loc);
+            // Still dependent (a generic lambda's body inside a function
+            // template specialization): the local stays unresolved, its
+            // uses dependent, until the lambda's own instantiation.
+            let h = kiln_ast::builder::DeclHead::new(self.sema.ctx, dname, loc);
+            let x = self.sema.builder().unresolved_using_value(h, nns, false);
+            self.sema.push_local(name, x);
+            return Ok(x);
         }
         let ctx = self.nns_context(nns, loc)?;
         // A using-declaration whose lookup finds nothing survives in the
         // pattern only with `using_if_exists` (the qualifier is not
-        // dependent, so the lookup is the definition's).
-        let if_exists =
-            self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
+        // dependent, so the lookup is the definition's). A dependent one
+        // (`UnresolvedUsingValue`) is checked now.
+        let if_exists = self.sema.kind_of(d) == DeclKind::Using
+            && self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc };
         self.sema
             .act_on_using_declarator(loc, Some(q), dname, loc, if_exists, None)
@@ -579,7 +586,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(x)
             }
             DeclKind::StaticAssert => self.static_assert_decl(d),
-            DeclKind::Using => self.local_using_decl(d, loc),
+            DeclKind::Using | DeclKind::UnresolvedUsingValue => self.local_using_decl(d, loc),
             // A block-scope using-directive ([namespace.udir]): the
             // nominated namespace is never dependent; redone in the
             // instantiation's block scope for its dependent lookups.

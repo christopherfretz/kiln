@@ -4820,7 +4820,9 @@ impl Sema<'_, '_> {
             // ... followed by an implicit `using namespace unique;`.
             let _ = self.using_directive(ns, loc, DeclFlags::IMPLICIT);
         }
-        self.scopes.push(Scope::new(ScopeKind::Namespace, Some(ns)));
+        let mut scope = Scope::new(ScopeKind::Namespace, Some(ns));
+        scope.first_decl = ns.index() + 1;
+        self.scopes.push(scope);
         self.ctx = ns;
         ns
     }
@@ -5238,7 +5240,10 @@ impl Sema<'_, '_> {
         if is_type_kind(k) {
             let ty = if matches!(
                 k,
-                DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm
+                DeclKind::Typedef
+                    | DeclKind::TypeAlias
+                    | DeclKind::TemplateTypeParm
+                    | DeclKind::UnresolvedUsingTypename
             ) {
                 self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
             } else {
@@ -5340,7 +5345,11 @@ impl Sema<'_, '_> {
                 }
                 Some(self.ast.definition(d).unwrap_or(d))
             }
-            DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm => Some(d),
+            // A dependent `using typename B<T>::x;` member nests like a
+            // template parameter (`x::value`, WP-179).
+            DeclKind::TemplateTypeParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::UnresolvedUsingTypename => Some(d),
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
                 let what = if self.kind_of(d) == DeclKind::ClassTemplate {
                     "class template"

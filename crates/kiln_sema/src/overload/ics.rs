@@ -15,7 +15,7 @@ use super::{CandidateFailure, CandidateKind, OvlOutcome, SetKind};
 use crate::Sema;
 use crate::conv::bases::{complete_class, is_derived_from, same_class};
 use crate::conv::{
-    self, ConvCtx, IcsCompare, RefBinding, SecondStep, StandardConversion,
+    self, ConvCtx, IcsCompare, ListArray, RefBinding, SecondStep, StandardConversion,
     compare_standard_conversions, standard_conversion_from,
 };
 use crate::init::{InitItem, InitList, InitValue};
@@ -639,6 +639,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records on `r` that it converts list `l` to an array of `elem`
+    /// (`to`), for the [over.ics.rank]/3.1.2 tie-breaker.
+    fn with_list_array(&self, mut r: Ics, l: &InitList, elem: QualType, to: QualType) -> Ics {
+        let len = self.ast.types.array_size(to);
+        let la =
+            ListArray { elem, len: len.unwrap_or(l.items.len() as u64), unbounded: len.is_none() };
+        match &mut r {
+            Ics::Standard(s) => s.list_array = Some(la),
+            Ics::UserDefined(u) => u.after.list_array = Some(la),
+            _ => {}
+        }
+        r
+    }
+
     /// The ICS of a braced-init-list ([over.ics.list]).
     pub(crate) fn list_ics(&mut self, l: &InitList, to: QualType, opts: IcsOptions) -> Ics {
         let void_from = QualType::VOID;
@@ -704,7 +718,8 @@ impl Sema<'_, '_> {
             {
                 return Ics::bad(BadKind::InitList, void_from, to);
             }
-            return self.worst_element(l, elem, to, opts);
+            let r = self.worst_element(l, elem, to, opts);
+            return self.with_list_array(r, l, elem, to);
         }
         if let Some(c) = self.ast.types.as_record(to) {
             // /5: std::initializer_list<X>.
@@ -1585,6 +1600,27 @@ impl Sema<'_, '_> {
         };
         if to_list(a) != to_list(b) {
             return if to_list(a) { IcsCompare::Better } else { IcsCompare::Worse };
+        }
+        // /3.1.2: of two list-initialization sequences converting to
+        // arrays of the same element type, the one initializing fewer
+        // elements is better, and with as many, the one not converting to
+        // an array of unknown bound (P0388; clang's
+        // `InitializerListContainerType`).
+        let to_array = |i: &Ics| match i {
+            Ics::Standard(s) => s.list_array,
+            Ics::UserDefined(u) => u.after.list_array,
+            _ => None,
+        };
+        if let (Some(x), Some(y)) = (to_array(a), to_array(b)) {
+            let t = &self.ast.types;
+            if t.canonical(x.elem).without_quals() == t.canonical(y.elem).without_quals() {
+                if x.len != y.len {
+                    return if x.len < y.len { IcsCompare::Better } else { IcsCompare::Worse };
+                }
+                if x.unbounded != y.unbounded {
+                    return if y.unbounded { IcsCompare::Better } else { IcsCompare::Worse };
+                }
+            }
         }
         match (a, b) {
             (Ics::Standard(x), Ics::Standard(y)) => compare_standard_conversions(self, x, y),

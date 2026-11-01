@@ -126,6 +126,7 @@ no category).
 | `NamespaceAliasDecl` | `NamespaceAliasDecl <head> Name Namespace 'Target'` or `... NamespaceAlias 'Target'` (the namespace or alias as written) |
 | `UsingDirectiveDecl` | `UsingDirectiveDecl <head> Namespace 'Name'` (an unnamed namespace's implicit directive prints `implicit` and `Namespace ''`) |
 | `UsingDecl` | `UsingDecl <head> qualifier::name` (the nested-name-specifier as written, `::N::x` or `N::x`) |
+| `UnresolvedUsingTypenameDecl` | `UnresolvedUsingTypenameDecl <head> name` (the unqualified member name; WP-179). A use of the name prints `'name':'Class::name'` (clang's `UnresolvedUsingType`) |
 | `UsingShadowDecl` | `UsingShadowDecl <head> Kind 'name'[ 'type'[:'canonical']]` (always `implicit`, so printed only with implicit nodes; the target's kind, name and, for a value or typedef, its type) |
 | `UsingEnumDecl` | `UsingEnumDecl <head> Enum 'Name'` |
 | `CXXRecordDecl` | `CXXRecordDecl <head> [friend_undeclared] struct\|class\|union [Name] [definition]`; children: base-specifiers, attributes, `FinalAttr final` (the class-virt-specifier; clang adds it after the head's attributes), members. `friend_undeclared`: first declared by a `friend` declaration (it prints under its `FriendDecl`) |
