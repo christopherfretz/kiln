@@ -1,5 +1,4 @@
 //@ expect: run
-//@ oracle: none
 //@ skip(clang): clang 19.1.7 hangs (never terminates) on a use of an explicitly specialized member class template whose specialization has a default member initializer; a dependent initializer (`U b = U();`) crashes it instead
 // [temp.expl.spec]/17-18: a member class template of an implicitly
 // instantiated class template specialization can be explicitly specialized

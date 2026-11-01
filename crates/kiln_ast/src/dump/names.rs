@@ -17,7 +17,8 @@ use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_unit};
 use crate::types::{
-    FloatFormat, PrintOptions, TypeNames, TypeView, write_arg_list, write_nns, write_type,
+    ArgView, FloatFormat, PrintOptions, TypeFlags, TypeNames, TypeView, write_arg_list,
+    write_arg_list_prefix, write_nns, write_type,
 };
 
 /// Scope chains and expressions nested deeper than this print `...`
@@ -175,6 +176,100 @@ impl<'a> AstNames<'a> {
         self.write_component(d, out);
     }
 
+    /// Appends the name `-fdump-ast-filter` matches and prints after
+    /// `Dumping` (clang `NamedDecl::printQualifiedName`, spec/ast-dump.md
+    /// §1): [`Self::write_qualified_name`], but a class template
+    /// specialization context prints its arguments (`n::X<int>::N`) and a
+    /// partial specialization its canonical ones (`X<type-parameter-0-0
+    /// *, true>::N`). `parm_of` is the pattern (or partial
+    /// specialization) of the template whose parameter `d` is: clang's
+    /// context of a class template's parameter is its class
+    /// (`n::X::T`), of a function template's its function (`T`); the
+    /// parameters of other templates are named by `d`'s own context.
+    pub fn write_filter_name(&self, d: DeclId, parm_of: Option<DeclId>, out: &mut String) {
+        match parm_of.map(|o| (o, self.ast.decls.get(o).kind())) {
+            Some((_, k)) if k.is_function() => {}
+            Some((o, DeclKind::CXXRecord)) => self.write_scope_chain(o, 0, true, out),
+            _ => self.write_scope_prefix(d, true, out),
+        }
+        self.write_component(d, out);
+    }
+
+    /// The arguments partial specialization `ctx` prints with as a
+    /// context (clang `printNestedNameSpecifier` prints `getTemplateArgs()`
+    /// without the trailing arguments `isSubstitutedDefaultArgument`
+    /// finds equal to their default): its canonical arguments and how
+    /// many print. An argument is dropped when its parameter's default is
+    /// non-dependent and equal to it, or is an earlier parameter of the
+    /// template (`class U = T`) whose argument equals it; any other
+    /// dependent default keeps it (spec/ast-dump.md §1).
+    fn partial_print_args(&self, ctx: DeclId) -> Option<(crate::ids::ArgListId, usize)> {
+        if self.ast.decls.get(ctx).kind() != DeclKind::CXXRecord {
+            return None;
+        }
+        let (_, pi) = self.ast.partial_spec_info(ctx)?;
+        let types = &self.ast.types;
+        let args = types.args(pi.canonical);
+        let params: Vec<DeclId> = self
+            .ast
+            .template_info(pi.template)
+            .map(|i| self.ast.lists.iter::<DeclId>(self.ast.templates.param_list(i.params).params))
+            .into_iter()
+            .flatten()
+            .collect();
+        let mut len = args.len();
+        if params.len() != len {
+            return Some((pi.canonical, len));
+        }
+        while len > 0 {
+            let p = params[len - 1];
+            if self.ast.template_parm(p).is_none_or(|x| x.pack) {
+                break;
+            }
+            let Some(&def) = self.ast.templates.defaults.get(p) else { break };
+            let def = types.canonical_arg(def);
+            let arg = types.canonical_arg(args[len - 1]);
+            let equal = if types.arg_flags(def).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+                // `class U = T`: the default is parameter `j` of this
+                // template.
+                match def.view() {
+                    ArgView::Type(q) => match types.view(q.ty()) {
+                        TypeView::CanonTemplateTypeParm { depth, index, pack: false }
+                            if (index as usize) < len - 1
+                                && u32::from(self.param_depth(p)) == depth =>
+                        {
+                            types.canonical_arg(args[index as usize]) == arg
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                }
+            } else if let (ArgView::Expr { expr, .. }, ArgView::Value { value, .. }) =
+                (def.view(), arg.view())
+            {
+                // A literal default (`bool B = false`) is kept unconverted.
+                let v = match self.ast.consts.scalar(value) {
+                    Some(Scalar::Int { bits, .. }) => bits.to_u128(),
+                    Some(Scalar::Bool { value, .. }) => Some(u128::from(value)),
+                    _ => None,
+                };
+                v.is_some() && v == self.expr_uint(expr).map(u128::from)
+            } else {
+                def == arg
+            };
+            if !equal {
+                break;
+            }
+            len -= 1;
+        }
+        Some((pi.canonical, len))
+    }
+
+    /// The depth of template parameter `p`.
+    fn param_depth(&self, p: DeclId) -> u16 {
+        self.ast.template_parm(p).map_or(u16::MAX, |x| x.depth)
+    }
+
     /// Appends the scopes of `d`'s qualified name, each followed by `::`
     /// (empty directly inside a function); with `spec_args`, class
     /// template specializations print their arguments without trailing
@@ -214,11 +309,12 @@ impl<'a> AstNames<'a> {
         };
         if !skip {
             self.write_component(ctx, out);
-            if spec_args
-                && !self.is_unnamed(ctx)
-                && let Some(args) = self.ast.spec_print_args(ctx)
-            {
-                write_arg_list(&self.ast.types, self, args, out);
+            if spec_args && !self.is_unnamed(ctx) {
+                if let Some(args) = self.ast.spec_print_args(ctx) {
+                    write_arg_list(&self.ast.types, self, args, out);
+                } else if let Some((args, len)) = self.partial_print_args(ctx) {
+                    write_arg_list_prefix(&self.ast.types, self, args, len, out);
+                }
             }
             if kind.is_function() {
                 self.write_function_scope(ctx, out);
@@ -382,7 +478,8 @@ impl<'a> AstNames<'a> {
         }
     }
 
-    /// The value of a constant integer expression (a bit-field width).
+    /// The value of a constant integer expression (a bit-field width, a
+    /// literal default template argument).
     fn expr_uint(&self, mut e: ExprId) -> Option<u64> {
         let exprs = &self.ast.exprs;
         for _ in 0..MAX_DEPTH {
@@ -398,6 +495,8 @@ impl<'a> AstNames<'a> {
                     e = exprs.operand(e);
                 }
                 ExprKind::IntegerLiteral => return exprs.int_value(e),
+                ExprKind::CXXBoolLiteralExpr => return Some(u64::from(exprs.bool_value(e))),
+                ExprKind::CharacterLiteral => return Some(u64::from(exprs.char_value(e))),
                 ExprKind::ParenExpr => e = exprs.operand(e),
                 k if k.is_cast() => e = exprs.operand(e),
                 _ => return None,

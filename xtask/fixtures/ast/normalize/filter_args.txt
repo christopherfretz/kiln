@@ -1,0 +1,361 @@
+TranslationUnitDecl 0xaaaaee759268 <<invalid sloc>> <invalid sloc>
+|-TypedefDecl 0xaaaaee75a198 <<invalid sloc>> <invalid sloc> implicit __int128_t '__int128'
+| `-BuiltinType 0xaaaaee759830 '__int128'
+|-TypedefDecl 0xaaaaee839f28 <<invalid sloc>> <invalid sloc> implicit __uint128_t 'unsigned __int128'
+| `-BuiltinType 0xaaaaee759850 'unsigned __int128'
+|-TypedefDecl 0xaaaaee83a2e8 <<invalid sloc>> <invalid sloc> implicit __NSConstantString '__NSConstantString_tag'
+| `-RecordType 0xaaaaee83a030 '__NSConstantString_tag'
+|   `-CXXRecord 0xaaaaee839f88 '__NSConstantString_tag'
+|-TypedefDecl 0xaaaaee83a358 <<invalid sloc>> <invalid sloc> implicit __SVInt8_t '__SVInt8_t'
+| `-BuiltinType 0xaaaaee759a50 '__SVInt8_t'
+|-TypedefDecl 0xaaaaee83a3c8 <<invalid sloc>> <invalid sloc> implicit __SVInt16_t '__SVInt16_t'
+| `-BuiltinType 0xaaaaee759a70 '__SVInt16_t'
+|-TypedefDecl 0xaaaaee83a438 <<invalid sloc>> <invalid sloc> implicit __SVInt32_t '__SVInt32_t'
+| `-BuiltinType 0xaaaaee759a90 '__SVInt32_t'
+|-TypedefDecl 0xaaaaee83a4a8 <<invalid sloc>> <invalid sloc> implicit __SVInt64_t '__SVInt64_t'
+| `-BuiltinType 0xaaaaee759ab0 '__SVInt64_t'
+|-TypedefDecl 0xaaaaee83a518 <<invalid sloc>> <invalid sloc> implicit __SVUint8_t '__SVUint8_t'
+| `-BuiltinType 0xaaaaee759ad0 '__SVUint8_t'
+|-TypedefDecl 0xaaaaee83a588 <<invalid sloc>> <invalid sloc> implicit __SVUint16_t '__SVUint16_t'
+| `-BuiltinType 0xaaaaee759af0 '__SVUint16_t'
+|-TypedefDecl 0xaaaaee83a5f8 <<invalid sloc>> <invalid sloc> implicit __SVUint32_t '__SVUint32_t'
+| `-BuiltinType 0xaaaaee759b10 '__SVUint32_t'
+|-TypedefDecl 0xaaaaee83a668 <<invalid sloc>> <invalid sloc> implicit __SVUint64_t '__SVUint64_t'
+| `-BuiltinType 0xaaaaee759b30 '__SVUint64_t'
+|-TypedefDecl 0xaaaaee83a6d8 <<invalid sloc>> <invalid sloc> implicit __SVFloat16_t '__SVFloat16_t'
+| `-BuiltinType 0xaaaaee759b50 '__SVFloat16_t'
+|-TypedefDecl 0xaaaaee83a748 <<invalid sloc>> <invalid sloc> implicit __SVFloat32_t '__SVFloat32_t'
+| `-BuiltinType 0xaaaaee759b70 '__SVFloat32_t'
+|-TypedefDecl 0xaaaaee83a7b8 <<invalid sloc>> <invalid sloc> implicit __SVFloat64_t '__SVFloat64_t'
+| `-BuiltinType 0xaaaaee759b90 '__SVFloat64_t'
+|-TypedefDecl 0xaaaaee83a828 <<invalid sloc>> <invalid sloc> implicit __SVBfloat16_t '__SVBfloat16_t'
+| `-BuiltinType 0xaaaaee759bb0 '__SVBfloat16_t'
+|-TypedefDecl 0xaaaaee83a898 <<invalid sloc>> <invalid sloc> implicit __clang_svint8x2_t '__clang_svint8x2_t'
+| `-BuiltinType 0xaaaaee759bd0 '__clang_svint8x2_t'
+|-TypedefDecl 0xaaaaee83a908 <<invalid sloc>> <invalid sloc> implicit __clang_svint16x2_t '__clang_svint16x2_t'
+| `-BuiltinType 0xaaaaee759bf0 '__clang_svint16x2_t'
+|-TypedefDecl 0xaaaaee83a978 <<invalid sloc>> <invalid sloc> implicit __clang_svint32x2_t '__clang_svint32x2_t'
+| `-BuiltinType 0xaaaaee759c10 '__clang_svint32x2_t'
+|-TypedefDecl 0xaaaaee83a9e8 <<invalid sloc>> <invalid sloc> implicit __clang_svint64x2_t '__clang_svint64x2_t'
+| `-BuiltinType 0xaaaaee759c30 '__clang_svint64x2_t'
+|-TypedefDecl 0xaaaaee83aa58 <<invalid sloc>> <invalid sloc> implicit __clang_svuint8x2_t '__clang_svuint8x2_t'
+| `-BuiltinType 0xaaaaee759c50 '__clang_svuint8x2_t'
+|-TypedefDecl 0xaaaaee83aac8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint16x2_t '__clang_svuint16x2_t'
+| `-BuiltinType 0xaaaaee759c70 '__clang_svuint16x2_t'
+|-TypedefDecl 0xaaaaee83ab38 <<invalid sloc>> <invalid sloc> implicit __clang_svuint32x2_t '__clang_svuint32x2_t'
+| `-BuiltinType 0xaaaaee759c90 '__clang_svuint32x2_t'
+|-TypedefDecl 0xaaaaee83aba8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint64x2_t '__clang_svuint64x2_t'
+| `-BuiltinType 0xaaaaee759cb0 '__clang_svuint64x2_t'
+|-TypedefDecl 0xaaaaee83ac18 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat16x2_t '__clang_svfloat16x2_t'
+| `-BuiltinType 0xaaaaee759cd0 '__clang_svfloat16x2_t'
+|-TypedefDecl 0xaaaaee83ac88 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat32x2_t '__clang_svfloat32x2_t'
+| `-BuiltinType 0xaaaaee759cf0 '__clang_svfloat32x2_t'
+|-TypedefDecl 0xaaaaee83acf8 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat64x2_t '__clang_svfloat64x2_t'
+| `-BuiltinType 0xaaaaee759d10 '__clang_svfloat64x2_t'
+|-TypedefDecl 0xaaaaee83ad68 <<invalid sloc>> <invalid sloc> implicit __clang_svbfloat16x2_t '__clang_svbfloat16x2_t'
+| `-BuiltinType 0xaaaaee759d30 '__clang_svbfloat16x2_t'
+|-TypedefDecl 0xaaaaee83add8 <<invalid sloc>> <invalid sloc> implicit __clang_svint8x3_t '__clang_svint8x3_t'
+| `-BuiltinType 0xaaaaee759d50 '__clang_svint8x3_t'
+|-TypedefDecl 0xaaaaee83ae48 <<invalid sloc>> <invalid sloc> implicit __clang_svint16x3_t '__clang_svint16x3_t'
+| `-BuiltinType 0xaaaaee759d70 '__clang_svint16x3_t'
+|-TypedefDecl 0xaaaaee83aeb8 <<invalid sloc>> <invalid sloc> implicit __clang_svint32x3_t '__clang_svint32x3_t'
+| `-BuiltinType 0xaaaaee759d90 '__clang_svint32x3_t'
+|-TypedefDecl 0xaaaaee83b348 <<invalid sloc>> <invalid sloc> implicit __clang_svint64x3_t '__clang_svint64x3_t'
+| `-BuiltinType 0xaaaaee759db0 '__clang_svint64x3_t'
+|-TypedefDecl 0xaaaaee83b3b8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint8x3_t '__clang_svuint8x3_t'
+| `-BuiltinType 0xaaaaee759dd0 '__clang_svuint8x3_t'
+|-TypedefDecl 0xaaaaee83b428 <<invalid sloc>> <invalid sloc> implicit __clang_svuint16x3_t '__clang_svuint16x3_t'
+| `-BuiltinType 0xaaaaee759df0 '__clang_svuint16x3_t'
+|-TypedefDecl 0xaaaaee83b498 <<invalid sloc>> <invalid sloc> implicit __clang_svuint32x3_t '__clang_svuint32x3_t'
+| `-BuiltinType 0xaaaaee759e10 '__clang_svuint32x3_t'
+|-TypedefDecl 0xaaaaee83b508 <<invalid sloc>> <invalid sloc> implicit __clang_svuint64x3_t '__clang_svuint64x3_t'
+| `-BuiltinType 0xaaaaee759e30 '__clang_svuint64x3_t'
+|-TypedefDecl 0xaaaaee83b578 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat16x3_t '__clang_svfloat16x3_t'
+| `-BuiltinType 0xaaaaee759e50 '__clang_svfloat16x3_t'
+|-TypedefDecl 0xaaaaee83b5e8 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat32x3_t '__clang_svfloat32x3_t'
+| `-BuiltinType 0xaaaaee759e70 '__clang_svfloat32x3_t'
+|-TypedefDecl 0xaaaaee83b658 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat64x3_t '__clang_svfloat64x3_t'
+| `-BuiltinType 0xaaaaee759e90 '__clang_svfloat64x3_t'
+|-TypedefDecl 0xaaaaee83b6c8 <<invalid sloc>> <invalid sloc> implicit __clang_svbfloat16x3_t '__clang_svbfloat16x3_t'
+| `-BuiltinType 0xaaaaee759eb0 '__clang_svbfloat16x3_t'
+|-TypedefDecl 0xaaaaee83b738 <<invalid sloc>> <invalid sloc> implicit __clang_svint8x4_t '__clang_svint8x4_t'
+| `-BuiltinType 0xaaaaee759ed0 '__clang_svint8x4_t'
+|-TypedefDecl 0xaaaaee83b7a8 <<invalid sloc>> <invalid sloc> implicit __clang_svint16x4_t '__clang_svint16x4_t'
+| `-BuiltinType 0xaaaaee759ef0 '__clang_svint16x4_t'
+|-TypedefDecl 0xaaaaee83b818 <<invalid sloc>> <invalid sloc> implicit __clang_svint32x4_t '__clang_svint32x4_t'
+| `-BuiltinType 0xaaaaee759f10 '__clang_svint32x4_t'
+|-TypedefDecl 0xaaaaee83b888 <<invalid sloc>> <invalid sloc> implicit __clang_svint64x4_t '__clang_svint64x4_t'
+| `-BuiltinType 0xaaaaee759f30 '__clang_svint64x4_t'
+|-TypedefDecl 0xaaaaee83b8f8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint8x4_t '__clang_svuint8x4_t'
+| `-BuiltinType 0xaaaaee759f50 '__clang_svuint8x4_t'
+|-TypedefDecl 0xaaaaee83b968 <<invalid sloc>> <invalid sloc> implicit __clang_svuint16x4_t '__clang_svuint16x4_t'
+| `-BuiltinType 0xaaaaee759f70 '__clang_svuint16x4_t'
+|-TypedefDecl 0xaaaaee83b9d8 <<invalid sloc>> <invalid sloc> implicit __clang_svuint32x4_t '__clang_svuint32x4_t'
+| `-BuiltinType 0xaaaaee759f90 '__clang_svuint32x4_t'
+|-TypedefDecl 0xaaaaee83ba48 <<invalid sloc>> <invalid sloc> implicit __clang_svuint64x4_t '__clang_svuint64x4_t'
+| `-BuiltinType 0xaaaaee759fb0 '__clang_svuint64x4_t'
+|-TypedefDecl 0xaaaaee83bab8 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat16x4_t '__clang_svfloat16x4_t'
+| `-BuiltinType 0xaaaaee759fd0 '__clang_svfloat16x4_t'
+|-TypedefDecl 0xaaaaee83bb28 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat32x4_t '__clang_svfloat32x4_t'
+| `-BuiltinType 0xaaaaee759ff0 '__clang_svfloat32x4_t'
+|-TypedefDecl 0xaaaaee83bb98 <<invalid sloc>> <invalid sloc> implicit __clang_svfloat64x4_t '__clang_svfloat64x4_t'
+| `-BuiltinType 0xaaaaee75a010 '__clang_svfloat64x4_t'
+|-TypedefDecl 0xaaaaee83bc08 <<invalid sloc>> <invalid sloc> implicit __clang_svbfloat16x4_t '__clang_svbfloat16x4_t'
+| `-BuiltinType 0xaaaaee75a030 '__clang_svbfloat16x4_t'
+|-TypedefDecl 0xaaaaee83bc78 <<invalid sloc>> <invalid sloc> implicit __SVBool_t '__SVBool_t'
+| `-BuiltinType 0xaaaaee75a050 '__SVBool_t'
+|-TypedefDecl 0xaaaaee83bce8 <<invalid sloc>> <invalid sloc> implicit __clang_svboolx2_t '__clang_svboolx2_t'
+| `-BuiltinType 0xaaaaee75a070 '__clang_svboolx2_t'
+|-TypedefDecl 0xaaaaee83bd58 <<invalid sloc>> <invalid sloc> implicit __clang_svboolx4_t '__clang_svboolx4_t'
+| `-BuiltinType 0xaaaaee75a090 '__clang_svboolx4_t'
+|-TypedefDecl 0xaaaaee83bdc8 <<invalid sloc>> <invalid sloc> implicit __SVCount_t '__SVCount_t'
+| `-BuiltinType 0xaaaaee75a0b0 '__SVCount_t'
+|-TypedefDecl 0xaaaaee83be70 <<invalid sloc>> <invalid sloc> implicit __builtin_ms_va_list 'char *'
+| `-PointerType 0xaaaaee83be20 'char *'
+|   `-BuiltinType 0xaaaaee759310 'char'
+|-TypedefDecl 0xaaaaee83c2c0 <<invalid sloc>> <invalid sloc> implicit __builtin_va_list 'std::__va_list'
+| `-RecordType 0xaaaaee83bf80 'std::__va_list'
+|   `-CXXRecord 0xaaaaee83bed0 '__va_list'
+|-ClassTemplateDecl 0xaaaaee859600 <filter_args.cpp:1:1, col:81> col:56 X
+| |-TemplateTypeParmDecl 0xaaaaee8592d8 <col:11, col:17> col:17 referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl 0xaaaaee8593b8 <col:20, col:29> col:25 'bool' depth 0 index 1 B
+| | `-TemplateArgument <col:29> expr 'false'
+| |   `-CXXBoolLiteralExpr 0xaaaaee859390 <col:29> 'bool' false
+| |-TemplateTypeParmDecl 0xaaaaee859448 <col:36, col:46> col:42 class depth 0 index 2 U
+| | `-TemplateArgument type 'T':'type-parameter-0-0'
+| |   `-TemplateTypeParmType 0xaaaaee859360 'T' dependent depth 0 index 0
+| |     `-TemplateTypeParm 0xaaaaee8592d8 'T'
+| |-CXXRecordDecl 0xaaaaee859550 <col:49, col:81> col:56 struct X definition
+| | |-DefinitionData empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+| | | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | | |-MoveConstructor exists simple trivial needs_implicit
+| | | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | | |-MoveAssignment exists simple trivial needs_implicit
+| | | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| | |-CXXRecordDecl 0xaaaaee859930 <col:49, col:56> col:56 implicit struct X
+| | `-CXXRecordDecl 0xaaaaee8599e0 <col:60, col:78> col:67 struct C definition
+| |   |-DefinitionData aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+| |   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| |   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| |   | |-MoveConstructor exists simple trivial needs_implicit
+| |   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| |   | |-MoveAssignment exists simple trivial needs_implicit
+| |   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |   |-CXXRecordDecl 0xaaaaee859b20 <col:60, col:67> col:67 implicit struct C
+| |   `-FieldDecl 0xaaaaee859be8 <col:71, col:75> col:75 x 'int'
+| `-ClassTemplateSpecializationDecl 0xaaaaee860790 <col:1, col:81> col:56 struct X definition implicit_instantiation
+|   |-DefinitionData pass_in_registers empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+|   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+|   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveConstructor exists simple trivial needs_implicit
+|   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveAssignment exists simple trivial needs_implicit
+|   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+|   |-TemplateArgument type 'int'
+|   | `-BuiltinType 0xaaaaee759370 'int'
+|   |-TemplateArgument integral 'false'
+|   |-TemplateArgument type 'long'
+|   | `-BuiltinType 0xaaaaee759390 'long'
+|   |-CXXRecordDecl 0xaaaaee860a28 <col:49, col:56> col:56 implicit struct X
+|   `-CXXRecordDecl 0xaaaaee860ad8 <col:60, line:3:41> col:41 struct C instantiated_from 0xaaaaee8599e0
+|-ClassTemplatePartialSpecializationDecl 0xaaaaee859eb0 <line:2:1, col:57> col:27 struct X definition explicit_specialization
+| |-DefinitionData empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-TemplateArgument type 'type-parameter-0-0 *'
+| | `-PointerType 0xaaaaee859d10 'type-parameter-0-0 *' dependent
+| |   `-TemplateTypeParmType 0xaaaaee859330 'type-parameter-0-0' dependent depth 0 index 0
+| |-TemplateArgument integral 'false'
+| |-TemplateArgument type 'type-parameter-0-0 *'
+| | `-PointerType 0xaaaaee859d10 'type-parameter-0-0 *' dependent
+| |   `-TemplateTypeParmType 0xaaaaee859330 'type-parameter-0-0' dependent depth 0 index 0
+| |-TemplateTypeParmDecl 0xaaaaee859c70 <col:11, col:17> col:17 referenced class depth 0 index 0 T
+| |-CXXRecordDecl 0xaaaaee85a100 <col:20, col:27> col:27 implicit struct X
+| `-CXXRecordDecl 0xaaaaee85a1b0 <col:36, col:54> col:43 struct C definition
+|   |-DefinitionData aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+|   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+|   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveConstructor exists simple trivial needs_implicit
+|   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveAssignment exists simple trivial needs_implicit
+|   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+|   |-CXXRecordDecl 0xaaaaee8605d0 <col:36, col:43> col:43 implicit struct C
+|   `-FieldDecl 0xaaaaee860698 <col:47, col:51> col:51 p 'int'
+|-CXXRecordDecl 0xaaaaee860bd0 parent 0xaaaaee860790 prev 0xaaaaee860ad8 <line:3:1, col:52> col:41 struct C definition instantiated_from 0xaaaaee8599e0
+| |-NestedNameSpecifier TypeSpec 'X<int, false, long>'
+| |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-CXXRecordDecl 0xaaaaee860d28 <col:13, col:41> col:41 implicit struct C
+| `-FieldDecl 0xaaaaee860df0 <col:45, col:49> col:49 j 'int'
+|-ClassTemplateDecl 0xaaaaee861118 <line:4:1, col:81> col:54 D
+| |-TemplateTemplateParmDecl 0xaaaaee860f30 <col:11, col:34> col:34 depth 0 index 0 TT
+| | `-TemplateTypeParmDecl 0xaaaaee860e60 <col:21> col:26 class depth 1 index 0
+| |-TemplateTypeParmDecl 0xaaaaee860f90 <col:38, col:44> col:44 referenced class depth 0 index 1 T
+| |-CXXRecordDecl 0xaaaaee861068 <col:47, col:81> col:54 struct D definition
+| | |-DefinitionData empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+| | | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | | |-MoveConstructor exists simple trivial needs_implicit
+| | | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | | |-MoveAssignment exists simple trivial needs_implicit
+| | | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| | |-CXXRecordDecl 0xaaaaee861b18 <col:47, col:54> col:54 implicit struct D
+| | `-CXXRecordDecl 0xaaaaee861bc8 <col:58, col:78> col:65 struct C definition
+| |   |-DefinitionData aggregate standard_layout trivially_copyable trivial
+| |   | |-DefaultConstructor exists trivial needs_implicit
+| |   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| |   | |-MoveConstructor exists simple trivial needs_implicit
+| |   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| |   | |-MoveAssignment exists simple trivial needs_implicit
+| |   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |   |-CXXRecordDecl 0xaaaaee861d00 <col:58, col:65> col:65 implicit struct C
+| |   `-FieldDecl 0xaaaaee861f38 <col:69, col:75> col:75 m 'TT<T>'
+| |-ClassTemplateSpecialization 0xaaaaee863a10 'D'
+| `-ClassTemplateSpecializationDecl 0xaaaaee864120 <col:1, col:81> col:54 struct D definition implicit_instantiation
+|   |-DefinitionData pass_in_registers empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+|   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+|   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveConstructor exists simple trivial needs_implicit
+|   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveAssignment exists simple trivial needs_implicit
+|   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+|   |-TemplateArgument template 'q::F'
+|   | `-ClassTemplateDecl 0xaaaaee862670 <line:6:15, col:44> col:41 F
+|   |-TemplateArgument type 'int'
+|   | `-BuiltinType 0xaaaaee759370 'int'
+|   |-CXXRecordDecl 0xaaaaee864358 <line:4:47, col:54> col:54 implicit struct D
+|   `-CXXRecordDecl 0xaaaaee864408 <col:58, line:8:34> col:34 struct C instantiated_from 0xaaaaee861bc8
+|-ClassTemplateDecl 0xaaaaee862110 <line:5:1, col:30> col:27 E
+| |-TemplateTypeParmDecl 0xaaaaee861fc0 <col:11, col:17> col:17 class depth 0 index 0 T
+| `-CXXRecordDecl 0xaaaaee862060 <col:20, col:30> col:27 struct E definition
+|   |-DefinitionData empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+|   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+|   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveConstructor exists simple trivial needs_implicit
+|   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveAssignment exists simple trivial needs_implicit
+|   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+|   `-CXXRecordDecl 0xaaaaee8623c0 <col:20, col:27> col:27 implicit struct E
+|-NamespaceDecl 0xaaaaee862488 <line:6:1, col:47> col:11 q
+| `-ClassTemplateDecl 0xaaaaee862670 <col:15, col:44> col:41 F
+|   |-TemplateTypeParmDecl 0xaaaaee862518 <col:25, col:31> col:31 class depth 0 index 0 T
+|   `-CXXRecordDecl 0xaaaaee8625c0 <col:34, col:44> col:41 struct F definition
+|     |-DefinitionData empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+|     | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+|     | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+|     | |-MoveConstructor exists simple trivial needs_implicit
+|     | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+|     | |-MoveAssignment exists simple trivial needs_implicit
+|     | `-Destructor simple irrelevant trivial constexpr needs_implicit
+|     `-CXXRecordDecl 0xaaaaee862920 <col:34, col:41> col:41 implicit struct F
+|-ClassTemplateSpecializationDecl 0xaaaaee863a10 <line:7:1, col:53> col:20 struct D definition explicit_specialization
+| |-DefinitionData pass_in_registers empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-TemplateArgument template 'E'
+| | `-ClassTemplateDecl 0xaaaaee862110 <line:5:1, col:30> col:27 E
+| |-TemplateArgument type 'int'
+| | `-BuiltinType 0xaaaaee759370 'int'
+| |-CXXRecordDecl 0xaaaaee863c28 <line:7:13, col:20> col:20 implicit struct D
+| `-CXXRecordDecl 0xaaaaee863cd8 <col:32, col:50> col:39 struct C definition
+|   |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+|   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+|   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveConstructor exists simple trivial needs_implicit
+|   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveAssignment exists simple trivial needs_implicit
+|   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+|   |-CXXRecordDecl 0xaaaaee863e10 <col:32, col:39> col:39 implicit struct C
+|   `-FieldDecl 0xaaaaee863ed8 <col:43, col:47> col:47 e 'int'
+|-CXXRecordDecl 0xaaaaee864500 parent 0xaaaaee864120 prev 0xaaaaee864408 <line:8:1, col:45> col:34 struct C definition instantiated_from 0xaaaaee861bc8
+| |-NestedNameSpecifier TypeSpec 'D<q::F, int>'
+| |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-CXXRecordDecl 0xaaaaee864658 <col:13, col:34> col:34 implicit struct C
+| `-FieldDecl 0xaaaaee864720 <col:38, col:42> col:42 f 'int'
+|-EnumDecl 0xaaaaee864790 <line:9:1, col:21> col:12 referenced class K 'int'
+| |-EnumConstantDecl 0xaaaaee864878 <col:16> col:16 a 'K'
+| `-EnumConstantDecl 0xaaaaee8648d8 <col:19> col:19 referenced b 'K'
+|-ClassTemplateDecl 0xaaaaee865370 <line:10:1, col:40> col:23 G
+| |-NonTypeTemplateParmDecl 0xaaaaee865248 <col:11, col:13> col:13 'K' depth 0 index 0 k
+| |-CXXRecordDecl 0xaaaaee8652c0 <col:16, col:40> col:23 struct G definition
+| | |-DefinitionData empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+| | | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | | |-MoveConstructor exists simple trivial needs_implicit
+| | | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | | |-MoveAssignment exists simple trivial needs_implicit
+| | | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| | |-CXXRecordDecl 0xaaaaee865640 <col:16, col:23> col:23 implicit struct G
+| | `-CXXRecordDecl 0xaaaaee8656f0 <col:27, col:37> col:34 struct C definition
+| |   |-DefinitionData empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+| |   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| |   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| |   | |-MoveConstructor exists simple trivial needs_implicit
+| |   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| |   | |-MoveAssignment exists simple trivial needs_implicit
+| |   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |   `-CXXRecordDecl 0xaaaaee865830 <col:27, col:34> col:34 implicit struct C
+| |-ClassTemplateSpecializationDecl 0xaaaaee865a08 <col:1, col:40> col:23 struct G definition implicit_instantiation
+| | |-DefinitionData pass_in_registers empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+| | | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | | |-MoveConstructor exists simple trivial needs_implicit
+| | | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | | |-MoveAssignment exists simple trivial needs_implicit
+| | | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| | |-TemplateArgument integral 'K::b'
+| | |-CXXRecordDecl 0xaaaaee865c08 <col:16, col:23> col:23 implicit struct G
+| | `-CXXRecordDecl 0xaaaaee865cb8 <col:27, line:11:29> col:29 struct C instantiated_from 0xaaaaee8656f0
+| `-ClassTemplateSpecializationDecl 0xaaaaee8660c8 <line:10:1, col:40> col:23 struct G definition implicit_instantiation
+|   |-DefinitionData pass_in_registers empty aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor can_const_default_init
+|   | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+|   | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveConstructor exists simple trivial needs_implicit
+|   | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+|   | |-MoveAssignment exists simple trivial needs_implicit
+|   | `-Destructor simple irrelevant trivial constexpr needs_implicit
+|   |-TemplateArgument integral '(K)7'
+|   |-CXXRecordDecl 0xaaaaee8669e8 <col:16, col:23> col:23 implicit struct G
+|   `-CXXRecordDecl 0xaaaaee866a98 <col:27, line:12:29> col:29 struct C instantiated_from 0xaaaaee8656f0
+|-CXXRecordDecl 0xaaaaee865db0 parent 0xaaaaee865a08 prev 0xaaaaee865cb8 <line:11:1, col:40> col:29 struct C definition instantiated_from 0xaaaaee8656f0
+| |-NestedNameSpecifier TypeSpec 'G<K::b>'
+| |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+| | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+| | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveConstructor exists simple trivial needs_implicit
+| | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+| | |-MoveAssignment exists simple trivial needs_implicit
+| | `-Destructor simple irrelevant trivial constexpr needs_implicit
+| |-CXXRecordDecl 0xaaaaee865f08 <col:13, col:29> col:29 implicit struct C
+| `-FieldDecl 0xaaaaee865fd0 <col:33, col:37> col:37 g 'int'
+`-CXXRecordDecl 0xaaaaee866b90 parent 0xaaaaee8660c8 prev 0xaaaaee866a98 <line:12:1, col:40> col:29 struct C definition instantiated_from 0xaaaaee8656f0
+  |-NestedNameSpecifier TypeSpec 'G<K(7)>':'G<7>'
+  |-DefinitionData pass_in_registers aggregate standard_layout trivially_copyable pod trivial literal has_constexpr_non_copy_move_ctor
+  | |-DefaultConstructor exists trivial constexpr needs_implicit defaulted_is_constexpr
+  | |-CopyConstructor simple trivial has_const_param needs_implicit implicit_has_const_param
+  | |-MoveConstructor exists simple trivial needs_implicit
+  | |-CopyAssignment simple trivial has_const_param needs_implicit implicit_has_const_param
+  | |-MoveAssignment exists simple trivial needs_implicit
+  | `-Destructor simple irrelevant trivial constexpr needs_implicit
+  |-CXXRecordDecl 0xaaaaee866ce8 <col:13, col:29> col:29 implicit struct C
+  `-FieldDecl 0xaaaaee866db0 <col:33, col:37> col:37 h 'int'
