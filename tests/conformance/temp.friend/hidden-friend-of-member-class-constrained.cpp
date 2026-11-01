@@ -6,7 +6,6 @@
 // only by argument-dependent lookup inside a concept's requires-expression.
 //@ expect: run
 //@ stdout: 1 0
-//@ xfail(kiln): "reference to a member of a dependent context" NYI (WP-272)
 #include <cstdio>
 template <class T> concept eq = requires(const T& a) { a == a; };
 struct NoEq {};
