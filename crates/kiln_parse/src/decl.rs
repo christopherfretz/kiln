@@ -489,9 +489,14 @@ impl Parser<'_, '_> {
                 }
                 continue;
             }
-            if !ds.has_type_specifier() && self.template_scope_end(self.pos()).is_some() {
+            if !ds.has_type_specifier()
+                && self.template_scope_end(self.pos()).is_some()
+                && !self.at_special_declarator(ctx)
+            {
                 // `X<A>::name` / `td::name` whose scope the lookahead
-                // cannot look into: parse the scope first.
+                // cannot look into: parse the scope first. Not
+                // `X<T*>::X(`, a constructor of a partial specialization:
+                // the declarator parses its scope, entering it.
                 self.annotate_template_scope();
             }
             if self.decltype_scope_end(self.pos()).is_some() || self.at_decltype_scope() {

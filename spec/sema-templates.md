@@ -2687,7 +2687,7 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
 `__has_builtin` answers false):
 | Stub | Owner |
 |---|---|
-| The 10 other overload-resolution traits (`__is_trivially_constructible`, `__is_trivially_assignable`, `__reference_*_from_temporary`, …) | WP-068a (`__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU; `__is_constructible` / `__is_nothrow_constructible` the three `__is_convertible` forms and `__is_nothrow_assignable` in WP-131) |
+| The 8 other overload-resolution traits (`__reference_*_from_temporary`, …) | WP-068a (`__is_trivially_constructible` / `__is_trivially_assignable` landed in WP-155: `init_check` `.ok && .trivial`, with clang 19's "no non-trivial call in the expression" rule; `__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU; `__is_constructible` / `__is_nothrow_constructible` the three `__is_convertible` forms and `__is_nothrow_assignable` in WP-131) |
 | `__is_layout_compatible`, `__is_pointer_interconvertible_base_of`, `__can_pass_in_regs`, `__is_bitwise_cloneable` | M4 (unassigned) |
 | `__is_trivially_relocatable` (`TRIVIALLY_RELOCATABLE` is never set) | unowned: S3C canPassInRegisters |
 | `__type_pack_element` and `__make_integer_seq` with pack arguments | WP-072 |
@@ -3468,6 +3468,32 @@ requires-clause scope.**
   `basic.scope.param/`, `dcl.meaning/qualified-declarator-scope-template.cpp`,
   `templates/deduce/temp.deduct.type-defaulted-args.cpp`, and the
   `ast/` goldens for each.
+
+**Landed (WP-155): out-of-line member classes, partial-specialization
+declarator scopes.**
+- *Out-of-line member classes and enums* ([temp.mem.class],
+  [temp.mem.enum]): `template<class T> struct A<T>::B { ... };` defines
+  the member class declared in the class template; it is a pattern for
+  `MemberOfSpecialization` (§4.6) and is instantiated when completeness
+  is needed. Members of a member class of a partial specialization, and
+  member class templates, are supported (`templ/mod.rs`, `decl.rs`
+  `act_on_tag`; the parser's `parse_tag_qualifier`).
+- *Constructors of partial specializations*: `X<T*>::X(` is a
+  constructor declarator. The parser no longer annotates the template
+  scope ahead (`annotate_template_scope`) when `at_special_declarator`
+  holds.
+- *Non-type arguments in a declarator scope*: a dependent template-id
+  keeps its written arguments (§3.4), so `template<int S> void
+  B<1, S>::g()` did not find the partial specialization `B<1, S>`
+  (registered with converted arguments). When entering a declarator
+  context, `entered_partial_by_converted_args` converts the arguments
+  with `check_template_args` and looks again (`find_partial`). Gap:
+  dependent template-ids elsewhere are still neither checked nor
+  converted (clang checks every template-id).
+- Tests: `tests/conformance/temp.mem.class/`, `temp.mem.enum/`,
+  `temp.spec.partial.member/out-of-line-ctors.cpp`,
+  `temp.spec.partial.member/non-type-arg-scope.cpp`,
+  `templates/builtins/builtin.is-trivially-constructible-assignable.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 
