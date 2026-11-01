@@ -2157,7 +2157,14 @@ containing one records, on the `CXXDefaultInitExpr`, the values of the
 constructor's name (the class name for an implicit constructor) or of the
 `}`/`)` of an aggregate initialization, with the constructor or the
 enclosing function as the function (clang `CXXDefaultInitExpr::
-getUsedLocation`/`getUsedContext`). The Oven and codegen read them from
+getUsedLocation`/`getUsedContext`). For a parenthesized aggregate
+initialization by a C-style cast `(S)x` that is the operand's last token
+(`Sema::expr_end_loc`, clang `getEndLoc`; WP-182): a stored closing token
+(a call's or a parenthesized operand's `)`, a `}`), else the end of the
+last operand of an implicit node, cast, prefix/binary operator or
+conditional, else the node's own location (a name, literal, member name,
+postfix operator). A built-in subscript records no `]`, so `(S)a[i]`
+takes the `[` (clang: the `]`). The Oven and codegen read them from
 the outermost such default argument or member initializer in scope, and
 the codegen prepass evaluates the immediate invocations of such a member
 initializer per use (`fold_immediate_in`). Substitution drops the trailing

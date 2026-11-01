@@ -369,6 +369,60 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The location of the last token of `e` (clang's `getEndLoc`): the
+    /// stored closing token (`)`, `}`) when there is one, else the end of
+    /// the last operand for a node that ends with one (a binary or prefix
+    /// operator, a conditional, a C-style cast, an implicit node), else
+    /// the node's own location (a name, a literal, a member name, a
+    /// postfix operator).
+    pub(crate) fn expr_end_loc(&self, mut e: ExprId) -> Loc {
+        loop {
+            if let Some(l) = self.ast.exprs.end_loc(e) {
+                return l;
+            }
+            let n = self.ast.exprs.get(e);
+            let last = match n.kind() {
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::BinaryOperator
+                | ExprKind::CompoundAssignOperator
+                | ExprKind::ConditionalOperator
+                | ExprKind::BinaryConditionalOperator => true,
+                ExprKind::UnaryOperator => !self.ast.exprs.unary_op(e).is_postfix(),
+                ExprKind::CXXRewrittenBinaryOperator => {
+                    e = self.ast.exprs.rewritten_semantic(e);
+                    continue;
+                }
+                ExprKind::CXXOperatorCallExpr => {
+                    use kiln_ast::names::OverloadedOperator as O;
+                    let op = self.ast.exprs.operator_call_op(e);
+                    let args = self.ast.lists.get(self.ast.exprs.call_args(e));
+                    let postfix = matches!(op, O::PlusPlus | O::MinusMinus) && args.len() == 2;
+                    if matches!(op, O::Call | O::Subscript | O::Arrow) || postfix {
+                        return n.loc();
+                    }
+                    match args.last() {
+                        Some(&a) => {
+                            e = ExprId::new(a);
+                            continue;
+                        }
+                        None => return n.loc(),
+                    }
+                }
+                _ => false,
+            };
+            let kids = if last { self.ast.exprs.children(e, &self.ast.lists) } else { Vec::new() };
+            match kids.last() {
+                Some(&k) => e = k,
+                None => return n.loc(),
+            }
+        }
+    }
+
     // -- full-expressions --------------------------------------------------------
 
     /// The end of a full-expression ([intro.execution]/5): resolves the
@@ -3888,9 +3942,13 @@ impl Sema<'_, '_> {
                 temp_end: None,
                 rparen: None,
                 // clang `InitializationKind::CreateFunctionalCast` /
-                // `CreateCast`: the `)`. A C-style cast's range ends at its
-                // operand's last token, which kiln does not record.
-                agg_end: (style != CastStyle::CStyle).then_some(rparen),
+                // `CreateCast`: the `)`; a C-style cast's range ends at its
+                // operand's last token (WP-182).
+                agg_end: Some(if style == CastStyle::CStyle {
+                    self.expr_end_loc(e)
+                } else {
+                    rparen
+                }),
                 sites: crate::class::DiagSites {
                     access: loc,
                     deleted: loc,
