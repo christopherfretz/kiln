@@ -1488,6 +1488,11 @@ immediate context: errors are hard.
   "not a candidate" before deduction only when it is explicit
   non-dependently (clang `isNonDependentlyExplicit`;
   `Sema::nondependently_explicit`).
+- **Return types** ([temp.deduct.general]/11.10). A substituted
+  signature (or any substituted function type) whose return type is an
+  array or function type fails with `function cannot return
+  {array|function} type T`, a deduction failure under SFINAE (clang
+  `BuildFunctionType`; `Subst::check_return_type`, WP-201).
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.

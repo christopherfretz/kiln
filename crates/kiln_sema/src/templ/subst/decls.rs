@@ -626,6 +626,7 @@ impl Substituter<'_, '_, '_> {
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = self.ty(p.ret(), loc)?;
+            self.check_return_type(ret, loc)?;
             let exc = self.exc_spec(&p, loc)?;
             Ok((params, ret, exc))
         });

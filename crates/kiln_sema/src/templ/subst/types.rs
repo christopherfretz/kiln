@@ -37,6 +37,24 @@ impl Substituter<'_, '_, '_> {
 
     /// One declarator operator applied to `base` with the declarator's
     /// checks.
+    /// [temp.deduct.general]/11.10: a substituted function type whose
+    /// return type is an array or function type fails (clang
+    /// `BuildFunctionType`).
+    pub(crate) fn check_return_type(&mut self, ret: QualType, loc: Loc) -> SubstResult<()> {
+        let t = &self.sema.ast.types;
+        if !t.is_array(ret) && !t.is_function(ret) {
+            return Ok(());
+        }
+        let which = if t.is_array(ret) { "0" } else { "1" };
+        let d = self
+            .sema
+            .diag(DiagId::sema_func_returning_array_function, loc)
+            .arg(which)
+            .arg(self.sema.ty_arg(ret));
+        self.sema.emit(d);
+        Err(SubstFail)
+    }
+
     fn chunk(&mut self, base: QualType, chunk: Chunk, loc: Loc) -> SubstResult<QualType> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, loc);
         d.site = crate::declspec::DeclSite::Subst;
@@ -171,6 +189,7 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::Function(p) => {
                 let ret = self.ty(p.ret(), loc)?;
+                self.check_return_type(ret, loc)?;
                 let params = self.sema.ast.types.params(&p).to_vec();
                 let out = self.expand_types(&params, loc)?;
                 let exc = match self.sema.ast.types.exc_spec(&p) {
