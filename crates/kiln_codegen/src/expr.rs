@@ -2771,17 +2771,18 @@ impl Cg<'_> {
             (Addr { v: a, ty, align }, None)
         };
         self.f.locals.insert(d, addr);
-        // Default-initialization by a trivial constructor emits nothing.
-        let Some(init) = v.init.filter(|&i| {
+        // Default-initialization by a trivial constructor emits nothing
+        // (but a non-trivial destructor still gets its cleanup).
+        let init = v.init.filter(|&i| {
             !ast.is_trivial_default_construction(i) || ast.exprs.construct_info(i).zeroing
-        }) else {
-            return Ok(());
-        };
-        if self.f.fir.cur().is_none() {
-            return Ok(());
+        });
+        if let Some(init) = init
+            && self.f.fir.cur().is_some()
+        {
+            self.emit_var_init(d, q, addr, init)?;
         }
-        self.emit_var_init(d, q, addr, init)?;
-        // clang `EmitAutoVarCleanups`.
+        // clang `EmitAutoVarCleanups`: no insertion point, no cleanup
+        // (sema rejects jumps into the variable's scope).
         if self.f.fir.cur().is_none() {
             return Ok(());
         }
