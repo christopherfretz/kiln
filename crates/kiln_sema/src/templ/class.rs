@@ -569,7 +569,11 @@ impl Sema<'_, '_> {
             }
             if diagnose {
                 let t = self.tag_type(spec);
-                let at = if matched.is_some() { pattern } else { tmpl };
+                // clang notes the latest declaration (one after
+                // `template<> template<...>` is a new decl,
+                // [temp.expl.spec]/16; kiln adds none for a plain
+                // redeclaration).
+                let at = if matched.is_some() { pattern } else { self.ast.latest(pattern) };
                 let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(at).loc());
                 let d = self
                     .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)

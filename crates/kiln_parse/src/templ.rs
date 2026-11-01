@@ -97,6 +97,15 @@ impl Parser<'_, '_> {
                 self.bump();
                 self.bump();
             }
+            if self.at_kw(Kw::Template) && self.peek_is(1, Punct::Less) {
+                // `template<> template<class U> struct A<int>::B {...}`: a
+                // member template of an implicitly instantiated class
+                // specialized as a template ([temp.expl.spec]/16).
+                self.s.act_member_template_spec_start(loc);
+                self.parse_template_declaration(ctx);
+                self.s.act_member_template_spec_end();
+                return;
+            }
             if self.at_partial_specialization()
                 || self.at_var_template_spec()
                 || !self.at_spec_tag_or_template()

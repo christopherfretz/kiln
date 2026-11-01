@@ -1595,6 +1595,9 @@ impl Sema<'_, '_> {
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
+            if d.qualifier.is_some() && self.templ.member_spec.is_some() {
+                self.specialize_member_template(t);
+            }
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
         if d.qualifier.is_none() {
@@ -1642,6 +1645,9 @@ impl Sema<'_, '_> {
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
+            if d.qualifier.is_some() && self.templ.member_spec.is_some() {
+                self.specialize_member_template(t);
+            }
         }
         if d.qualifier.is_none() && self.kind_of(decl) == DeclKind::CXXConversion {
             // A conversion function hides a using-declared base one with
@@ -3763,6 +3769,7 @@ impl Sema<'_, '_> {
         nloc: Loc,
         q: DeclId,
         use_: TagUse,
+        templated: bool,
     ) {
         if use_ == TagUse::Definition
             && let Some(&other) = self.lookup_qualified(q, n, LookupKind::All).decls.first()
@@ -3771,6 +3778,24 @@ impl Sema<'_, '_> {
             let msg =
                 self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
             let msg = self.note_prev(msg, other, true);
+            self.emit(msg);
+            return;
+        }
+        if templated {
+            // A qualified class template declaration names a member
+            // template of the nominated scope (clang's `CheckClassTemplate`
+            // reports `err_member_decl_does_not_match` as a definition,
+            // with or without a body).
+            let scope = if self.kind_of(q) == DeclKind::CXXRecord {
+                let t = self.this_class_type(q);
+                format!("'{}'", self.ty_str(t))
+            } else {
+                self.qualifier_desc(q)
+            };
+            let msg = self
+                .diag(DiagId::sema_member_def_no_match, nloc)
+                .arg(sym_str(self, n))
+                .arg(scope);
             self.emit(msg);
             return;
         }
@@ -3896,6 +3921,10 @@ impl Sema<'_, '_> {
                     }
                 } else if use_ == TagUse::Declaration
                     && self.ast.decls.get(p).misc().friend() != FriendKind::Undeclared
+                    // `template<> template<class U> struct A<int>::B;`
+                    // declares the member template specialized
+                    // ([temp.expl.spec]/16): a new decl (below).
+                    && self.templ.member_spec.is_none()
                 {
                     // A redeclaration creates no new decl (a deviation:
                     // clang adds a `ClassTemplateDecl` per redeclaration),
@@ -3907,7 +3936,7 @@ impl Sema<'_, '_> {
                     return p;
                 }
             } else if let Some(q) = qualifier {
-                self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_);
+                self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
@@ -3924,10 +3953,12 @@ impl Sema<'_, '_> {
         if qualifier.is_none() {
             self.set_member_access(d);
         }
-        if let Some(t) = self.finish_template_pattern(d)
-            && qualifier.is_none()
-        {
-            self.set_member_access(t);
+        if let Some(t) = self.finish_template_pattern(d) {
+            if qualifier.is_none() {
+                self.set_member_access(t);
+            } else if self.templ.member_spec.is_some() {
+                self.specialize_member_template(t);
+            }
         }
         if let Some((n, _)) = name
             && self.in_local_scope()
