@@ -179,6 +179,24 @@ impl Types {
         }
     }
 
+    /// The non-bit-field member (or base) of the record `t` that holds
+    /// byte `off`. A member of non-zero size wins over a zero-size one at
+    /// the same offset (a zero-length array, GNU `T x[0]`, holds no byte:
+    /// libc++'s `char __padding_[0]` before `__data_` in `basic_string`),
+    /// which is found only when nothing else is there.
+    pub fn field_at(&self, t: OTy, off: u64) -> Option<FieldInfo> {
+        let fs = self.fields(t);
+        let sized = |f: &&FieldInfo| {
+            f.width.is_none() && off >= f.offset && off < f.offset + self.size(f.ty)
+        };
+        fs.iter()
+            .find(sized)
+            .or_else(|| {
+                fs.iter().find(|f| f.width.is_none() && self.size(f.ty) == 0 && off == f.offset)
+            })
+            .copied()
+    }
+
     pub fn unions(&self, t: OTy) -> &[(u64, OTy)] {
         let (a, b) = self.info(t).upos;
         &self.union_pos[a as usize..b as usize]
@@ -557,26 +575,24 @@ impl Types {
                     t = elem;
                 }
                 _ if t == p => return Some((base, 1, false)),
-                TyKind::Record { union, .. } => {
+                TyKind::Record { union: true, .. } => {
                     let rel = o - base;
-                    let mut found = None;
                     for f in self.fields(t) {
                         if f.width.is_some() {
                             continue;
                         }
                         let sz = self.size(f.ty);
-                        if rel >= f.offset && rel < f.offset + sz.max(1) {
-                            if union {
-                                if let Some(r) = self.extent_in(f.ty, base + f.offset, o, p) {
-                                    return Some(r);
-                                }
-                                continue;
-                            }
-                            found = Some(*f);
-                            break;
+                        if rel >= f.offset
+                            && rel < f.offset + sz.max(1)
+                            && let Some(r) = self.extent_in(f.ty, base + f.offset, o, p)
+                        {
+                            return Some(r);
                         }
                     }
-                    let f = found?;
+                    return None;
+                }
+                TyKind::Record { .. } => {
+                    let f = self.field_at(t, o - base)?;
                     base += f.offset;
                     t = f.ty;
                 }
@@ -603,19 +619,42 @@ impl Types {
     /// Whether an object of type `p` lives at byte `off` of an object of
     /// type `root` (C++26 [expr.static.cast]/14 for `void*` casts).
     pub fn has_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
+        self.subobject_at(root, off, p, false)
+    }
+
+    /// [`Self::has_subobject`], where a bit-field of type `p` whose first
+    /// bit is in byte `off` counts too: the member a bit-field access at
+    /// `off` reaches, through members of class type
+    /// (`u.s.anon.bits = 1`, [class.union]/2).
+    pub fn has_member_at(&self, root: OTy, off: u64, p: OTy) -> bool {
+        self.subobject_at(root, off, p, true)
+    }
+
+    fn subobject_at(&self, root: OTy, off: u64, p: OTy, bits: bool) -> bool {
         if p == root && off == 0 {
             return true;
         }
         match self.kind(root) {
             TyKind::Array { elem, n } => {
                 let es = self.size(elem);
-                es != 0 && off / es < n && self.has_subobject(elem, off % es, p)
+                es != 0 && off / es < n && self.subobject_at(elem, off % es, p, bits)
             }
-            TyKind::Record { .. } => self.fields(root).iter().any(|f| {
-                f.width.is_none()
-                    && off >= f.offset
-                    && off < f.offset + self.size(f.ty).max(1)
-                    && self.has_subobject(f.ty, off - f.offset, p)
+            TyKind::Record { union: false, .. } => {
+                self.field_at(root, off)
+                    .is_some_and(|f| self.subobject_at(f.ty, off - f.offset, p, bits))
+                    || bits
+                        && self
+                            .fields(root)
+                            .iter()
+                            .any(|f| f.width.is_some() && f.ty == p && off == f.offset)
+            }
+            TyKind::Record { .. } => self.fields(root).iter().any(|f| match f.width {
+                None => {
+                    off >= f.offset
+                        && off < f.offset + self.size(f.ty).max(1)
+                        && self.subobject_at(f.ty, off - f.offset, p, bits)
+                }
+                Some(_) => bits && f.ty == p && off == f.offset,
             }),
             _ => false,
         }

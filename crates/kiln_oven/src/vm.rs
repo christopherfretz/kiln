@@ -1528,11 +1528,7 @@ impl Oven {
                     t = elem;
                 }
                 TyKind::Record { .. } => {
-                    let Some(f) = self.types.fields(t).iter().find(|f| {
-                        f.width.is_none()
-                            && off >= f.offset
-                            && off < f.offset + self.types.size(f.ty).max(1)
-                    }) else {
+                    let Some(f) = self.types.field_at(t, off) else {
                         return t;
                     };
                     off -= f.offset;
@@ -1577,7 +1573,7 @@ impl Oven {
                         let reach = |f: &crate::ty::FieldInfo| {
                             contains(f)
                                 && (f.width.is_some()
-                                    || self.types.has_subobject(f.ty, rel - f.offset, ty))
+                                    || self.types.has_member_at(f.ty, rel - f.offset, ty))
                         };
                         if let Some(i) = active {
                             let f = fields[i as usize];
@@ -1603,7 +1599,13 @@ impl Oven {
                             active: active.map(|i| fields[i as usize].decl),
                         });
                     }
-                    let Some(f) = fields.iter().find(|f| contains(f)) else { return Ok(()) };
+                    let Some(f) = self
+                        .types
+                        .field_at(t, rel)
+                        .or_else(|| fields.iter().find(|f| contains(f)).copied())
+                    else {
+                        return Ok(());
+                    };
                     if f.width.is_some() {
                         return Ok(());
                     }
@@ -1863,11 +1865,7 @@ impl Oven {
                     t = elem;
                 }
                 TyKind::Record { .. } => {
-                    let f = self.types.fields(t).iter().find(|f| {
-                        f.width.is_none()
-                            && off >= f.offset
-                            && off < f.offset + self.types.size(f.ty).max(1)
-                    });
+                    let f = self.types.field_at(t, off);
                     match f {
                         Some(f)
                             if !f.base
