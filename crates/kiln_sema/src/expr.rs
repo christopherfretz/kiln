@@ -2328,7 +2328,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         }
         if self.ast.types.is_pointer(t) {
-            if !self.check_pointer_arith(t, false, loc) {
+            if !self.check_pointer_arith(t, loc) {
                 return self.recover_err(&[e], loc);
             }
         } else if self.ast.types.as_complex(t).is_some() {
@@ -2357,19 +2357,20 @@ impl Sema<'_, '_> {
     /// Pointer arithmetic needs a pointer to a complete object type
     /// ([expr.add]/1); a `void` or function pointee is an error in C++
     /// (a GNU extension only in C: `sema_arith_void_pointer`).
-    fn check_pointer_arith(&mut self, pt: QualType, both: bool, loc: Loc) -> bool {
+    fn check_pointer_arith(&mut self, pt: QualType, loc: Loc) -> bool {
         let Some(p) = self.pointee_sugared(pt) else { return true };
-        let sel = if both { "1" } else { "0" };
         if self.ast.types.is_void(p) {
-            let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg(sel);
+            let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg("0");
             self.emit(msg);
             return false;
         }
         if self.ast.types.is_function(p) {
             let msg = self
                 .diag(DiagId::sema_arith_function_pointer_cxx, loc)
-                .arg(sel)
-                .arg(self.ty_arg(p));
+                .arg("0")
+                .arg(self.ty_arg(p))
+                .arg("0")
+                .arg("");
             self.emit(msg);
             return false;
         }
@@ -2379,6 +2380,50 @@ impl Sema<'_, '_> {
             return false;
         }
         true
+    }
+
+    /// [`Self::check_pointer_arith`] for the pointer difference `lt - rt`
+    /// (clang `checkArithmeticBinOpPointerOperands`): a `void` pointee on
+    /// one side is diagnosed for that side, on both as `pointers to void`;
+    /// likewise a function pointee, the two-pointer form naming the second
+    /// pointee only when the pointer types differ (`pointers to function
+    /// types 'void ()' and 'void (int)'`); then an incomplete pointee,
+    /// left first.
+    fn check_pointer_pair_arith(&mut self, lt: QualType, rt: QualType, loc: Loc) -> bool {
+        let (Some(a), Some(b)) = (self.pointee_sugared(lt), self.pointee_sugared(rt)) else {
+            return true;
+        };
+        let t = &self.ast.types;
+        let pick = |l: bool, r: bool| match (l, r) {
+            (true, true) => None,
+            (true, false) => Some(lt),
+            _ => Some(rt),
+        };
+        let (av, bv) = (t.is_void(a), t.is_void(b));
+        if av || bv {
+            let Some(one) = pick(av, bv) else {
+                let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg("1");
+                self.emit(msg);
+                return false;
+            };
+            return self.check_pointer_arith(one, loc);
+        }
+        let (af, bf) = (t.is_function(a), t.is_function(b));
+        if af || bf {
+            let Some(one) = pick(af, bf) else {
+                let differ = !self.ast.types.same_unqualified(lt, rt);
+                let msg = self
+                    .diag(DiagId::sema_arith_function_pointer_cxx, loc)
+                    .arg("1")
+                    .arg(self.ty_arg(a))
+                    .arg(if differ { "1" } else { "0" })
+                    .arg(self.ty_arg(b));
+                self.emit(msg);
+                return false;
+            };
+            return self.check_pointer_arith(one, loc);
+        }
+        self.check_pointer_arith(lt, loc) && self.check_pointer_arith(rt, loc)
     }
 
     // -- binary operators --------------------------------------------------------
@@ -2625,7 +2670,7 @@ impl Sema<'_, '_> {
                 if !self.is_integral_or_enum(rt) || conv::is_scoped_enum(self, rt) {
                     return self.invalid_operands(l, r, loc);
                 }
-                if !self.check_pointer_arith(lt, false, loc) {
+                if !self.check_pointer_arith(lt, loc) {
                     return self.recover_err(&[l, r], loc);
                 }
                 let r2 = conv::usual_unary_conversions(self, r);
@@ -2711,29 +2756,30 @@ impl Sema<'_, '_> {
                 (Some(a), Some(b)) => self.ast.types.same_unqualified(a, b),
                 _ => false,
             };
+            // clang `CheckSubtractionOperands`: the pointee check runs
+            // after an incompatibility too.
             if !same {
                 let msg = self
                     .diag(DiagId::sema_sub_ptr_compatible, loc)
                     .arg(self.ty_arg(lt))
                     .arg(self.ty_arg(rt));
                 self.emit(msg);
-                return self.recover_err(&[l2, r2], loc);
             }
-            if !self.check_pointer_arith(lt, true, loc) {
+            if !self.check_pointer_pair_arith(lt, rt, loc) || !same {
                 return self.recover_err(&[l2, r2], loc);
             }
             let ty = QualType::unqual(self.target.ptrdiff_t);
             return self.builder().binary(op, l2, r2, ty, loc);
         }
         if lp && int_like(self, rt) {
-            if !self.check_pointer_arith(lt, false, loc) {
+            if !self.check_pointer_arith(lt, loc) {
                 return self.recover_err(&[l2, r2], loc);
             }
             let r3 = conv::usual_unary_conversions(self, r2);
             return self.builder().binary(op, l2, r3, lt, loc);
         }
         if rp && int_like(self, lt) && op == BinaryOp::Add {
-            if !self.check_pointer_arith(rt, false, loc) {
+            if !self.check_pointer_arith(rt, loc) {
                 return self.recover_err(&[l2, r2], loc);
             }
             let l3 = conv::usual_unary_conversions(self, l2);

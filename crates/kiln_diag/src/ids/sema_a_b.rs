@@ -38,8 +38,8 @@ sema_argument_invalid_range = Error (3) "argument value {0} is outside the valid
 sema_arith_enum_enum = Error (3) "invalid {0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} different enumeration types ({1} and {2})";
 sema_arith_enum_float = Error (4) "invalid {0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} {1:floating-point|enumeration} type {2} {0:and|and|with|and|from} {1:enumeration|floating-point} type {3}";
 sema_arith_float_unordered = Error (3) "invalid {0:arithmetic between|bitwise operation between|comparison of|conditional expression between|compound assignment to} floating-point types {1} and {2} with unordered conversion ranks";
-sema_arith_function_pointer = Extension [GnuPointerArith] (2) "arithmetic on{0: a pointer| pointers} to the function type {1} is a GNU extension";
-sema_arith_function_pointer_cxx = Error (2) "arithmetic on{0: a|} pointer{0:|s} to the function type {1}";
+sema_arith_function_pointer = Extension [GnuPointerArith] (4) "arithmetic on{0: a|} pointer{0:|s} to{2: the|} function type{2:|s} {1}{2:| and {3}} is a GNU extension";
+sema_arith_function_pointer_cxx = Error (4) "arithmetic on{0: a|} pointer{0:|s} to{2: the|} function type{2:|s} {1}{2:| and {3}}";
 sema_arith_incomplete_pointee = Error (1) "arithmetic on a pointer to an incomplete type {0}";
 sema_arith_void_pointer = Extension [GnuPointerArith] (1) "arithmetic on{0: a pointer| pointers} to void is a GNU extension";
 // [expr.add]/1: in C++ a `void` or function pointee is an error, not

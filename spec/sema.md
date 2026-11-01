@@ -1285,7 +1285,14 @@ diagnostics and IR.
   assignment on a pointer to `void` or to a function type is an error in
   C++ (`arithmetic on a pointer to void`, `arithmetic on pointers to the
   function type 'void ()'` for two pointer operands), not the GNU C
-  extension (`-Wgnu-pointer-arith`, kept for C).
+  extension (`-Wgnu-pointer-arith`, kept for C). A pointer difference
+  (`check_pointer_pair_arith`, clang `checkArithmeticBinOpPointerOperands`,
+  WP-230) runs after `'T *' and 'U *' are not pointers to compatible
+  types` too: a `void` pointee on one side is diagnosed for that side,
+  on both as `pointers to void`; likewise a function pointee, the
+  two-pointer form naming both pointees when the pointer types differ
+  (`arithmetic on pointers to function types 'void ()' and 'void
+  (int)'`); otherwise an incomplete pointee, left side first.
 - **Member-pointer equality** ([expr.eq]/4, clang's
   `CheckCompareOperands`, WP-085): when either operand of a comparison
   is a member pointer:
