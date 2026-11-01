@@ -168,7 +168,7 @@ satisfies `compile-fail`.
 | `ast` | kiln: `-fsyntax-only -fdump-ast[=implicit] [-fdump-ast-filter=<substr>]`; clang: `-fsyntax-only -Xclang -ast-dump=json`, normalized | exit 0; the diags match; the dump equals `<test>.expected` up to trailing whitespace on each line and trailing blank lines; the oracle agrees (below). See "ast tests". |
 | `layout` | kiln: `-fsyntax-only -fdump-record-layouts`; clang: `-fsyntax-only -Xclang -fdump-record-layouts-complete` | exit 0; the diags match; the dump has at least one record layout; the oracle's dump has the same blocks in the same order. See "Layout and vtable tests". |
 | `vtables` | kiln: `-fsyntax-only -fdump-vtable-layouts`; clang: `-S -emit-llvm -o <scratch>/test.ll -Xclang -fdump-vtable-layouts` | exit 0; the diags match; the dump has at least one vtable block; the oracle's dump has the same set of blocks. See "Layout and vtable tests". |
-| `no-crash` | `-fsyntax-only` | exit 0 or 1 (errors anywhere are fine, in the test file or not), and the diags match; any other exit code (an internal-error exit such as 70 or 101) is a FAIL, as is a crash or hang (above). For robustness tests over input the compiler cannot fully handle yet, e.g. whole headers with `-ferror-limit=0` (WP-141). |
+| `no-crash` | `-fsyntax-only -ferror-limit=0` (before the test's `args:`, so an explicit `-ferror-limit=N` there wins; a crash must not hide behind the error limit, WP-145) | exit 0 or 1 (errors anywhere are fine, in the test file or not), and the diags match; any other exit code (an internal-error exit such as 70 or 101) is a FAIL, as is a crash or hang (above). For robustness tests over input the compiler cannot fully handle yet, e.g. whole headers with `-ferror-limit=0` (WP-141). |
 
 The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
 the inherited environment plus `env:`, and the `run-stdin:` /
@@ -395,6 +395,24 @@ file would change). The generator writes only changed files, removes stale
 generated files (those starting with its banner) in the directories it owns,
 and prints per-directory counts. Hand-written tests live in
 `tests/differential/pp/torture/`, which the generator does not touch.
+
+## Stress suites
+
+`cargo xtask stress [test options]` runs `cargo xtask test` (same options,
+same outcomes and exit status) over the suites too slow for `test` and `ci`.
+They live outside the default roots, so neither runs them. Run `stress`
+before a release candidate, and after a change to header-heavy Sema paths.
+
+| Suite | Contents | Cost |
+|---|---|---|
+| `tests/header-guard/` | the libc++ header no-crash guard: one `expect: no-crash` test per libc++ header, in `libcxx/`, `libcxx/experimental/` and `libcxx-c/` (the pp corpus's directories, minus `sysroot/`), each with `-stdlib=libc++ -ferror-limit=0` and `mem<=2048` | 131 tests, about 75 s at `-j 2` (debug kiln, 2026-11): over the ~60 s budget for `ci` |
+
+`cargo xtask gen-pp-corpus --no-crash` generates the guard. It uses the
+pp generator's header enumeration and exclusions and accepts `--std`,
+`--libcxx`, `--out` and `--check`. Any number of errors is fine. A panic, a
+signal, an internal-error exit, a hang, or going over the memory budget is a
+FAIL. It exists because the default error limit of 20 hid a reachable panic
+in `<string>` (WP-141), so `-ferror-limit=0` is part of the point (WP-145).
 
 ## Resource limits
 
