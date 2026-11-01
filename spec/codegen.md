@@ -1171,8 +1171,8 @@ Where the definitions are emitted (clang hands them to
   `extern` declaration; sema `instantiate_late_var_spec` rebinds the
   specialization to the defining redeclaration): instantiated at the end
   of the TU and emitted after the last top-level declaration, in
-  explicit instantiation order, before the key-function vtables and the deferred
-  definitions (clang `PerformPendingInstantiations`;
+  explicit instantiation order, before the key-function vtables and the
+  deferred definitions (clang `PerformPendingInstantiations`;
   `TemplateTables::late_explicit_insts`, `Cg::emit_late_explicit_insts`).
   Members of an explicitly instantiated class that are defined after the
   class's explicit instantiation are not instantiated (as clang).

@@ -771,27 +771,6 @@ impl Sema<'_, '_> {
         Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
     }
 
-    /// After `template<>`, an out-of-line redeclaration `p` of a
-    /// constructor or destructor of an implicit class
-    /// template specialization explicitly specializes it
-    /// ([temp.expl.spec]/1, §4.5): it is no longer instantiated from the
-    /// pattern (clang `CheckMemberSpecialization`).
-    pub(crate) fn mark_member_explicit_spec(&mut self, p: DeclId) {
-        if self.templ.explicit_spec.is_none() || !self.at_explicit_head() {
-            return;
-        }
-        let Some((i, info)) = self.ast.member_spec_info(self.ast.first(p)).map(|(i, x)| (i, *x))
-        else {
-            return;
-        };
-        if info.kind == SpecKind::ImplicitInstantiation {
-            self.ast.templates.update_member_spec(i, |x| {
-                x.kind = SpecKind::ExplicitSpecialization;
-                x.point_of_instantiation = Loc::INVALID;
-            });
-        }
-    }
-
     /// `template<> T C<args>::s ...;` for static data member `m` of an
     /// implicit class template specialization ([temp.expl.spec]/1): the
     /// member's definition is no longer instantiated from the pattern
@@ -826,6 +805,28 @@ impl Sema<'_, '_> {
         self.inst.member_defs.remove(&first);
         self.inst.deferred_inits.remove(&first);
         true
+    }
+
+    /// After `template<>`, an out-of-line redeclaration `p` of a
+    /// constructor or destructor of an implicit class template
+    /// specialization explicitly specializes it ([temp.expl.spec]/1,
+    /// §4.5): it is no longer instantiated from the pattern (clang
+    /// `CheckMemberSpecialization`). Static data members go through
+    /// `act_on_explicit_member_var_spec`.
+    pub(crate) fn mark_member_explicit_spec(&mut self, p: DeclId) {
+        if self.templ.explicit_spec.is_none() || !self.at_explicit_head() {
+            return;
+        }
+        let Some((i, info)) = self.ast.member_spec_info(self.ast.first(p)).map(|(i, x)| (i, *x))
+        else {
+            return;
+        };
+        if info.kind == SpecKind::ImplicitInstantiation {
+            self.ast.templates.update_member_spec(i, |x| {
+                x.kind = SpecKind::ExplicitSpecialization;
+                x.point_of_instantiation = Loc::INVALID;
+            });
+        }
     }
 
     /// `[extern] template R C<args>::f(params);` for member `m` of a
