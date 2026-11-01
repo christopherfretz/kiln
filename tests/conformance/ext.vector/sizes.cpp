@@ -2,6 +2,7 @@
 // vector packs one bit per element, rounded up to at least a byte and to a
 // power of two; other vectors are N elements wide, rounded up to a power
 // of two (WP-151; libc++ simd_utils.h __find_first_set's mask vector).
+//@ args: --target=aarch64-unknown-linux-gnu
 template <class T, unsigned N> using vec __attribute__((ext_vector_type(N))) = T;
 static_assert(sizeof(vec<bool, 1>) == 1 && alignof(vec<bool, 1>) == 1);
 static_assert(sizeof(vec<bool, 2>) == 1 && alignof(vec<bool, 2>) == 1);
