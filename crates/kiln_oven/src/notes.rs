@@ -94,6 +94,22 @@ impl Oven {
         Self::type_name(ast, q)
     }
 
+    /// ` (vector of N 'E' values)` after a quoted vector type `q`, as
+    /// clang's `ConvertTypeToDiagnosticString` prints it (WP-173).
+    fn vector_suffix(ast: &Ast, q: QualType) -> String {
+        let kiln_ast::types::TypeView::Vector { elem, count, .. } = ast.types.canonical_view(q)
+        else {
+            return String::new();
+        };
+        let top = ast.types.desugar_top(q);
+        let elem = match ast.types.view(top.ty()) {
+            kiln_ast::types::TypeView::Vector { elem, .. } => elem,
+            _ => elem,
+        };
+        let v = if count == 1 { "value" } else { "values" };
+        format!(" (vector of {count} '{}' {v})", Self::type_name(ast, elem))
+    }
+
     pub(crate) fn tname(&self, ast: &Ast, t: OTy) -> String {
         if let TyKind::Array { elem, n } = self.types.kind(t)
             && self.types.is_synthetic_array(t)
@@ -769,9 +785,10 @@ impl Oven {
     ) -> String {
         let signed = aux >> 8 & 1 != 0;
         let ty = site.e.map_or_else(|| "int".into(), |e| Self::qname(ast, ast.exprs.get(e).ty()));
+        let vec = site.e.map_or_else(String::new, |e| Self::vector_suffix(ast, ast.exprs.get(e).ty()));
         match err {
             IntErr::Overflow => format!(
-                "value {} is outside the range of representable values of type '{ty}'",
+                "value {} is outside the range of representable values of type '{ty}'{vec}",
                 arith::exact_result(op, signed, a, b)
             ),
             IntErr::DivZero => "division by zero".into(),
@@ -782,7 +799,7 @@ impl Oven {
             IntErr::ShiftBig => {
                 let cs = aux >> 17 & 1 != 0;
                 format!(
-                    "shift count {} >= width of type '{ty}' ({} bits)",
+                    "shift count {} >= width of type '{ty}'{vec} ({} bits)",
                     arith::int_to_string(b, cs),
                     aux & 0xFF
                 )

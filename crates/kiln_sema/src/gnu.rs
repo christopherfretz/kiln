@@ -430,9 +430,9 @@ impl Sema<'_, '_> {
     /// holding the list-initialization of cv-unqualified `T`, done as if
     /// by a C-style cast at `lparen`. Hence a reference `T` cannot bind
     /// to the list and more than one element for a scalar is reported
-    /// as a function-style cast's. Class and array literals need
-    /// temporary materialization and namespace-scope literals constant
-    /// elements; both are unsupported.
+    /// as a function-style cast's (a vector's list is its elements).
+    /// Class and array literals need temporary materialization and
+    /// namespace-scope literals constant elements; both are unsupported.
     pub fn act_on_compound_literal(&mut self, ty: QualType, l: &InitList, lparen: Loc) -> ExprId {
         let flat = Self::list_exprs(l);
         if self.is_error_type(ty) {
@@ -460,7 +460,7 @@ impl Sema<'_, '_> {
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, &flat, lparen);
         }
-        if l.items.len() > 1 {
+        if l.items.len() > 1 && !self.is_vector_type(ty) {
             self.error(DiagId::sema_builtin_func_cast_more_than_one_arg, lparen);
             return self.recover(ty, &flat, lparen);
         }

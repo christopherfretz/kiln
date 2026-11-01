@@ -492,6 +492,11 @@ impl Compiler<'_> {
                 };
                 op(self, bi::INT_OP, w | k << 8, [a, b, dst], [0, 0], begin);
             }
+            // clang 19 does not constant-evaluate the vector reductions
+            // (spec/oven.md "Vectors").
+            id::REDUCE_ADD..=id::REDUCE_XOR => {
+                self.trap_loc(begin, "subexpression not valid in a constant expression".into());
+            }
             _ => {
                 self.next = dst;
                 return None;
