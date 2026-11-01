@@ -2476,6 +2476,13 @@ impl Sema<'_, '_> {
         if self.is_err_expr(c) || self.is_err_expr(t) || self.is_err_expr(f) {
             return self.recover_err(&[c, t, f], loc);
         }
+        // The GNU element-wise conditional (clang `CXXCheckConditionalOperands`).
+        if !self.expr_is_type_dependent(c) {
+            let ct = self.ety(c);
+            if self.is_vector_condition(ct) {
+                return self.act_on_vector_conditional(c, t, f, loc);
+            }
+        }
         let c2 = if self.expr_is_type_dependent(c) {
             c
         } else {
@@ -2583,6 +2590,15 @@ impl Sema<'_, '_> {
             ) {
                 Ok((t2, f2, ty)) => self.builder().conditional(c2, t2, f2, ty, loc),
                 Err(err) => self.conv_failed(&err, t, f, loc),
+            };
+        }
+        // Extension: a vector arm (clang `CheckVectorOperands`).
+        if !tv && !fv && (self.is_vector_type(tt) || self.is_vector_type(ft)) {
+            let mut t2 = conv::decay(self, t);
+            let mut f2 = conv::decay(self, f);
+            return match self.scalar_cond_vector_operands(&mut t2, &mut f2, loc) {
+                Some(ty) => self.builder().conditional(c2, t2, f2, ty, loc),
+                None => self.recover_err(&[c, t, f], loc),
             };
         }
         if !tv && !fv {

@@ -8,6 +8,7 @@
 //! rules are GNU/clang extensions, not ISO C++.
 
 use kiln_ast::consts::{FloatKind, Scalar};
+use kiln_ast::expr::ValueCategory;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, UnaryOp};
 use kiln_ast::types::{BuiltinType, TypeView, VectorKind};
 use kiln_ast::{ExprId, QualType};
@@ -198,7 +199,7 @@ impl Sema<'_, '_> {
     /// type with `v`'s qualifiers and value category.
     pub(crate) fn vector_subscript(&mut self, base: ExprId, idx: ExprId, loc: Loc) -> ExprId {
         let mut b = base;
-        if self.ast.exprs.get(b).value_category() == kiln_ast::expr::ValueCategory::PRValue {
+        if self.ast.exprs.get(b).value_category() == ValueCategory::PRValue {
             let t = self.ety(b);
             b = self.materialize_temporary(b, t, false);
         }
@@ -447,14 +448,7 @@ impl Sema<'_, '_> {
         };
         if let Some(s) = scalar {
             let x = conv::cast_to(self, ck, *s, elem, None);
-            *s = conv::raw_cast(
-                self,
-                CastKind::VectorSplat,
-                x,
-                vty,
-                kiln_ast::expr::ValueCategory::PRValue,
-                None,
-            );
+            *s = conv::raw_cast(self, CastKind::VectorSplat, x, vty, ValueCategory::PRValue, None);
         }
         true
     }
@@ -505,14 +499,7 @@ impl Sema<'_, '_> {
         if let Some(ck) = ck {
             x = conv::cast_to(self, ck, x, elem, None);
         }
-        *scalar = conv::raw_cast(
-            self,
-            CastKind::VectorSplat,
-            x,
-            vty,
-            kiln_ast::expr::ValueCategory::PRValue,
-            None,
-        );
+        *scalar = conv::raw_cast(self, CastKind::VectorSplat, x, vty, ValueCategory::PRValue, None);
         true
     }
 
@@ -645,7 +632,7 @@ impl Sema<'_, '_> {
                     CastKind::VectorSplat,
                     x,
                     vt,
-                    kiln_ast::expr::ValueCategory::PRValue,
+                    ValueCategory::PRValue,
                     None,
                 );
                 Some(vt)
@@ -667,7 +654,7 @@ impl Sema<'_, '_> {
                     CastKind::VectorSplat,
                     *r,
                     vt,
-                    kiln_ast::expr::ValueCategory::PRValue,
+                    ValueCategory::PRValue,
                     None,
                 );
                 Some(lt)
@@ -775,5 +762,160 @@ impl Sema<'_, '_> {
             return None;
         };
         Some((vec![a], elem))
+    }
+}
+
+// -- vector conditionals --------------------------------------------------------
+
+impl Sema<'_, '_> {
+    /// clang's `isValidVectorForConditionalCondition`: a (GNU or ext)
+    /// vector of integral elements selects lane-wise in `?:`.
+    pub(crate) fn is_vector_condition(&self, q: QualType) -> bool {
+        self.vector_parts(q).is_some_and(|p| self.ast.types.is_integral(p.elem))
+    }
+
+    /// `c ? t : f` with a vector condition `c` (the GNU element-wise
+    /// conditional; clang `CXXCheckConditionalOperands` +
+    /// `CheckVectorConditionalTypes`). The condition is not converted to
+    /// `bool`: each lane of the result is `c[i] ? t[i] : f[i]`. Two vector
+    /// arms must have the same type (and the condition's GNU/ext kind);
+    /// one vector arm goes through `CheckVectorOperands`; two scalar arms
+    /// get their common type (usual arithmetic conversions) and are
+    /// splatted to a vector of the condition's lane count. The result
+    /// must have the condition's lane count and lane size.
+    pub(crate) fn act_on_vector_conditional(
+        &mut self,
+        c: ExprId,
+        t: ExprId,
+        f: ExprId,
+        loc: Loc,
+    ) -> ExprId {
+        let c2 = conv::decay(self, c);
+        if self.expr_is_type_dependent(t) || self.expr_is_type_dependent(f) {
+            return self.builder().dependent_conditional(c2, t, f, loc);
+        }
+        let (tt, ft) = (self.ety(t), self.ety(f));
+        let (tv, fv) = (self.ast.types.is_void(tt), self.ast.types.is_void(ft));
+        if tv || fv {
+            let v = if tv { t } else { f };
+            let at = self.begin_loc(v);
+            let throw = if self.is_throw_expr(v) { "1" } else { "0" };
+            let msg = self.diag(DiagId::sema_conditional_vector_has_void, at).arg(throw);
+            self.emit(msg);
+            return self.recover_err(&[c, t, f], loc);
+        }
+        let ct = conv::strip_cv(self, self.ety(c2));
+        let Some(cp) = self.vector_parts(ct) else {
+            return self.recover_err(&[c, t, f], loc);
+        };
+        let mut t2 = conv::decay(self, t);
+        let mut f2 = conv::decay(self, f);
+        let lt = conv::strip_cv(self, self.ety(t2));
+        let rt = conv::strip_cv(self, self.ety(f2));
+        let (lv, rv) = (self.vector_parts(lt), self.vector_parts(rt));
+        let res = match (lv, rv) {
+            (Some(l), Some(_)) => {
+                if cp.is_ext() != l.is_ext() {
+                    let msg = self.diag(DiagId::sema_conditional_vector_cond_result_mismatch, loc);
+                    self.emit(msg);
+                    return self.recover_err(&[c, t, f], loc);
+                }
+                if !self.ast.types.same_type(lt, rt) {
+                    self.vector_diag2(DiagId::sema_conditional_vector_mismatched, lt, rt, loc);
+                    return self.recover_err(&[c, t, f], loc);
+                }
+                lt
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                match self.check_vector_operands(&mut t2, &mut f2, loc, false, true, true) {
+                    Some(r) => r,
+                    None => return self.recover_err(&[c, t, f], loc),
+                }
+            }
+            (None, None) => {
+                let elem = if self.ast.types.same_type(lt, rt) {
+                    lt
+                } else {
+                    match conv::usual_arithmetic_conversions_kind(
+                        self,
+                        t2,
+                        f2,
+                        conv::ArithConvKind::Conditional,
+                    ) {
+                        Ok((a, b, ty)) => {
+                            (t2, f2) = (a, b);
+                            ty
+                        }
+                        Err(err) => return self.conv_failed(&err, t, f, loc),
+                    }
+                };
+                if self.ast.types.as_enum(elem).is_some() {
+                    let msg = self
+                        .diag(DiagId::sema_conditional_vector_operand_type, loc)
+                        .arg(self.ty_arg(elem));
+                    self.emit(msg);
+                    return self.recover_err(&[c, t, f], loc);
+                }
+                let arith = self.ast.types.is_arithmetic(elem);
+                // clang builds a vector of any element type here and then
+                // rejects it by lane size; kiln has no vectors of
+                // non-arithmetic elements, so a same-size one is an
+                // incompatible-operands error instead.
+                if !arith && self.scalar_bits(elem) == self.scalar_bits(cp.elem) {
+                    let msg = self
+                        .diag(DiagId::sema_incompatible_cond_operands, loc)
+                        .arg(self.ty_arg(tt))
+                        .arg(self.ty_arg(ft));
+                    self.emit(msg);
+                    return self.recover_err(&[c, t, f], loc);
+                }
+                let kind = if cp.is_ext() { VectorKind::Ext } else { VectorKind::Generic };
+                let vt = self.ast.types.vector(elem, cp.count, kind);
+                if arith {
+                    t2 = conv::raw_cast(
+                        self,
+                        CastKind::VectorSplat,
+                        t2,
+                        vt,
+                        ValueCategory::PRValue,
+                        None,
+                    );
+                    f2 = conv::raw_cast(
+                        self,
+                        CastKind::VectorSplat,
+                        f2,
+                        vt,
+                        ValueCategory::PRValue,
+                        None,
+                    );
+                }
+                vt
+            }
+        };
+        let Some(rp) = self.vector_parts(res) else {
+            return self.recover_err(&[c, t, f], loc);
+        };
+        if rp.count != cp.count {
+            self.vector_diag2(DiagId::sema_conditional_vector_size, ct, res, loc);
+            return self.recover_err(&[c, t, f], loc);
+        }
+        if self.scalar_bits(rp.elem) != self.scalar_bits(cp.elem) {
+            self.vector_diag2(DiagId::sema_conditional_vector_element_size, ct, res, loc);
+            return self.recover_err(&[c, t, f], loc);
+        }
+        self.builder().conditional(c2, t2, f2, res, loc)
+    }
+
+    /// `b ? t : f` with a scalar condition and a vector arm (clang
+    /// `CXXCheckConditionalOperands`, "Extension: conditional operator
+    /// involving vector types"): `CheckVectorOperands` without `bool`
+    /// vector operations gives the result type.
+    pub(crate) fn scalar_cond_vector_operands(
+        &mut self,
+        t: &mut ExprId,
+        f: &mut ExprId,
+        loc: Loc,
+    ) -> Option<QualType> {
+        self.check_vector_operands(t, f, loc, false, false, true)
     }
 }
