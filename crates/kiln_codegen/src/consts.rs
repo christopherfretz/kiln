@@ -289,20 +289,29 @@ impl Cg<'_> {
                 let e = e.map(|x| self.strip_init(x));
                 let is_string =
                     e.is_some_and(|x| self.ast.exprs.get(x).kind() == ExprKind::StringLiteral);
-                let inits: Vec<ExprId> = match e {
+                // clang `APValue::Array`: an array value-initialized, or
+                // initialized from a list without explicit elements, has
+                // no initialized elements, only a filler, so its constant
+                // has no common element type (`EmitArrayConstant`).
+                let (inits, filler, no_elts) = match e {
                     Some(x)
                         if matches!(
                             self.ast.exprs.get(x).kind(),
                             ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
                         ) =>
                     {
-                        crate::expr::agg_init_parts(self.ast, x).0
+                        let (inits, filler, _) = crate::expr::agg_init_parts(self.ast, x);
+                        let none = inits.is_empty();
+                        (inits, filler, none)
                     }
-                    _ => Vec::new(),
+                    Some(x) if self.ast.exprs.get(x).kind() == ExprKind::ImplicitValueInitExpr => {
+                        (Vec::new(), None, true)
+                    }
+                    _ => (Vec::new(), None, false),
                 };
                 let mut elems = Vec::with_capacity(*n as usize);
                 for i in 0..*n {
-                    let sub = inits.get(i as usize).copied();
+                    let sub = inits.get(i as usize).copied().or(filler);
                     elems.push(self.image_const(img, off + i * es, et, sub)?);
                 }
                 if is_string {
@@ -310,7 +319,7 @@ impl Cg<'_> {
                     return self.m.const_array(elt, &elems).map_err(|e| ir_err(&e));
                 }
                 let elt = self.ir(et);
-                self.array_const(t, elt, &elems)
+                self.array_const(t, elt, &elems, !no_elts)
             }
             IrType::Record(d) => {
                 let rec = self.tys.record(*d).clone();
@@ -529,8 +538,9 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `EmitArrayConstant` over fully expanded elements.
-    fn array_const(&mut self, t: LTy, elt: LTy, elems: &[Value]) -> R<Value> {
+    /// clang `EmitArrayConstant` over fully expanded elements; `common`
+    /// is false when the value has no explicitly initialized elements.
+    fn array_const(&mut self, t: LTy, elt: LTy, elems: &[Value], common: bool) -> R<Value> {
         let bound = elems.len();
         let mut nz = bound;
         while nz > 0 && self.is_null_value(elems[nz - 1]) {
@@ -539,7 +549,7 @@ impl Cg<'_> {
         if nz == 0 {
             return Ok(self.m.const_zero(t));
         }
-        let common = elems.iter().all(|&v| self.m.const_type(v) == elt);
+        let common = common && elems.iter().all(|&v| self.m.const_type(v) == elt);
         let tz = bound - nz;
         if tz >= 8 {
             let mut out = Vec::new();
