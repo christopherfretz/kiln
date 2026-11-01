@@ -1355,7 +1355,9 @@ retained, since the AST is append-only. They are metered as
      template params all sit in non-deduced contexts (`FS<A...>`, an
      alias of `BFS<char, typename ti<A>::type...>`): a failed match of
      its argument is not a deduction failure, and a successful one is
-     not an original argument for /4.
+     not an original argument for /4. A pack expanded in P's template
+     argument list with a deducible pattern (`Tup<int, Us...>`) is in a
+     deduced context, so a mismatch there still fails deduction.
 3. **Finish** ([temp.deduct.general]/5):
    - an undeduced parameter takes its default (substituted in order); a
      pack takes the empty pack; anything else gives `Incomplete`;
