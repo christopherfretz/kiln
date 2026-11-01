@@ -1252,7 +1252,10 @@ impl Substituter<'_, '_, '_> {
             {
                 Ok(Some(sub.local_class(m, local.as_deref_mut())))
             } else {
-                sub.member(m)
+                let salt = std::mem::replace(&mut sub.sema.inst.stack.member_salt, m.index());
+                let r = sub.member(m);
+                sub.sema.inst.stack.member_salt = salt;
+                r
             };
             let data = matches!(n.kind(), DeclKind::Field | DeclKind::Var);
             invalid |= data && r.is_err();

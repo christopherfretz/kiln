@@ -1589,10 +1589,10 @@ formed it:
   `TransformFunctionProtoType`. A trailing return type is substituted
   after them. The parameters still enter scope before the exception
   specification.
-- Known gap. clang reports an error once per declarator: in `typedef
-  T::type g, (*h)(T::type);` both `g` and `h` fail at the first `T::type`
-  and clang reports it twice. Kiln's diagnostic engine drops the
-  identical second report (same id, location and context).
+- Once per declarator. In `typedef T::type g, (*h)(T::type);` both `g`
+  and `h` fail at the first `T::type`, and clang reports it twice. Kiln
+  does too: the member being substituted salts the dedup context
+  (§10.2, `member_salt`).
 - Dependent names inside expressions (`T::x` in a default argument) are
   not affected. The expression keeps its own location, so these are
   exact without the table. A type operand of `sizeof`, `alignof` or
@@ -2715,7 +2715,13 @@ toward `-ftemplate-depth`. They are clang's `NonInstantiationEntries`.
 `InstantiationStack::context_key()`, a hash of every frame's `(kind,
 entity, args, poi)` (0 only for an empty stack). The same error in two
 instantiations (`S<int>`, `S<long>`) prints twice, each with its notes;
-see spec/diag.md §7.4 for the full rule (WP-087).
+see spec/diag.md §7.4 for the full rule (WP-087). While a class
+instantiation substitutes one pattern member, its `DeclId` is mixed into
+the key too (`InstantiationStack::member_salt`): clang substitutes each
+declarator of `typedef typename T::type g, (*h)(typename T::type);` (or
+`T::type a, b;`) separately, so an error in the shared decl-specifier
+prints once per declarator, the context notes only with the first
+(tests/conformance/temp.inst/shared-decl-specifier-per-declarator.cpp).
 
 **Elision.** `-ftemplate-backtrace-limit=N` defaults to 10; 0 means no
 limit. With F frames and F > N > 0:
