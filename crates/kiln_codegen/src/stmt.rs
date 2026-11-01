@@ -5,7 +5,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
-use kiln_llvm::TypeId as LTy;
+use kiln_llvm::{BinOp, Flags, IntPredicate, TypeId as LTy};
 
 use crate::cleanup::{Depth, JumpDest};
 use crate::fir::{Blk, Op, V};
@@ -672,10 +672,16 @@ impl Cg<'_> {
         self.f.fir.set_cur(None);
         let outer_cont = self.f.jumps.last().and_then(|j| j.cont);
         self.f.jumps.push(Jump { brk: epilog, cont: outer_cont });
-        let saved =
-            self.f.sw.replace(SwitchCtx { inst: crate::fir::Fir::last_inst(sw), cond_ty, default });
+        let inst = crate::fir::Fir::last_inst(sw);
+        let ctx = SwitchCtx { inst, cond: c, cond_ty, default, range_head: default };
+        let saved = self.f.sw.replace(ctx);
         self.emit_stmt(d.body)?;
         self.f.jumps.pop();
+        // `setDefaultDest(CaseRangeBlock)`.
+        let head = self.f.sw.expect("switch").range_head;
+        if head != default {
+            self.f.fir.set_successor(inst, default, head);
+        }
         if !self.f.fir.is_placed(default) {
             if self.requires_cleanups(&cond_scope) {
                 self.emit_block(default, false);
@@ -696,8 +702,8 @@ impl Cg<'_> {
         self.emit_block(b, false);
         loop {
             let cd = *ast.stmts.case_data(s);
-            if cd.rhs.is_some() {
-                return err(Some(ast.stmts.get(s).loc()), "case ranges are not supported yet");
+            if let Some(rhs) = cd.rhs {
+                return self.emit_case_range(cd.lhs, rhs, cd.sub);
             }
             let sw = self.f.sw.expect("case outside a switch");
             let v = self.fold_int(cd.lhs).expect("case value folds");
@@ -711,5 +717,42 @@ impl Cg<'_> {
             }
             return self.emit_stmt(cd.sub);
         }
+    }
+
+    /// clang `EmitCaseStmtRange`: the block of `case lo ... hi: sub`
+    /// (already started by [`Self::emit_case`]) and its sub-statement,
+    /// then a switch case per value when the range has fewer than 64
+    /// more, else an unsigned range test chained before the default.
+    fn emit_case_range(&mut self, lo: ExprId, hi: ExprId, sub: StmtId) -> R<()> {
+        let dest = self.f.fir.cur().expect("case block");
+        self.emit_stmt(sub)?;
+        let mut sw = self.f.sw.expect("case outside a switch");
+        let lo = self.fold_int(lo).expect("case value folds");
+        let hi = self.fold_int(hi).expect("case value folds");
+        if hi < lo {
+            return Ok(());
+        }
+        let range = hi - lo;
+        if range < 64 {
+            for v in lo..=hi {
+                let k = V::C(self.m.const_int(sw.cond_ty, v));
+                self.f.fir.add_switch_case(sw.inst, k, dest);
+            }
+            return Ok(());
+        }
+        let restore = self.f.fir.cur();
+        let false_dest = sw.range_head;
+        let b = self.f.fir.create_block();
+        sw.range_head = b;
+        self.f.sw = Some(sw);
+        self.f.fir.place_at_end(b);
+        self.f.fir.set_cur(Some(b));
+        let lv = V::C(self.m.const_int(sw.cond_ty, lo));
+        let diff = self.bin(BinOp::Sub, Flags::NONE, sw.cond, lv);
+        let rv = V::C(self.m.const_int(sw.cond_ty, range));
+        let inbounds = self.icmp(IntPredicate::Ule, diff, rv);
+        self.cond_br(inbounds, dest, false_dest);
+        self.f.fir.set_cur(restore);
+        Ok(())
     }
 }

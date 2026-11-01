@@ -103,6 +103,7 @@ diag_groups! {
     DollarInIdentifierExtension = "dollar-in-identifier-extension" [];
     EmbeddedDirective = "embedded-directive" [];
     ExpansionToDefined = "expansion-to-defined" [];
+    GnuCaseRange = "gnu-case-range" [];
     GnuIncludeNext = "gnu-include-next" [];
     GnuLineMarker = "gnu-line-marker" [];
     GnuZeroLineDirective = "gnu-zero-line-directive" [];
