@@ -1818,7 +1818,7 @@ records it in `TABLE`.
 | object model | `__builtin_addressof`†, `__builtin_launder`†, `__builtin_bit_cast`† (keyword form: `T` and the operand must be trivially copyable and the same size; `abi` layout gives the bytes), `__builtin_unreachable` | yes (`unreachable`: a non-constant diagnostic) | intrinsic / no-op |
 | allocation | `__builtin_operator_new`, `__builtin_operator_delete` | yes in clang 19; the Oven side is WP-061b's (transient allocation) | `operator new`/`delete` call |
 | bits | `__builtin_clz`/`l`/`ll`, `__builtin_ctz`/`l`/`ll`, `__builtin_popcount`/`l`/`ll`, `__builtin_clzg`†/`ctzg`†/`popcountg`† (type-generic, with an optional fallback argument), `__builtin_bswap16`/`32`/`64` | yes | `llvm.ctlz`/`cttz`/`ctpop`/`bswap` |
-| memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp` | yes (for trivially copyable element types) | libcall or `llvm.mem*` |
+| memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp`, `__builtin_strcmp`, `__builtin_strncmp`, `__builtin_strchr`, `__builtin_wcscmp`, `__builtin_wcsncmp`, `__builtin_wcschr`; `__builtin_strrchr`, `__builtin_strpbrk`, `__builtin_strstr` | yes (for trivially copyable element types); no for `strrchr`/`strpbrk`/`strstr` (clang 19) | libcall or `llvm.mem*` |
 | float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for `isfinite`/`isinf`/`isnan`/`isnormal`; no for `signbit` and the six comparisons (the clang 19 probe rejects them) | `fcmp` / `llvm.is.fpclass` |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
@@ -1839,6 +1839,23 @@ implemented in sema and codegen; their Oven side stays with WP-061b
 `bit_cast` through the ABI layout, source-location objects) is in
 spec/oven.md "Builtins".
 
+**Landed (WP-140): C string builtins.** The nine `str*`/`wcs*` names in
+the memory-and-strings row (`kiln_ast::decl::builtin::STRCMP`..`WCSCHR`, clang's ids)
+are used by libc++'s `char_traits` and `type_info`. `strcmp`, `strncmp`,
+`wcscmp`, `wcsncmp`, `strchr` and `wcschr` are constant-evaluated with
+clang 19's results (narrow characters compare as `unsigned char`, wide
+ones in `wchar_t`'s own signedness; a count of 0 is 0 before any read;
+`strchr` of a value the element type cannot represent is null, of 0 the
+terminator; reading past the end or through a null pointer is clang's
+note). `strrchr`, `strpbrk` and `strstr` are libcall-only, as in clang 19:
+in a constant expression they are "subexpression not valid". All nine
+lower to the C library call (the `wcs*` declarations carry
+`memory(read)`); an integer result with constant operands folds. They are
+not counted in the 143 header builtins of §13.3, which are the M3
+headers' own uses; `TABLE` now holds 91 function rows. Tests:
+`tests/conformance/expr.const/builtins-str{,-errors,-run}.cpp`,
+`tests/codegen/builtins_str.cpp`.
+
 **Source location.** Sema computes the values once, when it builds the
 `SourceLocExpr` (spec/ast.md §5.8): `LINE`/`COLUMN` from the presumed
 location, `FILE` as written and `FILE_NAME` as its last path component,
@@ -1856,7 +1873,7 @@ and `_M_column` (integral); otherwise clang's
 The counts are 49 type predicates (§9.1), `__array_extent`, 15 transforms,
 2 builtin templates and 76 `__builtin_*` names (2 of them in §9.4). That gives 143
 builtins in total (§13.3). `TABLE` also holds the 6 source-location
-names, for 82 function rows.
+names, for 82 function rows (91 with WP-140's string builtins, §9.5).
 
 ## 10. Diagnostics
 

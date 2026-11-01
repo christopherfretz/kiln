@@ -248,10 +248,13 @@ pub(crate) mod bi {
     /// `strlen`/`wcslen` of `a`; `t1` the character type.
     pub const STRLEN: u32 = 5;
     /// `memcmp`/`wmemcmp` of `a` and `b` over `c` elements; `t1`/`t2`
-    /// the element types; sub = `WIDE`.
+    /// the element types; sub = `WIDE` | `STR` | `UNBOUNDED`
+    /// (`strcmp`/`strncmp`/`wcscmp`/`wcsncmp`).
     pub const MEMCMP: u32 = 6;
     /// `memchr`/`char_memchr`/`wmemchr` of `b` in `c` elements at `a`;
-    /// `t1` the element type; sub = `WIDE`.
+    /// `t1` the element type; sub = `WIDE` | `STR` | `UNBOUNDED`
+    /// (`strchr`/`wcschr`; `strchr` gives null for a value its element
+    /// type cannot represent).
     pub const MEMCHR: u32 = 7;
     /// `memcpy`/`memmove` of `c` bytes from `b` to `a`; `t1`/`t2` the
     /// destination/source element types; sub = `MOVE`.
@@ -267,6 +270,12 @@ pub(crate) mod bi {
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
     pub const WIDE: u32 = 1;
+    /// sub of `MEMCMP`/`MEMCHR`: the `str`/`wcs` form: stops at a null
+    /// element and takes any element type (clang `StopAtNull`, not
+    /// `IsRawByte`).
+    pub const STR: u32 = 2;
+    /// sub of `MEMCMP`/`MEMCHR`: no element count (`c` is ignored).
+    pub const UNBOUNDED: u32 = 4;
     /// sub of `MEMCPY`: `memmove` (overlap allowed).
     pub const MOVE: u32 = 1;
     /// sub of `BIT_CAST`: the result initializes the object at `b`.

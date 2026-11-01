@@ -311,6 +311,14 @@ literal is one instruction and one step, not an interpreted loop.
   elements are one byte (or, for `memcpy`/`memmove`, scalars) and no
   union is involved; any irregularity falls back to the element-wise
   loop, which reports the exact fault.
+  **Landed (WP-140):** `strcmp`/`strncmp`/`wcscmp`/`wcsncmp` are
+  `MEMCMP` and `strchr`/`wcschr` are `MEMCHR` with the `STR` sub-kind
+  (stop at the terminator, no character-element restriction: clang 19's
+  `StopAtNull`) and, for the unbounded forms, `UNBOUNDED` (no count).
+  Narrow elements compare as unsigned, wide ones in `wchar_t`'s
+  signedness; `strchr` of a value not representable in the element type
+  is null. `strrchr`, `strpbrk` and `strstr` trap ("subexpression not
+  valid"), as clang 19, which does not constant-evaluate them.
 - **`__builtin_bit_cast`** (`bi::BIT_CAST`; `compile/bitcast.rs`,
   `vm/bitcast.rs`): clang's `checkBitCastConstexprEligibilityType` runs at
   compile time (unions, pointers, member pointers, `volatile` and

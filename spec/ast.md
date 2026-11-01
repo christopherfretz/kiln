@@ -251,7 +251,9 @@ fields used by fewer than ~5% of decls of a kind go there.
   implicit builtin `Function` decl, read through
   `DeclArena::builtin_id(d)`. Ids and spellings are in
   `kiln_ast::decl::builtin` (`IS_CONSTANT_EVALUATED = 722`, clang's
-  numbering; `ALL`; `by_name`).
+  numbering; `ALL`; `by_name`). Landed (WP-140): the C string builtins
+  `STRCMP` (1140), `STRNCMP`, `STRCHR`, `STRRCHR`, `STRPBRK`, `STRSTR`,
+  `WCSCMP`, `WCSNCMP`, `WCSCHR` (1386).
 - Structured bindings (WP-122, sema.md §4.9). Write-once cold maps:
   `decomp_bindings: ColdMap<DeclId, ListId>` (decomposed `Var` → its
   `Binding`s, in order), `binding_decomp` (`Binding` → that `Var`),

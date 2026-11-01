@@ -123,7 +123,9 @@ panic and never silently wrong IR.
       erases a return block without predecessors (and a then-unused
       `retval` slot);
     - the library builtins (memcmp, memchr, char_memchr→`memchr`, strlen,
-      wcslen, wmemchr, wmemcmp, nan*/nans* of a non-literal, and the math
+      wcslen, wmemchr, wmemcmp, strcmp, strncmp, strchr, strrchr, strpbrk,
+      strstr, wcscmp, wcsncmp, wcschr (WP-140; `tests/codegen/builtins_str.cpp`),
+      nan*/nans* of a non-literal, and the math
       functions exp/exp2/expm1/ldexp/pow/scalbn/scalbln with their
       `f`/`l` forms) call the function of the unprefixed name, declared
       with the builtin's type, `nounwind`, and `willreturn

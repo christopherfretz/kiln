@@ -1287,8 +1287,7 @@ impl Cg<'_> {
                 let fname = self.f.func.map(|f| self.m.func(f).name().to_owned());
                 let g = match fname {
                     Some(fname) => {
-                        let name =
-                            format!("{}.{}", ast.exprs.predefined_kind(e).spelling(), fname);
+                        let name = format!("{}.{}", ast.exprs.predefined_kind(e).spelling(), fname);
                         let bytes = ast.strings.bytes(lit).to_vec();
                         let mut bytes = bytes;
                         let total = ast.strings.object_bytes(lit);

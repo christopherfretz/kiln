@@ -2666,6 +2666,24 @@ pub mod builtin {
     pub const WMEMCHR: u32 = 1377;
     /// `__builtin_wmemcmp` (clang `Builtins.td` signature `iwC*wC*z`).
     pub const WMEMCMP: u32 = 1379;
+    /// `__builtin_strcmp` (clang `Builtins.td` signature `icC*cC*`).
+    pub const STRCMP: u32 = 1140;
+    /// `__builtin_strncmp` (clang `Builtins.td` signature `icC*cC*z`).
+    pub const STRNCMP: u32 = 1151;
+    /// `__builtin_strchr` (clang `Builtins.td` signature `c*cC*i`).
+    pub const STRCHR: u32 = 1138;
+    /// `__builtin_strrchr` (clang `Builtins.td` signature `c*cC*i`).
+    pub const STRRCHR: u32 = 1180;
+    /// `__builtin_strpbrk` (clang `Builtins.td` signature `c*cC*cC*`).
+    pub const STRPBRK: u32 = 1178;
+    /// `__builtin_strstr` (clang `Builtins.td` signature `c*cC*cC*`).
+    pub const STRSTR: u32 = 1157;
+    /// `__builtin_wcscmp` (clang `Builtins.td` signature `iwC*wC*`).
+    pub const WCSCMP: u32 = 1388;
+    /// `__builtin_wcsncmp` (clang `Builtins.td` signature `iwC*wC*z`).
+    pub const WCSNCMP: u32 = 1392;
+    /// `__builtin_wcschr` (clang `Builtins.td` signature `w*wC*w`).
+    pub const WCSCHR: u32 = 1386;
     /// `__builtin_isfinite` (clang `Builtins.td` signature `i.`).
     pub const ISFINITE: u32 = 725;
     /// `__builtin_isinf` (clang `Builtins.td` signature `i.`).
@@ -2831,6 +2849,15 @@ pub mod builtin {
         row(WCSLEN, "__builtin_wcslen", "zwC*", N | P),
         row(WMEMCHR, "__builtin_wmemchr", "w*wC*wz", N),
         row(WMEMCMP, "__builtin_wmemcmp", "iwC*wC*z", N),
+        row(STRCMP, "__builtin_strcmp", "icC*cC*", N),
+        row(STRNCMP, "__builtin_strncmp", "icC*cC*z", N),
+        row(STRCHR, "__builtin_strchr", "c*cC*i", N),
+        row(STRRCHR, "__builtin_strrchr", "c*cC*i", N),
+        row(STRPBRK, "__builtin_strpbrk", "c*cC*cC*", N),
+        row(STRSTR, "__builtin_strstr", "c*cC*cC*", N),
+        row(WCSCMP, "__builtin_wcscmp", "iwC*wC*", N | P),
+        row(WCSNCMP, "__builtin_wcsncmp", "iwC*wC*z", N | P),
+        row(WCSCHR, "__builtin_wcschr", "w*wC*w", N | P),
         row(ISFINITE, "__builtin_isfinite", "i.", N | C | T),
         row(ISINF, "__builtin_isinf", "i.", N | C | T),
         row(ISNAN, "__builtin_isnan", "i.", N | C | T),

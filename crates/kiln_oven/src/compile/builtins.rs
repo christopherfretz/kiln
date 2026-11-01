@@ -277,7 +277,10 @@ impl Compiler<'_> {
             | id::SCALBNL
             | id::SCALBLN
             | id::SCALBLNF
-            | id::SCALBLNL => self.trap_loc(begin, INVALID.into()),
+            | id::SCALBLNL
+            | id::STRRCHR
+            | id::STRPBRK
+            | id::STRSTR => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {
                 let x = arg(0)?;
                 let q = self.ast().exprs.get(x).ty();
@@ -288,17 +291,36 @@ impl Compiler<'_> {
                 let loc = self.ast().exprs.get(x).loc();
                 op(self, bi::STRLEN, 0, [a, dst, dst], [t, 0], loc);
             }
-            id::MEMCMP | id::WMEMCMP => {
-                let (x, y, n) = (arg(0)?, arg(1)?, arg(2)?);
+            id::MEMCMP | id::WMEMCMP | id::STRCMP | id::STRNCMP | id::WCSCMP | id::WCSNCMP => {
+                let (x, y) = (arg(0)?, arg(1)?);
+                let mut sub = u32::from(matches!(bid, id::WMEMCMP | id::WCSCMP | id::WCSNCMP));
+                if matches!(bid, id::STRCMP | id::STRNCMP | id::WCSCMP | id::WCSNCMP) {
+                    sub |= bi::STR;
+                }
+                let n = if matches!(bid, id::STRCMP | id::WCSCMP) {
+                    sub |= bi::UNBOUNDED;
+                    None
+                } else {
+                    Some(arg(2)?)
+                };
                 let t = [self.designator(x), self.designator(y)];
-                let r = [self.rv(x), self.rv(y), self.rv(n)];
-                op(self, bi::MEMCMP, u32::from(bid == id::WMEMCMP) * bi::WIDE, r, t, begin);
+                let (a, b) = (self.rv(x), self.rv(y));
+                let c = n.map_or(dst, |n| self.rv(n));
+                op(self, bi::MEMCMP, sub, [a, b, c], t, begin);
             }
-            id::MEMCHR | id::CHAR_MEMCHR | id::WMEMCHR => {
-                let (x, v, n) = (arg(0)?, arg(1)?, arg(2)?);
+            id::MEMCHR | id::CHAR_MEMCHR | id::WMEMCHR | id::STRCHR | id::WCSCHR => {
+                let (x, v) = (arg(0)?, arg(1)?);
+                let mut sub = u32::from(matches!(bid, id::WMEMCHR | id::WCSCHR));
+                let n = if matches!(bid, id::STRCHR | id::WCSCHR) {
+                    sub |= bi::STR | bi::UNBOUNDED;
+                    None
+                } else {
+                    Some(arg(2)?)
+                };
                 let t = self.designator(x);
-                let r = [self.rv(x), self.rv(v), self.rv(n)];
-                op(self, bi::MEMCHR, u32::from(bid == id::WMEMCHR) * bi::WIDE, r, [t, 0], begin);
+                let (a, b) = (self.rv(x), self.rv(v));
+                let c = n.map_or(dst, |n| self.rv(n));
+                op(self, bi::MEMCHR, sub, [a, b, c], [t, 0], begin);
             }
             id::MEMCPY | id::MEMMOVE => {
                 let (d, s, n) = (arg(0)?, arg(1)?, arg(2)?);

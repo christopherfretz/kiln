@@ -70,6 +70,15 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::WCSLEN
         | id::WMEMCHR
         | id::WMEMCMP
+        | id::STRCMP
+        | id::STRNCMP
+        | id::STRCHR
+        | id::STRRCHR
+        | id::STRPBRK
+        | id::STRSTR
+        | id::WCSCMP
+        | id::WCSNCMP
+        | id::WCSCHR
         | id::NAN
         | id::NANF
         | id::NANL

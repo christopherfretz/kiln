@@ -5,7 +5,9 @@
 //! descent. A `None` result ([`PExpr`]) means a syntax error was reported
 //! and the caller must recover; semantic errors yield an error expression.
 
-use kiln_ast::expr::{BinaryOp, ExprKind, PredefinedKind, SourceLocKind, TraitKind, TypeTrait, UnaryOp};
+use kiln_ast::expr::{
+    BinaryOp, ExprKind, PredefinedKind, SourceLocKind, TraitKind, TypeTrait, UnaryOp,
+};
 use kiln_ast::names::DeclName;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
