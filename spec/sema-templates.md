@@ -3747,6 +3747,10 @@ declarator scopes.**
   makes an undeduced pack parameter empty (`empty_undeduced_packs`, as
   matching already did). Without this, `C<A>` and `C<A, B...>` were
   ambiguous for `C<int>`.
+- *Matching prefilter and cv arrays*: `ArgShape::admits` compares an
+  array argument's effective (element) qualifiers, so `S<const F>`
+  matches `const int[10]` (libc++ `__copy_cv`, common_reference of
+  arrays).
 - Tests: `templates/builtins/temp.builtin.type-pack-element-narrowing.cpp`,
   `templates/diag/temp.arg.nontype-narrowing-wno.cpp`,
   `dcl.fct/abominable-compound.cpp`, `expr.mptr.oper/ref-qualified-call.cpp`,
@@ -3760,7 +3764,8 @@ declarator scopes.**
   `expr.call/function-rvalue-reference-result.cpp`,
   `templates/builtins/builtin.is-constructible-temporary-dtor.cpp`,
   `class.temporary/trivial-dtor-checked.cpp`,
-  `templates/order/temp.spec.partial.order-empty-pack.cpp`.
+  `templates/order/temp.spec.partial.order-empty-pack.cpp`,
+  `templates/spec/temp.spec.partial.match-cv-array.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 

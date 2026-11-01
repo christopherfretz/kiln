@@ -223,7 +223,14 @@ impl ArgShape {
             ArgShape::Exact(x) => x == a,
             ArgShape::Type { kind, quals } => {
                 let ArgView::Type(q) = a.view() else { return false };
-                q.quals_bits() & quals == quals && kind.is_none_or(|k| types.kind(q.ty()) == k)
+                // An array carries its element's qualifiers
+                // ([basic.type.qualifier]/3): `S<const F>` admits `const int[10]`.
+                let qb = if q.quals_bits() & quals == quals {
+                    q.quals_bits()
+                } else {
+                    types.effective_quals(q).bits()
+                };
+                qb & quals == quals && kind.is_none_or(|k| types.kind(q.ty()) == k)
             }
         }
     }
