@@ -509,6 +509,7 @@ diag_ids! {
     sema_using_decl_conflict = Error (0) "target of using declaration conflicts with declaration already in scope";
     sema_using_decl_conflict_reverse = Error (0) "declaration conflicts with target of using declaration already in scope";
     note_using_decl_target = Note (0) "target of using declaration";
+    sema_using_typename_non_type = Error (0) "'typename' keyword used on a non-type";
     note_using_decl_conflict = Note (0) "conflicting declaration";
     note_using_decl = Note (0) "using declaration";
     sema_use_of_empty_using_if_exists = Error (0) "reference to unresolved using declaration";

@@ -49,6 +49,19 @@ impl Substituter<'_, '_, '_> {
             DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm => {
                 self.sema.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
             }
+            // A `using typename B<T>::type;` member instantiated as a
+            // using-declaration (WP-169): the type its shadow names.
+            DeclKind::Using => {
+                let node = *self.sema.ast.decls.get(d);
+                let (ctx, name) = (node.ctx(), node.name());
+                let target = ctx.and_then(|c| {
+                    self.sema.ast.lookup_local(c, name).iter().find_map(|s| {
+                        let t = self.sema.ast.strip_shadow(s);
+                        (s != t && self.sema.kind_of(t) != DeclKind::Using).then_some(t)
+                    })
+                });
+                target.map_or(QualType::ERROR, |t| self.decl_type(t))
+            }
             _ => self.sema.tag_type(d),
         }
     }
