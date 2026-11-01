@@ -834,8 +834,7 @@ impl Sema<'_, '_> {
                 // A member template: the member overload set (an
                 // implicit `this->` for instance members).
                 let valid = found.decls.clone();
-                let e =
-                    self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
+                let e = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
                 self.set_overload_begin(e, begin, loc);
                 return e;
             }
@@ -2644,16 +2643,26 @@ impl Sema<'_, '_> {
     /// Reports argument `a` (the `i`th, 0-based) of a call of `d` (a
     /// one-candidate overload set) not converting to its parameter type
     /// `pt`: clang's "no matching function" with the candidate's note.
+    /// The note details the candidate's bad conversion sequence (clang
+    /// `DiagnoseBadConversion`: a temporary's referent, an lvalue
+    /// required, lost qualifiers).
     fn bad_argument(&mut self, d: DeclId, callee: ExprId, a: ExprId, pt: QualType, i: usize) {
         let msg = self
             .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
             .arg(self.decl_name(d));
-        let detail = format!(
-            "no known conversion from {} to {} for {} argument",
-            self.ty_arg(self.ety(a)),
-            self.ty_arg(pt),
-            ordinal(i + 1)
-        );
+        let info = self.arg_info(a);
+        let ics =
+            self.try_implicit_conversion(&info, pt, crate::overload::IcsOptions::CANDIDATE_ARG);
+        let detail = if ics.is_bad() {
+            self.bad_conversion_detail(&ics, Some(i))
+        } else {
+            format!(
+                "no known conversion from {} to {} for {} argument",
+                self.ty_arg(self.ety(a)),
+                self.ty_arg(pt),
+                ordinal(i + 1)
+            )
+        };
         let fl = self.ast.decls.get(d).loc();
         let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
         self.emit(msg.with_note(note));
@@ -2943,6 +2952,18 @@ impl Sema<'_, '_> {
                     && !self.is_err_expr(a)
                     && !self.expr_is_type_dependent(a)
                 {
+                    // A one-candidate overload set: a bad conversion
+                    // sequence makes the candidate not viable
+                    // ([over.match.viable]/4) where the direct path
+                    // diagnoses the initialization.
+                    if let Some(c) = named.filter(|c| c.overloadable) {
+                        let info = self.arg_info(a);
+                        let opts = crate::overload::IcsOptions::CANDIDATE_ARG;
+                        if self.try_implicit_conversion(&info, to, opts).is_bad() {
+                            self.bad_argument(c.decl, callee, a, params[i], i);
+                            return None;
+                        }
+                    }
                     let note = match pdecls.get(i) {
                         Some(&p) => crate::class::DeletedAs::Param(self.param_decl_note(p)),
                         None => crate::class::DeletedAs::Call,

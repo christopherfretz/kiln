@@ -696,7 +696,31 @@ fn bind_reference(
             let opts =
                 if ctx.is_direct() { IcsOptions::EXPLICIT_REF_CONV } else { IcsOptions::NONE };
             if let Some(r) = s.user_convert_with(e, to, ConvCtx::Initialization, opts, at) {
+                // clang: the /5.4.1 temporary's ambiguous implicit
+                // conversion sequence, reported where it is performed.
+                if !class_src
+                    && let Err(err) = &r
+                    && err.id == DiagId::sema_ref_init_ambiguous
+                {
+                    let mut d = s
+                        .diag(DiagId::sema_ovl_ambiguous_conversion, at)
+                        .arg(s.ty_arg(from))
+                        .arg(to_str);
+                    for n in &err.notes {
+                        d = d.with_note(n.clone());
+                    }
+                    s.emit(d);
+                    return Ok(s.recover_err(&[e], at));
+                }
                 return r;
+            }
+            if !class_src && !plain_lref {
+                // clang `FK_ReferenceInitFailed`: no implicit conversion
+                // sequence to the /5.4.1 temporary (no conversion
+                // function set to report).
+                let sel = if vk.is_glvalue() { "1" } else { "0" };
+                let args = vec![to_str, sel.into(), s.ty_arg(from)];
+                return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
             }
             let lref_opts =
                 if ctx.is_direct() { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };

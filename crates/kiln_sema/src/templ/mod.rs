@@ -768,14 +768,8 @@ impl Sema<'_, '_> {
         if !self.checks_member_spec_headers() {
             return;
         }
-        let mut heads = self
-            .templ
-            .heads
-            .iter()
-            .rev()
-            .take_while(|h| !h.taken)
-            .filter(|h| !h.invented)
-            .count();
+        let mut heads =
+            self.templ.heads.iter().rev().take_while(|h| !h.taken).filter(|h| !h.invented).count();
         for slot in self.scope_slots(qualifier) {
             match slot {
                 ScopeSlot::Params(_) => heads = heads.saturating_sub(1),
