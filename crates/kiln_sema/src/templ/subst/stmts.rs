@@ -231,6 +231,19 @@ impl Substituter<'_, '_, '_> {
             StmtKind::BreakStmt => Ok(self.sema.act_on_break(loc)),
             StmtKind::ContinueStmt => Ok(self.sema.act_on_continue(loc)),
             StmtKind::GCCAsmStmt => self.asm_stmt(s),
+            // Labels are rebuilt by name in the instantiation (clang
+            // `TransformLabelStmt` / `TransformGotoStmt`, whose
+            // `TransformDecl` makes a fresh `LabelDecl`).
+            StmtKind::LabelStmt => {
+                let (name, at) = self.label_name(DeclId::new(n.a()))?;
+                let d = self.sema.act_on_label(name, at);
+                let sub = self.stmt(StmtId::new(n.b()));
+                Ok(self.sema.act_on_label_stmt(d, sub, loc))
+            }
+            StmtKind::GotoStmt => {
+                let (name, at) = self.label_name(DeclId::new(n.a()))?;
+                Ok(self.sema.act_on_goto(name, at, loc))
+            }
             k => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
     }
@@ -256,9 +269,21 @@ impl Substituter<'_, '_, '_> {
             .collect();
         let (outs, ins) = new.split_at(data.num_outputs as usize);
         let string = (data.string, data.string_loc);
+        let pattern: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(data.labels).collect();
+        let mut labels: Vec<(DeclId, Loc)> = Vec::with_capacity(pattern.len());
+        for l in pattern {
+            let (name, at) = self.label_name(l)?;
+            labels.push((self.sema.act_on_asm_goto_label(name, at), at));
+        }
         self.sema
-            .act_on_gcc_asm_stmt(loc, bits, string, outs, ins, &clobbers, data.rparen)
+            .act_on_gcc_asm_goto_stmt(loc, bits, string, outs, ins, &clobbers, &labels, data.rparen)
             .ok_or(SubstFail)
+    }
+
+    /// The name and location of the pattern's label declaration `l`.
+    fn label_name(&self, l: DeclId) -> SubstResult<(kiln_source::symbol::Symbol, Loc)> {
+        let n = self.sema.ast.decls.get(l);
+        Ok((n.name().as_ident().ok_or(SubstFail)?, n.loc()))
     }
 
     /// `if` ([stmt.if]); for `if constexpr` only the taken branch is
