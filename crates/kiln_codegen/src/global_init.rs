@@ -15,7 +15,8 @@
 //! globals ([class.temporary]/6).
 
 use kiln_abi::mangle::{self, Structor};
-use kiln_ast::expr::ExprKind;
+use kiln_ast::decl::DeclKind;
+use kiln_ast::expr::{CastKind, ExprFlags, ExprKind};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, BinOp, CallOpts, ComdatKind, Flags, FuncId, GlobalId, IntPredicate, Linkage,
@@ -572,16 +573,18 @@ impl Cg<'_> {
         let comdat = weak.then(|| self.m.comdat(&name, ComdatKind::Any));
         let align = self.size_align(ty).1;
         // Constant storage (clang `isConstantStorage` with `ExcludeCtor`
-        // on the materialized initializer's type): a constant-initialized
-        // const array with no destructor, e.g. the `const E[N]` backing
-        // array of a namespace-scope `std::initializer_list`
-        // ([dcl.init.list]/5). A scalar or class prvalue is materialized
-        // cv-unqualified (the `const` of `const int& r = 5` is a no-op
-        // conversion clang skips), so its `_ZGR` stays writable.
+        // on the materialized type): a constant-initialized `const`
+        // object with no destructor and no `mutable` member. The `const`
+        // of `const int& r = 5` / `const P& r = P{}` is a no-op conversion
+        // clang skips, so their `_ZGR` stays writable; a temporary created
+        // by converting to the referenced type (`const double& r = 1`,
+        // `const P& r = {1}`, the `const E[N]` backing array of a
+        // `std::initializer_list`) is `constant`.
+        let mat = self.materialized_type(t).unwrap_or(ty);
         let constant = init.is_some()
-            && self.array_elem(ty).is_some()
-            && ast.types.effective_quals(ty).is_const()
-            && self.destructed_class(ty).is_none();
+            && ast.types.effective_quals(mat).is_const()
+            && !crate::module::has_mutable(ast, mat)
+            && self.destructed_class(mat).is_none();
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;
         gv.linkage = lin;
@@ -591,6 +594,60 @@ impl Cg<'_> {
         // initializer unless the value is constant.
         gv.dso_local = !matches!(lin, Linkage::Internal | Linkage::Private) && init.is_some();
         Ok(g)
+    }
+
+    /// clang `GetAddrOfGlobalTemporary`'s `MaterializedType` for
+    /// lifetime-extended temporary `t`: the type of its
+    /// `MaterializeTemporaryExpr`'s operand after parentheses, no-op and
+    /// derived-to-base casts and member accesses
+    /// (`skipRValueSubobjectAdjustments`) when any was skipped, else the
+    /// `MaterializeTemporaryExpr`'s own (cv-qualified) type. `None` when
+    /// the expression is not found in the extending variable's
+    /// initializer.
+    fn materialized_type(&self, t: DeclId) -> Option<QualType> {
+        let ast = self.ast;
+        let l = ast.decls.lifetime_extended(t)?;
+        let init = ast.decls.var(l.extending)?.init?;
+        let mut stack = vec![init];
+        let mut mte = None;
+        while let Some(e) = stack.pop() {
+            if ast.exprs.get(e).kind() == ExprKind::MaterializeTemporaryExpr
+                && ast.exprs.lifetime_extended_temporary(e) == Some(t)
+            {
+                mte = Some(e);
+                break;
+            }
+            stack.extend(ast.exprs.children(e, &ast.lists));
+        }
+        let mte = mte?;
+        let first = ast.exprs.operand(mte);
+        let mut e = first;
+        loop {
+            let n = ast.exprs.get(e);
+            let k = n.kind();
+            let skip = match k {
+                ExprKind::ParenExpr => true,
+                _ if k.is_cast() => match ast.exprs.cast_kind(e) {
+                    CastKind::NoOp => true,
+                    CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
+                        ast.types.as_record(n.ty()).is_some()
+                    }
+                    _ => false,
+                },
+                ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
+                    let f = ast.exprs.decl(e);
+                    ast.decls.get(f).kind() == DeclKind::Field
+                        && !ast.decls.field(f).is_some_and(|x| x.bit_width.is_some())
+                        && !ast.types.is_reference(ast.decls.get(f).ty().unwrap_or(QualType::INT))
+                }
+                _ => false,
+            };
+            if !skip {
+                break;
+            }
+            e = ast.exprs.operand(e);
+        }
+        Some(if e == first { ast.exprs.get(mte).ty() } else { ast.exprs.get(e).ty() })
     }
 
     /// The address of static-storage temporary `m` of type `sq` and
