@@ -65,13 +65,51 @@ impl Sema<'_, '_> {
             let info = self.ctor_arg_info(a);
             set.args.push(info);
         }
-        self.add_ctor_candidates(&mut set, c, opts, false);
+        // [over.match.copy]/1.1: from a non-class expression, converting
+        // constructors only (clang `TryUserDefinedConversion` keeps
+        // `isConvertingConstructor` ones, so a default constructor is
+        // not a noted candidate).
+        if let [arg] = args
+            && style == InitStyle::Copy
+            && self.ast.types.as_record(self.ety(*arg)).is_none()
+        {
+            self.add_converting_ctor_candidates(&mut set, c, opts);
+        } else {
+            self.add_ctor_candidates(&mut set, c, opts, false);
+        }
         if let [arg] = args {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
         self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         self.selected_of(set, out)
+    }
+
+    /// The converting constructors of class `c` ([class.conv.ctor]; clang
+    /// `isConvertingConstructor`: callable with one argument, or a
+    /// variadic one without parameters), and its inherited ones.
+    fn add_converting_ctor_candidates(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        c: DeclId,
+        opts: IcsOptions,
+    ) {
+        let c = self.class_def(c);
+        self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
+        self.ensure_implicit(c, crate::class::SpecialKind::CopyCtor);
+        self.ensure_implicit(c, crate::class::SpecialKind::MoveCtor);
+        let mut found: Vec<DeclId> = self.ast.constructors(c).iter().collect();
+        found.extend(self.ctor_shadows(c));
+        let mut params = Vec::new();
+        found.retain(|&f| {
+            if self.kind_of(f) != DeclKind::CXXConstructor {
+                return true;
+            }
+            params.clear();
+            let variadic = self.fn_param_types(f, &mut params);
+            if params.is_empty() { variadic } else { self.fn_min_args(f) <= 1 }
+        });
+        self.add_found_candidates(set, &found, crate::overload::CandidateKind::Ctor, opts, false);
     }
 
     /// clang's workaround for C++17 guaranteed copy elision (CWG2327):

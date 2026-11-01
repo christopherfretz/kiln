@@ -2533,6 +2533,16 @@ impl DeclArena {
         set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
     }
 
+    /// Takes back the default argument of a parameter of a class template
+    /// member specialization whose instantiation at a use failed
+    /// ([temp.inst]/12): as clang keeps the uninstantiated argument, the
+    /// next use instantiates (and reports) it again.
+    pub fn reset_failed_default_arg(&mut self, p: DeclId) {
+        let d = self.param_mut(p);
+        d.default_arg = None;
+        d.flags |= ParamData::DEFAULT_ARG_PENDING;
+    }
+
     /// Marks a parameter's default argument as pending late parsing
     /// ([`ParamData::DEFAULT_ARG_PENDING`]; set before the class is
     /// complete, cleared implicitly by reading `default_arg` once set).

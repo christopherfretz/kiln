@@ -104,7 +104,11 @@ impl Sema<'_, '_> {
     /// applied: they modify the decl-specifier type, not the declarator's
     /// (clang `processTypeAttrs(TAL_DeclSpec)`); the declarator's own
     /// trailing attributes apply to the whole declared type.
-    pub(crate) fn apply_declspec_vector_attrs(&mut self, base: QualType, ds: &DeclSpec) -> QualType {
+    pub(crate) fn apply_declspec_vector_attrs(
+        &mut self,
+        base: QualType,
+        ds: &DeclSpec,
+    ) -> QualType {
         let mut attrs = ds.attrs.clone();
         self.apply_vector_attrs(base, &mut attrs, ds.is_typedef())
     }
@@ -158,6 +162,7 @@ impl Sema<'_, '_> {
         }
         if self.expr_is_value_dependent(size) || (!ext && elem_dep) {
             let p = self.dependent_profile(size);
+            self.inst.vector_attr_locs.insert(size, loc);
             return self.ast.types.dependent_vector(elem, size, p, kind);
         }
         let name = if ext { "ext_vector_type" } else { "vector_size" };

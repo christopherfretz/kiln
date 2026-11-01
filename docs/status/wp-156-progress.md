@@ -31,6 +31,29 @@ libc++ M3 gate before: 318 / 642 pass (54.4%).
 4. [x] "cannot initialize return object / a parameter" now points at the
    start of the operand (it pointed at a call's `(`).
 
+5. [x] [temp.inst]/12: default arguments of members of class template
+   specializations (and of their member templates) are instantiated at
+   the first call that uses them (`kiln_sema/src/templ/default_args.rs`,
+   `InstState::lazy_defaults`); a function-local class or lambda still
+   instantiates them eagerly. A failed instantiation is retried, and
+   reported again, at the next use, as clang does. The note is clang's
+   "in instantiation of default function argument expression for 'f<B>'".
+   Tests: `temp.inst/lazy-default-args{,-diagnostics,-retry}.cpp`.
+6. [x] A default argument's conversion failure is reported at the
+   parameter with "passing argument to parameter 'x' here"; copy-
+   initialization of a class from a non-class expression only lists
+   converting constructors (no default-constructor note). Test:
+   `dcl.fct.default/conversion-diagnostics.cpp`.
+7. [x] `T()` (value-initialization through a default constructor with
+   default arguments) dropped the arguments: wrong constant values and an
+   IR lowering failure. Classes nested in a class template specialization
+   are named `%"struct.A<B>::In"` in IR, as clang names them. Test:
+   `tests/codegen/nested_spec_record_name.cpp`.
+8. [x] A dependent vector attribute is diagnosed at the attribute when
+   substituted, and outside SFINAE the type is then left unchanged (the
+   member typedef survives, no "no type named" cascade). Test:
+   `ext.vector/substitution-diagnostics.cpp`.
+
 ## Not done (follow-ups)
 - Oven folding of vector values (`kiln_oven/src/ty.rs` is owned by WP-154),
   and constant folding of vector binops.

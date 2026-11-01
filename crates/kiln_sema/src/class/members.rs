@@ -478,8 +478,14 @@ impl Sema<'_, '_> {
     /// initialized to the parameter type, its own full-expression.
     pub(crate) fn attach_default_arg(&mut self, p: DeclId, e: kiln_ast::ExprId) {
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let loc = self.ast.exprs.get(e).loc();
-        let c = self.perform_init(pty, crate::init::Initializer::Expr(e), loc, false);
+        let c = if self.is_error_type(pty) || self.ast.types.is_dependent(pty) {
+            let loc = self.ast.exprs.get(e).loc();
+            self.perform_init(pty, crate::init::Initializer::Expr(e), loc, false)
+        } else {
+            let note = self.param_decl_note(p);
+            let ploc = self.ast.decls.get(p).loc();
+            self.convert_default_arg(e, pty, ploc, note)
+        };
         self.note_default_init_full_expr();
         let c = self.act_on_full_expr(c);
         let _ = self.ast.decls.set_default_arg(p, c);

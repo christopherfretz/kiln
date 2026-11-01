@@ -557,7 +557,7 @@ impl Substituter<'_, '_, '_> {
                 .decls
                 .mark_function(f, kiln_ast::decl::FnSpec::new().with_implicit_inline(true));
         }
-        self.default_args(d, f);
+        self.defer_default_args(d, f);
         // `= delete` / `= default` on the pattern's declaration: declared
         // again on the instantiation, where its checks run with the class
         // (clang `InstantiateFunctionDeclaration` → `SetDeclDeleted` /
@@ -626,7 +626,7 @@ impl Substituter<'_, '_, '_> {
         self.sema.ast.decls.set_ty(spec, fty);
         let _ = self.sema.builder().set_params(spec, &ids);
         self.forget_pattern_params(pat);
-        self.default_args(pat, spec);
+        self.defer_default_args(pat, spec);
         Ok(())
     }
 
@@ -696,6 +696,95 @@ impl Substituter<'_, '_, '_> {
         })
     }
 
+    /// The default arguments of pattern function `pat` on `f`, recorded
+    /// to be instantiated at their first use ([temp.inst]/12, clang
+    /// `setUninstantiatedDefaultArg`): `f`'s parameter is marked
+    /// `DEFAULT_ARG_PENDING` and mapped to the pattern's parameter
+    /// (the original pattern's, when `pat`'s default is itself pending).
+    /// A function in a local scope (a local class's member) gets them now,
+    /// as clang (`isInLocalScopeForInstantiation`).
+    pub(crate) fn defer_default_args(&mut self, pat: DeclId, f: DeclId) {
+        if self.sema.decl_in_local_scope(f) {
+            self.default_args(pat, f);
+            return;
+        }
+        let params = |s: &Self, x: DeclId| -> Vec<DeclId> {
+            s.sema
+                .ast
+                .decls
+                .function(x)
+                .map(|fd| s.sema.ast.lists.iter::<DeclId>(fd.params).collect())
+                .unwrap_or_default()
+        };
+        let pp = params(self, pat);
+        let fp = params(self, f);
+        if pp.len() != fp.len() {
+            // A pack expanded: substitute now.
+            self.default_args(pat, f);
+            return;
+        }
+        for (&a, &b) in pp.iter().zip(fp.iter()) {
+            let src = if let Some(&src) = self.sema.inst.lazy_defaults.get(&a) {
+                src
+            } else {
+                match self.sema.ast.decls.param(a).and_then(|x| x.default_arg) {
+                    Some(def)
+                        if self.sema.ast.exprs.get(def).kind()
+                            != kiln_ast::expr::ExprKind::CXXDefaultArgExpr =>
+                    {
+                        (pat, a)
+                    }
+                    _ => continue,
+                }
+            };
+            self.sema.ast.decls.mark_default_arg_pending(b);
+            self.sema.inst.lazy_defaults.insert(b, src);
+        }
+    }
+
+    /// The default argument of parameter `b` of `f`, from parameter `a`
+    /// of pattern function `pat` (`f`'s parameters are mapped to
+    /// `pat`'s, so the default can name an earlier parameter).
+    pub(crate) fn lazy_default_arg(&mut self, pat: DeclId, a: DeclId, f: DeclId, b: DeclId) {
+        let params = |s: &Self, x: DeclId| -> Vec<DeclId> {
+            s.sema
+                .ast
+                .decls
+                .function(x)
+                .map(|fd| s.sema.ast.lists.iter::<DeclId>(fd.params).collect())
+                .unwrap_or_default()
+        };
+        let pp = params(self, pat);
+        let fp = params(self, f);
+        self.map_params(&pp, &fp);
+        self.default_arg_one(a, b);
+        for a in pp {
+            self.locals.remove(&a);
+        }
+    }
+
+    /// Substitutes the default argument of pattern parameter `a` onto `b`.
+    fn default_arg_one(&mut self, a: DeclId, b: DeclId) {
+        let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else {
+            return;
+        };
+        let e = match self.sema.ast.exprs.get(def).kind() {
+            kiln_ast::expr::ExprKind::CXXDefaultArgExpr => return,
+            // `= {...}` with a dependent type or element: the list
+            // as written, list-initializing the substituted type.
+            kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
+                if let Ok(l) = self.init_list(def) {
+                    self.sema.act_on_param_default_list(b, &l);
+                }
+                return;
+            }
+            _ => self.expr(def),
+        };
+        if let Ok(e) = e {
+            self.sema.act_on_param_default_arg(b, e);
+        }
+    }
+
     /// The default arguments of pattern function `pat` on `f`.
     pub(crate) fn default_args(&mut self, pat: DeclId, f: DeclId) {
         let pp: Vec<DeclId> = self
@@ -714,24 +803,7 @@ impl Substituter<'_, '_, '_> {
             .unwrap_or_default();
         self.map_params(&pp, &fp);
         for (&a, &b) in pp.iter().zip(fp.iter()) {
-            let Some(def) = self.sema.ast.decls.param(a).and_then(|x| x.default_arg) else {
-                continue;
-            };
-            let e = match self.sema.ast.exprs.get(def).kind() {
-                kiln_ast::expr::ExprKind::CXXDefaultArgExpr => continue,
-                // `= {...}` with a dependent type or element: the list
-                // as written, list-initializing the substituted type.
-                kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
-                    if let Ok(l) = self.init_list(def) {
-                        self.sema.act_on_param_default_list(b, &l);
-                    }
-                    continue;
-                }
-                _ => self.expr(def),
-            };
-            if let Ok(e) = e {
-                self.sema.act_on_param_default_arg(b, e);
-            }
+            self.default_arg_one(a, b);
         }
         for a in pp {
             self.locals.remove(&a);

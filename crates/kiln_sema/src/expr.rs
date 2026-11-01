@@ -2864,6 +2864,17 @@ impl Sema<'_, '_> {
             .and_then(|c| self.ast.decls.function(c.decl))
             .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
+        // [temp.inst]/12: the default arguments this call uses are
+        // instantiated now.
+        if let Some(c) = named {
+            for &p in pdecls.iter().take(n).skip(have) {
+                if self.inst.lazy_defaults.contains_key(&p)
+                    && !self.instantiate_lazy_default(c.decl, p, self.begin_loc(callee))
+                {
+                    return None;
+                }
+            }
+        }
         let defaults: Vec<Option<ExprId>> = (0..n)
             .map(|i| {
                 pdecls.get(i).and_then(|&p| self.ast.decls.param(p)).and_then(|x| x.default_arg)
@@ -3842,7 +3853,9 @@ impl Sema<'_, '_> {
             // ext vector.
             let ext = |q| self.vector_parts(q).is_some_and(|p| p.is_ext());
             let scalar_ext = (!fv && ext(to)) || (!tv && ext(from));
-            if !scalar_ext && self.lax_size(from).is_some() && self.lax_size(from) == self.lax_size(to)
+            if !scalar_ext
+                && self.lax_size(from).is_some()
+                && self.lax_size(from) == self.lax_size(to)
             {
                 return Some(CastKind::BitCast);
             }

@@ -617,7 +617,14 @@ impl<'a> Cg<'a> {
                     parts.push(s);
                 }
                 _ => {
-                    let s = mangle::decl_name(ast, x);
+                    let mut s = mangle::decl_name(ast, x);
+                    // An enclosing class template specialization prints
+                    // with its arguments (`A<B>::In`).
+                    if !s.is_empty()
+                        && let Some(l) = ast.spec_print_args(x)
+                    {
+                        kiln_ast::types::write_arg_list(&ast.types, ast, l, &mut s);
+                    }
                     parts.push(if s.is_empty() {
                         format!("(anonymous {})", record_kind_prefix(ast, x))
                     } else {
