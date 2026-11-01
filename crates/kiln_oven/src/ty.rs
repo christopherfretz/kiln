@@ -650,4 +650,25 @@ impl Types {
             _ => false,
         }
     }
+
+    /// Whether the storage unit of a bit-field of type `p` lies at `off`
+    /// inside `root` (a bit-field is not a subobject that a pointer can
+    /// designate, but its accesses still go through the unions above it).
+    pub fn has_bit_unit(&self, root: OTy, off: u64, p: OTy) -> bool {
+        match self.kind(root) {
+            TyKind::Array { elem, n } => {
+                let es = self.size(elem);
+                es != 0 && off / es < n && self.has_bit_unit(elem, off % es, p)
+            }
+            TyKind::Record { .. } => self.fields(root).iter().any(|f| match f.width {
+                Some(_) => off == f.offset && f.ty == p,
+                None => {
+                    off >= f.offset
+                        && off < f.offset + self.size(f.ty).max(1)
+                        && self.has_bit_unit(f.ty, off - f.offset, p)
+                }
+            }),
+            _ => false,
+        }
+    }
 }

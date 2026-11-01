@@ -52,6 +52,21 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether `f` is a defaulted move constructor or move assignment
+    /// operator defined as deleted, which overload resolution ignores
+    /// ([class.copy.ctor]/10, [class.copy.assign]/7, CWG1402; clang
+    /// `AddOverloadCandidate`, `AddMethodCandidate`), so that a move
+    /// falls back to the copy.
+    fn is_deleted_defaulted_move(&self, f: DeclId) -> bool {
+        let first = self.ast.first(f);
+        self.ast.decls.function(first).is_some_and(|x| {
+            x.spec.is_deleted() && x.spec.defaulted() != kiln_ast::decl::Defaulted::No
+        }) && matches!(
+            self.special_kind_of(f),
+            Some(crate::class::SpecialKind::MoveCtor | crate::class::SpecialKind::MoveAssign)
+        )
+    }
+
     /// Adds function `f` (found as `found`) to `set` as a candidate of
     /// kind `kind` for the set's arguments (and object argument): checks
     /// arity ([over.match.viable]/2), then computes one conversion
@@ -66,7 +81,8 @@ impl Sema<'_, '_> {
         kind: CandidateKind,
         first_opts: IcsOptions,
     ) {
-        if set.exclude.is_some_and(|x| x == self.ast.first(f)) {
+        if set.exclude.is_some_and(|x| x == self.ast.first(f)) || self.is_deleted_defaulted_move(f)
+        {
             return;
         }
         self.ovl.stats.candidates += 1;

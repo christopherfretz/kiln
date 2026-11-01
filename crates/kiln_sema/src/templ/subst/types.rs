@@ -16,6 +16,7 @@ use crate::declspec::{Chunk, Declarator, DeclaratorContext};
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
 use crate::templ::args::ArgLookup;
+use crate::templ::written::WrittenKey;
 
 impl Substituter<'_, '_, '_> {
     /// Substitutes into type `q` (its qualifiers kept, collapsing as the
@@ -236,7 +237,8 @@ impl Substituter<'_, '_, '_> {
                 let name = self.template_name(name, loc)?;
                 let args = self.args(args, loc)?;
                 let v = self.sema.ast.types.args(args).to_vec();
-                match self.sema.act_template_id(name, &v, loc, loc) {
+                let l = self.written(WrittenKey::Type(q), loc);
+                match self.sema.act_template_id(name, &v, l, l) {
                     Ok(TemplateIdRef::Type(t)) => Ok(t),
                     Ok(_) | Err(()) => Err(SubstFail),
                 }
@@ -266,7 +268,9 @@ impl Substituter<'_, '_, '_> {
                     // template named in a template): still dependent.
                     return Ok(self.sema.ast.types.dependent_name(keyword, n, name));
                 }
-                let ctx = self.nns_context(n, loc)?;
+                let ctx = self.nns_context(n, self.written(WrittenKey::Nns(nns), loc))?;
+                // Diagnosed at the name as written (§5.8).
+                let loc = self.written(WrittenKey::Type(q), loc);
                 let found = self.sema.lookup_qualified(ctx, name, LookupKind::Ordinary);
                 let Some(&d) = found.decls.first() else {
                     let d = self
@@ -393,7 +397,8 @@ impl Substituter<'_, '_, '_> {
                         .dependent_template_specialization(keyword, n, name, args));
                 }
                 // `T::template X<args>` ([temp.names]/5): the member
-                // template of the substituted class.
+                // template of the substituted class, diagnosed at `X`.
+                let loc = self.written(WrittenKey::Type(q), loc);
                 let d = self.member_template_named(n, name, loc)?;
                 let underlying = self.sema.template_name_for(d);
                 let tn =

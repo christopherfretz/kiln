@@ -885,11 +885,29 @@ downcast or a derived member pointer needs it). Lifetime is per
 allocation (the `live` bit and generation of `mem.rs`); a union's active
 member is tracked per union subobject as in M2 ([class.union]/6: a
 mem-initializer or an assignment to a member of non-class type activates
-it, also through an anonymous union). `BeginLife`/`EndLife` per subobject
+it, also through an anonymous union; so does a call of a trivial copy or
+move assignment operator on a member access chain, whose object operand
+is lowered as a write, clang's `MaybeHandleUnionActiveMemberChange`,
+WP-207). The active-member check on the path to an access reaches a
+bit-field's storage unit inside a member of class type
+(`Types::has_bit_unit`; a bit-field is not a `has_subobject` target),
+so libc++'s short-string `__s.__is_long_` reads and writes check against
+`__s` (WP-207). `BeginLife`/`EndLife` per subobject
 are not separate operations: a member's lifetime is its complete
 object's, which is precise for constant evaluation because no constant
 expression can end a subobject's lifetime independently except through a
 union (tracked) or an explicit destructor call (not yet parsed, below).
+
+**Static members and function lvalues (WP-207).** `E.m`/`E->m` naming a
+static data member evaluates `E` for its side effects only
+([expr.ref]/7.1, clang's `VisitIgnoredBaseExpression`; a null `E->m` is
+not an access) and designates the variable (`GlobalAddr`; a reference
+member designates its referent). An lvalue of function type designates
+a function in every lvalue position: a `DeclRefExpr` of a function
+reference variable (its referent), `*fp`, and no-op casts and
+`ConstantExpr` around either (`static_cast<F&&>(f)` in libc++'s
+`__invoke`, [expr.static.cast]/4), whether called, bound to a reference
+or under `&`.
 
 **Construction.** `CXXConstructExpr` (complete, base and delegating; a
 prvalue initializes its target object directly, [dcl.init.general]/17.6.1;

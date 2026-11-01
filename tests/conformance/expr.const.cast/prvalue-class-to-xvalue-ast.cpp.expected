@@ -1,0 +1,34 @@
+Dumping f:
+FunctionDecl f 'void ()'
+`-CompoundStmt
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CXXConstCastExpr 'const P' xvalue const_cast<const P &&> <NoOp>
+  |     `-MaterializeTemporaryExpr 'P' xvalue
+  |       `-CallExpr 'P'
+  |         `-ImplicitCastExpr 'P (*)()' <FunctionToPointerDecay>
+  |           `-DeclRefExpr 'P ()' lvalue Function 'mk' 'P ()'
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CXXConstCastExpr 'P' xvalue const_cast<P &&> <NoOp>
+  |     `-MaterializeTemporaryExpr 'P' xvalue
+  |       `-CallExpr 'P'
+  |         `-ImplicitCastExpr 'P (*)()' <FunctionToPointerDecay>
+  |           `-DeclRefExpr 'P ()' lvalue Function 'mk' 'P ()'
+  |-ExprWithCleanups 'void'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-CStyleCastExpr 'const D' xvalue <NoOp>
+  |     `-MaterializeTemporaryExpr 'D' xvalue
+  |       `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+  |         `-CallExpr 'D'
+  |           `-ImplicitCastExpr 'D (*)()' <FunctionToPointerDecay>
+  |             `-DeclRefExpr 'D ()' lvalue Function 'mkd' 'D ()'
+  `-ExprWithCleanups 'void'
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-CXXConstCastExpr 'const D' xvalue const_cast<const D &&> <NoOp>
+        `-MaterializeTemporaryExpr 'D' xvalue
+          `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+            `-CallExpr 'D'
+              `-ImplicitCastExpr 'D (*)()' <FunctionToPointerDecay>
+                `-DeclRefExpr 'D ()' lvalue Function 'mkd' 'D ()'
+

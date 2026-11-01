@@ -376,9 +376,6 @@ impl Cg<'_> {
         if rec.is_union && as_base {
             return err(None, "union base-class constants are not supported yet (M3)");
         }
-        if !rec.bitfields.is_empty() {
-            return err(None, "bit-field constants are not supported yet (M3)");
-        }
         let (members, packed) = match (&rec.base_members, as_base) {
             (Some(b), true) => {
                 let lt = self.ir(&IrType::RecordBase(first));
@@ -427,9 +424,12 @@ impl Cg<'_> {
         for (i, m) in members.iter().enumerate() {
             let at = rel + offs[i];
             if let Some(f) = by_member[i] {
-                let sub = fields
-                    .iter()
-                    .position(|&x| x == f)
+                // A bit-field storage unit is rebuilt from its bytes (the
+                // object representation already packs the fields, in
+                // target bit order), with no initializer.
+                let sub = Some(f)
+                    .filter(|f| !rec.bitfields.contains_key(f))
+                    .and_then(|f| fields.iter().position(|&x| x == f))
                     .and_then(|p| inits.get(p + bases.len()).copied());
                 out.push((at, self.image_const(img, off + at, m, sub)?));
             } else if let Some(b) = by_base[i] {

@@ -490,6 +490,11 @@ impl Sema<'_, '_> {
         }
         self.instantiate_static_member_init(m, name_loc);
         self.instantiate_static_member_def(m, name_loc);
+        if self.inst.member_defs.contains(&m) {
+            // Defined later, or an error at the end of the TU (clang
+            // `PerformPendingInstantiations`, spec/sema-templates.md §4.4).
+            self.queue_instantiation(m, name_loc);
+        }
         self.mark_used(m);
     }
 }

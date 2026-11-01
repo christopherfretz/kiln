@@ -92,12 +92,18 @@ QualRelation`:
 - `NotSimilar`;
 - `Similar { convertible, drops_outer, drops_nested }`.
 
-It implements the cv-decomposition rules, including P0388 array-of-unknown-bound unification. An array's cv is the union of its element's cv (`effective_quals`). The function pointer conversion ([conv.fctptr]) is `is_function_pointer_conversion`.
+It implements the cv-decomposition rules, including P0388 array-of-unknown-bound unification. An array's cv is the union of its element's cv (`effective_quals`). An array is not a level of its own for [conv.qual]/3.3 ([basic.type.qualifier]/3; clang's `UnwrapSimilarTypes` merges it with its element): a cv added to an array's elements requires `const` only at the levels above the array's enclosing pointer, so `int (*)[]` converts to `volatile int (*)[]` (WP-207). The function pointer conversion ([conv.fctptr]) is `is_function_pointer_conversion`.
 
 Base lookup (`conv/bases.rs`): `find_base(derived, base) -> BaseSearch {
 NotDerived, Unique(BasePath), Ambiguous(Vec<BasePath>) }` searches the
 complete base graph depth first, with a bounded visit count. Two paths to
 the same virtual base count as one. Access is **not** checked (§10).
+`find_base` itself does not instantiate. A caller that asks whether a class
+template specialization is derived first completes it with
+`require_complete_silent`, as clang's `isCompleteType` does
+([temp.inst]/2). The callers that do this are: the derived-to-base pointer
+conversion (`pointer_conversion`), reference-relatedness (`ref_related`),
+and static_cast up and down (`class_relation`, `static_downcast`).
 
 ## 4. Ranking (`compare_standard_conversions`)
 `compare_standard_conversions(a, b) -> IcsCompare {Better, Worse,

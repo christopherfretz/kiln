@@ -372,10 +372,16 @@ impl Sema<'_, '_> {
 
     /// Reference-relatedness of `t1` (the referee) and `t2`, both
     /// canonical and unqualified ([dcl.init.ref]/4): `(related,
-    /// derived)`.
-    pub(crate) fn ref_related(&self, t1: QualType, t2: QualType) -> (bool, bool) {
+    /// derived)`. A class template specialization `t2` is instantiated
+    /// first (clang `CompareReferenceRelationship`'s `isCompleteType`).
+    pub(crate) fn ref_related(&mut self, t1: QualType, t2: QualType) -> (bool, bool) {
         if t1 == t2 {
             return (true, false);
+        }
+        if let (Some(d), Some(b)) = (self.ast.types.as_record(t2), self.ast.types.as_record(t1))
+            && !same_class(self, d, b)
+        {
+            let _ = self.require_complete_silent(t2, Loc::INVALID);
         }
         let t = &self.ast.types;
         match (t.as_record(t2), t.as_record(t1)) {
