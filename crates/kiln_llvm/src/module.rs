@@ -301,6 +301,9 @@ pub struct Module {
     /// Types.
     pub types: TypeTable,
     pub(crate) consts: ConstTable,
+    /// Functions by [`FuncId`] (creation order). Index only: anything
+    /// that walks every function iterates [`Module::ordered_funcs`] /
+    /// `func_order`, so the output follows the print order.
     pub(crate) funcs: Vec<Function>,
     /// The print order of `funcs`: creation order unless
     /// [`Module::move_function_to_end`] moved one.
