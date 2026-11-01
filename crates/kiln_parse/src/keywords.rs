@@ -36,6 +36,7 @@ keywords! {
     GnuAlignof = "__alignof" | "__alignof__";
     DataSizeof = "__datasizeof";
     Asm = "asm" | "__asm" | "__asm__";
+    Atomic = "_Atomic";
     Auto = "auto";
     Bool = "bool" | "_Bool";
     Break = "break";

@@ -256,7 +256,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     Some(Punct::LParen) => Tpr::Ambiguous,
                     _ => Tpr::True,
                 },
-                Kw::Decltype | Kw::Typeof => {
+                Kw::Decltype | Kw::Typeof | Kw::Atomic => {
                     if self.punct_at(self.i + 1) != Some(Punct::LParen) {
                         return Tpr::Error;
                     }
@@ -371,7 +371,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             return Tpr::Ambiguous;
         }
         match self.kw() {
-            Some(k @ (Kw::Decltype | Kw::Typeof)) => {
+            Some(k @ (Kw::Decltype | Kw::Typeof | Kw::Atomic)) => {
                 self.i += 1;
                 if !self.at(Punct::LParen) || !self.skip_group_here() {
                     return Tpr::Error;
@@ -731,6 +731,14 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             }
             if self.at_cxx11_attr() {
                 return Tpr::True;
+            }
+            // An explicit object parameter ([dcl.fct]/3): `this` followed
+            // by a decl-specifier is never an expression.
+            if self.kw() == Some(Kw::This) {
+                let t = Scan { p: self.p, i: self.i + 1, declared: self.declared.clone() };
+                if matches!(t.decl_specifier(Tpr::False), Tpr::True | Tpr::Ambiguous) {
+                    return Tpr::True;
+                }
             }
             // A parameter's initializer needs `=`: `T{` is not one.
             let mut r = self.decl_specifier(Tpr::False);

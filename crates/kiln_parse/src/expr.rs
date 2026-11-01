@@ -97,6 +97,7 @@ fn is_simple_type_kw(k: Kw) -> bool {
             Kw::Const
                 | Kw::Volatile
                 | Kw::Restrict
+                | Kw::Atomic
                 | Kw::Struct
                 | Kw::Class
                 | Kw::Union
@@ -849,8 +850,15 @@ impl Parser<'_, '_> {
             };
             let nl = self.bump().span.lo;
             if self.at(Punct::Less) {
-                self.unsupported("a destructor template-id", nl);
-                return None;
+                // `p->~X<T>()` ([expr.prim.id.dtor]): the simple-template-id
+                // names the destroyed class type.
+                let class = self.s.classify_name(name, None);
+                return match self.parse_template_id_rest(class, name, nl) {
+                    Ok(TemplateIdRef::Type(t)) => {
+                        Some(self.s.rebuild_member_destructor(e, t, nl, loc, arrow))
+                    }
+                    _ => None,
+                };
             }
             return Some(self.s.act_on_member_destructor(e, name, tl, nl, loc, arrow));
         }

@@ -1754,6 +1754,7 @@ impl Cg<'_> {
                         // first argument is the object.
                         if ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
                             && ast.decls.get(d).kind() == DeclKind::CXXMethod
+                            && !self.is_explicit_object_method(d)
                         {
                             let args: Vec<ExprId> =
                                 ast.lists.iter(ast.exprs.call_args(e)).collect();
@@ -1763,6 +1764,7 @@ impl Cg<'_> {
                         }
                         if matches!(ast.decls.get(d).kind(), DeclKind::Function)
                             || self.is_static_method(d)
+                            || self.is_explicit_object_method(d)
                         {
                             direct = Some(d);
                         }

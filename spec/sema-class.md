@@ -20,7 +20,7 @@ C++26 draft; "clang" means clang 19 with `-std=c++26` on the container target
 | construction | ctor-initializers, delegating ctors, NSDMI, temporaries, cleanups, lifetime extension incl. P2718 range-for, guaranteed elision, NRVO marking, aggregates with bases, paren-aggregate init | function-try-blocks and EH cleanups (exceptions milestone) |
 | layout | full Itanium: bases, vptr, vbases, primary base, EBO, tail padding, bit-fields across bases, `#pragma pack`, `alignas`; vtable layout and VTT | MS ABI, `#pragma ms_struct`, `-fclang-abi-compat` |
 | RTTI | `dynamic_cast`/`typeid` sema; final overriders for the Oven | |
-| other | | explicit object parameters (P0847) beyond declaration (Q4) |
+| other | explicit object parameters (P0847): declarations, calls, `&C::f` (§2.5) | explicit object parameters of lambdas (Q4) |
 
 Principles:
 1. **clang's model where the standard leaves a choice** (node kinds,
@@ -168,8 +168,22 @@ result cache in M3 (Q6).
   const member function 'f'` + `member function 'K::f' is declared const here`.
 - `implicit_object_type(method)` gives `cv C&` / `cv C&&`
   ([over.match.funcs.general]/4) for S3O's ranking.
-- Explicit object parameters (P0847): declared (FnSpec `explicit_object`),
-  calls `sema_unsupported` in M3 (Q4).
+- Explicit object parameters (P0847, WP-149): `ParamInfo::explicit_object`
+  carries the `this` location; `act_on_function` sets FnSpec
+  `explicit_object` (also on instantiation, via `ParamData::EXPLICIT_OBJECT`)
+  after checking [dcl.fct]/6: only the first parameter
+  (`sema_explicit_object_param_not_first`), not in a static, virtual or
+  non-member function (`..._nonmember`), no cv- or ref-qualifier
+  (`..._qualifier`, reported at the `)`, where clang points at the
+  qualifier), no default argument, not a pack. `this` in the body is
+  `sema_explicit_object_this`. `x.f(args)` / `p->f(args)` is a `CallExpr`
+  of the decayed `DeclRefExpr CXXMethod` with the object as argument 0
+  (converted like any argument; templates deduce `Self` from it);
+  `&C::f` is an ordinary pointer to function ([expr.unary.op]/3.1), and
+  `is_implicit_object_member` excludes such members from pointer-to-member
+  matching ([over.over]). Codegen calls them directly
+  (`is_explicit_object_method`). Lambdas with an explicit object parameter
+  are `sema_unsupported` (Q4).
 
 ### 2.6 Pointers to members
 `&C::m` forms `MemberPointer` (types.md §5.2) for non-static members (`&(C::m)`
@@ -1638,8 +1652,9 @@ polymorphic classes) for `final_overrider`/vtable cache size.
   `ExprWithCleanups`, the use site sets `cleanup.needs`; `SourceLocExpr` and
   immediate invocations are evaluated against the nearest enclosing
   default-arg/default-init node's location and context (the Oven tracks it).
-- **Q4 Explicit object parameters (P0847).** *Recommend* declarations in
-  WP-066b, calls in WP-068a (S3O ranks the explicit object parameter).
+- **Q4 Explicit object parameters (P0847).** *Resolved* (WP-149) for
+  member functions (§2.5); a lambda's explicit object parameter (the
+  closure type as `Self`) is still unsupported.
 - **Q5 Name clash.** `kiln_sema::declspec::BaseSpec` (type-specifier enum,
   re-exported) vs `kiln_ast::BaseSpec` (base-specifier). *Recommend*
   renaming the former to `TypeSpecKind` in WP-066a.
