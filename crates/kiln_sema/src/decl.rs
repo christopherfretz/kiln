@@ -4265,6 +4265,26 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The template head a tag declaration consumes: a class's own head,
+    /// or none for an enumeration, whose heads (`template<class T> enum
+    /// class A<T>::E { ... }`) belong to the qualifier's class templates
+    /// ([temp.mem.enum]).
+    fn tag_template_head(
+        &mut self,
+        is_enum: bool,
+        qualifier: Option<DeclId>,
+        use_: TagUse,
+    ) -> Option<kiln_ast::ids::TemplateParamListId> {
+        if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
+            return self.take_template_head(qualifier);
+        }
+        if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
+            let _ = self.take_template_head(qualifier);
+            self.templ.cur = None;
+        }
+        None
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -4286,17 +4306,7 @@ impl Sema<'_, '_> {
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         self.check_enum_fixed_type(fixed, loc);
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
-        let head = if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
-            self.take_template_head(qualifier)
-        } else {
-            if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
-                // `template<class T> enum class A<T>::E { ... }`: the heads
-                // belong to the qualifier's class templates ([temp.mem.enum]).
-                let _ = self.take_template_head(qualifier);
-                self.templ.cur = None;
-            }
-            None
-        };
+        let head = self.tag_template_head(is_enum, qualifier, use_);
         let mut prev = None;
         if let Some((n, nloc)) = name {
             if qualifier.is_none() && use_ != TagUse::Reference {
