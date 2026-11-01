@@ -738,7 +738,8 @@ impl Sema<'_, '_> {
             T::IsFunction => tys.is_function(q),
             T::IsArithmetic => self.is_arithmetic_ext(q),
             T::IsFundamental => self.is_fundamental(q),
-            T::IsCompound => !self.is_fundamental(q),
+            // clang `isCompoundType`: the sizeless SVE builtins are neither.
+            T::IsCompound => !self.is_fundamental(q) && !self.ast.types.is_sizeless(q),
             T::IsObject => self.is_object_type(q),
             T::IsScalar => self.is_scalar_ext(q),
             T::IsConst => !tys.is_reference(q) && tys.effective_quals(q).is_const(),
@@ -904,7 +905,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {
@@ -927,7 +930,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {
@@ -947,7 +952,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {

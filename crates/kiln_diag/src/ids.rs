@@ -789,6 +789,11 @@ diag_ids! {
     lex_literal_warning = Warning (1) "{0}";
     sema_incdec_invalid = Error (2) "cannot {0:increment|decrement} value of type {1}";
     sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplete type {1}";
+    sema_sizeof_sizeless = Error (2) "invalid application of '{0}' to sizeless type {1}";
+    sema_array_sizeless_element = Error (1) "array has sizeless element type {0}";
+    sema_field_sizeless = Error (1) "field has sizeless type {0}";
+    sema_nonlocal_sizeless = Error (1) "non-local variable with sizeless type {0}";
+    sema_sve_type_without_sve = Error (1) "SVE vector type {0} cannot be used in a target without sve";
     sema_sizeof_function = Extension [PointerArith] (1) "invalid application of '{0}' to a function type";
     sema_sizeof_function_expr = Error (1) "invalid application of '{0}' to a function type";
     sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";

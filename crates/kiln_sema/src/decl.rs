@@ -644,6 +644,13 @@ impl Sema<'_, '_> {
                         self.emit(self.incomplete_note(msg, ty));
                         return QualType::ERROR;
                     }
+                    if self.ast.types.is_sizeless(ty) {
+                        let msg = self
+                            .diag(DiagId::sema_array_sizeless_element, *loc)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                        return QualType::ERROR;
+                    }
                     if self.require_non_abstract_element(*loc, ty) {
                         return QualType::ERROR;
                     }
@@ -2588,6 +2595,10 @@ impl Sema<'_, '_> {
         };
         let ty = if invalid && self.placeholder_keyword(ty).is_some() {
             QualType::ERROR
+        } else if !invalid && self.ast.types.is_sizeless(ty) {
+            let msg = self.diag(DiagId::sema_field_sizeless, d.name_loc()).arg(self.ty_arg(ty));
+            self.emit(msg);
+            QualType::ERROR
         } else if !invalid
             && !self.ast.types.is_reference(ty)
             && !self.require_complete(ty, d.name_loc())
@@ -2817,6 +2828,7 @@ impl Sema<'_, '_> {
             self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
         }
         self.check_abstract_var(v);
+        self.check_sizeless_var(v, self.in_local_scope());
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
             self.note_local_extern(name, v);
@@ -3260,6 +3272,10 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
         self.end_function_body(body, rbrace);
+        // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
+        if let Some(fty) = self.ast.decls.get(f).ty() {
+            self.check_sve_support(fty, self.ast.decls.get(f).loc());
+        }
         self.finish_source_locs(f);
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
@@ -3460,6 +3476,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `enum E : T`: the underlying type must be integral ([dcl.enum]/2).
+    fn check_enum_fixed_type(&mut self, fixed: Option<QualType>, loc: Loc) {
+        if let Some(f) = fixed {
+            let ok = self.ast.types.is_integral(f)
+                || self.is_error_type(f)
+                || self.ast.types.is_dependent(f);
+            if !ok {
+                let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
+                self.emit(msg);
+            }
+        }
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -3479,15 +3508,7 @@ impl Sema<'_, '_> {
         }
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
-        if let Some(f) = fixed {
-            let ok = self.ast.types.is_integral(f)
-                || self.is_error_type(f)
-                || self.ast.types.is_dependent(f);
-            if !ok {
-                let msg = self.diag(DiagId::sema_enum_invalid_underlying, loc).arg(self.ty_arg(f));
-                self.emit(msg);
-            }
-        }
+        self.check_enum_fixed_type(fixed, loc);
         if use_ == TagUse::Definition
             && let Some((_, nloc)) = name
         {

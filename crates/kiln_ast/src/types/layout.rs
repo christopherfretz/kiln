@@ -33,9 +33,9 @@ pub enum FloatFormat {
 /// laid out.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TargetTypes {
-    /// `(size in bytes, alignment in bytes)` per builtin id 1..=33 (index
+    /// `(size in bytes, alignment in bytes)` per builtin id 1..=47 (index
     /// 0 unused).
-    pub size_align: [(u16, u16); 34],
+    pub size_align: [(u16, u16); 48],
     /// `char` is signed.
     pub char_signed: bool,
     /// `wchar_t` is signed.
@@ -55,7 +55,7 @@ pub struct TargetTypes {
 impl Default for TargetTypes {
     fn default() -> Self {
         TargetTypes {
-            size_align: [(0, 0); 34],
+            size_align: [(0, 0); 48],
             char_signed: true,
             wchar_signed: true,
             long_double: FloatFormat::IeeeDouble,

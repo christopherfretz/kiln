@@ -1143,6 +1143,7 @@ impl Sema<'_, '_> {
         if matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar) && n.has(DeclFlags::INVALID) {
             return self.recover_err(&[], loc);
         }
+        self.check_sve_use(d, loc);
         // [dcl.spec.auto.general]/11: a placeholder variable's type is
         // not known inside its own initializer.
         if n.kind() == DeclKind::Var
@@ -3307,6 +3308,12 @@ impl Sema<'_, '_> {
         if !self.require_complete(check, loc) {
             let msg = self.diag(DiagId::sema_sizeof_incomplete, loc).arg(name).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));
+            return false;
+        }
+        // clang `err_sizeof_alignof_typeof_sizeless`.
+        if self.ast.types.is_sizeless(check) {
+            let msg = self.diag(DiagId::sema_sizeof_sizeless, loc).arg(name).arg(self.ty_arg(ty));
+            self.emit(msg);
             return false;
         }
         true

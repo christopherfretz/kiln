@@ -535,6 +535,27 @@ fn declarations() {
     );
 }
 
+/// §2.4: scalable vector and target extension types in a declaration
+/// (the `AArch64` SVE builtins, `__SVCount_t` as `target("aarch64.svcount")`).
+#[test]
+fn scalable_and_target_ext_declarations() {
+    let mut m = aarch64();
+    let nx4f = m.types.scalable_vector(TypeId::FLOAT, 4);
+    let nx16i1 = m.types.scalable_vector(TypeId::I1, 16);
+    let cnt = m.types.target_ext("aarch64.svcount");
+    let ft = m.types.function(nx4f, &[nx4f, nx16i1, cnt], false);
+    let f = m.add_function("sve", ft).unwrap();
+    let user = m.add_global("user", TypeId::PTR);
+    m.set_initializer(user, Some(Value::func(f))).unwrap();
+    check(
+        &m,
+        &[
+            "@user = global ptr @sve\n",
+            "declare <vscale x 4 x float> @sve(<vscale x 4 x float>, <vscale x 16 x i1>, target(\"aarch64.svcount\"))\n",
+        ],
+    );
+}
+
 /// §5: parameter and return attributes as clang emits them.
 #[test]
 fn parameter_attributes() {
