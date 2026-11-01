@@ -900,7 +900,7 @@ so libc++'s short-string `__s.__is_long_` reads and writes check against
 are not separate operations: a member's lifetime is its complete
 object's, which is precise for constant evaluation because no constant
 expression can end a subobject's lifetime independently except through a
-union (tracked) or an explicit destructor call (not yet parsed, below).
+union (tracked) or an explicit destructor call (untracked, below).
 Looking a member up by offset (`Types::field_at`, `subobject_at`,
 `has_member_at`) skips zero-size members (libc++'s `char __padding_[0]`
 shares its offset with the next member). Within a union, extents are
@@ -1032,9 +1032,14 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   templates (WP-071) and the library; the `is_std_allocator_call` hook
   still returns false.
 - Class assignment (`a = b` of class type) is rejected by sema before
-  evaluation; explicit destructor calls (`p->~T()`) and
-  `::operator new`/`::operator delete` are not parsed: front-end
-  gaps, not Oven work. Inheriting constructors (WP-114) evaluate their
+  evaluation; `::operator new`/`::operator delete` are not parsed:
+  front-end gaps, not Oven work. An explicit destructor call
+  (`p->~T()`) of a non-trivial destructor calls it; of a trivial one
+  (WP-215), like a pseudo-destructor call on a scalar, it evaluates the
+  object expression and runs nothing. Neither ends the object's
+  lifetime in the Oven (clang then rejects a later read, or the
+  implicit destruction at scope end, as outside its lifetime; kiln
+  accepts both). Inheriting constructors (WP-114) evaluate their
   `CXXInheritedCtorInitExpr` as a call of the base constructor with the
   inheriting constructor's own arguments (`compile/class.rs`
   `inherited_ctor`); notes name a non-constexpr inherited constructor
@@ -1399,8 +1404,8 @@ Remaining (each traps with a `kiln:` note today):
   templates wave").
 - `delete` through `void*`, and P2747 placement new (see above).
 - Front-end gaps that keep some forms from reaching the Oven (not
-  Oven work): class assignment, explicit destructor calls,
-  `::operator new`/`delete`, class-specific `operator new`,
+  Oven work): class assignment, qualified destructor names
+  (`p->T::~T()`), `::operator new`/`delete`, class-specific `operator new`,
   `delete[] (expr)` (parsed as a lambda) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the

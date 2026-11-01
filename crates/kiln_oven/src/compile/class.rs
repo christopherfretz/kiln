@@ -842,6 +842,15 @@ impl Compiler<'_> {
             self.patch_here(ok);
             self.next = m;
         }
+        // An explicit call of a trivial destructor (`p->~W()`) runs nothing
+        // ([class.dtor]/14, /18): it is a constant expression. The end of
+        // the object's lifetime is not tracked, as for a pseudo-destructor
+        // call (see `call`).
+        if self.ast().decls.get(md).kind() == DeclKind::CXXDestructor
+            && spec.is_some_and(kiln_ast::decl::FnSpec::is_trivial)
+        {
+            return self.reg();
+        }
         let callee = match self.method_class(md) {
             Some(cls) if dispatch => Callee::Virtual(md, cls),
             _ => Callee::Direct(md),
