@@ -647,9 +647,6 @@ impl<'a> Printer<'a, '_> {
         if args.len() > params.len() {
             return Err(format!("clang-ast: `{nm}` has more arguments than parameters"));
         }
-        fn param_ty(p: &Json) -> Option<&str> {
-            (kind(p) == "NonTypeTemplateParmDecl").then(|| qual_type(p))
-        }
         // clang drops trailing arguments equal to their parameter's
         // default (`SuppressDefaultTemplateArgs`), unless one is a pack.
         let mut end = args.len();
@@ -2406,7 +2403,7 @@ fn unsupported_ctx_arg(param: Option<&str>) -> String {
 /// An integral template argument `v` of parameter type `param` as clang
 /// prints it in a qualified name: `bool` as `true`/`false`, `char` as a
 /// character literal, other integers decoded from clang's sign-extended
-/// 64-bit pattern (spec_arg). `None` for anything else.
+/// 64-bit pattern (`spec_arg`). `None` for anything else.
 fn integral_arg(v: i64, param: &str) -> Option<String> {
     Some(match param {
         "bool" => (if v != 0 { "true" } else { "false" }).to_owned(),
@@ -2425,7 +2422,7 @@ fn integral_arg(v: i64, param: &str) -> Option<String> {
     })
 }
 
-/// A JSON number as an exact integer (within 2^53, as spec_arg).
+/// A JSON number as an exact integer (within 2^53, as `spec_arg`).
 fn exact_int(j: &Json) -> Option<i64> {
     j.as_f64().filter(|f| f.fract() == 0.0 && f.abs() <= 9_007_199_254_740_992.0).map(|f| f as i64)
 }
@@ -2442,34 +2439,41 @@ fn qualified_name_arg(a: &Json, param: Option<&str>) -> Res<String> {
     param.and_then(|p| integral_arg(v, p)).ok_or_else(|| unsupported_ctx_arg(param))
 }
 
-/// Whether specialization argument `a` equals the default argument of
-/// template parameter `p` (clang `isSubstitutedDefaultArgument`): a
+/// A non-type template parameter's type.
+fn param_ty(parm: &Json) -> Option<&str> {
+    (kind(parm) == "NonTypeTemplateParmDecl").then(|| qual_type(parm))
+}
+
+/// A type node's desugared spelling (its spelling if it has no sugar).
+fn desugared(ty: &Json) -> Option<&str> {
+    text(ty, "desugaredQualType").or_else(|| text(ty, "qualType"))
+}
+
+/// Whether specialization argument `arg` equals the default argument of
+/// template parameter `parm` (clang `isSubstitutedDefaultArgument`): a
 /// non-dependent type compared desugared, or a literal value. A default
 /// the tool cannot compare is an error.
-fn is_default_arg(p: &Json, a: &Json, param: Option<&str>) -> Res<bool> {
-    if p.get("defaultArg").is_none() {
+fn is_default_arg(parm: &Json, arg: &Json, nttp_ty: Option<&str>) -> Res<bool> {
+    if parm.get("defaultArg").is_none() {
         return Ok(false);
     }
     let unsupported = || {
         format!(
             "clang-ast: filter mode cannot compare a specialization context's argument with \
              the default argument of `{}`",
-            name(p).unwrap_or("")
+            name(parm).unwrap_or("")
         )
     };
-    let d = kids(p).find(|c| kind(c) == "TemplateArgument").ok_or_else(unsupported)?;
-    fn desugared(t: &Json) -> Option<&str> {
-        text(t, "desugaredQualType").or_else(|| text(t, "qualType"))
-    }
-    if let Some(dt) = d.get("type") {
-        let dependent = kids(d).any(|c| flag(c, "isDependent"))
+    let def = kids(parm).find(|c| kind(c) == "TemplateArgument").ok_or_else(unsupported)?;
+    if let Some(dt) = def.get("type") {
+        let dependent = kids(def).any(|c| flag(c, "isDependent"))
             || desugared(dt).is_none_or(|q| q.contains("type-parameter"));
         if dependent {
             return Err(unsupported());
         }
-        return Ok(a.get("type").and_then(desugared) == desugared(dt));
+        return Ok(arg.get("type").and_then(desugared) == desugared(dt));
     }
-    let e = kids(d).next().ok_or_else(unsupported)?;
+    let e = kids(def).next().ok_or_else(unsupported)?;
     let v = match (kind(e), e.get("value")) {
         ("CXXBoolLiteralExpr", Some(Json::Bool(b))) => i64::from(*b),
         ("CharacterLiteral", Some(v)) => exact_int(v).ok_or_else(unsupported)?,
@@ -2478,9 +2482,8 @@ fn is_default_arg(p: &Json, a: &Json, param: Option<&str>) -> Res<bool> {
         }
         _ => return Err(unsupported()),
     };
-    let p = param.ok_or_else(unsupported)?;
-    let printed = integral_arg(v, p).ok_or_else(unsupported)?;
-    Ok(qualified_name_arg(a, param).ok() == Some(printed))
+    let printed = integral_arg(v, nttp_ty.ok_or_else(unsupported)?).ok_or_else(unsupported)?;
+    Ok(qualified_name_arg(arg, nttp_ty).ok() == Some(printed))
 }
 
 /// The qualified name of `nm` declared in `ctx`
