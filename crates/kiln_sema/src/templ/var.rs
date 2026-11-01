@@ -396,6 +396,53 @@ impl Sema<'_, '_> {
 }
 
 impl Sema<'_, '_> {
+    /// [temp.explicit]/8, /11, [temp.spec.general]/5 for an explicit
+    /// instantiation of variable template specialization `v` (clang
+    /// `CheckSpecializationInstantiationRedecl`): false when it has no
+    /// effect (after an explicit specialization, a warning; a repeated
+    /// declaration) or is ill-formed (a second definition; a declaration
+    /// after the definition).
+    fn check_explicit_var_inst_redecl(
+        &mut self,
+        v: DeclId,
+        info: kiln_ast::templates::SpecInfo,
+        declaration: bool,
+        name_loc: Loc,
+    ) -> bool {
+        let (id, note) = match (info.kind, declaration) {
+            (SpecKind::ExplicitSpecialization, false) => {
+                let at = self.ast.decls.get(self.ast.latest(v)).loc();
+                let note = self.diag(DiagId::note_previous_template_specialization, at);
+                (DiagId::sema_explicit_inst_after_spec_ignored, note)
+            }
+            (SpecKind::ExplicitInstantiationDefinition, false) => {
+                let at = info.point_of_instantiation;
+                (
+                    DiagId::sema_explicit_inst_duplicate,
+                    self.diag(DiagId::note_previous_explicit_instantiation, at),
+                )
+            }
+            (SpecKind::ExplicitInstantiationDefinition, true) => {
+                let at = info.point_of_instantiation;
+                let note = self.diag(DiagId::note_explicit_instantiation_definition_here, at);
+                (DiagId::sema_explicit_inst_declaration_after_definition, note)
+            }
+            (
+                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDeclaration,
+                true,
+            ) => {
+                return false;
+            }
+            _ => return true,
+        };
+        let mut e = self.diag(id, name_loc);
+        if id != DiagId::sema_explicit_inst_declaration_after_definition {
+            e = e.arg(self.spec_decl_name(info.template, info.print_args));
+        }
+        self.emit(e.with_note(note));
+        false
+    }
+
     /// [temp.explicit]/3: the type declared by an explicit instantiation
     /// of variable template specialization `v` of `tmpl` must be the
     /// specialization's type (clang `ActOnExplicitInstantiation`,
@@ -459,21 +506,24 @@ impl Sema<'_, '_> {
             let Ok(v) = self.get_var_spec(sid.template, &sid.args, &sid.arg_locs, sid.loc) else {
                 return;
             };
-            if !self.check_explicit_var_inst_type(sid.template, v, declared) {
+            let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
+            // Checked in clang's order: the redeclaration, then (whatever
+            // its effect) the type; a later explicit instantiation sees
+            // this one even when its type is wrong.
+            let effect = self.check_explicit_var_inst_redecl(v, info, declaration, name_loc);
+            if effect {
+                // The point of instantiation stays where the specialization
+                // was first named (clang's `setTemplateSpecializationKind`).
+                self.ast.templates.update_spec(i, |s| {
+                    s.kind = kind;
+                    if s.point_of_instantiation == Loc::INVALID {
+                        s.point_of_instantiation = name_loc;
+                    }
+                });
+            }
+            if !self.check_explicit_var_inst_type(sid.template, v, declared) || !effect {
                 return;
             }
-            let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
-            match info.kind {
-                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDefinition => {
-                    return;
-                }
-                SpecKind::ExplicitInstantiationDeclaration if declaration => return,
-                _ => {}
-            }
-            self.ast.templates.update_spec(i, |s| {
-                s.kind = kind;
-                s.point_of_instantiation = name_loc;
-            });
             if !declaration {
                 self.instantiate_var_spec_init(v, name_loc);
                 self.mark_used(v);

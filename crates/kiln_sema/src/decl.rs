@@ -2006,9 +2006,10 @@ impl Sema<'_, '_> {
         // A member class of an implicit specialization declared
         // explicitly specialized: clang moves the instantiation's
         // location to that declaration ([temp.expl.spec]/1).
-        let explicit_member = self.ast.member_spec_info(self.ast.first(rec)).is_some_and(|(_, m)| {
-            m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
-        });
+        let explicit_member = self
+            .ast
+            .member_spec_info(self.ast.first(rec))
+            .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization);
         let at = if explicit_member { self.ast.latest(rec) } else { rec };
         let loc = self.ast.decls.get(at).loc();
         msg.with_note(
