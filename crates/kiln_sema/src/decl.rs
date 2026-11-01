@@ -4154,13 +4154,25 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Whether a qualified class head is `template<> struct O<long>::I`
+    /// Checks a definition's member specialization header, then returns
+    /// whether a qualified class head is `template<> struct O<long>::I`
     /// ([temp.expl.spec]/1, a member class of an implicit
     /// specialization). The header then belongs to the qualifier, and the
     /// class's own members are ordinary declarations, not explicit
     /// specializations, so the pending explicit specialization is taken.
-    fn begin_member_class_spec(&mut self, qualified: bool, use_: TagUse) -> bool {
-        let spec = qualified
+    fn begin_member_class_spec(
+        &mut self,
+        name: Option<(Symbol, Loc)>,
+        qualifier: Option<DeclId>,
+        use_: TagUse,
+        loc: Loc,
+    ) -> bool {
+        if use_ == TagUse::Definition
+            && let Some((_, nloc)) = name
+        {
+            self.check_member_spec_header(qualifier, nloc, loc);
+        }
+        let spec = qualifier.is_some()
             && matches!(use_, TagUse::Definition | TagUse::Declaration)
             && self.templ.explicit_spec.is_some()
             && self.at_explicit_head();
@@ -4201,12 +4213,7 @@ impl Sema<'_, '_> {
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         self.check_enum_fixed_type(fixed, loc);
-        if use_ == TagUse::Definition
-            && let Some((_, nloc)) = name
-        {
-            self.check_member_spec_header(qualifier, nloc, loc);
-        }
-        let member_class_spec = self.begin_member_class_spec(qualifier.is_some(), use_);
+        let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
         let head = if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
             self.take_template_head(qualifier)
         } else {
