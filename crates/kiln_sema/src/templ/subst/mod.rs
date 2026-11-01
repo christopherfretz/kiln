@@ -173,7 +173,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
             ArgView::Template(n) => Ok(TemplateArg::template(self.template_name(n, loc)?)),
-            ArgView::Pack(_) | ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
+            // A converted argument pack (a partial specialization's
+            // `<U>` against `class... Up` is the pack `{U}`): its
+            // elements, expansions expanded (§7.2).
+            ArgView::Pack(l) => Ok(TemplateArg::pack(self.args(l, loc)?)),
+            ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
                 self.unimplemented("pack expansion", loc)
             }
             ArgView::Null | ArgView::Value { .. } => Ok(a),
