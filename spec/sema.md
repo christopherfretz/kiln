@@ -2472,7 +2472,8 @@ clang 19's C99/GNU complex support in C++:
   the end of a switch with no default over a fully covered enumeration
   (`isAllEnumCasesCovered`); reaches a handler only from a live throw in
   its try-block (or in a nested try without a catch-all, as calls have
-  no exception edges); iterates `goto` labels and loop back edges to a
+  no exception edges); gives a live `asm goto` an edge to each of its
+  labels besides the next statement (WP-230); iterates `goto` labels and loop back edges to a
   fixed point; and checks nothing in a function with an `if consteval`
   (clang builds no CFG). The operands of `sizeof`/`alignof` are not
   walked (a `noexcept` operand is, as clang's CFG does); a GNU case range
@@ -2587,7 +2588,7 @@ values clang attaches are precomputed into `AsmData.srclocs` (literal
 begin, then every later template line; offset + 2). Templates are
 substituted (`subst/stmts.rs`) and rechecked at instantiation.
 `act_on_file_scope_asm` builds a `FileScopeAsmDecl`. Not implemented:
-`asm goto` (rejected by the parser), immediate range checks
+immediate range checks
 (`validateInputSize`/`validateOutputSize`), `=@cc` flag outputs, register
 variables (`register int r asm("x0")`) as operands and their clobber
 conflict check, the C++17 "asm in constexpr function" extension warning;

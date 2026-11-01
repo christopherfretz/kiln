@@ -436,6 +436,20 @@ impl Sema<'_, '_> {
                 false
             }
             StmtKind::IndirectGotoStmt => false,
+            // [dcl.asm], GNU `asm goto`: an edge to each label as well as
+            // to the next statement (clang's CFG `GCCAsmStmt` successors).
+            StmtKind::GCCAsmStmt => {
+                let out = self.reach_parts(s, live, r);
+                if out && self.ast.stmts.asm_bits(s) & kiln_ast::stmt::asm_bits::GOTO != 0 {
+                    let labels = self.ast.stmts.asm_data(s).labels;
+                    for l in self.ast.lists.iter::<DeclId>(labels) {
+                        if r.labels.insert(l) {
+                            r.changed = true;
+                        }
+                    }
+                }
+                out
+            }
             StmtKind::ReturnStmt | StmtKind::CoreturnStmt => {
                 if self.reach_parts(s, live, r) {
                     r.live_return = true;
