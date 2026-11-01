@@ -1973,12 +1973,13 @@ impl ExprArena {
     /// designators, in order (both bounds of a range).
     pub fn designated_indices(&self, e: ExprId) -> impl Iterator<Item = ExprId> + '_ {
         self.cold.designators.get(e).into_iter().flat_map(|d| {
-            d.iter().flat_map(|x| match *x {
-                Designator::Index { index, .. } => [Some(index), None],
-                Designator::Range { first, last, .. } => [Some(first), Some(last)],
-                Designator::Field { .. } => [None, None],
-            })
-            .flatten()
+            d.iter()
+                .flat_map(|x| match *x {
+                    Designator::Index { index, .. } => [Some(index), None],
+                    Designator::Range { first, last, .. } => [Some(first), Some(last)],
+                    Designator::Field { .. } => [None, None],
+                })
+                .flatten()
         })
     }
 

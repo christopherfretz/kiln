@@ -1157,14 +1157,12 @@ impl Sema<'_, '_> {
     /// names is known only at instantiation).
     pub(crate) fn init_list_type_dependent(&self, l: &crate::init::InitList) -> bool {
         l.items.iter().any(|it| {
-            it.designator.iter().any(|d| {
-                match *d {
-                    crate::init::Designator::Index(e, _) => self.expr_is_value_dependent(e),
-                    crate::init::Designator::Range(a, b, _, _) => {
-                        self.expr_is_value_dependent(a) || self.expr_is_value_dependent(b)
-                    }
-                    crate::init::Designator::Field(..) => false,
+            it.designator.iter().any(|d| match *d {
+                crate::init::Designator::Index(e, _) => self.expr_is_value_dependent(e),
+                crate::init::Designator::Range(a, b, _, _) => {
+                    self.expr_is_value_dependent(a) || self.expr_is_value_dependent(b)
                 }
+                crate::init::Designator::Field(..) => false,
             }) || match &it.value {
                 crate::init::InitValue::Expr(e) => self.expr_is_type_dependent(*e),
                 crate::init::InitValue::List(n) => self.init_list_type_dependent(n),
