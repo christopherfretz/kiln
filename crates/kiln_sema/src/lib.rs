@@ -516,7 +516,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return;
         }
         if !self.trailing_notes.borrow().is_empty()
-            && d.id().is_some_and(|id| self.diags.severity(id) >= kiln_diag::Severity::Error)
+            && d.id().is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
         {
             for n in self.trailing_notes.take() {
                 d = d.with_note(n);
@@ -527,7 +527,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         {
             // Dedup is per instantiation (spec/diag.md §7.4).
             d = d.context(self.inst.stack.context_key());
-            let sev = self.diags.severity(id);
+            let sev = self.diags.severity_at(id, d.loc());
             if self.inst.stack.is_sfinae() {
                 if sev >= kiln_diag::Severity::Error
                     && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()

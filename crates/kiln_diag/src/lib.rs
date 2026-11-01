@@ -24,6 +24,7 @@ mod json;
 mod layout;
 mod options;
 mod policy;
+mod pragma;
 pub mod template;
 mod text;
 

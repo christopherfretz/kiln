@@ -537,9 +537,10 @@ belong to WP-017, which builds them on `macro_defined` and
 
 1. *(Resolved by WP-014.)* The `# N "<built-in>" 3` marker is now
    printed as clang prints it (see "Predefined macros").
-2. **`#pragma clang|GCC diagnostic` is only validated.** kiln checks the
-   syntax and the group names. Changing diagnostic state is phase-7 work
-   for the consumer of `PpCallbacks::pragma`.
+2. *(Resolved by WP-183.)* `#pragma clang|GCC diagnostic` changes the
+   diagnostic state from the pragma on (spec/diag.md §5.5); kiln_pp
+   reports each push/pop/mapping to the engine and each file exit
+   (`pragma_file_exit`).
 3. **`#pragma clang deprecated`, `final` and `restrict_expansion` are
    validated and consumed, without effect.** As in clang, `-E` does not
    print them, but kiln does not implement their warnings on later uses
