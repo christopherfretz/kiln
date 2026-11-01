@@ -66,6 +66,11 @@ impl IcsOptions {
     /// deleted is no conversion (clang's `FindConversionForRefInit`),
     /// where an initialization diagnoses the deleted function.
     pub const CANDIDATE_ARG: IcsOptions = IcsOptions(8);
+    /// A direct-initialization of a reference: explicit conversion
+    /// functions are candidates of [over.match.ref] (/1.1), but not the
+    /// constructors of the /5.4.1 temporary (clang
+    /// `allowExplicitConversionFunctionsInRefBinding`).
+    pub const EXPLICIT_REF_CONV: IcsOptions = IcsOptions(16);
 
     /// The raw bits.
     pub(crate) fn bits(self) -> u8 {
@@ -435,12 +440,17 @@ impl Sema<'_, '_> {
             return Ics::Standard(direct(rb));
         }
         let suppress = opts.contains(IcsOptions::SUPPRESS_UDC);
+        let ref_opts = if opts.contains(IcsOptions::EXPLICIT_REF_CONV) {
+            opts.with(IcsOptions::ALLOW_EXPLICIT)
+        } else {
+            opts
+        };
         // /5.1.2: an lvalue result of a conversion function.
         if lref
             && !related
             && class_src
             && !suppress
-            && let Some(x) = self.ref_conversion(a, to, true, opts)
+            && let Some(x) = self.ref_conversion(a, to, true, ref_opts)
         {
             return x;
         }
@@ -464,7 +474,7 @@ impl Sema<'_, '_> {
         if !related
             && class_src
             && !suppress
-            && let Some(x) = self.ref_conversion(a, to, false, opts)
+            && let Some(x) = self.ref_conversion(a, to, false, ref_opts)
         {
             return x;
         }
@@ -486,7 +496,15 @@ impl Sema<'_, '_> {
         }
         let target = conv::strip_cv(self, t1);
         let temp_rb = base.with(RefBinding::BINDS_RVALUE);
-        match self.try_implicit_conversion(a, target, opts) {
+        // A non-class prvalue result of an explicit conversion function
+        // binds in a direct-initialization ([over.match.ref]/1.1); a
+        // class temporary's explicit constructors stay excluded.
+        let temp_opts = if ref_opts != opts && self.ast.types.as_record(t1).is_none() {
+            ref_opts
+        } else {
+            opts
+        };
+        match self.try_implicit_conversion(a, target, temp_opts) {
             Ics::Standard(mut s) => {
                 s.rb = temp_rb;
                 s.to_types[2] = t1;

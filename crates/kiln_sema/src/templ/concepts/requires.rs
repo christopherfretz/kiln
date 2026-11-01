@@ -81,14 +81,8 @@ impl Substituter<'_, '_, '_> {
                         let mut decls = Vec::with_capacity(v.len());
                         for t in v {
                             let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
-                            let np = self.sema.builder().param(
-                                rq.body,
-                                n.name(),
-                                n.loc(),
-                                t,
-                                idx,
-                                0,
-                            );
+                            let np =
+                                self.sema.builder().param(rq.body, n.name(), n.loc(), t, idx, 0);
                             decls.push(np);
                             new_params.push(np);
                         }
@@ -113,7 +107,12 @@ impl Substituter<'_, '_, '_> {
                     }
                     Some((_, st)) => {
                         let first = st.err().flatten();
-                        recs.push(invalid_record(self.sema, first.as_ref(), n.loc(), String::new()));
+                        recs.push(invalid_record(
+                            self.sema,
+                            first.as_ref(),
+                            n.loc(),
+                            String::new(),
+                        ));
                         ok = false;
                         break;
                     }
@@ -200,9 +199,12 @@ impl Substituter<'_, '_, '_> {
         dependent: &mut bool,
     ) -> Option<Requirement> {
         let dep_expr = |s: &Self, x: ExprId| {
-            s.sema.ast.exprs.get(x).deps().intersects(
-                ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK),
-            )
+            s.sema
+                .ast
+                .exprs
+                .get(x)
+                .deps()
+                .intersects(ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK))
         };
         match r {
             Requirement::Simple(e) => {

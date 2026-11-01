@@ -121,10 +121,10 @@ impl Substituter<'_, '_, '_> {
             // substituted earlier (§7.2), is an outer pack: clang
             // substitutes it first and reports
             // `err_pack_expansion_length_conflict_multilevel`.
-            let first_outer = first.outer
-                || matches!((first.depth, second.depth), (Some(a), Some(b)) if a < b);
-            let second_outer = second.outer
-                || matches!((first.depth, second.depth), (Some(a), Some(b)) if b < a);
+            let first_outer =
+                first.outer || matches!((first.depth, second.depth), (Some(a), Some(b)) if a < b);
+            let second_outer =
+                second.outer || matches!((first.depth, second.depth), (Some(a), Some(b)) if b < a);
             let d = if first_outer != second_outer {
                 let (named, outer, inner) =
                     if first_outer { (second.name, len, n) } else { (first.name, n, len) };
