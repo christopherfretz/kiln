@@ -649,6 +649,59 @@ impl Sema<'_, '_> {
         Ok(spec)
     }
 
+    /// `template<> struct C<args>::I` / `template<> enum class
+    /// C<args>::E` for member `p` of an implicit class template
+    /// specialization ([temp.expl.spec]/7; clang
+    /// `CheckMemberSpecialization`): false, after "explicit
+    /// specialization of 'I' after instantiation", when the member was
+    /// already defined from its pattern or explicitly instantiated.
+    pub(crate) fn check_member_tag_spec(&mut self, p: DeclId, name_loc: Loc) -> bool {
+        let first = self.ast.first(p);
+        let Some(info) = self.ast.member_spec_info(first).map(|(_, x)| *x) else { return true };
+        let after_inst = match info.kind {
+            SpecKind::ImplicitInstantiation => self.ast.definition(first).is_some(),
+            SpecKind::ExplicitInstantiationDeclaration
+            | SpecKind::ExplicitInstantiationDefinition => true,
+            SpecKind::Undeclared | SpecKind::ExplicitSpecialization => false,
+        };
+        if !after_inst {
+            return true;
+        }
+        let explicit = u32::from(info.kind != SpecKind::ImplicitInstantiation);
+        // An unscoped member enumeration was defined with its class: the
+        // class's point of instantiation.
+        let at = if info.point_of_instantiation == Loc::INVALID {
+            self.enclosing_poi(first)
+        } else {
+            info.point_of_instantiation
+        };
+        let note = self.diag(DiagId::note_instantiation_required_here, at).arg(explicit);
+        let e = self
+            .diag(DiagId::sema_spec_after_instantiation, name_loc)
+            .arg(self.decl_name_str(self.ast.decls.get(first).name()))
+            .with_note(note);
+        self.emit(e);
+        false
+    }
+
+    /// The point of instantiation of the innermost instantiated class
+    /// enclosing member `m` of a class template specialization.
+    fn enclosing_poi(&self, m: DeclId) -> Loc {
+        let mut c = self.ast.decls.get(m).ctx();
+        while let Some(x) = c.filter(|&x| self.kind_of(x) == DeclKind::CXXRecord) {
+            let poi = match (self.ast.spec_info(x), self.ast.member_spec_info(x)) {
+                (Some((_, s)), _) => s.point_of_instantiation,
+                (None, Some((_, s))) => s.point_of_instantiation,
+                (None, None) => Loc::INVALID,
+            };
+            if poi != Loc::INVALID {
+                return poi;
+            }
+            c = self.ast.decls.get(x).ctx();
+        }
+        Loc::INVALID
+    }
+
     /// `[extern] template struct C<args>::I;`, the qualified class `p`
     /// declared after an explicit instantiation's `template`: when `p` is
     /// a member class of a class template specialization

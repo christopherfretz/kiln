@@ -165,6 +165,36 @@ pub(crate) mod flags {
     /// `mutable` subobjects: reads of them are diagnosed
     /// ([expr.const]/5.9, `Oven::mutable_path`).
     pub const MUTABLE_OUTSIDE: u8 = 32;
+    /// A heap allocation made by `std::allocator<T>::allocate`: storage
+    /// for `T[n]` whose elements are outside their lifetime until
+    /// constructed (`Space::life`, spec/oven.md "Transient allocation").
+    pub const STD_ALLOC: u8 = 64;
+}
+
+/// How a heap object was allocated, and how one is deallocated (clang's
+/// `DynAlloc::Kind`): the two must agree ([expr.delete]/2,
+/// [allocator.members]/9).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DynKind {
+    /// `new T` / `delete p`.
+    New,
+    /// `new T[n]` / `delete[] p`.
+    ArrayNew,
+    /// `std::allocator<T>::allocate` / `deallocate`.
+    Std,
+}
+
+impl DynKind {
+    /// The kind of an allocation with flags `fl`.
+    pub fn of(fl: u8) -> DynKind {
+        if fl & flags::STD_ALLOC != 0 {
+            DynKind::Std
+        } else if fl & flags::ARRAY_NEW != 0 {
+            DynKind::ArrayNew
+        } else {
+            DynKind::New
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -190,7 +220,50 @@ pub(crate) struct Space {
     pub init: Vec<u8>,
     /// Per granule: holds a pointer.
     pub ptr: Vec<u8>,
+    /// Per granule: bit i = byte i is within the lifetime of an object.
+    /// Kept for [`flags::STD_ALLOC`] heap storage only, and empty until
+    /// the first such allocation (spec/oven.md "Transient allocation").
+    pub life: Vec<u8>,
     pub top: u64,
+}
+
+/// Whether every byte of `[abs, abs + len)` has its bit set in the
+/// per-granule bitmask `v`.
+fn all_bits(v: &[u8], abs: u64, len: u64) -> bool {
+    let (mut a, end) = (abs, abs + len);
+    while a < end {
+        let g = (a / GRAN) as usize;
+        let lo = (a % GRAN) as u32;
+        let hi = ((end - a + u64::from(lo)).min(GRAN)) as u32;
+        let mask = (((1u32 << hi) - 1) & !((1u32 << lo) - 1)) as u8;
+        if v[g] & mask != mask {
+            return false;
+        }
+        a += u64::from(hi - lo);
+    }
+    true
+}
+
+/// Sets (`on`) or clears the bits of `[abs, abs + len)` in the
+/// per-granule bitmask `v`.
+fn set_bits(v: &mut [u8], abs: u64, len: u64, on: bool) {
+    if len == 0 {
+        return;
+    }
+    let end = abs + len;
+    let (g0, g1) = (abs / GRAN, (end - 1) / GRAN);
+    let mask = |lo: u64, hi: u64| (((1u32 << hi) - 1) & !((1u32 << lo) - 1)) as u8;
+    let mut put = |g: u64, m: u8| {
+        let b = &mut v[g as usize];
+        if on { *b |= m } else { *b &= !m }
+    };
+    if g0 == g1 {
+        put(g0, mask(abs % GRAN, end - g0 * GRAN));
+        return;
+    }
+    put(g0, mask(abs % GRAN, GRAN));
+    put(g1, mask(0, end - g1 * GRAN));
+    v[(g0 + 1) as usize..g1 as usize].fill(if on { 0xFF } else { 0 });
 }
 
 impl Space {
@@ -201,42 +274,35 @@ impl Space {
             self.bytes.resize(n, 0);
             self.init.resize(n / GRAN as usize, 0);
             self.ptr.resize(n / GRAN as usize, 0);
+            if !self.life.is_empty() {
+                self.life.resize(n / GRAN as usize, 0);
+            }
         }
+    }
+
+    /// Starts keeping [`Space::life`].
+    fn ensure_life(&mut self) {
+        if self.life.is_empty() {
+            self.life.resize(self.init.len().max(1), 0);
+        }
+    }
+
+    /// Whether every byte of the range is within an object's lifetime.
+    pub fn is_live(&self, abs: u64, len: u64) -> bool {
+        all_bits(&self.life, abs, len)
+    }
+
+    /// Marks the range within (`v`) or outside an object's lifetime.
+    pub fn set_life(&mut self, abs: u64, len: u64, v: bool) {
+        set_bits(&mut self.life, abs, len, v);
     }
 
     pub fn is_init(&self, abs: u64, len: u64) -> bool {
-        let (mut a, end) = (abs, abs + len);
-        while a < end {
-            let g = (a / GRAN) as usize;
-            let lo = (a % GRAN) as u32;
-            let hi = ((end - a + u64::from(lo)).min(GRAN)) as u32;
-            let mask = (((1u32 << hi) - 1) & !((1u32 << lo) - 1)) as u8;
-            if self.init[g] & mask != mask {
-                return false;
-            }
-            a += u64::from(hi - lo);
-        }
-        true
+        all_bits(&self.init, abs, len)
     }
 
     pub fn set_init(&mut self, abs: u64, len: u64, v: bool) {
-        if len == 0 {
-            return;
-        }
-        let end = abs + len;
-        let (g0, g1) = (abs / GRAN, (end - 1) / GRAN);
-        let mask = |lo: u64, hi: u64| (((1u32 << hi) - 1) & !((1u32 << lo) - 1)) as u8;
-        let mut put = |g: u64, m: u8| {
-            let b = &mut self.init[g as usize];
-            if v { *b |= m } else { *b &= !m }
-        };
-        if g0 == g1 {
-            put(g0, mask(abs % GRAN, end - g0 * GRAN));
-            return;
-        }
-        put(g0, mask(abs % GRAN, GRAN));
-        put(g1, mask(0, end - g1 * GRAN));
-        self.init[(g0 + 1) as usize..g1 as usize].fill(if v { 0xFF } else { 0 });
+        set_bits(&mut self.init, abs, len, v);
     }
 
     /// Whether any granule overlapping the range holds a pointer.
@@ -301,10 +367,16 @@ pub(crate) enum MemFault {
     /// `delete` of a pointer to a subobject of a heap allocation (or one
     /// past its end).
     Subobject,
-    /// The wrong `delete` form; the allocation was made by an array form.
+    /// The wrong deallocation form for how the object was allocated.
     DeleteMismatch {
-        array_new: bool,
+        alloc: DynKind,
+        dealloc: DynKind,
     },
+    /// `std::allocator<T>::deallocate` of a null pointer.
+    DeallocNull,
+    /// An access of `std::allocator` storage not within an object's
+    /// lifetime (before its construction or after its destruction).
+    Lifetime,
     /// An effect a speculative trial ([`TrialMode::Speculative`]) does
     /// not allow: modifying a frame or static object that existed at its
     /// checkpoint, or a heap (de)allocation in its evaluation context.
@@ -594,7 +666,23 @@ impl Memory {
 
     /// Checks an access of `len` bytes at `p` and returns its absolute
     /// address in the pointer's space.
+    #[inline]
     pub fn check(&self, raw: u64, len: u64, write: bool) -> Result<(Sp, u64, &Alloc), MemFault> {
+        let r = self.check_storage(raw, len, write)?;
+        if r.2.flags & flags::STD_ALLOC != 0 && !self.heap.is_live(r.1, len) {
+            return Err(MemFault::Lifetime);
+        }
+        Ok(r)
+    }
+
+    /// [`Memory::check`] without the lifetime check of `std::allocator`
+    /// storage: the checks of a placement new, which begins a lifetime.
+    pub fn check_storage(
+        &self,
+        raw: u64,
+        len: u64,
+        write: bool,
+    ) -> Result<(Sp, u64, &Alloc), MemFault> {
         if raw == 0 {
             return Err(MemFault::Null);
         }
@@ -729,6 +817,10 @@ impl Memory {
         };
         self.heap.set_init(base, n, false);
         self.heap.set_ptr(base, n, false);
+        if fl & flags::STD_ALLOC != 0 {
+            self.heap.ensure_life();
+            self.heap.set_life(base, n, false);
+        }
         self.allocated += n;
         self.heap_live += n;
         self.heap_count += 1;
@@ -760,20 +852,20 @@ impl Memory {
         Ok(Ptr { slot: idx | HEAP_BIT, generation, past: false, off: 0 }.encode())
     }
 
-    /// Deallocates the heap object `raw` points to (`array`: by an array
-    /// form). Null is a no-op. Checked in clang's order: not a heap
-    /// allocation, already deleted, wrong form, not the complete object
-    /// (with `pointee`, the operand's static pointee type: a non-array
-    /// delete needs a pointer to the allocated object itself, an array
-    /// delete one to its first element).
+    /// Deallocates the heap object `raw` points to by form `kind`. Null is
+    /// a no-op (diagnosed for `deallocate`). Checked in clang's order: not
+    /// a heap allocation, already deleted, wrong form, not the complete
+    /// object (with `pointee`, the operand's static pointee type: a
+    /// non-array delete needs a pointer to the allocated object itself,
+    /// an array delete or `deallocate` one to its first element).
     pub fn heap_free(
         &mut self,
         raw: u64,
-        array: bool,
+        kind: DynKind,
         pointee: Option<OTy>,
         types: &Types,
     ) -> Result<(), MemFault> {
-        let Some(i) = self.heap_check(raw, array, pointee, types)? else {
+        let Some(i) = self.heap_check(raw, kind, pointee, types)? else {
             return Ok(());
         };
         if self.in_trial() {
@@ -797,12 +889,12 @@ impl Memory {
     pub fn heap_check(
         &self,
         raw: u64,
-        array: bool,
+        kind: DynKind,
         pointee: Option<OTy>,
         types: &Types,
     ) -> Result<Option<usize>, MemFault> {
         if raw == 0 {
-            return Ok(None);
+            return if kind == DynKind::Std { Err(MemFault::DeallocNull) } else { Ok(None) };
         }
         let p = Ptr::decode(raw);
         if p.is_fn() || !p.is_heap() {
@@ -813,24 +905,45 @@ impl Memory {
             Some(a) if a.generation == p.generation && a.live => *a,
             _ => return Err(MemFault::DoubleDelete),
         };
-        let array_new = a.flags & flags::ARRAY_NEW != 0;
-        if array_new != array {
-            return Err(MemFault::DeleteMismatch { array_new });
+        let alloc = DynKind::of(a.flags);
+        if alloc != kind {
+            return Err(MemFault::DeleteMismatch { alloc, dealloc: kind });
         }
         if p.off != 0 || p.past {
             return Err(MemFault::Subobject);
         }
         if let Some(t) = pointee {
-            let whole = if array {
-                matches!(types.kind(a.ty), TyKind::Array { elem, .. } if elem == t)
-            } else {
+            let whole = if kind == DynKind::New {
                 a.ty == t
+            } else {
+                matches!(types.kind(a.ty), TyKind::Array { elem, .. } if elem == t)
             };
             if !whole {
                 return Err(MemFault::Subobject);
             }
         }
         Ok(Some(i))
+    }
+
+    /// Begins (`live`, a placement new: the bytes become uninitialized
+    /// for the initialization that follows) or ends (an explicit
+    /// destruction) the lifetime of the `len`-byte object at `raw`
+    /// (checked). Lifetime is tracked for [`flags::STD_ALLOC`] storage
+    /// only; elsewhere ending one does nothing (spec/oven.md "Transient
+    /// allocation").
+    pub fn set_lifetime(&mut self, raw: u64, len: u64, live: bool) -> Result<(), MemFault> {
+        let (sp, abs, a) = self.check_storage(raw, len, true)?;
+        let std = a.flags & flags::STD_ALLOC != 0;
+        if !live && !std {
+            return Ok(());
+        }
+        self.trial_write(raw, len)?;
+        let s = self.space_mut(sp);
+        s.set_init(abs, len, false);
+        if std {
+            s.set_life(abs, len, live);
+        }
+        Ok(())
     }
 
     /// Frees heap slot `i` (live) and its block.
@@ -881,7 +994,7 @@ impl Memory {
             if a.live && a.frame == ctx {
                 let slot = i as u32 | HEAP_BIT;
                 let raw = Ptr { slot, generation: a.generation, past: false, off: 0 }.encode();
-                let _ = self.heap_free(raw, a.flags & flags::ARRAY_NEW != 0, None, types);
+                let _ = self.heap_free(raw, DynKind::of(a.flags), None, types);
             }
         }
     }
@@ -927,7 +1040,7 @@ struct Checkpoint {
 enum Undo {
     /// A granule of an object that existed at the innermost checkpoint:
     /// bytes and shadow.
-    Gran { sp: Sp, g: u32, bytes: [u8; 8], init: u8, ptr: u8 },
+    Gran { sp: Sp, g: u32, bytes: [u8; 8], init: u8, ptr: u8, life: u8 },
     /// A union's active-member entry ([`Memory::unions`]).
     Union(u64, Option<u32>),
     /// An allocation's flags.
@@ -1031,12 +1144,15 @@ impl Memory {
         while self.trial.log.len() > cp.pos {
             let Some(u) = self.trial.log.pop() else { break };
             match u {
-                Undo::Gran { sp, g, bytes, init, ptr } => {
+                Undo::Gran { sp, g, bytes, init, ptr, life } => {
                     let s = self.space_mut(sp);
                     let i = g as usize;
                     s.bytes[i * GRAN as usize..(i + 1) * GRAN as usize].copy_from_slice(&bytes);
                     s.init[i] = init;
                     s.ptr[i] = ptr;
+                    if let Some(l) = s.life.get_mut(i) {
+                        *l = life;
+                    }
                 }
                 Undo::Union(key, old) => match old {
                     Some(v) => {
@@ -1127,7 +1243,8 @@ impl Memory {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&s.bytes[i * GRAN as usize..(i + 1) * GRAN as usize]);
             let (init, ptr) = (s.init[i], s.ptr[i]);
-            self.trial.log.push(Undo::Gran { sp, g: g as u32, bytes, init, ptr });
+            let life = s.life.get(i).copied().unwrap_or(0);
+            self.trial.log.push(Undo::Gran { sp, g: g as u32, bytes, init, ptr, life });
         }
     }
 
@@ -1334,7 +1451,7 @@ mod tests {
     }
 
     fn free(m: &mut Memory, p: u64) {
-        m.heap_free(p, false, None, &Types::default()).unwrap();
+        m.heap_free(p, DynKind::New, None, &Types::default()).unwrap();
     }
 
     fn base(m: &Memory, p: u64) -> u64 {
@@ -1486,13 +1603,19 @@ mod tests {
         assert!(m.check(p, 8, false).is_ok());
         free(&mut m, p);
         assert_eq!(m.check(p, 8, false).err(), Some(MemFault::Dead(Origin::Heap(e, 0))));
-        assert_eq!(m.heap_free(p, false, None, &Types::default()), Err(MemFault::DoubleDelete));
+        assert_eq!(
+            m.heap_free(p, DynKind::New, None, &Types::default()),
+            Err(MemFault::DoubleDelete)
+        );
         // The slot is reused with a new generation: the old pointer is stale.
         let q = heap(&mut m, 16);
         assert_eq!(Ptr::decode(q).slot, Ptr::decode(p).slot);
         assert_ne!(q, p);
         assert_eq!(m.check(p, 8, false).err(), Some(MemFault::Stale));
-        assert_eq!(m.heap_free(p, false, None, &Types::default()), Err(MemFault::DoubleDelete));
+        assert_eq!(
+            m.heap_free(p, DynKind::New, None, &Types::default()),
+            Err(MemFault::DoubleDelete)
+        );
         assert!(m.check(q, 16, true).is_ok());
     }
 
@@ -1500,30 +1623,30 @@ mod tests {
     fn delete_faults() {
         let mut m = Memory::new(256 * MIB);
         let t = Types::default();
-        assert_eq!(m.heap_free(0, true, None, &t), Ok(()));
+        assert_eq!(m.heap_free(0, DynKind::ArrayNew, None, &t), Ok(()));
         let f = m.alloc(OTy(0), 8, 0, Origin::None).unwrap();
-        assert_eq!(m.heap_free(f, false, None, &t), Err(MemFault::NotHeap));
-        assert_eq!(m.heap_free(fn_ptr(3), false, None, &t), Err(MemFault::NotHeap));
+        assert_eq!(m.heap_free(f, DynKind::New, None, &t), Err(MemFault::NotHeap));
+        assert_eq!(m.heap_free(fn_ptr(3), DynKind::New, None, &t), Err(MemFault::NotHeap));
         let s = m.alloc_static(OTy(0), 8, 0, Origin::None);
-        assert_eq!(m.heap_free(s, false, None, &t), Err(MemFault::NotHeap));
+        assert_eq!(m.heap_free(s, DynKind::New, None, &t), Err(MemFault::NotHeap));
         let a = m.heap_alloc(OTy(0), 32, flags::ARRAY_NEW, Origin::None).unwrap();
         assert_eq!(
-            m.heap_free(a, false, None, &t),
-            Err(MemFault::DeleteMismatch { array_new: true })
+            m.heap_free(a, DynKind::New, None, &t),
+            Err(MemFault::DeleteMismatch { alloc: DynKind::ArrayNew, dealloc: DynKind::New })
         );
         assert_eq!(
-            m.heap_free(Ptr::with_off(a, 8, false), true, None, &t),
+            m.heap_free(Ptr::with_off(a, 8, false), DynKind::ArrayNew, None, &t),
             Err(MemFault::Subobject)
         );
         assert_eq!(
-            m.heap_free(Ptr::with_off(a, 32, true), true, None, &t),
+            m.heap_free(Ptr::with_off(a, 32, true), DynKind::ArrayNew, None, &t),
             Err(MemFault::Subobject)
         );
-        assert_eq!(m.heap_free(a, true, None, &t), Ok(()));
+        assert_eq!(m.heap_free(a, DynKind::ArrayNew, None, &t), Ok(()));
         let b = heap(&mut m, 8);
         assert_eq!(
-            m.heap_free(b, true, None, &t),
-            Err(MemFault::DeleteMismatch { array_new: false })
+            m.heap_free(b, DynKind::ArrayNew, None, &t),
+            Err(MemFault::DeleteMismatch { alloc: DynKind::New, dealloc: DynKind::ArrayNew })
         );
         assert_eq!(m.heap_count, 1);
     }
@@ -1821,7 +1944,7 @@ mod tests {
         // Heap objects may be modified.
         put(&mut m, h, 2).unwrap();
         assert_eq!(m.heap_alloc(OTy(0), 8, 0, Origin::None), Err(MemFault::Speculative));
-        assert_eq!(m.heap_free(h, false, None, &t), Err(MemFault::Speculative));
+        assert_eq!(m.heap_free(h, DynKind::New, None, &t), Err(MemFault::Speculative));
         // A nested evaluation context allocates and frees its own.
         m.ctx = 1;
         let n = hnew(&mut m, 8);

@@ -396,16 +396,99 @@ impl Sema<'_, '_> {
 }
 
 impl Sema<'_, '_> {
+    /// [temp.explicit]/8, /11, [temp.spec.general]/5 for an explicit
+    /// instantiation of variable template specialization `v` (clang
+    /// `CheckSpecializationInstantiationRedecl`): false when it has no
+    /// effect (after an explicit specialization, a warning; a repeated
+    /// declaration) or is ill-formed (a second definition; a declaration
+    /// after the definition).
+    fn check_explicit_var_inst_redecl(
+        &mut self,
+        v: DeclId,
+        info: kiln_ast::templates::SpecInfo,
+        declaration: bool,
+        name_loc: Loc,
+    ) -> bool {
+        let (id, note) = match (info.kind, declaration) {
+            (SpecKind::ExplicitSpecialization, false) => {
+                let at = self.ast.decls.get(self.ast.latest(v)).loc();
+                let note = self.diag(DiagId::note_previous_template_specialization, at);
+                (DiagId::sema_explicit_inst_after_spec_ignored, note)
+            }
+            (SpecKind::ExplicitInstantiationDefinition, false) => {
+                let at = info.point_of_instantiation;
+                (
+                    DiagId::sema_explicit_inst_duplicate,
+                    self.diag(DiagId::note_previous_explicit_instantiation, at),
+                )
+            }
+            (SpecKind::ExplicitInstantiationDefinition, true) => {
+                let at = info.point_of_instantiation;
+                let note = self.diag(DiagId::note_explicit_instantiation_definition_here, at);
+                (DiagId::sema_explicit_inst_declaration_after_definition, note)
+            }
+            (
+                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDeclaration,
+                true,
+            ) => {
+                return false;
+            }
+            _ => return true,
+        };
+        let mut e = self.diag(id, name_loc);
+        if id != DiagId::sema_explicit_inst_declaration_after_definition {
+            e = e.arg(self.spec_decl_name(info.template, info.print_args));
+        }
+        self.emit(e.with_note(note));
+        false
+    }
+
+    /// [temp.explicit]/3: the type declared by an explicit instantiation
+    /// of variable template specialization `v` of `tmpl` must be the
+    /// specialization's type (clang `ActOnExplicitInstantiation`,
+    /// `err_invalid_var_template_spec_type`). False after a diagnostic.
+    /// clang does not check a static data member's type (nor does kiln).
+    fn check_explicit_var_inst_type(
+        &mut self,
+        tmpl: DeclId,
+        v: DeclId,
+        (declared, type_loc): (QualType, Loc),
+    ) -> bool {
+        let Some(expected) = self.ast.decls.get(v).ty() else { return true };
+        let types = &self.ast.types;
+        if types.same_type(declared, expected)
+            || types.is_dependent(expected)
+            || self.is_error_type(expected)
+            || self.is_error_type(declared)
+        {
+            return true;
+        }
+        let name = self.decl_name_str(self.ast.decls.get(tmpl).name());
+        let at = self.ast.decls.get(self.ast.latest(tmpl)).loc();
+        let note = self.diag(DiagId::note_template_declared_here, at).arg(2u32).arg(name.clone());
+        let e = self
+            .diag(DiagId::sema_var_template_spec_type, type_loc)
+            .arg(0u32)
+            .arg(name)
+            .arg(self.ty_arg(declared))
+            .arg(self.ty_arg(expected))
+            .with_note(note);
+        self.emit(e);
+        false
+    }
+
     /// `[extern] template T v<args>;` or `[extern] template T
     /// C<args>::m;` ([temp.explicit]/3): an explicit instantiation of a
     /// variable template specialization or of a static data member of a
     /// class template specialization. A definition instantiates the
     /// variable's definition (initializer) now and keeps it for emission
     /// ([temp.explicit]/12); a declaration only records the kind
-    /// ([temp.explicit]/14).
+    /// ([temp.explicit]/14). `declared` is the declared type and the
+    /// location of its type specifier.
     pub(crate) fn act_on_explicit_var_inst(
         &mut self,
         d: &Declarator,
+        declared: (QualType, Loc),
         declaration: bool,
         invalid: bool,
     ) {
@@ -424,17 +507,23 @@ impl Sema<'_, '_> {
                 return;
             };
             let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
-            match info.kind {
-                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDefinition => {
-                    return;
-                }
-                SpecKind::ExplicitInstantiationDeclaration if declaration => return,
-                _ => {}
+            // Checked in clang's order: the redeclaration, then (whatever
+            // its effect) the type; a later explicit instantiation sees
+            // this one even when its type is wrong.
+            let effect = self.check_explicit_var_inst_redecl(v, info, declaration, name_loc);
+            if effect {
+                // The point of instantiation stays where the specialization
+                // was first named (clang's `setTemplateSpecializationKind`).
+                self.ast.templates.update_spec(i, |s| {
+                    s.kind = kind;
+                    if s.point_of_instantiation == Loc::INVALID {
+                        s.point_of_instantiation = name_loc;
+                    }
+                });
             }
-            self.ast.templates.update_spec(i, |s| {
-                s.kind = kind;
-                s.point_of_instantiation = name_loc;
-            });
+            if !self.check_explicit_var_inst_type(sid.template, v, declared) || !effect {
+                return;
+            }
             if !declaration {
                 self.instantiate_var_spec_init(v, name_loc);
                 self.mark_used(v);

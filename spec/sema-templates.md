@@ -882,6 +882,48 @@ member templates):
    declared here" at the latest redeclaration of the pattern when no
    partial specialization matched, as clang does.
 
+**Member classes and member enumerations of an implicit instantiation**
+([temp.expl.spec]/1, /5, /7; WP-206), such as `template<> struct
+A<int>::N {...}`, `template<> enum class A<int>::E : int {...}` and the
+declaration-only `template<> struct A<int>::N;`:
+1. The parser routes `template<>` followed by a class key or `enum` to
+   the specialization declaration path. `act_on_tag` finds the member that
+   the class instantiation declared and, inside the member-spec header,
+   calls `check_member_tag_spec` (`templ/spec.rs`, clang
+   `CheckMemberSpecialization` + `CheckSpecializationInstantiationRedecl`).
+2. A member that is already instantiated (an implicit instantiation that
+   has a definition, or any explicit instantiation) is "explicit
+   specialization of 'N' after instantiation". The note is "implicit
+   instantiation first required here" (or "explicit instantiation ...")
+   at the member's point of instantiation, or else at the point of
+   instantiation of the nearest enclosing specialization
+   (`enclosing_poi`). After this error the declaration is dropped. A
+   declaration-only specialization returns the existing member.
+3. Otherwise the member's `MemberSpecInfo.kind` becomes
+   `ExplicitSpecialization` and the new declaration redeclares it. A
+   redefinition is clang's "redefinition of 'N'". `instantiate_member_class`
+   never instantiates an explicitly specialized member, and its uses see
+   the specialization's definition. An unknown name in the specialization
+   is "no member named 'x' in 'A<int>::N'" (`find_instantiated_decl`).
+4. **Lazy scoped member enumerations** ([temp.inst]/3). The class
+   instantiation only declares a scoped member enumeration
+   (`Substituter::enum_decl`). Its enumerators are instantiated
+   (`instantiate_member_enum` → `enum_definition`) when the enumeration
+   must be complete:
+   - as a nested-name-specifier (`require_complete_nns` /
+     `undefined_member_enum`);
+   - in `using enum`;
+   - when the pattern names one of its enumerators (`find_instantiated_decl`
+     → `require_member_enum`).
+   This is what makes a later specialization valid. Unscoped member
+   enumerations are instantiated together with the class, so specializing
+   one is always "after instantiation", as in clang.
+5. `template enum ...`: a qualified name is "enumerations cannot be
+   explicitly instantiated". An unqualified name, like `template<> enum
+   E ...`, gives "enumeration cannot be a template" at the token after
+   the name or base, plus "declaration does not declare anything" at
+   `enum` (clang's parser).
+
 Not done: when the inner head does not match the member template's head
 (for example, different parameter count), clang drops the declaration.
 kiln still links it as a redeclaration, so later uses get cascading
@@ -1082,6 +1124,37 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
 
 This is why the chain `R<N>::v = R<N-1>::v` recurses one frame per level
 in clang (the d1 test in §10.2). Kiln matches its notes exactly.
+
+**Member variable templates defined out of line** (`template<class T>
+T A::v = T(1);`, WP-206). The implicit specialization `A::v<int>` is a
+single declaration in `A`. Its initializer is instantiated from the
+out-of-line definition, so the in-class static initializer check
+([class.static.data]/3) applies only when the pattern was written in the
+class (`init_written_in`; clang's `BuildVariableInstantiation` keeps the
+pattern's lexical context). Codegen emits it as a definition
+(`instantiated_var_def`).
+
+**Explicit instantiation of a variable template specialization**
+(`template int vv<long>;`, `extern template ...`; `act_on_explicit_var_inst`,
+clang `ActOnExplicitInstantiation`). The steps run in clang's order:
+1. The redeclaration check (`check_explicit_var_inst_redecl`, the §4.5
+   table): "duplicate explicit instantiation of 'vv<long>'", "explicit
+   instantiation declaration (with 'extern') follows explicit
+   instantiation definition (without 'extern')", the warning "explicit
+   instantiation of 'vv<long>' that occurs after an explicit
+   specialization has no effect". An `extern template` after an explicit
+   specialization or another explicit instantiation declaration does
+   nothing and says nothing.
+2. The new kind and the first point of instantiation are recorded only
+   when the instantiation has an effect.
+3. The declared type is compared with the specialization's type
+   (`check_explicit_var_inst_type`) even when step 1 found no effect:
+   "type {0} of explicit instantiation of 'vv<long>' does not match
+   expected type {1}" at the start of the type specifier, with the note
+   "variable template 'vv' declared here" at the template's latest
+   declaration. A mismatch also stops the definition from being
+   instantiated. Static data members and explicit specializations are
+   not type-checked.
 
 **The Oven never sees an uninstantiated variable.** By the time an
 initializer is evaluated, each variable it references has already been

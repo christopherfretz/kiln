@@ -17,8 +17,8 @@ use crate::arith::{self, FloatErr, IntErr};
 use crate::compile::{FState, Site, designator_type, skip_parens};
 use crate::failure::Note;
 use crate::kbc::{Op, ak};
-use crate::mem::{MemFault, Origin, Ptr, Sp, flags};
-use crate::ty::{OTy, TyKind};
+use crate::mem::{DynKind, MemFault, Origin, Ptr, Sp, flags};
+use crate::ty::{FieldInfo, OTy, TyKind};
 use crate::value::var_info;
 use crate::vm::{BiFault, BoundErr, Fault, value_len};
 use crate::{Oven, SemaBridge};
@@ -308,6 +308,22 @@ impl Oven {
                 extra.push(Note::new(ast.decls.get(d).loc(), "declared here"));
                 (site.loc, format!("pure virtual function '{}' called", qualified_name(ast, d)))
             }
+            Fault::NewBadSize { bytes, elem } => (
+                site.loc,
+                format!(
+                    "allocated size {bytes} is not a multiple of size {} of element type '{}'",
+                    self.types.size(elem),
+                    self.tname(ast, elem)
+                ),
+            ),
+            Fault::PlacementType { from, to } => (
+                site.loc,
+                format!(
+                    "placement new would change type of storage from '{}' to '{}'",
+                    self.tname(ast, from),
+                    self.tname(ast, to)
+                ),
+            ),
             Fault::DeleteNonVirtual { stat, dynamic } => (
                 site.loc,
                 format!(
@@ -586,6 +602,16 @@ impl Oven {
                 return;
             }
         }
+        // A member operator call prints its first operand as written
+        // (`u.s.data[0].operator=(e)`, `*p.operator+=(0)`).
+        if let Some(ce) = self.site(call_pc).e
+            && ast.exprs.get(ce).kind() == ExprKind::CXXOperatorCallExpr
+            && let Some(&obj) = ast.lists.get(ast.exprs.call_args(ce)).first()
+        {
+            ast.write_expr(ExprId::new(obj), s);
+            s.push('.');
+            return;
+        }
         let v = self.regs[fb + tr as usize] as u64;
         let Some(t) = func.this_ty else { return };
         // A temporary prints as the expression that created it (`P(9).~P()`).
@@ -692,14 +718,7 @@ impl Oven {
         }
     }
 
-    fn write_field(
-        &self,
-        ast: &Ast,
-        s: &mut String,
-        raw: u64,
-        f: crate::ty::FieldInfo,
-        depth: u32,
-    ) {
+    fn write_field(&self, ast: &Ast, s: &mut String, raw: u64, f: FieldInfo, depth: u32) {
         let off = u64::from(Ptr::decode(raw).off) + f.offset;
         let r = Ptr::with_off(raw, off, false);
         let Some(w) = f.width else {
@@ -775,10 +794,14 @@ impl Oven {
                     rel %= es;
                     t = elem;
                 }
-                TyKind::Record { .. } => {
-                    let Some(f) = self.types.field_at(t, rel) else {
-                        break;
+                TyKind::Record { union, .. } => {
+                    let f = if union {
+                        let at = u64::from(p.off) - rel;
+                        self.union_field_at(raw, at, t, rel, pointee)
+                    } else {
+                        self.types.field_at(t, rel)
                     };
+                    let Some(f) = f else { break };
                     if f.base {
                         via_base = Some(f.decl);
                     } else {
@@ -799,6 +822,34 @@ impl Oven {
             s.push_str(" + 1");
         }
         s
+    }
+
+    /// The member of union `t`, at byte `at` of `raw`'s allocation, that
+    /// a pointer `rel` bytes into it designates: one with a `pointee`
+    /// subobject there, the active member first (clang's designator is
+    /// the path the pointer was formed through, `&u.s.data[0]`, never a
+    /// sibling at the same offset).
+    fn union_field_at(
+        &self,
+        raw: u64,
+        at: u64,
+        t: OTy,
+        rel: u64,
+        pointee: OTy,
+    ) -> Option<FieldInfo> {
+        let fs = self.types.fields(t);
+        let holds = |f: &&FieldInfo| {
+            f.width.is_none()
+                && rel >= f.offset
+                && self.types.has_subobject(f.ty, rel - f.offset, pointee)
+        };
+        let active =
+            self.mem.unions.get(&Ptr::union_key(raw, at)).and_then(|&i| fs.get(i as usize));
+        active
+            .filter(holds)
+            .or_else(|| fs.iter().find(holds))
+            .copied()
+            .or_else(|| self.types.field_at(t, rel))
     }
 
     fn int_msg(
@@ -1035,17 +1086,28 @@ impl Oven {
             MemFault::Subobject => {
                 format!("delete of pointer to subobject '{}' ", self.ptr_string(ast, p, ty))
             }
-            MemFault::DeleteMismatch { array_new } => {
+            MemFault::DeleteMismatch { alloc, dealloc } => {
                 let a = self.alloc_any(Ptr::decode(p)).copied();
                 let t = a.map_or_else(|| self.tname(ast, ty), |a| self.tname(ast, a.ty));
                 if let Some(Origin::Heap(e, _)) = a.map(|a| a.origin) {
                     extra.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));
                 }
-                if array_new {
-                    format!("non-array delete used to delete pointer to array object of type '{t}'")
-                } else {
-                    format!("array delete used to delete pointer to non-array object of type '{t}'")
+                match (alloc, dealloc) {
+                    (DynKind::Std, _) => "'delete' used to delete pointer to object allocated with 'std::allocator<...>::allocate'".into(),
+                    (_, DynKind::Std) => "'std::allocator<...>::deallocate' used to delete pointer to object allocated with 'new'".into(),
+                    (DynKind::ArrayNew, _) => format!(
+                        "non-array delete used to delete pointer to array object of type '{t}'"
+                    ),
+                    _ => format!(
+                        "array delete used to delete pointer to non-array object of type '{t}'"
+                    ),
                 }
+            }
+            MemFault::DeallocNull => {
+                "'std::allocator<...>::deallocate' used to delete a null pointer".into()
+            }
+            MemFault::Lifetime => {
+                format!("{verb} object outside its lifetime is not allowed in a constant expression")
             }
         };
         (site.loc, msg)

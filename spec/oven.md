@@ -134,6 +134,14 @@ the evaluator's flattened type table.
   expression (clang's call-site location), not at the `CallExpr`'s own
   location (its parenthesis). Arguments bound to reference parameters print
   as the referred-to object (`bad(a[1], 0)`), as clang prints them.
+  A member call prints its object before the callee name (clang
+  `describeCall`): a `CXXMemberCallExpr` its implicit object expression as
+  written, a member `CXXOperatorCallExpr` its first operand as written
+  (`u.s.data[0].operator=(e)`, `*p.operator+=(0)`), anything else the
+  `this` pointer's designator. A designator through a union names the
+  member the pointer was formed through: the union's recorded active
+  member when it holds the pointee at that offset, else the first member
+  that does (WP-213).
 - `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
   frame limit; 0 shows every frame.
 - `try_fold`, `is_constant_initialized` and `fold_constant_init` never
@@ -367,8 +375,10 @@ literal is one instruction and one step, not an interpreted loop.
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
   constant expression", as clang 19): `__builtin_signbit`, the six
   ordered comparisons, the math functions; `__builtin_unreachable` when
-  reached; `__builtin_operator_new`/`_delete` (WP-061b; clang's
-  untyped-memory note).
+  reached; `__builtin_operator_new`/`_delete` outside
+  `std::allocator<T>::allocate`/`deallocate` (WP-061b; clang's
+  untyped-memory note; inside them they allocate, "Transient
+  allocation", WP-212).
 - **Bits** (`bi::CLZ`/`CTZ`/`POPCOUNT`/`BSWAP`): any width up to 128; a
   zero operand to `clz`/`ctz` without the `g` forms' fallback is not a
   constant (no note, as clang).
@@ -525,8 +535,10 @@ WP-061b part 1 (`crates/kiln_oven/src/mem.rs`); the `New`/`Delete`
 operations, their checks, the leak check and the churn benchmarks are
 WP-061b part 2 (`crates/kiln_oven/src/compile/new_delete.rs`, `vm.rs`,
 `value.rs`). Classes with a constructor or destructor landed with WP-076
-("Classes"); `std::allocator` and `__builtin_operator_new` (the templates
-wave) are not yet constant; see "Status and what remains".
+("Classes"); `std::allocator<T>::allocate`/`deallocate`,
+`__builtin_operator_new`/`_delete` inside them, `std::construct_at`/
+`destroy_at` and explicit destructor calls landed with WP-212 ("`std::allocator`
+and object lifetime" below).
 
 The operator's requirement: memory that a constant evaluation allocates and
 frees **must be reclaimed while the evaluation is still running**, not at its
@@ -611,17 +623,11 @@ the explicit initializers are filled by a runtime loop with the
 `array_filler`, or by `ZERO` when the filler is zero-initialization.
 `Delete [p, pointee]` (aux 1 for `delete[]`) frees the allocation; a null
 `p` is a no-op.
-`is_std_allocator_call` (`compile/new_delete.rs`) is the hook that will
-recognize the calls below; it returns false until class templates exist,
-and a call that reaches it traps with `kiln: std::allocator in constant
-evaluation lands with the templates wave`. `std::allocator<T>::allocate(n)`
-and `deallocate(p, n)` and the `__builtin_operator_new`/
-`__builtin_operator_delete` calls libc++ makes inside them lower to the same
-two ops with aux `ARRAY` and `ty = T` (clang's rule: the allocation is an
-array of `n` `T`; `__builtin_operator_new` anywhere else is not a constant
-expression). That recognition needs class templates and is part of the M3
-Oven package; WP-061 covers `new`/`delete` expressions on the types the Oven
-supports in M2 (scalars, arrays, aggregates without constructors).
+The `operator new`/`operator delete` calls (or `__builtin_operator_new`/
+`_delete`) inside `std::allocator<T>::allocate(n)` and `deallocate(p, n)`
+lower to the same two ops: `New` with aux `ARRAY | STD` and `ty = T`
+(clang's rule: the allocation is an array of `n` `T`), `Delete` with aux 8
+(`STD`); see "`std::allocator` and object lifetime" below (WP-212).
 
 *AST shapes the lowering consumes* (WP-061a; spec/ast.md §5.7).
 - `CXXNewExpr` (`ty` = `T*`), `new_extra(e)`:
@@ -655,8 +661,10 @@ supports in M2 (scalars, arrays, aggregates without constructors).
     placement new expression is not yet supported in constant
     expressions". P2747 (`constexpr` placement new, C++26) is not
     implemented by clang 19, so the reserved `new (p) T` is not constant
-    either (corrected: the earlier text planned it); it comes with the
-    oracle that implements it;
+    in user code (corrected: the earlier text planned it); it comes with
+    the oracle that implements it. Inside a function of namespace `std`
+    (`std::construct_at`) the reserved form is constant, as clang 19
+    allows it there ([expr.const]/5.18; WP-212, below);
   - `PASS_ALIGN` and `operator_delete` are codegen facts and do not
     affect evaluation.
 - `CXXDeleteExpr` (`ty` = `void`): `delete_operand(e)` is the pointer
@@ -694,6 +702,126 @@ them: `&x` for a variable, `&{*new T#n}` for allocation `n`, then
 CCEDiag; the observable result, an error on the evaluation, is the
 same). The leak check runs at the end of every evaluation context,
 outermost and nested.
+
+**`std::allocator` and object lifetime — landed (WP-212).** The
+transient-allocation rules of [expr.const]/5.18–5.20 and
+[allocator.members], with clang 19's notes, each verified against the
+oracle (`tests/conformance/expr.new/constexpr-std-allocator.cpp`,
+`tests/conformance/expr.delete/constexpr-std-deallocate.cpp`,
+`tests/conformance/basic.life/constexpr-construct-destroy.cpp`, and with
+libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
+
+- *Which calls allocate.* A call of a replaceable global
+  `operator new`/`operator new[]` (written `::operator new(n)` or as
+  `__builtin_operator_new(n)`) is constant only when the function being
+  evaluated is `allocate` of a specialization of the `std::allocator`
+  primary template whose first template argument is a type (clang's
+  `getStdAllocatorCaller`; `new_delete::std_allocator_elem`), and likewise
+  `operator delete` only in `deallocate`. Anywhere else it is not
+  constant: "cannot allocate untyped memory in a constant expression; use
+  'std::allocator<T>::allocate' to allocate memory of type 'T'" for a
+  new form, "subexpression not valid in a constant expression" for a
+  delete form (both at the call). The caller test is made when the call
+  is compiled, from the function being compiled, which is the function
+  clang's frame walk finds for every call libc++ makes; a call through a
+  function pointer whose target is `operator new` is not recognized (it
+  is a non-constexpr function call either way).
+- *Allocation.* Inside `allocate` the call lowers to `New` with aux
+  `ARRAY | STD`, `ty = T` and `count` = the byte count argument: the
+  allocation is a `T[n]` with `n = bytes / sizeof(T)`; a byte count that
+  is not a multiple is "allocated size B is not a multiple of size S of
+  element type 'T'"; the array-bound checks of `new[]` apply to `n`. The
+  allocation is flagged `STD_ALLOC` (`mem::flags`), counted in `allocs`,
+  and named `&{*new T[n]#k}` in notes as clang does. Its bytes are
+  uninitialized and **outside any object's lifetime**: `Space::life` (a
+  per-granule bitmask beside `init`, kept for the heap only once a
+  `STD_ALLOC` allocation exists, so programs without the allocator pay
+  nothing) records which bytes are within an object's lifetime, and only
+  `STD_ALLOC` storage consults it. Reading, writing or calling a member
+  function of an object there that has not been constructed (or has been
+  destroyed) is "read of object outside its lifetime ..." / "assignment
+  to ..." / "member call on object outside its lifetime is not allowed in
+  a constant expression".
+- *Construction.* A placement `new (p) T(args)` whose allocation function
+  is the reserved placement form (`operator new(size_t, void*)`) is
+  constant only inside a function of namespace `std` (clang's
+  `isStdFunction`: `std::construct_at`, `std::allocator_traits::construct`
+  and the library internals) and not as an array new; elsewhere it stays
+  "call to placement 'operator new'" (C++26 P2747 is not in clang 19).
+  It lowers to `Placement [p, T]`, which checks the storage with the
+  access checks minus the lifetime check (null: "construction of
+  dereferenced null pointer ..."; deleted, out of bounds) and that a
+  `T` object can live at `p`: the most-derived object at that offset of
+  the allocation's type must be `T` or contain a `T` subobject there, else
+  "placement new would change type of storage from 'U' to 'T'". It then
+  begins the lifetime of `sizeof(T)` bytes, marks them uninitialized, and
+  the initializer runs as for any `new` (a constructor call for a class).
+  Within `std::allocator<T>::allocate` a cast from `void*` to `T*` (as
+  libc++ writes `static_cast<T*>(__builtin_operator_new(...))`) is a plain
+  move, not the C++26 `void*` cast check.
+- *Destruction.* An explicit destructor call `p->~T()` (including the one
+  in `std::destroy_at`) lowers to `EndLife [p, T]` aux 1 before the call
+  (the object must be within its lifetime: "destruction of object outside
+  its lifetime ..."), then the destructor body, then `EndLife` aux 2,
+  which ends the lifetime of its bytes and marks them uninitialized. A
+  pseudo-destructor call (`p->~int()` on a scalar, through a template)
+  is `EndLife` aux 3 (check, then end). Any other member call on an object
+  in `STD_ALLOC` storage is preceded by `EndLife` aux 4, which only checks
+  that the object is within its lifetime ("member call on ..."). Outside
+  `STD_ALLOC` storage `EndLife` checks only the storage (null, deleted,
+  bounds) and does not track the lifetime (below).
+- *Deallocation.* Inside `deallocate`, `operator delete(p, ...)` lowers to
+  `Delete` aux 8 (`STD`): `p` must be the start of a live heap allocation
+  made by `allocate` ([allocator.members]/9). The checks and notes are
+  `delete`'s, plus the allocation-kind check of clang's `DynAlloc::Kind`:
+  "'delete' used to delete pointer to object allocated with
+  'std::allocator<...>::allocate'" and "'std::allocator<...>::deallocate'
+  used to delete pointer to object allocated with 'new'", each with
+  "heap allocation performed here"; a null `p` is "'std::allocator<...>::
+  deallocate' used to delete a null pointer". The size argument is
+  evaluated but not compared with the allocation's (as clang 19).
+  Objects still within their lifetime are not diagnosed at deallocation
+  (as clang). The block goes back to the size-class lists at once, so
+  reallocation-heavy code (`std::vector` growth) peaks at the last two
+  buffers.
+- *Leaks.* An allocation still live when the evaluation ends is "allocation
+  performed here was not deallocated", as for `new` (the note points into
+  the library's `allocate`, at the `__builtin_operator_new` call).
+- *Libc++ shapes the evaluator relies on.* A trivial copy assignment of a
+  union (`__rep = __str.__rep_` in `basic_string`) is a call of the
+  union's implicit `operator=`; it copies the object representation of
+  the source's active member and makes that member active in the
+  destination (clang's `handleTrivialCopy`; `compile/class.rs`
+  `method_call` lowers it to `Copy [this, src, U]`). A pointer into an
+  array member that shares its offset with a preceding zero-size member
+  (`char __padding_[0]` before the short string's `__data_`) designates
+  that array (`Types::field_at` skips zero-size members, WP-201, "Classes")
+  (`tests/conformance/class.union/constexpr-trivial-assign.cpp`,
+  `tests/conformance/expr.add/constexpr-zero-size-member.cpp`).
+
+*Deviations from clang 19.* Lifetime is tracked only in `STD_ALLOC`
+storage: destroying a local or a `new`-allocated object twice, or reading
+it after an explicit destructor call, is not diagnosed (clang diagnoses
+both). An explicit call of a virtual destructor ends only the lifetime of
+the static type's bytes. A placement new of the wrong type names the
+most-derived type at the offset as the "from" type, where clang names the
+designated subobject's type. A qualified call (`::operator new(n)`,
+`std::construct_at(...)`) is located at the name, two columns right of
+clang's location at the qualifier (the AST has no qualifier location);
+notes for unqualified calls agree. "in call to" notes print some
+arguments differently (`decltype(...)` and `{temporary}` where clang
+prints the value).
+
+*Memory benchmark.* `bench/oven/vector-alloc.cpp` builds a
+`std::vector<int>` of 100 000 elements by `push_back` and sums it: 18
+allocations, `peak_bytes` 786 600 (the 2^16- and 2^17-element buffers,
+768 KiB, during the last reallocation, plus frames), `peak_arena`
+1 048 744; the recorded release baseline (`bench/baselines/oven.json`)
+takes 461 ms and 31.7 MB RSS on the 24-CPU aarch64 host.
+`bench/oven/string.cpp` (std::string building) now runs on kiln too and
+has a kiln baseline (25 allocations, `peak_bytes` 9 320). The gated kiln-mode copy at 10 000 elements is
+`tests/conformance/expr.new/libcxx-constexpr-vector-churn.cpp`
+(`allocs<=15 peak_bytes<=106496 peak_arena<=163840`).
 
 **Churn benchmarks (written first, gated).** `bench/oven/churn-*.cpp` and
 the same programs as kiln-specific tests under `tests/conformance/expr.new/`
@@ -900,7 +1028,8 @@ so libc++'s short-string `__s.__is_long_` reads and writes check against
 are not separate operations: a member's lifetime is its complete
 object's, which is precise for constant evaluation because no constant
 expression can end a subobject's lifetime independently except through a
-union (tracked) or an explicit destructor call (not yet parsed, below).
+union (tracked) or an explicit destructor call (tracked in
+`std::allocator` storage, "Transient allocation", WP-212).
 Looking a member up by offset (`Types::field_at`, `subobject_at`,
 `has_member_at`) skips zero-size members (libc++'s `char __padding_[0]`
 shares its offset with the next member). Within a union, extents are
@@ -1028,13 +1157,18 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
 - Virtual calls, virtual calls through member pointers, `dynamic_cast`,
   `typeid`, `delete` through a base with a virtual destructor: landed in
   WP-077 (below). Virtual bases still trap with a `kiln:` note.
-- `std::construct_at`/`destroy_at`/`std::allocator`: need function
-  templates (WP-071) and the library; the `is_std_allocator_call` hook
-  still returns false.
-- Class assignment (`a = b` of class type) is rejected by sema before
-  evaluation; explicit destructor calls (`p->~T()`) and
-  `::operator new`/`::operator delete` are not parsed: front-end
-  gaps, not Oven work. Inheriting constructors (WP-114) evaluate their
+- `std::construct_at`/`destroy_at`/`std::allocator`: landed in WP-212
+  ("Transient allocation").
+- Class assignment (`a = b` of class type) is a call of `operator=`
+  (corrected: the earlier text said sema rejected it); a union's
+  trivial one copies the source's active member (WP-212). Explicit
+  destructor calls (`p->~T()`) and `::operator new`/`::operator delete`
+  are evaluated (WP-212, "Transient allocation").
+  An explicit call of a trivial destructor (WP-215) evaluates the
+  object expression and runs nothing; lifetime is tracked only in
+  `std::allocator` storage, so after `p->~T()` on a local kiln still
+  accepts a later read and the implicit destruction at scope end
+  (clang rejects both). Inheriting constructors (WP-114) evaluate their
   `CXXInheritedCtorInitExpr` as a call of the base constructor with the
   inheriting constructor's own arguments (`compile/class.rs`
   `inherited_ctor`); notes name a non-constexpr inherited constructor
@@ -1392,15 +1526,13 @@ over an undo log, with `__builtin_constant_p` as a speculative trial whose
 failure is rolled back; see "Trial evaluation — Landed (WP-135)".
 
 Remaining (each traps with a `kiln:` note today):
-- `std::allocator<T>::allocate`/`deallocate` and
-  `__builtin_operator_new`/`__builtin_operator_delete`: need class
-  templates; the `is_std_allocator_call` hook is in place and returns
-  false ("kiln: std::allocator in constant evaluation lands with the
-  templates wave").
+- Lifetime of objects outside `std::allocator` storage (double
+  destruction of a local, reads after an explicit destructor call), and
+  the other WP-212 deviations listed under "Transient allocation".
 - `delete` through `void*`, and P2747 placement new (see above).
 - Front-end gaps that keep some forms from reaching the Oven (not
-  Oven work): class assignment, explicit destructor calls,
-  `::operator new`/`delete`, class-specific `operator new`,
+  Oven work): qualified destructor names (`p->T::~T()`),
+  class-specific `operator new`,
   `delete[] (expr)` (parsed as a lambda) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the

@@ -14,10 +14,10 @@ use crate::softfloat;
 use crate::ty::TyKind;
 
 /// clang's `note_invalid_subexpr_in_const_expr`.
-const INVALID: &str = "subexpression not valid in a constant expression";
+pub(super) const INVALID: &str = "subexpression not valid in a constant expression";
 
 /// clang's `note_constexpr_new_untyped`.
-const UNTYPED_NEW: &str = "cannot allocate untyped memory in a constant expression; use 'std::allocator<T>::allocate' to allocate memory of type 'T'";
+pub(super) const UNTYPED_NEW: &str = "cannot allocate untyped memory in a constant expression; use 'std::allocator<T>::allocate' to allocate memory of type 'T'";
 
 /// The type of the object the pointer argument `e` designates, as far as
 /// it is known statically: the pointee of `e` with conversions to `void`
@@ -379,11 +379,13 @@ impl Compiler<'_> {
             id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),
             // clang: the assumption is not evaluated.
             id::ASSUME => self.konst(dst, 0),
-            id::OPERATOR_NEW => self.trap_loc(begin, UNTYPED_NEW.into()),
+            // As `::operator new`/`delete` (spec/oven.md "Transient
+            // allocation").
+            id::OPERATOR_NEW => return Some(self.global_alloc_call(e, true, args)),
+            id::OPERATOR_DELETE => return Some(self.global_alloc_call(e, false, args)),
             // Not evaluated by clang 19: the call is not a constant
             // expression, its arguments unevaluated.
-            id::OPERATOR_DELETE
-            | id::UNREACHABLE
+            id::UNREACHABLE
             | id::SIGNBIT
             | id::ISGREATER
             | id::ISGREATEREQUAL

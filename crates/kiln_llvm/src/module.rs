@@ -301,11 +301,17 @@ pub struct Module {
     /// Types.
     pub types: TypeTable,
     pub(crate) consts: ConstTable,
+    /// Functions by [`FuncId`] (creation order). Index only: anything
+    /// that walks every function iterates [`Module::ordered_funcs`] /
+    /// `func_order`, so the output follows the print order.
     pub(crate) funcs: Vec<Function>,
     /// The print order of `funcs`: creation order unless
     /// [`Module::move_function_to_end`] moved one.
     pub(crate) func_order: Vec<FuncId>,
     pub(crate) globals: Vec<GlobalVar>,
+    /// The print order of `globals`: creation order unless
+    /// [`Module::retype_global_to_end`] moved one.
+    pub(crate) global_order: Vec<GlobalId>,
     pub(crate) aliases: Vec<Alias>,
     pub(crate) comdats: Vec<Comdat>,
     comdat_names: HashMap<Box<str>, ComdatId>,
@@ -335,6 +341,7 @@ impl Module {
             funcs: Vec::new(),
             func_order: Vec::new(),
             globals: Vec::new(),
+            global_order: Vec::new(),
             aliases: Vec::new(),
             comdats: Vec::new(),
             comdat_names: HashMap::new(),
@@ -490,6 +497,7 @@ impl Module {
             align: None,
             md: Vec::new(),
         });
+        self.global_order.push(id);
         id
     }
 
@@ -530,6 +538,24 @@ impl Module {
         let gv = &mut self.globals[g.index()];
         gv.value_type = value_type;
         gv.init = None;
+    }
+
+    /// Give global `g` value type `value_type`, clear its initializer and
+    /// move it to the end of the print order: clang `GetOrCreateLLVMGlobal`
+    /// replaces a declaration whose type differs from the definition's
+    /// initializer by a new global appended to the module (pointers are
+    /// opaque, so existing uses stay valid). Ids are unchanged.
+    pub fn retype_global_to_end(&mut self, g: GlobalId, value_type: TypeId) {
+        self.set_global_value_type(g, value_type);
+        if let Some(i) = self.global_order.iter().position(|&x| x == g) {
+            let _ = self.global_order.remove(i);
+            self.global_order.push(g);
+        }
+    }
+
+    /// The global variables in print order.
+    pub(crate) fn ordered_globals(&self) -> impl Iterator<Item = &GlobalVar> {
+        self.global_order.iter().map(|&g| &self.globals[g.index()])
     }
 
     /// Attach metadata to a global variable (`, !dbg !N`).

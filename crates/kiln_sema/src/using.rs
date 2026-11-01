@@ -797,6 +797,9 @@ impl Sema<'_, '_> {
             return None;
         };
         self.mark_type_referenced(td);
+        // A scoped member enumeration of a class template specialization
+        // is defined when first required ([temp.inst]/3).
+        self.require_member_enum(e, name_loc);
         let ename = self.ast.decls.get(e).name();
         let h = DeclHead::new(self.ctx, ename, name_loc);
         let Some(def) = self.ast.definition(e) else {

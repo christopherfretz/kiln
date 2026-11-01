@@ -217,3 +217,61 @@ fn missing_tools() {
     );
     assert!(!d.join("add.o").exists());
 }
+
+/// Functions print in clang's order (`spec/codegen.md` "Function order"):
+/// creation order, a replacing base-object constructor taking the place of
+/// the complete-object declaration it replaces, deferred inline and
+/// template definitions after their first use. Two compilations print the
+/// same text, and the order matches clang 19 when it is installed.
+#[test]
+fn function_order_is_stable() {
+    const SRC: &str = "struct S { S(); ~S(); int v = 1; };\n\
+                       template <class T> T twice(T t) { return t + t; }\n\
+                       int use() { S s; return twice(s.v) + twice(2L); }\n\
+                       inline S::S() {}\n\
+                       S::~S() {}\n\
+                       static int helper() { return 3; }\n\
+                       int later() { return helper() + twice(1u); }\n";
+    const ORDER: [&str; 9] = [
+        "_Z3usev",
+        "_ZN1SC2Ev",
+        "_Z5twiceIiET_S0_",
+        "__gxx_personality_v0",
+        "_Z5twiceIlET_S0_",
+        "_ZN1SD2Ev",
+        "_Z5laterv",
+        "_ZL6helperv",
+        "_Z5twiceIjET_S0_",
+    ];
+    fn order(ll: &str) -> Vec<String> {
+        ll.lines()
+            .filter(|l| l.starts_with("define ") || l.starts_with("declare "))
+            .filter_map(|l| l.split('@').nth(1)?.split('(').next().map(str::to_owned))
+            .collect()
+    }
+    let d = scratch("order");
+    std::fs::write(d.join("order.cpp"), SRC).unwrap();
+    let args = ["-S", "-emit-llvm", "-o", "-", "--target=aarch64-unknown-linux-gnu", "order.cpp"];
+    let a = kiln_in(&d, &args);
+    assert_eq!((a.status.code(), text(&a.stderr).as_str()), (Some(0), ""));
+    let b = kiln_in(&d, &args);
+    assert_eq!(text(&a.stdout), text(&b.stdout), "two compilations differ");
+    assert_eq!(order(&text(&a.stdout)), ORDER);
+    if have("clang++-19") {
+        let c = Command::new("clang++-19")
+            .args([
+                "-std=c++26",
+                "-S",
+                "-emit-llvm",
+                "-o",
+                "-",
+                "--target=aarch64-unknown-linux-gnu",
+            ])
+            .arg("order.cpp")
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert_eq!(c.status.code(), Some(0), "{}", text(&c.stderr));
+        assert_eq!(order(&text(&c.stdout)), ORDER, "clang's order changed");
+    }
+}
