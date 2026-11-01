@@ -299,6 +299,7 @@ impl Sema<'_, '_> {
                 let at = self.ast.decls.get(f).loc();
                 self.mark_base_and_member_dtors_referenced(at, class);
                 self.check_destructor_delete(f, class);
+                self.mark_vtable_used(class, loc);
                 true
             }
         };
@@ -404,6 +405,10 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_ctor_inits(ctor, &info.out);
             self.mark_base_and_member_dtors_referenced(loc, class);
         }
+        // [basic.def.odr]/8: a constructor definition uses the vtable (at
+        // the use requiring an implicit definition).
+        let use_loc = self.synth.last().filter(|c| c.member == ctor).map_or(loc, |c| c.loc);
+        self.mark_vtable_used(class, use_loc);
         had_error
     }
 
@@ -573,6 +578,13 @@ impl Sema<'_, '_> {
             let Some(init) = self.default_member_init(field, info.ctor, loc) else {
                 return true;
             };
+            // Its immediate invocations are evaluated here
+            // ([expr.const]/16; clang's rebuilt `CXXDefaultInitExpr`).
+            let ctor = info.ctor;
+            if !self.in_template() && !self.is_consteval_kind(ctor) {
+                let escalating = self.is_immediate_escalating(ctor).then_some(ctor);
+                self.check_default_use(field, loc, escalating, true);
+            }
             info.out.push(CtorInit {
                 target: target.index(),
                 kind,
@@ -963,7 +975,7 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 self.mark_function_referenced(m, loc);
-                let args = self.ctor_args(am, call.args, call.narrowing)?;
+                let args = self.ctor_args(am, call.args, call.narrowing, loc)?;
                 let zeroing = call.info.zeroing || call.value_init && !self.is_user_provided(m);
                 let info = ConstructInfo { zeroing, ..call.info };
                 let e = match call.temp_end {
@@ -1123,12 +1135,14 @@ impl Sema<'_, '_> {
     /// The arguments of a call of constructor `m` with `args`: each
     /// converted to its parameter's type (copy-initialization,
     /// [expr.call]/7; checked for narrowing if `narrowing`), then the
-    /// default arguments, then the variadic arguments promoted.
+    /// default arguments (used at the construction `loc`), then the
+    /// variadic arguments promoted.
     pub(crate) fn ctor_args(
         &mut self,
         m: DeclId,
         args: &[ExprId],
         narrowing: bool,
+        loc: Loc,
     ) -> Option<Vec<ExprId>> {
         let params = self.param_decls(m);
         let mut out = Vec::new();
@@ -1152,13 +1166,11 @@ impl Sema<'_, '_> {
                 let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) else { break };
                 let x = *self.ast.exprs.get(d);
                 let used = self.ctx;
-                out.push(self.builder().default_arg(
-                    p,
-                    used,
-                    x.ty(),
-                    x.value_category(),
-                    Loc::INVALID,
-                ));
+                let arg =
+                    self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
+                // Used where the construction is ([expr.const]/16).
+                self.note_default_use(arg, p, loc);
+                out.push(arg);
             }
         }
         Some(out)

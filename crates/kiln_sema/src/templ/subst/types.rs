@@ -297,6 +297,24 @@ impl Substituter<'_, '_, '_> {
                 let e = self.ty(e, loc)?;
                 Ok(self.sema.ast.types.complex(e))
             }
+            TypeView::Atomic(v) => {
+                let v = self.ty(v, loc)?;
+                self.sema.act_on_atomic_type(v, loc).ok_or(SubstFail)
+            }
+            // [temp.inst] for clang's vector types (spec/types.md §1).
+            TypeView::Vector { elem, count, kind } => {
+                let e = self.ty(elem, loc)?;
+                Ok(self.sema.ast.types.vector(e, count, kind))
+            }
+            TypeView::DependentVector { elem, size: ExprOperand::Expr(s), kind } => {
+                let e = self.ty(elem, loc)?;
+                // Diagnosed at the size operand (clang: at the attribute,
+                // whose location the type does not keep).
+                let at = self.sema.begin_loc(s);
+                let s = self.expr(s)?;
+                let v = self.sema.build_vector_type(e, s, kind, at);
+                if self.sema.is_error_type(v) { Err(SubstFail) } else { Ok(v) }
+            }
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
                 let n = self.nns(nns, loc)?;
                 let args = self.args(args, loc)?;

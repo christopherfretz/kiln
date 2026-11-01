@@ -12,7 +12,7 @@
 
 use kiln_ast::consts::{ConstStore, PrintOptions, Scalar};
 use kiln_ast::types::RecordLayout;
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{Budget, EvalContext, EvalFailure, Oven, SemaBridge, Subobject, SubobjectId};
 use kiln_source::{Loc, Span};
@@ -60,6 +60,12 @@ impl SemaBridge for Bridge<'_, '_, '_> {
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout {
         let s = &mut *self.sema;
         kiln_abi::ensure_layout(&mut s.ast, record, &s.abi)
+    }
+
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32) {
+        let s = &*self.sema;
+        crate::target::size_align(&s.ast, ty, &s.abi)
+            .map_or((0, 1), |(size, align)| (size, u32::try_from(align).unwrap_or(1)))
     }
 
     // Final overriders and subobject graphs are computed on demand and

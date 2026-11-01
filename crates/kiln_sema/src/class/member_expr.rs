@@ -49,6 +49,9 @@ pub(crate) struct MemberRef {
     pub(crate) error: bool,
     /// Named by a qualified-id (only `&C::m` forms a pointer to member).
     pub(crate) qualified: bool,
+    /// Where the qualified-id begins, when `e` is a `MemberExpr` (the
+    /// `DeclRefExpr` of `&C::m` begins at its qualifier).
+    pub(crate) begin: Option<Loc>,
 }
 
 const CV: Quals = Quals::CV;
@@ -114,7 +117,8 @@ impl Sema<'_, '_> {
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
             let e = self.member_of_object(this, obj_ty, class, true, d, shadow, nns, loc);
             if qualified && !self.is_err_expr(e) {
-                self.member_refs.insert(e, MemberRef { decl: d, error: false, qualified });
+                self.member_refs
+                    .insert(e, MemberRef { decl: d, error: false, qualified, begin: None });
             }
             return e;
         }
@@ -132,7 +136,7 @@ impl Sema<'_, '_> {
         });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         let error = self.unevaluated == 0 || self.kind_of(d) == DeclKind::CXXMethod;
-        self.member_refs.insert(e, MemberRef { decl: d, error, qualified });
+        self.member_refs.insert(e, MemberRef { decl: d, error, qualified, begin: None });
         e
     }
 
@@ -699,6 +703,10 @@ impl Sema<'_, '_> {
         }
         let n = *self.ast.exprs.get(x);
         let (call_callee, method, fn_ty) = match n.kind() {
+            ExprKind::MemberExpr if self.has_explicit_object(self.ast.exprs.decl(x)) => {
+                let m = self.ast.exprs.decl(x);
+                return Some(self.explicit_object_call(x, m, args, braced, loc, rparen));
+            }
             ExprKind::MemberExpr => {
                 let m = self.ast.exprs.decl(x);
                 self.check_pure_virtual_call_in_cdtor(x, m);
@@ -755,6 +763,59 @@ impl Sema<'_, '_> {
             Some(m) => self.check_immediate_invocation(call, m, None),
             None => call,
         })
+    }
+
+    /// `obj.f(args)` for an explicit object member function `f` named by
+    /// the member access `x` ([over.match.funcs.general]/4, P0847): an
+    /// ordinary call of `f` whose first argument is the object expression
+    /// (clang's `BuildCallToMemberFunction` with
+    /// `isExplicitObjectMemberFunction`).
+    fn explicit_object_call(
+        &mut self,
+        x: ExprId,
+        m: DeclId,
+        args: &[ExprId],
+        braced: &mut [Option<InitList>],
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let n = *self.ast.exprs.get(x);
+        let base = self.ast.exprs.operand(x);
+        let obj = if n.has(ExprFlags::ARROW) {
+            let at = self.begin_loc(base);
+            self.builtin_unary(UnaryOp::Deref, base, at)
+        } else {
+            base
+        };
+        let mut kids = vec![obj];
+        kids.extend_from_slice(args);
+        let fn_ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
+        // The callee names the member function with no implicit object
+        // (not an implicit member access, [expr.prim.id.general]/4).
+        let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
+        let r = self.builder().decl_ref(m, fn_ty, n.loc(), None, nou, ExprFlags::NONE);
+        if self.unevaluated == 0 {
+            self.mark_function_referenced(m, n.loc());
+        } else {
+            self.exc_spec_needed(m, n.loc());
+        }
+        let Some(proto) = self.sugared_proto(fn_ty) else {
+            return self.recover_err(&kids, loc);
+        };
+        let f = conv::decay(self, r);
+        let mut all_braced = Vec::with_capacity(braced.len() + 1);
+        all_braced.push(None);
+        all_braced.extend(braced.iter_mut().map(Option::take));
+        let named = Some(CallCallee { decl: m, overloadable: false });
+        let conv_args =
+            self.convert_call_args(named, r, &kids, &mut all_braced, &proto, loc, rparen);
+        let Some(conv_args) = conv_args else {
+            return self.recover_err(&kids, loc);
+        };
+        let (ty, vk) = self.call_result(proto.ret(), loc);
+        let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);
+        let call = self.maybe_bind_temporary(call);
+        self.check_immediate_invocation(call, m, Some(r))
     }
 
     /// [class.cdtor]/4 (spec/sema-class.md §4.11, clang
@@ -970,7 +1031,11 @@ impl Sema<'_, '_> {
         } else {
             let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
             let at = self.eloc(e);
-            self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE)
+            let x = self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE);
+            if let Some(b) = r.begin {
+                let _ = self.ast.templates.expr_begin.insert(x, b);
+            }
+            x
         };
         if self.kind_of(d) == DeclKind::CXXMethod {
             let at = self.eloc(e);
@@ -982,8 +1047,14 @@ impl Sema<'_, '_> {
             // [expr.const]/18: `&C::f` of an immediate member function.
             self.note_immediate_ref(operand, d);
         }
-        let class_ty = self.tag_type(class).ty();
-        let mp = self.ast.types.member_pointer(declared, class_ty);
+        // [expr.unary.op]/3.1: `&C::f` of an explicit object member
+        // function is an ordinary pointer to function.
+        let mp = if self.has_explicit_object(d) {
+            self.ast.types.pointer_to(declared)
+        } else {
+            let class_ty = self.tag_type(class).ty();
+            self.ast.types.member_pointer(declared, class_ty)
+        };
         Some(self.builder().unary(UnaryOp::AddrOf, operand, mp, loc, ExprFlags::CANNOT_OVERFLOW))
     }
 

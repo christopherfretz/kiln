@@ -646,6 +646,8 @@ diag_ids! {
     sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";
     sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
     note_immediate_function_reason = Note (4) "'{0}' is an immediate function because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} function '{3}'{1:| and that call is not a constant expression}";
+    note_immediate_default_init_reason = Note (5) "'{0}' is an immediate {1:function|constructor} because the default initializer of '{2}' contains a call to {3:an immediate|a consteval} function '{4}' and that call is not a constant expression";
+    note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
     sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
     sema_block_extern_init = Error (0) "declaration of block scope identifier with linkage cannot have an initializer";
     sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";
@@ -682,6 +684,12 @@ diag_ids! {
     sema_alignment_not_power_of_two = Error (0) "requested alignment is not a power of 2";
     sema_alignas_underaligned = Error (2) "requested alignment is less than minimum alignment of {0} for type {1}";
     sema_alignment_too_big = Error (1) "requested alignment must be {0} bytes or smaller";
+    sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";
+    sema_vector_zero_size = Error (0) "zero vector size";
+    sema_vector_size_too_large = Error (0) "vector size too large";
+    sema_vector_size_not_multiple = Error (0) "vector size not an integral multiple of component size";
+    sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";
+    sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
     sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
     sema_static_assert_failed = Error (0) "static assertion failed";
     sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";
@@ -872,6 +880,12 @@ diag_ids! {
     sema_ambiguous_member_subobjects = Error (3) "non-static member '{0}' found in multiple base-class subobjects of type {1}:{2}";
     note_ambiguous_member_found = Note (0) "member found by ambiguous name lookup";
     sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
+    sema_explicit_object_this = Error (0) "invalid use of 'this' in a function with an explicit object parameter";
+    sema_explicit_object_param_nonmember = Error (1) "an explicit object parameter cannot appear in a {0:static|virtual|non-member} function";
+    sema_explicit_object_param_not_first = Error (0) "an explicit object parameter can only appear as the first parameter of the function";
+    sema_explicit_object_param_qualifier = Error (1) "explicit object member function cannot have '{0}' qualifier";
+    sema_explicit_object_param_default = Error (0) "the explicit object parameter cannot have a default argument";
+    sema_explicit_object_param_pack = Error (0) "the explicit object parameter cannot be a function parameter pack";
     sema_mutable_const = Error (0) "'mutable' and 'const' cannot be mixed";
     sema_mutable_reference = Error (0) "'mutable' cannot be applied to references";
     sema_mutable_function = Error (0) "'mutable' cannot be applied to functions";
@@ -1099,6 +1113,7 @@ diag_ids! {
     sema_typename_nested_not_found = Error (2) "no type named '{0}' in {1}";
     sema_pack_expansion_without_packs = Error (0) "pack expansion does not contain any unexpanded parameter packs";
     sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack {1}";
+    sema_atomic_specifier_bad_type = Error (2) "_Atomic cannot be applied to {0:array|function|reference|atomic|qualified} type {1}";
     sema_not_a_template = Error (1) "{0} is not a template";
     parse_template_args_expected_gt = Error (0) "expected '>'";
     sema_fold_packs_both_sides = Error (0) "binary fold expression has unexpanded parameter packs in both operands";

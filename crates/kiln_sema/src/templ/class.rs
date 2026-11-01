@@ -8,6 +8,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
+use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeView};
 use kiln_ast::{DeclId, QualType};
@@ -589,6 +590,7 @@ impl Sema<'_, '_> {
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let outer = self.inst_context_pairs(parent);
         self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &outer));
+        self.replay_dependent_access(def, spec);
         self.pop_inst_frame();
         self.ast.definition(spec).is_some()
     }
@@ -622,6 +624,7 @@ impl Sema<'_, '_> {
         }
         let parent = self.ast.decls.get(r).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(parent, |s| s.instantiate_class_body(r, def, &args, &outer));
+        self.replay_dependent_access(def, r);
         self.pop_inst_frame();
         self.ast.definition(r).is_some()
     }
@@ -693,6 +696,7 @@ impl Sema<'_, '_> {
             sub.map_contexts(&pairs);
             sub.function_def(f, pdef, body);
         });
+        self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
     }
 
@@ -1114,18 +1118,48 @@ impl Substituter<'_, '_, '_> {
     /// qualifier substituted (WP-114).
     fn member_using(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
         let pnns = self.sema.ast.using_qualifier(m).ok_or(SubstFail)?;
-        let name = self.sema.ast.decls.get(m).name();
-        let (name, inheriting) = match name.as_ident() {
-            Some(n) => (n, self.sema.nns_last_name(pnns) == Some(n)),
-            None => (self.sema.nns_last_name(pnns).ok_or(SubstFail)?, true),
+        let dn = self.sema.ast.decls.get(m).name();
+        // An operator- or conversion-function-id (`using B<T>::operator=;`)
+        // is kept, a conversion's target type substituted; a constructor
+        // name (or the base's own name) inherits constructors.
+        let (name, inheriting) = match self.sema.ast.names.view(dn) {
+            DeclNameView::Identifier(n) => (dn, self.sema.nns_last_name(pnns) == Some(n)),
+            DeclNameView::Operator(_) | DeclNameView::LiteralOperator(_) => (dn, false),
+            DeclNameView::Conversion(t) => {
+                let t = self.ty(t, loc)?;
+                let t = self.sema.ast.types.canonical(t);
+                (self.sema.ast.names.conversion(t), false)
+            }
+            _ => (DeclName::ident(self.sema.nns_last_name(pnns).ok_or(SubstFail)?), true),
         };
-        let nns = self.nns(pnns, loc)?;
-        if self.nns_still_dependent(nns) {
-            return self.unimplemented("dependent using-declarations in templates", loc);
+        let packed = self
+            .sema
+            .ast
+            .types
+            .nns_flags(pnns)
+            .contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK);
+        let nnss = if packed {
+            // `using Bases::operator()...;` ([temp.variadic]/5): one
+            // using-declarator per element.
+            match self.expand_pattern(|s| s.nns(pnns, loc))? {
+                crate::templ::pack::Expansion::Elements(v) => v,
+                crate::templ::pack::Expansion::Unexpanded(_) => {
+                    return self.unimplemented("this using-declaration pack expansion", loc);
+                }
+            }
+        } else {
+            vec![self.nns(pnns, loc)?]
+        };
+        let mut last = None;
+        for nns in nnss {
+            if self.nns_still_dependent(nns) {
+                return self.unimplemented("dependent using-declarations in templates", loc);
+            }
+            let ctx = self.nns_context(nns, loc)?;
+            let q = crate::using::Qualifier { ctx, nns, loc };
+            last = self.sema.instantiate_class_using(q, name, loc, inheriting).or(last);
         }
-        let ctx = self.nns_context(nns, loc)?;
-        let q = crate::using::Qualifier { ctx, nns, loc };
-        Ok(self.sema.instantiate_class_using(q, name, loc, inheriting))
+        Ok(last)
     }
 
     /// Replays member `m` of the pattern class (§4.6).

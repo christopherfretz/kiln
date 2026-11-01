@@ -1082,6 +1082,11 @@ impl Sema<'_, '_> {
             // specification is resolved from the body.
             self.define_cmp_on_use(f, loc);
             self.resolve_exception_spec(f, loc);
+        } else {
+            // Any other unresolved specification (an implicit special
+            // member's, [except.spec]/7) is resolved before the callee's
+            // type is taken.
+            self.resolve_exc_for_type(f, loc);
         }
         // [dcl.spec.auto.general]/12: a specialization's return type is
         // deduced by instantiating its definition.

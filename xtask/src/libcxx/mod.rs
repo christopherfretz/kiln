@@ -36,7 +36,8 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
   --compiler <path>      kiln binary (default: cargo build -p kiln_driver)
   --filter <substring>   only tests whose path contains <substring>
   --list                 list the selected tests and their pre-run verdict
-  -j, --jobs <n>         tests in parallel (default 2)
+  -j, --jobs <n>         tests in parallel (default 2; an upper bound under a
+                         MAKEFLAGS jobserver, see spec/harness.md)
   --timeout <secs>       test binary timeout (default 30; compiles: 120)
   --mem-limit <MiB>      address-space cap per process (default 8192; 0: none)
   --report <file.md>     write the status page's generated region to <file.md>
@@ -379,11 +380,12 @@ fn execute(opts: &Options) -> Result<bool, String> {
         })
         .collect();
     println!(
-        "xtask libcxx: {} tests from {} with {} (-j {})",
+        "xtask libcxx: {} tests from {} with {} (-j {}{})",
         jobs.len(),
         test_root.display(),
         kiln.display(),
-        opts.jobs
+        opts.jobs,
+        crate::jobs::global().describe().map_or_else(String::new, |d| format!(", jobserver {d}")),
     );
     let results = run_all(&cfg, &jobs, opts.jobs, opts.verbose);
     if !opts.keep {

@@ -85,8 +85,16 @@ fn class_member_qualifiers() {
 #[test]
 fn class_explicit_object_parameter() {
     let p = parse("struct S { void s(this S self); void t(this auto &&); };");
-    assert_parsed(&p);
-    p.assert_diag("explicit object parameters is not supported yet");
+    p.assert_clean();
+    p.assert_dump("ParmVarDecl");
+}
+
+/// [dcl.fct]/3: `this` followed by a decl-specifier starts a parameter
+/// list, not a direct-initializer, also at namespace scope.
+#[test]
+fn explicit_object_parameter_at_namespace_scope() {
+    let p = parse("void f(this int);");
+    p.assert_diag("1:8 error: an explicit object parameter cannot appear in a non-member function");
 }
 
 /// [class.mem.general]: a member declarator has no direct-initializer, so

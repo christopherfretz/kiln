@@ -61,6 +61,10 @@ impl AttrKind {
     /// (clang's `BuiltinAttr`): `a` = its builtin id
     /// ([`crate::decl::builtin`]). Always implicit.
     pub const BUILTIN: AttrKind = AttrKind(89);
+    /// Clang `ext_vector_type(N)` on a typedef: `a` = the element-count
+    /// `ExprId`. Like `VECTOR_SIZE`, it is consumed into the declared type
+    /// (a `Vector` / `DependentVector`) and never attached to the decl.
+    pub const EXT_VECTOR_TYPE: AttrKind = AttrKind(90);
     /// `clang::using_if_exists` on a using-declaration (WP-062).
     pub const USING_IF_EXISTS: AttrKind = AttrKind(100);
 }

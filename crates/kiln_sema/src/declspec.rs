@@ -428,6 +428,9 @@ pub struct ParamInfo {
     /// so that it is in scope in the rest of the declarator
     /// ([basic.scope.param]); the function adopts it.
     pub decl: Option<DeclId>,
+    /// `this` before the parameter-declaration: an explicit object
+    /// parameter ([dcl.fct]/6, P0847).
+    pub explicit_object: Option<Loc>,
 }
 
 /// The default argument of a [`ParamInfo`] ([dcl.fct.default]).

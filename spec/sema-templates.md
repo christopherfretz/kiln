@@ -847,9 +847,14 @@ Later uses of it are silent.
   template. In the pattern (or a partial specialization) of `X`, a
   member access befriended through a specialization of `X` is accepted:
   whether the instantiation is the befriended one is decided then
-  (clang's dependent access result; kiln does not re-check a
-  non-dependent access at instantiation, a known gap shared with friend
-  function specializations).
+  (clang's dependent access result). Such a check is recorded against the
+  innermost pattern function or class (`Sema::dependent_access`) and
+  re-run in each instantiation of it (a class at the end of its
+  instantiation, a member function after its body; clang
+  `PerformDependentDiagnostics`, WP-151); an error the instantiation
+  already reported is not repeated. Known gaps: function template
+  specializations and lambdas are not replayed, and access of type names
+  is not checked at all (spec/sema-class.md open issue 8).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 

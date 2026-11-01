@@ -18,7 +18,7 @@ that `expect: ast` goldens compare without special cases.
 | closure type | §3: call operator, conversion to pointer to function, static invoker, deleted special members, linkage, mangling numbers | |
 | captures | §4: by copy, by reference, init-captures (`= expr`), `this`, `*this`, implicit capture through `=` / `&`, nested lambdas | capture packs (`xs...`, `...xs = e`) |
 | generic | §5: `auto` parameters, template-parameter-lists, constraints, conversion-function templates | |
-| constant evaluation | §7: calls, captures, conversions, `this`/`*this` | `consteval` lambdas (immediate functions are not implemented) |
+| constant evaluation | §7: calls, captures, conversions, `this`/`*this`; `consteval` and escalated lambdas (§3.2, sema.md §5.10) | escalation of a generic lambda's conversion per specialization |
 | templates | §9: lambdas in templates and generic lambdas in templates | capture packs, lambdas as template arguments |
 | codegen | §8: IR-exact against clang for the corpus in `tests/codegen/lambda_*.cpp` | |
 
@@ -91,7 +91,11 @@ A lambda without a capture-default has ([expr.prim.lambda.closure]/8):
   constexpr only if `constexpr` was written.
 
 Both are immediate functions if the call operator is
-([expr.prim.lambda.closure]/10-11).
+([expr.prim.lambda.closure]/10-11): `consteval` when it is written, and
+escalated (`FnSpec::escalated`) when the call operator escalated
+(WP-137). clang 19 rejects every use of a consteval lambda's conversion;
+kiln follows the standard (`expr.prim.lambda/consteval-conversion.cpp`
+is `xfail(clang)`).
 
 Neither has a body. `Ast::closure_thunk(d)` classifies them as
 `ClosureThunk::Conversion { target }` (the invoker, or the call operator

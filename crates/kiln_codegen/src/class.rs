@@ -1484,6 +1484,13 @@ impl Cg<'_> {
             && self.ast.decls.function(d).is_some_and(|f| f.spec.storage() == FnStorage::Static)
     }
 
+    /// `d` is an explicit object member function ([dcl.fct]/6): called
+    /// like a non-member function, the object being its first argument.
+    pub(crate) fn is_explicit_object_method(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).kind() == DeclKind::CXXMethod
+            && self.ast.decls.function(d).is_some_and(|f| f.spec.has_explicit_object())
+    }
+
     /// `e` is `this` (through parentheses).
     pub(crate) fn is_this_expr(&self, e: ExprId) -> bool {
         let ast = self.ast;

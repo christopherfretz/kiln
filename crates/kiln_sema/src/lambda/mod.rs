@@ -292,6 +292,10 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+        if let Some(l) = params.iter().find_map(|p| p.explicit_object) {
+            // P0847 lambdas (`[](this auto& self)`): a gap.
+            self.unsupported("explicit object parameters in a lambda", l);
+        }
         self.create_params(f, &params, &defaults);
         let mut attrs = specs.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -617,7 +621,12 @@ impl Sema<'_, '_> {
             .function(call_op)
             .is_some_and(|x| x.spec.constexpr_kind() == ConstexprKind::Consteval);
         let kind = if consteval { ConstexprKind::Consteval } else { ConstexprKind::Constexpr };
-        let spec = FnSpec::new().with_inline(true).with_constexpr_kind(kind);
+        // P2564 / [expr.prim.lambda.closure]/10: an escalated call
+        // operator makes the conversion immediate too (clang 19 marks only
+        // the invoker and rejects every use of the conversion instead).
+        let escalated = self.ast.decls.function(call_op).is_some_and(|x| x.spec.escalated());
+        let spec =
+            FnSpec::new().with_inline(true).with_constexpr_kind(kind).with_escalated(escalated);
         let h = DeclHead::new(closure, name, lbracket)
             .flags(DeclFlags::IMPLICIT)
             .access(Access::Public);
@@ -640,9 +649,8 @@ impl Sema<'_, '_> {
         } else if explicit_constexpr {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr);
         }
-        // P2564: an escalated call operator makes the invoker immediate
-        // too (clang marks only the invoker, not the conversion).
-        if self.ast.decls.function(call_op).is_some_and(|x| x.spec.escalated()) {
+        // P2564: and the invoker.
+        if escalated {
             spec = spec.with_escalated(true);
         }
         let sym = self.ast.symbols().intern("__invoke");

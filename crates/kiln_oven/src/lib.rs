@@ -52,7 +52,7 @@ use std::time::Instant;
 pub use kiln_ast::class::{Subobject, SubobjectId};
 use kiln_ast::consts::ConstStore;
 use kiln_ast::types::RecordLayout;
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
@@ -197,6 +197,14 @@ pub trait SemaBridge {
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>;
     /// The layout of a complete record (via `kiln_abi`).
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout;
+    /// `(size, align)` in bytes of a type the Oven has no value model
+    /// for (a vector type: spec/oven.md "Interface"), via `kiln_abi`, so
+    /// `sizeof`/`alignof` agree with layout. The default is unknown
+    /// (`(0, 1)`).
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32) {
+        let _ = ty;
+        (0, 1)
+    }
     /// The final overrider of virtual function `method` called on the
     /// subobject `at` of an object whose most-derived class is
     /// `most_derived`, with the subobject the overrider is a member of
