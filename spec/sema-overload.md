@@ -181,7 +181,11 @@ operator". Failure: "no matching function for call to object of type 'F'" /
    the M2 built-in path runs. `= [] () ->` resolve only for a class left
    operand.
 2. **Member candidates**: qualified lookup of `operator@` in `T1` if complete
-   or being defined.
+   or being defined (also for `()`, [over.call.object], and for each
+   reversed/rewritten form). An ambiguous lookup ([class.member.lookup]/6)
+   is diagnosed at the operator ("member 'operator()' found in multiple
+   base classes of different types", as clang's `~LookupResult`), and every
+   declaration found stays a candidate (WP-152).
 3. **Non-member candidates**: unqualified lookup of `operator@` from the
    expression's context, skipping class scopes (/3.2), plus ADL over all
    operands.
