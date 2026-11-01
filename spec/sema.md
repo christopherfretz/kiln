@@ -1341,8 +1341,9 @@ for them.
     (it is checked on instantiation, with the instantiation note), and
     an `[[assume(...)]]` argument is checked like any other expression.
   - Unlike clang, the warnings are emitted at once, not deferred to the
-    end of the function and dropped when unreachable (`DiagIfReachable`),
-    and a macro-argument location gets no `expanded from macro` note.
+    end of the function and dropped when unreachable (`DiagIfReachable`).
+    The warning carries the expression's range, so a macro-argument
+    location gets clang's `expanded from macro` note (spec/diag.md §8.4).
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
