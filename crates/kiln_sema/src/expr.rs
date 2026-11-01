@@ -2969,6 +2969,7 @@ impl Sema<'_, '_> {
             let arg = self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
             let call_begin = self.begin_loc(callee);
             self.note_default_arg_use(arg, p, call_begin);
+            self.note_default_use(arg, p, call_begin);
             conv_args.push(arg);
         }
         Some(conv_args)

@@ -472,6 +472,7 @@ impl Sema<'_, '_> {
         if self.field_has_nsdmi(f) {
             let ctx = self.context();
             if let Some(e) = self.default_member_init(f, ctx, at) {
+                self.note_default_use(e, f, at);
                 return e;
             }
             return self.recover(fty, &[], at);
