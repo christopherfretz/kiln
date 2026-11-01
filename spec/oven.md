@@ -368,7 +368,7 @@ literal is one instruction and one step, not an interpreted loop.
   | `rotateleft8`..`64`, `rotateright8`..`64` | yes | `INT_OP`/`ROTL`/`ROTR`: amount (unsigned) modulo the width |
   | `bcmp` | yes | `MEMCMP` sub 0 (as `memcmp`; the unsupported note names `'__builtin_bcmp'`) |
   | `wmemcpy`, `wmemmove` | yes | `MEMCPY` with `WCHAR` (and `MOVE`): the count is in elements, no size-multiple check; notes say `'wmemcpy'`/`'wmemmove'` |
-  | `memset`, `mempcpy` | no | trap "subexpression not valid in a constant expression" |
+  | `memset`, `mempcpy` | no | trap "subexpression not valid in a constant expression" (clang 19 rejects both; WP-161 left them unevaluated, since an evaluating extension would need a `-fkiln-` opt-in) |
   | `abs`, `labs`, `llabs` (WP-144) | no | trap, as above |
 
   The notes take the builtin's name from the call's callee

@@ -225,6 +225,12 @@ passes `IcsOptions::EXPLICIT_REF_CONV` when its `ConvCtx` is direct. The
 from it fails). A class temporary's constructors stay non-explicit-only
 ([dcl.init.ref]/5.4.1 copy-initializes it). Copy-initialization keeps "no
 viable conversion" + "explicit conversion function is not a candidate".
+When the /5.4.1 source is not a class (`const B& b = 1`), clang's
+reference-init texts apply instead (WP-161): no usable constructor is
+"reference to type 'const B' could not bind to an rvalue of type 'int'"
+(`sema_reference_bind_failed`), an ambiguous one is "conversion from
+'int' to 'const F' is ambiguous" at the initializer, and a deleted one is
+"attempt to use a deleted function" (`DeletedAs::Use`).
 
 ### 2.7 [over.best.ics]/4 restrictions
 `IcsOptions::SUPPRESS_UDC`, passed by the nested resolution, forbids
@@ -824,7 +830,13 @@ Where the code differs from (or details) the design above:
   parenthesized or block-scope name, and a member, take clang's direct
   path ("cannot initialize a parameter of type …" + "passing argument to
   parameter here"). `(g)(1)` keeps its `ParenExpr` (`try_member_call`
-  likewise).
+  likewise). For the single-candidate overload path the argument's ICS
+  is computed as a candidate argument: a bad one (including a class
+  parameter whose converting constructor is explicit or missing) gives
+  "no matching function" with the `bad_conversion_detail` note, using
+  the Bad ICS's to-type (WP-161). The error is located at the callee's
+  begin, which for a qualified name is its nested-name-specifier
+  (`set_overload_begin`, `set_template_id_begin`).
 - **Newest-first order** (§13.1.1) is applied in `overload_name_ref`, which
   reverses unqualified function results, not in `lookup_name`: no other
   lookup consumer sees a changed order.

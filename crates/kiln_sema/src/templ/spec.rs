@@ -116,6 +116,8 @@ impl Sema<'_, '_> {
             TagForm::ExplicitSpec
         } else if self.take_template_head(qualifier).is_some() {
             TagForm::Partial
+        } else if self.templ.head_mismatch {
+            return Err(());
         } else {
             // [temp.expl.spec]/1: `template<>` is required.
             let d = self
@@ -266,9 +268,12 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_redefinition, name_loc)
                     .range(range)
                     .arg(self.partial_spec_name(p));
-                let d = self.note_prev(d, def, true);
+                let d = self.note_prev_partial_def(d, def);
                 self.emit(d);
                 return Err(());
+            }
+            if use_ == TagUse::Definition {
+                self.templ.partial_def_loc.insert(p, name_loc);
             }
             return Ok(p);
         }
@@ -307,7 +312,14 @@ impl Sema<'_, '_> {
         let name_loc = range.lo;
         let conv = self.check_template_args(tmpl, args, locs, name_loc)?;
         let types = &self.ast.types;
-        if !types.arg_list_flags(conv.canonical).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+        // A member template of a templated class has a dependent name
+        // (`Outer<T>::Inner`), so its non-dependent arguments are left to
+        // the deducibility check (clang's `Name.isDependent()` in
+        // `ActOnClassTemplateSpecialization`).
+        let dependent_name = self.ast.templates.param_list(head).depth > 0;
+        if !dependent_name
+            && !types.arg_list_flags(conv.canonical).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+        {
             let d = self
                 .diag(DiagId::sema_partial_spec_fully_specialized, name_loc)
                 .arg(self.decl_name(tmpl));
@@ -398,10 +410,11 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// `X<T *>`: how partial specialization `p` prints (its qualified
-    /// name and its arguments as written).
+    /// `X<T *>`: how partial specialization `p` prints as a diagnostic
+    /// argument (its unqualified name and its arguments as written, as
+    /// clang's `getNameForDiagnostic` without the `q` modifier).
     pub(crate) fn partial_spec_name(&self, p: DeclId) -> String {
-        let mut s = self.qualified_decl_name(p);
+        let mut s = self.unqualified_decl_name(p);
         if let Some((_, info)) = self.ast.partial_spec_info(p) {
             let names = crate::names::SemaNames::new(self);
             kiln_ast::types::write_arg_list(&self.ast.types, &names, info.args, &mut s);

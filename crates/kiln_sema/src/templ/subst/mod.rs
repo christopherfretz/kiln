@@ -79,6 +79,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// Variable initializers that failed to substitute (the variable is
     /// invalid, its declaration statement is not: clang keeps it).
     pub(crate) init_failures: u32,
+    /// The explicitly specified pack deduction may still extend
+    /// ([temp.arg.explicit]/9; clang's partially substituted pack), by
+    /// (depth, index): its length is a lower bound, checked against the
+    /// other packs of an expansion.
+    pub(crate) partial_pack: Option<(u16, u16)>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -106,6 +111,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             lambda_bodies: 0,
             stmt_failed: false,
             init_failures: 0,
+            partial_pack: None,
         }
     }
 
@@ -175,6 +181,9 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                     name: s.sema.decl_name(d),
                     depth: s.sema.ast.template_parm(d).map(|i| i.depth),
                     outer: false,
+                    partial: s.partial_pack.is_some()
+                        && s.sema.ast.template_parm(d).map(|i| (i.depth, i.index))
+                            == s.partial_pack,
                 },
                 None => PackName::default(),
             },
@@ -454,6 +463,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                             name: s.sema.decl_name(d),
                             depth: None,
                             outer: false,
+                            partial: false,
                         },
                         loc,
                     )?;
