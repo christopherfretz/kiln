@@ -17,6 +17,8 @@ use crate::module::{Cg, R, err};
 pub(crate) struct Scope {
     depth: Depth,
     le: usize,
+    /// The `CleanupDeactivationScope`'s `OldDeactivateCleanupStackSize`.
+    deferred: usize,
     lexical: bool,
     /// The enclosing `CurrentCleanupScopeDepth`.
     old_cur: Depth,
@@ -53,7 +55,14 @@ impl Cg<'_> {
         let depth = self.f.cl.depth();
         let old_cur = std::mem::replace(&mut self.f.cl.cur_scope, depth);
         let old_stack_save = std::mem::replace(&mut self.f.did_stack_save, false);
-        Scope { depth, le: self.f.cl.lifetime_extended.len(), lexical, old_cur, old_stack_save }
+        Scope {
+            depth,
+            le: self.f.cl.lifetime_extended.len(),
+            deferred: self.f.cl.deferred.len(),
+            lexical,
+            old_cur,
+            old_stack_save,
+        }
     }
 
     /// `RunCleanupsScope::requiresCleanups`.
@@ -61,11 +70,13 @@ impl Cg<'_> {
         self.f.cl.depth() != s.depth
     }
 
-    /// `ForceCleanup` (and the scope's destructor): pops the cleanups
-    /// pushed since `s` began, then pushes the lifetime-extended ones;
-    /// a lexical scope rescopes its labels.
+    /// `ForceCleanup` (and the scope's destructor): deactivates the
+    /// deferred cleanups (`CleanupDeactivationScope::ForceDeactivate`),
+    /// pops the cleanups pushed since `s` began, then pushes the
+    /// lifetime-extended ones; a lexical scope rescopes its labels.
     pub(crate) fn end_scope(&mut self, s: Scope) {
         let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
+        self.deactivate_deferred(s.deferred);
         self.pop_cleanup_blocks_le(s.depth, s.le);
         self.f.cl.cur_scope = s.old_cur;
         self.f.did_stack_save = s.old_stack_save;

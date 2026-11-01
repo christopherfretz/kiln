@@ -36,6 +36,13 @@ pub(crate) enum Cleanup {
     /// Destroys the constant-length array at `addr` of objects of class
     /// `record` (`emitDestroy` + `emitArrayDestroy`).
     ArrayDtor { addr: Addr, record: DeclId },
+    /// A [`Cleanup::Dtor`] (complete object) or, with `array`, a
+    /// [`Cleanup::ArrayDtor`] pushed inside a conditional branch at an
+    /// address that does not dominate the cleanup: the address is
+    /// reloaded from the `cond-cleanup.save` slot `slot`
+    /// (`DominatingValue<Address>::restore`); `ty`/`align` describe the
+    /// object.
+    SavedObject { slot: V, ty: LTy, align: u64, record: DeclId, array: bool },
     /// The destructor of an NRVO variable, skipped when the NRVO flag is
     /// set (`DestroyNRVOVariableCXX`).
     NrvoDtor { addr: V, record: DeclId, flag: V },
@@ -92,7 +99,7 @@ pub(crate) enum Saved {
 /// The operands of a [`Cleanup::IrregularPartialArray`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct IrregularPartialArray {
-    pub begin: V,
+    pub begin: Saved,
     pub end_slot: V,
     pub outer: LTy,
     pub depth: usize,
@@ -178,6 +185,9 @@ pub(crate) struct Scope {
     ext: bool,
     branch_afters: Vec<(Blk, u32)>,
     branches: Vec<Blk>,
+    /// `AuxillaryAllocas`: active-flag allocas erased, with their uses,
+    /// when the cleanup is popped without being emitted.
+    pub aux: Vec<V>,
 }
 
 impl Scope {
@@ -241,6 +251,10 @@ pub(crate) struct Cleanups {
     pub next_index: u32,
     /// `LifetimeExtendedCleanupStack`.
     pub lifetime_extended: Vec<(Cleanup, Option<Addr>)>,
+    /// `DeferredDeactivationCleanupStack`: cleanups deactivated when the
+    /// enclosing `RunCleanupsScope` ends, each with the placeholder
+    /// instruction standing for its dominating IP.
+    pub deferred: Vec<(Depth, V)>,
     /// `ExceptionSlot`.
     pub exn_slot: Option<V>,
     /// `EHSelectorSlot`.
@@ -363,87 +377,28 @@ impl Cg<'_> {
     /// `cleanup.cond` flag, cleared before the outermost conditional and
     /// set here, says it was reached (`initFullExprCleanup`).
     pub(crate) fn push_full_expr_cleanup(&mut self, c: Cleanup, normal: bool, eh: bool) {
-        let Some(&outer) = self.f.conds.first() else {
+        if self.f.conds.is_empty() {
             self.push_cleanup_kind(c, normal, eh);
             return;
-        };
-        let entry = self.f.fir.entry();
-        let needs_saving =
-            |cg: &Self, v: V| matches!(v, V::I(i) if cg.f.fir.inst_block(i) != Some(entry));
-        let c = match c {
-            Cleanup::FreeException { exn, saved: false } if needs_saving(self, exn) => {
-                let al = self.pref_align(LTy::PTR);
-                let slot = self.f.fir.alloca(LTy::PTR, al);
-                self.store(exn, slot, al, false);
-                Cleanup::FreeException { exn: slot, saved: true }
-            }
-            Cleanup::PartialArray { begin, end, elem, record }
-                if needs_saving(self, begin) || needs_saving(self, end) =>
-            {
-                // `pushRegularPartialArrayCleanup` inside a conditional
-                // branch (e.g. the elements of a nothrow `new[]`).
-                let save = |cg: &mut Self, v: V| {
-                    if !needs_saving(cg, v) {
-                        return Saved::Direct(CallArg::Scalar(v));
-                    }
-                    let al = cg.pref_align(LTy::PTR);
-                    let slot = cg.f.fir.alloca(LTy::PTR, al);
-                    cg.store(v, slot, al, false);
-                    Saved::Slot { slot, ty: LTy::PTR, align: al }
-                };
-                let begin = save(self, begin);
-                let end = save(self, end);
-                Cleanup::SavedPartialArray(Box::new(SavedPartialArray { begin, end, elem, record }))
-            }
-            Cleanup::Dtor { addr, .. } | Cleanup::ArrayDtor { addr: Addr { v: addr, .. }, .. }
-                if needs_saving(self, addr) =>
-            {
-                self.f.error.get_or_insert(crate::CodegenError {
-                    loc: None,
-                    msg: "a conditional temporary at a computed address is not supported yet"
-                        .into(),
-                });
-                c
-            }
-            Cleanup::IrregularPartialArray(ref p) if needs_saving(self, p.begin) => {
-                self.f.error.get_or_insert(crate::CodegenError {
-                    loc: None,
-                    msg: "a conditional array initialization at a computed address is not \
-                          supported yet"
-                        .into(),
-                });
-                c
-            }
-            Cleanup::NewDelete(mut nd) => {
-                // EnterNewDeleteCleanup: the pointer, the size, then the
-                // placement arguments.
-                let save = |cg: &mut Self, s: &mut Saved| match *s {
-                    Saved::Direct(CallArg::Scalar(v)) if needs_saving(cg, v) => {
-                        let ty = cg.f.fir.ty(&cg.m, v);
-                        let align = cg.pref_align(ty);
-                        let slot = cg.f.fir.alloca(ty, align);
-                        cg.store(v, slot, align, false);
-                        *s = Saved::Slot { slot, ty, align };
-                    }
-                    Saved::Direct(CallArg::Agg(_)) => {
-                        cg.f.error.get_or_insert(crate::CodegenError {
-                            loc: None,
-                            msg: "a conditional new-expression with a class placement argument is not supported yet"
-                                .into(),
-                        });
-                    }
-                    _ => {}
-                };
-                save(self, &mut nd.ptr);
-                save(self, &mut nd.size);
-                for (a, _) in &mut nd.placement {
-                    save(self, a);
-                }
-                Cleanup::NewDelete(nd)
-            }
-            c => c,
-        };
+        }
+        let c = self.save_cleanup_in_cond(c);
         self.push_cleanup_kind(c, normal, eh);
+        let flag = self.create_cleanup_active_flag();
+        self.init_full_expr_cleanup_with_flag(flag);
+    }
+
+    /// `initFullExprCleanupWithFlag` on the innermost cleanup.
+    pub(crate) fn init_full_expr_cleanup_with_flag(&mut self, flag: Addr) {
+        let s = self.f.cl.stack.last_mut().expect("cleanup scope");
+        s.active_flag = Some(flag);
+        s.test_flag = s.normal;
+        s.test_flag_eh = s.eh;
+    }
+
+    /// `createCleanupActiveFlag`: a `cleanup.cond` flag cleared before
+    /// the outermost conditional and set at the current location.
+    pub(crate) fn create_cleanup_active_flag(&mut self) -> Addr {
+        let outer = *self.f.conds.first().expect("in a conditional branch");
         let flag = self.f.fir.alloca(LTy::I1, 1);
         let f0 = V::C(self.m.const_bool(false));
         self.f.fir.insert_before_last(
@@ -453,10 +408,102 @@ impl Cg<'_> {
         );
         let t1 = V::C(self.m.const_bool(true));
         self.store(t1, flag, 1, false);
-        let s = self.f.cl.stack.last_mut().expect("cleanup scope");
-        s.active_flag = Some(Addr { v: flag, ty: LTy::I1, align: 1 });
-        s.test_flag = s.normal;
-        s.test_flag_eh = s.eh;
+        Addr { v: flag, ty: LTy::I1, align: 1 }
+    }
+
+    /// `saveValueInCond` of a value whose instruction is outside the
+    /// entry block (`DominatingLLVMValue::needsSaving`).
+    fn needs_saving(&self, v: V) -> bool {
+        let entry = self.f.fir.entry();
+        matches!(v, V::I(i) if self.f.fir.inst_block(i) != Some(entry))
+    }
+
+    /// `DominatingLLVMValue::save` of a pointer: a `cond-cleanup.save`
+    /// slot when `v` does not dominate the cleanup.
+    fn save_ptr(&mut self, v: V) -> Saved {
+        if !self.needs_saving(v) {
+            return Saved::Direct(CallArg::Scalar(v));
+        }
+        let al = self.pref_align(LTy::PTR);
+        let slot = self.f.fir.alloca(LTy::PTR, al);
+        self.store(v, slot, al, false);
+        Saved::Slot { slot, ty: LTy::PTR, align: al }
+    }
+
+    /// The `saveValueInCond` half of `pushFullExprCleanup` inside a
+    /// conditional branch: `c` with the values that do not dominate the
+    /// cleanup replaced by `cond-cleanup.save` slots.
+    pub(crate) fn save_cleanup_in_cond(&mut self, c: Cleanup) -> Cleanup {
+        match c {
+            Cleanup::FreeException { exn, saved: false } if self.needs_saving(exn) => {
+                let al = self.pref_align(LTy::PTR);
+                let slot = self.f.fir.alloca(LTy::PTR, al);
+                self.store(exn, slot, al, false);
+                Cleanup::FreeException { exn: slot, saved: true }
+            }
+            Cleanup::PartialArray { begin, end, elem, record }
+                if self.needs_saving(begin) || self.needs_saving(end) =>
+            {
+                // `pushRegularPartialArrayCleanup` inside a conditional
+                // branch (e.g. the elements of a nothrow `new[]`).
+                let begin = self.save_ptr(begin);
+                let end = self.save_ptr(end);
+                Cleanup::SavedPartialArray(Box::new(SavedPartialArray { begin, end, elem, record }))
+            }
+            Cleanup::Dtor { addr, record, base: false } if self.needs_saving(addr) => {
+                let ty = self.record_ty(record);
+                let al = self.pref_align(LTy::PTR);
+                let slot = self.f.fir.alloca(LTy::PTR, al);
+                self.store(addr, slot, al, false);
+                Cleanup::SavedObject { slot, ty, align: 1, record, array: false }
+            }
+            Cleanup::ArrayDtor { addr, record } if self.needs_saving(addr.v) => {
+                let al = self.pref_align(LTy::PTR);
+                let slot = self.f.fir.alloca(LTy::PTR, al);
+                self.store(addr.v, slot, al, false);
+                Cleanup::SavedObject { slot, ty: addr.ty, align: addr.align, record, array: true }
+            }
+            Cleanup::IrregularPartialArray(mut p) => {
+                if let Saved::Direct(CallArg::Scalar(v)) = p.begin {
+                    p.begin = self.save_ptr(v);
+                }
+                Cleanup::IrregularPartialArray(p)
+            }
+            Cleanup::NewDelete(mut nd) => {
+                // EnterNewDeleteCleanup: the pointer, the size, then the
+                // placement arguments.
+                self.save_new_delete_arg(&mut nd.ptr);
+                self.save_new_delete_arg(&mut nd.size);
+                for (a, _) in &mut nd.placement {
+                    self.save_new_delete_arg(a);
+                }
+                Cleanup::NewDelete(nd)
+            }
+            c => c,
+        }
+    }
+
+    /// `DominatingValue<RValue>::save` of an argument of a
+    /// [`Cleanup::NewDelete`].
+    fn save_new_delete_arg(&mut self, s: &mut Saved) {
+        match *s {
+            Saved::Direct(CallArg::Scalar(v)) if self.needs_saving(v) => {
+                let ty = self.f.fir.ty(&self.m, v);
+                let align = self.pref_align(ty);
+                let slot = self.f.fir.alloca(ty, align);
+                self.store(v, slot, align, false);
+                *s = Saved::Slot { slot, ty, align };
+            }
+            Saved::Direct(CallArg::Agg(_)) => {
+                self.f.error.get_or_insert(crate::CodegenError {
+                    loc: None,
+                    msg: "a conditional new-expression with a class placement argument is not \
+                          supported yet"
+                        .into(),
+                });
+            }
+            _ => {}
+        }
     }
 
     fn push_scope(&mut self, kind: Kind, normal: bool, eh: bool) {
@@ -476,6 +523,7 @@ impl Cg<'_> {
             ext: false,
             branch_afters: Vec::new(),
             branches: Vec::new(),
+            aux: Vec::new(),
         });
     }
 
@@ -660,11 +708,7 @@ impl Cg<'_> {
         for (c, flag) in pending {
             self.push_cleanup(c);
             if let Some(f) = flag {
-                // initFullExprCleanupWithFlag.
-                let s = self.f.cl.stack.last_mut().expect("scope");
-                s.active_flag = Some(f);
-                s.test_flag = s.normal;
-                s.test_flag_eh = s.eh;
+                self.init_full_expr_cleanup_with_flag(f);
             }
         }
     }
@@ -746,6 +790,8 @@ impl Cg<'_> {
         let has_prebranched = fallthrough_source.is_some_and(|b| self.f.fir.is_terminated(b));
         let requires_normal = is_normal && (has_fixups || has_existing_branches || has_fallthrough);
         let cleanup = self.f.cl.stack[top - 1].cleanup().clone();
+        let aux = std::mem::take(&mut self.f.cl.stack[top - 1].aux);
+        let mut emitted = false;
 
         if is_normal && has_prebranched && !requires_normal {
             let pre_dest = if fallthrough_is_branch_through {
@@ -769,7 +815,9 @@ impl Cg<'_> {
             self.destroy_optimistic_entry(top);
             self.f.cl.pop();
             self.emit_cleanup(&cleanup, flag, false);
+            emitted = true;
         } else {
+            emitted = true;
             self.emit_normal_cleanup_paths(
                 top,
                 &cleanup,
@@ -790,11 +838,26 @@ impl Cg<'_> {
             self.push_terminate();
             if eh_flag.is_some() || is_active {
                 self.emit_cleanup(&cleanup, eh_flag, true);
+                emitted = true;
             }
             self.br(next);
             self.pop_terminate();
             self.f.fir.set_cur(saved);
             self.simplify_cleanup_entry(eh_entry);
+        }
+        if !emitted {
+            self.erase_aux_allocas(&aux);
+        }
+    }
+
+    /// `~AuxillaryAllocas` of a cleanup never emitted: erases its flag
+    /// allocas and their uses.
+    fn erase_aux_allocas(&mut self, aux: &[V]) {
+        for &a in aux.iter().rev() {
+            for u in self.f.fir.users(a) {
+                self.f.fir.erase(u);
+            }
+            self.f.fir.erase(crate::fir::Fir::last_inst(a));
         }
     }
 
@@ -996,8 +1059,18 @@ impl Cg<'_> {
                 };
                 self.array_destroy_range(begin, end, elem, record, true, false);
             }
+            Cleanup::SavedObject { slot, ty, align, record, array } => {
+                let al = self.pref_align(LTy::PTR);
+                let v = self.load(LTy::PTR, slot, al, false);
+                if array {
+                    self.array_destroy_at(Addr { v, ty, align }, record, !for_eh);
+                } else {
+                    self.call_dtor(record, v, false);
+                }
+            }
             Cleanup::IrregularPartialArray(ref p) => {
                 let IrregularPartialArray { begin, end_slot, outer, depth, elem, record } = **p;
+                let CallArg::Scalar(begin) = self.restore_saved(begin) else { return };
                 let al = self.pref_align(LTy::PTR);
                 let end = self.load(LTy::PTR, end_slot, al, false);
                 let (begin, end) = if depth > 0 {

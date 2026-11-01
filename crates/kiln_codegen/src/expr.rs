@@ -15,7 +15,7 @@ use kiln_llvm::{
     IntPredicate, TypeId as LTy, Value,
 };
 
-use crate::cleanup::{Cleanup, IrregularPartialArray};
+use crate::cleanup::{Cleanup, IrregularPartialArray, Saved};
 use crate::fir::{Fir, Op, V};
 use crate::fold::is_local;
 use crate::func::{Addr, CallArg, min_align};
@@ -2900,10 +2900,13 @@ impl Cg<'_> {
                 let cont = self.f.fir.create_block();
                 let start = self.f.fir.cur();
                 self.branch_on_bool(c, lb, rb)?;
+                // Both arms see the same slot (`IsDestructed` included).
+                let destructed = self.f.dest_destructed;
                 self.emit_block(lb, false);
                 self.cond_eval(start, |cg| cg.agg_visit(a, dest, zeroed))?;
                 self.br(cont);
                 self.emit_block(rb, false);
+                self.f.dest_destructed = destructed;
                 self.cond_eval(start, |cg| cg.agg_visit(b, dest, zeroed))?;
                 self.emit_block(cont, false);
                 Ok(())
@@ -2930,7 +2933,7 @@ impl Cg<'_> {
                 let base = Addr { v: dest.v, ty: rty, align: dest.align };
                 // [except.ctor]/3: an initialized capture is destroyed if a
                 // later one throws (`pushDestroyAndDeferDeactivation`).
-                let mut deferred = Vec::new();
+                let deferred = self.f.cl.deferred.len();
                 for (f, init) in fields.into_iter().zip(inits) {
                     let fq = ast.decls.get(f).ty().expect("capture type");
                     let lv = self.field_lvalue_init(base, f, fq)?;
@@ -2948,7 +2951,7 @@ impl Cg<'_> {
                         } else {
                             Cleanup::Dtor { addr: lv.addr.v, record: frd, base: false }
                         };
-                        self.push_deferred_destroy(c, &mut deferred);
+                        self.push_deferred_destroy(c);
                     }
                 }
                 self.deactivate_deferred(deferred);
@@ -3156,7 +3159,7 @@ impl Cg<'_> {
         // if a later initialization throws; the cleanups are deactivated
         // once the object is complete (`pushDestroyAndDeferDeactivation`,
         // `CleanupDeactivationScope`).
-        let mut deferred = Vec::new();
+        let deferred = self.f.cl.deferred.len();
         for b in bases {
             if b.is_virtual {
                 return err(self.loc_of(e), "aggregate with a virtual base");
@@ -3176,7 +3179,7 @@ impl Cg<'_> {
             self.emit_agg_into(init, bdest, overlap)?;
             if self.has_nontrivial_dtor(brd) {
                 let c = Cleanup::Dtor { addr: v, record: brd, base: false };
-                self.push_deferred_destroy(c, &mut deferred);
+                self.push_deferred_destroy(c);
             }
         }
         let fields: Vec<DeclId> =
@@ -3205,7 +3208,7 @@ impl Cg<'_> {
                 } else {
                     Cleanup::Dtor { addr: lv.addr.v, record: frd, base: false }
                 };
-                self.push_deferred_destroy(c, &mut deferred);
+                self.push_deferred_destroy(c);
             }
         }
         self.deactivate_deferred(deferred);
@@ -3293,7 +3296,7 @@ impl Cg<'_> {
     /// `pushDestroyAndDeferDeactivation`: pushes the normal and EH
     /// cleanup `c` and records it, with its dominating placeholder, for
     /// [`Self::deactivate_deferred`].
-    fn push_deferred_destroy(&mut self, c: Cleanup, deferred: &mut Vec<(usize, V)>) {
+    fn push_deferred_destroy(&mut self, c: Cleanup) {
         if self.f.fir.cur().is_none() {
             return;
         }
@@ -3301,12 +3304,15 @@ impl Cg<'_> {
         let dominator =
             self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
         self.push_full_expr_cleanup(c, true, true);
-        deferred.push((self.f.cl.depth(), dominator));
+        let depth = self.f.cl.depth();
+        self.f.cl.deferred.push((depth, dominator));
     }
 
     /// `CleanupDeactivationScope::ForceDeactivate`: deactivates the
-    /// deferred cleanups, innermost first, and drops their placeholders.
-    fn deactivate_deferred(&mut self, deferred: Vec<(usize, V)>) {
+    /// cleanups deferred since `mark` (a length of `f.cl.deferred`),
+    /// innermost first, and drops their placeholders.
+    pub(crate) fn deactivate_deferred(&mut self, mark: usize) {
+        let deferred: Vec<_> = self.f.cl.deferred.drain(mark..).collect();
         for (c, dominator) in deferred.into_iter().rev() {
             let d = Fir::last_inst(dominator);
             self.deactivate_cleanup_block(c, d);
@@ -3347,7 +3353,14 @@ impl Cg<'_> {
             }
             let elem = self.mty(inner);
             let p =
-                IrregularPartialArray { begin, end_slot: slot, outer: ety, depth, elem, record };
+                IrregularPartialArray {
+                    begin: Saved::Direct(CallArg::Scalar(begin)),
+                    end_slot: slot,
+                    outer: ety,
+                    depth,
+                    elem,
+                    record,
+                };
             self.push_full_expr_cleanup(Cleanup::IrregularPartialArray(Box::new(p)), false, true);
             partial = Some((self.f.cl.depth(), dominator, slot, al));
         }
