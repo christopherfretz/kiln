@@ -190,10 +190,9 @@ impl Sema<'_, '_> {
     /// One using-declarator `using typename qual name;`
     /// ([namespace.udecl]/1, [temp.res.general]/5): the name is a type.
     /// In a class with a dependent qualifier (`using typename
-    /// B<T>::type;`) the member is an alias of the dependent type
-    /// `typename B<T>::type` (clang's `UnresolvedUsingTypenameDecl` with
-    /// its `UnresolvedUsingType`), resolved when the class is
-    /// instantiated. Otherwise the declarator is an ordinary one whose
+    /// B<T>::type;`) the member is an `UnresolvedUsingTypename` naming
+    /// its own dependent `UnresolvedUsing` type (as clang), redone when
+    /// the class is instantiated. Otherwise the declarator is an ordinary one whose
     /// target must be a type. Returns the declaration, or `None` after an
     /// error.
     pub fn act_on_using_typename_declarator(
@@ -205,7 +204,7 @@ impl Sema<'_, '_> {
         if_exists: bool,
         ellipsis: Option<Loc>,
     ) -> Option<DeclId> {
-        if let (Some(q), Some(n), None) = (qual, name.as_ident(), ellipsis)
+        if let (Some(q), Some(_), None) = (qual, name.as_ident(), ellipsis)
             && self.member_spec_class().is_some()
             && (self.is_dependent_ctx(q.ctx)
                 || self
@@ -215,10 +214,9 @@ impl Sema<'_, '_> {
                     .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
                     && self.kind_of(q.ctx) != DeclKind::CXXRecord)
         {
-            let ty = self.act_dependent_name(q.nns, n, None, kiln_ast::types::TagKeyword::Typename);
-            let d = self.act_on_alias_decl(n, name_loc, ty, &[]);
-            self.using_typename.insert(d);
-            return Some(d);
+            let access = self.current_member_access();
+            let h = DeclHead::new(self.ctx, name, name_loc).access(access);
+            return Some(self.builder().unresolved_using_typename(h, q.nns));
         }
         if let Some(q) = qual
             && !self.is_dependent_ctx(q.ctx)

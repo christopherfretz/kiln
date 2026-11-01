@@ -4990,7 +4990,10 @@ impl Sema<'_, '_> {
         if is_type_kind(k) {
             let ty = if matches!(
                 k,
-                DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm
+                DeclKind::Typedef
+                    | DeclKind::TypeAlias
+                    | DeclKind::TemplateTypeParm
+                    | DeclKind::UnresolvedUsingTypename
             ) {
                 self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
             } else {

@@ -48,6 +48,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // nominated/constructed base classes of the text dump.
     ("ConstructorUsingShadowDecl", Keep),
     ("UnresolvedUsingValueDecl", Keep),
+    ("UnresolvedUsingTypenameDecl", Keep),
     ("FunctionDecl", Keep),
     ("CXXMethodDecl", Keep),
     ("CXXConstructorDecl", Keep),
@@ -299,7 +300,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "UsingDecl" => &[],
         "UsingDirectiveDecl" => &["nominatedNamespace"],
         "UsingShadowDecl" | "ConstructorUsingShadowDecl" => &["target"],
-        "UnresolvedUsingValueDecl" => &[],
+        "UnresolvedUsingValueDecl" | "UnresolvedUsingTypenameDecl" => &[],
         "UsingEnumDecl" => &["target"],
         // `immediate`: kiln prints clang's text-dump `consteval` instead;
         // `variadic` is part of the printed type; `deletedMessage` becomes
@@ -526,6 +527,8 @@ pub const CLASS_KINDS: &[&str] = &[
     // WP-114: inheriting constructors and dependent using-declarations.
     "ConstructorUsingShadowDecl",
     "UnresolvedUsingValueDecl",
+    // WP-179: `using typename B<T>::x;` in a template.
+    "UnresolvedUsingTypenameDecl",
 ];
 
 /// The template kinds §5 of `spec/ast-dump.md` adds (WP-069).

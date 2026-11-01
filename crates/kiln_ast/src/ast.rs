@@ -166,7 +166,10 @@ impl Ast {
     /// The nested-name-specifier written in a `Using` declaration.
     pub fn using_qualifier(&self, d: DeclId) -> Option<crate::ids::NnsId> {
         let n = self.decls.get(d);
-        if matches!(n.kind(), DeclKind::Using | DeclKind::UnresolvedUsingValue) {
+        if matches!(
+            n.kind(),
+            DeclKind::Using | DeclKind::UnresolvedUsingValue | DeclKind::UnresolvedUsingTypename
+        ) {
             crate::ids::NnsId::try_new(n.data())
         } else {
             None

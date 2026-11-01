@@ -1181,11 +1181,8 @@ impl Substituter<'_, '_, '_> {
     /// `UnresolvedUsingTypenameDecl` instantiation): a using-declaration
     /// and its shadows, or "'typename' keyword used on a non-type".
     fn member_using_typename(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
-        let Some(u) = self.sema.ast.decls.typedef(m).map(|t| t.underlying) else { return Ok(None) };
-        let TypeView::DependentName { nns: pnns, name, .. } = self.sema.ast.types.view(u.ty())
-        else {
-            return Ok(None);
-        };
+        let Some(pnns) = self.sema.ast.using_qualifier(m) else { return Ok(None) };
+        let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else { return Ok(None) };
         let nns = self.nns(pnns, loc)?;
         if self.nns_still_dependent(nns) {
             return self.unimplemented("dependent using-declarations in templates", loc);
@@ -1236,9 +1233,7 @@ impl Substituter<'_, '_, '_> {
                 // class's member list; only the first declaration is.
                 self.function_decl(m, DeclaratorContext::Member, None)?
             }
-            DeclKind::TypeAlias if self.sema.using_typename.contains(&m) => {
-                return self.member_using_typename(m, loc);
-            }
+            DeclKind::UnresolvedUsingTypename => return self.member_using_typename(m, loc),
             DeclKind::Typedef | DeclKind::TypeAlias => self.typedef_decl(m)?,
             DeclKind::StaticAssert => {
                 self.static_assert_decl(m)?;

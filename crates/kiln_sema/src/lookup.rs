@@ -117,6 +117,7 @@ pub fn is_type_kind(k: DeclKind) -> bool {
             | DeclKind::Typedef
             | DeclKind::TypeAlias
             | DeclKind::TemplateTypeParm
+            | DeclKind::UnresolvedUsingTypename
     )
 }
 
