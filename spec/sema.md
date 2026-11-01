@@ -1548,6 +1548,16 @@ and aggregate element types.
   without destructors), aligned when over-aligned. Class element types
   with a non-trivial destructor are unsupported (WP-067b / WP-076);
   class-scope `operator delete` is `todo(WP-068b)`.
+- The element class's destructor ([expr.delete]/6, and for `new T[n]`
+  [expr.new]/27) is selected (`mark_element_dtor_referenced`, skipped
+  for an invalid or dependent class): a deleted one (such as a union's
+  with a non-trivial variant member, [class.union.general]/3) is
+  `attempt to use a deleted function` with the deletion notes and the
+  expression fails; an inaccessible one is `calling a private destructor
+  of class 'P'` at the operand (`sema_access_dtor`). For `new T[n]`
+  both are at the allocated type, the access error worded as for a
+  temporary (`temporary of type 'P' has private destructor`), as clang's
+  `ActOnCXXDelete` / `BuildCXXNew` do.
 - Gaps: `-fno-sized-deallocation` only removes the macro (Sema always
   selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
   is not reported; a non-constant bound in a parenthesized type-id is a

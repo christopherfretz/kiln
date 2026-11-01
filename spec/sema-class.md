@@ -309,7 +309,13 @@ replayed tokens were written in:
   not.)
 - `act_on_start_field_init(field)` precedes each NSDMI (clang's
   `ActOnStartCXXInClassMemberInitializer`); `act_on_field_init` follows
-  it only when the initializer parsed.
+  it only when the initializer parsed. `= {…}` is copy-list-initialization
+  (an explicit constructor is `chosen constructor is explicit in
+  copy-initialization`), `{…}` direct-list (`FieldData::init_style`, also
+  copied to an instantiated field). An initializer that fails marks the
+  field `INVALID`: constructors then skip it, and an aggregate
+  initialization or `field_filler` using it recovers silently (clang's
+  failed `BuildCXXDefaultInitExpr`).
 
 Per outermost class the parser calls, after
 `act_on_finish_record_definition(r, _)`: for each phase in order,
