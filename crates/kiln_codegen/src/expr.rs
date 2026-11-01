@@ -2251,6 +2251,13 @@ impl Cg<'_> {
         }
         // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
+        // `std::move(x)` and its kin fold to the address of `x`.
+        if let Some(d) = direct
+            && self.is_std_builtin(d)
+            && let Some(a) = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).next()
+        {
+            return Ok(Some(self.emit_lvalue(a)?.addr.v));
+        }
         let mut lib = None;
         if let Some(d) = direct
             && let Some(id) = ast.decls.builtin_id(d)
@@ -2513,6 +2520,11 @@ impl Cg<'_> {
             return Ok(None);
         }
         if rty == LTy::VOID {
+            if matches!(sig.info.ret.kind, ArgKind::Ignore) && self.is_aggregate(rq) {
+                // clang `EmitCall` -> `GetUndefRValue`: an ignored
+                // aggregate result still gets its (unused) temporary.
+                self.temp(rq);
+            }
             return Ok(None);
         }
         if self.is_aggregate(rq) || self.is_atomic_aggregate(rq) {

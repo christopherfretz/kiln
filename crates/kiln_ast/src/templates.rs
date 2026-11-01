@@ -299,6 +299,12 @@ pub struct TemplateTables {
     /// itself when its member list was empty): codegen defines them at
     /// that point, as clang's `HandleTopLevelDecl` does.
     explicit_member_insts: FxHashMap<DeclId, Vec<DeclId>>,
+    /// The definitions instantiated by the end-of-translation-unit drain
+    /// ([temp.point]/7), in instantiation order: codegen hands them to
+    /// `EmitGlobal` after the translation unit's own declarations, as
+    /// clang's `PerformPendingInstantiations` → `HandleTopLevelDecl`
+    /// (spec/codegen.md §2a).
+    end_of_tu_defs: Vec<DeclId>,
     /// Classes in `explicit_member_insts` whose members codegen defines
     /// only there, not where the class was first declared in its lexical
     /// context: an explicit instantiation definition following an
@@ -376,6 +382,7 @@ impl Default for TemplateTables {
             specs: Vec::new(),
             member_specs: Vec::new(),
             explicit_member_insts: FxHashMap::default(),
+            end_of_tu_defs: Vec::new(),
             moved_class_insts: FxHashSet::default(),
             late_explicit_insts: Vec::new(),
             late_explicit_set: FxHashSet::default(),
@@ -521,6 +528,18 @@ impl TemplateTables {
         self.explicit_member_insts.get(&after).map_or(&[], Vec::as_slice)
     }
 
+    /// Records that `decl`'s definition was instantiated by the
+    /// end-of-translation-unit drain (see `end_of_tu_defs`).
+    pub fn add_end_of_tu_def(&mut self, decl: DeclId) {
+        self.end_of_tu_defs.push(decl);
+    }
+
+    /// The definitions instantiated at the end of the translation unit,
+    /// in instantiation order.
+    pub fn end_of_tu_defs(&self) -> &[DeclId] {
+        &self.end_of_tu_defs
+    }
+
     /// Records the pattern of an instantiated decl that has no
     /// [`TemplLink`] (fields, enumerators, parameters, typedefs, locals).
     pub fn set_instantiated_from(&mut self, inst: DeclId, pattern: DeclId) {
@@ -599,6 +618,7 @@ impl HeapSize for TemplateTables {
         r.push(self.expr_nns.mem_row());
         r.push(MemRow::of_vec("templ.specs", &self.specs));
         r.push(MemRow::of_vec("templ.member_specs", &self.member_specs));
+        r.push(MemRow::of_vec("templ.end_of_tu_defs", &self.end_of_tu_defs));
         r.push(MemRow::of_map("templ.specializations", &self.specializations));
         let order = self.spec_order.values().map(|v| v.capacity() * 4).sum::<usize>() as u64;
         let mut row = MemRow::of_map("templ.spec_order", &self.spec_order);

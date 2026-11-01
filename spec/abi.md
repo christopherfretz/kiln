@@ -774,6 +774,68 @@ GPR/SSE counts (both zero means the argument is read from memory).
 - **Not implemented:** `Tk`/`Tt`/`Q` (constrained parameters and
   requires-clauses) and constrained `Dk` placeholders.
 
+### 8.15 Landed (WP-172): abi tags and dependent signature types
+**abi_tag.** `[[gnu::abi_tag("a","b")]]` / `__attribute__((abi_tag(...)))`
+is an `AttrKind::ABI_TAG` node whose `a` is the interned symbol of the
+sorted, de-duplicated tags joined by `,` (a non-string argument is
+`parse_attribute_requires_string`; an empty list attaches nothing).
+`mangle::abi_tags(ast, d)` finds the tags of a declaration: any redecl
+carrying the attribute, else the template pattern (`template_info`,
+`spec_info` of the primary) or the instantiation source
+(`instantiated_from`). For an instantiated *function* member of a class
+template clang 19 looks only at the pattern's definition when one exists
+(an out-of-line `template<class T> int Y<T>::f(){}` without a repeated
+tag mangles untagged); static data members and member templates of
+non-templates keep the declaration's tag. Since sema copies a pattern's
+attributes onto its instantiations (WP-182), an instantiated function, a
+non-explicit function specialization and the pattern of a member template
+instantiated with its class never use their own attributes: their tags
+come from the walk above (for the member template, from the original
+member's definition: `X4<int>::X4<int>(int)` is untagged when the
+out-of-line `template<class T> template<class U> X4<T>::X4(U){}` is). Tags mangle as `B<source-name>`
+each, after the unqualified name (identifiers, `C2`/`D2`, operator codes),
+and a tagged namespace-scope variable is mangled (`_Z1vB1x`) rather than
+emitted under its plain name.
+
+**Dependent signature types** (`mangle/dep.rs`, clang `CXXNameMangler`):
+a dependent template specialization is the unscoped template name plus
+arguments at namespace scope or directly in `std`, else
+`N <template-prefix> <args> E`; a template template parameter is `T_`
+(candidate `Sub::TemplateTemplateParm`). `typename P::id` is
+`[Ts|Tu|Te] N <prefix(P)> <id> E` and `P::template id<A>` is
+`N <prefix(P)> <id> <args> E`, where the prefix of a nested-name-specifier
+is nothing for `::`, the namespace prefix, the template prefix plus
+arguments of a specialization (the specialization the candidate) or the
+type, and for an identifier level `<prefix> <id>` (a candidate, clang
+≥ 15); a dependent template name `P::template id` is itself a candidate.
+A dependent unary transform is `u <spelling> I <base> E`
+(`u20__remove_reference_tIT_E`). A value-dependent template argument
+(an `Expr` or `Profile` argument, the profile's first expression) follows
+`mangleExpression`: literals unwrapped (`Li1E`, `Lb1E`, `LDnE`), anything
+else in `X ... E`; parentheses, implicit casts, `ConstantExpr` and
+substituted parameters are transparent; a parameter reference is `T_`;
+`DependentScopeDeclRefExpr` is an unresolved name (`sr` levels of the
+qualifier as written, a template parameter or `decltype` level an
+unresolved type with no closing `E`, a specialization level its source
+name and arguments, else `E` after the levels); unary/binary operator,
+`qu`, `st`/`sz`, `at`/`az` and `cv`/`sc`/`cc`/`rc`/`dc` encodings;
+`sp <expr>` for a pack expansion, `sZ <param>` for `sizeof...`,
+`u <trait> <type>* E` for a type trait, `cl <callee> <args> E` for a call
+and an `UnresolvedLookupExpr` as an unresolved name (the parser records
+the written qualifier of a qualified function template-id,
+`set_template_id_qualifier`, so `std::declval<T>()` is
+`clsr3stdE7declvalIT_EE`). A dependent `decltype(e)` is `Dt <expr> E` for
+an id-expression or member access, else `DT <expr> E`. The arguments of
+a dependent specialization of a known template group those of its
+parameter pack into one `J ... E` (clang's converted list:
+`NS_3tupIJDpT_EE`). An unsupported expression (member access, function
+parameters, non-dependent `sizeof` whose value would be needed, ...)
+mangles as `XLi0EE` in a template argument and `u7unknown` as a
+`decltype` operand. The
+template-parameter-declaration prefixes `Tn`/`Tp` are §8.14's (WP-117);
+the dependent template-specialization types there are the ones above
+(`dependent_tst`, with a pack's arguments grouped by `converted_args`).
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.
