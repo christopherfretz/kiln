@@ -200,6 +200,15 @@ pub(crate) enum Fault {
         field: DeclId,
         active: Option<DeclId>,
     },
+    /// A trivial copy of the class object `src` of type `whole` whose
+    /// subobject (member `field`, or of type `ty`) is not initialized
+    /// (clang's `CheckFullyInitialized` in `handleTrivialCopy`).
+    Uninit {
+        field: Option<DeclId>,
+        ty: OTy,
+        src: u64,
+        whole: OTy,
+    },
     /// A read of a `mutable` member of an object whose lifetime began
     /// outside the evaluation ([expr.const]/5.9).
     Mutable {
@@ -817,7 +826,9 @@ impl Oven {
                 }
                 Op::Copy => {
                     let ty = OTy(arg!(2) as u32);
-                    if let Err(f) = self.copy_obj(reg!(0) as u64, reg!(1) as u64, ty, aux & 1 != 0)
+                    let full = (aux & 2 != 0).then(|| b.ast());
+                    if let Err(f) =
+                        self.copy_obj(reg!(0) as u64, reg!(1) as u64, ty, aux & 1 != 0, full)
                     {
                         fail!(f);
                     }
@@ -1915,7 +1926,20 @@ impl Oven {
         Ok(())
     }
 
-    fn copy_obj(&mut self, dst: u64, src: u64, ty: OTy, init: bool) -> Result<(), Fault> {
+    /// Copies the object of type `ty` at `src` to `dst` (`init`: into
+    /// storage whose object's lifetime begins). With `full` (a trivial
+    /// copy constructor or assignment operator of a class, clang's
+    /// `handleTrivialCopy`), the source must be fully initialized
+    /// ([expr.const]/5.9 via the lvalue-to-rvalue conversion of the
+    /// object); a union copies its object representation unchecked.
+    fn copy_obj(
+        &mut self,
+        dst: u64,
+        src: u64,
+        ty: OTy,
+        init: bool,
+        full: Option<&kiln_ast::Ast>,
+    ) -> Result<(), Fault> {
         let size = self.types.size(ty);
         let (ss, sa, sa_alloc) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
             f,
@@ -1925,6 +1949,13 @@ impl Oven {
         })?;
         if sa_alloc.flags & flags::MUTABLE_OUTSIDE != 0 {
             self.mutable_path(src, ty)?;
+        }
+        if let Some(ast) = full
+            && !matches!(self.types.kind(ty), TyKind::Record { union: true, .. })
+            && let off = u64::from(Ptr::decode(src).off)
+            && let Some((field, sub)) = self.first_uninit(ast, ss, sa, src, off, ty, None)
+        {
+            return Err(Fault::Uninit { field, ty: sub, src, whole: ty });
         }
         let k = if init { ak::INIT } else { ak::ASSIGN };
         let (ds, da, a) =
@@ -1947,6 +1978,66 @@ impl Oven {
             }
         }
         Ok(())
+    }
+
+    /// The first subobject of the object of type `t` at byte `abs` of
+    /// space `sp` (byte `off` of the allocation of `raw`) that is not
+    /// initialized, as `(member, type)`: clang's `CheckFullyInitialized`,
+    /// walked as freezing walks a value (an unnamed or zero-width
+    /// bit-field and an inactive union member are not part of the value;
+    /// a base class subobject has no member name).
+    #[allow(clippy::too_many_arguments)]
+    fn first_uninit(
+        &self,
+        ast: &kiln_ast::Ast,
+        sp: Sp,
+        abs: u64,
+        raw: u64,
+        off: u64,
+        t: OTy,
+        field: Option<DeclId>,
+    ) -> Option<(Option<DeclId>, OTy)> {
+        let info = *self.types.info(t);
+        let s = self.mem.space(sp);
+        if s.is_init(abs, info.size) {
+            return None;
+        }
+        match info.kind {
+            TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
+                (!s.is_init(abs, value_len(info.size, info.kind))).then_some((field, t))
+            }
+            TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } => Some((field, t)),
+            TyKind::Array { elem, n } => {
+                let es = self.types.size(elem);
+                (0..n).find_map(|i| {
+                    self.first_uninit(ast, sp, abs + i * es, raw, off + i * es, elem, field)
+                })
+            }
+            TyKind::Record { union, first, count, .. } => {
+                let fields = if union {
+                    let &i = self.mem.unions.get(&Ptr::union_key(raw, off, t))?;
+                    first + i..first + i + 1
+                } else {
+                    first..first + count
+                };
+                fields.into_iter().find_map(|i| {
+                    let f = self.types.fields[i as usize];
+                    match f.width {
+                        None => {
+                            let named = (!f.base).then_some(f.decl);
+                            let (a, o) = (abs + f.offset, off + f.offset);
+                            self.first_uninit(ast, sp, a, raw, o, f.ty, named)
+                        }
+                        Some(w) if w == 0 || ast.decls.get(f.decl).name().is_empty() => None,
+                        Some(w) => {
+                            let n = u64::from((f.bit + w).div_ceil(8));
+                            (!s.is_init(abs + f.offset, n)).then_some((Some(f.decl), f.ty))
+                        }
+                    }
+                })
+            }
+            TyKind::Void | TyKind::Func | TyKind::Opaque => None,
+        }
     }
 
     /// Activates the first member of every union reached through first

@@ -553,12 +553,15 @@ impl Compiler<'_> {
             match args[..] {
                 [] => {}
                 // A trivial copy/move constructor copies the object
-                // representation ([class.copy.ctor]/14).
+                // representation ([class.copy.ctor]/14); a class's
+                // source is read whole, so it must be fully initialized
+                // (aux 2; clang's `handleTrivialCopy`).
                 [a] => {
                     let a = skip_parens(self.ast(), a);
                     if self.node(a).value_category().is_glvalue() {
                         let src = self.lv_mem(a, Access::Read);
-                        self.emit_at(Op::Copy, 1, &[p, src, ty.0], e);
+                        let full = matches!(self.kind(ty), TyKind::Record { union: false, .. });
+                        self.emit_at(Op::Copy, 1 | if full { 2 } else { 0 }, &[p, src, ty.0], e);
                     } else {
                         self.init_inner(a, p, ty);
                     }
@@ -866,15 +869,19 @@ impl Compiler<'_> {
             self.emit_site(Op::EndLife, 2, &[this, cls.0], e, loc);
             return self.reg();
         }
-        // A union's trivial assignment operator copies the object, its
-        // active member included (clang's `handleTrivialCopy`; sema
-        // defines it with an empty body).
-        if trivial_assign
+        // A trivial copy/move assignment operator, called by either
+        // syntax, copies the object (clang's `handleTrivialCopy`): a
+        // union's with its active member (sema defines it with an empty
+        // body), a class's from a fully initialized source (aux 2; noted
+        // at the argument, the call's frame note at the call).
+        if spec.is_some_and(kiln_ast::decl::FnSpec::is_trivial)
+            && self.ast().decls.get(md).name().as_operator()
+                == Some(kiln_ast::names::OverloadedOperator::Equal)
             && let (Some(cls), [src]) = (cls, args)
-            && matches!(self.kind(cls), TyKind::Record { union: true, .. })
+            && let TyKind::Record { union, .. } = self.kind(cls)
         {
             let s = self.lv_mem(*src, Access::Read);
-            self.emit_at(Op::Copy, 0, &[this, s, cls.0], e);
+            self.emit_site(Op::Copy, if union { 0 } else { 2 }, &[this, s, cls.0], e, loc);
             return this;
         }
         let r = self.call_frame(e, callee, rty, sret, Some(this), args, &refs, Some(loc));

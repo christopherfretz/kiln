@@ -152,6 +152,7 @@ impl Oven {
             site.loc = ast.exprs.get(m).loc();
         }
         let mut extra = Vec::new();
+        let mut frame = None;
         let (loc, msg) = match fault {
             Fault::Trap(i) => {
                 let t = &self.traps[i as usize];
@@ -263,6 +264,21 @@ impl Oven {
                         name_of(ast, field)
                     ),
                 )
+            }
+            Fault::Uninit { field, ty, src, whole } => {
+                let (loc, call) = self.trivial_copy_frame(ast, site, src, whole);
+                frame = Some(call);
+                let named = field.filter(|&f| !ast.decls.get(f).name().is_empty());
+                let msg = if let Some(f) = named {
+                    extra.push(Note::new(ast.decls.get(f).loc(), "subobject declared here"));
+                    let mut name = String::new();
+                    AstNames::new(ast).write_name(f, &mut name);
+                    format!("subobject '{name}' is not initialized")
+                } else {
+                    let t = Self::type_name(ast, self.types.info(ty).q);
+                    format!("subobject of type '{t}' is not initialized")
+                };
+                (loc, msg)
             }
             Fault::Mutable { ak: k, field } => {
                 extra.push(Note::new(ast.decls.get(field).loc(), "declared here"));
@@ -417,9 +433,52 @@ impl Oven {
         };
         let mut notes = Vec::with_capacity(2 + extra.len());
         notes.push(Note::new(loc, msg));
+        notes.extend(frame);
         self.call_stack(ast, &mut notes);
         notes.extend(extra);
         notes
+    }
+
+    /// A trivial copy constructor or assignment operator runs inline (an
+    /// `Op::Copy` at its call, no frame), but clang evaluates it as a
+    /// call: its failure is noted at the source argument, followed by
+    /// the call's own frame note (`in call to 'S(s)'`,
+    /// `in call to 't.operator=(s)'`) at the call site.
+    fn trivial_copy_frame(&self, ast: &Ast, site: Site, src: u64, ty: OTy) -> (Loc, Note) {
+        let arg = self.ptr_string(ast, src, ty);
+        let arg = arg.strip_prefix('&').unwrap_or(&arg);
+        let mut s = String::from("in call to '");
+        let mut at = site.loc;
+        match site.e.map(|e| (e, ast.exprs.get(e).kind())) {
+            Some((e, ExprKind::CXXConstructExpr)) => {
+                write_name_for_diag(ast, ast.exprs.constructor(e), &mut s);
+            }
+            Some((e, k @ (ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr))) => {
+                let args: Vec<ExprId> = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).collect();
+                let src_arg = if k == ExprKind::CXXOperatorCallExpr {
+                    if let Some(&obj) = args.first() {
+                        ast.write_expr(obj, &mut s);
+                        s.push('.');
+                    }
+                    args.get(1)
+                } else {
+                    let callee = skip_parens(ast, ast.exprs.callee(e));
+                    if ast.exprs.get(callee).kind() == ExprKind::MemberExpr {
+                        ast.write_expr(ast.exprs.operand(callee), &mut s);
+                        let arrow = ast.exprs.get(callee).has(ExprFlags::ARROW);
+                        s.push_str(if arrow { "->" } else { "." });
+                    }
+                    args.first()
+                };
+                s.push_str("operator=");
+                if let Some(&a) = src_arg {
+                    at = ast.exprs.get(a).loc();
+                }
+            }
+            _ => {}
+        }
+        let _ = write!(s, "({arg})'");
+        (at, Note::new(site.loc, s))
     }
 
     /// The note of a library builtin's failure (clang's
