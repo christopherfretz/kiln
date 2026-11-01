@@ -106,9 +106,22 @@ impl Substituter<'_, '_, '_> {
         let fd = r?;
         if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(fd)
             && let Some(p) = self.sema.pattern_of(x)
-            && self.sema.ast.instantiated_from(p).is_none()
         {
-            self.member_link(p, pattern);
+            if self.sema.ast.instantiated_from(p).is_none() {
+                self.member_link(p, pattern);
+            }
+            // Defined in the class: its specializations are instantiated
+            // from the class template's pattern with this specialization's
+            // arguments as the enclosing level, as a member template's
+            // ([temp.friend]/1, [temp.inst]/4; clang's
+            // `getTemplateInstantiationPattern` through
+            // `getInstantiatedFromMemberTemplate`).
+            if self.sema.ast.decls.function(pattern).is_some_and(|f| f.body.is_some())
+                && self.sema.ast.first(x) == x
+                && self.sema.ast.templates.instantiated_from_map(x).is_none()
+            {
+                self.sema.ast.templates.set_instantiated_from(x, t);
+            }
         }
         Ok(fd)
     }

@@ -73,7 +73,7 @@ impl Sema<'_, '_> {
         }
         let Some((_, margs)) = self.spec_args(spec) else { return Err(()) };
         let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
-        let pairs = self.inst_context_pairs(ctx);
+        let pairs = self.inst_context_pairs(self.spec_pairs_ctx(spec, tmpl));
         let r = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
@@ -158,7 +158,7 @@ impl Sema<'_, '_> {
             });
         }
         let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
-        let pairs = self.inst_context_pairs(ctx);
+        let pairs = self.inst_context_pairs(self.spec_pairs_ctx(f, tmpl));
         self.in_inst_context(ctx, |s| {
             s.act_on_start_function_def(f);
             let pp: Vec<DeclId> = s
@@ -566,7 +566,15 @@ impl Sema<'_, '_> {
             return None;
         }
         let cands = self.prev_candidates_dn(name, Some(q));
-        if cands.iter().any(|&c| self.kind_of(c) == DeclKind::FunctionTemplate) {
+        // A non-template member that matches wins over the member
+        // templates of the same name (clang's `ActOnExplicitInstantiation`
+        // and `CheckMemberSpecialization` try the non-templates first;
+        // libc++'s `extern template basic_string<char>&
+        // basic_string<char>::replace(size_type, ...)` beside the
+        // `replace` templates); explicit template arguments name a
+        // template's specialization.
+        let templates = cands.iter().any(|&c| self.kind_of(c) == DeclKind::FunctionTemplate);
+        if templates && d.spec_id.is_some() {
             return None;
         }
         let mut exc = None;
@@ -581,8 +589,18 @@ impl Sema<'_, '_> {
                 return Some(Some(self.ast.first(c)));
             }
             if exc.is_none() && self.same_ignoring_exc_spec(pty, ty) {
+                // [except.spec]/4 (C++11): an explicit instantiation need
+                // not repeat the exception specification (libc++'s
+                // extern template list omits `noexcept`; clang's
+                // `adjustCCAndNoReturn(..., AdjustExceptionSpec)`).
+                if inst && matches!(self.written_exc_spec(ty), kiln_ast::types::ExcSpec::None) {
+                    return Some(Some(self.ast.first(c)));
+                }
                 exc = Some(c);
             }
+        }
+        if templates {
+            return None;
         }
         if let Some(p) = exc {
             // [except.spec]/5.

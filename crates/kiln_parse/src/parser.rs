@@ -746,6 +746,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     NameClass::Namespace(d) | NameClass::Type(_, d) => d,
                     // `T::x::`: still dependent.
                     NameClass::Dependent => qual?,
+                    // The injected-class-name `X::` in (a member
+                    // declarator of) `X<A...>` ([temp.local]/1).
+                    NameClass::TypeTemplate(d) if end == i + 1 => self.s.injected_class_decl(d)?,
                     _ => return None,
                 });
                 i = end + 1;

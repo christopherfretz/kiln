@@ -463,6 +463,11 @@ impl Substituter<'_, '_, '_> {
             if s.is_final() {
                 dr.virt_final = Some(loc);
             }
+            // The pure-specifier: declared again so the instantiation is
+            // created pure (`is_pure` is not a late bit; [class.abstract]/2).
+            if s.is_pure() {
+                dr.pure = Some(loc);
+            }
         }
         // The pattern's trailing requires-clause, unsubstituted: checked
         // with this instantiation's levels ([temp.inst]/17, clang
@@ -485,6 +490,21 @@ impl Substituter<'_, '_, '_> {
         } else {
             r
         };
+        // A befriended function template (`template<class U> friend R
+        // g(U) { ... }`, via `friend_function_template`): the rest applies
+        // to its pattern, the function.
+        let f = if self.sema.kind_of(f) == DeclKind::FunctionTemplate {
+            match self.sema.pattern_of(f) {
+                Some(p) => p,
+                None => return Ok(r),
+            }
+        } else {
+            f
+        };
+        if self.sema.ast.decls.function(f).is_none() {
+            // Recovery declared something else (an invalid redeclaration).
+            return Ok(r);
+        }
         if lazy_exc {
             let first = self.sema.ast.first(f);
             self.sema.uninstantiated_exc.insert(first, d);
@@ -501,9 +521,6 @@ impl Substituter<'_, '_, '_> {
             && self.sema.ast.instantiated_from(f).is_none()
         {
             self.member_link(f, d);
-        }
-        if fs.is_some_and(kiln_ast::decl::FnSpec::is_pure) {
-            self.sema.ast.decls.mark_function(f, kiln_ast::decl::FnSpec::new().with_pure(true));
         }
         // Defined in its class: inline before its body is instantiated.
         if fs.is_some_and(kiln_ast::decl::FnSpec::implicit_inline) {
