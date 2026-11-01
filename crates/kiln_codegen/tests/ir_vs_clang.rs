@@ -33,6 +33,9 @@ const DEVIATIONS: &[(&str, &str)] = &[
     // The same canonicalization of `__cxx_global_array_dtor`'s
     // partial-array EH cleanup loop (WP-205).
     ("eh_array_destroy_throwing_global", "aarch64-unknown-linux-gnu"),
+    // The same, for the EH cleanup of a static array temporary's
+    // initialization (WP-216).
+    ("array_temporary_global", "aarch64-unknown-linux-gnu"),
 ];
 
 fn corpus_dir() -> PathBuf {
