@@ -321,7 +321,18 @@ trace tests in `kiln_parse/src/class.rs` (parse.md §10).
 
 Needing an unparsed NSDMI earlier (a nested class's implicit default ctor used
 in the enclosing class) is an error: `default member initializer for 'x'
-needed within definition of enclosing class 'S' outside of member functions`.
+needed within definition of enclosing class 'S' outside of member functions`
+(`sema_default_member_init_not_yet_parsed`, clang `BuildCXXDefaultInitExpr`)
+at the use, `S` the outermost lexically enclosing class, with the note
+`default member initializer declared here` at the field's name. The field
+becomes invalid (outside SFINAE), so later uses of it are quiet: an aggregate
+initialization recovers and an implicit constructor's definition fails
+silently (`define.rs` `default_member_init`). Gap: clang meets the unparsed
+initializer first while computing the implicit constructor's exception
+specification (note `in evaluation of exception specification for 'W::X::X'
+needed here`), and later uses of that now-invalid constructor fail
+silently; kiln reports it from the constructor's definition and still
+diagnoses later uses (`undefined constructor`, `no matching constructor`).
 
 ### 2.8 Unions and variant members
 [class.union]: at most one variant member has an NSDMI or appears in a

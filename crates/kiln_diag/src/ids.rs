@@ -1632,6 +1632,8 @@ diag_ids! {
     note_template_parameter_pack_non_pack = Note (2) "{0:template type|non-type template|template template} parameter{1:| pack} does not match {0:template type|non-type template|template template} parameter{1: pack|} in template argument";
     note_template_nontype_parm_different_type = Note (1) "template non-type parameter has a different type {0} in template argument";
     sema_access_dtor = Error (2) "calling a {1:private|protected} destructor of class {0}";
+    sema_default_member_init_not_yet_parsed = Error (2) "default member initializer for {1} needed within definition of enclosing class {0} outside of member functions";
+    note_default_member_init_not_yet_parsed = Note (0) "default member initializer declared here";
 }
 
 impl DiagId {
