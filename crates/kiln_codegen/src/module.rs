@@ -322,7 +322,8 @@ impl<'a> Cg<'a> {
         // each definition to `HandleTopLevelDecl`).
         let explicit = self.class_explicit_inst_kind(ast.first(d))
             == Some(SpecKind::ExplicitInstantiationDefinition);
-        if explicit && self.is_dynamic(d) {
+        if explicit && self.is_dynamic(d) && self.vtable_explicit_inst_kind(ast.first(d)).is_some()
+        {
             self.explicit_vtables.push(ast.first(d));
         }
         let members: Vec<DeclId> = ast.decls.members(d).collect();

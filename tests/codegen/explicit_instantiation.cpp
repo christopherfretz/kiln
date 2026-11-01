@@ -54,3 +54,42 @@ template <class T> Y<T>::~Y() {}
 template void Y<int>::m();
 template Y<int>::Y();
 template Y<int>::~Y();
+
+// A member class already defined at the explicit instantiation keeps an
+// implicit vtable (none if unused, linkonce_odr if used); one defined by
+// the explicit instantiation gets a weak_odr vtable.
+template <class T> struct S {
+  struct I {
+    T t;
+    virtual void v() {}
+  };
+  I i;
+};
+template struct S<int>;
+template <class T> struct S2 {
+  struct I {
+    T t;
+    virtual void v() {}
+  };
+  I i;
+  void m() {
+    I x;
+    x.v();
+  }
+};
+template struct S2<int>;
+template <class T> struct PJ {
+  struct J {
+    T t;
+    virtual void w() {}
+  };
+};
+template struct PJ<int>;
+template <class T> struct Q {
+  struct K {
+    T t;
+    virtual void x() {}
+  };
+};
+Q<int>::K *qk;
+template struct Q<int>;

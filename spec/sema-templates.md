@@ -767,6 +767,10 @@ instantiates the definitions of every member that is defined in the
 pattern and not yet explicitly specialized, including the out-of-line
 definitions of static data members (clang `InstantiateVariableDefinition`)
 and the members of member classes. Member templates are excluded. A
+member class that is not yet defined at that point gets the member
+specialization kind `ExplicitInstantiationDefinition` (so its vtable and
+RTTI are emitted `weak_odr`); one already defined keeps its implicit
+kind (clang `InstantiateClassMembers`; `instantiate_members_of`). A
 member explicit instantiation of a constructor or destructor
 (`template X<int>::X();`) reaches sema through the special-member
 declarator path and names the existing member (WP-170). An explicit

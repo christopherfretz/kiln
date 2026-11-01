@@ -552,7 +552,11 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   including out-of-line and inline static data members
   ([temp.explicit]/10; `emit_class_members`), plus a `weak_odr` vtable
   and RTTI (`VtLinkage::Weak`, emitted after the strong key-function
-  vtables). A member explicit instantiation (`template void X<int>::f();`,
+  vtables). A member class that was already defined when the enclosing
+  class was explicitly instantiated keeps an implicit vtable (emitted
+  `linkonce_odr` only if used; `Cg::vtable_explicit_inst_kind`), though
+  its member functions are still `weak_odr` (clang
+  `InstantiateClassMembers`). A member explicit instantiation (`template void X<int>::f();`,
   `template X<int>::X();`) is emitted right after the declaration that
   precedes it lexically (sema records it in
   `TemplateTables::explicit_member_insts`). Base-object structors of a

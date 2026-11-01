@@ -166,6 +166,26 @@ impl Cg<'_> {
                 .is_some_and(|(_, m)| m.kind != SpecKind::ExplicitSpecialization)
     }
 
+    /// [`Self::class_explicit_inst_kind`] for the vtable and RTTI: a member
+    /// class already defined when its enclosing class was explicitly
+    /// instantiated by a definition keeps its implicit kind (Sema marks
+    /// the member classes that instantiation defined; clang
+    /// `InstantiateClassMembers`), so its vtable is emitted only if used.
+    pub(crate) fn vtable_explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
+        let ast = self.ast;
+        match self.class_explicit_inst_kind(first) {
+            Some(SpecKind::ExplicitInstantiationDefinition) => {
+                let own = ast
+                    .spec_info(first)
+                    .map(|(_, s)| s.kind)
+                    .or_else(|| ast.member_spec_info(first).map(|(_, m)| m.kind));
+                (own == Some(SpecKind::ExplicitInstantiationDefinition))
+                    .then_some(SpecKind::ExplicitInstantiationDefinition)
+            }
+            k => k,
+        }
+    }
+
     /// The explicit instantiation kind of class `first`, itself or as a
     /// member class of an explicitly instantiated class (the innermost
     /// non-implicit kind decides; `None` when implicit or explicitly
@@ -208,7 +228,7 @@ impl Cg<'_> {
         }
         // [temp.explicit]/14: `extern template` — the vtable is defined
         // by the explicit instantiation definition elsewhere.
-        match self.class_explicit_inst_kind(first) {
+        match self.vtable_explicit_inst_kind(first) {
             Some(SpecKind::ExplicitInstantiationDeclaration) => return VtLinkage::External,
             // Template instantiations have no key function (Itanium
             // 5.2.6); an explicit instantiation definition is `weak_odr`.
