@@ -362,10 +362,10 @@ The normative description is spec/driver.md "Code generation". In short:
   virtual bases in M2 the two agree.
 - **Call results stored through a coercion** (`CreateCoercedStore`) use
   the object size, where clang uses the type's data size when the slot
-  may overlap (`AggValueSlot::getPreferredSize`). They differ only for a
-  class with tail padding reusable by a derived class: a base subobject
-  initialized from a call writes the whole object where clang goes
-  through a temporary and copies the data size. An immediate invocation
+  may overlap (`AggValueSlot::getPreferredSize`). A base subobject
+  initialized from a call (WP-158) goes through a temporary and copies
+  the data size, as clang; an aggregate's base element is initialized by
+  the base-object (C2) constructor variant. An immediate invocation
   (a valued `ConstantExpr`, WP-137) does use the data size of a
   `MayOverlap` slot (a materialized temporary): an oversized constant is
   stored to a temporary of its own type and the data size copied out,
@@ -508,8 +508,24 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   class whose key function is defined in this TU gets a strong
   `external` vtable; one whose key function is defined elsewhere gets an
   `external` declaration only; a class with no key function (or an
-  inline/template one) gets a `linkonce_odr` `unnamed_addr` definition in its own
-  COMDAT, as clang on ELF. The initializer is
+  inline one) gets a `linkonce_odr` `unnamed_addr` definition in its own
+  COMDAT, as clang on ELF. Template patterns, dependent classes and
+  classes instantiated from a template (any kind but an explicit
+  specialization) have no key function (Itanium 5.2.6, clang
+  `computeKeyFunction`). A class under an explicit instantiation
+  declaration (`extern template`, itself or as a member class) gets an
+  `external` vtable declaration (WP-158).
+- **Explicit instantiation declarations** ([temp.explicit]/14, WP-158;
+  `Cg::is_explicit_inst_declaration`): a function or variable that is
+  an `extern template` specialization, or a member of a class
+  specialization under one (the innermost explicitly instantiated
+  enclosing class decides), gets no definition at `-O0`, even when inline
+  (clang would make it `available_externally` only when optimizing);
+  references name the external symbol, structor calls the complete
+  variant (D1/C1). Implicitly declared special members are not
+  instantiations and are still emitted. An explicit instantiation
+  *definition* is still emitted `linkonce_odr` where clang uses `weak_odr`
+  (open). The initializer is
   `{ [N x ptr] ... }`, one array per primary/secondary group, with
   offset-to-top, RTTI, then the slots. Pure slots are
   `__cxa_pure_virtual`, deleted slots `__cxa_deleted_virtual`.

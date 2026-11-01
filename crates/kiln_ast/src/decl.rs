@@ -2556,6 +2556,16 @@ impl DeclArena {
         set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
     }
 
+    /// Takes back the default argument of a parameter of a class template
+    /// member specialization whose instantiation at a use failed
+    /// ([temp.inst]/12): as clang keeps the uninstantiated argument, the
+    /// next use instantiates (and reports) it again.
+    pub fn reset_failed_default_arg(&mut self, p: DeclId) {
+        let d = self.param_mut(p);
+        d.default_arg = None;
+        d.flags |= ParamData::DEFAULT_ARG_PENDING;
+    }
+
     /// Marks a parameter's default argument as pending late parsing
     /// ([`ParamData::DEFAULT_ARG_PENDING`]; set before the class is
     /// complete, cleared implicitly by reading `default_arg` once set).
@@ -2909,6 +2919,33 @@ pub mod builtin {
     pub const OPERATOR_DELETE: u32 = 223;
     /// `__builtin_unreachable` (clang `Builtins.td` signature `v`).
     pub const UNREACHABLE: u32 = 1347;
+    /// `void __builtin_va_start(__builtin_va_list &, ...) noexcept`
+    /// ([cstdarg.syn], C 7.16.1.4; clang `Builtins.td` signature `vA.`,
+    /// custom type-checking: sema checks the enclosing function and the
+    /// last named parameter).
+    pub const VA_START: u32 = 233;
+    /// `void __builtin_va_end(__builtin_va_list &) noexcept` (signature `vA`).
+    pub const VA_END: u32 = 1367;
+    /// `void __builtin_va_copy(__builtin_va_list &, __builtin_va_list &)
+    /// noexcept` (signature `vAA`).
+    pub const VA_COPY: u32 = 1365;
+
+    // WP-156: the vector reductions (clang `Builtins.td` signature `v.`,
+    // custom type-checking: the call has the vector's element type).
+    /// `__builtin_reduce_add`.
+    pub const REDUCE_ADD: u32 = 991;
+    /// `__builtin_reduce_and`.
+    pub const REDUCE_AND: u32 = 992;
+    /// `__builtin_reduce_max`.
+    pub const REDUCE_MAX: u32 = 993;
+    /// `__builtin_reduce_min`.
+    pub const REDUCE_MIN: u32 = 994;
+    /// `__builtin_reduce_mul`.
+    pub const REDUCE_MUL: u32 = 995;
+    /// `__builtin_reduce_or`.
+    pub const REDUCE_OR: u32 = 996;
+    /// `__builtin_reduce_xor`.
+    pub const REDUCE_XOR: u32 = 997;
 
     /// `__builtin_fabs` (clang `Builtins.td` signature `dd`).
     pub const FABS: u32 = 550;
@@ -3044,7 +3081,9 @@ pub mod builtin {
         /// `b` bool, `c` char, `w` `wchar_t`, `s` short, `i` int, `f`
         /// float, `d` double, `z` `size_t`; prefixes `U` unsigned, `L`
         /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
-        /// `&` lvalue reference, `C` const, `D` volatile.
+        /// `&` lvalue reference, `C` const, `D` volatile; `A` is a
+        /// `__builtin_va_list` parameter (a reference to it, or the decayed
+        /// pointer when it is an array).
         pub sig: &'static str,
         /// [`attr`] bits.
         pub attrs: u8,
@@ -3168,6 +3207,17 @@ pub mod builtin {
         row(OPERATOR_NEW, "__builtin_operator_new", "v*z", C | T),
         row(OPERATOR_DELETE, "__builtin_operator_delete", "vv*", N | T),
         row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
+        row(VA_START, "__builtin_va_start", "vA.", N | T),
+        row(VA_END, "__builtin_va_end", "vA", N),
+        row(VA_COPY, "__builtin_va_copy", "vAA", N),
+        // WP-156: the vector reductions.
+        row(REDUCE_ADD, "__builtin_reduce_add", "v.", N | C | T),
+        row(REDUCE_AND, "__builtin_reduce_and", "v.", N | C | T),
+        row(REDUCE_MAX, "__builtin_reduce_max", "v.", N | C | T),
+        row(REDUCE_MIN, "__builtin_reduce_min", "v.", N | C | T),
+        row(REDUCE_MUL, "__builtin_reduce_mul", "v.", N | C | T),
+        row(REDUCE_OR, "__builtin_reduce_or", "v.", N | C | T),
+        row(REDUCE_XOR, "__builtin_reduce_xor", "v.", N | C | T),
     ];
 
     /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,

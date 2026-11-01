@@ -316,7 +316,7 @@ impl Cg<'_> {
         let align = self.dyn_offset_align(base.align, class, natural);
         let q = ast.exprs.get(e).ty();
         let ty = self.mty(q);
-        Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None })
+        Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
     }
 
     /// clang `EmitCXXMemberPointerCallExpr` with

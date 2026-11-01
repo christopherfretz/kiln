@@ -124,6 +124,7 @@ keywords! {
     Extension = "__extension__";
     BuiltinOffsetof = "__builtin_offsetof";
     BuiltinBitCast = "__builtin_bit_cast";
+    BuiltinConvertVector = "__builtin_convertvector";
     BuiltinFile = "__builtin_FILE";
     BuiltinFileName = "__builtin_FILE_NAME";
     BuiltinFunction = "__builtin_FUNCTION";

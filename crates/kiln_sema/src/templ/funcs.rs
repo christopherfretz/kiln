@@ -738,7 +738,18 @@ impl Sema<'_, '_> {
             x.point_of_instantiation = Loc::INVALID;
         });
         if info.kind != SpecKind::ExplicitSpecialization {
-            self.ast.decls.respecify_function(m, fspec);
+            // The member keeps what its in-class declaration said about
+            // virtuality ([class.virtual]; clang's `isVirtual` reads the
+            // canonical declaration): dropping it would drop the member's
+            // vtable slot (WP-164).
+            let old = self.ast.decls.function(m).map(|x| x.spec).unwrap_or_default();
+            let member = fspec
+                .with_virtual(old.is_virtual())
+                .with_pure(old.is_pure())
+                .with_virtual_written(old.virtual_written())
+                .with_override(old.is_override())
+                .with_final(old.is_final());
+            self.ast.decls.respecify_function(m, member);
         }
         Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
     }

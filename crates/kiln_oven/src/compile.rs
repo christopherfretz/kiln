@@ -236,6 +236,20 @@ pub(crate) fn holding_vars(ast: &kiln_ast::Ast, d: DeclId) -> Vec<DeclId> {
     })
 }
 
+/// Whether `q` is a literal type ([basic.types.general]/10), as sema
+/// records it for each class (`DefinitionBits::LITERAL`).
+fn is_literal_type(ast: &kiln_ast::Ast, q: QualType) -> bool {
+    let mut t = q;
+    while let Some(e) = ast.types.element(t) {
+        t = e;
+    }
+    let TypeView::Record(r) = ast.types.canonical_view(t) else { return true };
+    ast.definition(r).and_then(|d| ast.decls.record(d)).is_none_or(|x| {
+        !x.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE)
+            || x.defn.contains(kiln_ast::decl::DefinitionBits::LITERAL)
+    })
+}
+
 /// Whether `d` is a variable with automatic storage duration.
 pub(crate) fn is_local_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
     let n = ast.decls.get(d);
@@ -1952,6 +1966,19 @@ impl Compiler<'_> {
             return;
         }
         let q = n.ty().unwrap_or(QualType::INT);
+        if let Some(init) = v.init
+            && self.cur_fn.is_some()
+            && !is_literal_type(ast, q)
+        {
+            // clang `CheckLiteralType` (from `EvaluateInPlace`): a local
+            // variable of non-literal type, named with its initializer's
+            // whole (array) type.
+            let t = Oven::type_name(ast, ast.exprs.get(init).ty().without_quals());
+            self.trap(
+                init,
+                &format!("non-literal type '{t}' cannot be used in a constant expression"),
+            );
+        }
         let ty = self.ty(q);
         let local = self.locals.get(&d).copied();
         match local {
