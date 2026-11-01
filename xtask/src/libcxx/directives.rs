@@ -83,7 +83,6 @@ impl Kind {
     /// Why the driver cannot run this kind, if it cannot.
     pub fn unsupported(self) -> Option<&'static str> {
         match self {
-            Self::Verify => Some("driver: -verify"),
             Self::Sh => Some("driver: RUN lines"),
             Self::Gen => Some("driver: generated tests"),
             Self::ObjCxx => Some("driver: objective-c++"),
@@ -325,7 +324,7 @@ mod tests {
         for &(name, want) in cases {
             assert_eq!(Kind::of(name), want, "{name}");
         }
-        assert_eq!(Kind::Verify.unsupported(), Some("driver: -verify"));
+        assert_eq!(Kind::Verify.unsupported(), None);
         assert_eq!(Kind::Pass.unsupported(), None);
     }
 

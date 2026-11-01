@@ -393,6 +393,22 @@ that `pragma` does not consume becomes `Marker::Pragma`.
 
 The default is `NoCallbacks`.
 
+### Comment handler: consumer is `-verify` (WP-143)
+
+`Preprocessor::set_comment_handler(Box<dyn FnMut(Span)>)` is clang's
+`Preprocessor::addCommentHandler`. The handler is called with the span of
+every comment the preprocessor lexes in normal mode, in source order,
+whether or not `-C` keeps it as a token. That covers comments on
+directive lines, in included files and in macro definitions. It does not
+cover comments in skipped conditional groups or in the discarded text of
+`#error` / `#warning`, which clang lexes raw and never shows its handler.
+Installing the handler also turns recording on for files already entered
+(the lexer's `set_record_comments`, spec/lex.md "Comments"). There is at
+most one handler; with none, nothing is recorded. Comments lexed in
+clang's raw mode (`quiet_lex`: the rest of a `#error` / `#warning` line,
+`#pragma GCC poison` operands) are dropped, as clang's raw lexer never
+calls its handlers. Test: `tests/cpp_comments.rs`.
+
 ## Interface
 
 ```rust
@@ -688,8 +704,8 @@ it through kiln_diag's fatal handling; the core itself carries on.
   group. Each test carries a `///` tag naming its [cpp] section, and a
   note when it records a deviation. The files are `cpp_replace`,
   `cpp_stringize`, `cpp_rescan`, `cpp_cond`, `cpp_line`, `cpp_pragma`,
-  `cpp_predefined`, `cpp_include`, `cpp_embed`, `cpp_module` and
-  `cpp_options`.
+  `cpp_predefined`, `cpp_include`, `cpp_embed`, `cpp_module`,
+  `cpp_options` and `cpp_comments`.
 
   Their goldens are clang 19's `-E -P` output and diagnostics, run with
   the aarch64 Linux C++26 predefines in
