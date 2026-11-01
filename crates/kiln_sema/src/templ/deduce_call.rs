@@ -621,7 +621,7 @@ impl Sema<'_, '_> {
     }
 
     /// `E` when `p` is `std::initializer_list<E>` (dependent or not).
-    fn initializer_list_param(&mut self, p: QualType) -> Option<QualType> {
+    pub(crate) fn initializer_list_param(&mut self, p: QualType) -> Option<QualType> {
         if let TypeView::TemplateSpecialization { name, args, .. } =
             self.ast.types.canonical_view(p)
         {

@@ -1325,9 +1325,72 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
+        // [over.match.list]/1.1 (phase 1) with the guides as constructors:
+        // the initializer-list guides with the list as their one argument,
+        // except for a single element of a specialization of the template
+        // (or a class derived from one).
+        if let Some(Initializer::List(l)) = init
+            && !self.ctad_list_of_spec(tmpl, l)
+        {
+            let list_guides: Vec<DeclId> = guides
+                .iter()
+                .copied()
+                .filter(|&g| {
+                    let p = match self.kind_of(g) {
+                        DeclKind::FunctionTemplate => self.pattern_of(g),
+                        _ => Some(g),
+                    };
+                    p.is_some_and(|p| self.is_init_list_guide(p))
+                })
+                .collect();
+            if !list_guides.is_empty() {
+                let mut set = self.begin_set(SetKind::Normal, loc);
+                let base = self.ovl.lists.len();
+                let idx = u32::try_from(base).unwrap_or(u32::MAX);
+                self.ovl.lists.push(l.clone());
+                set.args.push(crate::overload::ArgInfo {
+                    list: Some(idx),
+                    ..crate::overload::ArgInfo::of_type(
+                        QualType::VOID,
+                        kiln_ast::expr::ValueCategory::PRValue,
+                    )
+                });
+                self.add_ctad_candidates(&mut set, &list_guides, how, loc);
+                self.order_template_candidates(&mut set);
+                let out = self.best_viable(&mut set);
+                let result = if matches!(out, OvlOutcome::NoViable) {
+                    None
+                } else {
+                    Some(self.ctad_outcome(&set, out, declared, name, how, loc))
+                };
+                self.ovl.lists.truncate(base);
+                self.end_set(set);
+                if let Some(r) = result {
+                    return r;
+                }
+            }
+        }
         let mut set = self.begin_set(SetKind::Normal, loc);
         let base = self.push_call_args(&mut set, args, braced);
-        for g in guides {
+        self.add_ctad_candidates(&mut set, &guides, how, loc);
+        self.order_template_candidates(&mut set);
+        let out = self.best_viable(&mut set);
+        let result = self.ctad_outcome(&set, out, declared, name, how, loc);
+        self.ovl.lists.truncate(base);
+        self.end_set(set);
+        result
+    }
+
+    /// The guides `guides` as candidates of `set` for initialization
+    /// `how` (an explicit guide is not one of copy-initialization).
+    fn add_ctad_candidates(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        guides: &[DeclId],
+        how: CtadInit,
+        loc: Loc,
+    ) {
+        for &g in guides {
             let (pattern, template) = match self.kind_of(g) {
                 DeclKind::FunctionTemplate => match self.pattern_of(g) {
                     Some(p) => (p, Some(g)),
@@ -1340,12 +1403,12 @@ impl Sema<'_, '_> {
                 continue;
             }
             if how == CtadInit::Copy && self.fn_spec(pattern).is_explicit() {
-                self.add_explicit_guide(&mut set, pattern, g, template);
+                self.add_explicit_guide(set, pattern, g, template);
                 continue;
             }
             match template {
                 Some(ft) => self.add_template_candidate(
-                    &mut set,
+                    set,
                     ft,
                     g,
                     None,
@@ -1354,7 +1417,7 @@ impl Sema<'_, '_> {
                     loc,
                 ),
                 None => self.add_candidate(
-                    &mut set,
+                    set,
                     pattern,
                     g,
                     CandidateKind::Function,
@@ -1362,10 +1425,26 @@ impl Sema<'_, '_> {
                 ),
             }
         }
-        self.order_template_candidates(&mut set);
-        let out = self.best_viable(&mut set);
+    }
+
+    /// The deduced type of overload resolution `out` over the guides in
+    /// `set` for the placeholder `declared` (template name `name`), or
+    /// `None` after a diagnostic at `loc`.
+    fn ctad_outcome(
+        &mut self,
+        set: &OverloadCandidateSet,
+        out: OvlOutcome,
+        declared: QualType,
+        name: TemplateNameId,
+        how: CtadInit,
+        loc: Loc,
+    ) -> Option<QualType> {
+        let with_quals = |s: &mut Self, t: QualType| {
+            let d = s.ast.types.deduced_template_specialization(name, Some(t));
+            QualType::new(d.ty(), d.quals_bits() | declared.quals_bits())
+        };
         let shown = self.ty_str(declared.without_quals());
-        let result = match out {
+        match out {
             OvlOutcome::Success(b) | OvlOutcome::Deleted(b) => {
                 let f = set.cand(b).func();
                 let pattern = set.cand(b).template.and_then(|t| self.pattern_of(t)).unwrap_or(f);
@@ -1392,20 +1471,67 @@ impl Sema<'_, '_> {
             }
             OvlOutcome::NoViable => {
                 let msg = self.diag(DiagId::sema_ctad_no_viable, loc).arg(shown);
-                let msg = self.with_ovl_notes(msg, &set, false);
+                let msg = self.with_ovl_notes(msg, set, false);
                 self.emit(msg);
                 None
             }
             OvlOutcome::Ambiguous => {
                 let msg = self.diag(DiagId::sema_ctad_ambiguous, loc).arg(shown);
-                let msg = self.with_ovl_notes(msg, &set, true);
+                let msg = self.with_ovl_notes(msg, set, true);
                 self.emit(msg);
                 None
             }
-        };
-        self.ovl.lists.truncate(base);
-        self.end_set(set);
-        result
+        }
+    }
+
+    /// Whether guide `f` is an initializer-list "constructor"
+    /// ([dcl.init.list]/2): its first parameter is (a reference to cv)
+    /// `std::initializer_list<E>`, dependent or not, and any others have
+    /// default arguments.
+    fn is_init_list_guide(&mut self, f: DeclId) -> bool {
+        let params = self.param_decls(f);
+        let Some(&p) = params.first() else { return false };
+        if params[1..].iter().any(|&q| !self.param_has_default(q)) {
+            return false;
+        }
+        let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        let t = self.non_reference(pty);
+        self.initializer_list_param(t).is_some()
+    }
+
+    /// Whether braced list `l` is a single expression whose type is a
+    /// specialization of class template `tmpl` or a class derived from
+    /// one ([over.match.class.deduct]/4: initializer-list guides are then
+    /// not considered first).
+    fn ctad_list_of_spec(&mut self, tmpl: DeclId, l: &InitList) -> bool {
+        let [item] = l.items.as_slice() else { return false };
+        let InitValue::Expr(e) = item.value else { return false };
+        let ty = self.ast.exprs.get(e).ty();
+        let Some(rd) = self.ast.types.as_record(ty) else { return false };
+        let first = self.ast.first(self.inst_template(tmpl));
+        let mut work = vec![rd];
+        let mut seen = Vec::new();
+        while let Some(c) = work.pop() {
+            let c = self.ast.first(c);
+            if seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            if let Some((_, info)) = self.ast.spec_info(c)
+                && self.ast.first(self.inst_template(info.template)) == first
+            {
+                return true;
+            }
+            let Some(def) = self.ast.definition(c) else { continue };
+            let bases: Vec<QualType> =
+                self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
+            for b in bases {
+                if let Some(r) = self.ast.types.as_record(b) {
+                    work.push(r);
+                }
+            }
+        }
+        false
     }
 
     /// Explicit guide `g` (pattern `pattern`) as a non-viable candidate
