@@ -339,6 +339,9 @@ impl Sema<'_, '_> {
                     return e;
                 }
                 let style = if direct_list { InitStyle::DirectList } else { InitStyle::CopyList };
+                if self.ast.types.is_reference(ty) {
+                    return self.reference_list_init(ty, &l, Some(loc), style);
+                }
                 if let Some(e) = self.list_construct(ty, &l, style, loc, None) {
                     return e;
                 }
@@ -707,7 +710,7 @@ impl Sema<'_, '_> {
             return e;
         }
         if self.ast.types.is_reference(ty) {
-            return self.reference_list_init(ty, l, entity);
+            return self.reference_list_init(ty, l, entity, InitStyle::CopyList);
         }
         // Scalar ([dcl.init.list]/3.9-10).
         let mut inits = Vec::new();
@@ -745,7 +748,13 @@ impl Sema<'_, '_> {
     /// the reference directly; otherwise a prvalue of the referenced type
     /// is copy-list-initialized and the reference binds to it (a
     /// non-const lvalue reference cannot).
-    fn reference_list_init(&mut self, ty: QualType, l: &InitList, entity: Option<Loc>) -> ExprId {
+    fn reference_list_init(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        entity: Option<Loc>,
+        style: InitStyle,
+    ) -> ExprId {
         let r = self.pointee_sugared(ty).unwrap_or(QualType::ERROR);
         let ur = conv::strip_cv(self, r);
         let cr = self.ast.types.canonical(ur);
@@ -779,7 +788,16 @@ impl Sema<'_, '_> {
             let flat = Self::list_exprs(l);
             return self.recover(ty, &flat, l.lbrace);
         }
-        let tmp = self.init_from_list_at(r, l, entity);
+        // The temporary is list-initialized as the reference is
+        // ([dcl.init.list]/3.10: copy- or direct-), and a failed
+        // constructor call names the reference type.
+        self.ctor_diag_ty = Some(ty);
+        let tmp = self.list_construct(r, l, style, at, None);
+        self.ctor_diag_ty = None;
+        let tmp = match tmp {
+            Some(t) => t,
+            None => self.init_from_list_at(r, l, entity),
+        };
         self.init_from_expr(ty, tmp, ConvCtx::Initialization, at)
     }
 

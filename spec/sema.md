@@ -1320,6 +1320,14 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     class type is initialized from that element ([dcl.init.list]/3.2)
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
+- **References** (`reference_list_init`, [dcl.init.list]/3.10): when
+  the single element is not reference-related, a temporary of the
+  referenced type is list-initialized with the reference's own kind
+  (direct for `T& r{..}`, copy for `T& r = {..}`, a call argument or
+  a `return`). A failed constructor call for that temporary names the
+  reference type (`no matching constructor for initialization of
+  'const E &'`), via `ctor_diag_ty`, which `use_ctor` takes on entry
+  so nested constructions cannot see it.
 - **Results** are attached with `act_on_init`. `act_on_uninit` handles
   default-initialization: const objects without an initializer are an
   error, and incomplete types are diagnosed.

@@ -933,6 +933,7 @@ impl Sema<'_, '_> {
         entity: InitEntity,
         sites: DiagSites,
     ) -> Option<ExprId> {
+        let named = self.ctor_diag_ty.take().unwrap_or(ty);
         match sel {
             Selected::Found(m) => {
                 if call.reject_explicit && self.fn_spec(m).is_explicit() {
@@ -1109,7 +1110,7 @@ impl Sema<'_, '_> {
                     } else {
                         DiagId::sema_ovl_no_viable_ctor
                     };
-                    self.diag(id, sites.deleted).arg(self.ty_arg(ty))
+                    self.diag(id, sites.deleted).arg(self.ty_arg(named))
                 };
                 let mut msg = match self.ovl.failed.take() {
                     Some(set) => {

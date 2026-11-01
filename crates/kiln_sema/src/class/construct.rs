@@ -133,6 +133,7 @@ impl Sema<'_, '_> {
         let class = self.ast.definition(target)?;
         let class = conv::bases::complete_class(self, class)?;
         let (entity, ck) = self.take_ctor_entity();
+        let diag_ty = self.ctor_diag_ty.take();
         let loc = site.loc;
         if style.is_list()
             && self.has_init_list_ctor(class)
@@ -172,6 +173,7 @@ impl Sema<'_, '_> {
             ..CtorCall::new(args)
         };
         let k = if args.is_empty() { SpecialKind::DefaultCtor } else { SpecialKind::CopyCtor };
+        self.ctor_diag_ty = diag_ty;
         let built = self.use_ctor(sel, ty, class, k, call, loc, entity, site.sites);
         Some(built.unwrap_or_else(|| self.recover(ty, args, loc)))
     }
