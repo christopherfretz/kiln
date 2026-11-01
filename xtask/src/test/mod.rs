@@ -46,7 +46,9 @@ options:
   --report-parity <file>
                       write per-directory pass/fail counts into <file> between
                       its `<!-- parity:begin -->`/`<!-- parity:end -->` markers
-  -j, --jobs <N>      parallel tests (default: min(available CPUs, 8))
+  -j, --jobs <N>      parallel tests (default: min(available CPUs, 8)); an upper
+                      bound when MAKEFLAGS names a jobserver fifo, whose tokens
+                      every spawned process then also holds (spec/harness.md)
   --timeout <secs>    run-time limit for test binaries (default: 10)
   --mem-limit <MiB>   address-space cap of every compiler, oracle and test
                       binary process (default: 8192; 0 disables it, leaving
@@ -233,11 +235,12 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(8)))
         .min(cases.len());
     println!(
-        "running {} tests with {} ({}), oracle: {}, {jobs} jobs, mem limit: {}",
+        "running {} tests with {} ({}), oracle: {}, {jobs} jobs{}, mem limit: {}",
         cases.len(),
         cfg.compiler.display(),
         compiler_kind.as_str(),
         cfg.oracle.as_ref().map_or_else(|| "none".to_owned(), |o| o.display().to_string()),
+        crate::jobs::global().describe().map_or_else(String::new, |d| format!(" (jobserver {d})")),
         cfg.mem_limit.map_or_else(|| "none".to_owned(), |l| format!("{} MiB", l.mib)),
     );
 
