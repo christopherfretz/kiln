@@ -24,6 +24,7 @@ use crate::templ::subst::{SubstFail, SubstResult, Substituter};
 
 /// The state of the innermost expansion in progress.
 #[derive(Clone, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent flags of one expansion")]
 pub struct PackState {
     /// Probing for the length: the first pack reached stops the probe.
     pub probing: bool,
@@ -38,6 +39,16 @@ pub struct PackState {
     /// template (`alias<T, U>...` with `alias`'s pack bound to `{T, U}`
     /// inside a template over the packs `T` and `U`).
     pub element_has_packs: bool,
+    /// An element still names an unexpanded pack of a retained level
+    /// (`is_convertible<_Up, _Tp>...` in a member template of
+    /// `tuple<_Tp...>` with only `_Tp` known): the expansion is rebuilt
+    /// with [`PackState::keep`] instead (§7.2).
+    pub partial: bool,
+    /// Rebuilding a partially substituted expansion: a substituted type
+    /// parameter pack becomes a `SubstTemplateTypeParmPackType` naming
+    /// its arguments, expanded with the retained packs later (clang's
+    /// `TransformTemplateTypeParmType` with no pack index).
+    pub keep: bool,
 }
 
 /// The result of expanding one pattern.
@@ -166,7 +177,15 @@ impl Substituter<'_, '_, '_> {
                     }
                 }
                 self.sema.templ.pack_elements += u64::from(n);
-                res.map(|()| Expansion::Elements(out))
+                if res.is_err() && self.pack.partial {
+                    // A partially substituted expansion (§7.2): the
+                    // pattern rebuilt once, still an expansion.
+                    self.pack = PackState { ellipsis, keep: true, ..PackState::default() };
+                    self.pack_index = None;
+                    f(self).map(Expansion::Unexpanded)
+                } else {
+                    res.map(|()| Expansion::Elements(out))
+                }
             }
         };
         self.pack = saved_state;
@@ -212,8 +231,9 @@ impl Substituter<'_, '_, '_> {
 
     /// One element of a type pack expansion: an element that still names
     /// an unexpanded pack (of a level not substituted, `tl<Ts, Us>...`
-    /// with only `Ts` known) needs clang's partially-substituted packs.
-    /// An element whose packs came from the pack's own elements (the
+    /// with only `Ts` known) fails and marks the expansion partially
+    /// substituted, rebuilt by [`Self::expand_pattern_at`] (§7.2). An
+    /// element whose packs came from the pack's own elements (the
     /// arguments name packs of an enclosing template) is complete.
     pub(crate) fn element_ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
         let saved = std::mem::take(&mut self.pack.element_has_packs);
@@ -224,7 +244,8 @@ impl Substituter<'_, '_, '_> {
             && !from_elements
             && self.sema.ast.types.qflags(t).contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK)
         {
-            return self.unimplemented("partially substituted pack expansion", loc);
+            self.pack.partial = true;
+            return Err(SubstFail);
         }
         Ok(t)
     }

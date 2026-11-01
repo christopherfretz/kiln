@@ -1005,7 +1005,15 @@ impl Sema<'_, '_> {
             // dependent `enable_if_t<…, int> = 0` cannot be told apart
             // before then (libc++ `__shared_ptr_emplace`).
             let b = conv::decay_dependent(self, this);
-            return Some(self.builder().dependent_member(Some(b), true, name, false, nns, None, loc));
+            return Some(self.builder().dependent_member(
+                Some(b),
+                true,
+                name,
+                false,
+                nns,
+                None,
+                loc,
+            ));
         }
         let set = crate::overload::OvlMember {
             name,
