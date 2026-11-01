@@ -44,6 +44,9 @@ pub(crate) struct MemInitState {
     /// The mem-initializers of a constructor in a template, kept for its
     /// instantiation (when `skip`).
     pattern: Vec<MemInitInfo>,
+    /// A mem-initializer of the template failed its definition-time check
+    /// (when `skip`).
+    pattern_failed: bool,
 }
 
 /// What a mem-initializer-id names.
@@ -95,6 +98,11 @@ impl Sema<'_, '_> {
         let index = u8::try_from(self.mem_inits.count).unwrap_or(CtorInit::IMPLICIT - 1);
         self.mem_inits.count += 1;
         if self.mem_inits.skip {
+            if !self.pattern_mem_init_names_something(ctor, info) {
+                self.mem_inits.pattern_failed = true;
+                self.cleanup = super::CleanupState::default();
+                return;
+            }
             self.mem_inits.pattern.push(info.clone());
             self.cleanup = super::CleanupState::default();
             return;
@@ -139,6 +147,9 @@ impl Sema<'_, '_> {
         if st.skip {
             // A template: the instantiation substitutes into the list
             // (`templ/class.rs`).
+            if st.pattern_failed {
+                self.inst.failed_mem_inits.insert(ctor);
+            }
             if !st.pattern.is_empty()
                 && !self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID)
             {
@@ -161,6 +172,47 @@ impl Sema<'_, '_> {
         self.mem_inits.count += 1;
         self.mem_inits.any_errors = true;
         self.cleanup = super::CleanupState::default();
+    }
+
+    /// The definition-time check of an unqualified mem-initializer-id of a
+    /// constructor in a template ([class.base.init]/2, clang
+    /// `BuildMemInitializer` in a dependent context): it must name a
+    /// non-static data member of the class, or a type found by lookup
+    /// from the constructor's scope. A member of a dependent base is not
+    /// found ([temp.dep.general]/3), so `B(1)` for a dependent base `B<T>`
+    /// is ill-formed; the base is named `B<T>(1)` or `D::B(1)`. Reports
+    /// the error and returns false; instantiations of the constructor then
+    /// add no implicit initializers (as for a failed substitution).
+    fn pattern_mem_init_names_something(&mut self, ctor: DeclId, info: &MemInitInfo) -> bool {
+        let MemInitId::Ident(name) = info.id else { return true };
+        if info.pack_expansion || self.ast.decls.get(ctor).flags().contains(DeclFlags::INVALID) {
+            return true;
+        }
+        let Some(class) = self.ast.decls.get(ctor).ctx() else { return true };
+        let def = self.class_def(class);
+        let found = self.lookup_in(def, name, LookupKind::Ordinary);
+        if found
+            .decls
+            .iter()
+            .any(|&d| matches!(self.kind_of(d), DeclKind::Field | DeclKind::IndirectField))
+        {
+            return true;
+        }
+        if self.mem_init_class_member_type(def, name).is_some() {
+            return true;
+        }
+        match self.classify_name(name, None) {
+            crate::NameClass::Type(..) => return true,
+            crate::NameClass::TypeTemplate(t) if self.injected_class_type(t).is_some() => {
+                return true;
+            }
+            _ => {}
+        }
+        let msg = self
+            .diag(DiagId::sema_init_mem_not_member_or_base, info.loc)
+            .arg(crate::decl::sym_str(self, name));
+        self.emit(msg);
+        false
     }
 
     /// Whether the mem-initializers of `ctor` are checked: not for an

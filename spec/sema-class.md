@@ -698,6 +698,22 @@ initializer 'y' does not name a non-static data member or base class`,
 'B'`), `an initializer for a delegating constructor must appear alone`,
 `initializing multiple members of union`.
 
+**In a template** (WP-223; clang `BuildMemInitializer` in a dependent
+context). The list is kept as written and substituted per instantiation, but
+an unqualified id is checked when the definition is parsed: it must name a
+field of the class or a type found by that lookup (member typedef,
+injected-class-name, a type in an enclosing scope, a template parameter). A
+dependent base is not searched ([temp.dep.general]/3), so `B(1)` for base
+`B<T>` gets the `does not name` error at the definition, and the
+constructor's instantiations add no implicit initializers. A qualified id
+whose qualifier can name an unknown specialization (`T::Self(2)`, or the
+current instantiation with a dependent base, `D::B(1)` / `D<T>::B(1)`) is a
+`DependentNameType` (`Sema::act_unknown_specialization_type`). It is looked
+up in the instantiation (`no type named 'Foo' in 'D7<int>'`). The same
+function makes `typename D::X` dependent for such a qualifier
+([temp.res.general]/5). A qualified id naming no type in a non-dependent
+qualifier is still `qualified member initializers` unsupported.
+
 **Completion** (clang `SetCtorInitializers`): stored in initialization order
 ([class.base.init]/13): virtual bases (inheritance-graph order, complete-object
 ctor only), direct bases, fields. An unwritten subobject gets
