@@ -174,6 +174,7 @@ impl CodegenJob<'_> {
         let (pp, _deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let popts = ParseOptions {
             std: job.std.lex,
+            gnu: job.std.gnu,
             exceptions: a.predef.exceptions.unwrap_or(true),
             rtti: a.predef.rtti.unwrap_or(true),
             inst_limits: a.templ.limits(),

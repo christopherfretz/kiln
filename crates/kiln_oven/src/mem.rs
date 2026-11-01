@@ -161,6 +161,10 @@ pub(crate) mod flags {
     pub const RESOLVING: u8 = 8;
     /// A heap allocation made by an array form (`new[]`, `allocate`).
     pub const ARRAY_NEW: u8 = 16;
+    /// A static object whose lifetime began outside the evaluation, with
+    /// `mutable` subobjects: reads of them are diagnosed
+    /// ([expr.const]/5.9, `Oven::mutable_path`).
+    pub const MUTABLE_OUTSIDE: u8 = 32;
 }
 
 #[derive(Clone, Copy, Debug)]

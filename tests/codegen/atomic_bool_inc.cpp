@@ -11,3 +11,5 @@ bool j() { return ++b; }
 bool k(volatile _Atomic(bool) *p) { return (*p)++; }
 bool l(volatile _Atomic(bool) *p) { return ++*p; }
 int m() { return ab++ + 1; }
+bool n(bool x) { bool r = x ? ab++ : ab++; return r; }
+bool o(bool x) { return x ? ab++ : ab++; }

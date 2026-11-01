@@ -140,3 +140,37 @@ fn bad_option_values() {
     assert!(o.parse_arg("-fno-color-diagnostics") && o.parse_arg("-ferror-limit=0"));
     assert_eq!(o.error_limit, 0);
 }
+
+// spec: diag.md "Pragma state" (clang `DiagStateMap`)
+#[test]
+fn pragma_state_by_location() {
+    let (sm, f) = source("p.c", "0123456789abcdefghij\n");
+    let opts = DiagOptions::from_args(["-Werror=macro-redefined"]);
+    let engine = DiagEngine::new(&sm, &opts, MemorySink::new());
+    let at = |o: u32| sm.loc(f, o);
+    let id = DiagId::pp_macro_redefined;
+    let off = DiagId::pp_unknown_pragma;
+    assert!(!engine.is_enabled(off));
+    engine.pragma_push(at(2));
+    assert!(engine.pragma_set(at(2), false, "macro-redefined", Severity::Ignored));
+    assert!(engine.pragma_set(at(4), false, "unknown-pragmas", Severity::Warning));
+    // A `warning` pragma overrides an error mapping (unlike `-Wfoo`).
+    assert!(engine.pragma_set(at(6), false, "macro-redefined", Severity::Warning));
+    assert!(engine.pragma_pop(at(8)));
+    assert!(!engine.pragma_pop(at(9)));
+    assert!(!engine.pragma_set(at(10), false, "no-such-group", Severity::Ignored));
+    assert!(engine.pragma_set(at(12), false, "everything", Severity::Ignored));
+    let sev = |o: u32, id: DiagId| engine.severity_at(id, at(o));
+    assert_eq!(sev(1, id), Severity::Error);
+    assert_eq!(sev(3, id), Severity::Ignored);
+    assert_eq!(sev(5, off), Severity::Warning);
+    assert_eq!(sev(7, id), Severity::Warning);
+    assert_eq!(sev(8, id), Severity::Error);
+    assert_eq!(sev(8, off), Severity::Ignored);
+    assert_eq!(sev(13, id), Severity::Ignored);
+    // Errors are not in -Weverything.
+    assert_eq!(sev(13, DiagId::pp_endif_without_if), Severity::Error);
+    // Enabled somewhere: worth checking.
+    assert!(engine.is_enabled(off));
+    assert_eq!(engine.severity(id), Severity::Error);
+}

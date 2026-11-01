@@ -195,6 +195,15 @@ impl Oven {
             Fault::NullArith => {
                 (site.loc, "cannot perform pointer arithmetic on null pointer".into())
             }
+            // clang designates a variable length array as an array of
+            // unknown bound: the arithmetic succeeds and the access fails
+            // (`note_constexpr_access_unsized_array`). Kiln faults at the
+            // arithmetic, and reports it as the (usual) read.
+            Fault::ArrayIndex { .. } if site.e.is_some_and(|e| indexes_vla(ast, e)) => (
+                site.loc,
+                "read of element of array without known bound is not allowed in a constant expression"
+                    .into(),
+            ),
             Fault::ArrayIndex { idx, n, array } => {
                 let what = if array {
                     format!("array of {n} element{}", if n == 1 { "" } else { "s" })
@@ -250,6 +259,17 @@ impl Oven {
                     site.loc,
                     format!(
                         "{} member '{}' of union with {what} is not allowed in a constant expression",
+                        ak::verb(k),
+                        name_of(ast, field)
+                    ),
+                )
+            }
+            Fault::Mutable { ak: k, field } => {
+                extra.push(Note::new(ast.decls.get(field).loc(), "declared here"));
+                (
+                    site.loc,
+                    format!(
+                        "{} mutable member '{}' is not allowed in a constant expression",
                         ak::verb(k),
                         name_of(ast, field)
                     ),
@@ -893,6 +913,18 @@ impl Oven {
                     "{verb} object outside its lifetime is not allowed in a constant expression"
                 )
             }
+            // clang evaluates a variable length array (GNU extension) as
+            // an array of unknown bound (`note_constexpr_access_unsized_array`).
+            MemFault::PastEnd | MemFault::OutOfBounds
+                if self.alloc_any(Ptr::decode(p)).is_some_and(|a| {
+                    matches!(a.origin, Origin::Var(d)
+                        if ast.decls.get(d).ty().is_some_and(|q| crate::compile::is_vla(ast, q)))
+                }) =>
+            {
+                format!(
+                    "{verb} element of array without known bound is not allowed in a constant expression"
+                )
+            }
             MemFault::PastEnd | MemFault::OutOfBounds => {
                 format!(
                     "{verb} dereferenced one-past-the-end pointer is not allowed in a constant expression"
@@ -943,7 +975,12 @@ impl Oven {
                 let name = name_of(ast, d);
                 {
                     let vi = var_info(ast, d);
-                    if vi.usable && vi.init.is_none() {
+                    if ast.decls.get(d).kind() == DeclKind::ParmVar {
+                        // clang note_constexpr_function_param_value_unknown.
+                        format!(
+                            "function parameter '{name}' with unknown value cannot be used in a constant expression"
+                        )
+                    } else if vi.usable && vi.init.is_none() {
                         format!("initializer of '{name}' is unknown")
                     } else if vi.usable {
                         format!("initializer of '{name}' is not a constant expression")
@@ -1033,6 +1070,33 @@ pub(crate) fn array_name(elem: &str, n: u64) -> String {
         None => elem.find('[').unwrap_or(elem.len()),
     };
     format!("{}[{n}]{}", &elem[..at], &elem[at..])
+}
+
+/// Whether `e` (a subscript or pointer arithmetic) indexes a variable
+/// length array variable.
+fn indexes_vla(ast: &Ast, e: ExprId) -> bool {
+    let e = skip_parens(ast, e);
+    if !matches!(ast.exprs.get(e).kind(), ExprKind::ArraySubscriptExpr | ExprKind::BinaryOperator) {
+        return false;
+    }
+    ast.exprs.operands(e).into_iter().any(|mut o| {
+        for _ in 0..16 {
+            let k = ast.exprs.get(o).kind();
+            match k {
+                ExprKind::DeclRefExpr => {
+                    return ast
+                        .decls
+                        .get(ast.exprs.decl(o))
+                        .ty()
+                        .is_some_and(|q| crate::compile::is_vla(ast, q));
+                }
+                ExprKind::ParenExpr => o = ast.exprs.operand(o),
+                _ if k.is_cast() => o = ast.exprs.operand(o),
+                _ => return false,
+            }
+        }
+        false
+    })
 }
 
 /// The callee's spelling for "'f' evaluates to a null function pointer".
