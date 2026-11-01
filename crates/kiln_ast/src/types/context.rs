@@ -813,6 +813,15 @@ impl TypeContext {
         }
     }
 
+    /// The value type `T` of an `_Atomic(T)` (canonically; the
+    /// qualifiers on `_Atomic(T)` itself are not included).
+    pub fn as_atomic(&self, q: QualType) -> Option<QualType> {
+        match self.canonical_view(q) {
+            TypeView::Atomic(v) => Some(v),
+            _ => None,
+        }
+    }
+
     /// The class of a (canonical) record type.
     pub fn as_record(&self, q: QualType) -> Option<DeclId> {
         match self.canonical_view(q) {

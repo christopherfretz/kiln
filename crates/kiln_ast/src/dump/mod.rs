@@ -674,6 +674,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
+            | ExprKind::AtomicExpr
             | ExprKind::CXXNewExpr
             | ExprKind::CXXDeleteExpr => {
                 for c in exprs.children(e, lists) {

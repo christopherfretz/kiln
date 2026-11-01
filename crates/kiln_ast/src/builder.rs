@@ -2218,6 +2218,42 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::RecoveryExpr, vk, deps, 0, ty, loc, list.raw(), 0)
     }
 
+    // ----- WP-154: atomic builtins --------------------------------------
+
+    /// An `AtomicExpr` (clang's `AtomicExpr`): a `__c11_atomic_*` /
+    /// `__atomic_*` operation `op` (its builtin id, see
+    /// [`crate::decl::builtin::atomic`]) of the converted operands `subs`
+    /// in clang's order (`ptr`, `order`, `val1`, `order_fail`, `val2`,
+    /// `weak`, as the form has them); `loc` is the builtin name's
+    /// location, `rparen` the closing `)`.
+    pub fn atomic_expr(
+        &mut self,
+        op: u32,
+        subs: &[ExprId],
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        for &c in subs {
+            deps |= self.deps(c);
+        }
+        let list = self.ast.lists.push(subs);
+        let op = u8::try_from(op).expect("atomic operation ids are below 256");
+        let e = self.simple(
+            ExprKind::AtomicExpr,
+            ValueCategory::PRValue,
+            deps,
+            op,
+            ty,
+            loc,
+            list.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
     // ----- WP-064: expression forms ---------------------------------------
 
     /// `T()` for a non-class type `T` ([expr.type.conv]/2): a prvalue

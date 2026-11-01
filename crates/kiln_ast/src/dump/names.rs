@@ -844,6 +844,25 @@ impl<'a> AstNames<'a> {
                 self.expr(ExprId::new(n.a()), d, out);
                 out.push(')');
             }
+            ExprKind::AtomicExpr => {
+                // clang's `StmtPrinter::VisitAtomicExpr`: the builtin's
+                // name and the operands in source order.
+                use crate::decl::builtin::atomic;
+                let op = exprs.atomic_op(e);
+                out.push_str(atomic::name(op));
+                out.push('(');
+                let subs: Vec<ExprId> = ast.lists.iter::<ExprId>(exprs.atomic_subs(e)).collect();
+                let order = atomic::form(op).map_or(&[][..], atomic::Form::arg_to_sub);
+                for (i, &k) in order.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    if let Some(&c) = subs.get(k) {
+                        self.expr(c, d, out);
+                    }
+                }
+                out.push(')');
+            }
             ExprKind::CXXNoexceptExpr => {
                 out.push_str("noexcept(");
                 self.expr(exprs.noexcept_operand(e), d, out);

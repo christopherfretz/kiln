@@ -1811,6 +1811,18 @@ impl ExprArena {
     }
 
     /// The explicit initializers of a `CXXParenListInitExpr`.
+    /// The operation of an `AtomicExpr`: its builtin id
+    /// ([`crate::decl::builtin::atomic`]).
+    pub fn atomic_op(&self, e: ExprId) -> u32 {
+        u32::from(self.expect_kind(e, ExprKind::AtomicExpr).aux)
+    }
+
+    /// The operands of an `AtomicExpr` in clang's order: `ptr`, `order`,
+    /// then (as the form has them) `val1`, `order_fail`, `val2`, `weak`.
+    pub fn atomic_subs(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::AtomicExpr).a)
+    }
+
     pub fn paren_list_inits(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_kind(e, ExprKind::CXXParenListInitExpr).a)
     }
@@ -2216,7 +2228,9 @@ impl ExprArena {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
-            ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
+            ExprKind::RecoveryExpr | ExprKind::AtomicExpr => {
+                v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
+            }
             ExprKind::LambdaExpr => {
                 if let Some(l) = self.lambdas.get(LambdaId::new(n.a)).inits {
                     v.extend(lists.iter::<ExprId>(l));
