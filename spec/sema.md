@@ -1187,7 +1187,9 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)
   - aggregates, with brace elision, designators (C++20, in order) and
-    unions (first member, or the designated one)
+    unions (first member, or the designated one); an aggregate class
+    whose list holds one undesignated element of the same or a derived
+    class type is initialized from that element ([dcl.init.list]/3.2)
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **Results** are attached with `act_on_init`. `act_on_uninit` handles
