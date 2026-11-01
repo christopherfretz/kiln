@@ -1,10 +1,13 @@
 # WP-146 progress — inheriting-constructor follow-ups (WP-114)
 
 Branch `wp/146-inheriting-ctor-followups`, worktree `kiln/.worktrees/wp-146`,
-base af52e15 (main merged early for WP-149's `using.rs` signature). Every
+base af52e15. Main was merged three times at the coordinator's request:
+af52e15 (WP-149's `using.rs` signature), b8af85f (WP-148/151) and 3539dd8
+(WP-137). Every
 behaviour was compared against clang 19.
 
-Result: see "Gate and CI" below.
+Result: M3 gate 319/585, up from 317 (WP-149), with main merged at 3539dd8. CI is
+green (`.build/ci-wp146.log` in the helper repo).
 
 ## Items
 1. [x] **Deleted inheriting constructors.** `class/special/deletion.rs:205`
@@ -78,6 +81,17 @@ Result: see "Gate and CI" below.
      instantiation, so this is not cheap. `ast/class.implicit/eager.cpp`
      stays XFAIL.
 
+8. [x] **Found during the merge: operator and conversion member hiding.** The
+   /4 object parameter (item 2) made `namespace.udecl/operator-names.cpp`
+   ambiguous. A member `operator[]` never hid the using-declared base one: it
+   only ranked better through the derived-to-base object conversion.
+   - `check_using_shadow_conflict` (`using.rs`) now takes a `DeclName`;
+   - it now also runs for operator and literal-operator declarations
+     (`decl.rs:1468`) and for conversion functions
+     (`act_on_special_member_declarator`).
+
+   Test: `namespace.udecl/hide-operator-conversion.cpp`.
+
 ## Follow-ups
 - Inlining a C-variadic inheriting constructor as the base variant of a
   class with virtual bases reports "not supported yet". The VTT has to be
@@ -102,4 +116,9 @@ Result: see "Gate and CI" below.
   - `static_assert` printing `'!c'`.
 
 ## Gate and CI
-(filled in at handback)
+- CI: `cargo xtask ci` green at 65530f5 (corpus 1804/1812 with 8 XFAIL,
+  clang self-check 1776). The first run failed one clippy lint, fixed in
+  65530f5.
+- Gate: 319/585, up from 317. `std/utilities/meta` went from 116 to 118.
+  The new top cluster "expected body of lambda expression" comes from
+  WP-151 on main (simd_utils.h, WP-156).

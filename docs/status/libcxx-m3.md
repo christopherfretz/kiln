@@ -13,8 +13,8 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Setup
 
-- kiln: debug build of the WP-149 branch (commit in the generated "Run" table below), which
-  includes main at `5ef890a` (WP-134, WP-136, WP-138 and WP-144 merged).
+- kiln: debug build of the WP-146 branch (commit in the generated "Run" table below), which
+  includes main at `3539dd8` (WP-148, WP-151 and WP-137 merged).
 - Tests and headers: libc++ `llvmorg-19.1.7`. The tests come from the sparse checkout. The headers,
   `libc++.so`, `libc++experimental.a` and `libc++abi` come from the clang 19 packages in the
   container.
@@ -24,10 +24,12 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Reading
 
-**Overall: 317/585 (54.2%)**, up from 307 after WP-142 (254 after WP-141, 20 at the WP-081
-baseline). Main before WP-149 measured 312. The WP-149 branch measured 315 before it merged
-WP-144. There are no crashes, and no KILLED, TIMEOUT or hang results. Every failure is at the
-compile stage.
+**Overall: 319/585 (54.5%)** on the WP-146 branch, up from 317 after WP-149 (307 after WP-142,
+254 after WP-141, 20 at the WP-081 baseline). The gain is two `std/utilities/meta` tests (116 to
+118). The branch includes main's WP-151 and WP-137. WP-151 exposes the next layer of
+`__algorithm/simd_utils.h`, which is the new "expected body of lambda expression" cluster (31
+first errors, filed as WP-156). There are no crashes, and no KILLED, TIMEOUT or hang results.
+Every failure is at the compile stage.
 
 Per directory, WP-142 → WP-149:
 
@@ -88,7 +90,7 @@ Among the clusters that are rarely first:
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `63a1ced` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `65530f5` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -97,8 +99,8 @@ Among the clusters that are rarely first:
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 392.8 s |
-| peak RSS | 72 MiB (largest single process, `std/utilities/meta/meta.unary/meta.unary.prop/is_standard_layout.pass.cpp`; gnu-time) |
+| wall time | 385.3 s |
+| peak RSS | 72 MiB (largest single process, `std/utilities/meta/meta.unary/meta.unary.comp/is_compound.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -106,7 +108,7 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 
 | directory | total | pass | fail | xfail | xpass | unsupported (driver) | killed | timeout | error | pass rate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `std/utilities/meta` | 155 | 116 | 32 | 0 | 0 | 7 (6) | 0 | 0 | 0 | 78.4% |
+| `std/utilities/meta` | 155 | 118 | 30 | 0 | 0 | 7 (6) | 0 | 0 | 0 | 79.7% |
 | `std/utilities/utility` | 168 | 30 | 115 | 0 | 0 | 23 (19) | 0 | 0 | 0 | 20.7% |
 | `std/containers/sequences/array` | 47 | 25 | 12 | 0 | 0 | 10 (10) | 0 | 0 | 0 | 67.6% |
 | `std/strings/string.view` | 93 | 50 | 38 | 0 | 0 | 5 (5) | 0 | 0 | 0 | 56.8% |
@@ -114,13 +116,13 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 | `std/numerics/bit` | 17 | 13 | 2 | 0 | 0 | 2 (2) | 0 | 0 | 0 | 86.7% |
 | `std/language.support/support.limits` | 112 | 63 | 49 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 56.2% |
 | `std/language.support/support.initlist` | 5 | 5 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
-| **total** | 642 | 317 | 268 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 54.2% |
+| **total** | 642 | 319 | 266 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 54.5% |
 
 ### Failures by stage
 
 | directory | compile | link | run | expected-fail-but-succeeded |
 |---|---:|---:|---:|---:|
-| `std/utilities/meta` | 32 | 0 | 0 | 0 |
+| `std/utilities/meta` | 30 | 0 | 0 | 0 |
 | `std/utilities/utility` | 115 | 0 | 0 | 0 |
 | `std/containers/sequences/array` | 12 | 0 | 0 | 0 |
 | `std/strings/string.view` | 38 | 0 | 0 | 0 |
@@ -135,44 +137,44 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 
 | directory | clusters |
 |---|---|
-| `std/utilities/meta` | `compile: kiln: not yet implemented: type trait '…'` (11); `compile: static assertion failed due to requirement '…':` (5); `compile: comparison of distinct pointer types ('…' and '…' (aka '…'))` (5) |
-| `std/utilities/utility` | `compile: use of undeclared identifier '…'` (47); `compile: variable template partial specialization does not specialize any template argument; to define the primary template, remove the template argument list` (20); `compile: no member named '…' in '…'` (11) |
-| `std/containers/sequences/array` | `compile: type constraint differs in template redeclaration` (4); `compile: call to '…' is ambiguous` (3); `compile: comparison of distinct pointer types ('…' and '…' (aka '…'))` (2) |
+| `std/utilities/meta` | `compile: kiln: not yet implemented: type trait '…'` (11); `compile: comparison of distinct pointer types ('…' and '…' (aka '…'))` (5); `compile: array has incomplete element type '…'` (4) |
+| `std/utilities/utility` | `compile: use of undeclared identifier '…'` (47); `compile: expected body of lambda expression` (24); `compile: no member named '…' in '…'` (11) |
+| `std/containers/sequences/array` | `compile: type constraint differs in template redeclaration` (4); `compile: use of undeclared identifier '…'` (3); `compile: comparison of distinct pointer types ('…' and '…' (aka '…'))` (2) |
 | `std/strings/string.view` | `compile: type constraint differs in template redeclaration` (10); `compile: called object type '…' is not a function or function pointer` (6); `compile: static assertion expression is not an integral constant expression` (5) |
-| `std/containers/views/views.span` | `compile: type constraint differs in template redeclaration` (9); `compile: initialization by an initializer-list constructor is not supported yet` (4); `compile: call to '…' is ambiguous` (3) |
+| `std/containers/views/views.span` | `compile: type constraint differs in template redeclaration` (9); `compile: initialization by an initializer-list constructor is not supported yet` (4); `compile: expected body of lambda expression` (3) |
 | `std/numerics/bit` | `compile: static assertion failed due to requirement '…'` (1); `compile: unknown type name '…'` (1) |
 | `std/language.support/support.limits` | `compile: use of undeclared identifier '…'` (13); `compile: unknown type name '…'` (8); `compile: constructors is not supported yet` (7) |
 | `std/language.support/support.initlist` | — |
 
 ### Error clusters
 
-93 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
+89 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
-| 1 | 60 | 158 | `compile: use of undeclared identifier '…'` | `std/language.support/support.limits/support.limits.general/atomic.version.compile.pass.cpp` | `use of undeclared identifier '__c11_atomic_thread_fence'` |
-| 2 | 28 | 28 | `compile: type constraint differs in template redeclaration` | `std/containers/sequences/array/iterator_concept_conformance.compile.pass.cpp` | `type constraint differs in template redeclaration` |
-| 3 | 25 | 77 | `compile: kiln: not yet implemented: type trait '…'` | `std/containers/views/views.span/span.elem/at.pass.cpp` | `kiln: not yet implemented: type trait '__is_trivially_assignable'` |
-| 4 | 20 | 44 | `compile: variable template partial specialization does not specialize any template argument; to define the primary template, remove the template argument list` | `std/utilities/utility/mem.res/mem.res.global/new_delete_resource.pass.cpp` | `variable template partial specialization does not specialize any template argument; to define the primary template, remove the template argument list` |
+| 1 | 63 | 158 | `compile: use of undeclared identifier '…'` | `std/containers/sequences/array/array.tuple/get_const_rv.pass.cpp` | `use of undeclared identifier '__atomic_add_fetch'` |
+| 2 | 31 | 44 | `compile: expected body of lambda expression` | `std/containers/views/views.span/span.sub/first.pass.cpp` | `expected body of lambda expression` |
+| 3 | 28 | 28 | `compile: type constraint differs in template redeclaration` | `std/containers/sequences/array/iterator_concept_conformance.compile.pass.cpp` | `type constraint differs in template redeclaration` |
+| 4 | 25 | 77 | `compile: kiln: not yet implemented: type trait '…'` | `std/containers/views/views.span/span.elem/at.pass.cpp` | `kiln: not yet implemented: type trait '__is_trivially_assignable'` |
 | 5 | 14 | 52 | `compile: unknown type name '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `unknown type name '__SVFloat32_t'` |
-| 6 | 14 | 29 | `compile: call to '…' is ambiguous` | `std/containers/sequences/array/array.tuple/get_const_rv.pass.cpp` | `call to 'operator new' is ambiguous` |
-| 7 | 13 | 103 | `compile: no member named '…' in '…'` | `std/containers/views/views.span/span.cons/initializer_list.pass.cpp` | `no member named '_SmallHandler' in '__any_imp'` |
-| 8 | 9 | 15 | `compile: constructors is not supported yet` | `std/language.support/support.limits/support.limits.general/bitset.version.compile.pass.cpp` | `constructors is not supported yet` |
-| 9 | 8 | 9 | `compile: comparison of distinct pointer types ('…' and '…' (aka '…'))` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `comparison of distinct pointer types ('void *' and 'const typename aligned_storage<3 * sizeof(void *)>::type *' (aka 'const std::__1::aligned_storage<24>::type …` |
-| 10 | 7 | 7 | `compile: template non-type parameter has a different type '…' (aka '…') in template redeclaration` | `std/language.support/support.limits/support.limits.general/deque.version.compile.pass.cpp` | `template non-type parameter has a different type '_Dp' (aka 'type-parameter-1-4') in template redeclaration` |
-| 11 | 6 | 22 | `compile: expected member name or '…' after declaration specifiers` | `std/language.support/support.limits/support.limits.general/map.version.compile.pass.cpp` | `expected member name or ';' after declaration specifiers` |
-| 12 | 6 | 18 | `compile: initialization by an initializer-list constructor is not supported yet` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `initialization by an initializer-list constructor is not supported yet` |
-| 13 | 6 | 13 | `compile: static assertion failed due to requirement '…':` | `std/containers/sequences/array/size_and_alignment.compile.pass.cpp` | `static assertion failed due to requirement 'alignof(std::array<short, 0>) == alignof(short)':` |
-| 14 | 6 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/equal.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
-| 15 | 5 | 46 | `compile: static assertion expression is not an integral constant expression` | `std/strings/string.view/string.view.find/find_first_of_pointer_size.pass.cpp` | `static assertion expression is not an integral constant expression` |
-| 16 | 5 | 15 | `compile: kiln: not yet implemented: substitution into CXXTryStmt` | `std/strings/string.view/string.view.access/at.pass.cpp` | `kiln: not yet implemented: substitution into CXXTryStmt` |
-| 17 | 4 | 10 | `compile: static assertion failed due to requirement '…'` | `std/numerics/bit/bit.cast/bit_cast.compile.pass.cpp` | `static assertion failed due to requirement '!...'` |
-| 18 | 4 | 4 | `compile: aggregate expression ConditionalOperator is not supported yet` | `std/strings/string.view/string.view.template/ends_with.ptr.pass.cpp` | `aggregate expression ConditionalOperator is not supported yet` |
-| 19 | 4 | 4 | `compile: array has incomplete element type '…'` | `std/utilities/meta/meta.unary/meta.unary.cat/array.pass.cpp` | `array has incomplete element type 'Incomplete'` |
-| 20 | 3 | 60 | `compile: expected expression` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `expected expression` |
-| 21 | 3 | 3 | `compile: constexpr if condition is not a constant expression` | `std/containers/views/views.span/span.objectrep/as_bytes.pass.cpp` | `constexpr if condition is not a constant expression` |
-| 22 | 2 | 12 | `compile: member initializer '…' does not name a non-static data member or base class` | `std/utilities/utility/pairs/pair.piecewise/piecewise_construct.pass.cpp` | `member initializer 'pair' does not name a non-static data member or base class` |
-| 23 | 2 | 7 | `compile: no viable conversion from '…' (aka '…') to '…' (aka '…')` | `std/containers/sequences/array/array.overview/nttp.equivalence.compile.pass.cpp` | `no viable conversion from 'std::array<int, 3>' (aka 'std::__1::array<int, 3>') to 'std::array' (aka 'std::__1::array')` |
+| 6 | 13 | 103 | `compile: no member named '…' in '…'` | `std/containers/views/views.span/span.cons/initializer_list.pass.cpp` | `no member named '_SmallHandler' in '__any_imp'` |
+| 7 | 9 | 15 | `compile: constructors is not supported yet` | `std/language.support/support.limits/support.limits.general/bitset.version.compile.pass.cpp` | `constructors is not supported yet` |
+| 8 | 8 | 9 | `compile: comparison of distinct pointer types ('…' and '…' (aka '…'))` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `comparison of distinct pointer types ('void *' and 'const typename aligned_storage<3 * sizeof(void *)>::type *' (aka 'const std::__1::aligned_storage<24>::type …` |
+| 9 | 7 | 7 | `compile: template non-type parameter has a different type '…' (aka '…') in template redeclaration` | `std/language.support/support.limits/support.limits.general/deque.version.compile.pass.cpp` | `template non-type parameter has a different type '_Dp' (aka 'type-parameter-1-4') in template redeclaration` |
+| 10 | 6 | 22 | `compile: expected member name or '…' after declaration specifiers` | `std/language.support/support.limits/support.limits.general/map.version.compile.pass.cpp` | `expected member name or ';' after declaration specifiers` |
+| 11 | 6 | 18 | `compile: initialization by an initializer-list constructor is not supported yet` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `initialization by an initializer-list constructor is not supported yet` |
+| 12 | 6 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/equal.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
+| 13 | 5 | 46 | `compile: static assertion expression is not an integral constant expression` | `std/strings/string.view/string.view.find/find_first_of_pointer_size.pass.cpp` | `static assertion expression is not an integral constant expression` |
+| 14 | 5 | 15 | `compile: kiln: not yet implemented: substitution into CXXTryStmt` | `std/strings/string.view/string.view.access/at.pass.cpp` | `kiln: not yet implemented: substitution into CXXTryStmt` |
+| 15 | 4 | 11 | `compile: static assertion failed due to requirement '…':` | `std/containers/sequences/array/size_and_alignment.compile.pass.cpp` | `static assertion failed due to requirement 'alignof(std::array<short, 0>) == alignof(short)':` |
+| 16 | 4 | 10 | `compile: static assertion failed due to requirement '…'` | `std/numerics/bit/bit.cast/bit_cast.compile.pass.cpp` | `static assertion failed due to requirement '!...'` |
+| 17 | 4 | 4 | `compile: aggregate expression ConditionalOperator is not supported yet` | `std/strings/string.view/string.view.template/ends_with.ptr.pass.cpp` | `aggregate expression ConditionalOperator is not supported yet` |
+| 18 | 4 | 4 | `compile: array has incomplete element type '…'` | `std/utilities/meta/meta.unary/meta.unary.cat/array.pass.cpp` | `array has incomplete element type 'Incomplete'` |
+| 19 | 3 | 60 | `compile: expected expression` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `expected expression` |
+| 20 | 3 | 3 | `compile: constexpr if condition is not a constant expression` | `std/containers/views/views.span/span.objectrep/as_bytes.pass.cpp` | `constexpr if condition is not a constant expression` |
+| 21 | 2 | 12 | `compile: member initializer '…' does not name a non-static data member or base class` | `std/utilities/utility/pairs/pair.piecewise/piecewise_construct.pass.cpp` | `member initializer 'pair' does not name a non-static data member or base class` |
+| 22 | 2 | 7 | `compile: no viable conversion from '…' (aka '…') to '…' (aka '…')` | `std/containers/sequences/array/array.overview/nttp.equivalence.compile.pass.cpp` | `no viable conversion from 'std::array<int, 3>' (aka 'std::__1::array<int, 3>') to 'std::array' (aka 'std::__1::array')` |
+| 23 | 2 | 2 | `compile: a non-constant std::align_val_t allocation argument is not supported yet` | `std/strings/string.view/string.view.hash/string_view.pass.cpp` | `a non-constant std::align_val_t allocation argument is not supported yet` |
 | 24 | 2 | 2 | `compile: braced-init-list operands of a functional cast is not supported yet` | `std/utilities/utility/pairs/pairs.pair/ctor.brace-init.pass.cpp` | `braced-init-list operands of a functional cast is not supported yet` |
 | 25 | 1 | 12 | `compile: no type named '…' in '…'` | `std/utilities/meta/meta.trans/meta.trans.other/common_reference.compile.pass.cpp` | `no type named 'type' in 'std::__1::common_reference<B &, D &>'` |
 | 26 | 1 | 8 | `compile: ambiguous partial specializations of '…'` | `std/utilities/meta/meta.logical/conjunction.compile.pass.cpp` | `ambiguous partial specializations of 'conjunction<std::true_type>'` |
@@ -180,16 +182,16 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 28 | 1 | 6 | `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` | `std/utilities/utility/mem.res/mem.res.aliases/header_list_synop2.pass.cpp` | `static_cast from '__base_pointer' (aka 'std::__1::__list_node_base<std::__1::__list_imp<int, polymorphic_allocator<int>>::value_type, std::__1::__list_imp<int, …` |
 | 29 | 1 | 3 | `compile: static assertion failed due to requirement '…': Types differ unexpectedly` | `std/utilities/meta/meta.trans/meta.trans.other/decay.pass.cpp` | `static assertion failed due to requirement 'test_macros_detail::is_same<int (int) const, std::decay<int (int) const>::type>::value': Types differ unexpectedly` |
 | 30 | 1 | 1 | `compile: IR lowering failed: IrError { kind: BadCall, message: "call with N arguments to a function taking N" }` | `std/language.support/support.limits/limits/numeric.limits/default.pass.cpp` | `IR lowering failed: IrError { kind: BadCall, message: "call with 1 arguments to a function taking 2" }` |
-| 31 | 1 | 1 | `compile: cast Dependent is not supported yet` | `std/strings/string.view/string.view.hash/string_view.pass.cpp` | `cast Dependent is not supported yet` |
-| 32 | 1 | 1 | `compile: implicit assignment of an array of this type is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.pass.cpp` | `implicit assignment of an array of this type is not supported yet` |
-| 33 | 1 | 1 | `compile: redefinition of '…'` | `std/language.support/support.limits/support.limits.general/expected.version.compile.pass.cpp` | `redefinition of 'operator=='` |
-| 34 | 1 | 1 | `compile: static assertion failed due to requirement '…': Operation must be noexcept` | `std/utilities/utility/exchange/exchange.pass.cpp` | `static assertion failed due to requirement 'noexcept(std::exchange(x, std::move(x)))': Operation must be noexcept` |
-| 35 | 1 | 1 | `compile: static assertion failed due to requirement '…': streaming operator declaration not present` | `std/strings/string.view/string.view.io/stream_insert_decl_present.compile.pass.cpp` | `static assertion failed due to requirement 'HasDecl<std::string_view>::value': streaming operator declaration not present` |
-| 36 | 1 | 1 | `compile: the '…' type qualifier is not supported yet` | `std/utilities/meta/meta.unary/meta.unary.prop/is_trivially_destructible.pass.cpp` | `the '_Atomic' type qualifier is not supported yet` |
-| 37 | 0 | 58 | `compile: expected '…' for function-style cast or type construction` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `expected '(' for function-style cast or type construction` |
-| 38 | 0 | 44 | `compile: expected body of lambda expression` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `expected body of lambda expression` |
-| 39 | 0 | 44 | `compile: static assertion failed due to requirement '…': unexpected required size for mask integer type` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `static assertion failed due to requirement 'sizeof(bool) == 0': unexpected required size for mask integer type` |
-| 40 | 0 | 44 | `compile: variable '…' declared with deduced type '…' cannot appear in its own initializer` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `variable '__impl' declared with deduced type 'auto' cannot appear in its own initializer` |
+| 31 | 1 | 1 | `compile: implicit assignment of an array of this type is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.pass.cpp` | `implicit assignment of an array of this type is not supported yet` |
+| 32 | 1 | 1 | `compile: redefinition of '…'` | `std/language.support/support.limits/support.limits.general/expected.version.compile.pass.cpp` | `redefinition of 'operator=='` |
+| 33 | 1 | 1 | `compile: static assertion failed due to requirement '…': streaming operator declaration not present` | `std/strings/string.view/string.view.io/stream_insert_decl_present.compile.pass.cpp` | `static assertion failed due to requirement 'HasDecl<std::string_view>::value': streaming operator declaration not present` |
+| 34 | 1 | 1 | `compile: the '…' type qualifier is not supported yet` | `std/utilities/meta/meta.unary/meta.unary.prop/is_trivially_destructible.pass.cpp` | `the '_Atomic' type qualifier is not supported yet` |
+| 35 | 0 | 58 | `compile: expected '…' for function-style cast or type construction` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `expected '(' for function-style cast or type construction` |
+| 36 | 0 | 44 | `compile: variable '…' declared with deduced type '…' cannot appear in its own initializer` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `variable '__impl' declared with deduced type 'auto' cannot appear in its own initializer` |
+| 37 | 0 | 39 | `compile: expected '…'` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `expected '>'` |
+| 38 | 0 | 36 | `compile: out-of-line definition of '…' does not match any declaration in '…'` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `out-of-line definition of '__node_insert_unique' does not match any declaration in 'std::__1::__hash_table'` |
+| 39 | 0 | 35 | `compile: expected parameter declarator` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `expected parameter declarator` |
+| 40 | 0 | 32 | `compile: '…' using-declarators is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.addressof.compile.pass.cpp` | `'typename' using-declarators is not supported yet` |
 
 ### Crashes
 
