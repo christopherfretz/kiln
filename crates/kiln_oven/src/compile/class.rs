@@ -855,6 +855,15 @@ impl Compiler<'_> {
             let (aux, at) = if dtor.is_some() { (1, loc) } else { (4, self.node(callee_e).loc()) };
             self.emit_site(Op::EndLife, aux, &[this, cls.0], e, at);
         }
+        // An explicit call of a trivial destructor (`p->~W()`) runs nothing
+        // ([class.dtor]/14, /18; WP-215): only the lifetime bookkeeping
+        // happens, as for a non-trivial one.
+        if let Some(cls) = dtor
+            && spec.is_some_and(kiln_ast::decl::FnSpec::is_trivial)
+        {
+            self.emit_site(Op::EndLife, 2, &[this, cls.0], e, loc);
+            return self.reg();
+        }
         // A union's trivial assignment operator copies the object, its
         // active member included (clang's `handleTrivialCopy`; sema
         // defines it with an empty body).

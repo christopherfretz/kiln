@@ -1155,7 +1155,12 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   (corrected: the earlier text said sema rejected it); a union's
   trivial one copies the source's active member (WP-212). Explicit
   destructor calls (`p->~T()`) and `::operator new`/`::operator delete`
-  are evaluated (WP-212, "Transient allocation"). Inheriting constructors (WP-114) evaluate their
+  are evaluated (WP-212, "Transient allocation").
+  An explicit call of a trivial destructor (WP-215) evaluates the
+  object expression and runs nothing; lifetime is tracked only in
+  `std::allocator` storage, so after `p->~T()` on a local kiln still
+  accepts a later read and the implicit destruction at scope end
+  (clang rejects both). Inheriting constructors (WP-114) evaluate their
   `CXXInheritedCtorInitExpr` as a call of the base constructor with the
   inheriting constructor's own arguments (`compile/class.rs`
   `inherited_ctor`); notes name a non-constexpr inherited constructor
@@ -1518,7 +1523,8 @@ Remaining (each traps with a `kiln:` note today):
   the other WP-212 deviations listed under "Transient allocation".
 - `delete` through `void*`, and P2747 placement new (see above).
 - Front-end gaps that keep some forms from reaching the Oven (not
-  Oven work): class-specific `operator new`,
+  Oven work): qualified destructor names (`p->T::~T()`),
+  class-specific `operator new`,
   `delete[] (expr)` (parsed as a lambda) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the

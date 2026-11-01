@@ -297,6 +297,16 @@ impl Collect<'_> {
                     self.expr(v);
                 }
             }
+            // [except.pre]/1: a try-block and its handlers are ordinary
+            // statement contexts (a constant `R::k` read there folds too,
+            // rather than loading a member that has no definition).
+            StmtKind::CXXTryStmt => {
+                self.stmt(ast.stmts.try_block(s));
+                for &h in ast.lists.get(ast.stmts.try_handlers(s)) {
+                    self.stmt(StmtId::new(h));
+                }
+            }
+            StmtKind::CXXCatchStmt => self.stmt(ast.stmts.catch_block(s)),
             StmtKind::GCCAsmStmt => {
                 for op in ast.stmts.asm_operands(s) {
                     self.expr(op.expr);
