@@ -2250,6 +2250,10 @@ impl Sema<'_, '_> {
         });
         let prev = if global_new_delete {
             None
+        } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
+            // A friend of a templated class redeclares nothing until
+            // instantiated (see `is_dependent_friend_fn`).
+            None
         } else if friend && d.qualifier.is_none() {
             // Redeclaration lookup in the namespace sees hidden friends,
             // but not the members of its inline namespaces: those are in
@@ -2259,7 +2263,7 @@ impl Sema<'_, '_> {
                 .ast
                 .lookup_local(ctx, dname)
                 .iter_with_inline()
-                .filter(|&(_, via_inline)| !via_inline)
+                .filter(|&(d, via_inline)| !via_inline && !self.is_dependent_friend_fn(d))
                 .map(|(d, _)| d)
                 .collect();
             self.pick_prev_function(&found, new_fn)
@@ -3761,6 +3765,38 @@ impl Sema<'_, '_> {
 
     // -- function definitions ----------------------------------------------------
 
+    /// Whether function (template) `f` is a friend declared in a
+    /// templated class: it is a pattern that only declares the function
+    /// when the class is instantiated ([temp.inst]/4, [temp.friend]), so
+    /// another friend declaration does not redeclare it and two such
+    /// definitions are not a redefinition before then (libc++ `expected` and its `void` partial
+    /// specialization both define `operator==(const expected&, const
+    /// unexpected<_E2>&)`; clang's `CheckForFunctionRedefinition`).
+    fn is_dependent_friend_fn(&self, f: DeclId) -> bool {
+        let f = if self.kind_of(f) == DeclKind::FunctionTemplate {
+            self.pattern_of(f).unwrap_or(f)
+        } else {
+            f
+        };
+        self.ast.decls.get(f).misc().friend() != FriendKind::None
+            && self.in_templated_class(self.ast.decls.lexical_ctx(f))
+    }
+
+    /// True if lexical context `cur` is, or is nested in, a class template
+    /// or partial specialization before any namespace scope.
+    fn in_templated_class(&self, mut cur: Option<DeclId>) -> bool {
+        while let Some(c) = cur {
+            match self.kind_of(c) {
+                DeclKind::ClassTemplatePartialSpecialization => return true,
+                DeclKind::CXXRecord if self.ast.described_template(c).is_some() => return true,
+                DeclKind::TranslationUnit | DeclKind::Namespace => return false,
+                _ => {}
+            }
+            cur = self.ast.decls.lexical_ctx(c);
+        }
+        false
+    }
+
     /// Starts the definition of function `f` at `{`: checks for a
     /// redefinition, opens the function scope with the parameters.
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
@@ -3768,6 +3804,8 @@ impl Sema<'_, '_> {
         let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));
         if let Some(prev) = deleted.or_else(|| self.ast.definition(f))
             && prev != f
+            && !self.is_dependent_friend_fn(f)
+            && !self.is_dependent_friend_fn(prev)
         {
             let msg = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
