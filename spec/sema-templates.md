@@ -291,6 +291,7 @@ All of these are built by sema actions, which compute dependence as in
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
 | `int x(e)` with a type-dependent `e` | the initializer is kept as `ParenListExpr` |
+| `X x(e)`, `X x = e`, `X x{e}` whose type `X` is a dependent class type (including the current instantiation, [temp.dep.type]/7) | the initializer is kept unconverted (a `ParenListExpr` for the parenthesized form) and initialization runs only at instantiation, as clang's `AddInitializerToDecl`; overload resolution against a dependent target would treat every candidate's conversion as an identity and report ambiguity (WP-276) |
 | `sizeof...(P)` | `SizeOfPackExpr` |
 | `e...` / `T...` | `PackExpansionExpr` / `PackExpansion` type |
 | `(e op ...)` | `CXXFoldExpr` |
