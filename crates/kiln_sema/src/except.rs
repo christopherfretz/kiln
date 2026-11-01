@@ -210,6 +210,10 @@ impl Sema<'_, '_> {
                 | ExprKind::ArrayTypeTraitExpr
                 | ExprKind::ExpressionTraitExpr
                 | ExprKind::CXXTypeidExpr => continue,
+                // [expr.prim.id.dtor]/2: as clang, the object expression
+                // of a pseudo-destructor is not looked at either, so
+                // `noexcept(f().~I())` is true for any `f`.
+                ExprKind::CXXPseudoDestructorExpr => continue,
                 ExprKind::CXXThrowExpr | ExprKind::CXXNewExpr => return true,
                 ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr
                     if self.callee_can_throw(exprs.callee(x)) =>
@@ -286,6 +290,11 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(c).kind() == ExprKind::DeclRefExpr
             && self.ast.has_nothrow_attr(self.ast.exprs.decl(c))
         {
+            return false;
+        }
+        // A pseudo-destructor call has no effect ([expr.prim.id.dtor]/2)
+        // and so is not potentially-throwing (clang `canThrow`).
+        if self.ast.exprs.get(c).kind() == ExprKind::CXXPseudoDestructorExpr {
             return false;
         }
         let t = &self.ast.types;
