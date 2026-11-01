@@ -3438,8 +3438,22 @@ impl Sema<'_, '_> {
         }
         if spec.is_constexpr() {
             self.check_constexpr_init(v, e);
-        } else if !spec.is_inline() && self.is_in_class_static(v) {
+        } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
+        }
+    }
+
+    /// The declaration whose initializer `v` carries: an instantiated
+    /// variable template specialization's pattern (a member variable
+    /// template defined out of line is not initialized in its class, as
+    /// clang's `BuildVariableInstantiation` keeps the pattern's lexical
+    /// context), else `v` itself.
+    fn init_written_in(&self, v: DeclId) -> DeclId {
+        match self.ast.spec_info(v) {
+            Some((_, s)) if s.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization => {
+                s.from
+            }
+            _ => v,
         }
     }
 
