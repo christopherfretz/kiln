@@ -9,11 +9,17 @@
 use kiln_source::Loc;
 
 use crate::ids::{
-    ArgListId, ConstValueId, DeclId, ExprId, ListId, NnsId, QualType, RawId, StmtId, StringLitId,
+    ArgListId, ConstValueId, DeclId, ExprId, LambdaId, ListId, NnsId, QualType, RawId, StmtId,
+    StringLitId,
 };
 use crate::lists::IdLists;
 use crate::mem::{HeapSize, MemReport, VecDims};
 use crate::slot::{AlreadySet, ColdMap};
+
+/// `ConstantExpr` aux bit: a nested immediate invocation (no wrapper in clang).
+const CONSTANT_ELIDED: u8 = 1;
+/// `ConstantExpr` aux bit: the cached value is not clang's (not dumped).
+const CONSTANT_VALUE_HIDDEN: u8 = 2;
 
 /// Expression kinds (spec/ast.md §5.3; clang's class names without the
 /// `Expr`/`Operator` suffix where the dump adds it). The numbering is
@@ -222,6 +228,9 @@ impl ExprFlags {
     pub const PASS_ALIGN: ExprFlags = ExprFlags(1 << 6);
     /// `CXXDeleteExpr`: written `delete[]`.
     pub const ARRAY_AS_WRITTEN: ExprFlags = ExprFlags(1 << 6);
+    /// `DeclRefExpr`: names an immediate function where that made the
+    /// enclosing function immediate (P2564; dump `immediate-escalating`).
+    pub const IMMEDIATE_ESCALATING: ExprFlags = ExprFlags(1 << 7);
 
     /// The raw bits (already shifted into bits 4..=7).
     pub const fn bits(self) -> u8 {
@@ -664,9 +673,11 @@ u8_enum!(
 u8_enum!(
     /// The clang type-trait keywords (spec/sema-templates.md §9.1, §9.4):
     /// the `aux` of `TypeTraitExpr`, `ArrayTypeTraitExpr` and
-    /// `ExpressionTraitExpr`. Spellings are the keywords; aliases
-    /// (`__is_same_as`, `__is_convertible_to`, `__is_literal`) are their
-    /// own rows because clang dumps the spelling's trait. Arity, status and
+    /// `ExpressionTraitExpr`. Spellings are the keywords. The clang
+    /// `ALIAS` keywords `__is_same_as` and `__is_literal_type` have rows
+    /// for `__has_builtin`, but a built expression names the aliased
+    /// trait (`__is_same`, `__is_literal`), as clang prints it;
+    /// `__is_convertible_to` is a trait of its own. Arity, status and
     /// the evaluator live in `kiln_sema::templ::builtins::TABLE`.
     TypeTrait {
         /// `__has_nothrow_assign`.
@@ -727,9 +738,9 @@ u8_enum!(
         IsFundamental = "__is_fundamental",
         /// `__is_integral`.
         IsIntegral = "__is_integral",
-        /// `__is_literal` (an alias of `__is_literal_type`).
+        /// `__is_literal`.
         IsLiteral = "__is_literal",
-        /// `__is_literal_type`.
+        /// `__is_literal_type` (an alias of `__is_literal`).
         IsLiteralType = "__is_literal_type",
         /// `__is_lvalue_reference`.
         IsLvalueReference = "__is_lvalue_reference",
@@ -799,7 +810,7 @@ u8_enum!(
         IsAssignable = "__is_assignable",
         /// `__is_convertible`.
         IsConvertible = "__is_convertible",
-        /// `__is_convertible_to` (an alias of `__is_convertible`).
+        /// `__is_convertible_to` (clang's own trait, not an alias).
         IsConvertibleTo = "__is_convertible_to",
         /// `__is_layout_compatible`.
         IsLayoutCompatible = "__is_layout_compatible",
@@ -1099,7 +1110,8 @@ pub struct ColdExprData {
     pub array_trait: ColdMap<ExprId, ArrayTraitExtra>,
     /// `TypeTraitExpr`: the location of the second type argument of a
     /// binary trait (clang reports `__is_base_of`'s incomplete derived
-    /// type there).
+    /// type there); `VAArgExpr`: the begin location of the written type
+    /// (clang's `TypeLoc::getBeginLoc`, where its checks report).
     pub trait_rhs_loc: ColdMap<ExprId, Loc>,
     /// The values of the source-location builtins at a use (§5.8): for a
     /// `SourceLocExpr` its own location and context, for a
@@ -1107,6 +1119,42 @@ pub struct ColdExprData {
     /// one, the location and context of the use. Computed by sema (which
     /// owns the source manager and the function-name printer).
     pub source_loc: ColdMap<ExprId, SourceLocValues>,
+    /// The initialized member of a union's `CXXParenListInitExpr`
+    /// (clang `getInitializedFieldInUnion`).
+    pub union_field: ColdMap<ExprId, DeclId>,
+}
+
+/// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
+/// and the GNU spellings; clang `PredefinedIdentKind`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(u8)]
+pub enum PredefinedKind {
+    /// `__func__`: the function's unqualified name.
+    Func,
+    /// `__FUNCTION__`: the same as `__func__` outside MSVC mode.
+    Function,
+    /// `__PRETTY_FUNCTION__`: the signature with qualified name and
+    /// template arguments.
+    PrettyFunction,
+}
+
+impl PredefinedKind {
+    /// Every kind, in `repr` order.
+    pub const ALL: [PredefinedKind; 3] =
+        [PredefinedKind::Func, PredefinedKind::Function, PredefinedKind::PrettyFunction];
+
+    /// The identifier (clang `getIdentKindName`).
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            PredefinedKind::Func => "__func__",
+            PredefinedKind::Function => "__FUNCTION__",
+            PredefinedKind::PrettyFunction => "__PRETTY_FUNCTION__",
+        }
+    }
+
+    fn from_aux(a: u8) -> PredefinedKind {
+        Self::ALL.get(usize::from(a)).copied().unwrap_or(PredefinedKind::Func)
+    }
 }
 
 /// The builtin a `SourceLocExpr` names (clang `SourceLocIdentKind`).
@@ -1194,6 +1242,7 @@ impl Default for ColdExprData {
             array_trait: ColdMap::new("array_trait"),
             trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
             source_loc: ColdMap::new("source_loc"),
+            union_field: ColdMap::new("union_field"),
         }
     }
 }
@@ -1208,6 +1257,8 @@ pub struct ExprArena {
     compound_assigns: Vec<CompoundAssignExtra>,
     init_lists: Vec<InitListExtra>,
     news: Vec<NewExtra>,
+    /// Lambda side records (`LambdaExpr.a`, `RecordData.lambda`).
+    pub lambdas: crate::lambda::LambdaArena,
     /// Cold per-expression data.
     pub cold: ColdExprData,
 }
@@ -1242,6 +1293,7 @@ impl Default for ExprArena {
                 operator_delete: None,
                 type_loc: Loc::INVALID,
             }],
+            lambdas: crate::lambda::LambdaArena::default(),
             cold: ColdExprData::default(),
         }
     }
@@ -1298,6 +1350,8 @@ impl ExprArena {
     }
 
     fn expect_kind(&self, e: ExprId, k: ExprKind) -> &ExprNode {
+        // Invariant (WP-145): accessors are called on the kind they read;
+        // a mismatch is a Sema/AST bug, never input (spec/ast.md).
         let n = self.get(e);
         assert!(n.kind == k, "expected {k:?}, found {:?}", n.kind);
         n
@@ -1492,6 +1546,17 @@ impl ExprArena {
         let n = &mut self.nodes[e.index() as usize];
         assert!(n.bits & 3 != 0, "only a glvalue can designate a bit-field");
         n.bits = (n.bits & !(3 << 2)) | ((ObjectKind::BitField as u8) << 2);
+    }
+
+    /// Marks the glvalue `e` as designating a vector component
+    /// ([`ObjectKind::VectorComponent`]), propagated like
+    /// [`Self::mark_bitfield`] (clang copies the object kind of the
+    /// left operand of `=`, of a compound assignment and of prefix
+    /// `++`/`--`, and of the right operand of `,`). Monotone.
+    pub fn mark_vector_component(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.bits & 3 != 0, "only a glvalue can designate a vector component");
+        n.bits = (n.bits & !(3 << 2)) | ((ObjectKind::VectorComponent as u8) << 2);
     }
 
     /// Retypes the string literal `e` that initializes a character array
@@ -1699,6 +1764,17 @@ impl ExprArena {
         DeclId::new(self.expect_kind(e, ExprKind::CXXDefaultArgExpr).a)
     }
 
+    /// The identifier a `PredefinedExpr` names.
+    pub fn predefined_kind(&self, e: ExprId) -> PredefinedKind {
+        PredefinedKind::from_aux(self.expect_kind(e, ExprKind::PredefinedExpr).aux)
+    }
+
+    /// The `StringLiteral` holding a `PredefinedExpr`'s value (clang
+    /// `getFunctionName`); `None` in a dependent context.
+    pub fn predefined_name(&self, e: ExprId) -> Option<ExprId> {
+        ExprId::from_raw(self.expect_kind(e, ExprKind::PredefinedExpr).a)
+    }
+
     /// The builtin a `SourceLocExpr` names.
     pub fn source_loc_kind(&self, e: ExprId) -> SourceLocKind {
         SourceLocKind::from_aux(self.expect_kind(e, ExprKind::SourceLocExpr).aux)
@@ -1729,6 +1805,14 @@ impl ExprArena {
         self.cold.source_loc.insert(e, v)
     }
 
+    /// Replaces the recorded source-location values of `e`: a function's
+    /// pretty name is final only once its return type is deduced (clang
+    /// computes `SourceLocExpr` values lazily, after the body). `false`
+    /// if none were recorded.
+    pub fn refine_source_loc_values(&mut self, e: ExprId, v: SourceLocValues) -> bool {
+        self.cold.source_loc.refine(e, v)
+    }
+
     /// The declaration context in which a `CXXDefaultInitExpr` /
     /// `CXXDefaultArgExpr` is used.
     pub fn used_context(&self, e: ExprId) -> DeclId {
@@ -1746,6 +1830,18 @@ impl ExprArena {
         self.expect_kind(e, ExprKind::CXXThisExpr).aux & 1 != 0
     }
 
+    /// The operation of an `AtomicExpr`: its builtin id
+    /// ([`crate::decl::builtin::atomic`]).
+    pub fn atomic_op(&self, e: ExprId) -> u32 {
+        u32::from(self.expect_kind(e, ExprKind::AtomicExpr).aux)
+    }
+
+    /// The operands of an `AtomicExpr` in clang's order: `ptr`, `order`,
+    /// then (as the form has them) `val1`, `order_fail`, `val2`, `weak`.
+    pub fn atomic_subs(&self, e: ExprId) -> ListId {
+        ListId::new(self.expect_kind(e, ExprKind::AtomicExpr).a)
+    }
+
     /// The explicit initializers of a `CXXParenListInitExpr`.
     pub fn paren_list_inits(&self, e: ExprId) -> ListId {
         ListId::new(self.expect_kind(e, ExprKind::CXXParenListInitExpr).a)
@@ -1754,6 +1850,12 @@ impl ExprArena {
     /// The array filler of a `CXXParenListInitExpr`.
     pub fn paren_list_filler(&self, e: ExprId) -> Option<ExprId> {
         ExprId::from_raw(self.expect_kind(e, ExprKind::CXXParenListInitExpr).b)
+    }
+
+    /// The initialized member of a union's `CXXParenListInitExpr`.
+    pub fn paren_list_union_field(&self, e: ExprId) -> Option<DeclId> {
+        self.expect_kind(e, ExprKind::CXXParenListInitExpr);
+        self.cold.union_field.get(e).copied()
     }
 
     /// The common expression (an `OpaqueValueExpr`) and element
@@ -1802,6 +1904,14 @@ impl ExprArena {
     pub fn trait_type_arg(&self, e: ExprId) -> Option<QualType> {
         let n = self.expect_kind(e, ExprKind::UnaryExprOrTypeTraitExpr);
         n.has(ExprFlags::ARG_IS_TYPE).then(|| QualType::from_raw(n.a)).flatten()
+    }
+
+    /// The `va_list` operand, the written type and the written type's
+    /// begin location of a `VAArgExpr`.
+    pub fn va_arg(&self, e: ExprId) -> (ExprId, QualType, Loc) {
+        let n = self.expect_kind(e, ExprKind::VAArgExpr);
+        let ty_loc = self.cold.trait_rhs_loc.get(e).copied().unwrap_or(n.loc);
+        (ExprId::new(n.a), QualType::from_raw(n.b).expect("VAArgExpr: written type"), ty_loc)
     }
 
     /// The (unevaluated) operand of a `CXXNoexceptExpr`.
@@ -1911,6 +2021,7 @@ impl ExprArena {
                         | ExprKind::CXXBindTemporaryExpr
                         | ExprKind::CXXStdInitializerListExpr
                         | ExprKind::ExprWithCleanups
+                        | ExprKind::ConvertVectorExpr
                         | ExprKind::PackExpansionExpr
                 ),
             "{:?} has no single operand",
@@ -1942,6 +2053,17 @@ impl ExprArena {
         DeclId::new(self.expect_kind(e, ExprKind::SubstNonTypeTemplateParmExpr).a)
     }
 
+    /// The parameter pack of a `SubstNonTypeTemplateParmPackExpr`.
+    pub fn subst_pack_parameter(&self, e: ExprId) -> DeclId {
+        DeclId::new(self.expect_kind(e, ExprKind::SubstNonTypeTemplateParmPackExpr).a)
+    }
+
+    /// The argument pack of a `SubstNonTypeTemplateParmPackExpr`.
+    pub fn subst_pack_args(&self, e: ExprId) -> ArgListId {
+        let b = self.expect_kind(e, ExprKind::SubstNonTypeTemplateParmPackExpr).b;
+        ArgListId::try_new(b).unwrap_or(ArgListId::EMPTY)
+    }
+
     /// The cached value of a `ConstantExpr`.
     pub fn constant_value(&self, e: ExprId) -> Option<ConstValueId> {
         ConstValueId::from_raw(self.expect_kind(e, ExprKind::ConstantExpr).b)
@@ -1961,6 +2083,67 @@ impl ExprArena {
         }
         n.b = v.raw();
         Ok(())
+    }
+
+    /// Whether the `ConstantExpr` `e` is an immediate invocation nested in
+    /// another one: clang removes its wrapper ([expr.const]/16; the dump
+    /// shows the operand in its place).
+    pub fn constant_elided(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::ConstantExpr).aux & CONSTANT_ELIDED != 0
+    }
+
+    /// Whether the cached value of the `ConstantExpr` `e` is kiln's own:
+    /// clang leaves the immediate invocations of a constant-initialized
+    /// variable's initializer unevaluated (the dump omits the value).
+    pub fn constant_value_hidden(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::ConstantExpr).aux & CONSTANT_VALUE_HIDDEN != 0
+    }
+
+    /// Marks `e` instantiation-dependent: a source-location value naming
+    /// the enclosing function in a dependent context (clang's
+    /// `SourceLocExpr` and the used-context rebuild of `CXXDefaultArgExpr`)
+    /// is recomputed when the template is instantiated. Call it before
+    /// any parent of `e` is built (parents copy their children's bits).
+    pub fn mark_instantiation_dependent(&mut self, e: ExprId) {
+        self.nodes[e.index() as usize].deps |= ExprDeps::INSTANTIATION;
+    }
+
+    /// Marks the `DeclRefExpr` or construction `e` as immediate-escalating
+    /// (P2564): it made the enclosing function immediate.
+    ///
+    /// # Panics
+    /// If `e` is neither a `DeclRefExpr` nor a construction.
+    pub fn set_immediate_escalating(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        match n.kind {
+            ExprKind::DeclRefExpr => n.bits |= ExprFlags::IMMEDIATE_ESCALATING.bits(),
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                n.aux |= 1 << 5;
+            }
+            k => panic!("expected DeclRefExpr or CXXConstructExpr, found {k:?}"),
+        }
+    }
+
+    /// Marks the `ConstantExpr` `e` as a nested immediate invocation
+    /// ([`ExprArena::constant_elided`]).
+    ///
+    /// # Panics
+    /// If `e` is not a `ConstantExpr`.
+    pub fn set_constant_elided(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::ConstantExpr, "expected ConstantExpr, found {:?}", n.kind);
+        n.aux |= CONSTANT_ELIDED;
+    }
+
+    /// Marks the value of the `ConstantExpr` `e` as kiln's own
+    /// ([`ExprArena::constant_value_hidden`]).
+    ///
+    /// # Panics
+    /// If `e` is not a `ConstantExpr`.
+    pub fn set_constant_value_hidden(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::ConstantExpr, "expected ConstantExpr, found {:?}", n.kind);
+        n.aux |= CONSTANT_VALUE_HIDDEN;
     }
 
     /// The satisfaction of a non-dependent `ConceptSpecializationExpr` or
@@ -2002,6 +2185,17 @@ impl ExprArena {
         Ok(())
     }
 
+    /// The object, `->` flag and destroyed type of a
+    /// `CXXPseudoDestructorExpr`.
+    pub fn pseudo_destructor(&self, e: ExprId) -> (ExprId, bool, QualType) {
+        let n = self.expect_kind(e, ExprKind::CXXPseudoDestructorExpr);
+        (
+            ExprId::new(n.a),
+            n.aux & 1 != 0,
+            QualType::from_raw(n.b).expect("CXXPseudoDestructorExpr: destroyed type"),
+        )
+    }
+
     /// The closing-token location of `e`, if stored.
     pub fn end_loc(&self, e: ExprId) -> Option<Loc> {
         let n = self.get(e);
@@ -2030,7 +2224,9 @@ impl ExprArena {
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::CXXStdInitializerListExpr
-            | ExprKind::ExprWithCleanups => v.extend(id(n.a)),
+            | ExprKind::ExprWithCleanups
+            | ExprKind::ConvertVectorExpr
+            | ExprKind::PredefinedExpr => v.extend(id(n.a)),
             ExprKind::CXXTypeidExpr if !n.has(ExprFlags::ARG_IS_TYPE) => v.extend(id(n.a)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.b)));
@@ -2051,11 +2247,13 @@ impl ExprArena {
             // `CXXDependentScopeMemberExpr` and `PackExpansionExpr` are
             // template expressions (spec/sema-templates.md §2.4).
             ExprKind::CXXNoexceptExpr
+            | ExprKind::VAArgExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CompoundLiteralExpr
             | ExprKind::CXXDeleteExpr
             | ExprKind::CXXDependentScopeMemberExpr
+            | ExprKind::CXXPseudoDestructorExpr
             | ExprKind::PackExpansionExpr
             | ExprKind::CXXRewrittenBinaryOperator => v.extend(id(n.a)),
             ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr | ExprKind::CXXFoldExpr => {
@@ -2079,6 +2277,11 @@ impl ExprArena {
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
             ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
+            ExprKind::LambdaExpr => {
+                if let Some(l) = self.lambdas.get(LambdaId::new(n.a)).inits {
+                    v.extend(lists.iter::<ExprId>(l));
+                }
+            }
             ExprKind::CXXNewExpr => {
                 let x = &self.news[n.a as usize];
                 v.extend(x.array_size);
@@ -2091,6 +2294,7 @@ impl ExprArena {
             // expressions (spec/sema-templates.md §2.4).
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
+            | ExprKind::AtomicExpr
             | ExprKind::CXXUnresolvedConstructExpr
             | ExprKind::ParenListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
@@ -2122,12 +2326,14 @@ impl HeapSize for ExprArena {
         for row in self.vec_rows() {
             r.push(row.row());
         }
+        r.push(self.lambdas.mem_row());
         r.push(self.cold.end_loc.mem_row().prefixed("cold"));
         r.push(self.cold.member_extra.mem_row().prefixed("cold"));
         r.push(self.cold.designators.mem_row().prefixed("cold"));
         r.push(self.cold.array_trait.mem_row().prefixed("cold"));
         r.push(self.cold.trait_rhs_loc.mem_row().prefixed("cold"));
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));
+        r.push(self.cold.union_field.mem_row().prefixed("cold"));
         r
     }
 }
@@ -2148,6 +2354,16 @@ impl ExprArena {
         let mut it = lists.iter::<ExprId>(ListId::new(n.a));
         let mut next = || it.next().expect("four operands");
         [next(), next(), next(), next()]
+    }
+
+    /// The side record of a `LambdaExpr`.
+    pub fn lambda_id(&self, e: ExprId) -> LambdaId {
+        LambdaId::new(self.expect_kind(e, ExprKind::LambdaExpr).a)
+    }
+
+    /// The side record of a `LambdaExpr`.
+    pub fn lambda(&self, e: ExprId) -> &crate::lambda::LambdaData {
+        self.lambdas.get(self.lambda_id(e))
     }
 
     /// The compound statement of a `StmtExpr`.

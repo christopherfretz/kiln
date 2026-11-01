@@ -14,6 +14,7 @@ use super::rank::{
 };
 use super::{ConvCtx, array_decayed, bit_field_width, is_null_pointer_constant, strip_cv};
 use crate::Sema;
+use crate::vector_ops::VecParts;
 
 /// The first conversion of a standard conversion sequence ([conv.lval],
 /// [conv.array], [conv.func]).
@@ -54,6 +55,12 @@ pub enum SecondStep {
     /// A class argument for a parameter (or reference) of a base class
     /// type ([over.best.ics]/6, [over.ics.ref]/1): Conversion rank.
     DerivedToBase,
+    /// A scalar splatted to an ext vector (clang `ICK_Vector_Splat`; an
+    /// extension).
+    VectorSplat,
+    /// A bitcast between vectors of compatible types or (lax) the same
+    /// size (clang `ICK_Vector_Conversion`; an extension).
+    VectorConversion,
 }
 
 /// The third conversion ([conv.fctptr], [conv.qual]).
@@ -148,6 +155,9 @@ pub struct StandardConversion {
     pub fixed_enum: FixedEnumPromotion,
     /// The reference binding this sequence performs, if any.
     pub rb: RefBinding,
+    /// A list-initialization sequence converting to
+    /// `std::initializer_list<X>` ([over.ics.rank]/3.1.1).
+    pub std_init_list: bool,
 }
 
 impl StandardConversion {
@@ -177,6 +187,7 @@ impl StandardConversion {
             null_pointer: false,
             fixed_enum: FixedEnumPromotion::None,
             rb,
+            std_init_list: false,
         }
     }
 }
@@ -305,6 +316,26 @@ pub fn standard_conversion_from(
     to: QualType,
     ctx: ConvCtx,
 ) -> Option<StandardConversion> {
+    let r = standard_conversion_non_atomic(s, from, vk, npc, bit_field, to, ctx);
+    if r.is_some() {
+        return r;
+    }
+    // clang's `tryAtomicConversion`: a conversion to `_Atomic(T)` is the
+    // conversion to `T`, then `NonAtomicToAtomic` (applied by
+    // `apply_standard_conversion` when the sequence ends at `T`).
+    let v = s.ast.types.as_atomic(to)?;
+    standard_conversion_non_atomic(s, from, vk, npc, bit_field, v, ctx)
+}
+
+fn standard_conversion_non_atomic(
+    s: &mut Sema<'_, '_>,
+    from: QualType,
+    vk: ValueCategory,
+    npc: bool,
+    bit_field: Option<u32>,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Option<StandardConversion> {
     let types = &s.ast.types;
     if types.as_record(from).is_some() || types.as_record(to).is_some() {
         return None;
@@ -321,7 +352,13 @@ pub fn standard_conversion_from(
     } else if types.is_array(from) {
         (FirstStep::ArrayToPointer, array_decayed(s, from))
     } else if vk.is_glvalue() && !types.is_void(from) {
-        (FirstStep::LValueToRValue, strip_cv(s, from))
+        // C11 6.3.2.1p2: the value of an `_Atomic(T)` lvalue is a `T`
+        // (clang's `DefaultLvalueConversion` adds `AtomicToNonAtomic`).
+        let cur = match types.as_atomic(from) {
+            Some(v) => v,
+            None => from,
+        };
+        (FirstStep::LValueToRValue, strip_cv(s, cur))
     } else {
         (FirstStep::Identity, from)
     };
@@ -334,6 +371,7 @@ pub fn standard_conversion_from(
         null_pointer: false,
         fixed_enum: FixedEnumPromotion::None,
         rb: RefBinding::NONE,
+        std_init_list: false,
     };
     // A bit-field width only matters before the lvalue transformation
     // drops it; it stays attached to the value.
@@ -371,6 +409,8 @@ pub fn standard_conversion_from(
     } else if let Some(t) = member_pointer_conversion(s, cur, to, npc) {
         scs.null_pointer = npc && !is_member_pointer(s, cur);
         (SecondStep::MemberPointerConversion, t)
+    } else if let Some(step) = vector_conversion(s, cur, to) {
+        (step, to)
     } else {
         (SecondStep::Identity, cur)
     };
@@ -398,6 +438,36 @@ pub fn standard_conversion_from(
     scs.third = third;
     scs.to_types[2] = to;
     Some(scs)
+}
+
+/// clang's `IsVectorConversion`: a splat of an arithmetic value to an ext
+/// vector, or a bitcast between compatible or same-size vectors (never
+/// between two distinct ext vector types).
+fn vector_conversion(s: &Sema<'_, '_>, from: QualType, to: QualType) -> Option<SecondStep> {
+    let (fv, tv) = (s.vector_parts(from), s.vector_parts(to));
+    if fv.is_none() && tv.is_none() {
+        return None;
+    }
+    if s.ast.types.same_unqualified(from, to) {
+        return None;
+    }
+    if let Some(t) = tv
+        && t.is_ext()
+    {
+        if fv.is_some_and(VecParts::is_ext) {
+            return None;
+        }
+        if super::rank::is_arithmetic_or_unscoped_enum(s, from) {
+            return Some(SecondStep::VectorSplat);
+        }
+    }
+    if fv.is_some()
+        && tv.is_some()
+        && (s.compatible_vectors(from, to) || s.lax_vector_conversion(from, to))
+    {
+        return Some(SecondStep::VectorConversion);
+    }
+    None
 }
 
 fn types_pointer_like(s: &Sema<'_, '_>, q: QualType) -> bool {

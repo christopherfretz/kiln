@@ -13,12 +13,13 @@
 
 use kiln_ast::decl::{CtorInit, CtorInitKind, DeclFlags, DeclKind, DefinitionBits};
 use kiln_ast::expr::{BinaryOp, CastKind, ConstructionKind, ExprKind, TraitKind, UnaryOp};
+use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, ExprId, QualType, TypeId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
-use super::special::{ImplicitInit, InitEntity, SpecialKind};
+use super::special::{ImplicitInit, InitEntity, Selected, SpecialKind};
 use super::temporary::BindingSite;
 use super::{MemInitId, MemInitInfo};
 use crate::lookup::LookupKind;
@@ -299,6 +300,15 @@ impl Sema<'_, '_> {
         if let Some(target) = self.constructor_called(ci.init) {
             self.delegating.push((self.ast.first(ctor), target, ci.loc));
         }
+        // [class.base.init]/12 (clang `SetDelegatingInitializer`): the
+        // class's own destructor is potentially invoked.
+        if let Some(class) = self.ast.decls.get(ctor).ctx()
+            && let Selected::Found(dtor) | Selected::Deleted(dtor) =
+                self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+        {
+            self.mark_function_referenced(dtor, ci.loc);
+            self.diagnose_deleted_use(dtor, ci.loc);
+        }
     }
 
     /// The constructor a (full-expression) constructor call calls.
@@ -364,6 +374,7 @@ impl Sema<'_, '_> {
             self.check_dangling_temporary(BindingSite::Member(field), e);
         }
         self.check_dangling_field(field, fty, e);
+        self.note_member_init_full_expr(field, true);
         let e = self.act_on_full_expr(e);
         CtorInit {
             target: m.index(),
@@ -990,7 +1001,7 @@ impl Sema<'_, '_> {
 
     /// clang `QualType::isPODType` (C++11 POD: scalar, or a trivial
     /// standard-layout class, or an array of such).
-    fn is_pod_for_uninit_check(&self, ty: QualType) -> bool {
+    pub(crate) fn is_pod_for_uninit_check(&self, ty: QualType) -> bool {
         let t = self.base_element(ty);
         if self.ast.types.is_reference(t) {
             return false;

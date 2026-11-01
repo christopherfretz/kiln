@@ -149,6 +149,7 @@ impl Ast {
         let n = self.decls.get(d);
         match n.kind() {
             DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
             | DeclKind::UsingEnum
             | DeclKind::NamespaceAlias
             | DeclKind::UsingDirective => DeclId::try_new(n.data()),
@@ -156,21 +157,82 @@ impl Ast {
         }
     }
 
+    /// The template (a `StringLiteral`) of a `FileScopeAsm` declaration.
+    pub fn file_scope_asm_string(&self, d: DeclId) -> Option<crate::ids::ExprId> {
+        let n = self.decls.get(d);
+        (n.kind() == DeclKind::FileScopeAsm).then(|| crate::ids::ExprId::new(n.data()))
+    }
+
     /// The nested-name-specifier written in a `Using` declaration.
     pub fn using_qualifier(&self, d: DeclId) -> Option<crate::ids::NnsId> {
         let n = self.decls.get(d);
-        if n.kind() == DeclKind::Using { crate::ids::NnsId::try_new(n.data()) } else { None }
+        if matches!(n.kind(), DeclKind::Using | DeclKind::UnresolvedUsingValue) {
+            crate::ids::NnsId::try_new(n.data())
+        } else {
+            None
+        }
     }
 
     /// `d` with using-shadows looked through: the declaration a
     /// `UsingShadow` introduces (an `UnresolvedUsingIfExists` for an
     /// unresolved `using_if_exists` target), else `d`.
     pub fn strip_shadow(&self, d: DeclId) -> DeclId {
-        if self.decls.get(d).kind() == DeclKind::UsingShadow {
+        if matches!(
+            self.decls.get(d).kind(),
+            DeclKind::UsingShadow | DeclKind::ConstructorUsingShadow
+        ) {
             self.using_target(d).unwrap_or(d)
         } else {
             d
         }
+    }
+
+    /// The class (first declaration) whose constructor
+    /// constructor-using-shadow `shadow` nominates: that of its
+    /// nominated base's shadow `s`, or for `None` that of its target.
+    pub fn shadow_base_class(&self, s: Option<DeclId>, shadow: DeclId) -> Option<DeclId> {
+        let d = match s {
+            Some(s) => s,
+            None => self.using_target(shadow)?,
+        };
+        self.decls.get(d).ctx().map(|c| self.first(c))
+    }
+
+    /// clang `ConstructorUsingShadowDecl`'s constructed base class shadow
+    /// (`None`: the target's class) and `constructsVirtualBase`: a
+    /// shadow whose nominated base is a virtual base, or whose nominated
+    /// shadow constructs one, constructs that virtual base directly
+    /// ([class.inhctor.init]/2).
+    pub fn shadow_constructed(&self, s: DeclId) -> (Option<DeclId>, bool) {
+        let mut chain = vec![s];
+        let mut cur = s;
+        while let Some(n) = self.decls.ctor_shadow_nominated(cur) {
+            if chain.len() > 256 {
+                break;
+            }
+            chain.push(n);
+            cur = n;
+        }
+        // Innermost first: the first shadow nominating a virtual base
+        // fixes the constructed shadow for every shadow above it.
+        let mut out: (Option<DeclId>, bool) = (None, false);
+        for &sh in chain.iter().rev() {
+            let ns = self.decls.ctor_shadow_nominated(sh);
+            if out.1 {
+                continue;
+            }
+            let virt = match (self.decls.get(sh).ctx(), self.shadow_base_class(ns, sh)) {
+                (Some(d), Some(n)) => self.definition(d).is_some_and(|def| {
+                    self.decls.bases(def, &self.lists).any(|b| {
+                        b.is_virtual
+                            && self.types.as_record(b.ty).is_some_and(|c| self.first(c) == n)
+                    })
+                }),
+                _ => false,
+            };
+            out = (ns, virt);
+        }
+        out
     }
 
     /// The namespace a `NamespaceAlias` denotes (aliases of aliases
@@ -198,13 +260,35 @@ impl Ast {
 
     /// The first declaration of `d`'s entity (`d` itself if not
     /// redeclarable).
+    ///
+    /// A template decl has no redeclaration group of its own; its
+    /// redeclarations are those of its pattern ([temp.decls]/1), so the
+    /// first one is the template described by the pattern's first
+    /// declaration (clang's `RedeclarableTemplateDecl::getFirstDecl`).
     pub fn first(&self, d: DeclId) -> DeclId {
-        self.decls.redecl(d).map_or(d, |r| self.redecls.get(r.group).first)
+        match self.decls.redecl(d) {
+            Some(r) => self.redecls.get(r.group).first,
+            None => self.template_redecl(d, true),
+        }
     }
 
-    /// The latest declaration of `d`'s entity.
+    /// The latest declaration of `d`'s entity (a template's follows its
+    /// pattern's, as for [`Ast::first`]).
     pub fn latest(&self, d: DeclId) -> DeclId {
-        self.decls.redecl(d).map_or(d, |r| self.redecls.get(r.group).latest)
+        match self.decls.redecl(d) {
+            Some(r) => self.redecls.get(r.group).latest,
+            None => self.template_redecl(d, false),
+        }
+    }
+
+    /// The template described by the first (or latest) declaration of
+    /// template `d`'s pattern; `d` itself for other declarations.
+    fn template_redecl(&self, d: DeclId, first: bool) -> DeclId {
+        let Some(pattern) = self.template_info(d).and_then(|t| t.pattern) else { return d };
+        let Some(link) = self.decls.redecl(pattern) else { return d };
+        let group = self.redecls.get(link.group);
+        let target = if first { group.first } else { group.latest };
+        self.described_template(target).unwrap_or(d)
     }
 
     /// The definition of `d`'s entity, once seen.
@@ -293,6 +377,62 @@ impl Ast {
         let ty = self.decls.get(record).ty()?;
         let name = self.names.find_destructor(self.types.canonical(ty).ty())?;
         self.lookup_local(record, name).iter().next()
+    }
+
+    /// Whether some declaration of function `d` carries a `NoThrowAttr`
+    /// (clang `hasAttr<NoThrowAttr>()`, inherited by redeclarations): the
+    /// implicit one of a recognized C library function
+    /// (spec/sema.md §5.4) or of a lazily declared builtin.
+    pub fn has_nothrow_attr(&self, d: DeclId) -> bool {
+        self.redecls_of(d).any(|r| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .any(|a| self.attrs.get(a).kind == crate::attr::AttrKind::NOTHROW)
+        })
+    }
+
+    /// Whether the function `d` does not return (clang
+    /// `FunctionDecl::isNoReturn` minus the C11/Microsoft spellings): some
+    /// declaration of it carries `[[noreturn]]` /
+    /// `__attribute__((noreturn))` ([dcl.attr.noreturn]/1: the attribute
+    /// appertains to the function), or its type is `noreturn`.
+    pub fn is_noreturn_fn(&self, d: DeclId) -> bool {
+        let attr = |r: DeclId| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .any(|a| self.attrs.get(a).kind == crate::attr::AttrKind::NORETURN)
+        };
+        self.redecls_of(d).any(attr)
+            || self
+                .decls
+                .get(d)
+                .ty()
+                .and_then(|t| self.types.proto(t))
+                .is_some_and(|p| p.info().noreturn())
+    }
+
+    /// clang `VarDecl::needsDestruction`: the (array element) type is a class
+    /// with a non-trivial destructor ([basic.life]/1). Sema declares the
+    /// destructor of every variable's class (spec/sema-class.md §4.8), so a
+    /// class without a declared destructor is not destroyed.
+    pub fn needs_destruction(&self, t: crate::ids::QualType) -> bool {
+        let mut t = t;
+        for _ in 0..256 {
+            match self.types.element(t) {
+                Some(e) if self.types.is_array(t) => t = e,
+                _ => break,
+            }
+        }
+        let Some(def) = self.types.as_record(t).and_then(|r| self.definition(r)) else {
+            return false;
+        };
+        self.decls
+            .record(def)
+            .is_some_and(|x| !x.defn.contains(crate::decl::DefinitionBits::TRIVIAL_DTOR))
+            && self
+                .destructor(def)
+                .and_then(|d| self.decls.function(d))
+                .is_some_and(|f| !f.spec.is_trivial())
     }
 
     /// True if `e` is a `CXXConstructExpr` calling a trivial constructor

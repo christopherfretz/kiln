@@ -34,6 +34,9 @@ pub enum Expect {
     /// `-fsyntax-only -fdump-vtable-layouts`; compare the dump with the
     /// oracle's (emitted at code generation) as a set of blocks.
     Vtables,
+    /// `-fsyntax-only` ends normally (exit 0 or 1): errors are fine, a
+    /// crash, a hang or an internal-error exit code is not.
+    NoCrash,
 }
 
 impl Expect {
@@ -46,6 +49,7 @@ impl Expect {
             "ast" => Self::Ast,
             "layout" => Self::Layout,
             "vtables" => Self::Vtables,
+            "no-crash" => Self::NoCrash,
             _ => return None,
         })
     }
@@ -60,6 +64,7 @@ impl Expect {
             Self::Ast => "ast",
             Self::Layout => "layout",
             Self::Vtables => "vtables",
+            Self::NoCrash => "no-crash",
         }
     }
 }
@@ -263,6 +268,9 @@ pub struct TestSpec {
     /// `ast-implicit`: include implicit declarations (`-fdump-ast=implicit`,
     /// `xtask clang-ast --implicit`).
     pub ast_implicit: bool,
+    /// `mem<=N`: the address-space cap, in MiB, of every process the test
+    /// runs (lowers `--mem-limit`; `spec/harness.md` "Resource limits").
+    pub mem_mib: Option<u64>,
 }
 
 impl TestSpec {
@@ -328,6 +336,7 @@ struct Parser {
     inst_report: Option<PathBuf>,
     inst_report_line: usize,
     ast_implicit: bool,
+    mem_mib: Option<u64>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     pp_only: Vec<(usize, &'static str)>,
@@ -365,6 +374,7 @@ impl Parser {
             inst_report: None,
             inst_report_line: 0,
             ast_implicit: false,
+            mem_mib: None,
             run_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -380,6 +390,10 @@ impl Parser {
 
     #[allow(clippy::too_many_lines, reason = "one flat match over the directive keys")]
     fn directive(&mut self, line: usize, key: &str, value: Option<&str>) {
+        if key == "mem" || key.starts_with("mem<") || key.starts_with("mem=") {
+            self.mem_directive(line, key, value);
+            return;
+        }
         let Some((name, qualifier, value)) = self.split_key(line, key, value) else {
             return;
         };
@@ -552,6 +566,24 @@ impl Parser {
             return None;
         };
         Some((name, qualifier, value))
+    }
+
+    /// `mem<=N`: a memory budget of N MiB (a positive integer), written as
+    /// a bare key like the `oven:` budgets' items.
+    fn mem_directive(&mut self, line: usize, key: &str, value: Option<&str>) {
+        let n = key.strip_prefix("mem<=").map(str::trim);
+        let parsed = match (n, value) {
+            (Some(n), None) => n.parse::<u64>().ok().filter(|&n| n > 0),
+            _ => None,
+        };
+        match parsed {
+            Some(_) if self.mem_mib.is_some() => self.err(line, "duplicate `mem<=`"),
+            Some(n) => self.mem_mib = Some(n),
+            None => self.err(
+                line,
+                "a memory budget is written `mem<=N`, N a positive number of MiB (e.g. `//@ mem<=512`)",
+            ),
+        }
     }
 
     fn stdout_file_directive(&mut self, line: usize, value: &str) {
@@ -733,6 +765,7 @@ impl Parser {
             ast_filter: self.ast_filter,
             inst_report: self.inst_report,
             ast_implicit: self.ast_implicit,
+            mem_mib: self.mem_mib,
         })
     }
 }
@@ -833,6 +866,30 @@ mod tests {
             .collect()
     }
 
+    /// `mem<=N` (`spec/harness.md` "Resource limits").
+    #[test]
+    fn mem_budget() {
+        assert_eq!(ok("int x;\n").mem_mib, None);
+        assert_eq!(ok("//@ mem<=512\n").mem_mib, Some(512));
+        assert_eq!(ok("//@ expect: run\n//@ mem<= 64\n").mem_mib, Some(64));
+        let msg =
+            "a memory budget is written `mem<=N`, N a positive number of MiB (e.g. `//@ mem<=512`)";
+        for bad in [
+            "mem: 512",
+            "mem<=0",
+            "mem<=-1",
+            "mem<=1.5",
+            "mem<=",
+            "mem",
+            "mem=512",
+            "mem<512",
+            "mem<=512: x",
+        ] {
+            assert_eq!(errs(&format!("//@ {bad}\n")), [format!("line 1: {msg}")], "{bad}");
+        }
+        assert_eq!(errs("//@ mem<=512\n//@ mem<=256\n"), ["line 2: duplicate `mem<=`"]);
+    }
+
     #[test]
     fn defaults_without_header() {
         let s = ok("int main() {}\n");
@@ -842,6 +899,14 @@ mod tests {
         assert!(!s.oracle, "oracle is off by default for compile-ok");
         assert_eq!(s.exit, None);
         assert_eq!(parse("", Lang::C).unwrap().std, "c17");
+    }
+
+    #[test]
+    fn no_crash_kind() {
+        let s = ok("//@ expect: no-crash\n//@ args: -ferror-limit=0\n#include <string>\n");
+        assert_eq!(s.expect, Expect::NoCrash);
+        assert_eq!(s.expect.as_str(), "no-crash");
+        assert!(!s.oracle);
     }
 
     #[test]

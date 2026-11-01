@@ -14,7 +14,7 @@ pub(crate) mod props;
 mod record;
 mod subobject;
 
-use kiln_ast::types::{BuiltinType, RecordLayout, TypeView};
+use kiln_ast::types::{BuiltinType, RecordLayout, TypeView, VectorKind};
 use kiln_ast::{Ast, DeclId, QualType};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
@@ -293,9 +293,17 @@ impl<'a> Layouter<'a> {
                 }
                 i
             }
-            TypeView::Vector { elem, count, .. } => {
+            TypeView::Vector { elem, count, kind } => {
+                // clang `getTypeInfo`: an ext_vector of `bool` packs one
+                // bit per element (`isExtVectorBoolType`).
+                let bool_ext = kind == VectorKind::Ext
+                    && matches!(
+                        ast.types.canonical_view(elem),
+                        TypeView::Builtin(BuiltinType::Bool)
+                    );
                 let e = self.type_info(elem);
-                let mut width = e.width.saturating_mul(u64::from(count)).max(8);
+                let bits = if bool_ext { 1 } else { e.width };
+                let mut width = bits.saturating_mul(u64::from(count)).max(8);
                 let mut align = width;
                 if !align.is_power_of_two() {
                     align = align.checked_next_power_of_two().unwrap_or(1 << 63);
@@ -354,6 +362,14 @@ pub(crate) fn align_to(v: u64, a: u64) -> u64 {
 /// `size_align`).
 pub fn type_size_align(ast: &Ast, q: QualType, target: &Target) -> TypeLayout {
     Layouter::new(ast, target).type_layout(q)
+}
+
+/// The largest alignment, in bits, that `alignas` /
+/// `__attribute__((aligned))` requests for declaration `d` on any of its
+/// declarations (clang `Decl::getMaxAlignment`); 0 if none.
+pub fn decl_max_align(ast: &Ast, d: DeclId, target: &Target) -> u64 {
+    let mut lay = Layouter::new(ast, target);
+    max_align_attr(ast, d, target, &mut |q| lay.type_info(q).align)
 }
 
 /// The layout of `count` elements of `elem` ([dcl.array]/1: contiguous,

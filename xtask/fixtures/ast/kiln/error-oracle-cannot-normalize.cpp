@@ -1,3 +1,3 @@
 //@ expect: ast
 //@ oracle: clang
-void f() { l: goto l; }
+void f() { void *p = &&l; l: goto *p; }

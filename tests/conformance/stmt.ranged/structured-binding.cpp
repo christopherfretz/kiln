@@ -2,7 +2,6 @@
 // as the for-range-declaration.
 //@ expect: run
 //@ stdout: 9
-//@ xfail(kiln): structured bindings are not implemented yet (the parser reports them as unsupported)
 extern "C" int printf(const char*, ...);
 
 struct P { int a, b; };

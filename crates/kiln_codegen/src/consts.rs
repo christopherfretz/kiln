@@ -53,8 +53,19 @@ impl Cg<'_> {
                 let t = self.lty(ty);
                 self.scalar_const(s, t)
             }
+            // A vector value (scalar in IR, an aggregate image in the
+            // Oven): its `<N x T>` constant (clang `emitAbstract`).
+            ConstValue::Aggregate(_) if self.is_vector_ty(ty) => {
+                self.const_value(c, ty, None, true)
+            }
             ConstValue::Aggregate(_) => err(None, "aggregate constant in scalar context"),
         }
+    }
+
+    /// True if `ty` is a vector type laid out as an IR vector (not a
+    /// `bool` ext vector, whose value form is `<N x i1>`).
+    fn is_vector_ty(&mut self, ty: QualType) -> bool {
+        matches!(self.tys.convert_mem(ty), IrType::Vector(..))
     }
 
     /// A scalar constant of IR type `t`.
@@ -110,10 +121,11 @@ impl Cg<'_> {
             PtrBase::Function(d) => Ok(Value::func(self.get_fn(d)?)),
             PtrBase::StringLit { lit, .. } => Ok(gval(self.lit_global(lit))),
             PtrBase::Const(c) => Ok(gval(self.const_object(c)?)),
-            PtrBase::Temporary(_) => {
-                err(None, "pointers to lifetime-extended temporaries are not supported yet (M3)")
+            PtrBase::Temporary(t) => {
+                let ty = self.ast.decls.get(t).ty().unwrap_or(QualType::INT);
+                Ok(gval(self.let_global(t, ty)?))
             }
-            PtrBase::TypeInfo(_) => err(None, "typeid constants are not supported yet (M3)"),
+            PtrBase::TypeInfo(t) => self.rtti(t),
         }
     }
 
@@ -161,6 +173,13 @@ impl Cg<'_> {
             Some(s) => self.scalar_const(s, LTy::PTR),
             None => err(None, "source-location value is not a pointer"),
         }
+    }
+
+    /// The value of `ConstantExpr` `e`: sema's, or for an immediate
+    /// invocation inside a default argument the value the prepass folded
+    /// for the current use ([`crate::fold::Folds::imm`]).
+    pub(crate) fn immediate_value(&self, e: ExprId) -> Option<ConstValueId> {
+        self.ast.exprs.constant_value(e).or_else(|| self.folds.imm.get(&(e, self.srcloc)).copied())
     }
 
     /// Enters default argument `e` for emission: the source-location
@@ -268,9 +287,13 @@ impl Cg<'_> {
                 let is_string =
                     e.is_some_and(|x| self.ast.exprs.get(x).kind() == ExprKind::StringLiteral);
                 let inits: Vec<ExprId> = match e {
-                    Some(x) if self.ast.exprs.get(x).kind() == ExprKind::InitListExpr => {
-                        let l = self.ast.exprs.init_list_inits(x);
-                        self.ast.lists.get(l).iter().map(|&i| ExprId::new(i)).collect()
+                    Some(x)
+                        if matches!(
+                            self.ast.exprs.get(x).kind(),
+                            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+                        ) =>
+                    {
+                        crate::expr::agg_init_parts(self.ast, x).0
                     }
                     _ => Vec::new(),
                 };
@@ -303,9 +326,13 @@ impl Cg<'_> {
                 }
                 let e = e.map(|x| self.strip_init(x));
                 let inits: Vec<ExprId> = match e {
-                    Some(x) if self.ast.exprs.get(x).kind() == ExprKind::InitListExpr => {
-                        let l = self.ast.exprs.init_list_inits(x);
-                        self.ast.lists.get(l).iter().map(|&i| ExprId::new(i)).collect()
+                    Some(x)
+                        if matches!(
+                            self.ast.exprs.get(x).kind(),
+                            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+                        ) =>
+                    {
+                        crate::expr::agg_init_parts(self.ast, x).0
                     }
                     _ => Vec::new(),
                 };
@@ -315,15 +342,16 @@ impl Cg<'_> {
                     .members(self.ast.first(*d))
                     .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
                     .collect();
-                let mut elems = Vec::with_capacity(rec.members.len());
+                // clang `ConstStructBuilder`: the field constants at their
+                // offsets; padding (and the byte of an empty class) is left
+                // to `ConstantAggregateBuilder::buildFrom`.
+                let mut elems: Vec<(u64, Value)> = Vec::with_capacity(rec.members.len());
                 for (i, m) in rec.members.iter().enumerate() {
                     let sub = by_member[i]
                         .and_then(|f| fields.iter().position(|&x| x == f))
                         .and_then(|p| inits.get(p).copied());
                     if by_member[i].is_none() {
-                        let mt = self.ir(m);
                         if matches!(m, IrType::Array(..) | IrType::Int(8)) {
-                            elems.push(self.m.const_zero(mt));
                             continue;
                         }
                         return err(
@@ -331,17 +359,9 @@ impl Cg<'_> {
                             "base-class subobjects in constants are not supported yet (M3)",
                         );
                     }
-                    elems.push(self.image_const(img, off + offs[i], m, sub)?);
+                    elems.push((offs[i], self.image_const(img, off + offs[i], m, sub)?));
                 }
-                // clang's ConstantAggregateBuilder: the named type when the
-                // element types match it, else a literal struct.
-                let want = self.m.types.struct_fields(t).map(<[LTy]>::to_vec).unwrap_or_default();
-                let got: Vec<LTy> = elems.iter().map(|&v| self.m.const_type(v)).collect();
-                if want == got {
-                    self.m.const_struct(t, &elems).map_err(|e| ir_err(&e))
-                } else {
-                    self.m.const_anon_struct(&elems, rec.packed).map_err(|e| ir_err(&e))
-                }
+                self.build_struct_const(t, rec.size, &elems)
             }
             IrType::Struct(ms, packed) => {
                 let offs = self.tys.struct_offsets(ms, *packed);
@@ -354,10 +374,94 @@ impl Cg<'_> {
             IrType::RecordBase(_) => {
                 err(None, "base-class subobjects in constants are not supported yet (M3)")
             }
-            IrType::Void | IrType::Vector(..) => {
-                err(None, "vector constants are not supported yet (M3)")
+            // clang `ConstExprEmitter`/`APValue::Vector`: one constant per
+            // lane, lane `i` at byte `i * sizeof(elem)` of the image.
+            IrType::Vector(et, n) => {
+                let (es, _) = self.tys.size_align(et);
+                let mut elems = Vec::with_capacity(*n as usize);
+                for i in 0..*n {
+                    elems.push(self.image_const(img, off + i * es, et, None)?);
+                }
+                self.m.const_vector(&elems).map_err(|e| ir_err(&e))
+            }
+            IrType::Void | IrType::ScalableVector(..) | IrType::TargetExt(_) => {
+                err(None, "scalable-vector and target-type constants are not supported yet (M3)")
             }
         }
+    }
+
+    /// clang 19 `ConstantAggregateBuilder::buildFrom` for a struct of
+    /// `elems` (offset, constant) whose IR type `t` has alloc size `size`:
+    /// the natural unpacked layout when it fits (tail-padded with `undef`
+    /// bytes), else a packed one with explicit padding; the named type
+    /// when layout-identical, else a literal struct.
+    fn build_struct_const(&mut self, t: LTy, size: u64, fields: &[(u64, Value)]) -> R<Value> {
+        // `ConstantAggregateBuilder::add`, appending: padding fills a gap
+        // the natural layout would leave; a misaligned element makes the
+        // layout unnatural.
+        let mut natural = true;
+        let mut elems: Vec<(u64, Value)> = Vec::with_capacity(fields.len());
+        let mut end = 0u64;
+        for &(o, v) in fields {
+            let (s, a) = self.ir_layout(self.m.const_type(v));
+            let aligned = end.next_multiple_of(a);
+            if aligned > o || !o.is_multiple_of(a) {
+                natural = false;
+            } else if aligned < o {
+                let pad = self.padding_const(o - end);
+                elems.push((end, pad));
+            }
+            elems.push((o, v));
+            end = o + s;
+        }
+        // `buildFrom`.
+        let desired = size.max(end);
+        let align =
+            elems.iter().map(|&(_, v)| self.ir_layout(self.m.const_type(v)).1).max().unwrap_or(1);
+        let aligned = end.next_multiple_of(align);
+        let mut packed = false;
+        let mut unpacked: Vec<Value> = elems.iter().map(|&(_, v)| v).collect();
+        if desired < aligned || !desired.is_multiple_of(align) {
+            natural = false;
+            packed = true;
+        } else if desired > aligned {
+            let pad = self.padding_const(desired - end);
+            unpacked.push(pad);
+        }
+        let mut packed_elems = Vec::new();
+        if !natural {
+            let mut so_far = 0u64;
+            for &(o, v) in &elems {
+                let (s, a) = self.ir_layout(self.m.const_type(v));
+                if so_far.next_multiple_of(a) != o {
+                    packed = true;
+                }
+                if o != so_far {
+                    let pad = self.padding_const(o - so_far);
+                    packed_elems.push(pad);
+                }
+                packed_elems.push(v);
+                so_far = o + s;
+            }
+            if packed && so_far < desired {
+                let pad = self.padding_const(desired - so_far);
+                packed_elems.push(pad);
+            }
+        }
+        let out = if packed { packed_elems } else { unpacked };
+        let got: Vec<LTy> = out.iter().map(|&v| self.m.const_type(v)).collect();
+        let want = self.m.types.struct_fields(t).map(<[LTy]>::to_vec);
+        if want.as_deref() == Some(&got[..]) && self.m.types.struct_is_packed(t) == packed {
+            self.m.const_struct(t, &out).map_err(|e| ir_err(&e))
+        } else {
+            self.m.const_anon_struct(&out, packed).map_err(|e| ir_err(&e))
+        }
+    }
+
+    /// clang `ConstantAggregateBuilderUtils::getPadding`.
+    fn padding_const(&mut self, n: u64) -> Value {
+        let t = if n > 1 { self.m.types.array(LTy::I8, n) } else { LTy::I8 };
+        self.m.const_undef(t)
     }
 
     /// A union constant (clang `ConstStructBuilder` for unions): the active
@@ -372,18 +476,20 @@ impl Cg<'_> {
         e: Option<ExprId>,
     ) -> R<Value> {
         let e = e.map(|x| self.strip_init(x));
-        let ile = e.filter(|&x| self.ast.exprs.get(x).kind() == ExprKind::InitListExpr);
-        let active = ile.and_then(|x| self.ast.exprs.init_list(x).union_field);
+        let ile = e.filter(|&x| {
+            matches!(
+                self.ast.exprs.get(x).kind(),
+                ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+            )
+        });
+        let active = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).2);
         let Some(f) = active else {
             if (0..size).all(|i| img.byte(off + i) == 0) && img.relocs.is_empty() {
                 return Ok(self.m.const_zero(t));
             }
             return err(None, "union constant without an active member");
         };
-        let sub = ile.and_then(|x| {
-            let l = self.ast.exprs.init_list_inits(x);
-            self.ast.lists.get(l).first().map(|&i| ExprId::new(i))
-        });
+        let sub = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).0.first().copied());
         let fq = self.ast.decls.get(f).ty().expect("field type");
         let fit = self.tys.convert(fq);
         let c = self.image_const(img, off, &fit, sub)?;

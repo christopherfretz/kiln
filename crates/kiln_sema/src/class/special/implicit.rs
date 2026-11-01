@@ -41,7 +41,8 @@ pub(crate) fn needs_from(bits: DefinitionBits, implicit: u8, k: SpecialKind) -> 
                 && !ud(SpecialKind::Dtor)
         }
         SpecialKind::MoveAssign => {
-            !ud(SpecialKind::CopyCtor)
+            !bits.contains(DefinitionBits::LAMBDA_CAPTURES)
+                && !ud(SpecialKind::CopyCtor)
                 && !ud(SpecialKind::CopyAssign)
                 && !ud(SpecialKind::MoveCtor)
                 && !ud(SpecialKind::Dtor)
@@ -706,6 +707,15 @@ impl Sema<'_, '_> {
                 || bits.contains(DefinitionBits::HAS_VIRTUAL_BASES);
             let inh_ctor = bits.contains(DefinitionBits::HAS_INHERITED_CTOR);
             let inh_assign = bits.contains(DefinitionBits::HAS_INHERITED_ASSIGN);
+            // clang `HasInheritedDefaultConstructor`: an inherited
+            // default constructor gives the class an implicit one.
+            if inh_ctor
+                && self.implicit_bits(r) & K::DefaultCtor.bit() == 0
+                && !self.has_default_ctor_decl(r)
+                && self.inherits_default_ctor(r)
+            {
+                self.declare_implicit(r, K::DefaultCtor);
+            }
             for k in K::ALL {
                 if !self.needs_implicit(r, k) {
                     continue;

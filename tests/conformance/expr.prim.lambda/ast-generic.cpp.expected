@@ -1,0 +1,66 @@
+Dumping gfun:
+FunctionDecl gfun 'void ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl id '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:9:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:9:13)'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ImplicitCastExpr 'auto' xvalue <NoOp>
+  |           `-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto'
+  |-DeclStmt
+  | `-VarDecl tp '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:10:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:10:13)'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ConditionalOperator '<dependent type>'
+  |           |-BinaryOperator '<dependent type>' '<'
+  |           | |-DeclRefExpr 'T' lvalue ParmVar 'a' 'T'
+  |           | `-DeclRefExpr 'T' lvalue ParmVar 'b' 'T'
+  |           |-DeclRefExpr 'T' lvalue ParmVar 'b' 'T'
+  |           `-DeclRefExpr 'T' lvalue ParmVar 'a' 'T'
+  |-DeclStmt
+  | `-VarDecl cn '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:11:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:11:13)'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-BinaryOperator '<dependent type>' '+'
+  |           |-DeclRefExpr 'Small auto' lvalue ParmVar 'x' 'Small auto'
+  |           `-IntegerLiteral 'int' 1
+  |-DeclStmt
+  | `-VarDecl da '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:12:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:12:13)'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ParenExpr 'auto' lvalue
+  |           `-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto &'
+  |-DeclStmt
+  | `-VarDecl va '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:13:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:13:13)'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-CXXFoldExpr '<dependent type>'
+  |           |-<<<NULL>>>
+  |           |-IntegerLiteral 'int' 0
+  |           `-DeclRefExpr 'auto' lvalue ParmVar 'xs' 'auto...'
+  |-DeclStmt
+  | `-VarDecl rq '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:14:13)' cinit
+  |   `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:14:13)'
+  |     `-CompoundStmt
+  |       `-ReturnStmt
+  |         `-ImplicitCastExpr 'T' xvalue <NoOp>
+  |           `-DeclRefExpr 'T' lvalue ParmVar 'x' 'T'
+  |-DeclStmt
+  | `-VarDecl used k 'int' cinit
+  |   `-IntegerLiteral 'int' 1
+  `-DeclStmt
+    `-VarDecl cp '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:16:13)' cinit
+      `-LambdaExpr '(lambda at tests/conformance/expr.prim.lambda/ast-generic.cpp:16:13)'
+        |-ImplicitCastExpr 'int' <LValueToRValue>
+        | `-DeclRefExpr 'int' lvalue Var 'k' 'int'
+        `-CompoundStmt
+          `-ReturnStmt
+            `-BinaryOperator '<dependent type>' '+'
+              |-DeclRefExpr 'auto' lvalue ParmVar 'x' 'auto'
+              `-DeclRefExpr 'const int' lvalue Var 'k' 'int'
+

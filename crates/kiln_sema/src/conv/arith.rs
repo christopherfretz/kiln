@@ -133,6 +133,9 @@ pub fn usual_arithmetic_conversions_kind(
     let l = if ca { l } else { usual_unary_conversions(s, l) };
     let r = usual_unary_conversions(s, r);
     let (lt, rt) = (super::strip_cv(s, ty(s, l)), super::strip_cv(s, ty(s, r)));
+    // clang: "for conversion purposes, we ignore any atomic qualifier on
+    // the LHS operand" (an `_Atomic` compound-assignment target).
+    let lt = s.ast.types.as_atomic(lt).unwrap_or(lt);
     if s.ast.types.same_unqualified(lt, rt) {
         return Ok((l, r, common_sugar(s, lt, rt)));
     }

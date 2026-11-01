@@ -65,8 +65,9 @@ impl Sema<'_, '_> {
                         .arg("noexcept specifier argument")
                         .arg(v.to_string())
                         .arg(self.ty_arg(QualType::BOOL));
+                    // A `-Wc++11-narrowing` error by default; clang goes
+                    // on with the converted value.
                     self.emit(d);
-                    return self.invalid_noexcept_spec(loc);
                 }
             }
             BoolCce::NotAllowed => {
@@ -262,15 +263,31 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(c).kind() == ExprKind::MemberExpr {
             return !self.decl_is_nothrow(self.ast.exprs.decl(c));
         }
-        // `(o.*pm)()`: the pointer-to-member's function type.
+        // `(o.*pm)()`: the pointer-to-member's function type (the
+        // `.*` / `->*` itself is a bound-member prvalue).
         let t = &self.ast.types;
-        let ty = self.ast.exprs.get(c).ty();
+        let mut ty = self.ast.exprs.get(c).ty();
+        if self.ast.exprs.get(c).kind() == ExprKind::BinaryOperator
+            && let Some(&rhs) = self.ast.exprs.children(c, &self.ast.lists).get(1)
+            && let Some((p, _)) =
+                conv::scs::member_pointer_parts(self, self.ast.exprs.get(rhs).ty())
+        {
+            ty = p;
+        }
         t.proto(ty).is_none_or(|p| !t.exc_spec(p).is_nothrow())
     }
 
     /// Whether calling through `callee` may throw: its (pointer to)
     /// function type does not have a non-throwing exception specification.
     fn callee_can_throw(&self, callee: ExprId) -> bool {
+        // clang `canCalleeThrow`: a callee declared with `NoThrowAttr`
+        // (a recognized C library function, spec/sema.md §5.4) cannot.
+        let c = self.ignore_paren_imp_casts(callee);
+        if self.ast.exprs.get(c).kind() == ExprKind::DeclRefExpr
+            && self.ast.has_nothrow_attr(self.ast.exprs.decl(c))
+        {
+            return false;
+        }
         let t = &self.ast.types;
         let mut ty = self.ast.exprs.get(callee).ty();
         if let Some(p) = t.pointee(ty) {

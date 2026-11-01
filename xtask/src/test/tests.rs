@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::process::Command;
 
 use super::directives::{self, Expect, StdoutExpect};
 use super::runner::Status;
@@ -28,6 +29,8 @@ fn cli_parsing() {
         "clang++",
         "--no-oracle",
         "--pp-compare=text",
+        "--mem-limit",
+        "512",
         "--report-parity",
         "docs/status/pp-parity.md",
         "tests/a",
@@ -45,6 +48,7 @@ fn cli_parsing() {
             update: true,
             jobs: Some(3),
             run_timeout: Duration::from_millis(2500),
+            mem_limit_mib: 512,
             verbose: true,
             pp_compare: Some(PpCompare::Text),
             report_parity: Some("docs/status/pp-parity.md".into()),
@@ -53,6 +57,8 @@ fn cli_parsing() {
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
     assert_eq!(parse_args(Vec::new()).unwrap().unwrap(), Options::default());
+    assert_eq!(Options::default().mem_limit_mib, 8192, "the cap is on by default");
+    assert_eq!(parse_args(strings(&["--mem-limit=0"])).unwrap().unwrap().mem_limit_mib, 0);
     for bad in [
         &["--jobs", "0"][..],
         &["--compiler"],
@@ -60,6 +66,9 @@ fn cli_parsing() {
         &["--update=1"],
         &["--timeout", "-1"],
         &["--pp-compare", "bytes"],
+        &["--mem-limit", "-1"],
+        &["--mem-limit", "8G"],
+        &["--mem-limit"],
     ] {
         assert!(parse_args(strings(bad)).is_err(), "{bad:?} should be rejected");
     }
@@ -110,6 +119,7 @@ fn seed_roots(root: &Path) -> Vec<PathBuf> {
         roots.extend(subdirs);
     }
     roots.push(root.join("tests/differential/pp/torture"));
+    roots.push(root.join("tests/stress"));
     roots.retain(|p| p.is_dir());
     roots
 }
@@ -192,6 +202,7 @@ fn seed_corpus_passes_with_clang() {
         "header-test",
         "inst-report",
         "layout",
+        "no-crash",
         "oracle",
         "oven",
         "pp",
@@ -228,6 +239,7 @@ fn check_fixture_statuses(results: &[TestResult], expected_count: usize) {
             "xpass" => Status::XPass,
             "skip" => Status::Skip,
             "error" => Status::Error,
+            "killed" => Status::Killed,
             p => panic!("fixture {file} has no status prefix ({p})"),
         };
         assert_eq!(
@@ -248,11 +260,12 @@ fn fixtures_produce_expected_statuses() {
     let mut o = clang_opts(&[dir]);
     o.run_timeout = Duration::from_secs(1);
     let results = execute(&o).unwrap();
-    // 33 tests: helper.h and Inputs/* are not discovered.
-    check_fixture_statuses(&results, 33);
+    // 35 tests: helper.h and Inputs/* are not discovered.
+    check_fixture_statuses(&results, 35);
     let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
     assert!(by_name("fail-timeout.cpp").details.contains("timed out"));
     assert!(by_name("fail-crash.cpp").details.contains("signal"));
+    assert!(by_name("fail-no-crash-crash.cpp").details.contains("compiler crashed"));
     assert!(by_name("fail-wrong-stdout.cpp").details.contains("-no\n    +yes"));
     assert!(
         by_name("fail-wrong-exit.cpp").details.contains("expected exit code 0, got exit code 4")
@@ -309,6 +322,73 @@ fn oven_budgets_with_a_fake_kiln() {
     assert!(by_name("pass-budgets.cpp").log.iter().any(|l| l.contains("steps=116")), "log");
 }
 
+/// Memory limits (`spec/harness.md` "Resource limits") against a stand-in
+/// kiln that allocates what `// fake-hog-mib: N` asks for.
+#[test]
+fn memory_limits_with_a_fake_hog() {
+    if !have_clang() {
+        return;
+    }
+    if process::run(Command::new("python3").arg("--version"), Duration::from_secs(30)).is_err() {
+        eprintln!("python3 not installed; skipping the memory-limit fixtures");
+        return;
+    }
+    let root = repo_root();
+    let dir = root.join("xtask/fixtures/memory");
+    let mut o = clang_opts(std::slice::from_ref(&dir));
+    o.compiler = Some(root.join("xtask/fixtures/fake-hog/kiln"));
+    o.no_oracle = true;
+    let results = execute(&o).unwrap();
+    check_fixture_statuses(&results, 8);
+    let by_name = |rs: &[TestResult], n: &str| rs.iter().find(|r| r.name.ends_with(n)).cloned();
+    let has = |rs: &[TestResult], n: &str, what: &str| {
+        let r = by_name(rs, n).unwrap_or_else(|| panic!("{n} did not run"));
+        let text = report::format_result(&r, false);
+        assert!(text.contains(what), "{n}: {what:?} not in\n{text}");
+    };
+    has(
+        &results,
+        "killed-compiler-hog.cpp",
+        "KILLED xtask/fixtures/memory/killed-compiler-hog.cpp (memory limit 8192 MiB)\n",
+    );
+    has(
+        &results,
+        "killed-compiler-hog.cpp",
+        "the compiler ran out of memory under the 8192 MiB address-space cap + 1024 MiB kiln \
+         stack reservation",
+    );
+    has(&results, "killed-compiler-hog.cpp", "MemoryError");
+    has(&results, "killed-compiler-hog.cpp", "[mem<=9216 MiB]");
+    has(&results, "killed-xfail-does-not-mask.cpp", "(memory limit 8192 MiB)");
+    has(&results, "killed-compiler-over-budget.cpp", "(memory limit 256 MiB)");
+    has(&results, "killed-run-binary-over-budget.cpp", "the test binary ran out of memory");
+    has(&results, "killed-run-binary-over-budget.cpp", "std::bad_alloc");
+    has(&results, "killed-run-binary-over-budget.cpp", "[mem<=256 MiB]");
+    let counts = report::Counts::of(&results);
+    let summary = report::format_summary(&counts, results.len(), Duration::ZERO);
+    assert!(summary.starts_with("test result: FAILED.") && summary.contains("; 4 killed;"));
+    assert!(!CorpusOutcome::Ran { counts, total: 8, elapsed: Duration::ZERO }.passes());
+
+    // `--mem-limit 0` lifts the default cap but not a test's `mem<=N`.
+    o.mem_limit_mib = 0;
+    o.filter = Some("budget".into());
+    let results = execute(&o).unwrap();
+    let status = |rs: &[TestResult], n: &str| by_name(rs, n).map(|r| r.status);
+    assert_eq!(results.len(), 4, "{}", report(&results));
+    assert_eq!(status(&results, "error-bad-budget.cpp"), Some(Status::Error));
+    assert_eq!(status(&results, "killed-compiler-over-budget.cpp"), Some(Status::Killed));
+    assert_eq!(status(&results, "killed-run-binary-over-budget.cpp"), Some(Status::Killed));
+    assert_eq!(status(&results, "pass-budget-plus-stack-allowance.cpp"), Some(Status::Pass));
+
+    // A lower `--mem-limit` reaches the test binary, which gets no stack
+    // allowance.
+    o.mem_limit_mib = 256;
+    o.filter = Some("pass-run-binary-fits".into());
+    let results = execute(&o).unwrap();
+    assert_eq!(status(&results, "pass-run-binary-fits.cpp"), Some(Status::Killed));
+    has(&results, "pass-run-binary-fits.cpp", "(memory limit 256 MiB)");
+}
+
 #[test]
 fn oracle_mismatches_are_detected() {
     if !have_clang() {
@@ -359,7 +439,7 @@ fn ast_fixtures_with_clang() {
     has("fail-compile-error.cpp", "expected the AST dump, but the compiler failed");
     has("fail-unexpected-diag.cpp", "unexpected diagnostics");
     has("error-missing-golden.cpp", "`cargo xtask clang-ast <test>`");
-    has("error-unsupported-construct.cpp", "unsupported LabelStmt");
+    has("error-unsupported-construct.cpp", "unsupported AddrLabelExpr");
     let logged = |n: &str, what: &str| by_name(n).log.iter().any(|l| l.contains(what));
     assert!(
         logged("pass-dump.cpp", "-Xclang -ast-dump "),
@@ -543,6 +623,29 @@ fn update_rewrites_existing_goldens() {
 /// run has a FAIL, XPASS or ERROR (XFAIL and SKIP are allowed), an
 /// infrastructure error fails it, and a skipped run (the clang self-check
 /// under `--quick` or without clang) does not.
+/// `xtask ci` reruns a cargo step once on rustc's `error[E0463]` and
+/// never on anything else (`spec/harness.md` "CI").
+#[test]
+fn ci_retries_only_missing_crates_once() {
+    let e0463 = "   Compiling kiln_sema v0.0.1\n\
+                 error[E0463]: can't find crate for `kiln_ast`\n \
+                 --> crates/kiln_sema/src/lib.rs:3:1\n";
+    assert!(ci_should_retry(e0463, false));
+    assert!(!ci_should_retry(e0463, true), "only one retry");
+    assert!(ci_should_retry("warning: x\n  error[E0463]: can't find crate for `std`\n", false));
+    for other in [
+        "",
+        "error[E0425]: cannot find value `x` in this scope\n",
+        "error: could not compile `kiln_sema`\n",
+        "test foo ... FAILED\n",
+        // Only rustc's diagnostic line counts, not a mention of it.
+        "note: the test checks that error[E0463] is retried\n",
+        "Diff in xtask/src/main.rs: \"error[E0463]\"\n",
+    ] {
+        assert!(!ci_should_retry(other, false), "{other:?}");
+    }
+}
+
 #[test]
 fn ci_gate_honours_failure_counts() {
     let mk = |status| TestResult {
@@ -562,7 +665,7 @@ fn ci_gate_honours_failure_counts() {
     assert!(clean.passes());
     assert_eq!(
         clean.line(),
-        "test result: ok. 2 passed; 0 failed; 1 xfail; 0 xpass; 1 skipped; 0 errors; 4 tests in 1.25s"
+        "test result: ok. 2 passed; 0 failed; 1 xfail; 0 xpass; 1 skipped; 0 errors; 0 killed; 4 tests in 1.25s"
     );
     for bad in [Status::Fail, Status::XPass, Status::Error] {
         let run = ran(&[Status::Pass, Status::XFail, bad]);

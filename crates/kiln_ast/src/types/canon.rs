@@ -211,6 +211,15 @@ impl TypeContext {
         t.into()
     }
 
+    /// The already-interned `T&` (`rvalue == false`) or `T&&` node over
+    /// exactly `t`, if any: a read-only lookup for printers that hold
+    /// only `&TypeContext` (the type of an explicit cast to a reference,
+    /// WP-145). `None` when no such node was created.
+    pub(crate) fn find_reference_to(&self, t: QualType, rvalue: bool) -> Option<QualType> {
+        let kind = if rvalue { TypeKind::RValueRef } else { TypeKind::LValueRef };
+        self.lookup(&Key::inline(kind, 0, raw(t))).ok().map(QualType::from)
+    }
+
     /// If `t` is a reference type: the kind of the reference and its
     /// referenced type (through sugar).
     fn ref_node(&self, t: QualType) -> Option<(TypeKind, QualType)> {
@@ -956,8 +965,18 @@ impl TypeContext {
                 ArgListId::raw_opt(args),
             );
             self.intern_with(key, flags, |ctx| {
-                if let Some(d) = deduced {
+                if let Some(d) = deduced
+                    && d != QualType::DEPENDENT
+                {
                     Some(ctx.canonical(d))
+                } else if deduced.is_some() {
+                    // Deduced as dependent (clang's dependent `AutoType`):
+                    // canonical itself, so a templated function declared
+                    // `auto f()` keeps `auto` in its signature (mangled
+                    // `Da`) and two such placeholders compare equal.
+                    let ca = args.map(|a| ctx.canonical_args(a));
+                    (ca != args)
+                        .then(|| Self::uq(ctx.auto_type(keyword, deduced, concept, ca, pack)))
                 } else {
                     let ca = args.map(|a| ctx.canonical_args(a));
                     (ca != args).then(|| Self::uq(ctx.auto_type(keyword, None, concept, ca, pack)))

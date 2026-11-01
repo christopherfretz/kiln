@@ -5,8 +5,10 @@
 use std::fmt::Write as _;
 
 use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::builtin as id;
 use kiln_ast::dump::AstNames;
 use kiln_ast::expr::{ExprFlags, ExprKind};
+use kiln_ast::lambda::ClosureThunk;
 use kiln_ast::types::TypeNames as _;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_source::Loc;
@@ -27,6 +29,10 @@ pub(crate) const BACKTRACE_LIMIT: usize = 10;
 /// Elements of an aggregate argument printed before eliding.
 const MAX_ELEMS: u64 = 16;
 
+pub(crate) fn notes_name(ast: &Ast, d: DeclId) -> String {
+    name_of(ast, d)
+}
+
 fn name_of(ast: &Ast, d: DeclId) -> String {
     let mut s = String::new();
     write_name_for_diag(ast, d, &mut s);
@@ -37,6 +43,19 @@ fn name_of(ast: &Ast, d: DeclId) -> String {
 /// template specialization with its arguments (`f<int>`).
 fn write_name_for_diag(ast: &Ast, d: DeclId, out: &mut String) {
     let names = AstNames::new(ast);
+    // A decomposition's variable prints as `[a, b]` (clang
+    // `DecompositionDecl::printName`).
+    if let Some(l) = ast.decls.decomp_bindings(d) {
+        out.push('[');
+        for (i, b) in ast.lists.iter::<DeclId>(l).enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            names.write_name(b, out);
+        }
+        out.push(']');
+        return;
+    }
     names.write_name(d, out);
     if ast.decls.get(d).kind().is_function()
         && let Some((_, info)) = ast.spec_info(d)
@@ -75,6 +94,22 @@ impl Oven {
         Self::type_name(ast, q)
     }
 
+    /// ` (vector of N 'E' values)` after a quoted vector type `q`, as
+    /// clang's `ConvertTypeToDiagnosticString` prints it (WP-173).
+    fn vector_suffix(ast: &Ast, q: QualType) -> String {
+        let kiln_ast::types::TypeView::Vector { elem, count, .. } = ast.types.canonical_view(q)
+        else {
+            return String::new();
+        };
+        let top = ast.types.desugar_top(q);
+        let elem = match ast.types.view(top.ty()) {
+            kiln_ast::types::TypeView::Vector { elem, .. } => elem,
+            _ => elem,
+        };
+        let v = if count == 1 { "value" } else { "values" };
+        format!(" (vector of {count} '{}' {v})", Self::type_name(ast, elem))
+    }
+
     pub(crate) fn tname(&self, ast: &Ast, t: OTy) -> String {
         if let TyKind::Array { elem, n } = self.types.kind(t)
             && self.types.is_synthetic_array(t)
@@ -86,6 +121,13 @@ impl Oven {
 
     /// The notes of `fault` at `pc`, with the call stack.
     pub(crate) fn render(&self, b: &dyn SemaBridge, fault: Fault, pc: usize) -> Vec<Note> {
+        if let Fault::Trap(i) = fault
+            && self.traps[i as usize].msg.is_empty()
+        {
+            // A silent trap: the failure was already diagnosed (an
+            // erroneous expression); no note, no call stack.
+            return Vec::new();
+        }
         let ast = b.ast();
         let mut site = self.site(pc);
         if let Fault::Trap(i) = fault
@@ -296,17 +338,45 @@ impl Oven {
             }
             Fault::Callee(f) => {
                 let func = &self.funcs[f as usize];
-                let d = func.decl.unwrap_or_else(|| DeclId::new(0));
-                let what =
+                let mut d = func.decl.unwrap_or_else(|| DeclId::new(0));
+                let mut what =
                     if func.state == FState::NotConstexpr { "non-constexpr" } else { "undefined" };
+                // An inheriting constructor whose inherited constructor is
+                // not constexpr is diagnosed as that constructor (clang
+                // `CheckConstexprFunction`).
+                let mut inh = ast
+                    .decls
+                    .inheriting_ctor_shadow(d)
+                    .and_then(|s| ast.using_target(s))
+                    .map(|t| ast.first(t));
+                if let Some(t) = inh
+                    && !ast.decls.function(t).is_some_and(|f| {
+                        f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
+                    })
+                {
+                    d = t;
+                    what = "non-constexpr";
+                    inh = None;
+                }
                 extra.push(Note::new(ast.decls.get(ast.latest(d)).loc(), "declared here"));
-                (
-                    site.loc,
+                let msg = if let Some(t) = inh {
+                    let base = ast.decls.get(t).ctx().map(|c| name_of(ast, c)).unwrap_or_default();
                     format!(
-                        "{what} function '{}' cannot be used in a constant expression",
+                        "constructor inherited from base class '{base}' cannot be used in a \
+                         constant expression; derived class cannot be implicitly initialized"
+                    )
+                } else {
+                    let kind = if ast.decls.get(d).kind() == DeclKind::CXXConstructor {
+                        "constructor"
+                    } else {
+                        "function"
+                    };
+                    format!(
+                        "{what} {kind} '{}' cannot be used in a constant expression",
                         name_of(ast, d)
-                    ),
-                )
+                    )
+                };
+                (site.loc, msg)
             }
         };
         let mut notes = Vec::with_capacity(2 + extra.len());
@@ -345,7 +415,12 @@ impl Oven {
                 })
                 .map_or_else(|| self.tname(ast, t), |q| Self::qname(ast, q))
         };
-        let op = |mv: bool| if mv { "memmove" } else { "memcpy" };
+        // The builtin the call names: `wmemcpy`/`wmemmove` and `bcmp`
+        // share the `memcpy`/`memcmp` faults (WP-150).
+        let callee = site.e.and_then(|e| called_builtin(ast, e));
+        let w = if matches!(callee, Some(id::WMEMCPY | id::WMEMMOVE)) { "w" } else { "" };
+        let quoted = |dflt: &'static str| callee.and_then(id::info).map_or(dflt, |i| i.name);
+        let op = |mv: bool| format!("{w}{}", if mv { "memmove" } else { "memcpy" });
         let end = |src: bool| if src { "source" } else { "destination" };
         match f {
             BiFault::CopyNull { mv, src } => format!("{} of '{}' is nullptr", end(src), op(mv)),
@@ -360,7 +435,7 @@ impl Oven {
                 op(mv),
                 arg_ty(0, t)
             ),
-            BiFault::CopyOverlap => "'memcpy' between overlapping memory regions".into(),
+            BiFault::CopyOverlap => format!("'{w}memcpy' between overlapping memory regions"),
             BiFault::CopySize { mv, t, n, size } => format!(
                 "'{}' not supported: size to copy ({n}) is not a multiple of size of element type '{}' ({size})",
                 op(mv),
@@ -373,7 +448,8 @@ impl Oven {
                 arg_ty(0, t)
             ),
             BiFault::CmpType { t1, t2 } => format!(
-                "constant evaluation of '__builtin_memcmp' between arrays of types '{}' and '{}' is not supported; only arrays of narrow character types can be compared",
+                "constant evaluation of '{}' between arrays of types '{}' and '{}' is not supported; only arrays of narrow character types can be compared",
+                quoted("__builtin_memcmp"),
                 arg_ty(0, t1),
                 arg_ty(1, t2)
             ),
@@ -426,15 +502,26 @@ impl Oven {
             }
             let func = &self.funcs[fr.func as usize];
             let mut s = String::from("in call to '");
-            self.object_prefix(ast, fr.call_pc as usize, fr.fb as usize, fr.func, &mut s);
-            if let Some(d) = func.decl {
-                write_name_for_diag(ast, d, &mut s);
+            // A closure's static invoker runs as its call operator with no
+            // object: clang's `describeCall` then prints the first argument
+            // as the object (`(0->operator()()`, or `()` with none).
+            let mut invoker = match func.decl.and_then(|d| ast.closure_thunk(d)) {
+                Some(ClosureThunk::Invoker { call_op }) => Some(call_op),
+                _ => None,
+            };
+            if invoker.is_none() {
+                self.object_prefix(ast, fr.call_pc as usize, fr.fb as usize, fr.func, &mut s);
+                if let Some(d) = func.decl {
+                    write_name_for_diag(ast, d, &mut s);
+                }
             }
             s.push('(');
-            for (k, p) in func.params.iter().enumerate() {
-                if k > 0 {
+            let mut sep = false;
+            for p in &func.params {
+                if sep {
                     s.push_str(", ");
                 }
+                sep = true;
                 let v = self.regs[fr.fb as usize + p.reg as usize];
                 match self.types.kind(p.ty) {
                     // A reference argument prints as its referent's lvalue
@@ -444,6 +531,12 @@ impl Oven {
                         s.push_str(r.strip_prefix('&').unwrap_or(&r));
                     }
                     _ => self.write_value(ast, &mut s, p.ty, v, 0),
+                }
+                if let Some(op) = invoker.take() {
+                    s.push_str("->");
+                    write_name_for_diag(ast, op, &mut s);
+                    s.push('(');
+                    sep = false;
                 }
             }
             s.push_str(")'");
@@ -704,9 +797,11 @@ impl Oven {
     ) -> String {
         let signed = aux >> 8 & 1 != 0;
         let ty = site.e.map_or_else(|| "int".into(), |e| Self::qname(ast, ast.exprs.get(e).ty()));
+        let vec =
+            site.e.map_or_else(String::new, |e| Self::vector_suffix(ast, ast.exprs.get(e).ty()));
         match err {
             IntErr::Overflow => format!(
-                "value {} is outside the range of representable values of type '{ty}'",
+                "value {} is outside the range of representable values of type '{ty}'{vec}",
                 arith::exact_result(op, signed, a, b)
             ),
             IntErr::DivZero => "division by zero".into(),
@@ -717,7 +812,7 @@ impl Oven {
             IntErr::ShiftBig => {
                 let cs = aux >> 17 & 1 != 0;
                 format!(
-                    "shift count {} >= width of type '{ty}' ({} bits)",
+                    "shift count {} >= width of type '{ty}'{vec} ({} bits)",
                     arith::int_to_string(b, cs),
                     aux & 0xFF
                 )
@@ -852,7 +947,12 @@ impl Oven {
                         format!("initializer of '{name}' is unknown")
                     } else if vi.usable {
                         format!("initializer of '{name}' is not a constant expression")
-                    } else if vi.is_const {
+                    } else if vi.is_const || {
+                        // clang `findCompleteObject`: only a non-const
+                        // integral or enumeration variable is "non-const".
+                        let c = ast.types.canonical(vi.ty);
+                        !(ast.types.is_integral(c) || ast.types.as_enum(c).is_some())
+                    } {
                         format!(
                             "read of non-constexpr variable '{name}' is not allowed in a constant expression"
                         )
@@ -890,6 +990,10 @@ impl Oven {
                 )
             }
             MemFault::DoubleDelete => "delete of pointer that has already been deleted".into(),
+            // Trials are silent; rendered only if one ever is not.
+            MemFault::Speculative => {
+                format!("kiln: {verb} an object created outside a speculative evaluation is not allowed")
+            }
             MemFault::Subobject if Ptr::decode(p).past => format!(
                 "delete of pointer '{}' that does not point to complete object",
                 self.ptr_string(ast, p, ty)
@@ -949,4 +1053,18 @@ fn callee_name(ast: &Ast, call: ExprId) -> Option<String> {
         }
     }
     None
+}
+
+/// The builtin call `e` names directly, if any.
+fn called_builtin(ast: &Ast, e: ExprId) -> Option<u32> {
+    if ast.exprs.get(e).kind() != ExprKind::CallExpr {
+        return None;
+    }
+    let mut c = skip_parens(ast, ast.exprs.callee(e));
+    while ast.exprs.get(c).kind().is_cast() {
+        c = skip_parens(ast, ast.exprs.operand(c));
+    }
+    (ast.exprs.get(c).kind() == ExprKind::DeclRefExpr)
+        .then(|| ast.decls.builtin_id(ast.exprs.decl(c)))
+        .flatten()
 }

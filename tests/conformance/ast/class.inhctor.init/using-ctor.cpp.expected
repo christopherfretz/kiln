@@ -1,0 +1,36 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct B definition
+| |-CXXConstructorDecl used B 'void (int, int)'
+| | |-ParmVarDecl 'int'
+| | `-ParmVarDecl 'int'
+| `-CXXConstructorDecl used B 'void (double)'
+|   `-ParmVarDecl 'double'
+|-CXXRecordDecl referenced struct D definition
+| |-public 'B'
+| `-UsingDecl B::D
+|-ClassTemplateDecl Base
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct Base definition
+|   `-CXXConstructorDecl Base<T> 'void (T)'
+|     `-ParmVarDecl 'T'
+|-ClassTemplateDecl E
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct E definition
+|   |-public 'Base<T>'
+|   `-UnresolvedUsingValueDecl Base<type-parameter-0-0>
+|-ClassTemplateDecl F
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXRecordDecl struct F definition
+|   |-public 'T'
+|   `-UnresolvedUsingValueDecl type-parameter-0-0
+`-FunctionDecl use 'void ()'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl d 'D' callinit
+    |   `-CXXConstructExpr 'D' 'void (int, int) noexcept(false)'
+    |     |-IntegerLiteral 'int' 1
+    |     `-IntegerLiteral 'int' 2
+    `-DeclStmt
+      `-VarDecl d2 'D' callinit
+        `-CXXConstructExpr 'D' 'void (double) noexcept(false)'
+          `-FloatingLiteral 'double' 1e0

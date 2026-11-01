@@ -68,14 +68,26 @@ struct Walk {
     all_fields_const: bool,
     notes: Option<Vec<Diag>>,
     depth: usize,
+    /// For an inheriting constructor ([class.inhctor.init]/1, clang
+    /// `InheritedConstructorInfo`): the bases it initializes by an
+    /// inherited constructor (first declaration, constructor called).
+    inherited: Option<Vec<(DeclId, DeclId)>>,
 }
 
 impl Sema<'_, '_> {
-    /// `d` as clang prints a declaration argument: `'name'` (unqualified).
+    /// `d` as clang prints a declaration argument: `'name'` (unqualified;
+    /// a class or variable template specialization with its arguments,
+    /// clang `getNameForDiagnostic`).
     pub(crate) fn decl_arg(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        crate::names::SemaNames::new(self).write_decl_name(d, false, &mut s);
+        let names = crate::names::SemaNames::new(self);
+        names.write_decl_name(d, false, &mut s);
+        if matches!(self.kind_of(d), DeclKind::CXXRecord | DeclKind::Var)
+            && let Some((_, info)) = self.ast.spec_info(d)
+        {
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, info.print_args, &mut s);
+        }
         format!("'{s}'")
     }
 
@@ -112,9 +124,7 @@ impl Sema<'_, '_> {
                 Some(d) => Selected::Found(d),
             };
         }
-        if k.is_ctor() && bits.contains(DefinitionBits::HAS_INHERITED_CTOR)
-            || k.is_assign() && bits.contains(DefinitionBits::HAS_INHERITED_ASSIGN)
-        {
+        if k.is_assign() && bits.contains(DefinitionBits::HAS_INHERITED_ASSIGN) {
             return Selected::Unsupported;
         }
         // clang `LookupSpecialMember`: an argument of the class type (an
@@ -131,6 +141,7 @@ impl Sema<'_, '_> {
             let mut found = std::mem::take(&mut set.found);
             found.clear();
             found.extend(self.ast.constructors(c).iter());
+            found.extend(self.ctor_shadows(c));
             self.add_found_candidates(
                 &mut set,
                 &found,
@@ -195,6 +206,14 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether inheriting constructor `dc` is deleted beyond its base
+    /// constructor being deleted ([class.inhctor.init]/1 with
+    /// [class.default.ctor]/2; clang `findInheritingConstructor`'s
+    /// `ShouldDeleteSpecialMember`). Undecidable selections answer no.
+    pub(crate) fn inheriting_ctor_should_delete(&mut self, dc: DeclId) -> bool {
+        self.deletion(dc, SpecialKind::DefaultCtor, false, 0).0 == DeleteReason::Yes
+    }
+
     /// The notes explaining why defaulted special member `f` is deleted.
     pub(crate) fn deletion_notes(&mut self, f: DeclId, k: SpecialKind, depth: usize) -> Vec<Diag> {
         self.deletion(f, k, true, depth).1
@@ -202,6 +221,18 @@ impl Sema<'_, '_> {
 
     /// The notes of clang `NoteDeletedFunction` for deleted function `m`.
     pub(crate) fn deleted_function_notes(&mut self, m: DeclId, depth: usize) -> Vec<Diag> {
+        // clang `NoteDeletedInheritingConstructor`: a deleted inherited
+        // constructor is explained at the base, otherwise the deletion
+        // of the inheriting constructor as a default constructor's.
+        if let Some(bc) = self.inherited_ctor_base(m) {
+            if self.is_deleted_fn(bc) {
+                return self.deleted_function_notes(bc, depth);
+            }
+            if depth >= MAX_NOTE_DEPTH {
+                return Vec::new();
+            }
+            return self.deletion_notes(m, SpecialKind::DefaultCtor, depth + 1);
+        }
         let spec = self.fn_spec(m);
         if spec.defaulted() != Defaulted::No {
             let mut out = Vec::new();
@@ -248,14 +279,19 @@ impl Sema<'_, '_> {
             return (DeleteReason::No, Vec::new());
         }
         let bits = self.defn_bits(class);
-        if bits.contains(DefinitionBits::LAMBDA) {
-            // todo(WP-074): closure types ([expr.prim.lambda.closure]/13).
-            let r = if matches!(k, K::DefaultCtor | K::CopyAssign) {
-                DeleteReason::Unsupported
+        if bits.contains(DefinitionBits::LAMBDA)
+            && matches!(k, K::DefaultCtor | K::CopyAssign)
+            && !self.closure_default_constructible(class)
+        {
+            // [expr.prim.lambda.closure]/13: a closure type with a
+            // lambda-capture has a deleted default constructor and copy
+            // assignment operator (clang `note_lambda_decl`).
+            let notes = if diagnose {
+                vec![self.diag(DiagId::note_lambda_decl, self.ast.decls.get(class).loc())]
             } else {
-                DeleteReason::No
+                Vec::new()
             };
-            return (r, Vec::new());
+            return (DeleteReason::Yes, notes);
         }
         if k != K::DefaultCtor && k != K::Dtor && bits.contains(DefinitionBits::ANONYMOUS) {
             return (DeleteReason::No, Vec::new());
@@ -291,6 +327,13 @@ impl Sema<'_, '_> {
         // todo: [class.dtor]/7.3, the deallocation function of a virtual
         // destructor, is not checked (spec/sema-class.md §4.2).
         let const_arg = matches!(k, K::CopyCtor | K::CopyAssign) && self.copy_param_is_const_ref(f);
+        // An inheriting constructor is deleted as a defaulted default
+        // constructor would be, except that the inherited bases use their
+        // inherited constructors (clang `ShouldDeleteSpecialMember` with
+        // an `InheritedConstructorInfo`).
+        let inherited = self
+            .inherited_ctor_base(f)
+            .map(|_| self.inherited_bases(f).into_iter().map(|ib| (ib.base, ib.ctor)).collect());
         let mut w = Walk {
             member: f,
             class,
@@ -299,6 +342,7 @@ impl Sema<'_, '_> {
             all_fields_const: true,
             notes: diagnose.then(Vec::new),
             depth,
+            inherited,
         };
         let r = self.walk_subobjects(&mut w);
         (r, w.notes.unwrap_or_default())
@@ -337,6 +381,33 @@ impl Sema<'_, '_> {
         }
         for b in subs {
             let Some(bc) = self.base_class(&b) else { continue };
+            // [class.inhctor.init]/1: an inherited base is initialized by
+            // its inherited constructor; only its deletedness counts (clang
+            // checks neither access nor the destructor on this path).
+            let first = self.ast.first(bc);
+            if let Some(&(_, ctor)) =
+                w.inherited.as_ref().and_then(|v| v.iter().find(|e| e.0 == first))
+            {
+                if !self.is_deleted_fn(ctor) {
+                    continue;
+                }
+                if w.notes.is_some() {
+                    let d = self
+                        .diag(DiagId::note_deleted_subobject, b.loc)
+                        .arg(w.head())
+                        .arg(self.decl_arg(w.class))
+                        .arg(0u8)
+                        .arg(self.ty_arg(b.ty))
+                        .arg(1u8)
+                        .arg("corresponding constructor");
+                    let nested = self.deleted_function_notes(ctor, w.depth + 1);
+                    if let Some(n) = w.notes.as_mut() {
+                        n.push(d);
+                        n.extend(nested);
+                    }
+                }
+                return DeleteReason::Yes;
+            }
             match self.delete_for_class_subobject(w, bc, Subobject::Base(b), Quals::NONE) {
                 DeleteReason::No => {}
                 r => return r,
@@ -361,6 +432,7 @@ impl Sema<'_, '_> {
             if let Some(n) = w.notes.as_mut() {
                 let d = self
                     .diag(DiagId::note_deleted_all_const, self.ast.decls.get(w.class).loc())
+                    .arg(u8::from(w.inherited.is_some()))
                     .arg(self.decl_arg(w.class))
                     .arg(0u8);
                 n.push(d);
@@ -394,11 +466,13 @@ impl Sema<'_, '_> {
         let quals = self.ast.types.effective_quals(fty);
         let floc = self.ast.decls.get(f).loc();
         let class = w.class;
+        let head = u8::from(w.inherited.is_some());
         match w.kind {
             K::DefaultCtor => {
                 if is_ref && !init {
                     self.note(w, |s| {
                         s.diag(DiagId::note_deleted_uninit_field, floc)
+                            .arg(head)
                             .arg(s.decl_arg(class))
                             .arg(s.decl_arg(f))
                             .arg(0u8)
@@ -415,6 +489,7 @@ impl Sema<'_, '_> {
                 {
                     self.note(w, |s| {
                         s.diag(DiagId::note_deleted_uninit_field, floc)
+                            .arg(head)
                             .arg(s.decl_arg(class))
                             .arg(s.decl_arg(f))
                             .arg(1u8)
@@ -491,7 +566,10 @@ impl Sema<'_, '_> {
             if w.kind == K::DefaultCtor && all_const && !ufields.is_empty() {
                 let rloc = self.ast.decls.get(rec).loc();
                 self.note(w, |s| {
-                    s.diag(DiagId::note_deleted_all_const, rloc).arg(s.decl_arg(class)).arg(1u8)
+                    s.diag(DiagId::note_deleted_all_const, rloc)
+                        .arg(head)
+                        .arg(s.decl_arg(class))
+                        .arg(1u8)
                 });
                 return DeleteReason::Yes;
             }
@@ -572,19 +650,28 @@ impl Sema<'_, '_> {
             }
         };
         if w.notes.is_some() {
-            let what = if dtor_in_ctor { "destructor" } else { w.kind.spelling() };
+            // clang `note_deleted_special_member_class_subobject`: an
+            // inheriting constructor says "corresponding constructor" for
+            // a deleted one, "default constructor" otherwise.
+            let what = if dtor_in_ctor {
+                "destructor"
+            } else if w.inherited.is_some() && kind == 1 {
+                "corresponding constructor"
+            } else {
+                w.kind.spelling()
+            };
             let what = if kind == 2 { format!("{what}s") } else { what.to_owned() };
             let class = w.class;
             let d = match sub {
                 Subobject::Field(f) => self
                     .diag(DiagId::note_deleted_subobject, self.ast.decls.get(f).loc())
-                    .arg(w.kind.index())
+                    .arg(w.head())
                     .arg(self.decl_arg(class))
                     .arg(if kind == 4 { 2u8 } else { 1u8 })
                     .arg(self.decl_arg(f)),
                 Subobject::Base(b) => self
                     .diag(DiagId::note_deleted_subobject, b.loc)
-                    .arg(w.kind.index())
+                    .arg(w.head())
                     .arg(self.decl_arg(class))
                     .arg(0u8)
                     .arg(self.ty_arg(b.ty)),
@@ -758,6 +845,12 @@ impl Sema<'_, '_> {
 }
 
 impl Walk {
+    /// The member the notes name: the special member kind, or 6
+    /// ("constructor inherited by") for an inheriting constructor.
+    fn head(&self) -> u8 {
+        if self.inherited.is_some() { 6 } else { self.kind.index() }
+    }
+
     fn member_class(&self) -> DeclId {
         let _ = self.member;
         self.class

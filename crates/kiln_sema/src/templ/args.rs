@@ -181,9 +181,10 @@ impl Sema<'_, '_> {
         arg_locs: &[Loc],
         loc: Loc,
     ) -> Result<ConvertedArgs, ()> {
+        let head = self.head_template(tmpl);
         let tmpl = self.ast.first(tmpl);
-        let params = self.template_params(tmpl);
-        let depth = self.template_param_depth(tmpl);
+        let params = self.template_params(head);
+        let depth = self.template_param_depth(head);
         let mut out: Vec<TemplateArg> = Vec::with_capacity(params.len());
         let mut ok = true;
         let arg_loc = |i: usize| arg_locs.get(i).copied().unwrap_or(loc);
@@ -267,6 +268,11 @@ impl Sema<'_, '_> {
     ) -> Result<TemplateArg, ()> {
         match (self.kind_of(p), a.view()) {
             (DeclKind::TemplateTypeParm, ArgView::Type(t)) => Ok(TemplateArg::ty(t)),
+            (DeclKind::TemplateTypeParm, ArgView::Template(name))
+                if self.template_arg_missing_args(name, at) =>
+            {
+                Err(())
+            }
             (DeclKind::TemplateTypeParm, _) => {
                 let d = self.diag(DiagId::sema_template_arg_must_be_type, at);
                 let d = self.note_param_here(d, p);
@@ -445,8 +451,9 @@ impl Sema<'_, '_> {
                 .arg("non-type template argument")
                 .arg(raw.to_string())
                 .arg(self.ty_arg(pty));
+            // clang `ext_cce_narrowing` (a `-Wc++11-narrowing` error by
+            // default) recovers with the converted value.
             self.emit(d);
-            return Err(());
         }
         let c = match conv::implicit_convert(self, c, pty, ConvCtx::Initialization) {
             Ok(c) => c,

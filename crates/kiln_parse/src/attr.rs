@@ -13,13 +13,24 @@ use kiln_lex::{Punct, TokKind};
 use kiln_sema::decl::AttrArg;
 use kiln_source::symbol::Symbol;
 
+use crate::expr::prec;
 use crate::keywords::Kw;
 use crate::parser::Parser;
 
 /// True for the attributes whose arguments are expressions.
 fn takes_expr_args(name: &str) -> bool {
     let n = name.trim_start_matches("__").trim_end_matches("__");
-    matches!(n, "deprecated" | "nodiscard" | "aligned" | "warn_unused_result")
+    matches!(
+        n,
+        "deprecated"
+            | "nodiscard"
+            | "aligned"
+            | "warn_unused_result"
+            | "ext_vector_type"
+            | "vector_size"
+            | "alloc_size"
+            | "alloc_align"
+    )
 }
 
 impl Parser<'_, '_> {
@@ -97,6 +108,30 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// `[[...]]` where no attribute-specifier may appear, such as after
+    /// a parenthesized declarator (`int (x) [[a]];`; clang's
+    /// `CheckProhibitedCXX11Attribute` in `ParseBracketDeclarator`):
+    /// each specifier is reported at its `[[` and skipped unparsed.
+    pub(crate) fn discard_prohibited_cxx11_attrs(&mut self) {
+        while self.at_cxx11_attr() {
+            let at = self.bump().span.lo;
+            let mut depth = 1usize;
+            while depth > 0 {
+                let t = self.tok();
+                if t.kind == TokKind::Eof {
+                    break;
+                }
+                match Self::punct_of(t) {
+                    Some(Punct::LSquare) => depth += 1,
+                    Some(Punct::RSquare) => depth -= 1,
+                    _ => {}
+                }
+                self.bump();
+            }
+            self.s.error(DiagId::parse_attributes_not_allowed, at);
+        }
+    }
+
     /// Parses and discards attributes (where kiln does not yet attach them).
     pub(crate) fn skip_attributes(&mut self) {
         let mut v = Vec::new();
@@ -151,7 +186,11 @@ impl Parser<'_, '_> {
                 name = n;
                 self.bump();
             }
-            let args = self.parse_attr_args(name);
+            let args = if scope.is_none() && self.s.ast.symbols().as_str(name) == "assume" {
+                self.parse_assume_arg(name)
+            } else {
+                self.parse_attr_args(name)
+            };
             if let Some(l) = self.eat(Punct::Ellipsis) {
                 self.unsupported("attribute pack expansions", l);
             }
@@ -236,6 +275,33 @@ impl Parser<'_, '_> {
         }
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         ok.then_some(args)
+    }
+
+    /// The argument of `[[assume(conditional-expression)]]`
+    /// ([dcl.attr.assume]/1; clang's `ParseCXXAssumeAttributeArg`). An
+    /// expression that is not a conditional-expression (a comma or an
+    /// assignment at the top) is diagnosed at its operator and the
+    /// attribute is dropped (`None`). The expression is converted to
+    /// `bool` by `Sema::act_on_attributed_stmt` once the statement is known.
+    fn parse_assume_arg(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
+        let Some(open) = self.eat(Punct::LParen) else { return Some(Vec::new()) };
+        let Some(c) = self.parse_cast_expr().and_then(|l| self.parse_rhs_from(l, prec::COND))
+        else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        };
+        if !self.at(Punct::RParen) && !self.at(Punct::RSquare) {
+            if let Some(full) = self.parse_rhs_from(c, prec::COMMA) {
+                let loc = self.s.expr_loc(full);
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::parse_assume_attr_expects_cond_expr, loc).arg(text);
+                self.emit(d);
+            }
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        }
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(vec![AttrArg::Expr(c)])
     }
 
     /// `alignas ( type-id )` / `alignas ( constant-expression )` ([dcl.align]).

@@ -17,6 +17,7 @@ use kiln_ast::types::{TagKeyword, TemplateArg, TemplateName};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
+use kiln_sema::DeclSite;
 use kiln_sema::templ::actions::TemplateIdRef;
 use kiln_sema::{Declarator, DeclaratorContext, NameClass};
 use kiln_source::Loc;
@@ -122,6 +123,14 @@ impl Parser<'_, '_> {
             self.skip_unsupported_declaration();
             return;
         }
+        // [class.access]/7: the names in a namespace-scope template head
+        // are checked in the context of the declared entity
+        // (`template<A::I> struct A::Q`), closed by the declaration.
+        let level = self.s.delayed_access_level();
+        let delays = ctx != DeclaratorContext::Member && self.template_delay_level.is_none();
+        if delays {
+            self.s.begin_delayed_access();
+        }
         let l_angle = self.bump().span.lo;
         self.s.act_on_template_params_start(loc, l_angle);
         let r_angle = self.parse_template_param_list_tail();
@@ -133,7 +142,14 @@ impl Parser<'_, '_> {
         };
         let head = self.s.act_template_head(requires, r_angle);
         self.trace(|_| "template_head".to_owned());
+        if delays {
+            self.template_delay_level = Some(level);
+        }
         self.parse_templated_declaration(ctx, head, loc);
+        if delays {
+            self.template_delay_level = None;
+            self.s.end_delayed_access_to(level, None);
+        }
         self.s.act_on_finish_template_decl();
     }
 
@@ -143,7 +159,11 @@ impl Parser<'_, '_> {
         if ctx == DeclaratorContext::Member {
             self.parse_member_declaration();
         } else {
+            // [temp.spec.general]/6: its decl-specifiers and declarator
+            // are not access checked.
+            self.s.exempt_next_delayed_access(true);
             self.parse_simple_declaration(DeclaratorContext::File, true);
+            self.s.exempt_next_delayed_access(false);
         }
     }
 
@@ -170,8 +190,10 @@ impl Parser<'_, '_> {
             _ => {}
         }
         let _ = loc;
-        if self.at_friend_template() {
-            self.s.templ_unimplemented("friend templates", self.loc());
+        if ctx != DeclaratorContext::Member && self.at_friend_template() {
+            // [class.friend]/1: a friend declaration appears in a class
+            // (clang: "'friend' used outside of class").
+            self.s.templ_unimplemented("friend templates outside a class", self.loc());
             self.skip_unsupported_declaration();
             return;
         }
@@ -360,7 +382,7 @@ impl Parser<'_, '_> {
 
     /// template-parameter-list `>` after the `<` ([temp.param]/1).
     /// Returns the `>`'s location; on an error, recovers to it.
-    fn parse_template_param_list_tail(&mut self) -> Loc {
+    pub(crate) fn parse_template_param_list_tail(&mut self) -> Loc {
         if !self.at_greater() {
             loop {
                 if !self.parse_template_param() {
@@ -438,22 +460,25 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// `...`? identifier? after a type parameter's key or constraint.
-    fn parse_param_pack_and_name(&mut self) -> (bool, Option<(Symbol, Loc)>) {
+    /// `...`? identifier? after a type parameter's key or constraint,
+    /// and where the name is or would be (an unnamed parameter's
+    /// location, clang's `NameLoc`).
+    fn parse_param_pack_and_name(&mut self) -> (bool, Option<(Symbol, Loc)>, Loc) {
         let pack = self.eat(Punct::Ellipsis).is_some();
+        let at = self.loc();
         let name = match self.ident() {
             Some(n) if self.kw().is_none() => Some((n, self.bump().span.lo)),
             _ => None,
         };
-        (pack, name)
+        (pack, name, at)
     }
 
     /// `class|typename ...? T? (= type-id)?` ([temp.param]/1).
     fn parse_type_param(&mut self) -> bool {
         let kw = self.bump();
         let typename_kw = self.kw_of(kw) == Some(Kw::Typename);
-        let (pack, name) = self.parse_param_pack_and_name();
-        let p = self.s.act_on_type_template_param(typename_kw, kw.span.lo, pack, name);
+        let (pack, name, at) = self.parse_param_pack_and_name();
+        let p = self.s.act_on_type_template_param(typename_kw, kw.span.lo, pack, name, at);
         self.parse_type_param_default(p)
     }
 
@@ -476,8 +501,8 @@ impl Parser<'_, '_> {
     fn parse_constrained_param(&mut self, concept: DeclId) -> bool {
         let loc = self.loc();
         let Some((_, args)) = self.parse_concept_name() else { return false };
-        let (pack, name) = self.parse_param_pack_and_name();
-        let p = self.s.act_on_constrained_template_param(concept, &args, loc, pack, name);
+        let (pack, name, at) = self.parse_param_pack_and_name();
+        let p = self.s.act_on_constrained_template_param(concept, &args, loc, pack, (name, at));
         self.parse_type_param_default(p)
     }
 
@@ -513,7 +538,6 @@ impl Parser<'_, '_> {
             None
         };
         let params = self.s.act_template_head(requires, r_angle);
-        let kw = self.tok();
         let typename_kw = match self.kw() {
             Some(Kw::Class) => false,
             Some(Kw::Typename) => true,
@@ -525,8 +549,8 @@ impl Parser<'_, '_> {
             }
         };
         self.bump();
-        let (pack, name) = self.parse_param_pack_and_name();
-        let p = self.s.act_on_template_template_param(params, typename_kw, kw.span.lo, pack, name);
+        let (pack, name, at) = self.parse_param_pack_and_name();
+        let p = self.s.act_on_template_template_param(params, typename_kw, pack, name, at);
         if self.eat(Punct::Equal).is_none() {
             return true;
         }
@@ -573,9 +597,19 @@ impl Parser<'_, '_> {
             return false;
         }
         let mut d = Declarator::new(DeclaratorContext::Prototype, start);
+        d.site = DeclSite::TemplateParam;
+        // An unnamed `int...` / `int&...` is a pack here: a template
+        // parameter list has no C variadic ellipsis ([temp.param]/1).
+        let saved = std::mem::replace(&mut self.pack_hint, true);
         self.with_greater_op(false, |s| s.parse_declarator(&mut d));
+        self.pack_hint = saved;
         let pack = d.ellipsis.take().is_some();
-        let info = self.s.act_on_param_declarator(&ds, &d);
+        let mut info = self.s.act_on_param_declarator(&ds, &d);
+        // An unnamed parameter is located where its name would be
+        // (clang's identifier location of an abstract declarator).
+        if info.name.is_none() {
+            info.loc = self.loc();
+        }
         let p = self.s.act_on_non_type_template_param(&info, pack);
         if self.eat(Punct::Equal).is_some() {
             let eq = self.loc();
@@ -641,8 +675,19 @@ impl Parser<'_, '_> {
         // `decltype(e)::name` (WP-119): the parenthesized operand is
         // parsed with `>` as an operator.
         self.with_greater_op(true, Self::annotate_decltype_scope_here);
-        let a = if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
-            TemplateArg::ty(self.with_greater_op(false, Self::parse_type_id)?)
+        // A class template name alone is a template template argument,
+        // not a deduced class type placeholder ([dcl.type.class.deduct]/2
+        // allows no placeholder here).
+        let ctad_name = matches!(
+            self.scan_name_qual_at(self.pos()),
+            Some((_, false, NameClass::TypeTemplate(d), _, _)) if self.s.is_ctad_template(d)
+        );
+        let a = if ctad_name && let Some(t) = self.at_template_name_arg() {
+            t
+        } else if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
+            TemplateArg::ty(
+                self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TemplateArg))?,
+            )
         } else if let Some(t) = self.at_template_name_arg() {
             t
         } else {
@@ -808,6 +853,9 @@ impl Parser<'_, '_> {
         }
         let class = self.s.classify_name(name, Some(q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
+            if let NameClass::TypeTemplate(d) = class {
+                self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
+            }
             return match self.parse_template_id_rest(class, name, name_loc) {
                 // The qualifier as written is sugar: `'O::I<int>'`.
                 Ok(TemplateIdRef::Type(t)) => {
@@ -829,6 +877,7 @@ impl Parser<'_, '_> {
             return None;
         };
         self.s.mark_type_referenced(d);
+        self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
         let kind = self.s.ast.decls.get(d).kind();
         let named = if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
         // The qualifier as written is sugar: `'S::P':'int *'`.
@@ -950,7 +999,9 @@ impl Parser<'_, '_> {
             return;
         }
         self.bump();
+        let scope = self.s.act_on_start_trailing_requires(d);
         d.trailing_requires = self.parse_requires_clause();
+        self.s.act_on_end_trailing_requires(scope);
     }
 
     /// The constraint-logical-or-expression of a requires-clause after
@@ -1031,6 +1082,7 @@ impl Parser<'_, '_> {
                 Kw::Sizeof
                     | Kw::Alignof
                     | Kw::GnuAlignof
+                    | Kw::DataSizeof
                     | Kw::Noexcept
                     | Kw::New
                     | Kw::Delete
@@ -1061,6 +1113,7 @@ impl Parser<'_, '_> {
                     break;
                 }
                 let mut d = Declarator::new(DeclaratorContext::Prototype, start);
+                d.site = DeclSite::RequiresParam;
                 self.parse_declarator(&mut d);
                 let p = self.s.act_on_param_declarator(&ds, &d);
                 let idx = u16::try_from(params.len()).unwrap_or(u16::MAX);

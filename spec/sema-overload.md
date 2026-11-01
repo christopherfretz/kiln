@@ -181,7 +181,11 @@ operator". Failure: "no matching function for call to object of type 'F'" /
    the M2 built-in path runs. `= [] () ->` resolve only for a class left
    operand.
 2. **Member candidates**: qualified lookup of `operator@` in `T1` if complete
-   or being defined.
+   or being defined (also for `()`, [over.call.object], and for each
+   reversed/rewritten form). An ambiguous lookup ([class.member.lookup]/6)
+   is diagnosed at the operator ("member 'operator()' found in multiple
+   base classes of different types", as clang's `~LookupResult`), and every
+   declaration found stays a candidate (WP-152).
 3. **Non-member candidates**: unqualified lookup of `operator@` from the
    expression's context, skipping class scopes (/3.2), plus ADL over all
    operands.
@@ -202,7 +206,7 @@ built-in path silently (as clang).
 | copy-init of `T` from `T` or derived | `resolve_ctor(T, [e], Copy)` | converting constructors |
 | [over.match.copy] copy-init of `T` from class `S` not derived | `resolve_conversion(T, e, Copy)` | converting ctors of `T` + non-explicit conversion functions of `S`/bases yielding (cv) `T`, a derived class, or a reference to one |
 | [over.match.conv] non-class `T` from class `S` | `resolve_conversion(T, e, ToNonClass)` | conversion functions yielding a type convertible to `T` by a standard conversion; explicit ones only in direct-init |
-| [over.match.ref] reference to `cv2 T2` | `resolve_conversion(T, e, ToReference{lvalue})` | conversion functions yielding lvalue `cv2 T2&` (lvalue ref) or rvalue `cv2 T2`/`T2&&`, reference-compatible |
+| [over.match.ref] reference to `cv2 T2` | `resolve_conversion(T, e, ToReference{lvalue})` | conversion functions yielding lvalue `cv2 T2&` (lvalue ref) or rvalue `cv2 T2`/`T2&&`, reference-compatible; explicit ones only in direct-init (`IcsOptions::EXPLICIT_REF_CONV`) |
 | [over.match.list] list-init of class `T` | `resolve_ctor(T, list, List)` | phase 1: initializer-list ctors with the list as sole argument; phase 2 (none viable): all ctors with the elements |
 
 **`explicit`** (clang behaviour): in copy-init, explicit constructors and
@@ -214,6 +218,23 @@ never in call-argument notes (there `tg(1)` with `explicit G(int)` just says
 copy-list-init explicit ctors stay viable and choosing one is "chosen
 constructor is explicit in copy-initialization" + "explicit constructor
 declared here".
+
+**Reference direct-initialization** (`int&& r(Ex{})`, `static_cast<T&&>`;
+clang `allowExplicitConversionFunctionsInRefBinding`): `bind_reference`
+passes `IcsOptions::EXPLICIT_REF_CONV` when its `ConvCtx` is direct. The
+[over.match.ref] sets then admit explicit conversion functions (as
+`ALLOW_EXPLICIT`), and so does a non-class /5.4 temporary's
+[over.match.conv] set (a prvalue `int` from `explicit operator int()` binds
+`int&&`/`const int&`, subject to the same-type filter, so `const long&`
+from it fails). A class temporary's constructors stay non-explicit-only
+([dcl.init.ref]/5.4.1 copy-initializes it). Copy-initialization keeps "no
+viable conversion" + "explicit conversion function is not a candidate".
+When the /5.4.1 source is not a class (`const B& b = 1`), clang's
+reference-init texts apply instead (WP-161): no usable constructor is
+"reference to type 'const B' could not bind to an rvalue of type 'int'"
+(`sema_reference_bind_failed`), an ambiguous one is "conversion from
+'int' to 'const F' is ambiguous" at the initializer, and a deleted one is
+"attempt to use a deleted function" (`DeletedAs::Use`).
 
 ### 2.7 [over.best.ics]/4 restrictions
 `IcsOptions::SUPPRESS_UDC`, passed by the nested resolution, forbids
@@ -264,7 +285,10 @@ notes "requires N argument(s), but M was/were provided" (`min == max`),
 
 ### 3.2 Object parameter ([over.match.funcs]/4–5)
 The implicit object parameter is `cv X&` (no ref-qualifier or `&`) or `cv
-X&&` (`&&`), `X` the naming class, `cv` from `FuncInfo::this_quals`. The
+X&&` (`&&`), `X` the naming class, `cv` from `FuncInfo::this_quals`; a
+member found through a using-declaration (a `UsingShadow`) takes the
+using-declaration's class as `X` ([over.match.funcs.general]/4, clang's
+`ActingContext`; `object_ics_found`, WP-146). The
 object argument is an lvalue for `x.f`, `p->f`, implicit `this`; a prvalue
 for `S().f()`. `object_ics(obj_ty, obj_vk, method)` binds directly — no UDC,
 no temporary (/5); a method without ref-qualifier lets an rvalue bind to
@@ -298,7 +322,8 @@ OBJECT_NO_REF_QUAL IGNORED`) and `SecondStep::DerivedToBase` (class to base
 by value or reference; Conversion rank, [over.best.ics]/6).
 `try_implicit_conversion(arg: ArgInfo, to, opts: IcsOptions) -> Ics` is
 pure. `IcsOptions`: `SUPPRESS_UDC`, `NO_UDC`, `NO_TEMPORARY`,
-`ALLOW_EXPLICIT` (direct-init, contextual bool).
+`ALLOW_EXPLICIT` (direct-init, contextual bool), `CANDIDATE_ARG`,
+`EXPLICIT_REF_CONV` (reference direct-init, §2.6).
 
 **[over.ics.ref]** (target `cv1 T1&`/`&&`): (1) direct binding
 (reference-compatible with the right value category) → identity,
@@ -331,7 +356,11 @@ error by default).
 | reference | as the referenced type, bound to the temporary |
 | non-class, one element / empty | element's ICS (narrowing → `Bad(Narrowing)`) / identity |
 
-Wording: "cannot convert initializer list argument to 'int'".
+Wording: "cannot convert initializer list argument to 'int'". Every failure
+of a braced argument is `Bad(InitList)` naming the parameter type (for a
+reference, the cv-qualified referenced type: `'const G'` for the implicit
+copy constructor), as clang's `TryListConversion` fails with the list as the
+source (WP-152).
 
 ### 3.4 Comparing ICSs (`compare_ics`, [over.ics.rank])
 (1) /2: `Standard` < `UserDefined` = `Ambiguous` < `Ellipsis`. (2) /3.1
@@ -544,6 +573,51 @@ candidate". Contextual implicit conversion ([conv]/6: `switch`, `delete`,
 array-new size) is `contextual_implicit_convert(e, pred)`: the unique
 non-explicit conversion function whose result satisfies `pred`; several is
 clang's `err_*_multiple_conversions` + one note per function.
+
+### 6.7 Literal operators and user-defined literals ([over.literal], [lex.ext]; `literal_op.rs`)
+- **Declarations.** A literal-operator-id is `operator "" X` or
+  `operator ""X`. Adjacent string literals concatenate; the result must
+  be empty and must have no encoding prefix. The `Declarator` carries
+  `lit_suffix`, and the function's name is
+  `DeclName::literal_operator(X)`. `check_literal_operator_decl` mirrors
+  clang's `CheckLiteralOperatorDeclaration`, and its first failure marks
+  the decl invalid. In order:
+  - it must not be a class member;
+  - it must not have `extern "C"` linkage, which comes with a note at the
+    linkage specification;
+  - a template has no function parameters, and its head is one of:
+    - `<char...>`;
+    - one non-pack class-type NTTP;
+    - GNU `<class C, C...>`, which also gives an ExtWarn;
+  - a non-template has one parameter of type `unsigned long long`,
+    `long double`, a character type or `const char *`, or it has two
+    parameters, `(const C *, size_t)`; a mismatch gets clang's
+    "did you mean" type;
+  - no parameter has a default argument.
+
+  A suffix that does not start with `_`, or that contains `__`, gets
+  the `-Wuser-defined-literals` reserved warning.
+- **Calls.** Unqualified ordinary lookup of `operator""X` picks the form
+  in this order:
+  - **integer:** `unsigned long long`, with the value too large to fit
+    being an error; then raw `const char *`, with the spelling minus the
+    suffix as a string literal; then `template<char...>`, with one
+    `char` template argument per spelled character;
+  - **floating:** the same, with `long double` re-classified as an
+    `L`-suffixed literal;
+  - **character:** the literal's own type;
+  - **string:** in [lex.ext]/5 order:
+    - a class-NTTP template called as `operator""X<str>()`;
+    - the GNU pack, with the element type and then the code units;
+    - `(str, len)`.
+
+  A plain function call goes through `act_on_call`, so overload
+  resolution and access checks apply. A template form calls through an
+  `UnresolvedLookupExpr` with explicit template arguments.
+- **AST deviation.** The result is a plain `CallExpr`. Clang's is a
+  `UserDefinedLiteral`, a `CallExpr` subclass whose dump differs only in
+  the node name. IR and mangling (`li <source-name>`) match clang
+  (tests/codegen/user_defined_literals.cpp).
 
 ## 7. Default arguments ([dcl.fct.default])
 `ParamData.default_arg: Option<ExprId>` (ast.md §16.10), write-once.
@@ -764,7 +838,13 @@ Where the code differs from (or details) the design above:
   parenthesized or block-scope name, and a member, take clang's direct
   path ("cannot initialize a parameter of type …" + "passing argument to
   parameter here"). `(g)(1)` keeps its `ParenExpr` (`try_member_call`
-  likewise).
+  likewise). For the single-candidate overload path the argument's ICS
+  is computed as a candidate argument: a bad one (including a class
+  parameter whose converting constructor is explicit or missing) gives
+  "no matching function" with the `bad_conversion_detail` note, using
+  the Bad ICS's to-type (WP-161). The error is located at the callee's
+  begin, which for a qualified name is its nested-name-specifier
+  (`set_overload_begin`, `set_template_id_begin`).
 - **Newest-first order** (§13.1.1) is applied in `overload_name_ref`, which
   reverses unqualified function results, not in `lookup_name`: no other
   lookup consumer sees a changed order.
@@ -787,11 +867,21 @@ Where the code differs from (or details) the design above:
   conversion (clang `FindConversionForRefInit`), so the candidate is not
   viable; a declaration's initialization still diagnoses the deleted
   function.
-- **[over.match.list].** Phase 1 runs only when an initializer-list
-  constructor is viable for the arguments (`init_list_phase1_viable`; an
-  empty list with a default constructor value-initializes); otherwise
-  phase 2 over all constructors. Building the `std::initializer_list`
-  object itself is still unsupported.
+- **[over.match.list].** `init_list_ctor_init` (`init.rs`) runs phase 1
+  as overload resolution over the initializer-list constructors and
+  constructor templates (a template's dependent `initializer_list<U>` is
+  recognized through `initializer_list_param` and `U` deduced from the
+  list), with the whole list as the one argument; an empty list with a
+  default constructor value-initializes. When nothing is viable,
+  `construct_class` runs phase 2 over all constructors with the elements;
+  a nested braced-init-list element is a placeholder argument
+  (`act_on_braced_arg`) as in a call (WP-169). The /3.1.1 bit is
+  `StandardConversion::std_init_list` (set on the `std::initializer_list`
+  row of [over.ics.list], for a standard or user-defined sequence);
+  `compare_ics` checks it after the /2 class and before /3.2, so
+  `S({1, 2})` prefers `S(initializer_list<int>)` to
+  `S(const int (&)[2])` (clang). The array-bound tie-breaker of /3.1.2 is
+  not implemented.
 - **Casts.** `static_cast` / functional / C-style casts from a class to a
   non-class type run the direct-initialization's user-defined conversion
   (explicit conversion functions are candidates) with clang's

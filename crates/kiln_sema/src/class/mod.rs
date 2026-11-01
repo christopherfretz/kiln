@@ -15,9 +15,10 @@ mod compare;
 mod construct;
 mod ctor_select;
 mod ctorinit;
-mod friend;
+pub(crate) mod friend;
+pub(crate) mod inhctor;
 mod member_expr;
-mod members;
+pub(crate) mod members;
 mod special;
 mod temporary;
 mod r#virtual;
@@ -103,6 +104,10 @@ pub struct ClassBuild {
     /// The first declarations befriended by this class, in order; stored
     /// in `RecordCold.friends` at `}`.
     pub friends: Vec<DeclId>,
+    /// The context current where the definition began, current again at
+    /// `}` (an out-of-line definition of a member partial specialization
+    /// declared in its class is lexically outside it).
+    pub outer: DeclId,
 }
 
 /// The function being defined when a nested function definition starts
@@ -116,7 +121,7 @@ pub(crate) struct SavedFn {
 
 impl ClassBuild {
     /// A fresh entry for `record` with the default access of `tag`.
-    pub fn new(record: DeclId, tag: TagKind) -> Self {
+    pub fn new(record: DeclId, tag: TagKind, outer: DeclId) -> Self {
         let access = if tag == TagKind::Class { Access::Private } else { Access::Public };
         ClassBuild {
             record,
@@ -126,6 +131,7 @@ impl ClassBuild {
             pending_nsdmi: 0,
             pending_default_args: 0,
             friends: Vec::new(),
+            outer,
         }
     }
 }
@@ -251,6 +257,7 @@ impl Sema<'_, '_> {
         d: Option<&Declarator>,
         friend_loc: Loc,
     ) -> Option<DeclId> {
+        let base = self.ctad_friend_check(ds, base, d);
         self.declare_friend(ds, base, d, friend_loc)
     }
 
@@ -276,6 +283,22 @@ impl Sema<'_, '_> {
     /// defaults: WP-067b).
     pub fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId) {
         self.attach_default_arg(p, e);
+    }
+
+    /// The braced default argument `= { ... }` of parameter `p`
+    /// ([dcl.fct.default]/1, [dcl.init.list]): copy-list-initializes
+    /// the parameter's type, as one parsed in place does. Called by the
+    /// parser for a replayed member function default argument, and by
+    /// instantiation for a pattern's dependent braced default argument
+    /// (WP-136). Write-once, like [`Sema::act_on_param_default_arg`].
+    pub fn act_on_param_default_list(&mut self, p: DeclId, l: &crate::init::InitList) {
+        let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        let loc = self.ast.decls.get(p).loc();
+        let note = Some(self.param_decl_note(p));
+        let e = self.init_list_entity(pty, l, loc, crate::conv::ConvCtx::Argument, note);
+        self.note_default_init_full_expr();
+        let e = self.act_on_full_expr(e);
+        let _ = self.ast.decls.set_default_arg(p, e);
     }
 
     /// The replayed *noexcept-specifier* of member function `f`, whose
@@ -319,8 +342,17 @@ impl Sema<'_, '_> {
             if let Initializer::Expr(e) = init {
                 self.act_on_full_expr(e);
             }
+        } else if let Initializer::List(l) = &init
+            && (self.ast.types.is_dependent(fty) || self.init_list_type_dependent(l))
+        {
+            // Initialized when the class is instantiated ([temp.dep.expr]),
+            // the list kept as written (as for a variable).
+            let e = self.dependent_init_list(l);
+            let e = self.act_on_full_expr(e);
+            let _ = self.ast.decls.set_field_init(field, e);
         } else {
             let e = self.perform_init(fty, init, loc, direct);
+            self.note_default_init_full_expr();
             let e = self.act_on_full_expr(e);
             let _ = self.ast.decls.set_field_init(field, e);
         }
@@ -402,9 +434,16 @@ impl Sema<'_, '_> {
     /// WP-066b).
     pub fn act_on_this(&mut self, loc: Loc) -> ExprId {
         if let Some(t) = self.current_this() {
+            self.note_this_use(loc);
             self.builder().this_expr(t, false, loc)
         } else {
-            self.error(DiagId::sema_this_outside_member, loc);
+            let explicit_obj = self.func.as_ref().is_some_and(|f| self.has_explicit_object(f.decl));
+            let id = if explicit_obj {
+                DiagId::sema_explicit_object_this
+            } else {
+                DiagId::sema_this_outside_member
+            };
+            self.error(id, loc);
             self.act_on_error_expr(&[], loc)
         }
     }

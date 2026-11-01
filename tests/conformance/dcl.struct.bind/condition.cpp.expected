@@ -1,0 +1,82 @@
+Dumping test_cond:
+FunctionDecl test_cond 'int (P)'
+|-ParmVarDecl used p 'P'
+`-CompoundStmt
+  |-IfStmt has_var
+  | |-DeclStmt
+  | | `-DecompositionDecl used 'P' cinit
+  | |   |-CXXConstructExpr 'P' 'void (const P &) noexcept'
+  | |   | `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  | |   |   `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+  | |   |-BindingDecl referenced a 'int'
+  | |   | `-MemberExpr 'int' lvalue .x
+  | |   |   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | |   `-BindingDecl b 'int'
+  | |     `-MemberExpr 'int' lvalue .y
+  | |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+  | | `-CXXMemberCallExpr 'bool'
+  | |   `-MemberExpr '<bound member function type>' .operator bool
+  | |     `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  | |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | `-ReturnStmt
+  |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |-WhileStmt has_var
+  | |-DeclStmt
+  | | `-DecompositionDecl used 'P' cinit
+  | |   |-CXXConstructExpr 'P' 'void (const P &) noexcept'
+  | |   | `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  | |   |   `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+  | |   |-BindingDecl c 'int'
+  | |   | `-MemberExpr 'int' lvalue .x
+  | |   |   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | |   `-BindingDecl referenced d 'int'
+  | |     `-MemberExpr 'int' lvalue .y
+  | |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+  | | `-CXXMemberCallExpr 'bool'
+  | |   `-MemberExpr '<bound member function type>' .operator bool
+  | |     `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  | |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | `-ReturnStmt
+  |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     `-DeclRefExpr 'int' lvalue Binding 'd' 'int'
+  |-IfStmt has_init
+  | |-DeclStmt
+  | | `-DecompositionDecl used 'P' cinit
+  | |   |-CXXConstructExpr 'P' 'void (const P &) noexcept'
+  | |   | `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  | |   |   `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+  | |   |-BindingDecl referenced e 'int'
+  | |   | `-MemberExpr 'int' lvalue .x
+  | |   |   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | |   `-BindingDecl referenced g 'int'
+  | |     `-MemberExpr 'int' lvalue .y
+  | |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+  | | `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |   `-DeclRefExpr 'int' lvalue Binding 'e' 'int'
+  | `-ReturnStmt
+  |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  |     `-DeclRefExpr 'int' lvalue Binding 'g' 'int'
+  `-SwitchStmt has_init
+    |-DeclStmt
+    | `-DecompositionDecl used 'P' cinit
+    |   |-CXXConstructExpr 'P' 'void (const P &) noexcept'
+    |   | `-ImplicitCastExpr 'const P' lvalue <NoOp>
+    |   |   `-DeclRefExpr 'P' lvalue ParmVar 'p' 'P'
+    |   |-BindingDecl referenced h 'int'
+    |   | `-MemberExpr 'int' lvalue .x
+    |   |   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+    |   `-BindingDecl referenced i 'int'
+    |     `-MemberExpr 'int' lvalue .y
+    |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+    |-ImplicitCastExpr 'int' <LValueToRValue>
+    | `-DeclRefExpr 'int' lvalue Binding 'h' 'int'
+    `-CompoundStmt
+      `-DefaultStmt
+        `-ReturnStmt
+          `-ImplicitCastExpr 'int' <LValueToRValue>
+            `-DeclRefExpr 'int' lvalue Binding 'i' 'int'
+

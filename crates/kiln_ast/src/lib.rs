@@ -20,6 +20,7 @@ pub mod decl;
 pub mod dump;
 pub mod expr;
 pub mod ids;
+pub mod lambda;
 pub mod lists;
 pub mod lookup;
 pub mod mem;

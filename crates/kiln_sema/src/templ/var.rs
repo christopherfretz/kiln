@@ -263,9 +263,12 @@ impl Sema<'_, '_> {
             if Self::declares_definition(d, vspec) && self.is_var_definition(p) {
                 let msg =
                     self.diag(DiagId::sema_redefinition, sid.loc).arg(self.partial_spec_name(p));
-                let msg = self.note_prev(msg, p, true);
+                let msg = self.note_prev_partial_def(msg, p);
                 self.emit(msg);
                 return Err(());
+            }
+            if Self::declares_definition(d, vspec) {
+                self.templ.partial_def_loc.insert(p, sid.loc);
             }
             return Ok(p);
         }
@@ -342,5 +345,97 @@ impl Sema<'_, '_> {
             self.set_member_access(spec);
         }
         Ok(spec)
+    }
+}
+
+impl Sema<'_, '_> {
+    /// `[extern] template T v<args>;` or `[extern] template T
+    /// C<args>::m;` ([temp.explicit]/3): an explicit instantiation of a
+    /// variable template specialization or of a static data member of a
+    /// class template specialization. A definition instantiates the
+    /// variable's definition (initializer) now and keeps it for emission
+    /// ([temp.explicit]/12); a declaration only records the kind
+    /// ([temp.explicit]/14).
+    pub(crate) fn act_on_explicit_var_inst(
+        &mut self,
+        d: &Declarator,
+        declaration: bool,
+        invalid: bool,
+    ) {
+        self.templ.cur = None;
+        if invalid {
+            return;
+        }
+        let name_loc = d.name_loc();
+        let kind = if declaration {
+            SpecKind::ExplicitInstantiationDeclaration
+        } else {
+            SpecKind::ExplicitInstantiationDefinition
+        };
+        if let Some(sid) = &d.spec_id {
+            let Ok(v) = self.get_var_spec(sid.template, &sid.args, &sid.arg_locs, sid.loc) else {
+                return;
+            };
+            let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
+            match info.kind {
+                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDefinition => {
+                    return;
+                }
+                SpecKind::ExplicitInstantiationDeclaration if declaration => return,
+                _ => {}
+            }
+            self.ast.templates.update_spec(i, |s| {
+                s.kind = kind;
+                s.point_of_instantiation = name_loc;
+            });
+            if !declaration {
+                self.instantiate_var_spec_init(v, name_loc);
+                self.mark_used(v);
+            }
+            return;
+        }
+        // clang does not compare the declared type with the member's
+        // (GCC does); kiln follows clang.
+        let found = d.name.and_then(|(n, _)| {
+            let q = d.qualifier;
+            if q.is_some_and(|q| self.kind_of(q).payload() != kiln_ast::decl::PayloadClass::Record)
+            {
+                return None;
+            }
+            self.prev_candidates_dn(kiln_ast::names::DeclName::ident(n), q)
+                .into_iter()
+                .find(|&c| self.kind_of(c) == DeclKind::Var)
+        });
+        let Some(m) = found.filter(|&c| self.ast.instantiated_from(c).is_some()) else {
+            let name = d.name.map_or(String::new(), |(n, _)| crate::decl::sym_str(self, n));
+            let mut e = self.diag(DiagId::sema_explicit_inst_not_known, name_loc).arg(name);
+            if let Some(c) = found {
+                let note = self
+                    .diag(DiagId::note_explicit_instantiation_here, self.ast.decls.get(c).loc());
+                e = e.with_note(note);
+            }
+            self.emit(e);
+            return;
+        };
+        let m = self.ast.first(m);
+        if let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) {
+            match info.kind {
+                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDefinition => {
+                    return;
+                }
+                SpecKind::ExplicitInstantiationDeclaration if declaration => return,
+                _ => {}
+            }
+            self.ast.templates.update_member_spec(i, |x| {
+                x.kind = kind;
+                x.point_of_instantiation = name_loc;
+            });
+        }
+        if declaration {
+            return;
+        }
+        self.instantiate_static_member_init(m, name_loc);
+        self.instantiate_static_member_def(m, name_loc);
+        self.mark_used(m);
     }
 }

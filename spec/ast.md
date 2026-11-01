@@ -167,7 +167,7 @@ Option<DeclId>, group: RedeclGroupId }`). `T` = may be templated (§8.2).
 | types | `Typedef`R, `TypeAlias`R T, `Enum`★R T (scoped, fixed underlying type, `int_type`, promotion type), `EnumConstant` (value: `ConstValueId`), `CXXRecord`★R T (struct/class/union; lambda closure bit), `ClassTemplateSpecialization`★R, `ClassTemplatePartialSpecialization`★R |
 | members | `Field` (bit-width `ExprId`, default member init, mutable, `[[no_unique_address]]`), `IndirectField` (chain into anonymous unions), `AccessSpec` (no payload: the access is `misc.access`), `Friend` (no payload: a friend type is `DeclNode.ty` and `data` the raw `DeclId` of the class its elaborated-type-specifier first declared, or 0; a befriended function or class has `ty` None and `data` its `DeclId` — `Decls::friend_target` → `FriendTarget::{Decl, Type { ty, owned_tag }}`; P2893 pack), `FriendTemplate` |
 | functions | `Function`R T, `CXXMethod`R T, `CXXConstructor`R T, `CXXDestructor`R T, `CXXConversion`R T, `CXXDeductionGuide` T |
-| variables | `Var`R T, `ParmVar`, `ImplicitParam` (`this`, coroutine frame), `Decomposition` (structured bindings: `bindings: ListId`; P1061 pack), `Binding` (`binding: ExprId`, holding var for tuple-like), `VarTemplateSpecialization`R, `VarTemplatePartialSpecialization`R |
+| variables | `Var`R T, `ParmVar`, `ImplicitParam` (`this`, coroutine frame), `Binding` (one structured-binding name; no payload: its expression and holding variable are cold, see below; P1061 pack M4+). The decomposed object of a structured binding declaration (clang's `DecompositionDecl`) is a `Var` with an empty name and the cold `decomp_bindings` list, not a kind of its own (WP-122), `VarTemplateSpecialization`R, `VarTemplatePartialSpecialization`R |
 | templates | `ClassTemplate`R, `FunctionTemplate`R, `VarTemplate`R, `TypeAliasTemplate`R, `Concept`, `BuiltinTemplate` (`__make_integer_seq`, `__type_pack_element`), `TemplateTypeParm`, `NonTypeTemplateParm`, `TemplateTemplateParm`, `ImplicitConceptSpecialization`, `RequiresExprBody`★ |
 | synthesized | `LifetimeExtendedTemporary` (payload `LetData { extending: DeclId, mangling_index: u32, value: Option<ConstValueId> }`; context the extending declaration's, in no member list or lookup table), `TemplateParamObject` (class-type NTTP object: type + `ConstValueId`), `StaticAssert` (cond `ExprId`, message `ExprId`, P2741), `Label`, `ContractResultName` (P2900 `post(r: ...)`) |
 
@@ -251,7 +251,24 @@ fields used by fewer than ~5% of decls of a kind go there.
   implicit builtin `Function` decl, read through
   `DeclArena::builtin_id(d)`. Ids and spellings are in
   `kiln_ast::decl::builtin` (`IS_CONSTANT_EVALUATED = 722`, clang's
-  numbering; `ALL`; `by_name`).
+  numbering; `ALL`; `by_name`). Landed (WP-140): the C string builtins
+  `STRCMP` (1140), `STRNCMP`, `STRCHR`, `STRRCHR`, `STRPBRK`, `STRSTR`,
+  `WCSCMP`, `WCSNCMP`, `WCSCHR` (1386).
+- Structured bindings (WP-122, sema.md §4.9). Write-once cold maps:
+  `decomp_bindings: ColdMap<DeclId, ListId>` (decomposed `Var` → its
+  `Binding`s, in order), `binding_decomp` (`Binding` → that `Var`),
+  `binding_expr: ColdMap<DeclId, ExprId>` (the binding expression:
+  `e[i]`, `e.m`, or a `DeclRefExpr` to the holding variable) and
+  `binding_var` (`Binding` → holding variable, tuple-like only).
+  `DeclArena::set_decomp_bindings(v, list, bindings)` and
+  `set_binding(b, expr, holding)` write them; `decomp_bindings`,
+  `is_decomposition`, `binding_decomp`, `binding_expr` and
+  `binding_var` read them. `AstBuilder::binding(head)` creates a
+  `Binding` (type set later by sema), `set_decomposition(v, bindings)`
+  links them, and `holding_var(head, ty, spec)` creates the implicit
+  (`implicit`) `Var` a tuple-like binding refers to: a member of its
+  lexical context that name lookup never finds. The dump prints the `Var` as `DecompositionDecl`
+  (spec/ast-dump.md §3).
 - `AstBuilder::linkage_spec_head(head, lang)` creates a
   `LinkageSpecDecl` from a full `DeclHead`, so implicit ones get
   `IMPLICIT` at creation (`linkage_spec` delegates to it).
@@ -366,7 +383,7 @@ Names are clang's (the dump prints them). (M2) marks the M2 subset.
 | lambdas, packs | `LambdaExpr`, `PackExpansionExpr`, `CXXFoldExpr`, `PackIndexingExpr` (P2662), `CXXUnresolvedConstructExpr` |
 | coroutines | `CoawaitExpr`, `DependentCoawaitExpr`, `CoyieldExpr` |
 | constant | `ConstantExpr` (M2; caches the value, §9.2) |
-| GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr`, `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`), `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr` |
+| GNU / builtins | `StmtExpr` (M2), `ChooseExpr`, `VAArgExpr` (WP-171: `a` = the `va_list` operand, `b` = the written type, `cold.trait_rhs_loc` = the type's begin, `cold.end_loc` = the `)`; the node type is the written type without references, always a prvalue; accessor `ExprArena::va_arg`), `AtomicExpr` (`__c11_atomic_*`, `__atomic_*`; WP-154: `aux` = the builtin id (`ExprArena::atomic_op`), `a` = a list of the operands in clang's order `ptr`, `order`, `val1`, `order_fail`, `val2`, `weak`, only those the op takes (`atomic_subs`); the per-op shape is `kiln_ast::decl::builtin::atomic`), `ShuffleVectorExpr`, `ConvertVectorExpr`, `ExtVectorElementExpr` |
 | reflection (M6) | `CXXReflectExpr` (`^^`: operand type/decl/namespace/expr → `ReflectionId` when non-dependent), `CXXSpliceExpr` (`[: e :]` in expression position; designated entity once evaluated) |
 | recovery | `RecoveryExpr` (children kept; `ERROR` dependence; type if known) |
 
@@ -502,9 +519,42 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   The key is the `SourceLocExpr` itself (its own location and context),
   or a `CXXDefaultArgExpr` that uses a default argument containing one
   (the call's location and the caller's context, [dcl.fct.default]/9 via
-  [support.srcloc.cons]/2). Consumers (Oven, codegen) take the values of
-  the outermost `CXXDefaultArgExpr` in scope that has an entry, else the
-  `SourceLocExpr`'s own.
+  [support.srcloc.cons]/2), or a `CXXDefaultInitExpr` using a default
+  member initializer containing one (the constructor's or the aggregate
+  initialization's location and context). Consumers (Oven, codegen) take
+  the values of the outermost `CXXDefaultArgExpr`/`CXXDefaultInitExpr` in
+  scope that has an entry, else the `SourceLocExpr`'s own.
+
+### 5.9 Lambdas (WP-075)
+- **`LambdaExpr`** ([expr.prim.lambda]; spec/sema-lambda.md): `a` is its
+  `LambdaId`, an index into `exprs.lambdas: LambdaArena` (side records
+  `kiln_ast::lambda::LambdaData`, `Exprs::lambda_id`); its children are
+  the initializers of the closure's capture members, in member order
+  (clang `capture_inits`). A prvalue of the closure type. Built by
+  `act_on_lambda_end`.
+- **`LambdaData`**: `closure` (the `CXXRecordDecl`), `call_op` (the
+  call operator, or for a generic lambda the pattern of its template),
+  `default` / `default_loc` (`CaptureDefault`), `captures:
+  Vec<LambdaCapture>` (kind `This`/`StarThis`/`ByCopy`/`ByRef`, the
+  variable — an init-capture's own `VarDecl` —, the member `field`,
+  `loc`, pack `ellipsis`, `implicit`, `init`), `inits: Option<ListId>`,
+  `body: Option<StmtId>` (also the call operator's body), `lbracket` /
+  `rbracket`, the bits `explicit_params`, `explicit_result`, `mutable`,
+  and `mangling: LambdaMangling { number, context }` (abi.md §8.9).
+  Written by sema while the lambda is open (§2.4: the record is
+  completed at `}`), immutable after.
+- **Closure classes**: `RecordData.lambda: Option<LambdaId>` names the
+  same record (`DeclArena::set_closure`); `DefinitionBits::LAMBDA` and
+  `LAMBDA_CAPTURES` (a capture-default or a capture). Queries on `Ast`:
+  `closure_lambda(record)`, `call_op_lambda(f)` (the call operator or a
+  specialization of its template), `closure_invoker(record)`, and
+  `closure_thunk(f) -> Option<ClosureThunk>` (`Conversion { target }` /
+  `Invoker { call_op }`: the body-less closure members the Oven and
+  codegen synthesize).
+- **Captured names**: a `DeclRefExpr` to a captured entity carries
+  `ExprFlags::REFERS_TO_ENCLOSING` (clang `refersToEnclosingVariableOrCapture`).
+- Memory: `exprs.lambdas` has its own `MemRow` ("lambdas", captures
+  included).
 
 ## 6. Statements
 ```rust
@@ -1042,3 +1092,25 @@ These refine or replace the text above where they differ; each says why.
     dependence propagation as "const-qualified or `constexpr`" (no
     integral/enumeration type check): over-approximating value dependence
     is safe (it only defers evaluation to instantiation).
+
+**Landed (WP-140): GNU asm nodes.** `GCCAsmStmt`'s side record is
+`AsmData` (`StmtArena::asm_data`): template literal and location, a slice
+of the operand table (`asm_operands(s)`: `AsmOperand { name, constraint,
+constraint_loc, expr }`, outputs then inputs), clobbers and labels
+(`ListId`s), the closing `)`, and `srclocs` (a raw `u32` list of clang's
+`!srcloc` values, filled by sema); `aux` holds `asm_bits`
+(`VOLATILE`, `GOTO`, `INLINE`, `BASIC`). Built with
+`AstBuilder::gcc_asm_stmt(data, ops, bits, loc)`. A namespace-scope
+asm-declaration is `DeclKind::FileScopeAsm` (`AstBuilder::file_scope_asm`,
+`Ast::file_scope_asm_string`). `labels` is always empty (no `asm goto`).
+
+**Landed (WP-140): `PredefinedExpr`.** `__func__`, `__FUNCTION__`,
+`__PRETTY_FUNCTION__` ([dcl.fct.def.general]/8; clang `PredefinedExpr`):
+`aux` is the `PredefinedKind` (`Func`, `Function`, `PrettyFunction`;
+`Exprs::predefined_kind`), `a` the `StringLiteral` holding the name
+(`Exprs::predefined_name`, its only child). An lvalue of `const char[N]`;
+in a dependent context it has type `QualType::DEPENDENT` and no child.
+Built by `AstBuilder::predefined_expr(kind, ty, name, loc)`.
+`ExprArena::mark_instantiation_dependent(e)` sets
+`ExprDeps::INSTANTIATION` on a `SourceLocExpr` or `CXXDefaultArgExpr`
+whose function name changes per specialization (sema, §5.8).

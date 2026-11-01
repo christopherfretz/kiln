@@ -1,0 +1,52 @@
+TranslationUnitDecl
+|-ClassTemplateDecl Box
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Box definition
+| | |-FriendDecl
+| | | `-ClassTemplateDecl parent Box
+| | |   |-TemplateTypeParmDecl class depth 1 index 0 U
+| | |   `-CXXRecordDecl parent class Box
+| | `-FieldDecl value 'T'
+| |-ClassTemplateSpecializationDecl struct Box definition implicit_instantiation
+| | |-TemplateArgument type 'int'
+| | |-FriendDecl
+| | | `-ClassTemplateDecl parent Box
+| | |   |-TemplateTypeParmDecl class depth 0 index 0 U
+| | |   |-CXXRecordDecl parent class Box
+| | |   |-ClassTemplateSpecialization 'Box'
+| | |   |-ClassTemplateSpecialization 'Box'
+| | |   `-ClassTemplateSpecialization 'Box'
+| | `-FieldDecl referenced value 'int'
+| |-ClassTemplateSpecializationDecl struct Box definition implicit_instantiation
+| | |-TemplateArgument type 'char'
+| | |-FriendDecl
+| | | `-ClassTemplateDecl parent Box
+| | |   |-TemplateTypeParmDecl class depth 0 index 0 U
+| | |   |-CXXRecordDecl parent class Box
+| | |   |-ClassTemplateSpecialization 'Box'
+| | |   |-ClassTemplateSpecialization 'Box'
+| | |   `-ClassTemplateSpecialization 'Box'
+| | `-FieldDecl value 'char'
+| `-ClassTemplateSpecializationDecl struct Box definition implicit_instantiation
+|   |-TemplateArgument type 'Box<int>'
+|   |-FriendDecl
+|   | `-ClassTemplateDecl parent Box
+|   |   |-TemplateTypeParmDecl class depth 0 index 0 U
+|   |   |-CXXRecordDecl parent class Box
+|   |   |-ClassTemplateSpecialization 'Box'
+|   |   |-ClassTemplateSpecialization 'Box'
+|   |   `-ClassTemplateSpecialization 'Box'
+|   `-FieldDecl value 'Box<int>'
+|-VarDecl bi 'Box<int>' callinit
+| `-CXXConstructExpr 'Box<int>' 'void () noexcept'
+|-VarDecl bc 'Box<char>' callinit
+| `-CXXConstructExpr 'Box<char>' 'void () noexcept'
+|-VarDecl bb 'Box<Box<int>>' callinit
+| `-CXXConstructExpr 'Box<Box<int>>' 'void () noexcept'
+`-FunctionDecl get 'int (Box<int>)'
+  |-ParmVarDecl used b 'Box<int>'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-MemberExpr 'int' lvalue .value
+          `-DeclRefExpr 'Box<int>' lvalue ParmVar 'b' 'Box<int>'

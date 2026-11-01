@@ -46,6 +46,8 @@ struct Replay {
     cur: Token,
     prev_hi: Loc,
     depth: [u32; 3],
+    /// The interrupted stream's `greater_is_op` and `greater_off_depth`.
+    greater: (bool, u32),
     inject: bool,
 }
 
@@ -90,8 +92,12 @@ pub struct Parser<'a, 'sm> {
     pub(crate) in_stmt_expr: bool,
     /// False while parsing a template argument: a `>` or `>>` ends the
     /// argument instead of being an operator ([temp.names]/4, clang's
-    /// `GreaterThanIsOperator`). Brackets restore it.
+    /// `GreaterThanIsOperator`). Brackets restore it: see
+    /// [`Parser::greater_ends_arg`].
     pub(crate) greater_is_op: bool,
+    /// The total bracket depth where `greater_is_op` was last turned off:
+    /// a `>` nested in a bracket opened since is an operator again.
+    pub(crate) greater_off_depth: u32,
     /// The parameter-declaration being parsed declares a type with an
     /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
     /// declarator, not the parameter list ([dcl.fct]/14).
@@ -108,6 +114,10 @@ pub struct Parser<'a, 'sm> {
     /// token: the first component of a nested-name-specifier (WP-119,
     /// clang's `annot_decltype`). Cleared by every [`Parser::bump`].
     decltype_scope: Option<DecltypeScope>,
+    /// The access delay level a template head opened for the
+    /// declaration after it ([class.access]/7), taken by
+    /// `parse_simple_declaration`.
+    pub(crate) template_delay_level: Option<usize>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -183,10 +193,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             trace: Vec::new(),
             in_stmt_expr: false,
             greater_is_op: true,
+            greater_off_depth: 0,
             pack_hint: false,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
             decltype_scope: None,
+            template_delay_level: None,
         };
         p.handle_events(0);
         p
@@ -348,6 +360,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             cur: self.cur,
             prev_hi: self.prev_hi,
             depth: self.depth,
+            greater: (self.greater_is_op, self.greater_off_depth),
             inject: false,
         };
         self.replay.push(saved);
@@ -356,6 +369,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.cur = cur;
         self.prev_hi = Loc::INVALID;
         self.depth = [0; 3];
+        self.greater_is_op = true;
+        self.greater_off_depth = 0;
     }
 
     /// Inserts a `;` before the current token (at its location), as clang
@@ -375,6 +390,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             cur: self.cur,
             prev_hi: self.prev_hi,
             depth: self.depth,
+            greater: (self.greater_is_op, self.greater_off_depth),
             inject: true,
         };
         self.replay.push(saved);
@@ -396,6 +412,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.cur = r.cur;
             self.prev_hi = r.prev_hi;
             self.depth = r.depth;
+            (self.greater_is_op, self.greater_off_depth) = r.greater;
         }
         done
     }
@@ -423,6 +440,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             _ => return 0,
         };
         self.depth[b as usize]
+    }
+
+    /// The number of brackets of every kind open at the current token.
+    pub(crate) fn total_depth(&self) -> u32 {
+        self.depth.iter().sum()
+    }
+
+    /// Whether a `>` here ends a template argument rather than being an
+    /// operator ([temp.names]/4): not inside a bracket opened since the
+    /// template argument began (clang's `BalancedDelimiterTracker`
+    /// restores `GreaterThanIsOperator` inside `()`, `[]` and `{}`).
+    pub(crate) fn greater_ends_arg(&self) -> bool {
+        !self.greater_is_op && self.total_depth() <= self.greater_off_depth
     }
 
     fn close(&mut self, b: Bracket) {
@@ -647,40 +677,6 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.eat(Punct::Semi);
     }
 
-    /// The index of the first of `targets` at bracket depth 0, scanning
-    /// from the current token and stopping at an unbalanced closer, `{`,
-    /// `;` (unless a target) or end of file.
-    pub(crate) fn scan_for(&self, targets: &[Punct]) -> Option<(usize, Punct)> {
-        let mut depth = 0u32;
-        let mut i = self.pos;
-        loop {
-            let t = self.tok_at(i);
-            let p = match t.kind {
-                TokKind::Eof => return None,
-                TokKind::Punct(p) => p,
-                _ => {
-                    i += 1;
-                    continue;
-                }
-            };
-            if depth == 0 && targets.contains(&p) {
-                return Some((i, p));
-            }
-            match p {
-                Punct::LParen | Punct::LSquare => depth += 1,
-                Punct::RParen | Punct::RSquare => {
-                    if depth == 0 {
-                        return None;
-                    }
-                    depth -= 1;
-                }
-                Punct::LBrace | Punct::RBrace | Punct::Semi if depth == 0 => return None,
-                _ => {}
-            }
-            i += 1;
-        }
-    }
-
     // -- names --------------------------------------------------------------------
 
     /// Classifies the (possibly qualified) name starting at token index
@@ -746,6 +742,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     NameClass::Namespace(d) | NameClass::Type(_, d) => d,
                     // `T::x::`: still dependent.
                     NameClass::Dependent => qual?,
+                    // The injected-class-name `X::` in (a member
+                    // declarator of) `X<A...>` ([temp.local]/1).
+                    NameClass::TypeTemplate(d) if end == i + 1 => self.s.injected_class_decl(d)?,
                     _ => return None,
                 });
                 i = end + 1;
@@ -761,7 +760,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// a `>>`-like token) closes the innermost list when no bracket is
     /// open inside it. Returns the index of the token that closes the
     /// list and whether it closed before that token's last character (a
-    /// `>>` with one list open, `>=`, `>>=`). `None` if a bracket closes
+    /// `>>` with one list open, `>>=`). A `>=` is a relational operator
+    /// inside the list, never a closer. `None` if a bracket closes
     /// unbalanced, or a `;` or the end of input is reached first.
     ///
     /// Memoized per `<` index (spec/parse.md §2.5): nested lists are
@@ -812,6 +812,20 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                         Some(cc) => self.skip_qualified_rest(cc).unwrap_or(cc + 1),
                         None => j + 1,
                     };
+                    continue;
+                }
+                TokKind::Identifier(_)
+                    if matches!(
+                        self.kw_of(t),
+                        Some(
+                            Kw::StaticCast | Kw::DynamicCast | Kw::ReinterpretCast | Kw::ConstCast
+                        )
+                    ) && self.tok_at(j + 1).kind == TokKind::Punct(Punct::Less) =>
+                {
+                    // `static_cast<T>(e)` ([expr.post.general]): the cast's
+                    // `<` always opens a type list of its own.
+                    stack.push(Punct::Less);
+                    j += 2;
                     continue;
                 }
                 TokKind::Identifier(_) if self.kw_of(t).is_some() => {
@@ -868,7 +882,13 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     }
                     stack.pop();
                 }
-                Punct::Semi => return None,
+                // A `;` ends the scan unless inside braces (a
+                // requires-expression or lambda body in the argument).
+                Punct::Semi if !stack.contains(&Punct::LBrace) => return None,
+                // `>=` is a relational operator inside a template
+                // argument ([temp.names]/4 splits only `>` and `>>`;
+                // clang parses `B<n >= 1>` as one argument).
+                Punct::GreaterEqual => {}
                 _ => {
                     if let Some(r) = close_angles(&mut stack, Some(p), 0) {
                         return Some((j, r));
@@ -958,6 +978,69 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return false;
         }
         let qual = ty.and_then(|t| self.s.act_on_nested_name_decltype(t, loc));
+        self.decltype_scope =
+            Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
+        true
+    }
+
+    /// The index of the last `::` of the qualified name at token `i`
+    /// when its qualifier is a class template specialization `X<A...>`
+    /// in which the lookahead does not find the name: the lookahead
+    /// looks in `X`'s primary pattern only, and the name may be declared
+    /// by a partial or explicit specialization, or inherited from a base
+    /// the specialization's instantiation names. Such a qualifier is
+    /// parsed ahead ([`Parser::annotate_template_scope`]), as clang
+    /// annotates a scope before disambiguating.
+    pub(crate) fn template_scope_end(&self, i: usize) -> Option<usize> {
+        if self.decltype_scope_at(i).is_some() || self.decltype_scope_end(i).is_some() {
+            return None;
+        }
+        let (end, split, class, _, qual) = self.scan_name_qual_at(i)?;
+        let q = qual?;
+        if split
+            || !matches!(class, NameClass::Dependent | NameClass::Undeclared)
+            || end < i + 3
+            || !self.unresolved_specialization_scope(q)
+            || self.tok_at(end - 2).kind != TokKind::Punct(Punct::ColonColon)
+        {
+            return None;
+        }
+        Some(end - 2)
+    }
+
+    /// True if the lookahead's scope `q` stands for a class template
+    /// specialization it cannot look into: a class template (`X<A>::`,
+    /// looked up in the primary pattern), or a typedef naming a
+    /// specialization that is not instantiated yet (`hours::period` with
+    /// `typedef duration<long, ratio<3600>> hours`).
+    fn unresolved_specialization_scope(&self, q: DeclId) -> bool {
+        use kiln_ast::decl::DeclKind;
+        let ast = &self.s.ast;
+        match ast.decls.get(q).kind() {
+            DeclKind::ClassTemplate => true,
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                let ty = ast.decls.get(q).ty().unwrap_or(kiln_ast::QualType::ERROR);
+                ast.types.as_record(ty).is_some_and(|r| {
+                    ast.definition(r).is_none() && ast.spec_info(ast.first(r)).is_some()
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// At a qualified name whose qualifier the lookahead cannot resolve
+    /// ([`Parser::template_scope_end`]): parses the qualifier up to (not
+    /// including) its last `::` and records it as that `::`'s pending
+    /// scope, like a `decltype(e)::` ([`Parser::annotate_decltype_scope`]).
+    /// True if the current token is then that `::`.
+    pub(crate) fn annotate_template_scope(&mut self) -> bool {
+        let Some(cc) = self.template_scope_end(self.pos) else { return false };
+        let loc = self.loc();
+        let r = self.parse_nested_name_upto(Some(cc));
+        if self.pos != cc || !self.at(Punct::ColonColon) {
+            return false;
+        }
+        let qual = r.ok().flatten().map(|q| (q.ctx, q.nns));
         self.decltype_scope =
             Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
         true
@@ -1062,6 +1145,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// [`Parser::parse_nested_name`], also building the specifier as
     /// written (namespace aliases and typedef names kept).
     pub(crate) fn parse_nested_name_nns(&mut self) -> Result<Option<Qualifier>, ()> {
+        self.parse_nested_name_upto(None)
+    }
+
+    /// [`Parser::parse_nested_name_nns`], stopping before the `::` at
+    /// token index `limit` (left unconsumed) when there is one.
+    fn parse_nested_name_upto(&mut self, limit: Option<usize>) -> Result<Option<Qualifier>, ()> {
         let mut start = self.loc();
         let mut qual: Option<(DeclId, NnsId)> = None;
         if self.decltype_scope_end(self.pos).is_some() {
@@ -1084,9 +1173,15 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             let Some(name) = self.ident_of(self.tok_at(self.pos + k)) else { break };
             let next = self.tok_at(self.pos + k + 1).kind;
             if !template_kw && next == TokKind::Punct(Punct::ColonColon) {
+                let stop = limit == Some(self.pos + 1);
                 let loc = self.bump().span.lo;
-                self.bump();
+                if !stop {
+                    self.bump();
+                }
                 qual = Some(self.s.act_on_nested_name_component(qual, name, loc).ok_or(())?);
+                if stop {
+                    break;
+                }
                 continue;
             }
             if next != TokKind::Punct(Punct::Less) {
@@ -1123,41 +1218,60 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             }
             let loc = self.bump().span.lo;
             let Some((args, _, _)) = self.parse_template_arg_list() else { return Err(()) };
-            self.expect(Punct::ColonColon);
-            let prefix_nns = qual.map(|q| q.1);
-            qual = Some(match (class, qual) {
-                (NameClass::TypeTemplate(d), _) if !dep_prefix => {
-                    let tn = self.s.template_name_for(d);
-                    let Ok(kiln_sema::templ::actions::TemplateIdRef::Type(ty)) =
-                        self.s.act_template_id(tn, &args, loc, loc)
-                    else {
-                        return Err(());
-                    };
-                    self.s
-                        .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, loc)
-                        .ok_or(())?
-                }
-                (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
-                    let list = self.s.ast.types.arg_list(&args);
-                    let ty = self.s.act_dependent_name(
-                        pn,
-                        name,
-                        Some(list),
-                        kiln_ast::types::TagKeyword::None,
-                    );
-                    self.s
-                        .act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc)
-                        .ok_or(())?
-                }
-                _ => {
-                    let text = self.s.ast.symbols().as_str(name).to_owned();
-                    let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
-                    self.emit(d);
-                    return Err(());
-                }
-            });
+            let stop = limit == Some(self.pos);
+            if !stop {
+                self.expect(Punct::ColonColon);
+            }
+            qual =
+                Some(self.nested_name_template_id(class, qual, name, &args, template_kw, loc)?);
+            if stop {
+                break;
+            }
         }
         Ok(qual.map(|(ctx, nns)| Qualifier { ctx, nns, loc: start }))
+    }
+
+    /// The `name<args>::` component of a nested-name-specifier after `qual`.
+    fn nested_name_template_id(
+        &mut self,
+        class: NameClass,
+        qual: Option<(DeclId, NnsId)>,
+        name: Symbol,
+        args: &[kiln_ast::types::TemplateArg],
+        template_kw: bool,
+        loc: Loc,
+    ) -> Result<(DeclId, NnsId), ()> {
+        let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
+        let prefix_nns = qual.map(|q| q.1);
+        Ok(match (class, qual) {
+            (NameClass::TypeTemplate(d), _) if !dep_prefix => {
+                let tn = self.s.template_name_for(d);
+                let Ok(kiln_sema::templ::actions::TemplateIdRef::Type(ty)) =
+                    self.s.act_template_id(tn, args, loc, loc)
+                else {
+                    return Err(());
+                };
+                self.s
+                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, loc)
+                    .ok_or(())?
+            }
+            (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
+                let list = self.s.ast.types.arg_list(args);
+                let ty = self.s.act_dependent_name(
+                    pn,
+                    name,
+                    Some(list),
+                    kiln_ast::types::TagKeyword::None,
+                );
+                self.s.act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc).ok_or(())?
+            }
+            _ => {
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_no_template_named, loc).arg(text);
+                self.emit(d);
+                return Err(());
+            }
+        })
     }
 }
 

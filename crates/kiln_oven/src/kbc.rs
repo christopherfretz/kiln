@@ -220,6 +220,15 @@ ops! {
     // aux = 1 of the dynamic type of the polymorphic glvalue of `class`
     // at `p` ([expr.typeid]/3-4)
     TypeId = 4,
+    // [dst, value, end]: `__builtin_constant_p` (clang
+    // `EvaluateBuiltinConstantP`): the region after this instruction,
+    // which ends in a `Ret` of register `value`, runs as a speculative
+    // trial (spec/oven.md "Trial evaluation") in this frame's registers;
+    // `dst` is 1 if it completes (aux = 1: and the value, a pointer, is
+    // null or the start of a string literal), else 0 and its effects are
+    // rolled back (a resource limit still fails the evaluation); execution
+    // resumes at `end`.
+    Speculate = 3,
 }
 
 /// The kinds of `Builtin` and their operands.
@@ -239,10 +248,13 @@ pub(crate) mod bi {
     /// `strlen`/`wcslen` of `a`; `t1` the character type.
     pub const STRLEN: u32 = 5;
     /// `memcmp`/`wmemcmp` of `a` and `b` over `c` elements; `t1`/`t2`
-    /// the element types; sub = `WIDE`.
+    /// the element types; sub = `WIDE` | `STR` | `UNBOUNDED`
+    /// (`strcmp`/`strncmp`/`wcscmp`/`wcsncmp`).
     pub const MEMCMP: u32 = 6;
     /// `memchr`/`char_memchr`/`wmemchr` of `b` in `c` elements at `a`;
-    /// `t1` the element type; sub = `WIDE`.
+    /// `t1` the element type; sub = `WIDE` | `STR` | `UNBOUNDED`
+    /// (`strchr`/`wcschr`; `strchr` gives null for a value its element
+    /// type cannot represent).
     pub const MEMCHR: u32 = 7;
     /// `memcpy`/`memmove` of `c` bytes from `b` to `a`; `t1`/`t2` the
     /// destination/source element types; sub = `MOVE`.
@@ -254,10 +266,26 @@ pub(crate) mod bi {
     /// pointer type `t2`, thawed: the value of a source-location builtin
     /// (spec/oven.md, Builtins).
     pub const THAW_PTR: u32 = 10;
+    /// A sign-bit or comparison operation on the floats `a` and `b`;
+    /// sub = float kind | `FABS`..`ISINF_SIGN` << 4 (clang 19's
+    /// `FloatExprEvaluator::VisitCallExpr`).
+    pub const FP_OP: u32 = 11;
+    /// `__atomic_always_lock_free`/`__atomic_is_lock_free`/
+    /// `__c11_atomic_is_lock_free` of size `a`: `t1` the object's
+    /// alignment (0: unknown); sub = the target's inline width in bytes
+    /// | any object qualifies << 8 | `always` (an unknown answer is 0,
+    /// not a failure) << 9.
+    pub const LOCK_FREE: u32 = 12;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
     pub const WIDE: u32 = 1;
+    /// sub of `MEMCMP`/`MEMCHR`: the `str`/`wcs` form: stops at a null
+    /// element and takes any element type (clang `StopAtNull`, not
+    /// `IsRawByte`).
+    pub const STR: u32 = 2;
+    /// sub of `MEMCMP`/`MEMCHR`: no element count (`c` is ignored).
+    pub const UNBOUNDED: u32 = 4;
     /// sub of `MEMCPY`: `memmove` (overlap allowed).
     pub const MOVE: u32 = 1;
     /// sub of `BIT_CAST`: the result initializes the object at `b`.
@@ -266,11 +294,48 @@ pub(crate) mod bi {
     /// before the compiler's static ones).
     pub const READ_ONLY: u32 = 2;
 
+    // WP-150: the GCC integer builtins and `wmemcpy`/`wmemmove`.
+    /// An integer operation on `a` (and the amount `b`): sub = width |
+    /// `FFS`..`ROTR` << 8 (clang 19 `IntExprEvaluator::VisitBuiltinCallExpr`).
+    pub const INT_OP: u32 = 20;
+    /// `INT_OP`: `__builtin_ffs*`.
+    pub const FFS: u32 = 0;
+    /// `INT_OP`: `__builtin_parity*`.
+    pub const PARITY: u32 = 1;
+    /// `INT_OP`: `__builtin_clrsb*`.
+    pub const CLRSB: u32 = 2;
+    /// `INT_OP`: `__builtin_bitreverse*`.
+    pub const BITREVERSE: u32 = 3;
+    /// `INT_OP`: `__builtin_rotateleft*`.
+    pub const ROTL: u32 = 4;
+    /// `INT_OP`: `__builtin_rotateright*`.
+    pub const ROTR: u32 = 5;
+    /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
+    /// bytes.
+    pub const WCHAR: u32 = 2;
+
     /// Classes of `FP_CLASS`.
     pub const FINITE: u32 = 0;
     pub const INF: u32 = 1;
     pub const NAN: u32 = 2;
     pub const NORMAL: u32 = 3;
+    pub const SUBNORMAL: u32 = 4;
+    pub const ZERO: u32 = 5;
+    pub const SIGNALING: u32 = 6;
+    /// `__builtin_isfpclass`: whether `a`'s class is in the LLVM
+    /// `FPClassTest` mask `b` (0x1 sNaN, 0x2 qNaN, 0x4 -inf, 0x8 -normal,
+    /// 0x10 -subnormal, 0x20 -zero, 0x40 +zero, 0x80 +subnormal,
+    /// 0x100 +normal, 0x200 +inf).
+    pub const MASK: u32 = 7;
+
+    /// Operations of `FP_OP`: `|a|`; `a` with the sign of `b`; `fmax`
+    /// and `fmin` (a NaN operand yields the other; `-0 < +0`); the
+    /// `isinf_sign` of `a` (an `int`).
+    pub const FABS: u32 = 0;
+    pub const COPYSIGN: u32 = 1;
+    pub const FMAX: u32 = 2;
+    pub const FMIN: u32 = 3;
+    pub const ISINF_SIGN: u32 = 4;
 }
 
 /// The aux of `New`.

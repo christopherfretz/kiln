@@ -42,6 +42,7 @@ impl Sema<'_, '_> {
         d: &Declarator,
     ) -> Option<DeclId> {
         let type_loc = ds.type_loc.unwrap_or(ds.loc);
+        let base = self.ctad_catch_check(base, type_loc);
         let mut ty = self.type_for_declarator_at(base, type_loc, d);
         let loc = d.name_loc();
         let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
@@ -177,14 +178,18 @@ impl Sema<'_, '_> {
         Some(self.builder().try_stmt(block, handlers, loc))
     }
 
+    /// clang `CatchHandlerType`: the top-level cv-qualifiers are dropped
+    /// before a reference or pointer is stripped, so the pointee keeps its
+    /// own (`int` and `const int &` are different handlers; `const int`
+    /// and `int &` are not).
     fn handler_key(&self, ty: QualType) -> HandlerKey {
         let t = &self.ast.types;
-        let mut q = t.canonical(ty);
+        let mut q = t.canonical(ty).without_quals();
         let pointer = t.is_pointer(q);
         if pointer || t.is_reference(q) {
-            q = t.pointee(q).unwrap_or(QualType::ERROR);
+            q = t.canonical(t.pointee(q).unwrap_or(QualType::ERROR));
         }
-        (t.canonical(q).without_quals(), pointer)
+        (q, pointer)
     }
 
     /// The earlier handler whose type is a public, unambiguous base of
@@ -228,7 +233,10 @@ impl Sema<'_, '_> {
         let msg = self
             .diag(DiagId::sema_caught_by_earlier_handler, at(self, v))
             .arg(self.ty_arg(ty))
-            .with_note(note);
+            .with_note(note)
+            // clang checks the handlers again on every instantiation, also
+            // when the definition already warned (spec/diag.md §7.4).
+            .allow_duplicate();
         self.emit(msg);
     }
 

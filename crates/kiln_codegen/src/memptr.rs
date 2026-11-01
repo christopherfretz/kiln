@@ -99,7 +99,7 @@ impl Cg<'_> {
     }
 
     /// The byte offset of field `f` in its class.
-    fn field_byte_offset(&mut self, f: DeclId) -> R<u64> {
+    pub(crate) fn field_byte_offset(&mut self, f: DeclId) -> R<u64> {
         let ast = self.ast;
         let Some(rd) = ast.decls.get(f).ctx() else {
             return err(Some(ast.decls.get(f).loc()), "field outside a class");
@@ -316,7 +316,7 @@ impl Cg<'_> {
         let align = self.dyn_offset_align(base.align, class, natural);
         let q = ast.exprs.get(e).ty();
         let ty = self.mty(q);
-        Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None })
+        Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
     }
 
     /// clang `EmitCXXMemberPointerCallExpr` with

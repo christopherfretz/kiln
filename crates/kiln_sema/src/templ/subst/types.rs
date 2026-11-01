@@ -5,7 +5,7 @@
 //! written).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, Nns, TypeView};
+use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -37,6 +37,7 @@ impl Substituter<'_, '_, '_> {
     /// checks.
     fn chunk(&mut self, base: QualType, chunk: Chunk, loc: Loc) -> SubstResult<QualType> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, loc);
+        d.site = crate::declspec::DeclSite::Subst;
         d.name = self.declarator_name;
         d.chunks.push(chunk);
         let t = self.sema.type_for_declarator_at(base, loc, &d);
@@ -48,6 +49,19 @@ impl Substituter<'_, '_, '_> {
         match self.sema.kind_of(d) {
             DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm => {
                 self.sema.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
+            }
+            // A `using typename B<T>::type;` member instantiated as a
+            // using-declaration (WP-169): the type its shadow names.
+            DeclKind::Using => {
+                let node = *self.sema.ast.decls.get(d);
+                let (ctx, name) = (node.ctx(), node.name());
+                let target = ctx.and_then(|c| {
+                    self.sema.ast.lookup_local(c, name).iter().find_map(|s| {
+                        let t = self.sema.ast.strip_shadow(s);
+                        (s != t && self.sema.kind_of(t) != DeclKind::Using).then_some(t)
+                    })
+                });
+                target.map_or(QualType::ERROR, |t| self.decl_type(t))
             }
             _ => self.sema.tag_type(d),
         }
@@ -69,6 +83,22 @@ impl Substituter<'_, '_, '_> {
             TypeView::SubstTemplateTypeParm { replacement, associated, index, pack_index } => {
                 let r = self.ty(replacement, loc)?;
                 Ok(self.sema.ast.types.subst_template_type_parm(r, associated, index, pack_index))
+            }
+            // A substituted pack of a partially substituted expansion
+            // (§7.2): its element for the current index; it stays while
+            // another partial expansion is rebuilt.
+            TypeView::SubstTemplateTypeParmPack { associated, index, pack } => {
+                if self.pack.keep && self.pack_index.is_none() {
+                    return Ok(q);
+                }
+                let args = self.sema.ast.types.args(pack);
+                let n = u32::try_from(args.len()).unwrap_or(u32::MAX);
+                // Unnamed: an outer pack in the length-mismatch diagnostic.
+                let i = self.pack_reached(n, |_| crate::templ::pack::PackName::outer(), loc)?;
+                let ArgView::Type(t) = self.sema.ast.types.args(pack)[i as usize].view() else {
+                    return Err(SubstFail);
+                };
+                Ok(self.sema.ast.types.subst_template_type_parm(t, associated, index, Some(i)))
             }
             TypeView::Pointer(p) => {
                 let p = self.ty(p, loc)?;
@@ -107,13 +137,27 @@ impl Substituter<'_, '_, '_> {
                 if t.is_void(e) || t.is_function(e) || t.is_reference(e) {
                     return self.chunk(e, Chunk::Array { size: None, loc }, loc);
                 }
+                // clang rebuilds the array (`BuildArrayType`): a zero
+                // bound is an error in a SFINAE context (see decl.rs).
+                if a.size == 0 && self.sema.inst.stack.is_sfinae() {
+                    self.sema.error(DiagId::sema_zero_array_size_sfinae, loc);
+                    return Err(SubstFail);
+                }
                 Ok(self.sema.ast.types.constant_array(e, a.size, None))
             }
             TypeView::IncompleteArray(elem) => {
                 let e = self.ty(elem, loc)?;
                 self.chunk(e, Chunk::Array { size: None, loc }, loc)
             }
-            TypeView::DependentSizedArray { elem, size: ExprOperand::Expr(s) } => {
+            TypeView::DependentSizedArray { elem, size } => {
+                // A canonical array's bound is profiled: its first
+                // expression stands for it (an implicit guide's, WP-134).
+                let s = match size {
+                    ExprOperand::Expr(s) => s,
+                    ExprOperand::Profile(p) => {
+                        self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?
+                    }
+                };
                 let e = self.ty(elem, loc)?;
                 let s = self.expr(s)?;
                 self.chunk(e, Chunk::Array { size: Some(s), loc }, loc)
@@ -190,9 +234,7 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::DependentName { keyword, nns, name } => {
                 let n = self.nns(nns, loc)?;
-                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(n)
-                    && self.sema.is_dependent_type(ty)
-                {
+                if self.nns_still_dependent(n) {
                     // Substituted with dependent arguments (an alias
                     // template named in a template): still dependent.
                     return Ok(self.sema.ast.types.dependent_name(keyword, n, name));
@@ -225,6 +267,9 @@ impl Substituter<'_, '_, '_> {
                     return Err(SubstFail);
                 }
                 self.sema.mark_type_referenced(d);
+                // [class.access]/4, [temp.deduct.general]/8: checked now,
+                // a substitution failure in a SFINAE context.
+                self.sema.check_found_access(&found, loc);
                 let t = self.decl_type(d);
                 // The keyword is kept as written (clang: `typename S::type`).
                 Ok(self.sema.ast.types.elaborated(keyword, Some(n), t))
@@ -254,6 +299,19 @@ impl Substituter<'_, '_, '_> {
                 }
                 None => Ok(q),
             },
+            // A class template placeholder deduced from type-dependent
+            // arguments: deduced again from the substituted ones
+            // ([over.match.class.deduct], WP-071b).
+            TypeView::DeducedTemplateSpecialization { name, deduced } => match deduced {
+                Some(d) if d == QualType::DEPENDENT => {
+                    Ok(self.sema.ast.types.deduced_template_specialization(name, None))
+                }
+                Some(d) => {
+                    let d = self.ty(d, loc)?;
+                    Ok(self.sema.ast.types.deduced_template_specialization(name, Some(d)))
+                }
+                None => Ok(q),
+            },
             TypeView::Attributed { kind, modified, equivalent } => {
                 let m = self.ty(modified, loc)?;
                 let e = self.ty(equivalent, loc)?;
@@ -263,12 +321,37 @@ impl Substituter<'_, '_, '_> {
                 let e = self.ty(e, loc)?;
                 Ok(self.sema.ast.types.complex(e))
             }
+            TypeView::Atomic(v) => {
+                let v = self.ty(v, loc)?;
+                self.sema.act_on_atomic_type(v, loc).ok_or(SubstFail)
+            }
+            // [temp.inst] for clang's vector types (spec/types.md §1).
+            TypeView::Vector { elem, count, kind } => {
+                let e = self.ty(elem, loc)?;
+                Ok(self.sema.ast.types.vector(e, count, kind))
+            }
+            TypeView::DependentVector { elem, size: ExprOperand::Expr(s), kind } => {
+                let e = self.ty(elem, loc)?;
+                // Diagnosed at the attribute, as clang does.
+                let at = match self.sema.inst.vector_attr_locs.get(&s) {
+                    Some(&l) => l,
+                    None => self.sema.begin_loc(s),
+                };
+                let s = self.expr(s)?;
+                let v = self.sema.build_vector_type(e, s, kind, at);
+                if !self.sema.is_error_type(v) {
+                    Ok(v)
+                } else if self.sema.inst.stack.is_sfinae() {
+                    Err(SubstFail)
+                } else {
+                    // clang leaves the type unchanged after the error.
+                    Ok(e)
+                }
+            }
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
                 let n = self.nns(nns, loc)?;
                 let args = self.args(args, loc)?;
-                if let Nns::Type { ty, .. } = self.sema.ast.types.nns_view(n)
-                    && self.sema.is_dependent_type(ty)
-                {
+                if self.nns_still_dependent(n) {
                     return Ok(self
                         .sema
                         .ast
@@ -322,9 +405,29 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<QualType> {
         match self.lookup(depth, index) {
             ArgLookup::Arg(a) => {
+                if self.pack.keep
+                    && self.pack_index.is_none()
+                    && let ArgView::Pack(l) = a.view()
+                {
+                    // Rebuilding a partially substituted expansion (§7.2).
+                    let assoc = self.assoc(depth).ok_or(SubstFail)?;
+                    let p = self.sema.ast.types.subst_template_type_parm_pack(
+                        assoc,
+                        u32::from(index),
+                        l,
+                    );
+                    return Ok(QualType::new(p.ty(), q.quals_bits() | p.quals_bits()));
+                }
                 let a = self.element(a, decl, loc)?;
                 let ArgView::Type(t) = a.view() else { return Err(SubstFail) };
                 let Some(assoc) = self.assoc(depth) else { return Ok(t) };
+                // A pack element that is itself an expansion (`Ts` = <`Us...`>,
+                // an alias template guide's) stays visibly one (WP-134).
+                if self.pack_index.is_some()
+                    && matches!(self.sema.ast.types.view(t.ty()), TypeView::PackExpansion { .. })
+                {
+                    return Ok(t);
+                }
                 Ok(self.sema.ast.types.subst_template_type_parm(
                     t,
                     assoc,
@@ -396,7 +499,10 @@ impl Substituter<'_, '_, '_> {
     /// A context for diagnostics: `'X<int>'` or `namespace 'n'`.
     pub(crate) fn ctx_arg(&self, ctx: DeclId) -> String {
         match self.sema.kind_of(ctx) {
-            DeclKind::CXXRecord | DeclKind::Enum => self.sema.ty_arg(self.sema.tag_type(ctx)),
+            // Fully qualified, unsugared (clang: `'S::In'`, `'S::M<int>'`).
+            DeclKind::CXXRecord | DeclKind::Enum => {
+                format!("'{}'", self.sema.ty_canonical_str(self.sema.tag_type(ctx)))
+            }
             _ => format!("'{}'", self.sema.decl_name(ctx)),
         }
     }

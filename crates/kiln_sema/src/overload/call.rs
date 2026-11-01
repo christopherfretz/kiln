@@ -22,7 +22,7 @@ impl Sema<'_, '_> {
     #[allow(clippy::too_many_arguments, reason = "the lookup result's parts")]
     pub(crate) fn build_overload_ref(
         &mut self,
-        name: kiln_source::symbol::Symbol,
+        name: kiln_ast::names::DeclName,
         decls: &[DeclId],
         found: &[DeclId],
         naming: Option<DeclId>,
@@ -60,12 +60,12 @@ impl Sema<'_, '_> {
             .map(|(i, &d)| (d, extra.as_ref().and_then(|x| x.found.get(i).copied()).unwrap_or(d)))
             .collect();
         if adl {
-            self.adl_lookup(name, args, &mut cands);
+            self.adl_lookup_dn(name, args, &mut cands);
         }
         cands.retain(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID));
         let at = self.begin_loc(callee);
         if cands.is_empty() {
-            let text = self.ast.symbols().as_str(name).to_owned();
+            let text = self.decl_name_str(name);
             let msg = self.diag(DiagId::sema_undeclared_var_use, n.loc()).arg(text);
             self.emit(msg);
             return None;
@@ -151,16 +151,16 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         // A non-member operator template's first parameter takes the
-        // object operand ([over.match.oper]/2).
+        // object operand ([over.match.oper]/2), as does an explicit
+        // object parameter ([over.match.funcs.general]/4).
+        let pattern = self.templated_function(ft).unwrap_or(ft);
         let mut args = Vec::with_capacity(set.args.len() + 1);
-        if set.oper
-            && kind == CandidateKind::Function
+        if (set.oper && kind == CandidateKind::Function || self.has_explicit_object(pattern))
             && let Some(o) = set.object
         {
             args.push(o);
         }
         args.extend_from_slice(&set.args);
-        let pattern = self.templated_function(ft).unwrap_or(ft);
         match self.deduce_call(ft, explicit, &args, loc) {
             Ok(spec) => {
                 self.add_candidate(set, spec, found, kind, first_opts);
@@ -225,7 +225,7 @@ impl Sema<'_, '_> {
         &mut self,
         set: &OverloadCandidateSet,
         out: OvlOutcome,
-        name: kiln_source::symbol::Symbol,
+        name: kiln_ast::names::DeclName,
         at: Loc,
         loc: Loc,
         naming: Option<DeclId>,
@@ -246,12 +246,12 @@ impl Sema<'_, '_> {
         &mut self,
         set: &OverloadCandidateSet,
         out: OvlOutcome,
-        name: kiln_source::symbol::Symbol,
+        name: kiln_ast::names::DeclName,
         at: Loc,
         loc: Loc,
         member: bool,
     ) -> Option<u32> {
-        let text = self.ast.symbols().as_str(name).to_owned();
+        let text = self.decl_name_str(name);
         let undecided = set.uncertain
             || (set.skipped_templates
                 && !matches!(out, OvlOutcome::Success(b) | OvlOutcome::Deleted(b)

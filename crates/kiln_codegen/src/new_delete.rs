@@ -144,6 +144,153 @@ impl Cg<'_> {
         self.ast.types.as_enum(q).is_some_and(|e| self.in_std(e, name))
     }
 
+    /// The first attribute of kind `kind` on any declaration of `d`.
+    fn fn_attr(
+        &self,
+        d: DeclId,
+        kind: kiln_ast::attr::AttrKind,
+    ) -> Option<kiln_ast::attr::AttrNode> {
+        let ast = self.ast;
+        ast.redecls_of(d).find_map(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .map(|a| *ast.attrs.get(a))
+                .find(|n| n.kind == kind)
+        })
+    }
+
+    /// Function `d` carries GNU `malloc` (clang `RestrictAttr`) and
+    /// returns a pointer: its result is `noalias`.
+    pub(crate) fn fn_is_malloc(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let ptr_ret = ast
+            .decls
+            .get(d)
+            .ty()
+            .and_then(|t| ast.types.proto(t))
+            .is_some_and(|p| ast.types.is_pointer(p.ret()));
+        ptr_ret && self.fn_attr(d, kiln_ast::attr::AttrKind::MALLOC).is_some()
+    }
+
+    /// The allocation call-site attributes of a direct call of `d` with
+    /// arguments `vals` (excluding `this`), added to `extra` (function)
+    /// and `ret` (clang `ConstructAttributeList`): a replaceable global
+    /// `operator new`'s implicit `alloc_size` and `returns_nonnull`, and
+    /// `noalias` ("a sane operator new"); GNU `alloc_size` and `malloc`;
+    /// and `alloc_align` with a constant power-of-two alignment, which
+    /// raises the result's alignment (clang `AllocAlignAttrEmitter`; the
+    /// `llvm.assume` clang emits for any other alignment is not).
+    pub(crate) fn alloc_call_attrs(
+        &mut self,
+        d: DeclId,
+        vals: &[CallArg],
+        extra: &mut Vec<Attr>,
+        ret: &mut Vec<Attr>,
+    ) {
+        if let Some(af) = self.alloc_fn(d).filter(|a| a.replaceable && a.is_new) {
+            extra.push(Attr::AllocSize(0, None));
+            ret.push(Attr::Flag(AttrKind::NoAlias));
+            if !af.nothrow_t {
+                ret.push(Attr::Flag(AttrKind::NonNull));
+            }
+        } else if let Some(a) = self.fn_alloc_size(d) {
+            extra.push(a);
+        }
+        if self.fn_is_malloc(d) && !ret.contains(&Attr::Flag(AttrKind::NoAlias)) {
+            ret.push(Attr::Flag(AttrKind::NoAlias));
+        }
+        if let Some(i) = self.fn_alloc_align(d)
+            && let Some(&CallArg::Scalar(v)) = vals.get(i)
+            && let Some((_, n, _)) = self.cint(v)
+            && n.is_power_of_two()
+        {
+            ret.push(Attr::Align(n as u64));
+        }
+    }
+
+    /// The one-based parameter index an `alloc_size` / `alloc_align`
+    /// argument word holds (an `IntegerLiteral`).
+    fn attr_index(&self, raw: u32) -> Option<u32> {
+        let e = <ExprId as kiln_ast::ids::RawId>::from_raw(raw)?;
+        self.ast.exprs.int_value(e).and_then(|v| u32::try_from(v).ok())
+    }
+
+    /// Whether `d` returns a pointer (`refs`: or a reference).
+    fn returns_pointer(&self, d: DeclId, refs: bool) -> bool {
+        let t = &self.ast.types;
+        self.ast
+            .decls
+            .get(d)
+            .ty()
+            .and_then(|q| t.proto(q))
+            .is_some_and(|p| t.is_pointer(p.ret()) || (refs && t.is_reference(p.ret())))
+    }
+
+    /// The C library allocation functions clang recognizes as builtins
+    /// (`extern "C"` at namespace scope, pointer result) and gives an
+    /// implicit `alloc_size` and, for `aligned_alloc`, `alloc_align`
+    /// (clang `Sema::AddKnownFunctionAttributes`): the zero-based
+    /// `allocsize` indices and alignment parameter.
+    fn lib_alloc(&self, d: DeclId) -> Option<(Attr, Option<usize>)> {
+        let ast = self.ast;
+        let t = &ast.types;
+        let n = ast.decls.get(d);
+        if n.kind() != DeclKind::Function
+            || !n.ctx().is_some_and(|c| self.is_tu_level(c))
+            || !mangle::is_extern_c(ast, ast.first(d))
+        {
+            return None;
+        }
+        let p = *t.proto(n.ty()?)?;
+        if p.variadic() || !t.is_pointer(p.ret()) {
+            return None;
+        }
+        let name = ast.symbols().as_str(n.name().as_ident()?);
+        match (name, t.params(&p).len()) {
+            ("malloc", 1) => Some((Attr::AllocSize(0, None), None)),
+            ("calloc", 2) => Some((Attr::AllocSize(0, Some(1)), None)),
+            ("realloc", 2) => Some((Attr::AllocSize(1, None), None)),
+            ("aligned_alloc", 2) => Some((Attr::AllocSize(1, None), Some(0))),
+            _ => None,
+        }
+    }
+
+    /// GNU `alloc_size(n[, m])` on function `d` (or the implicit one of a
+    /// C library allocation function), as the zero-based parameter
+    /// indices of `allocsize` (clang `AllocSizeAttr`; the LLVM index
+    /// counts `this`, as the one-based source index does).
+    pub(crate) fn fn_alloc_size(&self, d: DeclId) -> Option<Attr> {
+        if let Some(n) = self.fn_attr(d, kiln_ast::attr::AttrKind::ALLOC_SIZE) {
+            if !self.returns_pointer(d, false) {
+                return None;
+            }
+            let b = if n.b == 0 { None } else { Some(self.attr_index(n.b)?.checked_sub(1)?) };
+            return Some(Attr::AllocSize(self.attr_index(n.a)?.checked_sub(1)?, b));
+        }
+        self.lib_alloc(d).map(|x| x.0)
+    }
+
+    /// The zero-based argument (excluding `this`) giving the alignment of
+    /// `d`'s result: GNU `alloc_align(n)`, the implicit one of
+    /// `aligned_alloc`, or the `std::align_val_t` of a
+    /// replaceable `operator new` (clang `AllocAlignAttr`).
+    pub(crate) fn fn_alloc_align(&self, d: DeclId) -> Option<usize> {
+        if let Some(n) = self.fn_attr(d, kiln_ast::attr::AttrKind::ALLOC_ALIGN) {
+            if !self.returns_pointer(d, true) {
+                return None;
+            }
+            let f = self.ast.first(d);
+            let this = u32::from(
+                self.ast.decls.get(f).kind() == DeclKind::CXXMethod && !self.is_static_method(f),
+            );
+            return self.attr_index(n.a)?.checked_sub(1 + this).map(|i| i as usize);
+        }
+        if let Some((_, a)) = self.lib_alloc(d) {
+            return a;
+        }
+        self.alloc_fn(d).filter(|a| a.replaceable && a.is_new).and_then(|a| a.align_param)
+    }
+
     /// The attributes of a replaceable allocation function's declaration
     /// or definition: `nobuiltin` (clang `SetFunctionAttributes`), and for
     /// `operator new` the implicit `alloc_size` and `returns_nonnull`
@@ -154,15 +301,31 @@ impl Cg<'_> {
         func: AttrSetId,
         ret: AttrSetId,
     ) -> (AttrSetId, AttrSetId) {
-        let Some(af) = self.alloc_fn(d).filter(|a| a.replaceable) else { return (func, ret) };
+        let af = self.alloc_fn(d).filter(|a| a.replaceable);
+        let malloc = self.fn_is_malloc(d);
+        let size = self.fn_alloc_size(d);
+        if af.is_none() && !malloc && size.is_none() {
+            return (func, ret);
+        }
         let mut f = self.m.attrs_of(func).to_vec();
-        f.push(Attr::Flag(AttrKind::NoBuiltin));
         let mut r = self.m.attrs_of(ret).to_vec();
-        if af.is_new {
-            f.push(Attr::AllocSize(0, None));
-            if !af.nothrow_t {
-                r.push(Attr::Flag(AttrKind::NonNull));
+        if let Some(af) = af {
+            f.push(Attr::Flag(AttrKind::NoBuiltin));
+            if af.is_new {
+                f.push(Attr::AllocSize(0, None));
+                if !af.nothrow_t {
+                    r.push(Attr::Flag(AttrKind::NonNull));
+                }
             }
+        }
+        // GNU `malloc` / `alloc_size` (clang `ConstructAttributeList`).
+        if malloc {
+            r.push(Attr::Flag(AttrKind::NoAlias));
+        }
+        if let Some(a) = size
+            && !f.iter().any(|x| matches!(x, Attr::AllocSize(..)))
+        {
+            f.push(a);
         }
         (self.m.attr_set(&f), self.m.attr_set(&r))
     }
@@ -321,7 +484,7 @@ impl Cg<'_> {
         }
     }
 
-    fn skip_parens(&self, mut e: ExprId) -> ExprId {
+    pub(crate) fn skip_parens(&self, mut e: ExprId) -> ExprId {
         while self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
             e = self.ast.exprs.operand(e);
         }
@@ -379,11 +542,17 @@ impl Cg<'_> {
         let af = self.alloc_fn(op_new).unwrap_or_default();
 
         // minElements: a braced initializer's explicit elements.
-        let ile = x.init.filter(|&i| ast.exprs.get(i).kind() == ExprKind::InitListExpr);
+        // A parenthesized list counts the same (clang `EmitCXXNewAllocSize`).
+        let ile = x.init.filter(|&i| {
+            matches!(
+                ast.exprs.get(i).kind(),
+                ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+            )
+        });
         let mut min_elems: u64 = 0;
         if is_array && let Some(i) = x.init {
             let lits: Vec<ExprId> = match ile {
-                Some(l) => ast.lists.iter(ast.exprs.init_list_inits(l)).collect(),
+                Some(l) => crate::expr::agg_init_parts(ast, l).0,
                 None => vec![i],
             };
             if lits.len() == 1
@@ -521,7 +690,10 @@ impl Cg<'_> {
         let null_check = !af.reserved
             && nothrow
             && !(af.replaceable && af.is_new && !af.nothrow_t)
-            && x.init.is_some();
+            // Default-initializing a class is a (possibly trivial)
+            // constructor call in clang's AST, so it counts as an
+            // initializer (`CXXNewExpr::hasInitializer`).
+            && (x.init.is_some() || t.as_record(base).is_some());
         let mut null_bb = None;
         let mut cont = None;
         if null_check {
@@ -577,6 +749,7 @@ impl Cg<'_> {
                 addr: Addr { v: alloc, ty, align: allocation_align },
                 q: x.allocated_ty,
                 bf: None,
+                vidx: None,
             };
             self.init_to_lvalue(init, lv, false)?;
         }
@@ -663,8 +836,13 @@ impl Cg<'_> {
         let mut cur_align = align;
         let mut n_init: u64 = 0;
         let mut init = Some(init0);
-        if ast.exprs.get(init0).kind() == ExprKind::InitListExpr {
-            let elems: Vec<ExprId> = ast.lists.iter(ast.exprs.init_list_inits(init0)).collect();
+        // clang `EmitNewArrayInitializer`: the explicit elements of a braced
+        // or parenthesized list, then its array filler.
+        if matches!(
+            ast.exprs.get(init0).kind(),
+            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+        ) {
+            let (elems, filler, _) = crate::expr::agg_init_parts(ast, init0);
             n_init = elems.len() as u64;
             let mut cur_ty = base_ty;
             if matches!(t.canonical_view(x.allocated_ty), TypeView::ConstantArray(_)) {
@@ -681,13 +859,18 @@ impl Cg<'_> {
             let start_align = cur_align;
             for (k, &ie) in elems.iter().enumerate() {
                 let q = ast.exprs.get(ie).ty();
-                let lv = LV { addr: Addr { v: cur, ty: cur_ty, align: cur_align }, q, bf: None };
+                let lv = LV {
+                    addr: Addr { v: cur, ty: cur_ty, align: cur_align },
+                    q,
+                    bf: None,
+                    vidx: None,
+                };
                 self.init_to_lvalue(ie, lv, false)?;
                 let one = self.i64c(1);
                 cur = self.gep(cur_ty, cur, vec![one], true);
                 cur_align = min_align(start_align, (k as u64 + 1).wrapping_mul(esize));
             }
-            init = ast.exprs.init_list(init0).array_filler;
+            init = filler;
             while let Some(f) = init
                 && matches!(t.canonical_view(ast.exprs.get(f).ty()), TypeView::ConstantArray(_))
                 && ast.exprs.get(f).kind() == ExprKind::InitListExpr
@@ -750,7 +933,8 @@ impl Cg<'_> {
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(cur, entry)] }, LTy::PTR);
         let iq = ast.exprs.get(init).ty();
         let ity = self.mty(iq);
-        let lv = LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None };
+        let lv =
+            LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None, vidx: None };
         self.init_to_lvalue(init, lv, false)?;
         let one = self.icn(LTy::I32, 1);
         let next = self.gep(elem_ty, phi, vec![one], true);

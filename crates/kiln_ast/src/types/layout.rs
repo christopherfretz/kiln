@@ -33,9 +33,9 @@ pub enum FloatFormat {
 /// laid out.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TargetTypes {
-    /// `(size in bytes, alignment in bytes)` per builtin id 1..=33 (index
+    /// `(size in bytes, alignment in bytes)` per builtin id 1..=47 (index
     /// 0 unused).
-    pub size_align: [(u16, u16); 34],
+    pub size_align: [(u16, u16); 48],
     /// `char` is signed.
     pub char_signed: bool,
     /// `wchar_t` is signed.
@@ -50,12 +50,15 @@ pub struct TargetTypes {
     pub intptr_t: TypeId,
     /// Size of a data pointer in bytes.
     pub pointer_bytes: u8,
+    /// The widest atomic operation, in bytes, the target inlines (clang
+    /// `MaxAtomicInlineWidth` / 8; 0 for an unknown target).
+    pub max_atomic_inline_bytes: u8,
 }
 
 impl Default for TargetTypes {
     fn default() -> Self {
         TargetTypes {
-            size_align: [(0, 0); 34],
+            size_align: [(0, 0); 48],
             char_signed: true,
             wchar_signed: true,
             long_double: FloatFormat::IeeeDouble,
@@ -63,6 +66,7 @@ impl Default for TargetTypes {
             ptrdiff_t: TypeId::LONG,
             intptr_t: TypeId::LONG,
             pointer_bytes: 0,
+            max_atomic_inline_bytes: 0,
         }
     }
 }

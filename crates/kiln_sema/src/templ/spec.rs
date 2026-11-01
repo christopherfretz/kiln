@@ -101,7 +101,7 @@ impl Sema<'_, '_> {
         qualifier: Option<DeclId>,
         use_: TagUse,
         name_loc: Loc,
-        r_angle: Loc,
+        (l_angle, r_angle): (Loc, Loc),
         kw_loc: Loc,
     ) -> Result<(Option<DeclId>, QualType), ()> {
         let range = Span::new(name_loc, r_angle.with_offset(1));
@@ -116,6 +116,8 @@ impl Sema<'_, '_> {
             TagForm::ExplicitSpec
         } else if self.take_template_head(qualifier).is_some() {
             TagForm::Partial
+        } else if self.templ.head_mismatch {
+            return Err(());
         } else {
             // [temp.expl.spec]/1: `template<>` is required.
             let d = self
@@ -151,11 +153,20 @@ impl Sema<'_, '_> {
                     .types
                     .arg_list_flags(list)
                     .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
-                if dependent || use_ == TagUse::Friend && self.in_template() {
-                    if use_ == TagUse::Friend {
-                        self.templ_unimplemented("friend class template specialization", name_loc);
-                        return Err(());
-                    }
+                // [temp.friend]/9: `template<class U> friend struct
+                // Y<U*>;` would declare a partial specialization.
+                if use_ == TagUse::Friend && self.take_template_head(qualifier).is_some() {
+                    let d = self
+                        .diag(DiagId::sema_partial_spec_friend, kw_loc)
+                        .range(Span::new(l_angle, r_angle.with_offset(1)));
+                    self.emit(d);
+                    return Err(());
+                }
+                // A dependent `friend struct X<T>;` ([class.friend]/3,
+                // [temp.friend]) stays a dependent type in the pattern's
+                // `FriendDecl`; each instantiation of the class befriends
+                // the substituted specialization (§4.8).
+                if dependent {
                     let t = self.ast.types.template_specialization(name, list, None, false);
                     return Ok((None, self.ast.types.elaborated(keyword, None, t)));
                 }
@@ -257,9 +268,12 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_redefinition, name_loc)
                     .range(range)
                     .arg(self.partial_spec_name(p));
-                let d = self.note_prev(d, def, true);
+                let d = self.note_prev_partial_def(d, def);
                 self.emit(d);
                 return Err(());
+            }
+            if use_ == TagUse::Definition {
+                self.templ.partial_def_loc.insert(p, name_loc);
             }
             return Ok(p);
         }
@@ -298,7 +312,14 @@ impl Sema<'_, '_> {
         let name_loc = range.lo;
         let conv = self.check_template_args(tmpl, args, locs, name_loc)?;
         let types = &self.ast.types;
-        if !types.arg_list_flags(conv.canonical).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+        // A member template of a templated class has a dependent name
+        // (`Outer<T>::Inner`), so its non-dependent arguments are left to
+        // the deducibility check (clang's `Name.isDependent()` in
+        // `ActOnClassTemplateSpecialization`).
+        let dependent_name = self.ast.templates.param_list(head).depth > 0;
+        if !dependent_name
+            && !types.arg_list_flags(conv.canonical).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
+        {
             let d = self
                 .diag(DiagId::sema_partial_spec_fully_specialized, name_loc)
                 .arg(self.decl_name(tmpl));
@@ -389,10 +410,11 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// `X<T *>`: how partial specialization `p` prints (its qualified
-    /// name and its arguments as written).
+    /// `X<T *>`: how partial specialization `p` prints as a diagnostic
+    /// argument (its unqualified name and its arguments as written, as
+    /// clang's `getNameForDiagnostic` without the `q` modifier).
     pub(crate) fn partial_spec_name(&self, p: DeclId) -> String {
-        let mut s = self.qualified_decl_name(p);
+        let mut s = self.unqualified_decl_name(p);
         if let Some((_, info)) = self.ast.partial_spec_info(p) {
             let names = crate::names::SemaNames::new(self);
             kiln_ast::types::write_arg_list(&self.ast.types, &names, info.args, &mut s);
@@ -413,7 +435,7 @@ impl Sema<'_, '_> {
             }
             s.push_str(&self.decl_name(p));
             s.push_str(" = ");
-            s.push_str(&self.arg_str(a));
+            s.push_str(&self.binding_arg_str(a));
         }
         s.push(']');
         s
@@ -642,8 +664,31 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXConstructor
                 | DeclKind::CXXDestructor
                 | DeclKind::CXXConversion => self.instantiate_function_definition(m, loc),
-                DeclKind::Var => self.instantiate_static_member_init(m, loc),
-                DeclKind::CXXRecord if self.instantiate_class(m, loc, false) => {
+                DeclKind::Var => {
+                    // In-class initializer, else the out-of-line
+                    // definition (clang `InstantiateVariableDefinition`).
+                    self.instantiate_static_member_init(m, loc);
+                    self.instantiate_static_member_def(m, loc);
+                }
+                DeclKind::CXXRecord => {
+                    // A member class the explicit instantiation defines is
+                    // itself explicitly instantiated (clang
+                    // `InstantiateClassMembers` sets its kind; one already
+                    // defined stays implicit: its vtable is not required).
+                    let fresh = self.ast.definition(m).is_none();
+                    if !self.instantiate_class(m, loc, false) {
+                        continue;
+                    }
+                    if fresh && let Some((i, _)) = self.ast.member_spec_info(self.ast.first(m)) {
+                        self.ast.templates.update_member_spec(i, |x| {
+                            if matches!(
+                                x.kind,
+                                SpecKind::Undeclared | SpecKind::ImplicitInstantiation
+                            ) {
+                                x.kind = SpecKind::ExplicitInstantiationDefinition;
+                            }
+                        });
+                    }
                     self.instantiate_members_of(m, loc, depth + 1);
                 }
                 _ => {}

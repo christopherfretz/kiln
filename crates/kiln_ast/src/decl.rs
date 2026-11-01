@@ -109,9 +109,9 @@ pub enum DeclKind {
     ParmVar,
     /// An implicit parameter (`this`, coroutine frame).
     ImplicitParam,
-    /// A structured-binding declaration.
-    Decomposition,
-    /// One structured binding.
+    /// One structured binding. The declaration it belongs to is a `Var`
+    /// with an empty name (clang's `DecompositionDecl`): see
+    /// [`DeclArena::decomp_bindings`] and [`DeclArena::binding_decomp`].
     Binding,
     /// A variable template specialization (R, payload [`VarData`], M3).
     VarTemplateSpecialization,
@@ -302,7 +302,6 @@ impl DeclKind {
             K::Var => "Var",
             K::ParmVar => "ParmVar",
             K::ImplicitParam => "ImplicitParam",
-            K::Decomposition => "Decomposition",
             K::Binding => "Binding",
             K::VarTemplateSpecialization => "VarTemplateSpecialization",
             K::VarTemplatePartialSpecialization => "VarTemplatePartialSpecialization",
@@ -752,6 +751,11 @@ impl FnSpec {
     pub const fn with_constexpr_kind(self, k: ConstexprKind) -> Self {
         FnSpec((self.0 & !(3 << 4)) | ((k as u32) << 4))
     }
+    /// An immediate function ([expr.const]/20): `consteval`, or escalated
+    /// (P2564). It is never emitted.
+    pub const fn is_immediate(self) -> bool {
+        matches!(self.constexpr_kind(), ConstexprKind::Consteval) || self.escalated()
+    }
     /// Defaulted status.
     pub const fn defaulted(self) -> Defaulted {
         match (self.0 >> 8) & 3 {
@@ -1150,6 +1154,11 @@ impl DefinitionBits {
     /// The class was declared with the `final` class-virt-specifier
     /// ([class.pre]; clang dumps a `FinalAttr final` child).
     pub const FINAL: DefinitionBits = DefinitionBits(1 << 50);
+    /// A closure type whose lambda has a *lambda-capture*
+    /// ([expr.prim.lambda.closure]/13: no default constructor, a deleted
+    /// copy assignment operator and no implicit move assignment; clang
+    /// `!lambdaIsDefaultConstructibleAndAssignable`).
+    pub const LAMBDA_CAPTURES: DefinitionBits = DefinitionBits(1 << 51);
 
     /// No bits.
     pub const fn empty() -> Self {
@@ -1523,6 +1532,38 @@ pub struct ColdDeclData {
     /// purposes ([dcl.typedef]/9, clang's `TypedefNameForAnonDecl`): the
     /// tag's type prints with the typedef's name.
     pub typedef_for_anon: ColdMap<DeclId, DeclId>,
+    /// Structured bindings ([dcl.struct.bind], WP-122): a `Var` that is a
+    /// decomposition (clang's `DecompositionDecl`, the hidden variable
+    /// `e`) → its `Binding`s (`ListId` of `DeclId`s, write-once).
+    pub decomp_bindings: ColdMap<DeclId, ListId>,
+    /// `Binding` → the decomposition variable it belongs to.
+    pub binding_decomp: ColdMap<DeclId, DeclId>,
+    /// `Binding` → its binding expression (an lvalue naming the element,
+    /// member or holding variable; write-once).
+    pub binding_expr: ColdMap<DeclId, ExprId>,
+    /// `Binding` of a tuple-like type → its implicit holding variable
+    /// ([dcl.struct.bind]/4; write-once).
+    pub binding_var: ColdMap<DeclId, DeclId>,
+    /// `ConstructorUsingShadow` → the shadow in the nominated base class
+    /// it was made from, when the base inherited the constructor itself
+    /// (clang `getNominatedBaseClassShadowDecl`; WP-114).
+    pub ctor_shadow_nominated: ColdMap<DeclId, DeclId>,
+    /// Inheriting constructor (the implicit `CXXConstructor` an inherited
+    /// constructor materializes, [class.inhctor.init]) → the
+    /// `ConstructorUsingShadow` it was made for (WP-114).
+    pub inheriting_ctor: ColdMap<DeclId, DeclId>,
+    /// Inheriting constructor → the base constructor it stands for (the
+    /// shadow's target or a specialization of it; clang
+    /// `getInheritedConstructor().getConstructor()`; WP-146).
+    pub inherited_ctor: ColdMap<DeclId, DeclId>,
+    /// Using-shadow in a class → the member of the class that hides it
+    /// ([namespace.udecl]/14; recorded at the class's `}`).
+    pub hidden_shadow: ColdMap<DeclId, DeclId>,
+    /// Conversion function template specialization → the target type its
+    /// name prints with (the pattern's, substituted before any return
+    /// type deduction; clang's instantiated declaration name). The
+    /// declaration keeps the pattern's name for the mangling (WP-170).
+    pub conversion_spec_target: ColdMap<DeclId, QualType>,
 }
 
 impl Default for ColdDeclData {
@@ -1547,12 +1588,21 @@ impl Default for ColdDeclData {
             injection_point: ColdMap::new("injection_point"),
             builtin_id: ColdMap::new("builtin_id"),
             typedef_for_anon: ColdMap::new("typedef_for_anon"),
+            decomp_bindings: ColdMap::new("decomp_bindings"),
+            binding_decomp: ColdMap::new("binding_decomp"),
+            binding_expr: ColdMap::new("binding_expr"),
+            binding_var: ColdMap::new("binding_var"),
+            ctor_shadow_nominated: ColdMap::new("ctor_shadow_nominated"),
+            inheriting_ctor: ColdMap::new("inheriting_ctor"),
+            inherited_ctor: ColdMap::new("inherited_ctor"),
+            hidden_shadow: ColdMap::new("hidden_shadow"),
+            conversion_spec_target: ColdMap::new("conversion_spec_target"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 19] {
+    fn rows(&self) -> [MemRow; 28] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1573,6 +1623,15 @@ impl ColdDeclData {
             self.injection_point.mem_row(),
             self.builtin_id.mem_row(),
             self.typedef_for_anon.mem_row(),
+            self.decomp_bindings.mem_row(),
+            self.binding_decomp.mem_row(),
+            self.binding_expr.mem_row(),
+            self.binding_var.mem_row(),
+            self.ctor_shadow_nominated.mem_row(),
+            self.inheriting_ctor.mem_row(),
+            self.inherited_ctor.mem_row(),
+            self.hidden_shadow.mem_row(),
+            self.conversion_spec_target.mem_row(),
         ]
     }
 }
@@ -1788,6 +1847,8 @@ macro_rules! payload_getter {
         #[allow(dead_code, reason = "not every payload has a late setter yet")]
         fn $mut_name(&mut self, d: DeclId) -> &mut $ty {
             let n = self.nodes[d.index() as usize];
+            // Invariant: Sema only mutates a payload of the decl's own class
+            // (two Sema bugs that broke this were fixed in WP-141).
             assert!(
                 n.kind.payload() == PayloadClass::$class && n.data != 0,
                 concat!("decl has no ", stringify!($class), " payload")
@@ -1997,6 +2058,117 @@ impl DeclArena {
         self.cold.typedef_for_anon.insert(tag, typedef_decl)
     }
 
+    /// The bindings of decomposition variable `d` ([dcl.struct.bind]),
+    /// `None` when `d` is not a decomposition.
+    pub fn decomp_bindings(&self, d: DeclId) -> Option<ListId> {
+        self.cold.decomp_bindings.get(d).copied()
+    }
+
+    /// True if `d` is a decomposition variable (clang's
+    /// `DecompositionDecl`).
+    pub fn is_decomposition(&self, d: DeclId) -> bool {
+        self.cold.decomp_bindings.contains(d)
+    }
+
+    /// The decomposition variable binding `b` belongs to.
+    pub fn binding_decomp(&self, b: DeclId) -> Option<DeclId> {
+        self.cold.binding_decomp.get(b).copied()
+    }
+
+    /// The binding expression of `Binding` `b`, once known.
+    pub fn binding_expr(&self, b: DeclId) -> Option<ExprId> {
+        self.cold.binding_expr.get(b).copied()
+    }
+
+    /// The holding variable of tuple-like `Binding` `b`.
+    pub fn binding_var(&self, b: DeclId) -> Option<DeclId> {
+        self.cold.binding_var.get(b).copied()
+    }
+
+    /// The base class's `ConstructorUsingShadow` that shadow `s` was made
+    /// from (the nominated base inherited the constructor too).
+    pub fn ctor_shadow_nominated(&self, s: DeclId) -> Option<DeclId> {
+        self.cold.ctor_shadow_nominated.get(s).copied()
+    }
+
+    /// The `ConstructorUsingShadow` inheriting constructor `c` was made
+    /// for, if `c` is one ([class.inhctor.init]).
+    pub fn inheriting_ctor_shadow(&self, c: DeclId) -> Option<DeclId> {
+        self.cold.inheriting_ctor.get(c).copied()
+    }
+
+    /// Records `c` as the inheriting constructor of shadow `s`.
+    ///
+    /// # Errors
+    /// If `c` is already recorded.
+    pub fn set_inheriting_ctor(&mut self, c: DeclId, s: DeclId) -> Result<(), AlreadySet> {
+        self.cold.inheriting_ctor.insert(c, s)
+    }
+
+    /// The base constructor inheriting constructor `c` stands for, if
+    /// `c` is one ([class.inhctor.init]).
+    pub fn inherited_ctor(&self, c: DeclId) -> Option<DeclId> {
+        self.cold.inherited_ctor.get(c).copied()
+    }
+
+    /// Records `b` as the base constructor inheriting constructor `c`
+    /// stands for.
+    ///
+    /// # Errors
+    /// If `c` is already recorded.
+    pub fn set_inherited_ctor(&mut self, c: DeclId, b: DeclId) -> Result<(), AlreadySet> {
+        self.cold.inherited_ctor.insert(c, b)
+    }
+
+    /// The class member hiding using-shadow `s`, if any.
+    pub fn hidden_shadow(&self, s: DeclId) -> Option<DeclId> {
+        self.cold.hidden_shadow.get(s).copied()
+    }
+
+    /// Records that member `by` hides using-shadow `s`.
+    ///
+    /// # Errors
+    /// If `s` is already recorded hidden.
+    pub fn set_hidden_shadow(&mut self, s: DeclId, by: DeclId) -> Result<(), AlreadySet> {
+        self.cold.hidden_shadow.insert(s, by)
+    }
+
+    /// Records decomposition `v`'s bindings and links each back to `v`.
+    /// Write-once.
+    ///
+    /// # Errors
+    /// If `v` already has bindings.
+    pub fn set_decomp_bindings(
+        &mut self,
+        v: DeclId,
+        list: ListId,
+        bindings: &[DeclId],
+    ) -> Result<(), AlreadySet> {
+        self.cold.decomp_bindings.insert(v, list)?;
+        for &b in bindings {
+            self.cold.binding_decomp.insert(b, v)?;
+        }
+        Ok(())
+    }
+
+    /// Records binding `b`'s expression and, for a tuple-like type, its
+    /// holding variable. Write-once.
+    ///
+    /// # Errors
+    /// If already set.
+    pub fn set_binding(
+        &mut self,
+        b: DeclId,
+        expr: ExprId,
+        holding: Option<DeclId>,
+    ) -> Result<(), AlreadySet> {
+        self.cold.binding_expr.insert(b, expr)?;
+        if let Some(h) = holding {
+            self.cold.binding_var.insert(b, h)?;
+        }
+        Ok(())
+    }
+
     /// Records a lexical context different from the semantic one. Must be
     /// called before `d` is appended to a member list.
     pub fn set_lexical_ctx(&mut self, d: DeclId, lexical: DeclId) -> Result<(), AlreadySet> {
@@ -2088,6 +2260,12 @@ impl DeclArena {
         let n = &mut self.nodes[p.index() as usize];
         assert!(n.kind == DeclKind::ParmVar, "set_param_owner on a {:?}", n.kind);
         n.ctx = Some(func);
+    }
+
+    /// Names `d` without making the name visible to lookup (a
+    /// structured binding's holding variable, `Builder::holding_var`).
+    pub fn set_name(&mut self, d: DeclId, name: DeclName) {
+        self.nodes[d.index() as usize].name = name;
     }
 
     /// Re-points the declared type (deduced return types, resolved
@@ -2251,6 +2429,14 @@ impl DeclArena {
         d.defn = d.defn.with(DefinitionBits::BEING_DEFINED);
     }
 
+    /// Marks class `r` (being defined) as the closure type of lambda `l`
+    /// ([expr.prim.lambda.closure]).
+    pub fn set_closure(&mut self, r: DeclId, l: LambdaId) {
+        let d = self.record_mut(r);
+        d.lambda = Some(l);
+        d.defn = d.defn.with(DefinitionBits::LAMBDA);
+    }
+
     /// Sets property bits of a class being defined.
     ///
     /// # Panics
@@ -2375,6 +2561,16 @@ impl DeclArena {
     /// Sets a parameter's default argument (write-once).
     pub fn set_default_arg(&mut self, p: DeclId, arg: ExprId) -> Result<(), AlreadySet> {
         set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
+    }
+
+    /// Takes back the default argument of a parameter of a class template
+    /// member specialization whose instantiation at a use failed
+    /// ([temp.inst]/12): as clang keeps the uninstantiated argument, the
+    /// next use instantiates (and reports) it again.
+    pub fn reset_failed_default_arg(&mut self, p: DeclId) {
+        let d = self.param_mut(p);
+        d.default_arg = None;
+        d.flags |= ParamData::DEFAULT_ARG_PENDING;
     }
 
     /// Marks a parameter's default argument as pending late parsing
@@ -2532,12 +2728,72 @@ pub mod builtin {
     pub const CTZG: u32 = 446;
     /// `__builtin_popcountg` (clang `Builtins.td` signature `i.`).
     pub const POPCOUNTG: u32 = 964;
+    /// `int __builtin_constant_p(...)` (clang `Builtins.td` signature `i.`;
+    /// custom type-checking: one argument, decayed): whether the argument
+    /// folds to a constant.
+    pub const CONSTANT_P: u32 = 211;
     /// `__builtin_bswap16` (clang `Builtins.td` signature `UsUs`).
     pub const BSWAP16: u32 = 179;
     /// `__builtin_bswap32` (clang `Builtins.td` signature `UiUi`).
     pub const BSWAP32: u32 = 180;
     /// `__builtin_bswap64` (clang `Builtins.td` signature `ULiULi`).
     pub const BSWAP64: u32 = 181;
+
+    // WP-150: the remaining GCC integer and memory builtins
+    // (spec/oven.md "Builtins", [`INT_MEM`]).
+    /// `__builtin_ffs` (clang `Builtins.td` signature `ii`).
+    pub const FFS: u32 = 539;
+    /// `__builtin_ffsl` (clang `Builtins.td` signature `iLi`).
+    pub const FFSL: u32 = 540;
+    /// `__builtin_ffsll` (clang `Builtins.td` signature `iLLi`).
+    pub const FFSLL: u32 = 541;
+    /// `__builtin_parity` (clang `Builtins.td` signature `iUi`).
+    pub const PARITY: u32 = 958;
+    /// `__builtin_parityl` (clang `Builtins.td` signature `iULi`).
+    pub const PARITYL: u32 = 959;
+    /// `__builtin_parityll` (clang `Builtins.td` signature `iULLi`).
+    pub const PARITYLL: u32 = 960;
+    /// `__builtin_clrsb` (clang `Builtins.td` signature `ii`).
+    pub const CLRSB: u32 = 337;
+    /// `__builtin_clrsbl` (clang `Builtins.td` signature `iLi`).
+    pub const CLRSBL: u32 = 338;
+    /// `__builtin_clrsbll` (clang `Builtins.td` signature `iLLi`).
+    pub const CLRSBLL: u32 = 339;
+    /// `__builtin_bitreverse8` (clang `Builtins.td` signature `UcUc`).
+    pub const BITREVERSE8: u32 = 186;
+    /// `__builtin_bitreverse16` (clang `Builtins.td` signature `UsUs`).
+    pub const BITREVERSE16: u32 = 187;
+    /// `__builtin_bitreverse32` (clang `Builtins.td` signature `UiUi`).
+    pub const BITREVERSE32: u32 = 188;
+    /// `__builtin_bitreverse64` (clang `Builtins.td` signature `ULiULi`).
+    pub const BITREVERSE64: u32 = 189;
+    /// `__builtin_rotateleft8` (clang `Builtins.td` signature `UcUcUc`).
+    pub const ROTATELEFT8: u32 = 1024;
+    /// `__builtin_rotateleft16` (clang `Builtins.td` signature `UsUsUs`).
+    pub const ROTATELEFT16: u32 = 1025;
+    /// `__builtin_rotateleft32` (clang `Builtins.td` signature `UiUiUi`).
+    pub const ROTATELEFT32: u32 = 1026;
+    /// `__builtin_rotateleft64` (clang `Builtins.td` signature `ULiULiULi`).
+    pub const ROTATELEFT64: u32 = 1027;
+    /// `__builtin_rotateright8` (clang `Builtins.td` signature `UcUcUc`).
+    pub const ROTATERIGHT8: u32 = 1028;
+    /// `__builtin_rotateright16` (clang `Builtins.td` signature `UsUsUs`).
+    pub const ROTATERIGHT16: u32 = 1029;
+    /// `__builtin_rotateright32` (clang `Builtins.td` signature `UiUiUi`).
+    pub const ROTATERIGHT32: u32 = 1030;
+    /// `__builtin_rotateright64` (clang `Builtins.td` signature `ULiULiULi`).
+    pub const ROTATERIGHT64: u32 = 1031;
+    /// `__builtin_bcmp` (clang `Builtins.td` signature `ivC*vC*z`).
+    pub const BCMP: u32 = 202;
+    /// `__builtin_wmemcpy` (clang `Builtins.td` signature `w*w*wC*z`).
+    pub const WMEMCPY: u32 = 1381;
+    /// `__builtin_wmemmove` (clang `Builtins.td` signature `w*w*wC*z`).
+    pub const WMEMMOVE: u32 = 1383;
+    /// `__builtin_memset` (clang `Builtins.td` signature `v*v*iz`).
+    pub const MEMSET: u32 = 869;
+    /// `__builtin_mempcpy` (clang `Builtins.td` signature `v*v*vC*z`).
+    pub const MEMPCPY: u32 = 220;
+
     /// `__builtin_memcmp` (clang `Builtins.td` signature `ivC*vC*z`).
     pub const MEMCMP: u32 = 218;
     /// `__builtin_memcpy` (clang `Builtins.td` signature `v*v*vC*z`).
@@ -2556,6 +2812,24 @@ pub mod builtin {
     pub const WMEMCHR: u32 = 1377;
     /// `__builtin_wmemcmp` (clang `Builtins.td` signature `iwC*wC*z`).
     pub const WMEMCMP: u32 = 1379;
+    /// `__builtin_strcmp` (clang `Builtins.td` signature `icC*cC*`).
+    pub const STRCMP: u32 = 1140;
+    /// `__builtin_strncmp` (clang `Builtins.td` signature `icC*cC*z`).
+    pub const STRNCMP: u32 = 1151;
+    /// `__builtin_strchr` (clang `Builtins.td` signature `c*cC*i`).
+    pub const STRCHR: u32 = 1138;
+    /// `__builtin_strrchr` (clang `Builtins.td` signature `c*cC*i`).
+    pub const STRRCHR: u32 = 1180;
+    /// `__builtin_strpbrk` (clang `Builtins.td` signature `c*cC*cC*`).
+    pub const STRPBRK: u32 = 1178;
+    /// `__builtin_strstr` (clang `Builtins.td` signature `c*cC*cC*`).
+    pub const STRSTR: u32 = 1157;
+    /// `__builtin_wcscmp` (clang `Builtins.td` signature `iwC*wC*`).
+    pub const WCSCMP: u32 = 1388;
+    /// `__builtin_wcsncmp` (clang `Builtins.td` signature `iwC*wC*z`).
+    pub const WCSNCMP: u32 = 1392;
+    /// `__builtin_wcschr` (clang `Builtins.td` signature `w*wC*w`).
+    pub const WCSCHR: u32 = 1386;
     /// `__builtin_isfinite` (clang `Builtins.td` signature `i.`).
     pub const ISFINITE: u32 = 725;
     /// `__builtin_isinf` (clang `Builtins.td` signature `i.`).
@@ -2652,6 +2926,169 @@ pub mod builtin {
     pub const OPERATOR_DELETE: u32 = 223;
     /// `__builtin_unreachable` (clang `Builtins.td` signature `v`).
     pub const UNREACHABLE: u32 = 1347;
+    /// `void __builtin_va_start(__builtin_va_list &, ...) noexcept`
+    /// ([cstdarg.syn], C 7.16.1.4; clang `Builtins.td` signature `vA.`,
+    /// custom type-checking: sema checks the enclosing function and the
+    /// last named parameter).
+    pub const VA_START: u32 = 233;
+    /// `void __builtin_va_end(__builtin_va_list &) noexcept` (signature `vA`).
+    pub const VA_END: u32 = 1367;
+    /// `void __builtin_va_copy(__builtin_va_list &, __builtin_va_list &)
+    /// noexcept` (signature `vAA`).
+    pub const VA_COPY: u32 = 1365;
+
+    // WP-171: the coroutine builtins ([`CORO`]; clang `CoroLangBuiltin`s).
+    /// `void __builtin_coro_resume(void *)` (signature `vv*`).
+    pub const CORO_RESUME: u32 = 373;
+    /// `void __builtin_coro_destroy(void *)` (signature `vv*`).
+    pub const CORO_DESTROY: u32 = 365;
+    /// `bool __builtin_coro_done(void *) noexcept` (signature `bv*`).
+    pub const CORO_DONE: u32 = 366;
+    /// `void *__builtin_coro_promise(void *, int, bool) noexcept`
+    /// (signature `v*v*IiIb`: the alignment and direction are integer
+    /// constant expressions).
+    pub const CORO_PROMISE: u32 = 372;
+    /// `void *__builtin_coro_noop() noexcept` (signature `v*`).
+    pub const CORO_NOOP: u32 = 371;
+    /// `size_t __builtin_coro_size() noexcept` (signature `z`).
+    pub const CORO_SIZE: u32 = 374;
+    /// `size_t __builtin_coro_align() noexcept` (signature `z`).
+    pub const CORO_ALIGN: u32 = 362;
+    /// `void *__builtin_coro_frame() noexcept` (signature `v*`).
+    pub const CORO_FRAME: u32 = 368;
+    /// `void *__builtin_coro_free(void *) noexcept` (signature `v*v*`).
+    pub const CORO_FREE: u32 = 369;
+    /// `void *__builtin_coro_id(int, void *, void *, void *) noexcept`
+    /// (signature `v*Iiv*v*v*`).
+    pub const CORO_ID: u32 = 370;
+    /// `bool __builtin_coro_alloc() noexcept` (signature `b`).
+    pub const CORO_ALLOC: u32 = 363;
+    /// `void *__builtin_coro_begin(void *) noexcept` (signature `v*v*`).
+    pub const CORO_BEGIN: u32 = 364;
+    /// `bool __builtin_coro_end(void *, bool) noexcept` (signature
+    /// `bv*Ib`).
+    pub const CORO_END: u32 = 367;
+    /// `char __builtin_coro_suspend(bool) noexcept` (signature `cIb`).
+    pub const CORO_SUSPEND: u32 = 375;
+
+    // WP-156: the vector reductions (clang `Builtins.td` signature `v.`,
+    // custom type-checking: the call has the vector's element type).
+    /// `__builtin_reduce_add`.
+    pub const REDUCE_ADD: u32 = 991;
+    /// `__builtin_reduce_and`.
+    pub const REDUCE_AND: u32 = 992;
+    /// `__builtin_reduce_max`.
+    pub const REDUCE_MAX: u32 = 993;
+    /// `__builtin_reduce_min`.
+    pub const REDUCE_MIN: u32 = 994;
+    /// `__builtin_reduce_mul`.
+    pub const REDUCE_MUL: u32 = 995;
+    /// `__builtin_reduce_or`.
+    pub const REDUCE_OR: u32 = 996;
+    /// `__builtin_reduce_xor`.
+    pub const REDUCE_XOR: u32 = 997;
+
+    /// `__builtin_fabs` (clang `Builtins.td` signature `dd`).
+    pub const FABS: u32 = 550;
+    /// `__builtin_fabsf` (clang `Builtins.td` signature `ff`).
+    pub const FABSF: u32 = 548;
+    /// `__builtin_fabsl` (clang `Builtins.td` signature `LdLd`).
+    pub const FABSL: u32 = 552;
+    /// `__builtin_copysign` (clang `Builtins.td` signature `ddd`).
+    pub const COPYSIGN: u32 = 356;
+    /// `__builtin_copysignf` (clang `Builtins.td` signature `fff`).
+    pub const COPYSIGNF: u32 = 354;
+    /// `__builtin_copysignl` (clang `Builtins.td` signature `LdLdLd`).
+    pub const COPYSIGNL: u32 = 358;
+    /// `__builtin_fmax` (clang `Builtins.td` signature `ddd`).
+    pub const FMAX: u32 = 585;
+    /// `__builtin_fmaxf` (clang `Builtins.td` signature `fff`).
+    pub const FMAXF: u32 = 583;
+    /// `__builtin_fmaxl` (clang `Builtins.td` signature `LdLdLd`).
+    pub const FMAXL: u32 = 587;
+    /// `__builtin_fmin` (clang `Builtins.td` signature `ddd`).
+    pub const FMIN: u32 = 593;
+    /// `__builtin_fminf` (clang `Builtins.td` signature `fff`).
+    pub const FMINF: u32 = 591;
+    /// `__builtin_fminl` (clang `Builtins.td` signature `LdLdLd`).
+    pub const FMINL: u32 = 595;
+    /// `__builtin_ceil` (clang `Builtins.td` signature `dd`).
+    pub const CEIL: u32 = 312;
+    /// `__builtin_ceilf` (clang `Builtins.td` signature `ff`).
+    pub const CEILF: u32 = 310;
+    /// `__builtin_ceill` (clang `Builtins.td` signature `LdLd`).
+    pub const CEILL: u32 = 314;
+    /// `__builtin_floor` (clang `Builtins.td` signature `dd`).
+    pub const FLOOR: u32 = 569;
+    /// `__builtin_floorf` (clang `Builtins.td` signature `ff`).
+    pub const FLOORF: u32 = 567;
+    /// `__builtin_floorl` (clang `Builtins.td` signature `LdLd`).
+    pub const FLOORL: u32 = 571;
+    /// `__builtin_trunc` (clang `Builtins.td` signature `dd`).
+    pub const TRUNC: u32 = 1334;
+    /// `__builtin_truncf` (clang `Builtins.td` signature `ff`).
+    pub const TRUNCF: u32 = 1332;
+    /// `__builtin_truncl` (clang `Builtins.td` signature `LdLd`).
+    pub const TRUNCL: u32 = 1336;
+    /// `__builtin_round` (clang `Builtins.td` signature `dd`).
+    pub const ROUND: u32 = 1042;
+    /// `__builtin_roundf` (clang `Builtins.td` signature `ff`).
+    pub const ROUNDF: u32 = 1040;
+    /// `__builtin_roundl` (clang `Builtins.td` signature `LdLd`).
+    pub const ROUNDL: u32 = 1044;
+    /// `__builtin_rint` (clang `Builtins.td` signature `dd`).
+    pub const RINT: u32 = 1018;
+    /// `__builtin_rintf` (clang `Builtins.td` signature `ff`).
+    pub const RINTF: u32 = 1016;
+    /// `__builtin_rintl` (clang `Builtins.td` signature `LdLd`).
+    pub const RINTL: u32 = 1020;
+    /// `__builtin_nearbyint` (clang `Builtins.td` signature `dd`).
+    pub const NEARBYINT: u32 = 905;
+    /// `__builtin_nearbyintf` (clang `Builtins.td` signature `ff`).
+    pub const NEARBYINTF: u32 = 903;
+    /// `__builtin_nearbyintl` (clang `Builtins.td` signature `LdLd`).
+    pub const NEARBYINTL: u32 = 907;
+    /// `__builtin_fma` (clang `Builtins.td` signature `dddd`).
+    pub const FMA: u32 = 577;
+    /// `__builtin_fmaf` (clang `Builtins.td` signature `ffff`).
+    pub const FMAF: u32 = 575;
+    /// `__builtin_fmal` (clang `Builtins.td` signature `LdLdLdLd`).
+    pub const FMAL: u32 = 579;
+    /// `__builtin_inf` (clang `Builtins.td` signature `d`).
+    pub const INF: u32 = 673;
+    /// `__builtin_inff` (clang `Builtins.td` signature `f`).
+    pub const INFF: u32 = 672;
+    /// `__builtin_infl` (clang `Builtins.td` signature `Ld`).
+    pub const INFL: u32 = 674;
+    /// `__builtin_abs` (clang `Builtins.td` signature `ii`).
+    pub const ABS: u32 = 92;
+    /// `__builtin_labs` (clang `Builtins.td` signature `LiLi`).
+    pub const LABS: u32 = 94;
+    /// `__builtin_llabs` (clang `Builtins.td` signature `LLiLLi`).
+    pub const LLABS: u32 = 96;
+    /// `__builtin_isinf_sign` (clang `Builtins.td` signature `i.`).
+    pub const ISINF_SIGN: u32 = 730;
+    /// `__builtin_fpclassify` (clang `Builtins.td` signature `iiiiii.`).
+    pub const FPCLASSIFY: u32 = 542;
+    /// `__builtin_issubnormal` (clang `Builtins.td` signature `i.`).
+    pub const ISSUBNORMAL: u32 = 741;
+    /// `__builtin_iszero` (clang `Builtins.td` signature `i.`).
+    pub const ISZERO: u32 = 745;
+    /// `__builtin_issignaling` (clang `Builtins.td` signature `i.`).
+    pub const ISSIGNALING: u32 = 739;
+    /// `__builtin_expect` (clang `Builtins.td` signature `LiLiLi`).
+    pub const EXPECT: u32 = 528;
+    /// `__builtin_expect_with_probability` (clang `Builtins.td` signature
+    /// `LiLiLid`).
+    pub const EXPECT_WITH_PROBABILITY: u32 = 529;
+    /// `__builtin_isfpclass` (clang `Builtins.td` signature `i.`).
+    pub const ISFPCLASS: u32 = 726;
+    /// `__builtin_assume` (clang `Builtins.td` signature `vb`).
+    pub const ASSUME: u32 = 148;
+    /// `__builtin_trap` (clang `Builtins.td` signature `v`).
+    pub const TRAP: u32 = 1331;
+    /// `__builtin_abort` (clang `Builtins.td` signature `v`).
+    pub const ABORT: u32 = 90;
 
     /// Attribute bits of an [`Info`] (clang's `Builtins.td` attributes).
     pub mod attr {
@@ -2666,6 +3103,11 @@ pub mod builtin {
         /// `CustomTypeChecking`: the arguments are not converted to the
         /// parameter types; sema checks the call itself.
         pub const CUSTOM: u8 = 16;
+        /// `ConstIgnoringExceptions` (`rint`, `fma`): with the default
+        /// floating-point exception mode the implicit `ConstAttr` is added
+        /// before the `NoThrowAttr` (clang `AddKnownFunctionAttributes`).
+        /// Set together with [`CONST`].
+        pub const CONST_EARLY: u8 = 32;
     }
 
     /// One builtin function.
@@ -2680,7 +3122,12 @@ pub mod builtin {
         /// `b` bool, `c` char, `w` `wchar_t`, `s` short, `i` int, `f`
         /// float, `d` double, `z` `size_t`; prefixes `U` unsigned, `L`
         /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
-        /// `&` lvalue reference, `C` const.
+        /// `&` lvalue reference, `C` const, `D` volatile; `A` is a
+        /// `__builtin_va_list` parameter (a reference to it, or the decayed
+        /// pointer when it is an array), `a` a `__builtin_va_list` (decayed
+        /// when it is an array), `P` the `FILE` type ([`LIB`] only). An `I`
+        /// prefix marks an argument that must be an integer constant
+        /// expression.
         pub sig: &'static str,
         /// [`attr`] bits.
         pub attrs: u8,
@@ -2690,7 +3137,7 @@ pub mod builtin {
         Info { id, name, sig, attrs }
     }
 
-    use attr::{CONST as C, CUSTOM as T, NORETURN as R, NOTHROW as N, PURE as P};
+    use attr::{CONST as C, CONST_EARLY as E, CUSTOM as T, NORETURN as R, NOTHROW as N, PURE as P};
 
     /// Every builtin function kiln declares.
     pub const ALL: &[Info] = &[
@@ -2708,6 +3155,7 @@ pub mod builtin {
         row(CLZG, "__builtin_clzg", "i.", N | C | T),
         row(CTZG, "__builtin_ctzg", "i.", N | C | T),
         row(POPCOUNTG, "__builtin_popcountg", "i.", N | C | T),
+        row(CONSTANT_P, "__builtin_constant_p", "i.", N | C | T),
         row(BSWAP16, "__builtin_bswap16", "UsUs", N | C),
         row(BSWAP32, "__builtin_bswap32", "UiUi", N | C),
         row(BSWAP64, "__builtin_bswap64", "ULiULi", N | C),
@@ -2720,6 +3168,15 @@ pub mod builtin {
         row(WCSLEN, "__builtin_wcslen", "zwC*", N | P),
         row(WMEMCHR, "__builtin_wmemchr", "w*wC*wz", N),
         row(WMEMCMP, "__builtin_wmemcmp", "iwC*wC*z", N),
+        row(STRCMP, "__builtin_strcmp", "icC*cC*", N),
+        row(STRNCMP, "__builtin_strncmp", "icC*cC*z", N),
+        row(STRCHR, "__builtin_strchr", "c*cC*i", N),
+        row(STRRCHR, "__builtin_strrchr", "c*cC*i", N),
+        row(STRPBRK, "__builtin_strpbrk", "c*cC*cC*", N),
+        row(STRSTR, "__builtin_strstr", "c*cC*cC*", N),
+        row(WCSCMP, "__builtin_wcscmp", "iwC*wC*", N | P),
+        row(WCSNCMP, "__builtin_wcsncmp", "iwC*wC*z", N | P),
+        row(WCSCHR, "__builtin_wcschr", "w*wC*w", N | P),
         row(ISFINITE, "__builtin_isfinite", "i.", N | C | T),
         row(ISINF, "__builtin_isinf", "i.", N | C | T),
         row(ISNAN, "__builtin_isnan", "i.", N | C | T),
@@ -2740,6 +3197,370 @@ pub mod builtin {
         row(NANS, "__builtin_nans", "dcC*", N | P),
         row(NANSF, "__builtin_nansf", "fcC*", N | P),
         row(NANSL, "__builtin_nansl", "LdcC*", N | P),
+        row(FABS, "__builtin_fabs", "dd", N | C),
+        row(FABSF, "__builtin_fabsf", "ff", N | C),
+        row(FABSL, "__builtin_fabsl", "LdLd", N | C),
+        row(COPYSIGN, "__builtin_copysign", "ddd", N | C),
+        row(COPYSIGNF, "__builtin_copysignf", "fff", N | C),
+        row(COPYSIGNL, "__builtin_copysignl", "LdLdLd", N | C),
+        row(FMAX, "__builtin_fmax", "ddd", N | C),
+        row(FMAXF, "__builtin_fmaxf", "fff", N | C),
+        row(FMAXL, "__builtin_fmaxl", "LdLdLd", N | C),
+        row(FMIN, "__builtin_fmin", "ddd", N | C),
+        row(FMINF, "__builtin_fminf", "fff", N | C),
+        row(FMINL, "__builtin_fminl", "LdLdLd", N | C),
+        row(CEIL, "__builtin_ceil", "dd", N | C),
+        row(CEILF, "__builtin_ceilf", "ff", N | C),
+        row(CEILL, "__builtin_ceill", "LdLd", N | C),
+        row(FLOOR, "__builtin_floor", "dd", N | C),
+        row(FLOORF, "__builtin_floorf", "ff", N | C),
+        row(FLOORL, "__builtin_floorl", "LdLd", N | C),
+        row(TRUNC, "__builtin_trunc", "dd", N | C),
+        row(TRUNCF, "__builtin_truncf", "ff", N | C),
+        row(TRUNCL, "__builtin_truncl", "LdLd", N | C),
+        row(ROUND, "__builtin_round", "dd", N | C),
+        row(ROUNDF, "__builtin_roundf", "ff", N | C),
+        row(ROUNDL, "__builtin_roundl", "LdLd", N | C),
+        row(RINT, "__builtin_rint", "dd", N | C | E),
+        row(RINTF, "__builtin_rintf", "ff", N | C | E),
+        row(RINTL, "__builtin_rintl", "LdLd", N | C | E),
+        row(NEARBYINT, "__builtin_nearbyint", "dd", N | C),
+        row(NEARBYINTF, "__builtin_nearbyintf", "ff", N | C),
+        row(NEARBYINTL, "__builtin_nearbyintl", "LdLd", N | C),
+        row(FMA, "__builtin_fma", "dddd", N | C | E),
+        row(FMAF, "__builtin_fmaf", "ffff", N | C | E),
+        row(FMAL, "__builtin_fmal", "LdLdLdLd", N | C | E),
+        row(INF, "__builtin_inf", "d", N | C),
+        row(INFF, "__builtin_inff", "f", N | C),
+        row(INFL, "__builtin_infl", "Ld", N | C),
+        row(ABS, "__builtin_abs", "ii", N | C),
+        row(LABS, "__builtin_labs", "LiLi", N | C),
+        row(LLABS, "__builtin_llabs", "LLiLLi", N | C),
+        row(ISINF_SIGN, "__builtin_isinf_sign", "i.", N | C | T),
+        row(FPCLASSIFY, "__builtin_fpclassify", "iiiiii.", N | C | T),
+        row(ISSUBNORMAL, "__builtin_issubnormal", "i.", N | C | T),
+        row(ISZERO, "__builtin_iszero", "i.", N | C | T),
+        row(ISSIGNALING, "__builtin_issignaling", "i.", N | C | T),
+        row(EXPECT, "__builtin_expect", "LiLiLi", N | C),
+        row(EXPECT_WITH_PROBABILITY, "__builtin_expect_with_probability", "LiLiLid", N | C),
+        row(ISFPCLASS, "__builtin_isfpclass", "i.", N | C | T),
+        row(ASSUME, "__builtin_assume", "vb", N),
+        row(TRAP, "__builtin_trap", "v", N | R),
+        row(ABORT, "__builtin_abort", "v", N | R),
+        row(LAUNDER, "__builtin_launder", "v*v*", N | T),
+        row(OPERATOR_NEW, "__builtin_operator_new", "v*z", C | T),
+        row(OPERATOR_DELETE, "__builtin_operator_delete", "vv*", N | T),
+        row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
+        row(VA_START, "__builtin_va_start", "vA.", N | T),
+        row(VA_END, "__builtin_va_end", "vA", N),
+        row(VA_COPY, "__builtin_va_copy", "vAA", N),
+        // WP-156: the vector reductions.
+        row(REDUCE_ADD, "__builtin_reduce_add", "v.", N | C | T),
+        row(REDUCE_AND, "__builtin_reduce_and", "v.", N | C | T),
+        row(REDUCE_MAX, "__builtin_reduce_max", "v.", N | C | T),
+        row(REDUCE_MIN, "__builtin_reduce_min", "v.", N | C | T),
+        row(REDUCE_MUL, "__builtin_reduce_mul", "v.", N | C | T),
+        row(REDUCE_OR, "__builtin_reduce_or", "v.", N | C | T),
+        row(REDUCE_XOR, "__builtin_reduce_xor", "v.", N | C | T),
+    ];
+
+    /// WP-171: the coroutine builtins the libc++ headers name (clang 19
+    /// `Builtins.td` `CoroLangBuiltin`s). Sema type-checks calls; codegen
+    /// and the Oven do not implement them.
+    pub const CORO: &[Info] = &[
+        row(CORO_RESUME, "__builtin_coro_resume", "vv*", 0),
+        row(CORO_DESTROY, "__builtin_coro_destroy", "vv*", 0),
+        row(CORO_DONE, "__builtin_coro_done", "bv*", N),
+        row(CORO_PROMISE, "__builtin_coro_promise", "v*v*IiIb", N),
+        row(CORO_NOOP, "__builtin_coro_noop", "v*", N),
+        row(CORO_SIZE, "__builtin_coro_size", "z", N),
+        row(CORO_ALIGN, "__builtin_coro_align", "z", N),
+        row(CORO_FRAME, "__builtin_coro_frame", "v*", N),
+        row(CORO_FREE, "__builtin_coro_free", "v*v*", N),
+        row(CORO_ID, "__builtin_coro_id", "v*Iiv*v*v*", N),
+        row(CORO_ALLOC, "__builtin_coro_alloc", "b", N),
+        row(CORO_BEGIN, "__builtin_coro_begin", "v*v*", N),
+        row(CORO_END, "__builtin_coro_end", "bv*Ib", N),
+        row(CORO_SUSPEND, "__builtin_coro_suspend", "cIb", N),
+    ];
+
+    /// WP-171: the C library functions clang 19 recognizes as library
+    /// builtins and gives implicit attributes (`Builtins.td` `LibBuiltin`
+    /// rows with the `NoThrow` / `Const` / `Pure` attributes; ids are
+    /// clang's `Builtin::ID`). A recognition table only: these names are
+    /// not lazily declared and a call is an ordinary call. The first
+    /// file-scope declaration with C language linkage whose type matches
+    /// the signature ignoring the exception specification gets the
+    /// attributes (clang `ActOnFunctionDeclarator` +
+    /// `AddKnownFunctionAttributes`). `P` is the type the file-scope
+    /// `FILE` typedef names. clang's library builtins without any of these
+    /// attributes (`malloc`, `printf`, `strtol`, ...) are left out.
+    pub const LIB: &[Info] = &[
+        row(93, "abs", "ii", N | C),
+        row(95, "labs", "LiLi", N | C),
+        row(97, "llabs", "LLiLLi", N | C),
+        row(866, "memcpy", "v*v*vC*z", N),
+        row(868, "memmove", "v*v*vC*z", N),
+        row(1143, "strcpy", "c*c*cC*", N),
+        row(1154, "strncpy", "c*c*cC*z", N),
+        row(1141, "strcmp", "icC*cC*", N),
+        row(1152, "strncmp", "icC*cC*z", N),
+        row(1137, "strcat", "c*c*cC*", N),
+        row(1150, "strncat", "c*c*cC*z", N),
+        row(863, "memchr", "v*vC*iz", N),
+        row(1139, "strchr", "c*cC*i", N),
+        row(1179, "strpbrk", "c*cC*cC*", N),
+        row(1181, "strrchr", "c*cC*i", N),
+        row(1156, "strspn", "zcC*cC*", N),
+        row(1158, "strstr", "c*cC*cC*", N),
+        row(870, "memset", "v*v*iz", N),
+        row(1148, "strlen", "zcC*", N),
+        row(544, "fprintf", "iP*cC*.", N),
+        row(1114, "snprintf", "ic*zcC*.", N),
+        row(1058, "sprintf", "ic*cC*.", N),
+        row(1357, "vprintf", "icC*a", N),
+        row(1372, "vfprintf", "iP*cC*a", N),
+        row(1376, "vsnprintf", "ic*zcC*a", N),
+        row(1374, "vsprintf", "ic*cC*a", N),
+        row(1387, "wcschr", "w*wC*w", N | P),
+        row(1389, "wcscmp", "iwC*wC*", N | P),
+        row(1391, "wcslen", "zwC*", N | P),
+        row(1393, "wcsncmp", "iwC*wC*z", N | P),
+        row(1378, "wmemchr", "w*wC*wz", N),
+        row(1380, "wmemcmp", "iwC*wC*z", N),
+        row(1382, "wmemcpy", "w*w*wC*z", N),
+        row(1384, "wmemmove", "w*w*wC*z", N),
+        row(717, "isalnum", "ii", N | P),
+        row(719, "isalpha", "ii", N | P),
+        row(720, "isblank", "ii", N | P),
+        row(721, "iscntrl", "ii", N | P),
+        row(723, "isdigit", "ii", N | P),
+        row(726, "isgraph", "ii", N | P),
+        row(734, "islower", "ii", N | P),
+        row(737, "isprint", "ii", N | P),
+        row(738, "ispunct", "ii", N | P),
+        row(740, "isspace", "ii", N | P),
+        row(743, "isupper", "ii", N | P),
+        row(744, "isxdigit", "ii", N | P),
+        row(1328, "tolower", "ii", N | P),
+        row(1330, "toupper", "ii", N | P),
+        row(101, "acos", "dd", N),
+        row(109, "acosh", "dd", N),
+        row(136, "asin", "dd", N),
+        row(144, "asinh", "dd", N),
+        row(153, "atan", "dd", N),
+        row(168, "atanh", "dd", N),
+        row(294, "cbrt", "dd", N | C),
+        row(313, "ceil", "dd", N | C),
+        row(379, "cos", "dd", N),
+        row(387, "cosh", "dd", N),
+        row(490, "erf", "dd", N),
+        row(497, "erfc", "dd", N),
+        row(510, "exp", "dd", N),
+        row(516, "exp2", "dd", N),
+        row(533, "expm1", "dd", N),
+        row(551, "fabs", "dd", N | C),
+        row(570, "floor", "dd", N | C),
+        row(768, "lgamma", "dd", N),
+        row(789, "log", "dd", N),
+        row(810, "log10", "dd", N),
+        row(795, "log1p", "dd", N),
+        row(802, "log2", "dd", N),
+        row(820, "logb", "dd", N),
+        row(906, "nearbyint", "dd", N | C),
+        row(1019, "rint", "dd", N | C),
+        row(1043, "round", "dd", N | C),
+        row(1095, "sin", "dd", N),
+        row(1103, "sinh", "dd", N),
+        row(1118, "sqrt", "dd", N),
+        row(1303, "tan", "dd", N),
+        row(1311, "tanh", "dd", N),
+        row(1321, "tgamma", "dd", N),
+        row(1335, "trunc", "dd", N | C),
+        row(159, "atan2", "ddd", N),
+        row(357, "copysign", "ddd", N | C),
+        row(560, "fdim", "ddd", N),
+        row(586, "fmax", "ddd", N | C),
+        row(594, "fmin", "ddd", N | C),
+        row(602, "fmod", "ddd", N),
+        row(659, "hypot", "ddd", N),
+        row(913, "nextafter", "ddd", N),
+        row(968, "pow", "ddd", N),
+        row(1001, "remainder", "ddd", N),
+        row(578, "fma", "dddd", N | C),
+        row(616, "frexp", "ddi*", N),
+        row(760, "ldexp", "ddi", N),
+        row(881, "modf", "ddd*", N),
+        row(893, "nan", "dcC*", N | P),
+        row(667, "ilogb", "id", N),
+        row(828, "lrint", "Lid", N),
+        row(775, "llrint", "LLid", N),
+        row(837, "lround", "Lid", N),
+        row(781, "llround", "LLid", N),
+        row(920, "nexttoward", "ddLd", N),
+        row(1008, "remquo", "dddi*", N),
+        row(1075, "scalbn", "ddi", N),
+        row(1069, "scalbln", "ddLi", N),
+        row(99, "acosf", "ff", N),
+        row(107, "acoshf", "ff", N),
+        row(134, "asinf", "ff", N),
+        row(142, "asinhf", "ff", N),
+        row(151, "atanf", "ff", N),
+        row(166, "atanhf", "ff", N),
+        row(292, "cbrtf", "ff", N | C),
+        row(311, "ceilf", "ff", N | C),
+        row(377, "cosf", "ff", N),
+        row(385, "coshf", "ff", N),
+        row(488, "erff", "ff", N),
+        row(495, "erfcf", "ff", N),
+        row(508, "expf", "ff", N),
+        row(514, "exp2f", "ff", N),
+        row(531, "expm1f", "ff", N),
+        row(549, "fabsf", "ff", N | C),
+        row(568, "floorf", "ff", N | C),
+        row(766, "lgammaf", "ff", N),
+        row(787, "logf", "ff", N),
+        row(808, "log10f", "ff", N),
+        row(793, "log1pf", "ff", N),
+        row(800, "log2f", "ff", N),
+        row(818, "logbf", "ff", N),
+        row(904, "nearbyintf", "ff", N | C),
+        row(1017, "rintf", "ff", N | C),
+        row(1041, "roundf", "ff", N | C),
+        row(1093, "sinf", "ff", N),
+        row(1101, "sinhf", "ff", N),
+        row(1116, "sqrtf", "ff", N),
+        row(1301, "tanf", "ff", N),
+        row(1309, "tanhf", "ff", N),
+        row(1319, "tgammaf", "ff", N),
+        row(1333, "truncf", "ff", N | C),
+        row(157, "atan2f", "fff", N),
+        row(355, "copysignf", "fff", N | C),
+        row(558, "fdimf", "fff", N),
+        row(584, "fmaxf", "fff", N | C),
+        row(592, "fminf", "fff", N | C),
+        row(600, "fmodf", "fff", N),
+        row(657, "hypotf", "fff", N),
+        row(911, "nextafterf", "fff", N),
+        row(966, "powf", "fff", N),
+        row(999, "remainderf", "fff", N),
+        row(576, "fmaf", "ffff", N | C),
+        row(614, "frexpf", "ffi*", N),
+        row(758, "ldexpf", "ffi", N),
+        row(879, "modff", "fff*", N),
+        row(891, "nanf", "fcC*", N | P),
+        row(665, "ilogbf", "if", N),
+        row(826, "lrintf", "Lif", N),
+        row(773, "llrintf", "LLif", N),
+        row(835, "lroundf", "Lif", N),
+        row(779, "llroundf", "LLif", N),
+        row(918, "nexttowardf", "ffLd", N),
+        row(1006, "remquof", "fffi*", N),
+        row(1073, "scalbnf", "ffi", N),
+        row(1067, "scalblnf", "ffLi", N),
+        row(103, "acosl", "LdLd", N),
+        row(111, "acoshl", "LdLd", N),
+        row(138, "asinl", "LdLd", N),
+        row(146, "asinhl", "LdLd", N),
+        row(155, "atanl", "LdLd", N),
+        row(170, "atanhl", "LdLd", N),
+        row(296, "cbrtl", "LdLd", N | C),
+        row(315, "ceill", "LdLd", N | C),
+        row(381, "cosl", "LdLd", N),
+        row(389, "coshl", "LdLd", N),
+        row(492, "erfl", "LdLd", N),
+        row(499, "erfcl", "LdLd", N),
+        row(512, "expl", "LdLd", N),
+        row(518, "exp2l", "LdLd", N),
+        row(535, "expm1l", "LdLd", N),
+        row(553, "fabsl", "LdLd", N | C),
+        row(572, "floorl", "LdLd", N | C),
+        row(770, "lgammal", "LdLd", N),
+        row(791, "logl", "LdLd", N),
+        row(812, "log10l", "LdLd", N),
+        row(797, "log1pl", "LdLd", N),
+        row(804, "log2l", "LdLd", N),
+        row(822, "logbl", "LdLd", N),
+        row(908, "nearbyintl", "LdLd", N | C),
+        row(1021, "rintl", "LdLd", N | C),
+        row(1045, "roundl", "LdLd", N | C),
+        row(1097, "sinl", "LdLd", N),
+        row(1105, "sinhl", "LdLd", N),
+        row(1120, "sqrtl", "LdLd", N),
+        row(1305, "tanl", "LdLd", N),
+        row(1313, "tanhl", "LdLd", N),
+        row(1323, "tgammal", "LdLd", N),
+        row(1337, "truncl", "LdLd", N | C),
+        row(161, "atan2l", "LdLdLd", N),
+        row(359, "copysignl", "LdLdLd", N | C),
+        row(562, "fdiml", "LdLdLd", N),
+        row(588, "fmaxl", "LdLdLd", N | C),
+        row(596, "fminl", "LdLdLd", N | C),
+        row(604, "fmodl", "LdLdLd", N),
+        row(661, "hypotl", "LdLdLd", N),
+        row(915, "nextafterl", "LdLdLd", N),
+        row(970, "powl", "LdLdLd", N),
+        row(1003, "remainderl", "LdLdLd", N),
+        row(580, "fmal", "LdLdLdLd", N | C),
+        row(618, "frexpl", "LdLdi*", N),
+        row(762, "ldexpl", "LdLdi", N),
+        row(883, "modfl", "LdLdLd*", N),
+        row(895, "nanl", "LdcC*", N | P),
+        row(669, "ilogbl", "iLd", N),
+        row(830, "lrintl", "LiLd", N),
+        row(777, "llrintl", "LLiLd", N),
+        row(839, "lroundl", "LiLd", N),
+        row(783, "llroundl", "LLiLd", N),
+        row(922, "nexttowardl", "LdLdLd", N),
+        row(1010, "remquol", "LdLdLdi*", N),
+        row(1077, "scalbnl", "LdLdi", N),
+        row(1071, "scalblnl", "LdLdLi", N),
+    ];
+
+    /// The [`LIB`] row of the C library function spelled `name`.
+    pub fn lib_by_name(name: &str) -> Option<&'static Info> {
+        LIB.iter().find(|e| e.name == name)
+    }
+
+    /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,
+    /// `clrsb`, `bitreverse`, `rotate*`) and memory builtins. All but
+    /// `memset`/`mempcpy` are constant-evaluated (clang 19 `Constexpr`).
+    pub const INT_MEM: &[Info] = &[
+        row(FFS, "__builtin_ffs", "ii", N | C),
+        row(FFSL, "__builtin_ffsl", "iLi", N | C),
+        row(FFSLL, "__builtin_ffsll", "iLLi", N | C),
+        row(PARITY, "__builtin_parity", "iUi", N | C),
+        row(PARITYL, "__builtin_parityl", "iULi", N | C),
+        row(PARITYLL, "__builtin_parityll", "iULLi", N | C),
+        row(CLRSB, "__builtin_clrsb", "ii", N | C),
+        row(CLRSBL, "__builtin_clrsbl", "iLi", N | C),
+        row(CLRSBLL, "__builtin_clrsbll", "iLLi", N | C),
+        row(BITREVERSE8, "__builtin_bitreverse8", "UcUc", N | C),
+        row(BITREVERSE16, "__builtin_bitreverse16", "UsUs", N | C),
+        row(BITREVERSE32, "__builtin_bitreverse32", "UiUi", N | C),
+        row(BITREVERSE64, "__builtin_bitreverse64", "ULiULi", N | C),
+        row(ROTATELEFT8, "__builtin_rotateleft8", "UcUcUc", N | C),
+        row(ROTATELEFT16, "__builtin_rotateleft16", "UsUsUs", N | C),
+        row(ROTATELEFT32, "__builtin_rotateleft32", "UiUiUi", N | C),
+        row(ROTATELEFT64, "__builtin_rotateleft64", "ULiULiULi", N | C),
+        row(ROTATERIGHT8, "__builtin_rotateright8", "UcUcUc", N | C),
+        row(ROTATERIGHT16, "__builtin_rotateright16", "UsUsUs", N | C),
+        row(ROTATERIGHT32, "__builtin_rotateright32", "UiUiUi", N | C),
+        row(ROTATERIGHT64, "__builtin_rotateright64", "ULiULiULi", N | C),
+        row(BCMP, "__builtin_bcmp", "ivC*vC*z", N),
+        row(WMEMCPY, "__builtin_wmemcpy", "w*w*wC*z", N),
+        row(WMEMMOVE, "__builtin_wmemmove", "w*w*wC*z", N),
+        row(MEMSET, "__builtin_memset", "v*v*iz", N),
+        row(MEMPCPY, "__builtin_mempcpy", "v*v*vC*z", N),
+    ];
+
+    /// The C library math functions ([c.math], C23 7.12) that are only
+    /// declared and called: never constant-evaluated by clang 19 (a call
+    /// in a constant expression is "subexpression not valid"), lowered to
+    /// a call of the library function the builtin names (`__builtin_sin`
+    /// -> `sin`; with clang's default `-fmath-errno` on Linux none of them
+    /// becomes an LLVM intrinsic). `frexp` is lowered to `llvm.frexp`.
+    pub const LIBM: &[Info] = &[
         row(EXP, "__builtin_exp", "dd", N),
         row(EXPF, "__builtin_expf", "ff", N),
         row(EXPL, "__builtin_expl", "LdLd", N),
@@ -2764,20 +3585,427 @@ pub mod builtin {
         row(SCALBLN, "__builtin_scalbln", "ddLi", N),
         row(SCALBLNF, "__builtin_scalblnf", "ffLi", N),
         row(SCALBLNL, "__builtin_scalblnl", "LdLdLi", N),
-        row(LAUNDER, "__builtin_launder", "v*v*", N | T),
-        row(OPERATOR_NEW, "__builtin_operator_new", "v*z", C | T),
-        row(OPERATOR_DELETE, "__builtin_operator_delete", "vv*", N | T),
-        row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
+        row(100, "__builtin_acos", "dd", N),
+        row(98, "__builtin_acosf", "ff", N),
+        row(108, "__builtin_acosh", "dd", N),
+        row(106, "__builtin_acoshf", "ff", N),
+        row(110, "__builtin_acoshl", "LdLd", N),
+        row(102, "__builtin_acosl", "LdLd", N),
+        row(135, "__builtin_asin", "dd", N),
+        row(133, "__builtin_asinf", "ff", N),
+        row(143, "__builtin_asinh", "dd", N),
+        row(141, "__builtin_asinhf", "ff", N),
+        row(145, "__builtin_asinhl", "LdLd", N),
+        row(137, "__builtin_asinl", "LdLd", N),
+        row(152, "__builtin_atan", "dd", N),
+        row(158, "__builtin_atan2", "ddd", N),
+        row(156, "__builtin_atan2f", "fff", N),
+        row(160, "__builtin_atan2l", "LdLdLd", N),
+        row(150, "__builtin_atanf", "ff", N),
+        row(167, "__builtin_atanh", "dd", N),
+        row(165, "__builtin_atanhf", "ff", N),
+        row(169, "__builtin_atanhl", "LdLd", N),
+        row(154, "__builtin_atanl", "LdLd", N),
+        row(293, "__builtin_cbrt", "dd", N | C),
+        row(291, "__builtin_cbrtf", "ff", N | C),
+        row(295, "__builtin_cbrtl", "LdLd", N | C),
+        row(378, "__builtin_cos", "dd", N),
+        row(376, "__builtin_cosf", "ff", N),
+        row(386, "__builtin_cosh", "dd", N),
+        row(384, "__builtin_coshf", "ff", N),
+        row(388, "__builtin_coshl", "LdLd", N),
+        row(380, "__builtin_cosl", "LdLd", N),
+        row(489, "__builtin_erf", "dd", N),
+        row(496, "__builtin_erfc", "dd", N),
+        row(494, "__builtin_erfcf", "ff", N),
+        row(498, "__builtin_erfcl", "LdLd", N),
+        row(487, "__builtin_erff", "ff", N),
+        row(491, "__builtin_erfl", "LdLd", N),
+        row(559, "__builtin_fdim", "ddd", N),
+        row(557, "__builtin_fdimf", "fff", N),
+        row(561, "__builtin_fdiml", "LdLdLd", N),
+        row(601, "__builtin_fmod", "ddd", N),
+        row(599, "__builtin_fmodf", "fff", N),
+        row(603, "__builtin_fmodl", "LdLdLd", N),
+        row(658, "__builtin_hypot", "ddd", N),
+        row(656, "__builtin_hypotf", "fff", N),
+        row(660, "__builtin_hypotl", "LdLdLd", N),
+        row(666, "__builtin_ilogb", "id", N),
+        row(664, "__builtin_ilogbf", "if", N),
+        row(668, "__builtin_ilogbl", "iLd", N),
+        row(767, "__builtin_lgamma", "dd", N),
+        row(765, "__builtin_lgammaf", "ff", N),
+        row(769, "__builtin_lgammal", "LdLd", N),
+        row(774, "__builtin_llrint", "LLid", N),
+        row(772, "__builtin_llrintf", "LLif", N),
+        row(776, "__builtin_llrintl", "LLiLd", N),
+        row(780, "__builtin_llround", "LLid", N),
+        row(778, "__builtin_llroundf", "LLif", N),
+        row(782, "__builtin_llroundl", "LLiLd", N),
+        row(788, "__builtin_log", "dd", N),
+        row(809, "__builtin_log10", "dd", N),
+        row(807, "__builtin_log10f", "ff", N),
+        row(811, "__builtin_log10l", "LdLd", N),
+        row(794, "__builtin_log1p", "dd", N),
+        row(792, "__builtin_log1pf", "ff", N),
+        row(796, "__builtin_log1pl", "LdLd", N),
+        row(801, "__builtin_log2", "dd", N),
+        row(799, "__builtin_log2f", "ff", N),
+        row(803, "__builtin_log2l", "LdLd", N),
+        row(819, "__builtin_logb", "dd", N),
+        row(817, "__builtin_logbf", "ff", N),
+        row(821, "__builtin_logbl", "LdLd", N),
+        row(786, "__builtin_logf", "ff", N),
+        row(790, "__builtin_logl", "LdLd", N),
+        row(827, "__builtin_lrint", "Lid", N),
+        row(825, "__builtin_lrintf", "Lif", N),
+        row(829, "__builtin_lrintl", "LiLd", N),
+        row(836, "__builtin_lround", "Lid", N),
+        row(834, "__builtin_lroundf", "Lif", N),
+        row(838, "__builtin_lroundl", "LiLd", N),
+        row(880, "__builtin_modf", "ddd*", N),
+        row(878, "__builtin_modff", "fff*", N),
+        row(882, "__builtin_modfl", "LdLdLd*", N),
+        row(912, "__builtin_nextafter", "ddd", N),
+        row(910, "__builtin_nextafterf", "fff", N),
+        row(914, "__builtin_nextafterl", "LdLdLd", N),
+        row(919, "__builtin_nexttoward", "ddLd", N),
+        row(917, "__builtin_nexttowardf", "ffLd", N),
+        row(921, "__builtin_nexttowardl", "LdLdLd", N),
+        row(1000, "__builtin_remainder", "ddd", N),
+        row(998, "__builtin_remainderf", "fff", N),
+        row(1002, "__builtin_remainderl", "LdLdLd", N),
+        row(1007, "__builtin_remquo", "dddi*", N),
+        row(1005, "__builtin_remquof", "fffi*", N),
+        row(1009, "__builtin_remquol", "LdLdLdi*", N),
+        row(1094, "__builtin_sin", "dd", N),
+        row(1092, "__builtin_sinf", "ff", N),
+        row(1102, "__builtin_sinh", "dd", N),
+        row(1100, "__builtin_sinhf", "ff", N),
+        row(1104, "__builtin_sinhl", "LdLd", N),
+        row(1096, "__builtin_sinl", "LdLd", N),
+        row(1117, "__builtin_sqrt", "dd", N),
+        row(1115, "__builtin_sqrtf", "ff", N),
+        row(1119, "__builtin_sqrtl", "LdLd", N),
+        row(1302, "__builtin_tan", "dd", N),
+        row(1300, "__builtin_tanf", "ff", N),
+        row(1310, "__builtin_tanh", "dd", N),
+        row(1308, "__builtin_tanhf", "ff", N),
+        row(1312, "__builtin_tanhl", "LdLd", N),
+        row(1304, "__builtin_tanl", "LdLd", N),
+        row(1320, "__builtin_tgamma", "dd", N),
+        row(1318, "__builtin_tgammaf", "ff", N),
+        row(1322, "__builtin_tgammal", "LdLd", N),
     ];
+
+    // ---- WP-154: atomic builtins (a separate block; see `atomic`) ----
+
+    /// The atomic builtins ([atomics], C11 7.17, GCC `__atomic`): the
+    /// operations with custom type-checking (`v.`, rebuilt by sema as an
+    /// `AtomicExpr`), then the fences, flag operations and lock-freedom
+    /// queries, which are ordinary calls.
+    pub const ATOMIC: &[Info] = &[
+        row(atomic::C11_INIT, "__c11_atomic_init", "v.", T),
+        row(atomic::C11_LOAD, "__c11_atomic_load", "v.", T),
+        row(atomic::C11_STORE, "__c11_atomic_store", "v.", T),
+        row(atomic::C11_EXCHANGE, "__c11_atomic_exchange", "v.", T),
+        row(atomic::C11_CMPXCHG_STRONG, "__c11_atomic_compare_exchange_strong", "v.", T),
+        row(atomic::C11_CMPXCHG_WEAK, "__c11_atomic_compare_exchange_weak", "v.", T),
+        row(atomic::C11_FETCH_ADD, "__c11_atomic_fetch_add", "v.", T),
+        row(atomic::C11_FETCH_SUB, "__c11_atomic_fetch_sub", "v.", T),
+        row(atomic::C11_FETCH_AND, "__c11_atomic_fetch_and", "v.", T),
+        row(atomic::C11_FETCH_OR, "__c11_atomic_fetch_or", "v.", T),
+        row(atomic::C11_FETCH_XOR, "__c11_atomic_fetch_xor", "v.", T),
+        row(atomic::C11_FETCH_NAND, "__c11_atomic_fetch_nand", "v.", T),
+        row(atomic::C11_FETCH_MAX, "__c11_atomic_fetch_max", "v.", T),
+        row(atomic::C11_FETCH_MIN, "__c11_atomic_fetch_min", "v.", T),
+        row(atomic::LOAD, "__atomic_load", "v.", T),
+        row(atomic::LOAD_N, "__atomic_load_n", "v.", T),
+        row(atomic::STORE, "__atomic_store", "v.", T),
+        row(atomic::STORE_N, "__atomic_store_n", "v.", T),
+        row(atomic::EXCHANGE, "__atomic_exchange", "v.", T),
+        row(atomic::EXCHANGE_N, "__atomic_exchange_n", "v.", T),
+        row(atomic::CMPXCHG, "__atomic_compare_exchange", "v.", T),
+        row(atomic::CMPXCHG_N, "__atomic_compare_exchange_n", "v.", T),
+        row(atomic::FETCH_ADD, "__atomic_fetch_add", "v.", T),
+        row(atomic::FETCH_SUB, "__atomic_fetch_sub", "v.", T),
+        row(atomic::FETCH_AND, "__atomic_fetch_and", "v.", T),
+        row(atomic::FETCH_OR, "__atomic_fetch_or", "v.", T),
+        row(atomic::FETCH_XOR, "__atomic_fetch_xor", "v.", T),
+        row(atomic::FETCH_NAND, "__atomic_fetch_nand", "v.", T),
+        row(atomic::FETCH_MAX, "__atomic_fetch_max", "v.", T),
+        row(atomic::FETCH_MIN, "__atomic_fetch_min", "v.", T),
+        row(atomic::ADD_FETCH, "__atomic_add_fetch", "v.", T),
+        row(atomic::SUB_FETCH, "__atomic_sub_fetch", "v.", T),
+        row(atomic::AND_FETCH, "__atomic_and_fetch", "v.", T),
+        row(atomic::OR_FETCH, "__atomic_or_fetch", "v.", T),
+        row(atomic::XOR_FETCH, "__atomic_xor_fetch", "v.", T),
+        row(atomic::NAND_FETCH, "__atomic_nand_fetch", "v.", T),
+        row(atomic::MAX_FETCH, "__atomic_max_fetch", "v.", T),
+        row(atomic::MIN_FETCH, "__atomic_min_fetch", "v.", T),
+        row(atomic::C11_THREAD_FENCE, "__c11_atomic_thread_fence", "vi", N),
+        row(atomic::C11_SIGNAL_FENCE, "__c11_atomic_signal_fence", "vi", N),
+        row(atomic::C11_IS_LOCK_FREE, "__c11_atomic_is_lock_free", "bz", N),
+        row(atomic::TEST_AND_SET, "__atomic_test_and_set", "bvD*i", N),
+        row(atomic::CLEAR, "__atomic_clear", "vvD*i", N),
+        row(atomic::THREAD_FENCE, "__atomic_thread_fence", "vi", N),
+        row(atomic::SIGNAL_FENCE, "__atomic_signal_fence", "vi", N),
+        row(atomic::ALWAYS_LOCK_FREE, "__atomic_always_lock_free", "bzvCD*", N),
+        row(atomic::IS_LOCK_FREE, "__atomic_is_lock_free", "bzvCD*", N),
+    ];
+
+    /// The atomic builtins' ids (clang 19 `Builtin::ID`s) and the
+    /// classification of the `AtomicExpr` operations (clang's
+    /// `AtomicExpr::AtomicOp` and `Sema::BuildAtomicExpr`). Every
+    /// operation id is below 256: an `AtomicExpr` stores it in `aux`.
+    #[allow(missing_docs, reason = "the ids are named after the builtins")]
+    pub mod atomic {
+        pub const ADD_FETCH: u32 = 1;
+        pub const AND_FETCH: u32 = 2;
+        pub const CMPXCHG: u32 = 3;
+        pub const CMPXCHG_N: u32 = 4;
+        pub const EXCHANGE: u32 = 5;
+        pub const EXCHANGE_N: u32 = 6;
+        pub const FETCH_ADD: u32 = 7;
+        pub const FETCH_AND: u32 = 8;
+        pub const FETCH_MAX: u32 = 9;
+        pub const FETCH_MIN: u32 = 10;
+        pub const FETCH_NAND: u32 = 11;
+        pub const FETCH_OR: u32 = 12;
+        pub const FETCH_SUB: u32 = 13;
+        pub const FETCH_XOR: u32 = 14;
+        pub const LOAD: u32 = 15;
+        pub const LOAD_N: u32 = 16;
+        pub const MAX_FETCH: u32 = 17;
+        pub const MIN_FETCH: u32 = 18;
+        pub const NAND_FETCH: u32 = 19;
+        pub const OR_FETCH: u32 = 20;
+        pub const STORE: u32 = 21;
+        pub const STORE_N: u32 = 22;
+        pub const SUB_FETCH: u32 = 23;
+        pub const XOR_FETCH: u32 = 24;
+        pub const C11_CMPXCHG_STRONG: u32 = 25;
+        pub const C11_CMPXCHG_WEAK: u32 = 26;
+        pub const C11_EXCHANGE: u32 = 27;
+        pub const C11_FETCH_ADD: u32 = 28;
+        pub const C11_FETCH_AND: u32 = 29;
+        pub const C11_FETCH_MAX: u32 = 30;
+        pub const C11_FETCH_MIN: u32 = 31;
+        pub const C11_FETCH_NAND: u32 = 32;
+        pub const C11_FETCH_OR: u32 = 33;
+        pub const C11_FETCH_SUB: u32 = 34;
+        pub const C11_FETCH_XOR: u32 = 35;
+        pub const C11_INIT: u32 = 36;
+        pub const C11_LOAD: u32 = 37;
+        pub const C11_STORE: u32 = 38;
+        pub const ALWAYS_LOCK_FREE: u32 = 172;
+        pub const CLEAR: u32 = 173;
+        pub const IS_LOCK_FREE: u32 = 174;
+        pub const SIGNAL_FENCE: u32 = 175;
+        pub const TEST_AND_SET: u32 = 176;
+        pub const THREAD_FENCE: u32 = 177;
+        pub const C11_IS_LOCK_FREE: u32 = 234;
+        pub const C11_SIGNAL_FENCE: u32 = 235;
+        pub const C11_THREAD_FENCE: u32 = 236;
+
+        /// The argument shape of an operation (clang's `BuildAtomicExpr`
+        /// `Form`).
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Form {
+            Init,
+            /// `(ptr, order)`.
+            Load,
+            /// `__atomic_load(ptr, ret, order)`.
+            LoadCopy,
+            /// A store: `(ptr, val, order)`.
+            Copy,
+            /// A read-modify-write: `(ptr, val, order)`.
+            Arithmetic,
+            /// `(ptr, val, order)`, returning the old value.
+            Xchg,
+            /// `__atomic_exchange(ptr, val, ret, order)`.
+            GnuXchg,
+            /// `(ptr, expected, desired, success, failure)`.
+            C11CmpXchg,
+            /// `(ptr, expected, desired, weak, success, failure)`.
+            GnuCmpXchg,
+        }
+
+        impl Form {
+            /// The number of arguments (clang's `NumArgs`).
+            pub fn num_args(self) -> usize {
+                match self {
+                    Form::Init | Form::Load => 2,
+                    Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => 3,
+                    Form::GnuXchg => 4,
+                    Form::C11CmpXchg => 5,
+                    Form::GnuCmpXchg => 6,
+                }
+            }
+
+            /// The number of value operands (clang's `NumVals`).
+            pub fn num_vals(self) -> usize {
+                match self {
+                    Form::Load => 0,
+                    Form::Init | Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => 1,
+                    Form::GnuXchg | Form::C11CmpXchg => 2,
+                    Form::GnuCmpXchg => 3,
+                }
+            }
+
+            /// The number of operands of the `AtomicExpr` (clang's
+            /// `getNumSubExprs`): `ptr`, the orders, the values, `weak`.
+            pub fn num_sub_exprs(self) -> usize {
+                self.num_args()
+            }
+
+            /// For each argument in source order, the index of the
+            /// `AtomicExpr` operand it became (the inverse of clang's
+            /// `SubExprs` permutation).
+            pub fn arg_to_sub(self) -> &'static [usize] {
+                match self {
+                    Form::Init | Form::Load => &[0, 1],
+                    Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => &[0, 2, 1],
+                    Form::GnuXchg => &[0, 2, 3, 1],
+                    Form::C11CmpXchg => &[0, 2, 4, 1, 3],
+                    Form::GnuCmpXchg => &[0, 2, 4, 5, 1, 3],
+                }
+            }
+        }
+
+        /// The read-modify-write operation of an `Arithmetic` form.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Rmw {
+            Add,
+            Sub,
+            And,
+            Or,
+            Xor,
+            Nand,
+            Max,
+            Min,
+        }
+
+        /// Whether `id` is an `AtomicExpr` operation.
+        pub fn is_op(id: u32) -> bool {
+            (1..=38).contains(&id)
+        }
+
+        /// The form of operation `id`.
+        pub fn form(id: u32) -> Option<Form> {
+            Some(match id {
+                C11_INIT => Form::Init,
+                C11_LOAD | LOAD_N => Form::Load,
+                LOAD => Form::LoadCopy,
+                C11_STORE | STORE | STORE_N => Form::Copy,
+                C11_EXCHANGE | EXCHANGE_N => Form::Xchg,
+                EXCHANGE => Form::GnuXchg,
+                C11_CMPXCHG_STRONG | C11_CMPXCHG_WEAK => Form::C11CmpXchg,
+                CMPXCHG | CMPXCHG_N => Form::GnuCmpXchg,
+                _ if rmw(id).is_some() => Form::Arithmetic,
+                _ => return None,
+            })
+        }
+
+        /// The read-modify-write of operation `id`, and whether it yields
+        /// the new value (`__atomic_<op>_fetch`) rather than the old.
+        pub fn rmw(id: u32) -> Option<(Rmw, bool)> {
+            Some(match id {
+                C11_FETCH_ADD | FETCH_ADD => (Rmw::Add, false),
+                C11_FETCH_SUB | FETCH_SUB => (Rmw::Sub, false),
+                C11_FETCH_AND | FETCH_AND => (Rmw::And, false),
+                C11_FETCH_OR | FETCH_OR => (Rmw::Or, false),
+                C11_FETCH_XOR | FETCH_XOR => (Rmw::Xor, false),
+                C11_FETCH_NAND | FETCH_NAND => (Rmw::Nand, false),
+                C11_FETCH_MAX | FETCH_MAX => (Rmw::Max, false),
+                C11_FETCH_MIN | FETCH_MIN => (Rmw::Min, false),
+                ADD_FETCH => (Rmw::Add, true),
+                SUB_FETCH => (Rmw::Sub, true),
+                AND_FETCH => (Rmw::And, true),
+                OR_FETCH => (Rmw::Or, true),
+                XOR_FETCH => (Rmw::Xor, true),
+                NAND_FETCH => (Rmw::Nand, true),
+                MAX_FETCH => (Rmw::Max, true),
+                MIN_FETCH => (Rmw::Min, true),
+                _ => return None,
+            })
+        }
+
+        /// Whether operation `id` is a `__c11_atomic_*` one (its pointer
+        /// operand points to an `_Atomic` type).
+        pub fn is_c11(id: u32) -> bool {
+            (25..=38).contains(&id)
+        }
+
+        /// Whether operation `id` is a GNU `_n` form or a C11 form (values
+        /// passed by value; the other GNU forms pass them by address).
+        pub fn by_value(id: u32) -> bool {
+            !matches!(id, LOAD | STORE | EXCHANGE | CMPXCHG)
+        }
+
+        /// The clang spelling of operation `id` without its leading `__`
+        /// (the `AtomicExpr` dump does not print it; diagnostics may).
+        pub fn name(id: u32) -> &'static str {
+            super::info(id).map_or("", |i| i.name)
+        }
+
+        /// Whether `id` is a `__c11_atomic_compare_exchange_weak` (weak
+        /// by name; the GNU forms carry a `weak` operand).
+        pub fn is_c11_weak(id: u32) -> bool {
+            id == C11_CMPXCHG_WEAK
+        }
+    }
+
+    // ---- end WP-154 ----
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
-        ALL.iter().find(|e| e.name == name).map(|e| e.id)
+        ALL.iter()
+            .chain(INT_MEM)
+            .chain(LIBM)
+            .chain(ATOMIC)
+            .chain(CORO)
+            .find(|e| e.name == name)
+            .map(|e| e.id)
     }
 
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
-        ALL.iter().find(|e| e.id == id)
+        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).chain(CORO).find(|e| e.id == id)
+    }
+
+    /// The parameters of builtin `id` that must be integer constant
+    /// expressions (an `I` prefix in its signature), as a bit mask by
+    /// parameter index (clang `ASTContext::GetBuiltinType`'s
+    /// `IntegerConstantArgs`).
+    pub fn ice_params(id: u32) -> u32 {
+        let Some(e) = info(id) else { return 0 };
+        let (mut mask, mut idx, mut ice) = (0u32, 0i32, false);
+        for &c in e.sig.as_bytes() {
+            match c {
+                b'I' => ice = true,
+                b'U' | b'L' | b'C' | b'D' | b'*' | b'&' => {}
+                b'.' => break,
+                _ => {
+                    if ice && idx > 0 {
+                        mask |= 1 << (idx - 1);
+                    }
+                    ice = false;
+                    idx += 1;
+                }
+            }
+        }
+        mask
+    }
+
+    /// Whether builtin `id` is a [`CORO`] builtin.
+    pub fn is_coro(id: u32) -> bool {
+        CORO.iter().any(|e| e.id == id)
+    }
+
+    /// Whether builtin `id` is a [`LIBM`] function.
+    pub fn is_libm(id: u32) -> bool {
+        LIBM.iter().any(|e| e.id == id)
     }
 
     /// Whether builtin `id` has custom type-checking.

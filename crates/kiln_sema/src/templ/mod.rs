@@ -17,8 +17,10 @@ pub mod builtins;
 pub mod class;
 pub mod concepts;
 pub mod ctad;
+mod ctad_site;
 pub mod deduce;
 pub mod deduce_call;
+mod default_args;
 mod equiv;
 pub mod funcs;
 pub mod member;
@@ -35,10 +37,10 @@ pub mod var;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::{ArgListId, TemplateParamListId};
 use kiln_ast::names::DeclName;
-use kiln_ast::templates::is_template_kind;
+use kiln_ast::templates::{SpecKind, is_template_kind};
 use kiln_ast::types::TemplateArg;
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{DiagId, FixIt};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
@@ -64,6 +66,43 @@ pub(crate) struct HeadBuild {
     invented: bool,
 }
 
+/// What a class of an out-of-line declaration's qualifier expects of
+/// the template headers ([`Sema::scope_slots`]).
+#[derive(Clone, Copy, Debug)]
+enum ScopeSlot {
+    /// A class template's or partial specialization's parameter list.
+    Params(TemplateParamListId),
+    /// `template<>`, for this implicitly instantiated specialization.
+    Empty(DeclId),
+}
+
+impl Sema<'_, '_> {
+    /// Takes the innermost head for the declaration about to be created
+    /// (a generic lambda's call operator, whose head is always its own).
+    pub(crate) fn take_innermost_head(&mut self) {
+        if let Some(h) = self.templ.heads.last_mut() {
+            h.taken = true;
+            self.templ.cur = h.list;
+        }
+    }
+}
+
+impl HeadBuild {
+    /// A written head whose list starts at `l_angle` (a lambda's
+    /// *template-parameter-list*, which has no `template` keyword).
+    pub(crate) fn explicit(l_angle: Loc, depth: u16) -> Self {
+        HeadBuild {
+            template_loc: Loc::INVALID,
+            l_angle,
+            depth,
+            params: Vec::new(),
+            list: None,
+            taken: false,
+            invented: false,
+        }
+    }
+}
+
 /// The template state of [`Sema`] (spec/sema-templates.md §11.2; the
 /// engine's `InstState` is WP-070's).
 #[derive(Clone, Debug, Default)]
@@ -73,6 +112,15 @@ pub struct TemplState {
     /// `EnteringContext`): `X<P...>::` names the current instantiation
     /// even outside `X`'s definition ([temp.mem]/1, out-of-line members).
     pub(crate) entering_context: bool,
+    /// The last [`Sema::take_template_head`] diagnosed a head matching an
+    /// implicitly instantiated class of the qualifier
+    /// ([`DiagId::sema_template_params_for_non_template`]): the
+    /// declaration is invalid.
+    pub(crate) head_mismatch: bool,
+    /// Where each partial specialization declared before its definition
+    /// was defined: the redefinition note points there (kiln reuses the
+    /// first declaration, clang adds a redeclaration).
+    pub(crate) partial_def_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The head consumed by the declaration being built: its pattern is
     /// wrapped in a template decl by [`Sema::finish_template_pattern`].
     pub(crate) cur: Option<TemplateParamListId>,
@@ -116,10 +164,48 @@ pub struct TemplState {
     /// The `...` of each fold-expression (clang `CXXFoldExpr::EllipsisLoc`;
     /// the AST node stores only the parentheses).
     pub(crate) fold_ellipsis: kiln_source::fx::FxHashMap<ExprId, Loc>,
+    /// The designators of a dependent braced-init-list's clauses, by
+    /// clause position (an `InitListExpr` of type `void` stores only the
+    /// clauses; [`Sema::dependent_init_list`]). Absent when no clause is
+    /// designated.
+    pub(crate) init_designators:
+        kiln_source::fx::FxHashMap<ExprId, Vec<Vec<crate::init::Designator>>>,
     /// The dependent-scope marker of dependent `decltype(e)::` qualifiers
     /// (an unlinked alias of `<dependent type>`, created on first use;
     /// [`Sema::act_on_nested_name_decltype`]).
     pub(crate) decltype_scope: Option<DeclId>,
+    /// The object scope of a nested-name-specifier after `.`/`->`
+    /// ([basic.lookup.qual.general]/2, WP-121): its first component is
+    /// looked up in the object's class before the expression's context.
+    /// Set by [`Sema::begin_member_qualifier`], taken by the first
+    /// component.
+    pub(crate) member_scope: Option<MemberScope>,
+    /// The implicit deduction guides of each class template (first
+    /// declaration), formed on first use ([over.match.class.deduct]/1).
+    pub(crate) ctad_guides: kiln_source::fx::FxHashMap<DeclId, Vec<DeclId>>,
+    /// What each implicit guide among them (template decl) was formed
+    /// from ([over.match.class.deduct]/1, [over.match.best.general]/2.12-13).
+    pub(crate) ctad_origin: kiln_source::fx::FxHashMap<DeclId, ctad::GuideOrigin>,
+    /// Each guide formed for an alias template from a guide of the
+    /// template it aliases ([over.match.class.deduct]/3, P1814): the
+    /// alias template and its defining-type-id.
+    pub(crate) ctad_alias: kiln_source::fx::FxHashMap<DeclId, (DeclId, QualType)>,
+    /// The guide formed for (alias template, source guide), if any.
+    pub(crate) ctad_alias_cache: kiln_source::fx::FxHashMap<(DeclId, DeclId), Option<DeclId>>,
+    /// The `using` keyword of each alias declaration in a template:
+    /// where clang declares the guides formed for an alias template.
+    pub(crate) alias_using_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
+}
+
+/// The class an object expression names for the lookup of the first
+/// component of a member access's qualifier.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MemberScope {
+    /// The object's (complete) class.
+    Class(DeclId),
+    /// A type-dependent object: a name not found in the context is
+    /// a dependent member of the object's type.
+    Dependent,
 }
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).
@@ -178,6 +264,15 @@ pub struct InstState {
     pub(crate) stack_exhausted: std::cell::Cell<bool>,
     /// Concepts and constraints (§8): normal forms, satisfaction caches.
     pub concepts: concepts::ConceptState,
+    /// [temp.inst]/12: default arguments of instantiated functions not
+    /// instantiated yet, by parameter: the pattern function and its
+    /// parameter whose default argument is substituted at the first use
+    /// (`default_args.rs`).
+    pub(crate) lazy_defaults: kiln_source::fx::FxHashMap<DeclId, (DeclId, DeclId)>,
+    /// The `vector_size` / `ext_vector_type` attribute location of a
+    /// dependent vector type, by its size operand: clang diagnoses a
+    /// substitution at the attribute, which the type does not keep.
+    pub(crate) vector_attr_locs: kiln_source::fx::FxHashMap<ExprId, Loc>,
 }
 
 impl Sema<'_, '_> {
@@ -238,6 +333,14 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_template_decl(&mut self) {
         if let Some(i) = self.scopes.iter().rposition(|s| s.kind == ScopeKind::TemplateParams) {
             self.scopes.truncate(i);
+        }
+        // The invented head of an out-of-line member's abbreviated
+        // function template sits above the class template's head
+        // ([`Sema::act_on_invented_template_param`]); it ends first.
+        while self.templ.heads.last().is_some_and(|h| h.invented) {
+            self.templ.heads.pop();
+            self.ast.templates.dependent_depth =
+                self.ast.templates.dependent_depth.saturating_sub(1);
         }
         self.templ.heads.pop();
         self.ast.templates.dependent_depth = self.ast.templates.dependent_depth.saturating_sub(1);
@@ -310,10 +413,16 @@ impl Sema<'_, '_> {
         kw_loc: Loc,
         pack: bool,
         name: Option<(Symbol, Loc)>,
+        at: Loc,
     ) -> DeclId {
-        let h = self.param_head(name, kw_loc);
+        let h = self.param_head(name, at);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_type_parm(h, depth, index, pack, typename_kw);
+        // Its first token, the key or the type-constraint (clang's
+        // `getBeginLoc`; redeclaration diagnostics point there).
+        if kw_loc != h.loc {
+            let _ = self.ast.decls.cold.begin_loc.insert(p, kw_loc);
+        }
         self.push_template_param(p, name);
         p
     }
@@ -327,9 +436,9 @@ impl Sema<'_, '_> {
         cargs: &[TemplateArg],
         loc: Loc,
         pack: bool,
-        name: Option<(Symbol, Loc)>,
+        (name, at): (Option<(Symbol, Loc)>, Loc),
     ) -> DeclId {
-        let p = self.act_on_type_template_param(false, loc, pack, name);
+        let p = self.act_on_type_template_param(false, loc, pack, name, at);
         let ty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let mut c = self.immediately_declared_constraint(concept, ty, cargs, loc);
         if pack {
@@ -408,12 +517,12 @@ impl Sema<'_, '_> {
         &mut self,
         params: TemplateParamListId,
         typename_kw: bool,
-        kw_loc: Loc,
         pack: bool,
         name: Option<(Symbol, Loc)>,
+        at: Loc,
     ) -> DeclId {
         self.act_on_finish_template_decl();
-        let h = self.param_head(name, kw_loc);
+        let h = self.param_head(name, at);
         let (depth, index) = (self.cur_depth(), self.next_param_index());
         let p = self.builder().template_template_parm(h, params, depth, index, pack, typename_kw);
         self.push_template_param(p, name);
@@ -548,6 +657,7 @@ impl Sema<'_, '_> {
         qualifier: Option<DeclId>,
     ) -> Option<TemplateParamListId> {
         self.templ.cur = None;
+        self.templ.head_mismatch = false;
         // The untaken heads directly around this declaration.
         let mut open = Vec::new();
         for (i, h) in self.templ.heads.iter().enumerate().rev() {
@@ -560,11 +670,42 @@ impl Sema<'_, '_> {
         if open.is_empty() {
             return None;
         }
-        let consumed = self.match_template_lists_to_scope(qualifier);
-        let mut it = open.iter().copied();
-        for _ in 0..consumed {
-            if let Some(i) = it.next() {
-                self.templ.heads[i].taken = true;
+        let check_empty = self.checks_member_spec_headers();
+        let mut it = open.iter().copied().peekable();
+        for slot in self.scope_slots(qualifier) {
+            match slot {
+                ScopeSlot::Params(expected) => {
+                    let Some(i) = it.next() else { break };
+                    self.templ.heads[i].taken = true;
+                    // [temp.mem]/1: each head equivalent to its class
+                    // template's (clang's `TemplateParameterListsAreEqual`
+                    // in `MatchTemplateParametersToScopeSpecifier`).
+                    if let Some(list) = self.templ.heads[i].list
+                        && !self.templ.heads[i].invented
+                    {
+                        let _ = self.check_template_heads_match(list, expected);
+                    }
+                }
+                ScopeSlot::Empty(class) if check_empty => {
+                    let Some(&i) = it.peek() else { break };
+                    if self.templ.heads[i].invented {
+                        break;
+                    }
+                    // [temp.expl.spec]/15: only `template<>` matches an
+                    // implicitly instantiated class (clang's
+                    // `err_template_param_list_matches_nontemplate`).
+                    let loc = self.templ.heads[i].template_loc;
+                    let d = self
+                        .diag(DiagId::sema_template_params_for_non_template, loc)
+                        .arg(self.ty_arg(self.tag_type(class)));
+                    self.emit(d);
+                    for &j in &open {
+                        self.templ.heads[j].taken = true;
+                    }
+                    self.templ.head_mismatch = true;
+                    return None;
+                }
+                ScopeSlot::Empty(_) => {}
             }
         }
         let rest: Vec<usize> = it.collect();
@@ -583,27 +724,100 @@ impl Sema<'_, '_> {
 
     /// How many template parameter lists the qualifier of an out-of-line
     /// declaration accounts for: one per class template (pattern) or
-    /// partial specialization on its context chain that is not already open (clang's
+    /// class template partial specialization on its context chain that is not already open (clang's
     /// `MatchTemplateParametersToScopeSpecifier`, [temp.mem]/1). Explicit
     /// specializations (`template<>`) are not matched yet (WP-070a).
     pub fn match_template_lists_to_scope(&self, qualifier: Option<DeclId>) -> usize {
-        let Some(mut c) = qualifier else { return 0 };
-        let mut n = 0;
+        self.scope_slots(qualifier).iter().filter(|s| matches!(s, ScopeSlot::Params(_))).count()
+    }
+
+    /// The template headers the classes of qualifier `qualifier` expect,
+    /// outermost first (clang's `MatchTemplateParametersToScopeSpecifier`):
+    /// a class template (pattern) or partial specialization not already
+    /// open expects its parameter list, an implicitly instantiated (or
+    /// explicitly instantiated) specialization `template<>`. The walk
+    /// stops at an explicit specialization, whose members are declared
+    /// as those of an ordinary class ([temp.expl.spec]/4).
+    fn scope_slots(&self, qualifier: Option<DeclId>) -> Vec<ScopeSlot> {
+        let Some(mut c) = qualifier else { return Vec::new() };
+        let mut slots = Vec::new();
         for _ in 0..1024 {
-            let first = self.ast.first(c);
             if self.kind_of(c) == DeclKind::CXXRecord
-                && (self.ast.described_template(first).is_some()
-                    || self.ast.partial_spec_info(first).is_some())
                 && !self.defining.iter().any(|&d| self.ast.first(d) == self.ast.first(c))
             {
-                n += 1;
+                let first = self.ast.first(c);
+                let list = match self.ast.described_template(first) {
+                    Some(t) => self.ast.template_info(t).map(|i| i.params),
+                    None => self.ast.partial_spec_info(first).map(|(_, p)| p.params),
+                };
+                if let Some(list) = list {
+                    slots.push(ScopeSlot::Params(list));
+                } else if let Some((_, info)) = self.ast.spec_info(first) {
+                    if info.kind == SpecKind::ExplicitSpecialization {
+                        break;
+                    }
+                    slots.push(ScopeSlot::Empty(c));
+                }
             }
             match self.ast.decls.get(c).ctx() {
                 Some(p) => c = p,
                 None => break,
             }
         }
-        n
+        slots.reverse();
+        slots
+    }
+
+    /// Whether the declaration being declared matches `template<>`
+    /// headers to the implicitly instantiated classes of its qualifier:
+    /// one at namespace scope, not after `template<>` or an explicit
+    /// instantiation's `template` (those forms are matched elsewhere).
+    fn checks_member_spec_headers(&self) -> bool {
+        self.templ.explicit_spec.is_none()
+            && self.templ.explicit_inst.is_none()
+            && matches!(self.kind_of(self.ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
+    }
+
+    /// `void A<int>::f() {}` at namespace scope: a member of an implicitly
+    /// instantiated specialization is explicitly specialized only after
+    /// `template<>` ([temp.expl.spec]/1; clang's
+    /// `err_template_spec_needs_header` from
+    /// `MatchTemplateParametersToScopeSpecifier`). A head left for that
+    /// class is diagnosed by [`Self::take_template_head`] instead.
+    pub(crate) fn check_member_spec_header(
+        &mut self,
+        qualifier: Option<DeclId>,
+        name_loc: Loc,
+        start: Loc,
+    ) {
+        if !self.checks_member_spec_headers() {
+            return;
+        }
+        let mut heads =
+            self.templ.heads.iter().rev().take_while(|h| !h.taken).filter(|h| !h.invented).count();
+        for slot in self.scope_slots(qualifier) {
+            match slot {
+                ScopeSlot::Params(_) => heads = heads.saturating_sub(1),
+                ScopeSlot::Empty(_) if heads > 0 => return,
+                ScopeSlot::Empty(_) => {
+                    let d = self
+                        .diag(DiagId::sema_template_spec_needs_header, name_loc)
+                        .fixit(FixIt::insert(start, "template<> "));
+                    self.emit(d);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// "previous definition is here" on partial specialization `p`'s
+    /// definition ([`TemplState::partial_def_loc`]).
+    pub(crate) fn note_prev_partial_def(&self, msg: kiln_diag::Diag, p: DeclId) -> kiln_diag::Diag {
+        let loc = match self.templ.partial_def_loc.get(&p) {
+            Some(&l) => l,
+            None => self.ast.decls.get(self.ast.definition(p).unwrap_or(p)).loc(),
+        };
+        msg.with_note(self.diag(DiagId::note_previous_definition, loc))
     }
 
     /// Called right before the builder creates the declaration a head
@@ -636,7 +850,20 @@ impl Sema<'_, '_> {
         // with an equivalent head (alias templates are checked by
         // `act_on_typedef`, function templates with other heads are
         // overloads).
-        let old = prev.and_then(|t| self.ast.template_info(t)).map(|i| i.params);
+        // A friend class template in a dependent context (`template<C U>
+        // friend class X;` in a class template) is compared with neither
+        // side here: its head is deeper than the namespace scope
+        // template's and may name the enclosing parameters (clang's
+        // `CheckClassTemplate`). A friend redeclaration is compared when
+        // the enclosing class is instantiated (`check_friend_class_head`).
+        let dependent_friend = kind == DeclKind::ClassTemplate
+            && self.ast.decls.get(pattern).misc().friend() != kiln_ast::decl::FriendKind::None
+            && self.ast.templates.param_list(list).depth > 0;
+        let old = prev
+            .filter(|_| !dependent_friend)
+            .and_then(|t| self.head_comparable_decl(t))
+            .and_then(|t| self.ast.template_info(t))
+            .map(|i| i.params);
         let heads_match = match old {
             Some(old) if matches!(kind, DeclKind::ClassTemplate | DeclKind::VarTemplate) => {
                 self.check_template_heads_match(list, old)
@@ -647,7 +874,88 @@ impl Sema<'_, '_> {
             self.check_template_param_list(kind, list, prev);
         }
         let t = self.builder().template_decl(kind, pattern, list, prev);
+        if prev.is_some() {
+            self.merge_template_defaults(t);
+        }
         Some(t)
+    }
+
+    /// Shares the default template arguments across the declarations of
+    /// template `t` ([temp.param]/12: the defaults available are the
+    /// union of those of all declarations), recording each one for the
+    /// parameters at its position that have none of their own.
+    fn merge_template_defaults(&mut self, t: DeclId) {
+        let Some(p) = self.pattern_of(t) else { return };
+        let lists: Vec<Vec<DeclId>> = self
+            .ast
+            .redecls_of(p)
+            .filter_map(|x| self.ast.described_template(x))
+            .map(|x| self.template_params(x))
+            .collect();
+        let n = lists.iter().map(Vec::len).max().unwrap_or(0);
+        for i in 0..n {
+            // Inherited ones too: a redeclaration that created no decl
+            // ([`Sema::inherit_redeclared_defaults`]).
+            let any = |q: &DeclId| self.template_default(*q);
+            let Some(a) = lists.iter().find_map(|l| l.get(i).and_then(any)) else { continue };
+            for l in &lists {
+                if let Some(&q) = l.get(i)
+                    && self.template_default(q).is_none()
+                {
+                    self.inherited_defaults.insert(q, a);
+                }
+            }
+        }
+    }
+
+    /// Records the default arguments of a class template redeclaration
+    /// that creates no decl (`template <class T = int> class X;` after
+    /// `template <class T> class X;`) for every declaration of template
+    /// `t` whose parameter at that position has none ([temp.param]/12).
+    pub(crate) fn inherit_redeclared_defaults(&mut self, t: DeclId, list: TemplateParamListId) {
+        let Some(p) = self.pattern_of(t) else { return };
+        let new: Vec<DeclId> =
+            self.ast.lists.iter::<DeclId>(self.ast.templates.param_list(list).params).collect();
+        let lists: Vec<Vec<DeclId>> = self
+            .ast
+            .redecls_of(p)
+            .filter_map(|x| self.ast.described_template(x))
+            .map(|x| self.template_params(x))
+            .collect();
+        for (i, &q) in new.iter().enumerate() {
+            let Some(a) = self.ast.templates.defaults.get(q).copied() else { continue };
+            for l in &lists {
+                if let Some(&o) = l.get(i)
+                    && self.template_default(o).is_none()
+                {
+                    self.inherited_defaults.insert(o, a);
+                }
+            }
+        }
+    }
+
+    /// The declaration of template `t` whose parameters stand for the
+    /// template: its definition's, else the first one that is not a
+    /// friend declaration, else the first. A friend redeclaration nested
+    /// in a class template has deeper parameters (libc++
+    /// `template <class _CharT, class _Traits, class _Alloc> friend class
+    /// basic_string;` in `__wrap_iter`, which may come first), and can have
+    /// no default arguments ([temp.param]/12).
+    pub(crate) fn head_template(&self, t: DeclId) -> DeclId {
+        let first = self.ast.first(t);
+        let Some(p) = self.pattern_of(t) else { return first };
+        if let Some(d) = self.ast.definition(p).and_then(|d| self.ast.described_template(d)) {
+            return d;
+        }
+        let mut head = first;
+        for x in self.ast.redecls_of(p) {
+            if self.ast.decls.get(x).misc().friend() == kiln_ast::decl::FriendKind::None
+                && let Some(d) = self.ast.described_template(x)
+            {
+                head = d;
+            }
+        }
+        head
     }
 
     /// The template decl `d` (a template, or the pattern of one) is part
@@ -711,18 +1019,34 @@ impl Sema<'_, '_> {
     /// contains `auto` ([dcl.fct]/22): added to the innermost open head,
     /// or to a new invented head one level deeper when the function has
     /// none. Returns its type; `constraint` is the type-constraint `C` of
-    /// `C auto` with its extra arguments.
+    /// `C auto` with its extra arguments. `qualifier` is the function
+    /// declarator's: the heads its class templates account for
+    /// (`template<class T> void A<T>::f(C auto)`, [temp.mem]/1) are not
+    /// the function's own, which is then invented ([dcl.fct]/22).
     pub fn act_on_invented_template_param(
         &mut self,
         loc: Loc,
         pack: bool,
         constraint: Option<(DeclId, Vec<TemplateArg>, Loc)>,
         param_name: Option<Symbol>,
+        qualifier: Option<DeclId>,
     ) -> QualType {
         // An explicit head is open once its list is built; an invented one
         // collects every `auto` parameter of the declarator.
-        let needs_new =
-            self.templ.heads.last().is_none_or(|h| h.taken || (!h.invented && h.list.is_none()));
+        let scope_heads = || {
+            let open = self
+                .templ
+                .heads
+                .iter()
+                .rev()
+                .take_while(|h| !h.taken)
+                .filter(|h| !h.invented)
+                .count();
+            open <= self.match_template_lists_to_scope(qualifier)
+        };
+        let needs_new = self.templ.heads.last().is_none_or(|h| {
+            h.taken || (!h.invented && (h.list.is_none() || qualifier.is_some() && scope_heads()))
+        });
         if needs_new {
             let depth = self.template_depth();
             self.templ.heads.push(HeadBuild {
@@ -827,7 +1151,12 @@ impl Sema<'_, '_> {
 
     /// The default argument recorded for template parameter `p`.
     pub fn template_default(&self, p: DeclId) -> Option<TemplateArg> {
-        self.ast.templates.defaults.get(p).copied()
+        self.ast
+            .templates
+            .defaults
+            .get(p)
+            .copied()
+            .or_else(|| self.inherited_defaults.get(&p).copied())
     }
 
     /// A declarator-id that is a template-id `tmpl<args>` naming the

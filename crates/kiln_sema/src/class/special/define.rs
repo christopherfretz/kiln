@@ -13,8 +13,8 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
-    BaseSpec, CtorInit, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, FnSpec,
-    FnStorage, LinkageLang, builtin,
+    Access, BaseSpec, CtorInit, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits,
+    FnSpec, FnStorage, LinkageLang, builtin,
 };
 use kiln_ast::expr::{
     BinaryOp, CastKind, ConstructInfo, ConstructionKind, ExprFlags, ExprKind, NonOdrUse, Radix,
@@ -31,6 +31,7 @@ use super::SpecialKind;
 use super::deletion::Selected;
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
+use crate::type_diff::DiffArgs as _;
 
 /// An implicit special member being defined (clang's
 /// `CodeSynthesisContext::DefiningSynthesizedFunction`).
@@ -52,6 +53,9 @@ pub(crate) enum SynthKind {
     Special(SpecialKind),
     /// A defaulted comparison operator ([class.compare.default]).
     Comparison(crate::class::compare::CmpKind),
+    /// An inheriting constructor ([class.inhctor.init]; clang prints no
+    /// note for it).
+    Inheriting,
 }
 
 /// How a constructor initializes the subobjects it has no
@@ -112,6 +116,10 @@ pub(crate) enum DeletedAs {
     /// ("conversion function from ... invokes a deleted function"), with
     /// the note on the parameter the argument initializes, if any.
     Conversion(Option<Diag>),
+    /// The [dcl.init.ref]/5.4.1 temporary of a non-class initializer
+    /// ("attempt to use a deleted function", clang's ICS-performed
+    /// conversion).
+    Use,
 }
 
 /// The call a selected constructor makes: its arguments and the form
@@ -128,6 +136,9 @@ pub(crate) struct CtorCall<'a> {
     /// A `CXXTemporaryObjectExpr` ending at this location (`T(a, b)`,
     /// `T{...}`); otherwise a `CXXConstructExpr`.
     pub temp_end: Option<Loc>,
+    /// The `)` of a parenthesized initializer of a `CXXConstructExpr`
+    /// (`T x(a)`): kept so instantiation redoes it as written.
+    pub rparen: Option<Loc>,
     /// Converted arguments of non-class type are checked for narrowing
     /// (list-initialization, [dcl.init.list]/3.7).
     pub narrowing: bool,
@@ -143,6 +154,7 @@ impl<'a> CtorCall<'a> {
             info: ConstructInfo::COMPLETE,
             value_init: false,
             temp_end: None,
+            rparen: None,
             narrowing: false,
             reject_explicit: false,
         }
@@ -171,6 +183,7 @@ pub(crate) struct Saved {
     cleanup: super::super::CleanupState,
     unevaluated: u32,
     pending_odr: Vec<ExprId>,
+    imm: crate::consteval::SavedImm,
     initializing: Option<DeclId>,
     nsdmi_this: Vec<(DeclId, QualType)>,
     deferring: bool,
@@ -195,6 +208,7 @@ impl Sema<'_, '_> {
             .synth
             .iter()
             .rev()
+            .filter(|c| c.kind != SynthKind::Inheriting)
             .map(|c| match c.kind {
                 SynthKind::Special(kind) => {
                     let spec =
@@ -205,7 +219,8 @@ impl Sema<'_, '_> {
                         .arg(kind.index())
                         .arg(self.ty_arg(self.tag_type(class)))
                 }
-                SynthKind::Comparison(k) => {
+                SynthKind::Comparison(_) | SynthKind::Inheriting => {
+                    let SynthKind::Comparison(k) = c.kind else { unreachable!("filtered") };
                     let class = self.cmp_class(c.member).unwrap_or(self.ast.tu);
                     self.diag(DiagId::note_defaulted_cmp_synthesized_at, c.loc)
                         .arg(k.index())
@@ -225,6 +240,7 @@ impl Sema<'_, '_> {
             cleanup: std::mem::take(&mut self.cleanup),
             unevaluated: std::mem::take(&mut self.unevaluated),
             pending_odr: std::mem::take(&mut self.pending_odr),
+            imm: self.take_immediate_state(true),
             initializing: self.initializing.take(),
             nsdmi_this: std::mem::take(&mut self.nsdmi_this),
             deferring: std::mem::take(&mut self.deferring_call_ref),
@@ -248,6 +264,7 @@ impl Sema<'_, '_> {
         self.cleanup = saved.cleanup;
         self.unevaluated = saved.unevaluated;
         self.pending_odr = saved.pending_odr;
+        self.restore_immediate_state(saved.imm);
         self.initializing = saved.initializing;
         self.nsdmi_this = saved.nsdmi_this;
         self.deferring_call_ref = saved.deferring;
@@ -287,6 +304,7 @@ impl Sema<'_, '_> {
                 let at = self.ast.decls.get(f).loc();
                 self.mark_base_and_member_dtors_referenced(at, class);
                 self.check_destructor_delete(f, class);
+                self.mark_vtable_used(class, loc);
                 true
             }
         };
@@ -390,8 +408,14 @@ impl Sema<'_, '_> {
         }
         if !info.out.is_empty() {
             let _ = self.builder().set_ctor_inits(ctor, &info.out);
-            self.mark_base_and_member_dtors_referenced(loc, class);
         }
+        // [class.base.init]/12: every constructor potentially invokes the
+        // destructors of the subobjects, written initializers or not.
+        self.mark_base_and_member_dtors_referenced(loc, class);
+        // [basic.def.odr]/8: a constructor definition uses the vtable (at
+        // the use requiring an implicit definition).
+        let use_loc = self.synth.last().filter(|c| c.member == ctor).map_or(loc, |c| c.loc);
+        self.mark_vtable_used(class, use_loc);
         had_error
     }
 
@@ -561,6 +585,13 @@ impl Sema<'_, '_> {
             let Some(init) = self.default_member_init(field, info.ctor, loc) else {
                 return true;
             };
+            // Its immediate invocations are evaluated here
+            // ([expr.const]/16; clang's rebuilt `CXXDefaultInitExpr`).
+            let ctor = info.ctor;
+            if !self.in_template() && !self.is_consteval_kind(ctor) {
+                let escalating = self.is_immediate_escalating(ctor).then_some(ctor);
+                self.check_default_use(field, loc, escalating, true);
+            }
             info.out.push(CtorInit {
                 target: target.index(),
                 kind,
@@ -619,7 +650,9 @@ impl Sema<'_, '_> {
             }
             _ => (conv::strip_cv(self, fty), ValueCategory::PRValue),
         };
-        Some(self.builder().default_init(field, ctor, ty, vk, loc))
+        let e = self.builder().default_init(field, ctor, ty, vk, loc);
+        self.note_default_init_use(e, field, loc, ctor);
+        Some(e)
     }
 
     /// A reference to the first parameter of the special member being
@@ -653,6 +686,20 @@ impl Sema<'_, '_> {
         let p = *self.param_decls(f).first()?;
         let ty = self.ast.decls.get(p).ty()?;
         Some((p, self.non_reference(ty)))
+    }
+
+    /// The end of an implicit mem-initializer `init`, a full-expression
+    /// ([intro.execution]/5.4): its immediate invocations are evaluated,
+    /// escalating the defaulted constructor being defined (clang's
+    /// `SynthesizedFunctionScope` context, [expr.const]/18), and its
+    /// temporaries destroyed.
+    /// `field` names the member it initializes.
+    fn finish_implicit_init(&mut self, init: ExprId, field: Option<DeclId>) -> ExprId {
+        if let Some(f) = field {
+            self.note_member_init_full_expr(f, false);
+        }
+        self.finish_immediate_invocations(init);
+        self.finish_cleanups(init)
     }
 
     /// clang `BuildImplicitBaseInitializer` for the base-specifier `spec`
@@ -707,7 +754,7 @@ impl Sema<'_, '_> {
                 self.construct_special(spec.ty, bclass, k, Some(arg), ck, loc, entity)?
             }
         };
-        let init = self.finish_cleanups(init);
+        let init = self.finish_implicit_init(init, None);
         Some(CtorInit {
             target: spec.ty.ty().index(),
             kind: if is_virtual { CtorInitKind::VirtualBase } else { CtorInitKind::Base },
@@ -741,7 +788,7 @@ impl Sema<'_, '_> {
                 mem = self.cast_for_moving(mem);
             }
             let init = self.init_subobject_from(fty, mem, InitEntity::Field(field), loc)?;
-            return Ok(Some(self.finish_cleanups(init)));
+            return Ok(Some(self.finish_implicit_init(init, Some(field))));
         }
         let elem = self.base_element(fty);
         if let Some(r) = self.ast.types.as_record(elem) {
@@ -757,7 +804,7 @@ impl Sema<'_, '_> {
                     InitEntity::Field(field),
                 )
                 .ok_or(())?;
-            return Ok(Some(self.finish_cleanups(init)));
+            return Ok(Some(self.finish_implicit_init(init, Some(field))));
         }
         let parent_union = self.ast.decls.get(field).ctx().is_some_and(|p| self.is_union(p));
         if !parent_union {
@@ -792,7 +839,7 @@ impl Sema<'_, '_> {
     /// [class.copy.ctor]/14): a reference binds, a class is copied or
     /// moved by its constructor, an array element-wise
     /// (`ArrayInitLoopExpr`), a scalar converted to a prvalue.
-    fn init_subobject_from(
+    pub(crate) fn init_subobject_from(
         &mut self,
         ty: QualType,
         arg: ExprId,
@@ -902,6 +949,7 @@ impl Sema<'_, '_> {
         entity: InitEntity,
         sites: DiagSites,
     ) -> Option<ExprId> {
+        let named = self.ctor_diag_ty.take().unwrap_or(ty);
         match sel {
             Selected::Found(m) => {
                 if call.reject_explicit && self.fn_spec(m).is_explicit() {
@@ -913,11 +961,17 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return None;
                 }
-                let mk = self.special_kind_of(m).filter(|x| x.is_ctor());
+                // An inheriting constructor is accessed, and takes its
+                // arguments (with default arguments), as the base
+                // constructor ([namespace.udecl]/19, [class.inhctor.init]).
+                let bc = self.inherited_ctor_base(m);
+                let am = bc.unwrap_or(m);
+                let aclass = bc.and_then(|b| self.ast.decls.get(b).ctx()).unwrap_or(class);
+                let mk = self.special_kind_of(m).filter(|x| x.is_ctor() && bc.is_none());
                 let sel = mk.map_or(3, SpecialKind::index);
-                let class_ty = self.ast.types.canonical(self.class_type(class));
+                let class_ty = self.ast.types.canonical(self.class_type(aclass));
                 let msg = match entity {
-                    InitEntity::Var => self.special_member_access(m, class, |s, prot| {
+                    InitEntity::Var => self.special_member_access(am, aclass, |s, prot| {
                         s.diag(DiagId::sema_access_ctor, sites.access)
                             .arg(u8::from(prot))
                             .arg(s.ty_arg(class_ty))
@@ -943,10 +997,10 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 self.mark_function_referenced(m, loc);
-                let args = self.ctor_args(m, call.args, call.narrowing)?;
+                let args = self.ctor_args(am, call.args, call.narrowing, loc)?;
                 let zeroing = call.info.zeroing || call.value_init && !self.is_user_provided(m);
                 let info = ConstructInfo { zeroing, ..call.info };
-                Some(match call.temp_end {
+                let e = match call.temp_end {
                     Some(end) => self.builder().temporary_object(
                         ty,
                         m,
@@ -956,17 +1010,43 @@ impl Sema<'_, '_> {
                         loc,
                         end,
                     ),
-                    None => {
-                        self.builder().construct(ty, m, &args, info, ExprFlags::NONE, loc, None)
-                    }
-                })
+                    None => self.builder().construct(
+                        ty,
+                        m,
+                        &args,
+                        info,
+                        ExprFlags::NONE,
+                        loc,
+                        call.rparen,
+                    ),
+                };
+                Some(self.check_immediate_invocation(e, m, None))
             }
             Selected::Deleted(m) => {
+                if let Some(bc) = self.inherited_ctor_base(m)
+                    && !self.is_deleted_fn(bc)
+                {
+                    // clang `DiagnoseUseOfDecl` of a deleted inheriting
+                    // constructor.
+                    let base = self.ast.decls.get(bc).ctx().unwrap_or(class);
+                    let mut msg = self
+                        .diag(DiagId::sema_deleted_inherited_ctor_use, sites.deleted)
+                        .arg(self.decl_arg(class))
+                        .arg(self.decl_arg(base));
+                    for n in self.deleted_function_notes(m, 0) {
+                        msg = msg.with_note(n);
+                    }
+                    self.emit(msg);
+                    return None;
+                }
+                // A deleted inherited constructor is named as the base's.
+                let m = self.inherited_ctor_base(m).unwrap_or(m);
                 let spec =
                     self.ast.decls.function(self.ast.first(m)).map(|x| x.spec).unwrap_or_default();
                 let mk = self.special_kind_of(m).filter(|x| x.is_ctor());
+                let use_ = matches!(sites.deleted_as, DeletedAs::Use);
                 let (deleted_as, param_note, conversion) = match sites.deleted_as {
-                    DeletedAs::Call => (None, None, false),
+                    DeletedAs::Call | DeletedAs::Use => (None, None, false),
                     DeletedAs::Param(n) => (None, Some(n), false),
                     DeletedAs::Cast(d) => (Some(d), None, false),
                     DeletedAs::Conversion(n) => (None, n, true),
@@ -993,11 +1073,13 @@ impl Sema<'_, '_> {
                     self.emit(d.with_note(note));
                     return None;
                 }
-                let mut msg = if conversion {
+                let mut msg = if use_ {
+                    self.diag(DiagId::sema_use_deleted_function, sites.deleted)
+                        .arg(self.delete_message_suffix(m))
+                } else if conversion {
                     let from = call.args.first().map_or(QualType::ERROR, |&a| self.ety(a));
                     self.diag(DiagId::sema_conv_deleted_ctor, sites.deleted)
-                        .arg(self.ty_arg(from))
-                        .arg(self.ty_arg(ty))
+                        .diff_args(self, from, ty)
                 } else if spec.defaulted() == Defaulted::No {
                     self.diag(DiagId::sema_call_deleted_ctor, sites.deleted)
                         .arg(self.ty_arg(ty))
@@ -1037,14 +1119,14 @@ impl Sema<'_, '_> {
                     } else {
                         DiagId::sema_no_viable_conversion
                     };
-                    self.diag(id, sites.deleted).arg(self.ty_arg(from)).arg(self.ty_arg(ty))
+                    self.diag(id, sites.deleted).diff_args(self, from, ty)
                 } else {
                     let id = if ambiguous {
                         DiagId::sema_ovl_ambiguous_ctor
                     } else {
                         DiagId::sema_ovl_no_viable_ctor
                     };
-                    self.diag(id, sites.deleted).arg(self.ty_arg(ty))
+                    self.diag(id, sites.deleted).arg(self.ty_arg(named))
                 };
                 let mut msg = match self.ovl.failed.take() {
                     Some(set) => {
@@ -1096,12 +1178,14 @@ impl Sema<'_, '_> {
     /// The arguments of a call of constructor `m` with `args`: each
     /// converted to its parameter's type (copy-initialization,
     /// [expr.call]/7; checked for narrowing if `narrowing`), then the
-    /// default arguments, then the variadic arguments promoted.
+    /// default arguments (used at the construction `loc`), then the
+    /// variadic arguments promoted.
     pub(crate) fn ctor_args(
         &mut self,
         m: DeclId,
         args: &[ExprId],
         narrowing: bool,
+        loc: Loc,
     ) -> Option<Vec<ExprId>> {
         let params = self.param_decls(m);
         let mut out = Vec::new();
@@ -1122,16 +1206,20 @@ impl Sema<'_, '_> {
         }
         if args.len() < params.len() {
             for &p in &params[args.len()..] {
+                // [temp.inst]/12: instantiated at this use.
+                if self.inst.lazy_defaults.contains_key(&p)
+                    && !self.instantiate_lazy_default(m, p, loc)
+                {
+                    return None;
+                }
                 let Some(d) = self.ast.decls.param(p).and_then(|x| x.default_arg) else { break };
                 let x = *self.ast.exprs.get(d);
                 let used = self.ctx;
-                out.push(self.builder().default_arg(
-                    p,
-                    used,
-                    x.ty(),
-                    x.value_category(),
-                    Loc::INVALID,
-                ));
+                let arg =
+                    self.builder().default_arg(p, used, x.ty(), x.value_category(), Loc::INVALID);
+                // Used where the construction is ([expr.const]/16).
+                self.note_default_use(arg, p, loc);
+                out.push(arg);
             }
         }
         Some(out)
@@ -1421,7 +1509,7 @@ impl Sema<'_, '_> {
             }
             let Some(fc) = self.element_class(fty) else { continue };
             if self.ast.decls.get(fc).flags().contains(DeclFlags::INVALID)
-                || self.defn_bits(fc).contains(DefinitionBits::TRIVIAL_DTOR)
+                || self.has_irrelevant_dtor(fc)
                 || self.is_union(fc) && self.is_anonymous_member(f)
             {
                 continue;
@@ -1483,14 +1571,25 @@ impl Sema<'_, '_> {
     /// The destructor of subobject class `c` whose use is relevant (not
     /// trivial, `c` valid).
     fn subobject_dtor(&mut self, c: DeclId) -> Option<DeclId> {
-        if self.ast.decls.get(c).flags().contains(DeclFlags::INVALID)
-            || self.defn_bits(c).contains(DefinitionBits::TRIVIAL_DTOR)
+        if self.ast.decls.get(c).flags().contains(DeclFlags::INVALID) || self.has_irrelevant_dtor(c)
         {
             return None;
         }
         match self.select_special(c, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
             Selected::Found(d) | Selected::Deleted(d) => Some(d),
             _ => None,
+        }
+    }
+
+    /// clang `hasIrrelevantDestructor`: the destructor of `c` is trivial,
+    /// public and not deleted, so a use needs no access or deletion check.
+    fn has_irrelevant_dtor(&mut self, c: DeclId) -> bool {
+        if !self.defn_bits(c).contains(DefinitionBits::TRIVIAL_DTOR) {
+            return false;
+        }
+        match self.select_special(c, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
+            Selected::Found(d) => self.ast.decls.get(d).misc().access() == Access::Public,
+            _ => false,
         }
     }
 }

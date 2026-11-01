@@ -444,7 +444,7 @@ impl TypeKind {
 
 macro_rules! builtins {
     ($($(#[$doc:meta])* $konst:ident = $id:literal, $variant:ident, $name:literal;)*) => {
-        /// The builtin types, pre-interned at fixed ids 1..=33 in this
+        /// The builtin types, pre-interned at fixed ids 1..=47 in this
         /// order (spec/types.md §5.1). The discriminant is the `TypeId`
         /// index.
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -455,7 +455,7 @@ macro_rules! builtins {
 
         impl BuiltinType {
             /// All builtins in id order.
-            pub const ALL: [BuiltinType; 33] = [$(BuiltinType::$variant,)*];
+            pub const ALL: [BuiltinType; 47] = [$(BuiltinType::$variant,)*];
 
             /// The builtin with type id index `id`, if it is one.
             pub fn from_index(id: u32) -> Option<BuiltinType> {
@@ -568,6 +568,34 @@ builtins! {
     BUILTIN_FN = 32, BuiltinFn, "<builtin fn type>";
     /// Recovery type; suppresses cascading diagnostics.
     ERROR = 33, Error, "<error type>";
+    /// The `AArch64` SVE ACLE sizeless type `__SVInt8_t`.
+    SV_INT8 = 34, SvInt8, "__SVInt8_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVInt16_t`.
+    SV_INT16 = 35, SvInt16, "__SVInt16_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVInt32_t`.
+    SV_INT32 = 36, SvInt32, "__SVInt32_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVInt64_t`.
+    SV_INT64 = 37, SvInt64, "__SVInt64_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVUint8_t`.
+    SV_UINT8 = 38, SvUint8, "__SVUint8_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVUint16_t`.
+    SV_UINT16 = 39, SvUint16, "__SVUint16_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVUint32_t`.
+    SV_UINT32 = 40, SvUint32, "__SVUint32_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVUint64_t`.
+    SV_UINT64 = 41, SvUint64, "__SVUint64_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVFloat16_t`.
+    SV_FLOAT16 = 42, SvFloat16, "__SVFloat16_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVFloat32_t`.
+    SV_FLOAT32 = 43, SvFloat32, "__SVFloat32_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVFloat64_t`.
+    SV_FLOAT64 = 44, SvFloat64, "__SVFloat64_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVBfloat16_t`.
+    SV_BFLOAT16 = 45, SvBfloat16, "__SVBfloat16_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVBool_t`.
+    SV_BOOL = 46, SvBool, "__SVBool_t";
+    /// The `AArch64` SVE ACLE sizeless type `__SVCount_t`.
+    SV_COUNT = 47, SvCount, "__SVCount_t";
 }
 
 impl BuiltinType {
@@ -613,7 +641,13 @@ impl BuiltinType {
     /// True for the placeholder builtins (`Dependent`, `Overload`,
     /// `BoundMember`, `BuiltinFn`, `Error`).
     pub const fn is_placeholder(self) -> bool {
-        (self as u8) >= 29
+        (self as u8) >= 29 && (self as u8) <= 33
+    }
+
+    /// True for the `AArch64` SVE ACLE sizeless types (`__SVInt8_t` ...
+    /// `__SVCount_t`; spec/types.md §5.1): complete, but with no size.
+    pub const fn is_sizeless(self) -> bool {
+        (self as u8) >= 34 && (self as u8) <= 47
     }
 }
 

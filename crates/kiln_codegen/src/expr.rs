@@ -5,7 +5,9 @@ use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::BitFieldInfo;
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, VarStorage};
-use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCategory};
+use kiln_ast::expr::{
+    BinaryOp, CastKind, ExprFlags, ExprKind, StorageDuration, UnaryOp, ValueCategory,
+};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
@@ -26,12 +28,25 @@ pub(crate) enum Opaque {
     Lv(LV),
 }
 
+/// The callee of [`Cg::call_vals_to`] (clang `CGCallee`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Callee {
+    /// A function pointer already computed.
+    Value(V),
+    /// Virtual method `md` of the object at `this` (alignment `align`):
+    /// its vtable slot is loaded after the arguments are lowered
+    /// (clang `CGCallee::forVirtual`).
+    Virtual { md: DeclId, this: V, align: u64 },
+}
+
 /// An lvalue: an address, its source type and the bit-field access.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LV {
     pub addr: Addr,
     pub q: QualType,
     pub bf: Option<BitFieldInfo>,
+    /// An element of the vector at `addr` (clang `LValue::MakeVectorElt`).
+    pub vidx: Option<V>,
 }
 
 fn low_mask(bits: u32) -> u128 {
@@ -52,7 +67,7 @@ impl Cg<'_> {
         self.ast.exprs.get(e).value_category() != ValueCategory::PRValue
     }
 
-    fn is_volatile(&self, q: QualType) -> bool {
+    pub(crate) fn is_volatile(&self, q: QualType) -> bool {
         self.ast.types.effective_quals(q).is_volatile()
     }
 
@@ -69,11 +84,19 @@ impl Cg<'_> {
     }
 
     pub(crate) fn icn(&mut self, ty: LTy, v: i128) -> V {
+        if let Some((et, n, _)) = self.m.types.vector_info(ty) {
+            let c = self.m.const_int(et, v);
+            return V::C(self.m.const_vector(&vec![c; n as usize]).expect("int vector"));
+        }
         V::C(self.m.const_int(ty, v))
     }
 
     /// A floating constant `x` (±1.0 and 0.0 only) of type `ty`.
-    fn fconst(&mut self, ty: LTy, x: f64) -> V {
+    pub(crate) fn fconst(&mut self, ty: LTy, x: f64) -> V {
+        if let Some((et, n, _)) = self.m.types.vector_info(ty) {
+            let V::C(c) = self.fconst(et, x) else { unreachable!("constant") };
+            return V::C(self.m.const_vector(&vec![c; n as usize]).expect("float vector"));
+        }
         let bits: u128 = match self.m.types.float_width(ty) {
             Some(32) => u128::from((x as f32).to_bits()),
             Some(64) => u128::from(x.to_bits()),
@@ -98,8 +121,25 @@ impl Cg<'_> {
         V::C(self.m.const_float_bits(ty, bits))
     }
 
-    fn is_float_ty(&self, t: LTy) -> bool {
-        self.m.types.float_width(t).is_some()
+    pub(crate) fn is_float_ty(&self, t: LTy) -> bool {
+        self.m.types.is_float_or_float_vector(t)
+    }
+
+    /// The element type of a vector type, else `q` itself.
+    pub(crate) fn scalar_of(&self, q: QualType) -> QualType {
+        self.vec_of(q).map_or(q, |x| x.0)
+    }
+
+    /// clang `EmitCompare` on vectors: the `<N x i1>` result sign-extended
+    /// to the result type unless that is an `ext_vector_type` of `bool`.
+    fn vec_cmp_result(&mut self, c: V, q: QualType) -> V {
+        match self.vec_of(q) {
+            Some((elem, _)) if !self.is_bool(elem) => {
+                let t = self.lty(q);
+                self.cast(CastOp::SExt, c, t)
+            }
+            _ => c,
+        }
     }
 
     /// Folded integer value of `e` (clang `ConstantFoldsToSimpleInteger`).
@@ -156,14 +196,21 @@ impl Cg<'_> {
                 return r;
             }
             ExprKind::CXXThisExpr => self.this_value(),
+            ExprKind::ArrayInitIndexExpr => match self.f.array_index.last() {
+                Some(&v) => v,
+                None => return err(self.loc_of(e), "ArrayInitIndexExpr outside its loop"),
+            },
             ExprKind::CXXMemberCallExpr => return self.emit_member_call(e, None),
             ExprKind::CXXDefaultInitExpr => {
                 let Some(init) = self.default_member_init(e) else {
                     return err(self.loc_of(e), "default member initializer not yet parsed");
                 };
-                return self.emit_scalar_opt(init);
+                let saved = self.enter_default_arg(e);
+                let r = self.emit_scalar_opt(init);
+                self.srcloc = saved;
+                return r;
             }
-            ExprKind::ConstantExpr => match ast.exprs.constant_value(e) {
+            ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
                 _ => return self.emit_scalar_opt(ast.exprs.operand(e)),
             },
@@ -188,6 +235,14 @@ impl Cg<'_> {
             ExprKind::CXXNoexceptExpr => V::C(self.m.const_bool(ast.exprs.noexcept_value(e))),
             ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr => {
                 V::C(self.m.const_bool(ast.exprs.type_trait_value(e)))
+            }
+            // spec/sema-templates.md §8.3, §8.5: Sema checked satisfaction;
+            // a concept-id or requires-expression is a prvalue constant.
+            ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr => {
+                match ast.exprs.satisfied(e) {
+                    Some(v) => V::C(self.m.const_bool(v)),
+                    None => return err(self.loc_of(e), "unchecked constraint expression"),
+                }
             }
             ExprKind::ArrayTypeTraitExpr => {
                 let t = self.lty(q);
@@ -272,8 +327,35 @@ impl Cg<'_> {
                 return Ok(None);
             }
             ExprKind::StmtExpr => return self.emit_stmt_expr(e),
+            ExprKind::AtomicExpr => return self.emit_atomic_expr(e, None),
+            ExprKind::VAArgExpr => return self.emit_va_arg(e, None),
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
+            // clang `VisitInitListExpr` on a vector: `insertelement` of
+            // each element into `poison` (i32 indices), then zeros.
+            ExprKind::InitListExpr if self.vec_of(q).is_some() => {
+                let inits: Vec<u32> = ast.lists.get(ast.exprs.init_list_inits(e)).to_vec();
+                let t = self.lty(q);
+                if inits.is_empty() {
+                    return Ok(Some(V::C(self.m.const_zero(t))));
+                }
+                let (et, n, _) = self.m.types.vector_info(t).expect("vector");
+                let mut v = V::C(self.m.const_poison(t));
+                let mut cur = 0u32;
+                for x in inits {
+                    let x = self.emit_scalar(ExprId::new(x))?;
+                    let idx = self.icn(LTy::I32, i128::from(cur));
+                    v = self.insert_elt(v, x, idx);
+                    cur += 1;
+                }
+                while cur < n {
+                    let idx = self.icn(LTy::I32, i128::from(cur));
+                    let z = V::C(self.m.const_zero(et));
+                    v = self.insert_elt(v, z, idx);
+                    cur += 1;
+                }
+                v
+            }
             ExprKind::InitListExpr if !self.is_aggregate(q) => {
                 if let Some(&x) = ast.lists.get(ast.exprs.init_list_inits(e)).first() {
                     return self.emit_scalar_opt(ExprId::new(x));
@@ -281,10 +363,25 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 V::C(self.m.const_zero(t))
             }
+            // clang `ScalarExprEmitter::VisitArraySubscriptExpr`: a vector
+            // subscript is the vector's value and `extractelement`.
+            ExprKind::ArraySubscriptExpr if self.vec_subscript(e).is_some() => {
+                let (base, idx) = self.vec_subscript(e).expect("checked");
+                let v = self.emit_scalar(base)?;
+                let i = self.emit_scalar(idx)?;
+                self.extract_elt(v, i)
+            }
+            ExprKind::ConvertVectorExpr => {
+                let src = ast.exprs.operand(e);
+                let v = self.emit_scalar(src)?;
+                let sq = ast.exprs.get(src).ty();
+                self.convert_vector(v, sq, q)
+            }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
             | ExprKind::ArraySubscriptExpr
             | ExprKind::StringLiteral
+            | ExprKind::PredefinedExpr
             | ExprKind::MaterializeTemporaryExpr => {
                 let lv = self.emit_lvalue(e)?;
                 self.load_lv(lv)
@@ -295,7 +392,16 @@ impl Cg<'_> {
 
     /// clang `EmitLoadOfLValue` for scalars.
     pub(crate) fn load_lv(&mut self, lv: LV) -> V {
-        let Some(bf) = lv.bf else { return self.load_scalar(lv.addr, lv.q) };
+        if let Some(idx) = lv.vidx {
+            let vec = self.vec_elt_load(lv);
+            return self.extract_elt(vec, idx);
+        }
+        let Some(bf) = lv.bf else {
+            if let Some(vq) = self.ast.types.as_atomic(lv.q) {
+                return self.atomic_load_lv(lv, vq);
+            }
+            return self.load_scalar(lv.addr, lv.q);
+        };
         let vol = self.is_volatile(lv.q);
         let st = lv.addr.ty;
         let mut v = self.load(st, lv.addr.v, lv.addr.align, vol);
@@ -327,8 +433,26 @@ impl Cg<'_> {
     /// clang `EmitStoreThroughLValue`; with `want`, also the value of the
     /// bit-field after the store.
     pub(crate) fn store_lv(&mut self, v: V, lv: LV, want: bool) -> V {
+        // clang `EmitStoreThroughLValue` of a vector element: read,
+        // `insertelement`, write (a `bool` vector through `<P x i1>`).
+        if let Some(idx) = lv.vidx {
+            let vec = self.vec_elt_load(lv);
+            let ins = self.insert_elt(vec, v, idx);
+            let raw = if self.m.types.int_width(lv.addr.ty).is_some() {
+                self.cast(CastOp::BitCast, ins, lv.addr.ty)
+            } else {
+                ins
+            };
+            let vol = self.is_volatile(lv.q);
+            self.store(raw, lv.addr.v, lv.addr.align, vol);
+            return v;
+        }
         let Some(bf) = lv.bf else {
-            self.store_scalar(v, lv.addr, lv.q);
+            if let Some(vq) = self.ast.types.as_atomic(lv.q) {
+                self.atomic_store_lv(v, lv, vq);
+            } else {
+                self.store_scalar(v, lv.addr, lv.q);
+            }
             return v;
         };
         let vol = self.is_volatile(lv.q);
@@ -467,21 +591,44 @@ impl Cg<'_> {
                 {
                     return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
                 }
-                // A call returning a reference yields its address; the
-                // conversion loads the object (clang `EmitLoadOfLValue`).
+                // A call returning a reference yields the referee's address
+                // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
+                // result is `EmitLoadOfLValue`).
+                let inner = self.skip_parens(s);
                 if matches!(
-                    ast.exprs.get(s).kind(),
+                    ast.exprs.get(inner).kind(),
                     ExprKind::CallExpr
-                        | ExprKind::CXXOperatorCallExpr
                         | ExprKind::CXXMemberCallExpr
-                ) && self.is_glvalue(s)
+                        | ExprKind::CXXOperatorCallExpr
+                ) && self.is_glvalue(inner)
                 {
                     let lv = self.emit_lvalue(s)?;
                     return Ok(Some(self.load_lv(lv)));
                 }
                 return self.emit_scalar_opt(s);
             }
-            CastKind::NoOp | CastKind::BitCast | CastKind::LValueBitCast => {
+            // clang `ScalarExprEmitter::VisitCastExpr`: a user-defined or
+            // constructor conversion is its (call) operand.
+            // A vector bitcast reinterprets the value (clang `CK_BitCast`
+            // `CreateBitCast`).
+            CastKind::BitCast if self.vec_of(q).is_some() || self.vec_of(sq).is_some() => {
+                let v = self.emit_scalar(s)?;
+                let t = self.lty(q);
+                self.cast(CastOp::BitCast, v, t)
+            }
+            // clang `CK_VectorSplat`: `CreateVectorSplat`.
+            CastKind::VectorSplat => {
+                let v = self.emit_scalar(s)?;
+                let n = self.vec_of(q).map_or(1, |x| x.1);
+                self.splat(v, n)
+            }
+            CastKind::NoOp
+            | CastKind::BitCast
+            | CastKind::LValueBitCast
+            | CastKind::AtomicToNonAtomic
+            | CastKind::NonAtomicToAtomic
+            | CastKind::UserDefinedConversion
+            | CastKind::ConstructorConversion => {
                 return self.emit_scalar_opt(s);
             }
             CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
@@ -611,6 +758,18 @@ impl Cg<'_> {
                 let m = self.icn(t, -1);
                 Ok(self.bin(BinOp::Xor, Flags::NONE, v, m))
             }
+            // clang `VisitUnaryLNot` on a vector: a comparison with zero.
+            UnaryOp::LNot if self.vec_of(q).is_some() => {
+                let v = self.emit_scalar(s)?;
+                let t = self.f.fir.ty(&self.m, v);
+                let z = V::C(self.m.const_zero(t));
+                let c = if self.is_float_ty(t) {
+                    self.fcmp(FloatPredicate::Oeq, v, z)
+                } else {
+                    self.icmp(IntPredicate::Eq, v, z)
+                };
+                Ok(self.vec_cmp_result(c, q))
+            }
             UnaryOp::LNot => {
                 let b = self.eval_bool(s)?;
                 let t = V::C(self.m.const_bool(true));
@@ -634,13 +793,24 @@ impl Cg<'_> {
 
     /// clang `EmitScalarPrePostIncDec`.
     fn inc_dec(&mut self, e: ExprId, lv: LV, op: UnaryOp) -> R<V> {
-        let ast = self.ast;
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
         let pre = matches!(op, UnaryOp::PreInc | UnaryOp::PreDec);
-        let q = lv.q;
+        if lv.bf.is_none()
+            && let Some(vq) = self.ast.types.as_atomic(lv.q)
+        {
+            return self.atomic_inc_dec(e, lv, vq, inc, pre);
+        }
         let old = self.load_lv(lv);
+        let new = self.inc_dec_value(e, lv.q, old, inc)?;
+        let stored = self.store_lv(new, lv, lv.bf.is_some());
+        Ok(if pre { stored } else { old })
+    }
+
+    /// The incremented (`inc`) or decremented value `old` of type `q`.
+    pub(crate) fn inc_dec_value(&mut self, e: ExprId, q: QualType, old: V, inc: bool) -> R<V> {
+        let ast = self.ast;
         let amount: i128 = if inc { 1 } else { -1 };
-        let new = if self.is_bool(q) && inc {
+        Ok(if self.is_bool(q) && inc {
             V::C(self.m.const_bool(true))
         } else if ast.types.is_pointer(q) {
             let pq = ast.types.pointee(q).expect("pointee");
@@ -662,9 +832,7 @@ impl Cg<'_> {
                 let fl = if can_overflow && self.is_signed(q) { Flags::NSW } else { Flags::NONE };
                 self.bin(BinOp::Add, fl, old, c)
             }
-        };
-        let stored = self.store_lv(new, lv, lv.bf.is_some());
-        Ok(if pre { stored } else { old })
+        })
     }
 
     fn emit_binary(&mut self, e: ExprId) -> R<Option<V>> {
@@ -673,7 +841,8 @@ impl Cg<'_> {
         let [l, r] = ast.exprs.operands(e);
         Ok(Some(match op {
             BinaryOp::Assign => {
-                if self.is_aggregate(ast.exprs.get(e).ty()) {
+                let q = ast.exprs.get(e).ty();
+                if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
                     let lv = self.emit_lvalue(e)?;
                     return Ok(Some(lv.addr.v));
                 }
@@ -712,7 +881,7 @@ impl Cg<'_> {
     /// Binary arithmetic, comparison and pointer arithmetic on emitted
     /// operands (`q` is the computation type).
     #[allow(clippy::too_many_arguments)]
-    fn arith(
+    pub(crate) fn arith(
         &mut self,
         e: ExprId,
         op: BinaryOp,
@@ -727,8 +896,10 @@ impl Cg<'_> {
         let rp = ast.types.is_pointer(rq);
         let lt = self.f.fir.ty(&self.m, l);
         let float = self.is_float_ty(lt);
-        let signed = self.is_signed(q);
-        let nsw = if signed { Flags::NSW } else { Flags::NONE };
+        // clang `hasSignedIntegerRepresentation`: a vector's elements;
+        // `nsw` only for scalars (`isSignedIntegerOrEnumerationType`).
+        let signed = self.is_signed(self.scalar_of(q));
+        let nsw = if self.is_signed(q) { Flags::NSW } else { Flags::NONE };
         Ok(match op {
             BinaryOp::Add | BinaryOp::Sub if lp && rp => {
                 let a = self.cast(CastOp::PtrToInt, l, LTy::I64);
@@ -835,9 +1006,10 @@ impl Cg<'_> {
                         BinaryOp::EQ => FloatPredicate::Oeq,
                         _ => FloatPredicate::Une,
                     };
-                    self.fcmp(p, l, r)
+                    let c = self.fcmp(p, l, r);
+                    self.vec_cmp_result(c, q)
                 } else {
-                    let s = !lp && self.is_signed(lq);
+                    let s = !lp && self.is_signed(self.scalar_of(lq));
                     let p = match (op, s) {
                         (BinaryOp::LT, true) => IntPredicate::Slt,
                         (BinaryOp::LT, false) => IntPredicate::Ult,
@@ -850,7 +1022,8 @@ impl Cg<'_> {
                         (BinaryOp::EQ, _) => IntPredicate::Eq,
                         _ => IntPredicate::Ne,
                     };
-                    self.icmp(p, l, r)
+                    let c = self.icmp(p, l, r);
+                    self.vec_cmp_result(c, q)
                 }
             }
             op => return err(self.loc_of(e), format!("binary {op:?} is not supported yet")),
@@ -1060,6 +1233,11 @@ impl Cg<'_> {
 
     /// clang `VisitAbstractConditionalOperator`.
     fn emit_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
+        if let kiln_ast::types::TypeView::Vector { kind, .. } =
+            self.ast.types.canonical_view(self.ast.exprs.get(c).ty())
+        {
+            return self.emit_vector_conditional(c, a, b, kind).map(Some);
+        }
         if let Some(x) = self.fold_bool(c) {
             return self.emit_scalar_opt(if x { a } else { b });
         }
@@ -1096,6 +1274,78 @@ impl Cg<'_> {
         })
     }
 
+    /// clang `VisitAbstractConditionalOperator` with a vector condition:
+    /// all three operands are evaluated; an ext vector condition selects
+    /// by each lane's sign bit through masks (`(f & ~m) | (t & m)`, float
+    /// lanes bit-cast to the condition's type), a GNU vector condition by
+    /// lane `!= 0` through a `select`.
+    fn emit_vector_conditional(
+        &mut self,
+        c: ExprId,
+        a: ExprId,
+        b: ExprId,
+        kind: kiln_ast::types::VectorKind,
+    ) -> R<V> {
+        let cv = self.emit_scalar(c)?;
+        let x = self.emit_scalar(a)?;
+        let y = self.emit_scalar(b)?;
+        let ct = self.f.fir.ty(&self.m, cv);
+        let zero = V::C(self.m.const_zero(ct));
+        if kind != kiln_ast::types::VectorKind::Ext {
+            let m = self.icmp(IntPredicate::Ne, cv, zero);
+            return Ok(self.select(m, x, y));
+        }
+        if self.m.types.vector_info(ct).is_some_and(|(et, _, _)| et == LTy::I1) {
+            return err(None, "conditionals on bool vectors are not supported yet (M4)");
+        }
+        let msb = self.icmp(IntPredicate::Slt, cv, zero);
+        let mask = self.cast(CastOp::SExt, msb, ct);
+        let ones = self.icn(ct, -1);
+        let inv = self.bin(BinOp::Xor, Flags::NONE, mask, ones);
+        let rt = self.f.fir.ty(&self.m, y);
+        let float = self.is_float_ty(rt);
+        let (xt, yt) = if float {
+            let yt = self.bitcast_fold(y, ct);
+            (self.bitcast_fold(x, ct), yt)
+        } else {
+            (x, y)
+        };
+        let lo = self.bin(BinOp::And, Flags::NONE, yt, inv);
+        let hi = self.bin(BinOp::And, Flags::NONE, xt, mask);
+        let r = self.bin(BinOp::Or, Flags::NONE, lo, hi);
+        Ok(if float { self.cast(CastOp::BitCast, r, rt) } else { r })
+    }
+
+    /// A bitcast of `v` to the integer vector type `to`, folded (as by
+    /// LLVM's `ConstantFolder`) when `v` is a constant float vector.
+    fn bitcast_fold(&mut self, v: V, to: LTy) -> V {
+        if let V::C(c) = v
+            && let Some((et, _, _)) = self.m.types.vector_info(to)
+        {
+            match self.m.const_of(c) {
+                Some(ConstData::Zero(_)) => return V::C(self.m.const_zero(to)),
+                Some(ConstData::Vector { elems, .. }) => {
+                    let bits: Option<Vec<u128>> = elems
+                        .iter()
+                        .map(|&x| match self.m.const_of(x) {
+                            Some(ConstData::Float { bits, .. }) => Some(*bits),
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(bits) = bits {
+                        let ints: Vec<Value> =
+                            bits.iter().map(|&b| self.m.const_int(et, b as i128)).collect();
+                        if let Ok(r) = self.m.const_vector(&ints) {
+                            return V::C(r);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.cast(CastOp::BitCast, v, to)
+    }
+
     /// clang `EmitCompoundAssignLValue`: the lvalue and the stored value.
     fn emit_compound_assign(&mut self, e: ExprId) -> R<(LV, V)> {
         let ast = self.ast;
@@ -1117,6 +1367,12 @@ impl Cg<'_> {
         let rv = self.emit_scalar(ca.rhs)?;
         let lv = self.emit_lvalue(l)?;
         let lq = lv.q;
+        if lv.bf.is_none()
+            && let Some(vq) = ast.types.as_atomic(lq)
+        {
+            let v = self.atomic_compound_assign(e, op, lv, vq, rv, rq, ca.lhs_ty, ca.result_ty)?;
+            return Ok((lv, v));
+        }
         let old = self.load_lv(lv);
         let lhs = if ast.types.is_pointer(lq) { old } else { self.conv(old, lq, ca.lhs_ty) };
         let res = self.arith(e, op, lhs, rv, ca.lhs_ty, rq, ca.result_ty)?;
@@ -1137,9 +1393,29 @@ impl Cg<'_> {
                     addr: Addr { v: V::C(Value::func(f)), ty: LTy::PTR, align: 1 },
                     q,
                     bf: None,
+                    vidx: None,
                 })
             }
+            // clang `EmitDeclRefLValue`: a structured binding is its
+            // binding expression ([dcl.struct.bind]), or its capture.
+            DeclKind::Binding => {
+                if ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING)
+                    && let Some(lv) = self.captured_var_lvalue(d, q)?
+                {
+                    return Ok(lv);
+                }
+                let Some(b) = ast.decls.binding_expr(d) else {
+                    return err(Some(ast.decls.get(d).loc()), "unbound binding");
+                };
+                let lv = self.emit_lvalue(b)?;
+                Ok(LV { q, ..lv })
+            }
             DeclKind::Var | DeclKind::ParmVar => {
+                if ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING)
+                    && let Some(lv) = self.captured_var_lvalue(d, q)?
+                {
+                    return Ok(lv);
+                }
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 if self.referee(dq).is_some() {
                     // clang `EmitLoadOfReferenceLValue`: the slot holds the
@@ -1154,7 +1430,7 @@ impl Cg<'_> {
                     return Ok(self.ref_lvalue(p, q));
                 }
                 if let Some(&a) = self.f.locals.get(&d) {
-                    return Ok(LV { addr: a, q, bf: None });
+                    return Ok(LV { addr: a, q, bf: None, vidx: None });
                 }
                 let ty = self.mty(q);
                 let st = ast.decls.var(d).map(|v| v.spec.storage());
@@ -1167,14 +1443,14 @@ impl Cg<'_> {
                 };
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 let align = self.global_align(dq);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             DeclKind::TemplateParamObject => {
                 let g = self.param_object_global(d)?;
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 let ty = self.mty(dq);
                 let align = self.global_align(dq);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
@@ -1203,7 +1479,7 @@ impl Cg<'_> {
     pub(crate) fn ref_lvalue(&mut self, p: V, q: QualType) -> LV {
         let ty = if self.ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
         let (_, align) = self.pointee_layout(q);
-        LV { addr: Addr { v: p, ty, align }, q, bf: None }
+        LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None }
     }
 
     /// clang `EmitLValue`.
@@ -1229,7 +1505,12 @@ impl Cg<'_> {
                 r
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
-                Some(init) => self.emit_lvalue(init),
+                Some(init) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.emit_lvalue(init);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
             },
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
@@ -1245,11 +1526,34 @@ impl Cg<'_> {
             }
             ExprKind::SubstNonTypeTemplateParmExpr => self.emit_lvalue(ExprId::new(n.b())),
             ExprKind::DeclRefExpr => self.decl_lvalue(e, ast.exprs.decl(e), q),
+            // clang `EmitPredefinedLValue`: the literal's global, named
+            // `<identifier>.<current function>` when first emitted.
+            ExprKind::PredefinedExpr => {
+                let Some(sl) = ast.exprs.predefined_name(e) else {
+                    return err(self.loc_of(e), "dependent predefined identifier");
+                };
+                let lit = ast.exprs.string_lit(sl);
+                let fname = self.f.func.map(|f| self.m.func(f).name().to_owned());
+                let g = match fname {
+                    Some(fname) => {
+                        let name = format!("{}.{}", ast.exprs.predefined_kind(e).spelling(), fname);
+                        let bytes = ast.strings.bytes(lit).to_vec();
+                        let mut bytes = bytes;
+                        let total = ast.strings.object_bytes(lit);
+                        bytes.resize(total as usize, 0);
+                        self.string_global_named(&bytes, 1, total, &name)
+                    }
+                    None => self.lit_global(lit),
+                };
+                let ty = self.m.global(g).value_type();
+                let align = self.m.global(g).align.unwrap_or(1);
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
+            }
             ExprKind::StringLiteral => {
                 let g = self.lit_global(ast.exprs.string_lit(e));
                 let ty = self.m.global(g).value_type();
                 let align = self.m.global(g).align.unwrap_or(1);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             ExprKind::MemberExpr => self.member_lvalue(e),
             ExprKind::ArraySubscriptExpr => self.subscript_lvalue(e),
@@ -1258,7 +1562,7 @@ impl Cg<'_> {
                     let p = self.emit_scalar(ast.exprs.operand(e))?;
                     let ty = if ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
                     let align = self.natural_align(q);
-                    Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None })
+                    Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
                 }
                 op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
@@ -1277,6 +1581,20 @@ impl Cg<'_> {
                             let lv = self.emit_lvalue(l)?;
                             self.emit_agg(r, lv.addr, false)?;
                             return Ok(lv);
+                        }
+                        if self.is_atomic_aggregate(q) {
+                            // clang `AggExprEmitter::VisitBinAssign` on an
+                            // `_Atomic` left side (WP-165).
+                            // The right side goes into a temporary of the
+                            // assignment's type (`EmitAggExprToLValue`),
+                            // which is the result.
+                            let lv = self.emit_lvalue(l)?;
+                            let t = self.temp(q);
+                            self.f.slot_volatile = self.is_volatile(q);
+                            self.emit_agg(r, t, false)?;
+                            self.f.slot_volatile = false;
+                            self.atomic_agg_store(t, lv);
+                            return Ok(LV { addr: t, q, bf: None, vidx: None });
                         }
                         let v = self.emit_scalar(r)?;
                         let lv = self.emit_lvalue(l)?;
@@ -1319,24 +1637,59 @@ impl Cg<'_> {
             ExprKind::MaterializeTemporaryExpr
             | ExprKind::CallExpr
             | ExprKind::CXXOperatorCallExpr
-            | ExprKind::InitListExpr => {
+            | ExprKind::InitListExpr
+            | ExprKind::CXXParenListInitExpr => {
                 let s =
                     if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
                 let sq = ast.exprs.get(s).ty();
-                let tmp = self.temp(sq);
+                // [class.temporary]/6: a temporary bound to a reference
+                // with static storage duration is a `_ZGR` global.
+                let static_tmp = n.kind() == ExprKind::MaterializeTemporaryExpr
+                    && ast.exprs.temporary_storage(e) == StorageDuration::Static;
+                let (tmp, needs_init) =
+                    if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
+                if !needs_init {
+                    return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
+                }
                 if self.is_aggregate(sq) {
-                    self.emit_agg_into(s, tmp, false)?;
+                    // clang `EmitAnyExprToMem`: a materialized temporary is
+                    // a `MayOverlap` slot, which only a constructor call or
+                    // an immediate invocation consumes.
+                    let mut inner = s;
+                    loop {
+                        let k = ast.exprs.get(inner).kind();
+                        if k == ExprKind::ParenExpr
+                            || (k.is_cast() && ast.exprs.cast_kind(inner) == CastKind::NoOp)
+                        {
+                            inner = ast.exprs.operand(inner);
+                        } else {
+                            break;
+                        }
+                    }
+                    let overlap = n.kind() == ExprKind::MaterializeTemporaryExpr
+                        && matches!(
+                            ast.exprs.get(inner).kind(),
+                            ExprKind::ConstantExpr
+                                | ExprKind::CXXConstructExpr
+                                | ExprKind::CXXTemporaryObjectExpr
+                        );
+                    self.emit_agg_into(s, tmp, overlap)?;
                 } else {
                     let v = self.emit_scalar(s)?;
                     self.store_scalar(v, tmp, sq);
                 }
-                if n.kind() == ExprKind::MaterializeTemporaryExpr {
+                if static_tmp {
+                    self.register_temporary_dtor(e, tmp)?;
+                } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
                     self.push_temporary_cleanup(e, tmp);
                 }
-                Ok(LV { addr: tmp, q: sq, bf: None })
+                Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
             }
             k if k.is_cast() => match ast.exprs.cast_kind(e) {
-                CastKind::NoOp | CastKind::LValueBitCast | CastKind::LValueToRValue => {
+                CastKind::NoOp
+                | CastKind::LValueBitCast
+                | CastKind::LValueToRValue
+                | CastKind::UserDefinedConversion => {
                     let mut lv = self.emit_lvalue(ast.exprs.operand(e))?;
                     if lv.bf.is_none() && !ast.types.is_function(q) {
                         lv.addr.ty = self.mty(q);
@@ -1353,7 +1706,7 @@ impl Cg<'_> {
                     let (vb, off) = self.base_path(e, derived)?;
                     let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
                     let ty = self.mty(q);
-                    Ok(LV { addr: Addr { v, ty, align }, q, bf: None })
+                    Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
                 }
                 CastKind::Dynamic => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
@@ -1377,7 +1730,7 @@ impl Cg<'_> {
                 let dq = ast.exprs.get(dead).ty();
                 let ty = self.mty(dq);
                 let v = V::C(self.m.const_undef(LTy::PTR));
-                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None });
+                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None, vidx: None });
             }
             return self.emit_lvalue(live);
         }
@@ -1408,7 +1761,12 @@ impl Cg<'_> {
             .fir
             .push(Op::Phi { ty: LTy::PTR, inc: vec![(x.addr.v, lb), (y.addr.v, rb)] }, LTy::PTR);
         let align = x.addr.align.min(y.addr.align);
-        Ok(LV { addr: Addr { v: p, ty: x.addr.ty, align }, q: ast.exprs.get(e).ty(), bf: None })
+        Ok(LV {
+            addr: Addr { v: p, ty: x.addr.ty, align },
+            q: ast.exprs.get(e).ty(),
+            bf: None,
+            vidx: None,
+        })
     }
 
     /// `e` through parentheses, if it is a throw-expression.
@@ -1495,7 +1853,7 @@ impl Cg<'_> {
                 align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
             }
             let st = self.m.types.int(bf.storage_size);
-            return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf) });
+            return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf), vidx: None });
         }
         let fq = ast.decls.get(field).ty().unwrap_or(q);
         if let Some(referee) = self.referee(fq) {
@@ -1505,9 +1863,19 @@ impl Cg<'_> {
             let p = self.load(LTy::PTR, slot.addr.v, slot.addr.align, false);
             let (_, align) = self.pointee_layout(referee);
             let ty = self.mty(referee);
-            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None });
+            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None, vidx: None });
         }
         self.field_lvalue_init(base, field, q)
+    }
+
+    /// The lvalue an aggregate initializer stores to: a reference member's
+    /// own slot (to bind), any other field as `field_lvalue` (bit-fields).
+    fn init_field_lvalue(&mut self, base: Addr, field: DeclId, q: QualType) -> R<LV> {
+        if self.referee(q).is_some() {
+            self.field_lvalue_init(base, field, q)
+        } else {
+            self.field_lvalue(base, field, q)
+        }
     }
 
     /// The storage of field `field` of the object at `base` (a reference
@@ -1522,14 +1890,24 @@ impl Cg<'_> {
         };
         let ty = self.mty(q);
         if is_union {
-            return Ok(LV { addr: Addr { v: base.v, ty, align: base.align }, q, bf: None });
+            return Ok(LV {
+                addr: Addr { v: base.v, ty, align: base.align },
+                q,
+                bf: None,
+                vidx: None,
+            });
         }
         let Some(i) = idx else {
-            return Ok(LV { addr: Addr { v: base.v, ty, align: base.align }, q, bf: None });
+            // An empty field with no IR element (clang addresses it by
+            // byte offset).
+            let off = self.field_byte_offset(field)?;
+            let v = if off == 0 { base.v } else { self.byte_offset(base.v, off) };
+            let align = min_align(base.align, off);
+            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None });
         };
         let v = self.struct_gep(rty, base.v, i);
         let align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
-        Ok(LV { addr: Addr { v, ty, align }, q, bf: None })
+        Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
     }
 
     /// The array operand of a simple array-to-pointer decay.
@@ -1544,10 +1922,89 @@ impl Cg<'_> {
         None
     }
 
+    /// clang `ScalarExprEmitter::VisitConvertVectorExpr`.
+    fn convert_vector(&mut self, v: V, sq: QualType, q: QualType) -> V {
+        let st = self.f.fir.ty(&self.m, v);
+        let dt = self.lty(q);
+        if st == dt {
+            return v;
+        }
+        let (Some((se, _)), Some((de, _))) = (self.vec_of(sq), self.vec_of(q)) else {
+            return v;
+        };
+        let set = self.m.types.vector_info(st).map_or(st, |x| x.0);
+        let det = self.m.types.vector_info(dt).map_or(dt, |x| x.0);
+        let s_int = self.m.types.int_width(set);
+        let d_int = self.m.types.int_width(det);
+        if self.is_bool(de) {
+            let z = V::C(self.m.const_zero(st));
+            return if s_int.is_some() {
+                self.icmp(IntPredicate::Ne, v, z)
+            } else {
+                self.fcmp(FloatPredicate::Une, v, z)
+            };
+        }
+        let op = match (s_int, d_int) {
+            (Some(sw), Some(dw)) => {
+                let signed = self.is_signed(se) && !self.is_bool(se);
+                match sw.cmp(&dw) {
+                    std::cmp::Ordering::Equal => return v,
+                    std::cmp::Ordering::Greater => CastOp::Trunc,
+                    std::cmp::Ordering::Less if signed => CastOp::SExt,
+                    std::cmp::Ordering::Less => CastOp::ZExt,
+                }
+            }
+            (Some(_), None) if self.is_signed(se) && !self.is_bool(se) => CastOp::SIToFP,
+            (Some(_), None) => CastOp::UIToFP,
+            (None, Some(_)) if self.is_signed(de) => CastOp::FPToSI,
+            (None, Some(_)) => CastOp::FPToUI,
+            (None, None) => {
+                let sw = self.m.types.float_width(set).unwrap_or(0);
+                let dw = self.m.types.float_width(det).unwrap_or(0);
+                if dw < sw { CastOp::FPTrunc } else { CastOp::FPExt }
+            }
+        };
+        self.cast(op, v, dt)
+    }
+
+    /// `(vector, index)` operands of a vector subscript.
+    fn vec_subscript(&self, e: ExprId) -> Option<(ExprId, ExprId)> {
+        let ast = self.ast;
+        let [l, r] = ast.exprs.operands(e);
+        if self.vec_of(ast.exprs.get(l).ty()).is_some() {
+            Some((l, r))
+        } else if self.vec_of(ast.exprs.get(r).ty()).is_some() {
+            Some((r, l))
+        } else {
+            None
+        }
+    }
+
+    /// The vector holding the element `lv` (a `bool` vector's `iP`
+    /// storage as `<P x i1>`).
+    fn vec_elt_load(&mut self, lv: LV) -> V {
+        let vol = self.is_volatile(lv.q);
+        let raw = self.load(lv.addr.ty, lv.addr.v, lv.addr.align, vol);
+        match self.m.types.int_width(lv.addr.ty) {
+            Some(p) => {
+                let vt = self.m.types.vector(LTy::I1, p);
+                self.cast(CastOp::BitCast, raw, vt)
+            }
+            None => raw,
+        }
+    }
+
     /// clang `EmitArraySubscriptExpr`.
     fn subscript_lvalue(&mut self, e: ExprId) -> R<LV> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
+        // `LValue::MakeVectorElt`: the vector's address and the
+        // unpromoted index.
+        if let Some((base, idx)) = self.vec_subscript(e) {
+            let blv = self.emit_lvalue(base)?;
+            let i = self.emit_scalar(idx)?;
+            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(i) });
+        }
         let [l, r] = ast.exprs.operands(e);
         let swapped =
             !ast.types.is_pointer(ast.exprs.get(l).ty()) && self.simple_decay_operand(l).is_none();
@@ -1585,7 +2042,7 @@ impl Cg<'_> {
             None => min_align(addr.align, esz),
         };
         let v = self.gep(addr.ty, addr.v, indices, true);
-        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None })
+        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None })
     }
 
     // ---- statement expressions -----------------------------------------
@@ -1644,6 +2101,29 @@ impl Cg<'_> {
         let q = ast.exprs.get(e).ty();
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
+                if ast.exprs.get(e).kind() == ExprKind::VAArgExpr {
+                    // An ignored slot: the `va_list` advances, nothing is
+                    // copied (clang `EmitAggFinalDestCopy`).
+                    return self.emit_va_arg(e, None).map(|_| ());
+                }
+                // clang `AggExprEmitter::withReturnValueSlot`: an ignored
+                // slot gives the call no address, so `EmitCall` makes its
+                // `sret`/coerce temporary after the arguments' `agg.tmp`s.
+                let mut c = e;
+                while ast.exprs.get(c).kind() == ExprKind::ParenExpr {
+                    c = ast.exprs.operand(c);
+                }
+                match ast.exprs.get(c).kind() {
+                    ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
+                        self.emit_call(c, None)?;
+                        return Ok(());
+                    }
+                    ExprKind::CXXMemberCallExpr => {
+                        self.emit_member_call(c, None)?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
             }
@@ -1683,6 +2163,7 @@ impl Cg<'_> {
                         // first argument is the object.
                         if ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
                             && ast.decls.get(d).kind() == DeclKind::CXXMethod
+                            && !self.is_explicit_object_method(d)
                         {
                             let args: Vec<ExprId> =
                                 ast.lists.iter(ast.exprs.call_args(e)).collect();
@@ -1692,10 +2173,17 @@ impl Cg<'_> {
                         }
                         if matches!(ast.decls.get(d).kind(), DeclKind::Function)
                             || self.is_static_method(d)
+                            || self.is_explicit_object_method(d)
                         {
                             direct = Some(d);
                         }
                         break;
+                    }
+                    // `p->~T()` on a scalar ([expr.prim.id.dtor]/2): the
+                    // object expression is evaluated; there is no call.
+                    ExprKind::CXXPseudoDestructorExpr => {
+                        self.emit_ignored(ast.exprs.pseudo_destructor(c).0)?;
+                        return Ok(None);
                     }
                     // `obj.f()` naming a static member function: the object
                     // is evaluated and ignored.
@@ -1734,9 +2222,70 @@ impl Cg<'_> {
             let fty = ast.types.pointee(pq).expect("function pointer");
             (p, fty, false, None)
         };
-        let sig = self.call_sig(fty, extern_c, &arg_tys);
-        let extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
-        self.call_with(&sig, callee, fid, None, &args, dest, &extra)
+        let mut sig = self.call_sig(fty, extern_c, &arg_tys);
+        let mut extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
+        // A callee with a `NoThrowAttr` (a recognized C library function)
+        // or a `const` / `pure` attribute.
+        if let Some(d) = direct {
+            let const_pure = crate::builtins::const_pure_attrs(ast, d, &mut extra);
+            sig.nothrow |= const_pure || ast.has_nothrow_attr(d);
+        }
+        let mut noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
+        if !noreturn {
+            let (site, unreachable) = self.noreturn_call(direct, fty);
+            if site {
+                extra.push(Attr::Flag(AttrKind::NoReturn));
+            }
+            noreturn = unreachable;
+        }
+        let vals = self.emit_call_args(&sig, &args)?;
+        let mut ret_extra = Vec::new();
+        if let Some(d) = direct {
+            self.alloc_call_attrs(d, &vals, &mut extra, &mut ret_extra);
+        }
+        let r =
+            self.call_vals_ret(&sig, callee, fid, None, &vals, &args, dest, &extra, &ret_extra)?;
+        if noreturn {
+            self.finish_noreturn_call();
+        }
+        Ok(r)
+    }
+
+    /// Whether a call of function `d` (`None`: through a pointer) of type
+    /// `fty` gets the `noreturn` call-site attribute, and whether it is
+    /// followed by `unreachable` (clang `ConstructAttributeList`: a
+    /// `[[noreturn]]` virtual function's overriders may return, so only
+    /// the GNU spelling and a `noreturn` function type mark its call
+    /// site; `EmitCall` still ends the block).
+    pub(crate) fn noreturn_call(&self, d: Option<DeclId>, fty: QualType) -> (bool, bool) {
+        let ast = self.ast;
+        let ty_nr = ast.types.proto(fty).is_some_and(|p| p.info().noreturn());
+        let Some(d) = d else { return (ty_nr, ty_nr) };
+        if !ast.is_noreturn_fn(d) {
+            return (ty_nr, ty_nr);
+        }
+        let virt =
+            ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_virtual()));
+        let gnu = ast.redecls_of(d).any(|r| {
+            ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).any(|a| {
+                let n = ast.attrs.get(a);
+                n.kind == kiln_ast::attr::AttrKind::NORETURN
+                    && n.syntax == kiln_ast::attr::AttrSyntax::Gnu
+            })
+        });
+        (ty_nr || gnu || !virt, true)
+    }
+
+    /// clang `EmitCall` of a call that does not return: `unreachable`,
+    /// then a dummy block for the unreachable code that follows.
+    pub(crate) fn finish_noreturn_call(&mut self) {
+        if self.f.fir.cur().is_none() {
+            return;
+        }
+        self.f.fir.push(Op::Unreachable, LTy::VOID);
+        self.f.fir.set_cur(None);
+        let cont = self.f.fir.create_block();
+        self.emit_block(cont, false);
     }
 
     /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
@@ -1796,6 +2345,43 @@ impl Cg<'_> {
         dest: Option<Addr>,
         extra: &[Attr],
     ) -> R<Option<V>> {
+        self.call_vals_to(sig, Callee::Value(callee), fid, this, vals, args, dest, extra, &[])
+    }
+
+    /// [`Self::call_vals`] with extra return attributes `ret_extra`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_vals_ret(
+        &mut self,
+        sig: &Sig,
+        callee: V,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        vals: &[CallArg],
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+        ret_extra: &[Attr],
+    ) -> R<Option<V>> {
+        self.call_vals_to(sig, Callee::Value(callee), fid, this, vals, args, dest, extra, ret_extra)
+    }
+
+    /// [`Self::call_vals_ret`] with a callee that may be computed only after
+    /// the arguments are lowered (clang `EmitCall` step 2,
+    /// `prepareConcreteCallee`: a virtual call loads its vtable slot after
+    /// the argument coercions).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_vals_to(
+        &mut self,
+        sig: &Sig,
+        callee: Callee,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        vals: &[CallArg],
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+        ret_extra: &[Attr],
+    ) -> R<Option<V>> {
         self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
         let rq = sig.ret;
         let mut ir_args = Vec::new();
@@ -1831,6 +2417,10 @@ impl Cg<'_> {
             let loc = args.get(i).and_then(|&a| self.loc_of(a));
             self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
         }
+        let callee = match callee {
+            Callee::Value(v) => v,
+            Callee::Virtual { md, this, align } => self.virtual_fn_ptr(md, None, this, align)?,
+        };
         let rty = match &sig.info.ret.kind {
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
                 let c = coerce.clone();
@@ -1838,27 +2428,51 @@ impl Cg<'_> {
             }
             _ => LTy::VOID,
         };
-        let (ret, params) = self.sig_attrs(sig, vals.len(), false);
+        let (mut ret, params) = self.sig_attrs(sig, vals.len(), false);
+        if !ret_extra.is_empty() {
+            let mut ra = self.m.attrs_of(ret).to_vec();
+            ra.extend(ret_extra.iter().cloned());
+            ret = self.m.attr_set(&ra);
+        }
         let func = if sig.nothrow {
             let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
             fa.extend(extra.iter().cloned());
             self.m.attr_set(&fa)
+        } else if !extra.is_empty() {
+            self.m.attr_set(extra)
         } else {
             AttrList::default().func
         };
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
         let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
         if let Some(a) = sret_addr {
-            let _ = a;
+            // clang `convertTempToRValue`: a scalar returned indirectly
+            // (a vector wider than the registers) is loaded back.
+            if !self.is_aggregate(rq)
+                && !matches!(
+                    self.ast.types.canonical_view(rq),
+                    kiln_ast::types::TypeView::Complex(_)
+                )
+            {
+                return Ok(Some(self.load_scalar(a, rq)));
+            }
             return Ok(None);
         }
         if rty == LTy::VOID {
             return Ok(None);
         }
         if self.is_aggregate(rq) {
-            let d = match dest {
-                Some(d) => d,
-                None => self.temp(rq),
+            // clang `EmitCall`: a given destination takes the data size
+            // (`getTypeInfoDataSizeInChars`; it may be a base subobject or
+            // a `[[no_unique_address]]` member whose tail padding holds
+            // other members), a fresh temporary the whole object.
+            let (size, _) = self.size_align(rq);
+            let (d, size) = match dest {
+                Some(d) => {
+                    let ds = self.ast.types.as_record(rq).and_then(|r| self.class_def(r));
+                    (d, ds.map_or(size, |r| self.tys.layouter().record(r).data_size))
+                }
+                None => (self.temp(rq), size),
             };
             let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) =
                 sig.info.ret.kind.clone()
@@ -1871,7 +2485,6 @@ impl Cg<'_> {
             } else {
                 // (Empty records are returned `Ignore` on both targets, so
                 // clang's empty-record skip cannot arise here.)
-                let (size, _) = self.size_align(rq);
                 self.coerced_store_sized(r, &coerce, d, size);
             }
             return Ok(None);
@@ -2005,6 +2618,23 @@ impl Cg<'_> {
         let n = *ast.exprs.get(e);
         let q = n.ty();
         match n.kind() {
+            ExprKind::ConstantExpr if self.immediate_value(e).is_some() => {
+                // clang `AggExprEmitter::VisitConstantExpr`: the value of
+                // an immediate invocation, stored by `CreateCoercedStore`.
+                // The destination size is `AggValueSlot::getPreferredSize`:
+                // the data size when the slot may overlap.
+                let overlap = std::mem::take(&mut self.f.overlap);
+                let c = self.immediate_value(e).expect("guarded");
+                let k = self.const_value(c, q, Some(e), true)?;
+                let size = match ast.types.as_record(q) {
+                    Some(rd) if overlap && self.array_elem(q).is_none() => {
+                        Some(self.copy_size(rd, true))
+                    }
+                    _ => None,
+                };
+                self.coerced_store_const(k, dest, size, self.is_volatile(q));
+                Ok(())
+            }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
@@ -2024,10 +2654,13 @@ impl Cg<'_> {
                 r
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
+            ExprKind::AtomicExpr => self.emit_atomic_expr(e, Some(dest)).map(|_| ()),
+            ExprKind::VAArgExpr => self.emit_va_arg(e, Some(dest)).map(|_| ()),
             ExprKind::CXXThrowExpr => self.emit_throw(e, true),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)
             }
+            ExprKind::CXXInheritedCtorInitExpr => self.emit_inherited_ctor_init(e, dest),
             ExprKind::CXXStdInitializerListExpr => self.std_initializer_list(e, dest),
             ExprKind::CXXBindTemporaryExpr => {
                 let destructed = std::mem::take(&mut self.f.dest_destructed);
@@ -2039,7 +2672,12 @@ impl Cg<'_> {
                 Ok(())
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
-                Some(init) => self.agg_visit(init, dest, zeroed),
+                Some(init) => {
+                    let saved = self.enter_default_arg(e);
+                    let r = self.agg_visit(init, dest, zeroed);
+                    self.srcloc = saved;
+                    r
+                }
                 None => err(self.loc_of(e), "default member initializer not yet parsed"),
             },
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
@@ -2052,7 +2690,18 @@ impl Cg<'_> {
                 self.emit_member_call(e, Some(dest))?;
                 Ok(())
             }
-            ExprKind::InitListExpr => {
+            // A braced `_Atomic` initializer holds its one converted
+            // element (clang `InitListExpr::isTransparent`).
+            ExprKind::InitListExpr if ast.types.as_atomic(q).is_some() => {
+                match ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(e)).next() {
+                    Some(x) => self.agg_visit(x, dest, zeroed),
+                    None => err(self.loc_of(e), "empty `_Atomic` initializer list"),
+                }
+            }
+            // clang `VisitCXXParenListOrInitListExpr`: a parenthesized
+            // aggregate initialization ([dcl.init.general]/16.5, /16.6.2.2)
+            // is emitted as the braced list with the same elements.
+            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr => {
                 if ast.types.is_array(q) {
                     self.array_init(e, dest, zeroed)
                 } else {
@@ -2079,6 +2728,14 @@ impl Cg<'_> {
             k if k.is_cast()
                 && matches!(
                     ast.exprs.cast_kind(e),
+                    CastKind::NonAtomicToAtomic | CastKind::AtomicToNonAtomic
+                ) =>
+            {
+                self.agg_atomic_cast(e, dest, zeroed)
+            }
+            k if k.is_cast()
+                && matches!(
+                    ast.exprs.cast_kind(e),
                     CastKind::NoOp
                         | CastKind::LValueToRValue
                         | CastKind::LValueToRValueBitCast
@@ -2089,6 +2746,10 @@ impl Cg<'_> {
                 let s = ast.exprs.operand(e);
                 if self.is_glvalue(s) {
                     let lv = self.emit_lvalue(s)?;
+                    if self.is_atomic_aggregate(lv.q) {
+                        self.atomic_agg_load(lv, dest);
+                        return Ok(());
+                    }
                     let size = self.size_align(q).0;
                     let vol = self.is_volatile(q) || self.is_volatile(lv.q);
                     self.agg_copy(q, dest, lv.addr, size, vol);
@@ -2102,6 +2763,10 @@ impl Cg<'_> {
             | ExprKind::ArraySubscriptExpr
             | ExprKind::UnaryOperator => {
                 let lv = self.emit_lvalue(e)?;
+                if self.is_atomic_aggregate(lv.q) {
+                    self.atomic_agg_load(lv, dest);
+                    return Ok(());
+                }
                 let size = self.size_align(q).0;
                 self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
@@ -2112,6 +2777,27 @@ impl Cg<'_> {
                 self.ensure_insert_point();
                 self.agg_visit(r, dest, zeroed)
             }
+            // clang `AggExprEmitter::VisitAbstractConditionalOperator`: each
+            // arm initializes the destination in its own block.
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                let c = self.sub(e);
+                if let Some(x) = self.fold_bool(c) {
+                    return self.agg_visit(if x { a } else { b }, dest, zeroed);
+                }
+                let lb = self.f.fir.create_block();
+                let rb = self.f.fir.create_block();
+                let cont = self.f.fir.create_block();
+                let start = self.f.fir.cur();
+                self.branch_on_bool(c, lb, rb)?;
+                self.emit_block(lb, false);
+                self.cond_eval(start, |cg| cg.agg_visit(a, dest, zeroed))?;
+                self.br(cont);
+                self.emit_block(rb, false);
+                self.cond_eval(start, |cg| cg.agg_visit(b, dest, zeroed))?;
+                self.emit_block(cont, false);
+                Ok(())
+            }
             ExprKind::StringLiteral => {
                 // A literal initializing a (possibly longer) char array:
                 // copy from the literal's constant padded to the array.
@@ -2119,6 +2805,43 @@ impl Cg<'_> {
                 let g = self.lit_global_sized(ast.exprs.string_lit(e), size);
                 let align = self.m.global(g).align.unwrap_or(1);
                 self.memcpy(dest, V::C(gval(g)), align, size, false);
+                Ok(())
+            }
+            ExprKind::ArrayInitLoopExpr => self.array_init_loop(e, dest, None),
+            // clang `AggExprEmitter::VisitLambdaExpr`: each capture
+            // initializes its field; a captureless closure has nothing to
+            // initialize.
+            ExprKind::LambdaExpr => {
+                let l = ast.exprs.lambda(e);
+                let inits: Vec<ExprId> =
+                    l.inits.map(|x| ast.lists.iter::<ExprId>(x).collect()).unwrap_or_default();
+                let fields: Vec<DeclId> = l.captures.iter().filter_map(|c| c.field).collect();
+                let rty = self.record_ty(l.closure);
+                let base = Addr { v: dest.v, ty: rty, align: dest.align };
+                // [except.ctor]/3: an initialized capture is destroyed if a
+                // later one throws (`pushDestroyAndDeferDeactivation`).
+                let mut deferred = Vec::new();
+                for (f, init) in fields.into_iter().zip(inits) {
+                    let fq = ast.decls.get(f).ty().expect("capture type");
+                    let lv = self.field_lvalue_init(base, f, fq)?;
+                    if self.referee(fq).is_some() {
+                        // clang `EmitInitializationToLValue` on a
+                        // reference: bind, then store the address.
+                        let p = self.emit_ref_binding(init)?;
+                        self.store(p, lv.addr.v, lv.addr.align, false);
+                    } else {
+                        self.init_to_lvalue(init, lv, false)?;
+                    }
+                    if let Some(frd) = self.destructed_class(fq) {
+                        let c = if self.array_elem(fq).is_some() {
+                            Cleanup::ArrayDtor { addr: lv.addr, record: frd }
+                        } else {
+                            Cleanup::Dtor { addr: lv.addr.v, record: frd, base: false }
+                        };
+                        self.push_deferred_destroy(c, &mut deferred);
+                    }
+                }
+                self.deactivate_deferred(deferred);
                 Ok(())
             }
             ExprKind::BinaryOperator if ast.exprs.binary_op(e) == BinaryOp::Cmp => {
@@ -2203,6 +2926,17 @@ impl Cg<'_> {
         let k = ast.exprs.get(e).kind();
         if matches!(k, ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr) {
             return self.null_init_lvalue(lv, zeroed);
+        }
+        if lv.bf.is_none() && self.referee(lv.q).is_some() {
+            // A reference member binds to its initializer's address
+            // (clang `EmitInitializationToLValue`, reference case).
+            let p = self.emit_ref_binding(e)?;
+            self.store(p, lv.addr.v, lv.addr.align, false);
+            return Ok(());
+        }
+        if lv.bf.is_none() && self.ast.types.as_atomic(lv.q).is_some() {
+            // clang `EmitAtomicInit` (WP-165).
+            return self.atomic_init(e, lv);
         }
         if self.is_aggregate(lv.q) {
             // `AggValueSlot::IsDestructed`: the enclosing object owns the
@@ -2290,14 +3024,14 @@ impl Cg<'_> {
         let Some(rd) = ast.types.as_record(q) else {
             return err(self.loc_of(e), "initializer list of non-aggregate type");
         };
-        let inits: Vec<ExprId> = ast.lists.iter(ast.exprs.init_list_inits(e)).collect();
+        let (inits, _, union_field) = agg_init_parts(ast, e);
         let is_union = self.tys.record(rd).is_union;
         let rty = self.record_ty(rd);
         let base = Addr { v: dest.v, ty: rty, align: dest.align };
         if is_union {
-            let Some(f) = ast.exprs.init_list(e).union_field else { return Ok(()) };
+            let Some(f) = union_field else { return Ok(()) };
             let fq = ast.decls.get(f).ty().expect("field type");
-            let lv = self.field_lvalue(base, f, fq)?;
+            let lv = self.init_field_lvalue(base, f, fq)?;
             return match inits.first() {
                 Some(&i) => self.init_to_lvalue(i, lv, zeroed),
                 None => self.null_init_lvalue(lv, zeroed),
@@ -2348,7 +3082,7 @@ impl Cg<'_> {
                 break;
             }
             let fq = ast.decls.get(f).ty().expect("field type");
-            let lv = self.field_lvalue(base, f, fq)?;
+            let lv = self.init_field_lvalue(base, f, fq)?;
             if k < inits.len() {
                 self.init_to_lvalue(inits[k], lv, zeroed)?;
                 k += 1;
@@ -2365,6 +3099,84 @@ impl Cg<'_> {
             }
         }
         self.deactivate_deferred(deferred);
+        Ok(())
+    }
+
+    /// clang `AggExprEmitter::VisitArrayInitLoopExpr`: binds the common
+    /// expression, then initializes each element of `dest` in a loop.
+    /// `outer` is the outermost loop's first element (a nested loop shares
+    /// its partial-array cleanup).
+    fn array_init_loop(&mut self, e: ExprId, dest: Addr, outer: Option<V>) -> R<()> {
+        let ast = self.ast;
+        let q = ast.exprs.get(e).ty();
+        let [ove, sub] = ast.exprs.array_init_loop(e);
+        let src = ast.exprs.opaque_source(ove);
+        if let Some(src) = src {
+            let v = if self.is_glvalue(src) {
+                Opaque::Lv(self.emit_lvalue(src)?)
+            } else {
+                Opaque::Rv(self.emit_scalar_opt(src)?)
+            };
+            self.f.opaque.insert(src, v);
+        }
+        let n = ast.types.array_size(q).unwrap_or(0);
+        if n == 0 {
+            if let Some(src) = src {
+                self.f.opaque.remove(&src);
+            }
+            return Ok(());
+        }
+        let eq = ast.types.element(q).expect("element type");
+        let esz = self.size_align(eq).0;
+        let ety = self.mty(eq);
+        let ealign = min_align(dest.align, esz);
+        let zero = self.i64c(0);
+        let begin = self.gep(dest.ty, dest.v, vec![zero, zero], true);
+        let entry = self.f.fir.cur().expect("insertion point");
+        let body = self.f.fir.create_block();
+        self.emit_block(body, false);
+        let phi = self.f.fir.push(Op::Phi { ty: LTy::I64, inc: vec![(zero, entry)] }, LTy::I64);
+        let el = self.gep(ety, begin, vec![phi], true);
+        let outer = outer.unwrap_or(begin);
+        let inner = ast.exprs.get(sub).kind() == ExprKind::ArrayInitLoopExpr;
+        // The elements initialized so far are destroyed if an
+        // initialization throws ([except.ctor]/3,
+        // `pushRegularPartialArrayCleanup`).
+        let mut cleanup = None;
+        if self.opts.exceptions
+            && !inner
+            && let Some(record) = self.destructed_class(eq)
+        {
+            let c = Cleanup::PartialArray { begin: outer, end: el, elem: ety, record };
+            self.push_full_expr_cleanup(c, false, true);
+            cleanup = Some(self.f.cl.depth());
+        }
+        self.f.array_index.push(phi);
+        let sc = self.begin_scope(false);
+        let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
+        let r = if inner {
+            self.array_init_loop(sub, lv.addr, Some(outer))
+        } else {
+            self.init_to_lvalue(sub, lv, false)
+        };
+        self.end_scope(sc);
+        self.f.array_index.pop();
+        r?;
+        let one = self.i64c(1);
+        let next = self.bin(BinOp::Add, Flags::NUW, phi, one);
+        let cur = self.f.fir.cur().expect("insertion point");
+        self.f.fir.add_incoming(Fir::last_inst(phi), next, cur);
+        let nn = self.i64c(i128::from(n));
+        let done = self.icmp(IntPredicate::Eq, next, nn);
+        let end = self.f.fir.create_block();
+        self.cond_br(done, end, body);
+        self.emit_block(end, false);
+        if let Some(c) = cleanup {
+            self.deactivate_cleanup_block(c, Fir::last_inst(phi));
+        }
+        if let Some(src) = src {
+            self.f.opaque.remove(&src);
+        }
         Ok(())
     }
 
@@ -2398,7 +3210,7 @@ impl Cg<'_> {
         let q = ast.exprs.get(e).ty();
         let eq = ast.types.element(q).expect("element type");
         let n_elems = ast.types.array_size(q).unwrap_or(0);
-        let inits: Vec<ExprId> = ast.lists.iter(ast.exprs.init_list_inits(e)).collect();
+        let (inits, filler, _) = agg_init_parts(ast, e);
         let esz = self.size_align(eq).0;
         let ety = self.mty(eq);
         let ealign = min_align(dest.align, esz);
@@ -2440,10 +3252,10 @@ impl Cg<'_> {
                 }
                 el
             };
-            let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None };
+            let lv =
+                LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
             self.init_to_lvalue(init, lv, zeroed)?;
         }
-        let filler = ast.exprs.init_list(e).array_filler;
         let trivial = match filler {
             None => true,
             Some(f) => self.is_trivial_filler(f),
@@ -2463,7 +3275,8 @@ impl Cg<'_> {
             let body = self.f.fir.create_block();
             self.emit_block(body, false);
             let cur = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(el, entry)] }, LTy::PTR);
-            let lv = LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None };
+            let lv =
+                LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
             // [class.temporary]/5: the temporaries of each element's
             // initialization are destroyed before the next one starts.
             let sc = self.begin_scope(false);
@@ -2507,14 +3320,29 @@ impl Cg<'_> {
 
     // ---- local variables -----------------------------------------------
 
-    /// clang `EmitVarDecl` for a block-scope variable.
+    /// clang `EmitVarDecl` for a block-scope variable; a decomposition's
+    /// tuple-like bindings' holding variables follow it (clang
+    /// `EmitDecl` of a `DecompositionDecl`).
     pub(crate) fn emit_var_decl(&mut self, d: DeclId) -> R<()> {
+        self.emit_one_var_decl(d)?;
+        let ast = self.ast;
+        if let Some(l) = ast.decls.decomp_bindings(d) {
+            for b in ast.lists.iter::<DeclId>(l).collect::<Vec<_>>() {
+                if let Some(h) = ast.decls.binding_var(b) {
+                    self.emit_one_var_decl(h)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_one_var_decl(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
         match v.spec.storage() {
             VarStorage::Static => {
-                self.static_local(d)?;
-                return Ok(());
+                let g = self.static_local(d)?;
+                return self.static_local_init(d, g);
             }
             VarStorage::Extern => return Ok(()),
             _ => {}
@@ -2545,16 +3373,18 @@ impl Cg<'_> {
             (Addr { v: a, ty, align }, None)
         };
         self.f.locals.insert(d, addr);
-        if self.f.fir.cur().is_none() {
-            return Ok(());
-        }
-        // Default-initialization by a trivial constructor emits nothing,
-        // but a non-trivial destructor still runs (`EmitAutoVarCleanups`).
-        let Some(init) = v.init else { return Ok(()) };
-        if !ast.is_trivial_default_construction(init) || ast.exprs.construct_info(init).zeroing {
+        // Default-initialization by a trivial constructor emits nothing
+        // (but a non-trivial destructor still gets its cleanup).
+        let init = v.init.filter(|&i| {
+            !ast.is_trivial_default_construction(i) || ast.exprs.construct_info(i).zeroing
+        });
+        if let Some(init) = init
+            && self.f.fir.cur().is_some()
+        {
             self.emit_var_init(d, q, addr, init)?;
         }
-        // clang `EmitAutoVarCleanups`.
+        // clang `EmitAutoVarCleanups`: no insertion point, no cleanup
+        // (sema rejects jumps into the variable's scope).
         if self.f.fir.cur().is_none() {
             return Ok(());
         }
@@ -2572,13 +3402,23 @@ impl Cg<'_> {
     }
 
     /// clang `EmitAutoVarInit` for variable `d` of type `q` at `addr`.
-    fn emit_var_init(&mut self, d: DeclId, q: QualType, addr: Addr, init: ExprId) -> R<()> {
+    pub(crate) fn emit_var_init(
+        &mut self,
+        d: DeclId,
+        q: QualType,
+        addr: Addr,
+        init: ExprId,
+    ) -> R<()> {
         let ast = self.ast;
         if self.referee(q).is_some() {
             // A reference binds the address of its initializer glvalue.
             let p = self.emit_ref_binding(init)?;
             self.store(p, addr.v, addr.align, false);
             return Ok(());
+        }
+        if ast.types.as_atomic(q).is_some() {
+            // clang `EmitExprAsInit` -> `EmitAtomicInit` (WP-165).
+            return self.atomic_init(init, LV { addr, q, bf: None, vidx: None });
         }
         let fold = self.folds.get(init);
         if self.is_aggregate(q) {
@@ -2727,6 +3567,59 @@ impl Cg<'_> {
     }
 
     /// clang `emitStoresForConstant`.
+    /// clang 19 `CreateCoercedStore` of constant `k` into `dst` (whose
+    /// size is that of its IR type), with `BuildAggStore` splitting a
+    /// first-class struct into one store per element.
+    fn coerced_store_const(&mut self, k: Value, dst: Addr, size: Option<u64>, vol: bool) {
+        let dst_size = size.unwrap_or_else(|| self.alloc_size(dst.ty));
+        if dst_size == 0 {
+            return;
+        }
+        let st = self.m.const_type(k);
+        let src_size = self.alloc_size(st);
+        let mut dst = dst;
+        if st != dst.ty {
+            dst = self.enter_struct_for_coerce(dst, src_size);
+        }
+        if src_size > dst_size {
+            // `CreateTempAllocaForCoercion`: at least the preferred
+            // alignment (8 for a struct, `a:0:64` on both targets).
+            let pref = if self.m.types.struct_fields(st).is_some() {
+                let abi = if self.m.types.struct_is_packed(st) { 1 } else { self.ir_layout(st).1 };
+                abi.max(8)
+            } else {
+                self.ir_layout(st).1
+            };
+            let a = pref.max(dst.align);
+            let tmp = self.f.fir.alloca(st, a);
+            self.store(V::C(k), tmp, a, vol);
+            self.memcpy_v(dst, tmp, a, dst_size);
+            return;
+        }
+        let Some(fields) = self.struct_fields(st) else {
+            self.store(V::C(k), dst.v, dst.align, vol);
+            return;
+        };
+        let elems = match self.const_elems(k) {
+            Some(es) if es.len() == fields.len() => es,
+            _ => match self.m.const_of(k) {
+                Some(ConstData::Zero(_)) => fields.iter().map(|&f| self.m.const_zero(f)).collect(),
+                Some(ConstData::Undef(_)) => {
+                    fields.iter().map(|&f| self.m.const_undef(f)).collect()
+                }
+                _ => {
+                    self.store(V::C(k), dst.v, dst.align, vol);
+                    return;
+                }
+            },
+        };
+        let offs = self.struct_field_offsets(st);
+        for (i, ek) in elems.into_iter().enumerate() {
+            let p = self.struct_gep(st, dst.v, i as u32);
+            self.store(V::C(ek), p, min_align(dst.align, offs[i]), vol);
+        }
+    }
+
     fn stores_for_constant(&mut self, d: DeclId, at: Addr, k: Value, vol: bool) -> R<()> {
         let ty = self.m.const_type(k);
         let size = self.alloc_size(ty);
@@ -2765,4 +3658,21 @@ impl Cg<'_> {
 fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
     let p = ast.exprs.default_arg_param(e);
     ast.decls.param(p).and_then(|x| x.default_arg)
+}
+
+/// The elements, array filler and initialized union member of an
+/// aggregate initialization: an `InitListExpr` or a
+/// `CXXParenListInitExpr` (clang `VisitCXXParenListOrInitListExpr`).
+pub(crate) fn agg_init_parts(
+    ast: &kiln_ast::Ast,
+    e: ExprId,
+) -> (Vec<ExprId>, Option<ExprId>, Option<DeclId>) {
+    if ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
+        let inits = ast.lists.iter(ast.exprs.paren_list_inits(e)).collect();
+        let x = &ast.exprs;
+        return (inits, x.paren_list_filler(e), x.paren_list_union_field(e));
+    }
+    let inits = ast.lists.iter(ast.exprs.init_list_inits(e)).collect();
+    let l = ast.exprs.init_list(e);
+    (inits, l.array_filler, l.union_field)
 }

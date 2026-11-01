@@ -21,6 +21,7 @@ use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::subst::Substituter;
+use crate::type_diff::DiffArgs as _;
 
 impl Sema<'_, '_> {
     /// The specialization of function template `tmpl` for converted
@@ -48,7 +49,14 @@ impl Sema<'_, '_> {
         if !kind.is_function() {
             return Err(());
         }
-        let fspec = self.ast.decls.function(pattern).map(|x| x.spec).unwrap_or_default();
+        // A specialization escalates on its own (P2564): clang does not
+        // carry an escalated pattern's `immediate` over.
+        let fspec = self
+            .ast
+            .decls
+            .function(pattern)
+            .map(|x| x.spec.with_escalated(false))
+            .unwrap_or_default();
         let spec = self.builder().function_spec(
             tmpl,
             args.sugared,
@@ -66,12 +74,13 @@ impl Sema<'_, '_> {
         }
         let Some((_, margs)) = self.spec_args(spec) else { return Err(()) };
         let ctx = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
-        let pairs = self.inst_context_pairs(ctx);
+        let pairs = self.inst_context_pairs(self.spec_pairs_ctx(spec, tmpl));
         let r = self.in_inst_context(ctx, |s| {
             let mut sub = Substituter::new(s, &margs);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
-            sub.function_spec_signature(pattern, spec)
+            sub.function_spec_signature(pattern, spec)?;
+            sub.function_spec_explicit(pattern, spec)
         });
         if r.is_err() {
             self.ast.decls.set_flags(spec, DeclFlags::INVALID);
@@ -93,8 +102,12 @@ impl Sema<'_, '_> {
     /// `f<int>`: how function template specialization `spec` (of `tmpl`
     /// with `args`) prints in an instantiation note.
     pub(crate) fn function_spec_name(&self, spec: DeclId, tmpl: DeclId, args: ArgListId) -> String {
-        let _ = spec;
-        self.spec_name(tmpl, args)
+        if self.kind_of(spec) != DeclKind::CXXConversion {
+            return self.spec_name(tmpl, args);
+        }
+        // A conversion function template specialization is named by its
+        // substituted target type, then its arguments (`operator int<int>`).
+        self.qualified_decl_name(spec)
     }
 
     /// clang's template argument binding string, `[with T = int, N = 3]`,
@@ -107,7 +120,7 @@ impl Sema<'_, '_> {
             if matches!(a.view(), kiln_ast::types::ArgView::Null) {
                 continue;
             }
-            parts.push(format!("{} = {}", self.decl_name(*p), self.arg_str(a)));
+            parts.push(format!("{} = {}", self.decl_name(*p), self.binding_arg_str(a)));
         }
         format!("[with {}]", parts.join(", "))
     }
@@ -151,7 +164,7 @@ impl Sema<'_, '_> {
             });
         }
         let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
-        let pairs = self.inst_context_pairs(ctx);
+        let pairs = self.inst_context_pairs(self.spec_pairs_ctx(f, tmpl));
         self.in_inst_context(ctx, |s| {
             s.act_on_start_function_def(f);
             let pp: Vec<DeclId> = s
@@ -199,16 +212,18 @@ impl Sema<'_, '_> {
                 sub.sema.act_on_mem_initializers(f, &[], colon);
             }
             let b = sub.body(body);
-            let failed = sub.failed;
-            s.act_on_finish_function_def(f, b, rbrace);
-            if failed {
-                // [temp.inst]: a body that failed to instantiate makes the
-                // specialization invalid (clang `setInvalidDecl`): later
-                // deductions find it a substitution failure, constant
-                // evaluation a "subexpression not valid".
+            // A statement of the body failed: the specialization is
+            // invalid (clang's `InstantiateFunctionDefinition` marks it
+            // when the body is `StmtError`), so a later call deduces it
+            // as a substitution failure and an undeduced placeholder
+            // return type is not deduced `void` (spec/sema-templates.md
+            // §5.5).
+            if sub.stmt_failed {
                 s.ast.decls.set_flags(f, DeclFlags::INVALID);
             }
+            s.act_on_finish_function_def(f, b, rbrace);
         });
+        self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
     }
 }
@@ -216,11 +231,11 @@ impl Sema<'_, '_> {
 /// A function template matched by the declarator of an explicit
 /// specialization or instantiation ([temp.deduct.decl]).
 #[derive(Clone, Copy)]
-struct SpecMatch {
+pub(crate) struct SpecMatch {
     /// The specialization deduced.
-    spec: DeclId,
+    pub(crate) spec: DeclId,
     /// The function template it specializes.
-    template: DeclId,
+    pub(crate) template: DeclId,
 }
 
 impl Sema<'_, '_> {
@@ -270,7 +285,7 @@ impl Sema<'_, '_> {
         self.templ.cur = None;
         let dname = match (d.op_name, d.name) {
             (Some(op), _) => DeclName::operator(op),
-            (None, Some((n, _))) => DeclName::ident(n),
+            (None, Some((n, _))) => d.fn_decl_name(n),
             _ => {
                 self.error(DiagId::parse_expected_unqualified_id, d.loc);
                 return None;
@@ -318,8 +333,16 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<SpecMatch> {
         let explicit = d.spec_id.as_ref().map(|s| self.ast.types.arg_list(&s.args));
+        let found = self.prev_candidates_dn(name, d.qualifier);
+        let templates = self.function_templates_in(&found);
+        self.match_function_spec_in(&templates, explicit, name, ty, inst, loc)
+    }
+
+    /// The function templates among `found` (first declarations, once
+    /// each).
+    pub(crate) fn function_templates_in(&self, found: &[DeclId]) -> Vec<DeclId> {
         let mut templates: Vec<DeclId> = Vec::new();
-        for c in self.prev_candidates_dn(name, d.qualifier) {
+        for &c in found {
             if self.kind_of(c) == DeclKind::FunctionTemplate {
                 let c = self.ast.first(c);
                 if !templates.contains(&c) {
@@ -327,9 +350,23 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        templates
+    }
+
+    /// [`Self::match_function_spec`] over the candidate `templates`, with
+    /// the `explicit` template arguments written.
+    pub(crate) fn match_function_spec_in(
+        &mut self,
+        templates: &[DeclId],
+        explicit: Option<ArgListId>,
+        name: DeclName,
+        ty: QualType,
+        inst: bool,
+        loc: Loc,
+    ) -> Option<SpecMatch> {
         let mut matches: Vec<SpecMatch> = Vec::new();
         let mut failures = Vec::new();
-        for &ft in &templates {
+        for &ft in templates {
             match self.deduce_funcaddr(ft, explicit, ty, loc) {
                 Ok(s) => {
                     let sty = self.ast.decls.get(s).ty().unwrap_or(QualType::ERROR);
@@ -338,8 +375,7 @@ impl Sema<'_, '_> {
                     } else {
                         let n = self
                             .diag(DiagId::note_deduction_non_deduced_mismatch, self.loc_of(ft))
-                            .arg(self.ty_str(sty))
-                            .arg(self.ty_str(ty));
+                            .diff_args(self, sty, ty);
                         failures.push(n);
                     }
                 }
@@ -548,7 +584,15 @@ impl Sema<'_, '_> {
         // An invalid out-of-line declaration is not found (clang does
         // not add it to its context).
         cands.retain(|&c| !self.ast.decls.get(c).has(DeclFlags::INVALID));
-        if cands.iter().any(|&c| self.kind_of(c) == DeclKind::FunctionTemplate) {
+        // A non-template member that matches wins over the member
+        // templates of the same name (clang's `ActOnExplicitInstantiation`
+        // and `CheckMemberSpecialization` try the non-templates first;
+        // libc++'s `extern template basic_string<char>&
+        // basic_string<char>::replace(size_type, ...)` beside the
+        // `replace` templates); explicit template arguments name a
+        // template's specialization.
+        let templates = cands.iter().any(|&c| self.kind_of(c) == DeclKind::FunctionTemplate);
+        if templates && d.spec_id.is_some() {
             return None;
         }
         let mut exc = None;
@@ -563,8 +607,18 @@ impl Sema<'_, '_> {
                 return Some(Some(self.ast.first(c)));
             }
             if exc.is_none() && self.same_ignoring_exc_spec(pty, ty) {
+                // [except.spec]/4 (C++11): an explicit instantiation need
+                // not repeat the exception specification (libc++'s
+                // extern template list omits `noexcept`; clang's
+                // `adjustCCAndNoReturn(..., AdjustExceptionSpec)`).
+                if inst && matches!(self.written_exc_spec(ty), kiln_ast::types::ExcSpec::None) {
+                    return Some(Some(self.ast.first(c)));
+                }
                 exc = Some(c);
             }
+        }
+        if templates {
+            return None;
         }
         if let Some(p) = exc {
             // [except.spec]/5.
@@ -621,11 +675,15 @@ impl Sema<'_, '_> {
             fspec = fspec
                 .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Constexpr)
                 .with_implicit_inline(true);
+        } else if ds.consteval.is_some() {
+            fspec = fspec
+                .with_constexpr_kind(kiln_ast::decl::ConstexprKind::Consteval)
+                .with_implicit_inline(true);
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         fspec = fspec.with_variadic(variadic);
         let old = self.ast.decls.function(old).map(|x| x.spec).unwrap_or_default();
-        fspec.with_storage(old.storage())
+        fspec.with_storage(old.storage()).with_explicit_object(old.has_explicit_object())
     }
 
     /// The new declaration of an explicit specialization `s` (of a
@@ -688,7 +746,18 @@ impl Sema<'_, '_> {
             x.point_of_instantiation = Loc::INVALID;
         });
         if info.kind != SpecKind::ExplicitSpecialization {
-            self.ast.decls.respecify_function(m, fspec);
+            // The member keeps what its in-class declaration said about
+            // virtuality ([class.virtual]; clang's `isVirtual` reads the
+            // canonical declaration): dropping it would drop the member's
+            // vtable slot (WP-164).
+            let old = self.ast.decls.function(m).map(|x| x.spec).unwrap_or_default();
+            let member = fspec
+                .with_virtual(old.is_virtual())
+                .with_pure(old.is_pure())
+                .with_virtual_written(old.virtual_written())
+                .with_override(old.is_override())
+                .with_final(old.is_final());
+            self.ast.decls.respecify_function(m, member);
         }
         Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
     }
@@ -731,7 +800,12 @@ impl Sema<'_, '_> {
 
     /// `[extern] template R C<args>::f(params);` for member `m` of a
     /// class template specialization ([temp.explicit]/3, §4.5).
-    fn act_on_explicit_member_inst(&mut self, m: DeclId, declaration: bool, name_loc: Loc) {
+    pub(crate) fn act_on_explicit_member_inst(
+        &mut self,
+        m: DeclId,
+        declaration: bool,
+        name_loc: Loc,
+    ) {
         let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) else { return };
         let name = self.qualified_decl_name(m);
         match (info.kind, declaration) {
@@ -785,6 +859,13 @@ impl Sema<'_, '_> {
             x.point_of_instantiation = name_loc;
         });
         if !declaration {
+            // [temp.explicit]/10: clang hands the definition to codegen
+            // where the explicit instantiation appears.
+            let lexical = self.ctx;
+            if let Some(list) = self.ast.decls.member_list(lexical) {
+                let after = list.last.unwrap_or(lexical);
+                self.ast.templates.add_explicit_member_inst(after, m);
+            }
             self.instantiate_function_definition(m, name_loc);
             if self.ast.definition(m).is_none() {
                 self.queue_instantiation(m, name_loc);
@@ -804,20 +885,40 @@ impl Sema<'_, '_> {
     pub fn act_on_template_member(
         &mut self,
         base: ExprId,
-        name: kiln_source::symbol::Symbol,
+        name: DeclName,
         targs: Option<ArgListId>,
         template_kw: bool,
         loc: Loc,
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
-        if let Some(e) = self.try_dependent_member(base, name, targs, template_kw, loc, arrow) {
+        self.act_on_template_member_q(base, None, name, targs, template_kw, loc, op_loc, arrow)
+    }
+
+    /// [`Sema::act_on_template_member`] with an optional
+    /// nested-name-specifier before the name (`e.N::template f<T>`,
+    /// WP-121).
+    #[allow(clippy::too_many_arguments, reason = "the operands of a member access")]
+    pub fn act_on_template_member_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        name: DeclName,
+        targs: Option<ArgListId>,
+        template_kw: bool,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        if let Some(e) =
+            self.try_dependent_member_q(base, qual, name, targs, template_kw, loc, arrow)
+        {
             if op_loc != loc {
                 let _ = self.ast.templates.member_op_loc.insert(e, op_loc);
             }
             return e;
         }
-        let e = self.act_on_member(base, name, loc, op_loc, arrow);
+        let e = self.act_on_member_q(base, qual, name, loc, op_loc, arrow);
         if self.is_err_expr(e) {
             return e;
         }
@@ -827,7 +928,7 @@ impl Sema<'_, '_> {
             }
             let mut d = self
                 .diag(DiagId::sema_template_kw_refers_to_non_template, loc)
-                .arg(crate::decl::sym_str(self, name));
+                .arg(self.decl_name_str(name));
             if self.ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MemberExpr {
                 let at = self.ast.decls.get(self.ast.exprs.decl(e)).loc();
                 d = d.with_note(self.diag(DiagId::note_declared_non_template, at));

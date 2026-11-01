@@ -11,7 +11,7 @@
 //! ill-formed, no diagnostic required, and kiln treats them as different
 //! (as clang does).
 
-use kiln_ast::decl::{DeclKind, FnStorage};
+use kiln_ast::decl::{DeclKind, FnStorage, FriendKind};
 use kiln_ast::{DeclId, ExprId, TemplateParamListId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -78,6 +78,34 @@ impl Sema<'_, '_> {
             .and_then(|t| self.ast.template_info(t))
             .map(|i| i.params);
         self.ast.decls.function(d).map(|_| (d, head))
+    }
+
+    /// Whether class template `t` was declared by a friend declaration
+    /// in a dependent context (`template<C U> friend class X;` in a class
+    /// template): its head is deeper than the namespace scope template's
+    /// and may name the enclosing template's parameters, so it is not
+    /// compared with other declarations' heads ([temp.friend]; clang's
+    /// `CheckClassTemplate` skips such a friend's head).
+    pub(crate) fn is_dependent_friend_template(&self, t: DeclId) -> bool {
+        self.kind_of(t) == DeclKind::ClassTemplate
+            && self
+                .pattern_of(t)
+                .is_some_and(|p| self.ast.decls.get(p).misc().friend() != FriendKind::None)
+            && self
+                .ast
+                .template_info(t)
+                .is_some_and(|i| self.ast.templates.param_list(i.params).depth > 0)
+    }
+
+    /// The latest of `t` and its previous declarations (a class
+    /// template's) that is not a friend in a dependent context
+    /// ([`Self::is_dependent_friend_template`]): the declaration whose
+    /// head a redeclaration's head is compared with.
+    pub(crate) fn head_comparable_decl(&self, mut t: DeclId) -> Option<DeclId> {
+        while self.is_dependent_friend_template(t) {
+            t = self.ast.prev(self.pattern_of(t)?).and_then(|p| self.ast.described_template(p))?;
+        }
+        Some(t)
     }
 
     /// clang's `TemplateParameterListsAreEqual` (`TPL_TemplateMatch`):
@@ -200,11 +228,15 @@ impl Sema<'_, '_> {
             _ => {}
         }
         if which == 0 && !self.opt_exprs_equivalent(ix.constraint, iy.constraint) {
-            // An unconstrained parameter's diagnostic is at its name: the
-            // parameter's first token is not recorded (clang: the
-            // `class`/`typename` keyword).
-            let at = |s: &Self, c: Option<ExprId>, l: Loc| c.map_or(l, |e| s.begin_loc(e));
-            let (at_x, at_y) = (at(self, ix.constraint, lx), at(self, iy.constraint, ly));
+            // An unconstrained parameter's diagnostic is at its first
+            // token, the `class`/`typename` key (clang's `getBeginLoc`).
+            let at = |s: &Self, c: Option<ExprId>, d: DeclId, l: Loc| {
+                c.map_or_else(
+                    || s.ast.decls.cold.begin_loc.get(d).copied().unwrap_or(l),
+                    |e| s.begin_loc(e),
+                )
+            };
+            let (at_x, at_y) = (at(self, ix.constraint, x, lx), at(self, iy.constraint, y, ly));
             let d = self.diag(DiagId::sema_template_different_type_constraint, at_x);
             let note = self.diag(DiagId::note_template_prev_declaration, at_y).arg(0);
             self.emit(d.with_note(note));

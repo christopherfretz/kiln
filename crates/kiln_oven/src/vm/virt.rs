@@ -194,6 +194,7 @@ impl Oven {
 
     fn write_vptr(&mut self, p: u64, w: u128) -> Result<(), MemFault> {
         let (sp, abs, _) = self.mem.check(p, 8, true)?;
+        self.mem.trial_write(p, 8)?;
         let s = self.mem.space_mut(sp);
         s.write(abs, 8, w);
         s.set_init(abs, 8, true);

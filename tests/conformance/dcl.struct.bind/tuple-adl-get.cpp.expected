@@ -1,0 +1,29 @@
+Dumping test_adl:
+FunctionDecl test_adl 'long (n::R)'
+|-ParmVarDecl used r 'n::R'
+`-CompoundStmt
+  |-DeclStmt
+  | `-DecompositionDecl used 'n::R &' cinit
+  |   |-DeclRefExpr 'n::R' lvalue ParmVar 'r' 'n::R'
+  |   |-BindingDecl referenced a 'std::tuple_element<0, n::R>::type':'int'
+  |   | |-VarDecl implicit used a 'std::tuple_element<0, n::R>::type &' cinit
+  |   | | `-CallExpr 'int' lvalue adl
+  |   | |   |-ImplicitCastExpr 'int &(*)(R &)' <FunctionToPointerDecay>
+  |   | |   | `-DeclRefExpr 'int &(R &)' lvalue Function 'get' 'int &(R &)' (FunctionTemplate 'get')
+  |   | |   `-DeclRefExpr 'n::R' lvalue Decomposition '' 'n::R &'
+  |   | `-DeclRefExpr 'std::tuple_element<0, n::R>::type':'int' lvalue Var 'a' 'std::tuple_element<0, n::R>::type &'
+  |   `-BindingDecl referenced b 'std::tuple_element<1, n::R>::type':'long'
+  |     |-VarDecl implicit used b 'std::tuple_element<1, n::R>::type &' cinit
+  |     | `-CallExpr 'long' lvalue adl
+  |     |   |-ImplicitCastExpr 'long &(*)(R &)' <FunctionToPointerDecay>
+  |     |   | `-DeclRefExpr 'long &(R &)' lvalue Function 'get' 'long &(R &)' (FunctionTemplate 'get')
+  |     |   `-DeclRefExpr 'n::R' lvalue Decomposition '' 'n::R &'
+  |     `-DeclRefExpr 'std::tuple_element<1, n::R>::type':'long' lvalue Var 'b' 'std::tuple_element<1, n::R>::type &'
+  `-ReturnStmt
+    `-BinaryOperator 'std::tuple_element<1, n::R>::type':'long' '+'
+      |-ImplicitCastExpr 'std::tuple_element<1, n::R>::type':'long' <IntegralCast>
+      | `-ImplicitCastExpr 'std::tuple_element<0, n::R>::type':'int' <LValueToRValue>
+      |   `-DeclRefExpr 'std::tuple_element<0, n::R>::type':'int' lvalue Binding 'a' 'std::tuple_element<0, n::R>::type':'int'
+      `-ImplicitCastExpr 'std::tuple_element<1, n::R>::type':'long' <LValueToRValue>
+        `-DeclRefExpr 'std::tuple_element<1, n::R>::type':'long' lvalue Binding 'b' 'std::tuple_element<1, n::R>::type':'long'
+

@@ -1,13 +1,13 @@
 //! Partial specialization matching and partial ordering
 //! ([temp.spec.partial.match], [temp.spec.partial.order];
 //! spec/sema-templates.md §7). Partial ordering of function templates
-//! ([temp.func.order]) without packs is WP-071; with packs, WP-072.
+//! ([temp.func.order]) is WP-071; with function parameter packs, WP-131.
 
 use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::ArgListId;
-use kiln_ast::types::{ArgView, TemplateArg, TypeView};
+use kiln_ast::types::{ArgView, Quals, TemplateArg, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -117,19 +117,7 @@ impl Sema<'_, '_> {
         let mut d = DeducedArgs::new(list.depth, n);
         let mut ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success;
         if ok && p.has_pack {
-            // A pack deduced from no elements is empty ([temp.deduct.type]/9).
-            for i in 0..n {
-                let pack = self
-                    .ast
-                    .lists
-                    .at::<DeclId>(list.params, i)
-                    .and_then(|x| self.ast.template_parm(x))
-                    .is_some_and(|x| x.pack);
-                if pack && matches!(d.args.get(i).map(TemplateArg::view), Some(ArgView::Null)) {
-                    let l = self.ast.types.arg_list(&[]);
-                    d.args[i] = TemplateArg::pack(l);
-                }
-            }
+            self.empty_undeduced_packs(list.params, &mut d);
         }
         ok &= d.first_undeduced().is_none();
         let r = if ok {
@@ -277,6 +265,23 @@ impl Sema<'_, '_> {
         Err(())
     }
 
+    /// A pack parameter of `params` deduced from no elements is empty
+    /// ([temp.deduct.type]/9).
+    fn empty_undeduced_packs(&mut self, params: kiln_ast::ids::ListId, d: &mut DeducedArgs) {
+        for i in 0..self.ast.lists.len(params) {
+            let pack = self
+                .ast
+                .lists
+                .at::<DeclId>(params, i)
+                .and_then(|x| self.ast.template_parm(x))
+                .is_some_and(|x| x.pack);
+            if pack && matches!(d.args.get(i).map(TemplateArg::view), Some(ArgView::Null)) {
+                let l = self.ast.types.arg_list(&[]);
+                d.args[i] = TemplateArg::pack(l);
+            }
+        }
+    }
+
     /// Whether partial specialization row `a` is more specialized than
     /// row `b` ([temp.spec.partial.order]/1, [temp.func.order]/5).
     fn partial_more_specialized(&mut self, a: u32, b: u32, loc: Loc) -> bool {
@@ -322,8 +327,13 @@ impl Sema<'_, '_> {
         let as_: Vec<TemplateArg> = self.ast.types.args(pa.canonical).to_vec();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(lb.depth, self.ast.lists.len(lb.params));
-        let ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success
-            && d.first_undeduced().is_none();
+        let ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success;
+        if ok && pb.has_pack {
+            // [temp.deduct.partial]: `C<A, B...>` deduces from `C<A'>`
+            // with `B` empty, as in matching.
+            self.empty_undeduced_packs(lb.params, &mut d);
+        }
+        let ok = ok && d.first_undeduced().is_none();
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         let r = ok && !failed;
         let _ = self.templ.partial_order.insert((a, b), r);
@@ -333,8 +343,8 @@ impl Sema<'_, '_> {
     /// Whether function template `a` is more specialized than `b` in the
     /// context of a call with `nargs` arguments ([temp.func.order]/3-5,
     /// [temp.deduct.partial]): `a` is at least as specialized as `b` and
-    /// not the reverse. Packs are WP-072; the reference-binding
-    /// tie-breaker ([temp.deduct.partial]/9) is not applied.
+    /// not the reverse. The reference-binding tie-breaker
+    /// ([temp.deduct.partial]/9) is not applied.
     pub fn more_specialized(&mut self, a: DeclId, b: DeclId, nargs: usize) -> bool {
         let side = |n| Side::Call { nargs: n, object: false, reverse: false };
         self.more_specialized_in(a, side(nargs), b, side(nargs))
@@ -378,14 +388,52 @@ impl Sema<'_, '_> {
         let (Some(pa), Some(pb)) = (self.ordering_types(a, sa), self.ordering_types(b, sb)) else {
             return false;
         };
-        if pa.len() != pb.len() {
-            return false;
-        }
         if !self.fn_at_least_as_specialized(&pa, b, &pb) {
             return false;
         }
         if !self.fn_at_least_as_specialized(&pb, a, &pa) {
             return true;
+        }
+        // [temp.deduct.partial]/9-10: deduction succeeded both ways; a
+        // reference parameter is more specialized when it is an lvalue
+        // reference against an rvalue one, or else more cv-qualified.
+        let (mut a_wins, mut b_wins) = (false, false);
+        for (x, y) in pa.iter().zip(&pb) {
+            if let (Some((xl, xq)), Some((yl, yq))) = (x.refq, y.refq) {
+                if xl != yl {
+                    *(if xl { &mut a_wins } else { &mut b_wins }) = true;
+                } else if xq != yq && xq.contains(yq) {
+                    a_wins = true;
+                } else if xq != yq && yq.contains(xq) {
+                    b_wins = true;
+                }
+            }
+        }
+        if a_wins != b_wins {
+            return a_wins;
+        }
+        // [temp.deduct.partial]/11 (CWG1395): equally specialized, a
+        // template without a trailing function parameter pack beats one
+        // whose trailing pack has no corresponding parameter (clang
+        // `getMoreSpecializedTemplate` compares the parameter counts).
+        if matches!(sa, Side::Call { .. }) && matches!(sb, Side::Call { .. }) {
+            let shape = |s: &Self, t: DeclId| {
+                let f = s.templated_function(t)?;
+                let ps = s.proto_param_types(f).0;
+                let variadic =
+                    ps.last().is_some_and(|&q| crate::templ::pack::type_pattern(s, q).is_some());
+                Some((ps.len(), variadic))
+            };
+            if let (Some((na, va)), Some((nb, vb))) = (shape(self, a), shape(self, b))
+                && va != vb
+            {
+                if va && na > nb {
+                    return false;
+                }
+                if vb && nb > na {
+                    return true;
+                }
+            }
         }
         // [temp.func.order]/6: equally specialized, the more constrained.
         self.template_more_constrained(a, b)
@@ -394,7 +442,7 @@ impl Sema<'_, '_> {
     /// The parameter types of function template `ft`'s templated
     /// function that partial ordering compares (`side`), adjusted
     /// ([temp.deduct.partial]/5-7): references and top-level cv dropped.
-    fn ordering_types(&mut self, ft: DeclId, side: Side) -> Option<Vec<QualType>> {
+    fn ordering_types(&mut self, ft: DeclId, side: Side) -> Option<Vec<OrderingType>> {
         let f = self.templated_function(ft)?;
         let mut ptys = match side {
             Side::Call { nargs, object, .. } => {
@@ -418,12 +466,23 @@ impl Sema<'_, '_> {
             ptys.into_iter()
                 .map(|p| {
                     let p = t.canonical(p);
-                    let p = match t.canonical_view(p) {
-                        TypeView::LValueRef(x) | TypeView::RValueRef(x) => t.canonical(x),
-                        _ => p,
+                    // A function parameter pack is compared through its
+                    // pattern ([temp.deduct.partial]/8).
+                    let (p, pack) = match t.view(p.ty()) {
+                        TypeView::PackExpansion { pattern, .. } => (t.canonical(pattern), true),
+                        _ => (p, false),
+                    };
+                    let (p, refq) = match t.canonical_view(p) {
+                        TypeView::LValueRef(x) => {
+                            (t.canonical(x), Some((true, t.effective_quals(x))))
+                        }
+                        TypeView::RValueRef(x) => {
+                            (t.canonical(x), Some((false, t.effective_quals(x))))
+                        }
+                        _ => (p, None),
                     };
                     let u = t.unqualified(p);
-                    t.canonical(u)
+                    OrderingType { ty: t.canonical(u), pack, refq }
                 })
                 .collect(),
         )
@@ -434,21 +493,70 @@ impl Sema<'_, '_> {
     /// `b`'s parameters deduce from `pa`, whose template parameters
     /// stand for unique synthesized types ([temp.func.order]/3-4,
     /// [temp.deduct.partial]/2-10).
-    fn fn_at_least_as_specialized(&mut self, pa: &[QualType], b: DeclId, pb: &[QualType]) -> bool {
+    ///
+    /// With function parameter packs ([temp.deduct.partial]/8,
+    /// [temp.deduct.type]/10, clang's list deduction with
+    /// `PartialOrdering`): a trailing pack of `b` deduces from each
+    /// remaining type of `pa`; a pack of `pa` matched by a parameter of
+    /// `b` that is not a pack fails; a pack of `b` that is not trailing
+    /// is a non-deduced context; a trailing pack of `pa` left over
+    /// matches nothing and succeeds.
+    fn fn_at_least_as_specialized(
+        &mut self,
+        pa: &[OrderingType],
+        b: DeclId,
+        pb: &[OrderingType],
+    ) -> bool {
         let depth = self.template_param_depth(b);
         let n = self.template_params(b).len();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(depth, n);
         let mut ok = true;
-        for (&p, &x) in pb.iter().zip(pa) {
-            if self.deduce(p, x, TdfFlags::NONE, &mut d) != Tdk::Success {
+        let mut ai = 0;
+        for (pi, p) in pb.iter().enumerate() {
+            if !p.pack {
+                let Some(x) = pa.get(ai) else {
+                    ok = false;
+                    break;
+                };
+                if x.pack || self.deduce(p.ty, x.ty, TdfFlags::NONE, &mut d) != Tdk::Success {
+                    ok = false;
+                    break;
+                }
+                ai += 1;
+                continue;
+            }
+            if pi + 1 != pb.len() {
+                continue;
+            }
+            let rest: Vec<QualType> = pa[ai.min(pa.len())..].iter().map(|x| x.ty).collect();
+            ai = pa.len();
+            let r = self.deduce_pack_elements_from(None, rest.len(), &mut d, |s, k, d| {
+                s.deduce(p.ty, rest[k], TdfFlags::NONE, d)
+            });
+            if r != Tdk::Success {
                 ok = false;
                 break;
             }
         }
+        if ok && ai < pa.len() && !(ai + 1 == pa.len() && pa[ai].pack) {
+            ok = false;
+        }
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         ok && !failed
     }
+}
+
+/// One parameter type compared by partial ordering of function
+/// templates: adjusted per [temp.deduct.partial]/5-7, and for a function
+/// parameter pack, its pattern.
+#[derive(Clone, Copy, Debug)]
+struct OrderingType {
+    ty: QualType,
+    pack: bool,
+    /// A reference parameter: lvalue reference, and the referred-to
+    /// type's cv-qualifiers ([temp.deduct.partial]/9).
+    refq: Option<(bool, Quals)>,
 }
 
 /// One side of a partial ordering of function templates

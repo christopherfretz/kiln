@@ -5,7 +5,10 @@
 //! descent. A `None` result ([`PExpr`]) means a syntax error was reported
 //! and the caller must recover; semantic errors yield an error expression.
 
-use kiln_ast::expr::{BinaryOp, ExprKind, SourceLocKind, TraitKind, TypeTrait, UnaryOp};
+use kiln_ast::expr::{
+    BinaryOp, ExprKind, PredefinedKind, SourceLocKind, TraitKind, TypeTrait, UnaryOp,
+};
+use kiln_ast::names::DeclName;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
@@ -14,9 +17,8 @@ use kiln_lex::literal::{
 };
 use kiln_lex::{Punct, TokKind, Token};
 use kiln_sema::expr::CastStyle;
-use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent};
+use kiln_sema::{DeclaratorContext, NameClass, OffsetofComponent, SpecialName};
 use kiln_source::Loc;
-use kiln_source::symbol::Symbol;
 
 use crate::decl::is_type_specifier_kw;
 use crate::keywords::Kw;
@@ -95,6 +97,7 @@ fn is_simple_type_kw(k: Kw) -> bool {
             Kw::Const
                 | Kw::Volatile
                 | Kw::Restrict
+                | Kw::Atomic
                 | Kw::Struct
                 | Kw::Class
                 | Kw::Union
@@ -139,10 +142,14 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_throw(operand, loc))
     }
 
-    /// constant-expression ([expr.const]): a conditional-expression.
+    /// constant-expression ([expr.const]): a conditional-expression,
+    /// manifestly constant-evaluated (an immediate function context,
+    /// [expr.const]/16).
     pub fn parse_constant_expr(&mut self) -> PExpr {
-        let lhs = self.parse_cast_expr()?;
-        self.parse_rhs(lhs, prec::COND)
+        self.s.enter_constant_evaluated();
+        let r = self.parse_cast_expr().and_then(|lhs| self.parse_rhs(lhs, prec::COND));
+        self.s.exit_constant_evaluated();
+        r
     }
 
     /// An expression whose operators all have precedence `min` or higher
@@ -164,7 +171,7 @@ impl Parser<'_, '_> {
 
     fn cur_binop(&self) -> Option<(u8, Option<BinaryOp>)> {
         let p = Self::punct_of(self.tok())?;
-        if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
+        if self.greater_ends_arg() && matches!(p, Punct::Greater | Punct::GreaterGreater) {
             return None;
         }
         let r = binop(p)?;
@@ -180,7 +187,7 @@ impl Parser<'_, '_> {
     /// ([expr.prim.fold]/1: any binary operator but `?:`).
     fn fold_op_at(&self, i: usize) -> Option<BinaryOp> {
         let p = Self::punct_of(self.tok_at(i))?;
-        if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
+        if self.greater_ends_arg() && matches!(p, Punct::Greater | Punct::GreaterGreater) {
             return None;
         }
         let op = binop(p)?.1?;
@@ -191,8 +198,11 @@ impl Parser<'_, '_> {
     /// `GreaterThanIsOperatorScope`).
     pub(crate) fn with_greater_op<T>(&mut self, on: bool, f: impl FnOnce(&mut Self) -> T) -> T {
         let saved = std::mem::replace(&mut self.greater_is_op, on);
+        let depth = self.total_depth();
+        let saved_depth = std::mem::replace(&mut self.greater_off_depth, depth);
         let r = f(self);
         self.greater_is_op = saved;
+        self.greater_off_depth = saved_depth;
         r
     }
 
@@ -289,8 +299,12 @@ impl Parser<'_, '_> {
         } else {
             return false;
         };
-        let name = Symbol::from_index(n.b());
-        let text = self.s.ast.symbols().as_str(name).to_owned();
+        let name = if n.kind() == ExprKind::CXXDependentScopeMemberExpr {
+            self.s.ast.dependent_member_name(lhs)
+        } else {
+            self.s.ast.dependent_scope_ref_name(lhs)
+        };
+        let text = self.s.decl_name_str(name);
         let d = self.s.diag(id, n.loc()).arg(text);
         self.emit(d);
         true
@@ -372,10 +386,19 @@ impl Parser<'_, '_> {
                 self.unsupported("the GNU address-of-label operator", loc);
                 return None;
             }
-            if p == Punct::LParen
-                && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
-            {
-                return self.parse_c_style_cast();
+            if let Some((open, is_type, ambiguous)) = self.open_paren_template_scope() {
+                if is_type && (!ambiguous || self.ambiguous_paren_is_cast(self.pos())) {
+                    return self.parse_c_style_cast_rest(open);
+                }
+                let e = self.with_greater_op(true, |p| p.parse_paren_rest(open))?;
+                return self.parse_postfix_suffix(e);
+            }
+            if p == Punct::LParen {
+                let (is_type, ambiguous) =
+                    self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens);
+                if is_type && (!ambiguous || self.ambiguous_paren_is_cast(self.pos() + 1)) {
+                    return self.parse_c_style_cast();
+                }
             }
         }
         if let Some(crate::keywords::BuiltinKw::Trait(t)) = self.builtin_kw_at(self.pos()) {
@@ -389,6 +412,7 @@ impl Parser<'_, '_> {
             Some(Kw::GnuAlignof) => {
                 return self.parse_sizeof_alignof(TraitKind::PreferredAlignOf);
             }
+            Some(Kw::DataSizeof) => return self.parse_sizeof_alignof(TraitKind::DataSizeOf),
             Some(Kw::Extension) => {
                 self.bump();
                 return self.parse_cast_expr();
@@ -419,9 +443,147 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_stmt_expr(scope, body, lparen, rparen))
     }
 
+    /// [expr.cast], [dcl.ambig.res]/2: the parentheses whose contents
+    /// start at token `inner` hold an ambiguous type-id (`(T())`, `(T(*)())`); clang's
+    /// `ParseCXXAmbiguousParenExpression` decides on the tokens after the
+    /// `)`. A `{` makes it a compound literal and a token that starts a
+    /// cast-expression makes it a cast (`(T())x`, `(T())*x`); anything
+    /// else (`(T());`, `(T())/x`, `(T())()`) makes it a parenthesized
+    /// expression.
+    fn ambiguous_paren_is_cast(&self, inner: usize) -> bool {
+        let mut i = inner;
+        let after = loop {
+            match self.tok_at(i).kind {
+                TokKind::Eof => return true,
+                TokKind::Punct(Punct::RParen) => break i + 1,
+                TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => {
+                    let Some(j) = self.skip_balanced(i) else { return true };
+                    i = j;
+                }
+                _ => i += 1,
+            }
+        };
+        let t = self.tok_at(after);
+        match t.kind {
+            TokKind::Punct(Punct::LBrace) => true,
+            TokKind::Punct(Punct::LParen) => {
+                self.tok_at(after + 1).kind != TokKind::Punct(Punct::RParen)
+            }
+            _ => self.starts_cast_expr(t),
+        }
+    }
+
+    /// Whether `t` can begin a cast-expression: the tokens clang's
+    /// `ParseCastExpression` accepts without setting `NotCastExpr`.
+    fn starts_cast_expr(&self, t: Token) -> bool {
+        match t.kind {
+            TokKind::PpNumber
+            | TokKind::CharLit(_)
+            | TokKind::StringLit(_)
+            | TokKind::RawStringLit(_) => true,
+            TokKind::Punct(p) => matches!(
+                p,
+                Punct::LParen
+                    | Punct::LSquare
+                    | Punct::PlusPlus
+                    | Punct::MinusMinus
+                    | Punct::Amp
+                    | Punct::AmpAmp
+                    | Punct::Star
+                    | Punct::Plus
+                    | Punct::Minus
+                    | Punct::Exclaim
+                    | Punct::Tilde
+                    | Punct::ColonColon
+                    | Punct::CaretCaret
+                    | Punct::SpliceOpen
+            ),
+            TokKind::Identifier(_) => match self.kw_of(t) {
+                None => true,
+                Some(k) => matches!(
+                    k,
+                    Kw::Alignof
+                        | Kw::GnuAlignof
+                        | Kw::DataSizeof
+                        | Kw::Auto
+                        | Kw::Bool
+                        | Kw::Char
+                        | Kw::Char8
+                        | Kw::Char16
+                        | Kw::Char32
+                        | Kw::ConstCast
+                        | Kw::CoAwait
+                        | Kw::Decltype
+                        | Kw::Delete
+                        | Kw::Double
+                        | Kw::DynamicCast
+                        | Kw::False
+                        | Kw::Float
+                        | Kw::Float128
+                        | Kw::Int
+                        | Kw::Int128
+                        | Kw::Long
+                        | Kw::New
+                        | Kw::Noexcept
+                        | Kw::Nullptr
+                        | Kw::Operator
+                        | Kw::ReinterpretCast
+                        | Kw::Requires
+                        | Kw::Short
+                        | Kw::Signed
+                        | Kw::Sizeof
+                        | Kw::StaticCast
+                        | Kw::This
+                        | Kw::True
+                        | Kw::Typeid
+                        | Kw::Typename
+                        | Kw::Typeof
+                        | Kw::Unsigned
+                        | Kw::Void
+                        | Kw::WChar
+                        | Kw::Extension
+                        | Kw::BuiltinOffsetof
+                        | Kw::BuiltinBitCast
+                        | Kw::BuiltinVaArg
+                        | Kw::BuiltinConvertVector
+                        | Kw::BuiltinFile
+                        | Kw::BuiltinFileName
+                        | Kw::BuiltinFunction
+                        | Kw::Func
+                        | Kw::FunctionName
+                        | Kw::PrettyFunction
+                        | Kw::BuiltinLine
+                        | Kw::BuiltinColumn
+                        | Kw::BuiltinSourceLocation
+                ),
+            },
+            _ => false,
+        }
+    }
+
     /// `( type-id ) cast-expression`.
     fn parse_c_style_cast(&mut self) -> PExpr {
         let open = self.bump().span.lo;
+        self.parse_c_style_cast_rest(open)
+    }
+
+    /// At a `(` followed by a qualified name whose class template
+    /// specialization qualifier the lookahead cannot resolve
+    /// ([`Parser::template_scope_end`]): consumes the `(`, parses the
+    /// qualifier ahead, and says whether a type-id follows (and whether that was ambiguous, [`Parser::is_cxx_type_id_at`]). `None` (and
+    /// nothing consumed) at any other token.
+    fn open_paren_template_scope(&mut self) -> Option<(Loc, bool, bool)> {
+        if !self.at(Punct::LParen) || self.template_scope_end(self.pos() + 1).is_none() {
+            return None;
+        }
+        let open = self.bump().span.lo;
+        self.annotate_template_scope();
+        let (is_type, ambiguous) = self.is_cxx_type_id_at(self.pos(), TypeIdContext::InParens);
+        Some((open, is_type, ambiguous))
+    }
+
+    /// [`Parser::parse_c_style_cast`] after the `(` at `open`.
+    fn parse_c_style_cast_rest(&mut self, open: Loc) -> PExpr {
         let ty = self.parse_type_id();
         let Some(ty) = ty else {
             self.skip_until(&[Punct::RParen], false, true);
@@ -458,11 +620,31 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_sizeof_pack_name(name, name_loc, loc, rparen))
     }
 
-    /// `sizeof`/`alignof`/`__alignof` ([expr.sizeof], [expr.alignof]).
+    /// `sizeof`/`alignof`/`__alignof`/`__datasizeof` ([expr.sizeof],
+    /// [expr.alignof]; `__datasizeof` is clang's size without tail padding).
     fn parse_sizeof_alignof(&mut self, kind: TraitKind) -> PExpr {
         let loc = self.bump().span.lo;
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
             return self.parse_sizeof_pack(loc);
+        }
+        self.s.enter_unevaluated();
+        let scoped = self.open_paren_template_scope();
+        self.s.exit_unevaluated();
+        if let Some((open, is_type, _)) = scoped {
+            if is_type {
+                let Some(ty) = self.parse_type_id() else {
+                    self.skip_until(&[Punct::RParen], false, true);
+                    return None;
+                };
+                let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+                return Some(self.s.act_on_trait_type(kind, ty, loc, rparen));
+            }
+            self.s.enter_unevaluated();
+            let e = self
+                .with_greater_op(true, |p| p.parse_paren_rest(open))
+                .and_then(|e| self.parse_postfix_suffix(e));
+            self.s.exit_unevaluated();
+            return Some(self.s.act_on_trait_expr(kind, e?, loc));
         }
         if self.at(Punct::LParen)
             && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
@@ -624,6 +806,73 @@ impl Parser<'_, '_> {
         ok.then(|| self.s.act_on_builtin_bit_cast(ty, e, loc, rparen))
     }
 
+    /// `__builtin_va_arg ( assignment-expression , type-id )` ([cstdarg.syn],
+    /// C 7.16.1.1; clang `ParseBuiltinPrimaryExpression`).
+    fn parse_builtin_va_arg(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_va_arg'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let e = self.parse_assignment_expr();
+        if self.expect(Punct::Comma).is_none() {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        // The type's checks report where clang's `TypeLoc` begins: past
+        // leading cv-qualifiers (a `QualifiedTypeLoc` has no location of
+        // its own).
+        let mut n = 0;
+        while matches!(self.kw_of(self.peek(n)), Some(Kw::Const | Kw::Volatile)) {
+            n += 1;
+        }
+        let ty_loc = self.peek(n).span.lo;
+        let ty = self.parse_type_id();
+        let ok = self.at(Punct::RParen);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let (e, ty) = (e?, ty?);
+        ok.then(|| self.s.act_on_va_arg(e, ty, ty_loc, loc, rparen))
+    }
+
+    /// `__builtin_convertvector ( assignment-expression , type-id )`
+    /// (clang `ParseBuiltinPrimaryExpression`).
+    fn parse_builtin_convert_vector(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_convertvector'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let Some(e) = self.parse_assignment_expr() else {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        };
+        if self.eat(Punct::Comma).is_none() {
+            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("','");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let ty = self.parse_type_id()?;
+        if !self.at(Punct::RParen) {
+            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("')'");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(self.s.act_on_convert_vector(e, ty, loc, rparen))
+    }
+
     /// `__builtin_FILE ( )` and the other source-location builtins (clang
     /// `ParseBuiltinPrimaryExpression`; [support.srcloc.cons]).
     fn parse_source_loc_expr(&mut self, kind: SourceLocKind) -> PExpr {
@@ -743,44 +992,7 @@ impl Parser<'_, '_> {
                 }
                 Some(p @ (Punct::Period | Punct::Arrow)) => {
                     self.bump();
-                    let template_kw = self.eat_kw(Kw::Template).is_some();
-                    if self.at(Punct::Tilde) {
-                        self.unsupported("this member access", self.loc());
-                        return None;
-                    }
-                    // `e.N::m` ([expr.ref]/1 with a qualified-id): sema's
-                    // `act_on_member` takes no nested-name-specifier yet.
-                    if self.at(Punct::ColonColon)
-                        || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
-                    {
-                        self.unsupported("qualified member access", self.loc());
-                        return None;
-                    }
-                    let Some(name) = self.ident() else {
-                        self.error_here(DiagId::parse_expected_unqualified_id);
-                        return None;
-                    };
-                    let nl = self.bump().span.lo;
-                    let arrow = p == Punct::Arrow;
-                    if template_kw {
-                        // `e.template f<args>` ([temp.names]/5).
-                        let targs = if self.at(Punct::Less) {
-                            let (args, _, _) = self.parse_template_arg_list()?;
-                            Some(self.s.ast.types.arg_list(&args))
-                        } else {
-                            None
-                        };
-                        e = self.s.act_on_template_member(e, name, targs, true, nl, loc, arrow);
-                        continue;
-                    }
-                    e = self.s.act_on_member(e, name, nl, loc, arrow);
-                    // `e.f<args>` naming a member function template
-                    // ([temp.names]/3).
-                    if self.at(Punct::Less) && self.s.is_member_template_ref(e) {
-                        let (args, _, _) = self.parse_template_arg_list()?;
-                        let l = self.s.ast.types.arg_list(&args);
-                        e = self.s.act_on_member_template_args(e, l);
-                    }
+                    e = self.parse_member_access_suffix(e, loc, p == Punct::Arrow)?;
                 }
                 Some(Punct::PlusPlus) => {
                     self.bump();
@@ -792,6 +1004,141 @@ impl Parser<'_, '_> {
                 }
                 _ => return Some(e),
             }
+        }
+    }
+
+    /// The member designator after `.`/`->` (the operator token at `loc`
+    /// already consumed): `[template] id-expression` or a
+    /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
+    fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
+        let mut template_kw = self.eat_kw(Kw::Template).is_some();
+        // `e.N::m`, `p->B::f`, `e.::N::m` ([expr.ref]/1 with a
+        // qualified-id; [basic.lookup.qual.general]/2 looks the first
+        // component up in the object's class, then here).
+        let qual = if self.at_member_qualifier() {
+            self.s.begin_member_qualifier(e, arrow);
+            let q = self.parse_nested_name_nns();
+            self.s.end_member_qualifier();
+            let Ok(q) = q else { return None };
+            template_kw |= q.is_some() && self.eat_kw(Kw::Template).is_some();
+            q
+        } else {
+            None
+        };
+        if qual.is_some() && self.at(Punct::Tilde) {
+            self.unsupported("a qualified destructor name", self.loc());
+            return None;
+        }
+        if self.at(Punct::Tilde) {
+            // `p->~T()` / `x.~T()`.
+            let tl = self.bump().span.lo;
+            let Some(name) = self.ident() else {
+                self.error_here(DiagId::parse_destructor_tilde_identifier);
+                return None;
+            };
+            let nl = self.bump().span.lo;
+            if self.at(Punct::Less) {
+                // `p->~X<T>()` ([expr.prim.id.dtor]): the simple-template-id
+                // names the destroyed class type.
+                let class = self.s.classify_name(name, None);
+                return match self.parse_template_id_rest(class, name, nl) {
+                    Ok(TemplateIdRef::Type(t)) => {
+                        Some(self.s.rebuild_member_destructor(e, t, nl, loc, arrow))
+                    }
+                    _ => None,
+                };
+            }
+            return Some(self.s.act_on_member_destructor(e, name, tl, nl, loc, arrow));
+        }
+        let nl = self.loc();
+        let name = if self.at_kw(Kw::Operator) {
+            // `x.operator->()`, `x.operator T()`: an operator- or
+            // conversion-function-id.
+            self.parse_operator_function_name()?
+        } else {
+            let Some(name) = self.ident() else {
+                self.error_here(DiagId::parse_expected_unqualified_id);
+                return None;
+            };
+            self.bump();
+            DeclName::ident(name)
+        };
+        if template_kw {
+            // `e.template f<args>` ([temp.names]/5).
+            let targs = if self.at(Punct::Less) {
+                let (args, _, _) = self.parse_template_arg_list()?;
+                Some(self.s.ast.types.arg_list(&args))
+            } else {
+                None
+            };
+            return Some(
+                self.s.act_on_template_member_q(e, qual, name, targs, true, nl, loc, arrow),
+            );
+        }
+        let mut e = self.s.act_on_member_q(e, qual, name, nl, loc, arrow);
+        // `e.f<args>` naming a member function template ([temp.names]/3).
+        if self.at(Punct::Less) && self.s.is_member_template_ref(e) {
+            let (args, _, _) = self.parse_template_arg_list()?;
+            let l = self.s.ast.types.arg_list(&args);
+            e = self.s.act_on_member_template_args(e, l);
+        }
+        Some(e)
+    }
+
+    /// True at a nested-name-specifier after `.`/`->`: `::`, `N::`,
+    /// `X<args>::` or `decltype(e)::`.
+    fn at_member_qualifier(&mut self) -> bool {
+        if self.at(Punct::ColonColon) || self.decltype_scope_end(self.pos()).is_some() {
+            return true;
+        }
+        if self.ident().is_none() {
+            return false;
+        }
+        if self.peek_is(1, Punct::ColonColon) {
+            return true;
+        }
+        self.peek_is(1, Punct::Less)
+            && matches!(
+                self.skip_template_args(self.pos() + 1),
+                Some((close, false))
+                    if self.tok_at(close + 1).kind == TokKind::Punct(Punct::ColonColon)
+            )
+    }
+
+    /// An unqualified operator- or conversion-function-id as a primary
+    /// expression ([expr.prim.id.unqual]/1): `operator()(x)` in a member
+    /// function is `this->operator()(x)`.
+    fn parse_operator_id_expression(&mut self, loc: Loc) -> PExpr {
+        let name = self.parse_operator_function_name()?;
+        if self.at(Punct::Less) {
+            self.unsupported("an operator function template-id", loc);
+            return None;
+        }
+        if self.at(Punct::LParen) {
+            Some(self.s.act_on_call_name_dn(name, loc))
+        } else {
+            Some(self.s.act_on_id_expression_dn(name, loc, None))
+        }
+    }
+
+    /// An operator-function-id or conversion-function-id at `operator`
+    /// ([over.oper.general]/1, [class.conv.fct]/1), as a declaration
+    /// name. `None` after diagnosing (literal operators are not yet
+    /// supported in expressions).
+    pub(crate) fn parse_operator_function_name(&mut self) -> Option<DeclName> {
+        let mut d = kiln_sema::Declarator::new(DeclaratorContext::TypeName, self.loc());
+        self.parse_special_declarator_id(&mut d);
+        if d.invalid {
+            return None;
+        }
+        match d.special {
+            Some((SpecialName::Operator(op), _)) => Some(DeclName::operator(op)),
+            Some((SpecialName::LiteralOperator(s), _)) => Some(DeclName::literal_operator(s)),
+            Some((SpecialName::Conversion(t), _)) => {
+                let c = self.s.ast.types.canonical(t);
+                Some(self.s.ast.names.conversion(c))
+            }
+            _ => None,
         }
     }
 
@@ -854,10 +1201,7 @@ impl Parser<'_, '_> {
                 // [expr.prim.paren]: `>` is an operator inside parentheses.
                 return self.with_greater_op(true, |p| p.parse_paren_rest(loc));
             }
-            TokKind::Punct(Punct::LSquare) => {
-                self.unsupported("lambda expressions", loc);
-                return None;
-            }
+            TokKind::Punct(Punct::LSquare) => return self.parse_lambda_expr(),
             TokKind::Punct(Punct::CaretCaret | Punct::SpliceOpen) => {
                 self.unsupported("reflection", loc);
                 return None;
@@ -867,6 +1211,11 @@ impl Parser<'_, '_> {
         // `decltype(e)::name` (WP-119): the qualifier is parsed first.
         if self.decltype_scope_end(self.pos()).is_some() && !self.annotate_decltype_scope() {
             return None;
+        }
+        // `X<A>::name` with `name` from a specialization of `X`: the
+        // qualifier is parsed first too.
+        if self.template_scope_end(self.pos()).is_some() {
+            self.annotate_template_scope();
         }
         if self.at_decltype_scope() && !self.decltype_scope_ok() {
             self.skip_failed_decltype_scope();
@@ -886,10 +1235,7 @@ impl Parser<'_, '_> {
                 Kw::ConstCast => self.parse_named_cast(CastStyle::Const),
                 Kw::ReinterpretCast => self.parse_named_cast(CastStyle::Reinterpret),
                 Kw::DynamicCast => self.parse_named_cast(CastStyle::Dynamic),
-                Kw::Operator => {
-                    self.unsupported("operator function names", loc);
-                    None
-                }
+                Kw::Operator => self.parse_operator_id_expression(loc),
                 _ if is_simple_type_kw(k) => self.parse_functional_cast(),
                 Kw::This => {
                     self.bump();
@@ -898,6 +1244,17 @@ impl Parser<'_, '_> {
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
+                Kw::BuiltinVaArg => self.parse_builtin_va_arg(),
+                Kw::BuiltinConvertVector => self.parse_builtin_convert_vector(),
+                Kw::Func | Kw::FunctionName | Kw::PrettyFunction => {
+                    self.bump();
+                    let kind = match k {
+                        Kw::Func => PredefinedKind::Func,
+                        Kw::FunctionName => PredefinedKind::Function,
+                        _ => PredefinedKind::PrettyFunction,
+                    };
+                    Some(self.s.act_on_predefined_expr(kind, loc))
+                }
                 Kw::BuiltinFile => self.parse_source_loc_expr(SourceLocKind::File),
                 Kw::BuiltinFileName => self.parse_source_loc_expr(SourceLocKind::FileName),
                 Kw::BuiltinFunction => self.parse_source_loc_expr(SourceLocKind::Function),
@@ -920,28 +1277,42 @@ impl Parser<'_, '_> {
             };
         }
         if self.ident().is_some() || self.at(Punct::ColonColon) {
-            if let Some((end, NameClass::Type(..), name)) = self.scan_name(self.pos()) {
-                // An unqualified type name not followed by `(` or `{` is
-                // not looked at as a type (clang only annotates it before
-                // those), so the id-expression names a type.
-                if end == self.pos() + 1
-                    && !matches!(
-                        Self::punct_of(self.tok_at(end)),
-                        Some(Punct::LParen | Punct::LBrace)
-                    )
-                {
-                    let text = self.s.ast.symbols().as_str(name).to_owned();
-                    let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);
-                    self.emit(d);
-                    self.bump();
-                    return Some(self.s.act_on_error_expr(&[], loc));
-                }
-                return self.parse_functional_cast();
-            }
-            return self.parse_id_expression_rest();
+            return self.parse_name_primary(loc);
         }
         self.error_here(DiagId::parse_expected_expression);
         None
+    }
+
+    /// A primary expression starting with a name or `::`: a functional
+    /// cast of a type name, or an id-expression.
+    fn parse_name_primary(&mut self, loc: Loc) -> PExpr {
+        if let Some((end, NameClass::Type(..), name)) = self.scan_name(self.pos()) {
+            // An unqualified type name not followed by `(` or `{` is
+            // not looked at as a type (clang only annotates it before
+            // those), so the id-expression names a type.
+            if end == self.pos() + 1
+                && !matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
+            {
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);
+                self.emit(d);
+                self.bump();
+                return Some(self.s.act_on_error_expr(&[], loc));
+            }
+            return self.parse_functional_cast();
+        }
+        // A class template's injected-class-name used as a type
+        // ([temp.local]/1): `X(args)` / `X{args}` in its definition.
+        if let Some((end, NameClass::TypeTemplate(d), _)) = self.scan_name(self.pos())
+            && matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
+            && (end == self.pos() + 1 && self.s.names_injected_class(d)
+                || self.s.is_ctad_template(d))
+        {
+            // Or a class template named for class template argument
+            // deduction ([dcl.type.class.deduct]/2): `C(args)`.
+            return self.parse_functional_cast();
+        }
+        self.parse_id_expression_rest()
     }
 
     /// A (possibly qualified) id-expression that does not name a type
@@ -955,6 +1326,12 @@ impl Parser<'_, '_> {
         let begin = self.name_begin();
         let qual = self.parse_nested_name_nns().ok()?;
         let template_kw = qual.is_some() && self.eat_kw(Kw::Template).is_some();
+        if let Some(q) = qual
+            && !template_kw
+            && self.at_kw(Kw::Operator)
+        {
+            return self.parse_qualified_operator_id(q, begin);
+        }
         let Some(name) = self.ident() else {
             self.error_here(DiagId::parse_expected_unqualified_id);
             return None;
@@ -969,13 +1346,22 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(self.s.act_dependent_scope_ref(q.nns, name, targs, begin, nl));
+            return Some(self.s.act_dependent_scope_ref(
+                q.nns,
+                DeclName::ident(name),
+                targs,
+                begin,
+                nl,
+            ));
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             return match self.parse_template_id_rest(class, name, nl) {
                 Ok(TemplateIdRef::Overload(e)) => {
                     let e = self.s.widen_function_template_id(e, name, qual.map(|q| q.ctx));
+                    if qual.is_some() {
+                        self.s.set_template_id_begin(e, begin, nl);
+                    }
                     if !self.at(Punct::LParen) {
                         return Some(self.s.resolve_single_template_id(e));
                     }
@@ -1006,6 +1392,23 @@ impl Parser<'_, '_> {
         }
         let e = self.s.act_on_id_expression(name, nl, qual);
         self.parse_pack_index_suffix(e)
+    }
+
+    /// `N::operator@` / `X<T>::operator T` after the nested-name-specifier
+    /// `q` ([expr.prim.id.qual]/1: a qualified-id's unqualified-id may be
+    /// an operator- or conversion-function-id): `B<float>::operator()(v)`
+    /// in libc++ <__functional/hash.h>.
+    fn parse_qualified_operator_id(&mut self, q: kiln_sema::using::Qualifier, begin: Loc) -> PExpr {
+        let nl = self.loc();
+        let name = self.parse_operator_function_name()?;
+        if self.at(Punct::Less) {
+            self.unsupported("an operator function template-id", nl);
+            return None;
+        }
+        if self.s.is_dependent_ctx(q.ctx) {
+            return Some(self.s.act_dependent_scope_ref(q.nns, name, None, begin, nl));
+        }
+        Some(self.s.act_on_id_expression_dn(name, nl, Some(q)))
     }
 
     /// `pack...[index]` after an id-expression (C++26
@@ -1140,6 +1543,7 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_value_init_cast(ty, loc, rparen));
         }
         let mut args = Vec::new();
+        let mut expansion = false;
         loop {
             if self.at(Punct::LBrace) {
                 self.unsupported("braced-init-list operands of a functional cast", self.loc());
@@ -1150,13 +1554,23 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };
+            // `T(args...)` ([temp.variadic]/5: an expression-list).
+            let e = match self.eat(Punct::Ellipsis) {
+                Some(l) => {
+                    expansion = true;
+                    self.s.act_pack_expansion(e, l)
+                }
+                None => e,
+            };
             args.push(e);
             if self.eat(Punct::Comma).is_none() {
                 break;
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        if let [e] = args[..] {
+        if let [e] = args[..]
+            && !expansion
+        {
             return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc, rparen));
         }
         Some(self.s.act_on_paren_list_cast(ty, &args, loc, rparen))
@@ -1195,10 +1609,20 @@ impl Parser<'_, '_> {
         match &n.class {
             NumberClass::Integer(l) => {
                 let ud = suffix_loc(t.span.hi, l.ud_suffix);
+                if let Some(u) = l.ud_suffix {
+                    // [lex.ext]/3: the raw form is the spelling without
+                    // the ud-suffix.
+                    let raw = &sp[..sp.len() - u.len()];
+                    return self.s.act_on_integer_udl(l, raw, t.span.lo, ud);
+                }
                 self.s.act_on_integer_literal(l, t.span.lo, ud)
             }
             NumberClass::Floating(l) => {
                 let ud = suffix_loc(t.span.hi, l.ud_suffix);
+                if let Some(u) = l.ud_suffix {
+                    let raw = &sp[..sp.len() - u.len()];
+                    return self.s.act_on_float_udl(l, raw, t.span.lo, ud);
+                }
                 self.s.act_on_float_literal(l, t.span.lo, ud)
             }
             NumberClass::Invalid => self.s.act_on_error_expr(&[], t.span.lo),

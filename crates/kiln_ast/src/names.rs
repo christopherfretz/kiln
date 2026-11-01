@@ -85,6 +85,7 @@ impl DeclName {
             4 => DeclNameKind::Conversion,
             5 => DeclNameKind::LiteralOperator,
             6 => DeclNameKind::DeductionGuide,
+            // Invariant: `pack` only stores the seven tags above.
             _ => unreachable!(),
         }
     }
@@ -115,6 +116,11 @@ impl DeclName {
         } else {
             None
         }
+    }
+
+    /// The ud-suffix, if this is an `operator""X` name.
+    pub fn as_literal_operator(self) -> Option<Symbol> {
+        (self.kind() == DeclNameKind::LiteralOperator).then(|| Symbol::from_index(self.payload()))
     }
 
     /// The raw word.

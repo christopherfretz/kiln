@@ -28,13 +28,15 @@ use crate::expr::{
     TypeTrait, TypeidOperand, UnaryOp, ValueCategory,
 };
 use crate::ids::{
-    AttrId, ConstValueId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId,
+    AttrId, ConstValueId, DeclId, ExprId, LambdaId, ListId, QualType, RawId, StmtId, StringLitId,
+    TypeId,
 };
 use crate::lookup::LookupFlags;
 use crate::names::DeclName;
 use crate::slot::AlreadySet;
 use crate::stmt::{
-    CaseData, IfData, IfKind, LoopData, RangeForData, StmtKind, StmtNode, SwitchData,
+    AsmData, AsmOperand, CaseData, IfData, IfKind, LoopData, RangeForData, StmtKind, StmtNode,
+    SwitchData,
 };
 use crate::types::TypeFlags;
 
@@ -261,6 +263,54 @@ impl<'a> AstBuilder<'a> {
         d
     }
 
+    /// The implicit `ConstructorUsingShadow` an inheriting-constructor
+    /// using-declaration (`using B::B;`, [namespace.udecl]/3) introduces
+    /// into class `h.ctx` for constructor (or constructor template)
+    /// `target` of a base class. `nominated` is the base class's own shadow
+    /// when the base inherited `target` itself. Appended to the member list
+    /// but not entered in lookup: overload resolution for the class's
+    /// constructors collects the shadows from the member list (WP-114).
+    pub fn constructor_using_shadow(
+        &mut self,
+        h: DeclHead,
+        target: DeclId,
+        nominated: Option<DeclId>,
+    ) -> DeclId {
+        let d = self.add_unregistered(
+            h.flags(DeclFlags::IMPLICIT),
+            DeclKind::ConstructorUsingShadow,
+            Payload::None(target.raw()),
+            true,
+        );
+        if let Some(n) = nominated {
+            let _ = self.ast.decls.cold.ctor_shadow_nominated.insert(d, n);
+        }
+        d
+    }
+
+    /// A using-declarator with a dependent qualifier in a class template
+    /// (clang `UnresolvedUsingValueDecl`): `h.name` is the name as
+    /// written, `nns` the qualifier. Entered in lookup when `register`
+    /// (a member name; uses of it are dependent), not for an
+    /// inheriting-constructor declarator.
+    pub fn unresolved_using_value(
+        &mut self,
+        h: DeclHead,
+        nns: crate::ids::NnsId,
+        register: bool,
+    ) -> DeclId {
+        let d = self.add_unregistered(
+            h,
+            DeclKind::UnresolvedUsingValue,
+            Payload::None(nns.raw()),
+            true,
+        );
+        if register {
+            self.register_name(h.ctx, h.name, d, None, false, false);
+        }
+        d
+    }
+
     /// `using enum E;` ([enum.udecl]); `e` is the enumeration. Not
     /// entered in lookup (its enumerators' shadows are).
     pub fn using_enum(&mut self, h: DeclHead, e: DeclId) -> DeclId {
@@ -275,6 +325,13 @@ impl<'a> AstBuilder<'a> {
             self.add_unregistered(h, DeclKind::NamespaceAlias, Payload::None(target.raw()), true);
         self.register_name(h.ctx, h.name, d, prev, false, false);
         d
+    }
+
+    /// A file-scope `asm("...")` declaration ([dcl.asm]); the inline
+    /// payload is the template string.
+    pub fn file_scope_asm(&mut self, ctx: DeclId, loc: Loc, string: ExprId) -> DeclId {
+        let h = DeclHead::new(ctx, DeclName::EMPTY, loc);
+        self.add_unregistered(h, DeclKind::FileScopeAsm, Payload::None(string.raw()), true)
     }
 
     /// The placeholder target of a `using_if_exists` using-declaration
@@ -382,6 +439,17 @@ impl<'a> AstBuilder<'a> {
             self.ast.lookup.add_inline_child(parent, d);
         }
         d
+    }
+
+    /// A namespace that is neither entered in `ctx`'s lookup table nor
+    /// listed among its members: a context for naming only (clang's
+    /// implicit `namespace std` around `AArch64`'s builtin `__va_list`).
+    pub fn hidden_namespace(&mut self, ctx: DeclId, name: DeclName) -> DeclId {
+        let redecl = self.redecl_link(None);
+        let payload =
+            Payload::Namespace(NamespaceData { redecl, members: Members::default(), flags: 0 });
+        let h = DeclHead::new(ctx, name, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        self.add_unregistered(h, DeclKind::Namespace, payload, false)
     }
 
     /// A linkage specification `extern "C" { }` ([dcl.link]). Transparent:
@@ -640,6 +708,20 @@ impl<'a> AstBuilder<'a> {
         self.add(h, kind, Some(ty), payload, replaces)
     }
 
+    /// A deduction guide ([temp.deduct.guide]) with function type `ty`
+    /// (its return type is the guided specialization). Guides are not
+    /// redeclarable; parameters are attached as for [`AstBuilder::function`].
+    pub fn deduction_guide(&mut self, h: DeclHead, ty: QualType, spec: FnSpec) -> DeclId {
+        let payload = Payload::Function(FunctionData {
+            redecl: self.redecl_link(None),
+            params: ListId::EMPTY,
+            body: None,
+            spec,
+            templ: TemplLink::NONE,
+        });
+        self.add(h, DeclKind::CXXDeductionGuide, Some(ty), payload, None)
+    }
+
     /// A function parameter of `func` ([dcl.fct]); `index` is its position.
     /// Parameters are not members of any list or lookup table (§4.3).
     pub fn param(
@@ -733,6 +815,44 @@ impl<'a> AstBuilder<'a> {
             templ: TemplLink::NONE,
         });
         self.add(h, DeclKind::Var, Some(ty), payload, replaces)
+    }
+
+    /// One structured binding ([dcl.struct.bind]/1, clang's
+    /// `BindingDecl`): typed and given its binding expression when the
+    /// decomposition's initializer is known (`DeclArena::set_binding`). At
+    /// namespace scope it joins the member list ahead of its
+    /// decomposition variable, as in clang.
+    pub fn binding(&mut self, h: DeclHead) -> DeclId {
+        self.add(h, DeclKind::Binding, None, Payload::None(0), None)
+    }
+
+    /// The implicit variable holding a tuple-like structured binding's
+    /// value ([dcl.struct.bind]/4, clang's holding `VarDecl`): a member
+    /// of its lexical context that name lookup never finds.
+    pub fn holding_var(&mut self, h: DeclHead, ty: QualType, spec: VarSpec) -> DeclId {
+        let payload = Payload::Var(VarData {
+            redecl: self.redecl_link(None),
+            init: None,
+            spec,
+            eval: VarEval::default(),
+            templ: TemplLink::NONE,
+        });
+        let name = h.name;
+        let mut h = h;
+        h.name = DeclName::EMPTY;
+        let d = self.add(h, DeclKind::Var, Some(ty), payload, None);
+        self.ast.decls.set_name(d, name);
+        d
+    }
+
+    /// Marks `v` (an unnamed `Var`) as the decomposition holding
+    /// `bindings` (write-once).
+    ///
+    /// # Errors
+    /// If `v` already has bindings.
+    pub fn set_decomposition(&mut self, v: DeclId, bindings: &[DeclId]) -> Result<(), AlreadySet> {
+        let list = self.ast.lists.push(bindings);
+        self.ast.decls.set_decomp_bindings(v, list, bindings)
     }
 
     /// Sets the initializer of variable `v` (once).
@@ -969,6 +1089,32 @@ impl<'a> AstBuilder<'a> {
         self.push_expr(kind, vk, ObjectKind::Ordinary, ExprFlags::NONE, deps, aux, ty, loc, a, b)
     }
 
+    /// `p->~T` / `x.~T` naming the destructor of a scalar or dependent
+    /// type `destroyed` ([expr.prim.id.dtor]/2, [expr.ref]/1):
+    /// `CXXPseudoDestructorExpr`, a prvalue of the bound-member type
+    /// whose only use is a call of type `void` ([expr.call]/5). `base`
+    /// is the object (a pointer for `arrow`); `loc` is the destroyed
+    /// type's name.
+    pub fn pseudo_destructor(
+        &mut self,
+        base: ExprId,
+        arrow: bool,
+        destroyed: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.deps(base) | self.type_deps(destroyed);
+        self.simple(
+            ExprKind::CXXPseudoDestructorExpr,
+            ValueCategory::PRValue,
+            deps,
+            u8::from(arrow),
+            QualType::BOUND_MEMBER,
+            loc,
+            base.raw(),
+            destroyed.to_raw(),
+        )
+    }
+
     /// An integer literal of at most 64 bits ([lex.icon]): a prvalue,
     /// never dependent.
     pub fn int_literal(&mut self, ty: QualType, value: u64, radix: Radix, loc: Loc) -> ExprId {
@@ -1083,6 +1229,31 @@ impl<'a> AstBuilder<'a> {
     pub fn nullptr_literal(&mut self, ty: QualType, loc: Loc) -> ExprId {
         let deps = self.type_deps(ty);
         self.simple(ExprKind::CXXNullPtrLiteralExpr, ValueCategory::PRValue, deps, 0, ty, loc, 0, 0)
+    }
+
+    /// `__func__`, `__FUNCTION__` or `__PRETTY_FUNCTION__`
+    /// ([dcl.fct.def.general]/8): `PredefinedExpr`, an lvalue of type `ty`
+    /// (`const char[N]`, or the dependent type in a dependent context,
+    /// where `name` is `None`); `name` is the `StringLiteral` holding the
+    /// value (its child).
+    pub fn predefined_expr(
+        &mut self,
+        kind: crate::expr::PredefinedKind,
+        ty: QualType,
+        name: Option<ExprId>,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(
+            ExprKind::PredefinedExpr,
+            ValueCategory::LValue,
+            deps,
+            kind as u8,
+            ty,
+            loc,
+            name.map_or(0, ExprId::raw),
+            0,
+        )
     }
 
     /// A source-location builtin call `kind()` ([support.srcloc.cons];
@@ -1474,6 +1645,58 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::ArraySubscriptExpr, vk, deps, 0, ty, loc, base.raw(), idx.raw())
     }
 
+    /// `v[i]` on a vector `v` (a GNU/clang extension): the element, of
+    /// `v`'s value category; a glvalue designates a vector component
+    /// (clang `OK_VectorComponent`).
+    pub fn vector_subscript(
+        &mut self,
+        base: ExprId,
+        idx: ExprId,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        let vk = self.vk(base);
+        let ok = if vk == ValueCategory::PRValue {
+            ObjectKind::Ordinary
+        } else {
+            ObjectKind::VectorComponent
+        };
+        let deps = self.deps(base) | self.deps(idx) | self.type_deps(ty);
+        self.push_expr(
+            ExprKind::ArraySubscriptExpr,
+            vk,
+            ok,
+            ExprFlags::NONE,
+            deps,
+            0,
+            ty,
+            loc,
+            base.raw(),
+            idx.raw(),
+        )
+    }
+
+    /// `__builtin_convertvector(src, T)` (clang `ConvertVectorExpr`): a
+    /// prvalue of the written vector type `ty` whose operand `src` is kept
+    /// unconverted, as clang does (codegen and the Oven read it).
+    pub fn convert_vector(&mut self, src: ExprId, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let deps = self.deps(src) | self.type_deps(ty);
+        let e = self.push_expr(
+            ExprKind::ConvertVectorExpr,
+            ValueCategory::PRValue,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            deps,
+            0,
+            ty,
+            loc,
+            src.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
     /// A parenthesized expression ([expr.prim.paren]): the type, category,
     /// object kind and dependence of `sub`.
     pub fn paren(&mut self, sub: ExprId, lparen: Loc, rparen: Loc) -> ExprId {
@@ -1734,6 +1957,37 @@ impl<'a> AstBuilder<'a> {
             arg.raw(),
             0,
         )
+    }
+
+    /// `__builtin_va_arg(list, T)` (clang's `VAArgExpr`): a prvalue of
+    /// `ty` (the non-reference form of `written`, clang's
+    /// `getNonLValueExprType`) reading the next variadic argument through
+    /// the `va_list` lvalue `list`; `ty_loc` is where `written` begins
+    /// and `rparen` is the closing `)`. Dependence is `written`'s plus `list`'s without its type
+    /// dependence (clang's `computeDependence(VAArgExpr *)`).
+    pub fn va_arg_expr(
+        &mut self,
+        list: ExprId,
+        written: QualType,
+        ty: QualType,
+        ty_loc: Loc,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(written) | self.deps(list).without(ExprDeps::TYPE);
+        let e = self.simple(
+            ExprKind::VAArgExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            list.raw(),
+            written.to_raw(),
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.trait_rhs_loc.insert(e, ty_loc).expect("fresh expression");
+        e
     }
 
     /// `noexcept(operand)` ([expr.unary.noexcept]): a `bool` prvalue whose
@@ -2047,6 +2301,42 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::RecoveryExpr, vk, deps, 0, ty, loc, list.raw(), 0)
     }
 
+    // ----- WP-154: atomic builtins --------------------------------------
+
+    /// An `AtomicExpr` (clang's `AtomicExpr`): a `__c11_atomic_*` /
+    /// `__atomic_*` operation `op` (its builtin id, see
+    /// [`crate::decl::builtin::atomic`]) of the converted operands `subs`
+    /// in clang's order (`ptr`, `order`, `val1`, `order_fail`, `val2`,
+    /// `weak`, as the form has them); `loc` is the builtin name's
+    /// location, `rparen` the closing `)`.
+    pub fn atomic_expr(
+        &mut self,
+        op: u32,
+        subs: &[ExprId],
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        for &c in subs {
+            deps |= self.deps(c);
+        }
+        let list = self.ast.lists.push(subs);
+        let op = u8::try_from(op).expect("atomic operation ids are below 256");
+        let e = self.simple(
+            ExprKind::AtomicExpr,
+            ValueCategory::PRValue,
+            deps,
+            op,
+            ty,
+            loc,
+            list.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
     // ----- WP-064: expression forms ---------------------------------------
 
     /// `T()` for a non-class type `T` ([expr.type.conv]/2): a prvalue
@@ -2132,6 +2422,31 @@ impl<'a> AstBuilder<'a> {
             0,
         );
         self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        e
+    }
+
+    /// A `LambdaExpr` ([expr.prim.lambda], §5): a prvalue of the closure
+    /// type `ty` over the side record `id` (its capture initializers are
+    /// the children); `loc` is the `[`, `end` the `}` of the body.
+    pub fn lambda_expr(&mut self, id: LambdaId, ty: QualType, loc: Loc, end: Loc) -> ExprId {
+        let mut deps = self.type_deps(ty);
+        if let Some(l) = self.ast.exprs.lambdas.get(id).inits {
+            let inits: Vec<ExprId> = self.ast.lists.iter::<ExprId>(l).collect();
+            for e in inits {
+                deps |= self.deps(e);
+            }
+        }
+        let e = self.simple(
+            ExprKind::LambdaExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            id.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
         e
     }
 
@@ -2529,6 +2844,21 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// A union's parenthesized aggregate initialization: `init`
+    /// copy-initializes the member `field` ([dcl.init.general]/16.6.2.2).
+    pub fn paren_list_init_union(
+        &mut self,
+        ty: QualType,
+        init: ExprId,
+        field: DeclId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let e = self.paren_list_init(ty, &[init], None, loc, rparen);
+        self.ast.exprs.cold.union_field.insert(e, field).expect("fresh expression");
+        e
+    }
+
     /// An `OpaqueValueExpr` standing for `source` (same type, category,
     /// object kind and dependence); `source` is shared, not a child.
     pub fn opaque_value(&mut self, source: ExprId) -> ExprId {
@@ -2722,10 +3052,32 @@ impl<'a> AstBuilder<'a> {
         self.stmt(StmtKind::CXXForRangeStmt, 0, loc, side, 0)
     }
 
+    /// A GNU asm statement (`GCCAsmStmt`, [dcl.asm]); `bits` are the
+    /// [`crate::stmt::asm_bits`]. `data.operands` is ignored (the operands
+    /// are copied into the operand table).
+    pub fn gcc_asm_stmt(
+        &mut self,
+        data: AsmData,
+        operands: &[AsmOperand],
+        bits: u16,
+        loc: Loc,
+    ) -> StmtId {
+        let side = self.ast.stmts.push_asm(data, operands);
+        self.stmt(StmtKind::GCCAsmStmt, bits, loc, side, 0)
+    }
+
     /// A labeled statement `label: sub` ([stmt.label]); `label` is the
     /// `Label` declaration (`a` = label, `b` = sub-statement).
     pub fn label_stmt(&mut self, label: DeclId, sub: StmtId, loc: Loc) -> StmtId {
         self.stmt(StmtKind::LabelStmt, 0, loc, label.raw(), sub.raw())
+    }
+
+    /// An attributed statement `[[attrs]] sub` ([stmt.pre]/1, clang's
+    /// `AttributedStmt`): `a` = the `AttrId` list, `b` = the statement.
+    /// `loc` is the first attribute-specifier.
+    pub fn attributed_stmt(&mut self, attrs: &[AttrId], sub: StmtId, loc: Loc) -> StmtId {
+        let list = self.ast.lists.push(attrs);
+        self.stmt(StmtKind::AttributedStmt, 0, loc, list.raw(), sub.raw())
     }
 
     /// `goto label;` ([stmt.goto]); `a` = the `Label` declaration.

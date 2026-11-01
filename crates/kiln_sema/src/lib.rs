@@ -14,8 +14,10 @@
     reason = "sema code uses the standard's short names (e, t, d, l, r)"
 )]
 
+mod asm;
 mod builtins;
 pub mod class;
+mod consteval;
 pub mod constfold;
 pub mod conv;
 pub mod decl;
@@ -25,23 +27,34 @@ pub mod except;
 pub mod expr;
 mod forms;
 mod gnu;
+mod impcast;
 pub mod init;
+mod jump_scope;
+pub mod lambda;
 pub mod literal;
+mod literal_op;
 pub mod lookup;
 pub mod names;
 pub mod new_delete;
 mod oven_bridge;
 pub mod overload;
+mod predefined;
 mod range_for;
 mod rtti;
 pub mod scope;
+mod self_ref;
 mod side_effects;
 pub mod stack_guard;
 pub mod stmt;
+mod struct_bind;
+mod sve;
 pub mod target;
 pub mod templ;
 mod try_stmt;
+mod type_diff;
 pub mod using;
+mod vector;
+mod vector_ops;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
@@ -52,8 +65,8 @@ use kiln_source::{Loc, Span};
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
-    StorageSpec, TypeSpecKind, Width,
+    BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
+    ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
@@ -112,6 +125,10 @@ pub struct Sema<'a, 'sm> {
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
     pub(crate) pending_odr: Vec<ExprId>,
+    /// Immediate invocations and references to immediate functions of
+    /// the current full-expression, and why escalated functions are
+    /// immediate (spec/sema.md §5.10).
+    pub(crate) imm: consteval::ImmState,
     /// Classes whose definitions are being processed (incomplete until
     /// their closing brace).
     pub(crate) defining: Vec<DeclId>,
@@ -135,9 +152,17 @@ pub struct Sema<'a, 'sm> {
     /// parameter-declaration-clause being parsed
     /// ([`Sema::act_on_start_prototype`]).
     pub(crate) prototype_params: Vec<decl::PrototypeFrame>,
+    /// The contexts of the qualified declarator-ids being parsed
+    /// ([`Sema::act_on_enter_declarator_scope`]), the scope depth each
+    /// one's scopes end at, and the context to restore.
+    pub(crate) declarator_records: Vec<(DeclId, usize, DeclId)>,
     /// Parameters created by [`Sema::act_on_prototype_param`] that no
     /// function has adopted yet ([`Sema::create_params`]).
     pub(crate) unowned_params: std::collections::HashSet<DeclId>,
+    /// The declared type (`cv auto`, `auto &`, `auto &&`) of each
+    /// decomposition declared in a template, which instantiation
+    /// deduces anew (the pattern's own may be deduced, spec/sema.md).
+    pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
     /// The declared (placeholder) return type of each function whose
     /// return type was deduced, by first declaration: redeclarations are
     /// matched against it ([dcl.spec.auto.general]/13).
@@ -146,6 +171,9 @@ pub struct Sema<'a, 'sm> {
     /// declaration (clang `getTypeSpecStartLoc`), where the handler-order
     /// warnings point ([except.handle]/4, WP-100).
     pub(crate) handler_type_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where `constinit` was written on each variable declaration that
+    /// has it ([dcl.constinit]; WP-159).
+    pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The declared placeholder type and decl-specifiers' type location
     /// of each variable of a multi-declarator group in a template
     /// pattern: instantiation checks the group's deductions again
@@ -156,6 +184,13 @@ pub struct Sema<'a, 'sm> {
     /// known to be non-dependent ([temp.dep.candidate]), and ADL applies
     /// (spec/sema-overload.md §2.2).
     pub(crate) deferring_call_ref: bool,
+    /// Replaying a non-dependent class-scope using-declaration of a
+    /// pattern: clang walks the pattern's shadow list, which is newest
+    /// first, so the instantiation's shadows come in reverse (WP-159).
+    pub(crate) reverse_using_shadows: bool,
+    /// The type `__builtin_va_list` names (its typedef sugar; the `A` of
+    /// a builtin signature), once declared.
+    pub(crate) va_list_type: Option<QualType>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -176,8 +211,27 @@ pub struct Sema<'a, 'sm> {
     /// Access checks delayed until their declaration exists
     /// (spec/sema-class.md §2.4).
     pub(crate) delayed_access: Vec<class::AccessCheck>,
-    /// `delayed_access.len()` at each open delay point, innermost last.
-    pub(crate) delayed_access_depth: Vec<usize>,
+    /// `delayed_access.len()`, the context and whether the checks are
+    /// dropped ([temp.spec.general]/6) at each open delay point,
+    /// innermost last.
+    pub(crate) delayed_access_depth: Vec<(usize, DeclId, bool)>,
+    /// The next delay point drops its checks (the declaration of an
+    /// explicit instantiation or specialization; [`Sema::exempt_next_delayed_access`]).
+    pub(crate) exempt_next_delay: bool,
+    /// Access checks in a class template pattern (or partial
+    /// specialization) that passed only because the class may instantiate
+    /// to a befriended specialization, keyed by the pattern's first
+    /// declaration; re-run in each instantiation (clang's dependent access
+    /// diagnostics; spec/sema-templates.md §4.8).
+    pub(crate) dependent_access: kiln_source::fx::FxHashMap<DeclId, Vec<class::AccessCheck>>,
+    /// Set by the access check when friendship came only from such a
+    /// befriended specialization.
+    pub(crate) speculative_friend: std::cell::Cell<bool>,
+    /// Access errors reported, as (member, location, innermost context),
+    /// so a replayed check does not repeat one its instantiation redid.
+    pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
+    /// True while [`Sema::replay_dependent_access`] runs.
+    pub(crate) replaying_access: bool,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
     pub(crate) cleanup: class::CleanupState,
@@ -188,6 +242,12 @@ pub struct Sema<'a, 'sm> {
     /// innermost last: diagnostics emitted meanwhile get the note `in
     /// implicit ... for 'T' first required here`.
     pub(crate) synth: Vec<class::SynthContext>,
+    /// Classes whose vtables are used ([basic.def.odr]/8; clang
+    /// `VTableUses`), with the use: their virtual members are marked
+    /// referenced at the end of the TU (spec/sema-class.md §3.5).
+    pub(crate) vtable_uses: Vec<(DeclId, Loc)>,
+    /// The classes ever pushed on `vtable_uses` (first declarations).
+    pub(crate) vtables_used: kiln_source::fx::FxHashSet<DeclId>,
     /// The depth of `synth` whose notes were last printed (clang
     /// `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) synth_noted: std::cell::Cell<usize>,
@@ -202,6 +262,10 @@ pub struct Sema<'a, 'sm> {
     /// builds (clang's `InitializedEntity` for bases, members and
     /// delegation; spec/sema-class.md §4.9).
     pub(crate) ctor_entity: Option<(class::InitEntity, kiln_ast::expr::ConstructionKind)>,
+    /// The type a failed constructor call names instead of the class:
+    /// the reference a list-initialized temporary binds to (`'const E &'`,
+    /// clang's entity type). Set around that construction only.
+    pub(crate) ctor_diag_ty: Option<QualType>,
     /// The mem-initializers of the constructor definition being parsed
     /// (spec/sema-class.md §4.9).
     pub(crate) mem_inits: class::MemInitState,
@@ -217,6 +281,11 @@ pub struct Sema<'a, 'sm> {
     /// range-based `for` from `getCurScope()`); set by the outermost
     /// `in_inst_context`.
     pub(crate) range_for_outer_depth: Option<usize>,
+    /// The C++26 rule for deleting a pointer to an incomplete type
+    /// (P3144), as the parser last passed it to
+    /// [`Sema::act_on_cxx_delete`]; reused when a dependent
+    /// delete-expression is instantiated.
+    pub(crate) delete_cxx26: bool,
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
@@ -236,6 +305,27 @@ pub struct Sema<'a, 'sm> {
     /// The class the last `friend class X;` declared ([`TagUse::Friend`]),
     /// taken by [`Sema::act_on_friend`] as the `FriendDecl`'s owned tag.
     pub(crate) friend_tag: Option<DeclId>,
+    /// The class template the last `template<..> friend class X;`
+    /// befriended ([temp.friend]/1), taken by [`Sema::act_on_friend`].
+    pub(crate) friend_class_template: Option<DeclId>,
+    /// Default template arguments a template parameter inherits from
+    /// another declaration of its template ([temp.param]/12), keyed by
+    /// the parameter that has none of its own.
+    /// The friend function template specializations of class template
+    /// patterns (`friend bool operator==<>(const X&, const X&);`,
+    /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
+    /// their templates per specialization.
+    pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
+    /// The member aliases standing for a dependent `using typename
+    /// B<T>::name;` ([`Sema::act_on_using_typename_declarator`]): an
+    /// instantiation redoes the using-declarator.
+    pub(crate) using_typename: kiln_source::fx::FxHashSet<DeclId>,
+    pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
+    /// The inheriting constructors declared, by (derived class, base
+    /// constructor) (WP-114, clang `findInheritingConstructor`'s lookup).
+    pub(crate) inh_ctors: kiln_source::fx::FxHashMap<(DeclId, DeclId), DeclId>,
+    /// The base constructor of each inheriting constructor.
+    pub(crate) inh_ctor_base: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -253,6 +343,11 @@ pub struct Sema<'a, 'sm> {
     pub(crate) abstract_noted: kiln_source::fx::FxHashSet<DeclId>,
     /// State of the source-location builtins (`builtins.rs`).
     pub(crate) srcloc: builtins::SrcLocCache,
+    /// The lambdas whose bodies are being analysed, innermost last
+    /// (spec/sema-lambda.md; WP-075).
+    pub(crate) lambdas: Vec<lambda::LambdaScope>,
+    /// The mangling-number state of closure types (spec/sema-lambda.md).
+    pub(crate) lambda_mangle: lambda::ManglingState,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -279,7 +374,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let tu = ast.tu;
         templ::builtins::declare_builtin_templates(&mut ast);
         builtins::declare_int128_typedefs(&mut ast, &target);
-        Sema {
+        let mut s = Sema {
             ast,
             diags,
             target,
@@ -296,6 +391,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             decltype_calls: Vec::new(),
             immediate: 0,
             pending_odr: Vec::new(),
+            imm: consteval::ImmState::default(),
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
@@ -303,11 +399,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
+            declarator_records: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
+            decomp_written: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
+            constinit_locs: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
+            reverse_using_shadows: false,
+            va_list_type: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             deferred_call_refs: Vec::new(),
@@ -316,29 +417,49 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             special: class::SpecialState::default(),
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
+            exempt_next_delay: false,
+            dependent_access: kiln_source::fx::FxHashMap::default(),
+            speculative_friend: std::cell::Cell::new(false),
+            access_failed: kiln_source::fx::FxHashSet::default(),
+            replaying_access: false,
             cleanup: class::CleanupState::default(),
             cleanup_saved: Vec::new(),
             synth: Vec::new(),
+            vtable_uses: Vec::new(),
+            vtables_used: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             memcpy_decl: None,
             delegating: Vec::new(),
             ctor_entity: None,
+            ctor_diag_ty: None,
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             diag_capture: std::cell::RefCell::new(None),
             range_for_outer_depth: None,
+            delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
+            friend_class_template: None,
+            inherited_defaults: kiln_source::fx::FxHashMap::default(),
+            inh_ctors: kiln_source::fx::FxHashMap::default(),
+            inh_ctor_base: kiln_source::fx::FxHashMap::default(),
+            friend_specs: kiln_source::fx::FxHashMap::default(),
+            using_typename: kiln_source::fx::FxHashSet::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),
-        }
+            lambdas: Vec::new(),
+            lambda_mangle: lambda::ManglingState::default(),
+        };
+        s.declare_builtin_va_list();
+        s.declare_sve_typedefs();
+        s
     }
 
     /// The AST, mutably.
@@ -438,13 +559,85 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// `q` as clang prints a type argument: `'T'`, or `'T' (aka 'int')`
     /// when the canonical spelling differs.
+    /// A vector type adds ` (vector of N 'E' values)` (clang's
+    /// `ConvertTypeToDiagnosticString`).
+    /// clang's `desugarForDiagnostic`
+    /// does not desugar `__builtin_va_list`, so a difference only there
+    /// gives no `aka`.
     pub fn ty_arg(&self, q: QualType) -> String {
         let names = names::SemaNames::new(self);
         let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
-        match aka(&self.ast.types, &names, q) {
+        if let kiln_ast::types::TypeView::Vector { elem, count, .. } =
+            self.ast.types.canonical_view(q)
+        {
+            // clang's `Desugar` stops before a vector type ("people want
+            // their vec4"), and prints the vector details only without
+            // an `aka`.
+            if let Some(d) = self.vector_aka(q) {
+                let a = print_type(&self.ast.types, &names, d, PrintOptions::SUGARED);
+                if a != s {
+                    return format!("'{s}' (aka '{a}')");
+                }
+            }
+            let top = self.ast.types.desugar_top(q);
+            let elem = match self.ast.types.view(top.ty()) {
+                kiln_ast::types::TypeView::Vector { elem, .. } => elem,
+                _ => elem,
+            };
+            let e = print_type(&self.ast.types, &names, elem, PrintOptions::SUGARED);
+            let v = if count == 1 { "value" } else { "values" };
+            return format!("'{s}' (vector of {count} '{e}' {v})");
+        }
+        let a = aka(&self.ast.types, &names, q).filter(|a| {
+            self.va_list_type.is_none_or(|v| {
+                let vc = print_type(&self.ast.types, &names, v, PrintOptions::CANONICAL);
+                s.replace("__builtin_va_list", &vc) != *a
+            })
+        });
+        match a {
             Some(a) => format!("'{s}' (aka '{a}')"),
             None => format!("'{s}'"),
         }
+    }
+
+    /// clang's `Desugar` for a type whose canonical type is a vector: the
+    /// type desugared step by step, stopping at the sugar whose
+    /// underlying type is the vector itself; `None` when no step counts
+    /// for an `aka` (template parameter substitution, `using` and
+    /// elaborated names, attributes and deduced types do not).
+    fn vector_aka(&self, q: QualType) -> Option<QualType> {
+        use kiln_ast::types::TypeView as V;
+        let t = &self.ast.types;
+        let mut cur = q;
+        let mut aka = false;
+        for _ in 0..256 {
+            let next = t.desugar_once(cur);
+            if next == cur {
+                break;
+            }
+            match t.view(cur.ty()) {
+                // clang substitutes canonical template arguments.
+                V::SubstTemplateTypeParm { .. } => {
+                    cur = t.canonical(cur);
+                    continue;
+                }
+                V::Elaborated { .. } | V::Using { .. } | V::Attributed { .. } | V::Auto { .. } => {}
+                _ => {
+                    if matches!(t.view(next.ty()), V::Vector { .. }) {
+                        break;
+                    }
+                    aka = true;
+                }
+            }
+            cur = next;
+        }
+        aka.then_some(cur)
+    }
+
+    /// `q` printed canonically (fully qualified) without quotes.
+    pub fn ty_canonical_str(&self, q: QualType) -> String {
+        let names = names::SemaNames::new(self);
+        print_type(&self.ast.types, &names, q, PrintOptions::CANONICAL)
     }
 
     /// `q` printed without quotes.
@@ -453,11 +646,28 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         print_type(&self.ast.types, &names, q, PrintOptions::SUGARED)
     }
 
+    /// `q` printed canonical and fully scoped, without quotes: how clang
+    /// prints a declaration's own type (`Context.getTypeDeclType(D)`, a
+    /// bare `RecordType`), e.g. `N::X<int>`.
+    pub fn decl_ty_str(&self, q: QualType) -> String {
+        let names = names::SemaNames::new(self);
+        print_type(&self.ast.types, &names, q, PrintOptions::CANONICAL)
+    }
+
     /// The qualified name of `d`, as clang prints a declaration argument.
     pub fn qualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        names::SemaNames::new(self).write_decl_name(d, true, &mut s);
+        names::SemaNames::new(self).for_decls().write_decl_name(d, true, &mut s);
+        s
+    }
+
+    /// The unqualified name of `d` with its template arguments, as clang
+    /// prints a `NamedDecl` argument without the `q` modifier.
+    pub fn unqualified_decl_name(&self, d: DeclId) -> String {
+        use kiln_ast::types::TypeNames as _;
+        let mut s = String::new();
+        names::SemaNames::new(self).write_decl_name(d, false, &mut s);
         s
     }
 
@@ -470,6 +680,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// The simple name of `d` (empty when unnamed).
     pub fn decl_name(&self, d: DeclId) -> String {
+        if self.ast.decls.decomp_bindings(d).is_some() {
+            return self.decomp_name(d);
+        }
         self.decl_name_str(self.ast.decls.get(d).name())
     }
 

@@ -118,8 +118,8 @@ clang's `Parser` over `Preprocessor::Lex`.
 ### 2.1 The lookahead window
 - `TokenSource` holds the tokens from a little behind the parser's
   position to the furthest token looked at. Lookahead is by absolute
-  index (`tok_at(i)`), so arbitrary-distance scans such as `scan_for`
-  and `at_constructor_declaration` work unchanged; the window grows to
+  index (`tok_at(i)`), so arbitrary-distance scans such as
+  `condition_has_init_statement` and `at_constructor_declaration` work unchanged; the window grows to
   cover them.
 - `bump` releases consumed tokens. The source keeps `KEEP_BEHIND` = 8
   tokens behind the position (the parser reads back at most one, for
@@ -231,8 +231,13 @@ outermost class is complete, so their tokens are saved and re-parsed
     default argument (ends at `,` or `)`) or a default member initializer
     (ends at `,` or `;`). A `?:` keeps its `:` (`capture_conditional`),
     and `operator,`-style names are taken whole. clang's
-    template-argument heuristics (`a < b, c > d` in a default argument)
-    are not implemented.
+    template-argument heuristics are implemented (WP-155): a `,` after an
+    unclosed `<` ends the initializer only if the tokens after it form an
+    init-declarator-list followed by `;` (default member initializer) or
+    parameters that each have `=` (default argument), decided by the
+    tentative scanner (`comma_ends_saved_initializer`); otherwise the `<`
+    is known to open template arguments and later commas inside it are
+    kept. `template name <` is known up front.
   - `capture_default_arg` (at `=`), `capture_exception_spec` (at
     `noexcept`/`throw`, through the `)`), and
     `capture_function_prologue` (an optional `try`, a ctor-initializer and
@@ -259,6 +264,13 @@ template-argument-list closes before an operator could
 in the list and recurses into nested lists, so without a memo each of `N`
 nesting levels re-scans everything inside it: `W<W<...<char>...>>` was
 quadratic in `N` (2,000 levels took 1.4 s in release).
+- A named cast keyword (`static_cast`, `dynamic_cast`, `reinterpret_cast`,
+  `const_cast`) followed by `<` opens a nested list, so
+  `C<static_cast<T>(e)>` closes at the last `>` (WP-130).
+- In `X<args>::name` the arguments are not converted: `name` is
+  classified by the primary template's pattern, and, when the pattern
+  lacks it, by the explicit and then the partial specializations
+  (`Sema::classify_template_member`, WP-130).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
@@ -307,7 +319,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Name scanning:**
   - `scan_name(i)` classifies a possibly qualified name starting at
     token `i` without consuming it.
-  - `scan_for(targets)` finds the first target punctuator at depth 0.
+  - `condition_has_init_statement` (stmt.rs) finds whether a `;`
+    precedes the `)` of an `if`/`switch` condition, skipping nested
+    brackets and braces (clang's `SkipUntil(r_paren, semi)`), so an
+    init-statement may hold braces (`if (int n{1}; n)`).
   - `parse_nested_name` consumes `A::B::`.
 
 ## 4. Declarations (`decl.rs`)
@@ -352,7 +367,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - on a function chunk: cv-qualifiers (a duplicate warns
     `duplicate 'const' declaration specifier`), a ref-qualifier, and an
     explicit object parameter (`this T self`, [dcl.fct]/6) in
-    `Declarator::explicit_object`
+    `Declarator::explicit_object`; in the tentative parse `this` followed
+    by a decl-specifier starts a parameter-declaration-clause, so
+    `void f(this int);` at namespace scope is a function declarator
   - in member context: virt-specifiers `override`/`final` (a repeat is
     `class member already marked 'X'`; `final` in a friend declaration
     is `'final' is invalid in friend declarations`) and a
@@ -365,7 +382,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - A `(` after the declarator-id is a parameter list or a direct
     initializer by `is_cxx_function_declarator` (only where a direct
     initializer may follow; in member context it always starts a
-    parameter list, since a member has no direct-initializer); when the choice was
+    parameter list, since a member has no direct-initializer). It is a
+    parameter list only if its contents parse as a
+    parameter-declaration-clause: `T f(T a)`, `T f(T(a))`, `T f(T(*a))`
+    and `T f(T())` declare functions, while `T x((a))`, `T x((T()))`,
+    `T x((T(a)))` and `T x(T() + T())` declare variables (a
+    parameter-declaration cannot begin with `(`, and no declarator is
+    followed by `+`); the initializer's expression is then parsed as
+    below (an ambiguous parenthesized type-id); when the choice was
     ambiguous the function chunk records it and Sema warns
     `-Wvexing-parse` (`parentheses were disambiguated as a function
     declaration` / `empty parentheses interpreted as a function
@@ -385,11 +409,27 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (sema.md §4.3); a member's exception specification and trailing
     return type are bracketed by `act_on_start_this_scope` /
     `act_on_end_this_scope`.
+    An unnamed parameter (and an abstract `for`-range or condition
+    declarator) is located where its name would be (`set_abstract_loc`,
+    clang `ParseDirectDeclarator`): the first array bound, else the token
+    after the declarator.
   - `-> type-id` after the exception specification is a trailing
     return type (`Chunk::Function::trailing`), required with a
     leading `auto` and diagnosed otherwise by Sema.
   - `decltype ( expression )` and `decltype(auto)` are type specifiers;
     the operand is unevaluated.
+    A concept name followed by `auto` or `decltype ( auto` begins a
+    declaration in the statement disambiguator (`tentative.rs`), so
+    `std::same_as<X> decltype(auto) r = e;` in a block is a constrained
+    placeholder declaration (WP-169).
+  - `_Atomic ( type-id )` (a clang extension in C++, C11 6.7.2.4) is a
+    type specifier, built by `Sema::act_on_atomic_type` (array, function,
+    reference, atomic and qualified operands are
+    `sema_atomic_specifier_bad_type`). The bare `_Atomic` qualifier
+    (WP-154) is parsed with the cv-qualifiers (`tentative.rs` treats it as
+    a decl-specifier when not followed by `(`) and applied as clang's
+    `BuildQualifiedType`: `_Atomic T` is `_Atomic(T)`, with the same
+    operand checks.
 - **Exception specifications** (`parse_exception_spec`, after the
   function parameters, [except.spec]/1): at most one per declarator.
   - `noexcept` is `ExcSpec::BasicNoexcept`.
@@ -473,11 +513,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Using-declarations and aliases** (`parse_using`, spec/sema.md §4.8):
   - `using a::x, ::b::y;`: each declarator is a nested-name-specifier
     (`parse_nested_name_nns`, which also builds the specifier as
-    written) and an identifier, passed to
-    `Sema::act_on_using_declarator` one at a time.
-    - `typename` declarators, `operator`/destructor names and pack
-      expansions (`x...`) are "not supported yet" (they need classes
-      with bases and templates).
+    written) and an unqualified-id (an identifier, an operator-function-id
+    or a conversion-function-id, WP-149) with an optional `...`, passed to
+    `Sema::act_on_using_declarator` one at a time as a `DeclName`.
+    - `typename` declarators (outside a class) and destructor names are
+      "not supported yet".
     - A missing name is `expected unqualified-id`; a missing `;` is
       `expected ';' after using declaration`.
   - `[[clang::using_if_exists]]` is accepted before `using` (at
@@ -547,7 +587,8 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   1. **Method:** `act_on_start_delayed_method(f)`, then each default
      argument (`act_on_param_default_arg(p, e)`; leftover tokens are
      `unexpected end of default argument expression`; a braced default
-     argument is unsupported) and the *noexcept-specifier*
+     argument is parsed as an *initializer-list* and goes to
+     `act_on_param_default_list(p, list)`, WP-136) and the *noexcept-specifier*
      (`act_on_exception_spec(f, spec)`; leftovers are `unexpected end of
      exception specification`), then `act_on_finish_delayed_method(f)`.
   2. **Nsdmi:** `act_on_start_field_init(field)`, the initializer, then
@@ -586,6 +627,23 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     type-id. `( type-id ) { ... }` is a compound literal instead
     (`act_on_compound_literal`), followed by postfix operators as in
     clang's `ParseCompoundLiteralExpression`.
+  - When that type-id was *ambiguous* (the second flag: the abstract
+    declarator could also be an expression, `(T())`, `(T(*)())`), the
+    tokens after the matching `)` decide ([dcl.ambig.res]/2,
+    [expr.cast]; clang's `ParseCXXAmbiguousParenExpression`,
+    `ambiguous_paren_is_cast`): a `{` makes it a compound literal, `(`
+    `)` makes it an expression, and any other token is a cast exactly
+    when it can begin a cast-expression (`starts_cast_expr`, the tokens
+    clang's `ParseCastExpression` accepts without `NotCastExpr`:
+    literals, identifiers and the keywords that start a primary or
+    unary expression or a functional cast, `(`, `[`, `::`, `^^`, `[:`,
+    and the unary operators `++ -- & && * + - ! ~`). So `(T())x` and
+    `(T())*x` are casts, while `(T());`, `(T())/x`, `(T())()` and the
+    direct-initializer `T x((T()))` (libc++ `count_new.h`'s
+    `MemCounter counter((MemCounter::MemCounterCtorArg_()))`) are
+    parenthesized expressions. Unlike clang, kiln decides by looking
+    ahead without parsing the operand first; the only difference is
+    that the cast's type is built before its operand.
   - `throw [assignment-expression]` (the operand is optional before
     `)`, `]`, `}`, `;`, `,` and `:`) and `typeid ( type-id |
     expression )`, disambiguated with `is_cxx_type_id`; the operand of
@@ -593,6 +651,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - Then postfix operators (`parse_postfix_suffix`): calls, subscripts,
     `.`, `->`, `++`, `--`. A call argument may be a braced-init-list
     (`act_on_braced_arg`, converted once the parameter type is known).
+    A member destructor name may be a template-id, `p->~C<T>()`
+    ([expr.prim.id.dtor]/1): the template-id is parsed as a type and
+    passed to `Sema::rebuild_member_destructor` (WP-149).
   - Then primary expressions:
     - literals and `this`-less id-expressions
     - qualified names `N::x`
@@ -614,6 +675,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
       `expected ','`, `expected identifier` (skip past `)`), a missing
       `]` (reported, parsing continues) and a missing `)` (reported;
       the expression fails).
+    - `__builtin_va_arg ( assignment-expression , type-id )` (WP-171) goes
+      to `act_on_va_arg` with the type's begin location and the `)`.
+      Errors as clang: `expected '(' after '__builtin_va_arg'`,
+      `expected ','`, a missing `)`.
 - **The GNU `x ?: y`** goes to `act_on_binary_conditional`; the middle
   operand of an ordinary `?:` is a full expression.
 - **Missing closers** (`expect_closing`) are reported at the current
@@ -666,16 +731,48 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
 ## 6. Statements and attributes
 
 ### 6.1 Statements (`stmt.rs`)
-- **Declaration or expression** ([stmt.ambig]):
-  `is_declaration_statement` uses keywords, attributes and `scan_name`.
-  Each case below counts as a declaration:
+- **Declaration or expression** ([stmt.ambig], [dcl.ambig.res]):
+  `is_cxx_declaration_statement` (§2.1) decides, as clang's
+  `isCXXDeclarationStatement` does. A `[` after a declarator is clang's
+  `TryParseBracketDeclarator`: `[{` or a top-level `,` before the `]`
+  means an expression; `[[` is a declarator suffix (the attributes are
+  then `an attribute list cannot appear here` after a parenthesized
+  declarator, `discard_prohibited_cxx11_attrs`). A condition is a
+  declaration when the declarator is followed by `=`, `{`, `[[`, `asm`
+  or `__attribute__`. `condition_has_init_statement` looks for a `;` at
+  the top level of the parentheses, skipping balanced groups, so
+  `if (int n{1}; n)` has an init-statement.
 
-  | Name class | Followed by |
-  |---|---|
-  | type name | an identifier, `*`, `&`, `&&`, `;`, `(*`, `(&`, or a decl-specifier keyword |
-  | undeclared name | an identifier |
+  Audit against clang 19 (WP-180). `T` is a class, `U` a template type
+  parameter, `a` a variable, `I` a typedef; tests are under
+  `tests/conformance/stmt.ambig/` and `tests/conformance/dcl.ambig.res/`.
 
-  `T(x);` is not disambiguated yet: tentative parsing is M3.
+  | Form | clang 19 | kiln |
+  |---|---|---|
+  | `T x(T(a)), y;` | `x` a function with parameter `a`, `-Wvexing-parse` | same |
+  | `T(a)->f();` | expression (cast) | same |
+  | `T(*p)(int);` | declaration of `p`, `T*` from `int` | same |
+  | `T(e)[3];` | declaration of an array | same |
+  | `T(e) = 1;` | declaration | same |
+  | `T(e), b;` / `T(e), y = 2;` | declarations | same |
+  | `T(a)++;`, `T(a, 5) << c;`, `T(a)->m = 7;` | expressions | same |
+  | `int(a)++;` | expression; `assignment to cast is illegal, lvalue casts are not supported` | same (fixed in WP-180) |
+  | `T(f) = {1};` | declaration | same |
+  | `T(*g)(nullptr);` | declaration, type sugar `T (*)` | declaration, `T *` (no ParenType sugar) |
+  | `T(n) [[maybe_unused]];` | declaration; `an attribute list cannot appear here` | same (fixed in WP-180) |
+  | `T(a);`, `T(a)(b);`, `U(a);` with `a` declared | declaration; `-Wvexing-parse` redundant-parentheses warning | declaration, no warning |
+  | `void g(T(a));` / `void g(T(I));` | parameter `a` / parameter `T (*)(I)` | same |
+  | `sizeof(T(a))`, `sizeof(T(a).m)` | expressions | same |
+  | `sizeof(T())`, `sizeof(T(*)())` | type-ids (the first a function type: error) | same |
+  | `typeid(T(a))` / `typeid(T())`, `typeid(T(I))` | expression / type-ids | same |
+  | `for (T(e); ;)` | declaration | same |
+  | `if (T(e) = 1)` / `if (T(a).m)` | declaration / expression | same |
+  | `if (T(n){1})`, `while (T(n){1})` | declaration with a braced initializer | same (fixed in WP-180) |
+  | `if (int n{1}; n)`, `switch (int m{2}; m)` | init-statement | same (fixed in WP-180) |
+  | `(T()){}` | `illegal initializer type 'T ()'` | same (fixed in WP-180) |
+  | `U(e);`, `U(*p)(int);`, `U(f), g = 1;`, `U(h)[2];` | declarations | same |
+  | `(U)a`, `(U(a))`, `U(a) + 1`, `U(a)->m` | expressions | same |
+  | `typename U::type(e);` / `U::type(a);` | declaration / call | same |
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed
@@ -735,6 +832,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     declaration
   - the class-head and enum-head, for the tag (`act_on_tag_attrs`)
   - before a statement, for the statement (`fallthrough`, `likely`)
+- **`[[assume(e)]]` (WP-160):** `parse_assume_arg` parses a
+  conditional-expression. If the next token is not `)`, it reparses the
+  full expression, reports `use of this expression in an 'assume'
+  attribute requires parentheses` at its expression location, and drops
+  the attribute. A statement whose leading `[[...]]` holds an `assume`
+  goes through `act_on_attributed_stmt` after the sub-statement is parsed,
+  passing whether the standard is before C++23 (sema has no standard).
 
 ## 7. Driver (`kiln -fsyntax-only [-fdump-ast]`)
 - The driver builds the preprocessor exactly as `-E` does
@@ -760,8 +864,6 @@ in `kiln_diag` for now; nothing emits them.
 - **Classes** (parsed by WP-065; their Sema is WP-066b):
   - qualified non-type and `decltype` mem-initializer-ids, braced
     default arguments
-  - clang's template-argument heuristics when saving a default argument
-    or default member initializer (`a < b, c > d`)
   - literal operators (`operator""`)
   - pragma events inside saved tokens (they fire at capture)
   - diagnostics clang gives that the parser skips: a decl-specifier
@@ -822,12 +924,28 @@ argument skipping) is skipped syntactically (`skip_qualified_rest`) and
 classified by what follows the name: an identifier, a `*`/`&`/`&&`
 before `)`/`,`/`>`, or a `)` before an identifier, literal or `(` make it
 a type. A name begins at the `decltype` keyword (`name_begin`).
+**Landed (WP-140).** GNU asm ([dcl.asm], `asm.rs`): the asm-declaration
+`asm ( string-literal ) ;` at namespace scope goes to
+`act_on_file_scope_asm`; in a function body `asm`/`__asm`/`__asm__` with
+the qualifiers `volatile`, `inline`, `goto` (duplicates diagnosed,
+`const`/`restrict` ignored with clang's warnings) and the extended form
+`( template : outputs : inputs : clobbers [: labels] )`, operands
+`[name] "constraint" ( expression )`, goes to `act_on_gcc_asm_stmt`. A
+wide, Unicode or empty literal is diagnosed at the following token, as
+clang does. `asm goto` is parsed and then reported as
+`'asm goto' is not supported yet` (callbr lowering is not implemented).
+Not implemented: `asm goto`, MS-style `__asm { }` blocks.
+
+**Landed (WP-140).** The predefined identifiers `__func__`,
+`__FUNCTION__` and `__PRETTY_FUNCTION__` are keywords and primary
+expressions ([dcl.fct.def.general]/8) passed to `act_on_predefined_expr`.
+
 - **Other declarations:**
   - pack expansions in dynamic exception specifications
   - `auto` deduction from braced lists (`std::initializer_list`)
   - `typename`, `operator` and pack forms of using-declarators, and an
     attributed `[[...]] using` as a block-scope statement
-  - `asm` declarations, modules, `__declspec`
+  - `asm goto`, MS `__asm` blocks, modules, `__declspec`
 
 ## 10. Tests
 - **Per-rule tests** in `crates/kiln_parse/tests/`, each tagged with

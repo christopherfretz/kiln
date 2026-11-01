@@ -1,0 +1,58 @@
+TranslationUnitDecl
+|-ClassTemplateDecl M
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-CXXRecordDecl struct M definition
+| | `-ClassTemplateDecl N
+| |   |-TemplateTypeParmDecl class depth 1 index 0 U
+| |   `-CXXRecordDecl struct N definition
+| |     `-ClassTemplateDecl O
+| |       |-TemplateTypeParmDecl referenced class depth 2 index 0 V
+| |       `-CXXRecordDecl struct O definition
+| |         `-TypeAliasDecl type 'V'
+| `-ClassTemplateSpecializationDecl struct M definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   `-ClassTemplateDecl N
+|     |-TemplateTypeParmDecl class depth 0 index 0 U
+|     |-CXXRecordDecl struct N
+|     `-ClassTemplateSpecializationDecl struct N definition implicit_instantiation
+|       |-TemplateArgument type 'int'
+|       `-ClassTemplateDecl O
+|         |-TemplateTypeParmDecl class depth 0 index 0 V
+|         |-CXXRecordDecl struct O
+|         `-ClassTemplateSpecializationDecl struct O definition implicit_instantiation
+|           |-TemplateArgument type 'long'
+|           `-TypeAliasDecl referenced type 'long'
+|-TypeAliasTemplateDecl Deep
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| |-TemplateTypeParmDecl referenced class depth 0 index 2 V
+| `-TypeAliasDecl Deep 'typename M<T>::template N<U>::template O<V>::type'
+|-ClassTemplateDecl Z
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct Z definition
+| | `-TypeAliasDecl type 'Deep<T, T, long>':'typename M<type-parameter-0-0>::template N<type-parameter-0-0>::template O<long>::type'
+| `-ClassTemplateSpecializationDecl struct Z definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   `-TypeAliasDecl referenced type 'Deep<int, int, long>':'long'
+|-VarDecl z 'Z<int>::type':'long' cinit
+| `-ImplicitCastExpr 'Z<int>::type':'long' <IntegralCast>
+|   `-IntegerLiteral 'int' 1
+|-ClassTemplateDecl Q
+| |-TemplateTypeParmDecl class depth 0 index 0 X
+| |-CXXRecordDecl struct Q definition
+| | `-TypeAliasDecl type 'typename X::type::inner'
+| `-ClassTemplateSpecializationDecl struct Q definition implicit_instantiation
+|   |-TemplateArgument type 'In'
+|   `-TypeAliasDecl referenced type 'typename In::type::inner':'int'
+|-CXXRecordDecl referenced struct In definition
+| `-CXXRecordDecl struct type definition
+|   `-TypeAliasDecl referenced inner 'int'
+|-ClassTemplateDecl R
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct R definition
+| | `-TypeAliasDecl t 'typename Q<T>::type'
+| `-ClassTemplateSpecializationDecl struct R definition implicit_instantiation
+|   |-TemplateArgument type 'In'
+|   `-TypeAliasDecl referenced t 'typename Q<In>::type':'int'
+`-VarDecl r 'R<In>::t':'int' cinit
+  `-IntegerLiteral 'int' 2

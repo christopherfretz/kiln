@@ -1,0 +1,72 @@
+Dumping ShadB:
+CXXRecordDecl referenced struct ShadB definition
+|-CXXRecordDecl implicit referenced struct ShadB
+|-CXXConstructorDecl ShadB 'void (int)'
+| `-ParmVarDecl 'int'
+|-CXXConstructorDecl ShadB 'void (long)'
+| `-ParmVarDecl 'long'
+|-CXXMethodDecl f 'void (int)'
+| `-ParmVarDecl 'int'
+|-CXXMethodDecl f 'void (long)'
+| `-ParmVarDecl 'long'
+|-CXXConstructorDecl implicit constexpr ShadB 'void (const ShadB &)' inline default trivial noexcept-unevaluated
+| `-ParmVarDecl 'const ShadB &'
+|-CXXConstructorDecl implicit constexpr ShadB 'void (ShadB &&)' inline default trivial noexcept-unevaluated
+| `-ParmVarDecl 'ShadB &&'
+`-CXXDestructorDecl implicit constexpr ~ShadB 'void ()' inline default trivial noexcept-unevaluated
+
+Dumping ShadD:
+ClassTemplateDecl ShadD
+|-TemplateTypeParmDecl class depth 0 index 0 T
+|-CXXRecordDecl struct ShadD definition
+| |-public 'ShadB'
+| |-CXXRecordDecl implicit struct ShadD
+| |-UsingDecl ShadB::ShadD<T>
+| |-ConstructorUsingShadowDecl implicit CXXConstructor 'ShadB' 'void (int)'
+| |-ConstructorUsingShadowDecl implicit CXXConstructor 'ShadB' 'void (long)'
+| |-ConstructorUsingShadowDecl implicit CXXConstructor 'ShadB' 'void (const ShadB &)'
+| |-ConstructorUsingShadowDecl implicit CXXConstructor 'ShadB' 'void (ShadB &&)'
+| |-UsingDecl ShadB::f
+| |-UsingShadowDecl implicit CXXMethod 'f' 'void (int)'
+| `-UsingShadowDecl implicit CXXMethod 'f' 'void (long)'
+`-ClassTemplateSpecializationDecl struct ShadD definition implicit_instantiation
+  |-TemplateArgument type 'int'
+  |-public 'ShadB'
+  |-CXXRecordDecl implicit struct ShadD
+  |-UsingDecl ShadB::ShadD
+  |-ConstructorUsingShadowDecl implicit CXXConstructor 'ShadB' 'void (ShadB &&)'
+  |-ConstructorUsingShadowDecl implicit CXXConstructor 'ShadB' 'void (const ShadB &)'
+  |-ConstructorUsingShadowDecl implicit CXXConstructor 'ShadB' 'void (long)'
+  |-ConstructorUsingShadowDecl implicit CXXConstructor 'ShadB' 'void (int)'
+  |-UsingDecl ShadB::f
+  |-UsingShadowDecl implicit CXXMethod 'f' 'void (long)'
+  |-UsingShadowDecl implicit CXXMethod 'f' 'void (int)'
+  |-CXXConstructorDecl implicit constexpr ShadD 'void ()' inline default_delete noexcept-unevaluated
+  |-CXXConstructorDecl implicit constexpr ShadD 'void (const ShadD<int> &)' inline default trivial noexcept-unevaluated
+  | `-ParmVarDecl 'const ShadD<int> &'
+  `-CXXConstructorDecl implicit constexpr ShadD 'void (ShadD<int> &&)' inline default trivial noexcept-unevaluated
+    `-ParmVarDecl 'ShadD<int> &&'
+
+Dumping ShadE:
+ClassTemplateDecl ShadE
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-CXXRecordDecl struct ShadE definition
+| |-public 'T'
+| |-CXXRecordDecl implicit struct ShadE
+| `-UnresolvedUsingValueDecl f
+`-ClassTemplateSpecializationDecl struct ShadE definition implicit_instantiation
+  |-TemplateArgument type 'ShadB'
+  |-public 'ShadB'
+  |-CXXRecordDecl implicit struct ShadE
+  |-UsingDecl ShadB::f
+  |-UsingShadowDecl implicit CXXMethod 'f' 'void (int)'
+  `-UsingShadowDecl implicit CXXMethod 'f' 'void (long)'
+
+Dumping ShadUse:
+FunctionDecl ShadUse 'void ()'
+`-CompoundStmt
+  |-CStyleCastExpr 'void' <ToVoid>
+  | `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'ShadD<int>'
+  `-CStyleCastExpr 'void' <ToVoid>
+    `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'ShadE<ShadB>'
+

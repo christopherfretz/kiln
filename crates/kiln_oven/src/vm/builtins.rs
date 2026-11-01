@@ -96,6 +96,17 @@ impl Oven {
                 Ok(u128::from(n))
             }
             bi::POPCOUNT => Ok(u128::from((a & mask(sub & 0xFF)).count_ones())),
+            bi::LOCK_FREE => {
+                // clang 19 `IntExprEvaluator::VisitBuiltinCallExpr`: a
+                // power-of-two size within the inline width is lock-free
+                // for an `_Atomic` (c11) or null object, a single byte,
+                // or an object aligned to the size.
+                let max = u128::from(sub & 0xFF);
+                let yes = a.is_power_of_two()
+                    && a <= max
+                    && (sub >> 8 & 1 != 0 || a == 1 || u128::from(t1) >= a);
+                if yes || sub >> 9 & 1 != 0 { Ok(u128::from(yes)) } else { Err(Fault::Invalid) }
+            }
             bi::BSWAP => {
                 let w = sub & 0xFF;
                 Ok((a & mask(w)).swap_bytes() >> (128 - w))
@@ -106,15 +117,121 @@ impl Oven {
                     bi::FINITE => !matches!(c, Class::Inf | Class::NaN),
                     bi::INF => c == Class::Inf,
                     bi::NAN => c == Class::NaN,
+                    bi::SUBNORMAL => c == Class::Subnormal,
+                    bi::ZERO => c == Class::Zero,
+                    bi::SIGNALING => softfloat::is_signaling(float_of(sub & 15), a),
+                    bi::MASK => {
+                        let k = float_of(sub & 15);
+                        let neg = a & softfloat::sign_bit(k) != 0;
+                        let bit = match c {
+                            Class::NaN if softfloat::is_signaling(k, a) => 0x1,
+                            Class::NaN => 0x2,
+                            Class::Inf => {
+                                if neg {
+                                    0x4
+                                } else {
+                                    0x200
+                                }
+                            }
+                            Class::Normal => {
+                                if neg {
+                                    0x8
+                                } else {
+                                    0x100
+                                }
+                            }
+                            Class::Subnormal => {
+                                if neg {
+                                    0x10
+                                } else {
+                                    0x80
+                                }
+                            }
+                            Class::Zero => {
+                                if neg {
+                                    0x20
+                                } else {
+                                    0x40
+                                }
+                            }
+                        };
+                        b & bit != 0
+                    }
                     _ => c == Class::Normal,
                 };
                 Ok(u128::from(r))
             }
+            bi::FP_OP => {
+                let k = float_of(sub & 15);
+                let sign = softfloat::sign_bit(k);
+                let neg = |x: u128| x & sign != 0;
+                let zero = |x: u128| softfloat::classify(k, x) == Class::Zero;
+                let nan = |x: u128| softfloat::classify(k, x) == Class::NaN;
+                Ok(match sub >> 4 {
+                    bi::FABS => a & !sign,
+                    bi::COPYSIGN => a & !sign | b & sign,
+                    bi::FMAX => {
+                        let gt = softfloat::cmp(k, b, a) == Some(std::cmp::Ordering::Greater);
+                        if zero(a) && zero(b) {
+                            if neg(a) { b } else { a }
+                        } else if nan(a) || gt {
+                            b
+                        } else {
+                            a
+                        }
+                    }
+                    bi::FMIN => {
+                        let lt = softfloat::cmp(k, b, a) == Some(std::cmp::Ordering::Less);
+                        if zero(a) && zero(b) {
+                            if neg(b) { b } else { a }
+                        } else if nan(a) || lt {
+                            b
+                        } else {
+                            a
+                        }
+                    }
+                    _ => match softfloat::classify(k, a) {
+                        Class::Inf if neg(a) => u128::MAX,
+                        Class::Inf => 1,
+                        _ => 0,
+                    },
+                })
+            }
             bi::STRLEN => self.bi_strlen(a as u64, OTy(t1)).map(u128::from),
-            bi::MEMCMP => self.bi_memcmp(ast, a as u64, b as u64, c as u64, t1, t2, sub != 0),
-            bi::MEMCHR => self.bi_memchr(ast, a as u64, b, c as u64, t1, sub != 0).map(u128::from),
+            k @ (bi::MEMCMP | bi::MEMCHR) => {
+                let n = if sub & bi::UNBOUNDED != 0 { u64::MAX } else { c as u64 };
+                let mode = StrMode { wide: sub & bi::WIDE != 0, str: sub & bi::STR != 0 };
+                if k == bi::MEMCMP {
+                    self.bi_memcmp(ast, a as u64, b as u64, n, t1, t2, mode)
+                } else {
+                    self.bi_memchr(ast, a as u64, b, n, t1, mode).map(u128::from)
+                }
+            }
             bi::MEMCPY => {
-                self.bi_memcpy(ast, a as u64, b as u64, c as u64, t1, t2, sub != 0).map(|()| a)
+                let (mv, wide) = (sub & bi::MOVE != 0, sub & bi::WCHAR != 0);
+                self.bi_memcpy(ast, a as u64, b as u64, c as u64, [t1, t2], mv, wide).map(|()| a)
+            }
+            bi::INT_OP => {
+                let w = sub & 0xFF;
+                let v = a & mask(w);
+                Ok(match sub >> 8 {
+                    bi::FFS if v == 0 => 0,
+                    bi::FFS => u128::from(v.trailing_zeros() + 1),
+                    bi::PARITY => u128::from(v.count_ones() & 1),
+                    bi::CLRSB => {
+                        // The redundant sign bits: `clz` of `v` (or of
+                        // `~v` when negative) in `w` bits, minus one.
+                        let s = if v >> (w - 1) & 1 != 0 { !v & mask(w) } else { v };
+                        u128::from(s.leading_zeros() - (128 - w) - 1)
+                    }
+                    bi::BITREVERSE => v.reverse_bits() >> (128 - w),
+                    k => {
+                        // clang: the amount modulo the width.
+                        let n = ((b & mask(w)) % u128::from(w)) as u32;
+                        let n = if k == bi::ROTL { n } else { (w - n) % w };
+                        if n == 0 { v } else { (v << n | v >> (w - n)) & mask(w) }
+                    }
+                })
             }
             bi::BIT_CAST => {
                 let (to_mem, read) = (sub == bi::TO_MEM, sub == bi::READ_ONLY);
@@ -185,7 +302,9 @@ impl Oven {
     }
 
     /// `memcmp` (`wide` false: only arrays of narrow character types,
-    /// compared as unsigned bytes) and `wmemcmp` (as `wchar_t`).
+    /// compared as unsigned bytes) and `wmemcmp` (as `wchar_t`); with
+    /// `str`, `strcmp`/`strncmp`/`wcscmp`/`wcsncmp`: any element type, and
+    /// equal at the first null element (clang `StopAtNull`).
     #[allow(clippy::too_many_arguments, reason = "the instruction's operands")]
     fn bi_memcmp(
         &self,
@@ -195,7 +314,7 @@ impl Oven {
         mut n: u64,
         t1: u32,
         t2: u32,
-        wide: bool,
+        StrMode { wide, str }: StrMode,
     ) -> Result<u128, Fault> {
         let ret = |o: std::cmp::Ordering| o as i8 as i128 as u128;
         if n == 0 {
@@ -209,12 +328,12 @@ impl Oven {
         }
         let (t1, t2) = (self.designated(p, t1)?, self.designated(q, t2)?);
         if !wide {
-            if !(is_narrow_char(ast, self, t1) && is_narrow_char(ast, self, t2)) {
+            if !(str || (is_narrow_char(ast, self, t1) && is_narrow_char(ast, self, t2))) {
                 return Err(Fault::Bi(BiFault::CmpType { t1, t2 }));
             }
             if let (Some(x), Some(y)) = (self.byte_run(p, t1, n), self.byte_run(q, t2, n)) {
                 let m = x.len().min(y.len());
-                if let Some(i) = (0..m).find(|&i| x[i] != y[i]) {
+                if let Some(i) = (0..m).find(|&i| x[i] != y[i] || str && x[i] == 0) {
                     return Ok(ret(x[i].cmp(&y[i])));
                 }
                 if m as u64 == n {
@@ -240,6 +359,9 @@ impl Oven {
                     return Ok(ret(o));
                 }
             }
+            if str && x & mask(bits) == 0 {
+                return Ok(0);
+            }
             p = self.ptr_add(p, 1, t1)?;
             q = self.ptr_add(q, 1, t2)?;
         }
@@ -249,6 +371,9 @@ impl Oven {
     /// `memchr`/`char_memchr` (`wide` false: the value converted to
     /// `unsigned char`; `memchr` only over narrow character types) and
     /// `wmemchr`: the first of `n` elements at `p` equal to `v`, else null.
+    /// With `str`, `strchr`/`wcschr`: any element type, null after the
+    /// first null element, and (`strchr`) null for an `int` value the
+    /// element type cannot represent (clang's `HandleIntToIntCast` check).
     fn bi_memchr(
         &self,
         ast: &Ast,
@@ -256,7 +381,7 @@ impl Oven {
         v: u128,
         mut n: u64,
         t: u32,
-        wide: bool,
+        StrMode { wide, str }: StrMode,
     ) -> Result<u64, Fault> {
         if n == 0 {
             return Ok(0);
@@ -270,12 +395,29 @@ impl Oven {
             TyKind::Int { width, .. } => u32::from(width),
             _ => 8,
         };
-        if !wide && !is_narrow_char(ast, self, t) {
+        if !wide && !str && !is_narrow_char(ast, self, t) {
             return Err(Fault::Bi(BiFault::ChrType { t }));
+        }
+        if str && !wide {
+            // `strchr`'s `int` argument, sign-extended, must survive the
+            // conversion to the element type.
+            let sv = i128::from(v as u32 as i32);
+            let signed = matches!(self.types.kind(t), TyKind::Int { signed: true, .. });
+            let (lo, hi) = if signed {
+                (-(1i128 << (w - 1)), (1i128 << (w - 1)) - 1)
+            } else {
+                (0, (1i128 << w) - 1)
+            };
+            if sv < lo || sv > hi {
+                return Ok(0);
+            }
         }
         let want = if wide { v & mask(w) } else { v & 0xFF };
         if !wide && let Some(run) = self.byte_run(p, t, n) {
-            if let Some(i) = run.iter().position(|&x| u128::from(x) == want) {
+            if let Some(i) = run.iter().position(|&x| u128::from(x) == want || str && x == 0) {
+                if u128::from(run[i]) != want {
+                    return Ok(0);
+                }
                 return self.ptr_add(p, i as i128, t);
             }
             n -= run.len() as u64;
@@ -285,8 +427,12 @@ impl Oven {
             p = self.ptr_add(p, run.len() as i128, t)?;
         }
         for _ in 0..n {
-            if self.load(p, t, ak::READ)? & mask(w) == want {
+            let x = self.load(p, t, ak::READ)? & mask(w);
+            if x == want {
                 return Ok(p);
+            }
+            if str && x == 0 {
+                return Ok(0);
             }
             p = self.ptr_add(p, 1, t)?;
         }
@@ -317,9 +463,9 @@ impl Oven {
         dst: u64,
         src: u64,
         n: u64,
-        t1: u32,
-        t2: u32,
+        [t1, t2]: [u32; 2],
         mv: bool,
+        wide: bool,
     ) -> Result<(), Fault> {
         if n == 0 {
             return Ok(());
@@ -339,10 +485,14 @@ impl Oven {
         if size == 0 {
             return Err(Fault::Invalid);
         }
-        if !n.is_multiple_of(size) {
+        // `wmemcpy`/`wmemmove` count elements (clang: no size check).
+        let (n, ne) = if wide {
+            (n.saturating_mul(size), n)
+        } else if !n.is_multiple_of(size) {
             return Err(Fault::Bi(BiFault::CopySize { mv, t, n, size }));
-        }
-        let ne = n / size;
+        } else {
+            (n, n / size)
+        };
         for (p, is_src) in [(src, true), (dst, false)] {
             let (_, len, cur, _) = self.extent_of(p, t)?;
             if ne > len - cur {
@@ -400,7 +550,20 @@ impl Oven {
         if d_alloc.flags & flags::HAS_UNION != 0 || write_fault(ds, d_alloc, t).is_some() {
             return false;
         }
+        // A refused trial write: the element-wise copy reports it.
+        if self.mem.trial_write(dst, n).is_err() {
+            return false;
+        }
         self.mem.copy(ds, da, ss, sa, n);
         true
     }
+}
+
+/// The flavour of a `MEMCMP`/`MEMCHR` builtin (`bi::WIDE`, `bi::STR`).
+#[derive(Clone, Copy)]
+struct StrMode {
+    /// Elements compared as `wchar_t` (the `w` forms).
+    wide: bool,
+    /// The `str`/`wcs` forms: stop at a null element.
+    str: bool,
 }

@@ -12,11 +12,12 @@
 use std::mem;
 
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, FriendTarget, InitStyle};
-use kiln_ast::names::OverloadedOperator;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TagKeyword;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind, Token};
+use kiln_sema::DeclSite;
 use kiln_sema::{
     BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
     MemInitInfo, NameClass, SpecialName, StorageSpec, TypeSpecKind,
@@ -24,7 +25,7 @@ use kiln_sema::{
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
-use crate::decl::is_untyped_special;
+use crate::decl::{is_deduction_guide, is_untyped_special};
 use crate::keywords::Kw;
 use crate::parser::{Parser, quote};
 use kiln_sema::templ::auto::AutoGroup;
@@ -182,16 +183,43 @@ impl Parser<'_, '_> {
         true
     }
 
-    /// clang's `ConsumeAndStoreInitializer` (without its template-argument
-    /// heuristics): moves a default argument or default member initializer
-    /// into `out`, up to (not including) the `,`, `)` or `;` that ends it.
-    /// Returns false at end of input or at an unbalanced closer.
+    /// clang's `ConsumeAndStoreInitializer`: moves a default argument or
+    /// default member initializer into `out`, up to (not including) the
+    /// `,`, `)` or `;` that ends it. A `,` after an unclosed `<` may be a
+    /// template argument separator: a tentative parse of what follows
+    /// decides ([`Parser::comma_ends_saved_initializer`]); once one such
+    /// comma did not end it, the `<` is known to open a template argument
+    /// list. Returns false at end of input or at an unbalanced closer.
     pub(crate) fn capture_initializer(&mut self, kind: InitKind, out: &mut Vec<Token>) -> bool {
         let mut first = true;
+        // clang's `AngleCount` (possible unclosed `<`s) and
+        // `KnownTemplateCount`.
+        let (mut angles, mut known) = (0u32, 0u32);
         loop {
             let t = self.tok();
             match Self::punct_of(t) {
-                Some(Punct::Comma) => return true,
+                Some(Punct::Comma) => {
+                    if angles == 0 {
+                        return true;
+                    }
+                    if known == 0 {
+                        if self.comma_ends_saved_initializer(kind == InitKind::Nsdmi) {
+                            return true;
+                        }
+                        known += 1;
+                    }
+                    self.take_into(out);
+                }
+                Some(Punct::Less) => {
+                    angles += 1;
+                    self.take_into(out);
+                }
+                Some(p @ (Punct::Greater | Punct::GreaterGreater)) => {
+                    let n = if p == Punct::Greater { 1 } else { 2 };
+                    angles = angles.saturating_sub(n);
+                    known = known.saturating_sub(n);
+                    self.take_into(out);
+                }
                 Some(Punct::Question) => {
                     if !self.capture_conditional(out) {
                         return false;
@@ -199,8 +227,9 @@ impl Parser<'_, '_> {
                 }
                 Some(open @ (Punct::LParen | Punct::LSquare | Punct::LBrace)) => {
                     self.take_into(out);
+                    // Nested brackets may hold a lambda body's `;`.
                     if let Some(close) = closer_of(open) {
-                        self.capture_until(&[close], out, true, true);
+                        self.capture_until(&[close], out, false, true);
                     }
                 }
                 Some(Punct::RParen) if kind == InitKind::DefaultArg => return true,
@@ -214,6 +243,18 @@ impl Parser<'_, '_> {
                 }
                 Some(Punct::Semi) if kind == InitKind::Nsdmi => return true,
                 _ if t.kind == TokKind::Eof => return false,
+                _ if self.kw_of(t) == Some(Kw::Template) => {
+                    // `template name <` certainly opens template arguments.
+                    self.take_into(out);
+                    if self.ident().is_some() {
+                        self.take_into(out);
+                        if self.at(Punct::Less) {
+                            angles += 1;
+                            known += 1;
+                            self.take_into(out);
+                        }
+                    }
+                }
                 _ if self.kw_of(t) == Some(Kw::Operator) => {
                     // `operator,` and friends: the punctuator is a name.
                     self.take_into(out);
@@ -561,6 +602,9 @@ impl Parser<'_, '_> {
             return;
         }
         let r = class.record;
+        // A member class template of a non-template class is replayed
+        // after its head closed: its parameters are visible again.
+        let heads = self.s.act_on_reenter_template_scopes(r);
         self.trace(|p| format!("start_delayed_class({})", p.decl_name(r)));
         self.s.act_on_start_delayed_class(r);
         for item in &mut class.items {
@@ -589,6 +633,7 @@ impl Parser<'_, '_> {
         }
         self.trace(|p| format!("finish_delayed_class({})", p.decl_name(r)));
         self.s.act_on_finish_delayed_class(r);
+        self.s.act_on_exit_reentered_template_scopes(heads);
     }
 
     /// Skips what is left of the saved tokens and ends the replay.
@@ -614,8 +659,20 @@ impl Parser<'_, '_> {
         for (i, t) in parts.default_args {
             self.begin_replay(t.toks, t.end);
             self.bump();
+            if let Some(&p) = params.get(i) {
+                self.s.act_on_start_delayed_default_arg(p);
+            }
             if self.at(Punct::LBrace) {
-                self.unsupported("braced default arguments", self.loc());
+                // `= { ... }` ([dcl.fct.default]/1: an initializer-clause).
+                if let Ok(l) = self.parse_init_list() {
+                    if !self.at_eof() {
+                        self.error_here(DiagId::parse_default_arg_unparsed);
+                    }
+                    if let Some(&p) = params.get(i) {
+                        self.trace(|_| format!("default_arg({i})"));
+                        self.s.act_on_param_default_list(p, &l);
+                    }
+                }
             } else if let Some(e) = self.parse_assignment_expr() {
                 if !self.at_eof() {
                     self.error_here(DiagId::parse_default_arg_unparsed);
@@ -631,6 +688,7 @@ impl Parser<'_, '_> {
                     }
                 }
             }
+            self.s.act_on_end_delayed_default_arg();
             self.finish_replay();
         }
         if let Some(t) = parts.noexcept {
@@ -804,6 +862,22 @@ impl Parser<'_, '_> {
     /// mem-initializer ([class.base.init]): the initializer (when sema can
     /// take it) and whether it parsed.
     fn parse_mem_initializer(&mut self) -> (Option<MemInitInfo>, bool) {
+        // A simple-template-id class-name, possibly qualified (`Leaf<I, T>(u)...`,
+        // [class.base.init]/2), names the base as a base-specifier would.
+        if self.at_template_type_name(DeclaratorContext::TypeName) {
+            let loc = self.loc();
+            let Some(ty) = self.parse_template_type_name(DeclaratorContext::TypeName) else {
+                return (None, false);
+            };
+            let Some(init) = self.parse_mem_init_args() else {
+                return (None, false);
+            };
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return (
+                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
+                true,
+            );
+        }
         let Ok(q) = self.parse_nested_name() else {
             return (None, false);
         };
@@ -828,6 +902,11 @@ impl Parser<'_, '_> {
             return (None, false);
         };
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+        // [class.access]/4: a mem-initializer-id naming a type (a base,
+        // through a typedef or its injected-class-name) is access-checked.
+        if let NameClass::Type(_, d) = self.s.classify_name(name, q) {
+            self.s.check_type_name_access(name, q, d, loc);
+        }
         let id = match q {
             // `Bs(args)...` names a pack: resolve the type now so that
             // instantiation can expand it ([temp.variadic]/5).
@@ -835,7 +914,18 @@ impl Parser<'_, '_> {
                 NameClass::Type(ty, d) => MemInitId::Type(self.named_type(ty, d)),
                 _ => MemInitId::Ident(name),
             },
-            None => MemInitId::Ident(name),
+            // A template type parameter cannot be redeclared by a member
+            // ([temp.local]/6), so naming one is a base: resolve it now,
+            // since instantiation re-resolves identifiers in the
+            // instantiated class, where the parameter is not in scope.
+            None => match self.s.classify_name(name, None) {
+                NameClass::Type(ty, d)
+                    if self.s.ast.decls.get(d).kind() == DeclKind::TemplateTypeParm =>
+                {
+                    MemInitId::Type(self.named_type(ty, d))
+                }
+                _ => MemInitId::Ident(name),
+            },
             Some(q) => {
                 if let NameClass::Type(ty, d) = self.s.classify_name(name, Some(q)) {
                     MemInitId::Type(self.named_type(ty, d))
@@ -1079,7 +1169,9 @@ impl Parser<'_, '_> {
     /// once the first declarator is known: clang reports a missing type
     /// specifier at its name.
     fn member_base_type(&mut self, ds: &DeclSpec, d: &Declarator) -> QualType {
-        if !ds.has_type_specifier() && is_untyped_special(d) {
+        if !ds.has_type_specifier() && is_deduction_guide(d) {
+            self.s.plain_auto_type()
+        } else if !ds.has_type_specifier() && is_untyped_special(d) {
             QualType::VOID
         } else if d.invalid && !ds.has_type_specifier() {
             // A malformed special declarator-id (`operator;`) is reported;
@@ -1127,6 +1219,7 @@ impl Parser<'_, '_> {
         let mut group = AutoGroup::default();
         loop {
             let mut d = Declarator::new(DeclaratorContext::Member, self.loc());
+            d.friend = ds.friend.is_some();
             self.late_fn = LateFnParts {
                 delay_args: !is_typedef,
                 delay_noexcept: !is_typedef && ds.friend.is_none(),
@@ -1277,8 +1370,12 @@ impl Parser<'_, '_> {
             let decls = &self.s.ast.decls;
             if decls.get(x).kind() == DeclKind::Friend {
                 match decls.friend_target(x) {
-                    FriendTarget::Decl(t) if decls.function(t).is_some() => Some(t),
-                    _ => None,
+                    // A friend function template's body is its pattern's.
+                    FriendTarget::Decl(t) => {
+                        let t = self.s.ast.template_info(t).and_then(|i| i.pattern).unwrap_or(t);
+                        decls.function(t).map(|_| t)
+                    }
+                    FriendTarget::Type { .. } => None,
                 }
             } else {
                 decls.function(x).map(|_| x)
@@ -1296,6 +1393,10 @@ impl Parser<'_, '_> {
             (None, Some((SpecialName::Destructor(n), _))) => format!("~{}", sym(*n)),
             (None, Some((SpecialName::Conversion(_), _))) => "operator <conv>".to_owned(),
             (None, Some((SpecialName::Operator(_), _))) => "operator".to_owned(),
+            (None, Some((SpecialName::DeductionGuide(_), _))) => "<deduction guide>".to_owned(),
+            (None, Some((SpecialName::LiteralOperator(n), _))) => {
+                format!("operator\"\"{}", sym(*n))
+            }
             (None, None) => "<anon>".to_owned(),
         }
     }
@@ -1374,6 +1475,9 @@ impl Parser<'_, '_> {
         if Self::punct_of(self.tok_at(i + 1)) != Some(Punct::LParen) {
             return false;
         }
+        if i == self.pos() && self.deduction_guide_at(i).is_some() {
+            return true;
+        }
         match last {
             Some(q) => q == n,
             None => {
@@ -1387,18 +1491,33 @@ impl Parser<'_, '_> {
         }
     }
 
-    // -- special declarator-ids ----------------------------------------------------------
-
-    /// The last name in the nested-name-specifier starting here (`B` in
-    /// `A::B::f`), for recognising `C::C` ([class.ctor.general]/1).
-    pub(crate) fn last_qualifier_name(&self) -> Option<Symbol> {
-        let (_, last) = self.scan_qualifier();
-        last
+    /// The class template whose deduction-guide ([temp.deduct.guide])
+    /// starts at token `i`: an unqualified template-name of a class
+    /// template, a parenthesized parameter list, then `->` (clang's
+    /// `isDeductionGuideName` plus its declarator check). The
+    /// injected-class-name in its own class is a constructor instead.
+    pub(crate) fn deduction_guide_at(&self, i: usize) -> Option<DeclId> {
+        let n = self.ident_of(self.tok_at(i))?;
+        if Self::punct_of(self.tok_at(i + 1)) != Some(Punct::LParen) {
+            return None;
+        }
+        let NameClass::TypeTemplate(t) = self.s.classify_name(n, None) else { return None };
+        if self.s.ast.decls.get(t).kind() != DeclKind::ClassTemplate
+            || self.s.names_injected_class(t)
+        {
+            return None;
+        }
+        let close = self.skip_balanced(i + 1)?;
+        (Self::punct_of(self.tok_at(close)) == Some(Punct::Arrow)).then_some(t)
     }
 
-    /// Scans the nested-name-specifier starting here (`::`, then `N ::`
-    /// or `N < args > ::` components): the index of the token after it
-    /// and its last component's name (`A` in `n::A<T>::`).
+    // -- special declarator-ids ----------------------------------------------------------
+
+    /// Scans the nested-name-specifier starting here, of identifiers and
+    /// simple template-ids (`::A::B<int>::`): the index of the token after
+    /// it and its last name (`B`), so that `C<T>::C(` and `C<T>::~C(` are
+    /// recognised as constructor and destructor declarators
+    /// ([class.qual]/2).
     fn scan_qualifier(&self) -> (usize, Option<Symbol>) {
         let mut i = self.pos();
         if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
@@ -1406,22 +1525,27 @@ impl Parser<'_, '_> {
         }
         let mut last = None;
         while let Some(n) = self.ident_of(self.tok_at(i)) {
-            let mut end = i + 1;
-            if Self::punct_of(self.tok_at(end)) == Some(Punct::Less) {
-                // `A<T>::A` ([class.ctor.general]/1 with a
-                // simple-template-id qualifier).
-                match self.skip_template_args(end) {
-                    Some((close, false)) => end = close + 1,
+            match Self::punct_of(self.tok_at(i + 1)) {
+                Some(Punct::ColonColon) => i += 2,
+                Some(Punct::Less) => match self.skip_template_args(i + 1) {
+                    Some((close, false))
+                        if Self::punct_of(self.tok_at(close + 1)) == Some(Punct::ColonColon) =>
+                    {
+                        i = close + 2;
+                    }
                     _ => break,
-                }
-            }
-            if Self::punct_of(self.tok_at(end)) != Some(Punct::ColonColon) {
-                break;
+                },
+                _ => break,
             }
             last = Some(n);
-            i = end + 1;
         }
         (i, last)
+    }
+
+    /// The last name in the nested-name-specifier starting here (`B` in
+    /// `A::B::f`), for recognising `C::C` ([class.ctor.general]/1).
+    pub(crate) fn last_qualifier_name(&self) -> Option<Symbol> {
+        self.scan_qualifier().1
     }
 
     /// True if identifier `n`, which is at the current token, names a
@@ -1470,6 +1594,23 @@ impl Parser<'_, '_> {
         self.bump();
         if let Some(op) = self.parse_operator_symbol() {
             d.special = Some((SpecialName::Operator(op), loc));
+            if self.at(Punct::Less) && d.friend && !self.s.has_pending_head() {
+                // `friend bool operator==<>(const X&, const X&);`
+                // ([temp.friend]/1.3).
+                let t = self.s.friend_spec_template(DeclName::operator(op), d.qualifier);
+                let Some((args, _, r)) = self.parse_template_arg_list() else {
+                    d.invalid = true;
+                    return;
+                };
+                if let Some(t) = t {
+                    d.spec_id = self.s.act_on_specialization_declarator_id(t, &args, loc, r);
+                } else {
+                    let n = DeclName::operator(op);
+                    self.s.act_on_friend_spec_without_template(n, d.qualifier, loc);
+                    d.dropped = true;
+                }
+                return;
+            }
             if self.at(Punct::Less)
                 && (self.s.has_explicit_spec_head() || self.s.has_explicit_inst_head())
                 && let Some(t) = self.s.operator_function_template(op, d.qualifier)
@@ -1483,13 +1624,46 @@ impl Parser<'_, '_> {
             }
             return;
         }
-        if matches!(self.tok().kind, TokKind::StringLit(_)) {
-            self.unsupported("literal operators", loc);
-            self.bump();
-            if self.ident().is_some() {
-                self.bump();
+        if matches!(self.tok().kind, TokKind::StringLit(_) | TokKind::RawStringLit(_)) {
+            // literal-operator-id ([over.literal]/1): `operator "" X` or
+            // `operator ""X` (clang `ParseUnqualifiedIdOperator`).
+            // Adjacent string literals concatenate ([lex.string]/7).
+            let first = self.loc();
+            let mut empty = true;
+            let mut ud = None;
+            while self.at_string() {
+                let t = self.bump();
+                let sp = self.spelling_of(&t);
+                let lit = kiln_lex::literal::decode_string(&sp, self.lit_opts);
+                empty &= lit.units.is_empty();
+                if (lit.encoding != kiln_lex::Encoding::Ordinary || lit.raw) && !d.invalid {
+                    self.s.error(DiagId::parse_literal_operator_string_prefix, t.span.lo);
+                    d.invalid = true;
+                }
+                if let Some(u) = lit.ud_suffix {
+                    ud.get_or_insert_with(|| self.s.intern(u));
+                }
             }
-            d.invalid = true;
+            if !empty && !d.invalid {
+                self.s.error(DiagId::parse_literal_operator_string_not_empty, first);
+                d.invalid = true;
+            }
+            let suffix = if ud.is_some() {
+                ud
+            } else if let Some(n) = self.ident() {
+                self.bump();
+                Some(n)
+            } else {
+                let m = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("identifier");
+                self.s.emit(m);
+                None
+            };
+            match suffix {
+                Some(n) if !d.invalid => {
+                    d.special = Some((SpecialName::LiteralOperator(n), loc));
+                }
+                _ => d.invalid = true,
+            }
             return;
         }
         // conversion-type-id: type-specifier-seq conversion-declarator(opt).
@@ -1500,9 +1674,10 @@ impl Parser<'_, '_> {
             return;
         }
         let mut cd = Declarator::new(DeclaratorContext::TypeName, self.loc());
+        cd.site = DeclSite::ConversionId;
         self.parse_conversion_declarator(&mut cd);
         let base = self.s.type_from_declspec(&ds);
-        let ty = self.s.type_for_declarator(base, &cd);
+        let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &cd);
         if ds.invalid || cd.invalid {
             d.invalid = true;
         }
@@ -1696,6 +1871,7 @@ impl Parser<'_, '_> {
             self.s.error(DiagId::parse_expected_class_name, id_loc);
             return None;
         };
+        self.s.check_type_name_access(name, q, d, id_loc);
         let ty = self.named_type(ty, d);
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
         Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs })

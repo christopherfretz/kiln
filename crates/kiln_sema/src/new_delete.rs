@@ -8,7 +8,7 @@
 //! calls (array cookies) are WP-067b / WP-076.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, EnumData, FnSpec};
-use kiln_ast::expr::{ExprFlags, ExprKind, NewExtra, NewInitStyle, Radix};
+use kiln_ast::expr::{ExprDeps, ExprFlags, ExprKind, NewExtra, NewInitStyle, Radix};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, FuncInfo, Nns, Quals, TagKeyword};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType};
@@ -19,6 +19,7 @@ use crate::class::{CtorCall, DeletedAs, DiagSites, InitEntity, Selected, Special
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{Chunk, Declarator};
 use crate::init::{InitList, InitValue, Initializer};
+use crate::templ::ctad::CtadInit;
 use crate::{EvalContext, Sema};
 
 /// The type-id of a new-expression ([expr.new]/1), as parsed: the
@@ -84,6 +85,13 @@ impl Sema<'_, '_> {
             return;
         }
         self.global_ops.declared = true;
+        // The first new-expression may sit in a template definition; the
+        // implicit declarations (above all an implicit `std::align_val_t`)
+        // are not members of it and must not get dependent types, or every
+        // later `operator new(std::size_t, std::align_val_t)` accepts any
+        // argument (`::operator new(n, nothrow)` was ambiguous after a
+        // `requires { ::new T; }` in `<concepts>`).
+        let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
         let al = self.std_align_val_t();
         self.global_ops.align_val_t = Some(al);
         let size = self.size_type();
@@ -97,6 +105,7 @@ impl Sema<'_, '_> {
                 self.declare_global_op(op, QualType::VOID, params, ExcSpec::BasicNoexcept);
             }
         }
+        self.ast.templates.dependent_depth = saved;
     }
 
     fn declare_global_op(
@@ -271,6 +280,57 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_new_array_size_unknown, at);
             return self.recover_err(&kids, loc);
         }
+        // [dcl.type.class.deduct]/2: a placeholder for a deduced class
+        // type is not an array element (clang reports the innermost
+        // array: a later bound's `[`, else the first bound).
+        if d.chunks.is_empty()
+            && self.is_ctad_placeholder(tid.base)
+            && let Some(&(size, bracket)) = arrays.last()
+        {
+            let at = match size {
+                _ if arrays.len() > 1 => bracket,
+                Some(e) => self.begin_loc(e),
+                None => tid.loc,
+            };
+            let d = self.diag(DiagId::sema_ctad_compound_type, at).arg("form array of");
+            self.emit(d);
+            return self.recover_err(&kids, loc);
+        }
+        // A dependent new-expression is checked at instantiation ([temp.res]).
+        let kids_dep = kids.iter().any(|&k| {
+            self.ast
+                .exprs
+                .get(k)
+                .deps()
+                .intersects(ExprDeps::TYPE_VALUE_INST | ExprDeps::UNEXPANDED_PACK)
+        });
+        if kids_dep || self.is_dependent_type(tid.base) {
+            if d.invalid || self.is_error_type(tid.base) {
+                return self.recover_err(&kids, loc);
+            }
+            // The later bounds are part of the allocated type.
+            let rest = std::mem::take(&mut d.chunks);
+            d.chunks = arrays
+                .iter()
+                .skip(1)
+                .map(|&(size, loc)| Chunk::Array { size, loc })
+                .chain(rest)
+                .collect();
+            let elem = self.type_for_declarator(tid.base, &d);
+            if self.is_error_type(elem) {
+                return self.recover_err(&kids, loc);
+            }
+            return self.dependent_new(
+                global,
+                loc,
+                placement,
+                elem,
+                arrays.first().copied(),
+                init,
+                tid.loc,
+                end,
+            );
+        }
         // Every later bound is a converted constant expression of type
         // `std::size_t` ([expr.new]/6).
         let mut later: Vec<(Option<u64>, Loc)> = Vec::new();
@@ -289,6 +349,24 @@ impl Sema<'_, '_> {
         let mut elem = self.type_for_declarator(tid.base, &d);
         if self.is_error_type(elem) {
             return self.recover_err(&kids, loc);
+        }
+        // [dcl.type.class.deduct]/2: `new C(args)` (WP-071b).
+        if self.is_ctad_placeholder(elem) {
+            let t = match &init {
+                NewInit::None => self.deduce_ctad(elem, &[], &[], CtadInit::Direct, tid.loc),
+                NewInit::Paren(es, l, r) => {
+                    let i = Initializer::Paren(es.clone(), *l, *r);
+                    self.ctad_for_initializer(elem, &i, false, tid.loc)
+                }
+                NewInit::List(l) => {
+                    let i = Initializer::List(l.clone());
+                    self.ctad_for_initializer(elem, &i, true, tid.loc)
+                }
+            };
+            match t {
+                Some(t) => elem = t,
+                None => return self.recover_err(&kids, loc),
+            }
         }
         // [dcl.type.auto.deduct]: `new auto(e)`.
         if self.is_undeduced_auto(elem) {
@@ -317,6 +395,10 @@ impl Sema<'_, '_> {
                 }
                 None => self.ast.types.incomplete_array(elem),
             };
+        }
+        if self.is_dependent_type(elem) {
+            let first = arrays.first().copied();
+            return self.dependent_new(global, loc, placement, elem, first, init, tid.loc, end);
         }
         // [expr.new]/5: a typedef of an array type allocates an array.
         let mut first: Option<(Option<ExprId>, Loc)> = arrays.first().copied();
@@ -475,6 +557,57 @@ impl Sema<'_, '_> {
             operator_new: Some(self.ast.latest(op_new)),
             operator_delete: op_delete.map(|d| self.ast.latest(d)),
             type_loc: tid.loc,
+        };
+        self.builder().cxx_new(ty, flags, style, extra, loc, end)
+    }
+
+    /// A new-expression whose allocated type or operands are dependent,
+    /// kept as written for instantiation (clang's `BuildCXXNew` for a
+    /// dependent type): the allocated type `elem` with its later bounds,
+    /// the first bound as written, the placement arguments and the
+    /// initializer as a `ParenListExpr` or dependent `InitListExpr`; no
+    /// allocation function is looked up.
+    #[allow(clippy::too_many_arguments, reason = "the parts of the new-expression")]
+    fn dependent_new(
+        &mut self,
+        global: bool,
+        loc: Loc,
+        placement: Option<NewPlacement>,
+        elem: QualType,
+        first: Option<(Option<ExprId>, Loc)>,
+        init: NewInit,
+        type_loc: Loc,
+        end: Loc,
+    ) -> ExprId {
+        let (style, init_expr) = match init {
+            NewInit::None => (NewInitStyle::None, None),
+            NewInit::Paren(v, open, rparen) => {
+                (NewInitStyle::Parens, Some(self.builder().paren_list(&v, open, rparen)))
+            }
+            NewInit::List(l) => (NewInitStyle::Braces, Some(self.dependent_init_list(&l))),
+        };
+        let mut flags = ExprFlags::NONE;
+        if global {
+            flags = flags.with(ExprFlags::GLOBAL);
+        }
+        if first.is_some() {
+            flags = flags.with(ExprFlags::ARRAY_FORM);
+        }
+        let placement_list = placement.map(|p| self.ast.lists.push(&p.args));
+        // `new auto(e)` with a dependent `e`: the type is deduced later.
+        let ty = if self.contains_auto(elem) {
+            QualType::DEPENDENT
+        } else {
+            self.ast.types.pointer_to(elem)
+        };
+        let extra = NewExtra {
+            allocated_ty: elem,
+            array_size: first.and_then(|f| f.0),
+            init: init_expr,
+            placement: placement_list,
+            operator_new: None,
+            operator_delete: None,
+            type_loc,
         };
         self.builder().cxx_new(ty, flags, style, extra, loc, end)
     }
@@ -983,11 +1116,10 @@ impl Sema<'_, '_> {
             }
             NewInit::Paren(v, l, r) => {
                 if array_form {
-                    if !v.is_empty() {
-                        self.unsupported("parenthesized initialization of an array", l);
-                        return Err(());
-                    }
                     let t = array_ty(self);
+                    if !v.is_empty() {
+                        return self.new_paren_array_init(elem, t, &v, first, l, r);
+                    }
                     return match self.new_class_default(elem, t, true, at) {
                         Some(Ok(e)) => Ok((Some(e), None)),
                         Some(Err(())) => Err(()),
@@ -1046,6 +1178,40 @@ impl Sema<'_, '_> {
                 Ok((Some(e), completed))
             }
         }
+    }
+
+    /// `new T[n](args...)`: a parenthesized aggregate initialization of the
+    /// array (P0960). Like clang's `TryOrBuildParenListInitialization` for
+    /// a new-expression, the `CXXParenListInitExpr` always carries an array
+    /// filler (a runtime bound may exceed the arguments); with no written
+    /// bound its length completes the array type.
+    fn new_paren_array_init(
+        &mut self,
+        elem: QualType,
+        t: QualType,
+        args: &[ExprId],
+        first: Option<(Option<ExprId>, Loc)>,
+        l: Loc,
+        r: Loc,
+    ) -> Result<(Option<ExprId>, Option<u64>), ()> {
+        let e = self.paren_aggregate_init(t, args, l, r);
+        if self.is_err_expr(e) || self.ast.exprs.get(e).kind() != ExprKind::CXXParenListInitExpr {
+            return Err(());
+        }
+        let ety = self.ast.exprs.get(e).ty();
+        let e = if self.ast.exprs.paren_list_filler(e).is_none() {
+            let inits: Vec<ExprId> = {
+                let l = self.ast.exprs.paren_list_inits(e);
+                self.ast.lists.iter(l).collect()
+            };
+            let filler = self.paren_value_init(elem, l);
+            self.builder().paren_list_init(ety, &inits, Some(filler), l, r)
+        } else {
+            e
+        };
+        let completed =
+            if matches!(first, Some((None, _))) { self.ast.types.array_size(ety) } else { None };
+        Ok((Some(e), completed))
     }
 
     /// An array `InitListExpr` for a runtime bound: clang's
@@ -1108,6 +1274,20 @@ impl Sema<'_, '_> {
             flags = flags.with(ExprFlags::ARRAY_FORM).with(ExprFlags::ARRAY_AS_WRITTEN);
         }
         if self.is_err_expr(operand) {
+            return self.builder().cxx_delete(
+                operand,
+                None,
+                flags,
+                false,
+                false,
+                QualType::VOID,
+                loc,
+            );
+        }
+        self.delete_cxx26 = cxx26;
+        if self.ast.exprs.get(operand).is_type_dependent() {
+            // [temp.dep.expr]: checked when instantiated (clang
+            // `ActOnCXXDelete` skips a type-dependent operand).
             return self.builder().cxx_delete(
                 operand,
                 None,

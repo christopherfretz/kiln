@@ -82,29 +82,52 @@ impl Sema<'_, '_> {
 
     /// One using-declarator `using qual name;` ([namespace.udecl]).
     /// `using_loc` is the `using` keyword; `if_exists` is set by the
-    /// `using_if_exists` attribute. Returns the `Using` declaration, or
-    /// `None` after an error.
+    /// `using_if_exists` attribute; `ellipsis` is the `...` of a pack
+    /// expansion (`using Bases::operator()...;`, [temp.variadic]/5), whose
+    /// qualifier names an unexpanded pack: the declarator stays an
+    /// `UnresolvedUsingValue` and instantiation expands it over the pack.
+    /// Returns the `Using` declaration, or `None` after an error.
     pub fn act_on_using_declarator(
         &mut self,
         using_loc: Loc,
         qual: Option<Qualifier>,
-        name: Symbol,
+        name: DeclName,
         name_loc: Loc,
         if_exists: bool,
+        ellipsis: Option<Loc>,
     ) -> Option<DeclId> {
         // [namespace.udecl]/1: the declarator's name is qualified.
         let Some(q) = qual else {
             self.error(DiagId::sema_using_requires_qualname, name_loc);
             return None;
         };
+        if let Some(l) = ellipsis {
+            let packs = self
+                .ast
+                .types
+                .nns_flags(q.nns)
+                .contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK);
+            if !packs {
+                self.error(DiagId::sema_pack_expansion_without_packs, l);
+                return None;
+            }
+            if self.member_spec_class().is_none() {
+                self.unsupported("a pack expansion in a non-member using-declaration", l);
+                return None;
+            }
+        }
         let qk = self.kind_of(q.ctx);
         if let Some(class) = self.member_spec_class()
             && qk != DeclKind::Enum
         {
-            self.class_using_declarator(class, q, name, name_loc);
+            return self.class_using_declarator(class, q, name, name_loc, using_loc, false);
+        }
+        if name.as_ident().is_none() && self.in_local_scope() {
+            // Block scopes hold identifiers only.
+            self.unsupported("an operator name in a block-scope using-declarator", name_loc);
             return None;
         }
-        let found = self.lookup_qualified(q.ctx, name, LookupKind::All);
+        let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
         // [namespace.udecl]/8: at namespace or block scope a
         // using-declarator may name a class member only if it is an
         // enumerator.
@@ -133,14 +156,14 @@ impl Sema<'_, '_> {
                 // clang's UnresolvedUsingIfExistsDecl: lookup ignores it
                 // while anything else is found; a use is an error.
                 let using = self.new_using_decl(name, name_loc, q.nns);
-                let h = DeclHead::new(self.ctx, DeclName::ident(name), using_loc);
+                let h = DeclHead::new(self.ctx, name, using_loc);
                 let uuie = self.builder().unresolved_using_if_exists(h);
                 let _ = self.introduce_shadow(name, name_loc, uuie);
                 return Some(using);
             }
             let msg = self
                 .diag(DiagId::sema_no_member, name_loc)
-                .arg(sym_str(self, name))
+                .arg(self.decl_name_str(name))
                 .arg(self.qualifier_desc(q.ctx));
             self.emit(msg);
             return None;
@@ -164,57 +187,445 @@ impl Sema<'_, '_> {
         Some(using)
     }
 
-    fn new_using_decl(&mut self, name: Symbol, name_loc: Loc, nns: NnsId) -> DeclId {
-        let h = DeclHead::new(self.ctx, DeclName::ident(name), name_loc);
+    /// One using-declarator `using typename qual name;`
+    /// ([namespace.udecl]/1, [temp.res.general]/5): the name is a type.
+    /// In a class with a dependent qualifier (`using typename
+    /// B<T>::type;`) the member is an alias of the dependent type
+    /// `typename B<T>::type` (clang's `UnresolvedUsingTypenameDecl` with
+    /// its `UnresolvedUsingType`), resolved when the class is
+    /// instantiated. Otherwise the declarator is an ordinary one whose
+    /// target must be a type. Returns the declaration, or `None` after an
+    /// error.
+    pub fn act_on_using_typename_declarator(
+        &mut self,
+        using_loc: Loc,
+        qual: Option<Qualifier>,
+        name: DeclName,
+        name_loc: Loc,
+        if_exists: bool,
+        ellipsis: Option<Loc>,
+    ) -> Option<DeclId> {
+        if let (Some(q), Some(n), None) = (qual, name.as_ident(), ellipsis)
+            && self.member_spec_class().is_some()
+            && (self.is_dependent_ctx(q.ctx)
+                || self
+                    .ast
+                    .types
+                    .nns_flags(q.nns)
+                    .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
+                    && self.kind_of(q.ctx) != DeclKind::CXXRecord)
+        {
+            let ty = self.act_dependent_name(q.nns, n, None, kiln_ast::types::TagKeyword::Typename);
+            let d = self.act_on_alias_decl(n, name_loc, ty, &[]);
+            self.using_typename.insert(d);
+            return Some(d);
+        }
+        if let Some(q) = qual
+            && !self.is_dependent_ctx(q.ctx)
+        {
+            let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
+            if let Some(&t) = found.decls.iter().find(|&&d| {
+                let k = self.kind_of(self.ast.using_target(d).unwrap_or(d));
+                !is_type_kind(k) && !is_tag_kind(k)
+            }) && !found.decls.iter().any(|&d| {
+                let k = self.kind_of(self.ast.using_target(d).unwrap_or(d));
+                is_type_kind(k) || is_tag_kind(k)
+            }) {
+                let msg = self.diag(DiagId::sema_using_typename_non_type, name_loc).with_note(
+                    self.diag(DiagId::note_using_decl_target, self.ast.decls.get(t).loc()),
+                );
+                self.emit(msg);
+                return None;
+            }
+        }
+        self.act_on_using_declarator(using_loc, qual, name, name_loc, if_exists, ellipsis)
+    }
+
+    fn new_using_decl(&mut self, name: DeclName, name_loc: Loc, nns: NnsId) -> DeclId {
+        let h = DeclHead::new(self.ctx, name, name_loc);
         self.builder().using_decl(h, Some(nns))
     }
 
-    /// A using-declarator in a class ([namespace.udecl]/3): it must name
-    /// a member of a base class. kiln has no base classes yet, so every
-    /// such declarator is ill-formed; this reports clang's diagnostic for
-    /// the qualifier.
-    fn class_using_declarator(&mut self, class: DeclId, q: Qualifier, name: Symbol, name_loc: Loc) {
+    /// A using-declarator in a class ([namespace.udecl]/3): it names a
+    /// member of a base class (`using B::f;`), or, when the name is the
+    /// qualifier's last component (`using B::B;`, [class.qual]/2), the
+    /// constructors of a direct base (WP-114). A dependent qualifier makes
+    /// an `UnresolvedUsingValue` redone at instantiation.
+    fn class_using_declarator(
+        &mut self,
+        class: DeclId,
+        q: Qualifier,
+        name: DeclName,
+        name_loc: Loc,
+        using_loc: Loc,
+        force_inheriting: bool,
+    ) -> Option<DeclId> {
         let qk = self.kind_of(q.ctx);
         if matches!(qk, DeclKind::Namespace | DeclKind::TranslationUnit) {
             let msg = self
                 .diag(DiagId::sema_using_decl_nested_name_specifier_is_not_class, q.loc)
                 .arg(self.nns_str(q.nns));
             self.emit(msg);
-            return;
+            return None;
+        }
+        let inheriting = force_inheriting
+            || name.as_ident().is_some_and(|n| self.nns_last_name(q.nns) == Some(n));
+        if self.is_dependent_ctx(q.ctx)
+            || self
+                .ast
+                .types
+                .nns_flags(q.nns)
+                .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
+                && qk != DeclKind::CXXRecord
+        {
+            return Some(self.dependent_class_using(class, q, name, name_loc, inheriting));
         }
         if self.ast.first(q.ctx) == self.ast.first(class) {
             self.error(DiagId::sema_using_decl_refers_to_own_class, q.loc);
-            if self.lookup_in(q.ctx, name, LookupKind::All).is_empty() {
+            if self.lookup_in_dn(q.ctx, name, LookupKind::All).is_empty() {
                 let msg = self
                     .diag(DiagId::sema_no_member, name_loc)
-                    .arg(sym_str(self, name))
+                    .arg(self.decl_name_str(name))
                     .arg(self.qualifier_desc(q.ctx));
                 self.emit(msg);
             }
+            return None;
+        }
+        let is_base = qk == DeclKind::CXXRecord
+            && if inheriting {
+                self.is_direct_base(class, q.ctx)
+            } else {
+                crate::conv::bases::is_derived_from(self, class, q.ctx)
+            };
+        if !is_base {
+            if self.has_dependent_bases(class) {
+                // The qualifier may name a member of a dependent base
+                // (clang: checked at instantiation).
+                return Some(self.dependent_class_using(class, q, name, name_loc, inheriting));
+            }
+            let msg = if inheriting && crate::conv::bases::is_derived_from(self, class, q.ctx) {
+                self.diag(DiagId::sema_using_decl_constructor_not_in_direct_base, using_loc)
+                    .arg(self.ty_arg(self.class_type(q.ctx)))
+                    .arg(self.ty_arg(self.class_type(class)))
+            } else {
+                self.diag(DiagId::sema_using_decl_not_base_class, q.loc)
+                    .arg(self.nns_str(q.nns))
+                    .arg(self.decl_name(class))
+            };
+            self.emit(msg);
+            return None;
+        }
+        if inheriting {
+            // [namespace.udecl]/10: `using B::B;` cannot be repeated.
+            if let Some(prev) = self.previous_inheriting_using(class, q.ctx) {
+                let msg = self
+                    .diag(DiagId::sema_using_decl_redeclaration, name_loc)
+                    .with_note(self.diag(DiagId::note_previous_using_decl, prev));
+                self.emit(msg);
+                return None;
+            }
+            return Some(self.inheriting_using(class, q, name_loc));
+        }
+        let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
+        if found.is_empty() {
+            let msg = self
+                .diag(DiagId::sema_no_member, name_loc)
+                .arg(self.decl_name_str(name))
+                .arg(self.qualifier_desc(q.ctx));
+            self.emit(msg);
+            return None;
+        }
+        let access = self.current_member_access();
+        let h = DeclHead::new(self.ctx, name, name_loc).access(access);
+        let using = self.builder().using_decl(h, Some(q.nns));
+        let mut targets = found.decls.clone();
+        if self.reverse_using_shadows {
+            targets.reverse();
+        }
+        for t in targets {
+            let _ = self.introduce_shadow(name, name_loc, t);
+        }
+        Some(using)
+    }
+
+    /// A class-scope using-declaration of a class template's pattern,
+    /// replayed in the instantiation being defined ([temp.inst]/3):
+    /// `inheriting` when the pattern's declarator named the base's
+    /// constructors (`using B<T>::B;`, `using T::T;`, `using __base::__base;`),
+    /// which the substituted qualifier may no longer spell.
+    pub(crate) fn instantiate_class_using(
+        &mut self,
+        q: Qualifier,
+        name: DeclName,
+        name_loc: Loc,
+        inheriting: bool,
+    ) -> Option<DeclId> {
+        let class = self.member_spec_class()?;
+        self.class_using_declarator(class, q, name, name_loc, name_loc, inheriting)
+    }
+
+    /// Whether `base` is a direct base class of `class`.
+    pub(crate) fn is_direct_base(&self, class: DeclId, base: DeclId) -> bool {
+        let Some(def) = self.ast.definition(class) else { return false };
+        let want = self.ast.first(base);
+        self.ast
+            .decls
+            .bases(def, &self.ast.lists)
+            .any(|b| self.ast.types.as_record(b.ty).is_some_and(|r| self.ast.first(r) == want))
+    }
+
+    /// The access of the next member of the class being defined.
+    fn current_member_access(&self) -> kiln_ast::decl::Access {
+        self.classes.last().map_or(kiln_ast::decl::Access::Public, |c| c.access)
+    }
+
+    /// The identifier spelling the last component of `nns` (a typedef,
+    /// class, template or template parameter name), for [class.qual]/2.
+    pub(crate) fn nns_last_name(&self, nns: NnsId) -> Option<Symbol> {
+        match self.ast.types.nns_view(nns) {
+            Nns::Type { ty, .. } => self.type_spelled_name(ty, 0),
+            Nns::Identifier { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    fn type_spelled_name(&self, ty: QualType, depth: u32) -> Option<Symbol> {
+        use kiln_ast::types::{TemplateName, TypeView};
+        if depth > 64 {
+            return None;
+        }
+        let ident = |d: DeclId| self.ast.decls.get(d).name().as_ident();
+        match self.ast.types.view(ty.ty()) {
+            TypeView::Typedef { decl, .. } => ident(decl),
+            TypeView::Using { shadow, .. } => ident(shadow),
+            TypeView::Record(d) | TypeView::Enum(d) | TypeView::TemplateTypeParm(d) => ident(d),
+            TypeView::InjectedClassName { pattern, .. } => ident(pattern),
+            TypeView::Elaborated { named, .. } => self.type_spelled_name(named, depth + 1),
+            TypeView::SubstTemplateTypeParm { replacement, .. } => {
+                self.type_spelled_name(replacement, depth + 1)
+            }
+            TypeView::DependentName { name, .. }
+            | TypeView::DependentTemplateSpecialization { name, .. } => Some(name),
+            TypeView::TemplateSpecialization { name, .. } => {
+                let mut n = name;
+                for _ in 0..64 {
+                    match self.ast.types.template_name_view(n) {
+                        TemplateName::Qualified { underlying, .. } => n = underlying,
+                        TemplateName::Template(d) => return ident(d),
+                        TemplateName::TemplateTemplateParm { decl, .. } => return ident(decl),
+                        TemplateName::DependentIdentifier { name, .. } => return Some(name),
+                        _ => return None,
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// A class-scope using-declarator with a dependent qualifier (or one
+    /// that may name a member of a dependent base): an
+    /// `UnresolvedUsingValue` member, entered in lookup so uses of the
+    /// name are dependent; instantiation redoes the declarator.
+    fn dependent_class_using(
+        &mut self,
+        class: DeclId,
+        q: Qualifier,
+        name: DeclName,
+        name_loc: Loc,
+        inheriting: bool,
+    ) -> DeclId {
+        let access = self.current_member_access();
+        // An inheriting declarator is named by the constructor name of the
+        // canonical nominated type (clang: `T::type-parameter-0-0`).
+        let dn = match self.ast.types.nns_view(q.nns) {
+            Nns::Type { ty, .. } if inheriting => {
+                let canon = self.ast.types.canonical(ty).ty();
+                self.ast.names.constructor(canon)
+            }
+            _ => name,
+        };
+        let h = DeclHead::new(self.ctx, dn, name_loc).access(access);
+        let d = self.builder().unresolved_using_value(h, q.nns, !inheriting);
+        if inheriting {
+            self.note_inherited_ctor(class);
+        }
+        d
+    }
+
+    /// Sets `HAS_INHERITED_CTOR` on the class being defined.
+    fn note_inherited_ctor(&mut self, class: DeclId) {
+        if let Some(c) = self.classes.last_mut()
+            && c.record == class
+        {
+            c.bits = c.bits.with(kiln_ast::decl::DefinitionBits::HAS_INHERITED_CTOR);
+        }
+    }
+
+    /// `using B::B;` naming direct base `q.ctx` of `class`
+    /// ([namespace.udecl]/3, [class.inhctor.init]): a `Using` named by the
+    /// class's constructor name and one `ConstructorUsingShadow` per
+    /// constructor of the base (including the ones it inherits itself),
+    /// except those hidden by a constructor of `class` already declared
+    /// with the same signature ([namespace.udecl]/14; later ones hide at
+    /// `}`).
+    fn inheriting_using(&mut self, class: DeclId, q: Qualifier, name_loc: Loc) -> DeclId {
+        let access = self.current_member_access();
+        let canon = self.ast.types.canonical(self.class_type(class)).ty();
+        let cname = self.ast.names.constructor(canon);
+        let h = DeclHead::new(self.ctx, cname, name_loc).access(access);
+        let using = self.builder().using_decl(h, Some(q.nns));
+        self.note_inherited_ctor(class);
+        let base = self.ast.definition(q.ctx).unwrap_or(q.ctx);
+        for k in [
+            crate::class::SpecialKind::DefaultCtor,
+            crate::class::SpecialKind::CopyCtor,
+            crate::class::SpecialKind::MoveCtor,
+        ] {
+            self.ensure_implicit(base, k);
+        }
+        let own: Vec<DeclId> = self.ast.constructors(class).iter().collect();
+        let mut inherited = self.inheritable_ctors(base);
+        if self.reverse_using_shadows {
+            inherited.reverse();
+        }
+        for (target, nominated) in inherited {
+            if own.iter().any(|&c| self.hides_ctor(c, target)) {
+                continue;
+            }
+            let h = DeclHead::new(self.ctx, cname, name_loc).access(access);
+            let _ = self.builder().constructor_using_shadow(h, target, nominated);
+        }
+        using
+    }
+
+    /// The location of an earlier `using B::B;` of class `class` naming
+    /// base `base` (found by the `ConstructorUsingShadow`s it made).
+    fn previous_inheriting_using(&self, class: DeclId, base: DeclId) -> Option<Loc> {
+        let def = self.ast.definition(class).unwrap_or(class);
+        let base = self.ast.first(base);
+        self.ast
+            .decls
+            .members(def)
+            .filter(|&m| self.kind_of(m) == DeclKind::ConstructorUsingShadow)
+            .find(|&m| {
+                let ns = self.ast.decls.ctor_shadow_nominated(m);
+                self.ast.shadow_base_class(ns, m) == Some(base)
+            })
+            .map(|m| self.ast.decls.get(m).loc())
+    }
+
+    /// The constructors class `base` offers to a class inheriting them:
+    /// its own and the ones it inherits (not hidden), each with the
+    /// base's shadow for an inherited one.
+    pub(crate) fn inheritable_ctors(&self, base: DeclId) -> Vec<(DeclId, Option<DeclId>)> {
+        let mut out: Vec<(DeclId, Option<DeclId>)> =
+            self.ast.constructors(base).iter().map(|c| (c, None)).collect();
+        for s in self.ctor_shadows(base) {
+            if let Some(t) = self.ast.using_target(s) {
+                out.push((t, Some(s)));
+            }
+        }
+        out
+    }
+
+    /// The `ConstructorUsingShadow`s of class `class` not hidden by one of
+    /// its constructors.
+    pub(crate) fn ctor_shadows(&self, class: DeclId) -> Vec<DeclId> {
+        let Some(def) = self.ast.definition(class) else { return Vec::new() };
+        let bits = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
+        if !bits.contains(kiln_ast::decl::DefinitionBits::HAS_INHERITED_CTOR)
+            && !self.classes.iter().any(|c| {
+                c.record == def
+                    && c.bits.contains(kiln_ast::decl::DefinitionBits::HAS_INHERITED_CTOR)
+            })
+        {
+            return Vec::new();
+        }
+        self.ast
+            .decls
+            .members(def)
+            .filter(|&m| {
+                self.kind_of(m) == DeclKind::ConstructorUsingShadow
+                    && self.ast.decls.hidden_shadow(m).is_none()
+            })
+            .collect()
+    }
+
+    /// Whether constructor `own` (of the derived class) hides inherited
+    /// constructor `target`: same parameter-type-list (and template head)
+    /// ([namespace.udecl]/14, [over.dcl]).
+    pub(crate) fn hides_ctor(&mut self, own: DeclId, target: DeclId) -> bool {
+        let (ko, kt) = (self.kind_of(own), self.kind_of(target));
+        if ko != kt {
+            return false;
+        }
+        if ko == DeclKind::FunctionTemplate {
+            return self.equivalent_signatures(own, target);
+        }
+        let to = self.ast.decls.get(own).ty().unwrap_or(QualType::ERROR);
+        let tt = self.ast.decls.get(target).ty().unwrap_or(QualType::ERROR);
+        self.same_ignoring_exc_spec(to, tt)
+    }
+
+    /// At the `}` of class `r`: records the `ConstructorUsingShadow`s
+    /// hidden by a constructor of `r` declared after the using-declaration
+    /// (including the implicit ones declared eagerly).
+    pub(crate) fn hide_inherited_ctors(&mut self, r: DeclId) {
+        let shadows = self.ctor_shadows(r);
+        if shadows.is_empty() {
             return;
         }
-        let msg = self
-            .diag(DiagId::sema_using_decl_not_base_class, q.loc)
-            .arg(self.nns_str(q.nns))
-            .arg(self.decl_name(class));
-        self.emit(msg);
+        let own: Vec<DeclId> = self.ast.constructors(r).iter().collect();
+        for s in shadows {
+            let Some(t) = self.ast.using_target(s) else { continue };
+            if let Some(&c) = own.iter().find(|&&c| self.hides_ctor(c, t)) {
+                let _ = self.ast.decls.set_hidden_shadow(s, c);
+            }
+        }
     }
 
     /// Introduces a `UsingShadow` of `target` named `name` into the
     /// current scope, unless it conflicts with a declaration already
     /// there ([namespace.udecl]/11, [basic.scope.scope]/4). A repeated
     /// using-declaration of the same entity replaces the earlier shadow.
-    fn introduce_shadow(&mut self, name: Symbol, loc: Loc, target: DeclId) -> Option<DeclId> {
+    fn introduce_shadow(&mut self, name: DeclName, loc: Loc, target: DeclId) -> Option<DeclId> {
+        let in_class = self.member_spec_class().is_some();
+        let fnlike = |me: &Self, d| {
+            let k = me.kind_of(d);
+            k.is_function() || k == DeclKind::FunctionTemplate
+        };
         let mut prev = None;
-        for e in self.current_scope_raw(name) {
+        for e in self.current_scope_raw_dn(name) {
             let es = self.ast.strip_shadow(e);
             if self.ast.first(es) == self.ast.first(target) {
                 if e != es {
+                    if in_class && self.ast.decls.hidden_shadow(e).is_none() {
+                        // [namespace.udecl]/10: a using-declarator in a
+                        // class cannot be repeated.
+                        let msg = self.diag(DiagId::sema_using_decl_redeclaration, loc).with_note(
+                            self.diag(DiagId::note_previous_using_decl, self.decl_loc(e)),
+                        );
+                        self.emit(msg);
+                        return None;
+                    }
                     prev = Some(e);
                 }
                 continue;
             }
+            // [namespace.udecl]/11 (example): two using-declarators may
+            // introduce functions with the same parameter-type-list (a
+            // call is then ambiguous); only a function declared in the
+            // scope conflicts.
+            if e != es && fnlike(self, es) && fnlike(self, target) {
+                continue;
+            }
             if self.using_conflicts(target, es) {
+                if in_class && e == es && fnlike(self, es) && fnlike(self, target) {
+                    // [namespace.udecl]/14: a member function of the class
+                    // hides the one the declarator would introduce.
+                    return None;
+                }
                 let msg = self
                     .diag(DiagId::sema_using_decl_conflict, loc)
                     .with_note(self.diag(DiagId::note_using_decl_target, self.decl_loc(target)))
@@ -223,10 +634,15 @@ impl Sema<'_, '_> {
                 return None;
             }
         }
-        let h = DeclHead::new(self.ctx, DeclName::ident(name), loc);
+        let mut h = DeclHead::new(self.ctx, name, loc);
+        if in_class {
+            h = h.access(self.current_member_access());
+        }
         let s = self.builder().using_shadow(h, target, prev);
-        if self.in_local_scope() {
-            self.push_local(name, s);
+        if self.in_local_scope()
+            && let Some(n) = name.as_ident()
+        {
+            self.push_local(n, s);
         }
         Some(s)
     }
@@ -254,8 +670,16 @@ impl Sema<'_, '_> {
         if typedef(ka) && typedef(kb) {
             return !self.ast.types.same_type(ta, tb);
         }
-        if ka == DeclKind::Function && kb == DeclKind::Function {
+        if ka.is_function() && kb.is_function() {
             return self.same_ignoring_exc_spec(ta, tb);
+        }
+        // A function template overloads with functions and with other
+        // function templates unless the signatures, including the
+        // template heads, are equivalent ([basic.scope.scope]/4,
+        // [temp.over.link]/7; clang `CheckOverload`).
+        let fnlike = |k: DeclKind| k.is_function() || k == DeclKind::FunctionTemplate;
+        if fnlike(ka) && fnlike(kb) {
+            return ka == kb && self.equivalent_signatures(a, b);
         }
         true
     }
@@ -263,11 +687,20 @@ impl Sema<'_, '_> {
     /// Checks a new declaration `d` named `name` against the using-shadows
     /// of the current scope ([namespace.udecl]/11); on a conflict, reports
     /// it, marks `d` invalid and returns true.
-    pub(crate) fn check_using_shadow_conflict(&mut self, d: DeclId, name: Symbol) -> bool {
-        let shadows = self.current_scope_shadows(name);
+    pub(crate) fn check_using_shadow_conflict(&mut self, d: DeclId, name: DeclName) -> bool {
+        let mut shadows = self.current_scope_raw_dn(name);
+        shadows.retain(|&s| self.kind_of(s) == DeclKind::UsingShadow);
         for s in shadows.into_iter().rev() {
             let t = self.ast.strip_shadow(s);
             if self.ast.first(t) == self.ast.first(d) || !self.using_conflicts(t, d) {
+                continue;
+            }
+            if self.member_spec_class().is_some()
+                && self.kind_of(d).is_function() | (self.kind_of(d) == DeclKind::FunctionTemplate)
+            {
+                // [namespace.udecl]/14: in a class the member hides the
+                // shadow instead of conflicting with it.
+                let _ = self.ast.decls.set_hidden_shadow(s, d);
                 continue;
             }
             let msg = self
@@ -340,7 +773,7 @@ impl Sema<'_, '_> {
             .collect();
         for c in enumerators {
             if let Some(n) = self.ast.decls.get(c).name().as_ident() {
-                let _ = self.introduce_shadow(n, name_loc, c);
+                let _ = self.introduce_shadow(DeclName::ident(n), name_loc, c);
             }
         }
         Some(ud)

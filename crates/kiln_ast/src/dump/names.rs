@@ -12,7 +12,7 @@ use crate::consts::{
     Scalar, Shape,
 };
 use crate::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
-use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind};
+use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind, ValueCategory};
 use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_unit};
@@ -72,7 +72,16 @@ impl<'a> AstNames<'a> {
     /// `operator""_x`, `<deduction guide for S>`. Unnamed declarations
     /// append nothing.
     pub fn write_name(&self, d: DeclId, out: &mut String) {
-        self.write_decl_name_value(self.ast.decls.get(d).name(), out);
+        let n = self.ast.decls.get(d);
+        // A conversion function template specialization keeps the
+        // pattern's name (`operator T`, which the mangling needs); clang
+        // names it by its substituted target type (`operator int`).
+        if let Some(&q) = self.ast.decls.cold.conversion_spec_target.get(d) {
+            out.push_str("operator ");
+            write_type(&self.ast.types, self, q, PrintOptions::SUGARED, out);
+            return;
+        }
+        self.write_decl_name_value(n.name(), out);
     }
 
     /// Appends `name`.
@@ -110,6 +119,42 @@ impl<'a> AstNames<'a> {
     }
 
     fn write_class_type(&self, t: TypeId, out: &mut String) {
+        // clang `printCXXConstructorDestructorName`: a class template
+        // specialization prints its bare name (`Base`, not `Base<int>`).
+        if let Some(d) = self.ast.types.as_record(QualType::unqual(t))
+            && self.ast.spec_info(d).is_some()
+        {
+            self.write_decl_name_value(self.ast.decls.get(d).name(), out);
+            return;
+        }
+        // The pattern of a class template: clang's class type is the
+        // injected-class-name `X<P...>`, printed with the parameters'
+        // names (`Base<T>`, `~Tuple<Ts...>`).
+        if let Some(d) = self.ast.types.as_record(QualType::unqual(t))
+            && let Some(tmpl) = self.ast.described_template(d)
+            && let Some(info) = self.ast.template_info(tmpl)
+        {
+            self.write_decl_name_value(self.ast.decls.get(d).name(), out);
+            out.push('<');
+            let list = self.ast.templates.param_list(info.params);
+            for (i, q) in self.ast.lists.iter::<DeclId>(list.params).enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                let parm = self.ast.template_parm(q).copied();
+                if let Some(n) = self.ast.decls.get(q).name().as_ident() {
+                    out.push_str(self.ast.symbols().as_str(n));
+                } else {
+                    let (depth, index) = parm.map_or((0, 0), |p| (p.depth, p.index));
+                    let _ = write!(out, "type-parameter-{depth}-{index}");
+                }
+                if parm.is_some_and(|p| p.pack) {
+                    out.push_str("...");
+                }
+            }
+            out.push('>');
+            return;
+        }
         write_type(&self.ast.types, self, QualType::unqual(t), PrintOptions::SUGARED, out);
     }
 
@@ -126,17 +171,25 @@ impl<'a> AstNames<'a> {
     /// struct)`, enclosing functions `f(int, char *)`. A declaration
     /// directly inside a function prints its bare name.
     pub fn write_qualified_name(&self, d: DeclId, out: &mut String) {
+        self.write_scope_prefix(d, false, out);
+        self.write_component(d, out);
+    }
+
+    /// Appends the scopes of `d`'s qualified name, each followed by `::`
+    /// (empty directly inside a function); with `spec_args`, class
+    /// template specializations print their arguments without trailing
+    /// defaults (clang `NamedDecl::printNestedNameSpecifier`, `A<int>::`).
+    pub fn write_scope_prefix(&self, d: DeclId, spec_args: bool, out: &mut String) {
         let n = self.ast.decls.get(d);
         if let Some(ctx) = n.ctx()
             && !self.ast.decls.get(ctx).kind().is_function()
         {
-            self.write_scope_chain(ctx, 0, out);
+            self.write_scope_chain(ctx, 0, spec_args, out);
         }
-        self.write_component(d, out);
     }
 
     /// Appends `ctx` and its parents, each followed by `::`.
-    fn write_scope_chain(&self, ctx: DeclId, depth: u32, out: &mut String) {
+    fn write_scope_chain(&self, ctx: DeclId, depth: u32, spec_args: bool, out: &mut String) {
         if depth > MAX_DEPTH {
             out.push_str("...::");
             return;
@@ -147,7 +200,7 @@ impl<'a> AstNames<'a> {
             return;
         }
         if let Some(parent) = n.ctx() {
-            self.write_scope_chain(parent, depth + 1, out);
+            self.write_scope_chain(parent, depth + 1, spec_args, out);
         }
         let skip = match kind {
             DeclKind::LinkageSpec | DeclKind::Export => true,
@@ -161,6 +214,12 @@ impl<'a> AstNames<'a> {
         };
         if !skip {
             self.write_component(ctx, out);
+            if spec_args
+                && !self.is_unnamed(ctx)
+                && let Some(args) = self.ast.spec_print_args(ctx)
+            {
+                write_arg_list(&self.ast.types, self, args, out);
+            }
             if kind.is_function() {
                 self.write_function_scope(ctx, out);
             }
@@ -560,6 +619,7 @@ impl<'a> AstNames<'a> {
                 }
                 self.write_name(exprs.decl(e), out);
             }
+            ExprKind::PredefinedExpr => out.push_str(exprs.predefined_kind(e).spelling()),
             ExprKind::SourceLocExpr => {
                 out.push_str(exprs.source_loc_kind(e).spelling());
                 out.push_str("()");
@@ -717,7 +777,7 @@ impl<'a> AstNames<'a> {
             }
             ExprKind::CStyleCastExpr => {
                 out.push('(');
-                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                self.written_cast_type(n.ty(), n.value_category(), out);
                 out.push(')');
                 self.expr(exprs.operand(e), d, out);
             }
@@ -745,9 +805,16 @@ impl<'a> AstNames<'a> {
                     ExprKind::CXXDynamicCastExpr => "dynamic_cast<",
                     _ => "__builtin_bit_cast(",
                 });
-                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                self.written_cast_type(n.ty(), n.value_category(), out);
                 out.push_str(if k == ExprKind::BuiltinBitCastExpr { ", " } else { ">(" });
                 self.expr(exprs.operand(e), d, out);
+                out.push(')');
+            }
+            ExprKind::ConvertVectorExpr => {
+                out.push_str("__builtin_convertvector(");
+                self.expr(exprs.operand(e), d, out);
+                out.push_str(", ");
+                write_type(&ast.types, self, n.ty(), self.expr_types, out);
                 out.push(')');
             }
             ExprKind::UnaryExprOrTypeTraitExpr => {
@@ -791,6 +858,33 @@ impl<'a> AstNames<'a> {
                 out.push_str(exprs.type_trait(e).spelling());
                 out.push('(');
                 self.expr(ExprId::new(n.a()), d, out);
+                out.push(')');
+            }
+            ExprKind::AtomicExpr => {
+                // clang's `StmtPrinter::VisitAtomicExpr`: the builtin's
+                // name and the operands in source order.
+                use crate::decl::builtin::atomic;
+                let op = exprs.atomic_op(e);
+                out.push_str(atomic::name(op));
+                out.push('(');
+                let subs: Vec<ExprId> = ast.lists.iter::<ExprId>(exprs.atomic_subs(e)).collect();
+                let order = atomic::form(op).map_or(&[][..], atomic::Form::arg_to_sub);
+                for (i, &k) in order.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    if let Some(&c) = subs.get(k) {
+                        self.expr(c, d, out);
+                    }
+                }
+                out.push(')');
+            }
+            ExprKind::VAArgExpr => {
+                let (list, written, _) = exprs.va_arg(e);
+                out.push_str("__builtin_va_arg(");
+                self.expr(list, d, out);
+                out.push_str(", ");
+                write_type(&ast.types, self, written, self.expr_types, out);
                 out.push(')');
             }
             ExprKind::CXXNoexceptExpr => {
@@ -906,13 +1000,13 @@ impl<'a> AstNames<'a> {
             // `VisitUnresolvedLookupExpr`: `N::name<args>`.
             ExprKind::DependentScopeDeclRefExpr => {
                 write_nns(&ast.types, self, crate::ids::NnsId::new(n.a()), out);
-                self.dependent_name(e, Symbol::from_index(n.b()), out);
+                self.dependent_name(e, ast.dependent_scope_ref_name(e), out);
             }
             ExprKind::UnresolvedLookupExpr => {
                 if let Some(&nns) = ast.templates.expr_nns.get(e) {
                     write_nns(&ast.types, self, nns, out);
                 }
-                self.dependent_name(e, Symbol::from_index(n.a()), out);
+                self.dependent_name(e, ast.unresolved_name(e), out);
             }
             // clang's `VisitCXXDependentScopeMemberExpr`.
             ExprKind::CXXDependentScopeMemberExpr => {
@@ -926,7 +1020,14 @@ impl<'a> AstNames<'a> {
                 if let Some(&nns) = ast.templates.expr_nns.get(e) {
                     write_nns(&ast.types, self, nns, out);
                 }
-                self.dependent_name(e, Symbol::from_index(n.b()), out);
+                self.dependent_name(e, ast.dependent_member_name(e), out);
+            }
+            // clang's `VisitCXXPseudoDestructorExpr`: `p->~T`.
+            ExprKind::CXXPseudoDestructorExpr => {
+                let (b, arrow, t) = exprs.pseudo_destructor(e);
+                self.expr(b, d, out);
+                out.push_str(if arrow { "->~" } else { ".~" });
+                write_type(&ast.types, self, t, PrintOptions::SUGARED, out);
             }
             _ => out.push_str("..."),
         }
@@ -934,8 +1035,8 @@ impl<'a> AstNames<'a> {
 
     /// The name and explicit template arguments of dependent name
     /// expression `e`.
-    fn dependent_name(&self, e: ExprId, name: Symbol, out: &mut String) {
-        self.write_symbol(name, out);
+    fn dependent_name(&self, e: ExprId, name: DeclName, out: &mut String) {
+        self.write_decl_name_value(name, out);
         if let Some(&l) = self.ast.templates.expr_targs.get(e) {
             write_arg_list(&self.ast.types, self, l, out);
         }
@@ -964,6 +1065,28 @@ impl<'a> AstNames<'a> {
 }
 
 impl AstNames<'_> {
+    /// An explicit cast's type as written (clang's `getTypeAsWritten`):
+    /// the expression's type `t` plus the reference its value category
+    /// implies, an lvalue cast naming `T &` and an xvalue cast `T &&`.
+    /// The interned reference node is preferred, so `int (&)[2]` prints
+    /// with its declarator parentheses (WP-145).
+    fn written_cast_type(&self, t: QualType, vk: ValueCategory, out: &mut String) {
+        let types = &self.ast.types;
+        let rvalue = match vk {
+            ValueCategory::PRValue => {
+                return write_type(types, self, t, self.expr_types, out);
+            }
+            ValueCategory::LValue => false,
+            ValueCategory::XValue => true,
+        };
+        if let Some(r) = types.find_reference_to(t, rvalue) {
+            write_type(types, self, r, self.expr_types, out);
+        } else {
+            write_type(types, self, t, self.expr_types, out);
+            out.push_str(if rvalue { " &&" } else { " &" });
+        }
+    }
+
     /// A return-type-requirement's type-constraint as written: the
     /// immediately-declared constraint `C<decltype((e)), args...>` printed
     /// as `C<args...>` (clang's `TypeConstraint::print`).
@@ -1077,6 +1200,10 @@ impl TypeNames for AstNames<'_> {
         out.push_str(self.ast.symbols().as_str(sym));
     }
 
+    fn write_template_param(&self, associated: DeclId, index: u32, out: &mut String) {
+        self.ast.write_replaced_param(associated, index, out);
+    }
+
     fn is_anonymous_namespace(&self, ns: DeclId) -> bool {
         self.ast
             .decls
@@ -1142,6 +1269,10 @@ impl TypeNames for Ast {
 
     fn write_symbol(&self, sym: Symbol, out: &mut String) {
         out.push_str(self.symbols().as_str(sym));
+    }
+
+    fn write_template_param(&self, associated: DeclId, index: u32, out: &mut String) {
+        self.write_replaced_param(associated, index, out);
     }
 
     fn is_anonymous_namespace(&self, ns: DeclId) -> bool {

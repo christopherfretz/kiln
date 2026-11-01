@@ -66,6 +66,11 @@ impl IcsOptions {
     /// deleted is no conversion (clang's `FindConversionForRefInit`),
     /// where an initialization diagnoses the deleted function.
     pub const CANDIDATE_ARG: IcsOptions = IcsOptions(8);
+    /// A direct-initialization of a reference: explicit conversion
+    /// functions are candidates of [over.match.ref] (/1.1), but not the
+    /// constructors of the /5.4.1 temporary (clang
+    /// `allowExplicitConversionFunctionsInRefBinding`).
+    pub const EXPLICIT_REF_CONV: IcsOptions = IcsOptions(16);
 
     /// The raw bits.
     pub(crate) fn bits(self) -> u8 {
@@ -353,7 +358,7 @@ impl Sema<'_, '_> {
         };
         let ft = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let addr = self.overload_operand(e).is_some_and(|(_, addr)| addr);
-        let class = self.is_instance_member(d).then(|| self.declaring_class(d)).flatten();
+        let class = self.is_implicit_object_member(d).then(|| self.declaring_class(d)).flatten();
         let f = if let Some(c) = class {
             let ct = self.tag_type(c).ty();
             ArgInfo::of_type(self.ast.types.member_pointer(ft, ct), ValueCategory::PRValue)
@@ -435,12 +440,17 @@ impl Sema<'_, '_> {
             return Ics::Standard(direct(rb));
         }
         let suppress = opts.contains(IcsOptions::SUPPRESS_UDC);
+        let ref_opts = if opts.contains(IcsOptions::EXPLICIT_REF_CONV) {
+            opts.with(IcsOptions::ALLOW_EXPLICIT)
+        } else {
+            opts
+        };
         // /5.1.2: an lvalue result of a conversion function.
         if lref
             && !related
             && class_src
             && !suppress
-            && let Some(x) = self.ref_conversion(a, to, true, opts)
+            && let Some(x) = self.ref_conversion(a, to, true, ref_opts)
         {
             return x;
         }
@@ -464,7 +474,7 @@ impl Sema<'_, '_> {
         if !related
             && class_src
             && !suppress
-            && let Some(x) = self.ref_conversion(a, to, false, opts)
+            && let Some(x) = self.ref_conversion(a, to, false, ref_opts)
         {
             return x;
         }
@@ -486,7 +496,15 @@ impl Sema<'_, '_> {
         }
         let target = conv::strip_cv(self, t1);
         let temp_rb = base.with(RefBinding::BINDS_RVALUE);
-        match self.try_implicit_conversion(a, target, opts) {
+        // A non-class prvalue result of an explicit conversion function
+        // binds in a direct-initialization ([over.match.ref]/1.1); a
+        // class temporary's explicit constructors stay excluded.
+        let temp_opts = if ref_opts != opts && self.ast.types.as_record(t1).is_none() {
+            ref_opts
+        } else {
+            opts
+        };
+        match self.try_implicit_conversion(a, target, temp_opts) {
             Ics::Standard(mut s) => {
                 s.rb = temp_rb;
                 s.to_types[2] = t1;
@@ -521,11 +539,25 @@ impl Sema<'_, '_> {
     /// `m` and object `o` ([over.match.funcs]/4–5, clang
     /// `TryObjectArgumentInitialization`).
     pub(crate) fn object_ics(&mut self, o: &ArgInfo, m: DeclId) -> Ics {
+        self.object_ics_found(o, m, m)
+    }
+
+    /// [`Self::object_ics`] for method `m` found as `found`: a member
+    /// nominated by a using-declaration is a member of the class of the
+    /// using-declaration for the type of its implicit object parameter
+    /// ([over.match.funcs.general]/4; clang's `ActingContext`).
+    pub(crate) fn object_ics_found(&mut self, o: &ArgInfo, m: DeclId, found: DeclId) -> Ics {
         self.ovl.stats.ics += 1;
         if self.ics_is_error(o.ty) {
             return super::ignored_object(o.ty);
         }
-        let Some(cls) = self.declaring_class(m) else { return super::ignored_object(o.ty) };
+        let acting = (found != m && self.kind_of(found) == DeclKind::UsingShadow)
+            .then(|| self.ast.decls.get(found).ctx())
+            .flatten()
+            .filter(|&c| self.kind_of(c) == DeclKind::CXXRecord);
+        let Some(cls) = acting.or_else(|| self.declaring_class(m)) else {
+            return super::ignored_object(o.ty);
+        };
         let cty = self.ast.decls.get(cls).ty().unwrap_or(QualType::ERROR);
         let (q, rq) = self.method_object_quals(m);
         let param = self.ast.types.qualify(cty, q);
@@ -582,7 +614,14 @@ impl Sema<'_, '_> {
         let l = std::mem::replace(slot, empty);
         let r = self.list_ics(&l, to, opts);
         self.ovl.lists[i as usize] = l;
-        r
+        // clang's `TryListConversion` fails with the list itself as the
+        // source: "cannot convert initializer list argument to 'T'".
+        match r {
+            Ics::Bad(b) if b.kind != BadKind::InitList => {
+                Ics::bad(BadKind::InitList, QualType::VOID, b.to)
+            }
+            r => r,
+        }
     }
 
     /// The ICS of a braced-init-list ([over.ics.list]).
@@ -625,6 +664,9 @@ impl Sema<'_, '_> {
                     u.after.to_types[2] = r;
                     Ics::UserDefined(u)
                 }
+                // The failure names the referenced type (clang recurses
+                // on `T1`).
+                Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, r),
                 other => other,
             };
         }
@@ -643,13 +685,24 @@ impl Sema<'_, '_> {
         if let Some(c) = self.ast.types.as_record(to) {
             // /5: std::initializer_list<X>.
             if let Some(elem) = self.initializer_list_element(to) {
-                return self.worst_element(l, elem, to, opts);
+                let mut r = self.worst_element(l, elem, to, opts);
+                match &mut r {
+                    Ics::Standard(s) => s.std_init_list = true,
+                    Ics::UserDefined(u) => u.after.std_init_list = true,
+                    _ => {}
+                }
+                return r;
             }
             if !self.require_complete_silent(to, Loc::INVALID) {
                 return Ics::bad(BadKind::InitList, void_from, to);
             }
             // /7: a non-aggregate class: constructors ([over.match.list]).
             if !self.is_aggregate(to) {
+                // /2: a designated-initializer-list converts only to an
+                // aggregate.
+                if l.items.iter().any(|i| !i.designator.is_empty()) {
+                    return Ics::bad(BadKind::InitList, void_from, to);
+                }
                 return self.list_ctor_conversion(l, c, to, opts);
             }
             // /8: an aggregate.
@@ -842,6 +895,7 @@ impl Sema<'_, '_> {
         let mut found = std::mem::take(&mut set.found);
         found.clear();
         found.extend(self.ast.constructors(c).iter());
+        found.extend(self.ctor_shadows(c));
         self.add_found_candidates(set, &found, CandidateKind::Ctor, first_opts, list_only);
         set.found = found;
     }
@@ -865,10 +919,25 @@ impl Sema<'_, '_> {
             DeclKind::CXXMethod
         };
         let mut seen: Vec<DeclId> = Vec::with_capacity(found.len());
-        for &f in found {
+        for &fd in found {
+            // An inherited constructor is its base constructor found
+            // through its shadow ([namespace.udecl]/13,
+            // [over.match.funcs.general]/8).
+            let mut f = fd;
+            if self.kind_of(fd) == DeclKind::ConstructorUsingShadow {
+                if kind != CandidateKind::Ctor {
+                    continue;
+                }
+                let Some(t) = self.ast.using_target(fd) else { continue };
+                f = t;
+            }
             let k = self.kind_of(f);
+            let n = set.cands.len();
             if k == DeclKind::FunctionTemplate {
-                self.add_found_template(set, f, want, kind, first_opts, list_only, &mut seen);
+                self.add_found_template(set, f, fd, want, kind, first_opts, list_only, &mut seen);
+                if fd != f {
+                    self.exclude_inhctor_slice(set, n, fd);
+                }
                 continue;
             }
             if k != want || self.ast.decls.get(f).has(DeclFlags::INVALID) {
@@ -885,7 +954,64 @@ impl Sema<'_, '_> {
             if self.ast.decls.cold.requires_clause.contains(f) {
                 set.uncertain = true;
             }
-            self.add_candidate(set, f, f, kind, first_opts);
+            self.add_candidate(set, f, fd, kind, first_opts);
+            if fd != f {
+                self.exclude_inhctor_slice(set, n, fd);
+            }
+        }
+    }
+
+    /// [over.match.funcs.general]/8 (clang `AddOverloadCandidate`): an
+    /// inherited constructor of class C whose first parameter is a
+    /// reference to P is not viable for a single argument when the
+    /// constructed class D is reference-related to P and P to C (it
+    /// would copy or move a base subobject).
+    fn exclude_inhctor_slice(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        n: usize,
+        shadow: DeclId,
+    ) {
+        if set.args.len() != 1 {
+            return;
+        }
+        let Some(cand) = set.cands.get(n) else { return };
+        // clang checks the slice before the arity and the conversions, so
+        // it overrides those failures (not a failed deduction or an
+        // illegal constructor specialization, checked earlier).
+        if !cand.viable
+            && matches!(
+                cand.failure,
+                CandidateFailure::BadDeduction | CandidateFailure::IllegalCtor
+            )
+        {
+            return;
+        }
+        let f = cand.func();
+        let params = self.param_decls(f);
+        let Some(&p0) = params.first() else { return };
+        let pty = self.ast.decls.get(p0).ty().unwrap_or(QualType::ERROR);
+        if !self.ast.types.is_reference(pty) {
+            return;
+        }
+        let moving = self.ast.types.canonical_kind(pty) == kiln_ast::types::TypeKind::RValueRef;
+        let Some(p) = self.ast.types.pointee(pty) else { return };
+        let (Some(c), Some(d)) = (self.ast.decls.get(f).ctx(), self.ast.decls.get(shadow).ctx())
+        else {
+            return;
+        };
+        let (cty, dty) = (self.class_type(c), self.class_type(d));
+        let related = |s: &Self, a: QualType, b: QualType| {
+            s.ast.types.same_unqualified(a, b)
+                || match (s.ast.types.as_record(a), s.ast.types.as_record(b)) {
+                    (Some(x), Some(y)) => is_derived_from(s, x, y),
+                    _ => false,
+                }
+        };
+        if related(self, p, cty) && related(self, dty, p) {
+            let c = &mut set.cands[n];
+            c.viable = false;
+            c.failure = CandidateFailure::InhCtorSlice { moving };
         }
     }
 
@@ -901,6 +1027,7 @@ impl Sema<'_, '_> {
         &mut self,
         set: &mut super::OverloadCandidateSet,
         ft: DeclId,
+        found: DeclId,
         want: DeclKind,
         kind: CandidateKind,
         first_opts: IcsOptions,
@@ -924,7 +1051,7 @@ impl Sema<'_, '_> {
         }
         let n = set.cands.len();
         let loc = set.loc;
-        self.add_template_candidate(set, ft, ft, None, kind, first_opts, loc);
+        self.add_template_candidate(set, ft, found, None, kind, first_opts, loc);
         if kind == CandidateKind::Ctor
             && set.args.len() == 1
             && let Some(c) = set.cands.get(n)
@@ -970,7 +1097,9 @@ impl Sema<'_, '_> {
         }
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let t = self.non_reference(pty);
-        self.initializer_list_element(t).is_some()
+        // A constructor template's `std::initializer_list<U>` is
+        // dependent ([dcl.init.list]/2 names the template, WP-169).
+        self.initializer_list_param(t).is_some()
     }
 
     /// A user-defined conversion of `a` to `to` ([over.match.copy],
@@ -1320,7 +1449,7 @@ impl Sema<'_, '_> {
         opts: IcsOptions,
     ) {
         let Some(pattern) = self.templated_function(ft) else { return };
-        if self.fn_spec(pattern).is_explicit() && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+        if self.nondependently_explicit(pattern) && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
             // clang `AddTemplateConversionCandidate`: noted as "not a
             // candidate" (a reference binding skips it).
             if !matches!(set.kind, SetKind::ConvToRef { .. }) {
@@ -1421,6 +1550,17 @@ impl Sema<'_, '_> {
         }
         if ca > cb {
             return IcsCompare::Worse;
+        }
+        // /3.1.1: a list-initialization sequence converting to
+        // std::initializer_list is better than one that does not, even
+        // if another rule of /3 would apply (CWG1467).
+        let to_list = |i: &Ics| match i {
+            Ics::Standard(s) => s.std_init_list,
+            Ics::UserDefined(u) => u.after.std_init_list,
+            _ => false,
+        };
+        if to_list(a) != to_list(b) {
+            return if to_list(a) { IcsCompare::Better } else { IcsCompare::Worse };
         }
         match (a, b) {
             (Ics::Standard(x), Ics::Standard(y)) => compare_standard_conversions(self, x, y),

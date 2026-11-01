@@ -1,7 +1,7 @@
 // __has_builtin in the modes that run sema answers from TABLE's
 // implemented column (spec/sema-templates.md §9, Q10): every row kiln
-// implements answers 1, as clang 19 does. The rows staged off are
-// has-builtin-staged-off.cpp.
+// implements answers 1, as clang 19 does (WP-166 implemented the last
+// staged-off trait rows).
 //@ strict-diags
 #if !__has_builtin(__add_lvalue_reference)
 #error __add_lvalue_reference
@@ -23,6 +23,9 @@
 #endif
 #if !__has_builtin(__builtin_bit_cast)
 #error __builtin_bit_cast
+#endif
+#if !__has_builtin(__builtin_constant_p)
+#error __builtin_constant_p
 #endif
 #if !__has_builtin(__builtin_is_constant_evaluated)
 #error __builtin_is_constant_evaluated
@@ -65,6 +68,9 @@
 #endif
 #if !__has_builtin(__is_array)
 #error __is_array
+#endif
+#if !__has_builtin(__is_assignable)
+#error __is_assignable
 #endif
 #if !__has_builtin(__is_base_of)
 #error __is_base_of
@@ -239,6 +245,39 @@
 #endif
 #if !__has_builtin(__underlying_type)
 #error __underlying_type
+#endif
+#if !__has_builtin(__can_pass_in_regs)
+#error __can_pass_in_regs
+#endif
+#if !__has_builtin(__has_nothrow_assign)
+#error __has_nothrow_assign
+#endif
+#if !__has_builtin(__has_nothrow_constructor)
+#error __has_nothrow_constructor
+#endif
+#if !__has_builtin(__has_nothrow_copy)
+#error __has_nothrow_copy
+#endif
+#if !__has_builtin(__has_nothrow_move_assign)
+#error __has_nothrow_move_assign
+#endif
+#if !__has_builtin(__is_bitwise_cloneable)
+#error __is_bitwise_cloneable
+#endif
+#if !__has_builtin(__is_layout_compatible)
+#error __is_layout_compatible
+#endif
+#if !__has_builtin(__is_pointer_interconvertible_base_of)
+#error __is_pointer_interconvertible_base_of
+#endif
+#if !__has_builtin(__is_trivially_equality_comparable)
+#error __is_trivially_equality_comparable
+#endif
+#if !__has_builtin(__is_trivially_relocatable)
+#error __is_trivially_relocatable
+#endif
+#if !__has_builtin(__type_pack_element)
+#error __type_pack_element
 #endif
 #if !__has_builtin(__builtin_COLUMN)
 #error __builtin_COLUMN
@@ -474,9 +513,39 @@
 #if !__has_builtin(__builtin_wmemcmp)
 #error __builtin_wmemcmp
 #endif
+#if !__has_builtin(__builtin_strcmp)
+#error __builtin_strcmp
+#endif
+#if !__has_builtin(__builtin_strncmp)
+#error __builtin_strncmp
+#endif
+#if !__has_builtin(__builtin_strchr)
+#error __builtin_strchr
+#endif
+#if !__has_builtin(__builtin_strrchr)
+#error __builtin_strrchr
+#endif
+#if !__has_builtin(__builtin_strpbrk)
+#error __builtin_strpbrk
+#endif
+#if !__has_builtin(__builtin_strstr)
+#error __builtin_strstr
+#endif
+#if !__has_builtin(__builtin_wcscmp)
+#error __builtin_wcscmp
+#endif
+#if !__has_builtin(__builtin_wcsncmp)
+#error __builtin_wcsncmp
+#endif
+#if !__has_builtin(__builtin_wcschr)
+#error __builtin_wcschr
+#endif
+#if !__has_constexpr_builtin(__builtin_strcmp) || !__has_constexpr_builtin(__builtin_wcschr) || __has_constexpr_builtin(__builtin_strstr)
+#error constexpr WP-140
+#endif
 #if !__has_constexpr_builtin(__builtin_memcpy) || !__has_constexpr_builtin(__builtin_strlen) || !__has_constexpr_builtin(__builtin_popcount)
 #error constexpr WP-088
 #endif
-#if !__has_constexpr_builtin(__builtin_is_constant_evaluated) || !__has_constexpr_builtin(__builtin_addressof)
+#if !__has_constexpr_builtin(__builtin_is_constant_evaluated) || !__has_constexpr_builtin(__builtin_addressof) || !__has_constexpr_builtin(__builtin_constant_p)
 #error constexpr
 #endif

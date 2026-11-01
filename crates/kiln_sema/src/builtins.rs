@@ -19,13 +19,16 @@ use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
 use kiln_ast::types::{Nns, TagKeyword};
-use kiln_ast::{Ast, DeclHead, DeclId, ExprId, QualType};
+use kiln_ast::{Ast, AttrId, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
+use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
+
+mod atomic;
 
 /// The implicit typedefs `__int128_t` and `__uint128_t` for `__int128`
 /// and `unsigned __int128` (clang's `Sema::Initialize`: declared in the
@@ -46,6 +49,164 @@ pub(crate) fn declare_int128_typedefs(ast: &mut Ast, target: &TargetTypes) {
 }
 
 impl Sema<'_, '_> {
+    /// The implicit typedef `__builtin_va_list` (clang's `Sema::Initialize`
+    /// and `CreateVaListDecl`), declared in the translation unit:
+    /// - `AArch64` (AAPCS64 §10.1.5): `typedef std::__va_list
+    ///   __builtin_va_list;` with `struct __va_list { void *__stack;
+    ///   void *__gr_top; void *__vr_top; int __gr_offs; int __vr_offs; }`
+    ///   in an implicit `namespace std` that lookup does not see;
+    /// - x86-64 (`SysV` psABI §3.5.7): `typedef __va_list_tag
+    ///   __builtin_va_list[1];` with `struct __va_list_tag { unsigned
+    ///   gp_offset; unsigned fp_offset; void *overflow_arg_area; void
+    ///   *reg_save_area; }`, a record lookup does not see.
+    ///
+    /// All are `IMPLICIT`, so `-ast-dump` skips them, as clang.
+    pub(crate) fn declare_builtin_va_list(&mut self) {
+        use kiln_abi::target::Arch;
+        use kiln_ast::decl::{Access, TagKind};
+        if self.target.pointer_bytes == 0 {
+            return;
+        }
+        let tu = self.ast.tu;
+        let void_ptr = self.ast.types.pointer_to(QualType::VOID);
+        let (ctx, tag_name, fields): (DeclId, &str, [(&str, QualType); 5]) =
+            match self.abi.triple.arch {
+                Arch::AArch64 => {
+                    let std = DeclName::ident(self.ast.symbols().intern("std"));
+                    let ns = self.builder().hidden_namespace(tu, std);
+                    let f = [
+                        ("__stack", void_ptr),
+                        ("__gr_top", void_ptr),
+                        ("__vr_top", void_ptr),
+                        ("__gr_offs", QualType::INT),
+                        ("__vr_offs", QualType::INT),
+                    ];
+                    (ns, "__va_list", f)
+                }
+                Arch::X86_64 => {
+                    let f = [
+                        ("gp_offset", QualType::UINT),
+                        ("fp_offset", QualType::UINT),
+                        ("overflow_arg_area", void_ptr),
+                        ("reg_save_area", void_ptr),
+                        ("", QualType::VOID),
+                    ];
+                    (tu, "__va_list_tag", f)
+                }
+            };
+        // Created unnamed and named afterwards, so the tag is not entered
+        // in lookup.
+        let h = DeclHead::new(ctx, DeclName::EMPTY, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        let r = self.builder().record(h, TagKind::Struct, None);
+        let tag = DeclName::ident(self.ast.symbols().intern(tag_name));
+        self.ast.decls.set_name(r, tag);
+        let saved = self.ctx;
+        self.act_on_start_record_definition(r);
+        for (name, ty) in fields.into_iter().filter(|f| !f.0.is_empty()) {
+            let n = DeclName::ident(self.ast.symbols().intern(name));
+            let f = self.builder().field(DeclHead::new(r, n, Loc::INVALID), ty, None, 0);
+            self.ast.decls.set_access(f, Access::Public);
+        }
+        self.act_on_finish_record_definition(r, false);
+        self.ctx = saved;
+        let rty = self.tag_type(r);
+        let ty = match self.abi.triple.arch {
+            Arch::AArch64 => rty,
+            Arch::X86_64 => self.ast.types.constant_array(rty, 1, None),
+        };
+        let n = DeclName::ident(self.ast.symbols().intern("__builtin_va_list"));
+        let h = DeclHead::new(tu, n, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+        let td = self.builder().typedef(h, DeclKind::Typedef, ty, None);
+        self.va_list_type = Some(self.ast.types.typedef_type(td, ty).into());
+    }
+
+    /// The parameter type a `Builtins.td` `A` spells (clang's
+    /// `DecodeTypeFromStr`): `__builtin_va_list &`, or the decayed pointer
+    /// when the target's `va_list` is an array (x86-64).
+    fn builtin_va_list_param(&mut self) -> QualType {
+        let Some(t) = self.va_list_type else { return QualType::ERROR };
+        if self.ast.types.is_array(t) {
+            conv::array_decayed(self, t)
+        } else {
+            self.ast.types.lvalue_ref_to(t)
+        }
+    }
+
+    /// The parameter type a `Builtins.td` `a` spells: `__builtin_va_list`,
+    /// decayed when the target's `va_list` is an array (clang
+    /// `GetBuiltinType` decays array parameters).
+    fn builtin_va_list_value(&mut self) -> QualType {
+        let Some(t) = self.va_list_type else { return QualType::ERROR };
+        if self.ast.types.is_array(t) { conv::array_decayed(self, t) } else { t }
+    }
+
+    /// The type a `Builtins.td` `P` spells (clang `ASTContext::getFILEType`):
+    /// the type a translation-unit-scope typedef named `FILE` names, or
+    /// the error type when there is none (clang `GE_Missing_stdio`).
+    fn file_type(&mut self) -> QualType {
+        let name = self.intern("FILE");
+        let found = self.lookup_in(self.ast.tu, name, LookupKind::Ordinary);
+        found
+            .decls
+            .iter()
+            .find(|&&d| matches!(self.kind_of(d), DeclKind::Typedef | DeclKind::TypeAlias))
+            .and_then(|&d| self.ast.decls.get(d).ty())
+            .unwrap_or(QualType::ERROR)
+    }
+
+    /// clang's library-builtin recognition (`ActOnFunctionDeclarator`)
+    /// and `AddKnownFunctionAttributes` (spec/sema.md §5.4): the first
+    /// declaration of a [`builtin::LIB`] function, in a namespace-scope
+    /// context with C language linkage and with the row's type ignoring
+    /// the exception specification, gets clang's implicit `NoThrowAttr`,
+    /// `ConstAttr` / `PureAttr`, appended to `attrs`. Redeclarations
+    /// inherit them (the attributes are read across the redeclaration
+    /// chain). `NoThrowAttr` makes a call non-throwing for `noexcept`
+    /// ([`Sema::can_throw`]) and `nounwind` in IR, as in clang; no
+    /// `BuiltinAttr` is attached, so a call stays an ordinary call.
+    pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
+        if self.kind_of(f) != DeclKind::Function || self.ast.prev(f).is_some() {
+            return;
+        }
+        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
+            let r = self.ast.redecl_context(c);
+            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
+        });
+        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
+            return;
+        }
+        let Some(name) = self.ast.decls.get(f).name().as_ident() else { return };
+        let Some(info) = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied() else {
+            return;
+        };
+        let Some(ty) = self.ast.decls.get(f).ty() else { return };
+        let (ret, params, variadic) = self.builtin_signature(info.sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return;
+        }
+        let want = self.ast.types.function(
+            ret,
+            &params,
+            FuncInfo::new().with_variadic(variadic),
+            ExcSpec::None,
+        );
+        let have = self.with_exc_spec(ty, ExcSpec::None);
+        if !self.ast.types.same_type(want, have) {
+            return;
+        }
+        let loc = self.ast.decls.get(f).loc();
+        for (bit, kind) in [
+            (builtin::attr::NOTHROW, AttrKind::NOTHROW),
+            (builtin::attr::CONST, AttrKind::CONST),
+            (builtin::attr::PURE, AttrKind::PURE),
+        ] {
+            if info.attrs & bit != 0 {
+                let n = AttrNode { kind, syntax: AttrSyntax::Gnu, flags: 1, loc, a: 0, b: 0 };
+                attrs.push(self.ast.attrs.push(n));
+            }
+        }
+    }
+
     /// Declares the builtin function `name` (first used at `loc`) if it
     /// is one kiln knows, from its [`builtin::Info`] row: the type its
     /// `Builtins.td` signature spells (`noexcept` for the `NoThrow` ones,
@@ -86,12 +247,14 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_params(f, &pds);
         }
         let mut attrs = vec![self.ast.attrs.push(implicit(AttrKind::BUILTIN, Loc::INVALID, id))];
+        let early = has(builtin::attr::CONST_EARLY);
         for (bit, kind) in [
+            (builtin::attr::CONST_EARLY, AttrKind::CONST),
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
             (builtin::attr::CONST, AttrKind::CONST),
             (builtin::attr::PURE, AttrKind::PURE),
         ] {
-            if has(bit) {
+            if has(bit) && !(early && bit == builtin::attr::CONST) {
                 attrs.push(self.ast.attrs.push(implicit(kind, loc, 0)));
             }
         }
@@ -126,6 +289,9 @@ impl Sema<'_, '_> {
             match c {
                 b'U' => unsigned = true,
                 b'L' => longs += 1,
+                // An integer constant expression argument (checked by
+                // `check_builtin_ice_args`).
+                b'I' => {}
                 _ => break,
             }
             s = &s[1..];
@@ -149,11 +315,15 @@ impl Sema<'_, '_> {
             (b'd', _, 0) => QualType::DOUBLE,
             (b'd', ..) => QualType::LONGDOUBLE,
             (b'z', ..) => self.size_type(),
+            (b'A', ..) => self.builtin_va_list_param(),
+            (b'a', ..) => self.builtin_va_list_value(),
+            (b'P', ..) => self.file_type(),
             _ => QualType::VOID,
         };
         while let Some(&c) = s.first() {
             t = match c {
                 b'C' => self.ast.types.qualify(t, Quals::CONST),
+                b'D' => self.ast.types.qualify(t, Quals::VOLATILE),
                 b'*' => self.ast.types.pointer_to(t),
                 b'&' => self.ast.types.lvalue_ref_to(t),
                 _ => break,
@@ -191,6 +361,13 @@ impl Sema<'_, '_> {
             self.unsupported("a braced argument to a builtin function", loc);
             return self.recover_err(&kids, loc);
         }
+        if builtin::atomic::is_op(id) {
+            // WP-154: an `AtomicExpr` (no call, no callee).
+            return match self.builtin_atomic_op(self.begin_loc(callee), id, args, rparen) {
+                Some(e) => e,
+                None => self.recover_err(&kids, loc),
+            };
+        }
         let r = match id {
             builtin::CLZG | builtin::CTZG => self.builtin_count_zeros_generic(args, rparen),
             builtin::POPCOUNTG => self.builtin_popcountg(args, rparen),
@@ -198,7 +375,13 @@ impl Sema<'_, '_> {
             | builtin::ISINF
             | builtin::ISNAN
             | builtin::ISNORMAL
-            | builtin::SIGNBIT => self.builtin_fp_classification(args, rparen),
+            | builtin::SIGNBIT
+            | builtin::ISINF_SIGN
+            | builtin::ISSUBNORMAL
+            | builtin::ISZERO
+            | builtin::ISSIGNALING => self.builtin_fp_classification(args, rparen),
+            builtin::FPCLASSIFY => self.builtin_fpclassify(args, rparen),
+            builtin::ISFPCLASS => self.builtin_isfpclass(callee, args, rparen),
             builtin::ISGREATER
             | builtin::ISGREATEREQUAL
             | builtin::ISLESS
@@ -206,6 +389,16 @@ impl Sema<'_, '_> {
             | builtin::ISLESSGREATER
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
+            builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
+            builtin::VA_START => self.builtin_va_start(callee, args, rparen),
+            // WP-156: the vector reductions (vector_ops.rs).
+            builtin::REDUCE_ADD
+            | builtin::REDUCE_MUL
+            | builtin::REDUCE_AND
+            | builtin::REDUCE_OR
+            | builtin::REDUCE_XOR
+            | builtin::REDUCE_MIN
+            | builtin::REDUCE_MAX => self.builtin_reduce(id, args, rparen),
             builtin::OPERATOR_NEW | builtin::OPERATOR_DELETE => {
                 return self.builtin_operator_new_delete(callee, b, id, args, loc, rparen);
             }
@@ -342,6 +535,143 @@ impl Sema<'_, '_> {
         Some((vec![a], QualType::INT))
     }
 
+    /// The probability argument of `__builtin_expect_with_probability`
+    /// (already converted to `double`): a constant expression in
+    /// [0.0, 1.0] (clang `Sema::BuiltinExpectWithProbability`). A
+    /// value-dependent argument is checked at instantiation.
+    pub(crate) fn check_expect_probability(&mut self, p: ExprId) -> bool {
+        if self.expr_is_value_dependent(p) {
+            return true;
+        }
+        let at = self.begin_loc(p);
+        let v = match self.eval_const(p, EvalContext::new(EvalKind::Other, at)) {
+            Ok(v) => v,
+            Err(f) => {
+                let d = self.diag(DiagId::sema_probability_not_constant_float, at);
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                return false;
+            }
+        };
+        let x = match self.ast.consts.scalar(v) {
+            Some(Scalar::Float { kind, bits, .. }) if kind.bits() == 64 => {
+                f64::from_bits(bits as u64)
+            }
+            _ => {
+                let d = self.diag(DiagId::sema_probability_not_constant_float, at);
+                self.emit(d);
+                return false;
+            }
+        };
+        if !(0.0..=1.0).contains(&x) {
+            let d = self.diag(DiagId::sema_probability_out_of_range, at);
+            self.emit(d);
+            return false;
+        }
+        true
+    }
+
+    /// The arguments of a builtin call that must be integer constant
+    /// expressions (clang `CheckBuiltinFunctionCall` -> `BuiltinConstantArg`:
+    /// `argument to '<name>' must be a constant integer` at the call's
+    /// start). Value-dependent arguments wait for instantiation.
+    pub(crate) fn check_builtin_ice_args(
+        &mut self,
+        id: u32,
+        callee: ExprId,
+        args: &[ExprId],
+    ) -> bool {
+        let mask = builtin::ice_params(id);
+        if mask == 0 {
+            return true;
+        }
+        for (i, &a) in args.iter().enumerate().take(32) {
+            if mask & (1 << i) == 0 || self.expr_is_value_dependent(a) {
+                continue;
+            }
+            if self.fold_int(a).is_none() {
+                let name = builtin::info(id).map_or("", |e| e.name);
+                let at = self.begin_loc(callee);
+                let d = self.diag(DiagId::sema_constant_integer_arg_type, at).arg(name.to_string());
+                self.emit(d);
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `__builtin_isfpclass(x, mask)` (clang's `BuiltinFPClassification`
+    /// with `IsFPClass`): `x` real floating, `mask` an integer constant
+    /// in [0, 1023] (`llvm::fcAllFlags`), left unconverted; reported at
+    /// the call's start (clang `BuiltinConstantArgRange`).
+    fn builtin_isfpclass(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let (mut out, _) = self.builtin_fp_classification(&args[..1], rparen)?;
+        let m = args[1];
+        if !self.expr_is_value_dependent(m) {
+            let at = self.begin_loc(callee);
+            let v = if self.ast.types.is_integral(self.ety(m)) { self.fold_int(m) } else { None };
+            let Some(v) = v else {
+                let msg = self
+                    .diag(DiagId::sema_constant_integer_arg_type, at)
+                    .arg("__builtin_isfpclass".to_string());
+                self.emit(msg);
+                return None;
+            };
+            if !(0..=1023).contains(&v) {
+                let msg = self
+                    .diag(DiagId::sema_argument_invalid_range, at)
+                    .arg(v.to_string())
+                    .arg("0".to_string())
+                    .arg("1023".to_string());
+                self.emit(msg);
+                return None;
+            }
+        }
+        out.push(m);
+        Some((out, QualType::INT))
+    }
+
+    /// `__builtin_fpclassify(nan, inf, normal, subnormal, zero, x)`
+    /// (clang's `BuiltinFPClassification` with six arguments; C23
+    /// 7.12.3.1): the five values are converted to `int` as arguments,
+    /// `x` must be real floating.
+    fn builtin_fpclassify(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 6, rparen) {
+            return None;
+        }
+        let mut out = Vec::with_capacity(6);
+        for &a in &args[..5] {
+            if let Ok(x) = conv::implicit_convert(self, a, QualType::INT, ConvCtx::Argument) {
+                out.push(x);
+            } else {
+                // clang `PerformImplicitConversion(.., AA_Passing)`:
+                // `DiagnoseAssignmentResult`'s incompatible case.
+                let t = self.ety(a);
+                let msg = self
+                    .diag(DiagId::sema_builtin_passing_incompatible, self.begin_loc(a))
+                    .arg(self.ty_arg(t))
+                    .arg(self.ty_arg(QualType::INT));
+                self.emit(msg);
+                return None;
+            }
+        }
+        let (mut x, _) = self.builtin_fp_classification(&args[5..], rparen)?;
+        out.append(&mut x);
+        Some((out, QualType::INT))
+    }
+
     /// `__builtin_isgreater` & co. (clang's `BuiltinUnorderedCompare`;
     /// C23 7.12.17): the usual arithmetic conversions to a real floating
     /// common type.
@@ -394,6 +724,20 @@ impl Sema<'_, '_> {
     /// argument of pointer-to-complete-object type (an array or function
     /// argument decays), copy-initialized to that type, which is the
     /// call's.
+    /// `__builtin_constant_p(e)` (clang `CheckBuiltinFunctionCall`): exactly one argument, which undergoes
+    /// `DefaultFunctionArrayLvalueConversion`; the result is `int`.
+    fn builtin_constant_p(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 1, rparen) {
+            return None;
+        }
+        let a = conv::decay(self, args[0]);
+        Some((vec![a], QualType::INT))
+    }
+
     fn builtin_launder(
         &mut self,
         callee: ExprId,
@@ -441,6 +785,191 @@ impl Sema<'_, '_> {
                 None
             }
         }
+    }
+
+    /// `__builtin_va_start(ap, last)` ([cstdarg.syn]/1, C 7.16.1.4; clang's
+    /// `BuiltinVAStart`): two arguments; `ap` binds to the
+    /// `__builtin_va_list` parameter; the call must be in a variadic
+    /// function, else `'va_start' used in function with fixed args` (or
+    /// `cannot be used outside a function`) at the callee. `last` is kept
+    /// as written; one that is not the last named parameter, or that
+    /// names a parameter of reference or promotable type, gets a
+    /// `-Wvarargs` warning (undefined behavior, [cstdarg.syn]/1).
+    fn builtin_va_start(
+        &mut self,
+        callee: ExprId,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 2, rparen) {
+            return None;
+        }
+        let pt = self.builtin_va_list_param();
+        let ap = match conv::implicit_convert(self, args[0], pt, ConvCtx::Argument) {
+            Ok(x) => x,
+            Err(err) => {
+                let msg = err.diag(self, args[0]);
+                self.emit(msg);
+                return None;
+            }
+        };
+        let at = self.begin_loc(callee);
+        let f = self.ctx;
+        if !self.ast.decls.get(f).kind().is_function() {
+            let msg = self.diag(DiagId::sema_va_start_outside_function, at);
+            self.emit(msg);
+            return None;
+        }
+        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        if !self.ast.types.proto(fty).is_some_and(|p| p.info().variadic()) {
+            let msg = self.diag(DiagId::sema_va_start_fixed_function, at);
+            self.emit(msg);
+            return None;
+        }
+        let last =
+            self.ast.decls.function(f).and_then(|x| self.ast.lists.iter::<DeclId>(x.params).last());
+        let x = self.ignore_paren_imp_casts(args[1]);
+        let named = Some(x)
+            .filter(|&x| self.ast.exprs.get(x).kind() == ExprKind::DeclRefExpr)
+            .map(|x| self.ast.exprs.decl(x))
+            .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::ParmVar);
+        let arg_at = self.begin_loc(args[1]);
+        match named {
+            Some(p) if Some(p) == last => {
+                let t = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                let promotable = self.ast.types.canonical(t).without_quals() == QualType::FLOAT
+                    || conv::rank::promoted_type(self, t, None).is_some_and(|q| {
+                        self.ast.types.canonical(q) != self.ast.types.canonical(t)
+                    });
+                let reason = if self.ast.types.is_reference(t) {
+                    Some(1)
+                } else if promotable {
+                    Some(0)
+                } else {
+                    None
+                };
+                if let Some(r) = reason {
+                    let msg = self.diag(DiagId::sema_va_start_type_is_undefined, arg_at).arg(r);
+                    let pl = self.ast.decls.get(p).loc();
+                    let note =
+                        self.diag(DiagId::note_va_start_parameter_type, pl).arg(self.ty_arg(t));
+                    self.emit(msg.with_note(note));
+                }
+            }
+            _ => {
+                let msg = self.diag(DiagId::sema_va_start_not_last_named_param, arg_at);
+                self.emit(msg);
+            }
+        }
+        Some((vec![ap, args[1]], QualType::VOID))
+    }
+
+    /// `__builtin_va_arg(list, T)` ([cstdarg.syn]/1, C 7.16.1.1; clang's
+    /// `BuildVAArgExpr`). The `va_list` operand: on a target whose
+    /// `va_list` is an array (x86-64) it decays (the usual unary
+    /// conversions) and must then have the decayed type, else `first
+    /// argument to 'va_arg' is of type 'T' and not 'va_list'`; on one
+    /// whose `va_list` is a class (`AArch64`) it is copy-initialized to a
+    /// `__builtin_va_list &` parameter (so a mismatch is a reference
+    /// binding error). A non-dependent `T` must be complete and not
+    /// abstract; a non-POD `T` (a reference included) is a
+    /// `-Wnon-pod-varargs` error that does not stop the expression; a
+    /// promotable `T` (an integer type of rank below `int`, an unscoped
+    /// enumeration whose promoted type is not its underlying type, or
+    /// `float`) gets the `-Wvarargs` undefined-behavior warning as a
+    /// runtime-behavior diagnostic (`diag_runtime_behavior`). Every check
+    /// reports at `ty_loc`, where `T` begins. The result is a prvalue of
+    /// `T`'s non-lvalue expression type (clang's `getNonLValueExprType`:
+    /// a reference's referent; cv dropped for a non-class non-array).
+    pub fn act_on_va_arg(
+        &mut self,
+        e: ExprId,
+        ty: QualType,
+        ty_loc: Loc,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        if self.is_err_expr(e) || self.is_error_type(ty) {
+            return self.recover_err(&[e], loc);
+        }
+        let Some(vl) = self.va_list_type else { return self.recover_err(&[e], loc) };
+        let mut list = e;
+        if !self.expr_is_type_dependent(e) {
+            if self.ast.types.is_array(vl) {
+                let orig = self.ety(e);
+                list = conv::usual_unary_conversions(self, e);
+                let want = conv::array_decayed(self, vl);
+                if self.ast.types.canonical(self.ety(list)) != self.ast.types.canonical(want) {
+                    let at = self.begin_loc(e);
+                    let msg = self.diag(DiagId::sema_va_arg_not_va_list, at).arg(self.ty_arg(orig));
+                    self.emit(msg);
+                    return self.recover_err(&[list], loc);
+                }
+            } else {
+                let pt = self.ast.types.lvalue_ref_to(vl);
+                list = match conv::implicit_convert(self, e, pt, ConvCtx::Argument) {
+                    Ok(x) => x,
+                    Err(err) => {
+                        let msg = err.diag(self, e);
+                        self.emit(msg);
+                        return self.recover_err(&[e], loc);
+                    }
+                };
+            }
+        }
+        if !self.ast.types.is_dependent(ty) {
+            if !self.require_complete(ty, ty_loc) {
+                let msg = self.diag(DiagId::sema_va_arg_incomplete, ty_loc).arg(self.ty_arg(ty));
+                self.emit(self.incomplete_note(msg, ty));
+                return self.recover_err(&[list], loc);
+            }
+            if let Some(c) = self.abstract_class(ty) {
+                let msg = self.diag(DiagId::sema_va_arg_abstract, ty_loc).arg(self.ty_arg(ty));
+                let msg = self.pure_virtual_notes(msg, c);
+                self.emit(msg);
+                return self.recover_err(&[list], loc);
+            }
+            if self.ast.types.is_reference(ty) || !self.is_pod_type(ty) {
+                let msg = self.diag(DiagId::sema_va_arg_not_pod, ty_loc).arg(self.ty_arg(ty));
+                self.emit(msg);
+            }
+            if let Some(p) = self.va_arg_promotion(ty) {
+                let msg = self
+                    .diag(DiagId::sema_va_arg_never_compatible, ty_loc)
+                    .arg(self.ty_arg(ty))
+                    .arg(self.ty_arg(p));
+                self.diag_runtime_behavior(msg);
+            }
+        }
+        let mut rty = self.non_reference(ty);
+        if !self.ast.types.is_reference(ty)
+            && self.ast.types.as_record(rty).is_none()
+            && !self.ast.types.is_array(rty)
+        {
+            rty = conv::strip_cv(self, rty);
+        }
+        self.builder().va_arg_expr(list, ty, rty, ty_loc, loc, rparen)
+    }
+
+    /// The type a variadic argument read as `t` was promoted to when `t`
+    /// is not that type (clang `BuildVAArgExpr`'s `PromoteType`): an
+    /// integral promotion ([conv.prom]) whose result is not `t` (for an
+    /// unscoped enumeration: not its underlying type), and `double` for
+    /// `float` ([expr.call]/13). clang's second test, a promoted type
+    /// differing from the underlying type only in signedness, never
+    /// holds for a standard promotable type, so it is not repeated.
+    fn va_arg_promotion(&mut self, t: QualType) -> Option<QualType> {
+        let canon = |s: &Self, q: QualType| s.ast.types.canonical(q).without_quals();
+        if canon(self, t) == QualType::FLOAT {
+            return Some(QualType::DOUBLE);
+        }
+        let p = conv::rank::promoted_type(self, t, None)?;
+        let under = if self.ast.types.as_enum(t).is_some() {
+            conv::rank::enum_data(self, t).and_then(|e| e.int_type).unwrap_or(t)
+        } else {
+            t
+        };
+        (canon(self, p) != canon(self, under)).then_some(p)
     }
 
     /// `__builtin_operator_new` / `__builtin_operator_delete` (clang's
@@ -837,6 +1366,11 @@ pub(crate) struct SrcLocCache {
     /// transitively through the default arguments of the calls in it
     /// (bit `1 << kind`; computed once per parameter).
     param_kinds: kiln_source::fx::FxHashMap<DeclId, u8>,
+    /// Uses whose `__builtin_source_location()` value holds the pretty
+    /// name of a function whose return type is not deduced yet: (use,
+    /// function), refined at the end of that function's body
+    /// ([`Sema::finish_source_locs`]).
+    deferred: Vec<(ExprId, DeclId)>,
 }
 
 /// The bit of `SourceLocKind::SourceLocStruct` in a kinds mask.
@@ -868,6 +1402,9 @@ impl Sema<'_, '_> {
         let ctx = self.ctx;
         let e = self.builder().source_loc_expr(kind, ty, ctx, loc, rparen);
         self.record_source_loc(e, loc, ctx, kind == SourceLocKind::SourceLocStruct);
+        if matches!(kind, SourceLocKind::Function | SourceLocKind::SourceLocStruct) {
+            self.mark_function_name_dependent(e, ctx);
+        }
         e
     }
 
@@ -989,6 +1526,38 @@ impl Sema<'_, '_> {
             location,
         };
         let _ = self.ast.exprs.set_source_loc_values(e, v);
+        if v.location.is_some()
+            && self
+                .func
+                .as_ref()
+                .is_some_and(|f| f.decl == ctx && f.auto_ret.is_some() && !f.deduced)
+        {
+            self.srcloc.deferred.push((e, ctx));
+        }
+    }
+
+    /// The return type of `f` is deduced (or its body ends): the
+    /// source-location objects built in it before then take the pretty
+    /// name with the deduced type (clang computes a `SourceLocExpr`'s value
+    /// when it is evaluated: `const char *f()` for `auto f()` from codegen
+    /// or from an immediate invocation in the deducing `return`). A
+    /// constant evaluated before then keeps the name it saw.
+    pub(crate) fn finish_source_locs(&mut self, f: DeclId) {
+        if self.srcloc.deferred.is_empty() {
+            return;
+        }
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.srcloc.deferred).into_iter().partition(|&(_, c)| c == f);
+        self.srcloc.deferred = rest;
+        let (_, pretty) = self.predefined_function_names(f);
+        let Some(pretty_p) = self.srcloc_string(&pretty) else { return };
+        for (e, _) in mine {
+            let Some(mut v) = self.ast.exprs.source_loc_values(e).copied() else { continue };
+            v.location = self.source_location_object(v.file, pretty_p, v.line, v.column);
+            if v.location.is_some() {
+                self.ast.exprs.refine_source_loc_values(e, v);
+            }
+        }
     }
 
     /// The `const char *` value pointing to the string literal object
@@ -1098,29 +1667,15 @@ impl Sema<'_, '_> {
     /// clang `PredefinedExpr::ComputeName` of context `ctx` for
     /// `__builtin_FUNCTION` (`Function`: the unqualified name) and
     /// `_M_function_name` (`PrettyFunction`); both empty outside a
-    /// function. Gap: the ` [T = int]` suffix of template specializations
-    /// is not printed (spec/sema-templates.md §9.5).
+    /// function.
     fn predefined_function_names(&self, ctx: DeclId) -> (String, String) {
-        let n = self.ast.decls.get(ctx);
-        if !n.kind().is_function() {
+        if !self.ast.decls.get(ctx).kind().is_function() {
             return (String::new(), String::new());
         }
-        let names = kiln_ast::dump::AstNames::new(&self.ast);
-        let mut plain = String::new();
-        names.write_name(ctx, &mut plain);
-        let mut pretty = String::new();
-        if let Some(f) = self.ast.decls.function(ctx)
-            && n.kind() == DeclKind::CXXMethod
-        {
-            if f.spec.is_virtual() {
-                pretty.push_str("virtual ");
-            }
-            if f.spec.storage() == FnStorage::Static {
-                pretty.push_str("static ");
-            }
-        }
-        pretty.push_str(&kiln_abi::vtable::pretty_function(&self.ast, ctx));
-        (plain, pretty)
+        (
+            self.compute_predefined_name(kiln_ast::expr::PredefinedKind::Func, ctx),
+            self.compute_predefined_name(kiln_ast::expr::PredefinedKind::PrettyFunction, ctx),
+        )
     }
 
     /// Records the source-location values at a use of `param`'s default
@@ -1133,18 +1688,103 @@ impl Sema<'_, '_> {
         if kinds != 0 {
             let ctx = self.ctx;
             self.record_source_loc(e, call_begin, ctx, kinds & SRC_LOC_STRUCT_BIT != 0);
+            // An immediate invocation in the argument is evaluated where
+            // the call is built (clang's rewritten default argument), so
+            // it sees the function name as it is now.
+            if self.default_arg_has_immediate(param, 0) {
+                self.srcloc.deferred.retain(|&(x, _)| x != e);
+            }
+            if kinds & (SRC_LOC_STRUCT_BIT | 1 << SourceLocKind::Function as u8) != 0 {
+                self.mark_function_name_dependent(e, ctx);
+            }
         }
     }
 
-    /// The source-location builtins `param`'s default argument evaluates
-    /// (a mask of `1 << kind`), through nested default arguments.
+    /// Whether `param`'s default argument holds an immediate invocation
+    /// (a `ConstantExpr`), through nested default arguments.
+    /// Records the source-location values at a use of `field`'s default
+    /// member initializer (the `CXXDefaultInitExpr` `e`, built at `loc`:
+    /// the constructor's name, or the `}` / `)` of an aggregate
+    /// initialization, in context `ctx`) when the initializer evaluates a
+    /// source-location builtin ([support.srcloc.cons]/2; clang
+    /// `CXXDefaultInitExpr::getUsedLocation` / `getUsedContext`).
+    pub(crate) fn note_default_init_use(
+        &mut self,
+        e: ExprId,
+        field: DeclId,
+        loc: Loc,
+        ctx: DeclId,
+    ) {
+        let kinds = self.default_arg_srcloc_kinds(field);
+        if kinds != 0 {
+            self.record_source_loc(e, loc, ctx, kinds & SRC_LOC_STRUCT_BIT != 0);
+            if self.default_arg_has_immediate(field, 0) {
+                self.srcloc.deferred.retain(|&(x, _)| x != e);
+            }
+            if kinds & (SRC_LOC_STRUCT_BIT | 1 << SourceLocKind::Function as u8) != 0 {
+                self.mark_function_name_dependent(e, ctx);
+            }
+        }
+    }
+
+    fn default_arg_has_immediate(&self, param: DeclId, depth: u32) -> bool {
+        let Some(init) = self.default_init_of(param) else {
+            return false;
+        };
+        if depth > 32 {
+            return false;
+        }
+        let mut stack = vec![init];
+        while let Some(x) = stack.pop() {
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::ConstantExpr => return true,
+                ExprKind::CXXDefaultArgExpr => {
+                    let p = self.ast.exprs.default_arg_param(x);
+                    if self.default_arg_has_immediate(p, depth + 1) {
+                        return true;
+                    }
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    let f = self.ast.exprs.default_init_field(x);
+                    if self.default_arg_has_immediate(f, depth + 1) {
+                        return true;
+                    }
+                }
+                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+            }
+        }
+        false
+    }
+
+    /// In a dependent context the function name a source-location value
+    /// holds changes per specialization (`[T = int]`): `e` is marked
+    /// instantiation-dependent so instantiation rebuilds it (clang 19's
+    /// `SourceLocExpr::MayBeDependent`, `TransformCXXDefaultArgExpr`).
+    fn mark_function_name_dependent(&mut self, e: ExprId, ctx: DeclId) {
+        if self.ast.decls.get(ctx).kind().is_function() && self.ctx_template_levels(ctx) > 0 {
+            self.ast.exprs.mark_instantiation_dependent(e);
+        }
+    }
+
+    /// The default argument of parameter `d` or the default member
+    /// initializer of field `d`.
+    fn default_init_of(&self, d: DeclId) -> Option<ExprId> {
+        match self.ast.decls.param(d) {
+            Some(p) => p.default_arg,
+            None => self.ast.decls.field(d).and_then(|f| f.init),
+        }
+    }
+
+    /// The source-location builtins `param`'s default argument (or field
+    /// `param`'s default member initializer) evaluates (a mask of
+    /// `1 << kind`), through nested default arguments and initializers.
     fn default_arg_srcloc_kinds(&mut self, param: DeclId) -> u8 {
         if let Some(&k) = self.srcloc.param_kinds.get(&param) {
             return k;
         }
         // Guards recursion through `void f(int = f())`.
         self.srcloc.param_kinds.insert(param, 0);
-        let Some(init) = self.ast.decls.param(param).and_then(|p| p.default_arg) else {
+        let Some(init) = self.default_init_of(param) else {
             return 0;
         };
         let mut kinds = 0u8;
@@ -1157,6 +1797,10 @@ impl Sema<'_, '_> {
                 ExprKind::CXXDefaultArgExpr => {
                     let p = self.ast.exprs.default_arg_param(x);
                     kinds |= self.default_arg_srcloc_kinds(p);
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    let f = self.ast.exprs.default_init_field(x);
+                    kinds |= self.default_arg_srcloc_kinds(f);
                 }
                 _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
             }

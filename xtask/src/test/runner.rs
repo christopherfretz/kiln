@@ -15,7 +15,7 @@ use super::discover::TestCase;
 use super::inst_report;
 use crate::clang_ast::{DumpOptions, normalize};
 use crate::util::oven_report::{self, Report};
-use crate::util::process::{self, Output, Shown};
+use crate::util::process::{self, MemLimit, Output, Shown};
 use kiln_abi::dump_blocks::{record_layout_blocks, vtable_blocks};
 
 /// Everything a worker needs; shared read-only between threads.
@@ -27,6 +27,8 @@ pub struct Config {
     pub compiler_kind: CompilerKind,
     /// The oracle compiler; `None` disables oracle comparisons (`--no-oracle`).
     pub oracle: Option<PathBuf>,
+    /// What the oracle is (its stack reservation is allowed for if kiln).
+    pub oracle_kind: CompilerKind,
     pub update: bool,
     /// Per-run scratch directory (under the cargo target dir).
     pub scratch: PathBuf,
@@ -34,6 +36,10 @@ pub struct Config {
     pub run_timeout: Duration,
     /// `--pp-compare`: overrides every test's `pp-compare:`.
     pub pp_compare: Option<PpCompare>,
+    /// `--mem-limit`: the address-space cap of every process a test runs;
+    /// `None` (`--mem-limit 0`) leaves only `mem<=N` budgets
+    /// (`spec/harness.md` "Resource limits").
+    pub mem_limit: Option<MemLimit>,
 }
 
 /// Outcome of one test.
@@ -47,6 +53,9 @@ pub enum Status {
     /// The test itself is broken (bad directives, missing file, the oracle
     /// rejected it); never masked by `xfail`.
     Error,
+    /// A process of the test exceeded its address-space cap (`--mem-limit`
+    /// or `mem<=N`); never masked by `xfail`.
+    Killed,
 }
 
 impl Status {
@@ -58,12 +67,13 @@ impl Status {
             Self::XPass => "XPASS",
             Self::Skip => "SKIP",
             Self::Error => "ERROR",
+            Self::Killed => "KILLED",
         }
     }
 
     /// Does this outcome make the run fail?
     pub fn is_failure(self) -> bool {
-        matches!(self, Self::Fail | Self::XPass | Self::Error)
+        matches!(self, Self::Fail | Self::XPass | Self::Error | Self::Killed)
     }
 }
 
@@ -85,6 +95,19 @@ pub struct TestResult {
 enum Problem {
     Fail(String),
     Broken(String),
+    /// A process ran out of address space under the test's cap of `mib`.
+    Killed {
+        mib: u64,
+        details: String,
+    },
+}
+
+impl Problem {
+    fn text(&self) -> &str {
+        match self {
+            Self::Fail(d) | Self::Broken(d) | Self::Killed { details: d, .. } => d,
+        }
+    }
 }
 
 type Check = Result<(), Problem>;
@@ -99,6 +122,7 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         log: Vec::new(),
         updated: false,
         inst_report: None,
+        mem_limit: cfg.mem_limit,
     };
     let (status, reason, details) = t.evaluate();
     if t.dir.exists() {
@@ -123,6 +147,8 @@ struct Test<'a> {
     updated: bool,
     /// The last compile's masked instantiation report (`inst-report:`).
     inst_report: Option<String>,
+    /// This test's cap: `--mem-limit` lowered by its `mem<=N`.
+    mem_limit: Option<MemLimit>,
 }
 
 impl Test<'_> {
@@ -141,6 +167,10 @@ impl Test<'_> {
                 return (Status::Error, None, d);
             }
         };
+        if let Some(n) = spec.mem_mib {
+            let budget = MemLimit { mib: n };
+            self.mem_limit = Some(self.mem_limit.map_or(budget, |l| l.min(budget)));
+        }
         let kind = self.cfg.compiler_kind;
         if let Some(r) = spec.skip_reason(kind) {
             return (Status::Skip, Some(r.to_owned()), String::new());
@@ -175,6 +205,7 @@ impl Test<'_> {
             Expect::Ast => self.ast(&spec),
             Expect::Layout => self.dump(&spec, DumpKind::Layout),
             Expect::Vtables => self.dump(&spec, DumpKind::Vtables),
+            Expect::NoCrash => self.no_crash(&spec),
         };
         // Budgets are checked once the kind's own checks pass.
         let outcome = outcome.and_then(|()| self.check_oven(&spec));
@@ -190,6 +221,9 @@ impl Test<'_> {
             (Err(Problem::Fail(d)), None) => (Status::Fail, None, d),
             (Err(Problem::Fail(d)), Some(r)) => (Status::XFail, Some(r), d),
             (Err(Problem::Broken(d)), r) => (Status::Error, r, d),
+            (Err(Problem::Killed { mib, details }), _) => {
+                (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
+            }
         }
     }
 
@@ -233,14 +267,82 @@ impl Test<'_> {
         Some(path.to_string_lossy().into_owned())
     }
 
-    fn exec(&mut self, mut cmd: Command, timeout: Duration) -> Result<Output, String> {
-        let shown = Shown(&cmd).to_string();
-        let r = process::run(&mut cmd, timeout);
-        match &r {
-            Ok(o) => self.log.push(format!("$ {shown}  # {}", o.describe_end())),
-            Err(e) => self.log.push(format!("$ {shown}  # failed to start: {e}")),
+    /// The cap of a compile by `program`: the test's cap, plus the stack
+    /// kiln reserves when `program` is kiln (`spec/harness.md` "Resource
+    /// limits").
+    fn compile_cap(&self, program: &Path, cmd: &Command) -> Option<MemLimit> {
+        let cap = self.mem_limit?;
+        let kiln = (program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Kiln)
+            || (self.cfg.oracle.as_deref() == Some(program)
+                && self.cfg.oracle_kind == CompilerKind::Kiln);
+        if !kiln {
+            return Some(cap);
         }
-        r.map_err(|e| format!("could not run `{shown}`: {e}"))
+        let args: Vec<_> = cmd.get_args().collect();
+        Some(cap.plus(process::kiln_stack_reservation_mib(&args)))
+    }
+
+    /// Runs a compiler (`who`, for messages) under its cap. Failing to start
+    /// it is broken; running out of memory under the cap is KILLED.
+    fn exec(&mut self, who: &str, cmd: &Command, timeout: Duration) -> Result<Output, Problem> {
+        let cap = self.compile_cap(Path::new(cmd.get_program()), cmd);
+        let shown = Shown(cmd).to_string();
+        let r = self.run_capped(&shown, cmd, None, cap, timeout);
+        let o = r.map_err(|e| Problem::Broken(format!("could not run `{shown}`: {e}")))?;
+        self.check_capped(who, &o, cap)?;
+        Ok(o)
+    }
+
+    /// Runs `cmd` under `cap`, logging it as `shown`.
+    fn run_capped(
+        &mut self,
+        shown: &str,
+        cmd: &Command,
+        stdin: Option<&[u8]>,
+        cap: Option<MemLimit>,
+        timeout: Duration,
+    ) -> std::io::Result<Output> {
+        let mut capped = process::limited(cmd, cap);
+        let r = process::run_with_input(&mut capped, stdin, timeout);
+        let limit = cap.map_or_else(String::new, |c| format!(" [mem<={} MiB]", c.mib));
+        match &r {
+            Ok(o) => self.log.push(format!("$ {shown}{limit}  # {}", o.describe_end())),
+            Err(e) => self.log.push(format!("$ {shown}{limit}  # failed to start: {e}")),
+        }
+        r
+    }
+
+    /// KILLED when `o` ran out of memory under `cap`; broken when the cap
+    /// could not be applied.
+    fn check_capped(&self, who: &str, o: &Output, cap: Option<MemLimit>) -> Check {
+        let Some(cap) = cap else { return Ok(()) };
+        let stderr = o.stderr_str();
+        if o.code() == Some(MemLimit::ULIMIT_FAILED)
+            && stderr.lines().any(|l| l.starts_with("kiln-mem-limit:") && l.contains("ulimit"))
+        {
+            return Err(Problem::Broken(format!(
+                "cannot apply the memory limit of {} MiB to {who}\n{}",
+                cap.mib,
+                indent(&stderr)
+            )));
+        }
+        if !o.out_of_memory() {
+            return Ok(());
+        }
+        let mib = self.mem_limit.map_or(cap.mib, |l| l.mib);
+        let allowance = if cap.mib > mib {
+            format!(" + {} MiB kiln stack reservation", cap.mib - mib)
+        } else {
+            String::new()
+        };
+        Err(Problem::Killed {
+            mib,
+            details: format!(
+                "{who} ran out of memory under the {mib} MiB address-space cap{allowance} ({})\n{}",
+                o.describe_end(),
+                indent(&tail(&stderr, 20))
+            ),
+        })
     }
 
     /// Runs the compiler under test and rejects timeouts and crashes.
@@ -267,7 +369,7 @@ impl Test<'_> {
             flag.push(&report);
             cmd.arg(flag);
         }
-        let o = self.exec(cmd, self.cfg.compile_timeout).map_err(Problem::Broken)?;
+        let o = self.exec("the compiler", &cmd, self.cfg.compile_timeout)?;
         let stderr = o.stderr_str();
         if spec.inst_report.is_some() {
             self.inst_report = Some(inst_report::extract(&stderr));
@@ -295,7 +397,7 @@ impl Test<'_> {
         out: Option<&Path>,
     ) -> Result<Output, Problem> {
         let cmd = self.command(oracle, spec, mode, out);
-        let o = self.exec(cmd, self.cfg.compile_timeout).map_err(Problem::Broken)?;
+        let o = self.exec("the oracle", &cmd, self.cfg.compile_timeout)?;
         if o.success() {
             Ok(o)
         } else if o.timed_out() {
@@ -370,6 +472,26 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diags)
+    }
+
+    /// `expect: no-crash`: the compile ends normally, with or without
+    /// errors (exit 0 or 1). A crash or hang is already a FAIL in
+    /// [`Self::compile`]; any other exit code (70, 101, ...) is one too.
+    /// The `diag:` lines are still checked.
+    fn no_crash(&mut self, spec: &TestSpec) -> Check {
+        // No error limit by default: a crash must not hide behind the 20th
+        // error (WP-141's `<string>` panic did). It precedes the test's
+        // `args:`, so an explicit `-ferror-limit=N` there still wins.
+        let o = self.compile(spec, &["-fsyntax-only", "-ferror-limit=0"], None)?;
+        let stderr = o.stderr_str();
+        if !matches!(o.code(), Some(0 | 1)) {
+            return Err(Problem::Fail(format!(
+                "expected no-crash (exit code 0 or 1), but the compiler ended with {}\n{}",
+                o.describe_end(),
+                indent(&stderr)
+            )));
+        }
+        self.check_diags(spec, &diag_parse::parse(&stderr))
     }
 
     fn scratch(&self) -> Result<&Path, Problem> {
@@ -447,13 +569,15 @@ impl Test<'_> {
     }
 
     /// Runs a built binary in the scratch directory with the test's
-    /// arguments, environment and stdin.
+    /// arguments, environment and stdin, under the test's cap. Failing to
+    /// start the test's binary fails the test, the oracle's makes it broken.
     fn execute_binary(
         &mut self,
         exe: &Path,
         spec: &TestSpec,
         stdin: Option<&[u8]>,
-    ) -> Result<Output, String> {
+        oracle: bool,
+    ) -> Result<Output, Problem> {
         let mut cmd = Command::new(exe);
         cmd.current_dir(&self.dir).args(&spec.run_args);
         for (k, v) in &spec.env {
@@ -467,12 +591,14 @@ impl Test<'_> {
         if stdin.is_some() {
             shown.push_str(" < (stdin)");
         }
-        let r = process::run_with_input(&mut cmd, stdin, self.cfg.run_timeout);
-        match &r {
-            Ok(o) => self.log.push(format!("$ {shown}  # {}", o.describe_end())),
-            Err(e) => self.log.push(format!("$ {shown}  # failed to start: {e}")),
-        }
-        r.map_err(|e| format!("could not run `{shown}`: {e}"))
+        let cap = self.mem_limit;
+        let o = self.run_capped(&shown, &cmd, stdin, cap, self.cfg.run_timeout).map_err(|e| {
+            let d = format!("could not run `{shown}`: {e}");
+            if oracle { Problem::Broken(d) } else { Problem::Fail(d) }
+        })?;
+        let who = if oracle { "the oracle's binary" } else { "the test binary" };
+        self.check_capped(who, &o, cap)?;
+        Ok(o)
     }
 
     fn run(&mut self, spec: &TestSpec) -> Check {
@@ -487,7 +613,7 @@ impl Test<'_> {
         }
         self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
         let stdin = self.stdin_bytes(spec)?;
-        let got = self.execute_binary(&exe, spec, stdin.as_deref()).map_err(Problem::Fail)?;
+        let got = self.execute_binary(&exe, spec, stdin.as_deref(), false)?;
         if got.code().is_none() {
             return Err(Problem::Fail(format!(
                 "test binary {}\nstdout:\n{}stderr:\n{}",
@@ -525,8 +651,7 @@ impl Test<'_> {
         {
             let oexe = self.dir.join("oracle.out");
             self.oracle_compile(&oracle, spec, &[], Some(&oexe))?;
-            let theirs =
-                self.execute_binary(&oexe, spec, stdin.as_deref()).map_err(Problem::Broken)?;
+            let theirs = self.execute_binary(&oexe, spec, stdin.as_deref(), true)?;
             if theirs.code().is_none() {
                 // The oracle's binary is the reference; if it hangs or
                 // crashes, the test itself is broken.
@@ -710,16 +835,28 @@ impl Test<'_> {
         };
         let main_file = self.case.name.clone();
         let timeout = self.cfg.compile_timeout;
+        let who = if oracle { "the oracle" } else { "the compiler" };
+        let mut killed = None;
         let mut text = || {
             let cmd = self.command(clang, spec, &["-fsyntax-only", "-Xclang", "-ast-dump"], None);
-            let o = self.exec(cmd, timeout)?;
+            let o = self.exec(who, &cmd, timeout).map_err(|p| {
+                let d = p.text().to_owned();
+                if let Problem::Killed { .. } = p {
+                    killed = Some(p);
+                }
+                d
+            })?;
             if o.success() {
                 Ok(o.stdout_str())
             } else {
                 Err(format!("clang's text dump failed ({})", o.describe_end()))
             }
         };
-        normalize(&json, &main_file, &opts, &mut text).map_err(|e| {
+        let r = normalize(&json, &main_file, &opts, &mut text);
+        if let Some(k) = killed {
+            return Err(k);
+        }
+        r.map_err(|e| {
             Problem::Broken(format!(
                 "cannot normalize the AST dump of {} (`xtask clang-ast`):\n{}",
                 clang.display(),
@@ -957,6 +1094,19 @@ fn ast_diff(want: &str, got: &str) -> Option<String> {
 }
 
 /// Indents every line by four spaces (and terminates the last one).
+/// The last `n` lines of `s` (an out-of-memory death's stderr can be long;
+/// the cause is at its end).
+fn tail(s: &str, n: usize) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    let skip = lines.len().saturating_sub(n);
+    let mut out = if skip > 0 { format!("[{skip} earlier lines]\n") } else { String::new() };
+    for l in &lines[skip..] {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
 pub fn indent(s: &str) -> String {
     let mut out = String::new();
     for line in s.lines() {

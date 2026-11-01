@@ -1,5 +1,6 @@
 //! Statements ([stmt]; spec/parse.md §6).
 
+use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::InitStyle;
 use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
@@ -80,11 +81,25 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return None;
         }
-        let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         if self.at_cxx11_attr() {
+            let start = self.loc();
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
+            // Statement attributes are applied once the statement is
+            // parsed (clang's `ProcessStmtAttributes`); only `[[assume]]`
+            // is kept so far (spec/parse.md §6).
+            if attrs.iter().any(|&a| self.s.ast.attrs.get(a).kind == AttrKind::ASSUME) {
+                let sub = self.parse_statement_after_attrs()?;
+                let pre23 = self.std < Std::Cxx23;
+                return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, pre23));
+            }
         }
+        self.parse_statement_after_attrs()
+    }
+
+    /// A statement after its attribute-specifier-seq.
+    fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
+        let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         let loc = self.loc();
         match Self::punct_of(self.tok()) {
             Some(Punct::LBrace) => return Some(self.parse_compound(true).0),
@@ -124,7 +139,8 @@ impl Parser<'_, '_> {
                 Kw::Return => return self.parse_return(),
                 Kw::Goto => return self.parse_goto(),
                 Kw::Try => return self.parse_try_stmt(),
-                Kw::CoReturn | Kw::Asm => {
+                Kw::Asm => return self.parse_asm_statement(),
+                Kw::CoReturn => {
                     self.unsupported(&format!("'{}' statements", k.spelling()), loc);
                     self.skip_statement();
                     return None;
@@ -260,7 +276,7 @@ impl Parser<'_, '_> {
             return None;
         };
         let mut init = None;
-        if let Some((_, Punct::Semi)) = self.scan_for(&[Punct::Semi, Punct::RParen]) {
+        if self.condition_has_init_statement() {
             init = self.parse_statement();
         }
         let Some(c) = self.parse_condition() else {
@@ -269,6 +285,32 @@ impl Parser<'_, '_> {
         };
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         Some((init, c))
+    }
+
+    /// Whether a `;` comes before the `)` closing a condition, skipping
+    /// nested brackets and braces (clang's `SkipUntil(r_paren, semi)` in
+    /// `isCXXConditionDeclarationOrInitStatement`): then the condition
+    /// has an init-statement, which may hold braces (`if (int n{1}; n)`,
+    /// `if (auto g = [] { return 1; }; g())`).
+    fn condition_has_init_statement(&self) -> bool {
+        let mut depth = 0u32;
+        let mut i = self.pos();
+        loop {
+            let t = self.tok_at(i);
+            match t.kind {
+                TokKind::Eof => return false,
+                TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => depth += 1,
+                TokKind::Punct(Punct::RParen | Punct::RSquare | Punct::RBrace) => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                TokKind::Punct(Punct::Semi) if depth == 0 => return true,
+                _ => {}
+            }
+            i += 1;
+        }
     }
 
     /// condition ([stmt.pre]/1): an expression, or a declaration of a
@@ -292,12 +334,13 @@ impl Parser<'_, '_> {
         if self.at_attr() {
             self.parse_attributes(&mut d.attrs);
         }
-        let Some((_, name_loc)) = d.name else {
+        if !d.has_name() {
             if !d.invalid {
                 self.error_here(DiagId::parse_expected_unqualified_id);
             }
             return None;
-        };
+        }
+        let name_loc = d.name_loc();
         d.init_style = match Self::punct_of(self.tok()) {
             Some(Punct::Equal) => Some(InitStyle::C),
             Some(Punct::LBrace) => Some(InitStyle::List),
@@ -383,19 +426,7 @@ impl Parser<'_, '_> {
             let ds = self.parse_decl_specifiers(ctx);
             let mut d = Declarator::new(ctx, self.loc());
             self.parse_declarator(&mut d);
-            if d.name.is_none() {
-                // An abstract declarator's identifier location is where
-                // the name would be (clang `ParseDirectDeclarator`): the
-                // first array bound, else the token after the declarator.
-                d.loc = d
-                    .chunks
-                    .iter()
-                    .find_map(|c| match c {
-                        Chunk::Array { loc, .. } => Some(*loc),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| self.loc());
-            }
+            self.set_abstract_loc(&mut d);
             let base = self.s.type_from_declspec_at(&ds, d.name_loc());
             self.s.act_on_exception_decl(&ds, base, &d)
         };
@@ -435,7 +466,15 @@ impl Parser<'_, '_> {
             return None;
         }
         self.s.push_scope(ScopeKind::Control);
-        let Some((init, (var, c))) = self.parse_paren_condition("if") else {
+        // An `if constexpr` condition is manifestly constant-evaluated.
+        if constexpr {
+            self.s.enter_constant_evaluated();
+        }
+        let cond = self.parse_paren_condition("if");
+        if constexpr {
+            self.s.exit_constant_evaluated();
+        }
+        let Some((init, (var, c))) = cond else {
             self.s.pop_scope();
             self.skip_if_rest_after_cond();
             return None;
@@ -729,15 +768,6 @@ impl Parser<'_, '_> {
             return self.finish_for_range(open, loc, init, v, range, Vec::new(), colon);
         }
         let ds = self.parse_decl_specifiers(ctx);
-        let binding = self.at(Punct::LSquare)
-            || (matches!(Self::punct_of(self.tok()), Some(Punct::Amp | Punct::AmpAmp))
-                && Self::punct_of(self.peek(1)) == Some(Punct::LSquare));
-        if binding {
-            self.unsupported("structured bindings", self.loc());
-            self.skip_until(&[Punct::RParen], false, true);
-            self.skip_sub_statement();
-            return None;
-        }
         if ds.is_empty() {
             // `for (expr : r)`: clang `err_for_range_expected_decl` at the
             // `:` after the expression.

@@ -161,6 +161,27 @@ the evaluator's flattened type table.
   ([basic.start.static]/2): manifestly constant-evaluated, but silent and
   not recorded, like `try_fold`. Codegen uses it for the initializers it
   emits as constants (spec/codegen.md).
+- `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
+  `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
+  `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
+  that has an initializer (or a known value) but is not usable in constant
+  expressions (a `const double`, a `const _Atomic(int)`, a `const` class,
+  array or pointer) is read as if it were (`VarInfo::lax`), except one
+  whose type contains a `mutable` member (the Oven has no "read of mutable
+  member" check yet, so such variables are excluded wholesale). Lax mode
+  applies only to an outermost evaluation (nested in a bridge callback it
+  is plain `try_fold`). Variables resolved under lax mode are recorded in
+  `lax_globals` and reset to unresolved when the next outermost
+  evaluation runs in the other mode, and lax-mode calls are never
+  memoized, so a lax read never leaks into a strict evaluation. Codegen
+  uses it for its non-initializer fold candidates; sema uses it
+  (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
+  (spec/sema.md §4.2).
+- Freezing a pointer or reference into a constant rejects a pointer to an
+  object of automatic storage duration (a static allocation whose origin
+  is a local variable read as a global): "pointer to '…' is not a
+  constant expression" (or "reference to …" when the frozen type is a
+  reference; clang `note_constexpr_non_global`), with "declared here".
 
 ### Manifestly constant-evaluated context — normative (WP-063)
 `__builtin_is_constant_evaluated()` ([expr.const]/20, [meta.const.eval])
@@ -286,6 +307,20 @@ literal is one instruction and one step, not an interpreted loop.
   parsed as clang's `StringRef::getAsInteger(0)`: decimal, `0` octal,
   `0x` hex, `0b` binary, `0o` octal; an empty string is payload 0; any
   other argument is not a constant), and the source-location builtins (below).
+- **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
+  and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
+  19's `IntExprEvaluator`: a power-of-two size within the target's inline
+  width (`Target::max_atomic_inline_bytes`: aarch64 16, x86_64 8 bytes) is
+  lock-free for the c11 form, a null object, a single byte, or an object
+  whose pointee alignment is at least the size; otherwise
+  `always_lock_free` is false and `is_lock_free` is not a constant.
+  `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops. Every other
+  `AtomicExpr` is not a constant (clang's generic note).
+- **`__builtin_va_arg` (WP-171):** a `VAArgExpr` is never a constant: the
+  generic "subexpression not valid in a constant expression" note at the
+  expression (clang has no `VisitVAArgExpr`), as for `va_start`/`va_end`/
+  `va_copy`. It counts as a side effect for `__builtin_constant_p`-style
+  folding (`has_side_effects`).
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
   constant expression", as clang 19): `__builtin_signbit`, the six
   ordered comparisons, the math functions; `__builtin_unreachable` when
@@ -296,7 +331,10 @@ literal is one instruction and one step, not an interpreted loop.
   constant (no note, as clang).
 - **Classification** (`bi::FP_CLASS`): `isfinite`/`isinf`/`isnan`/
   `isnormal` on every float format, x87 and binary128 through
-  `softfloat.rs`.
+  `softfloat.rs`; `__builtin_isfpclass` is the `MASK` class: the
+  value's LLVM `FPClassTest` bit (sign and signaling distinguished) ANDed
+  with the mask register, the mask evaluated first.
+  `__builtin_expect_with_probability` is its first operand, as `expect`.
 - **Strings and memory** (`bi::STRLEN`, `MEMCMP`, `MEMCHR`, `MEMCPY`, each
   with a `WIDE` or `MOVE` sub-kind): clang's typed semantics. `strlen`,
   `memcmp` and `memchr` read element by element and fail with clang's
@@ -311,6 +349,14 @@ literal is one instruction and one step, not an interpreted loop.
   elements are one byte (or, for `memcpy`/`memmove`, scalars) and no
   union is involved; any irregularity falls back to the element-wise
   loop, which reports the exact fault.
+  **Landed (WP-140):** `strcmp`/`strncmp`/`wcscmp`/`wcsncmp` are
+  `MEMCMP` and `strchr`/`wcschr` are `MEMCHR` with the `STR` sub-kind
+  (stop at the terminator, no character-element restriction: clang 19's
+  `StopAtNull`) and, for the unbounded forms, `UNBOUNDED` (no count).
+  Narrow elements compare as unsigned, wide ones in `wchar_t`'s
+  signedness; `strchr` of a value not representable in the element type
+  is null. `strrchr`, `strpbrk` and `strstr` trap ("subexpression not
+  valid"), as clang 19, which does not constant-evaluate them.
 - **`__builtin_bit_cast`** (`bi::BIT_CAST`; `compile/bitcast.rs`,
   `vm/bitcast.rs`): clang's `checkBitCastConstexprEligibilityType` runs at
   compile time (unions, pointers, member pointers, `volatile` and
@@ -336,6 +382,30 @@ literal is one instruction and one step, not an interpreted loop.
   same string and `__impl` objects. Inside a `CXXDefaultArgExpr` whose
   call site sema recorded, the outermost such default argument supplies
   the values.
+- **Landed (WP-150): GCC integer and remaining memory builtins**
+  (`builtin::INT_MEM`). Folding status, as clang 19:
+
+  | builtin | Oven | evaluation |
+  |---|---|---|
+  | `ffs`, `ffsl`, `ffsll` | yes | `bi::INT_OP`/`FFS`: 0 for 0, else trailing zeros + 1 |
+  | `parity`, `parityl`, `parityll` | yes | `INT_OP`/`PARITY`: popcount mod 2 |
+  | `clrsb`, `clrsbl`, `clrsbll` | yes | `INT_OP`/`CLRSB`: redundant sign bits (width − significant bits) |
+  | `bitreverse8`..`64` | yes | `INT_OP`/`BITREVERSE` |
+  | `rotateleft8`..`64`, `rotateright8`..`64` | yes | `INT_OP`/`ROTL`/`ROTR`: amount (unsigned) modulo the width |
+  | `bcmp` | yes | `MEMCMP` sub 0 (as `memcmp`; the unsupported note names `'__builtin_bcmp'`) |
+  | `wmemcpy`, `wmemmove` | yes | `MEMCPY` with `WCHAR` (and `MOVE`): the count is in elements, no size-multiple check; notes say `'wmemcpy'`/`'wmemmove'` |
+  | `memset`, `mempcpy` | no | trap "subexpression not valid in a constant expression" (clang 19 rejects both; WP-161 left them unevaluated, since an evaluating extension would need a `-fkiln-` opt-in) |
+  | `abs`, `labs`, `llabs` (WP-144) | no | trap, as above |
+
+  The notes take the builtin's name from the call's callee
+  (`notes.rs` `called_builtin`). Codegen follows clang `EmitBuiltinExpr`:
+  `ffs` is `cttz(x, true) + 1` selected against zero, `parity` is
+  `ctpop(x) & 1`, `clrsb` is `ctlz(x < 0 ? ~x : x, false) - 1`,
+  `bitreverse` is `llvm.bitreverse`, the rotates are `llvm.fshl`/`fshr`
+  of `(x, x, n)`, `memset` is `llvm.memset` of the truncated byte with
+  the destination's known alignment, `mempcpy` is `llvm.memcpy` plus an
+  `i8` GEP by the count; `bcmp`, `wmemcpy` and `wmemmove` call the
+  library functions.
 
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
@@ -596,6 +666,162 @@ The bench entries take the default thresholds (`threshold-bytes` 2%), so
 once recorded, any allocator change that raises `peak_bytes`, `peak_arena`
 or `allocs` fails the bench. `steps` is gated at 0% as everywhere.
 
+### Trial evaluation — Landed (WP-135)
+A *trial* is a part of an evaluation whose effects on the abstract memory
+can be undone. `Memory` (`src/mem.rs`, "trial evaluation") keeps a stack of
+open checkpoints and one undo log.
+- `checkpoint(mode)` opens a checkpoint. It records the undo-log length, the
+  frame mark (whose low half is the frame top), the static top, the
+  evaluation context (`ctx`) and the heap allocation counter.
+- `commit()` closes the innermost checkpoint and keeps its effects. An
+  enclosing checkpoint can still undo them, because its log entries are
+  older.
+- `rollback(types)` closes the innermost checkpoint and undoes its effects.
+  It replays the log entries made since the checkpoint, newest first, then
+  releases the frame objects made since (`release(mark)`).
+- When the last checkpoint closes, either way, the log and its index are
+  cleared.
+
+**Fresh objects.** An object is *fresh* for a checkpoint if it was created
+after the checkpoint. Writes to fresh objects are never logged, because a
+rollback discards those objects anyway.
+- A frame object is fresh if its base is at or above the checkpoint's frame
+  top.
+- A static object is fresh if its base is at or above the checkpoint's
+  static top.
+- A heap object is fresh if it belongs to a deeper evaluation context, or if
+  it belongs to the checkpoint's context and its `Origin::Heap` number is at
+  least the checkpoint's allocation counter.
+
+**What is logged.** All entries are made against the innermost checkpoint:
+- `Gran`: the 8 bytes and the shadow (init and ptr bits) of each granule of
+  a non-fresh object that is about to be written. A granule is logged at
+  most once per checkpoint; `seen` maps the granule to the checkpoint's
+  serial number.
+- `Union`: an active-member entry of a non-fresh union that changes.
+- `Flags`: changed allocation flags of a non-fresh object. This covers
+  `MakeConst`, and the end of lifetime marked by cleanups.
+- `HeapMeta`: on the first heap allocation or deallocation under a
+  checkpoint, a snapshot of the heap structure, taken once per checkpoint.
+  It holds the top, the live and count counters, the slot count, the
+  size-class bins and the free-slot list.
+- `HSlot`: a heap slot that is about to be reused or freed. Freeing a
+  non-fresh block also logs that block's granules, since the allocator
+  reuses its bytes.
+
+A rollback therefore does three things. Objects that existed at the
+checkpoint get back their values, shadow, active members, flags and
+liveness. Heap blocks allocated since the checkpoint go back to the
+allocator. Frame and static objects made since the checkpoint are released.
+
+**The hooks.** Every VM path that modifies existing memory calls
+`trial_write(ptr, len)` before writing. These paths are:
+- stores and bit-field stores;
+- object copies and `bulk_copy`;
+- `ZeroInit` and `bit_cast` destinations;
+- vptr writes;
+- active-member changes.
+
+Union entries and flags change only through `union_put` and `set_flags`.
+
+**Speculative mode.** `TrialMode::Speculative` is clang's speculative
+evaluation (`EvaluateBuiltinConstantP`: `SpeculativeEvaluationRAII`, plus
+the evaluation-mode checks on side effects). Two kinds of effect fail with
+`MemFault::Speculative`, which is a not-constant fault:
+- writing a frame or static object that is not fresh for the innermost
+  speculative checkpoint;
+- `new` or `delete` in the evaluation context of any open speculative
+  checkpoint.
+
+Nested evaluations (`ensure_body`, constraints) run in deeper contexts and
+may still allocate.
+
+Writes to heap objects that existed before the trial are allowed and
+logged. `Op::Speculate` (`__builtin_constant_p`) opens a speculative
+checkpoint around its region:
+- if the region completes, the checkpoint is committed;
+- if the region fails, the checkpoint is rolled back. A not-constant
+  failure then answers 0. A resource limit (steps, depth, memory) is still
+  rolled back first, and then fails the evaluation.
+
+**Divergence from clang 19.** A failed speculative evaluation that wrote a
+heap object keeps that write in clang. In kiln it is rolled back
+(`tests/conformance/expr.const/constant-p-trial-rollback.cpp`, which is
+skipped for clang). Every other observable result matches clang
+(`constant-p-trial.cpp`, which is strict-diags under both compilers).
+
+`TrialMode::Transactional` allows every effect and undoes it on rollback.
+It is the general mode for future evaluator trials. No evaluator path uses
+it yet; the unit tests exercise it.
+
+**Complexity.**
+
+| Operation | Cost |
+|---|---|
+| Write outside any trial | One `Vec::is_empty` test. The logging path is out of line (`#[inline(never)]`). |
+| `checkpoint`, `commit` | O(1). |
+| Write inside a trial | O(granules written) the first time per checkpoint (a hash insert per granule), and a hash lookup after that. A fresh object costs one allocation lookup. |
+| Heap op inside a trial | O(bins + free slots) once per checkpoint (`HeapMeta`), O(1) after that. |
+| `rollback` | O(log entries since the checkpoint) plus the frame release. |
+
+**Memory bounds.**
+- The log holds at most one `Gran` per granule of a non-fresh object
+  written per open checkpoint. It also holds one `HeapMeta` per checkpoint
+  that touches the heap, and one `HSlot` (a boxed `Alloc`) per heap slot
+  reused or freed.
+- Writes to fresh objects are never logged. A trial that builds its own
+  data costs nothing beyond that data.
+- The log, the `seen` index and the checkpoint stack are freed when the
+  outermost checkpoint closes, and by `Memory::reset`. They are counted in
+  `Memory::footprint`.
+- So the memory of N sequential failed trials is O(1) in N.
+  `bench/oven/trial-rollback.cpp` runs 20000 failed trials over a helper
+  that writes a pre-existing heap buffer, fills a local array and calls
+  `new`. Before WP-135, every trial leaked its allocation: the measurement
+  was `peak_arena` 20,480,320 and `allocs` 20001, and the evaluation failed
+  the leak check. After WP-135 the measurement is `peak_arena` 320, `allocs`
+  1 and `frozen_bytes` 32 for any N.
+
+**Statistics.**
+- Cumulative counters keep the trial's work: `allocated` bytes, `allocs`,
+  steps and calls. The peaks keep their maxima: `peak_bytes`, `peak_arena`
+  and depth.
+- A rollback lowers the current arena and the live heap bytes. This keeps
+  `peak_arena` honest: it is the most memory the Oven held at once,
+  including inside trials.
+- The diagnostics of a failed trial are discarded. `Op::Speculate` runs its
+  region silent, and drops the pending records the region pushed, keeping
+  only their peaks.
+
+**Not rolled back.** These effects are all either independent of the trial
+or idempotent:
+- thawed globals and the provisional-resolution cache, which are reverted at
+  the next outermost evaluation;
+- the memo cache, which holds only pure calls with scalar parameters and no
+  heap operations, so its entries do not depend on context;
+- constants interned into the AST store, which are deduplicated by content;
+- functions instantiated by `ensure_body`, which are sema effects, as they
+  are in clang;
+- frame slot generation numbers.
+
+A frame release below an open checkpoint's frame top does not happen: the
+trial's region returns to the checkpoint's frame before the checkpoint
+closes. Rollback relies on this.
+
+**kiln_sema's speculative sites (audit).** SFINAE `fold_int` in
+`templ/args.rs`, constraint satisfaction (`templ/concepts`), noexcept
+(`except.rs`), narrowing `try_fold` (`init.rs`), and every other sema call
+of `try_fold`, `fold_int`, `eval_const`, `eval_int` or
+`is_constant_initialized` share one property. Each is an *outermost* Oven
+evaluation, or a nested one under `ensure_body`, so no memory outlives it:
+- `eval_outermost` resets `Memory` at its end;
+- provisional global resolutions are undone at the next outermost start;
+- frozen results are interned.
+
+None of these sites needs a checkpoint. A failed SFINAE or `requires` trial
+leaves only an interned constant and the instantiations clang would also
+perform. The WP-135 progress note has the site table.
+
 ### Classes — Landed (WP-076)
 
 *Status:* implemented in `crates/kiln_oven/src/compile/class.rs`
@@ -732,9 +958,13 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   still returns false.
 - Class assignment (`a = b` of class type) is rejected by sema before
   evaluation; explicit destructor calls (`p->~T()`) and
-  `::operator new`/`::operator delete` are not parsed; inheriting
-  constructors (`using B::B`) are not in sema: front-end gaps, not Oven
-  work.
+  `::operator new`/`::operator delete` are not parsed: front-end
+  gaps, not Oven work. Inheriting constructors (WP-114) evaluate their
+  `CXXInheritedCtorInitExpr` as a call of the base constructor with the
+  inheriting constructor's own arguments (`compile/class.rs`
+  `inherited_ctor`); notes name a non-constexpr inherited constructor
+  (`non-constexpr constructor 'B' ...`) or the base for a constructor
+  inherited through a virtual base, as clang.
 - Constant destruction of a non-trivially-destructible temporary bound to
   a constexpr reference is not checked (clang 19 rejects it as "not yet
   supported"; kiln accepts it).
@@ -831,9 +1061,15 @@ arrays of class type are list-initialized (`Holder h{}` with a `C
 cs[2]` member); `ensure_body` defines implicit virtual destructors.
 
 **Left for later (owners).**
-- Virtual bases: objects with virtual bases cannot be constructed
-  (`VIRTUAL_UNSUPPORTED` traps on a `VirtualBase` ctor-init, an inherited
-  constructor and a class cast through a virtual base), so dispatch,
+- Virtual bases: a class with a virtual base is not a literal type
+  ([basic.types.general]/10), so constructing one is never a constant
+  expression: `construct` traps first with clang's `CheckLiteralType` note
+  `non-literal type 'X' cannot be used in a constant expression`, also
+  for an inheriting constructor through a virtual base (WP-146; the
+  evaluated variable itself is rejected by sema, sema-class.md §4.10).
+  The remaining `VIRTUAL_UNSUPPORTED` traps (a `VirtualBase` ctor-init, a
+  class cast through a virtual base) are therefore unreachable from
+  valid code, so dispatch,
   `dynamic_cast` and `typeid` never meet one; the subobject list marks
   virtual subobjects and phase 2 treats one as `Fault::Invalid`. Owner:
   a follow-up WP (object layout of virtual bases in `ty.rs`).
@@ -848,6 +1084,42 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
 - A virtual call on a member subobject whose own base is still being
   constructed reports the lifetime note where clang reports CWG1517
   (`no_dynamic` keys on the running constructor's object and class).
+
+### Vectors — Landed (WP-173)
+GNU `vector_size` and clang `ext_vector_type` values are stored as an
+array of their lanes (`TyKind::Array`, `Types::is_vector`). The array is
+padded to the vector's own size and alignment, so an `ext_vector_type(3)`
+occupies 4 lanes and the 4th is indeterminate. A vector of `bool` (bits)
+stays `Opaque`: it has no value model yet. The operations are in
+`compile/vector.rs`. The accept/reject boundary is clang 19's
+`VectorExprEvaluator`:
+- **Folded:** arithmetic, bitwise, shift and comparison operators, lane
+  by lane, with scalars splatted. A comparison yields -1/0 lanes, but a
+  true lane of vector `&&`/`||` folds to **1**. This is a clang 19 quirk:
+  at run time the lane is -1. Also folded:
+  - unary `+ - ~ !`;
+  - casts between vectors and lax casts to and from scalars of the same
+    size, as bit reinterpretations through `compile/bitcast.rs`;
+  - `__builtin_convertvector`, lane by lane;
+  - compound assignment;
+  - `?:` with a scalar condition;
+  - `__builtin_bit_cast` to and from vectors;
+  - multi-element compound literals and list-initialization, including
+    brace-elided members.
+- **Diagnosed per lane:** signed overflow, division by zero and shift
+  counts carry the usual notes, with the vector type in the operand text
+  (`notes.rs` `vector_suffix`). An uninitialized vector read is
+  diagnosed.
+- **Rejected with "subexpression not valid in a constant expression"**
+  at the expression's begin, as clang 19 does: a subscript `v[i]`,
+  `__builtin_reduce_*`, and a bit cast from a vector to a scalar of a
+  different class.
+- **Rejected without a note** (clang 19 fails silently): a `?:` with a
+  vector condition, and ext-vector element access `.x`.
+- clang 20+ folds subscripts, reductions and vector-condition `?:`. The
+  boundary moves with the oracle at the clang 22 switch (M3 to M4).
+- Codegen emits folded vector values as `<N x T>` constants
+  (`kiln_codegen/src/consts.rs`).
 
 ### Reflection runtime (M6)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's entity tables;
@@ -869,6 +1141,7 @@ pub trait SemaBridge {
     fn ast(&self) -> &Ast;                                        // re-borrowed per use, never held
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>; // instantiates / defines implicit members if needed; may evaluate (nested)
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout; // via kiln_abi
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32);  // via kiln_abi: size/align of a vector type, whose lanes the Oven lays out inside it (WP-151, WP-173); default (0, 1), so every bridge that folds vectors (sema's, codegen's prepass) must implement it
     fn final_overrider(&mut self, most_derived: DeclId, at: SubobjectId, method: DeclId)
         -> Option<(DeclId, SubobjectId)>;                         // spec/sema-class.md §3.5
     fn subobjects(&mut self, record: DeclId) -> &[Subobject];     // indexed by SubobjectId
@@ -883,6 +1156,7 @@ impl Oven {
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn is_constant_initialized(&mut self, bridge: &mut dyn SemaBridge, var: DeclId) -> bool;
     pub fn fold_constant_init(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) -> Option<ConstValueId>;
+    pub fn fold_rvalue(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn stats(&self) -> &EvalStats;
     pub fn footprint(&self) -> usize;
     pub fn disassemble(&self) -> String;                          // debugging aid
@@ -1038,6 +1312,10 @@ destruction, temporaries (static ones frozen into `LetData.value`),
 constant destruction, member pointers, class `new`/`delete` and the
 iterative spine walkers; see "Classes — Landed (WP-076)".
 
+Implemented (M3, WP-135): trial evaluation — checkpoint/commit/rollback
+over an undo log, with `__builtin_constant_p` as a speculative trial whose
+failure is rolled back; see "Trial evaluation — Landed (WP-135)".
+
 Remaining (each traps with a `kiln:` note today):
 - `std::allocator<T>::allocate`/`deallocate` and
   `__builtin_operator_new`/`__builtin_operator_delete`: need class
@@ -1047,11 +1325,30 @@ Remaining (each traps with a `kiln:` note today):
 - `delete` through `void*`, and P2747 placement new (see above).
 - Front-end gaps that keep some forms from reaching the Oven (not
   Oven work): class assignment, explicit destructor calls,
-  `::operator new`/`delete`, class-specific `operator new`, inheriting
-  constructors, `delete[] (expr)` (parsed as a lambda) and
+  `::operator new`/`delete`, class-specific `operator new`,
+  `delete[] (expr)` (parsed as a lambda) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the
   front end puts the volatile qualifier on the read expression's type.
+
+**Landed (WP-140): asm statements.** A `GCCAsmStmt` is never a core
+constant expression ([dcl.asm]/1, [expr.const]/5.?): the Oven compiler
+lowers it to the same trap as `goto`, giving clang's
+`subexpression not valid in a constant expression` note at the `asm`.
+A constexpr function that contains asm on a path not taken still
+evaluates.
+
+**Landed (WP-140): `PredefinedExpr`.** An lvalue of its `StringLiteral`
+child: the same static string object as the literal
+(`tests/conformance/dcl.fct.def.general/predefined-constexpr.cpp`).
+
+**Landed (WP-160): `[[assume(e)]]`.** Each assumption that sema did not
+mark `ASSUME_IGNORED` is evaluated when reached, inside its own
+temporaries scope. If it is false, evaluation fails with clang's
+`assumption evaluated to false` note at the assumption's expression
+location ([dcl.attr.assume]/1, [expr.const]/5.8). An assumption that has
+possible side effects is never evaluated, as in clang's `EvaluateStmt`
+(`tests/conformance/expr.const/assume-false.cpp`).
 
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:
@@ -1076,7 +1373,15 @@ Remaining (each traps with a `kiln:` note today):
   function whose body is being made available, no memoization through it)
   and content interning of frozen aggregates.
 - `src/mem.rs` unit tests: the size classes, LIFO reuse, best-fit carving,
-  coalescing, top lowering, heap counters and per-context freeing.
+  coalescing, top lowering, heap counters and per-context freeing; the
+  trial undo log (WP-135): interleaved writes, once-per-checkpoint granule
+  logging, allocations and frees rolled back, nested checkpoints, unions
+  and flags, the speculative refusals, and a flat footprint over failed
+  trials.
+- `tests/conformance/expr.const/constant-p-trial*.cpp` (WP-135): a failed
+  trial's callee writes, unions and allocations, nested trials, kept
+  effects of a successful trial, and (kiln only, `oven:` budget) heap
+  rollback and memory O(1) in the number of failed trials.
 - `bench.rs` (ignored): the benchmarks above.
 - `common/`: a small recursive-descent C++ subset parser building kiln_ast
   directly (test-only; replaced by the real front end as it lands).

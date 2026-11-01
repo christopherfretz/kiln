@@ -10,9 +10,10 @@ and perf-sensitive behavior ships with a recorded baseline.
 |---|---|---|
 | Unit tests | `crates/*/src`, `crates/*/tests` | Module contracts in `spec/` |
 | Conformance | `tests/conformance/<section>/` | Standard behavior by section ([lex], [cpp], [expr.const], ...) |
+| Stress | `tests/stress/` | Deep nesting, huge packs, the stack guard, runaway-allocation regressions, under `mem<=N` budgets |
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
-| libc++ suite | external, driven by `cargo xtask libcxx` | The real world |
+| libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 
 ## Conformance test format
@@ -63,6 +64,8 @@ Directives (the full contract, including matching and outcome rules, is
   kiln-specific and skipped elsewhere. kiln reports its counters with
   `-fconstexpr-report=<path>` (NDJSON, one line per evaluation and a total;
   the protocol is in spec/oven.md "Reporting protocol").
+- `mem<=N` lowers the address-space cap of every process the test runs to
+  N MiB (see "Resource limits" below).
 - `skip: <reason>` / `xfail: <reason>` (tracked, must shrink over time).
   `skip(kiln):`, `skip(clang):`, `xfail(kiln):` and `xfail(clang):` apply to
   one compiler only. This lets the corpus be validated against clang while it
@@ -74,8 +77,21 @@ hold auxiliary files, never tests. A pp golden is `<test file>.expected`, for
 example `foo.cpp.expected`. It is compared token-wise (or as normalized text
 under `pp-compare: text`) and refreshed by `cargo xtask test --update`.
 
-`cargo xtask ci` is the merge gate. After fmt, clippy and the unit tests it
-runs the corpus twice, and fails on any FAIL, XPASS or ERROR in either run:
+**Resource limits.** Every compiler, oracle and test-binary process runs
+under an address-space cap (`RLIMIT_AS`): 8192 MiB by default
+(`--mem-limit <MiB>`, `0` disables it), lowered per test by `mem<=N`. kiln
+invocations get kiln's stack reservation (1 GiB by default) on top, so a
+budget measures what the compile allocates. A process that runs out of
+memory under the cap makes the test **KILLED**, a failure that `xfail`
+cannot mask, counted in the summary line. A runaway compile (the AST
+dumper cycle of 2026-10-31 OOM-killed the whole container twice) thus dies
+alone. `cargo xtask bench` caps its measured compiles the same way. The
+contract is spec/harness.md "Resource limits".
+
+`cargo xtask ci` is the merge gate. After fmt, clippy and the unit tests
+(each cargo step rerun once if it fails with rustc's `error[E0463]`, a
+crate artifact that vanished mid-build) it runs the corpus twice, and fails
+on any FAIL, XPASS, ERROR or KILLED in either run:
 
 - `cargo xtask test --compiler clang++-19`: the corpus validates itself, so a
   test that clang 19 does not pass is caught before it is used to judge kiln
@@ -88,6 +104,16 @@ runs the corpus twice, and fails on any FAIL, XPASS or ERROR in either run:
 `cargo xtask ci --quick` drops the clang self-check for local iteration;
 merges use the full form. The contract is spec/harness.md "CI". An oracle
 that hangs or crashes makes the test an ERROR, never a kiln FAIL.
+
+`cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
+tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
+with kiln. It reimplements the subset of lit that the gates need: suffix
+classification, `REQUIRES`/`UNSUPPORTED`/`XFAIL` with lit's boolean grammar
+over a static feature set, and `ADDITIONAL_COMPILE_FLAGS`. `--gate m3` is
+the M3 exit gate. A run's `--report` regenerates the per-directory table and
+the error-cluster table of a status page (`docs/status/libcxx-m3.md`). It is
+run by hand or periodically, and the pass rate is tracked there. The
+contract is `spec/libcxx.md`.
 
 Each test file names the standard section it covers in its directory path,
 and `spec/` entries list the tests that back them, so coverage of a spec is

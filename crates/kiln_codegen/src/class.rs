@@ -8,8 +8,7 @@
 
 use kiln_abi::mangle::{self, Structor};
 use kiln_ast::decl::{
-    ConstexprKind, CtorInitKind, DeclKind, Defaulted, DefinitionBits, FnStorage, TagKind,
-    TemplLinkKind,
+    CtorInitKind, DeclKind, Defaulted, DefinitionBits, FnStorage, TagKind, TemplLinkKind,
 };
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
 use kiln_ast::stmt::StmtKind;
@@ -19,7 +18,7 @@ use kiln_llvm::{FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value
 
 use crate::cleanup::Cleanup;
 use crate::fir::{Op, V};
-use crate::func::{Addr, min_align};
+use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, Def, R, Sig, err};
 
 /// A special member function (clang `CXXSpecialMemberKind`, the subset
@@ -119,7 +118,13 @@ impl Cg<'_> {
         }
         let params: Vec<DeclId> = ast.lists.iter(fd.params).collect();
         let pty = |p: DeclId| ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let has_default = |p: DeclId| ast.decls.param(p).is_some_and(|x| x.default_arg.is_some());
+        // A default not instantiated yet ([temp.inst]/12) still counts.
+        let has_default = |p: DeclId| {
+            ast.decls.param(p).is_some_and(|x| {
+                x.default_arg.is_some()
+                    || x.flags & kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING != 0
+            })
+        };
         let is_class = |t: QualType| ast.types.as_record(t).is_some_and(|r| ast.first(r) == class);
         if kind == DeclKind::CXXConstructor {
             let &p0 = params.first()?;
@@ -181,11 +186,14 @@ impl Cg<'_> {
     /// The definition of structor `first` to emit, if any.
     fn structor_def(&self, first: DeclId) -> Option<DeclId> {
         let ast = self.ast;
+        if self.is_explicit_inst_declaration(first) {
+            return None;
+        }
         ast.redecls_of(first).find(|&r| {
             ast.decls.function(r).is_some_and(|f| {
                 f.body.is_some()
                     && !matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _)))
-                    && f.spec.constexpr_kind() != ConstexprKind::Consteval
+                    && !f.spec.is_immediate()
             })
         })
     }
@@ -204,7 +212,10 @@ impl Cg<'_> {
     /// parameter of a base-object structor of a class with virtual
     /// bases).
     pub(crate) fn structor_sig(&mut self, first: DeclId, v: Option<Structor>) -> R<Sig> {
-        let sig = self.decl_sig(first)?;
+        let mut sig = self.decl_sig(first)?;
+        if self.inheriting_drops_params(first, v) {
+            sig = self.without_params(sig);
+        }
         let k = self.ast.decls.get(first).kind();
         if v == Some(Structor::Base)
             && matches!(k, DeclKind::CXXConstructor | DeclKind::CXXDestructor)
@@ -215,13 +226,173 @@ impl Cg<'_> {
         Ok(sig)
     }
 
+    /// Whether variant `v` of constructor `first` is the base-object
+    /// variant of an inheriting constructor whose constructor-using-shadow
+    /// constructs a virtual base: it takes no parameters but the VTT,
+    /// since only the complete-object variant constructs that base (clang
+    /// `inheritingCtorHasParams`, [class.inhctor.init]/2).
+    pub(crate) fn inheriting_drops_params(&self, first: DeclId, v: Option<Structor>) -> bool {
+        v == Some(Structor::Base)
+            && self
+                .ast
+                .decls
+                .inheriting_ctor_shadow(first)
+                .is_some_and(|s| self.ast.shadow_constructed(s).1)
+    }
+
+    /// clang `EmitInheritedCXXConstructorCall`: the base subobject at
+    /// `dest` constructed by the base-object variant of `e`'s constructor
+    /// with the enclosing inheriting constructor's parameters forwarded
+    /// (none when the constructor is inherited through a virtual base,
+    /// which only the complete-object variant constructs).
+    pub(crate) fn emit_inherited_ctor_init(&mut self, e: ExprId, dest: Addr) -> R<()> {
+        let ast = self.ast;
+        let ctor = ast.exprs.constructor(e);
+        let (kind, from_vbase) = ast.exprs.inherited_ctor_info(e);
+        let rd = ast.decls.get(ctor).ctx().expect("constructor class");
+        let first = ast.first(ctor);
+        let mut vals = Vec::new();
+        let mut ptys = Vec::new();
+        if let Some((v, t)) = self.f.inh_args.clone() {
+            // Inlined at the call site: the call's own arguments.
+            if !from_vbase {
+                vals = v;
+                ptys = t;
+            }
+        } else if !from_vbase {
+            let outer = self.f.decl.and_then(|d| ast.decls.function(d)).map(|f| f.params);
+            let params: Vec<DeclId> =
+                outer.map(|l| ast.lists.iter(l).collect()).unwrap_or_default();
+            for p in params {
+                let q = ast.decls.get(p).ty().expect("param type");
+                let Some(&a) = self.f.locals.get(&p) else {
+                    return err(self.loc_of(e), "inherited constructor parameter not bound");
+                };
+                // EmitDelegateCallArg.
+                vals.push(if self.referee(q).is_some() {
+                    CallArg::Scalar(self.load(LTy::PTR, a.v, a.align, false))
+                } else if self.is_aggregate(q) {
+                    CallArg::Agg(a)
+                } else {
+                    CallArg::Scalar(self.load_scalar(a, q))
+                });
+                ptys.push(q);
+            }
+        }
+        if !from_vbase && self.inlines_inheriting_ctor(ctor) {
+            let vtt = if self.structor_has_vbases(first) {
+                Some(self.vtt_arg(rd, kind == ConstructionKind::VirtualBase, false)?)
+            } else {
+                None
+            };
+            return self.emit_inlined_inheriting_ctor(ctor, dest, Structor::Base, vals, ptys, vtt);
+        }
+        let fty = ast.decls.get(first).ty().expect("constructor type");
+        let mut sig = self.call_sig_this(fty, false, &ptys, Some(rd));
+        if from_vbase {
+            sig = self.without_params(sig);
+        }
+        if self.structor_has_vbases(first) {
+            sig = self.with_vtt(sig);
+            let vtt = self.vtt_arg(rd, kind == ConstructionKind::VirtualBase, false)?;
+            self.f.call_vtt = Some(vtt);
+        }
+        let (callee, fid) = self.structor_ref(ctor, Structor::Base)?;
+        self.call_vals(&sig, callee, fid, Some(dest.v), &vals, &[], None, &[])?;
+        Ok(())
+    }
+
+    /// Whether a call of constructor `ctor` is inlined at the call site:
+    /// an inheriting constructor of a C-variadic base constructor, whose
+    /// variadic arguments cannot be forwarded (clang
+    /// `canEmitDelegateCallArgs` false →
+    /// `EmitInlinedInheritingCXXConstructorCall`).
+    pub(crate) fn inlines_inheriting_ctor(&self, ctor: DeclId) -> bool {
+        let ast = self.ast;
+        ast.decls.inheriting_ctor_shadow(ctor).is_some()
+            && ast
+                .decls
+                .get(ctor)
+                .ty()
+                .and_then(|t| ast.types.proto(ast.types.canonical(t)))
+                .is_some_and(kiln_ast::types::FuncProto::variadic)
+    }
+
+    /// clang `EmitInlinedInheritingCXXConstructorCall`: variant `v` of
+    /// inheriting constructor `ctor` emitted in place on the object at
+    /// `dest`, its `CXXInheritedCtorInitExpr`s forwarding the call's
+    /// evaluated arguments `vals` (of types `tys`). `vtt` is the VTT
+    /// argument of a base-object variant of a class with virtual bases,
+    /// computed by the caller (`addImplicitConstructorArgs`); it becomes
+    /// the inlined body's VTT parameter.
+    pub(crate) fn emit_inlined_inheriting_ctor(
+        &mut self,
+        ctor: DeclId,
+        dest: Addr,
+        v: Structor,
+        vals: Vec<CallArg>,
+        tys: Vec<QualType>,
+        vtt: Option<V>,
+    ) -> R<()> {
+        let ast = self.ast;
+        let first = ast.first(ctor);
+        let rd = ast.decls.get(ctor).ctx().expect("constructor class");
+        let def = self.structor_def(first);
+        let Some((def, body)) =
+            def.and_then(|d| ast.decls.function(d).and_then(|f| f.body).map(|b| (d, b)))
+        else {
+            return err(Some(ast.decls.get(ctor).loc()), "inheriting constructor is not defined");
+        };
+        debug_assert_eq!(
+            vtt.is_some(),
+            v == Structor::Base && self.structor_has_vbases(first),
+            "VTT argument of an inlined inheriting constructor"
+        );
+        let saved = (
+            self.f.decl,
+            self.f.this,
+            self.f.this_class,
+            self.f.closure.take(),
+            self.f.structor,
+            self.f.vtt.take(),
+            self.f.inh_args.take(),
+        );
+        // The simplified prolog: `this` and the VTT are spilled and
+        // reloaded as by a function prolog (`EmitParmDecl` +
+        // `EmitInstanceFunctionProlog`).
+        let a = self.f.fir.alloca(LTy::PTR, 8);
+        let vtt_addr = vtt.map(|_| self.f.fir.alloca(LTy::PTR, 8));
+        self.store(dest.v, a, 8, false);
+        if let (Some(t), Some(va)) = (vtt, vtt_addr) {
+            self.store(t, va, 8, false);
+        }
+        let this = self.load(LTy::PTR, a, 8, false);
+        self.f.vtt = vtt_addr.map(|va| self.load(LTy::PTR, va, 8, false));
+        self.f.decl = Some(def);
+        self.f.this = Some(this);
+        self.f.this_class = Some(rd);
+        self.f.structor = Some(v);
+        self.f.inh_args = Some((vals, tys));
+        let r = self.emit_ctor_body(def, body);
+        (
+            self.f.decl,
+            self.f.this,
+            self.f.this_class,
+            self.f.closure,
+            self.f.structor,
+            self.f.vtt,
+            self.f.inh_args,
+        ) = saved;
+        r
+    }
+
     /// Declares structor variant `v` of `first` (clang
     /// `getAddrOfCXXStructor` creating the declaration).
     pub(crate) fn declare_structor(&mut self, first: DeclId, v: Structor) -> R<(Value, FuncId)> {
         if let Some(&r) = self.sfns.get(&(first, v)) {
             return Ok(r);
         }
-        let name = mangle::mangle_structor(self.ast, first, v);
+        let name = mangle::mangle_structor(self.ast, &mut self.anon, first, v);
         let sig = self.structor_sig(first, Some(v))?;
         let f = self.declare_fn(&name, first, &sig)?;
         self.m.func_mut(f).unnamed_addr = UnnamedAddr::Global;
@@ -329,10 +500,13 @@ impl Cg<'_> {
         if fd.body.is_none() || matches!(fd.templ.get(), Some((TemplLinkKind::Pattern, _))) {
             return Ok(());
         }
-        if fd.spec.constexpr_kind() == ConstexprKind::Consteval {
+        if fd.spec.is_immediate() {
             return Ok(());
         }
         let first = ast.first(d);
+        if self.is_explicit_inst_declaration(first) {
+            return Ok(());
+        }
         let is_ctor = ast.decls.get(d).kind() == DeclKind::CXXConstructor;
         let abstract_ = ast
             .decls
@@ -409,7 +583,7 @@ impl Cg<'_> {
                     return self.emit_thunks(d, Some(v));
                 }
                 let f = self.base_fn(first, true)?;
-                let name = mangle::mangle_structor(ast, first, v);
+                let name = mangle::mangle_structor(ast, &mut self.anon, first, v);
                 let fty = self.m.func(f).ty();
                 let a = match self.m.add_alias(&name, fty, Value::func(f)) {
                     Ok(a) => a,
@@ -420,9 +594,15 @@ impl Cg<'_> {
                         );
                     }
                 };
+                // The alias takes the base variant's linkage (`weak_odr`
+                // for an explicit instantiation definition).
+                let linkage = match self.m.func(f).linkage {
+                    Linkage::WeakOdr => Linkage::WeakOdr,
+                    _ => Linkage::External,
+                };
                 {
                     let al = self.m.alias_mut(a);
-                    al.linkage = Linkage::External;
+                    al.linkage = linkage;
                     al.dso_local = true;
                     al.unnamed_addr = UnnamedAddr::Global;
                 }
@@ -1103,7 +1283,12 @@ impl Cg<'_> {
                     if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                         let def = self.class_def(rd).expect("class definition");
                         let nv = self.tys.layouter().record(def).nv_size;
-                        self.memset(dest, 0, nv, false);
+                        // clang `EmitNullBaseClassInitialization`: the
+                        // store range is addressed as a byte offset (0;
+                        // Itanium has no vbptr gaps) from the subobject.
+                        let z = V::C(self.m.const_int(LTy::I64, 0));
+                        let v = self.gep(LTy::I8, dest.v, vec![z], true);
+                        self.memset(Addr { v, ..dest }, 0, nv, false);
                     }
                 }
             }
@@ -1222,8 +1407,13 @@ impl Cg<'_> {
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
         if self.memcpy_equivalent(ctor) {
             let src = self.emit_lvalue(args[0])?;
-            let size = self.copy_size(rd, overlap);
-            self.agg_copy_record(rd, dest, src.addr, size, false);
+            // clang `EmitAggregateCopy` ignores empty classes: an empty
+            // base shares its address with another subobject ([intro.object]
+            // /8), which a one-byte copy would clobber.
+            if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
+                let size = self.copy_size(rd, overlap);
+                self.memcpy(dest, src.addr.v, src.addr.align, size, false);
+            }
             return Ok(());
         }
         let v = match info.kind {
@@ -1234,6 +1424,10 @@ impl Cg<'_> {
         let first = ast.first(ctor);
         let fty = ast.decls.get(first).ty().expect("constructor type");
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
+        // A base-object inheriting constructor that drops its parameters
+        // is still called with the arguments (clang
+        // `arrangeCXXConstructorCall` with `PassProtoArgs` false keeps the
+        // argument list; only the callee's prototype omits them).
         let mut sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
         let needs_vtt = v == Structor::Base && self.structor_has_vbases(first);
         if needs_vtt {
@@ -1244,6 +1438,16 @@ impl Cg<'_> {
         let vals = self.emit_call_args(&sig, &args);
         self.f.dest_destructed = saved;
         let vals = vals?;
+        if self.inlines_inheriting_ctor(ctor) {
+            let vtt = if needs_vtt {
+                let virt = info.kind == ConstructionKind::VirtualBase;
+                let delegating = info.kind == ConstructionKind::Delegating;
+                Some(self.vtt_arg(rd, virt, delegating)?)
+            } else {
+                None
+            };
+            return self.emit_inlined_inheriting_ctor(ctor, dest, v, vals, arg_tys, vtt);
+        }
         if needs_vtt {
             let virt = info.kind == ConstructionKind::VirtualBase;
             let delegating = info.kind == ConstructionKind::Delegating;
@@ -1337,7 +1541,13 @@ impl Cg<'_> {
             self.emit_ignored(base)?;
             let f = self.get_fn(md)?;
             let sig = self.call_sig(fty, false, &arg_tys);
-            return self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &[]);
+            let (extra, nr) = self.noreturn_extra(Some(md), fty);
+            let r =
+                self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &extra)?;
+            if nr {
+                self.finish_noreturn_call();
+            }
+            return Ok(r);
         }
         // clang `EmitCXXMemberOrOperatorMemberCallExpr`: devirtualization.
         let is_virtual = ast.decls.function(md).is_some_and(|f| f.spec.is_virtual());
@@ -1368,8 +1578,11 @@ impl Cg<'_> {
             }
             if matches!(self.special_of(md), Some(Special::CopyAssign | Special::MoveAssign)) {
                 let src = self.emit_lvalue(args[0])?;
-                let size = self.copy_size(rd, true);
-                self.agg_copy_record(rd, this, src.addr, size, false);
+                // clang `EmitAggregateCopy`: empty classes are ignored.
+                if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
+                    let size = self.copy_size(rd, true);
+                    self.memcpy(this, src.addr.v, src.addr.align, size, false);
+                }
                 return Ok(Some(this.v));
             }
         }
@@ -1389,11 +1602,42 @@ impl Cg<'_> {
             // The arguments come first; `prepareConcreteCallee` then
             // loads the slot.
             let vals = self.emit_call_args(&sig, args)?;
-            let fp = self.virtual_fn_ptr(md, None, this.v, this.align)?;
-            return self.call_vals(&sig, fp, None, Some(this.v), &vals, args, dest, &[]);
+            let (extra, nr) = self.noreturn_extra(Some(md), cfty);
+            let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
+            let r =
+                self.call_vals_to(&sig, fp, None, Some(this.v), &vals, args, dest, &extra, &[])?;
+            if nr {
+                self.finish_noreturn_call();
+            }
+            return Ok(r);
         }
         let f = self.get_fn(callee_md)?;
-        self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), args, dest, &[])
+        let (mut extra, nr) = self.noreturn_extra(Some(callee_md), cfty);
+        let vals = self.emit_call_args(&sig, args)?;
+        let mut ret_extra = Vec::new();
+        self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
+        let callee = V::C(Value::func(f));
+        let this = Some(this.v);
+        let r =
+            self.call_vals_ret(&sig, callee, Some(f), this, &vals, args, dest, &extra, &ret_extra)?;
+        if nr {
+            self.finish_noreturn_call();
+        }
+        Ok(r)
+    }
+
+    /// The call-site attributes of a call of `d` (`noreturn` per
+    /// `noreturn_call`) and whether `unreachable` follows it.
+    fn noreturn_extra(&self, d: Option<DeclId>, fty: QualType) -> (Vec<kiln_llvm::Attr>, bool) {
+        let (site, unreachable) = self.noreturn_call(d, fty);
+        (
+            if site {
+                vec![kiln_llvm::Attr::Flag(kiln_llvm::AttrKind::NoReturn)]
+            } else {
+                Vec::new()
+            },
+            unreachable,
+        )
     }
 
     // ---- expressions ---------------------------------------------------
@@ -1408,6 +1652,13 @@ impl Cg<'_> {
     pub(crate) fn is_static_method(&self, d: DeclId) -> bool {
         self.ast.decls.get(d).kind() == DeclKind::CXXMethod
             && self.ast.decls.function(d).is_some_and(|f| f.spec.storage() == FnStorage::Static)
+    }
+
+    /// `d` is an explicit object member function ([dcl.fct]/6): called
+    /// like a non-member function, the object being its first argument.
+    pub(crate) fn is_explicit_object_method(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).kind() == DeclKind::CXXMethod
+            && self.ast.decls.function(d).is_some_and(|f| f.spec.has_explicit_object())
     }
 
     /// `e` is `this` (through parentheses).

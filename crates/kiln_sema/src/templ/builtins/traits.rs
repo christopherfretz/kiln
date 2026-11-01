@@ -10,7 +10,7 @@
 //! zero-length array is not an array).
 
 use kiln_ast::decl::{Access, DefinitionBits};
-use kiln_ast::expr::{ExprDeps, TypeTrait, ValueCategory};
+use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, TypeTrait, ValueCategory};
 use kiln_ast::types::{ExcSpec, Quals, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -21,6 +21,9 @@ use crate::Sema;
 use crate::class::{Selected, SpecialKind};
 use crate::conv::rank::builtin_signed;
 use crate::target;
+use crate::templ::stack::FrameKind;
+
+mod special;
 
 impl Sema<'_, '_> {
     /// `__trait(T, ...)` as parsed at `loc` (the keyword) up to `rparen`:
@@ -54,6 +57,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        let t = alias_target(t);
         let tys: Vec<QualType> = args.iter().map(|a| a.0).collect();
         if tys.iter().any(|&q| self.ast.types.flags(q.ty()).intersects(TypeFlags::CONTAINS_ERROR))
             || tys.contains(&QualType::ERROR)
@@ -81,17 +85,71 @@ impl Sema<'_, '_> {
                 rparen,
             );
         }
+        if matches!(
+            t,
+            TypeTrait::ReferenceBindsToTemporary
+                | TypeTrait::ReferenceConstructsFromTemporary
+                | TypeTrait::ReferenceConvertsFromTemporary
+        ) {
+            let value = self.eval_ref_from_temporary(t, args[0], args[1], loc, rparen);
+            return self.builder().type_trait_expr(
+                t,
+                &tys,
+                rhs_loc,
+                value,
+                QualType::BOOL,
+                loc,
+                rparen,
+            );
+        }
         if let Status::Owner(_) = table::trait_status(t) {
             let what = format!("type trait '{}'", t.spelling());
             let d = self.diag(DiagId::sema_unimplemented_template_feature, loc).arg(what);
             self.emit(d);
             return self.recover(QualType::BOOL, &[], loc);
         }
-        let value = if tys.len() == 1 {
+        let value = if matches!(
+            t,
+            TypeTrait::IsConstructible
+                | TypeTrait::IsNothrowConstructible
+                | TypeTrait::IsTriviallyConstructible
+        ) {
+            match self.eval_constructible(t, args, loc, rparen) {
+                Some(v) => v,
+                None => return self.recover(QualType::BOOL, &[], loc),
+            }
+        } else if tys.len() == 1 {
             if !self.check_trait_completeness(t, tys[0], loc) {
                 return self.recover(QualType::BOOL, &[], loc);
             }
-            self.eval_unary_trait(t, tys[0])
+            self.eval_unary_trait(t, tys[0], loc)
+        } else if t == TypeTrait::IsLayoutCompatible {
+            self.eval_layout_compatible(args[0], args[1])
+        } else if t == TypeTrait::IsPointerInterconvertibleBaseOf {
+            self.eval_pointer_interconvertible_base(args[0], args[1])
+        } else if matches!(
+            t,
+            TypeTrait::IsConvertible | TypeTrait::IsConvertibleTo | TypeTrait::IsNothrowConvertible
+        ) {
+            match self.eval_convertible(t, args[0], args[1], loc) {
+                Some(v) => v,
+                None => return self.recover(QualType::BOOL, &[], loc),
+            }
+        } else if matches!(
+            t,
+            TypeTrait::IsAssignable
+                | TypeTrait::IsNothrowAssignable
+                | TypeTrait::IsTriviallyAssignable
+        ) {
+            let check = match t {
+                TypeTrait::IsNothrowAssignable => InitCheck::Nothrow,
+                TypeTrait::IsTriviallyAssignable => InitCheck::Trivial,
+                _ => InitCheck::WellFormed,
+            };
+            match self.eval_assignable(args[0], args[1], check, loc) {
+                Some(v) => v,
+                None => return self.recover(QualType::BOOL, &[], loc),
+            }
         } else {
             self.eval_binary_trait(t, tys[0], tys[1], args[1].1)
         };
@@ -299,6 +357,354 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// `__is_assignable(T, U)` ([meta.unary.prop]/3, clang's
+    /// `EvaluateBinaryTypeTrait`): whether `declval<T>() = declval<U>()` is
+    /// well-formed as an unevaluated operand. The assignment is built
+    /// on opaque operands in a SFINAE context, with access checked from
+    /// the translation unit; `__is_nothrow_assignable` also requires
+    /// that it cannot throw. `None` when an operand is incomplete (not
+    /// `void` or an array of unknown bound), which is an error.
+    fn eval_assignable(
+        &mut self,
+        a: (QualType, Loc),
+        b: (QualType, Loc),
+        check: InitCheck,
+        loc: Loc,
+    ) -> Option<bool> {
+        for (q, at) in [a, b] {
+            let tys = &self.ast.types;
+            if tys.is_void(q)
+                || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
+                || tys.is_reference(q)
+                || tys.is_function(q)
+                || self.require_complete(q, at)
+            {
+                continue;
+            }
+            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
+            let msg = self.incomplete_note(msg, q);
+            self.emit(msg);
+            return None;
+        }
+        if self.ast.types.is_void(a.0) || self.ast.types.is_void(b.0) {
+            return Some(false);
+        }
+        // `declval<T>()`: an lvalue for an lvalue reference (or a
+        // reference to function), else an xvalue.
+        let operand = |s: &mut Self, q: QualType| {
+            let (ty, vc) = match s.ast.types.canonical_view(q) {
+                TypeView::LValueRef(p) => (p, ValueCategory::LValue),
+                TypeView::RValueRef(p) if s.ast.types.is_function(p) => (p, ValueCategory::LValue),
+                TypeView::RValueRef(p) => (p, ValueCategory::XValue),
+                _ if s.ast.types.is_function(q) => (q, ValueCategory::LValue),
+                _ => (q, ValueCategory::XValue),
+            };
+            s.builder().opaque_value_of(ty, vc, loc)
+        };
+        let tu = self.ast.tu;
+        let saved = std::mem::replace(&mut self.ctx, tu);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
+            s.enter_unevaluated();
+            let l = operand(s, a.0);
+            let r = operand(s, b.0);
+            let e = s.binary_operator(BinaryOp::Assign, l, r, None, loc);
+            s.exit_unevaluated();
+            !s.is_err_expr(e) && s.init_check_holds(check, e)
+        });
+        self.ctx = saved;
+        Some(matches!(r, Some((true, Ok(())))))
+    }
+
+    /// `__is_constructible(T, Args...)` / `__is_nothrow_constructible`
+    /// ([meta.unary.prop]/9, clang's `EvaluateBooleanTypeTrait`): whether
+    /// the direct-initialization `T t(declval<Args>()...);` of a
+    /// temporary is well-formed as an unevaluated operand (and, for the
+    /// nothrow form, cannot throw). Built in a SFINAE context with
+    /// access checked from the translation unit. `None` when an operand
+    /// is incomplete (not `void` or an array of unknown bound), an error.
+    fn eval_constructible(
+        &mut self,
+        t: TypeTrait,
+        args: &[(QualType, Loc)],
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<bool> {
+        for &(q, at) in args {
+            let tys = &self.ast.types;
+            if tys.is_void(q)
+                || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
+                || tys.is_reference(q)
+                || tys.is_function(q)
+                || self.require_complete(q, at)
+            {
+                continue;
+            }
+            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
+            let msg = self.incomplete_note(msg, q);
+            self.emit(msg);
+            return None;
+        }
+        let ty = args[0].0;
+        let tys = &self.ast.types;
+        if tys.is_void(ty)
+            || matches!(tys.canonical_view(ty), TypeView::IncompleteArray(_))
+            || tys.is_function(ty)
+            || self.record_bit(ty, DefinitionBits::ABSTRACT)
+            || args[1..].iter().any(|a| self.ast.types.is_void(a.0))
+        {
+            return Some(false);
+        }
+        // A reference is bound by exactly one argument; anything else
+        // but a class or an array takes at most one.
+        let n = args.len() - 1;
+        let is_ref = self.ast.types.is_reference(ty);
+        if (is_ref && n != 1)
+            || (n > 1 && self.ast.types.as_record(ty).is_none() && !self.ast.types.is_array(ty))
+        {
+            return Some(false);
+        }
+        // `declval<A>()`: an lvalue for an lvalue reference (or a function
+        // type), else an xvalue.
+        let operand = |s: &mut Self, q: QualType, at: Loc| {
+            let (ty, vc) = match s.ast.types.canonical_view(q) {
+                TypeView::LValueRef(p) => (p, ValueCategory::LValue),
+                TypeView::RValueRef(p) if s.ast.types.is_function(p) => (p, ValueCategory::LValue),
+                TypeView::RValueRef(p) => (p, ValueCategory::XValue),
+                _ if s.ast.types.is_function(q) => (q, ValueCategory::LValue),
+                _ => (q, ValueCategory::XValue),
+            };
+            s.builder().opaque_value_of(ty, vc, at)
+        };
+        let check = match t {
+            TypeTrait::IsNothrowConstructible => InitCheck::Nothrow,
+            TypeTrait::IsTriviallyConstructible => InitCheck::Trivial,
+            _ => InitCheck::WellFormed,
+        };
+        let tu = self.ast.tu;
+        let saved = std::mem::replace(&mut self.ctx, tu);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
+            s.enter_unevaluated();
+            let ops: Vec<ExprId> = args[1..].iter().map(|&(q, at)| operand(s, q, at)).collect();
+            let e = if ops.is_empty() {
+                s.paren_value_init(ty, loc)
+            } else {
+                let init = crate::init::Initializer::Paren(ops, loc, rparen);
+                s.perform_init(ty, init, loc, false)
+            };
+            // clang initializes `InitializedEntity::InitializeTemporary`:
+            // a class temporary is bound (`MaybeBindToTemporary`), so its
+            // destructor must be accessible and not deleted, and counts
+            // for the nothrow form.
+            let e = if s.is_err_expr(e) { e } else { s.maybe_bind_temporary(e) };
+            s.exit_unevaluated();
+            !s.is_err_expr(e) && s.init_check_holds(check, e)
+        });
+        self.ctx = saved;
+        let ok = matches!(r, Some((true, Ok(()))));
+        // The temporary is destroyed: clang's `CXXBindTemporaryExpr` of a
+        // class with a non-trivial destructor is a non-trivial call.
+        if ok && check == InitCheck::Trivial && !self.ast.types.is_reference(ty) {
+            return Some(self.is_destructible(TypeTrait::IsTriviallyDestructible, ty));
+        }
+        Some(ok)
+    }
+
+    /// The extra requirement of the nothrow / trivially form of an
+    /// initialization or assignment trait on its well-formed operation `e`.
+    fn init_check_holds(&self, check: InitCheck, e: ExprId) -> bool {
+        match check {
+            InitCheck::WellFormed => true,
+            InitCheck::Nothrow => !self.can_throw(e),
+            InitCheck::Trivial => !self.has_nontrivial_call(e),
+        }
+    }
+
+    /// Whether evaluating `e` calls a function that is not a trivial
+    /// special member ([meta.unary.prop]/9 "known to call no operation
+    /// that is not trivial"; clang's `Expr::hasNonTrivialCall`): a call
+    /// of a non-trivial function (a user-provided or non-trivial special
+    /// member, a conversion function, any non-member function), the
+    /// construction by a non-trivial constructor, or a temporary with a
+    /// non-trivial destructor. Unevaluated operands are not entered.
+    pub(crate) fn has_nontrivial_call(&self, e: ExprId) -> bool {
+        let exprs = &self.ast.exprs;
+        let trivial = |d: DeclId| self.ast.decls.function(d).is_some_and(|f| f.spec.is_trivial());
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            let n = exprs.get(x);
+            match n.kind() {
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::TypeTraitExpr
+                | ExprKind::ArrayTypeTraitExpr
+                | ExprKind::ExpressionTraitExpr
+                | ExprKind::CXXTypeidExpr => continue,
+                ExprKind::CallExpr
+                | ExprKind::CXXOperatorCallExpr
+                | ExprKind::CXXMemberCallExpr => {
+                    let c = self.ignore_parens(exprs.callee(x));
+                    let c = if exprs.get(c).kind().is_cast() { exprs.operand(c) } else { c };
+                    let c = self.ignore_parens(c);
+                    let named =
+                        matches!(exprs.get(c).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr);
+                    if !named || !trivial(exprs.decl(c)) {
+                        return true;
+                    }
+                }
+                ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr
+                    if !trivial(exprs.constructor(x)) =>
+                {
+                    return true;
+                }
+                ExprKind::CXXBindTemporaryExpr
+                    if self
+                        .ast
+                        .types
+                        .as_record(n.ty())
+                        .and_then(|r| self.ast.definition(r))
+                        .and_then(|r| self.ast.destructor(r))
+                        .is_none_or(|d| !trivial(d)) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+            stack.extend(exprs.children(x, &self.ast.lists));
+        }
+        false
+    }
+
+    /// `__is_convertible(From, To)` / `__is_convertible_to` /
+    /// `__is_nothrow_convertible` ([meta.rel]/5, clang's
+    /// `EvaluateBinaryTypeTrait`): whether `To test() { return
+    /// declval<From>(); }` is well-formed, i.e. the copy-initialization of
+    /// a `To` temporary from a `declval<From>()` operand, built
+    /// unevaluated under a SFINAE frame with access from the TU (and,
+    /// for the nothrow form, cannot throw). `None` when an operand is
+    /// incomplete, an error.
+    fn eval_convertible(
+        &mut self,
+        t: TypeTrait,
+        from: (QualType, Loc),
+        to: (QualType, Loc),
+        loc: Loc,
+    ) -> Option<bool> {
+        let tys = &self.ast.types;
+        if tys.is_void(to.0) {
+            return Some(tys.is_void(from.0));
+        }
+        if tys.is_function(to.0) || tys.is_array(to.0) || tys.is_void(from.0) {
+            return Some(false);
+        }
+        for (q, at) in [from, to] {
+            let tys = &self.ast.types;
+            if matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
+                || tys.is_reference(q)
+                || tys.is_function(q)
+                || self.require_complete(q, at)
+            {
+                continue;
+            }
+            let msg = self.diag(DiagId::sema_incomplete_type_trait, at).arg(self.ty_arg(q));
+            let msg = self.incomplete_note(msg, q);
+            self.emit(msg);
+            return None;
+        }
+        // clang `CheckConvertibilityForTypeTraits`: `To test()` needs a
+        // non-abstract return type ([class.abstract]/3).
+        if self.abstract_class(to.0).is_some() {
+            return Some(false);
+        }
+        let (fty, vc) = match self.ast.types.canonical_view(from.0) {
+            TypeView::LValueRef(p) => (p, ValueCategory::LValue),
+            TypeView::RValueRef(p) if self.ast.types.is_function(p) => (p, ValueCategory::LValue),
+            TypeView::RValueRef(p) => (p, ValueCategory::XValue),
+            _ if self.ast.types.is_function(from.0) => (from.0, ValueCategory::LValue),
+            _ => (from.0, ValueCategory::XValue),
+        };
+        let nothrow = t == TypeTrait::IsNothrowConvertible;
+        let tu = self.ast.tu;
+        let saved = std::mem::replace(&mut self.ctx, tu);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
+            s.enter_unevaluated();
+            let op = s.builder().opaque_value_of(fty, vc, from.1);
+            let e = s.perform_init(to.0, crate::init::Initializer::Expr(op), loc, false);
+            s.exit_unevaluated();
+            !(s.is_err_expr(e) || (nothrow && s.can_throw(e)))
+        });
+        self.ctx = saved;
+        Some(matches!(r, Some((true, Ok(())))))
+    }
+
+    /// `__reference_binds_to_temporary(T, U)` and the C++23
+    /// `__reference_constructs_from_temporary` /
+    /// `__reference_converts_from_temporary` ([meta.unary.prop], clang's
+    /// `EvaluateBinaryTypeTrait`): `T` is a reference and its
+    /// initialization from `declval<U>()` (direct for the first two, copy
+    /// for the last) is well-formed and binds it to a materialized
+    /// temporary rather than directly. The C++23 forms take a non-reference
+    /// `U` as a prvalue.
+    fn eval_ref_from_temporary(
+        &mut self,
+        t: TypeTrait,
+        to: (QualType, Loc),
+        from: (QualType, Loc),
+        loc: Loc,
+        rparen: Loc,
+    ) -> bool {
+        if !self.ast.types.is_reference(to.0) || self.ast.types.is_void(from.0) {
+            return false;
+        }
+        if !self.ast.types.is_reference(from.0)
+            && !self.ast.types.is_function(from.0)
+            && !matches!(self.ast.types.canonical_view(from.0), TypeView::IncompleteArray(_))
+            && !self.require_complete(from.0, from.1)
+        {
+            return false;
+        }
+        let prvalue = t != TypeTrait::ReferenceBindsToTemporary;
+        let (fty, vc) = match self.ast.types.canonical_view(from.0) {
+            TypeView::LValueRef(p) => (p, ValueCategory::LValue),
+            TypeView::RValueRef(p) if self.ast.types.is_function(p) => (p, ValueCategory::LValue),
+            TypeView::RValueRef(p) => (p, ValueCategory::XValue),
+            _ if self.ast.types.is_function(from.0) => (from.0, ValueCategory::LValue),
+            _ if prvalue => (from.0, ValueCategory::PRValue),
+            _ => (from.0, ValueCategory::XValue),
+        };
+        let tu = self.ast.tu;
+        let saved = std::mem::replace(&mut self.ctx, tu);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
+            s.enter_unevaluated();
+            let op = s.builder().opaque_value_of(fty, vc, from.1);
+            let init = if t == TypeTrait::ReferenceConvertsFromTemporary {
+                crate::init::Initializer::Expr(op)
+            } else {
+                crate::init::Initializer::Paren(vec![op], loc, rparen)
+            };
+            let e = s.perform_init(to.0, init, loc, false);
+            s.exit_unevaluated();
+            (!s.is_err_expr(e)).then(|| s.binds_temporary(e))
+        });
+        self.ctx = saved;
+        matches!(r, Some((Some(true), Ok(()))))
+    }
+
+    /// Whether the reference initialization `e` binds to a materialized
+    /// temporary (clang's `!isDirectReferenceBinding()`).
+    fn binds_temporary(&self, mut e: ExprId) -> bool {
+        for _ in 0..64 {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::MaterializeTemporaryExpr => return true,
+                ExprKind::ParenExpr
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr => e = self.ast.exprs.operand(e),
+                _ => return false,
+            }
+        }
+        false
+    }
+
     /// The record of `q` (not looking through arrays), if it is a class
     /// or union with a definition.
     fn defined_record(&self, q: QualType) -> Option<DeclId> {
@@ -312,7 +718,7 @@ impl Sema<'_, '_> {
 
     /// clang's `EvaluateUnaryTypeTrait`.
     #[allow(clippy::too_many_lines, reason = "one arm per trait")]
-    fn eval_unary_trait(&mut self, t: TypeTrait, q: QualType) -> bool {
+    fn eval_unary_trait(&mut self, t: TypeTrait, q: QualType, loc: Loc) -> bool {
         use TypeTrait as T;
         let tys = &self.ast.types;
         let view = tys.canonical_view(q);
@@ -349,7 +755,8 @@ impl Sema<'_, '_> {
             T::IsFunction => tys.is_function(q),
             T::IsArithmetic => self.is_arithmetic_ext(q),
             T::IsFundamental => self.is_fundamental(q),
-            T::IsCompound => !self.is_fundamental(q),
+            // clang `isCompoundType`: the sizeless SVE builtins are neither.
+            T::IsCompound => !self.is_fundamental(q) && !self.ast.types.is_sizeless(q),
             T::IsObject => self.is_object_type(q),
             T::IsScalar => self.is_scalar_ext(q),
             T::IsConst => !tys.is_reference(q) && tys.effective_quals(q).is_const(),
@@ -389,6 +796,13 @@ impl Sema<'_, '_> {
             T::IsLiteral | T::IsLiteralType => self.trait_literal(q),
             T::IsTriviallyRelocatable => self.is_trivially_relocatable(q),
             T::HasUniqueObjectRepresentations => self.has_unique_object_reps(q),
+            T::HasNothrowAssign
+            | T::HasNothrowMoveAssign
+            | T::HasNothrowCopy
+            | T::HasNothrowConstructor => self.has_nothrow(t, q, loc),
+            T::IsTriviallyEqualityComparable => self.trivially_equality_comparable(q, loc),
+            T::CanPassInRegs => self.can_pass_in_regs_trait(q, loc),
+            T::IsBitwiseCloneable => self.is_bitwise_cloneable(q, 0),
             T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
                 self.is_destructible(t, q)
             }
@@ -448,8 +862,8 @@ impl Sema<'_, '_> {
                     _ => false,
                 }
             }
-            // Binary, n-ary, array and expression traits, and the
-            // unimplemented rows, never reach here.
+            // Binary, n-ary, array and expression traits never reach
+            // here.
             _ => false,
         }
     }
@@ -515,7 +929,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {
@@ -538,7 +954,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {
@@ -553,12 +971,14 @@ impl Sema<'_, '_> {
 
     /// C++11 POD types (clang `isCXX11PODType`): trivial and
     /// standard-layout.
-    fn is_pod_type(&self, q: QualType) -> bool {
+    pub(crate) fn is_pod_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {
@@ -620,9 +1040,11 @@ impl Sema<'_, '_> {
             return false;
         }
         if let Some(r) = self.defined_record(e) {
-            return self.bits_of(r).contains(DefinitionBits::TRIVIALLY_RELOCATABLE);
+            return self.can_pass_in_registers(r);
         }
-        self.is_trivially_copyable_type(e)
+        // clang: any other complete object type of C++ (none is destructed
+        // or non-trivial to move primitively).
+        true
     }
 
     /// [meta.unary.prop] `is_destructible` and its trivially / nothrow
@@ -692,12 +1114,13 @@ impl Sema<'_, '_> {
         if !self.is_trivially_copyable_type(e) {
             return false;
         }
-        self.unique_reps_tc(e)
+        self.unique_reps_tc(e, true)
     }
 
-    /// [`Sema::has_unique_object_reps`] of a non-array, trivially
-    /// copyable type.
-    fn unique_reps_tc(&self, q: QualType) -> bool {
+    /// [`Sema::has_unique_object_reps`] of a non-array type (trivially
+    /// copyable, or not checked when `tc` is false: clang's
+    /// `CheckIfTriviallyCopyable`).
+    fn unique_reps_tc(&self, q: QualType, tc: bool) -> bool {
         let tys = &self.ast.types;
         match tys.canonical_view(q) {
             TypeView::Builtin(b) if b.is_integral() => true,
@@ -707,21 +1130,22 @@ impl Sema<'_, '_> {
             }
             TypeView::Record(r) => {
                 if self.is_union(r) {
-                    self.union_unique_reps(r, q)
+                    self.union_unique_reps(r, q, tc)
                 } else {
                     let size = self.size_bits(q);
-                    self.struct_unique_bits(r).is_some_and(|b| Some(b) == size)
+                    self.struct_unique_bits(r, tc).is_some_and(|b| Some(b) == size)
                 }
             }
             _ => false,
         }
     }
 
-    fn unique_reps(&self, q: QualType) -> bool {
+    /// clang's `hasUniqueObjectRepresentations(q, tc)`.
+    fn unique_reps(&self, q: QualType, tc: bool) -> bool {
         if self.ast.types.is_array(q) {
-            return self.unique_reps(self.base_element(q));
+            return self.unique_reps(self.base_element(q), tc);
         }
-        self.is_trivially_copyable_type(q) && self.unique_reps_tc(q)
+        (!tc || self.is_trivially_copyable_type(q)) && self.unique_reps_tc(q, tc)
     }
 
     fn size_bits(&self, q: QualType) -> Option<u64> {
@@ -737,20 +1161,20 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `unionHasUniqueObjectRepresentations`.
-    fn union_unique_reps(&self, r: DeclId, q: QualType) -> bool {
+    fn union_unique_reps(&self, r: DeclId, q: QualType, tc: bool) -> bool {
         let Some(us) = self.size_bits(q) else { return false };
         let fields = self.fields_of(r);
         !fields.is_empty()
             && fields.iter().all(|&f| {
                 let ft = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-                self.unique_reps(ft) && self.size_bits(ft) == Some(us)
+                self.unique_reps(ft, tc) && self.size_bits(ft) == Some(us)
             })
     }
 
     /// clang's `structHasUniqueObjectRepresentations`: the number of
     /// value bits of class `r` when its bases and fields are laid out
     /// contiguously, else `None`.
-    fn struct_unique_bits(&self, r: DeclId) -> Option<u64> {
+    fn struct_unique_bits(&self, r: DeclId, tc: bool) -> Option<u64> {
         let def = self.class_def(r);
         let bits = self.bits_of(def);
         if bits.contains(DefinitionBits::POLYMORPHIC)
@@ -763,7 +1187,7 @@ impl Sema<'_, '_> {
         let mut bases: Vec<(DeclId, u64)> = layout.bases.to_vec();
         bases.sort_by_key(|b| b.1);
         for (b, off) in bases {
-            let size = self.struct_unique_bits(b)?;
+            let size = self.struct_unique_bits(b, tc)?;
             if size != 0 {
                 if off.saturating_mul(8) != cur {
                     return None;
@@ -772,7 +1196,7 @@ impl Sema<'_, '_> {
             }
         }
         for (i, f) in self.fields_of(def).into_iter().enumerate() {
-            let size = self.field_unique_bits(f)?;
+            let size = self.field_unique_bits(f, tc)?;
             if size != 0 {
                 if layout.fields.get(i).copied() != Some(cur) {
                     return None;
@@ -784,17 +1208,17 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `getSubobjectSizeInBits` for a field.
-    fn field_unique_bits(&self, f: DeclId) -> Option<u64> {
+    fn field_unique_bits(&self, f: DeclId, tc: bool) -> Option<u64> {
         let ft = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let tys = &self.ast.types;
         if let Some(r) = tys.as_record(ft)
             && !self.is_union(r)
             && !tys.is_array(ft)
         {
-            return self.struct_unique_bits(r);
+            return self.struct_unique_bits(r, tc);
         }
         let bit_int = matches!(tys.canonical_view(ft), TypeView::BitInt { .. });
-        if !tys.is_reference(ft) && !bit_int && !self.unique_reps(ft) {
+        if !tys.is_reference(ft) && !bit_int && !self.unique_reps(ft, tc) {
             return None;
         }
         let size = self.size_bits(ft)?;
@@ -812,9 +1236,28 @@ impl Sema<'_, '_> {
             }
             return Some(w);
         }
-        if bit_int && !self.unique_reps(ft) {
+        if bit_int && !self.unique_reps(ft, tc) {
             return None;
         }
         Some(size)
+    }
+}
+
+/// Which form of an initialization or assignment trait is evaluated
+/// (`__is_X`, `__is_nothrow_X`, `__is_trivially_X`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum InitCheck {
+    WellFormed,
+    Nothrow,
+    Trivial,
+}
+
+/// clang `TypeTraits.def` `ALIAS`es: the keyword names the aliased trait,
+/// which is what diagnostics and dumps spell.
+fn alias_target(t: TypeTrait) -> TypeTrait {
+    match t {
+        TypeTrait::IsSameAs => TypeTrait::IsSame,
+        TypeTrait::IsLiteralType => TypeTrait::IsLiteral,
+        _ => t,
     }
 }

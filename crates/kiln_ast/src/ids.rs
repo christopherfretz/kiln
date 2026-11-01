@@ -194,6 +194,7 @@ impl QualType {
         let raw = (ty.index() << 3) | (quals as u32 & Self::QUALS_MASK);
         match NonZeroU32::new(raw) {
             Some(n) => Self(n),
+            // Invariant: a `TypeId` index is never 0, so `raw` is nonzero.
             None => unreachable!(),
         }
     }

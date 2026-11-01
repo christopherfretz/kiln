@@ -8,8 +8,9 @@
 //! emits — and lowered into the module once it is final ([`Fir::lower`]).
 
 use kiln_llvm::{
-    BinOp, BlockId, CallOpts, CastOp, Clause, FastMath, Flags, FloatPredicate, FuncId, GepFlags,
-    IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module, TypeId, Value,
+    BinOp, BlockId, CallOpts, CastOp, Clause, CmpXchgOpts, FastMath, Flags, FloatPredicate, FuncId,
+    GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module, Ordering,
+    RmwOp, SyncScope, TypeId, Value,
 };
 
 /// A block of the buffer.
@@ -103,6 +104,15 @@ pub(crate) enum Op {
         normal: Blk,
         unwind: Blk,
     },
+    /// `callbr ... to label %normal [label %indirect...]` (`asm goto`).
+    CallBr {
+        fn_ty: TypeId,
+        callee: V,
+        args: Vec<V>,
+        opts: Box<CallOpts>,
+        normal: Blk,
+        indirect: Vec<Blk>,
+    },
     /// `landingpad { ptr, i32 } [cleanup] catch ptr <clause>...`.
     LandingPad {
         cleanup: bool,
@@ -138,6 +148,42 @@ pub(crate) enum Op {
         val: V,
         idx: u32,
     },
+    /// `extractelement vec, idx` (WP-156).
+    ExtractElement {
+        vec: V,
+        idx: V,
+    },
+    /// `insertelement vec, elt, idx`.
+    InsertElement {
+        vec: V,
+        elt: V,
+        idx: V,
+    },
+    /// `shufflevector a, b, mask`.
+    ShuffleVector {
+        a: V,
+        b: V,
+        mask: Vec<u32>,
+    },
+    /// `atomicrmw` (the result has `val`'s type).
+    AtomicRmw {
+        op: RmwOp,
+        ptr: V,
+        val: V,
+        mem: MemOpts,
+    },
+    /// `cmpxchg` (the result is `{ T, i1 }`).
+    CmpXchg {
+        ptr: V,
+        cmp: V,
+        new: V,
+        opts: CmpXchgOpts,
+    },
+    /// `fence`.
+    Fence {
+        ordering: Ordering,
+        scope: SyncScope,
+    },
 }
 
 impl Op {
@@ -150,6 +196,7 @@ impl Op {
                 | Op::Ret { .. }
                 | Op::Unreachable
                 | Op::Invoke { .. }
+                | Op::CallBr { .. }
                 | Op::Resume { .. }
         )
     }
@@ -158,6 +205,9 @@ impl Op {
         match self {
             Op::Br { dest } => vec![*dest],
             Op::Invoke { normal, unwind, .. } => vec![*normal, *unwind],
+            Op::CallBr { normal, indirect, .. } => {
+                std::iter::once(*normal).chain(indirect.iter().copied()).collect()
+            }
             Op::CondBr { t, f, .. } => vec![*t, *f],
             Op::Switch { default, cases, .. } => {
                 std::iter::once(*default).chain(cases.iter().map(|c| c.1)).collect()
@@ -170,6 +220,9 @@ impl Op {
         match self {
             Op::Br { dest } => vec![dest],
             Op::Invoke { normal, unwind, .. } => vec![normal, unwind],
+            Op::CallBr { normal, indirect, .. } => {
+                std::iter::once(normal).chain(indirect.iter_mut()).collect()
+            }
             Op::CondBr { t, f, .. } => vec![t, f],
             Op::Switch { default, cases, .. } => {
                 std::iter::once(default).chain(cases.iter_mut().map(|c| &mut c.1)).collect()
@@ -180,9 +233,14 @@ impl Op {
 
     fn operands(&self) -> Vec<V> {
         match self {
-            Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable => Vec::new(),
+            Op::Alloca { .. } | Op::Br { .. } | Op::Unreachable | Op::Fence { .. } => Vec::new(),
+            Op::AtomicRmw { ptr, val, .. } => vec![*ptr, *val],
+            Op::CmpXchg { ptr, cmp, new, .. } => vec![*ptr, *cmp, *new],
             Op::ExtractValue { agg, .. } => vec![*agg],
             Op::InsertValue { agg, val, .. } => vec![*agg, *val],
+            Op::ExtractElement { vec, idx } => vec![*vec, *idx],
+            Op::InsertElement { vec, elt, idx } => vec![*vec, *elt, *idx],
+            Op::ShuffleVector { a, b, .. } => vec![*a, *b],
             Op::Load { ptr, .. } => vec![*ptr],
             Op::Store { val, ptr, .. } => vec![*val, *ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![*l, *r],
@@ -192,7 +250,9 @@ impl Op {
             }
             Op::Phi { inc, .. } => inc.iter().map(|x| x.0).collect(),
             Op::Select { c, t, f } => vec![*c, *t, *f],
-            Op::Call { callee, args, .. } | Op::Invoke { callee, args, .. } => {
+            Op::Call { callee, args, .. }
+            | Op::Invoke { callee, args, .. }
+            | Op::CallBr { callee, args, .. } => {
                 std::iter::once(*callee).chain(args.iter().copied()).collect()
             }
             Op::LandingPad { clauses, .. } => clauses.clone(),
@@ -674,6 +734,11 @@ impl Fir {
                         let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
                         b.invoke_ex(*fn_ty, val(*callee), &args, blk(*normal), blk(*unwind), opts)?
                     }
+                    Op::CallBr { fn_ty, callee, args, opts, normal, indirect } => {
+                        let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
+                        let ind: Vec<BlockId> = indirect.iter().map(|&x| blk(x)).collect();
+                        b.callbr_ex(*fn_ty, val(*callee), &args, blk(*normal), &ind, opts)?
+                    }
                     Op::LandingPad { cleanup, clauses } => {
                         let cl: Vec<Clause> =
                             clauses.iter().map(|&x| Clause::Catch(val(x))).collect();
@@ -689,7 +754,21 @@ impl Fir {
                     }
                     Op::Ret { v } => b.ret(v.map(val))?,
                     Op::Unreachable => b.unreachable()?,
+                    Op::AtomicRmw { op, ptr, val: v, mem } => {
+                        b.atomicrmw(*op, val(*ptr), val(*v), *mem)?
+                    }
+                    Op::CmpXchg { ptr, cmp, new, opts } => {
+                        b.cmpxchg(val(*ptr), val(*cmp), val(*new), *opts)?
+                    }
+                    Op::Fence { ordering, scope } => b.fence(*ordering, *scope)?,
                     Op::ExtractValue { agg, idx } => b.extract_value(val(*agg), &[*idx])?,
+                    Op::ExtractElement { vec, idx } => b.extract_element(val(*vec), val(*idx))?,
+                    Op::InsertElement { vec, elt, idx } => {
+                        b.insert_element(val(*vec), val(*elt), val(*idx))?
+                    }
+                    Op::ShuffleVector { a, b: y, mask } => {
+                        b.shuffle_vector(val(*a), val(*y), mask)?
+                    }
                     Op::InsertValue { agg, val: x, idx } => {
                         b.insert_value(val(*agg), val(*x), &[*idx])?
                     }

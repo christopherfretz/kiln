@@ -4,6 +4,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, NewDecl, Payload};
 use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
+use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{CaseData, IfData, IfKind, LoopData, StmtKind, SwitchData};
 use kiln_ast::types::{BuiltinType, TypeView};
@@ -65,6 +66,13 @@ pub struct FnState {
     /// The `return`s with an NRVO candidate, re-checked at the end of
     /// the body (clang `FunctionScopeInfo::Returns`, §5.5).
     pub(crate) returns: Vec<StmtId>,
+    /// The body has a `switch` (a goto or `asm goto` shows in `labels`):
+    /// the jump-scope check runs (clang `NeedsScopeChecking`).
+    pub(crate) has_switch: bool,
+    /// Runtime-behavior diagnostics of the body (clang
+    /// `FunctionScopeInfo::PossiblyUnreachableDiags`), emitted at its
+    /// end (`diag_runtime_behavior`).
+    pub(crate) runtime_diags: Vec<kiln_diag::Diag>,
 }
 
 impl FnState {
@@ -80,6 +88,8 @@ impl FnState {
             this_ty: None,
             this_override: None,
             returns: Vec::new(),
+            has_switch: false,
+            runtime_diags: Vec::new(),
         }
     }
 }
@@ -148,16 +158,26 @@ impl Sema<'_, '_> {
     /// variable of the function (not a parameter or exception variable)
     /// whose type is the class return type ignoring cv.
     fn copy_elision_candidate(&self, e: ExprId, ret: QualType) -> Option<DeclId> {
+        // A return type still to be deduced at instantiation has no
+        // candidate (clang `getCopyElisionCandidate`: a canonical `auto` or
+        // the dependent builtin).
+        if ret == QualType::DEPENDENT
+            || matches!(self.ast.types.canonical_view(ret), TypeView::Auto { .. })
+        {
+            return None;
+        }
         let mut id = e;
         while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
             id = self.ast.exprs.operand(id);
         }
-        if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr {
+        if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr
+            || self.ast.exprs.get(id).has(kiln_ast::expr::ExprFlags::REFERS_TO_ENCLOSING)
+        {
             return None;
         }
         let d = self.ast.exprs.decl(id);
         let dn = *self.ast.decls.get(d);
-        if dn.kind() != DeclKind::Var {
+        if dn.kind() != DeclKind::Var || !self.in_innermost_function(dn.ctx()) {
             return None;
         }
         let v = self.ast.decls.var(d)?;
@@ -221,6 +241,104 @@ impl Sema<'_, '_> {
             }
         };
         self.act_on_full_expr(e)
+    }
+
+    /// The statement attributes `attrs` written before `sub`, at `loc`
+    /// ([dcl.attr.grammar]/5; clang's `ProcessStmtAttributes`). Only
+    /// `[[assume]]` is kept (in an `AttributedStmt`); it applies to a null
+    /// statement only ([dcl.attr.assume]/1). The assumption is
+    /// contextually converted to `bool` unless dependent, and a C++23
+    /// extension before C++23 (`pre_cxx23`, under `-pedantic`).
+    pub fn act_on_attributed_stmt(
+        &mut self,
+        attrs: &[kiln_ast::AttrId],
+        sub: StmtId,
+        loc: Loc,
+        pre_cxx23: bool,
+    ) -> StmtId {
+        use kiln_ast::attr::AttrKind;
+        let sub_kind = self.ast.stmts.get(sub).kind();
+        let mut kept = Vec::new();
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::ASSUME {
+                continue;
+            }
+            if sub_kind == StmtKind::DeclStmt {
+                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg("assume");
+                self.emit(msg);
+                continue;
+            }
+            if sub_kind != StmtKind::NullStmt {
+                let msg = self
+                    .diag(DiagId::sema_attribute_wrong_stmt_type, node.loc)
+                    .arg("assume")
+                    .arg("empty statements");
+                self.emit(msg);
+                continue;
+            }
+            let Some(e) = ExprId::from_raw(node.a) else { continue };
+            let Some(e) = self.build_cxx_assume_expr(e) else { continue };
+            if pre_cxx23 {
+                let msg = self.diag(DiagId::ext_cxx23_attr, node.loc).arg("assume");
+                self.emit(msg);
+            }
+            kept.push(self.assume_attr(node, e));
+        }
+        if kept.is_empty() {
+            return sub;
+        }
+        self.builder().attributed_stmt(&kept, sub, loc)
+    }
+
+    /// The `[[assume]]` attribute `node` with built assumption `e`
+    /// (`AttrNode::ASSUME_IGNORED` when it has possible side effects).
+    pub(crate) fn assume_attr(
+        &mut self,
+        node: kiln_ast::attr::AttrNode,
+        e: ExprId,
+    ) -> kiln_ast::AttrId {
+        let dependent = self
+            .ast
+            .exprs
+            .get(e)
+            .deps()
+            .intersects(ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::UNEXPANDED_PACK);
+        let mut flags = node.flags & !kiln_ast::attr::AttrNode::ASSUME_IGNORED;
+        if dependent || self.has_possible_side_effects(e) {
+            flags |= kiln_ast::attr::AttrNode::ASSUME_IGNORED;
+        }
+        let b = self.expr_loc(e).to_raw();
+        self.ast.attrs.push(kiln_ast::attr::AttrNode { flags, a: e.raw(), b, ..node })
+    }
+
+    /// clang's `BuildCXXAssumeExpr`: assumption `e` contextually converted
+    /// to `bool` ([dcl.attr.assume]/1), with `-Wassume` when it has
+    /// possible side effects (it is then not assumed; spec/codegen.md).
+    /// A dependent assumption is kept as written until instantiation;
+    /// `None` after an error.
+    pub(crate) fn build_cxx_assume_expr(&mut self, e: ExprId) -> Option<ExprId> {
+        let n = self.ast.exprs.get(e);
+        if n.deps().contains(ExprDeps::ERROR) || n.kind() == ExprKind::RecoveryExpr {
+            return None;
+        }
+        if n.deps().intersects(ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::UNEXPANDED_PACK) {
+            return Some(e);
+        }
+        let c = match conv::contextually_convert_to_bool(self, e) {
+            Ok(c) => c,
+            Err(err) => {
+                let loc = self.ast.exprs.get(e).loc();
+                self.emit(err.diag_at(self, loc));
+                return None;
+            }
+        };
+        let c = self.act_on_full_expr(c);
+        if self.has_possible_side_effects(c) {
+            let msg = self.diag(DiagId::sema_assume_side_effects, self.begin_loc(c));
+            self.emit(msg);
+        }
+        Some(c)
     }
 
     /// A condition declaration ([stmt.pre]/4): the variable `v` (already
@@ -354,10 +472,16 @@ impl Sema<'_, '_> {
     pub fn act_on_start_switch(&mut self, cond: ExprId, loc: Loc) -> ExprId {
         let ty0 = self.ast.exprs.get(cond).ty();
         let t = &self.ast.types;
-        let ok = t.is_integral(ty0)
-            || t.as_enum(ty0).is_some()
+        let tv = t.as_atomic(ty0).unwrap_or(ty0);
+        let ok = t.is_integral(tv)
+            || t.as_enum(tv).is_some()
             || t.builtin(ty0) == Some(BuiltinType::Error);
-        let (cond, cond_ty, invalid) = if ok {
+        // [temp.res.general]/6: a condition of dependent type is checked
+        // (converted, promoted) when the template is instantiated; the
+        // case values are left unevaluated until then.
+        let (cond, cond_ty, invalid) = if self.is_dependent_type(ty0) {
+            (cond, ty0, false)
+        } else if ok {
             let c = conv::integral_promotion(self, cond);
             let ty = self.ast.exprs.get(c).ty();
             (c, ty, false)
@@ -369,6 +493,7 @@ impl Sema<'_, '_> {
         };
         let cond = self.act_on_full_expr(cond);
         if let Some(f) = self.func.as_mut() {
+            f.has_switch = true;
             f.switches.push(SwitchState {
                 cond_ty,
                 values: Vec::new(),
@@ -575,6 +700,18 @@ impl Sema<'_, '_> {
         self.builder().goto_stmt(d, loc)
     }
 
+    /// An `asm goto` label operand (clang `LookupOrCreateLabel` then
+    /// `ActOnAddrLabel`, which marks it used).
+    pub fn act_on_asm_goto_label(&mut self, name: Symbol, name_loc: Loc) -> DeclId {
+        let d = self.label_decl(name, name_loc);
+        self.ast.decls.set_flags(d, DeclFlags::USED);
+        if let Some(l) = self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d))
+        {
+            l.first_use.get_or_insert(name_loc);
+        }
+        d
+    }
+
     /// `return e;` ([stmt.return]).
     pub fn act_on_return(&mut self, value: Option<ExprId>, loc: Loc) -> StmtId {
         let Some((fdecl, mut ret)) = self.func.as_ref().map(|f| (f.decl, f.ret)) else {
@@ -586,9 +723,12 @@ impl Sema<'_, '_> {
         let ret_void = self.ast.types.is_void(ret);
         let fname = self.decl_name(fdecl);
         let mut candidate = None;
+        // A dependent return type checks the operand at instantiation
+        // (clang `BuildReturnStmt`'s `HasDependentReturnType`).
+        let ret_dep = self.ast.types.is_dependent(ret);
         let value = match value {
             None => {
-                if !ret_void && !self.is_error_type(ret) {
+                if !ret_void && !self.is_error_type(ret) && !ret_dep {
                     let d = self.diag(DiagId::sema_return_missing_expr, loc).arg(fname);
                     self.emit(d);
                 }
@@ -597,12 +737,17 @@ impl Sema<'_, '_> {
             Some(e) => {
                 let ety = self.ast.exprs.get(e).ty();
                 if ret_void {
-                    if !self.ast.types.is_void(ety) && !self.is_error_type(ety) {
+                    // [stmt.return]/2: an operand of type `void` is fine;
+                    // a type-dependent one is checked at instantiation.
+                    if !self.ast.types.is_void(ety)
+                        && !self.is_error_type(ety)
+                        && !self.expr_is_type_dependent(e)
+                    {
                         let d = self.diag(DiagId::sema_return_has_expr, loc).arg(fname);
                         self.emit(d);
                     }
                     Some(self.act_on_full_expr(e))
-                } else if self.ast.types.is_void(ety) {
+                } else if self.ast.types.is_void(ety) && !ret_dep {
                     let d = self.diag(DiagId::sema_return_void_expr_in_nonvoid, loc).arg(fname);
                     self.emit(d);
                     Some(self.act_on_full_expr(e))
@@ -613,7 +758,7 @@ impl Sema<'_, '_> {
                     if self.ast.types.is_reference(ret) && !self.is_err_expr(c) {
                         self.check_dangling_temporary(crate::class::BindingSite::Return, c);
                     }
-                    Some(self.act_on_full_expr(c))
+                    Some(self.act_on_full_expr_at(c, loc))
                 }
             }
         };
@@ -632,6 +777,16 @@ impl Sema<'_, '_> {
         r
     }
 
+    /// Whether a local whose semantic context is `ctx` is declared in the
+    /// innermost enclosing function or lambda ([class.copy.elision]/3): a
+    /// local of an enclosing function named from a lambda body is not.
+    fn in_innermost_function(&self, ctx: Option<DeclId>) -> bool {
+        let (Some(c), Some(f)) = (ctx, self.func.as_ref().map(|f| f.decl)) else {
+            return true;
+        };
+        !self.ast.decls.get(c).kind().is_function() || self.ast.first(c) == self.ast.first(f)
+    }
+
     /// C++23 implicit move ([expr.prim.id.unqual]/4, [class.copy.elision]/3):
     /// an id-expression naming a non-volatile object of automatic storage
     /// duration declared in the function becomes an xvalue.
@@ -642,11 +797,18 @@ impl Sema<'_, '_> {
             id = self.ast.exprs.operand(id);
         }
         let n = *self.ast.exprs.get(id);
-        if n.kind() != ExprKind::DeclRefExpr {
+        // A captured variable is not declared in the innermost function
+        // or lambda ([class.copy.elision]/3).
+        if n.kind() != ExprKind::DeclRefExpr
+            || n.has(kiln_ast::expr::ExprFlags::REFERS_TO_ENCLOSING)
+        {
             return e;
         }
         let d = self.ast.exprs.decl(id);
         let dn = *self.ast.decls.get(d);
+        if !self.in_innermost_function(dn.ctx()) {
+            return e;
+        }
         let local = match dn.kind() {
             DeclKind::ParmVar => true,
             DeclKind::Var => {
@@ -673,10 +835,20 @@ impl Sema<'_, '_> {
     /// the function scope).
     pub(crate) fn begin_function_body(&mut self, f: DeclId, ret: QualType) {
         let mut state = FnState::new(f, ret);
-        if self.contains_undeduced_auto(ret) {
+        let auto = self.contains_undeduced_auto(ret);
+        if auto {
             state.auto_ret = Some(ret);
         }
         self.func = Some(state);
+        // A templated function deduces its return type when it is
+        // instantiated ([dcl.spec.auto.general]/12): until then the
+        // placeholder is deduced as dependent (clang's dependent
+        // `AutoType`, printed `auto`), so calls of it in the template are
+        // type-dependent rather than uses of an undeduced function.
+        if auto && self.in_template() {
+            let dep = self.dependent_auto(ret);
+            self.set_deduced_return(f, dep);
+        }
     }
 
     /// Ends the body: undefined labels and fall-off-the-end checks.
@@ -694,13 +866,23 @@ impl Sema<'_, '_> {
             }
         }
         // No return statement: the placeholder deduces `void`
-        // ([dcl.spec.auto.general]/10).
+        // ([dcl.spec.auto.general]/10); a templated function's when it
+        // is instantiated (clang skips a dependent context).
         if let Some(st) = self.func.as_ref()
             && st.auto_ret.is_some()
+            && !self.in_template()
             && !st.deduced
         {
             let f = st.decl;
-            self.set_deduced_return(f, QualType::VOID);
+            // A specialization whose body failed to instantiate (a
+            // dropped `return`) deduces nothing (clang leaves the type
+            // undeduced): the error type, so uses are silent.
+            let ret = if self.ast.decls.get(f).has(DeclFlags::INVALID) {
+                QualType::ERROR
+            } else {
+                QualType::VOID
+            };
+            self.set_deduced_return(f, ret);
         }
         let Some(state) = self.func.take() else { return };
         for &r in &state.returns {
@@ -717,6 +899,18 @@ impl Sema<'_, '_> {
                     .arg(self.ast.symbols().as_str(l.name).to_string());
                 self.emit(msg);
             }
+        }
+        // [stmt.dcl]/3, [except.handle]/2: jumps into protected scopes
+        // (clang `DiagnoseInvalidJumps`, ahead of the flow warnings).
+        if state.has_switch || !state.labels.is_empty() {
+            self.check_jump_scopes(body);
+        }
+        // The deferred runtime-behavior diagnostics, ahead of the flow
+        // warnings (clang `PopFunctionScopeInfo` / `IssueWarnings`); a
+        // template's too (clang flushes them unfiltered there), and an
+        // instantiation re-checks.
+        for msg in state.runtime_diags {
+            self.emit(msg);
         }
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred
@@ -746,8 +940,15 @@ impl Sema<'_, '_> {
                 .ctx()
                 .is_some_and(|c| self.ast.redecl_context(c) == self.ast.tu);
         if !is_main {
+            let lambda = self.is_lambda_call_op(state.decl);
             match self.falls_off(body) {
                 Falloff::Never => {}
+                Falloff::Always if lambda => {
+                    self.error(DiagId::sema_falloff_nonvoid_lambda, rbrace);
+                }
+                Falloff::Maybe if lambda => {
+                    self.error(DiagId::sema_falloff_nonvoid_lambda_maybe, rbrace);
+                }
                 Falloff::Always => self.error(DiagId::sema_falloff_nonvoid, rbrace),
                 Falloff::Maybe => self.error(DiagId::sema_falloff_nonvoid_maybe, rbrace),
             }
@@ -755,13 +956,26 @@ impl Sema<'_, '_> {
         self.check_throw_in_nothrow(state.decl, body);
     }
 
+    /// A diagnostic about behavior at run time (clang
+    /// `DiagRuntimeBehavior`): dropped in an unevaluated operand or an
+    /// immediate function context, deferred to the end of the enclosing
+    /// function body, emitted at once outside a function. clang drops
+    /// the deferred ones whose statement is unreachable in the body's
+    /// CFG when no error occurred; kiln has no CFG and emits them all
+    /// (spec/sema-stmt.md).
+    pub(crate) fn diag_runtime_behavior(&mut self, msg: kiln_diag::Diag) {
+        if self.unevaluated > 0 || self.immediate > 0 {
+            return;
+        }
+        match self.func.as_mut() {
+            Some(st) => st.runtime_diags.push(msg),
+            None => self.emit(msg),
+        }
+    }
+
     /// Whether function `f` is declared `[[noreturn]]`.
     fn decl_is_noreturn(&self, f: DeclId) -> bool {
-        let attrs = self.ast.attrs.of_decl(f);
-        self.ast
-            .lists
-            .iter::<kiln_ast::AttrId>(attrs)
-            .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::NORETURN)
+        self.ast.is_noreturn_fn(f)
     }
 
     /// Whether control can reach the end of `s` (a structural
@@ -869,7 +1083,10 @@ impl Sema<'_, '_> {
 
     fn is_noreturn_call(&self, e: ExprId) -> bool {
         let n = self.ast.exprs.get(e);
-        if !matches!(n.kind(), ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr) {
+        if !matches!(
+            n.kind(),
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr
+        ) {
             return false;
         }
         let mut c = self.ast.exprs.callee(e);
@@ -885,12 +1102,15 @@ impl Sema<'_, '_> {
                         return builtin::info(b)
                             .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
                     }
-                    let attrs = self.ast.attrs.of_decl(d);
-                    return self
-                        .ast
-                        .lists
-                        .iter::<kiln_ast::AttrId>(attrs)
-                        .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::NORETURN);
+                    return self.ast.decls.get(d).kind().is_function()
+                        && self.ast.is_noreturn_fn(d);
+                }
+                // `s.m()`: clang's CFG uses the direct callee, virtual or
+                // not.
+                ExprKind::MemberExpr => {
+                    let d = self.ast.exprs.decl(c);
+                    return self.ast.decls.get(d).kind().is_function()
+                        && self.ast.is_noreturn_fn(d);
                 }
                 _ => return false,
             }

@@ -24,15 +24,67 @@ use crate::templ::subst::{SubstFail, SubstResult, Substituter};
 
 /// The state of the innermost expansion in progress.
 #[derive(Clone, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent flags of one expansion")]
 pub struct PackState {
     /// Probing for the length: the first pack reached stops the probe.
     pub probing: bool,
     /// What the probe found: the length and the pack's name.
-    pub found: Option<(u32, String)>,
+    pub found: Option<(u32, PackName)>,
     /// The length of the expansion and the first pack's name.
-    pub expanding: Option<(u32, String)>,
+    pub expanding: Option<(u32, PackName)>,
     /// The `...` of the expansion, where a length mismatch is reported.
     pub ellipsis: Option<Loc>,
+    /// A pack element substituted since the flag was last cleared is a
+    /// type that itself names an unexpanded pack of an enclosing
+    /// template (`alias<T, U>...` with `alias`'s pack bound to `{T, U}`
+    /// inside a template over the packs `T` and `U`).
+    pub element_has_packs: bool,
+    /// An element still names an unexpanded pack of a retained level
+    /// (`is_convertible<_Up, _Tp>...` in a member template of
+    /// `tuple<_Tp...>` with only `_Tp` known): the expansion is rebuilt
+    /// with [`PackState::keep`] instead (§7.2).
+    pub partial: bool,
+    /// Rebuilding a partially substituted expansion: a substituted type
+    /// parameter pack becomes a `SubstTemplateTypeParmPackType` naming
+    /// its arguments, expanded with the retained packs later (clang's
+    /// `TransformTemplateTypeParmType` with no pack index).
+    pub keep: bool,
+    /// The element substituted since the flag was last cleared came from
+    /// a pack element that is itself a pack expansion (`Is...` bound to
+    /// `index_sequence`'s pack `I`): the element is its pattern and the
+    /// substituted element is re-formed as an expansion (clang's
+    /// `getPackSubstitutedTemplateArgument` and the
+    /// `containsUnexpandedParameterPack` re-wrap in `TransformTypes`).
+    pub element_expansion: bool,
+    /// Set on the enclosing state when an expansion finishes: per
+    /// element, whether it must be re-formed as an expansion. Taken by
+    /// the expansion site with [`Substituter::take_rewrap`].
+    pub rewrap: Vec<bool>,
+    /// The expansion site re-forms elements flagged in `rewrap`; only
+    /// then is an expansion element stripped to its pattern.
+    pub rewrap_ok: bool,
+}
+
+/// A pack as the length-mismatch diagnostic names it: its name and,
+/// for a template parameter pack, its depth.
+#[derive(Clone, Debug, Default)]
+pub struct PackName {
+    /// The pack's name.
+    pub name: String,
+    /// The template depth of a template parameter pack.
+    pub depth: Option<u16>,
+    /// A pack substituted earlier (§7.2): one of the "outer parameter
+    /// packs" of the diagnostic.
+    pub outer: bool,
+    /// The partially substituted pack ([`Substituter::partial_pack`]).
+    pub partial: bool,
+}
+
+impl PackName {
+    /// A pack substituted earlier, unnamed.
+    pub fn outer() -> Self {
+        PackName { outer: true, ..PackName::default() }
+    }
 }
 
 /// The result of expanding one pattern.
@@ -66,7 +118,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn pack_reached(
         &mut self,
         n: u32,
-        name: impl FnOnce(&Self) -> String,
+        name: impl FnOnce(&Self) -> PackName,
         loc: Loc,
     ) -> SubstResult<u32> {
         if self.pack.probing {
@@ -80,13 +132,49 @@ impl Substituter<'_, '_, '_> {
             && len != n
         {
             let second = name(self);
-            let d = self
-                .sema
-                .diag(DiagId::sema_pack_length_mismatch, self.pack.ellipsis.unwrap_or(loc))
-                .arg(first)
-                .arg(second)
-                .arg(len)
-                .arg(n);
+            let at = self.pack.ellipsis.unwrap_or(loc);
+            if first.partial || second.partial {
+                // [temp.arg.explicit]/9: deduction may extend the
+                // explicitly specified pack, so only a pack shorter than
+                // it conflicts (clang's
+                // `err_pack_expansion_length_conflict_partial`).
+                let (named, at_least, other) =
+                    if first.partial { (first.name, len, n) } else { (second.name, n, len) };
+                if at_least > other {
+                    let d = self
+                        .sema
+                        .diag(DiagId::sema_pack_length_mismatch_partial, at)
+                        .arg(named)
+                        .arg(at_least)
+                        .arg(other);
+                    self.sema.emit(d);
+                }
+                return Err(SubstFail);
+            }
+            // A pack of a shallower level than the other, or one
+            // substituted earlier (§7.2), is an outer pack: clang
+            // substitutes it first and reports
+            // `err_pack_expansion_length_conflict_multilevel`.
+            let first_outer =
+                first.outer || matches!((first.depth, second.depth), (Some(a), Some(b)) if a < b);
+            let second_outer =
+                second.outer || matches!((first.depth, second.depth), (Some(a), Some(b)) if b < a);
+            let d = if first_outer == second_outer {
+                self.sema
+                    .diag(DiagId::sema_pack_length_mismatch, at)
+                    .arg(first.name)
+                    .arg(second.name)
+                    .arg(len)
+                    .arg(n)
+            } else {
+                let (named, outer, inner) =
+                    if first_outer { (second.name, len, n) } else { (first.name, n, len) };
+                self.sema
+                    .diag(DiagId::sema_pack_length_mismatch_outer, at)
+                    .arg(named)
+                    .arg(outer)
+                    .arg(inner)
+            };
             self.sema.emit(d);
             return Err(SubstFail);
         }
@@ -101,17 +189,49 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn pack_element(
         &mut self,
         a: TemplateArg,
-        name: impl FnOnce(&Self) -> String,
+        name: impl FnOnce(&Self) -> PackName,
         loc: Loc,
     ) -> SubstResult<TemplateArg> {
         match a.view() {
             ArgView::Pack(l) => {
                 let n = u32::try_from(self.sema.ast.types.args(l).len()).unwrap_or(u32::MAX);
                 let i = self.pack_reached(n, name, loc)?;
-                Ok(self.sema.ast.types.args(l)[i as usize])
+                let mut e = self.sema.ast.types.args(l)[i as usize];
+                if self.pack.rewrap_ok
+                    && let Some(p) = self.expansion_pattern_arg(e)
+                {
+                    e = p;
+                    self.pack.element_expansion = true;
+                    self.pack.element_has_packs = true;
+                }
+                if let ArgView::Type(t) = e.view()
+                    && self.sema.has_unexpanded_pack(t)
+                {
+                    self.pack.element_has_packs = true;
+                }
+                Ok(e)
             }
             _ => Ok(a),
         }
+    }
+
+    /// The pattern of a pack-expansion argument (`T...`, `e...`, `TT...`).
+    fn expansion_pattern_arg(&mut self, a: TemplateArg) -> Option<TemplateArg> {
+        match a.view() {
+            ArgView::Type(q) => type_pattern(self.sema, q).map(TemplateArg::ty),
+            ArgView::Expr { expr, .. } => {
+                expr_pattern(self.sema, expr).map(|p| self.sema.ast.builder().template_arg_expr(p))
+            }
+            ArgView::TemplateExpansion { name, .. } => Some(TemplateArg::template(name)),
+            _ => None,
+        }
+    }
+
+    /// Which elements of the expansion that just finished must be
+    /// re-formed as expansions (their pack element was one); empty when
+    /// none.
+    pub(crate) fn take_rewrap(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.pack.rewrap)
     }
 
     /// Expands a pattern (§7.2): `f` substitutes the pattern once, under
@@ -128,10 +248,32 @@ impl Substituter<'_, '_, '_> {
     pub fn expand_pattern_at<T>(
         &mut self,
         ellipsis: Option<Loc>,
+        f: impl FnMut(&mut Self) -> SubstResult<T>,
+    ) -> SubstResult<Expansion<T>> {
+        self.expand_pattern_impl(ellipsis, false, f)
+    }
+
+    /// [`Self::expand_pattern_at`] for a site that re-forms the elements
+    /// [`Self::take_rewrap`] flags as expansions: a pack element that is
+    /// itself an expansion is substituted as its pattern.
+    pub(crate) fn expand_pattern_rewrap<T>(
+        &mut self,
+        ellipsis: Option<Loc>,
+        f: impl FnMut(&mut Self) -> SubstResult<T>,
+    ) -> SubstResult<Expansion<T>> {
+        self.expand_pattern_impl(ellipsis, true, f)
+    }
+
+    fn expand_pattern_impl<T>(
+        &mut self,
+        ellipsis: Option<Loc>,
+        rewrap_ok: bool,
         mut f: impl FnMut(&mut Self) -> SubstResult<T>,
     ) -> SubstResult<Expansion<T>> {
+        let mut rewrap = Vec::new();
         let saved_state = std::mem::take(&mut self.pack);
         self.pack.ellipsis = ellipsis;
+        self.pack.rewrap_ok = rewrap_ok;
         let saved_index = self.pack_index.take();
         self.pack.probing = true;
         let probe = f(self);
@@ -146,8 +288,15 @@ impl Substituter<'_, '_, '_> {
                 let mut res = Ok(());
                 for k in 0..n {
                     self.pack_index = Some(k);
+                    self.pack.element_expansion = false;
                     match f(self) {
-                        Ok(x) => out.push(x),
+                        Ok(x) => {
+                            out.push(x);
+                            if self.pack.element_expansion {
+                                rewrap.resize(out.len() - 1, false);
+                                rewrap.push(true);
+                            }
+                        }
                         Err(e) => {
                             res = Err(e);
                             break;
@@ -155,11 +304,21 @@ impl Substituter<'_, '_, '_> {
                     }
                 }
                 self.sema.templ.pack_elements += u64::from(n);
-                res.map(|()| Expansion::Elements(out))
+                if res.is_err() && self.pack.partial {
+                    // A partially substituted expansion (§7.2): the
+                    // pattern rebuilt once, still an expansion.
+                    self.pack = PackState { ellipsis, keep: true, ..PackState::default() };
+                    self.pack_index = None;
+                    f(self).map(Expansion::Unexpanded)
+                } else {
+                    res.map(|()| Expansion::Elements(out))
+                }
             }
         };
         self.pack = saved_state;
         self.pack_index = saved_index;
+        self.pack.rewrap =
+            if matches!(r, Ok(Expansion::Elements(_))) { rewrap } else { Vec::new() };
         r
     }
 
@@ -177,8 +336,13 @@ impl Substituter<'_, '_, '_> {
         let mut out = Vec::with_capacity(items.len());
         for &x in items {
             if let Some(p) = pattern_of(self.sema, x) {
-                match self.expand_pattern(|s| each(s, p))? {
-                    Expansion::Elements(v) => out.extend(v),
+                match self.expand_pattern_rewrap(None, |s| each(s, p))? {
+                    Expansion::Elements(v) => {
+                        let rw = self.take_rewrap();
+                        for (k, y) in v.into_iter().enumerate() {
+                            out.push(if rw.get(k) == Some(&true) { rewrap(self, y) } else { y });
+                        }
+                    }
                     Expansion::Unexpanded(y) => out.push(rewrap(self, y)),
                 }
             } else {
@@ -201,13 +365,21 @@ impl Substituter<'_, '_, '_> {
 
     /// One element of a type pack expansion: an element that still names
     /// an unexpanded pack (of a level not substituted, `tl<Ts, Us>...`
-    /// with only `Ts` known) needs clang's partially-substituted packs.
+    /// with only `Ts` known) fails and marks the expansion partially
+    /// substituted, rebuilt by [`Self::expand_pattern_at`] (§7.2). An
+    /// element whose packs came from the pack's own elements (the
+    /// arguments name packs of an enclosing template) is complete.
     pub(crate) fn element_ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
-        let t = self.ty(q, loc)?;
+        let saved = std::mem::take(&mut self.pack.element_has_packs);
+        let t = self.ty(q, loc);
+        let from_elements = std::mem::replace(&mut self.pack.element_has_packs, saved);
+        let t = t?;
         if self.pack_index.is_some()
+            && !from_elements
             && self.sema.ast.types.qflags(t).contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK)
         {
-            return self.unimplemented("partially substituted pack expansion", loc);
+            self.pack.partial = true;
+            return Err(SubstFail);
         }
         Ok(t)
     }
@@ -223,8 +395,18 @@ impl Substituter<'_, '_, '_> {
             };
             // A `PackExpansionExpr` is located at its `...`.
             let ellipsis = self.sema.ast.exprs.get(x).loc();
-            match self.expand_pattern_at(Some(ellipsis), |s| s.expr(p))? {
-                Expansion::Elements(v) => out.extend(v),
+            match self.expand_pattern_rewrap(Some(ellipsis), |s| s.expr(p))? {
+                Expansion::Elements(v) => {
+                    let rw = self.take_rewrap();
+                    for (k, y) in v.into_iter().enumerate() {
+                        let y = if rw.get(k) == Some(&true) {
+                            self.sema.act_pack_expansion(y, ellipsis)
+                        } else {
+                            y
+                        };
+                        out.push(y);
+                    }
+                }
                 Expansion::Unexpanded(y) => out.push(self.sema.act_pack_expansion(y, ellipsis)),
             }
         }
@@ -247,7 +429,10 @@ impl Substituter<'_, '_, '_> {
         let extra = (fp.len() + packs).saturating_sub(pp.len());
         let mut j = 0;
         for &a in pp {
-            if is_pack(self, a) && packs == 1 {
+            // A pack whose new parameter is still a pack (a generic
+            // lambda's, rebuilt with its levels retained) maps one to one.
+            let retained = fp.get(j).is_some_and(|&b| is_pack(self, b));
+            if is_pack(self, a) && packs == 1 && !retained {
                 let end = (j + extra).min(fp.len());
                 let l = self.sema.ast.lists.push(&fp[j..end]);
                 self.locals.insert(a, DeclOrPack::Pack(l));
@@ -404,6 +589,11 @@ impl Substituter<'_, '_, '_> {
         let d = kiln_ast::DeclId::from_raw(n.a()).ok_or(SubstFail)?;
         let len = if let Some(&DeclOrPack::Pack(l)) = self.locals.get(&d) {
             Some(self.sema.ast.lists.len(l))
+        } else if let Some(&DeclOrPack::Decl(x)) = self.locals.get(&d) {
+            // A function parameter pack that stays one (a generic
+            // lambda's, its own levels retained).
+            let st = self.sema.size_type();
+            return Ok(self.sema.builder().size_of_pack(x, st, loc, end));
         } else if let Some(info) = self.sema.ast.template_parm(d).copied() {
             match self.lookup(info.depth, info.index) {
                 ArgLookup::Arg(a) => match a.view() {

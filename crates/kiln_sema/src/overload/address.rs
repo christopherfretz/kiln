@@ -84,7 +84,7 @@ impl Sema<'_, '_> {
     /// member function, the others only a non-member target.
     fn address_matches(&mut self, d: DeclId, (fnty, member): (QualType, bool)) -> bool {
         if !matches!(self.kind_of(d), DeclKind::Function | DeclKind::CXXMethod)
-            || self.is_instance_member(d) != member
+            || self.is_implicit_object_member(d) != member
         {
             return false;
         }
@@ -244,7 +244,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let cands = self.ule_candidates(ule);
-        let name = self.ast.symbols().as_str(self.ast.unresolved_name(ule)).to_owned();
+        let name = self.decl_name_str(self.ast.unresolved_name(ule));
         let loc = self.begin_loc(ule);
         if matches.len() > 1 {
             let msg = self.diag(DiagId::sema_addr_ovl_ambiguous, loc).arg(name);

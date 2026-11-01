@@ -63,31 +63,32 @@ fn kiln_names(src: &str, arch: Arch) -> Result<BTreeSet<String>, String> {
     }
     let ast = &tu.ast;
     let mut names = BTreeSet::new();
+    let anon = &mut mangle::AnonIds::new();
     for d in ast.decls.ids() {
         match ast.decls.get(d).kind() {
             DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {
-                names.insert(mangle::mangle_decl(ast, d));
+                names.insert(mangle::mangle_decl(ast, anon, d));
             }
             DeclKind::CXXConstructor => {
-                names.insert(mangle::mangle_structor(ast, d, Structor::Complete));
-                names.insert(mangle::mangle_structor(ast, d, Structor::Base));
+                names.insert(mangle::mangle_structor(ast, anon, d, Structor::Complete));
+                names.insert(mangle::mangle_structor(ast, anon, d, Structor::Base));
             }
             DeclKind::CXXDestructor => {
-                names.insert(mangle::mangle_structor(ast, d, Structor::Complete));
-                names.insert(mangle::mangle_structor(ast, d, Structor::Base));
-                names.insert(mangle::mangle_structor(ast, d, Structor::Deleting));
+                names.insert(mangle::mangle_structor(ast, anon, d, Structor::Complete));
+                names.insert(mangle::mangle_structor(ast, anon, d, Structor::Base));
+                names.insert(mangle::mangle_structor(ast, anon, d, Structor::Deleting));
             }
             DeclKind::Var | DeclKind::VarTemplateSpecialization => {
                 for i in 0..3 {
-                    names.insert(mangle::mangle_static_local(ast, d, i));
-                    names.insert(mangle::mangle_guard(ast, d, i));
+                    names.insert(mangle::mangle_static_local(ast, anon, d, i));
+                    names.insert(mangle::mangle_guard(ast, anon, d, i));
                     for t in 0..3 {
-                        names.insert(mangle::mangle_ref_temporary(ast, d, i, t));
+                        names.insert(mangle::mangle_ref_temporary(ast, anon, d, i, t));
                     }
                 }
             }
             DeclKind::TemplateParamObject => {
-                names.insert(mangle::mangle_param_object(ast, d));
+                names.insert(mangle::mangle_param_object(ast, anon, d));
             }
             _ => {}
         }

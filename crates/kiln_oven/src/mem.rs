@@ -301,6 +301,10 @@ pub(crate) enum MemFault {
     DeleteMismatch {
         array_new: bool,
     },
+    /// An effect a speculative trial ([`TrialMode::Speculative`]) does
+    /// not allow: modifying a frame or static object that existed at its
+    /// checkpoint, or a heap (de)allocation in its evaluation context.
+    Speculative,
 }
 
 #[derive(Debug)]
@@ -345,6 +349,9 @@ pub(crate) struct Memory {
     /// Serial of the running call frame, and the last serial handed out.
     pub cur_frame: u32,
     pub serial: u32,
+    /// Open checkpoints and their undo log (spec/oven.md "Trial
+    /// evaluation").
+    trial: Trial,
 }
 
 const DEAD0: Alloc = Alloc {
@@ -383,6 +390,7 @@ impl Memory {
             limit,
             cur_frame: 0,
             serial: 0,
+            trial: Trial::default(),
         }
     }
 
@@ -397,6 +405,7 @@ impl Memory {
             + (self.free.capacity() + self.live.capacity() + self.hfree.capacity()) * 4
             + self.bins.footprint()
             + self.unions.capacity() * (size_of::<(u64, u32)>() + 1)
+            + self.trial.footprint()
     }
 
     /// Drops every frame and heap allocation (end of a top-level
@@ -420,6 +429,7 @@ impl Memory {
         self.allocated = 0;
         self.peak = 0;
         self.arena_peak = 0;
+        self.trial.clear();
     }
 
     /// Live bytes now (`peak_bytes` is their maximum).
@@ -697,6 +707,9 @@ impl Memory {
         {
             return Err(MemFault::Memory(self.limit));
         }
+        if self.in_trial() {
+            self.trial_heap()?;
+        }
         let base = match self.bins.take(n) {
             Some(b) => b,
             None => {
@@ -729,6 +742,9 @@ impl Memory {
             frame: self.ctx,
         };
         let idx = if let Some(i) = self.hfree.pop_front() {
+            if self.in_trial() {
+                self.trial.log.push(Undo::HSlot(i, Box::new(self.hslots[i as usize])));
+            }
             let g = self.hslots[i as usize].generation + 1;
             self.hslots[i as usize] = Alloc { generation: g, ..a };
             i
@@ -756,12 +772,15 @@ impl Memory {
         let Some(i) = self.heap_check(raw, array, pointee, types)? else {
             return Ok(());
         };
+        if self.in_trial() {
+            self.trial_heap()?;
+        }
         let a = self.hslots[i];
         self.release_heap(i);
         if a.flags & flags::HAS_UNION != 0 {
             let key = Ptr::alloc_key(raw);
             for &(o, _) in types.unions(a.ty) {
-                self.unions.remove(&(key << 32 | o));
+                self.union_put(key << 32 | o, None);
             }
         }
         Ok(())
@@ -812,6 +831,18 @@ impl Memory {
 
     /// Frees heap slot `i` (live) and its block.
     fn release_heap(&mut self, i: usize) {
+        if self.in_trial() {
+            let a = self.hslots[i];
+            self.trial.log.push(Undo::HSlot(i as u32, Box::new(a)));
+            // A block that outlives the trial: its bytes are restored even
+            // when a later allocation of the trial reuses it.
+            if let Some(cp) = self.trial.cps.last().copied()
+                && !self.fresh(&cp, Sp::Heap, &a)
+            {
+                let n = u64::from(a.size).max(1).next_multiple_of(GRAN);
+                self.log_range(Sp::Heap, u64::from(a.base), n, cp.serial);
+            }
+        }
         let a = &mut self.hslots[i];
         a.live = false;
         let (base, n) = (u64::from(a.base), u64::from(a.size).max(1).next_multiple_of(GRAN));
@@ -852,6 +883,319 @@ impl Memory {
     }
 }
 
+// ---- trial evaluation ---------------------------------------------------------
+
+/// What a trial allows (spec/oven.md "Trial evaluation").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TrialMode {
+    /// clang's speculative evaluation (`__builtin_constant_p`): modifying
+    /// a frame or static object that existed at the checkpoint, or a heap
+    /// allocation or deallocation in the checkpoint's evaluation context,
+    /// fails with [`MemFault::Speculative`]. Heap objects that existed at
+    /// the checkpoint may be modified (and are restored by a rollback).
+    Speculative,
+    /// Every effect is allowed and undone by a rollback.
+    #[cfg_attr(not(test), expect(dead_code, reason = "no evaluator trial needs it yet"))]
+    Transactional,
+}
+
+/// An open checkpoint: the state a rollback restores.
+#[derive(Clone, Copy, Debug)]
+struct Checkpoint {
+    mode: TrialMode,
+    /// Unique among the checkpoints of the evaluation (`Trial::seen`).
+    serial: u32,
+    /// Undo log length at the checkpoint.
+    pos: usize,
+    /// Frame mark ([`Memory::mark`]); its low half is the frame top.
+    mark: u64,
+    stat_top: u64,
+    ctx: u32,
+    /// [`Memory::heap_allocs`]: heap objects of `ctx` numbered from it
+    /// (`Origin::Heap`) were allocated after the checkpoint.
+    heap_allocs: u64,
+    /// The heap structure was saved ([`Undo::HeapMeta`]) since.
+    heap_saved: bool,
+}
+
+/// One undo log entry: an old value, restored by a rollback.
+#[derive(Debug)]
+enum Undo {
+    /// A granule of an object that existed at the innermost checkpoint:
+    /// bytes and shadow.
+    Gran { sp: Sp, g: u32, bytes: [u8; 8], init: u8, ptr: u8 },
+    /// A union's active-member entry ([`Memory::unions`]).
+    Union(u64, Option<u32>),
+    /// An allocation's flags.
+    Flags { sp: Sp, idx: u32, old: u8 },
+    /// A heap slot (reused, or freed).
+    HSlot(u32, Box<Alloc>),
+    /// The heap structure before the first heap allocation or
+    /// deallocation under a checkpoint.
+    HeapMeta(Box<HeapMeta>),
+}
+
+#[derive(Debug)]
+struct HeapMeta {
+    top: u64,
+    live: u64,
+    count: u32,
+    slots: usize,
+    bins: Bins,
+    hfree: VecDeque<u32>,
+}
+
+/// The open checkpoints of the running evaluation and their undo log.
+#[derive(Debug, Default)]
+struct Trial {
+    cps: Vec<Checkpoint>,
+    log: Vec<Undo>,
+    /// Granules logged (`sp << 62 | granule`) and the checkpoint serial
+    /// they were logged under: a granule is logged once per checkpoint.
+    seen: FxHashMap<u64, u32>,
+    serial: u32,
+}
+
+impl Trial {
+    fn footprint(&self) -> usize {
+        self.cps.capacity() * size_of::<Checkpoint>()
+            + self.log.capacity() * size_of::<Undo>()
+            + self
+                .log
+                .iter()
+                .map(|u| match u {
+                    Undo::HSlot(..) => size_of::<Alloc>(),
+                    Undo::HeapMeta(m) => {
+                        size_of::<HeapMeta>() + m.bins.footprint() + m.hfree.capacity() * 4
+                    }
+                    _ => 0,
+                })
+                .sum::<usize>()
+            + self.seen.capacity() * (size_of::<(u64, u32)>() + 1)
+    }
+
+    fn clear(&mut self) {
+        self.cps.clear();
+        self.log.clear();
+        self.seen.clear();
+    }
+}
+
+impl Memory {
+    /// Whether a checkpoint is open (the only test on the hot path).
+    #[inline]
+    pub fn in_trial(&self) -> bool {
+        !self.trial.cps.is_empty()
+    }
+
+    /// Opens a checkpoint; its effects are kept by [`Memory::commit`] or
+    /// undone by [`Memory::rollback`] (innermost first). O(1).
+    pub fn checkpoint(&mut self, mode: TrialMode) {
+        self.trial.serial = self.trial.serial.wrapping_add(1);
+        self.trial.cps.push(Checkpoint {
+            mode,
+            serial: self.trial.serial,
+            pos: self.trial.log.len(),
+            mark: self.mark(),
+            stat_top: self.stat.top,
+            ctx: self.ctx,
+            heap_allocs: self.heap_allocs,
+            heap_saved: false,
+        });
+    }
+
+    /// Closes the innermost checkpoint keeping its effects (an enclosing
+    /// checkpoint can still undo them). O(1).
+    pub fn commit(&mut self) {
+        self.trial.cps.pop();
+        if self.trial.cps.is_empty() {
+            self.trial.clear();
+        }
+    }
+
+    /// Closes the innermost checkpoint undoing its effects: objects that
+    /// existed at it get their values (bytes, shadow, active union
+    /// members, flags) back, heap blocks allocated since are freed and
+    /// heap objects freed since are live again, and the frame objects
+    /// made since are released. O(log entries since the checkpoint).
+    /// Cumulative counters (`allocated`, `heap_allocs`) and peaks keep
+    /// the work done.
+    pub fn rollback(&mut self, types: &Types) {
+        let Some(cp) = self.trial.cps.pop() else {
+            return;
+        };
+        while self.trial.log.len() > cp.pos {
+            let Some(u) = self.trial.log.pop() else { break };
+            match u {
+                Undo::Gran { sp, g, bytes, init, ptr } => {
+                    let s = self.space_mut(sp);
+                    let i = g as usize;
+                    s.bytes[i * GRAN as usize..(i + 1) * GRAN as usize].copy_from_slice(&bytes);
+                    s.init[i] = init;
+                    s.ptr[i] = ptr;
+                }
+                Undo::Union(key, old) => match old {
+                    Some(v) => {
+                        self.unions.insert(key, v);
+                    }
+                    None => {
+                        self.unions.remove(&key);
+                    }
+                },
+                Undo::Flags { sp, idx, old } => {
+                    let a = match sp {
+                        Sp::Static => &mut self.statics[idx as usize],
+                        Sp::Heap => &mut self.hslots[idx as usize],
+                        Sp::Frame => &mut self.slots[idx as usize],
+                    };
+                    a.flags = old;
+                }
+                Undo::HSlot(i, a) => self.hslots[i as usize] = *a,
+                Undo::HeapMeta(m) => {
+                    let m = *m;
+                    self.heap.top = m.top;
+                    self.heap_live = m.live;
+                    self.heap_count = m.count;
+                    self.hslots.truncate(m.slots);
+                    self.bins = m.bins;
+                    self.hfree = m.hfree;
+                }
+            }
+        }
+        self.release(cp.mark, types);
+        if self.trial.cps.is_empty() {
+            self.trial.clear();
+        }
+    }
+
+    /// Whether allocation `a` (in space `sp`) was made after `cp`.
+    fn fresh(&self, cp: &Checkpoint, sp: Sp, a: &Alloc) -> bool {
+        match sp {
+            Sp::Frame => u64::from(a.base) >= cp.mark & 0xFFFF_FFFF,
+            Sp::Static => u64::from(a.base) >= cp.stat_top,
+            Sp::Heap => {
+                a.frame > cp.ctx
+                    || a.frame == cp.ctx
+                        && matches!(a.origin, Origin::Heap(_, n) if u64::from(n) >= cp.heap_allocs)
+            }
+        }
+    }
+
+    /// Prepares a write of `len` bytes at `raw` (checked) under the open
+    /// checkpoints: free outside a trial.
+    #[inline]
+    pub fn trial_write(&mut self, raw: u64, len: u64) -> Result<(), MemFault> {
+        if self.in_trial() { self.trial_log(raw, len) } else { Ok(()) }
+    }
+
+    #[inline(never)]
+    fn trial_log(&mut self, raw: u64, len: u64) -> Result<(), MemFault> {
+        let p = Ptr::decode(raw);
+        let Some(a) = self.alloc_any(p).copied() else {
+            return Ok(());
+        };
+        let sp = p.space();
+        if sp != Sp::Heap
+            && let Some(cp) = self.trial.cps.iter().rev().find(|c| c.mode == TrialMode::Speculative)
+            && !self.fresh(cp, sp, &a)
+        {
+            return Err(MemFault::Speculative);
+        }
+        let Some(cp) = self.trial.cps.last().copied() else {
+            return Ok(());
+        };
+        if !self.fresh(&cp, sp, &a) {
+            self.log_range(sp, u64::from(a.base) + u64::from(p.off), len, cp.serial);
+        }
+        Ok(())
+    }
+
+    /// Logs the granules overlapping `len` bytes at `abs` not yet logged
+    /// under checkpoint `serial`.
+    fn log_range(&mut self, sp: Sp, abs: u64, len: u64, serial: u32) {
+        let (g0, g1) = (abs / GRAN, (abs + len.max(1) - 1) / GRAN);
+        for g in g0..=g1 {
+            if self.trial.seen.insert((sp as u64) << 62 | g, serial) == Some(serial) {
+                continue;
+            }
+            let s = self.space(sp);
+            let i = g as usize;
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&s.bytes[i * GRAN as usize..(i + 1) * GRAN as usize]);
+            let (init, ptr) = (s.init[i], s.ptr[i]);
+            self.trial.log.push(Undo::Gran { sp, g: g as u32, bytes, init, ptr });
+        }
+    }
+
+    /// Sets (`Some`) or clears the active-member entry `key` of
+    /// [`Memory::unions`], logged under a checkpoint.
+    pub fn union_put(&mut self, key: u64, v: Option<u32>) {
+        let old = match v {
+            Some(v) => self.unions.insert(key, v),
+            None => self.unions.remove(&key),
+        };
+        if old != v && self.in_trial() {
+            self.trial_union(key, old);
+        }
+    }
+
+    #[inline(never)]
+    fn trial_union(&mut self, key: u64, old: Option<u32>) {
+        let p = Ptr::decode((key >> 32) << SLOT_SHIFT);
+        let Some(cp) = self.trial.cps.last().copied() else {
+            return;
+        };
+        if self.alloc_any(p).is_none_or(|a| !self.fresh(&cp, p.space(), a)) {
+            self.trial.log.push(Undo::Union(key, old));
+        }
+    }
+
+    /// Sets the flags of `p`'s allocation, logged under a checkpoint.
+    pub fn set_flags(&mut self, p: Ptr, fl: u8) {
+        if self.in_trial()
+            && let Some(cp) = self.trial.cps.last().copied()
+            && let Some(a) = self.alloc_any(p)
+            && a.flags != fl
+            && !self.fresh(&cp, p.space(), a)
+        {
+            let idx = match p.space() {
+                Sp::Static => p.slot & !STATIC_BIT,
+                Sp::Heap => p.slot - HEAP_BIT,
+                Sp::Frame => p.slot,
+            };
+            self.trial.log.push(Undo::Flags { sp: p.space(), idx, old: a.flags });
+        }
+        self.alloc_of_mut(p).flags = fl;
+    }
+
+    /// A heap allocation or deallocation under a checkpoint: refused in a
+    /// speculative trial's own context; the heap structure is saved once
+    /// per checkpoint (O(free blocks + free slots)).
+    #[inline(never)]
+    fn trial_heap(&mut self) -> Result<(), MemFault> {
+        let ctx = self.ctx;
+        if self.trial.cps.iter().any(|c| c.mode == TrialMode::Speculative && c.ctx == ctx) {
+            return Err(MemFault::Speculative);
+        }
+        let Some(cp) = self.trial.cps.last_mut() else {
+            return Ok(());
+        };
+        if !cp.heap_saved {
+            cp.heap_saved = true;
+            let m = HeapMeta {
+                top: self.heap.top,
+                live: self.heap_live,
+                count: self.heap_count,
+                slots: self.hslots.len(),
+                bins: self.bins.clone(),
+                hfree: self.hfree.clone(),
+            };
+            self.trial.log.push(Undo::HeapMeta(Box::new(m)));
+        }
+        Ok(())
+    }
+}
+
 // ---- heap blocks ------------------------------------------------------------
 
 /// Largest block served by an exact per-size class.
@@ -885,7 +1229,7 @@ pub(crate) fn block_size(n: u64) -> u64 {
 
 /// The free heap blocks: a LIFO list per class and the coalesced free
 /// large regions, sorted by base. Every block lies below the heap top.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Bins {
     lists: Vec<Vec<u32>>,
     large: Vec<(u64, u64)>,
@@ -1295,5 +1639,229 @@ mod tests {
         assert_eq!(m.heap_live_of(1).count(), 0);
         assert_eq!(m.heap_live_of(0).count(), 1);
         assert_eq!(m.heap_count, 1);
+    }
+
+    // ---- trials ----
+
+    /// A heap object numbered as `Op::New` numbers them.
+    fn hnew(m: &mut Memory, size: u64) -> u64 {
+        let n = m.heap_allocs as u32;
+        m.heap_alloc(OTy(0), size, 0, Origin::Heap(ExprId::new(7), n)).unwrap()
+    }
+
+    fn fnew(m: &mut Memory) -> u64 {
+        m.alloc(OTy(0), 8, 0, Origin::None).unwrap()
+    }
+
+    /// Stores the 8-byte value `v` at `p` as the VM does.
+    fn put(m: &mut Memory, p: u64, v: u64) -> Result<(), MemFault> {
+        let (sp, abs, _) = m.check(p, 8, true)?;
+        m.trial_write(p, 8)?;
+        let s = m.space_mut(sp);
+        s.write(abs, 8, u128::from(v));
+        s.set_init(abs, 8, true);
+        Ok(())
+    }
+
+    fn get(m: &Memory, p: u64) -> Option<u64> {
+        let (sp, abs, _) = m.check(p, 8, false).ok()?;
+        let s = m.space(sp);
+        s.is_init(abs, 8).then(|| s.read(abs, 8) as u64)
+    }
+
+    #[test]
+    fn rollback_restores_interleaved_writes() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let x = fnew(&mut m);
+        let h = hnew(&mut m, 32);
+        let u = fnew(&mut m); // never initialized
+        put(&mut m, x, 1).unwrap();
+        put(&mut m, h, 2).unwrap();
+        let (top, live) = (m.frame.top, m.live.len());
+        m.checkpoint(TrialMode::Transactional);
+        put(&mut m, x, 10).unwrap();
+        let y = fnew(&mut m);
+        put(&mut m, y, 5).unwrap();
+        put(&mut m, h, 20).unwrap();
+        put(&mut m, x, 11).unwrap();
+        put(&mut m, u, 3).unwrap();
+        put(&mut m, Ptr::with_off(h, 8, false), 21).unwrap();
+        assert_eq!((get(&m, x), get(&m, h)), (Some(11), Some(20)));
+        m.rollback(&t);
+        assert_eq!((get(&m, x), get(&m, h), get(&m, u)), (Some(1), Some(2), None));
+        assert_eq!(get(&m, Ptr::with_off(h, 8, false)), None);
+        assert!(m.check(y, 8, false).is_err(), "the trial's frame object is released");
+        assert_eq!((m.frame.top, m.live.len()), (top, live));
+        assert!(!m.in_trial());
+        assert!(m.trial.log.is_empty() && m.trial.seen.is_empty());
+    }
+
+    #[test]
+    fn granules_are_logged_once_per_checkpoint() {
+        let mut m = Memory::new(256 * MIB);
+        let x = fnew(&mut m);
+        m.checkpoint(TrialMode::Transactional);
+        for v in 0..100 {
+            put(&mut m, x, v).unwrap();
+        }
+        assert_eq!(m.trial.log.len(), 1);
+        m.commit();
+        assert_eq!(get(&m, x), Some(99));
+        assert!(m.trial.log.is_empty());
+    }
+
+    #[test]
+    fn rollback_frees_allocations_and_revives_frees() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let h1 = hnew(&mut m, 64);
+        let h2 = hnew(&mut m, 64);
+        put(&mut m, h1, 1).unwrap();
+        put(&mut m, h2, 2).unwrap();
+        let state = |m: &Memory| (m.heap.top, m.heap_live, m.heap_count, m.hslots.len());
+        let before = state(&m);
+        let (b1, b2) = (base(&m, h1), base(&m, h2));
+        m.checkpoint(TrialMode::Transactional);
+        free(&mut m, h1);
+        // Reuses h1's block and slot.
+        let h3 = hnew(&mut m, 64);
+        assert_eq!(base(&m, h3), b1);
+        put(&mut m, h3, 30).unwrap();
+        let big = hnew(&mut m, 4 * MIB);
+        put(&mut m, big, 4).unwrap();
+        free(&mut m, h2);
+        let h4 = hnew(&mut m, 8);
+        free(&mut m, h4);
+        assert!(m.arena() > 4 * MIB);
+        m.rollback(&t);
+        assert_eq!(state(&m), before);
+        assert_eq!((get(&m, h1), get(&m, h2)), (Some(1), Some(2)));
+        assert!(m.check(h3, 8, false).is_err() && m.check(big, 8, false).is_err());
+        assert!(m.arena() < MIB, "rolled-back blocks are released");
+        // The heap is consistent: new blocks do not overlap the revived ones.
+        let h5 = hnew(&mut m, 64);
+        assert!(base(&m, h5) != b1 && base(&m, h5) != b2);
+        free(&mut m, h1);
+        free(&mut m, h2);
+        free(&mut m, h5);
+        assert_eq!((m.heap_live, m.heap_count), (0, 0));
+        assert_eq!(m.heap.top, 128, "small blocks stay on their lists");
+        let h6 = hnew(&mut m, 64);
+        assert_eq!(base(&m, h6), b2, "reuses the last freed");
+    }
+
+    #[test]
+    fn nested_checkpoints() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let x = fnew(&mut m);
+        let h = hnew(&mut m, 8);
+        put(&mut m, x, 0).unwrap();
+        m.checkpoint(TrialMode::Transactional);
+        put(&mut m, x, 1).unwrap();
+        m.checkpoint(TrialMode::Transactional);
+        put(&mut m, x, 2).unwrap();
+        free(&mut m, h);
+        m.rollback(&t);
+        assert_eq!(get(&m, x), Some(1));
+        assert_eq!(get(&m, h), None, "uninitialized but live again");
+        assert!(m.check(h, 8, false).is_ok());
+        m.checkpoint(TrialMode::Transactional);
+        put(&mut m, x, 3).unwrap();
+        put(&mut m, h, 7).unwrap();
+        let y = hnew(&mut m, 8);
+        m.commit();
+        assert_eq!((get(&m, x), get(&m, h)), (Some(3), Some(7)));
+        assert!(m.in_trial());
+        free(&mut m, y);
+        m.rollback(&t);
+        assert_eq!((get(&m, x), get(&m, h)), (Some(0), None));
+        assert!(m.check(y, 8, false).is_err());
+        assert_eq!((m.heap_count, m.hslots.len()), (1, 1));
+    }
+
+    #[test]
+    fn unions_and_flags_are_restored() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let x = fnew(&mut m);
+        let key = Ptr::union_key(x, 0);
+        m.union_put(key, Some(1));
+        m.checkpoint(TrialMode::Transactional);
+        m.union_put(key, Some(2));
+        m.union_put(key, None);
+        m.set_flags(Ptr::decode(x), flags::CONST);
+        let y = fnew(&mut m);
+        m.union_put(Ptr::union_key(y, 0), Some(0));
+        m.set_flags(Ptr::decode(y), flags::CONST);
+        assert_eq!(m.trial.log.len(), 3, "the trial's own object is not logged");
+        m.rollback(&t);
+        assert_eq!(m.unions.get(&key), Some(&1));
+        assert_eq!(m.alloc_of(Ptr::decode(x)).unwrap().flags, 0);
+    }
+
+    #[test]
+    fn speculative_trials_refuse_outside_effects() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let x = fnew(&mut m);
+        let h = hnew(&mut m, 8);
+        let s = m.alloc_static(OTy(0), 8, 0, Origin::None);
+        put(&mut m, h, 1).unwrap();
+        m.checkpoint(TrialMode::Speculative);
+        assert_eq!(put(&mut m, x, 1), Err(MemFault::Speculative));
+        assert_eq!(put(&mut m, s, 1), Err(MemFault::Speculative));
+        let own = fnew(&mut m);
+        put(&mut m, own, 1).unwrap();
+        // Heap objects may be modified.
+        put(&mut m, h, 2).unwrap();
+        assert_eq!(m.heap_alloc(OTy(0), 8, 0, Origin::None), Err(MemFault::Speculative));
+        assert_eq!(m.heap_free(h, false, None, &t), Err(MemFault::Speculative));
+        // A nested evaluation context allocates and frees its own.
+        m.ctx = 1;
+        let n = hnew(&mut m, 8);
+        put(&mut m, n, 3).unwrap();
+        free(&mut m, n);
+        m.ctx = 0;
+        // A nested speculative trial: objects of the enclosing trial
+        // existed before it.
+        m.checkpoint(TrialMode::Speculative);
+        assert_eq!(put(&mut m, own, 2), Err(MemFault::Speculative));
+        m.rollback(&t);
+        m.rollback(&t);
+        assert_eq!((get(&m, x), get(&m, h)), (None, Some(1)));
+        assert_eq!((m.heap_count, m.heap.top), (1, block_size(8)));
+        // Committed: heap writes are kept.
+        m.checkpoint(TrialMode::Speculative);
+        put(&mut m, h, 5).unwrap();
+        m.commit();
+        assert_eq!(get(&m, h), Some(5));
+    }
+
+    #[test]
+    fn failed_trials_hold_no_memory() {
+        let t = Types::default();
+        let mut m = Memory::new(256 * MIB);
+        let x = fnew(&mut m);
+        let h = hnew(&mut m, 8);
+        m.checkpoint(TrialMode::Transactional);
+        m.rollback(&t);
+        let foot = m.footprint();
+        let arena = m.arena_peak;
+        for i in 0..1000 {
+            m.checkpoint(TrialMode::Transactional);
+            put(&mut m, x, i).unwrap();
+            put(&mut m, h, i).unwrap();
+            let a = hnew(&mut m, 4096);
+            put(&mut m, a, i).unwrap();
+            let _ = fnew(&mut m);
+            m.rollback(&t);
+        }
+        assert_eq!(m.arena(), arena, "nothing held after the trials");
+        assert!(m.arena_peak <= arena + block_size(4096) + GRAN);
+        assert!(m.footprint() <= foot + 64 * 1024, "footprint is flat: {}", m.footprint());
+        assert_eq!(m.heap_count, 1);
+        assert!(m.allocated > 1000 * 4096, "cumulative counters keep the work done");
     }
 }

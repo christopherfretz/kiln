@@ -326,6 +326,13 @@ pub fn write_template_arg(
 pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<String> {
     let written = print_type(ctx, names, q, PrintOptions::SUGARED);
     let canon = print_type(ctx, names, q, PrintOptions::CANONICAL);
+    // clang's `Desugar` keeps template type parameters by name (`'pr<T, I>'
+    // (aka 'pr<T, int>')`); the canonical printer cannot, so a dependent
+    // type whose canonical form names `type-parameter-D-I` gets no `aka`
+    // rather than a wrong one.
+    if canon.contains("type-parameter-") && !written.contains("type-parameter-") {
+        return None;
+    }
     (canon != written && without_exc_specs(&canon) != without_exc_specs(&written)).then_some(canon)
 }
 
@@ -870,7 +877,16 @@ impl Printer<'_> {
             // A placeholder deduced from a type-dependent initializer
             // prints as written (clang's dependent `AutoType`).
             TypeView::Auto { deduced: Some(d), .. } if d != QualType::DEPENDENT => self.before(d),
-            TypeView::DeducedTemplateSpecialization { deduced: Some(d), .. } => self.before(d),
+            // A qualified placeholder (`N::S x(1)`) keeps its qualifier,
+            // as clang's `ElaboratedType` around the deduced type does.
+            TypeView::DeducedTemplateSpecialization { name, deduced: Some(d) } => {
+                if let TemplateName::Qualified { nns, .. } = self.ctx.template_name_view(name) {
+                    self.nns(nns);
+                    self.with_scope(false, |p| p.before(d));
+                } else {
+                    self.before(d);
+                }
+            }
             TypeView::Auto { keyword, concept, args, .. } => {
                 if let Some(c) = concept {
                     self.decl(c, false);
@@ -962,7 +978,13 @@ impl Printer<'_> {
                 self.push("...");
             }
             TypeView::Auto { deduced: Some(d), .. } if d != QualType::DEPENDENT => self.after(d),
-            TypeView::DeducedTemplateSpecialization { deduced: Some(d), .. } => self.after(d),
+            TypeView::DeducedTemplateSpecialization { name, deduced: Some(d) } => {
+                if let TemplateName::Qualified { .. } = self.ctx.template_name_view(name) {
+                    self.with_scope(false, |p| p.after(d));
+                } else {
+                    self.after(d);
+                }
+            }
             TypeView::Attributed { kind, modified, equivalent } => {
                 let saved = self.inside_cc_attr;
                 self.inside_cc_attr = kind == TypeAttrKind::CallingConv;

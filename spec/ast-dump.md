@@ -97,6 +97,13 @@ type   := "'" printed-type "'" [":'" desugared "'"]     -- only when the strings
   written). Concatenated literals print as one. clang instead prints
   bytes and small code units in octal (`\303\251`) and large code points
   as `\U0001F600`.
+- Cycles (WP-121): the dumper keeps the chain of declarations it is
+  inside. A declaration reached again inside itself (a friend template
+  redeclaration cycle through specialization lists, `A` befriends `B`
+  and `B` befriends `A`) prints its line with ` <cycle>` and is not
+  descended into. Nesting is also capped at 4096 levels (deeper children
+  are not printed). clang never prints these; a test whose golden
+  contains them is a kiln bug.
 - Floats and other values print per ast.md §9.3.
 - Types print per spec/types.md §12 (as clang).
 
@@ -134,6 +141,8 @@ no category).
 | `FriendDecl` | `FriendDecl <head> ['type']` (a friend type; with no child unless the type is first declared here) or `FriendDecl <head>` with the befriended declaration as its child |
 | `ParmVarDecl` | `ParmVarDecl <head> [name] 'type' [cinit] [pack]` (`cinit`: has a default argument, its child) |
 | `VarDecl` | `VarDecl <head> name 'type' [static\|extern\|register] [tls\|tls_dynamic] [nrvo] [inline] [constexpr] [cinit\|callinit\|listinit\|parenlistinit] [value=V]` (the init style only with an initializer; `constinit` is an attribute in clang and is not printed); `value=` only on a `constexpr` variable with an initializer (a `const int` initialized by a constant prints none, as in clang) |
+| `DecompositionDecl` | `DecompositionDecl <head> 'type' [static\|extern] [tls\|tls_dynamic] [cinit\|callinit\|listinit]` (a structured binding declaration's unnamed variable `e`, printed as a `VarDecl` without a name); children: the initializer, then its `BindingDecl`s (WP-122) |
+| `BindingDecl` | `BindingDecl <head> name 'type'` (the binding's type; `'<dependent type>'` in a dependent pattern); children: the holding `VarDecl` (tuple-like only; `implicit`, but printed even without `implicit` nodes, as clang's text dump does), then the binding expression (`ArraySubscriptExpr`, `MemberExpr`, or a `DeclRefExpr` to the holding variable). A `DeclRefExpr` to the variable `e` prints kind `Decomposition` and name `''`; one to a binding prints kind `Binding` and is `bitfield` when the binding expression is |
 | `StaticAssertDecl` | `StaticAssertDecl <head>` children: condition, [message (`StringLiteral unevaluated "msg"`)] |
 | attribute | `<Name>Attr [#aN] [@loc] [Inherited] [Implicit]` with clang's class name (`[[nodiscard]]` → `WarnUnusedResultAttr`); a kind without one prints `UnknownAttr kind=N`. Arguments are not printed (M2), except: `AsmLabelAttr [Inherited] "label" IsLiteralLabel` (the label's bytes unescaped, as clang) and `BuiltinAttr Implicit N` (the builtin id; the implicit builtin decl and its `extern "C"` `LinkageSpecDecl` print only with `implicit`). Implicit attributes print only with `implicit` |
 | `IntegerLiteral` | `IntegerLiteral 'type' N` |
@@ -143,15 +152,18 @@ no category).
 | `CXXBoolLiteralExpr`, `CXXNullPtrLiteralExpr` | `... 'bool' true`, `... 'std::nullptr_t'` |
 | `DeclRefExpr` | `DeclRefExpr 'type' [lvalue] Kind 'name' 'type' [(UsingShadow 'name')] [non_odr_use_constant\|non_odr_use_unevaluated\|non_odr_use_discarded]` (`(UsingShadow 'name')`: the name was found through a using-declaration, clang's `FoundDecl`) |
 | `MemberExpr` | `MemberExpr 'type' [lvalue [bitfield]] .name\|->name [non_odr_use_unevaluated]` (`non_odr_use_unevaluated`: the access is in an unevaluated operand, clang's `NOUR_Unevaluated`) |
+| `CXXPseudoDestructorExpr` | `CXXPseudoDestructorExpr '<bound member function type>'`; one child, the object expression (`p->~T` on a scalar or dependent object, WP-121). The destroyed type is not printed (clang prints none) |
 | `ImplicitCastExpr` | `ImplicitCastExpr 'type' [lvalue\|xvalue] <Kind> [part_of_explicit_cast]` |
 | `CStyleCastExpr` | `CStyleCastExpr 'type' [lvalue\|xvalue] <Kind>` |
 | `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` (`T` is the type as written, the expression's sugared type) |
 | `UnaryOperator` | `UnaryOperator 'type' [lvalue [bitfield]] prefix\|postfix 'op' [cannot overflow]` |
 | `BinaryOperator` | `BinaryOperator 'type' [lvalue [bitfield]] 'op'` |
 | `CompoundAssignOperator` | `CompoundAssignOperator 'type' lvalue [bitfield] 'op' ComputeLHSTy='T' ComputeResultTy='T'` |
-| `ConditionalOperator`, `ParenExpr`, `ArraySubscriptExpr`, `CallExpr` | class, type, category; children in source order (callee first) |
+| `ConditionalOperator`, `ParenExpr`, `ArraySubscriptExpr` | class, type, category; children in source order |
+| `CallExpr` | `CallExpr 'type' [lvalue\|xvalue] [adl]` (`adl`: the callee was found by argument-dependent lookup, clang's `usesADL`; WP-122); children: callee, arguments |
 | `UnaryExprOrTypeTraitExpr` | `UnaryExprOrTypeTraitExpr 'type' sizeof\|alignof 'operand-type'` (or expression child) |
 | `CXXNoexceptExpr` | `CXXNoexceptExpr 'bool'`; one child, the unevaluated operand. The value is not printed (clang prints none) |
+| `VAArgExpr` | `VAArgExpr 'T'` (the written type; a prvalue); one child, the `va_list` operand |
 | `CXXStaticCastExpr`, `CXXDynamicCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr` | `Class 'type' [lvalue\|xvalue] static_cast<T> <Kind [(path)]>` (the written type, as `'type'` plus `&` for an lvalue and `&&` for an xvalue result) |
 | `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` |
 | cast paths | a derived-to-base or base-to-derived cast kind prints its path: `<DerivedToBase (A -> virtual V)>` (each base class, `virtual` on a virtual step), also on `ImplicitCastExpr` and `CStyleCastExpr` |
@@ -169,7 +181,7 @@ no category).
 | `InitListExpr` | `InitListExpr 'type' [field=name]`; `array_filler:` child first, then elements; `field=` names the initialized member of a union |
 | `ImplicitValueInitExpr` | `ImplicitValueInitExpr 'type'` |
 | WP-064 forms | `CXXScalarValueInitExpr`, `CXXDefaultArgExpr`, `CXXThrowExpr`, `StmtExpr`, `CompoundLiteralExpr`, `OpaqueValueExpr`, `BinaryConditionalOperator`, `OffsetOfExpr`, `CXXTypeidExpr`: class, type, category only. Children: a `CXXDefaultArgExpr` the parameter's default argument; a `CXXThrowExpr` its operand, if any; a `StmtExpr` its `CompoundStmt`; a `CompoundLiteralExpr` its `InitListExpr`; an `OpaqueValueExpr` its source expression; a `BinaryConditionalOperator` the common expression, condition, true arm and false arm; an `OffsetOfExpr` its array index expressions; a `CXXTypeidExpr` its expression operand (a type operand is not printed) |
-| `ConstantExpr` | `ConstantExpr 'type' value=V` (M2: integral, `bool` and enumeration values) |
+| `ConstantExpr` | `ConstantExpr 'type' value=V` (M2: integral, `bool` and enumeration values; WP-133: aggregates of those, `{1, {2, 3}}`); no `value=` on an immediate invocation not evaluated in place (nested in another, or in a constant initializer; WP-133) |
 | `CXXNewExpr` | `CXXNewExpr 'T *' [global] [array] Function 'operator new' 'type'` (clang's `operatorNewDecl` printed as a decl reference, kind, name and type; `array` for an array new; no placement, init-style or alignment flags, as clang 19). Children in clang's order: the array size (the first bound converted to `unsigned long`, an `IntegralCast` or a synthesized `IntegerLiteral` for `new T[]{...}`), the initializer (`InitListExpr`, `ImplicitValueInitExpr` for `()`, or the converted expression), then the placement arguments (WP-061a) |
 | `CXXDeleteExpr` | `CXXDeleteExpr 'void' [global] [array] Function 'operator delete' 'type'` (`array` when written `delete[]`; clang's `isArrayForm`); one child, the operand converted to a pointer prvalue (WP-061a) |
 | statements | `CompoundStmt`, `DeclStmt`, `NullStmt`, `ReturnStmt`, `BreakStmt`, `ContinueStmt`, `DefaultStmt`, `CaseStmt`, `IfStmt [has_init] [has_var] [has_else] [constexpr] [consteval\|!consteval]`, `SwitchStmt [has_init] [has_var]`, `WhileStmt [has_var]`, `DoStmt`, `ForStmt [has_init] [has_var] [has_cond] [has_inc]`, `CXXForRangeStmt [has_init]` (WP-089: children init, `__range`/`__begin`/`__end` `DeclStmt`s, cond, inc, loop-variable `DeclStmt`, body; the absent slots of a dependent pattern are not printed) |
@@ -380,6 +392,15 @@ sketch above (WP-071/072).
 - `TemplateTemplateParmDecl depth D index I [...] [<name>]`. The
   children are the inner parameters (at depth D+1), then the default
   as a `TemplateArgument template` line.
+- `CXXDeductionGuideDecl [used] <deduction guide for N> 'auto (<params>)
+  -> <ret>'` (WP-134), a user-declared guide, as a function line with
+  `ParmVarDecl` children; a template guide is the pattern of its
+  `FunctionTemplateDecl <deduction guide for N>`. `explicit` is not
+  printed (clang prints none). `used` marks the guide CTAD selected.
+  Implicit guides ([over.match.class.deduct]/1) are not printed (clang
+  marks theirs `implicit`). The variable a qualified placeholder
+  declares keeps the qualifier on the deduced type (`N::S s(1)`:
+  `'N::S<int>'`, clang's `ElaboratedType` around the deduced type).
 - `ConceptDecl <name>`, with the constraint-expression as its child.
 - `ConceptSpecializationExpr 'bool'`. The children are the written
   arguments as `TemplateArgument` lines.
@@ -455,6 +476,11 @@ Normative. The order and placement are clang 19's.
 - A `VarTemplateSpecializationDecl` that clang prints at a top-level
   position (after the first declaration that uses it) is also printed
   there in full.
+- A template's specializations print under its first declaration not
+  introduced by a friend declaration (else its first declaration), as
+  clang does (WP-121). A friend redeclaration of a template prints
+  `friend` / `friend_undeclared` only when the friend declaration
+  introduced it directly.
 - `ClassTemplateSpecializationDecl <tag> <name> [definition]
   <kind>`. The kinds are `implicit_instantiation`,
   `explicit_specialization`, `explicit_instantiation_definition` and
@@ -485,6 +511,28 @@ Known gaps:
 - Explicit specializations of members of an implicit specialization are
   not implemented (spec/sema-templates.md §11.2, WP-070b).
 
+**Landed (WP-140).** `FileScopeAsmDecl` (no attributes; its literal is
+the child) and `GCCAsmStmt` (no attributes; the output then input
+operand expressions are the children; the template, constraints and
+clobbers are not printed, as in clang's text dump). Both are kept by the
+`xtask clang-ast` normalizer. `tests/conformance/ast/dcl.asm/`.
+
+**Landed (WP-140).** `PredefinedExpr` prints its value category and
+spelling (`'const char[2]' lvalue __func__`) with the `StringLiteral` as
+its child (none when dependent), as clang does; kept by the normalizer.
+`tests/conformance/ast/dcl.fct.def.general/`.
+
+**Landed (WP-160).** `LabelStmt 'name'` (the labelled statement is its
+child), `GotoStmt 'name'` (the target label; clang's text dump adds its
+address, the JSON names only the `LabelDecl` id, which the normalizer
+resolves through the `LabelStmt`), and `AttributedStmt` for
+`[[assume(e)]]`: its children are the `CXXAssumeAttr`s (each with the
+assumption as its child) then the statement. `asm goto` labels are not
+children of the `GCCAsmStmt`, as in clang's text dump. Other statement
+attributes are not yet kept (kiln drops them; the normalizer rejects
+their `Attr` kinds). `tests/conformance/ast/stmt.label/`,
+`tests/conformance/ast/dcl.attr.assume/`.
+
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]
 [--all-files] [--filter=<substr>] [-- <clang args>]` prints clang's AST of
@@ -508,7 +556,11 @@ contract:
   flags; `array_filler` is printed first with its label; the
   `'NULL TYPE'` static-assert message becomes `unevaluated`); type pairs
   collapse when equal (§2); strings are re-escaped (§2); the `bitfield`
-  flag is derived from the referenced `FieldDecl`'s `isBitfield` (§2);
+  flag is derived from the referenced `FieldDecl`'s `isBitfield` (§2),
+  or for a `DeclRefExpr` to a `BindingDecl` from that binding's
+  expression (its last child, WP-122); a `BindingDecl`'s type, which the
+  JSON lacks, is its last child's type (`'<dependent type>'` without
+  one), and its holding `VarDecl` is printed although implicit;
   enumerator values come from the initializer's `ConstantExpr` (or the
   previous value + 1).
 - **Side channel.** The JSON lacks the `value:` of a constexpr variable,
@@ -550,8 +602,9 @@ between kiln and the tool is a real difference. Known-divergent constructs
 are rejected in the table, never patched in goldens by hand.
 
 Rejected by the table:
-- Function template specializations, variadic specializations,
-  `CXXDeductionGuideDecl`, and a `TemplateArgument` outside the
+- Function template specializations (so a template deduction guide
+  that deduction succeeded on), variadic specializations, and a
+  `TemplateArgument` outside the
   template nodes that print theirs: WP-071/072. Class and variable
   template specializations (implicit, explicit and partial), their
   reference lines and `SubstNonTypeTemplateParmExpr` are compared (§5;

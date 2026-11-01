@@ -91,7 +91,7 @@ impl Cg<'_> {
     }
 
     /// `getJumpDestForLabel`.
-    fn label_dest(&mut self, d: DeclId) -> JumpDest {
+    pub(crate) fn label_dest(&mut self, d: DeclId) -> JumpDest {
         if let Some(&j) = self.f.labels.get(&d) {
             return j;
         }
@@ -233,7 +233,10 @@ impl Cg<'_> {
                 }
                 Ok(())
             }
-            StmtKind::AttributedStmt => self.emit_stmt(StmtId::new(n.b())),
+            StmtKind::AttributedStmt => {
+                self.emit_assumptions(s)?;
+                self.emit_stmt(StmtId::new(n.b()))
+            }
             StmtKind::LabelStmt => {
                 self.emit_label(DeclId::new(n.a()));
                 self.emit_stmt(StmtId::new(n.b()))
@@ -267,6 +270,7 @@ impl Cg<'_> {
                 self.emit_stmt(ast.stmts.default_sub(s))
             }
             StmtKind::CXXTryStmt => self.emit_try_stmt(s),
+            StmtKind::GCCAsmStmt => self.emit_asm(s),
             k => err(Some(n.loc()), format!("statement {k:?} is not supported yet")),
         }
     }
@@ -370,6 +374,29 @@ impl Cg<'_> {
         }
         self.emit_block(end_b, true);
         self.end_scope(cond_scope);
+        Ok(())
+    }
+
+    /// clang `EmitAttributedStmt`: `llvm.assume` of each `[[assume]]`
+    /// assumption without possible side effects ([dcl.attr.assume]),
+    /// when the point is reachable (even at `-O0`).
+    fn emit_assumptions(&mut self, s: StmtId) -> R<()> {
+        use kiln_ast::attr::{AttrKind, AttrNode};
+        use kiln_ast::ids::RawId;
+        let ast = self.ast;
+        for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
+            let node = *ast.attrs.get(a);
+            if node.kind != AttrKind::ASSUME
+                || node.flags & AttrNode::ASSUME_IGNORED != 0
+                || self.f.fir.cur().is_none()
+            {
+                continue;
+            }
+            let Some(e) = ExprId::from_raw(node.a) else { continue };
+            let c = self.emit_scalar(e)?;
+            let f = kiln_llvm::intrinsics::assume(&mut self.m);
+            self.intrinsic_call(f, vec![c]);
+        }
         Ok(())
     }
 

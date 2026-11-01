@@ -4,7 +4,7 @@
 
 use std::cmp::Ordering;
 
-use kiln_ast::decl::{DeclFlags, Defaulted};
+use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted};
 use kiln_ast::types::Quals;
 use kiln_diag::{Diag, DiagId};
 
@@ -48,6 +48,11 @@ impl Sema<'_, '_> {
                 Some(SpecialKind::MoveCtor) => "constructor (the implicit move constructor)",
                 _ => "constructor (the implicit copy constructor)",
             },
+            CandidateKind::Ctor
+                if c.found != f && self.kind_of(c.found) == DeclKind::ConstructorUsingShadow =>
+            {
+                "inherited constructor"
+            }
             CandidateKind::Ctor => "constructor",
             _ if c.rewrite.is_reversed() => "function (with reversed parameter order)",
             CandidateKind::Method if implicit => match self.special_kind_of(f) {
@@ -100,7 +105,7 @@ impl Sema<'_, '_> {
 
     /// The detail of candidate `c`'s bad conversion (`slot` in its
     /// sequences; `arg` the argument index, `None` for the object).
-    fn bad_conversion_detail(&self, x: &Ics, arg: Option<usize>) -> String {
+    pub(crate) fn bad_conversion_detail(&self, x: &Ics, arg: Option<usize>) -> String {
         let Ics::Bad(b) = x else { return String::new() };
         let which = match arg {
             Some(i) => format!("{} argument", ordinal(i + 1)),
@@ -111,11 +116,8 @@ impl Sema<'_, '_> {
                 if let Some(s) = self.base_to_derived_pointer(b.from, b.to) {
                     return format!("{s} for {which}");
                 }
-                format!(
-                    "no known conversion from {} to {} for {which}",
-                    self.ty_arg(b.from),
-                    self.ty_arg(b.to)
-                )
+                let (from, to) = self.ty_diff(b.from, b.to);
+                format!("no known conversion from {from} to {to} for {which}")
             }
             BadKind::LvalueRequired => format!("expects an lvalue for {which}"),
             BadKind::RvalueRequired => format!("expects an rvalue for {which}"),
@@ -123,11 +125,8 @@ impl Sema<'_, '_> {
                 // clang names the lost qualifiers only for the same type
                 // (`DiagnoseBadConversion`); a derived class is no known
                 // conversion.
-                format!(
-                    "no known conversion from {} to {} for {which}",
-                    self.ty_arg(b.from),
-                    self.ty_arg(b.to)
-                )
+                let (from, to) = self.ty_diff(b.from, b.to);
+                format!("no known conversion from {from} to {to} for {which}")
             }
             BadKind::LosesQuals(q) => {
                 let (s, plural) = lost_quals(q, "and");
@@ -249,12 +248,22 @@ impl Sema<'_, '_> {
                 return self.with_sat_notes(d, sat);
             }
             CandidateFailure::Explicit => {
-                let which = u8::from(cand.kind == CandidateKind::ConvFn);
+                let which = match self.ctad_guide_kind(f, cand.template) {
+                    Some(None) => 2,
+                    _ => u8::from(cand.kind == CandidateKind::ConvFn),
+                };
                 return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
             }
             CandidateFailure::IllegalCtor => {
                 let which = u8::from(cand.template.is_some());
                 return self.diag(DiagId::note_ovl_candidate_illegal_constructor, loc).arg(which);
+            }
+            CandidateFailure::InhCtorSlice { moving } => {
+                let which = u8::from(cand.template.is_some());
+                return self
+                    .diag(DiagId::note_ovl_candidate_inherited_constructor_slice, loc)
+                    .arg(which)
+                    .arg(u8::from(moving));
             }
             CandidateFailure::None
             | CandidateFailure::BadFinalConversion
@@ -273,6 +282,18 @@ impl Sema<'_, '_> {
             .filter(|&c| !ambiguous || set.cand(c).ambiguous_mark && set.cand(c).viable)
             // A non-viable built-in candidate is never listed.
             .filter(|&c| set.cand(c).kind != CandidateKind::Builtin || set.cand(c).viable)
+            // An inherited copy/move constructor excluded by
+            // [over.match.funcs]/8 is not listed (clang
+            // `NoteFunctionCandidate`, `ovl_fail_inhctor_slice`).
+            .filter(|&c| {
+                let cand = set.cand(c);
+                !matches!(cand.failure, CandidateFailure::InhCtorSlice { .. })
+                    || cand.template.is_some()
+                    || !matches!(
+                        self.special_kind_of(cand.func()),
+                        Some(SpecialKind::CopyCtor | SpecialKind::MoveCtor)
+                    )
+            })
             .collect();
         order.sort_by(|&a, &b| self.compare_for_display(set, a, b));
         let mut out = Vec::with_capacity(order.len());
@@ -287,6 +308,33 @@ impl Sema<'_, '_> {
                 out.push(self.surrogate_note(set.cand(c).func()));
             } else {
                 out.push(self.ovl_note(set, c));
+                // clang `MaybeEmitInheritedConstructorNote` (not after a
+                // deduction failure: `DiagnoseBadDeduction` omits it).
+                let found = set.cand(c).found;
+                if self.kind_of(found) == DeclKind::ConstructorUsingShadow
+                    && !matches!(set.cand(c).failure, CandidateFailure::BadDeduction)
+                {
+                    let nominated = self.ast.decls.ctor_shadow_nominated(found);
+                    let base = nominated.and_then(|n| self.ast.decls.get(n).ctx()).or_else(|| {
+                        self.ast.using_target(found).and_then(|t| self.ast.decls.get(t).ctx())
+                    });
+                    if let Some(b) = base {
+                        let ty = self.class_type(b);
+                        let loc = self.ast.decls.get(found).loc();
+                        let d = self.diag(DiagId::note_ovl_candidate_inherited_constructor, loc);
+                        out.push(d.arg(self.ty_arg(ty)));
+                    }
+                }
+                // clang `NoteDeductionGuide`: an implicit guide's notes
+                // say what it was synthesized as.
+                let cand = set.cand(c);
+                if let Some(Some(_)) = self.ctad_guide_kind(cand.func(), cand.template)
+                    && let Some(t) = cand.template
+                    && let Some(sig) = self.implicit_guide_signature(t)
+                {
+                    let loc = self.ast.decls.get(cand.func()).loc();
+                    out.push(self.diag(DiagId::note_implicit_deduction_guide, loc).arg(sig));
+                }
             }
         }
         out
@@ -427,6 +475,13 @@ impl Sema<'_, '_> {
                 match (ded(l), ded(r)) {
                     (true, false) => return Ordering::Less,
                     (false, true) => return Ordering::Greater,
+                    (true, true) => {
+                        // clang `RankDeductionFailure`.
+                        let (lr, rr) = (deduction_rank(l), deduction_rank(r));
+                        if lr != rr {
+                            return lr.cmp(&rr);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -474,5 +529,26 @@ impl Sema<'_, '_> {
             }
         }
         x.len().cmp(&y.len())
+    }
+}
+
+/// clang's `RankDeductionFailure`: the display rank of a candidate whose
+/// template argument deduction failed (lower first).
+fn deduction_rank(c: &Candidate) -> u8 {
+    use crate::templ::deduce::Tdk;
+    match c.deduction.as_ref().map(|d| d.tdk) {
+        None | Some(Tdk::Success | Tdk::NonDependentConversionFailure) => 0,
+        Some(Tdk::Incomplete | Tdk::IncompletePack) => 1,
+        Some(Tdk::Underqualified | Tdk::Inconsistent) => 2,
+        Some(
+            Tdk::SubstitutionFailure
+            | Tdk::DeducedMismatch
+            | Tdk::ConstraintsNotSatisfied
+            | Tdk::NonDeducedMismatch
+            | Tdk::MiscellaneousDeductionFailure,
+        ) => 3,
+        Some(Tdk::InstantiationDepth) => 4,
+        Some(Tdk::InvalidExplicitArguments) => 5,
+        Some(Tdk::TooManyArguments | Tdk::TooFewArguments) => 6,
     }
 }

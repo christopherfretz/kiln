@@ -44,6 +44,10 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("UsingDirectiveDecl", Keep),
     ("UsingShadowDecl", Keep),
     ("UsingEnumDecl", Keep),
+    // Inheriting constructors (WP-114); clang's JSON omits the
+    // nominated/constructed base classes of the text dump.
+    ("ConstructorUsingShadowDecl", Keep),
+    ("UnresolvedUsingValueDecl", Keep),
     ("FunctionDecl", Keep),
     ("CXXMethodDecl", Keep),
     ("CXXConstructorDecl", Keep),
@@ -123,6 +127,7 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("NestedRequirement", Keep),
     ("CXXFoldExpr", Keep),
     ("CXXDependentScopeMemberExpr", Keep),
+    ("CXXPseudoDestructorExpr", Keep),
     ("DependentScopeDeclRefExpr", Keep),
     ("CXXUnresolvedConstructExpr", Keep),
     ("UnresolvedLookupExpr", Keep),
@@ -168,24 +173,31 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ClassTemplatePartialSpecializationDecl", Keep),
     ("VarTemplateSpecializationDecl", Keep),
     ("VarTemplatePartialSpecializationDecl", Keep),
-    ("CXXDeductionGuideDecl", Unsupported(INSTANTIATION)),
-    ("DecompositionDecl", Unsupported("structured bindings are not in the M2 dump")),
-    ("BindingDecl", Unsupported("structured bindings are not in the M2 dump")),
+    // User-declared guides (WP-134); implicit ones are dropped as implicit
+    // decls are.
+    ("CXXDeductionGuideDecl", Keep),
+    // Structured bindings (WP-122, spec/ast-dump.md §3).
+    ("DecompositionDecl", Keep),
+    ("BindingDecl", Keep),
     ("EmptyDecl", Unsupported(NOT_M2)),
     ("LabelDecl", Unsupported(NOT_M2)),
-    ("FileScopeAsmDecl", Unsupported(NOT_M2)),
+    ("FileScopeAsmDecl", Keep),
     ("ExportDecl", Unsupported(NOT_M2)),
     ("ImportDecl", Unsupported(NOT_M2)),
     ("TopLevelStmtDecl", Unsupported(NOT_M2)),
     ("LifetimeExtendedTemporaryDecl", Unsupported(NOT_M2)),
     // Statements kiln does not dump in M2.
-    ("LabelStmt", Unsupported(NOT_M2)),
-    ("GotoStmt", Unsupported(NOT_M2)),
+    // Labels and `goto` (WP-160); the label is named by its `LabelStmt`.
+    ("LabelStmt", Keep),
+    ("GotoStmt", Keep),
     ("IndirectGotoStmt", Unsupported(NOT_M2)),
-    ("AttributedStmt", Unsupported("attributes are not in the M2 dump")),
+    // Only `[[assume]]` is kept on a statement (WP-160); another statement
+    // attribute is unsupported by its own kind.
+    ("AttributedStmt", Keep),
+    ("CXXAssumeAttr", Keep),
     ("CXXTryStmt", Keep),
     ("CXXCatchStmt", Keep),
-    ("GCCAsmStmt", Unsupported(NOT_M2)),
+    ("GCCAsmStmt", Keep),
     ("CoreturnStmt", Unsupported(NOT_M2)),
     ("CoroutineBodyStmt", Unsupported(NOT_M2)),
     // Expressions kiln does not dump in M2.
@@ -201,21 +213,23 @@ pub const TABLE: &[(&str, Disposition)] = &[
     // A template argument outside the template nodes that print theirs
     // (an explicit specialization's or instantiation's arguments).
     ("TemplateArgument", Unsupported(INSTANTIATION)),
-    ("LambdaExpr", Unsupported("lambdas are M3 (spec/ast-dump.md §5)")),
+    // The closure (implicit, so only under `implicit`), the capture
+    // initializers, then the body (spec/ast-dump.md §5).
+    ("LambdaExpr", Keep),
     ("TypeTraitExpr", Unsupported(NOT_M2)),
     ("ArrayTypeTraitExpr", Unsupported(NOT_M2)),
     ("ExpressionTraitExpr", Unsupported(NOT_M2)),
     ("ChooseExpr", Unsupported(NOT_M2)),
     ("GNUNullExpr", Unsupported(NOT_M2)),
-    ("VAArgExpr", Unsupported(NOT_M2)),
-    ("PredefinedExpr", Unsupported(NOT_M2)),
+    ("VAArgExpr", Keep),
+    ("PredefinedExpr", Keep),
     ("UserDefinedLiteral", Unsupported(NOT_M2)),
     ("DesignatedInitExpr", Unsupported(NOT_M2)),
     ("DesignatedInitUpdateExpr", Unsupported(NOT_M2)),
     ("NoInitExpr", Unsupported(NOT_M2)),
     ("ImaginaryLiteral", Unsupported(NOT_M2)),
     ("FixedPointLiteral", Unsupported(NOT_M2)),
-    ("AtomicExpr", Unsupported(NOT_M2)),
+    ("AtomicExpr", Keep),
     ("ParenListExpr", Unsupported(NOT_M2)),
     ("SourceLocExpr", Unsupported(NOT_M2)),
     ("EmbedExpr", Unsupported(NOT_M2)),
@@ -284,7 +298,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "NamespaceAliasDecl" => &["aliasedNamespace"],
         "UsingDecl" => &[],
         "UsingDirectiveDecl" => &["nominatedNamespace"],
-        "UsingShadowDecl" => &["target"],
+        "UsingShadowDecl" | "ConstructorUsingShadowDecl" => &["target"],
+        "UnresolvedUsingValueDecl" => &[],
         "UsingEnumDecl" => &["target"],
         // `immediate`: kiln prints clang's text-dump `consteval` instead;
         // `variadic` is part of the printed type; `deletedMessage` becomes
@@ -303,17 +318,29 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
             "deletedMessage",
             "variadic",
         ],
+        // clang's JSON has no `explicit`, and its text dump prints none.
+        "CXXDeductionGuideDecl" => &["type"],
         "CXXCtorInitializer" => &["anyInit", "baseInit", "delegatingInit"],
         // `init` (always `c`, printed `cinit`): the default argument is the
         // child.
         "ParmVarDecl" => &["type", "init", "isParameterPack"],
-        "VarDecl" | "VarTemplateSpecializationDecl" | "VarTemplatePartialSpecializationDecl" => {
+        "VarDecl"
+        | "DecompositionDecl"
+        | "VarTemplateSpecializationDecl"
+        | "VarTemplatePartialSpecializationDecl" => {
             &["type", "storageClass", "nrvo", "inline", "constexpr", "init"]
         }
-        "StaticAssertDecl" => &[],
+        // The type is the binding expression's (the JSON has none).
+        "BindingDecl" => &[],
+        "StaticAssertDecl" | "FileScopeAsmDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
-        "CXXNullPtrLiteralExpr" | "CXXNoexceptExpr" => &[],
+        "CXXNullPtrLiteralExpr"
+        | "CXXNoexceptExpr"
+        | "CXXPseudoDestructorExpr"
+        | "AtomicExpr"
+        | "VAArgExpr" => &[],
+        "PredefinedExpr" => &["name"],
         // `isPlacement` and `initStyle` are implied by the children.
         "CXXNewExpr" => &[
             "isGlobal",
@@ -325,7 +352,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         ],
         // `isArrayAsWritten` is not printed (clang's text dump has none).
         "CXXDeleteExpr" => &["isGlobal", "isArray", "isArrayAsWritten", "operatorDeleteDecl"],
-        "DeclRefExpr" => &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason"],
+        "DeclRefExpr" => {
+            &["referencedDecl", "foundReferencedDecl", "nonOdrUseReason", "isImmediateEscalating"]
+        }
         "MemberExpr" => &["name", "isArrow", "referencedMemberDecl", "nonOdrUseReason"],
         // `conversionFunc` is the child's callee (not printed by clang).
         "ImplicitCastExpr" => &["castKind", "path", "isPartOfExplicitCast", "conversionFunc"],
@@ -338,7 +367,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "UnaryOperator" => &["opcode", "isPostfix", "canOverflow"],
         "BinaryOperator" => &["opcode"],
         "CompoundAssignOperator" => &["opcode", "computeLHSType", "computeResultType"],
-        "ConditionalOperator" | "ParenExpr" | "ArraySubscriptExpr" | "CallExpr" => &[],
+        "ConditionalOperator" | "ParenExpr" | "ArraySubscriptExpr" => &[],
+        "CallExpr" => &["adl"],
         // The operator spelling is the callee's (clang's text dump prints it).
         "CXXOperatorCallExpr" => &["adl"],
         // Only the semantic form is a child (as in clang's text dump).
@@ -373,7 +403,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "StmtExpr"
         | "CompoundLiteralExpr"
         | "BinaryConditionalOperator"
-        | "OffsetOfExpr" => &[],
+        | "OffsetOfExpr"
+        | "LambdaExpr" => &[],
         "CXXThisExpr" => &["implicit"],
         "CXXDefaultInitExpr" => &["hasRewrittenInit"],
         // `temp` and `dtor` (the temporary's destructor) are not printed.
@@ -425,7 +456,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "WhileStmt" => &["hasVar"],
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
         | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXForRangeStmt" | "CXXTryStmt"
-        | "CXXCatchStmt" => &[],
+        | "CXXCatchStmt" | "GCCAsmStmt" | "AttributedStmt" | "CXXAssumeAttr" => &[],
+        "LabelStmt" => &["name", "declId"],
+        "GotoStmt" => &["targetLabelDeclId"],
         _ => return None,
     })
 }
@@ -488,6 +521,11 @@ pub const CLASS_KINDS: &[&str] = &[
     "ArrayInitLoopExpr",
     "ArrayInitIndexExpr",
     "OpaqueValueExpr",
+    // WP-075: the closure class of a lambda.
+    "LambdaExpr",
+    // WP-114: inheriting constructors and dependent using-declarations.
+    "ConstructorUsingShadowDecl",
+    "UnresolvedUsingValueDecl",
 ];
 
 /// The template kinds §5 of `spec/ast-dump.md` adds (WP-069).
@@ -500,6 +538,7 @@ pub const TEMPLATE_KINDS: &[&str] = &[
     "VarTemplatePartialSpecializationDecl",
     "SubstNonTypeTemplateParmExpr",
     "FunctionTemplateDecl",
+    "CXXDeductionGuideDecl",
     "VarTemplateDecl",
     "TypeAliasTemplateDecl",
     "ConceptDecl",
@@ -542,7 +581,19 @@ pub const M2_KINDS: &[&str] = &[
     "FunctionDecl",
     "ParmVarDecl",
     "VarDecl",
+    "DecompositionDecl",
+    "BindingDecl",
     "StaticAssertDecl",
+    // GNU asm (WP-140).
+    "FileScopeAsmDecl",
+    "GCCAsmStmt",
+    // Labels, `goto`, `[[assume]]` (WP-160).
+    "LabelStmt",
+    "GotoStmt",
+    "AttributedStmt",
+    "CXXAssumeAttr",
+    // Predefined identifiers (WP-140).
+    "PredefinedExpr",
     "IntegerLiteral",
     "FloatingLiteral",
     "CharacterLiteral",
@@ -551,6 +602,7 @@ pub const M2_KINDS: &[&str] = &[
     "CXXNullPtrLiteralExpr",
     "DeclRefExpr",
     "MemberExpr",
+    "CXXPseudoDestructorExpr",
     "ImplicitCastExpr",
     "CStyleCastExpr",
     "UnaryOperator",
@@ -562,6 +614,8 @@ pub const M2_KINDS: &[&str] = &[
     "CallExpr",
     "UnaryExprOrTypeTraitExpr",
     "CXXNoexceptExpr",
+    "AtomicExpr",
+    "VAArgExpr",
     "CXXNewExpr",
     "CXXDeleteExpr",
     "InitListExpr",

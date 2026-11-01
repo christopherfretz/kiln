@@ -104,10 +104,22 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Whether function `f` is explicit without a value-dependent
+    /// `explicit(expr)` (clang `isNonDependentlyExplicit`): a template
+    /// whose explicit-specifier depends on its parameters is resolved
+    /// per specialization (§6.1 step 4).
+    pub(crate) fn nondependently_explicit(&self, f: DeclId) -> bool {
+        self.fn_spec(f).is_explicit()
+            && self.ast.decls.cold.explicit_expr.get(f).is_none_or(|&e| {
+                let x = self.ast.exprs.get(e);
+                !x.is_value_dependent() && !x.is_type_dependent()
+            })
+    }
+
     /// The value of `explicit(expr)` ([dcl.fct.spec]/3: a contextually
     /// converted constant expression of type `bool`): `None` when it is
     /// value-dependent or not a constant.
-    fn explicit_value(&mut self, e: kiln_ast::ExprId) -> Option<bool> {
+    pub(crate) fn explicit_value(&mut self, e: kiln_ast::ExprId) -> Option<bool> {
         let x = self.ast.exprs.get(e);
         if x.is_value_dependent() || x.is_type_dependent() {
             return None;
@@ -144,6 +156,8 @@ impl Sema<'_, '_> {
                 SpecialName::Destructor(_) => self.error(DiagId::sema_dtor_not_member, sloc),
                 SpecialName::Constructor(_) => self.unsupported("constructors", sloc),
                 SpecialName::Operator(_) => self.unsupported("overloaded operators", sloc),
+                SpecialName::LiteralOperator(_) => self.unsupported("literal operators", sloc),
+                SpecialName::DeductionGuide(_) => self.unsupported("deduction guides here", sloc),
             }
             return None;
         };
@@ -163,6 +177,7 @@ impl Sema<'_, '_> {
             }
             SpecialName::Conversion(t) => Shape::Conv(t),
             SpecialName::Operator(_) => Shape::Assign,
+            SpecialName::DeductionGuide(_) | SpecialName::LiteralOperator(_) => return None,
         };
         let in_class = d.qualifier.is_none();
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
@@ -311,6 +326,17 @@ impl Sema<'_, '_> {
         let mut matched = None;
         for c in cands {
             let c = if templ {
+                // [temp.over.link]/7: member templates are the same entity
+                // only when their template heads are equivalent too; heads
+                // differing in a non-type parameter's (dependent) type,
+                // e.g. `enable_if_t<C1, int> = 0` vs `enable_if_t<C2, int>
+                // = 0`, declare overloads.
+                let head = self.ast.template_info(c).map(|i| i.params);
+                if let (Some(a), Some(b)) = (head, self.templ.cur)
+                    && !self.heads_equivalent(a, b)
+                {
+                    continue;
+                }
                 match self.pattern_of(c) {
                     Some(p) => self.ast.latest(p),
                     None => continue,
@@ -390,12 +416,28 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        // `[extern] template C<args>::C(params);`: an explicit
+        // instantiation of a constructor or destructor of a class
+        // template specialization ([temp.explicit]/3) declares nothing.
+        if let Some(p) = prev_ok
+            && !in_class
+            && self.at_explicit_head()
+            && let Some((ext, _)) = self.templ.explicit_inst
+            && self.ast.member_spec_info(p).is_some()
+        {
+            self.templ.explicit_inst = None;
+            self.templ.cur = None;
+            self.act_on_explicit_member_inst(self.ast.first(p), ext.is_some(), sloc);
+            return None;
+        }
         let mut spec = FnSpec::new();
         if ds.inline.is_some() {
             spec = spec.with_inline(true);
         }
         if ds.constexpr.is_some() {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr).with_implicit_inline(true);
+        } else if ds.consteval.is_some() && shape != Shape::Dtor {
+            spec = spec.with_constexpr_kind(ConstexprKind::Consteval).with_implicit_inline(true);
         }
         spec = spec.with_variadic(variadic && shape != Shape::Dtor);
         if let Some(p) = prev_ok

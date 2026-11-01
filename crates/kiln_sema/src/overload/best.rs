@@ -120,7 +120,7 @@ impl Sema<'_, '_> {
                 } else if kind == CandidateKind::Function || self.is_static_method(f) {
                     super::ignored_object(o.ty)
                 } else {
-                    self.object_ics(&o, f)
+                    self.object_ics_found(&o, f, found)
                 };
                 set.ics.push(x);
                 if x.is_bad() {
@@ -176,8 +176,13 @@ impl Sema<'_, '_> {
         // /2.1: no worse for every argument, better for one. In a
         // conversion set, a conversion function's object argument and a
         // constructor's argument occupy the same slot.
+        // A static `operator()`'s ignored object argument still counts as
+        // an identity conversion against a surrogate's user-defined object
+        // conversion (clang; [over.call.object] with P1169 static lambdas).
+        let surrogate =
+            (x.kind == CandidateKind::Surrogate) != (y.kind == CandidateKind::Surrogate);
         for (p, q) in a.iter().zip(b.iter()) {
-            if p.is_ignored() || q.is_ignored() {
+            if (p.is_ignored() || q.is_ignored()) && !surrogate {
                 continue;
             }
             match self.compare_ics(p, q) {
@@ -226,6 +231,28 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        // /2.7: a constructor of a derived class over an inherited
+        // constructor; of two inherited ones, the more derived class's
+        // (clang; the same-parameter-types condition is not checked).
+        let inh = |c: &Candidate| {
+            c.found != c.func() && self.kind_of(c.found) == DeclKind::ConstructorUsingShadow
+        };
+        match (inh(x), inh(y)) {
+            (false, true) => return true,
+            (true, false) => return false,
+            (true, true) => {
+                let cls = |c: &Candidate| self.ast.decls.get(c.func()).ctx();
+                if let (Some(a), Some(b)) = (cls(x), cls(y)) {
+                    if a != b && crate::conv::bases::is_derived_from(self, a, b) {
+                        return true;
+                    }
+                    if a != b && crate::conv::bases::is_derived_from(self, b, a) {
+                        return false;
+                    }
+                }
+            }
+            (false, false) => {}
+        }
         // /2.8: a non-rewritten candidate over a rewritten one; /2.9:
         // of two rewritten candidates, the one not reversed.
         if (x.rewrite == Rewrite::None) != (y.rewrite == Rewrite::None) {
@@ -234,10 +261,28 @@ impl Sema<'_, '_> {
         if x.rewrite.is_reversed() != y.rewrite.is_reversed() {
             return !x.rewrite.is_reversed();
         }
-        // /2.7 (constructor of a derived class over
-        // an inherited constructor): inherited constructors are not
-        // candidates yet. /2.8-2.10 (rewritten candidates, deduction
-        // guides): WP-068b, S3T.
+        // [over.match.class.deduct] tie-breakers (WP-071b, WP-134):
+        // /2.11: a user-declared deduction guide over an implicit one;
+        // /2.12: the copy deduction candidate over any other; /2.13: the
+        // guide of a non-template constructor over a constructor
+        // template's.
+        if let (Some(g1), Some(g2)) = (
+            x.decl.and_then(|f| self.ctad_guide_kind(f, x.template)),
+            y.decl.and_then(|f| self.ctad_guide_kind(f, y.template)),
+        ) {
+            use crate::templ::ctad::GuideOrigin;
+            let implicit = |g: Option<GuideOrigin>| g.is_some();
+            if implicit(g1) != implicit(g2) {
+                return !implicit(g1);
+            }
+            let copy = |g: Option<GuideOrigin>| g == Some(GuideOrigin::Copy);
+            if copy(g1) != copy(g2) {
+                return copy(g1);
+            }
+            if g1 == Some(GuideOrigin::Ctor) && g2 == Some(GuideOrigin::CtorTemplate) {
+                return true;
+            }
+        }
         false
     }
 

@@ -9,10 +9,16 @@
 //! A failure is reported (or, in a SFINAE context, captured, §5.7) where
 //! it happens and returned as [`SubstFail`].
 
+mod anon;
 mod decls;
 mod exprs;
+mod lambda;
+mod local;
+mod shared;
 mod stmts;
 mod types;
+
+pub(crate) use local::LocalMethod;
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind};
@@ -63,10 +69,21 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (clang's diagnostics name it: "'a' declared as an array with a
     /// negative size").
     pub(crate) declarator_name: Option<(Symbol, Loc)>,
-    /// A statement failed to substitute (it was replaced by a null
-    /// statement): the instantiated function is invalid (clang's
-    /// `Body.isInvalid()` -> `setInvalidDecl`).
-    pub(crate) failed: bool,
+    /// How many lambda bodies are being rebuilt (a shared expression in
+    /// one still captures `this`).
+    pub(crate) lambda_bodies: u32,
+    /// A statement of the body failed to substitute after an error
+    /// (clang's `TransformCompoundStmt` `SubStmtInvalid`: the body, and
+    /// so the function template specialization, is invalid; WP-145).
+    pub(crate) stmt_failed: bool,
+    /// Variable initializers that failed to substitute (the variable is
+    /// invalid, its declaration statement is not: clang keeps it).
+    pub(crate) init_failures: u32,
+    /// The explicitly specified pack deduction may still extend
+    /// ([temp.arg.explicit]/9; clang's partially substituted pack), by
+    /// (depth, index): its length is a lower bound, checked against the
+    /// other packs of an expansion.
+    pub(crate) partial_pack: Option<(u16, u16)>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -91,7 +108,10 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             entity: None,
             pairs: Vec::new(),
             declarator_name: None,
-            failed: false,
+            lambda_bodies: 0,
+            stmt_failed: false,
+            init_failures: 0,
+            partial_pack: None,
         }
     }
 
@@ -153,7 +173,22 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         parm: Option<DeclId>,
         loc: Loc,
     ) -> SubstResult<TemplateArg> {
-        self.pack_element(a, |s| parm.map_or_else(String::new, |d| s.sema.decl_name(d)), loc)
+        use crate::templ::pack::PackName;
+        self.pack_element(
+            a,
+            |s| match parm {
+                Some(d) => PackName {
+                    name: s.sema.decl_name(d),
+                    depth: s.sema.ast.template_parm(d).map(|i| i.depth),
+                    outer: false,
+                    partial: s.partial_pack.is_some()
+                        && s.sema.ast.template_parm(d).map(|i| (i.depth, i.index))
+                            == s.partial_pack,
+                },
+                None => PackName::default(),
+            },
+            loc,
+        )
     }
 
     /// Substitutes into one template argument (§5.3).
@@ -169,7 +204,18 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
             ArgView::Template(n) => Ok(TemplateArg::template(self.template_name(n, loc)?)),
-            ArgView::Pack(_) | ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
+            // A converted argument pack (a partial specialization's
+            // `<U>` against `class... Up` is the pack `{U}`): its
+            // elements, expansions expanded (§7.2).
+            ArgView::Pack(l) => Ok(TemplateArg::pack(self.args(l, loc)?)),
+            // A canonical value-dependent argument: its first expression
+            // stands for it (an implicit deduction guide's, WP-134).
+            ArgView::Profile(p) if !flags.contains(TypeFlags::UNEXPANDED_PACK) => {
+                let e = self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?;
+                let e = self.expr(e)?;
+                Ok(self.sema.ast.builder().template_arg_expr(e))
+            }
+            ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
                 self.unimplemented("pack expansion", loc)
             }
             ArgView::Null | ArgView::Value { .. } => Ok(a),
@@ -207,8 +253,20 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         let r = match a.view() {
             ArgView::Type(q) => {
                 let Some(p) = type_pattern(self.sema, q) else { return Ok(None) };
-                match self.expand_pattern(|s| s.element_ty(p, loc))? {
-                    Expansion::Elements(v) => v.into_iter().map(TemplateArg::ty).collect(),
+                match self.expand_pattern_rewrap(None, |s| s.element_ty(p, loc))? {
+                    Expansion::Elements(v) => {
+                        let rw = self.take_rewrap();
+                        v.into_iter()
+                            .enumerate()
+                            .map(|(k, t)| {
+                                TemplateArg::ty(if rw.get(k) == Some(&true) {
+                                    self.sema.ast.types.pack_expansion(t, None)
+                                } else {
+                                    t
+                                })
+                            })
+                            .collect()
+                    }
                     Expansion::Unexpanded(t) => {
                         vec![TemplateArg::ty(self.sema.ast.types.pack_expansion(t, None))]
                     }
@@ -216,11 +274,21 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             }
             ArgView::Expr { expr, .. } => {
                 let Some(p) = expr_pattern(self.sema, expr) else { return Ok(None) };
-                match self.expand_pattern(|s| s.expr(p))? {
-                    Expansion::Elements(v) => v
-                        .into_iter()
-                        .map(|e| self.sema.ast.builder().template_arg_expr(e))
-                        .collect(),
+                match self.expand_pattern_rewrap(None, |s| s.expr(p))? {
+                    Expansion::Elements(v) => {
+                        let rw = self.take_rewrap();
+                        v.into_iter()
+                            .enumerate()
+                            .map(|(k, e)| {
+                                let e = if rw.get(k) == Some(&true) {
+                                    self.sema.act_pack_expansion(e, loc)
+                                } else {
+                                    e
+                                };
+                                self.sema.ast.builder().template_arg_expr(e)
+                            })
+                            .collect()
+                    }
                     Expansion::Unexpanded(e) => {
                         let x = self.sema.act_pack_expansion(e, loc);
                         vec![self.sema.ast.builder().template_arg_expr(x)]
@@ -228,8 +296,20 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 }
             }
             ArgView::TemplateExpansion { name, .. } => {
-                match self.expand_pattern(|s| s.template_name(name, loc))? {
-                    Expansion::Elements(v) => v.into_iter().map(TemplateArg::template).collect(),
+                match self.expand_pattern_rewrap(None, |s| s.template_name(name, loc))? {
+                    Expansion::Elements(v) => {
+                        let rw = self.take_rewrap();
+                        v.into_iter()
+                            .enumerate()
+                            .map(|(k, n)| {
+                                if rw.get(k) == Some(&true) {
+                                    TemplateArg::template_expansion(n, None)
+                                } else {
+                                    TemplateArg::template(n)
+                                }
+                            })
+                            .collect()
+                    }
                     Expansion::Unexpanded(n) => vec![TemplateArg::template_expansion(n, None)],
                 }
             }
@@ -342,6 +422,12 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             Nns::Identifier { prefix, name } => {
                 let Some(p) = prefix else { return self.unimplemented("dependent name", loc) };
                 let p = self.nns(p, loc)?;
+                if self.nns_still_dependent(p) {
+                    // Substituted with dependent arguments: `X::name::`
+                    // stays dependent ([temp.dep.type]/6), rebuilt on
+                    // the substituted prefix (WP-121).
+                    return Ok(self.sema.ast.types.nns(Nns::Identifier { prefix: Some(p), name }));
+                }
                 let ctx = self.nns_context(p, loc)?;
                 let Some((c, spelled)) = self.sema.act_on_nested_name_spelled(Some(ctx), name, loc)
                 else {
@@ -358,6 +444,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             other => other,
         };
         Ok(self.sema.ast.types.nns(r))
+    }
+
+    /// True if the substituted specifier `n` is still dependent (its
+    /// arguments were dependent: an alias or member template named in
+    /// another template), so names after it are looked up later.
+    pub(crate) fn nns_still_dependent(&self, n: NnsId) -> bool {
+        self.sema.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
     }
 
     /// The context a substituted nested-name-specifier names (a class
@@ -398,7 +491,16 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 DeclOrPack::Decl(x) => Ok(x),
                 DeclOrPack::Pack(l) => {
                     let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
-                    let i = self.pack_reached(n, |s| s.sema.decl_name(d), loc)?;
+                    let i = self.pack_reached(
+                        n,
+                        |s| crate::templ::pack::PackName {
+                            name: s.sema.decl_name(d),
+                            depth: None,
+                            outer: false,
+                            partial: false,
+                        },
+                        loc,
+                    )?;
                     self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)
                 }
             };
@@ -425,6 +527,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         // being instantiated (its template is not itself a context).
         let inst_parent = self.find_instantiated_decl(parent, loc)?;
         if inst_parent == parent {
+            // The parent depends only on levels this substitution keeps
+            // (an alias or member template of a class template named
+            // inside its pattern): the member stays (clang's
+            // `FindInstantiatedDecl`, `ParentDependsOnArgs`).
+            if self.levels_retained(self.sema.ctx_template_levels(parent)) {
+                return Ok(d);
+            }
             return self.unimplemented("reference to a member of a dependent context", loc);
         }
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
@@ -434,8 +543,9 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         if let Some(m) = self.sema.ast.templates.find_member(inst_parent, d) {
             return Ok(m);
         }
-        // An out-of-line definition (`template<class T> T A<T>::st;`)
-        // names the member its first declaration declares.
+        // An out-of-line redeclaration of the member (`T C<T>::z = ...;`
+        // found by lookup in a later out-of-line initializer): the
+        // member instantiated from its first declaration.
         let first = self.sema.ast.first(d);
         if first != d
             && let Some(m) = self.sema.ast.templates.find_member(inst_parent, first)
@@ -448,7 +558,48 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     }
 }
 
+impl Substituter<'_, '_, '_> {
+    /// True if none of the outermost `n` levels is substituted (a level of
+    /// undeduced arguments keeps its parameters, as a class template's
+    /// does in the guide of a constructor template, WP-134).
+    fn levels_retained(&self, n: u16) -> bool {
+        (0..n).all(|k| {
+            self.args.level(k).is_none_or(|l| {
+                l.mode == crate::templ::args::LevelMode::Retain
+                    || self
+                        .sema
+                        .ast
+                        .types
+                        .args(l.args)
+                        .iter()
+                        .all(|a| matches!(a.view(), ArgView::Null))
+            })
+        })
+    }
+}
+
 impl Sema<'_, '_> {
+    /// The number of template parameter levels context `c` is inside
+    /// (its own, for a template pattern or partial specialization).
+    pub(crate) fn ctx_template_levels(&self, c: DeclId) -> u16 {
+        let mut cur = Some(c);
+        let mut guard = 0;
+        while let Some(d) = cur {
+            if let Some(t) = self.ast.described_template(d) {
+                return self.template_param_depth(t) + 1;
+            }
+            if let Some((_, p)) = self.ast.partial_spec_info(d) {
+                return self.ast.templates.param_list(p.params).depth + 1;
+            }
+            guard += 1;
+            if guard > 1024 {
+                break;
+            }
+            cur = self.ast.decls.get(d).ctx();
+        }
+        0
+    }
+
     /// Whether template-argument flags `f` make a node dependent.
     pub(crate) fn dependent_flags(f: TypeFlags) -> bool {
         f.intersects(TypeFlags::DEPENDENT_INSTANTIATION | TypeFlags::UNEXPANDED_PACK)

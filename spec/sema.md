@@ -36,7 +36,8 @@ source manager it reports against.
 | `declared_returns` | the declared (placeholder) function type of a deduced-return function, for its redeclarations (§4.3.1) |
 | `group_placeholders` | placeholder types of instantiation-pattern variables whose declarator group passed the one-deduction check, for the re-check at instantiation (§4.3.1) |
 | `pragma_packs` | `#pragma pack` directives seen, with their location and argument text (recorded for the class layout, sema-class.md §6.1) |
-| `immediate` | depth of immediate function contexts ([expr.const]/16) entered by `if consteval` |
+| `immediate` | depth of immediate function contexts ([expr.const]/16) entered by `if consteval` and `consteval` bodies (§5.10) |
+| `imm` | immediate invocations and immediate-function references of the current full-expression, and why escalated functions are immediate (§5.10) |
 | `oven` | the constant evaluator and its budget |
 | `classes`, `implicit_declared`, `delayed_access` (+ `delayed_access_depth`), `cleanup`, `extend_collector`, `unparsed_exc` | class state, sema-class.md §8.3 (`FnState` gains `this_ty`/`this_override`, `Scope` gains `nrvo`) |
 
@@ -125,6 +126,11 @@ Constructors:
   per [basic.link]/6 and clang's local extern decls.
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
+  Landed (WP-140): a non-dependent typedef or alias qualifier is
+  replaced by the class or enumeration it names before the lookup, as
+  `act_on_nested_name` does, so `typedef D J; J::T x;` declares `x`
+  (libc++ `<typeinfo>`'s `__impl::__type_name_t`;
+  `tests/conformance/basic.lookup.qual/typedef-qualifier-decl.cpp`).
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
@@ -149,8 +155,18 @@ Constructors:
    - arrays of references, functions, `void` or abstract types
    - functions returning arrays or functions
    - references to references, pointers to references
-   - array bounds: converted constant expressions, which must be
-     positive
+   - array bounds: converted constant expressions of integral,
+     unscoped enumeration or `_Atomic` integral type, which must be
+     positive. A bound that is not a constant expression is a VLA, which
+     kiln does not support (`sema_vla_unsupported`), except at namespace
+     or class scope, where a bound that `OvenBridge::fold_rvalue_int`
+     folds (lax mode: e.g. a `const _Atomic(int)` or `const` variable
+     with a non-constant-expression initializer that is still a constant)
+     gives clang's `TryToFixInvalidVariablyModifiedType` result: a
+     constant array, `-Wvla-cxx-extension` at the bound (with the strict
+     evaluation's notes) and the ExtWarn "variable length array folded
+     to constant array as an extension" [-Wgnu-folding-constant] at the
+     declarator name (WP-165)
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
    are compatible, and links the redeclaration chain.
@@ -207,6 +223,11 @@ Redeclaration and linkage rules:
   asm label, where `{` is not a body) is
   `illegal initializer (only variables can be initialized)` at the
   declaration, which becomes invalid.
+- **An `extern` variable with an initializer** is an error at block
+  scope; elsewhere it warns `'extern' variable has an initializer`
+  (-Wextern-initializer) unless its base element type is const, it is
+  `extern "C"`, or it is a template instantiation (clang
+  `AddInitializerToDecl`). Explicit and partial specializations warn.
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.
@@ -280,6 +301,22 @@ Redeclaration and linkage rules:
   the deduced one, and then adopts the deduced type
   (`adopt_deduced_return`), so `auto f(); auto f() { return 1; } auto
   f();` is valid and `int f();` after it is not.
+- Deduced return types in templated functions (WP-122,
+  [dcl.spec.auto.general]/12): when the body is in a dependent context
+  (`in_template()`), `begin_function_body` gives the pattern the
+  return type `dependent_auto(declared)` (clang's AutoType "deduced as
+  dependent", printed `auto`, canonical to itself so it mangles `Da`/
+  `Dc`) and `deduce_return` checks nothing. The pattern's returns are
+  left unconverted, `return;` / `return void();` are not diagnosed
+  against the dependent type, and there is no NRVO candidate
+  (`copy_elision_candidate`), as in clang. Deduction runs when the body
+  is instantiated, so a `return` in a discarded `if constexpr` branch
+  never participates (libc++ `__get_comp_type`) and only a real
+  conflict between instantiated returns is reported. `return {…}` is
+  still an error in the pattern. A call `x.g()` to a member whose
+  return type is not yet deduced goes through `check_undeduced_use`
+  (instantiating it when it is a specialization member) before
+  member-call building.
 - Declarator groups ([dcl.spec.auto.general]/3, /8): the parser records
   each declarator of a simple-declaration or member-declaration with
   `act_on_group_declarator(&mut AutoGroup, d)` and closes the group with
@@ -298,6 +335,35 @@ Redeclaration and linkage rules:
   `expression with side effects has no effect in an unevaluated
   context`, at clang's expression location. Not in instantiations, not
   for type- or value-dependent operands, not for macro locations.
+- **`[[assume(e)]]`** ([dcl.attr.assume]; WP-160, `stmt.rs`
+  `act_on_attributed_stmt`). Clang's order is followed for each attribute:
+  - On a declaration: `'assume' attribute cannot be applied to a
+    declaration`.
+  - On a statement that is not null: `'assume' attribute only applies to
+    empty statements`.
+  - Otherwise, `build_cxx_assume_expr` contextually converts the
+    assumption to `bool` and makes it a full-expression. It warns
+    `assumption is ignored because it contains (potential) side-effects`
+    (`-Wassume`, at the expression's begin location) when
+    `side_effects.rs` `has_possible_side_effects` holds. That predicate is
+    clang's `HasSideEffects(IncludePossibleEffects=true)`: a call to a
+    function that is not `const`/`pure`, a volatile read, a `dynamic_cast`
+    to a reference, a non-trivial construction, a temporary with a
+    destructor, `new`/`delete`/`throw`, assignment, increment or
+    decrement, any dependent or unresolved node, and, through
+    default-argument, default-member-initializer and lambda-capture
+    initializers, whatever they contain.
+  - Before C++23, `-pedantic` adds `use of the 'assume' attribute is a C++23
+    extension` (`-Wc++23-attribute-extensions`, which is not under
+    `-Wc++23-extensions`).
+  - The result is an `AttributedStmt` with one `ASSUME` attribute per
+    assumption kept: `a` is the expression and `b` is clang's
+    `getExprLoc`. `AttrNode::ASSUME_IGNORED` marks a side-effecting or
+    dependent assumption, and codegen and the oven skip those.
+  - A dependent assumption is converted and checked again on
+    instantiation (`templ/subst/stmts.rs`).
+  - Not kept yet: `likely`/`unlikely`/`fallthrough` in the
+    `AttributedStmt`.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 
@@ -323,6 +389,145 @@ and returns the scope it names:
 - The Substituter keeps the written keyword of a substituted
   `DependentNameType` (`typename S::type`, as clang's
   `ElaboratedType`); it was dropped before.
+
+### 4.3.2 Class template argument deduction (`templ/ctad.rs`, WP-071b, WP-134)
+[dcl.type.class.deduct], [over.match.class.deduct], [temp.deduct.guide].
+
+**Implemented.**
+- **Guides parse** at namespace and class scope: `[explicit] X(params)
+  -> X<…>;`, as a template or not, with a requires-clause. The
+  declarator name is `SpecialName::DeductionGuide(template)`, the
+  declaration a `CXXDeductionGuide` (`act_on_deduction_guide`). Guides
+  are found by lookup of that name in the template's context
+  (`user_guides`).
+- **Placeholder.** A class template name used as a type specifier is a
+  `DeducedTemplateSpecialization` (DTS) type with no deduced type
+  (`ctad_placeholder`). The parser accepts one in a simple-declaration,
+  after `new`, and before `(`/`{` in an expression (functional cast).
+- **Sites.** Each site calls `deduce_ctad(declared, args, braced, how,
+  loc)` with `how` one of `CtadInit::{Direct, DirectList, Copy, CopyList}`:
+  - variables (`act_on_init`; `act_on_uninit` for `X x;`);
+  - `new X(…)`, `new X{…}`, `new X`;
+  - `X(…)`, `X{…}`, `X()` (`ctad_cast_type`,
+    `act_on_ctad_list_cast_type`).
+
+  The result is the DTS with the deduced type (printed as the
+  specialization, as clang), with the declared cv-qualifiers.
+- **Guide set** (`ctad_guides`). The implicit guides are cached per
+  template in `TemplState::ctad_guides` once the class has a
+  definition; `TemplState::ctad_origin` records each one's origin
+  (`GuideOrigin::{Ctor, CtorTemplate, Copy, Aggregate}`). The set is:
+  - one implicit guide per non-template constructor of the primary
+    definition (a hypothetical `X()` when there is none). An implicit
+    guide is a detached `FunctionTemplate` over the class template's
+    own parameter list (`AstContext::detached_template_decl`) with
+    return type `X<T…>`, the constructor's parameters (names) and
+    trailing requires-clause. A parameter with a default argument gets
+    a source-less `OpaqueValueExpr` of its type as the guide's default
+    (`guide_default_placeholder`, WP-152; clang's
+    `transformFunctionTypeParam`, printed `<null expr>`): the guide has
+    the constructor's arity but its default arguments are never
+    substituted or evaluated (the constructor's expression names the
+    constructor's template parameters, not the guide's). Substituting a
+    guide specialization's declaration (`Substituter::default_args`)
+    gives it another placeholder of the substituted type;
+  - one guide per constructor template (`ctor_template_guide`, WP-134):
+    the class parameters followed by the constructor template's,
+    re-depthed one level shallower and renumbered after them
+    (`ctad_redepth_param`; the class level is substituted by null
+    arguments, which retain it); its constraints are the class
+    template's and the constructor template's, conjoined;
+  - the copy deduction candidate `X(X<T…>) -> X<T…>`;
+  - P1816 (WP-134): when `X` has no user guides and the initializer is
+    a non-empty braced or parenthesized list, the aggregate deduction
+    candidate (`aggregate_guide`): one parameter per element the
+    initializers initialize (bases, then fields), brace elision assumed
+    only for a non-dependent sub-aggregate or an array whose bound is
+    not value-dependent; a braced element or string literal for an
+    array of dependent bound is `T(&&)[N]` / `const T(&)[N]`. Not cached: it depends on the initializer. Call
+    deduction deduces `P'[N]` from a braced list (each element deduces
+    `P'`, the length `N`);
+  - the user guides (`user_guides`).
+- **Member templates** (WP-134). A member class template of a class
+  template specialization (`Outer<int>::In`, redeclared at
+  instantiation, [temp.mem]) has no definition until one of its
+  specializations is instantiated. Its implicit guides
+  (`member_ctor_guides`) take the original member's non-template
+  constructors, their parameter types substituted with
+  `base_levels(tmpl)` plus the redeclared template's own parameters as
+  arguments. Its member deduction guides are redeclared with it: the
+  Substituter maps a `DeductionGuide(t)` name to the instantiated `t`.
+  Each constructor template of the original member gives a guide
+  (WP-152, `ctor_template_guide` with the member levels): the
+  redeclared template's parameters followed by the constructor
+  template's, retained at the redeclared template's depth.
+  The member is named as a placeholder through an alias of the
+  specialization (`using O = Outer<int>; O::In`) or through the
+  template-id itself (`Outer<int>::In`, WP-152): the lookahead finds
+  `In` in `Outer`'s primary pattern, so `parse_ctad_placeholder`
+  classifies the name again in the context the parsed
+  nested-name-specifier names and takes the instantiated member.
+- **Alias templates (P1814, WP-134).** For `A<…>` naming an alias
+  template whose defining-type-id is a simple-template-id `C<…>`, each
+  guide `g` of `C` is transformed (`build_alias_guide`): `g`'s return
+  type is deduced from the RHS (packs deduce element-wise,
+  `DeducedArgs::expansions`); the alias parameters used by the
+  deductions are kept (renumbered when only some are); the deductions
+  are resugared to them; `g`'s undeduced parameters follow. The guide
+  carries `ctad_alias[g'] = (alias, rhs)`, and `deduce_call` checks
+  clang's `__is_deducible(A, R)` on the deduced return type
+  (`note_alias_not_deducible`). An RHS that is not a simple-template-id
+  is `sema_ctad_non_deducible_template`.
+- **Resolution.** The usual candidate machinery with `deduce_call`, then
+  `order_template_candidates` and `best_viable`.
+  - List-initialization runs [over.match.list] phase 1 first (WP-134):
+    the initializer-list guides (first parameter (reference to cv)
+    `std::initializer_list<E>`, dependent or not; any others defaulted;
+    `is_init_list_guide`) with the whole list as one argument. A
+    viable or ambiguous phase 1 decides; otherwise phase 2 runs all
+    guides on the elements. A single element whose type is a
+    specialization of `X` or derived from one skips phase 1
+    (`ctad_list_of_spec`).
+  - In copy-initialization (`=` and `= {…}`), explicit guides and
+    constructors are non-viable (`CandidateFailure::Explicit`).
+  - In copy-list-initialization, an explicit winner is
+    `sema_ctad_explicit_copy_list` plus `note_ctad_explicit_here`.
+  - Tie-breakers in `overload/best.rs`
+    ([over.match.best.general]/2.11-2.13): a user guide beats an
+    implicit one; the copy deduction candidate beats the others; a
+    non-template constructor's guide beats a constructor template's.
+- **Diagnostics** use clang's wording: `sema_ctad_no_viable`,
+  `sema_ctad_ambiguous`, and the explicit-copy-list error and note
+  above. Each implicit-guide candidate note is followed by
+  `implicit deduction guide declared as '<sig>'`
+  (`implicit_guide_signature`; parameter names as clang's DeclPrinter
+  places them, `Ts ...xs`, and an inherited default argument as
+  `= <null expr>`).
+- **Array new.** `new X[n]{…}` with a placeholder element type is
+  `sema_ctad_compound_type` ("cannot form array of deduced class
+  template specialization type") at the innermost bound, as clang.
+- **AST dump.** A user-declared `CXXDeductionGuideDecl` is compared
+  against clang (spec/ast-dump.md); implicit guides are not dumped.
+- **Dependent initializers.** A type-dependent argument gives the DTS
+  deduced as `QualType::DEPENDENT`. The Substituter maps it back to the
+  undeduced placeholder, so deduction is redone for the instantiation.
+  A non-dependent use in a template is deduced at definition.
+
+**Deferred (no candidate, or diagnosed as unsupported).**
+- Inherited-constructor guides (P2582): clang 19 does not implement
+  them either, so `D d(args)` through `using B<T>::B;` finds only `D`'s
+  own guides, as clang 19 does. Implementing it is the alias transform
+  of `B`'s guides with `D`'s base-specifier as the right-hand side.
+- Guides from constructor templates of a member class template of an
+  instantiated class template (only its non-template constructors and
+  user guides are used).
+- Qualified CTAD through a template-id, `Outer<int>::In x(…)`: the
+  parser classifies `In` as a dependent name, giving a variable of a
+  dependent type with no diagnostic (name classification, not CTAD;
+  `using O = Outer<int>; O::In x(…)` works).
+- `sema_ctad_deleted` (a deleted constructor selected) and
+  `sema_ctad_not_allowed` (a placeholder in a non-deducible position)
+  are reserved ids that nothing emits yet.
 
 ### 4.4 Tags, enumerations, bit-fields and anonymous records
 - **`act_on_tag(kind, name, TagUse, …)`** implements [dcl.type.elab]
@@ -370,6 +575,41 @@ and returns the scope it names:
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)
+  - `ext_vector_type(N)` / `vector_size(N)` (GNU syntax; `vector.rs`).
+    They take exactly one expression and are consumed into the declared
+    type, never attached. `ext_vector_type` applies only to a typedef or
+    alias-declaration (`'ext_vector_type' attribute only applies to
+    typedefs`); `vector_size` also to the type of a variable, field or
+    parameter. Among the decl-specifiers they modify the decl-specifier
+    type (so a function can return a vector); after a declarator, the
+    whole declared type (on a function, pointer or array declarator:
+    an invalid element type, after which the type is left unchanged,
+    as clang). The element
+    type must be integral or floating (`vector_size`: a non-`bool`
+    builtin), else `invalid vector element type 'T'`; N must be an
+    integral constant (`ext_vector_type attribute requires an integer
+    constant`), nonzero (`zero vector size`) and, for `vector_size`, a
+    multiple of the element size (`vector size not an integral multiple
+    of component size`). A value-dependent N (or a dependent element of
+    a `vector_size` vector) gives a `DependentVector` (spec/types.md);
+    after substitution it is diagnosed at the size operand (clang: at
+    the attribute name).
+  - GNU `malloc` (function with a pointer result, else `'malloc'
+    attribute only applies to return values that are pointers`; on a
+    non-function `... only applies to functions`), `alloc_size(n[, m])`
+    and `alloc_align(n)` (`vector.rs::alloc_attribute`, checked in
+    `decl.rs::check_alloc_attr` as clang's `handleAllocSizeAttr` /
+    `AddAllocAlignAttr`): integer-constant one-based indices (`requires
+    parameter N to be an integer constant`; arity: `takes at least 1
+    argument` / `takes no more than 2 arguments` / `takes one argument`)
+    naming an integer parameter (`parameter N is out of bounds`, `argument
+    may only refer to a function parameter of integer type` at the
+    argument, a dependent parameter included; index 1 of an implicit
+    object member function: `is invalid for the implicit this
+    argument`); the result must be a pointer (`alloc_align`: or a
+    reference), else a `-Wignored-attributes` warning; on a non-function
+    `only applies to non-K&R-style functions`. Codegen: spec/codegen.md
+    "Allocation functions".
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -382,6 +622,9 @@ and returns the scope it names:
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
   | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
   | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
+  | MALLOC | — | — |
+  | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
+  | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -492,8 +735,13 @@ specification as written (`TypeNames` prints ` noexcept`,
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
 - **Using-declarators** ([namespace.udecl]):
-  `act_on_using_declarator(using_loc, qual, name, name_loc, if_exists)`
-  handles one declarator of `using a::x, b::y;`.
+  `act_on_using_declarator(using_loc, qual, name: DeclName, name_loc,
+  if_exists, ellipsis)` handles one declarator of `using a::x, b::y;`.
+  The name may be an operator or conversion function name (WP-149).
+  A declarator with `...` ([namespace.udecl]/1,
+  P0195) is a pack expansion over a dependent qualifier, expanded
+  per element when the class template is instantiated
+  (`templ/class.rs` `member_using`).
   - The name must be qualified: `using declaration requires a
     qualified name`.
   - The target is looked up with `LookupKind::All` in the qualifier's
@@ -513,6 +761,19 @@ specification as written (`TypeNames` prints ` noexcept`,
     the qualifier, and one `UsingShadow` per declaration found is entered
     in the current scope (a local scope's `locals`, or the context's
     table).
+  - `using typename q::x;` ([namespace.udecl]/1, /12;
+    `act_on_using_typename_declarator`, WP-169): with a dependent
+    qualifier in a class member specification, the declarator is kept
+    as a member alias `x` of the dependent type `typename q::x`
+    (recorded in `Sema::using_typename`); at instantiation
+    (`templ/class.rs` `member_using_typename`) it is redone as an
+    ordinary using-declarator, and references to the alias in
+    instantiated members resolve to the type of its shadow's target
+    (`subst/types.rs` `decl_type`). With a non-dependent qualifier, or
+    at instantiation, a target that is not a type reports `'typename'
+    keyword used on a non-type` at the name, with the `target of using
+    declaration` note (clang's `err_using_typename_non_type`). Kiln has
+    no `UnresolvedUsingTypename` node; the dump shows the alias.
 - **Conflicts** ([namespace.udecl]/11, [basic.scope.scope]/4), as in
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:
@@ -526,9 +787,12 @@ specification as written (`TypeNames` prints ` noexcept`,
     conflicts with declaration already in scope`, with notes at the
     target and the conflicting declaration; no shadow is made.
   - A later declaration that conflicts with a shadow
-    (`check_using_shadow_conflict`, from variable, function and typedef
-    declarations) reports `declaration conflicts with target of using
-    declaration already in scope`, and is marked invalid.
+    (`check_using_shadow_conflict`, from variable, function, typedef
+    and tag declarations, including operator, literal-operator and
+    conversion function names, WP-146) reports `declaration conflicts with
+    target of using declaration already in scope`, and is marked invalid;
+    in a class a member function instead hides the shadow
+    ([namespace.udecl]/14, `Decls::hidden_shadow`).
   - Repeating a using-declaration of the same entity is allowed; the new
     shadow redeclares the old one.
 - **Class scope:** kiln has no base classes yet (M3), so every
@@ -565,6 +829,154 @@ specification as written (`TypeNames` prints ` noexcept`,
 - **Uses:** a `DeclRefExpr` found through a shadow records it as its
   found declaration (`build_decl_ref_via`; `DeclRefExtra::found_decl`).
 
+### 4.9 Structured bindings (`struct_bind.rs`)
+
+**Landed (WP-122).** [dcl.struct.bind] for simple-declarations,
+conditions, range-for loop variables, namespace scope (`static`,
+`thread_local` and plain) and block scope, matching clang 19's AST,
+diagnostics and IR.
+
+- **Representation** (spec/ast.md §4). The decomposed object `e` is a
+  `DeclKind::Var` with an empty name, located at `[` (clang's
+  `DecompositionDecl`). Each name is a `DeclKind::Binding` declared
+  before it. The links are write-once cold maps:
+  - `set_decomp_bindings(v, list, bindings)` records the bindings, read
+    back with `decomp_bindings(v)`, `is_decomposition(v)` and
+    `binding_decomp(b)`;
+  - `set_binding(b, expr, holding)` records the binding expression
+    (`binding_expr(b)`) and, for a tuple-like type, the holding
+    variable (`binding_var(b)`, built with `builder.holding_var`).
+
+  `decl_name(v)` prints `[a, b]`, as clang's `printName` does.
+- **Declaring.** The parser hands a declarator with a decomposition to
+  `act_on_decomposition_declarator`:
+  - In a template-declaration it is `decomposition declaration template
+    not supported`.
+  - In a condition (`DeclaratorContext::Condition`, not an
+    init-statement) it warns `ISO C++17 does not permit structured
+    binding declaration in a condition` (`-Wbinding-in-condition`) at
+    `[`. Clang 19 does not implement P0963 yet and warns in C++26 too.
+  - Only `static`, `thread_local`, `auto` and cv are allowed
+    ([dcl.pre]/6). Another storage class, `constexpr`, `consteval`,
+    `constinit` or `inline` is `decomposition declaration cannot be
+    declared 'constexpr'`, or `... with 'static constexpr' specifiers`
+    when there are several, at the first one. The declaration continues:
+    a `constexpr` is still applied, which makes `e` const, as in clang.
+  - A declarator chunk other than `&`/`&&` is `decomposition declaration
+    cannot be declared with parentheses` or `... with type 'T'; declared
+    type must be 'auto' or reference to 'auto'`.
+  - A constrained placeholder is `decomposition declaration cannot be
+    declared with constrained 'auto'`.
+
+  `declare_decomposition` then declares the bindings: redefinitions are
+  checked against earlier names, binding attributes are attached, and a
+  pack `...a` (P1061) is reported as `a structured binding pack` is
+  unsupported. It then declares `e`. A second declarator in the same
+  group is `decomposition declaration must be the only declaration in
+  its group` (`act_on_decomposition_not_alone`). A missing initializer
+  is `decomposition declaration '[a, b]' requires an initializer`
+  (`decomposition_requires_init`).
+- **Initializing** (`act_on_init`):
+  - `auto [a, b] = arr;` with a plain `cv auto` and an array initializer
+    deduces `cv A`. It initializes element-wise with an
+    `ArrayInitLoopExpr` (`decomp_array_type`, `init_decomposition_array`,
+    clang's `TryArrayCopy`).
+  - Otherwise `e` is deduced and initialized as an ordinary variable.
+
+  `complete_decomposition` (clang's
+  `CheckCompleteDecompositionDeclaration`) then gives every binding a
+  type and an expression. An invalid `e` or an error initializer
+  invalidates the bindings silently. A dependent `e` gives them
+  `QualType::DEPENDENT` until instantiation.
+  - **Arrays** (`decompose_array`): `e[i]` (an `ArraySubscriptExpr` on a
+    `DeclRefExpr` to `e`), of the element type with `e`'s cv.
+  - **Tuple-like** (`tuple_like`, `decompose_tuple`): applies when
+    `std::tuple_size<E>` is a complete class.
+    - A `value` that is not an integral constant expression is `cannot
+      decompose this type; 'std::tuple_size<T>::value' is not a valid
+      integral constant expression`.
+    - Each binding gets a holding variable of type `tuple_element<i,
+      E>::type&` (lvalue `e`) or `&&`, with the binding's name. It is
+      initialized with `e.get<i>()` when a member template `get` has a
+      non-type first parameter, else with an ADL-only `get<i>(xvalue
+      e)`, which prints `adl`.
+    - The binding's type is `tuple_element<i, E>::type`, as written,
+      and its expression a `DeclRefExpr` to the holding variable.
+    - `tuple_element` is checked after the `get` call. An incomplete
+      specialization gets clang's `implicit instantiation of undefined
+      template 'std::tuple_element<0, T>'` (`std_trait_ty(..,
+      complain = true)`). A specialization without `type` is `cannot
+      decompose this type; 'std::tuple_element<0>::type' does not name a
+      type`.
+    - A failed `get` call that had candidates is recovered as clang does
+      (a `RecoveryExpr`), and the next binding is still checked.
+      An empty `get` lookup (`use of undeclared identifier 'get'`) or a
+      failed initialization stops at that binding.
+    - The holding variable's initialization runs in a
+      `FrameKind::BindingInit` frame, whose note is `in implicit
+      initialization of binding declaration 'a'`.
+  - **Classes** (`decomposable_class`, `decompose_members`): the bindings
+    are `e.mi` (a `MemberExpr`) for the non-static data members of the
+    one class in the hierarchy that has any. The member's type gets
+    `e`'s cv, with `mutable` dropping const.
+    - Fields spread over several classes are `cannot decompose class type
+      'D': both it and its base class 'B' have non-static data members`
+      (or `its base classes 'A' and 'B'`).
+    - An ambiguous base is `cannot decompose members of ambiguous base
+      class 'B' of 'D'`.
+    - A lambda closure is `cannot decompose lambda closure type`.
+    - An anonymous struct or union member is `cannot decompose class
+      type 'S' because it has an anonymous struct|union member`, with a
+      note.
+    - An inaccessible member is `cannot decompose private|protected
+      member 'x' of 'S'` at the binding, through the usual access
+      check.
+    - A union or a non-class type is `cannot decompose union|non-class,
+      non-array type 'T'`.
+    - A bit-field member makes the binding a bit-field lvalue. Every
+      `DeclRefExpr` to it is marked `bitfield` (`mark_bitfield`, clang's
+      `refersToBitField`), so `int &r = b;` is `non-const reference
+      cannot bind to bit-field 'b'`.
+  - A binding count that differs from the element count is `type 'T'
+    decomposes into N elements, but M names were provided` (`1 name
+    was`, `only 1 name was`).
+- **Uses.** A `DeclRefExpr` to a binding is an lvalue of the binding's
+  type, kind `Binding`. A binding is captured by a lambda as the entity
+  it names ([expr.prim.lambda.capture]/12, P1091R3): `has_local_storage`
+  and `may_need_capture` follow `binding_decomp`. Codegen loads a
+  captured binding through the closure field. Reference binding
+  (`conv::bind_reference`) looks through a binding to its expression for
+  the bit-field check.
+- **Templates.** `decomp_written` records each pattern's declared type.
+  `templ/subst/decls.rs` re-declares the bindings and `e` from it, then
+  completes the decomposition. A range-for loop variable and a
+  condition are re-declared in `templ/subst/stmts.rs`. Binding
+  attributes are not instantiated.
+- **Constant evaluation and codegen.** The Oven and codegen treat `e`
+  as an ordinary variable, followed by the holding variables
+  (`kiln_oven` `holding_vars`, codegen `emit_var_decl`). A use of a
+  binding evaluates or emits its binding expression. A namespace-scope
+  `e` mangles as `_ZDC1a1bE` (`kiln_abi` `mangle_decomp.rs`, `DC
+  <source-name>+ E`, never `L`-prefixed). A `constexpr` decomposition is
+  rejected, so constant bindings come from a `const` `e` with a
+  constant initializer, which is usable in constant expressions.
+- **Fixed on the way.**
+  - A reference that cannot bind (to `void`, or to a non-class type
+    with no conversion) is `reference to type 'int' could not bind to
+    an rvalue|lvalue of type 'void'` (`sema_reference_bind_failed`, the
+    referee as written, clang's `FK_ReferenceInitFailed`).
+  - `implicit instantiation of undefined template` names the
+    specialization fully qualified (`Sema::decl_ty_str`, clang's
+    printing of `getTypeDeclType`).
+- **Left.**
+  - Structured binding packs (P1061).
+  - `constexpr` structured bindings (P2686; clang 19 rejects them too).
+  - Instantiating binding attributes.
+  - The NoOp `'const M'` cast clang adds when a const class `e` is
+    copy-initialized from a prvalue.
+  - Clang 19 rejects a capture of a binding by a lambda in a constant
+    expression, and kiln accepts it.
+
 ## 5. Expressions (`expr.rs`, `conv/`)
 - **Typed nodes:** each `act_on_*` builds clang's typed node, with
   implicit conversions spelled out as `ImplicitCastExpr`
@@ -575,15 +987,18 @@ specification as written (`TypeNames` prints ` noexcept`,
 - **Supported expressions:**
   - **names:** DeclRefExpr, enumerators, functions with
     function-to-pointer decay
-  - **literals:** via `kiln_sema::literal`; user-defined literals are
-    diagnosed with clang's `no matching literal operator`
+  - **literals:** via `kiln_sema::literal`; user-defined literals
+    call literal operators (sema-overload.md §6.7); when no form
+    matches, clang's `no matching literal operator` is reported
   - **operators:**
     - unary and binary operators, including compound assignment (its
       computation type promotes the left operand's type, bit-fields
       by width, and an unscoped-enumeration left operand is then an
       error: sema-conv.md §6)
     - `?:`, the comma operator
-    - increment and decrement
+    - increment and decrement (of `bool`, or `_Atomic(bool)`: `++` is
+      clang's DefaultError `-Wincrement-bool` extension and is then
+      accepted, `--` is always an error; WP-165)
   - **calls:** argument conversion, arity notes, variadic default
     promotions
   - **member access:** `.` and `->` on records and through
@@ -624,6 +1039,15 @@ specification as written (`TypeNames` prints ` noexcept`,
   Not yet: the composite type that needs a cv-union of both sides
   (`const int B::*` vs `volatile int D::*`; [expr.type]/4.6) and
   constant evaluation of the comparison (WP-076).
+- **Composite pointer type** ([expr.type]/4; `composite_pointer` in
+  `expr.rs`, used by `==`, `<`, `<=>` and `?:`): after the null,
+  same-type and one-way-conversion cases, `cv_combined_pointer` tries a
+  pointer to either side's unqualified pointee with the cv-qualifiers of
+  both (`void *` vs `const B *` is `const void *`; `B *` vs `const D *`
+  is `const B *`), taking the first that both operands reach by a
+  standard conversion (WP-155). Not yet: multi-level cv-combination
+  (`int **` vs `const int **` is `const int *const *`) and the member
+  pointer case above.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -694,6 +1118,24 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 - **Evaluation:** the Oven answers `true` in a manifestly
   constant-evaluated context and `false` otherwise (spec/oven.md);
   codegen emits `i1 false` (spec/codegen.md).
+- **Library functions** (WP-171, clang `ActOnFunctionDeclarator`'s
+  library-builtin recognition + `AddKnownFunctionAttributes`,
+  `add_known_function_attrs`): the first declaration of a function
+  named in `builtin::LIB` (clang 19's library builtins carrying
+  `NoThrow` / `Const` / `Pure`: `<string.h>`, `<stdio.h>` `*printf`,
+  `<ctype.h>`, `<wchar.h>`, `<math.h>` d/f/l), declared in a namespace
+  scope context (TU or namespace, through linkage specs) with C
+  language linkage and with the row's type ignoring the exception
+  specification, gets implicit `NoThrow` and `Const`/`Pure` attributes
+  (after its written ones). Sig letter `a` is `__builtin_va_list`
+  (decayed when an array), `P` the type of the TU-scope `FILE`
+  typedef (none yet: not recognized). Redeclarations inherit them
+  (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
+  a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
+  true). No `Builtin` attribute is attached, so the call stays an
+  ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
+  calls to intrinsics and its implicit `format` / `alloc_size`
+  attributes (`-Wformat*`) are not modelled.
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:
@@ -749,6 +1191,14 @@ for them.
     The result is always a prvalue.
   - An unused statement expression warns as clang's
     `isUnusedResultAWarning` does.
+- **Unused results** (`unused_warning`, clang `isUnusedResultAWarning`
+  / `DiagnoseUnusedExprResult`; WP-158): a functional, C-style or
+  `static_cast` constructor conversion (`X(1);`) is checked through its
+  operand, looking through temporary binding, materialization and
+  cleanups; a constructor call warns only when the constructor or its
+  class is `[[nodiscard]]` (`ignoring temporary created by a constructor
+  declared with 'nodiscard' attribute[: msg]`, -Wunused-value). A braced
+  or scalar functional cast warns `expression result unused`.
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
@@ -787,8 +1237,10 @@ clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
 and aggregate element types.
 - **Implicit global operators** ([basic.stc.dynamic.general]/2):
   `declare_global_new_delete` runs once, the first time a new- or
-  delete-expression or a declaration of a global `operator new`/`delete`
-  needs it (clang's `DeclareGlobalNewDelete`). It declares, as implicit
+  delete-expression, a declaration of a global `operator new`/`delete`,
+  or an unqualified or `::`-qualified id-expression naming one
+  (`::operator new(n)`, WP-158) needs it (clang's
+  `DeclareGlobalNewDelete`). It declares, as implicit
   TU-scope functions in clang's order, `operator new`/`new[]` taking
   `(size_t)` and `(size_t, std::align_val_t)`, and `operator
   delete`/`delete[]` taking `(void*)`, `(void*, align_val_t)`,
@@ -856,6 +1308,199 @@ and aggregate element types.
   default arguments of a user-declared allocation function are not
   used (every parameter must be matched by an argument).
 
+### 5.10 Immediate functions (`consteval.rs`, WP-133)
+clang's `CheckForImmediateInvocation`, `HandleImmediateInvocations` and
+P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
+- **Declarations.** `consteval` is accepted on functions, member
+  functions, constructors, conversion functions, lambdas (`[]()
+  consteval {}`) and function templates, and dumped as clang does
+  (`consteval`; an escalated function is `constexpr immediate`, a
+  lambda's escalated `__invoke` `implicit immediate`). Errors: on a
+  variable or field (`consteval can only be used in function
+  declarations`), a destructor, `main`, a parameter (`function parameter
+  cannot be constexpr|consteval|constinit`), with `constexpr`, and a
+  redeclaration that disagrees. A consteval virtual function is allowed
+  ([class.virtual]/19). `FnSpec::is_immediate()` (consteval or
+  escalated) is what codegen skips.
+- **Immediate function context** ([expr.const]/16): a consteval body,
+  the constant-evaluated branch of `if consteval`, an unevaluated
+  operand, and the manifestly constant-evaluated contexts the parser
+  brackets with `enter/exit_constant_evaluated` (`static_assert`,
+  array bounds, template arguments, the `if constexpr` condition,
+  `parse_constant_expr`). Nothing is wrapped or checked there.
+- **Invocations.** Building a call, member call, operator call or
+  construction of an immediate function outside such a context wraps
+  it in an unvalued `ConstantExpr` and records it as a candidate
+  (`check_immediate_invocation`); the callee's `DeclRefExpr` is dropped
+  from the references. `finish_immediate_invocations` runs at the end of
+  every full-expression (`act_on_full_expr`): nested candidates lose
+  their wrapper, the outermost are evaluated with `eval_const`
+  (`EvalKind::Consteval`) and the value stored in the `ConstantExpr`.
+  The initializer of a variable that is constant-initialized keeps its
+  wrappers unvalued (clang's deferred mode). A failure reports `call to
+  consteval|immediate function 'f' is not a constant expression` with
+  the Oven's notes. Default arguments and default member initializers
+  are not checked at their definition (`note_default_init_full_expr`).
+- **Default uses** ([expr.const]/16, [dcl.fct.default]/5, [class.mem]/10;
+  WP-137). Each use of a default argument (`convert_call_args`,
+  `ctor_args`) or default member initializer (aggregate `field_filler`,
+  a constructor's implicit member init in `collect_field_init`) whose
+  definition holds an unvalued invocation is recorded with
+  `note_default_use` and checked at the end of the using
+  full-expression (`check_default_use`): each invocation is evaluated
+  afresh, and a failure is `call to consteval function 'h' is not a
+  constant expression` at the invocation, then `in the default
+  initializer of 'p'` at the use (callee begin, construct loc, ctor
+  name, or the closing `}`/`)` of an aggregate init) and `declared here`
+  at the parameter or field. A default used inside another default
+  argument or initializer is checked at that definition only. In an
+  immediate-escalating function (defaulted or implicit constructor,
+  `constexpr` template specialization, lambda) the failure escalates
+  instead; a constructor's reason note is `'D' is an immediate
+  constructor because the default initializer of 'm' contains a call to
+  a consteval function 'h' and that call is not a constant expression`.
+  An instantiation re-checks the defaults its shared expressions and
+  rebuilt init lists use (`templ/subst/shared.rs`, `subst/exprs.rs`),
+  so a template use is reported at the definition and at each
+  instantiation. Codegen folds each use separately (WP-144). clang 19's
+  extra report at a class template's NSDMI instantiation and inside
+  `sizeof` are not replicated.
+- **References.** A `DeclRefExpr` (or `&C::m`) naming an immediate
+  function that is not the callee of a candidate is `cannot take
+  address of consteval function 'f' outside of an immediate
+  invocation`, with `declared here`. For a qualified name (`&C::m`, also
+  inside a member function) the error is at the qualifier, as clang.
+  The Oven also rejects a constant result (or a subobject of one) that
+  is a pointer, reference or member pointer to an immediate function:
+  `pointer|reference to a consteval declaration is not a constant
+  expression` at the invocation's callee, then `declared here`
+  ([expr.const]/22; WP-137).
+- **Escalation** (P2564, [expr.const]/18-20). Immediate-escalating:
+  a lambda call operator, a defaulted special member, a `constexpr`
+  function instantiated from a templated entity, and any templated
+  function while its definition is parsed. In one, a failed invocation
+  or a bad reference makes the function immediate (`FnSpec::escalated`)
+  instead of an error: the failed `ConstantExpr` loses its wrapper and
+  its callee `DeclRefExpr` (or the `CXXConstructExpr`) is flagged
+  `immediate-escalating` (dumped), and the reason is kept for the note
+  `'f' is an immediate function because its body contains a call to ...`
+  on a later failed call of `f`. Successful invocations in it are still
+  wrapped and folded. A specialization starts non-escalated whatever
+  its pattern is; refs already flagged are skipped. A lambda whose call
+  operator escalates gets an escalated `__invoke`, and its conversion
+  function to a function pointer is escalated too
+  ([expr.prim.lambda.closure]/10; clang 19 instead rejects every use of
+  the conversion of a consteval lambda).
+- **Templates.** A template definition's non-dependent invocations are
+  checked at the definition (they are shared with every instantiation);
+  dependent ones are built and checked at instantiation, with
+  `in instantiation of ...` notes. A `ConstantExpr` is substituted
+  through to its operand and re-wrapped by the rebuilt call. A shared
+  (not rebuilt) expression is walked at each instantiation and the
+  functions it odr-uses (named, constructors, bound destructors,
+  `operator new`/`delete`) are marked referenced, which defines or
+  instantiates them, as clang's rebuild does (`templ/subst/shared.rs`;
+  unevaluated operands and lambda bodies are not entered).
+- **Codegen.** A valued `ConstantExpr` lowers to its constant: scalars
+  directly, aggregates by clang 19's `CreateCoercedStore` into the
+  destination (one store per top-level element).
+- Gaps: the escalation of a generic lambda's conversion function is not
+  tracked per specialization; an implicit constructor does not escalate
+  through a member whose (non-NSDMI) default construction is a failed
+  consteval constructor call.
+
+### 5.11 Atomics (`builtins/atomic.rs`, WP-154)
+- **Builtins.** `__c11_atomic_*` and `__atomic_*` calls (the ids in
+  `kiln_ast::decl::builtin::atomic`) become an `AtomicExpr`, as clang's
+  `Sema::BuildAtomicExpr`: the pointer operand is checked
+  (`sema_atomic_builtin_must_be_pointer`, `_op_needs_atomic` for the c11
+  forms, `_needs_non_const_atomic`/`_pointer`, incomplete types, `_BitInt`
+  prohibited), the value kind per op (int / int-or-fp / int-ptr-or-fp /
+  trivially copyable), value operands are converted to the value type (or
+  `ptrdiff_t` for pointer arithmetic, or pointers for the generic
+  `__atomic_load`/`store`/`exchange`/`compare_exchange` forms), orders to
+  `int`, and a constant order invalid for the op is
+  `-Watomic-memory-ordering` (`sema_atomic_op_invalid_memory_order`). The
+  result type is clang's (void, the value, or `bool`).
+- **Lvalues of `_Atomic(T)`.** Lvalue-to-rvalue conversion adds
+  `AtomicToNonAtomic`; assignment and initialization from `T` add
+  `NonAtomicToAtomic`. Operand checks of the arithmetic, shift, bitwise,
+  unary and `switch` conditions use the value type (`value_ty`). `++`/`--`
+  and compound assignment are allowed on a modifiable `_Atomic` lvalue
+  and yield an lvalue of `T` (`++`) or `_Atomic(T)` (compound assignment),
+  as clang 19's `decltype` shows. A braced list initializing an `_Atomic`
+  object is `sema_illegal_initializer_type`, as clang, unless it holds
+  one element of class type.
+- **`_Atomic(T)` of class type `T` (WP-165).** Initialized from a `T` or
+  a class derived from `T` (copy, direct, or a one-element braced list)
+  as `T` is, then `NonAtomicToAtomic` (clang `InitializeFrom`
+  `NeedAtomicConversion`; `Sema::atomic_class_init`); other class sources
+  fail as a conversion to `_Atomic(T)`. Assignment from `T` or `_Atomic(T)`
+  is the right side's lvalue conversion then `NonAtomicToAtomic`
+  (`conv::atomic_class_assign`, C11 6.5.16.1). Assignment errors to any
+  `_Atomic` target are reported at the operator, as clang's C path.
+- `-Watomic-alignment` is reported by codegen (spec/codegen.md §7d).
+
+### 5.12 `__builtin_va_arg` (`builtins.rs`, WP-171)
+- **`act_on_va_arg(list, ty, ty_loc, loc, rparen)`** is clang's
+  `Sema::BuildVAArgExpr`. The operand initializes a
+  `__builtin_va_list &` (an AAPCS64 struct) or, for the x86-64 array
+  `va_list`, decays and must be `__va_list_tag *` (otherwise the
+  reference-binding / conversion error). The type must be complete
+  (`sema_va_arg_incomplete`, with the forward-declaration note),
+  non-abstract (`sema_va_arg_abstract`, with the pure-virtual notes) and
+  POD (`sema_va_arg_non_pod`, `-Wnon-pod-varargs`, an error by default;
+  a reference type is non-POD). A type that undergoes default argument
+  promotion (`va_arg_promotion`: `float`, or a type whose integral
+  promotion differs from it, an enum compared through its underlying
+  type, so `E : short` warns and `enum class` does not) is
+  `sema_va_arg_promotable` (`-Wvarargs`) through `diag_runtime_behavior`.
+  Dependent operands build a dependent `VAArgExpr`; substitution rebuilds
+  through `act_on_va_arg`.
+- **Runtime-behavior diagnostics** (`stmt.rs`, clang
+  `DiagRuntimeBehavior`): inside a function body they are queued on
+  `FnState::runtime_diags` and flushed in `end_function_body`; in an
+  unevaluated operand or an immediate context they are dropped; outside a
+  function (a namespace-scope initializer) they are emitted at once.
+  **Gaps:** clang filters queued diagnostics by CFG reachability
+  (`if (0) va_arg(ap, char)` is silent there, reported here), and a
+  non-dependent expression shared by a template and its instantiation is
+  checked once, at definition.
+
+### 5.13 Vector conditionals (`vector_ops.rs`, WP-173)
+The vector operators themselves are summarized in spec/types.md
+(`Vector`). `?:` follows clang 19:
+- **Vector condition** (`act_on_vector_conditional`, clang
+  `CheckVectorConditionalTypes`): a condition of vector type with an
+  integral element is decayed, not converted to `bool`, and selects lane
+  by lane.
+  - A `void` or `throw` arm is `GNU vector conditional operand cannot be
+    void|a throw expression`.
+  - Two vector arms must have the same type (`vector operands to the
+    vector conditional must be the same type`, with clang 19's stray
+    `}`), and must be ext vectors exactly when the condition is
+    (`cannot mix vectors and extended vectors in a vector conditional`).
+  - One vector arm: the scalar arm is converted as for a binary vector
+    operator (`CheckVectorOperands`, `bool` vectors allowed).
+  - Two scalar arms: the same type, or the usual arithmetic conversions.
+    An enumeration result is `enumeration type T is not allowed in a
+    vector conditional`. The result is a vector with the condition's lane
+    count and kind (ext or GNU), and both arms are splatted. A
+    non-arithmetic result is `incompatible operand types`, a deviation:
+    clang 19 builds a malformed vector or crashes.
+  - Then the result must have the condition's lane count (`vector
+    condition type T and result type U do not have the same number of
+    elements`) and lane size (`... do not have elements of the same
+    size`).
+  - Codegen: a GNU condition is `icmp ne 0` plus `select`. An ext
+    condition is the sign-bit mask blend (`icmp slt 0`, `sext`, `and`,
+    `or`, with float arms bitcast to the condition type), as clang
+    emits it for C++. A `bool` ext-vector condition is *M4*.
+- **Scalar condition with a vector arm** (`scalar_cond_vector_operands`):
+  converted to `bool` as usual, and the arms are converted as for a
+  binary vector operator without `bool` vectors. A `bool`-vector arm is
+  `invalid operands to binary expression`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -866,9 +1511,39 @@ and aggregate element types.
     an over-long string is an error
     (`initializer-string for char array is too long`, two arguments)
   - aggregates, with brace elision, designators (C++20, in order) and
-    unions (first member, or the designated one)
+    unions (first member, or the designated one); an aggregate class
+    whose list holds one undesignated element of the same or a derived
+    class type is initialized from that element ([dcl.init.list]/3.2)
+  - vector members (WP-173, clang `CheckSubElementType`): a GNU vector
+    member cannot be initialized from a scalar, so a scalar starts a
+    brace-elided list of up to N elements (`elided_vector_init`). A
+    designator after its first item ends that list. A vector initializer
+    copy-initializes the member, and an ext vector member splats a scalar
+    instead. A vector item inside a vector's element list, braced or
+    elided, is `cannot initialize a vector element of type T with an
+    rvalue|lvalue of type V`. Deviation: clang 19 does not stop the list at
+    a designator, so `{1, 2, .z = 5}` is an error there (a `void`
+    "vector element"). Kiln does not diagnose the C99 mixture of
+    designated and positional items in either case.
+  - a non-class `T` list-initialized from one class-type element (or
+    `bool` from `nullptr`) is initialized from the element itself
+    (`class_element_list_init`; clang's core-24034 rewrite in
+    `TryListInitialization`): direct-initialization for a direct list
+    (an explicit conversion function is a candidate), failures at the
+    entity (variable name, `T` of `T{e}`, the `{` of an argument or
+    return value; an argument adds its "passing argument" note), no
+    `-Wbraced-scalar-init`, and narrowing checked on the user
+    conversion's result
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
+- **References** (`reference_list_init`, [dcl.init.list]/3.10): when
+  the single element is not reference-related, a temporary of the
+  referenced type is list-initialized with the reference's own kind
+  (direct for `T& r{..}`, copy for `T& r = {..}`, a call argument or
+  a `return`). A failed constructor call for that temporary names the
+  reference type (`no matching constructor for initialization of
+  'const E &'`), via `ctor_diag_ty`, which `use_ctor` takes on entry
+  so nested constructions cannot see it.
 - **Results** are attached with `act_on_init`. `act_on_uninit` handles
   default-initialization: const objects without an initializer are an
   error, and incomplete types are diagnosed.
@@ -876,6 +1551,27 @@ and aggregate element types.
   initializer of a `constexpr` variable, and of a const integral
   variable, which is usable in constant expressions. The value is
   stored (§8.3).
+- **Self-reference** (`self_ref.rs`, WP-171; clang `CheckSelfReference`):
+  after the initialization is performed, `act_on_init` walks the
+  converted initializer of a variable without automatic storage
+  duration, or of class or reference type, for uses of the variable
+  itself ([basic.life]/7). A use warns
+  `variable {0} is uninitialized when used within its own
+  initialization` (namespace scope, or class type),
+  `reference {0} is not yet bound to a value ...` (references, any use)
+  or `static variable {0} is suspiciously used ...` (static locals,
+  `-Wstatic-self-init`, inside `-Wuninitialized`), through
+  `diag_runtime_behavior`. As in clang: a value use is an
+  lvalue-to-rvalue conversion, increment/decrement, compound-assignment
+  operand, overloaded-operator argument, copy-constructor argument,
+  `std::move` argument, or a non-static member function call on the
+  variable; `T a = a;` with non-class `T` and copy-initialization is
+  the silencing idiom; a member read in an aggregate initializer list
+  is fine once that member is initialized; unevaluated operands,
+  `constexpr` variables, static data members of non-class type and
+  variables in a linkage specification (clang checks the declaration
+  context) are not diagnosed. Other locals are left to a CFG
+  uninitialized-values analysis kiln does not have.
 
 ### 6.1 Braced lists in expressions and explicit type conversions (`forms.rs`)
 - **Call arguments** `f({...})` ([expr.call]/7):
@@ -886,7 +1582,10 @@ and aggregate element types.
   - Viability follows [over.ics.list]: a scalar takes at most one
     unbraced, convertible element; an aggregate at most as many
     elements as brace elision reaches. A non-viable list is clang's
-    `cannot convert initializer list argument to 'T'` candidate note.
+    `cannot convert initializer list argument to 'T'` candidate note,
+    except that a single class-type element for a non-class parameter
+    notes the element's own conversion ([over.ics.list]/10: `no known
+    conversion from 'N' to 'int' for 1st argument`).
   - A list for the ellipsis of a variadic function is an error.
 - **`return {...};`** ([stmt.return]/2, `act_on_return_list`):
   copy-list-initialization of the returned object.
@@ -899,6 +1598,9 @@ and aggregate element types.
   - `T()` (`act_on_value_init_cast`) value-initializes; `void()` is
     a `void` prvalue.
   - `T{...}` (`act_on_list_cast`) is direct-list-initialization.
+    For an enumeration with a fixed underlying type that includes
+    [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
+    narrowing rejected, then to `E`), as `E e{v};` does.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have
@@ -927,8 +1629,9 @@ and aggregate element types.
     `if consteval`, the `else` branch of `if !consteval`) is an
     immediate function context ([expr.const]/16):
     `enter_immediate_context`/`exit_immediate_context` bracket it and
-    `in_immediate_context()` reports it. Nothing consumes it yet: the
-    immediate-invocation checks it relaxes are M3.
+    `in_immediate_context()` reports it, and its immediate invocations
+    are neither wrapped nor checked (§5.10). In a template the branches
+    are substituted the same way at instantiation.
 - **`switch`:**
   - integral promotion of the condition
   - duplicate `case` values (with a note)
@@ -950,7 +1653,25 @@ and aggregate element types.
 - `goto` to an undeclared label is reported at the end of the function
   (`use of undeclared label 'x'`).
 - A redefinition is an error, with a note.
-- Jumps past initializations are not checked yet (M3, [stmt.dcl]/3).
+- **Landed (WP-153): jump-scope checking** (`jump_scope.rs`, clang
+  `JumpScopeChecker`), run at the end of every function body with a
+  label, `switch` or `asm goto` (in templates, at instantiation).
+  Protected scopes: a variable whose initialization a jump would bypass
+  ([stmt.dcl]/3: non-trivial default init, any initializer, a VLA or a
+  non-trivial destructor), try blocks and handlers ([except.handle]/2),
+  each arm of a constexpr/consteval `if` ([stmt.if]/2), GNU statement
+  expressions and lifetime-extended temporaries with a destructor. A
+  `goto` or `case` entering one is `cannot jump from this goto statement
+  to its label` / `cannot jump from switch statement to this case label`
+  with one `jump bypasses …` note per scope entered; an `asm goto` may
+  neither enter nor leave a scope with a destructor (`cannot jump from
+  this asm goto statement to one of its possible targets`, the
+  `possible target of asm goto statement` note and `jump exits …`
+  notes). Leaving scopes through `goto` is fine; codegen runs their
+  cleanups (spec/codegen.md).
+- `[[noreturn]]`: the fall-off analysis (§4.3) treats a call as not
+  returning when any redeclaration of the callee is `[[noreturn]]`,
+  including member calls.
 
 ### 7.5 Landed (WP-100): try-blocks (`try_stmt.rs`)
 - `act_on_exception_decl` ([except.handle]/1-3): an rvalue-reference
@@ -968,7 +1689,11 @@ and aggregate element types.
   unambiguous derived class of, an earlier one gets `-Wexceptions`
   `exception of type T will be caught by earlier handler` with the note
   `for type U` (clang `CheckCXXTryBlock`, references and pointers
-  compared by their pointee).
+  compared by their pointee). Exact duplicates use clang's
+  `CatchHandlerType` key (WP-160): the top-level cv-qualifiers are dropped
+  first, then a reference or pointer is stripped and the pointee keeps its
+  cv-qualifiers. So `int` then `const int &` is not a duplicate, while
+  `const int` then `int &` is. The public-base search ignores cv.
 - `push_try_scope` marks the scope a try barrier (`Scope::try_barrier`)
   for the implicit move of thrown locals (§5.5).
 - Function-try-blocks: `check_function_try_block` (from
@@ -1021,7 +1746,8 @@ template saved in `range_for_outer_depth` for instantiations).
   head (`None`) or a failed declaration (`act_on_for_range_error`) marks
   the loop variable invalid and the body is still parsed. `for (x : r)`
   is `range-based for loop requires type for loop variable` (the
-  variable gets type `auto`); a structured binding is unsupported; an
+  variable gets type `auto`); a structured binding is declared by
+  `act_on_decomposition_declarator` (§4.9); an
   init-statement before C++20 is `-Wc++20-extensions`.
 - **Range kinds.** An array range (a constant array; a VLA is
   unsupported) uses `__range` and `__range + N` (`N` a `ptrdiff_t`
@@ -1059,11 +1785,77 @@ template saved in `range_for_outer_depth` for instantiations).
 - **Left (WP-089):** `err_range_on_array_parameter` (needs
   `ParamData.original_ty`, which `act_on_param_declarator` does not set,
   so an array parameter gets the generic `'int *'` diagnostic);
-  structured bindings; VLA ranges; the default-on
+  VLA ranges; the default-on
   `-Wempty-body`-style `warn_empty_range_based_for_body` and the
   DefaultIgnore `-Wrange-loop-construct`/`-Wrange-loop-bind-reference`
   warnings (groups declared, not emitted); the begin/end-types-differ
   pre-C++17 extension warning; clang's recovery for `for (int x, y : a)`.
+
+### 7.7 Landed (WP-140): GNU asm statements (`asm.rs`)
+`act_on_gcc_asm_stmt` follows clang's `ActOnGCCAsmStmt`: output and input
+constraints are validated per target (`kiln_abi::asm`, aarch64 and
+x86_64), outputs must be modifiable lvalues
+(`invalid lvalue in asm output`), a register-only input is converted to a
+prvalue (lvalue-to-rvalue) and a memory input stays an lvalue, an
+immediate input (`i`, `n`) must be an integer constant expression, a
+tied operand must have a compatible type, and the template is parsed
+(`%N`, `%[name]`, `%=`, `%%`, modifiers) with clang's errors for an
+invalid operand number, unknown name and a mismatched modifier (the
+aarch64 `-Wasm-operand-widths` warning with its `%w` fix-it note).
+Clobbers are checked against the target's register names. Each operand
+ends a full-expression (its odr-uses are resolved). The `!srcloc`
+values clang attaches are precomputed into `AsmData.srclocs` (literal
+begin, then every later template line; offset + 2). Templates are
+substituted (`subst/stmts.rs`) and rechecked at instantiation.
+`act_on_file_scope_asm` builds a `FileScopeAsmDecl`. Not implemented:
+`asm goto` (rejected by the parser), immediate range checks
+(`validateInputSize`/`validateOutputSize`), `=@cc` flag outputs, register
+variables (`register int r asm("x0")`) as operands and their clobber
+conflict check, the C++17 "asm in constexpr function" extension warning;
+`!srcloc` values in headers and macro expansions do not match clang's
+encoding.
+
+**Deferred (WP-160 item 4): macro `!srcloc` parity.** For a string from a
+macro expansion, clang emits `2^31 + offset`, where the offset is into
+clang's unified source-location space. That space holds, in order: entry 0
+(2 bytes), the main file (size + 1), the predefines buffer (20928 bytes on
+aarch64 for C++26, which is the `-dM` text plus 4213 bytes of other
+builtins), and then one entry of length + 1 per macro expansion. Matching
+it needs two things:
+- kiln_source keeping a clang-compatible offset counter across files.
+- The same sequence of expansion entries as clang: argument
+  pre-expansion runs, the 4060-byte scratch buffer, expansions inside
+  `#if`, and included files.
+
+That is an ABI-free, preprocessor-wide change with no effect on codegen.
+The `!srcloc` value only labels inline-asm backend diagnostics, so it is
+left for a pp/source WP.
+
+### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
+`act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing
+function (or, outside one, the translation unit with
+`-Wpredefined-identifier-outside-function`); a dependent context gives a
+dependent `PredefinedExpr` that template instantiation rebuilds;
+otherwise a `const char[N]` lvalue holding the name.
+`compute_predefined_name(kind, f)` is clang 19's
+`PredefinedExpr::ComputeName`: `__func__`/`__FUNCTION__` are the bare
+name (`operator int`, `operator()`, `top level` is only pretty);
+`__PRETTY_FUNCTION__` prints `virtual `/`static `, the return type
+(`auto` for lambdas, none for constructors and destructors, the
+instantiation pattern's otherwise), the scope with specialization
+arguments (`A<int>::`), the pattern's parameters (`, ...` if variadic),
+cv and ref qualifiers, and ` [T = int, ...]`: enclosing implicit class
+specializations' arguments (outermost first) then the function template
+specialization's, printed with their types (`2U`, `'a'`, packs
+`<int, char *>`, `x:auto` for a generic lambda's invented parameter).
+The source-location builtins use the same printer (§9.5 of
+sema-templates.md), and a `__builtin_FUNCTION`/`__builtin_source_location`
+in a dependent context, or a default argument evaluating one used there,
+is marked instantiation-dependent and recomputed at instantiation.
+Tests: `tests/conformance/dcl.fct.def.general/predefined-*.cpp`,
+`expr.const/builtins-srcloc-template-run.cpp`, `tests/codegen/predefined.cpp`.
+Gap: a function with a deduced return type prints `auto` where clang
+evaluates the source-location name after deduction.
 
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
@@ -1166,8 +1958,6 @@ unscoped enumeration is reported (spec/oven.md "Integration").
     one, and class-glvalue results
 - **Constant evaluation** (what the Oven supports in M2 is in
   spec/oven.md):
-  - `consteval` and immediate invocations (the immediate function
-    context of `if consteval` is tracked, §7, but not consulted)
   - the discarded statement of `if constexpr` ([stmt.if]/2), with
     templates
   - template arguments (`EvalKind::TemplateArg`)

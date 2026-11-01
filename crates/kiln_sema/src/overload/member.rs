@@ -175,6 +175,9 @@ impl Sema<'_, '_> {
         let (d, f) = won?;
         self.check_member_access(f, m.naming, Some(m.def), loc);
         let shadow = (f != d).then_some(f);
+        if self.check_undeduced_use(d, loc) {
+            return Some(self.recover_err(&[m.base], loc));
+        }
         if m.implicit && self.is_static_method(d) {
             let e = self.build_decl_ref_qualified(d, loc, shadow, m.nns);
             self.note_function_name_use(d, e, loc, m.nns.is_none());
@@ -182,7 +185,8 @@ impl Sema<'_, '_> {
         }
         let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
         if m.nns.is_some() && !self.is_err_expr(e) {
-            self.member_refs.insert(e, MemberRef { decl: d, error: false, qualified: true });
+            self.member_refs
+                .insert(e, MemberRef { decl: d, error: false, qualified: true, begin: None });
         }
         Some(e)
     }

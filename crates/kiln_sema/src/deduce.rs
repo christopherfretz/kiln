@@ -1,6 +1,7 @@
 //! `decltype` ([dcl.type.decltype]), `decltype(auto)` and deduced return
 //! types ([dcl.spec.auto], [dcl.type.auto.deduct]; spec/sema.md §4.3.1).
 
+use kiln_ast::decl::DeclFlags;
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::types::{AutoKeyword, Quals, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -43,8 +44,13 @@ impl Sema<'_, '_> {
         }
         let exempt = e.and_then(|e| self.decltype_top_call(e));
         for c in calls {
-            if Some(c.loc) != exempt {
-                let _ = self.check_call_return(c);
+            if Some(c.loc) != exempt && self.check_call_return(c) {
+                // The destructor check `maybe_bind_temporary` deferred.
+                if let Some(class) =
+                    self.ast.types.as_record(c.ty).and_then(|r| self.ast.definition(r))
+                {
+                    let _ = self.check_temporary_dtor(class, c.ty, c.at);
+                }
             }
         }
     }
@@ -93,6 +99,37 @@ impl Sema<'_, '_> {
         };
         self.emit(self.incomplete_note(msg, c.ty));
         false
+    }
+
+    /// `_Atomic ( t )` (C11 6.7.2.4, a clang extension in C++): the atomic
+    /// type of `t`, or `None` after diagnosing an array, function,
+    /// reference, atomic or cv-qualified `t` (clang
+    /// `BuildAtomicType`). A dependent `t` is checked at instantiation.
+    pub fn act_on_atomic_type(&mut self, t: QualType, loc: Loc) -> Option<QualType> {
+        if t == QualType::ERROR {
+            return None;
+        }
+        let dependent = self.ast.types.qflags(t).intersects(kiln_ast::types::TypeFlags::DEPENDENT);
+        if !dependent {
+            let c = self.ast.types.canonical(t);
+            let bad = match self.ast.types.view(c.ty()) {
+                _ if self.ast.types.is_array(c) => Some(0),
+                TypeView::Function(_) => Some(1),
+                TypeView::LValueRef(_) | TypeView::RValueRef(_) => Some(2),
+                TypeView::Atomic(_) => Some(3),
+                _ if !c.quals().is_empty() => Some(4),
+                _ => None,
+            };
+            if let Some(k) = bad {
+                let msg = self
+                    .diag(DiagId::sema_atomic_specifier_bad_type, loc)
+                    .arg(k.to_string())
+                    .arg(self.ty_arg(t));
+                self.emit(msg);
+                return None;
+            }
+        }
+        Some(self.ast.types.atomic(t))
     }
 
     /// `decltype ( e )` ([dcl.type.decltype]/1): the type `decltype(e)`
@@ -299,12 +336,15 @@ impl Sema<'_, '_> {
         let (fdecl, ret, done) = (state.decl, state.ret, state.deduced);
         let Some(declared) = state.auto_ret else { return ret };
         let kw = self.undeduced_keyword(declared).unwrap_or(AutoKeyword::Auto);
-        // A type-dependent operand defers the deduction to instantiation
-        // ([dcl.spec.auto.general]/12): the declared type keeps its
-        // placeholder (clang prints `auto`).
-        if let Some(e) = value
-            && self.expr_is_type_dependent(e)
-        {
+        // In a templated function (a dependent context) deduction happens
+        // when the definition is instantiated, even from a return statement
+        // with a non-type-dependent operand ([dcl.spec.auto.general]/12;
+        // clang's `DeduceFunctionTypeFromReturnExpr` skips a dependent
+        // context). Only the instantiation's non-discarded returns then
+        // participate ([stmt.if]/2), so `if constexpr (c) return; else
+        // return 1;` deduces per specialization. The declared type keeps
+        // its placeholder (clang prints `auto`).
+        if self.in_template() || value.is_some_and(|e| self.expr_is_type_dependent(e)) {
             if let Some(st) = self.func.as_mut()
                 && !st.deduced
             {
@@ -341,11 +381,17 @@ impl Sema<'_, '_> {
         };
         if !done {
             if !self.is_error_type(deduced) && !self.ast.types.is_dependent(deduced) {
-                let at = self
-                    .inst
-                    .concepts
-                    .placeholder_locs
+                // An instantiation's diagnostic points at its pattern's
+                // type-constraint.
+                let pattern = self.ast.instantiated_from(fdecl).or_else(|| {
+                    let (_, s) = self.ast.spec_info(fdecl)?;
+                    let from = s.from;
+                    self.pattern_of(from)
+                });
+                let locs = &self.inst.concepts.placeholder_locs;
+                let at = locs
                     .get(&fdecl)
+                    .or_else(|| pattern.and_then(|p| locs.get(&p)))
                     .copied()
                     .unwrap_or(self.ast.decls.get(fdecl).loc());
                 let _ = self.check_placeholder_constraint(declared, deduced, at);
@@ -397,6 +443,7 @@ impl Sema<'_, '_> {
         for d in redecls {
             self.ast.decls.set_ty(d, nty);
         }
+        self.finish_source_locs(f);
     }
 
     /// The type of function `f` as declared: with the placeholder return
@@ -450,6 +497,9 @@ impl Sema<'_, '_> {
                 return false;
             }
         }
+        if self.undeduced_dependent_use(d) {
+            return false;
+        }
         let name = self.decl_name(d);
         let note = self
             .diag(DiagId::note_entity_declared_at, self.ast.decls.get(d).loc())
@@ -458,5 +508,20 @@ impl Sema<'_, '_> {
             self.diag(DiagId::sema_auto_fn_used_before_defined, loc).arg(name).with_note(note);
         self.emit(msg);
         true
+    }
+
+    /// True if a use of `d` inside a template definition, whose return
+    /// type is still undeduced, is dependent: `d` is declared in the
+    /// templated class being defined, so its definition is instantiated
+    /// (and the type deduced) with each specialization. The reference is
+    /// type-dependent (clang accepts `using C = decltype(get());` after
+    /// `static auto get() { ... }` in a class template; libc++
+    /// `move_iterator::__get_iter_concept`).
+    pub(crate) fn undeduced_dependent_use(&self, d: DeclId) -> bool {
+        self.in_template()
+            && self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX)
+            && self.ast.decls.get(d).ty().is_some_and(|fty| {
+                self.ast.types.proto(fty).is_some_and(|p| self.contains_undeduced_auto(p.ret()))
+            })
     }
 }

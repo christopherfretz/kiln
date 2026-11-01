@@ -1,0 +1,43 @@
+Dumping test_ns:
+NamespaceDecl test_ns
+|-BindingDecl referenced gx 'int'
+| `-MemberExpr 'int' lvalue .x
+|   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+|-BindingDecl gy 'int'
+| `-MemberExpr 'int' lvalue .y
+|   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+`-DecompositionDecl used 'P' cinit
+  |-CXXConstructExpr 'P' 'void (const P &) noexcept'
+  | `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  |   `-DeclRefExpr 'P' lvalue Var 'gp' 'P'
+  |-BindingDecl referenced gx 'int'
+  | `-MemberExpr 'int' lvalue .x
+  |   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  `-BindingDecl gy 'int'
+    `-MemberExpr 'int' lvalue .y
+      `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+
+Dumping test_static:
+FunctionDecl test_static 'int ()'
+`-CompoundStmt
+  |-DeclStmt
+  | `-DecompositionDecl used 'P' static cinit
+  |   |-CXXConstructExpr 'P' 'void (const P &) noexcept'
+  |   | `-ImplicitCastExpr 'const P' lvalue <NoOp>
+  |   |   `-DeclRefExpr 'P' lvalue Var 'gp' 'P'
+  |   |-BindingDecl referenced sx 'int'
+  |   | `-MemberExpr 'int' lvalue .x
+  |   |   `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  |   `-BindingDecl referenced sy 'int'
+  |     `-MemberExpr 'int' lvalue .y
+  |       `-DeclRefExpr 'P' lvalue Decomposition '' 'P'
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-BinaryOperator 'int' '+'
+      | |-ImplicitCastExpr 'int' <LValueToRValue>
+      | | `-DeclRefExpr 'int' lvalue Binding 'sx' 'int'
+      | `-ImplicitCastExpr 'int' <LValueToRValue>
+      |   `-DeclRefExpr 'int' lvalue Binding 'sy' 'int'
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'int' lvalue Binding 'gx' 'int'
+

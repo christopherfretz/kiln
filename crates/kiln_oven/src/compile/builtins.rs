@@ -38,6 +38,38 @@ pub(crate) fn designator_type(ast: &Ast, mut e: ExprId) -> Option<QualType> {
     }
 }
 
+/// Whether evaluating `e` would modify an object, allocate, or throw on
+/// its own (clang `Expr::HasSideEffects` without its treatment of calls:
+/// a called function is evaluated, and a failure in it makes the result
+/// 0). `__builtin_constant_p` of such an argument is 0 without evaluating it.
+fn has_side_effects(ast: &Ast, e: ExprId) -> bool {
+    let exprs = &ast.exprs;
+    let mut stack = vec![e];
+    while let Some(x) = stack.pop() {
+        match exprs.get(x).kind() {
+            ExprKind::UnaryOperator if exprs.unary_op(x).is_inc_dec() => return true,
+            ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator
+                if exprs.binary_op(x).is_assignment() =>
+            {
+                return true;
+            }
+            ExprKind::CXXNewExpr
+            | ExprKind::CXXDeleteExpr
+            | ExprKind::AtomicExpr
+            | ExprKind::VAArgExpr
+            | ExprKind::CXXThrowExpr
+            | ExprKind::CoawaitExpr
+            | ExprKind::CoyieldExpr => return true,
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::RequiresExpr => {}
+            _ => stack.extend(exprs.children(x, &ast.lists)),
+        }
+    }
+    false
+}
+
 /// `StringRef::getAsInteger(0, APInt)`: an unsigned integer whose radix
 /// is sensed from its prefix (`0x`, `0b`, `0o`, a leading `0`), modulo
 /// 2^128 (only the low bits of a NaN payload are kept).
@@ -83,6 +115,48 @@ fn nan_bits(ast: &Ast, mut arg: ExprId, kind: FloatKind, signaling: bool) -> Opt
     Some(softfloat::make_nan(kind, fill, signaling))
 }
 
+/// The builtins lowered to LLVM rounding / fused intrinsics, which clang
+/// 19 does not evaluate.
+fn is_rounding(b: u32) -> bool {
+    matches!(
+        b,
+        id::CEIL
+            | id::CEILF
+            | id::CEILL
+            | id::FLOOR
+            | id::FLOORF
+            | id::FLOORL
+            | id::TRUNC
+            | id::TRUNCF
+            | id::TRUNCL
+            | id::ROUND
+            | id::ROUNDF
+            | id::ROUNDL
+            | id::RINT
+            | id::RINTF
+            | id::RINTL
+            | id::NEARBYINT
+            | id::NEARBYINTF
+            | id::NEARBYINTL
+            | id::FMA
+            | id::FMAF
+            | id::FMAL
+    )
+}
+
+/// The `bi::INT_OP` operation of the GCC integer builtin `b` (WP-150).
+fn int_op(b: u32) -> Option<u32> {
+    Some(match b {
+        id::FFS | id::FFSL | id::FFSLL => bi::FFS,
+        id::PARITY | id::PARITYL | id::PARITYLL => bi::PARITY,
+        id::CLRSB | id::CLRSBL | id::CLRSBLL => bi::CLRSB,
+        id::BITREVERSE8 | id::BITREVERSE16 | id::BITREVERSE32 | id::BITREVERSE64 => bi::BITREVERSE,
+        id::ROTATELEFT8 | id::ROTATELEFT16 | id::ROTATELEFT32 | id::ROTATELEFT64 => bi::ROTL,
+        id::ROTATERIGHT8 | id::ROTATERIGHT16 | id::ROTATERIGHT32 | id::ROTATERIGHT64 => bi::ROTR,
+        _ => return None,
+    })
+}
+
 impl Compiler<'_> {
     fn int_width(&mut self, e: ExprId) -> u32 {
         let t = self.ety(e);
@@ -120,6 +194,31 @@ impl Compiler<'_> {
             s.emit_site(Op::Builtin, k | sub << 8, &[dst, r[0], r[1], r[2], t[0], t[1]], e, loc);
         };
         match bid {
+            id::CONSTANT_P => {
+                let x = arg(0)?;
+                let k = self.ety(x);
+                let ptr = matches!(self.kind(k), TyKind::Ptr(_));
+                let scalar = ptr
+                    || matches!(
+                        self.kind(k),
+                        TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) | TyKind::NullPtr
+                    );
+                if !scalar || has_side_effects(self.b.ast(), x) {
+                    // clang `EvaluateBuiltinConstantP`: any other type, or
+                    // an argument with side effects, is not a constant.
+                    self.konst(dst, 0);
+                } else {
+                    // The argument is evaluated speculatively in this
+                    // frame's registers: the region ends in a `Ret` of
+                    // its value, after which `Speculate` resumes at `end`.
+                    let pc = self.emit(Op::Speculate, u32::from(ptr), &[dst, 0, 0]);
+                    let v = self.rv(x);
+                    self.emit(Op::Ret, 1, &[v]);
+                    let end = self.here();
+                    self.patch(pc + 2, v);
+                    self.patch(pc + 3, end);
+                }
+            }
             id::CLZ
             | id::CLZL
             | id::CLZLL
@@ -159,7 +258,14 @@ impl Compiler<'_> {
                 };
                 op(self, k, w, [a, dst, dst], [0, 0], begin);
             }
-            id::ISFINITE | id::ISINF | id::ISNAN | id::ISNORMAL => {
+            id::ISFINITE
+            | id::ISINF
+            | id::ISNAN
+            | id::ISNORMAL
+            | id::ISSUBNORMAL
+            | id::ISZERO
+            | id::ISSIGNALING
+            | id::ISINF_SIGN => {
                 let x = arg(0)?;
                 let Some(fk) = self.float_kind(x) else {
                     self.trap_loc(begin, INVALID.into());
@@ -170,11 +276,92 @@ impl Compiler<'_> {
                     id::ISFINITE => bi::FINITE,
                     id::ISINF => bi::INF,
                     id::ISNAN => bi::NAN,
+                    id::ISSUBNORMAL => bi::SUBNORMAL,
+                    id::ISZERO => bi::ZERO,
+                    id::ISSIGNALING => bi::SIGNALING,
+                    id::ISINF_SIGN => {
+                        let sub = float_code(fk) | bi::ISINF_SIGN << 4;
+                        op(self, bi::FP_OP, sub, [a, dst, dst], [0, 0], begin);
+                        return Some(self.finish_builtin(dst));
+                    }
                     _ => bi::NORMAL,
                 };
                 op(self, bi::FP_CLASS, float_code(fk) | class << 4, [a, dst, dst], [0, 0], begin);
             }
-            id::HUGE_VAL | id::HUGE_VALF | id::HUGE_VALL => {
+            // clang: the mask (an integer constant) first, then the value.
+            id::ISFPCLASS => {
+                let (x, m) = (arg(0)?, arg(1)?);
+                let Some(fk) = self.float_kind(x) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let b = self.rv(m);
+                let a = self.rv(x);
+                op(self, bi::FP_CLASS, float_code(fk) | bi::MASK << 4, [a, b, dst], [0, 0], begin);
+            }
+            id::FPCLASSIFY => {
+                // clang: the operand, then only the argument its class
+                // selects (nan, infinite, normal, subnormal, zero).
+                let (Some(x), true) = (arg(5), args.len() == 6) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let Some(fk) = self.float_kind(x) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let a = self.rv(x);
+                let mut ends = Vec::new();
+                for (i, class) in [(0, bi::NAN), (1, bi::INF), (2, bi::NORMAL), (3, bi::SUBNORMAL)]
+                {
+                    op(
+                        self,
+                        bi::FP_CLASS,
+                        float_code(fk) | class << 4,
+                        [a, dst, dst],
+                        [0, 0],
+                        begin,
+                    );
+                    let j = self.jmp_if(dst, false);
+                    self.rv_into(args[i], dst);
+                    ends.push(self.jmp());
+                    self.patch_here(j);
+                }
+                self.rv_into(args[4], dst);
+                for j in ends {
+                    self.patch_here(j);
+                }
+            }
+            id::FABS
+            | id::FABSF
+            | id::FABSL
+            | id::COPYSIGN
+            | id::COPYSIGNF
+            | id::COPYSIGNL
+            | id::FMAX
+            | id::FMAXF
+            | id::FMAXL
+            | id::FMIN
+            | id::FMINF
+            | id::FMINL => {
+                let Some(fk) = self.float_kind(e) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let k = match bid {
+                    id::FABS | id::FABSF | id::FABSL => bi::FABS,
+                    id::COPYSIGN | id::COPYSIGNF | id::COPYSIGNL => bi::COPYSIGN,
+                    id::FMAX | id::FMAXF | id::FMAXL => bi::FMAX,
+                    _ => bi::FMIN,
+                };
+                let a = self.rv(arg(0)?);
+                let b = match arg(1) {
+                    Some(y) => self.rv(y),
+                    None => a,
+                };
+                op(self, bi::FP_OP, float_code(fk) | k << 4, [a, b, dst], [0, 0], begin);
+            }
+            id::INF | id::INFF | id::INFL | id::HUGE_VAL | id::HUGE_VALF | id::HUGE_VALL => {
                 let fk = self.float_kind(e)?;
                 self.konst(dst, softfloat::inf(fk));
             }
@@ -187,6 +374,11 @@ impl Compiler<'_> {
                 }
             }
             id::LAUNDER => self.rv_into(arg(0)?, dst),
+            // clang: the value of the first operand (the expected value is
+            // not evaluated).
+            id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),
+            // clang: the assumption is not evaluated.
+            id::ASSUME => self.konst(dst, 0),
             id::OPERATOR_NEW => self.trap_loc(begin, UNTYPED_NEW.into()),
             // Not evaluated by clang 19: the call is not a constant
             // expression, its arguments unevaluated.
@@ -199,30 +391,24 @@ impl Compiler<'_> {
             | id::ISLESSEQUAL
             | id::ISLESSGREATER
             | id::ISUNORDERED
-            | id::EXP
-            | id::EXPF
-            | id::EXPL
-            | id::EXP2
-            | id::EXP2F
-            | id::EXP2L
-            | id::EXPM1
-            | id::EXPM1F
-            | id::EXPM1L
-            | id::FREXP
-            | id::FREXPF
-            | id::FREXPL
-            | id::LDEXP
-            | id::LDEXPF
-            | id::LDEXPL
-            | id::POW
-            | id::POWF
-            | id::POWL
-            | id::SCALBN
-            | id::SCALBNF
-            | id::SCALBNL
-            | id::SCALBLN
-            | id::SCALBLNF
-            | id::SCALBLNL => self.trap_loc(begin, INVALID.into()),
+            | id::ABS
+            | id::LABS
+            | id::LLABS
+            | id::TRAP
+            | id::ABORT
+            | id::STRRCHR
+            | id::STRPBRK
+            | id::STRSTR
+            | id::MEMSET
+            | id::MEMPCPY
+            // clang evaluates no `va_list` operation.
+            | id::VA_START
+            | id::VA_END
+            | id::VA_COPY => self.trap_loc(begin, INVALID.into()),
+            // The libm functions and the rounding intrinsics.
+            _ if id::is_libm(bid) || is_rounding(bid) => self.trap_loc(begin, INVALID.into()),
+            // WP-171: clang constant-evaluates no coroutine builtin.
+            _ if id::is_coro(bid) => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {
                 let x = arg(0)?;
                 let q = self.ast().exprs.get(x).ty();
@@ -233,23 +419,86 @@ impl Compiler<'_> {
                 let loc = self.ast().exprs.get(x).loc();
                 op(self, bi::STRLEN, 0, [a, dst, dst], [t, 0], loc);
             }
-            id::MEMCMP | id::WMEMCMP => {
-                let (x, y, n) = (arg(0)?, arg(1)?, arg(2)?);
+            id::MEMCMP
+            | id::BCMP
+            | id::WMEMCMP
+            | id::STRCMP
+            | id::STRNCMP
+            | id::WCSCMP
+            | id::WCSNCMP => {
+                let (x, y) = (arg(0)?, arg(1)?);
+                let mut sub = u32::from(matches!(bid, id::WMEMCMP | id::WCSCMP | id::WCSNCMP));
+                if matches!(bid, id::STRCMP | id::STRNCMP | id::WCSCMP | id::WCSNCMP) {
+                    sub |= bi::STR;
+                }
+                let n = if matches!(bid, id::STRCMP | id::WCSCMP) {
+                    sub |= bi::UNBOUNDED;
+                    None
+                } else {
+                    Some(arg(2)?)
+                };
                 let t = [self.designator(x), self.designator(y)];
-                let r = [self.rv(x), self.rv(y), self.rv(n)];
-                op(self, bi::MEMCMP, u32::from(bid == id::WMEMCMP) * bi::WIDE, r, t, begin);
+                let (a, b) = (self.rv(x), self.rv(y));
+                let c = n.map_or(dst, |n| self.rv(n));
+                op(self, bi::MEMCMP, sub, [a, b, c], t, begin);
             }
-            id::MEMCHR | id::CHAR_MEMCHR | id::WMEMCHR => {
-                let (x, v, n) = (arg(0)?, arg(1)?, arg(2)?);
+            id::MEMCHR | id::CHAR_MEMCHR | id::WMEMCHR | id::STRCHR | id::WCSCHR => {
+                let (x, v) = (arg(0)?, arg(1)?);
+                let mut sub = u32::from(matches!(bid, id::WMEMCHR | id::WCSCHR));
+                let n = if matches!(bid, id::STRCHR | id::WCSCHR) {
+                    sub |= bi::STR | bi::UNBOUNDED;
+                    None
+                } else {
+                    Some(arg(2)?)
+                };
                 let t = self.designator(x);
-                let r = [self.rv(x), self.rv(v), self.rv(n)];
-                op(self, bi::MEMCHR, u32::from(bid == id::WMEMCHR) * bi::WIDE, r, [t, 0], begin);
+                let (a, b) = (self.rv(x), self.rv(v));
+                let c = n.map_or(dst, |n| self.rv(n));
+                op(self, bi::MEMCHR, sub, [a, b, c], [t, 0], begin);
             }
-            id::MEMCPY | id::MEMMOVE => {
+            // WP-154: clang's `IntExprEvaluator` lock-free folding.
+            id::atomic::ALWAYS_LOCK_FREE
+            | id::atomic::IS_LOCK_FREE
+            | id::atomic::C11_IS_LOCK_FREE => {
+                let size = arg(0)?;
+                let (any, align) = if bid == id::atomic::C11_IS_LOCK_FREE {
+                    (true, 0)
+                } else {
+                    let p = arg(1)?;
+                    self.lock_free_object(p)
+                };
+                let max = u32::from(self.ast().types.target().max_atomic_inline_bytes);
+                let a = self.rv(size);
+                let sub =
+                    max | u32::from(any) << 8 | u32::from(bid == id::atomic::ALWAYS_LOCK_FREE) << 9;
+                op(self, bi::LOCK_FREE, sub, [a, dst, dst], [align, 0], begin);
+            }
+            id::MEMCPY | id::MEMMOVE | id::WMEMCPY | id::WMEMMOVE => {
                 let (d, s, n) = (arg(0)?, arg(1)?, arg(2)?);
                 let t = [self.designator(d), self.designator(s)];
                 let r = [self.rv(d), self.rv(s), self.rv(n)];
-                op(self, bi::MEMCPY, u32::from(bid == id::MEMMOVE) * bi::MOVE, r, t, begin);
+                let mut sub = u32::from(matches!(bid, id::MEMMOVE | id::WMEMMOVE)) * bi::MOVE;
+                if matches!(bid, id::WMEMCPY | id::WMEMMOVE) {
+                    sub |= bi::WCHAR;
+                }
+                op(self, bi::MEMCPY, sub, r, t, begin);
+            }
+            // WP-150: the GCC integer builtins.
+            _ if int_op(bid).is_some() => {
+                let k = int_op(bid)?;
+                let x = arg(0)?;
+                let w = self.int_width(x);
+                let a = self.rv(x);
+                let b = match arg(1) {
+                    Some(n) => self.rv(n),
+                    None => dst,
+                };
+                op(self, bi::INT_OP, w | k << 8, [a, b, dst], [0, 0], begin);
+            }
+            // clang 19 does not constant-evaluate the vector reductions
+            // (spec/oven.md "Vectors").
+            id::REDUCE_ADD..=id::REDUCE_XOR => {
+                self.trap_loc(begin, "subexpression not valid in a constant expression".into());
             }
             _ => {
                 self.next = dst;
@@ -257,6 +506,28 @@ impl Compiler<'_> {
             }
         }
         Some(self.finish_builtin(dst))
+    }
+
+    /// The object argument of `__atomic_is_lock_free`/`always_lock_free`:
+    /// whether it is a null pointer constant (any suitably-sized object
+    /// qualifies), else the alignment of its pointee type before the
+    /// implicit conversion to `const volatile void *` (0: incomplete).
+    fn lock_free_object(&mut self, p: ExprId) -> (bool, u32) {
+        let ast = self.ast();
+        let mut x = skip_parens(ast, p);
+        while ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
+            if ast.exprs.cast_kind(x) == kiln_ast::expr::CastKind::NullToPointer {
+                return (true, 0);
+            }
+            x = skip_parens(ast, ast.exprs.operand(x));
+        }
+        let Some(pointee) = ast.types.pointee(ast.exprs.get(x).ty()) else { return (false, 0) };
+        if ast.types.is_void(pointee) {
+            return (false, 0);
+        }
+        let t = self.ty(pointee);
+        let info = self.o.types.info(t);
+        (false, if info.size == 0 { 0 } else { info.align })
     }
 
     fn finish_builtin(&mut self, dst: u32) -> u32 {

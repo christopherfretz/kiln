@@ -92,10 +92,6 @@ pub struct Row {
     pub oven: Oven,
 }
 
-/// The owner of the overload-resolution traits (spec §9.1 `init_check`,
-/// `conv_check`).
-pub const OVERLOAD_WP: &str = "WP-068a";
-
 /// The arity of trait `t`.
 pub fn arity(t: TypeTrait) -> Arity {
     use TypeTrait as T;
@@ -146,7 +142,8 @@ pub fn completeness(t: TypeTrait) -> Complete {
         | T::IsTrivial
         | T::IsTriviallyCopyable
         | T::IsTriviallyEqualityComparable
-        | T::IsTriviallyRelocatable => Complete::Element,
+        | T::IsTriviallyRelocatable
+        | T::CanPassInRegs => Complete::Element,
         T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
             Complete::BoundedElement
         }
@@ -173,43 +170,10 @@ pub fn deprecated_replacement(t: TypeTrait) -> Option<&'static str> {
 }
 
 /// The status of trait `t`.
-pub fn trait_status(t: TypeTrait) -> Status {
-    use TypeTrait as T;
-    match t {
-        // [meta.unary.prop] initialization and conversion checks: these
-        // need the unevaluated `init_check` / `conv_check` of overload
-        // resolution.
-        T::IsConstructible
-        | T::IsNothrowConstructible
-        | T::IsTriviallyConstructible
-        | T::IsAssignable
-        | T::IsNothrowAssignable
-        | T::IsTriviallyAssignable
-        | T::IsConvertible
-        | T::IsConvertibleTo
-        | T::IsNothrowConvertible
-        | T::ReferenceBindsToTemporary
-        | T::ReferenceConstructsFromTemporary
-        | T::ReferenceConvertsFromTemporary
-        | T::HasNothrowAssign
-        | T::HasNothrowConstructor
-        | T::HasNothrowCopy
-        | T::HasNothrowMoveAssign
-        | T::IsTriviallyEqualityComparable => Status::Owner(OVERLOAD_WP),
-        // Layout-compatibility and register-passing queries (not used by
-        // the M3 headers).
-        T::IsLayoutCompatible
-        | T::IsPointerInterconvertibleBaseOf
-        | T::CanPassInRegs
-        | T::IsBitwiseCloneable => Status::Owner("M4 (unassigned)"),
-        // clang 19 answers `canPassInRegisters` for a class, which needs the
-        // S3C class properties to set `DefinitionBits::TRIVIALLY_RELOCATABLE`
-        // (nothing sets it yet). libc++ falls back to trivially copyable.
-        T::IsTriviallyRelocatable => {
-            Status::Owner("unowned: S3C canPassInRegisters (DefinitionBits::TRIVIALLY_RELOCATABLE)")
-        }
-        _ => Status::Done,
-    }
+pub fn trait_status(_t: TypeTrait) -> Status {
+    // Every trait clang 19 knows is implemented (WP-166 finished the
+    // `__has_nothrow_*`, layout and register-passing queries).
+    Status::Done
 }
 
 /// The kind of trait `t`'s row.
@@ -231,24 +195,14 @@ const fn f(name: &'static str, status: Status, oven: Oven) -> Row {
 }
 
 const DONE: Status = Status::Done;
-/// The owner of the §9.5 builtin declarations kiln does not declare yet:
-/// WP-088 landed the rest of §9.5; `__builtin_constant_p` has no package
-/// (spec/sema-templates.md §11, "Landed (WP-088)").
-const DECL_WP: Status = Status::Owner("unowned: proposed §9.5 builtin-functions WP");
-const OVEN_WP: &str = "unowned: proposed §9.5 builtin-functions WP";
 
 /// The non-trait rows: §9.3 templates, then §9.4-9.5 functions.
 pub static TABLE: &[Row] = &[
     Row { name: "__make_integer_seq", kind: Kind::Template, status: Status::Done, oven: Oven::No },
-    Row {
-        name: "__type_pack_element",
-        kind: Kind::Template,
-        status: Status::Owner("WP-072 (pack expansion of Ts...)"),
-        oven: Oven::No,
-    },
+    Row { name: "__type_pack_element", kind: Kind::Template, status: Status::Done, oven: Oven::No },
     // §9.4
     f("__builtin_is_constant_evaluated", DONE, Oven::Yes),
-    f("__builtin_constant_p", DECL_WP, Oven::Stub(OVEN_WP)),
+    f("__builtin_constant_p", DONE, Oven::Yes),
     // §9.5 object model
     f("__builtin_addressof", DONE, Oven::Yes),
     f("__builtin_launder", DONE, Oven::Yes),
@@ -283,6 +237,15 @@ pub static TABLE: &[Row] = &[
     f("__builtin_wcslen", DONE, Oven::Yes),
     f("__builtin_wmemchr", DONE, Oven::Yes),
     f("__builtin_wmemcmp", DONE, Oven::Yes),
+    f("__builtin_strcmp", DONE, Oven::Yes),
+    f("__builtin_strncmp", DONE, Oven::Yes),
+    f("__builtin_strchr", DONE, Oven::Yes),
+    f("__builtin_strrchr", DONE, Oven::No),
+    f("__builtin_strpbrk", DONE, Oven::No),
+    f("__builtin_strstr", DONE, Oven::No),
+    f("__builtin_wcscmp", DONE, Oven::Yes),
+    f("__builtin_wcsncmp", DONE, Oven::Yes),
+    f("__builtin_wcschr", DONE, Oven::Yes),
     // float classification
     f("__builtin_isfinite", DONE, Oven::Yes),
     f("__builtin_isinf", DONE, Oven::Yes),
@@ -339,6 +302,89 @@ pub static TABLE: &[Row] = &[
     f("__builtin_scalbln", DONE, Oven::No),
     f("__builtin_scalblnf", DONE, Oven::No),
     f("__builtin_scalblnl", DONE, Oven::No),
+    // WP-144: constant-evaluated libm builtins (clang 19 `Constexpr`)
+    f("__builtin_fabs", DONE, Oven::Yes),
+    f("__builtin_fabsf", DONE, Oven::Yes),
+    f("__builtin_fabsl", DONE, Oven::Yes),
+    f("__builtin_copysign", DONE, Oven::Yes),
+    f("__builtin_copysignf", DONE, Oven::Yes),
+    f("__builtin_copysignl", DONE, Oven::Yes),
+    f("__builtin_fmax", DONE, Oven::Yes),
+    f("__builtin_fmaxf", DONE, Oven::Yes),
+    f("__builtin_fmaxl", DONE, Oven::Yes),
+    f("__builtin_fmin", DONE, Oven::Yes),
+    f("__builtin_fminf", DONE, Oven::Yes),
+    f("__builtin_fminl", DONE, Oven::Yes),
+    f("__builtin_inf", DONE, Oven::Yes),
+    f("__builtin_inff", DONE, Oven::Yes),
+    f("__builtin_infl", DONE, Oven::Yes),
+    f("__builtin_isinf_sign", DONE, Oven::Yes),
+    f("__builtin_fpclassify", DONE, Oven::Yes),
+    f("__builtin_issubnormal", DONE, Oven::Yes),
+    f("__builtin_iszero", DONE, Oven::Yes),
+    f("__builtin_issignaling", DONE, Oven::Yes),
+    // WP-144: intrinsic-lowered, not constant in clang 19; the other
+    // libm functions (`builtin::LIBM`) fall back to clang's answer
+    f("__builtin_ceil", DONE, Oven::No),
+    f("__builtin_ceilf", DONE, Oven::No),
+    f("__builtin_ceill", DONE, Oven::No),
+    f("__builtin_floor", DONE, Oven::No),
+    f("__builtin_floorf", DONE, Oven::No),
+    f("__builtin_floorl", DONE, Oven::No),
+    f("__builtin_trunc", DONE, Oven::No),
+    f("__builtin_truncf", DONE, Oven::No),
+    f("__builtin_truncl", DONE, Oven::No),
+    f("__builtin_round", DONE, Oven::No),
+    f("__builtin_roundf", DONE, Oven::No),
+    f("__builtin_roundl", DONE, Oven::No),
+    f("__builtin_rint", DONE, Oven::No),
+    f("__builtin_rintf", DONE, Oven::No),
+    f("__builtin_rintl", DONE, Oven::No),
+    f("__builtin_nearbyint", DONE, Oven::No),
+    f("__builtin_nearbyintf", DONE, Oven::No),
+    f("__builtin_nearbyintl", DONE, Oven::No),
+    f("__builtin_fma", DONE, Oven::No),
+    f("__builtin_fmaf", DONE, Oven::No),
+    f("__builtin_fmal", DONE, Oven::No),
+    f("__builtin_abs", DONE, Oven::No),
+    f("__builtin_labs", DONE, Oven::No),
+    f("__builtin_llabs", DONE, Oven::No),
+    // WP-156: vectors
+    f("__builtin_reduce_add", DONE, Oven::No),
+    f("__builtin_reduce_and", DONE, Oven::No),
+    f("__builtin_reduce_max", DONE, Oven::No),
+    f("__builtin_reduce_min", DONE, Oven::No),
+    f("__builtin_reduce_mul", DONE, Oven::No),
+    f("__builtin_reduce_or", DONE, Oven::No),
+    f("__builtin_reduce_xor", DONE, Oven::No),
+    // WP-150: the remaining GCC integer and memory builtins
+    // (`builtin::INT_MEM`); `memset`/`mempcpy` are not constant in clang 19
+    f("__builtin_ffs", DONE, Oven::Yes),
+    f("__builtin_ffsl", DONE, Oven::Yes),
+    f("__builtin_ffsll", DONE, Oven::Yes),
+    f("__builtin_parity", DONE, Oven::Yes),
+    f("__builtin_parityl", DONE, Oven::Yes),
+    f("__builtin_parityll", DONE, Oven::Yes),
+    f("__builtin_clrsb", DONE, Oven::Yes),
+    f("__builtin_clrsbl", DONE, Oven::Yes),
+    f("__builtin_clrsbll", DONE, Oven::Yes),
+    f("__builtin_bitreverse8", DONE, Oven::Yes),
+    f("__builtin_bitreverse16", DONE, Oven::Yes),
+    f("__builtin_bitreverse32", DONE, Oven::Yes),
+    f("__builtin_bitreverse64", DONE, Oven::Yes),
+    f("__builtin_rotateleft8", DONE, Oven::Yes),
+    f("__builtin_rotateleft16", DONE, Oven::Yes),
+    f("__builtin_rotateleft32", DONE, Oven::Yes),
+    f("__builtin_rotateleft64", DONE, Oven::Yes),
+    f("__builtin_rotateright8", DONE, Oven::Yes),
+    f("__builtin_rotateright16", DONE, Oven::Yes),
+    f("__builtin_rotateright32", DONE, Oven::Yes),
+    f("__builtin_rotateright64", DONE, Oven::Yes),
+    f("__builtin_bcmp", DONE, Oven::Yes),
+    f("__builtin_wmemcpy", DONE, Oven::Yes),
+    f("__builtin_wmemmove", DONE, Oven::Yes),
+    f("__builtin_memset", DONE, Oven::No),
+    f("__builtin_mempcpy", DONE, Oven::No),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -401,14 +447,19 @@ mod tests {
 
     #[test]
     fn overload_traits_are_staged_off() {
-        assert_eq!(has_builtin_staged("__is_constructible"), Some(false));
-        assert_eq!(has_builtin_staged("__is_convertible"), Some(false));
+        assert_eq!(has_builtin_staged("__is_trivially_constructible"), Some(true));
+        assert_eq!(has_builtin_staged("__is_trivially_assignable"), Some(true));
+        assert_eq!(has_builtin_staged("__has_nothrow_assign"), Some(true));
+        assert_eq!(has_builtin_staged("__is_layout_compatible"), Some(true));
+        assert_eq!(has_builtin_staged("__type_pack_element"), Some(true));
+        assert_eq!(has_builtin_staged("__is_constructible"), Some(true));
+        assert_eq!(has_builtin_staged("__is_convertible"), Some(true));
         assert_eq!(has_builtin_staged("__is_same"), Some(true));
         assert_eq!(has_builtin_staged("__remove_cvref"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_memcpy"), Some(true));
-        assert_eq!(has_builtin_staged("__builtin_constant_p"), Some(false));
+        assert_eq!(has_builtin_staged("__builtin_constant_p"), Some(true));
         assert_eq!(has_constexpr_builtin_staged("__builtin_strlen"), Some(true));
-        assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(false));
+        assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_expect"), None);
         assert_eq!(has_builtin_staged("__make_integer_seq"), Some(true));
     }

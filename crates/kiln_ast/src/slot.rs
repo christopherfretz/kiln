@@ -80,6 +80,20 @@ impl<K: Copy + Eq + Hash, V> ColdMap<K, V> {
         }
     }
 
+    /// Replaces the value of `k`, which must already have one: for data
+    /// only final once more is known (a source-location value's function
+    /// name, final once its function's return type is deduced). `false`
+    /// (and no write) if `k` has no value.
+    pub fn refine(&mut self, k: K, v: V) -> bool {
+        match self.map.get_mut(&k) {
+            Some(slot) => {
+                *slot = v;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The number of entries.
     pub fn len(&self) -> usize {
         self.map.len()

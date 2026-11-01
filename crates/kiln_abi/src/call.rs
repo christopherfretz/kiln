@@ -108,9 +108,44 @@ pub fn classify_call(
     info
 }
 
+/// How `__builtin_va_arg` reads a value of type `q` (clang's per-target
+/// `EmitVAArg` classification): the variadic-argument lowering plus, on
+/// x86-64, the general-purpose and SSE registers it needs (both zero when
+/// it is always read from the overflow area). `AArch64` leaves them zero.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct VaArgInfo {
+    /// The variadic-argument lowering of the type.
+    pub kind: ArgKind,
+    /// x86-64 general-purpose registers needed (`neededInt`).
+    pub needed_int: u32,
+    /// x86-64 SSE registers needed (`neededSSE`).
+    pub needed_sse: u32,
+}
+
+/// Classify `q` as an unnamed (variadic) argument read by `va_arg`.
+pub fn classify_va_arg(t: &mut IrTypes<'_>, q: QualType) -> VaArgInfo {
+    match t.target().arch() {
+        Arch::AArch64 => VaArgInfo { kind: aarch64_arg(t, q), needed_int: 0, needed_sse: 0 },
+        Arch::X86_64 => {
+            let (kind, needed_int, needed_sse) = x86_arg(t, q, 0);
+            VaArgInfo { kind, needed_int, needed_sse }
+        }
+    }
+}
+
+/// The `getPrimitiveSizeInBits` of a vector IR type (`<3 x i32>` is 96);
+/// zero for any other type.
+pub fn vector_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
+    match ty {
+        IrType::Vector(..) => ir_bits(t, ty),
+        _ => 0,
+    }
+}
+
 fn vector_width(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
     match ty {
-        IrType::Vector(..) => t.size_align(ty).0 * 8,
+        // `getPrimitiveSizeInBits`: `<3 x i32>` is 96.
+        IrType::Vector(..) => ir_bits(t, ty),
         IrType::Struct(m, _) => m.clone().iter().map(|e| vector_width(t, e)).max().unwrap_or(0),
         _ => 0,
     }
@@ -208,6 +243,7 @@ fn no_undef(t: &mut IrTypes<'_>, q: QualType, kind: &ArgKind, check_coerce: bool
     match view(t, q) {
         TypeView::BitInt { .. } | TypeView::LValueRef(_) | TypeView::RValueRef(_) => true,
         TypeView::Builtin(BuiltinType::NullPtr) | TypeView::MemberPointer { .. } => false,
+        TypeView::Builtin(b) if b.is_sizeless() => false,
         TypeView::Builtin(_) | TypeView::Pointer(_) | TypeView::Enum(_) => true,
         TypeView::Complex(e) | TypeView::Vector { elem: e, .. } => no_undef(t, e, kind, false),
         TypeView::ConstantArray(a) => no_undef(t, a.elem, kind, false),
@@ -228,6 +264,7 @@ fn ir_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
     match ty {
         IrType::Int(n) => u64::from(*n),
         IrType::X86Fp80 => 80,
+        IrType::Vector(e, n) => ir_bits(t, &e.clone()) * *n,
         _ => t.size_align(ty).0 * 8,
     }
 }
@@ -240,7 +277,31 @@ fn aarch64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType]) -> CallInfo {
     CallInfo { ret: arg(r), args: a, max_vector_width: 0 }
 }
 
+/// clang `AArch64ABIInfo::isIllegalVectorType` + `coerceIllegalVector`:
+/// a vector whose element count is not a power of two, or whose size is
+/// neither 64 bits nor 128 bits with several elements, goes as `i32`,
+/// `<2 x i32>`, `<4 x i32>` or indirectly.
+fn aarch64_illegal_vector(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
+    let TypeView::Vector { count, .. } = view(t, q) else {
+        return None;
+    };
+    let size = type_bits(t, q);
+    if count.is_power_of_two() && (size == 64 || (size == 128 && count != 1)) {
+        return None;
+    }
+    let i32v = |n| IrType::Vector(Box::new(IrType::Int(32)), n);
+    Some(match size {
+        0..=32 => direct(IrType::Int(32)),
+        64 => direct(i32v(2)),
+        128 => direct(i32v(4)),
+        _ => ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align },
+    })
+}
+
 fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
+    if let Some(k) = aarch64_illegal_vector(t, q) {
+        return k;
+    }
     if !is_aggregate(t, q) {
         let q = strip_enum(t, q);
         if let TypeView::BitInt { width, .. } = view(t, q)
@@ -288,6 +349,10 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     }
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+    }
+    // Large vector types are returned via memory.
+    if matches!(view(t, q), TypeView::Vector { .. }) && type_bits(t, q) > 128 {
+        return ArgKind::Indirect { byval: true, align: t.layouter().type_layout(q).align };
     }
     if !is_aggregate(t, q) {
         let q = strip_enum(t, q);
@@ -591,6 +656,28 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 hi = lo;
             }
         }
+        // clang `X86_64ABIInfo::classify` for vectors (no AVX: the native
+        // vector size is 128 bits).
+        TypeView::Vector { elem, .. } => {
+            let size = type_bits(t, q);
+            if matches!(size, 1 | 8 | 16 | 32) {
+                set_cur!(Integer);
+                if off / 64 != (off + size - 1) / 64 {
+                    hi = lo;
+                }
+            } else if size == 64 {
+                if matches!(view(t, elem), TypeView::Builtin(BuiltinType::Double)) {
+                    return (lo, hi);
+                }
+                set_cur!(Sse);
+                if off != 0 && off != 64 {
+                    hi = lo;
+                }
+            } else if size == 128 {
+                lo = Sse;
+                hi = SseUp;
+            }
+        }
         TypeView::ConstantArray(a) => {
             let size = type_bits(t, q);
             if size > 512 {
@@ -708,7 +795,12 @@ fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
     }
-    if !is_aggregate(t, q) && !matches!(view(t, q), TypeView::BitInt { .. }) {
+    // clang `IsIllegalVectorType`: at most 64 or over 128 bits (no AVX).
+    let illegal_vector = matches!(view(t, q), TypeView::Vector { .. }) && {
+        let s = type_bits(t, q);
+        s <= 64 || s > 128
+    };
+    if !is_aggregate(t, q) && !illegal_vector && !matches!(view(t, q), TypeView::BitInt { .. }) {
         let q = strip_enum(t, q);
         return if is_promotable(t, q) { extend(t, q) } else { direct(t.convert(q)) };
     }
@@ -1091,7 +1183,6 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
     let bits = r.defn;
     let mut copy_decl = false;
     let mut move_decl = false;
-    let mut copy_trivial = false;
     // Declared constructors (implicit ones included once declared).
     let ctors: Vec<DeclId> = ast.constructors(def).iter().collect();
     let mut declared = Vec::new();
@@ -1102,9 +1193,6 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
             move_decl = true;
         } else {
             copy_decl = true;
-            if !spec.is_deleted() && spec.is_trivial() {
-                copy_trivial = true;
-            }
         }
         declared.push((c, spec));
     }
@@ -1117,18 +1205,10 @@ pub fn can_pass_in_registers(ast: &Ast, record: DeclId) -> bool {
         && !bits.contains(B::USER_DECLARED_MOVE_ASSIGN)
         && !bits.contains(B::USER_DECLARED_DTOR);
     let needs_dtor = dtor.is_none();
-    if needs_copy && !bits.contains(B::DEFAULTED_COPY_CTOR_DELETED) {
-        copy_trivial = bits.contains(B::TRIVIAL_COPY_CTOR);
-    }
-    let dtor_trivial = if needs_dtor {
-        !bits.contains(B::DEFAULTED_DTOR_DELETED) && bits.contains(B::TRIVIAL_DTOR)
-    } else {
-        dtor.and_then(|d| ast.decls.function(d))
-            .is_some_and(|f| !f.spec.is_deleted() && f.spec.is_trivial())
-    };
-    if copy_trivial && dtor_trivial {
-        return true;
-    }
+    // No "one trivial copy constructor suffices" shortcut: that is the
+    // MSVC x64 rule. Under Itanium a non-trivial move constructor (or any
+    // non-trivial, non-deleted copy/move constructor or destructor) makes
+    // the class indirect even when its copy constructor is trivial.
     let mut has_copy_or_move = false;
     if needs_copy && !bits.contains(B::DEFAULTED_COPY_CTOR_DELETED) {
         if !bits.contains(B::TRIVIAL_COPY_CTOR) {

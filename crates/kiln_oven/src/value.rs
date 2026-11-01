@@ -5,7 +5,8 @@
 use kiln_ast::consts::{
     ByteImage, ByteRange, ConstValue, IntBits, NullKind, PtrBase, Reloc, Scalar, UnionMember,
 };
-use kiln_ast::decl::{DeclKind, VarEvalState};
+use kiln_ast::decl::{DeclKind, DefinitionBits, VarEvalState};
+use kiln_ast::expr::ExprKind;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StringLitId};
 use kiln_source::Loc;
@@ -52,6 +53,10 @@ pub(crate) struct VarInfo {
     pub state: VarEvalState,
     pub ty: QualType,
     pub is_const: bool,
+    /// Not usable, but readable by a lax fold ([`crate::Oven::fold_rvalue`],
+    /// clang `EvaluateAsRValue`): `const` non-volatile with an initializer
+    /// (clang `findCompleteObject` only notes such a read).
+    pub lax: bool,
 }
 
 pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
@@ -61,6 +66,7 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
         state: VarEvalState::NotEvaluated,
         ty: ast.decls.get(d).ty().unwrap_or(QualType::INT),
         is_const: false,
+        lax: false,
     };
     // A template parameter object ([temp.param]/8): a `const` object
     // whose value is the template argument's.
@@ -89,7 +95,27 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     // Potentially-constant ([expr.const]/3): constexpr, a reference, or
     // const-qualified integral or enumeration type.
     info.usable = constexpr || ast.types.is_reference(c) || (info.is_const && integral);
+    let q = ast.types.effective_quals(info.ty);
+    info.lax = !info.usable
+        && q.is_const()
+        && !q.is_volatile()
+        && (info.init.is_some() || matches!(info.state, VarEvalState::Value(_)))
+        && !has_mutable_fields(ast, info.ty);
     info
+}
+
+/// Whether `q` (or its array element type) is a class with a `mutable`
+/// member, directly or in a subobject: such an object may change after
+/// its initialization, so a lax fold does not read it.
+fn has_mutable_fields(ast: &Ast, q: QualType) -> bool {
+    let mut t = q;
+    while let Some(e) = ast.types.element(t) {
+        t = e;
+    }
+    ast.types.as_record(t).is_some_and(|r| {
+        let def = ast.definition(r).unwrap_or(r);
+        ast.decls.record(def).is_some_and(|x| x.defn.contains(DefinitionBits::HAS_MUTABLE_FIELDS))
+    })
 }
 
 /// Why a value cannot be frozen.
@@ -170,7 +196,7 @@ impl Oven {
         // initializer (`EvaluateAsInitializer`), else the expression.
         let loc = match object {
             Some(d) => b.ast().decls.get(d).loc(),
-            None => b.ast().exprs.get(e).loc(),
+            None => expr_loc(b.ast(), e),
         };
         let r = match self.funcs[f as usize].ret {
             RetKind::Void => {
@@ -292,6 +318,9 @@ impl Oven {
         loc: Loc,
     ) -> Result<ConstValueId, Freeze> {
         if let TyKind::MemPtr { .. } = self.types.kind(ty) {
+            if let Some(m) = self.mp.get(v).filter(|e| e.func).map(|e| e.member) {
+                self.check_not_immediate(b, m, false, loc)?;
+            }
             return self.mp_freeze(b, ty, v).map_err(|_| Freeze::Fault(FailKind::MemoryLimit));
         }
         let s = self.scalar_of(b, ty, v, loc)?;
@@ -330,6 +359,37 @@ impl Oven {
         })
     }
 
+    /// [expr.const]/22: a constant expression's value does not point
+    /// to (or refer to, or name as a member) an immediate function
+    /// (clang `note_consteval_address_accessible`).
+    fn check_not_immediate(
+        &self,
+        b: &dyn SemaBridge,
+        d: DeclId,
+        reference: bool,
+        loc: Loc,
+    ) -> Result<(), Freeze> {
+        let ast = b.ast();
+        let immediate = ast.decls.function(d).is_some_and(|f| {
+            f.spec.constexpr_kind() == kiln_ast::decl::ConstexprKind::Consteval
+                || f.spec.escalated()
+        });
+        if !immediate {
+            return Ok(());
+        }
+        if self.run.silent {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        }
+        let what = if reference { "reference" } else { "pointer" };
+        Err(Freeze::Notes(vec![
+            Note::new(
+                loc,
+                format!("{what} to a consteval declaration is not a constant expression"),
+            ),
+            Note::new(ast.decls.get(d).loc(), "declared here"),
+        ]))
+    }
+
     fn ptr_of(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -344,7 +404,11 @@ impl Oven {
         let p = Ptr::decode(raw);
         if p.is_fn() {
             return match self.funcs.get(p.off as usize).and_then(|f| f.decl) {
-                Some(d) => Ok(Scalar::Pointer { ty: q, base: PtrBase::Function(d), offset: 0 }),
+                Some(d) => {
+                    let r = b.ast().types.is_reference(q);
+                    self.check_not_immediate(b, d, r, loc)?;
+                    Ok(Scalar::Pointer { ty: q, base: PtrBase::Function(d), offset: 0 })
+                }
                 None => Err(Freeze::Fault(FailKind::NotConstant)),
             };
         }
@@ -363,17 +427,21 @@ impl Oven {
                 "pointer to an object outside its lifetime is not a constant expression",
             )]));
         };
-        // A variable with automatic storage duration not created by this
-        // evaluation ([expr.const]/14: a constant expression's pointers
-        // point to objects with static storage duration).
+        // A variable with automatic storage duration reached through the
+        // globals path (outside its frame, or read by a lax fold) has no
+        // constant address ([expr.const]/14).
         let automatic = matches!(a.origin, Origin::Global(d) | Origin::External(d)
-            if is_automatic(b.ast(), d));
+            if is_local_var(b.ast(), d));
         if p.is_static() && !automatic {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
                 Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
                 Origin::Const(c) => PtrBase::Const(c),
                 Origin::Let(t) => PtrBase::Temporary(t),
+                // `&typeid(T)` ([expr.const]/14: the type_info object has
+                // static storage duration), e.g. libc++'s
+                // `static constexpr __policy` in <functional> (WP-176).
+                Origin::TypeInfo(t) => PtrBase::TypeInfo(t),
                 _ => return Err(Freeze::Fault(FailKind::NotConstant)),
             };
             return Ok(Scalar::Pointer { ty: q, base, offset });
@@ -405,11 +473,11 @@ impl Oven {
         let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
         let mut notes = Vec::with_capacity(2);
         match a.origin {
-            Origin::Var(d) | Origin::Global(d) | Origin::External(d)
-                if automatic || matches!(a.origin, Origin::Var(_)) =>
-            {
+            Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
                 let mut name = String::new();
                 kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
+                // clang `note_constexpr_non_global`.
+                let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
                 notes.push(Note::new(
                     loc,
                     format!("{kind} to {what}'{name}' is not a constant expression"),
@@ -741,7 +809,12 @@ impl Oven {
     fn resolve_var(&mut self, b: &mut dyn SemaBridge, g: u32, d: DeclId, top: u32) -> u64 {
         let info = var_info(b.ast(), d);
         let ty = self.types.intern(b, info.ty);
-        if !info.usable {
+        if info.lax {
+            // Resolved differently by strict and lax evaluations: reset
+            // when the mode changes (`Oven::eval_outermost`).
+            self.lax_globals.push(g);
+        }
+        if !(info.usable || info.lax && self.run.lax) {
             return self.external(ty, d);
         }
         let hu = if self.types.info(ty).has_union { flags::HAS_UNION } else { 0 };
@@ -971,11 +1044,9 @@ impl Oven {
             }
             PtrBase::Const(c) => self.thaw(b, c, top),
             PtrBase::Temporary(d) => self.resolve_let(b, d, top),
-            PtrBase::TypeInfo(_) => {
-                let t = pointee.unwrap_or(ty);
-                let size = self.types.size(t);
-                self.mem.alloc_static(t, size, flags::CONST, Origin::None)
-            }
+            // The one object `typeid` evaluates to, so a thawed `&typeid(T)`
+            // compares equal to a fresh one.
+            PtrBase::TypeInfo(q) => self.type_info(q, pointee.unwrap_or(ty)),
         };
         let rp = Ptr::decode(root);
         let Some(a) = self.alloc_any(rp).copied() else { return root };
@@ -1000,7 +1071,7 @@ pub(crate) fn let_mte(ast: &Ast, t: DeclId) -> Option<ExprId> {
     let init = ast.redecls_of(ext).find_map(|r| ast.decls.var(r).and_then(|v| v.init))?;
     let mut work = vec![init];
     while let Some(e) = work.pop() {
-        if ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::MaterializeTemporaryExpr
+        if ast.exprs.get(e).kind() == ExprKind::MaterializeTemporaryExpr
             && ast.exprs.lifetime_extended_temporary(e) == Some(t)
         {
             return Some(e);
@@ -1010,18 +1081,34 @@ pub(crate) fn let_mte(ast: &Ast, t: DeclId) -> Option<ExprId> {
     None
 }
 
-/// Whether `d` is a variable or parameter with automatic storage
-/// duration ([basic.stc.auto]).
-fn is_automatic(ast: &Ast, d: DeclId) -> bool {
-    let n = ast.decls.get(d);
-    match n.kind() {
-        DeclKind::ParmVar => true,
-        DeclKind::Var => {
-            ast.decls.var(d).is_some_and(|v| {
-                v.spec.storage() == kiln_ast::decl::VarStorage::None
-                    && v.spec.tls() == kiln_ast::decl::TlsKind::None
-            }) && n.ctx().is_some_and(|c| ast.decls.get(c).kind().is_function())
-        }
-        _ => false,
+/// clang's `Expr::getExprLoc` for an evaluation root, as far as it
+/// differs from kiln's node location: wrappers are looked through, a
+/// `CallExpr` is at its callee's start and a `CXXMemberCallExpr` at the
+/// member name.
+fn expr_loc(ast: &Ast, mut e: ExprId) -> Loc {
+    let x = &ast.exprs;
+    loop {
+        let k = x.get(e).kind();
+        e = match k {
+            ExprKind::ConstantExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::ImplicitCastExpr => x.operand(e),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
+                let c = x.callee(e);
+                let c =
+                    if x.get(c).kind() == ExprKind::ImplicitCastExpr { x.operand(c) } else { c };
+                let ck = x.get(c).kind();
+                if ck == ExprKind::DeclRefExpr {
+                    return ast.templates.expr_begin.get(c).copied().unwrap_or(x.get(c).loc());
+                }
+                if ck == ExprKind::MemberExpr {
+                    return x.get(c).loc();
+                }
+                return x.get(e).loc();
+            }
+            _ => return x.get(e).loc(),
+        };
     }
 }

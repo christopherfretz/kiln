@@ -14,12 +14,11 @@
 
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
-use kiln_source::symbol::Symbol;
 
 use crate::ast::Ast;
 use crate::builder::{AstBuilder, DeclHead};
 use crate::decl::{
-    DeclFlags, DeclKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
+    DeclFlags, DeclKind, FriendKind, Members, NewDecl, Payload, ScopeData, TemplLink, TemplLinkKind,
 };
 use crate::expr::{BinaryOp, ExprDeps, ExprFlags, ExprKind, ObjectKind, UnaryOp, ValueCategory};
 use crate::ids::{
@@ -157,7 +156,8 @@ pub struct SpecInfo {
     pub from_args: Option<ArgListId>,
     /// Where the definition was first required ([temp.point]).
     pub point_of_instantiation: Loc,
-    /// The arguments names print with: `args` without the trailing
+    /// The arguments names print with: the canonical `args` (for a
+    /// class specialization formed from a template-id) without the trailing
     /// arguments that equal their parameter's default (clang's
     /// `SuppressDefaultTemplateArgs`).
     pub print_args: ArgListId,
@@ -223,7 +223,14 @@ impl ArgShape {
             ArgShape::Exact(x) => x == a,
             ArgShape::Type { kind, quals } => {
                 let ArgView::Type(q) = a.view() else { return false };
-                q.quals_bits() & quals == quals && kind.is_none_or(|k| types.kind(q.ty()) == k)
+                // An array carries its element's qualifiers
+                // ([basic.type.qualifier]/3): `S<const F>` admits `const int[10]`.
+                let qb = if q.quals_bits() & quals == quals {
+                    q.quals_bits()
+                } else {
+                    types.effective_quals(q).bits()
+                };
+                qb & quals == quals && kind.is_none_or(|k| types.kind(q.ty()) == k)
             }
         }
     }
@@ -286,6 +293,12 @@ pub struct TemplateTables {
     pub dependent_depth: u32,
     specs: Vec<SpecInfo>,
     member_specs: Vec<MemberSpecInfo>,
+    /// Members of class specializations explicitly instantiated by a
+    /// definition (`template void X<int>::f();`), keyed by the
+    /// declaration they follow in their lexical context (the context
+    /// itself when its member list was empty): codegen defines them at
+    /// that point, as clang's `HandleTopLevelDecl` does.
+    explicit_member_insts: FxHashMap<DeclId, Vec<DeclId>>,
     /// `(first decl of template, canonical args) -> specialization`
     /// (spec/ast.md §8.3).
     specializations: FxHashMap<(DeclId, ArgListId), DeclId>,
@@ -349,6 +362,7 @@ impl Default for TemplateTables {
             dependent_depth: 0,
             specs: Vec::new(),
             member_specs: Vec::new(),
+            explicit_member_insts: FxHashMap::default(),
             specializations: FxHashMap::default(),
             spec_order: FxHashMap::default(),
             instantiated_from: FxHashMap::default(),
@@ -443,6 +457,17 @@ impl TemplateTables {
     /// instantiated from the pattern member `pattern`.
     pub fn record_member(&mut self, spec: DeclId, pattern: DeclId, inst: DeclId) {
         let _ = self.member_map.insert((spec, pattern), inst);
+    }
+
+    /// Records that `member` was explicitly instantiated by a definition
+    /// right after `after` (see `explicit_member_insts`).
+    pub fn add_explicit_member_inst(&mut self, after: DeclId, member: DeclId) {
+        self.explicit_member_insts.entry(after).or_default().push(member);
+    }
+
+    /// The members explicitly instantiated right after `after`, in order.
+    pub fn explicit_member_insts_after(&self, after: DeclId) -> &[DeclId] {
+        self.explicit_member_insts.get(&after).map_or(&[], Vec::as_slice)
     }
 
     /// Records the pattern of an instantiated decl that has no
@@ -596,6 +621,25 @@ impl Ast {
         }
     }
 
+    /// Writes template parameter `index` of template `associated` as
+    /// clang prints a substituted pack's replaced parameter (its name,
+    /// or `type-parameter-<index>` when it has none).
+    pub fn write_replaced_param(&self, associated: DeclId, index: u32, out: &mut String) {
+        let name = self
+            .template_info(associated)
+            .map(|i| *self.templates.param_list(i.params))
+            .and_then(|l| self.lists.iter::<DeclId>(l.params).nth(index as usize))
+            .and_then(|p| self.decls.get(p).name().as_ident())
+            .map(|s| self.symbols().as_str(s))
+            .filter(|s| !s.is_empty());
+        if let Some(n) = name {
+            out.push_str(n);
+        } else {
+            out.push_str("type-parameter-");
+            out.push_str(&index.to_string());
+        }
+    }
+
     /// The template arguments a class template specialization's name
     /// prints with (`None` for other declarations).
     pub fn spec_print_args(&self, d: DeclId) -> Option<ArgListId> {
@@ -657,10 +701,37 @@ impl Ast {
     ///
     /// # Panics
     /// If `e` is not an `UnresolvedLookupExpr`.
-    pub fn unresolved_name(&self, e: ExprId) -> Symbol {
+    pub fn unresolved_name(&self, e: ExprId) -> DeclName {
         let n = self.exprs.get(e);
         assert_eq!(n.kind(), ExprKind::UnresolvedLookupExpr, "not an UnresolvedLookupExpr");
-        Symbol::from_index(n.a())
+        DeclName::from_raw(n.a()).unwrap_or(DeclName::EMPTY)
+    }
+
+    /// The member name a `CXXDependentScopeMemberExpr` names (an
+    /// identifier, operator-function-id, conversion-function-id or
+    /// destructor name, [expr.ref]/1).
+    ///
+    /// # Panics
+    /// If `e` is not a `CXXDependentScopeMemberExpr`.
+    pub fn dependent_member_name(&self, e: ExprId) -> DeclName {
+        let n = self.exprs.get(e);
+        assert_eq!(
+            n.kind(),
+            ExprKind::CXXDependentScopeMemberExpr,
+            "not a CXXDependentScopeMemberExpr"
+        );
+        DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY)
+    }
+
+    /// The name a `DependentScopeDeclRefExpr` names (an identifier,
+    /// operator-function-id or conversion-function-id,
+    /// [expr.prim.id.qual]/1); empty for any other expression.
+    pub fn dependent_scope_ref_name(&self, e: ExprId) -> DeclName {
+        let n = self.exprs.get(e);
+        if n.kind() != ExprKind::DependentScopeDeclRefExpr {
+            return DeclName::EMPTY;
+        }
+        DeclName::from_raw(n.b()).unwrap_or(DeclName::EMPTY)
     }
 
     /// The declarations an `UnresolvedLookupExpr` found.
@@ -938,10 +1009,42 @@ impl AstBuilder<'_> {
         self.ast.templates.dependent_depth = depth;
         debug_assert_eq!(d, d2);
         let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
-        if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) {
+        // A friend class template declared in a class template is a
+        // template of the enclosing namespace, which stays independent.
+        let friend_class = kind == DeclKind::ClassTemplate && n.misc().friend() != FriendKind::None;
+        if self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX) && !friend_class {
             let first = prev.map_or(d, |p| self.ast.first(p));
             self.ast.types.mark_dependent_template(first);
         }
+        d
+    }
+
+    /// A template decl for `pattern` that is neither a member nor a
+    /// name (an implicit deduction guide, [over.match.class.deduct]/1):
+    /// found only through the table that owns it. `pattern` is created
+    /// through [`TemplateTables::pattern_next`].
+    pub fn detached_template_decl(
+        &mut self,
+        kind: DeclKind,
+        pattern: DeclId,
+        params: TemplateParamListId,
+    ) -> DeclId {
+        let n = *self.ast.decls.get(pattern);
+        let ctx = n.ctx().unwrap_or(self.ast.tu);
+        let mut h = DeclHead::new(ctx, n.name(), n.loc());
+        h.misc = n.misc();
+        h.flags = n.flags().without(DeclFlags::HAS_LEXICAL_CTX.with(DeclFlags::DEPENDENT_CTX));
+        let i = self.ast.templates.infos.len() as u32;
+        let d = self.ast.decls.next_id();
+        self.ast.templates.infos.push(TemplateInfo {
+            decl: d,
+            params,
+            pattern: Some(pattern),
+            constraint: None,
+        });
+        let d2 = self.add_unregistered(h, kind, Payload::None(i), false);
+        debug_assert_eq!(d, d2);
+        let _ = self.ast.decls.set_templ(pattern, TemplLink::new(TemplLinkKind::Pattern, i));
         d
     }
 
@@ -1397,13 +1500,13 @@ impl AstBuilder<'_> {
         TemplateArg::expr(e, Some(p))
     }
 
-    /// `T::name` / `X<T>::name<args>` in an expression
-    /// ([temp.dep.expr]/3): `DependentScopeDeclRefExpr`, a type-dependent
-    /// lvalue.
+    /// `T::name` / `X<T>::name<args>` / `X<T>::operator()` in an
+    /// expression ([temp.dep.expr]/3): `DependentScopeDeclRefExpr`, a
+    /// type-dependent lvalue (`b` holds the [`DeclName`]).
     pub fn dependent_scope_decl_ref(
         &mut self,
         nns: NnsId,
-        name: Symbol,
+        name: DeclName,
         targs: Option<ArgListId>,
         begin: Loc,
         loc: Loc,
@@ -1418,7 +1521,7 @@ impl AstBuilder<'_> {
             ty,
             loc,
             nns.raw(),
-            name.index(),
+            name.to_raw(),
         );
         self.side(e, None, targs);
         if begin != loc {
@@ -1433,7 +1536,7 @@ impl AstBuilder<'_> {
     /// applies at instantiation ([temp.dep.candidate]).
     pub fn unresolved_lookup(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         decls: &[DeclId],
         adl: bool,
         nns: Option<NnsId>,
@@ -1449,7 +1552,7 @@ impl AstBuilder<'_> {
     #[allow(clippy::too_many_arguments, reason = "the lookup fields")]
     pub fn unresolved_lookup_in(
         &mut self,
-        name: Symbol,
+        name: DeclName,
         decls: &[DeclId],
         adl: bool,
         nns: Option<NnsId>,
@@ -1472,7 +1575,7 @@ impl AstBuilder<'_> {
             u8::from(adl),
             ty,
             loc,
-            name.index(),
+            name.to_raw(),
             list.raw(),
         );
         self.side(e, nns, targs);
@@ -1486,7 +1589,7 @@ impl AstBuilder<'_> {
         &mut self,
         base: Option<ExprId>,
         arrow: bool,
-        name: Symbol,
+        name: DeclName,
         template_kw: bool,
         nns: Option<NnsId>,
         targs: Option<ArgListId>,
@@ -1506,7 +1609,7 @@ impl AstBuilder<'_> {
             ty,
             loc,
             ExprId::raw_opt(base),
-            name.index(),
+            name.to_raw(),
         );
         self.side(e, nns, targs);
         e
@@ -1790,6 +1893,31 @@ impl AstBuilder<'_> {
             loc,
             param.raw(),
             replacement.raw(),
+        )
+    }
+
+    /// A non-type template parameter pack substituted while its
+    /// expansion is still dependent on a retained level ([temp.variadic]/5;
+    /// clang's `SubstNonTypeTemplateParmPackExpr`, spec/sema-templates.md
+    /// §7.2): `param` is the pack and `args` its argument pack. A prvalue
+    /// of `ty`, value-dependent and naming an unexpanded pack, so an
+    /// enclosing expansion selects its element per index.
+    pub fn subst_nttp_pack_expr(
+        &mut self,
+        param: DeclId,
+        args: ArgListId,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        self.simple(
+            ExprKind::SubstNonTypeTemplateParmPackExpr,
+            ValueCategory::PRValue,
+            ExprDeps::VALUE_INST.with(ExprDeps::UNEXPANDED_PACK),
+            0,
+            ty,
+            loc,
+            param.raw(),
+            args.raw(),
         )
     }
 

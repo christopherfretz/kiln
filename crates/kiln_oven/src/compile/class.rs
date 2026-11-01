@@ -57,9 +57,10 @@ const VIRTUAL_UNSUPPORTED: &str =
 
 impl Compiler<'_> {
     /// The current `this`: the object a default member initializer is
-    /// initializing, else the implicit object parameter.
+    /// initializing, else the `this` a lambda captured, else the implicit
+    /// object parameter.
     fn this_ptr(&self) -> Option<u32> {
-        self.this_override.or(self.this_reg)
+        self.this_override.or(self.lambda_this).or(self.this_reg)
     }
 
     /// `this` into `dst` ([expr.prim.this]).
@@ -484,6 +485,19 @@ impl Compiler<'_> {
     /// object (or array of objects) of type `ty` at `p`.
     pub(super) fn construct(&mut self, e: ExprId, p: u32, ty: OTy) {
         let ast = self.ast();
+        if self.cur_fn.is_some() && self.has_virtual_bases(e) {
+            // clang `CheckLiteralType`: an object of a class with a
+            // virtual base (not a literal type) cannot be created in a
+            // function called during evaluation; only the object being
+            // initialized by the evaluated declaration itself may be.
+            let q = ast.exprs.get(e).ty().without_quals();
+            let t = crate::Oven::type_name(ast, q);
+            self.trap(
+                e,
+                &format!("non-literal type '{t}' cannot be used in a constant expression"),
+            );
+            return;
+        }
         let zeroing = ast.exprs.construct_info(e).zeroing;
         let trivial = ast.is_trivial_default_construction(e);
         if zeroing {
@@ -494,6 +508,17 @@ impl Compiler<'_> {
             return;
         }
         self.construct_obj(e, p, ty);
+    }
+
+    /// The class (or array element class) `e` constructs has a virtual
+    /// base.
+    fn has_virtual_bases(&self, e: ExprId) -> bool {
+        let ast = self.ast();
+        let ctor = ast.exprs.constructor(e);
+        ast.decls
+            .get(ctor)
+            .ctx()
+            .is_some_and(|c| record_bits(ast, c).contains(DefinitionBits::HAS_VIRTUAL_BASES))
     }
 
     fn construct_obj(&mut self, e: ExprId, p: u32, ty: OTy) {
@@ -560,7 +585,21 @@ impl Compiler<'_> {
         let ast = self.ast();
         let ctor = ast.exprs.constructor(e);
         if ast.exprs.inherited_ctor_info(e).1 {
-            self.trap(e, VIRTUAL_UNSUPPORTED);
+            // The inherited constructor lives in a virtual base, so the
+            // inheriting constructor's class has a virtual base and is not
+            // constexpr-suitable ([dcl.constexpr]/3): the call is rejected
+            // before its body runs (`Fault::Callee`, as clang's
+            // `note_constexpr_invalid_inhctor`). Reaching this body anyway
+            // reports the same note.
+            let base = ast.decls.get(ctor).ctx();
+            let name = base.map(|b| crate::notes::notes_name(ast, b)).unwrap_or_default();
+            self.trap(
+                e,
+                &format!(
+                    "constructor inherited from base class '{name}' cannot be used in a \
+                     constant expression; derived class cannot be implicitly initialized"
+                ),
+            );
             return;
         }
         let params = self.cur_params.clone();

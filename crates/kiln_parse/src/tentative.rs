@@ -8,7 +8,7 @@
 //! `TentativelyDeclaredIdentifiers`).
 
 use kiln_ast::DeclId;
-use kiln_lex::{Punct, TokKind};
+use kiln_lex::{Punct, Std, TokKind};
 use kiln_sema::NameClass;
 use kiln_source::symbol::Symbol;
 
@@ -202,6 +202,19 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
     }
 
+    /// Does a placeholder type specifier (`auto` or `decltype(auto)`)
+    /// start at token `i`? Used after a type-constraint.
+    fn placeholder_at(&self, i: usize) -> bool {
+        match self.p.kw_of(self.p.tok_at(i)) {
+            Some(Kw::Auto) => true,
+            Some(Kw::Decltype) => {
+                self.p.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)
+                    && self.p.kw_of(self.p.tok_at(i + 2)) == Some(Kw::Auto)
+            }
+            _ => false,
+        }
+    }
+
     /// clang's `isCXXDeclarationSpecifier`: can a decl-specifier start at
     /// the current token? `True` if it must be one, `Ambiguous` for a
     /// simple-type-specifier followed by `(` (a functional cast is
@@ -256,9 +269,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     Some(Punct::LParen) => Tpr::Ambiguous,
                     _ => Tpr::True,
                 },
-                Kw::Decltype | Kw::Typeof => {
+                Kw::Decltype | Kw::Typeof | Kw::Atomic => {
+                    // Without `(`, `_Atomic` is the type qualifier: as `const`.
                     if self.punct_at(self.i + 1) != Some(Punct::LParen) {
-                        return Tpr::Error;
+                        return if k == Kw::Atomic { Tpr::True } else { Tpr::Error };
                     }
                     match self.skip_group(self.i + 1) {
                         Some(j)
@@ -305,13 +319,11 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
         match class {
             NameClass::Type(..) => self.after_simple_type(end, braced),
-            NameClass::TypeTemplate(d) if self.p.s.names_injected_class(d) => {
+            NameClass::TypeTemplate(d) if self.p.s.names_class_type(d) => {
                 self.after_simple_type(end, braced)
             }
-            // `C auto` ([dcl.spec.auto.general]/1).
-            NameClass::Concept(_) if self.p.kw_of(self.p.tok_at(end)) == Some(Kw::Auto) => {
-                Tpr::True
-            }
+            // `C auto`, `C decltype(auto)` ([dcl.spec.auto.general]/1).
+            NameClass::Concept(_) if self.placeholder_at(end) => Tpr::True,
             // `T::type x` (a missing `typename`, diagnosed by the
             // declaration parser).
             NameClass::Dependent if end > self.i + 1 && self.ident_at(end).is_some() => Tpr::True,
@@ -352,6 +364,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     fn decl_specifier_is_type(&self) -> bool {
         match self.kw() {
             Some(Kw::Const | Kw::Volatile | Kw::Restrict) => false,
+            Some(Kw::Atomic) if self.punct_at(self.i + 1) != Some(Punct::LParen) => false,
             Some(k) => crate::decl::is_type_specifier_kw(k),
             None => {
                 self.p.transform_at(self.i).is_some()
@@ -371,7 +384,8 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             return Tpr::Ambiguous;
         }
         match self.kw() {
-            Some(k @ (Kw::Decltype | Kw::Typeof)) => {
+            Some(Kw::Atomic) if self.punct_at(self.i + 1) != Some(Punct::LParen) => self.i += 1,
+            Some(k @ (Kw::Decltype | Kw::Typeof | Kw::Atomic)) => {
                 self.i += 1;
                 if !self.at(Punct::LParen) || !self.skip_group_here() {
                     return Tpr::Error;
@@ -590,8 +604,8 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 }
                 self.i += 1;
                 self.function_declarator(may_have_trailing_return)
-            } else if self.at(Punct::LSquare) && !self.at_cxx11_attr() {
-                if self.skip_group_here() { Tpr::Ambiguous } else { Tpr::Error }
+            } else if self.at(Punct::LSquare) {
+                self.bracket_declarator()
             } else if self.kw() == Some(Kw::Requires) {
                 Tpr::True
             } else {
@@ -602,6 +616,35 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             }
         }
         Tpr::Ambiguous
+    }
+
+    /// `[ constant-expression? ]` after a declarator (clang's
+    /// `TryParseBracketDeclarator`), also at a `[[`: a constant-expression
+    /// cannot begin with `{` and holds no top-level `,`, while a
+    /// subscript's operand can (`T(a)[{1}]`, `T(a)[1, 2]` are
+    /// expressions). So `T(n) [[maybe_unused]];` is a declaration, whose
+    /// misplaced attribute the declaration parser reports.
+    fn bracket_declarator(&mut self) -> Tpr {
+        let mut i = self.i + 1;
+        if self.punct_at(i) == Some(Punct::LBrace) {
+            return Tpr::False;
+        }
+        loop {
+            match self.punct_at(i) {
+                Some(Punct::RSquare) => {
+                    self.i = i + 1;
+                    return Tpr::Ambiguous;
+                }
+                Some(Punct::Comma) => return Tpr::False,
+                Some(Punct::LParen | Punct::LSquare | Punct::LBrace) => match self.skip_group(i) {
+                    Some(j) => i = j,
+                    None => return Tpr::Error,
+                },
+                Some(Punct::Semi | Punct::RParen | Punct::RBrace) => return Tpr::Error,
+                _ if self.p.tok_at(i).kind == TokKind::Eof => return Tpr::Error,
+                _ => i += 1,
+            }
+        }
     }
 
     /// Skips `operator @` (an operator-function-id or conversion name).
@@ -643,7 +686,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
 
     /// clang's `TryParseFunctionDeclarator`, after the `(`.
     fn function_declarator(&mut self, may_have_trailing_return: bool) -> Tpr {
-        let mut r = self.parameter_declaration_clause(&mut false);
+        let mut r = self.parameter_declaration_clause(&mut false, false);
         if r == Tpr::Ambiguous && !self.at(Punct::RParen) {
             r = Tpr::False;
         }
@@ -721,7 +764,14 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     }
 
     /// clang's `TryParseParameterDeclarationClause`, after the `(`.
-    fn parameter_declaration_clause(&mut self, _invalid: &mut bool) -> Tpr {
+    /// `versus_template_arg`: disambiguating the rest of a saved default
+    /// argument after a `,` inside `<...>` from more template arguments;
+    /// a decl-specifier is then no proof, and a parameter must have `=`.
+    fn parameter_declaration_clause(
+        &mut self,
+        _invalid: &mut bool,
+        versus_template_arg: bool,
+    ) -> Tpr {
         if self.at(Punct::RParen) {
             return Tpr::Ambiguous;
         }
@@ -732,9 +782,17 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             if self.at_cxx11_attr() {
                 return Tpr::True;
             }
+            // An explicit object parameter ([dcl.fct]/3): `this` followed
+            // by a decl-specifier is never an expression.
+            if self.kw() == Some(Kw::This) {
+                let t = Scan { p: self.p, i: self.i + 1, declared: self.declared.clone() };
+                if matches!(t.decl_specifier(Tpr::False), Tpr::True | Tpr::Ambiguous) {
+                    return Tpr::True;
+                }
+            }
             // A parameter's initializer needs `=`: `T{` is not one.
             let mut r = self.decl_specifier(Tpr::False);
-            if r != Tpr::Ambiguous {
+            if r != Tpr::Ambiguous && !(versus_template_arg && r == Tpr::True) {
                 return r;
             }
             let mut seen_type = false;
@@ -748,7 +806,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     return Tpr::True;
                 }
                 r = self.decl_specifier(Tpr::False);
-                if r == Tpr::Error || r == Tpr::True {
+                if r == Tpr::Error || (r == Tpr::True && !versus_template_arg) {
                     return r;
                 }
                 if r == Tpr::False {
@@ -761,6 +819,11 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             }
             if self.kw() == Some(Kw::Attribute) {
                 return Tpr::True;
+            }
+            // A later parameter of a first declaration needs a default
+            // argument too, so `=` decides it.
+            if versus_template_arg {
+                return if self.at(Punct::Equal) { Tpr::True } else { Tpr::False };
             }
             if self.at(Punct::Equal) {
                 self.i += 1;
@@ -784,7 +847,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     fn function_declarator_at(&self, open: usize, ambiguous: &mut bool) -> bool {
         let mut s = Scan { p: self.p, i: open + 1, declared: self.declared.clone() };
         let mut invalid = false;
-        let mut r = s.parameter_declaration_clause(&mut invalid);
+        let mut r = s.parameter_declaration_clause(&mut invalid, false);
         if r == Tpr::Ambiguous {
             if s.at(Punct::RParen) {
                 let n = s.i + 1;
@@ -955,7 +1018,11 @@ impl Parser<'_, '_> {
             Tpr::False => return false,
             Tpr::Ambiguous => {}
         }
-        s.at(Punct::Equal) || s.at_cxx11_attr() || matches!(s.kw(), Some(Kw::Asm | Kw::Attribute))
+        // C++11 [stmt.pre]/1: a braced-init-list initializes it too.
+        s.at(Punct::Equal)
+            || (s.p.std >= Std::Cxx11 && s.at(Punct::LBrace))
+            || s.at_cxx11_attr()
+            || matches!(s.kw(), Some(Kw::Asm | Kw::Attribute))
     }
 
     /// [dcl.ambig.res]/2-3: whether a type-id starts at the current token
@@ -970,10 +1037,32 @@ impl Parser<'_, '_> {
     /// Parses a `decltype(e)::` at the current token ahead, as clang
     /// annotates the scope before disambiguating (WP-119): the scanner
     /// then classifies the name after it.
+    /// Also parses ahead a class template specialization qualifier in
+    /// which the lookahead cannot find the name
+    /// ([`Parser::annotate_template_scope`]).
     pub(crate) fn annotate_decltype_scope_here(&mut self) {
         if self.decltype_scope_end(self.pos()).is_some() {
             self.annotate_decltype_scope();
+        } else if self.template_scope_end(self.pos()).is_some() {
+            self.annotate_template_scope();
         }
+    }
+
+    /// clang's `ConsumeAndStoreInitializer` at a `,` inside what may be a
+    /// template argument list of a saved default argument (`nsdmi` false)
+    /// or default member initializer: whether the tokens after the comma
+    /// form a parameter-declaration-clause whose parameters all have
+    /// initializers, or an init-declarator-list followed by `;` -- then
+    /// the comma ends the initializer.
+    pub(crate) fn comma_ends_saved_initializer(&self, nsdmi: bool) -> bool {
+        let mut s = Scan::new(self, self.pos() + 1);
+        let r = if nsdmi {
+            let r = s.init_declarator_list(false);
+            if r == Tpr::Ambiguous && !s.at(Punct::Semi) { Tpr::False } else { r }
+        } else {
+            s.parameter_declaration_clause(&mut false, true)
+        };
+        !matches!(r, Tpr::False | Tpr::Error)
     }
 
     /// [`Parser::is_cxx_type_id`] at token index `i`.

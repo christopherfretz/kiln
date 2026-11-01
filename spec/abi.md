@@ -586,6 +586,10 @@ points, thunks and method indices are clang's.
   - a class whose non-virtual size differs from its size also gets a
     `%struct.S.base` subobject type (`IrType::RecordBase`,
     `getBaseSubobjectLLVMType`);
+  - a potentially-overlapping field (`[[no_unique_address]]` of
+    non-empty class type) is stored as its class's base-subobject type,
+    as the layout places it, so later fields may use its tail padding
+    (WP-158);
   - `IrRecord::base_index` and `vbase_index` map each base to its
     element.
 - **Argument passing** (`call.rs`): `can_pass_in_registers` follows
@@ -648,6 +652,97 @@ points, thunks and method indices are clang's.
   eightbytes, on the stack when fewer than two registers remain.
   IR-exact on both triples (`tests/codegen/int128.cpp`,
   `tests/codegen/int128_ops.cpp`).
+
+### 8.9 Landed (WP-075): closure types
+- **Linkage** (`is_unnumbered_closure`, `has_internal_linkage`,
+  `is_unique_external`, `type_externally_visible`): a closure type with
+  a mangling number (spec/sema-lambda.md §3.5) takes its context's linkage; one without has
+  no linkage, its members are internal, and a type built from it has no
+  linkage. A namespace-scope variable whose type, or a function whose
+  parameter types, have no linkage is unique-external (clang
+  `getLVForNamespaceScopeDecl`): emitted `internal`, keeping its name.
+- **Mangling** (`mangle.rs`, Itanium §5.1.8): a numbered closure is
+  `<closure-type-name> ::= Ul <lambda-sig> E [ <number> ] _` (`Ul..E_`
+  for number 1, `Ul..E0_` for 2, ...), its signature the call operator's
+  parameter types (`v` for none; a generic lambda's invented parameters
+  as `T_`-style template parameters at the lambda's level). An unnumbered
+  one mangles as an unnamed class, `$_N`, from the module's
+  `AnonIds` table (clang `getAnonymousStructId`: per function for a
+  class in a function, else one module-wide counter). A closure created
+  in a default argument of a function's parameter mangles in that
+  function's local scope with `d [<number>] _` (the parameter counted
+  from the last, clang `mangleLocalName`); one created in the initializer
+  of a variable or data member has `<closure-prefix> ::= [ <prefix> ]
+  <unqualified-name> M` (a substitution candidate). `decltype(auto)` is
+  `Dc`. `tests/codegen/lambda_names.cpp` checks it IR-exact (symbols
+  included) against clang; the `S2_` substitution in some closure
+  names inside templates is WP-117's.
+
+### 8.10 Landed (WP-131): local entities of template instantiations
+- **Linkage** (`fn_shares_local_linkage`): a local class, and hence its
+  members, takes its function's linkage when that function is inline
+  *or a template instantiation*. This covers a function template
+  specialization (implicitly or explicitly instantiated) and a member of
+  a class template specialization that is not explicitly specialized
+  (clang `getLVForLocalDecl`: `isInlined() ||
+  isTemplateInstantiation(TSK)`). Otherwise the local class has no
+  linkage and its members are internal.
+- **Discriminator** (`AnonIds::local_tag`): `Z <encoding> E <entity>
+  [<discriminator>]`. A named class or enumeration declared directly in
+  a function, after the first one of the same name there, gets `_0`,
+  `_1`, ..., `__10_` (Itanium §5.1.6; clang's mangling number, counted
+  per name in declaration order). A member of such a class carries its
+  class's discriminator after the whole nested name
+  (`_ZZ1fvEN1M1gE_0v`). The table is built in one pass over the
+  declarations, on the first use. clang numbers *internal* local
+  classes in first-mangle order instead; kiln uses declaration order
+  for those too, which differs only when a later same-named class is
+  mangled first. `tests/codegen/local_class_template.cpp` checks this.
+
+### 8.11 Landed (WP-140): inline-asm target rules (`asm.rs`)
+Per-target (aarch64, x86_64) data and checks behind clang's `TargetInfo`
+asm hooks, shared by sema and codegen: `ConstraintInfo` and
+`validate_output_constraint` / `validate_input_constraint` (alternatives,
+`+`/`=`/`&`, tied numbers and `[name]`s, immediate classes),
+`validate_constraint_modifier` (the aarch64 `w`/`x` width warning),
+register and clobber names (`is_valid_register_name`, `is_valid_clobber`,
+`normalized_register_name`), `machine_clobbers`, `simplify_constraint`
+(clang's `SimplifyConstraint`), and the template parser
+`analyze_asm_string` (pieces: text, operand with modifier; clang's
+errors) with `generate_asm_string` producing LLVM's `$`-syntax as bytes.
+Not implemented: other targets, immediate range validation of operand
+sizes.
+
+### 8.12 Landed (WP-171): `va_arg` classification
+`call::classify_va_arg(tys, q) -> VaArgInfo { kind, needed_int,
+needed_sse }`: on aarch64 the parameter classification (`aarch64_arg`;
+the register counts are unused), on x86_64 `x86_arg(q, 0)` with its
+GPR/SSE counts (both zero means the argument is read from memory).
+
+### 8.13 Landed (WP-176): register passing and call-order details
+- *`can_pass_in_registers`* (`call.rs`, clang `canPassInRegisters` under
+  the Itanium C++ ABI): a class is passed indirectly when any copy or
+  move constructor or the destructor is non-trivial and not deleted, or
+  when every copy/move constructor is deleted. There is no "a trivial
+  copy constructor suffices" shortcut (that is the MSVC x64 rule), so a
+  class with a trivial copy constructor and a user-provided move
+  constructor goes in memory. Golden: `tests/codegen/class_nontrivial_move_abi.cpp`.
+- *Call IR order* (codegen): a call whose aggregate result is ignored
+  gets no destination, so its `sret`/coerce temporary is made after the
+  arguments' `agg.tmp`s (clang `AggExprEmitter::withReturnValueSlot`);
+  a virtual call loads its callee from the vtable after the arguments
+  are evaluated (`Callee::Virtual`, resolved in `call_vals_to`).
+- *`typeid` constants*: a `const std::type_info*` or `&typeid(T)` in a
+  constant initializer folds to `PtrBase::TypeInfo(T)` (oven `freeze`/
+  `thaw`) and is emitted as the RTTI global `_ZTI...` (`consts.rs`).
+  Golden: `tests/codegen/typeid_constant.cpp`.
+- *Aggregate conditional*: `c ? a : b` of class type emits each arm
+  into the destination slot (clang `AggExprEmitter::
+  VisitAbstractConditionalOperator`; a constant condition emits one arm).
+- *Reference members in aggregate init*: the initializer is bound
+  (`emit_ref_binding`) and its address stored into the member's slot
+  (`init_field_lvalue` uses `field_lvalue_init`, clang
+  `EmitLValueForFieldInitialization`), never stored through the member.
 
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386

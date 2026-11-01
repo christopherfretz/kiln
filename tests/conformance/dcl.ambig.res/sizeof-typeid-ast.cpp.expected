@@ -1,0 +1,53 @@
+TranslationUnitDecl
+|-NamespaceDecl std
+| `-CXXRecordDecl referenced class type_info
+|-CXXRecordDecl referenced struct T definition
+| |-CXXConstructorDecl T 'void ()'
+| |-CXXConstructorDecl referenced T 'void (int)'
+| | `-ParmVarDecl 'int'
+| `-FieldDecl referenced m 'int'
+|-VarDecl referenced a 'int'
+|-TypedefDecl referenced I 'int'
+|-VarDecl z1 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|   `-ParenExpr 'T'
+|     `-CXXFunctionalCastExpr 'T' functional cast to T <ConstructorConversion>
+|       `-CXXConstructExpr 'T' 'void (int)'
+|         `-ImplicitCastExpr 'int' <LValueToRValue>
+|           `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+|-VarDecl z3 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T (*)()'
+|-VarDecl z4 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|   `-ParenExpr 'int' xvalue
+|     `-MemberExpr 'int' xvalue .m non_odr_use_unevaluated
+|       `-MaterializeTemporaryExpr 'T' xvalue
+|         `-CXXFunctionalCastExpr 'T' functional cast to T <ConstructorConversion>
+|           `-CXXConstructExpr 'T' 'void (int)'
+|             `-ImplicitCastExpr 'int' <LValueToRValue>
+|               `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+|-VarDecl z5 'unsigned long' cinit
+| `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof
+|   `-ParenExpr 'int'
+|     `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+|       `-ImplicitCastExpr 'int' <LValueToRValue> part_of_explicit_cast
+|         `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+|-VarDecl t1 'const std::type_info &' cinit
+| `-CXXTypeidExpr 'const std::type_info' lvalue
+|   `-CXXFunctionalCastExpr 'T' functional cast to T <ConstructorConversion>
+|     `-CXXConstructExpr 'T' 'void (int)'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+|-VarDecl t2 'const std::type_info &' cinit
+| `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='T ()'
+|-VarDecl t3 'const std::type_info &' cinit
+| `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='T (I)'
+|-VarDecl t4 'const std::type_info &' cinit
+| `-CXXTypeidExpr 'const std::type_info' lvalue type_operand='T (*)(I)'
+`-VarDecl t5 'const std::type_info &' cinit
+  `-CXXTypeidExpr 'const std::type_info' lvalue
+    `-BinaryOperator 'int' '+'
+      |-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+      | `-ImplicitCastExpr 'int' <LValueToRValue> part_of_explicit_cast
+      |   `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+      `-IntegerLiteral 'int' 1

@@ -107,6 +107,7 @@ const FN_KINDS: &[&str] = &[
     "CXXConstructorDecl",
     "CXXDestructorDecl",
     "CXXConversionDecl",
+    "CXXDeductionGuideDecl",
 ];
 
 /// The template declaration kinds (spec/ast-dump.md §5).
@@ -145,6 +146,9 @@ struct Index<'a> {
     types: Types,
     /// Bit-field `FieldDecl` ids.
     bitfields: HashSet<&'a str>,
+    /// `BindingDecl`s by id (a reference to one is a bit-field lvalue when
+    /// its binding expression is).
+    bindings: HashMap<&'a str, &'a Json>,
     /// Functions by id (for `previousDecl`).
     funcs: HashMap<&'a str, &'a Json>,
     /// Functions whose lexical context is a class (members, and friends
@@ -181,6 +185,9 @@ struct Index<'a> {
     /// The `ClassTemplateDecl`s by name, with their lexical contexts (a
     /// partial specialization's JSON does not name its template).
     templates_by_name: HashMap<&'a str, Vec<&'a Json>>,
+    /// Label names by their `LabelDecl` id (a `GotoStmt` names only the
+    /// id; the declaration is its `LabelStmt`'s).
+    labels: HashMap<&'a str, &'a str>,
 }
 
 /// Whether `n` is a `CXXRecordDecl` whose destructor is non-trivial.
@@ -266,6 +273,11 @@ impl<'a> Index<'a> {
         }
         self.nontrivial_dtor |= has_nontrivial_dtor(n, k);
         self.note_template(n, k);
+        if k == "LabelStmt"
+            && let (Some(d), Some(nm)) = (text(n, "declId"), name(n))
+        {
+            self.labels.insert(d, nm);
+        }
         if parent == "FriendDecl" {
             self.befriended.insert(id(n));
         }
@@ -327,9 +339,18 @@ impl<'a> Index<'a> {
         if is_template {
             self.template_depth -= 1;
         }
+        self.note_decl(n, k);
+    }
+
+    /// Records the bit-fields, bindings, records, aliases and enumerations
+    /// the printer looks up by id or name.
+    fn note_decl(&mut self, n: &'a Json, k: &str) {
         match k {
             "FieldDecl" if flag(n, "isBitfield") => {
                 self.bitfields.insert(id(n));
+            }
+            "BindingDecl" => {
+                self.bindings.insert(id(n), n);
             }
             "CXXRecordDecl" if flag(n, "completeDefinition") && !flag(n, "isImplicit") => {
                 if let Some(nm) = name(n) {
@@ -408,6 +429,9 @@ struct Printer<'a, 'f> {
     /// Function words derived from the JSON, checked against the side
     /// channel when it is loaded: (order position, [(word, present)]).
     fn_flags: Vec<(usize, [(&'static str, bool); 3])>,
+    /// The next `node` prints even if implicit (a binding's holding
+    /// variable, spec/ast-dump.md §3).
+    force: bool,
 }
 
 /// Prints `root` (a `TranslationUnitDecl`) per `opts`.
@@ -420,8 +444,15 @@ pub fn dump(
     if kind(root) != "TranslationUnitDecl" {
         return Err("clang-ast: the JSON dump is not a TranslationUnitDecl".into());
     }
-    let mut p =
-        Printer { ix: Index::build(root), opts, main_file, text, side: None, fn_flags: Vec::new() };
+    let mut p = Printer {
+        ix: Index::build(root),
+        opts,
+        main_file,
+        text,
+        side: None,
+        fn_flags: Vec::new(),
+        force: false,
+    };
     let mut out = String::new();
     match &opts.filter {
         None => {
@@ -611,7 +642,7 @@ impl<'a> Printer<'a, '_> {
             return Err("clang-ast: unexpected absent child (`{}`) in clang's JSON".into());
         }
         let k = kind(n);
-        if self.implicit_dropped(n) {
+        if !std::mem::take(&mut self.force) && self.implicit_dropped(n) {
             return Ok(None);
         }
         match table::lookup(k)? {
@@ -752,7 +783,11 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
-            "NamespaceAliasDecl" | "UsingDirectiveDecl" | "UsingShadowDecl" | "UsingEnumDecl" => {
+            "NamespaceAliasDecl"
+            | "UsingDirectiveDecl"
+            | "UsingShadowDecl"
+            | "ConstructorUsingShadowDecl"
+            | "UsingEnumDecl" => {
                 let mut l = decl_head(n, k);
                 if k == "NamespaceAliasDecl" {
                     push_opt(&mut l, name(n));
@@ -765,7 +800,9 @@ impl<'a> Printer<'a, '_> {
                 let t = n.get(key).ok_or_else(|| format!("clang-ast: {k} without `{key}`"))?;
                 l.push(' ');
                 l.push_str(&bare_ref(t)?);
-                if k == "UsingShadowDecl" && t.get("type").is_some() {
+                if matches!(k, "UsingShadowDecl" | "ConstructorUsingShadowDecl")
+                    && t.get("type").is_some()
+                {
                     push_word(&mut l, &type_pair(t.get("type"), "shadowed declaration")?);
                 }
                 line = l;
@@ -778,15 +815,20 @@ impl<'a> Printer<'a, '_> {
                     }
                 }
             }
-            "UsingDecl" => {
-                // clang's `name` is the qualified name as written (`N::x`).
+            "UsingDecl" | "UnresolvedUsingValueDecl" => {
+                // clang's `name` is the qualified name as written (`N::x`);
+                // an unresolved one's is the unqualified member name.
                 let mut l = decl_head(n, k);
                 push_opt(&mut l, name(n));
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
-            "FunctionDecl" | "CXXMethodDecl" | "CXXConstructorDecl" | "CXXDestructorDecl"
-            | "CXXConversionDecl" => {
+            "FunctionDecl"
+            | "CXXMethodDecl"
+            | "CXXConstructorDecl"
+            | "CXXDestructorDecl"
+            | "CXXConversionDecl"
+            | "CXXDeductionGuideDecl" => {
                 let (l, pre) = self.function(n, k)?;
                 line = l;
                 kids_out = pre;
@@ -837,9 +879,32 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
-            "VarDecl" => {
+            "VarDecl" | "DecompositionDecl" => {
                 line = self.var(n)?;
                 kids_out = self.kid_trees(n)?;
+            }
+            "BindingDecl" => {
+                // clang's JSON has no type for a binding: it is the type of
+                // its binding expression (the last child: the expression,
+                // or the holding variable then a reference to it), or
+                // dependent. (A reference member's binding has the member's
+                // reference type, which the expression lacks.)
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, name(n));
+                let ty = match kids(n).last() {
+                    Some(e) => type_pair(e.get("type"), "binding expression")?,
+                    None => "'<dependent type>'".to_owned(),
+                };
+                push_word(&mut l, &ty);
+                line = l;
+                let mut v = Vec::new();
+                for c in kids(n) {
+                    self.force = kind(c) == "VarDecl";
+                    if let Some(t) = self.node(c)? {
+                        v.push(t);
+                    }
+                }
+                kids_out = v;
             }
             "ClassTemplateDecl"
             | "FunctionTemplateDecl"
@@ -1099,6 +1164,11 @@ impl<'a> Printer<'a, '_> {
                     format!("{} {lit}", self.expr_head(n, k)?)
                 };
             }
+            "PredefinedExpr" => {
+                let v = text(n, "name").ok_or("clang-ast: PredefinedExpr without a name")?;
+                line = format!("{} {v}", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
             "CXXBoolLiteralExpr" => {
                 let v = match n.get("value") {
                     Some(Json::Bool(b)) => *b,
@@ -1124,6 +1194,9 @@ impl<'a> Printer<'a, '_> {
                 if let Some(why) = text(n, "nonOdrUseReason") {
                     l.push_str(" non_odr_use_");
                     l.push_str(why);
+                }
+                if flag(n, "isImmediateEscalating") {
+                    l.push_str(" immediate-escalating");
                 }
                 line = l;
                 kids_out = self.kid_trees(n)?;
@@ -1316,9 +1389,17 @@ impl<'a> Printer<'a, '_> {
                     first.line.insert_str(0, "array_filler: ");
                 }
             }
+            // A prvalue without a value is an immediate invocation not yet
+            // evaluated: nested in another, or in a constant initializer.
+            "ConstantExpr"
+                if text(n, "value").is_none() && text(n, "valueCategory") == Some("prvalue") =>
+            {
+                line = self.expr_head(n, k)?;
+                kids_out = self.kid_trees(n)?;
+            }
             "ConstantExpr" => {
                 let v = text(n, "value").ok_or_else(|| {
-                    "clang-ast: ConstantExpr without a value (an lvalue or unevaluated \
+                    "clang-ast: ConstantExpr without a value (an lvalue \
                      constant) is not supported"
                         .to_string()
                 })?;
@@ -1334,12 +1415,19 @@ impl<'a> Printer<'a, '_> {
                 line = format!("{} '{op}'{adl}", self.expr_head(n, k)?);
                 kids_out = self.kid_trees(n)?;
             }
+            "CallExpr" => {
+                let adl = if flag(n, "adl") { " adl" } else { "" };
+                line = format!("{}{adl}", self.expr_head(n, k)?);
+                kids_out = self.kid_trees(n)?;
+            }
             "CXXNullPtrLiteralExpr"
             | "CXXNoexceptExpr"
+            | "AtomicExpr"
+            | "VAArgExpr"
+            | "CXXPseudoDestructorExpr"
             | "ConditionalOperator"
             | "ParenExpr"
             | "ArraySubscriptExpr"
-            | "CallExpr"
             | "ImplicitValueInitExpr"
             | "ExprWithCleanups"
             | "CXXStdInitializerListExpr"
@@ -1352,6 +1440,7 @@ impl<'a> Printer<'a, '_> {
             | "CXXScalarValueInitExpr"
             | "CXXThrowExpr"
             | "StmtExpr"
+            | "LambdaExpr"
             | "CompoundLiteralExpr"
             | "BinaryConditionalOperator"
             | "OffsetOfExpr"
@@ -1473,9 +1562,20 @@ impl<'a> Printer<'a, '_> {
                 }
             }
             "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt"
-            | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" | "CXXTryStmt" => {
+            | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" | "CXXTryStmt"
+            | "GCCAsmStmt" | "FileScopeAsmDecl" | "AttributedStmt" | "CXXAssumeAttr" => {
                 line = k.to_owned();
                 kids_out = self.kid_trees(n)?;
+            }
+            "LabelStmt" => {
+                line = format!("{k} '{}'", name(n).unwrap_or(""));
+                kids_out = self.kid_trees(n)?;
+            }
+            "GotoStmt" => {
+                let target = text(n, "targetLabelDeclId")
+                    .and_then(|d| self.ix.labels.get(d))
+                    .ok_or("clang-ast: a GotoStmt whose label is not in the dump")?;
+                line = format!("{k} '{target}'");
             }
             _ => return Err(format!("clang-ast: no printer for kept kind `{k}` (normalizer bug)")),
         }
@@ -1509,6 +1609,13 @@ impl<'a> Printer<'a, '_> {
             "MemberExpr" => {
                 text(n, "referencedMemberDecl").is_some_and(|d| self.ix.bitfields.contains(d))
             }
+            "DeclRefExpr" => n
+                .get("referencedDecl")
+                .and_then(|r| r.get("id"))
+                .and_then(Json::as_str)
+                .and_then(|b| self.ix.bindings.get(b))
+                .and_then(|b| kids(b).last())
+                .is_some_and(|e| self.bitfield(e)),
             "ParenExpr" | "CompoundAssignOperator" => kid(0),
             "SubstNonTypeTemplateParmExpr" => kid(1),
             "BinaryOperator" => match text(n, "opcode") {
@@ -1529,7 +1636,8 @@ impl<'a> Printer<'a, '_> {
     /// `noexcept-unevaluated`) and the `Overrides:` child, which only
     /// members, friends and defaulted functions can carry.
     fn needs_side(&self, n: &Json, class: &str) -> bool {
-        class != "FunctionDecl"
+        // A deduction guide is never a member, friend or defaulted.
+        !matches!(class, "FunctionDecl" | "CXXDeductionGuideDecl")
             || self.ix.befriended.contains(id(n))
             || n.get("explicitlyDefaulted").is_some()
     }
@@ -1659,7 +1767,7 @@ impl<'a> Printer<'a, '_> {
         let class = kind(n);
         let mut l = self.head(n, class);
         // A handler's exception declaration may be unnamed ([except.pre]/1).
-        if class == "VarDecl" {
+        if class == "VarDecl" || class == "DecompositionDecl" {
             push_opt(&mut l, name(n));
         } else {
             push_word(&mut l, name(n).ok_or("clang-ast: VarDecl without a name")?);

@@ -61,6 +61,20 @@ impl AttrKind {
     /// (clang's `BuiltinAttr`): `a` = its builtin id
     /// ([`crate::decl::builtin`]). Always implicit.
     pub const BUILTIN: AttrKind = AttrKind(89);
+    /// Clang `ext_vector_type(N)` on a typedef: `a` = the element-count
+    /// `ExprId`. Like `VECTOR_SIZE`, it is consumed into the declared type
+    /// (a `Vector` / `DependentVector`) and never attached to the decl.
+    pub const EXT_VECTOR_TYPE: AttrKind = AttrKind(90);
+    /// GNU `malloc` on a function returning a pointer (clang's
+    /// `RestrictAttr`): the result is `noalias` (WP-170).
+    pub const MALLOC: AttrKind = AttrKind(97);
+    /// GNU `alloc_size(n[, m])` (clang `AllocSizeAttr`): `a` / `b` are
+    /// `IntegerLiteral`s holding the one-based parameter indices n / m
+    /// (`b` = 0 when absent) (WP-170).
+    pub const ALLOC_SIZE: AttrKind = AttrKind(98);
+    /// GNU `alloc_align(n)` (clang `AllocAlignAttr`): `a` is an
+    /// `IntegerLiteral` holding the one-based parameter index (WP-170).
+    pub const ALLOC_ALIGN: AttrKind = AttrKind(99);
     /// `clang::using_if_exists` on a using-declaration (WP-062).
     pub const USING_IF_EXISTS: AttrKind = AttrKind(100);
 }
@@ -97,6 +111,15 @@ pub struct AttrNode {
     pub a: u32,
     /// Argument word `b`.
     pub b: u32,
+}
+
+impl AttrNode {
+    /// `[[assume]]` flag (bit 2): the assumption has possible side
+    /// effects and is ignored (clang `-Wassume`): neither assumed by
+    /// codegen nor checked by constant evaluation. For `ASSUME`, `a` is
+    /// the assumption (`ExprId`) and `b` the raw `Loc` of its clang
+    /// `getExprLoc`, where constant evaluation reports it false.
+    pub const ASSUME_IGNORED: u8 = 4;
 }
 
 /// Attribute nodes and the declaration → attributes map.

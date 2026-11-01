@@ -8,6 +8,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
+use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeView};
 use kiln_ast::{DeclId, QualType};
@@ -22,7 +23,7 @@ use crate::init::Initializer;
 use crate::scope::{Scope, ScopeKind};
 use crate::templ::args::{LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
-use crate::templ::subst::{SubstFail, Substituter};
+use crate::templ::subst::{LocalMethod, SubstFail, Substituter};
 
 /// The parse state set aside while an instantiation runs in the context
 /// of its template (§4.5): an instantiation can be triggered from deep
@@ -66,6 +67,7 @@ impl Sema<'_, '_> {
         if outer_depth.is_none() {
             self.range_for_outer_depth = Some(self.clang_scope_depth());
         }
+        let imm = self.take_immediate_state(true);
         let saved = SavedState {
             scopes: std::mem::take(&mut self.scopes),
             ctx: Some(self.ctx),
@@ -127,6 +129,7 @@ impl Sema<'_, '_> {
         self.unevaluated = saved.unevaluated;
         self.immediate = saved.immediate;
         self.pending_odr = saved.pending_odr;
+        self.restore_immediate_state(imm);
         self.defining = saved.defining;
         self.enums = saved.enums;
         self.braced_args = saved.braced_args;
@@ -174,7 +177,7 @@ impl Sema<'_, '_> {
             .and_then(|p| self.ast.decls.record(p))
             .map_or(TagKind::Struct, |r| r.tag);
         let spec = self.builder().class_spec(tmpl, conv.sugared, conv.canonical, tag);
-        let print = self.suppress_default_args(tmpl, conv.sugared, written.len(), loc);
+        let print = self.suppress_default_args(tmpl, conv.canonical, written.len(), loc);
         if let Some((i, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(i, |s| s.print_args = print);
         }
@@ -192,12 +195,13 @@ impl Sema<'_, '_> {
         written: usize,
         loc: Loc,
     ) -> ArgListId {
-        let params = self.template_params(tmpl);
+        let head = self.head_template(tmpl);
+        let params = self.template_params(head);
         let elems: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
         if elems.len() != params.len() {
             return args;
         }
-        let depth = self.template_param_depth(tmpl);
+        let depth = self.template_param_depth(head);
         let mut n = elems.len();
         while n > 0 {
             let p = params[n - 1];
@@ -279,13 +283,17 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::AliasTemplate, pattern, tmpl, loc) {
             return Err(());
         }
-        let r = {
-            let saved = std::mem::take(&mut self.ast.templates.dependent_depth);
-            let mut s = Substituter::new(self, &args);
-            let r = s.ty(u, loc);
-            self.ast.templates.dependent_depth = saved;
-            r
-        };
+        // Names in the aliased type are looked up from the alias's own
+        // context, not from the use ([temp.res.general]/1): `f<int>(t)`
+        // in a member alias finds the class's `f` when the alias is used
+        // outside the class.
+        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        let pairs = self.inst_context_pairs(ctx);
+        let r = self.in_inst_context(ctx, |s| {
+            let mut sub = Substituter::new(s, &args);
+            sub.map_contexts(&pairs);
+            sub.ty(u, loc)
+        });
         self.pop_inst_frame();
         let Ok(u) = r else { return Err(()) };
         let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);
@@ -297,33 +305,44 @@ impl Sema<'_, '_> {
     /// canonical `InjectedClassNameType` prints as `X<T>`, where kiln's
     /// canonical form is the dependent specialization).
     fn alias_subst_args(&mut self, sugared: ArgListId) -> ArgListId {
-        let out: Vec<TemplateArg> = self
-            .ast
-            .types
-            .args(sugared)
-            .to_vec()
-            .into_iter()
-            .map(|a| match a.view() {
-                ArgView::Type(q) if q.quals().is_empty() => {
-                    let mut t = q;
-                    loop {
-                        if matches!(self.ast.types.view(t.ty()), TypeView::InjectedClassName { .. })
-                        {
-                            break TemplateArg::ty(t);
+        let out: Vec<TemplateArg> =
+            self.ast
+                .types
+                .args(sugared)
+                .to_vec()
+                .into_iter()
+                .map(|a| match a.view() {
+                    ArgView::Type(q) if q.quals().is_empty() => {
+                        let mut t = q;
+                        loop {
+                            if matches!(
+                                self.ast.types.view(t.ty()),
+                                TypeView::InjectedClassName { .. }
+                            ) {
+                                break TemplateArg::ty(t);
+                            }
+                            let n = self.ast.types.desugar_once(t);
+                            if n == t {
+                                break self.ast.types.canonical_arg(a);
+                            }
+                            t = n;
                         }
-                        let n = self.ast.types.desugar_once(t);
-                        if n == t {
-                            break self.ast.types.canonical_arg(a);
-                        }
-                        t = n;
                     }
-                }
-                // A dependent expression stays one: its canonical form
-                // (a profile) cannot be substituted.
-                ArgView::Expr { profile: Some(_), .. } => a,
-                _ => self.ast.types.canonical_arg(a),
-            })
-            .collect();
+                    // A dependent expression stays one: its canonical form
+                    // (a profile) cannot be substituted.
+                    ArgView::Expr { profile: Some(_), .. } => a,
+                    // A pack holding a pack expansion (`index_sequence<Is...>`)
+                    // keeps its elements substitutable the same way.
+                    ArgView::Pack(l)
+                        if self.ast.types.args(l).iter().any(|e| {
+                            matches!(e.view(), ArgView::Expr { profile: Some(_), .. })
+                        }) =>
+                    {
+                        TemplateArg::pack(self.alias_subst_args(l))
+                    }
+                    _ => self.ast.types.canonical_arg(a),
+                })
+                .collect();
         self.ast.types.arg_list(&out)
     }
 
@@ -383,7 +402,14 @@ impl Sema<'_, '_> {
         if let Some(r) = self.undefined_spec(q) {
             return self.instantiate_class(r, loc, true);
         }
-        if self.ast.types.as_record(q).is_some() && !self.is_complete(q) {
+        if let Some(r) = self.ast.types.as_record(q)
+            && !self.is_complete(q)
+            // The class being defined may be named: lookup finds the
+            // members declared so far ([class.mem.general]/8; clang's
+            // `RequireCompleteDeclContext`), e.g. `C::duration` in a
+            // default template argument substituted inside `C`.
+            && !self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(r))
+        {
             let d = self.diag(DiagId::sema_incomplete_nested_name_spec, loc).arg(self.ty_arg(q));
             self.emit(d);
             return false;
@@ -423,7 +449,7 @@ impl Sema<'_, '_> {
     /// instantiated member template ([temp.mem]), else retained.
     pub(crate) fn base_levels(&self, tmpl: DeclId) -> MultiLevelArgs {
         if self.inst_template(tmpl) != tmpl {
-            let mut c = self.ast.decls.get(tmpl).ctx();
+            let mut c = Some(self.inst_lexical_class(tmpl));
             while let Some(x) = c.filter(|&x| self.kind_of(x) == DeclKind::CXXRecord) {
                 if let Some((_, a)) = self.spec_args(x) {
                     return a;
@@ -431,7 +457,33 @@ impl Sema<'_, '_> {
                 c = self.ast.decls.get(x).ctx();
             }
         }
-        Self::outer_levels(tmpl, self.template_param_depth(tmpl))
+        Self::outer_levels(tmpl, self.template_param_depth(self.head_template(tmpl)))
+    }
+
+    /// The context of instantiated member template `tmpl` whose
+    /// specialization arguments enclose its own: its class, or for a
+    /// friend template defined in a class template, the class that
+    /// declared it (its lexical context; [temp.friend]/1).
+    pub(crate) fn inst_lexical_class(&self, tmpl: DeclId) -> DeclId {
+        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        if self.kind_of(ctx) != DeclKind::CXXRecord
+            && let Some(l) = self.ast.decls.lexical_ctx(tmpl)
+            && self.kind_of(l) == DeclKind::CXXRecord
+        {
+            return l;
+        }
+        ctx
+    }
+
+    /// The context whose instantiated classes map the pattern's classes
+    /// for function template specialization `spec` of `tmpl`
+    /// ([`Self::inst_context_pairs`]): its own, or the class that
+    /// declared it for a friend template defined in a class template.
+    pub(crate) fn spec_pairs_ctx(&self, spec: DeclId, tmpl: DeclId) -> DeclId {
+        if self.inst_template(tmpl) != tmpl {
+            return self.inst_lexical_class(tmpl);
+        }
+        self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu)
     }
 
     /// The instantiated classes from `x` outwards (stopping at the first
@@ -495,7 +547,10 @@ impl Sema<'_, '_> {
             Some(m) => {
                 args = self.base_levels(tmpl);
                 args.push(m.args, m.partial, LevelMode::Substitute);
-                Some(m.partial)
+                // A partial specialization redeclared with its member
+                // template ([`Substituter::member_partial_spec`]) is
+                // defined by the original.
+                Some(self.ast.templates.instantiated_from_map(m.partial).unwrap_or(m.partial))
             }
             None => self.pattern_of(self.inst_template(tmpl)),
         };
@@ -518,7 +573,7 @@ impl Sema<'_, '_> {
                 let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(at).loc());
                 let d = self
                     .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
-                    .arg(self.ty_str(t))
+                    .arg(self.decl_ty_str(t))
                     .with_note(note);
                 self.emit(d);
                 self.inst.undefined_diagnosed.set(Some(spec));
@@ -546,6 +601,7 @@ impl Sema<'_, '_> {
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let outer = self.inst_context_pairs(parent);
         self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &outer));
+        self.replay_dependent_access(def, spec);
         self.pop_inst_frame();
         self.ast.definition(spec).is_some()
     }
@@ -579,6 +635,7 @@ impl Sema<'_, '_> {
         }
         let parent = self.ast.decls.get(r).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(parent, |s| s.instantiate_class_body(r, def, &args, &outer));
+        self.replay_dependent_access(def, r);
         self.pop_inst_frame();
         self.ast.definition(r).is_some()
     }
@@ -593,103 +650,10 @@ impl Sema<'_, '_> {
         args: &MultiLevelArgs,
         outer: &[(DeclId, DeclId)],
     ) {
-        self.act_on_start_record_definition(spec);
         let mut sub = Substituter::new(self, args);
         sub.entity = Some(spec);
         sub.map_contexts(outer);
-        sub.map_contexts(&[(def, spec)]);
-        // Base classes ([temp.inst]/3: the base-clause is instantiated
-        // with the class).
-        let bases: Vec<kiln_ast::decl::BaseSpec> =
-            sub.sema.ast.decls.bases(def, &sub.sema.ast.lists).copied().collect();
-        let mut specs = Vec::with_capacity(bases.len());
-        for b in bases {
-            if b.pack_expansion {
-                // [temp.variadic]/5: one base per element.
-                let tys = match sub.expand_pattern(|s| s.element_ty(b.ty, b.loc)) {
-                    Ok(crate::templ::pack::Expansion::Elements(v)) => v,
-                    Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
-                        let _ = sub.unimplemented::<()>("base pack expansion", b.loc);
-                        continue;
-                    }
-                    Err(_) => continue,
-                };
-                for ty in tys {
-                    specs.push(BaseSpecInfo {
-                        ty,
-                        loc: b.loc,
-                        is_virtual: b.is_virtual,
-                        access: b.access,
-                        pack_expansion: false,
-                        attrs: Vec::new(),
-                    });
-                }
-                continue;
-            }
-            if let Ok(ty) = sub.ty(b.ty, b.loc) {
-                specs.push(BaseSpecInfo {
-                    ty,
-                    loc: b.loc,
-                    is_virtual: b.is_virtual,
-                    access: b.access,
-                    pack_expansion: false,
-                    attrs: Vec::new(),
-                });
-            }
-        }
-        sub.sema.act_on_base_specifiers(spec, &specs);
-        let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
-        let mut nsdmis = Vec::new();
-        for m in members {
-            let n = *sub.sema.ast.decls.get(m);
-            if n.flags().contains(DeclFlags::IMPLICIT) {
-                continue;
-            }
-            // A friend function defined in the class is a member of the
-            // list as well as its `FriendDecl`'s target; the
-            // `FriendDecl` redeclares it.
-            if n.kind() == DeclKind::Function
-                && n.misc().friend() != kiln_ast::decl::FriendKind::None
-            {
-                continue;
-            }
-            let r = sub.member(m);
-            if let Ok(Some(x)) = r {
-                sub.member_link(x, m);
-                if n.kind() == DeclKind::Field
-                    && let Some(init) = sub.sema.ast.decls.field(m).and_then(|f| f.init)
-                {
-                    nsdmis.push((x, init));
-                }
-            }
-        }
-        sub.sema.act_on_finish_record_definition(spec, false);
-        // Default member initializers: in the complete-class context
-        // (clang instantiates them when a constructor uses them; a gap).
-        if !nsdmis.is_empty() {
-            sub.sema.act_on_start_delayed_class(spec);
-            for (field, init) in nsdmis {
-                if sub.sema.kind_of(field) != DeclKind::Field {
-                    continue;
-                }
-                sub.sema.act_on_start_field_init(field);
-                let i = if sub.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
-                    sub.init_list(init).map(Initializer::List)
-                } else {
-                    sub.expr(init).map(Initializer::Expr)
-                };
-                match i {
-                    Ok(i) => sub.sema.act_on_field_init(field, i),
-                    Err(SubstFail) => {
-                        if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
-                            sub.sema.nsdmi_this.pop();
-                        }
-                    }
-                }
-            }
-            sub.sema.act_on_finish_delayed_class(spec);
-        }
-        sub.sema.act_on_finish_class_contexts(spec);
+        sub.class_body(spec, def, None);
     }
 
     /// Instantiates the definition of `f`, a member function of a class
@@ -709,6 +673,15 @@ impl Sema<'_, '_> {
         if explicit == Some(SpecKind::ExplicitSpecialization) {
             return;
         }
+        // A use inside a ctor-initializer (`B<int>(3)` calling a
+        // constructor instantiated here) must not clobber the enclosing
+        // constructor's mem-initializer state.
+        let outer = std::mem::take(&mut self.mem_inits);
+        self.instantiate_function_definition_inner(f, poi);
+        self.mem_inits = outer;
+    }
+
+    fn instantiate_function_definition_inner(&mut self, f: DeclId, poi: Loc) {
         let Some(pattern) = self.ast.instantiated_from(f) else { return };
         let Some(pdef) = self.ast.definition(pattern) else { return };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
@@ -738,62 +711,12 @@ impl Sema<'_, '_> {
         }
         let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
         self.in_inst_context(ctx, |s| {
-            s.act_on_start_function_def(f);
-            let pp: Vec<DeclId> = s
-                .ast
-                .decls
-                .function(pdef)
-                .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
-                .unwrap_or_default();
-            let fp: Vec<DeclId> = s
-                .ast
-                .decls
-                .function(f)
-                .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
-                .unwrap_or_default();
-            let lbrace = s.ast.stmts.get(body).loc();
-            let rbrace = if s.ast.stmts.get(body).kind() == kiln_ast::stmt::StmtKind::CompoundStmt {
-                s.ast.stmts.rbrace(body)
-            } else {
-                lbrace
-            };
             let mut sub = Substituter::new(s, &args);
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
-            sub.map_params(&pp, &fp);
-            if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
-                // The pattern's ctor-initializer, substituted and checked
-                // as the parser's would be (spec/sema-class.md §4.9).
-                let (inits, colon) = sub
-                    .sema
-                    .inst
-                    .pattern_mem_inits
-                    .get(&pdef)
-                    .cloned()
-                    .unwrap_or((Vec::new(), lbrace));
-                for info in &inits {
-                    match sub.mem_initializer(info) {
-                        Ok(v) => {
-                            for i in &v {
-                                sub.sema.act_on_mem_initializer(f, i);
-                            }
-                        }
-                        Err(_) => sub.sema.note_failed_mem_initializer(f),
-                    }
-                }
-                sub.sema.act_on_mem_initializers(f, &[], colon);
-            }
-            let b = sub.body(body);
-            let failed = sub.failed;
-            s.act_on_finish_function_def(f, b, rbrace);
-            if failed {
-                // [temp.inst]: a body that failed to instantiate makes the
-                // specialization invalid (clang `setInvalidDecl`): later
-                // deductions find it a substitution failure, constant
-                // evaluation a "subexpression not valid".
-                s.ast.decls.set_flags(f, DeclFlags::INVALID);
-            }
+            sub.function_def(f, pdef, body);
         });
+        self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
     }
 
@@ -992,6 +915,214 @@ impl Sema<'_, '_> {
 }
 
 impl Substituter<'_, '_, '_> {
+    /// Defines member function `f` from its pattern definition `pdef`
+    /// with body `body` ([temp.inst]/4-5): the parameters are mapped, a
+    /// constructor's ctor-initializer is substituted, then the body.
+    pub(crate) fn function_def(&mut self, f: DeclId, pdef: DeclId, body: kiln_ast::StmtId) {
+        let sub = self;
+        sub.sema.act_on_start_function_def(f);
+        let pp: Vec<DeclId> = sub
+            .sema
+            .ast
+            .decls
+            .function(pdef)
+            .map(|x| sub.sema.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        let fp: Vec<DeclId> = sub
+            .sema
+            .ast
+            .decls
+            .function(f)
+            .map(|x| sub.sema.ast.lists.iter::<DeclId>(x.params).collect())
+            .unwrap_or_default();
+        let lbrace = sub.sema.ast.stmts.get(body).loc();
+        let rbrace =
+            if sub.sema.ast.stmts.get(body).kind() == kiln_ast::stmt::StmtKind::CompoundStmt {
+                sub.sema.ast.stmts.rbrace(body)
+            } else {
+                lbrace
+            };
+        sub.map_params(&pp, &fp);
+        if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
+            // The pattern's ctor-initializer, substituted and checked
+            // as the parser's would be (spec/sema-class.md §4.9).
+            let (inits, colon) =
+                sub.sema.inst.pattern_mem_inits.get(&pdef).cloned().unwrap_or((Vec::new(), lbrace));
+            for info in &inits {
+                match sub.mem_initializer(info) {
+                    Ok(v) => {
+                        for i in &v {
+                            sub.sema.act_on_mem_initializer(f, i);
+                        }
+                    }
+                    Err(_) => sub.sema.note_failed_mem_initializer(f),
+                }
+            }
+            sub.sema.act_on_mem_initializers(f, &[], colon);
+        }
+        let b = sub.body(body);
+        if sub.stmt_failed {
+            // [temp.inst]: a body that failed to instantiate makes the
+            // member specialization invalid (clang `setInvalidDecl`), as
+            // for a function template specialization (funcs.rs).
+            sub.sema.ast.decls.set_flags(f, DeclFlags::INVALID);
+        }
+        sub.sema.act_on_finish_function_def(f, b, rbrace);
+    }
+
+    /// The base-specifiers of pattern definition `def`, substituted
+    /// ([temp.inst]/3: the base-clause is instantiated with the class;
+    /// [temp.variadic]/5: a pack expansion gives one base per element).
+    fn class_bases(&mut self, def: DeclId) -> Vec<BaseSpecInfo> {
+        // Base classes ([temp.inst]/3: the base-clause is instantiated
+        // with the class).
+        let bases: Vec<kiln_ast::decl::BaseSpec> =
+            self.sema.ast.decls.bases(def, &self.sema.ast.lists).copied().collect();
+        let mut specs = Vec::with_capacity(bases.len());
+        for b in bases {
+            if b.pack_expansion {
+                // [temp.variadic]/5: one base per element.
+                let tys = match self.expand_pattern(|s| s.element_ty(b.ty, b.loc)) {
+                    Ok(crate::templ::pack::Expansion::Elements(v)) => v,
+                    Ok(crate::templ::pack::Expansion::Unexpanded(_)) => {
+                        let _ = self.unimplemented::<()>("base pack expansion", b.loc);
+                        continue;
+                    }
+                    Err(_) => continue,
+                };
+                for ty in tys {
+                    specs.push(BaseSpecInfo {
+                        ty,
+                        loc: b.loc,
+                        is_virtual: b.is_virtual,
+                        access: b.access,
+                        pack_expansion: false,
+                        attrs: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            if let Ok(ty) = self.ty(b.ty, b.loc) {
+                specs.push(BaseSpecInfo {
+                    ty,
+                    loc: b.loc,
+                    is_virtual: b.is_virtual,
+                    access: b.access,
+                    pack_expansion: false,
+                    attrs: Vec::new(),
+                });
+            }
+        }
+        specs
+    }
+
+    /// Defines `spec` from pattern definition `def` (bases, members,
+    /// default member initializers). `local` is set for a local class
+    /// ([class.local], [temp.inst]/3: instantiated with its enclosing
+    /// function): its member classes are defined with it, and the member
+    /// functions it defines are collected there, to be defined after the
+    /// outermost local class is complete (as the parser replays them);
+    /// otherwise the class contexts are finished here.
+    pub(crate) fn class_body(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+        local: Option<&mut Vec<LocalMethod>>,
+    ) {
+        self.class_body_with(spec, def, local, false);
+    }
+
+    /// [`Substituter::class_body`]; `anonymous` for an anonymous struct
+    /// or union (its `}` is followed by `;`).
+    pub(crate) fn class_body_with(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
+        mut local: Option<&mut Vec<LocalMethod>>,
+        anonymous: bool,
+    ) {
+        let saved_entity = self.entity.replace(spec);
+        self.sema.act_on_start_record_definition(spec);
+        self.class_attrs(spec, def);
+        self.map_contexts(&[(def, spec)]);
+        let sub = self;
+        let specs = sub.class_bases(def);
+        sub.sema.act_on_base_specifiers(spec, &specs);
+        let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
+        let mut nsdmis = Vec::new();
+        for m in members {
+            let n = *sub.sema.ast.decls.get(m);
+            if n.flags().contains(DeclFlags::IMPLICIT) {
+                continue;
+            }
+            // A friend function defined in the class is a member of the
+            // list as well as its `FriendDecl`'s target; the
+            // `FriendDecl` redeclares it.
+            if n.kind() == DeclKind::Function
+                && n.misc().friend() != kiln_ast::decl::FriendKind::None
+            {
+                continue;
+            }
+            if n.kind() == DeclKind::IndirectField {
+                // Injected by its anonymous struct or union.
+                continue;
+            }
+            if local.is_none() && sub.is_unnamed_member_class(m) {
+                let _ = sub.unnamed_member_class(m);
+                continue;
+            }
+            let r = if local.is_some()
+                && n.kind() == DeclKind::CXXRecord
+                && n.misc().friend() == kiln_ast::decl::FriendKind::None
+            {
+                Ok(Some(sub.local_class(m, local.as_deref_mut())))
+            } else {
+                sub.member(m)
+            };
+            if let Ok(Some(x)) = r {
+                sub.member_link(x, m);
+                if let Some(l) = local.as_deref_mut() {
+                    sub.collect_local_method(spec, x, m, l);
+                }
+                if n.kind() == DeclKind::Field
+                    && let Some(init) = sub.sema.ast.decls.field(m).and_then(|f| f.init)
+                {
+                    nsdmis.push((x, init));
+                }
+            }
+        }
+        sub.sema.act_on_finish_record_definition(spec, anonymous);
+        // Default member initializers: in the complete-class context
+        // (clang instantiates them when a constructor uses them; a gap).
+        if !nsdmis.is_empty() {
+            sub.sema.act_on_start_delayed_class(spec);
+            for (field, init) in nsdmis {
+                if sub.sema.kind_of(field) != DeclKind::Field {
+                    continue;
+                }
+                sub.sema.act_on_start_field_init(field);
+                let i = if sub.sema.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
+                    sub.init_list(init).map(Initializer::List)
+                } else {
+                    sub.expr(init).map(Initializer::Expr)
+                };
+                match i {
+                    Ok(i) => sub.sema.act_on_field_init(field, i),
+                    Err(SubstFail) => {
+                        if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
+                            sub.sema.nsdmi_this.pop();
+                        }
+                    }
+                }
+            }
+            sub.sema.act_on_finish_delayed_class(spec);
+        }
+        if local.is_none() {
+            sub.sema.act_on_finish_class_contexts(spec);
+        }
+        sub.entity = saved_entity;
+    }
+
     /// A member class is declared with its class; its definition is
     /// instantiated when it is required to be complete ([temp.inst]/3).
     pub(crate) fn member_class_decl(&mut self, m: DeclId) -> Result<DeclId, SubstFail> {
@@ -1006,6 +1137,84 @@ impl Substituter<'_, '_, '_> {
             _ => TagKeyword::Struct,
         };
         Ok(self.sema.act_on_tag(kw, Some((name, loc)), None, TagUse::Declaration, 0, None, loc))
+    }
+
+    /// A class-scope using-declaration of the pattern (`using B<T>::f;`,
+    /// `using __base::__base;`), redone in the instantiation with its
+    /// qualifier substituted (WP-114).
+    fn member_using(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
+        let pnns = self.sema.ast.using_qualifier(m).ok_or(SubstFail)?;
+        let dn = self.sema.ast.decls.get(m).name();
+        // An operator- or conversion-function-id (`using B<T>::operator=;`)
+        // is kept, a conversion's target type substituted; a constructor
+        // name (or the base's own name) inherits constructors.
+        let (name, inheriting) = match self.sema.ast.names.view(dn) {
+            DeclNameView::Identifier(n) => (dn, self.sema.nns_last_name(pnns) == Some(n)),
+            DeclNameView::Operator(_) | DeclNameView::LiteralOperator(_) => (dn, false),
+            DeclNameView::Conversion(t) => {
+                let t = self.ty(t, loc)?;
+                let t = self.sema.ast.types.canonical(t);
+                (self.sema.ast.names.conversion(t), false)
+            }
+            _ => (DeclName::ident(self.sema.nns_last_name(pnns).ok_or(SubstFail)?), true),
+        };
+        let packed = self
+            .sema
+            .ast
+            .types
+            .nns_flags(pnns)
+            .contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK);
+        let nnss = if packed {
+            // `using Bases::operator()...;` ([temp.variadic]/5): one
+            // using-declarator per element.
+            match self.expand_pattern(|s| s.nns(pnns, loc))? {
+                crate::templ::pack::Expansion::Elements(v) => v,
+                crate::templ::pack::Expansion::Unexpanded(_) => {
+                    return self.unimplemented("this using-declaration pack expansion", loc);
+                }
+            }
+        } else {
+            vec![self.nns(pnns, loc)?]
+        };
+        let mut last = None;
+        for nns in nnss {
+            if self.nns_still_dependent(nns) {
+                return self.unimplemented("dependent using-declarations in templates", loc);
+            }
+            let ctx = self.nns_context(nns, loc)?;
+            let q = crate::using::Qualifier { ctx, nns, loc };
+            let resolved = self.sema.kind_of(m) == DeclKind::Using;
+            let reverse = std::mem::replace(&mut self.sema.reverse_using_shadows, resolved);
+            last = self.sema.instantiate_class_using(q, name, loc, inheriting).or(last);
+            self.sema.reverse_using_shadows = reverse;
+        }
+        Ok(last)
+    }
+
+    /// Redoes the dependent `using typename B<T>::name;` that pattern
+    /// alias `m` stands for, with its substituted qualifier (clang's
+    /// `UnresolvedUsingTypenameDecl` instantiation): a using-declaration
+    /// and its shadows, or "'typename' keyword used on a non-type".
+    fn member_using_typename(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
+        let Some(u) = self.sema.ast.decls.typedef(m).map(|t| t.underlying) else { return Ok(None) };
+        let TypeView::DependentName { nns: pnns, name, .. } = self.sema.ast.types.view(u.ty())
+        else {
+            return Ok(None);
+        };
+        let nns = self.nns(pnns, loc)?;
+        if self.nns_still_dependent(nns) {
+            return self.unimplemented("dependent using-declarations in templates", loc);
+        }
+        let ctx = self.nns_context(nns, loc)?;
+        let q = crate::using::Qualifier { ctx, nns, loc };
+        Ok(self.sema.act_on_using_typename_declarator(
+            loc,
+            Some(q),
+            DeclName::ident(name),
+            loc,
+            false,
+            None,
+        ))
     }
 
     /// Replays member `m` of the pattern class (§4.6).
@@ -1042,6 +1251,9 @@ impl Substituter<'_, '_, '_> {
                 // class's member list; only the first declaration is.
                 self.function_decl(m, DeclaratorContext::Member, None)?
             }
+            DeclKind::TypeAlias if self.sema.using_typename.contains(&m) => {
+                return self.member_using_typename(m, loc);
+            }
             DeclKind::Typedef | DeclKind::TypeAlias => self.typedef_decl(m)?,
             DeclKind::StaticAssert => {
                 self.static_assert_decl(m)?;
@@ -1057,10 +1269,27 @@ impl Substituter<'_, '_, '_> {
                 let r = self.friend_decl(m)?;
                 return Ok(r.filter(|&x| self.sema.kind_of(x) != DeclKind::Friend));
             }
-            DeclKind::Empty => return Ok(None),
+            // A class-scope using-declaration is redone with its
+            // substituted qualifier; its shadows come with it.
+            DeclKind::Using | DeclKind::UnresolvedUsingValue => return self.member_using(m, loc),
+            DeclKind::Empty | DeclKind::UsingShadow | DeclKind::ConstructorUsingShadow => {
+                return Ok(None);
+            }
             // A friend function is in its class's member list as well as
             // in its FriendDecl, which instantiates it.
-            DeclKind::Function if n.misc().friend() != kiln_ast::decl::FriendKind::None => {
+            // So is a friend template ([temp.friend]/1) or a class a
+            // friend declaration introduced (`template<class> friend
+            // class X;`).
+            DeclKind::Function
+            | DeclKind::FunctionTemplate
+            | DeclKind::ClassTemplate
+            | DeclKind::CXXRecord
+                if n.misc().friend() != kiln_ast::decl::FriendKind::None =>
+            {
+                return Ok(None);
+            }
+            DeclKind::CXXRecord if self.sema.ast.partial_spec_info(m).is_some() => {
+                self.member_partial_spec(m)?;
                 return Ok(None);
             }
             DeclKind::CXXRecord => self.member_class_decl(m)?,

@@ -49,11 +49,11 @@ fn class_friend_special_names() {
     assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
 }
 
-/// [over.literal]: literal operators are not supported.
+/// [over.literal]/2: a literal operator is not a class member.
 #[test]
-fn class_literal_operator_unsupported() {
+fn class_literal_operator_member() {
     let p = parse("struct S { int operator\"\"_x(unsigned long long); };");
-    p.assert_diag("literal operators is not supported yet");
+    p.assert_diag("literal operator 'operator\"\"_x' must be in a namespace or global scope");
 }
 
 /// [dcl.constexpr], [dcl.constinit]: the specifiers on members, and that
@@ -64,7 +64,7 @@ fn class_constexpr_specifiers() {
         "struct S { consteval int f(); constexpr static int v = 1; constinit static int w; };",
     );
     assert_parsed(&p);
-    p.assert_diag("1:12 error: 'consteval' is not supported yet");
+    p.assert_clean();
     let p = parse("struct S { consteval constexpr int m(); };");
     p.assert_diag("1:22 error: cannot combine with previous 'consteval' declaration specifier");
 }
@@ -85,8 +85,16 @@ fn class_member_qualifiers() {
 #[test]
 fn class_explicit_object_parameter() {
     let p = parse("struct S { void s(this S self); void t(this auto &&); };");
-    assert_parsed(&p);
-    p.assert_diag("explicit object parameters is not supported yet");
+    p.assert_clean();
+    p.assert_dump("ParmVarDecl");
+}
+
+/// [dcl.fct]/3: `this` followed by a decl-specifier starts a parameter
+/// list, not a direct-initializer, also at namespace scope.
+#[test]
+fn explicit_object_parameter_at_namespace_scope() {
+    let p = parse("void f(this int);");
+    p.assert_diag("1:8 error: an explicit object parameter cannot appear in a non-member function");
 }
 
 /// [class.mem.general]: a member declarator has no direct-initializer, so
@@ -208,13 +216,11 @@ fn expr_prim_this() {
     p.assert_diag("1:9 error: invalid use of 'this' outside of a non-static member function");
 }
 
-/// [expr.ref]/1: a qualified-id after `.`/`->` is reported unsupported
-/// (no cascade of parse errors).
+/// [expr.ref]/1, /4: a qualified-id after `.`/`->` (WP-121).
 #[test]
 fn expr_ref_qualified_member() {
     let p = parse("struct B { int x; }; struct D : B {}; int f(D d) { return d.B::x; }");
-    p.assert_diag("1:61 error: qualified member access is not supported yet");
-    assert_eq!(p.problems().len(), 1, "{:?}", p.problems());
+    assert!(p.problems().is_empty(), "{:?}", p.problems());
 }
 
 /// [class.pre], [dcl.enum]: a missing `;` after a definition is diagnosed

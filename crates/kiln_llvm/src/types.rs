@@ -112,6 +112,9 @@ pub enum TypeData {
     },
     /// An identified struct; the index into the table's named-struct list.
     Named(u32),
+    /// A target extension type without parameters, `target("name")`
+    /// (e.g. `target("aarch64.svcount")`).
+    TargetExt(Box<str>),
     /// `R (P...)` / `R (P..., ...)`.
     Function {
         /// Return type.
@@ -234,6 +237,11 @@ impl TypeTable {
     pub fn vector(&mut self, elem: TypeId, len: u32) -> TypeId {
         debug_assert!(self.is_valid_vector_elem(elem), "invalid vector element type");
         self.intern(TypeData::Vector { len, elem, scalable: false })
+    }
+
+    /// `target("name")`.
+    pub fn target_ext(&mut self, name: &str) -> TypeId {
+        self.intern(TypeData::TargetExt(name.into()))
     }
 
     /// `<vscale x len x elem>`.
@@ -537,6 +545,7 @@ impl TypeTable {
             TypeData::Label => w.write_str("label"),
             TypeData::Metadata => w.write_str("metadata"),
             TypeData::Token => w.write_str("token"),
+            TypeData::TargetExt(n) => write!(w, "target(\"{n}\")"),
             TypeData::Half => w.write_str("half"),
             TypeData::BFloat => w.write_str("bfloat"),
             TypeData::Float => w.write_str("float"),
@@ -644,6 +653,9 @@ impl TypeTable {
             TypeData::Label => s.push_str("label"),
             TypeData::Metadata => s.push_str("Metadata"),
             TypeData::Token => s.push_str("token"),
+            TypeData::TargetExt(n) => {
+                let _ = write!(s, "t{n}");
+            }
             TypeData::Half => s.push_str("f16"),
             TypeData::BFloat => s.push_str("bf16"),
             TypeData::Float => s.push_str("f32"),

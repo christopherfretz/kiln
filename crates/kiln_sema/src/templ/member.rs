@@ -9,7 +9,7 @@
 //! ([`Sema::base_levels`]).
 
 use kiln_ast::DeclId;
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, FriendTarget};
 use kiln_ast::ids::TemplateParamListId;
 
 use crate::declspec::DeclaratorContext;
@@ -23,6 +23,127 @@ impl Substituter<'_, '_, '_> {
     /// Its constraints stay the pattern's: they are recorded in
     /// `member_constraints` with this specialization's levels.
     pub(crate) fn member_template(&mut self, t: DeclId) -> SubstResult<DeclId> {
+        let Some(info) = self.sema.ast.template_info(t).copied() else { return Err(SubstFail) };
+        let Some(pattern) = info.pattern else { return Err(SubstFail) };
+        self.open_substituted_head(info.params)?;
+        let r = self.member_template_pattern(pattern);
+        self.sema.act_on_finish_template_decl();
+        self.sema.templ.cur = None;
+        let d = r?;
+        if let Some(x) = self.sema.template_of(d) {
+            self.locals.insert(pattern, DeclOrPack::Decl(d));
+            if !self.sema.associated_constraints(t).is_empty() {
+                self.sema.inst.concepts.member_constraints.insert(x, (t, self.args.clone()));
+            }
+            self.out_of_line_member_partials(t);
+            return Ok(x);
+        }
+        Err(SubstFail)
+    }
+
+    /// Redeclares partial specialization `m` of a member class template
+    /// of the pattern class for the member template it was redeclared as
+    /// ([temp.spec.partial.member]/2, [temp.mem]; clang's
+    /// `InstantiateClassTemplatePartialSpecialization`): its parameter
+    /// list and arguments substituted, so matching sees the enclosing
+    /// specialization's arguments (`In<T, B>` in `Outer<int>` matches
+    /// `In<int, char>`). A specialization instantiated from it uses the
+    /// original partial's definition, recorded as its pattern, with the
+    /// enclosing arguments as the outer levels (§4.6).
+    pub(crate) fn member_partial_spec(&mut self, m: DeclId) -> SubstResult<()> {
+        let Some((_, info)) = self.sema.ast.partial_spec_info(m) else { return Err(SubstFail) };
+        let (tmpl, params, args) = (info.template, info.params, info.args);
+        let n = *self.sema.ast.decls.get(m);
+        let Some(pattern) = self.sema.pattern_of(tmpl) else { return Err(SubstFail) };
+        let Some(&DeclOrPack::Decl(new_pattern)) = self.locals.get(&pattern) else {
+            return Err(SubstFail);
+        };
+        let Some(new_tmpl) = self.sema.template_of(new_pattern) else { return Err(SubstFail) };
+        self.open_substituted_head(params)?;
+        let r = (|| {
+            let list = self.sema.templ.heads.last().and_then(|h| h.list).ok_or(SubstFail)?;
+            let args = self.args(args, n.loc())?;
+            let ctx = self.sema.ast.decls.get(new_tmpl).ctx().unwrap_or(self.sema.ast.tu);
+            let h = kiln_ast::DeclHead::new(ctx, n.name(), n.loc());
+            let tag =
+                self.sema.ast.decls.record(m).map_or(kiln_ast::decl::TagKind::Struct, |r| r.tag);
+            let p = self.sema.builder().class_partial_spec(h, new_tmpl, list, args, tag);
+            self.sema.ast.templates.set_instantiated_from(p, m);
+            Ok(())
+        })();
+        self.sema.act_on_finish_template_decl();
+        self.sema.templ.cur = None;
+        r
+    }
+
+    /// Redeclares the partial specializations of member class template
+    /// `t` declared out of line (`template<class T> template<class U>
+    /// struct Outer<T>::Inner<U*> {...}`, [temp.spec.partial.member]/1):
+    /// they are not in the pattern class's member list, so the member
+    /// walk does not reach them (clang's `VisitClassTemplateDecl`
+    /// instantiates every partial specialization of the member
+    /// template). Those declared in the class come with the walk.
+    fn out_of_line_member_partials(&mut self, t: DeclId) {
+        if self.sema.kind_of(t) != DeclKind::ClassTemplate {
+            return;
+        }
+        let class = self.sema.ast.decls.get(t).ctx();
+        let partials: Vec<DeclId> = self
+            .sema
+            .ast
+            .templates
+            .partials_of(t)
+            .iter()
+            .filter_map(|&i| self.sema.ast.templates.partial(i))
+            .map(|p| p.partial)
+            .filter(|&p| self.sema.ast.decls.lexical_ctx(p) != class)
+            .collect();
+        for p in partials {
+            // A partial specialization whose redeclaration fails is not
+            // matched; the primary template is used, as for one that
+            // fails in the member walk.
+            let _ = self.member_partial_spec(p);
+        }
+    }
+
+    /// Opens the head of a member template (or a generic lambda's call
+    /// operator) being redeclared: template parameter list `params`
+    /// substituted ([`Self::param_list`]), its parameters in scope, one
+    /// more dependent level. The declaration takes the head.
+    pub(crate) fn open_substituted_head(&mut self, params: TemplateParamListId) -> SubstResult<()> {
+        let list = self.param_list(params)?;
+        let l = *self.sema.ast.templates.param_list(list);
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l.params).collect();
+        self.sema.templ.heads.push(HeadBuild {
+            template_loc: l.template_loc,
+            l_angle: l.l_angle,
+            depth: l.depth,
+            params: params.clone(),
+            list: Some(list),
+            taken: false,
+            invented: false,
+        });
+        let mut s = Scope::new(ScopeKind::TemplateParams, None);
+        for &p in &params {
+            if let Some(n) = self.sema.ast.decls.get(p).name().as_ident() {
+                s.locals.push((n, p, Ns::Ordinary));
+            }
+        }
+        self.sema.scopes.push(s);
+        self.sema.ast.templates.dependent_depth += 1;
+        Ok(())
+    }
+
+    /// `template<class U> friend R f(U);` in a class template
+    /// ([temp.friend]/1): its head is substituted like a member
+    /// template's (to the retained depth), and the pattern redeclared as a
+    /// friend, which matches (or hiddenly declares) the namespace scope
+    /// template. Returns the `FriendDecl`.
+    pub(crate) fn friend_function_template(
+        &mut self,
+        t: DeclId,
+        loc: kiln_source::Loc,
+    ) -> SubstResult<DeclId> {
         let Some(info) = self.sema.ast.template_info(t).copied() else { return Err(SubstFail) };
         let Some(pattern) = info.pattern else { return Err(SubstFail) };
         let list = self.param_list(info.params)?;
@@ -45,18 +166,30 @@ impl Substituter<'_, '_, '_> {
         }
         self.sema.scopes.push(s);
         self.sema.ast.templates.dependent_depth += 1;
-        let r = self.member_template_pattern(pattern);
+        let r = self.function_decl(pattern, DeclaratorContext::Member, Some(loc));
         self.sema.act_on_finish_template_decl();
         self.sema.templ.cur = None;
-        let d = r?;
-        if let Some(x) = self.sema.template_of(d) {
-            self.locals.insert(pattern, DeclOrPack::Decl(d));
-            if !self.sema.associated_constraints(t).is_empty() {
-                self.sema.inst.concepts.member_constraints.insert(x, (t, self.args.clone()));
+        let fd = r?;
+        if let FriendTarget::Decl(x) = self.sema.ast.decls.friend_target(fd)
+            && let Some(p) = self.sema.pattern_of(x)
+        {
+            if self.sema.ast.instantiated_from(p).is_none() {
+                self.member_link(p, pattern);
             }
-            return Ok(x);
+            // Defined in the class: its specializations are instantiated
+            // from the class template's pattern with this specialization's
+            // arguments as the enclosing level, as a member template's
+            // ([temp.friend]/1, [temp.inst]/4; clang's
+            // `getTemplateInstantiationPattern` through
+            // `getInstantiatedFromMemberTemplate`).
+            if self.sema.ast.decls.function(pattern).is_some_and(|f| f.body.is_some())
+                && self.sema.ast.first(x) == x
+                && self.sema.ast.templates.instantiated_from_map(x).is_none()
+            {
+                self.sema.ast.templates.set_instantiated_from(x, t);
+            }
         }
-        Err(SubstFail)
+        Ok(fd)
     }
 
     /// Declares the pattern of a member template (the head is open).
@@ -93,7 +226,10 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes template parameter list `list` of a member template:
     /// new parameters at their retained depth, mapped from the old ones
     /// in [`Substituter::locals`]; defaults substituted now.
-    fn param_list(&mut self, list: TemplateParamListId) -> SubstResult<TemplateParamListId> {
+    pub(crate) fn param_list(
+        &mut self,
+        list: TemplateParamListId,
+    ) -> SubstResult<TemplateParamListId> {
         let l = *self.sema.ast.templates.param_list(list);
         let depth = self.args.retained_depth(l.depth);
         let old: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l.params).collect();

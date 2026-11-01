@@ -14,16 +14,20 @@ use kiln_ast::decl::{DeclFlags, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{RecordLayout, TypeView};
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{Oven, SemaBridge, Subobject, SubobjectId};
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 /// The folded values of the expressions codegen may ask about.
 #[derive(Debug, Default)]
 pub(crate) struct Folds {
     /// Expression → value, for every candidate that folded.
     pub expr: FxHashMap<ExprId, ConstValueId>,
+    /// The values of the immediate invocations inside default arguments,
+    /// per use: (invocation, the enclosing default argument use whose
+    /// source-location values apply, as [`crate::module`]'s `srcloc`).
+    pub imm: FxHashMap<(ExprId, Option<ExprId>), ConstValueId>,
 }
 
 impl Folds {
@@ -54,6 +58,13 @@ impl SemaBridge for Bridge<'_> {
         kiln_abi::ensure_layout(&mut *self.ast, record, self.abi)
     }
 
+    // A vector's size and alignment: the Oven lays out its lanes inside
+    // them (WP-173).
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32) {
+        let l = kiln_abi::type_size_align(self.ast, ty, self.abi);
+        (l.size, u32::try_from(l.align).unwrap_or(1))
+    }
+
     fn final_overrider(
         &mut self,
         most_derived: DeclId,
@@ -74,14 +85,26 @@ impl SemaBridge for Bridge<'_> {
     }
 
     fn diag(&mut self, _d: Diag) {}
+
+    fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
+        // The `_ZGR` global of a constant-initialized reference holds the
+        // value (write-once, as sema's bridge).
+        let _ = self.ast.decls.set_lifetime_extended_value(t, v);
+    }
 }
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits) = {
-        let mut c = Collect { ast, out: Vec::new(), inits: FxHashMap::default() };
+    let (cands, inits, imm) = {
+        let mut c = Collect {
+            ast,
+            out: Vec::new(),
+            inits: FxHashMap::default(),
+            imm: Vec::new(),
+            defaults: FxHashSet::default(),
+        };
         c.tu();
-        (c.out, c.inits)
+        (c.out, c.inits, c.imm)
     };
     let mut b = Bridge { ast, abi: target };
     let mut folds = Folds::default();
@@ -91,13 +114,24 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         }
         // A constant initializer is manifestly constant-evaluated
         // ([expr.const]/20, clang `EvaluateAsInitializer`); anything else
-        // is a trial fold (`__builtin_is_constant_evaluated()` is false).
+        // is a trial fold (`__builtin_is_constant_evaluated()` is false),
+        // lax as clang's `EvaluateAsRValue`: a `const double` or
+        // `const _Atomic(int)` variable reads as its value.
         let v = match inits.get(&e) {
             Some(&var) => oven.fold_constant_init(&mut b, e, var),
-            None => oven.try_fold(&mut b, e),
+            None => oven.fold_rvalue(&mut b, e),
         };
         if let Some(v) = v {
             folds.expr.insert(e, v);
+        }
+    }
+    for key @ (e, at) in imm {
+        if folds.imm.contains_key(&key) {
+            continue;
+        }
+        let op = b.ast.exprs.operand(e);
+        if let Some(v) = oven.fold_immediate_in(&mut b, op, at) {
+            folds.imm.insert(key, v);
         }
     }
     folds
@@ -111,6 +145,12 @@ struct Collect<'a> {
     /// storage, `constexpr`, or usable in constant expressions as a
     /// `const` non-volatile integral or enumeration).
     inits: FxHashMap<ExprId, DeclId>,
+    /// Immediate invocations inside default arguments, with the use
+    /// they are evaluated in ([`Folds::imm`]).
+    imm: Vec<(ExprId, Option<ExprId>)>,
+    /// Parameters whose default argument was already walked: a
+    /// `CXXDefaultArgExpr` has no children, its expression is shared.
+    defaults: FxHashSet<DeclId>,
 }
 
 impl Collect<'_> {
@@ -137,6 +177,13 @@ impl Collect<'_> {
                     }
                 }
                 DeclKind::Var if !is_local(ast, d) => self.var(d, true),
+                // A default member initializer's immediate invocations
+                // are left unevaluated by sema, like a default argument's.
+                DeclKind::Field => {
+                    if let Some(init) = ast.decls.field(d).and_then(|f| f.init) {
+                        self.immediates(init, None, 0);
+                    }
+                }
                 _ => {}
             }
         }
@@ -212,6 +259,16 @@ impl Collect<'_> {
             }
             StmtKind::DefaultStmt => self.stmt(ast.stmts.default_sub(s)),
             StmtKind::LabelStmt | StmtKind::AttributedStmt => {
+                if n.kind() == StmtKind::AttributedStmt {
+                    for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
+                        let node = *ast.attrs.get(a);
+                        if node.kind == kiln_ast::attr::AttrKind::ASSUME
+                            && let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a)
+                        {
+                            self.expr(e);
+                        }
+                    }
+                }
                 if n.b() != 0 {
                     self.stmt(StmtId::new(n.b()));
                 }
@@ -238,6 +295,11 @@ impl Collect<'_> {
             StmtKind::ReturnStmt => {
                 if let Some(v) = ast.stmts.return_value(s) {
                     self.expr(v);
+                }
+            }
+            StmtKind::GCCAsmStmt => {
+                for op in ast.stmts.asm_operands(s) {
+                    self.expr(op.expr);
                 }
             }
             _ => {}
@@ -268,7 +330,9 @@ impl Collect<'_> {
             ExprKind::CXXNoexceptExpr
             | ExprKind::TypeTraitExpr
             | ExprKind::ArrayTypeTraitExpr
-            | ExprKind::ExpressionTraitExpr => return,
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::RequiresExpr => return,
             ExprKind::BinaryOperator
                 if matches!(ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
             {
@@ -291,10 +355,29 @@ impl Collect<'_> {
                 self.out.push(e);
             }
             // clang `EmitBuiltinExpr` first tries the call as a constant.
-            ExprKind::CallExpr if crate::builtins::is_fold_candidate(ast, e) => self.out.push(e),
+            ExprKind::CallExpr if crate::builtins::is_fold_candidate(ast, e) => {
+                self.out.push(e);
+                self.out.extend(crate::builtins::folded_arg(ast, e));
+            }
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.
             ExprKind::CXXNewExpr => self.out.extend(ast.exprs.new_extra(e).array_size),
             ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
+            // The default argument is emitted at each call that uses it;
+            // its immediate invocations are evaluated per use.
+            ExprKind::CXXDefaultArgExpr => {
+                let p = ast.exprs.default_arg_param(e);
+                if self.defaults.insert(p)
+                    && let Some(d) = ast.decls.param(p).and_then(|x| x.default_arg)
+                {
+                    self.expr(d);
+                }
+                self.default_arg(e, None, 0);
+            }
+            // A default member initializer use with its own source-location
+            // values: its immediate invocations are evaluated per use.
+            ExprKind::CXXDefaultInitExpr if ast.exprs.source_loc_values(e).is_some() => {
+                self.default_init(e, None, 0);
+            }
             ExprKind::ImplicitCastExpr
                 if ast.exprs.cast_kind(e) == CastKind::LValueToRValue
                     && refers_to_const_var(ast, ast.exprs.operand(e)) =>
@@ -309,11 +392,74 @@ impl Collect<'_> {
     }
 }
 
-/// Whether `e` (through parentheses) names a variable of const,
+impl Collect<'_> {
+    /// The immediate invocations of the default argument use `u` (nested
+    /// in the use `at`, if any): sema leaves them unevaluated in the
+    /// parameter's default argument (spec/sema.md §5.10), so the prepass
+    /// evaluates them per use, with that use's source-location values
+    /// (clang `BuildCXXDefaultArgExpr`'s rewritten argument).
+    fn default_arg(&mut self, u: ExprId, at: Option<ExprId>, depth: u32) {
+        let ast = self.ast;
+        let p = ast.exprs.default_arg_param(u);
+        let Some(d) = ast.decls.param(p).and_then(|x| x.default_arg) else { return };
+        if depth > 32 {
+            return;
+        }
+        let at = at.or_else(|| ast.exprs.source_loc_values(u).is_some().then_some(u));
+        self.immediates(d, at, depth);
+    }
+
+    /// As [`Collect::default_arg`], for the default member initializer
+    /// use `u`.
+    fn default_init(&mut self, u: ExprId, at: Option<ExprId>, depth: u32) {
+        let ast = self.ast;
+        let f = ast.exprs.default_init_field(u);
+        let Some(d) = ast.decls.field(f).and_then(|x| x.init) else { return };
+        if depth > 32 {
+            return;
+        }
+        let at = at.or_else(|| ast.exprs.source_loc_values(u).is_some().then_some(u));
+        self.immediates(d, at, depth);
+    }
+
+    /// The unevaluated immediate invocations in `root`, a default argument
+    /// or default member initializer (evaluated in the use `at`).
+    fn immediates(&mut self, root: ExprId, at: Option<ExprId>, depth: u32) {
+        let ast = self.ast;
+        let mut stack = vec![root];
+        while let Some(x) = stack.pop() {
+            match ast.exprs.get(x).kind() {
+                ExprKind::ConstantExpr if ast.exprs.constant_value(x).is_none() => {
+                    self.imm.push((x, at));
+                }
+                ExprKind::CXXDefaultArgExpr => self.default_arg(x, at, depth + 1),
+                ExprKind::CXXDefaultInitExpr if at.is_some() => {
+                    self.default_init(x, at, depth + 1);
+                }
+                ExprKind::CXXNoexceptExpr
+                | ExprKind::TypeTraitExpr
+                | ExprKind::ArrayTypeTraitExpr
+                | ExprKind::ExpressionTraitExpr => {}
+                _ => stack.extend(ast.exprs.children(x, &ast.lists)),
+            }
+        }
+    }
+}
+
+/// Whether `e` (through parentheses and no-op casts) names a variable of const,
 /// non-volatile type (clang `checkVarTypeForConstantEmission`).
 pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
-    while ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-        e = ast.exprs.operand(e);
+    // Through parentheses and no-op casts (the xvalue of an implicitly
+    // movable `return x;`): clang's `VisitCastExpr` visits a `CK_NoOp`
+    // operand, reaching `VisitDeclRefExpr`'s `tryEmitAsConstant`.
+    loop {
+        match ast.exprs.get(e).kind() {
+            ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::ImplicitCastExpr if ast.exprs.cast_kind(e) == CastKind::NoOp => {
+                e = ast.exprs.operand(e);
+            }
+            _ => break,
+        }
     }
     if ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
         return false;
@@ -332,7 +478,7 @@ pub(crate) fn is_local(ast: &Ast, d: DeclId) -> bool {
     let mut c = ast.decls.get(d).ctx();
     while let Some(x) = c {
         match ast.decls.get(x).kind() {
-            DeclKind::Function => return true,
+            k if k.is_function() => return true,
             DeclKind::TranslationUnit | DeclKind::Namespace => return false,
             _ => c = ast.decls.get(x).ctx(),
         }

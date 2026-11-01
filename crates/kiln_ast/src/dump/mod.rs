@@ -25,7 +25,6 @@ mod names;
 use std::fmt::Write as _;
 use std::io;
 
-use kiln_source::symbol::Symbol;
 use kiln_source::{FileId, Loc, SourceManager};
 
 pub use names::AstNames;
@@ -181,7 +180,16 @@ struct Dumper<'a, W> {
     prefix: String,
     stack: Vec<Item>,
     kids: Vec<(Node, Option<&'static str>)>,
+    /// The declaration of each line on the path from the root to the
+    /// current line (`None` for other nodes), indexed by depth: a
+    /// declaration that is its own ancestor is printed as a leaf (a
+    /// malformed AST must not make the dump unbounded).
+    path: Vec<Option<DeclId>>,
 }
+
+/// The deepest line printed; deeper children are cut (a backstop against
+/// an unbounded tree; real ASTs stay far below it).
+const MAX_DUMP_DEPTH: usize = 4096;
 
 impl<'a, W: io::Write> Dumper<'a, W> {
     fn new(ast: &'a Ast, opts: &'a DumpOptions<'a>, out: W) -> Self {
@@ -194,6 +202,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             prefix: String::with_capacity(64),
             stack: Vec::new(),
             kids: Vec::new(),
+            path: Vec::new(),
         }
     }
 
@@ -312,6 +321,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             StmtKind::CaseStmt => push(Some(stmts.case_data(s).sub), todo),
             StmtKind::DefaultStmt => push(Some(stmts.default_sub(s)), todo),
+            StmtKind::LabelStmt | StmtKind::AttributedStmt => push(Some(stmts.sub_stmt(s)), todo),
             StmtKind::WhileStmt | StmtKind::ForStmt => {
                 let l = *stmts.loop_data(s);
                 push(l.init, todo);
@@ -352,9 +362,17 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     fn dump_tree(&mut self, root: Node) -> io::Result<()> {
         self.prefix.clear();
         self.stack.clear();
+        self.path.clear();
         self.stack.push(Item { node: root, label: None, last: true, depth: 0 });
         while let Some(it) = self.stack.pop() {
             let depth = it.depth as usize;
+            self.path.truncate(depth);
+            let decl = match it.node {
+                Node::Decl(d) => Some(d),
+                _ => None,
+            };
+            let cycle = decl.is_some() && self.path.contains(&decl);
+            self.path.push(decl);
             self.line.clear();
             if depth > 0 {
                 self.prefix.truncate(2 * (depth - 1));
@@ -390,9 +408,15 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     }
                 }
             }
+            if cycle {
+                self.line.push_str(" <cycle>");
+            }
             debug_assert!(!self.line.ends_with(' '), "trailing whitespace: {:?}", self.line);
             self.line.push('\n');
             self.out.write_all(self.line.as_bytes())?;
+            if cycle || depth >= MAX_DUMP_DEPTH {
+                continue;
+            }
             if depth > 0 {
                 self.prefix.push_str(if it.last { "  " } else { "| " });
             }
@@ -434,11 +458,25 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             Node::Arg(a) => self.arg_children(a, kids),
             Node::Req(e, i) => self.req_children(e, i, kids),
-            Node::Attr(_)
-            | Node::Base(..)
-            | Node::Overrides(_)
-            | Node::Fixed(_)
-            | Node::SpecRef(_) => {}
+            Node::Attr(a) => {
+                // `CXXAssumeAttr`: the assumption.
+                let n = self.ast.attrs.get(a);
+                if n.kind == AttrKind::ASSUME
+                    && let Some(e) = ExprId::from_raw(n.a)
+                {
+                    kids.push((Node::Expr(e), None));
+                }
+            }
+            Node::Base(..) | Node::Overrides(_) | Node::Fixed(_) | Node::SpecRef(_) => {}
+        }
+        // A nested immediate invocation has no wrapper in clang.
+        for (k, _) in kids.iter_mut() {
+            while let Node::Expr(x) = *k
+                && self.ast.exprs.get(x).kind() == ExprKind::ConstantExpr
+                && self.ast.exprs.constant_elided(x)
+            {
+                *k = Node::Expr(self.ast.exprs.operand(x));
+            }
         }
     }
 
@@ -491,6 +529,21 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             if let Some(e) = init {
                 kids.push((Node::Expr(e), None));
             }
+            // clang's `DecompositionDecl`: the bindings follow the init.
+            if let Some(list) = decls.decomp_bindings(d) {
+                for b in ast.lists.iter::<DeclId>(list) {
+                    kids.push((Node::Decl(b), None));
+                }
+            }
+        } else if kind == DeclKind::Binding {
+            // clang's `BindingDecl`: the holding variable (tuple-like),
+            // then the binding expression.
+            if let Some(h) = decls.binding_var(d) {
+                kids.push((Node::Decl(h), None));
+            }
+            if let Some(e) = decls.binding_expr(d) {
+                kids.push((Node::Expr(e), None));
+            }
         } else if let Some(p) = decls.param(d) {
             expr(p.default_arg);
         } else if let Some(f) = decls.field(d) {
@@ -501,6 +554,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         } else if let Some(s) = decls.static_assert(d) {
             expr(Some(s.cond));
             expr(s.message);
+        } else if let Some(s) = ast.file_scope_asm_string(d) {
+            expr(Some(s));
         } else if decls.record(d).is_some() {
             self.spec_children(d, kids);
             for i in 0..decls.bases(d, &ast.lists).count() {
@@ -526,12 +581,38 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
         }
         if !kind.is_function() && decls.member_list(d).is_some() {
-            for m in ast.members(d) {
-                // A befriended declaration prints under its `FriendDecl`.
-                if self.shown(d, m) && decls.get(m).misc().friend() == FriendKind::None {
-                    kids.push((Node::Decl(m), None));
-                }
+            self.member_children(d, kids);
+        }
+    }
+
+    /// The members of context `d` that print under it: a befriended
+    /// declaration prints under its `FriendDecl`, and a shadow hidden by a
+    /// later member is gone, as clang's `HideUsingShadowDecl` removes it.
+    fn member_children(&self, d: DeclId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let decls = &self.ast.decls;
+        for m in self.ast.members(d) {
+            if self.shown(d, m)
+                && decls.get(m).misc().friend() == FriendKind::None
+                && decls.hidden_shadow(m).is_none()
+            {
+                kids.push((Node::Decl(m), None));
             }
+        }
+    }
+
+    /// The closure type, the capture initializers, the body (clang's
+    /// `ASTNodeTraverser::VisitLambdaExpr`).
+    fn lambda_children(&self, e: ExprId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let exprs = &self.ast.exprs;
+        let l = exprs.lambda(e);
+        if self.shown(l.closure, l.closure) {
+            kids.push((Node::Decl(l.closure), None));
+        }
+        for c in exprs.children(e, &self.ast.lists) {
+            kids.push((Node::Expr(c), None));
+        }
+        if let Some(b) = l.body {
+            kids.push((self.stmt_node(b), None));
         }
     }
 
@@ -556,6 +637,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CXXNoexceptExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
+            | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::ConvertVectorExpr
             | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 // The parameter prints first (clang), then the replacement.
@@ -565,7 +648,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
-            k if k.is_cast() => push(n.a()),
+            k if k.is_cast() || k == ExprKind::VAArgExpr => push(n.a()),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 for c in lists.iter::<ExprId>(exprs.construct_args(e)) {
                     push(c.raw());
@@ -590,7 +673,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     push(c.raw());
                 }
             }
-            ExprKind::CXXRewrittenBinaryOperator => push(n.a()),
+            ExprKind::CXXRewrittenBinaryOperator | ExprKind::PredefinedExpr => push(n.a()),
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 push(n.a());
                 for c in lists.iter::<ExprId>(exprs.call_args(e)) {
@@ -621,6 +704,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::StmtExpr => kids.push((self.stmt_node(exprs.stmt_expr_body(e)), None)),
+            ExprKind::LambdaExpr => self.lambda_children(e, kids),
             k if is_template_expr(k) => self.template_expr_children(e, kids),
             _ => self.class_expr_children(e, kids),
         }
@@ -662,10 +746,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
+            ExprKind::AtomicExpr => {
+                for c in exprs.children(e, lists) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
             _ => {}
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per statement kind")]
     fn stmt_children(&self, s: StmtId, kids: &mut Vec<(Node, Option<&'static str>)>) {
         let stmts = &self.ast.stmts;
         let lists = &self.ast.lists;
@@ -720,6 +810,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 stmt(Some(c.sub), kids);
             }
             StmtKind::DefaultStmt => stmt(Some(stmts.default_sub(s)), kids),
+            StmtKind::LabelStmt => stmt(Some(stmts.sub_stmt(s)), kids),
+            StmtKind::AttributedStmt => {
+                for a in lists.iter::<AttrId>(stmts.stmt_attrs(s)) {
+                    kids.push((Node::Attr(a), None));
+                }
+                stmt(Some(stmts.sub_stmt(s)), kids);
+            }
             StmtKind::WhileStmt | StmtKind::ForStmt => {
                 let l = *stmts.loop_data(s);
                 stmt(l.init, kids);
@@ -745,6 +842,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 stmt(Some(r.body), kids);
             }
             StmtKind::ReturnStmt => expr(stmts.return_value(s), kids),
+            StmtKind::GCCAsmStmt => {
+                for op in stmts.asm_operands(s) {
+                    expr(Some(op.expr), kids);
+                }
+            }
             StmtKind::CXXTryStmt => {
                 stmt(Some(stmts.try_block(s)), kids);
                 for h in lists.iter::<StmtId>(stmts.try_handlers(s)) {
@@ -868,6 +970,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     // declarations
     // -------------------------------------------------------------------
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one line per decl kind; the cycle cut and friend words sit beside it"
+    )]
     fn decl_line(&mut self, d: DeclId) {
         let ast = self.ast;
         let decls = &ast.decls;
@@ -910,7 +1016,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             self.function_fields(d);
             return;
         }
-        self.friend_word(n.misc().friend());
+        // Besides functions, clang shows a friend kind only on a class a
+        // friend declaration introduces (not on a befriended template or
+        // its pattern).
+        if kind == DeclKind::CXXRecord
+            && n.misc().friend() == FriendKind::Undeclared
+            && ast.described_template(d).is_none()
+            && ast.spec_info(d).is_none()
+        {
+            self.friend_word(FriendKind::Undeclared);
+        }
         if let Some(v) = decls.var(d) {
             let v = *v;
             self.name(d);
@@ -953,7 +1068,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.value(c);
                 }
             }
-            if n.ty().is_some_and(|t| needs_destruction(ast, t)) {
+            if n.ty().is_some_and(|t| ast.needs_destruction(t)) {
                 self.line.push_str(" destroyed");
             }
         } else if let Some(p) = decls.param(d) {
@@ -963,7 +1078,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             if p.default_arg.is_some() {
                 self.line.push_str(" cinit");
             }
-            if n.ty().is_some_and(|t| needs_destruction(ast, t)) {
+            if n.ty().is_some_and(|t| ast.needs_destruction(t)) {
                 self.line.push_str(" destroyed");
             }
             if p.flags & ParamData::PACK != 0 {
@@ -1000,6 +1115,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         };
         let spec = f.spec;
         match spec.constexpr_kind() {
+            ConstexprKind::Constexpr if spec.escalated() => {
+                self.line.push_str(" constexpr immediate");
+            }
             ConstexprKind::Constexpr => self.line.push_str(" constexpr"),
             ConstexprKind::Consteval => self.line.push_str(" consteval"),
             ConstexprKind::None if spec.escalated() => self.line.push_str(" immediate"),
@@ -1076,7 +1194,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         let ast = self.ast;
         let decls = &ast.decls;
         match n.kind() {
-            DeclKind::TranslationUnit | DeclKind::StaticAssert | DeclKind::Empty => {}
+            DeclKind::TranslationUnit
+            | DeclKind::StaticAssert
+            | DeclKind::Empty
+            | DeclKind::FileScopeAsm => {}
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.name(d);
                 let under = decls.typedef(d).map(|t| t.underlying).or(n.ty());
@@ -1165,6 +1286,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             DeclKind::Using
             | DeclKind::NamespaceAlias
             | DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
+            | DeclKind::UnresolvedUsingValue
             | DeclKind::UsingEnum
             | DeclKind::UsingDirective => self.using_fields(d, n.kind()),
             DeclKind::LinkageSpec => {
@@ -1244,6 +1367,8 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             (DeclKind::CXXRecord, _, true) => "ClassTemplatePartialSpecialization",
             (DeclKind::Var, true, _) => "VarTemplateSpecialization",
             (DeclKind::Var, _, true) => "VarTemplatePartialSpecialization",
+            // A structured binding's hidden variable `e` (spec/ast.md).
+            (DeclKind::Var, ..) if self.ast.decls.is_decomposition(d) => "Decomposition",
             _ => kind.name(),
         }
     }
@@ -1283,8 +1408,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         // The specializations, in creation order (§5): an implicit
         // instantiation is printed in full once, under its template; an
         // explicit specialization or instantiation is a reference line
-        // (its tree prints at its lexical position).
-        for &s in ast.templates.specs_of(d) {
+        // (its tree prints at its lexical position). A template first
+        // declared by a friend declaration lists them under its first
+        // declaration outside a class (as clang's JSON dump does).
+        if self.spec_owner(d) != d {
+            return;
+        }
+        for &s in ast.templates.specs_of(ast.first(d)) {
             match ast.spec_info(s).map(|(_, i)| i.kind) {
                 Some(SpecKind::Undeclared | SpecKind::ImplicitInstantiation) => {
                     kids.push((Node::Decl(s), None));
@@ -1293,6 +1423,22 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 None => {}
             }
         }
+    }
+
+    /// The declaration of template `d` its specializations are listed
+    /// under: the first one not introduced by a friend declaration, else
+    /// the first.
+    fn spec_owner(&self, d: DeclId) -> DeclId {
+        let ast = self.ast;
+        let first = ast.first(d);
+        let Some(p) = ast.template_info(first).and_then(|i| i.pattern) else { return d };
+        let mut redecls: Vec<DeclId> = ast.redecls_of(p).collect();
+        redecls.reverse();
+        let owner = redecls
+            .iter()
+            .filter_map(|&r| ast.described_template(r))
+            .find(|&t| ast.decls.get(t).misc().friend() == FriendKind::None);
+        owner.unwrap_or(first)
     }
 
     /// A template parameter's children: a template template parameter's
@@ -1513,6 +1659,20 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 return;
             }
             DeclKind::NamespaceAlias => self.name(d),
+            // clang's JSON `name` is the unqualified member name (a
+            // constructor's is its canonical class type).
+            DeclKind::UnresolvedUsingValue => {
+                self.line.push(' ');
+                if let crate::names::DeclNameView::Constructor(t) =
+                    ast.names.view(ast.decls.get(d).name())
+                {
+                    let opts = PrintOptions { full_scope: false, ..PrintOptions::CANONICAL };
+                    write_type(&ast.types, &self.names, QualType::unqual(t), opts, &mut self.line);
+                } else {
+                    self.names.write_name(d, &mut self.line);
+                }
+                return;
+            }
             _ => {}
         }
         if let Some(t) = ast.using_target(d) {
@@ -1673,6 +1833,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             StmtKind::CXXForRangeStmt => {
                 self.flags(&[(stmts.range_for_data(s).init.is_some(), " has_init")]);
             }
+            StmtKind::LabelStmt | StmtKind::GotoStmt => {
+                // clang prints the label's name (and, for a `GotoStmt`, the
+                // label's address).
+                let d = stmts.label_decl(s);
+                self.line.push_str(" '");
+                self.names.write_name(d, &mut self.line);
+                self.line.push('\'');
+            }
             StmtKind::ReturnStmt => {
                 if let Some(v) = stmts.return_nrvo(s) {
                     self.line.push_str(" nrvo_candidate(");
@@ -1752,6 +1920,10 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 self.line.push(' ');
                 ast.strings.write_literal(exprs.string_lit(e), &mut self.line);
             }
+            ExprKind::PredefinedExpr => {
+                self.line.push(' ');
+                self.line.push_str(exprs.predefined_kind(e).spelling());
+            }
             ExprKind::CXXBoolLiteralExpr => {
                 self.line.push_str(if exprs.bool_value(e) { " true" } else { " false" });
             }
@@ -1763,10 +1935,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.decl_ref(found);
                     self.line.push(')');
                 }
-                if n.has(ExprFlags::REFERS_TO_ENCLOSING) {
-                    self.line.push_str(" refers_to_enclosing_variable_or_capture");
-                }
+                // `refers_to_enclosing_variable_or_capture` is not printed:
+                // clang's JSON dump, the oracle's source, omits it.
                 self.non_odr_use(exprs.non_odr_use(e));
+                if n.has(ExprFlags::IMMEDIATE_ESCALATING) {
+                    self.line.push_str(" immediate-escalating");
+                }
             }
             ExprKind::MemberExpr => {
                 self.line.push_str(if n.has(ExprFlags::ARROW) { " ->" } else { " ." });
@@ -1897,17 +2071,23 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::ConstantExpr => {
-                if let Some(v) = exprs.constant_value(e) {
+                if let Some(v) = exprs.constant_value(e)
+                    && !exprs.constant_value_hidden(e)
+                {
                     self.value(v);
                 }
             }
             ExprKind::CXXDependentScopeMemberExpr => {
                 self.line.push_str(if n.aux() & 1 != 0 { " ->" } else { " ." });
-                self.line.push_str(ast.symbols().as_str(Symbol::from_index(n.b())));
+                let mut t = String::new();
+                AstNames::new(ast).write_decl_name_value(ast.dependent_member_name(e), &mut t);
+                self.line.push_str(&t);
             }
             ExprKind::UnresolvedLookupExpr => {
                 self.line.push_str(if n.aux() != 0 { " (ADL) = '" } else { " (no ADL) = '" });
-                self.line.push_str(ast.symbols().as_str(Symbol::from_index(n.a())));
+                let mut t = String::new();
+                AstNames::new(ast).write_decl_name_value(ast.unresolved_name(e), &mut t);
+                self.line.push_str(&t);
                 self.line.push('\'');
                 if ast.unresolved_decls(e).is_empty() {
                     self.line.push_str(" empty");
@@ -2021,24 +2201,4 @@ fn is_value_decl(k: DeclKind) -> bool {
                 | DeclKind::IndirectField
                 | DeclKind::TemplateParamObject
         )
-}
-
-/// clang `VarDecl::needsDestruction`: the (array element) type is a class
-/// with a non-trivial destructor ([basic.life]/1). Sema declares the
-/// destructor of every variable's class (spec/sema-class.md §4.8), so a
-/// class without a declared destructor is not destroyed.
-fn needs_destruction(ast: &Ast, t: QualType) -> bool {
-    let mut t = t;
-    for _ in 0..256 {
-        match ast.types.element(t) {
-            Some(e) if ast.types.is_array(t) => t = e,
-            _ => break,
-        }
-    }
-    let Some(def) = ast.types.as_record(t).and_then(|r| ast.definition(r)) else { return false };
-    ast.decls.record(def).is_some_and(|x| !x.defn.contains(DefinitionBits::TRIVIAL_DTOR))
-        && ast
-            .destructor(def)
-            .and_then(|d| ast.decls.function(d))
-            .is_some_and(|f| !f.spec.is_trivial())
 }

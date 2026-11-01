@@ -74,6 +74,7 @@ diag_groups! {
     DivisionByZero = "division-by-zero" [];
     ShiftCountNegative = "shift-count-negative" [];
     ShiftCountOverflow = "shift-count-overflow" [];
+    VecElemSize = "vec-elem-size" [];
     EnumConstexprConversion = "enum-constexpr-conversion" [];
     ConstantEvaluated = "constant-evaluated" [];
     Unused = "unused" [UnusedValue];
@@ -131,6 +132,7 @@ diag_groups! {
     Cxx17Extensions = "c++17-extensions" [];
     Cxx20Extensions = "c++20-extensions" [];
     Cxx23Extensions = "c++23-extensions" [];
+    Cxx23AttributeExtensions = "c++23-attribute-extensions" [];
     // WP-064
     VexingParse = "vexing-parse" [];
     BracedScalarInit = "braced-scalar-init" [];
@@ -139,6 +141,11 @@ diag_groups! {
     // driver codegen path (WP-052b)
     UnusedCommandLineArgument = "unused-command-line-argument" [];
     DeleteIncomplete = "delete-incomplete" [];
+    // WP-159
+    MissingConstinit = "missing-constinit" [];
+    Varargs = "varargs" [];
+    // WP-171
+    NonPodVarargs = "non-pod-varargs" [];
     // WP-067a
     DefaultedFunctionDeleted = "defaulted-function-deleted" [];
     ClassConversion = "class-conversion" [];
@@ -147,27 +154,51 @@ diag_groups! {
     InconsistentMissingOverride = "inconsistent-missing-override" [];
     AbstractFinalClass = "abstract-final-class" [];
     InaccessibleBase = "inaccessible-base" [];
+    // WP-165
+    IncrementBool = "increment-bool" [];
+    AtomicAlignment = "atomic-alignment" [];
+    GnuFoldingConstant = "gnu-folding-constant" [];
     // WP-074
     DeprecatedBuiltins = "deprecated-builtins" [];
     // WP-087
     UnevaluatedExpression = "unevaluated-expression" [];
+    // WP-160
+    Assume = "assume" [];
     InvalidPartialSpecialization = "invalid-partial-specialization" [];
     UnusablePartialSpecialization = "unusable-partial-specialization" [];
     InstantiationAfterSpecialization = "instantiation-after-specialization" [];
-    Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef];
+    Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture];
+    // WP-075
+    DeprecatedThisCapture = "deprecated-this-capture" [];
     DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
     ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
     ReturnStackAddress = "return-stack-address" [];
     Reorder = "reorder" [ReorderCtor];
     ReorderCtor = "reorder-ctor" [];
-    Uninitialized = "uninitialized" [];
+    Uninitialized = "uninitialized" [StaticSelfInit];
+    StaticSelfInit = "static-self-init" [];
     DelegatingCtorCycles = "delegating-ctor-cycles" [];
     CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
     Dangling = "dangling" [DanglingField, ReturnStackAddress];
     DanglingField = "dangling-field" [];
+    // ----- WP-122 (structured bindings)
+    EmptyDecomposition = "empty-decomposition" [];
+    BindingInCondition = "binding-in-condition" [];
     // ----- WP-100 (exceptions)
     Exceptions = "exceptions" [];
     InvalidNoreturn = "invalid-noreturn" [];
+    // ----- WP-131 (literal operators)
+    UserDefinedLiterals = "user-defined-literals" [];
+    GnuStringLiteralOperatorTemplate = "gnu-string-literal-operator-template" [];
+    // WP-140
+    AsmOperandWidths = "asm-operand-widths" [];
+    Asm = "asm" [AsmOperandWidths];
+    PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
+    // ----- WP-154 (atomic builtins)
+    AtomicMemoryOrdering = "atomic-memory-ordering" [];
+    // ----- WP-177 (implicit conversion warnings)
+    LiteralConversion = "literal-conversion" [];
+    Conversion = "conversion" [LiteralConversion];
 }
 
 impl Group {

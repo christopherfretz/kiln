@@ -9,7 +9,8 @@ use std::rc::Rc;
 
 use kiln_abi::mangle::{self, Structor};
 use kiln_ast::class::{SubobjectId, Thunk, VTableComponent, VTableLayout, VttComponent};
-use kiln_ast::decl::{Access, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_llvm::{
@@ -32,6 +33,9 @@ pub(crate) enum VtLinkage {
     Strong,
     /// `linkonce_odr` in a comdat.
     LinkOnce,
+    /// `weak_odr` in a comdat (the class is explicitly instantiated,
+    /// [temp.explicit]/10).
+    Weak,
     /// `internal` (the class has internal linkage).
     Internal,
 }
@@ -132,24 +136,104 @@ impl Cg<'_> {
     // ---- linkage -------------------------------------------------------
 
     /// The key function of `rd` and its definition in this translation
-    /// unit, if any.
+    /// unit, if any. Template patterns and instantiations have none
+    /// (Itanium C++ ABI 5.2.6; clang `computeKeyFunction`).
     fn key_function(&self, rd: DeclId) -> Option<(DeclId, Option<DeclId>)> {
         let ast = self.ast;
         let def = self.class_def(rd)?;
+        if self.class_is_templated_or_instantiated(def) {
+            return None;
+        }
         let &k = ast.decls.cold.key_function.get(def)?;
         let body =
             ast.redecls_of(k).find(|&r| ast.decls.function(r).is_some_and(|f| f.body.is_some()));
         Some((k, body))
     }
 
+    /// Whether class `def` is a template pattern, is dependent, or is a
+    /// (member) class instantiated from a template (any specialization
+    /// kind but an explicit specialization).
+    fn class_is_templated_or_instantiated(&self, def: DeclId) -> bool {
+        let ast = self.ast;
+        let n = ast.decls.get(def);
+        if n.has(DeclFlags::DEPENDENT_CTX) || ast.described_template(def).is_some() {
+            return true;
+        }
+        let first = ast.first(def);
+        ast.spec_info(first).is_some_and(|(_, s)| s.kind != SpecKind::ExplicitSpecialization)
+            || ast
+                .member_spec_info(first)
+                .is_some_and(|(_, m)| m.kind != SpecKind::ExplicitSpecialization)
+    }
+
+    /// [`Self::class_explicit_inst_kind`] for the vtable and RTTI: a member
+    /// class already defined when its enclosing class was explicitly
+    /// instantiated by a definition keeps its implicit kind (Sema marks
+    /// the member classes that instantiation defined; clang
+    /// `InstantiateClassMembers`), so its vtable is emitted only if used.
+    pub(crate) fn vtable_explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
+        let ast = self.ast;
+        match self.class_explicit_inst_kind(first) {
+            Some(SpecKind::ExplicitInstantiationDefinition) => {
+                let own = ast
+                    .spec_info(first)
+                    .map(|(_, s)| s.kind)
+                    .or_else(|| ast.member_spec_info(first).map(|(_, m)| m.kind));
+                (own == Some(SpecKind::ExplicitInstantiationDefinition))
+                    .then_some(SpecKind::ExplicitInstantiationDefinition)
+            }
+            k => k,
+        }
+    }
+
+    /// The explicit instantiation kind of class `first`, itself or as a
+    /// member class of an explicitly instantiated class (the innermost
+    /// non-implicit kind decides; `None` when implicit or explicitly
+    /// specialized).
+    pub(crate) fn class_explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
+        let ast = self.ast;
+        let mut c = Some(first);
+        while let Some(d) = c {
+            if !matches!(
+                ast.decls.get(d).kind(),
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+            ) {
+                return None;
+            }
+            let kind = ast
+                .spec_info(d)
+                .map(|(_, s)| s.kind)
+                .or_else(|| ast.member_spec_info(d).map(|(_, m)| m.kind));
+            match kind {
+                Some(
+                    k @ (SpecKind::ExplicitInstantiationDeclaration
+                    | SpecKind::ExplicitInstantiationDefinition),
+                ) => return Some(k),
+                Some(SpecKind::ImplicitInstantiation | SpecKind::Undeclared) => {}
+                _ => return None,
+            }
+            c = ast.decls.get(d).ctx();
+        }
+        None
+    }
+
     /// clang `getVTableLinkage` / `isVTableExternal` (at `-O0`).
     pub(crate) fn vtable_linkage(&self, rd: DeclId) -> VtLinkage {
         let first = self.ast.first(rd);
-        if mangle::has_internal_linkage(self.ast, first) {
+        if mangle::class_is_internal(self.ast, first) {
             return VtLinkage::Internal;
         }
         if self.is_implicit_instantiation(first) {
             return VtLinkage::LinkOnce;
+        }
+        // [temp.explicit]/14: `extern template` — the vtable is defined
+        // by the explicit instantiation definition elsewhere.
+        match self.vtable_explicit_inst_kind(first) {
+            Some(SpecKind::ExplicitInstantiationDeclaration) => return VtLinkage::External,
+            // Template instantiations have no key function (Itanium
+            // 5.2.6); an explicit instantiation definition is `weak_odr`.
+            Some(_) => return VtLinkage::Weak,
+            None => {}
         }
         match self.key_function(rd) {
             None => VtLinkage::LinkOnce,
@@ -176,7 +260,7 @@ impl Cg<'_> {
         self.deferred_vtables.push(first);
         let l = self.vt_layout(first)?;
         let ty = self.vtable_ir_ty(&l);
-        let name = mangle::mangle_class_special(self.ast, "_ZTV", first);
+        let name = mangle::mangle_class_special(self.ast, &mut self.anon, "_ZTV", first);
         let g = self.m.add_global(&name, ty);
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
@@ -216,12 +300,15 @@ impl Cg<'_> {
             .collect();
         classes.sort_unstable();
         for (_, c) in classes {
-            if ast.decls.get(c).has(kiln_ast::decl::DeclFlags::INVALID) {
+            if ast.decls.get(c).has(DeclFlags::INVALID) {
                 continue;
             }
             if self.vtable_linkage(c) == VtLinkage::Strong {
                 self.emit_vtable_def(c)?;
             }
+        }
+        for c in std::mem::take(&mut self.explicit_vtables) {
+            self.emit_vtable_def(c)?;
         }
         Ok(())
     }
@@ -249,7 +336,7 @@ impl Cg<'_> {
     /// clang `GetAddrOfVTT`: the `_ZTT` global of `rd` (declared).
     pub(crate) fn vtt_global(&mut self, rd: DeclId) -> R<GlobalId> {
         let first = self.ast.first(rd);
-        let name = mangle::mangle_class_special(self.ast, "_ZTT", first);
+        let name = mangle::mangle_class_special(self.ast, &mut self.anon, "_ZTT", first);
         if let Some(g) = self.m.get_global(&name) {
             return Ok(g);
         }
@@ -305,7 +392,7 @@ impl Cg<'_> {
                 Ok(l) => Rc::new(l),
                 Err(e) => return err(loc, format!("cannot lay out a construction vtable: {e:?}")),
             };
-            let name = mangle::mangle_ctor_vtable(ast, rd, off as i64, so.class);
+            let name = mangle::mangle_ctor_vtable(ast, &mut self.anon, rd, off as i64, so.class);
             let ty = self.vtable_ir_ty(&l);
             let g = match self.m.get_global(&name) {
                 Some(g) => g,
@@ -820,8 +907,14 @@ impl Cg<'_> {
     fn thunk_fn(&mut self, m: DeclId, v: Option<Structor>, th: Thunk) -> R<FuncId> {
         let ast = self.ast;
         let first = ast.first(m);
-        let name =
-            mangle::mangle_thunk(ast, first, v.unwrap_or(Structor::Complete), th.this, th.ret);
+        let name = mangle::mangle_thunk(
+            ast,
+            &mut self.anon,
+            first,
+            v.unwrap_or(Structor::Complete),
+            th.this,
+            th.ret,
+        );
         if let Some(&f) = self.thunk_fns.get(&name) {
             return Ok(f);
         }
@@ -1246,7 +1339,7 @@ impl Cg<'_> {
     pub(crate) fn rtti(&mut self, q: QualType) -> R<Value> {
         let ast = self.ast;
         let q = QualType::unqual(ast.types.canonical(q).ty());
-        let name = mangle::mangle_rtti(ast, q, "_ZTI");
+        let name = mangle::mangle_rtti(ast, &mut self.anon, q, "_ZTI");
         if let Some(&g) = self.rtti_globals.get(&name) {
             return Ok(Value::global(g));
         }
@@ -1295,8 +1388,7 @@ impl Cg<'_> {
             return VtLinkage::Internal;
         }
         let ast = self.ast;
-        let internal =
-            |d: Option<DeclId>| d.is_some_and(|d| mangle::has_internal_linkage(ast, ast.first(d)));
+        let internal = |d: Option<DeclId>| d.is_some_and(|d| mangle::class_is_internal(ast, d));
         let mut t = q;
         loop {
             // (`pointee` also looks through member pointers.)
@@ -1333,7 +1425,7 @@ impl Cg<'_> {
         // The mangling of the function type without its exception
         // specification: drop the `Do` before `F`.
         let q = QualType::unqual(ast.types.canonical(pointee).ty());
-        let with = mangle::mangle_rtti(ast, q, "_ZTI");
+        let with = mangle::mangle_rtti(ast, &mut self.anon, q, "_ZTI");
         let name = match with.strip_prefix("_ZTIDo") {
             Some(rest) => format!("_ZTI{rest}"),
             None => return err(None, format!("unexpected noexcept function mangling `{with}`")),
@@ -1384,7 +1476,7 @@ impl Cg<'_> {
 
     /// clang `GetAddrOfTypeName`: the `_ZTS` string of `q`.
     fn rtti_type_name(&mut self, q: QualType, linkage: VtLinkage) -> Value {
-        let ts_name = mangle::mangle_rtti(self.ast, q, "_ZTS");
+        let ts_name = mangle::mangle_rtti(self.ast, &mut self.anon, q, "_ZTS");
         self.rtti_name_global(&ts_name, linkage)
     }
 
@@ -1473,14 +1565,13 @@ impl Cg<'_> {
 
     /// clang `getTypeInfoLinkage` for class `rd`.
     fn rtti_linkage(&self, rd: DeclId) -> VtLinkage {
-        if mangle::has_internal_linkage(self.ast, self.ast.first(rd))
-            || self.class_def(rd).is_none()
-        {
+        if mangle::class_is_internal(self.ast, rd) || self.class_def(rd).is_none() {
             return VtLinkage::Internal;
         }
         if self.is_dynamic(rd) {
             return match self.vtable_linkage(rd) {
                 VtLinkage::Strong => VtLinkage::Strong,
+                VtLinkage::Weak => VtLinkage::Weak,
                 VtLinkage::Internal => VtLinkage::Internal,
                 _ => VtLinkage::LinkOnce,
             };
@@ -1567,8 +1658,8 @@ impl Cg<'_> {
     /// Linkage, `dso_local` and comdat of an RTTI or vtable definition.
     pub(crate) fn set_vague_linkage(&mut self, g: GlobalId, linkage: VtLinkage) {
         let name = self.m.global(g).name().to_owned();
-        let comdat =
-            (linkage == VtLinkage::LinkOnce).then(|| self.m.comdat(&name, ComdatKind::Any));
+        let comdat = matches!(linkage, VtLinkage::LinkOnce | VtLinkage::Weak)
+            .then(|| self.m.comdat(&name, ComdatKind::Any));
         let gv = self.m.global_mut(g);
         match linkage {
             VtLinkage::Internal => {
@@ -1577,6 +1668,11 @@ impl Cg<'_> {
             }
             VtLinkage::LinkOnce => {
                 gv.linkage = Linkage::LinkOnceOdr;
+                gv.dso_local = true;
+                gv.comdat = comdat;
+            }
+            VtLinkage::Weak => {
+                gv.linkage = Linkage::WeakOdr;
                 gv.dso_local = true;
                 gv.comdat = comdat;
             }

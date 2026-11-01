@@ -1,0 +1,42 @@
+Dumping test_bitfield:
+FunctionDecl test_bitfield 'int (BF)'
+|-ParmVarDecl used bf 'BF'
+`-CompoundStmt
+  |-DeclStmt
+  | `-DecompositionDecl used 'BF &' cinit
+  |   |-DeclRefExpr 'BF' lvalue ParmVar 'bf' 'BF'
+  |   |-BindingDecl referenced x 'int'
+  |   | `-MemberExpr 'int' lvalue bitfield .a
+  |   |   `-DeclRefExpr 'BF' lvalue Decomposition '' 'BF &'
+  |   `-BindingDecl referenced y 'int'
+  |     `-MemberExpr 'int' lvalue .b
+  |       `-DeclRefExpr 'BF' lvalue Decomposition '' 'BF &'
+  |-DeclStmt
+  | `-VarDecl used c 'const int &' cinit
+  |   `-ExprWithCleanups 'const int' lvalue
+  |     `-MaterializeTemporaryExpr 'const int' lvalue extended by Var 'c' 'const int &'
+  |       `-ImplicitCastExpr 'int' <LValueToRValue>
+  |         `-DeclRefExpr 'int' lvalue bitfield Binding 'x' 'int'
+  |-DeclStmt
+  | `-VarDecl used d 'const int &' cinit
+  |   `-ExprWithCleanups 'const int' lvalue
+  |     `-MaterializeTemporaryExpr 'const int' lvalue extended by Var 'd' 'const int &'
+  |       `-ImplicitCastExpr 'int' <LValueToRValue>
+  |         `-MemberExpr 'int' lvalue bitfield .a
+  |           `-DeclRefExpr 'BF' lvalue ParmVar 'bf' 'BF'
+  |-BinaryOperator 'int' lvalue bitfield '='
+  | |-DeclRefExpr 'int' lvalue bitfield Binding 'x' 'int'
+  | `-IntegerLiteral 'int' 2
+  `-ReturnStmt
+    `-BinaryOperator 'int' '+'
+      |-BinaryOperator 'int' '+'
+      | |-BinaryOperator 'int' '+'
+      | | |-ImplicitCastExpr 'int' <LValueToRValue>
+      | | | `-DeclRefExpr 'const int' lvalue Var 'c' 'const int &'
+      | | `-ImplicitCastExpr 'int' <LValueToRValue>
+      | |   `-DeclRefExpr 'const int' lvalue Var 'd' 'const int &'
+      | `-ImplicitCastExpr 'int' <LValueToRValue>
+      |   `-DeclRefExpr 'int' lvalue bitfield Binding 'x' 'int'
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'int' lvalue Binding 'y' 'int'
+

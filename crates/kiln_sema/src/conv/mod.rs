@@ -35,6 +35,7 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::overload::ics::IcsOptions;
 
 pub use apply::apply_standard_conversion;
 pub use arith::{ArithConvKind, usual_arithmetic_conversions_kind};
@@ -250,7 +251,17 @@ pub fn lvalue_to_rvalue(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     } else {
         CastKind::LValueToRValue
     };
-    raw_cast(s, ck, e, to, ValueCategory::PRValue, None)
+    let atomic = types.as_atomic(t);
+    let r = raw_cast(s, ck, e, to, ValueCategory::PRValue, None);
+    // clang's `DefaultLvalueConversion`: the load of an `_Atomic(T)` is
+    // then converted to the unqualified `T` (C11 6.3.2.1p2).
+    match atomic {
+        Some(v) => {
+            let v = strip_cv(s, v);
+            raw_cast(s, CastKind::AtomicToNonAtomic, r, v, ValueCategory::PRValue, None)
+        }
+        None => r,
+    }
 }
 
 /// The array-to-pointer ([conv.array]) and function-to-pointer
@@ -369,6 +380,15 @@ pub(crate) fn eval_width(s: &Sema<'_, '_>, w: ExprId) -> Option<u32> {
 /// parentheses and no-op/lvalue-to-rvalue casts; clang's
 /// `getSourceBitField`).
 pub fn bit_field_width(s: &Sema<'_, '_>, e: ExprId) -> Option<u32> {
+    let f = source_bit_field(s, e)?;
+    let w = s.ast.decls.field(f)?.bit_width?;
+    eval_width(s, w)
+}
+
+/// The bit-field `e` designates, if any: through parentheses, no-op and
+/// lvalue-to-rvalue casts and a structured binding's expression (clang
+/// `Expr::getSourceBitField`).
+pub fn source_bit_field(s: &Sema<'_, '_>, e: ExprId) -> Option<kiln_ast::DeclId> {
     let mut cur = e;
     for _ in 0..256 {
         let n = s.ast.exprs.get(cur);
@@ -383,9 +403,10 @@ pub fn bit_field_width(s: &Sema<'_, '_>, e: ExprId) -> Option<u32> {
                 cur = s.ast.exprs.operand(cur);
             }
             ExprKind::MemberExpr if n.object_kind() == ObjectKind::BitField => {
-                let f = s.ast.exprs.decl(cur);
-                let w = s.ast.decls.field(f)?.bit_width?;
-                return eval_width(s, w);
+                return Some(s.ast.exprs.decl(cur));
+            }
+            ExprKind::DeclRefExpr if n.object_kind() == ObjectKind::BitField => {
+                cur = s.ast.decls.binding_expr(s.ast.exprs.decl(cur))?;
             }
             _ => return None,
         }
@@ -526,12 +547,13 @@ fn pointer_fix_hint(
 /// The diagnostic for a failed conversion of `e` to `to` in `ctx`.
 fn conversion_error(s: &mut Sema<'_, '_>, e: ExprId, to: QualType, ctx: ConvCtx) -> ConvError {
     let from = ty(s, e);
-    let (fa, ta) = (s.ty_arg(from), s.ty_arg(to));
+    // clang's `%diff` pair (spec/diag.md §6.4).
+    let (fa, ta) = s.ty_diff(from, to);
     let types = &s.ast.types;
     let record_src = types.as_record(from).is_some();
     match ctx {
         ConvCtx::Condition => {
-            ConvError::new(DiagId::sema_not_contextually_convertible_to_bool, vec![fa])
+            ConvError::new(DiagId::sema_not_contextually_convertible_to_bool, vec![s.ty_arg(from)])
         }
         ConvCtx::Assignment => {
             let from_d = {
@@ -596,7 +618,12 @@ fn unsupported(what: &str) -> ConvError {
 /// 5.3 for reference-compatible glvalues). Temporaries and conversion
 /// functions are not supported yet (M3).
 #[allow(clippy::too_many_lines, reason = "one step per bullet of [dcl.init.ref]/5")]
-fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprId, ConvError> {
+fn bind_reference(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Result<ExprId, ConvError> {
     let (rvalue_ref, referee) = match s.ast.types.canonical_view(to) {
         TypeView::LValueRef(p) => (false, p),
         TypeView::RValueRef(p) => (true, p),
@@ -623,13 +650,24 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         _ => BaseSearch::NotDerived,
     };
     let related = same || base.is_derived();
-    let to_str = s.ty_arg(referee);
+    // Diagnostics print the referee as written (clang
+    // `DestType.getNonReferenceType()`): `I` in `I &&`.
+    let written = s.ast.types.desugar_top(to);
+    let to_ty = match s.ast.types.view(written.ty()) {
+        TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+        _ => referee,
+    };
+    // The reference diagnostics format (to, from) as clang's `%diff`
+    // The reference diagnostics format (to, from) as clang's `%diff`
+    // pair (spec/diag.md §6.4), formatted only on failure.
+    let strs = |s: &Sema<'_, '_>| s.ty_diff(to_ty, from);
     // A non-const (or volatile) lvalue reference: binds no temporary.
     let plain_lref = !rvalue_ref && (!rq.contains(Quals::CONST) || rq.contains(Quals::VOLATILE));
-    // [dcl.init.ref]/5.1 binds an lvalue; /5.3.1 binds an xvalue to an
-    // rvalue reference or a const lvalue reference directly.
+    // [dcl.init.ref]/5.1 binds an lvalue; /5.3.1 binds an xvalue (or a
+    // function lvalue) to an rvalue reference or a const lvalue
+    // reference directly.
     let bind_ok_category = match vk {
-        ValueCategory::LValue => !rvalue_ref,
+        ValueCategory::LValue => !rvalue_ref || s.ast.types.is_function(r_un),
         ValueCategory::XValue => !plain_lref,
         ValueCategory::PRValue => false,
     };
@@ -648,8 +686,13 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         // [dcl.init.ref]/5.4.2: a temporary of type cv1 T1
         // copy-initialized from the initializer.
         let target = s.ast.types.qualify(r_un, rq);
-        let scs = standard_conversion(s, e, r_un, ConvCtx::Initialization)
-            .ok_or_else(|| conversion_error(s, e, r_un, ConvCtx::Initialization))?;
+        // clang `FK_ReferenceInitFailed`: the referee as written.
+        let Some(scs) = standard_conversion(s, e, r_un, ConvCtx::Initialization) else {
+            let sel = if vk.is_glvalue() { "1" } else { "0" };
+            let (to_str, from_str) = strs(s);
+            let args = vec![to_str, sel.into(), from_str];
+            return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
+        };
         let mut x = apply_standard_conversion(s, e, &scs, r_un)?;
         if !rq.is_empty() {
             x = qualify_prvalue(s, x, target);
@@ -664,21 +707,47 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
         let class_ref = s.ast.types.as_record(r_un).is_some();
         if class_src || (class_ref && !plain_lref) {
             let at = s.begin_loc(e);
-            if let Some(r) = s.user_convert(e, to, ConvCtx::Initialization, at) {
+            // [over.match.ref]/1.1: a direct-initialization considers the
+            // explicit conversion functions (not the explicit constructors
+            // of a /5.4.1 temporary).
+            let opts =
+                if ctx.is_direct() { IcsOptions::EXPLICIT_REF_CONV } else { IcsOptions::NONE };
+            if let Some(r) = s.user_convert_with(e, to, ConvCtx::Initialization, opts, at) {
+                // clang: the /5.4.1 temporary's ambiguous implicit
+                // conversion sequence, reported where it is performed.
+                if !class_src
+                    && let Err(err) = &r
+                    && err.id == DiagId::sema_ref_init_ambiguous
+                {
+                    let (to_str, from_str) = strs(s);
+                    let mut d =
+                        s.diag(DiagId::sema_ovl_ambiguous_conversion, at).arg(from_str).arg(to_str);
+                    for n in &err.notes {
+                        d = d.with_note(n.clone());
+                    }
+                    s.emit(d);
+                    return Ok(s.recover_err(&[e], at));
+                }
                 return r;
             }
-            if !plain_lref
-                || (class_src
-                    && s.has_lvalue_ref_conversion_candidates(
-                        from,
-                        crate::overload::udc::udc_options(ConvCtx::Initialization),
-                    ))
+            if !class_src && !plain_lref {
+                // clang `FK_ReferenceInitFailed`: no implicit conversion
+                // sequence to the /5.4.1 temporary (no conversion
+                // function set to report).
+                let sel = if vk.is_glvalue() { "1" } else { "0" };
+                let (to_str, from_str) = strs(s);
+                let args = vec![to_str, sel.into(), from_str];
+                return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
+            }
+            let lref_opts =
+                if ctx.is_direct() { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };
+            if !plain_lref || (class_src && s.has_lvalue_ref_conversion_candidates(from, lref_opts))
             {
-                let mut err = ConvError::new(
-                    DiagId::sema_no_viable_conversion,
-                    vec![s.ty_arg(from), s.ty_arg(referee)],
-                );
-                err.notes = s.udc_failure_notes(e, to, ConvCtx::Initialization);
+                let mut err = ConvError::new(DiagId::sema_no_viable_conversion, {
+                    let (f, r) = s.ty_diff(from, referee);
+                    vec![f, r]
+                });
+                err.notes = s.udc_failure_notes_with(e, to, opts);
                 return Err(err);
             }
         }
@@ -689,9 +758,53 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
             } else {
                 DiagId::sema_lvalue_ref_bind_to_temporary
             };
-            return Err(ConvError::new(id, vec![sel.into(), to_str, s.ty_arg(from)]));
+            let (to_str, from_str) = strs(s);
+            return Err(ConvError::new(id, vec![sel.into(), to_str, from_str]));
         }
         return Err(unsupported("binding a reference to a temporary"));
+    }
+    if related
+        && vk.is_glvalue()
+        && s.ast.exprs.get(e).object_kind() == ObjectKind::VectorComponent
+        && plain_lref
+    {
+        // A vector element is not referenceable either (clang
+        // `err_reference_bind_to_vector_element`).
+        let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
+        return Err(ConvError::new(
+            DiagId::sema_reference_bind_to_vector_element,
+            vec![sel.into()],
+        ));
+    }
+    if related
+        && vk.is_glvalue()
+        && matches!(
+            s.ast.exprs.get(e).object_kind(),
+            ObjectKind::BitField | ObjectKind::VectorComponent
+        )
+    {
+        // A bit-field is not referenceable ([dcl.init.ref]/5.1, clang
+        // `isNonReferenceableGLValue`): a non-const lvalue reference is
+        // ill-formed, any other binds a temporary copy (/5.4.2).
+        if plain_lref {
+            let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
+            let f = source_bit_field(s, e);
+            let name = f.map_or_else(String::new, |f| format!(" '{}'", s.decl_name(f)));
+            let mut err =
+                ConvError::new(DiagId::sema_reference_bind_to_bitfield, vec![sel.into(), name]);
+            if let Some(f) = f {
+                let at = s.ast.decls.get(f).loc();
+                err.notes.push(s.diag(DiagId::note_bitfield_decl, at));
+            }
+            return Err(err);
+        }
+        let target = s.ast.types.qualify(r_un, rq);
+        let scs = standard_conversion(s, e, r_un, ConvCtx::Initialization)
+            .ok_or_else(|| conversion_error(s, e, r_un, ConvCtx::Initialization))?;
+        // clang materializes the cv1 T1 temporary from the unqualified
+        // value, without a qualification cast.
+        let x = apply_standard_conversion(s, e, &scs, r_un)?;
+        return Ok(s.materialize_temporary(x, target, !rvalue_ref));
     }
     if !rq.contains(fq) {
         let dropped = fq - rq;
@@ -703,23 +816,26 @@ fn bind_reference(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> Result<ExprI
                 .collect();
         let plural = if names.len() > 1 { "1" } else { "0" };
         let quoted = format!("'{}'", names.join(" "));
+        let (to_str, from_str) = strs(s);
         return Err(ConvError::new(
             DiagId::sema_reference_bind_drops_quals,
-            vec![to_str, s.ty_arg(from), quoted, plural.into()],
+            vec![to_str, from_str, quoted, plural.into()],
         ));
     }
     if !bind_ok_category {
         if rvalue_ref && vk == ValueCategory::LValue {
+            let (to_str, from_str) = strs(s);
             return Err(ConvError::new(
                 DiagId::sema_rvalue_ref_bind_to_lvalue,
-                vec![to_str, s.ty_arg(from)],
+                vec![to_str, from_str],
             ));
         }
         if plain_lref && vk == ValueCategory::PRValue {
             let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
+            let (to_str, from_str) = strs(s);
             return Err(ConvError::new(
                 DiagId::sema_lvalue_ref_bind_to_temporary,
-                vec![sel.into(), to_str, s.ty_arg(from)],
+                vec![sel.into(), to_str, from_str],
             ));
         }
         return Err(unsupported("binding a reference to a temporary"));
@@ -888,7 +1004,7 @@ pub fn implicit_convert(
         };
     }
     if s.ast.types.is_reference(to) {
-        return bind_reference(s, e, to);
+        return bind_reference(s, e, to, ctx);
     }
     let (fr, tr) = (s.ast.types.as_record(from), s.ast.types.as_record(to));
     if tr.is_some() {
@@ -964,4 +1080,21 @@ pub fn usual_arithmetic_conversions(
 /// conversion.
 pub fn contextually_convert_to_bool(s: &mut Sema<'_, '_>, e: ExprId) -> Result<ExprId, ConvError> {
     implicit_convert(s, e, QualType::BOOL, ConvCtx::Condition)
+}
+
+/// Assignment to `_Atomic(T)`, `T` a class, from a `T` or `_Atomic(T)`
+/// (clang `CheckAssignmentConstraints` on the value type, C11
+/// 6.5.16.1p1): the right side's lvalue conversion, then
+/// `NonAtomicToAtomic`.
+pub(crate) fn atomic_class_assign(s: &mut Sema<'_, '_>, to: QualType, r: ExprId) -> Option<ExprId> {
+    let v = s.ast.types.as_atomic(to)?;
+    s.ast.types.as_record(v)?;
+    let rt = ty(s, r);
+    let rv = s.ast.types.as_atomic(rt).unwrap_or(rt);
+    if !s.ast.types.same_unqualified(rv, v) {
+        return None;
+    }
+    let r = lvalue_to_rvalue(s, r);
+    let to = strip_cv(s, to);
+    Some(raw_cast(s, CastKind::NonAtomicToAtomic, r, to, ValueCategory::PRValue, None))
 }

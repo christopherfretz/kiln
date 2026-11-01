@@ -23,6 +23,7 @@ use crate::target;
 #[derive(Debug)]
 pub struct StmtExprScope {
     outer_odr: Vec<ExprId>,
+    outer_imm: crate::consteval::SavedImm,
 }
 
 /// One part of a `__builtin_offsetof` designator (clang
@@ -67,7 +68,10 @@ impl Sema<'_, '_> {
     /// full-expressions, so the enclosing one's pending odr-uses are set
     /// aside until [`Sema::act_on_stmt_expr`].
     pub fn act_on_start_stmt_expr(&mut self) -> StmtExprScope {
-        StmtExprScope { outer_odr: std::mem::take(&mut self.pending_odr) }
+        StmtExprScope {
+            outer_odr: std::mem::take(&mut self.pending_odr),
+            outer_imm: self.take_immediate_state(false),
+        }
     }
 
     /// The expression statement that ends a statement expression (clang's
@@ -118,6 +122,7 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         let inner = std::mem::replace(&mut self.pending_odr, scope.outer_odr);
         self.pending_odr.extend(inner);
+        self.restore_immediate_state(scope.outer_imm);
         let ty = self.stmt_expr_result(body).map_or(QualType::VOID, |e| self.ast.exprs.get(e).ty());
         self.builder().stmt_expr(body, ty, lparen, rparen)
     }
@@ -425,15 +430,33 @@ impl Sema<'_, '_> {
     /// holding the list-initialization of cv-unqualified `T`, done as if
     /// by a C-style cast at `lparen`. Hence a reference `T` cannot bind
     /// to the list and more than one element for a scalar is reported
-    /// as a function-style cast's. Class and array literals need
-    /// temporary materialization and namespace-scope literals constant
-    /// elements; both are unsupported.
+    /// as a function-style cast's (a vector's list is its elements); a
+    /// function type is an illegal initializer type. Class and array
+    /// literals need temporary materialization and namespace-scope
+    /// literals constant elements; both are unsupported.
     pub fn act_on_compound_literal(&mut self, ty: QualType, l: &InitList, lparen: Loc) -> ExprId {
         let flat = Self::list_exprs(l);
         if self.is_error_type(ty) {
             return self.recover(ty, &flat, lparen);
         }
-        if self.ast.types.is_array(ty) || self.ast.types.is_function(ty) {
+        if self.ast.types.is_function(ty) {
+            // A function type cannot be list-initialized (clang's
+            // `InitListChecker::CheckListElementTypes`), diagnosed at the
+            // `{`; a dependent one waits for instantiation.
+            if !self.is_dependent_type(ty) {
+                let msg =
+                    self.diag(DiagId::sema_illegal_initializer_type, l.lbrace).arg(self.ty_arg(ty));
+                self.emit(msg);
+                return self.recover(ty, &flat, lparen);
+            }
+            if self.func.is_none() {
+                self.unsupported("compound literals at namespace scope", lparen);
+                return self.recover(ty, &flat, lparen);
+            }
+            let init = self.init_from_list_at(ty, l, Some(lparen));
+            return self.builder().compound_literal(ty, init, lparen);
+        }
+        if self.ast.types.is_array(ty) {
             let what = self.temporary_unsupported(ty).unwrap_or("a temporary");
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, &flat, lparen);
@@ -455,7 +478,7 @@ impl Sema<'_, '_> {
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, &flat, lparen);
         }
-        if l.items.len() > 1 {
+        if l.items.len() > 1 && !self.is_vector_type(ty) {
             self.error(DiagId::sema_builtin_func_cast_more_than_one_arg, lparen);
             return self.recover(ty, &flat, lparen);
         }

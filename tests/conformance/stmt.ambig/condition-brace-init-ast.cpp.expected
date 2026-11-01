@@ -1,0 +1,135 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct T definition
+| |-CXXConstructorDecl T 'void ()'
+| |-CXXConstructorDecl used T 'void (int)'
+| | `-ParmVarDecl 'int'
+| `-CXXConversionDecl used operator bool 'bool () const'
+|-FunctionDecl y1 'void ()'
+| `-CompoundStmt
+|   `-IfStmt has_var
+|     |-DeclStmt
+|     | `-VarDecl used n 'T' listinit
+|     |   `-CXXConstructExpr 'T' 'void (int)' list
+|     |     `-IntegerLiteral 'int' 1
+|     |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|     | `-CXXMemberCallExpr 'bool'
+|     |   `-MemberExpr '<bound member function type>' .operator bool
+|     |     `-ImplicitCastExpr 'const T' lvalue <NoOp>
+|     |       `-DeclRefExpr 'T' lvalue Var 'n' 'T'
+|     `-CompoundStmt
+|-FunctionDecl y2 'void ()'
+| `-CompoundStmt
+|   `-WhileStmt has_var
+|     |-DeclStmt
+|     | `-VarDecl used n 'T' listinit
+|     |   `-CXXConstructExpr 'T' 'void (int)' list
+|     |     `-IntegerLiteral 'int' 1
+|     |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|     | `-CXXMemberCallExpr 'bool'
+|     |   `-MemberExpr '<bound member function type>' .operator bool
+|     |     `-ImplicitCastExpr 'const T' lvalue <NoOp>
+|     |       `-DeclRefExpr 'T' lvalue Var 'n' 'T'
+|     `-CompoundStmt
+|-FunctionDecl y4 'void ()'
+| `-CompoundStmt
+|   `-IfStmt has_var
+|     |-DeclStmt
+|     | `-VarDecl used n 'T' listinit
+|     |   `-CXXConstructExpr 'T' 'void (int)' list
+|     |     `-IntegerLiteral 'int' 1
+|     |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|     | `-CXXMemberCallExpr 'bool'
+|     |   `-MemberExpr '<bound member function type>' .operator bool
+|     |     `-ImplicitCastExpr 'const T' lvalue <NoOp>
+|     |       `-DeclRefExpr 'T' lvalue Var 'n' 'T'
+|     `-CompoundStmt
+|-FunctionDecl y5 'void ()'
+| `-CompoundStmt
+|   `-IfStmt has_init
+|     |-DeclStmt
+|     | `-VarDecl used n 'int' listinit
+|     |   `-InitListExpr 'int'
+|     |     `-IntegerLiteral 'int' 1
+|     |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+|     | `-ImplicitCastExpr 'int' <LValueToRValue>
+|     |   `-DeclRefExpr 'int' lvalue Var 'n' 'int'
+|     `-CompoundStmt
+|-FunctionDecl y6 'void ()'
+| `-CompoundStmt
+|   `-SwitchStmt has_var
+|     |-DeclStmt
+|     | `-VarDecl used n 'int' listinit
+|     |   `-InitListExpr 'int'
+|     |     `-IntegerLiteral 'int' 1
+|     |-ImplicitCastExpr 'int' <LValueToRValue>
+|     | `-DeclRefExpr 'int' lvalue Var 'n' 'int'
+|     `-CompoundStmt
+|-FunctionDecl y7 'void ()'
+| `-CompoundStmt
+|   `-ForStmt has_var has_cond
+|     |-DeclStmt
+|     | `-VarDecl used n 'T' listinit
+|     |   `-CXXConstructExpr 'T' 'void (int)' list
+|     |     `-IntegerLiteral 'int' 1
+|     |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|     | `-CXXMemberCallExpr 'bool'
+|     |   `-MemberExpr '<bound member function type>' .operator bool
+|     |     `-ImplicitCastExpr 'const T' lvalue <NoOp>
+|     |       `-DeclRefExpr 'T' lvalue Var 'n' 'T'
+|     `-CompoundStmt
+|-FunctionDecl y8 'void ()'
+| `-CompoundStmt
+|   `-IfStmt has_var
+|     |-DeclStmt
+|     | `-VarDecl used n 'int' listinit
+|     |   `-InitListExpr 'int'
+|     |     `-IntegerLiteral 'int' 1
+|     |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+|     | `-ImplicitCastExpr 'int' <LValueToRValue>
+|     |   `-DeclRefExpr 'int' lvalue Var 'n' 'int'
+|     `-CompoundStmt
+`-FunctionDecl y9 'void ()'
+  `-CompoundStmt
+    |-IfStmt has_init
+    | |-DeclStmt
+    | | `-VarDecl used n 'int' listinit
+    | |   `-InitListExpr 'int'
+    | |     `-IntegerLiteral 'int' 1
+    | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+    | | `-ImplicitCastExpr 'int' <LValueToRValue>
+    | |   `-DeclRefExpr 'int' lvalue Var 'n' 'int'
+    | `-CompoundStmt
+    |-IfStmt has_init
+    | |-DeclStmt
+    | | `-VarDecl used g '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)' cinit
+    | |   `-LambdaExpr '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)'
+    | |     `-CompoundStmt
+    | |       `-ReturnStmt
+    | |         `-IntegerLiteral 'int' 1
+    | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+    | | `-CXXOperatorCallExpr 'int' '()'
+    | |   |-ImplicitCastExpr 'auto (*)() const -> int' <FunctionToPointerDecay>
+    | |   | `-DeclRefExpr 'auto () const -> int' lvalue CXXMethod 'operator()' 'auto () const -> int'
+    | |   `-ImplicitCastExpr 'const (lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)' lvalue <NoOp>
+    | |     `-DeclRefExpr '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)' lvalue Var 'g' '(lambda at tests/conformance/stmt.ambig/condition-brace-init-ast.cpp:16:16)'
+    | `-CompoundStmt
+    |-SwitchStmt has_init
+    | |-DeclStmt
+    | | `-VarDecl used m 'int' listinit
+    | |   `-InitListExpr 'int'
+    | |     `-IntegerLiteral 'int' 2
+    | |-ImplicitCastExpr 'int' <LValueToRValue>
+    | | `-DeclRefExpr 'int' lvalue Var 'm' 'int'
+    | `-CompoundStmt
+    `-IfStmt has_init
+      |-DeclStmt
+      | |-CXXRecordDecl struct Q definition
+      | | `-FieldDecl referenced v 'int'
+      | `-VarDecl used q 'struct Q':'Q' listinit
+      |   `-InitListExpr 'struct Q':'Q'
+      |     `-IntegerLiteral 'int' 3
+      |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+      | `-ImplicitCastExpr 'int' <LValueToRValue>
+      |   `-MemberExpr 'int' lvalue .v
+      |     `-DeclRefExpr 'struct Q':'Q' lvalue Var 'q' 'struct Q':'Q'
+      `-CompoundStmt

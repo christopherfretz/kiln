@@ -1,0 +1,22 @@
+TranslationUnitDecl
+|-FunctionDecl f 'const char *(int)'
+| |-ParmVarDecl 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|       `-PredefinedExpr 'const char[2]' lvalue __func__
+|         `-StringLiteral 'const char[2]' lvalue "f"
+|-CXXRecordDecl struct S definition
+| `-CXXMethodDecl m 'const char *() const' implicit-inline
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-ImplicitCastExpr 'const char *' <ArrayToPointerDecay>
+|         `-PredefinedExpr 'const char[25]' lvalue __PRETTY_FUNCTION__
+|           `-StringLiteral 'const char[25]' lvalue "const char *S::m() const"
+`-FunctionTemplateDecl g
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl g 'const char *(T)'
+    |-ParmVarDecl 'T'
+    `-CompoundStmt
+      `-ReturnStmt
+        `-PredefinedExpr '<dependent type>' lvalue __FUNCTION__

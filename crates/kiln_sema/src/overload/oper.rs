@@ -728,6 +728,9 @@ impl Sema<'_, '_> {
             self.ensure_implicit(def, crate::class::SpecialKind::MoveAssign);
         }
         let found = self.lookup_in_class_dn(def, DeclName::operator(name), LookupKind::Ordinary);
+        // An ambiguous lookup is diagnosed (clang's `~LookupResult`) and
+        // its declarations still compete.
+        self.diagnose_member_ambiguity(&found, DeclName::operator(name), loc);
         for (&d, &f) in found.decls.iter().zip(&found.found) {
             if self.ast.decls.get(d).has(DeclFlags::INVALID) {
                 continue;
@@ -1082,16 +1085,26 @@ impl Sema<'_, '_> {
             // specification is resolved from the body.
             self.define_cmp_on_use(f, loc);
             self.resolve_exception_spec(f, loc);
+        } else {
+            // Any other unresolved specification (an implicit special
+            // member's, [except.spec]/7) is resolved before the callee's
+            // type is taken.
+            self.resolve_exc_for_type(f, loc);
+        }
+        // [dcl.spec.auto.general]/12: a specialization's return type is
+        // deduced by instantiating its definition.
+        if self.check_undeduced_use(f, loc) {
+            return None;
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let proto = self.sugared_proto(fty)?;
         let method = self.kind_of(f) == DeclKind::CXXMethod;
         let implicit_obj = method && !self.is_static_method(f) && !self.has_explicit_object(f);
-        let extra = (found != f).then_some(DeclRefExtra {
-            qualifier: None,
-            template_args: None,
-            found_decl: Some(found),
-        });
+        // clang `CreateFunctionRefExpr` records no found declaration (a
+        // member template's specialization prints without it).
+        let extra = (found != f && self.kind_of(found) != DeclKind::FunctionTemplate).then_some(
+            DeclRefExtra { qualifier: None, template_args: None, found_decl: Some(found) },
+        );
         let callee = self.builder().operator_callee(f, fty, loc, extra);
         let named = Some(CallCallee { decl: f, overloadable: false });
         let rparen = if end.is_valid() { end } else { loc };
@@ -1139,6 +1152,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let e = self.builder().operator_call(op, callee, &conv, ty, vk, loc, end);
-        Some(self.maybe_bind_temporary(e))
+        let e = self.maybe_bind_temporary(e);
+        Some(self.check_immediate_invocation(e, f, None))
     }
 }

@@ -43,6 +43,11 @@ pub enum IrType {
     Array(Box<IrType>, u64),
     /// `<N x T>`.
     Vector(Box<IrType>, u64),
+    /// `<vscale x N x T>` (the SVE builtins; declarations only).
+    ScalableVector(Box<IrType>, u64),
+    /// A parameterless target extension type `target("name")`
+    /// (`__SVCount_t` is `target("aarch64.svcount")`).
+    TargetExt(&'static str),
     /// The named struct of a class (`%struct.S`), by first declaration.
     Record(DeclId),
     /// The base-subobject struct of a class whose non-virtual size differs
@@ -163,8 +168,14 @@ impl<'a> IrTypes<'a> {
     /// clang `ConvertType`: the type of a value (`bool` is `i1`).
     pub fn convert(&mut self, q: QualType) -> IrType {
         let ast = self.ast();
-        if let TypeView::Builtin(BuiltinType::Bool) = ast.types.canonical_view(q) {
-            return IrType::Int(1);
+        match ast.types.canonical_view(q) {
+            TypeView::Builtin(BuiltinType::Bool) => return IrType::Int(1),
+            // A vector value is `<N x T>`; an `ext_vector_type` of `bool`
+            // is `<N x i1>` (clang `ConvertType`).
+            TypeView::Vector { elem, count, .. } => {
+                return IrType::Vector(Box::new(self.convert(elem)), u64::from(count));
+            }
+            _ => {}
         }
         self.convert_mem(q)
     }
@@ -207,6 +218,30 @@ impl<'a> IrTypes<'a> {
                     IrType::Int(64)
                 }
             }
+            // clang `ConvertTypeForMem`: a vector of `bool` is stored as
+            // an integer of at least 8 bits, one bit per element.
+            TypeView::Vector { elem, count, .. } => {
+                if let TypeView::Builtin(BuiltinType::Bool) = ast.types.canonical_view(elem) {
+                    IrType::Int(count.max(8))
+                } else {
+                    IrType::Vector(Box::new(self.convert_mem(elem)), u64::from(count))
+                }
+            }
+            // clang `ConvertTypeForMem(_Atomic(T))`: `T`, padded to the
+            // promoted atomic size with a byte array.
+            TypeView::Atomic(v) => {
+                let inner = self.convert_mem(v);
+                let full = self.lay.type_layout(q).size;
+                let value = self.lay.type_layout(v).size;
+                if full > value {
+                    IrType::Struct(
+                        vec![inner, IrType::Array(Box::new(IrType::Int(8)), full - value)],
+                        false,
+                    )
+                } else {
+                    inner
+                }
+            }
             _ => IrType::Int(8),
         }
     }
@@ -225,6 +260,7 @@ impl<'a> IrTypes<'a> {
             },
             BuiltinType::Float128 => IrType::Fp128,
             BuiltinType::NullPtr => IrType::Ptr,
+            b if b.is_sizeless() => sve_type(b),
             _ => {
                 let (size, _) = t.builtin_size_align(b);
                 IrType::Int(u32::try_from(size * 8).unwrap_or(8))
@@ -268,10 +304,17 @@ impl<'a> IrTypes<'a> {
                 (s * n, a)
             }
             IrType::Vector(e, n) => {
-                let (s, _) = self.size_align(e);
-                let bytes = (s * n).next_power_of_two();
+                let bits = match **e {
+                    IrType::Int(b) => u64::from(b),
+                    ref e => self.size_align(e).0 * 8,
+                };
+                let bytes = (bits * n).div_ceil(8).next_power_of_two();
                 (bytes, bytes)
             }
+            // The minimum (vscale = 1) size of a scalable vector; these
+            // types are sizeless in C++ and never laid out.
+            IrType::ScalableVector(..) => (16, 16),
+            IrType::TargetExt(_) => (2, 2),
             IrType::Record(d) => {
                 let r = self.record(*d).clone();
                 struct_size_align(self, &r.members, r.packed)
@@ -361,7 +404,14 @@ impl<'a> IrTypes<'a> {
             } else if self.is_empty_field(&f) {
                 i += 1;
             } else {
-                let ty = self.convert_mem(f.ty);
+                // A potentially-overlapping member ([[no_unique_address]]
+                // of class type) is stored as its base-subobject type, as
+                // the record layout places it (clang 19 accumulateFields):
+                // later members may live in its tail padding.
+                let ty = match self.overlapping_class(&f) {
+                    Some(c) => self.base_storage_type(c),
+                    None => self.convert_mem(f.ty),
+                };
                 members.push(Member {
                     offset: layout.fields[i] / 8,
                     data: Some(ty),
@@ -608,6 +658,19 @@ impl<'a> IrTypes<'a> {
             storage_size,
             storage_offset,
             is_signed: is_signed_or_enum(ast, f.ty, self.target()),
+        }
+    }
+
+    /// clang `FieldDecl::isPotentiallyOverlapping`: the class of a
+    /// `[[no_unique_address]]` member of class type.
+    fn overlapping_class(&self, f: &FieldDesc) -> Option<DeclId> {
+        if !f.nua {
+            return None;
+        }
+        let ast = self.ast();
+        match ast.types.canonical_view(f.ty) {
+            TypeView::Record(d) if ast.definition(d).is_some() => Some(d),
+            _ => None,
         }
     }
 
@@ -884,5 +947,42 @@ pub fn record_kind_prefix(ast: &Ast, d: DeclId) -> &'static str {
         Some(TagKind::Union) => "union",
         Some(TagKind::Class) => "class",
         _ => "struct",
+    }
+}
+
+/// The LLVM type of the SVE builtin `b` (clang
+/// `CodeGenTypes::ConvertType` with `AArch64SVEACLETypes.def`).
+fn sve_type(b: BuiltinType) -> IrType {
+    use BuiltinType as B;
+    let (e, n) = match b {
+        B::SvInt8 | B::SvUint8 => (IrType::Int(8), 16),
+        B::SvInt16 | B::SvUint16 => (IrType::Int(16), 8),
+        B::SvInt32 | B::SvUint32 => (IrType::Int(32), 4),
+        B::SvInt64 | B::SvUint64 => (IrType::Int(64), 2),
+        B::SvFloat16 => (IrType::Half, 8),
+        B::SvBfloat16 => (IrType::BFloat, 8),
+        B::SvFloat32 => (IrType::Float, 4),
+        B::SvFloat64 => (IrType::Double, 2),
+        B::SvBool => (IrType::Int(1), 16),
+        _ => return IrType::TargetExt("aarch64.svcount"),
+    };
+    IrType::ScalableVector(Box::new(e), n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sve_builtins_lower_to_scalable_vectors() {
+        use BuiltinType as B;
+        let sv = |e: IrType, n| IrType::ScalableVector(Box::new(e), n);
+        assert_eq!(sve_type(B::SvInt8), sv(IrType::Int(8), 16));
+        assert_eq!(sve_type(B::SvUint64), sv(IrType::Int(64), 2));
+        assert_eq!(sve_type(B::SvFloat32), sv(IrType::Float, 4));
+        assert_eq!(sve_type(B::SvBfloat16), sv(IrType::BFloat, 8));
+        assert_eq!(sve_type(B::SvBool), sv(IrType::Int(1), 16));
+        assert_eq!(sve_type(B::SvCount), IrType::TargetExt("aarch64.svcount"));
+        assert_eq!(B::ALL.iter().filter(|b| b.is_sizeless()).count(), 14);
     }
 }

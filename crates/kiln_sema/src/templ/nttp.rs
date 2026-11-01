@@ -4,12 +4,12 @@
 //! parameter objects ([temp.param]/8) class-type arguments designate.
 
 use kiln_ast::consts::{PtrBase, Scalar};
-use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits};
+use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, VarStorage};
 use kiln_ast::expr::{ExprFlags, ExprKind, NonOdrUse, UnaryOp};
 use kiln_ast::types::{Quals, TemplateArg, TypeView};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
-use kiln_oven::EvalContext;
+use kiln_oven::{EvalContext, EvalFailure, FailKind, Note};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -44,10 +44,8 @@ impl Sema<'_, '_> {
             return true;
         }
         if !bits.contains(DefinitionBits::LITERAL) {
-            let mut d = self.diag(DiagId::sema_nttp_non_literal, loc).arg(self.ty_arg(ty));
-            if let Some(n) = self.non_literal_note(ty) {
-                d = d.with_note(n);
-            }
+            let d = self.diag(DiagId::sema_nttp_non_literal, loc).arg(self.ty_arg(ty));
+            let d = self.with_non_literal_notes(d, ty);
             self.emit(d);
             return false;
         }
@@ -174,55 +172,6 @@ impl Sema<'_, '_> {
         notes
     }
 
-    /// Why class type `ty` is not literal ([basic.types.general]/10;
-    /// clang `RequireLiteralType`'s notes), as far as kiln tracks it.
-    fn non_literal_note(&self, ty: QualType) -> Option<Diag> {
-        let def = self.ast.types.as_record(ty).and_then(|r| self.ast.definition(r))?;
-        let bits = self.record_bits(def);
-        let shown = self.ty_arg(ty);
-        if !bits.contains(DefinitionBits::AGGREGATE)
-            && !bits.contains(DefinitionBits::HAS_CONSTEXPR_CTOR)
-            && !bits.contains(DefinitionBits::LAMBDA)
-        {
-            let loc = self.ast.decls.get(def).loc();
-            return Some(self.diag(DiagId::note_non_literal_no_constexpr_ctors, loc).arg(shown));
-        }
-        for b in self.ast.decls.bases(def, &self.ast.lists) {
-            if !self.is_literal_type(b.ty) {
-                return Some(
-                    self.diag(DiagId::note_non_literal_base_class, b.loc)
-                        .arg(&shown)
-                        .arg(self.ty_arg(b.ty)),
-                );
-            }
-        }
-        for f in self.fields_in(def) {
-            let n = self.ast.decls.get(f);
-            let q = n.ty()?;
-            if !self.is_literal_type(q) {
-                return Some(
-                    self.diag(DiagId::note_non_literal_field, n.loc())
-                        .arg(&shown)
-                        .arg(self.decl_arg(f))
-                        .arg(self.ty_arg(q)),
-                );
-            }
-        }
-        let dtor = self
-            .ast
-            .members(def)
-            .find(|&m| self.ast.decls.get(m).kind() == DeclKind::CXXDestructor)?;
-        let constexpr = self
-            .ast
-            .decls
-            .function(dtor)
-            .is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None);
-        (!constexpr).then(|| {
-            self.diag(DiagId::note_non_literal_non_constexpr_dtor, self.ast.decls.get(dtor).loc())
-                .arg(shown)
-        })
-    }
-
     /// A template argument `e` for a non-type parameter of class type
     /// `pty` ([temp.arg.nontype]/2): a `const T` copy-initialized from
     /// `e` as a converted constant expression, evaluated to a frozen
@@ -317,27 +266,40 @@ impl Sema<'_, '_> {
         let loc = self.ast.exprs.get(c).loc();
         let a = self.builder().unary(UnaryOp::AddrOf, c, pt, loc, ExprFlags::NONE);
         let a = self.act_on_full_expr(a);
-        let r = self.eval_const(a, EvalContext::converted(at)).map_err(|mut f| {
-            // [temp.arg.nontype]/3: the referent has static storage
-            // duration. The Oven rejects the address `&e` it was given;
-            // clang words it for the reference.
+        let r = self.eval_const(a, EvalContext::converted(at));
+        // The Oven reports the address of an automatic variable as a
+        // pointer: here it is the reference's referent.
+        let r = r.map_err(|mut f| {
             if let Some(n) = f.notes.first_mut()
-                && let Some(rest) = n.msg.strip_prefix("pointer to ")
+                && n.msg.starts_with("pointer to '")
             {
-                n.msg = format!("reference to {rest}");
+                n.msg.replace_range(.."pointer".len(), "reference");
             }
             f
         });
-        let r = r.map(|v| {
+        let r = r.and_then(|v| {
+            // [temp.arg.nontype]/3: the referent has static storage
+            // duration (an automatic variable's address is not constant).
             match self.ast.consts.scalar(v) {
+                Some(Scalar::Pointer { base: PtrBase::Decl(d), .. }) if self.is_automatic(d) => {
+                    let n = format!(
+                        "reference to '{}' is not a constant expression",
+                        self.decl_name(d)
+                    );
+                    let notes = vec![
+                        Note { loc: at, msg: n },
+                        Note { loc: self.ast.decls.get(d).loc(), msg: "declared here".into() },
+                    ];
+                    Err(EvalFailure { kind: FailKind::NotConstant, notes })
+                }
                 // Re-keyed at the reference type: printed without `&`
                 // (`T<gi>`), as clang.
-                Some(Scalar::Pointer { base, offset, .. }) => self
+                Some(Scalar::Pointer { base, offset, .. }) => Ok(self
                     .ast
                     .consts
                     .push_scalar(Scalar::Pointer { ty: canon, base, offset })
-                    .unwrap_or(v),
-                _ => v,
+                    .unwrap_or(v)),
+                _ => Ok(v),
             }
         });
         match r {
@@ -348,6 +310,21 @@ impl Sema<'_, '_> {
                 self.emit(d);
                 Err(())
             }
+        }
+    }
+
+    /// Whether `d` is a variable or parameter with automatic storage
+    /// duration.
+    fn is_automatic(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        match n.kind() {
+            DeclKind::ParmVar => true,
+            DeclKind::Var => {
+                self.ast.decls.var(d).is_some_and(|v| {
+                    matches!(v.spec.storage(), VarStorage::None | VarStorage::Register)
+                }) && n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+            }
+            _ => false,
         }
     }
 

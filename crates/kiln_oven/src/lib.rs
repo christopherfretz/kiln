@@ -52,7 +52,7 @@ use std::time::Instant;
 pub use kiln_ast::class::{Subobject, SubobjectId};
 use kiln_ast::consts::ConstStore;
 use kiln_ast::types::RecordLayout;
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
@@ -197,6 +197,14 @@ pub trait SemaBridge {
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>;
     /// The layout of a complete record (via `kiln_abi`).
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout;
+    /// `(size, align)` in bytes of a type the Oven has no value model
+    /// for (a vector type: spec/oven.md "Interface"), via `kiln_abi`, so
+    /// `sizeof`/`alignof` agree with layout. The default is unknown
+    /// (`(0, 1)`).
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32) {
+        let _ = ty;
+        (0, 1)
+    }
     /// The final overrider of virtual function `method` called on the
     /// subobject `at` of an object whose most-derived class is
     /// `most_derived`, with the subobject the overrider is a member of
@@ -242,11 +250,21 @@ pub struct Oven {
     pub(crate) funcs: Vec<Func>,
     pub(crate) func_map: FxHashMap<DeclId, u32>,
     pub(crate) thunks: FxHashMap<ExprId, u32>,
+    /// Thunks compiled inside a default argument use (the key's second
+    /// half, [`Oven::fold_immediate_in`]): their source-location builtins
+    /// take that use's values.
+    pub(crate) thunks_at: FxHashMap<(ExprId, ExprId), u32>,
+    /// The default argument use the next thunk is compiled in.
+    pub(crate) srcloc_root: Option<ExprId>,
     pub(crate) globals: Vec<Global>,
     pub(crate) global_map: FxHashMap<DeclId, u32>,
     /// Globals resolved to an unknown value because they had no
     /// initializer yet: re-resolved by the next evaluation.
     pub(crate) provisional: Vec<u32>,
+    /// Globals whose resolution depends on the lax mode
+    /// ([`value::VarInfo::lax`]), and the mode they were resolved in.
+    pub(crate) lax_globals: Vec<u32>,
+    pub(crate) lax_resolved: bool,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -300,9 +318,13 @@ impl Oven {
             funcs: Vec::new(),
             func_map: FxHashMap::default(),
             thunks: FxHashMap::default(),
+            thunks_at: FxHashMap::default(),
+            srcloc_root: None,
             globals: Vec::new(),
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
+            lax_globals: Vec::new(),
+            lax_resolved: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             lets: FxHashMap::default(),
@@ -379,6 +401,40 @@ impl Oven {
         self.eval_ctx(bridge, e, None, true, false, false).0.ok()
     }
 
+    /// As [`Oven::try_fold`], laxly (clang `Expr::EvaluateAsRValue`, as
+    /// codegen's `tryEmitAsConstant` and a folded array bound use it): a
+    /// `const` non-volatile variable with an initializer is read even if
+    /// it is not usable in constant expressions (a `const double`, a
+    /// `const _Atomic(int)`; [expr.const]/4 rejects such a read, clang
+    /// only notes it). Strict outside an outermost evaluation.
+    pub fn fold_rvalue(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId> {
+        if self.ctx_depth != 0 {
+            return self.try_fold(bridge, e);
+        }
+        self.run.lax = true;
+        let r = self.eval_ctx(bridge, e, None, true, false, false).0.ok();
+        self.run.lax = false;
+        r
+    }
+
+    /// Evaluates immediate invocation `e` ([expr.const]/16; manifestly
+    /// constant-evaluated, silent, not recorded) as it appears inside the
+    /// default argument used by `CXXDefaultArgExpr` `at`: its
+    /// source-location builtins take the values of that use
+    /// ([support.srcloc.cons]/2; clang rebuilds such a default argument at
+    /// each use and evaluates its invocations there).
+    pub fn fold_immediate_in(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+        at: Option<ExprId>,
+    ) -> Option<ConstValueId> {
+        let saved = std::mem::replace(&mut self.srcloc_root, at);
+        let r = self.eval_ctx(bridge, e, None, true, false, true).0.ok();
+        self.srcloc_root = saved;
+        r
+    }
+
     /// Folds the initializer `e` of variable `var` as a constant
     /// initializer ([basic.start.static]/2, manifestly constant-evaluated:
     /// `__builtin_is_constant_evaluated()` yields true); `None` if it is
@@ -433,9 +489,11 @@ impl Oven {
             + cap(&self.funcs)
             + map(&self.func_map)
             + map(&self.thunks)
+            + map(&self.thunks_at)
             + cap(&self.globals)
             + map(&self.global_map)
             + cap(&self.provisional)
+            + cap(&self.lax_globals)
             + map(&self.lit_exprs)
             + map(&self.thawed)
             + map(&self.lets)
@@ -511,6 +569,12 @@ impl Oven {
     ) -> (Result<ConstValueId, EvalFailure>, vm::Counters) {
         for g in self.provisional.drain(..) {
             self.globals[g as usize].state = compile::GState::Unresolved;
+        }
+        if self.lax_resolved != self.run.lax {
+            self.lax_resolved = self.run.lax;
+            for g in self.lax_globals.drain(..) {
+                self.globals[g as usize].state = compile::GState::Unresolved;
+            }
         }
         self.run.silent = silent;
         self.run.enum_check = enum_check;

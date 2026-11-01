@@ -20,19 +20,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use directives::PpCompare;
-pub use report::{CorpusOutcome, ci_corpus_passes};
+pub use report::{CorpusOutcome, ci_corpus_passes, ci_should_retry};
 use runner::TestResult;
 
 #[cfg(test)]
 use crate::util::json_string_field;
-use crate::util::{CompilerKind, build_kiln};
+use crate::util::{CompilerKind, build_kiln, process};
 pub use crate::util::{repo_root, target_dir};
 
 pub const USAGE: &str = "\
 usage: cargo xtask test [options] [paths...]
 
-Runs tests/conformance and tests/differential (or the given files/directories)
-through a compiler. See spec/harness.md.
+Runs tests/conformance, tests/differential and tests/stress (or the given
+files/directories) through a compiler. See spec/harness.md.
 
 options:
   --compiler <path>   compiler under test (default: build and use the kiln binary)
@@ -46,12 +46,17 @@ options:
   --report-parity <file>
                       write per-directory pass/fail counts into <file> between
                       its `<!-- parity:begin -->`/`<!-- parity:end -->` markers
-  -j, --jobs <N>      parallel tests (default: min(available CPUs, 8))
+  -j, --jobs <N>      parallel tests (default: min(available CPUs, 8)); an upper
+                      bound when MAKEFLAGS names a jobserver fifo, whose tokens
+                      every spawned process then also holds (spec/harness.md)
   --timeout <secs>    run-time limit for test binaries (default: 10)
+  --mem-limit <MiB>   address-space cap of every compiler, oracle and test
+                      binary process (default: 8192; 0 disables it, leaving
+                      only `mem<=N` budgets); kiln's stack reservation is added
   -v, --verbose       print every result and the commands that were run
   -h, --help          this text
 
-exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored,
+exit status: 0 all passed (xfail/skip allowed), 1 a test failed/xpassed/errored/was killed,
 2 usage or infrastructure error.
 ";
 
@@ -65,6 +70,8 @@ pub struct Options {
     pub update: bool,
     pub jobs: Option<usize>,
     pub run_timeout: Duration,
+    /// `--mem-limit`, in MiB; `0` disables the default cap.
+    pub mem_limit_mib: u64,
     pub verbose: bool,
     pub pp_compare: Option<PpCompare>,
     pub report_parity: Option<PathBuf>,
@@ -81,6 +88,7 @@ impl Default for Options {
             update: false,
             jobs: None,
             run_timeout: Duration::from_secs(10),
+            mem_limit_mib: process::DEFAULT_MEM_LIMIT_MIB,
             verbose: false,
             pp_compare: None,
             report_parity: None,
@@ -120,6 +128,11 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                     .filter(|s: &f64| s.is_finite() && *s > 0.0)
                     .ok_or_else(|| format!("bad --timeout `{v}`"))?;
                 o.run_timeout = Duration::from_secs_f64(secs);
+            }
+            "--mem-limit" => {
+                let v = value("--mem-limit")?;
+                o.mem_limit_mib =
+                    v.parse().map_err(|_| format!("bad --mem-limit `{v}` (MiB; 0 disables)"))?;
             }
             "--pp-compare" => {
                 let v = value("--pp-compare")?;
@@ -191,12 +204,12 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     };
     let compiler_id = crate::util::identify(&compiler)?;
     let compiler_kind = compiler_id.kind;
-    let oracle = if opts.no_oracle {
-        None
+    let (oracle, oracle_kind) = if opts.no_oracle {
+        (None, CompilerKind::Other)
     } else {
-        detect_kind(&opts.oracle)
+        let kind = detect_kind(&opts.oracle)
             .map_err(|e| format!("{e} (pass --no-oracle to skip oracle comparisons)"))?;
-        Some(opts.oracle.clone())
+        (Some(opts.oracle.clone()), kind)
     };
 
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -209,22 +222,26 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         compiler,
         compiler_kind,
         oracle,
+        oracle_kind,
         update: opts.update,
         scratch,
         compile_timeout: Duration::from_secs(120),
         run_timeout: opts.run_timeout,
         pp_compare: opts.pp_compare,
+        mem_limit: process::MemLimit::from_mib(opts.mem_limit_mib),
     };
     let jobs = opts
         .jobs
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(8)))
         .min(cases.len());
     println!(
-        "running {} tests with {} ({}), oracle: {}, {jobs} jobs",
+        "running {} tests with {} ({}), oracle: {}, {jobs} jobs{}, mem limit: {}",
         cases.len(),
         cfg.compiler.display(),
         compiler_kind.as_str(),
         cfg.oracle.as_ref().map_or_else(|| "none".to_owned(), |o| o.display().to_string()),
+        crate::jobs::global().describe().map_or_else(String::new, |d| format!(" (jobserver {d})")),
+        cfg.mem_limit.map_or_else(|| "none".to_owned(), |l| format!("{} MiB", l.mib)),
     );
 
     let results = run_all(&cfg, &cases, jobs);

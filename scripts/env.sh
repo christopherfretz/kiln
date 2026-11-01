@@ -33,5 +33,17 @@ unset _WS _MAIN _cand
 # middle of a clean build; a retry at -j 8 passed). Cap the jobs and disable
 # pipelining so a dependent rustc never starts before the artifact is fully
 # written. Override either with the same variables.
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
+# Shared jobserver (helper `scripts/jobserver.sh`, started by provision.sh):
+# when its fifo is live, cargo and rustc draw parallelism tokens from the ONE
+# pool shared by every checkout on the box instead of a per-process -j, so
+# concurrent agents cannot over-commit memory. CARGO_BUILD_JOBS is left unset
+# then (cargo ignores it when it inherits a jobserver); it is the fallback.
+_JSF="${KILN_JOBSERVER_FIFO:-/run/kiln/jobserver.fifo}"
+if [ -p "$_JSF" ] && [ -z "${KILN_NO_JOBSERVER:-}" ]; then
+  export MAKEFLAGS="--jobserver-auth=fifo:$_JSF"
+  unset CARGO_BUILD_JOBS
+else
+  export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
+fi
+unset _JSF
 export CARGO_BUILD_PIPELINING="${CARGO_BUILD_PIPELINING:-false}"

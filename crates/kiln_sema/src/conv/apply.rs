@@ -1,7 +1,7 @@
 //! Performing a standard conversion sequence: the `ImplicitCastExpr`s
 //! clang's `PerformImplicitConversion` builds for each step.
 
-use kiln_ast::expr::CastKind;
+use kiln_ast::expr::{CastKind, ValueCategory};
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
@@ -35,6 +35,15 @@ pub fn apply_standard_conversion(
     to: QualType,
 ) -> Result<ExprId, ConvError> {
     let mut e = e;
+    // A sequence to `_Atomic(T)` that ends at `T` (clang's
+    // `tryAtomicConversion`): convert to `T`, then `NonAtomicToAtomic`.
+    let atomic_to = s
+        .ast
+        .types
+        .as_atomic(to)
+        .filter(|_| !s.ast.types.same_unqualified(scs.to_types[2], to))
+        .map(|v| (to, v));
+    let to = atomic_to.map_or(to, |(_, v)| v);
     match scs.first {
         FirstStep::Identity => {}
         FirstStep::LValueToRValue => {
@@ -58,6 +67,10 @@ pub fn apply_standard_conversion(
         }
         ThirdStep::FunctionPointer => e = cast_to(s, CastKind::NoOp, e, to, None),
     }
+    if let Some((at, _)) = atomic_to {
+        let at = s.ast.types.unqualified(at);
+        e = cast_to(s, CastKind::NonAtomicToAtomic, e, at, None);
+    }
     Ok(e)
 }
 
@@ -72,6 +85,15 @@ fn apply_second(
     let to_bool = s.ast.types.builtin(to) == Some(BuiltinType::Bool);
     Ok(match scs.second {
         SecondStep::Identity => e,
+        SecondStep::VectorSplat => {
+            let x = s.prepare_vector_splat(to, e);
+            let u = s.ast.types.unqualified(to);
+            super::raw_cast(s, CastKind::VectorSplat, x, u, ValueCategory::PRValue, None)
+        }
+        SecondStep::VectorConversion => {
+            let u = s.ast.types.unqualified(to);
+            cast_to(s, CastKind::BitCast, e, u, None)
+        }
         SecondStep::IntegralPromotion | SecondStep::IntegralConversion => {
             let ck = if to_bool { CastKind::IntegralToBoolean } else { CastKind::IntegralCast };
             cast_to(s, ck, e, to, None)

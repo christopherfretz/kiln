@@ -5,7 +5,7 @@
 //! [`DeclSpec`] into a type ([dcl.type.simple]) and a [`Declarator`] into
 //! a declaration.
 
-use kiln_ast::names::OverloadedOperator;
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -170,6 +170,9 @@ pub struct DeclSpec {
     pub friend: Option<Loc>,
     /// cv-qualifiers.
     pub cv: Quals,
+    /// The C11 `_Atomic` type qualifier (no parenthesis; a clang
+    /// extension in C++) written at.
+    pub atomic_qual: Option<Loc>,
     /// `short`/`long`.
     pub width: Width,
     /// `signed`/`unsigned`.
@@ -221,6 +224,7 @@ impl DeclSpec {
             && self.inline.is_none()
             && self.thread_local.is_none()
             && self.cv.is_empty()
+            && self.atomic_qual.is_none()
             && self.consteval.is_none()
             && self.virtual_.is_none()
             && self.explicit.is_none()
@@ -428,6 +432,9 @@ pub struct ParamInfo {
     /// so that it is in scope in the rest of the declarator
     /// ([basic.scope.param]); the function adopts it.
     pub decl: Option<DeclId>,
+    /// `this` before the parameter-declaration: an explicit object
+    /// parameter ([dcl.fct]/6, P0847).
+    pub explicit_object: Option<Loc>,
 }
 
 /// The default argument of a [`ParamInfo`] ([dcl.fct.default]).
@@ -567,9 +574,17 @@ pub struct Declarator {
     /// `this` before a parameter-declaration (an explicit object
     /// parameter, P0847 [dcl.fct]/6).
     pub explicit_object: Option<Loc>,
+    /// Where the innermost function declarator's `const`, `volatile` and
+    /// ref-qualifier are ("explicit object member function cannot have
+    /// '...' qualifier" points at the first and quotes them in order).
+    pub fn_qual_locs: [Option<Loc>; 3],
     /// The declarator-id is an operator-function-id (`operator new`):
     /// `name` then holds the `operator` keyword and its location.
     pub op_name: Option<OverloadedOperator>,
+    /// The declarator-id is a literal-operator-id (`operator""_x`,
+    /// [over.literal]/1): its ud-suffix; `name` then holds the
+    /// `operator` keyword and its location.
+    pub lit_suffix: Option<Symbol>,
     /// `...` before the declarator-id: a function or template parameter
     /// pack ([dcl.fct]/16, [temp.variadic]/3).
     pub ellipsis: Option<Loc>,
@@ -589,6 +604,78 @@ pub struct Declarator {
     ///
     /// [`Sema::act_on_specialization_declarator_id`]: crate::Sema::act_on_specialization_declarator_id
     pub spec_id: Option<crate::templ::spec::SpecDeclaratorId>,
+    /// A structured binding declaration's `[ identifier-list ]`
+    /// ([dcl.struct.bind], [dcl.pre]/6): the declarator has no name then
+    /// (a ref-qualifier is its only chunk).
+    pub decomp: Option<Decomposition>,
+    /// The declarator of a friend declaration ([class.friend]): its
+    /// declarator-id may be a template-id naming a specialization of a
+    /// function template without a template head ([temp.friend]/1.3).
+    pub friend: bool,
+    /// What the declarator declares, beyond `ctx`, where that decides
+    /// whether a placeholder for a deduced class type may appear
+    /// ([dcl.type.class.deduct]/2; clang's finer `DeclaratorContext`s).
+    pub site: DeclSite,
+    /// The outermost grouping parentheses and the number of chunks inside
+    /// them (`B (x)`: `(0, loc of '(')`; [dcl.type.class.deduct]/2).
+    pub outer_paren: Option<(usize, Loc)>,
+}
+
+/// Where a declarator appears, refining [`DeclaratorContext`] for the
+/// contexts clang distinguishes when a placeholder for a deduced class
+/// type is not allowed (`err_auto_not_allowed`, `err_template_missing_args`).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum DeclSite {
+    /// As `ctx` says (a type-id: a cast, `sizeof`, `typeid`, ...).
+    #[default]
+    Plain,
+    /// A parameter of a lambda-declarator.
+    LambdaParam,
+    /// A parameter of a requires-expression.
+    RequiresParam,
+    /// A non-type template parameter (a placeholder is allowed: C++20
+    /// [temp.param]/6).
+    TemplateParam,
+    /// A conversion-type-id.
+    ConversionId,
+    /// The type-id of a new-expression (a placeholder is allowed).
+    New,
+    /// A type-id template argument (a class template name alone is a
+    /// template template argument, parsed apart).
+    TemplateArg,
+    /// A type-id in which clang's parser forms no placeholder (an
+    /// alias-declaration, a trailing return type): the template name
+    /// lacks its arguments.
+    NoDeduction,
+    /// A declarator rebuilt by template substitution (already checked).
+    Subst,
+}
+
+/// The bracketed identifier list of a structured binding declaration
+/// ([dcl.pre]/6: `attribute-specifier-seq(opt) decl-specifier-seq
+/// ref-qualifier(opt) [ sb-identifier-list ] initializer ;`).
+#[derive(Clone, Debug)]
+pub struct Decomposition {
+    /// Where `[` is.
+    pub lbracket: Loc,
+    /// Where `]` is.
+    pub rbracket: Loc,
+    /// The sb-identifiers in order.
+    pub ids: Vec<BindingId>,
+}
+
+/// One sb-identifier ([dcl.pre]/6): `...(opt) identifier
+/// attribute-specifier-seq(opt)`.
+#[derive(Clone, Debug)]
+pub struct BindingId {
+    /// The identifier and where it is.
+    pub name: Symbol,
+    /// Its location.
+    pub loc: Loc,
+    /// A C++26 binding pack's `...` (P1061).
+    pub ellipsis: Option<Loc>,
+    /// The attributes after the identifier (P0609).
+    pub attrs: Vec<AttrId>,
 }
 
 /// A declarator-id that is not an identifier ([dcl.decl]/4,
@@ -603,6 +690,12 @@ pub enum SpecialName {
     Conversion(QualType),
     /// `operator @`.
     Operator(OverloadedOperator),
+    /// `operator "" X` / `operator ""X` ([over.literal]/1): the
+    /// ud-suffix `X`.
+    LiteralOperator(Symbol),
+    /// The template-name of a deduction-guide ([temp.deduct.guide]):
+    /// the class template it is for.
+    DeductionGuide(DeclId),
 }
 
 impl Declarator {
@@ -622,28 +715,49 @@ impl Declarator {
             grouping: false,
             asm_label: None,
             special: None,
+            site: DeclSite::Plain,
+            outer_paren: None,
             virt_override: None,
             virt_final: None,
             pure: None,
             late_noexcept: None,
             explicit_object: None,
+            fn_qual_locs: [None; 3],
             op_name: None,
+            lit_suffix: None,
             ellipsis: None,
             trailing_requires: None,
             dropped: false,
             spec_id: None,
+            decomp: None,
+            friend: false,
         }
     }
 
     /// True if the declarator has a declarator-id (an identifier or a
     /// [`SpecialName`]).
     pub fn has_name(&self) -> bool {
-        self.name.is_some() || self.special.is_some()
+        self.name.is_some() || self.special.is_some() || self.decomp.is_some()
+    }
+
+    /// The declaration name of a function declarator whose identifier
+    /// (or `operator` keyword) is `name`: an operator-function-id, a
+    /// literal-operator-id, or `name`.
+    pub fn fn_decl_name(&self, name: Symbol) -> DeclName {
+        match (self.op_name, self.lit_suffix) {
+            (Some(op), _) => DeclName::operator(op),
+            (None, Some(s)) => DeclName::literal_operator(s),
+            (None, None) => DeclName::ident(name),
+        }
     }
 
     /// The location of the name, or of the declarator.
     pub fn name_loc(&self) -> Loc {
-        self.name.map(|n| n.1).or(self.special.map(|s| s.1)).unwrap_or(self.loc)
+        self.name
+            .map(|n| n.1)
+            .or(self.special.map(|s| s.1))
+            .or(self.decomp.as_ref().map(|b| b.lbracket))
+            .unwrap_or(self.loc)
     }
 
     /// True if the outermost operator applied to the name is a function
