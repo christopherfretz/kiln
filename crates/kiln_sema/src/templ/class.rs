@@ -1157,7 +1157,10 @@ impl Substituter<'_, '_, '_> {
             }
             let ctx = self.nns_context(nns, loc)?;
             let q = crate::using::Qualifier { ctx, nns, loc };
+            let resolved = self.sema.kind_of(m) == DeclKind::Using;
+            let reverse = std::mem::replace(&mut self.sema.reverse_using_shadows, resolved);
             last = self.sema.instantiate_class_using(q, name, loc, inheriting).or(last);
+            self.sema.reverse_using_shadows = reverse;
         }
         Ok(last)
     }

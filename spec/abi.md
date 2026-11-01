@@ -586,6 +586,10 @@ points, thunks and method indices are clang's.
   - a class whose non-virtual size differs from its size also gets a
     `%struct.S.base` subobject type (`IrType::RecordBase`,
     `getBaseSubobjectLLVMType`);
+  - a potentially-overlapping field (`[[no_unique_address]]` of
+    non-empty class type) is stored as its class's base-subobject type,
+    as the layout places it, so later fields may use its tail padding
+    (WP-158);
   - `IrRecord::base_index` and `vbase_index` map each base to its
     element.
 - **Argument passing** (`call.rs`): `can_pass_in_registers` follows

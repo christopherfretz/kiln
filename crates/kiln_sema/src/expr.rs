@@ -672,13 +672,52 @@ impl Sema<'_, '_> {
             ExprKind::CXXScalarValueInitExpr if !self.ast.types.is_void(n.ty()) => {
                 Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
             }
-            ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr => (self
-                .ast
-                .exprs
-                .cast_kind(x)
-                != CastKind::ToVoid)
-                .then_some((DiagId::sema_unused_expr, loc, Vec::new())),
-            ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
+            ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr => {
+                match self.ast.exprs.cast_kind(x) {
+                    CastKind::ToVoid | CastKind::Dependent => None,
+                    // `X(1);` is checked through its constructor call
+                    // (clang `isUnusedResultAWarning`), reported at the cast.
+                    CastKind::ConstructorConversion => self
+                        .unused_warning(self.ast.exprs.operand(x))
+                        .map(|(id, _, args)| (id, loc, args)),
+                    _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
+                }
+            }
+            ExprKind::CXXStaticCastExpr => {
+                // Always unused, but a constructor conversion reports a
+                // nodiscard constructor or class (clang
+                // `DiagnoseUnusedExprResult`).
+                let unused = (DiagId::sema_unused_expr, loc, Vec::new());
+                if self.ast.exprs.cast_kind(x) != CastKind::ConstructorConversion {
+                    return Some(unused);
+                }
+                let inner = self.ignore_paren_imp_casts(self.ast.exprs.operand(x));
+                let ik = self.ast.exprs.get(inner).kind();
+                if !matches!(ik, ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr) {
+                    return Some(unused);
+                }
+                Some(self.unused_warning(inner).map_or(unused, |(id, _, args)| (id, loc, args)))
+            }
+            ExprKind::CXXBindTemporaryExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                // A temporary of a nodiscard class, or made by a nodiscard
+                // constructor ([dcl.attr.nodiscard]/4, clang
+                // `warn_unused_constructor`).
+                let ctor = self.ast.exprs.constructor(x);
+                let a = self.find_attr(ctor, AttrKind::NODISCARD).or_else(|| {
+                    let class = self.ast.types.as_record(n.ty())?;
+                    self.find_attr(class, AttrKind::NODISCARD)
+                })?;
+                let attr = *self.ast.attrs.get(a);
+                let name = "'nodiscard'".to_owned();
+                Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_text(m)) {
+                    Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),
+                    None => (DiagId::sema_unused_constructor, loc, vec![name]),
+                })
+            }
             ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
@@ -699,7 +738,6 @@ impl Sema<'_, '_> {
             | ExprKind::ArrayTypeTraitExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXTypeidExpr
-            | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
             | ExprKind::CXXConstCastExpr
             | ExprKind::CompoundLiteralExpr
@@ -788,9 +826,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The replaceable global allocation functions are visible to lookup
+    /// without `<new>` ([basic.stc.dynamic.general]/2): declares them
+    /// before an unqualified or `::`-qualified lookup of their names.
+    fn declare_global_new_delete_for(&mut self, name: DeclName, qualifier: Option<DeclId>) {
+        use kiln_ast::names::OverloadedOperator as O;
+        if qualifier.is_none_or(|q| q == self.ast.tu)
+            && matches!(name.as_operator(), Some(O::New | O::ArrayNew | O::Delete | O::ArrayDelete))
+        {
+            self.declare_global_new_delete();
+        }
+    }
+
     /// [`Sema::act_on_id_expression`] for any unqualified-id: an
     /// identifier, an operator-function-id or a conversion-function-id
     /// ([expr.prim.id.unqual]/1; WP-121).
+    #[allow(clippy::too_many_lines)]
     pub fn act_on_id_expression_dn(
         &mut self,
         name: DeclName,
@@ -800,6 +851,7 @@ impl Sema<'_, '_> {
         let nns = qualifier.map(|q| q.nns);
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
+        self.declare_global_new_delete_for(name, qualifier);
         let found = match qualifier {
             Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
             None => self.lookup_name_dn(name, LookupKind::Ordinary),

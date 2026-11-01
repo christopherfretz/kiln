@@ -338,7 +338,11 @@ impl Sema<'_, '_> {
         let access = self.current_member_access();
         let h = DeclHead::new(self.ctx, name, name_loc).access(access);
         let using = self.builder().using_decl(h, Some(q.nns));
-        for &t in &found.decls {
+        let mut targets = found.decls.clone();
+        if self.reverse_using_shadows {
+            targets.reverse();
+        }
+        for t in targets {
             let _ = self.introduce_shadow(name, name_loc, t);
         }
         Some(using)
@@ -481,7 +485,11 @@ impl Sema<'_, '_> {
             self.ensure_implicit(base, k);
         }
         let own: Vec<DeclId> = self.ast.constructors(class).iter().collect();
-        for (target, nominated) in self.inheritable_ctors(base) {
+        let mut inherited = self.inheritable_ctors(base);
+        if self.reverse_using_shadows {
+            inherited.reverse();
+        }
+        for (target, nominated) in inherited {
             if own.iter().any(|&c| self.hides_ctor(c, target)) {
                 continue;
             }

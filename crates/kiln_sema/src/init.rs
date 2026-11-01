@@ -618,9 +618,16 @@ impl Sema<'_, '_> {
         let loc = self.begin_loc(e);
         if self.is_prvalue_of_class(e, bty) {
             let m = self.materialize_temporary(e, ety, false);
-            if let Some(x) =
-                self.construct_from_class(m, bty, ConvCtx::Initialization, loc, DeletedAs::Call)
-            {
+            // The move constructs a base subobject (clang `EK_Base`): the
+            // base-object variant is called.
+            self.ctor_entity = Some((
+                crate::class::InitEntity::Base { inherited_virtual: false },
+                kiln_ast::expr::ConstructionKind::NonVirtualBase,
+            ));
+            let x =
+                self.construct_from_class(m, bty, ConvCtx::Initialization, loc, DeletedAs::Call);
+            self.ctor_entity = None;
+            if let Some(x) = x {
                 return x;
             }
         }

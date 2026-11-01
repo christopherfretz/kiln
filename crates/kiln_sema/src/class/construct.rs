@@ -77,7 +77,17 @@ impl Sema<'_, '_> {
         }
         let vk = self.ast.exprs.get(e).value_category();
         if vk == ValueCategory::PRValue && conv::bases::same_class(self, src, class) {
-            return Some(e);
+            // Not into a base subobject or a delegating constructor's
+            // object (clang `TryConstructorInitialization`, per CWG2403:
+            // a base may overlap other members): the object is
+            // move-constructed from the materialized prvalue.
+            let base_or_delegating = matches!(
+                self.ctor_entity,
+                Some((InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating))
+            );
+            if !base_or_delegating {
+                return Some(e);
+            }
         }
         let k =
             if vk == ValueCategory::LValue { SpecialKind::CopyCtor } else { SpecialKind::MoveCtor };
@@ -136,7 +146,11 @@ impl Sema<'_, '_> {
         let loc = site.loc;
         // [over.match.list]/1.1 (phase 1) was done by the caller
         // (`init_list_ctor_init`); this is phase 2.
-        let sel = self.resolve_ctor(class, args, style);
+        let actual = matches!(
+            (entity, ck),
+            (InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating)
+        );
+        let sel = self.resolve_ctor_ex(class, args, style, actual);
         if sel == Selected::Missing
             && style == InitStyle::Direct
             && !args.is_empty()
