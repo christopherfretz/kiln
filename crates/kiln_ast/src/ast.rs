@@ -259,6 +259,20 @@ impl Ast {
         Arc::clone(&self.symbols)
     }
 
+    /// The expression the `CXXDefaultArgExpr` `e` stands for: its
+    /// parameter's default argument without the `ExprWithCleanups` of its
+    /// own full-expression (clang `ParmVarDecl::getDefaultArg`). Its
+    /// temporaries are destroyed with the full-expression containing the
+    /// call ([intro.execution]/5, [class.temporary]/6.9).
+    pub fn default_arg_expr(&self, e: crate::ids::ExprId) -> Option<crate::ids::ExprId> {
+        let p = self.exprs.default_arg_param(e);
+        let d = self.decls.param(p)?.default_arg?;
+        Some(match self.exprs.get(d).kind() {
+            crate::expr::ExprKind::ExprWithCleanups => self.exprs.operand(d),
+            _ => d,
+        })
+    }
+
     // -- redeclarations (§4.4) ------------------------------------------
 
     /// The first declaration of `d`'s entity (`d` itself if not

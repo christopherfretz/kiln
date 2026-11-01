@@ -61,16 +61,25 @@ impl Sema<'_, '_> {
         m
     }
 
-    /// clang `MaybeBindToTemporary`: a class prvalue `e` whose class has a
-    /// non-trivial destructor is bound to a temporary destroyed at the end
+    /// clang `MaybeBindToTemporary`: a class (or array of class) prvalue
+    /// `e` whose class has a non-trivial destructor is bound to a temporary destroyed at the end
     /// of the full-expression ([class.temporary]/4). The destructor must be
     /// accessible and not deleted ([class.dtor]/15) and is odr-used.
     pub(crate) fn maybe_bind_temporary(&mut self, e: ExprId) -> ExprId {
         let n = *self.ast.exprs.get(e);
-        if n.value_category() != ValueCategory::PRValue || n.deps().contains(ExprDeps::TYPE) {
+        if n.value_category() != ValueCategory::PRValue
+            || n.deps().contains(ExprDeps::TYPE)
+            || n.kind() == ExprKind::CXXBindTemporaryExpr
+        {
             return e;
         }
-        let Some(r) = self.ast.types.as_record(n.ty()) else { return e };
+        // An array temporary binds the destructor of its base element
+        // class (clang searches through the array types).
+        let mut base = n.ty();
+        while self.ast.types.is_array(base) {
+            base = self.ast.types.element(base).unwrap_or(QualType::ERROR);
+        }
+        let Some(r) = self.ast.types.as_record(base) else { return e };
         let Some(class) = self.ast.definition(r) else { return e };
         let flags = self.ast.decls.get(class).flags();
         if flags.contains(DeclFlags::INVALID) || flags.contains(DeclFlags::DEPENDENT_CTX) {
