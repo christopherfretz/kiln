@@ -1251,22 +1251,23 @@ impl<'a> Cg<'a> {
         let any_init = v
             .init
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
-        let mut needs_ctor = false;
+        let mut needs_init = false;
         let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
             None => {
                 let t = self.mty(ty);
                 self.m.const_zero(t)
             }
-            Some(e) => match self.folds.get(e) {
-                Some(c) => self.const_value(c, ty, Some(e), true)?,
-                // Dynamic initialization ([basic.start.dynamic]): zero
-                // until the initialization function runs.
-                None => {
-                    needs_ctor = true;
+            Some(e) => {
+                if let Some(c) = self.folds.get(e) {
+                    self.const_value(c, ty, Some(e), true)?
+                } else {
+                    // Dynamic initialization ([basic.start.dynamic]): zero
+                    // until the initialization function runs.
+                    needs_init = true;
                     let t = self.mty(ty);
                     self.m.const_zero(t)
                 }
-            },
+            }
         };
         let is_ref = ast.types.is_reference(ty);
         let needs_dtor = !is_ref && self.destructed_class(ty).is_some();
@@ -1287,7 +1288,7 @@ impl<'a> Cg<'a> {
         let inline = self.var_is_inline(d) || instantiated.is_some();
         let quals = ast.types.effective_quals(ty);
         let constant =
-            ((quals.is_const() && !has_mutable(ty)) || is_ref) && !needs_ctor && !needs_dtor;
+            ((quals.is_const() && !has_mutable(ty)) || is_ref) && !needs_init && !needs_dtor;
         let align = self.global_align(ty);
         let name = self.m.global(g).name().to_owned();
         let comdat =
@@ -1309,8 +1310,8 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::External;
             gv.dso_local = true;
         }
-        if needs_ctor || needs_dtor {
-            self.emit_var_init_fn(d, g, needs_ctor)?;
+        if needs_init || needs_dtor {
+            self.emit_var_init_fn(d, g, needs_init)?;
         }
         Ok(())
     }
