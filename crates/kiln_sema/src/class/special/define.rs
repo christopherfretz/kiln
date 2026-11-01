@@ -45,6 +45,10 @@ pub(crate) struct SynthContext {
     pub kind: SynthKind,
     /// The use that required the definition.
     pub loc: Loc,
+    /// The instantiation frames already active when it was pushed: the
+    /// ones pushed later are inside it, so their notes print before its
+    /// own (clang keeps both kinds on one `CodeSynthesisContexts` stack).
+    pub inst_depth: usize,
 }
 
 /// What [`SynthContext::member`] is (clang `DefaultedFunctionKind`).
@@ -201,17 +205,17 @@ pub(crate) struct Saved {
 impl Sema<'_, '_> {
     // -- the code-synthesis context ----------------------------------------
 
-    /// Adds the notes of the implicit definitions in progress to `d`
-    /// (clang `PrintContextStack`): once per nesting depth, innermost
-    /// first, and not to notes or diagnostics that are not emitted.
-    pub(crate) fn with_synth_note(&self, d: Diag) -> Diag {
+    /// The notes of the implicit definitions in progress for `d` (clang
+    /// `PrintContextStack`): once per nesting depth, innermost first, and
+    /// none for notes or diagnostics that are not emitted.
+    pub(crate) fn synth_notes(&self, d: &Diag) -> Vec<Diag> {
         let n = self.synth.len();
         if n == 0 || self.synth_noted.get() == n {
-            return d;
+            return Vec::new();
         }
-        let Some(id) = d.id() else { return d };
+        let Some(id) = d.id() else { return Vec::new() };
         if !self.diags.is_enabled_at(id, d.loc()) {
-            return d;
+            return Vec::new();
         }
         let notes: Vec<Diag> = self
             .synth
@@ -241,11 +245,12 @@ impl Sema<'_, '_> {
             })
             .collect();
         self.synth_noted.set(n);
-        d.with_context_notes(notes)
+        notes
     }
 
     pub(crate) fn push_synth(&mut self, member: DeclId, kind: SynthKind, loc: Loc) -> Saved {
-        self.synth.push(SynthContext { member, kind, loc });
+        let inst_depth = self.inst.stack.len();
+        self.synth.push(SynthContext { member, kind, loc, inst_depth });
         let saved = Saved {
             ctx: self.ctx,
             func: self.func.take(),
@@ -306,6 +311,11 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        // clang: the exception specification is needed because the
+        // function is being defined (`ResolveExceptionSpec` before the
+        // definition's context note), so the default member initializers
+        // it instantiates note the exception-specification evaluation.
+        self.resolve_exception_spec(f, loc);
         let saved = self.push_synth(f, SynthKind::Special(kind), loc);
         let ok = match kind {
             SpecialKind::DefaultCtor => self.define_ctor(f, class, ImplicitInit::Default),
@@ -353,7 +363,14 @@ impl Sema<'_, '_> {
         iik: ImplicitInit,
         any_errors: bool,
     ) -> bool {
-        let loc = self.ast.decls.get(ctor).loc();
+        // clang `InstantiateFunctionDefinition` moves an instantiated
+        // member to its pattern's definition, so an out-of-line one
+        // locates the implicit initializations there.
+        let loc = self
+            .ast
+            .instantiated_from(ctor)
+            .and_then(|p| self.ast.definition(p))
+            .map_or_else(|| self.ast.decls.get(ctor).loc(), |d| self.ast.decls.get(d).loc());
         let mut info = InitInfo {
             ctor,
             iik,

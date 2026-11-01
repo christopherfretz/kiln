@@ -1089,10 +1089,18 @@ instantiate their members as usual
 - An NSDMI whose substitution fails makes its field invalid (clang
   `InstantiateInClassInitializer`), so a constructor or aggregate
   initialization that uses it reports nothing more (WP-220;
-  `default_member_init` returns `None` for an invalid field). As landed,
-  kiln still instantiates NSDMIs with the class, so the error's notes
-  name the class instantiation, not the initializer and the constructor
-  (`tests/conformance/class.mem/nsdmi-subst-failure.cpp`).
+  `default_member_init` returns `None` for an invalid field). The error's
+  notes are clang's (WP-238, `tests/conformance/class.mem/nsdmi-subst-failure.cpp`,
+  `nsdmi-lazy-context-notes.cpp`): the initializer's frame at the
+  constructor (an out-of-line instantiated constructor at its pattern's
+  definition, as clang `InstantiateFunctionDefinition` relocates it), then
+  the constructor's instantiation or the exception-specification
+  evaluation that needed it. An implicit special member's exception
+  specification is resolved before it is defined, so an implicit default
+  constructor's initializers are first instantiated by its exception
+  specification. Open: aggregate initialization keeps filling the
+  remaining fields after a failed initializer (clang stops at the first;
+  `init.rs` `field_filler`).
 
 ### 4.10 Alias templates
 
@@ -2722,6 +2730,17 @@ toward `-ftemplate-depth`. They are clang's `NonInstantiationEntries`.
   `DiagEngine::would_emit` first (spec/diag.md §7.4), so a dropped
   duplicate or an ignored warning does not set `last_emitted` and leave
   the next real error without its context.
+- kiln keeps the implicit-definition contexts (clang's "in implicit
+  default constructor for …", "in evaluation of exception specification
+  for … needed here": `Sema.synth`, `SynthContext`) apart from this
+  stack, with their own once-per-depth mark (`synth_noted`). clang has one
+  stack, so `Sema::emit` interleaves the two: each `SynthContext` records
+  the instantiation depth it was pushed at (`inst_depth`), and the
+  instantiation notes of frames pushed after the innermost one print
+  before the synthesis notes, the older ones after them (a default member
+  initializer instantiated while an exception specification is evaluated:
+  the initializer's note, then the specification's; WP-238,
+  tests/conformance/class.mem/nsdmi-lazy-context-notes.cpp).
 
 **Deduplication.** `Sema::emit` sets the diagnostic's dedup context to
 `InstantiationStack::context_key()`, a hash of every frame's `(kind,

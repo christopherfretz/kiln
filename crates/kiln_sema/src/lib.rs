@@ -635,6 +635,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 d = d.with_note(n);
             }
         }
+        let mut inst_notes = Vec::new();
         if !self.inst.stack.is_empty()
             && let Some(id) = d.id()
         {
@@ -655,10 +656,21 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             // Only a diagnostic that will print takes the context notes,
             // which print once per depth (§10.2).
             if self.diags.would_emit(&d) {
-                d.prepend_notes(self.inst_context_notes());
+                inst_notes = self.inst_context_notes();
             }
         }
-        let d = self.with_synth_note(d);
+        // The instantiations begun inside the innermost implicit
+        // definition print first, then the definitions, then the rest.
+        let synth_notes = self.synth_notes(&d);
+        let inner = self
+            .synth
+            .last()
+            .map_or(0, |c| self.inst.stack.len().saturating_sub(c.inst_depth))
+            .min(inst_notes.len());
+        let outer = inst_notes.split_off(inner);
+        inst_notes.extend(synth_notes);
+        inst_notes.extend(outer);
+        d.prepend_notes(inst_notes);
         d.emit(self.diags);
     }
 
