@@ -647,6 +647,18 @@ impl Cg<'_> {
                     self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0
                 }
             }
+            // clang `CK_BaseToDerived`: `GetAddressOfDerivedClass`, null-checked
+            // unless the operand is `this` (`ShouldNullCheckClassCastValue`).
+            CastKind::BaseToDerived => {
+                let p = self.emit_scalar(s)?;
+                let Some(derived) = ast.types.pointee(q).and_then(|t| ast.types.as_record(t))
+                else {
+                    return err(self.loc_of(e), "base-to-derived cast of a non-class pointer");
+                };
+                let off = self.derived_cast_offset(e, derived)?;
+                let null_check = !self.is_this_expr(s);
+                self.derived_ptr(p, off, null_check)
+            }
             // `__builtin_bit_cast` ([bit.cast]): the operand's bytes
             // loaded as the destination type (clang `EmitLoadOfLValue` of
             // the reinterpreted address).
@@ -1707,6 +1719,16 @@ impl Cg<'_> {
                     let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
                     let ty = self.mty(q);
                     Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
+                }
+                // clang `EmitCastLValue` `CK_BaseToDerived`: never null-checked.
+                CastKind::BaseToDerived => {
+                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                    let Some(derived) = ast.types.as_record(q) else {
+                        return err(self.loc_of(e), "base-to-derived cast of a non-class");
+                    };
+                    let off = self.derived_cast_offset(e, derived)?;
+                    let v = self.derived_ptr(lv.addr.v, off, false);
+                    Ok(self.ref_lvalue(v, q))
                 }
                 CastKind::Dynamic => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
