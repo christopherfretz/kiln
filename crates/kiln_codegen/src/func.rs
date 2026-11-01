@@ -649,6 +649,7 @@ impl Cg<'_> {
                 let q = self.f.sig.as_ref().map(|g| g.ret);
                 if let (Some(q), Some(slot)) = (q, self.f.ret_slot)
                     && !self.is_aggregate(q)
+                    && !self.is_atomic_aggregate(q)
                     && !matches!(self.ast.types.canonical_view(q), TypeView::Complex(_))
                     && self.f.fir.cur().is_some()
                 {
@@ -918,7 +919,7 @@ impl Cg<'_> {
         loc: Option<Loc>,
     ) -> R<ParamVal> {
         let mt = self.mty(pq);
-        let agg = self.is_aggregate(pq);
+        let agg = self.is_aggregate(pq) || self.is_atomic_aggregate(pq);
         match kind {
             ArgKind::Ignore => {
                 if agg {

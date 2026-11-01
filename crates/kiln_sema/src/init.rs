@@ -442,7 +442,7 @@ impl Sema<'_, '_> {
     /// type `T` or derived from `T` (clang `InitializeFrom`
     /// `NeedAtomicConversion`): `T` is initialized from `e`, then
     /// converted by `NonAtomicToAtomic` (WP-165).
-    fn atomic_class_init(
+    pub(crate) fn atomic_class_init(
         &mut self,
         ty: QualType,
         e: ExprId,

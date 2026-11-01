@@ -2308,7 +2308,7 @@ impl Cg<'_> {
             let v = if self.referee(sig.params[i]).is_some() {
                 // A reference parameter binds the argument glvalue.
                 CallArg::Scalar(self.emit_lvalue(a)?.addr.v)
-            } else if self.is_aggregate(arg_tys[i]) {
+            } else if self.is_aggregate(arg_tys[i]) || self.is_atomic_aggregate(arg_tys[i]) {
                 let t = self.temp(arg_tys[i]);
                 let saved = std::mem::take(&mut self.f.dest_destructed);
                 let r = self.emit_agg(a, t, false);
@@ -2417,6 +2417,7 @@ impl Cg<'_> {
             // clang `convertTempToRValue`: a scalar returned indirectly
             // (a vector wider than the registers) is loaded back.
             if !self.is_aggregate(rq)
+                && !self.is_atomic_aggregate(rq)
                 && !matches!(
                     self.ast.types.canonical_view(rq),
                     kiln_ast::types::TypeView::Complex(_)
@@ -2429,7 +2430,7 @@ impl Cg<'_> {
         if rty == LTy::VOID {
             return Ok(None);
         }
-        if self.is_aggregate(rq) {
+        if self.is_aggregate(rq) || self.is_atomic_aggregate(rq) {
             // clang `EmitCall`: a given destination takes the data size
             // (`getTypeInfoDataSizeInChars`; it may be a base subobject or
             // a `[[no_unique_address]]` member whose tail padding holds

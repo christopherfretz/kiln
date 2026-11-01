@@ -314,7 +314,7 @@ impl Cg<'_> {
                 let p = self.emit_ref_binding(e)?;
                 let slot = self.f.ret_slot.expect("return slot");
                 self.store(p, slot.v, slot.align, false);
-            } else if self.is_aggregate(q) {
+            } else if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
                 let slot = self.f.ret_slot.expect("return slot");
                 self.emit_agg_slot(e, slot, false, false)?;
             } else {

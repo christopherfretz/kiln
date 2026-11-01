@@ -968,6 +968,14 @@ clang 19 `CGAtomic` at -O0, mirrored:
   then stores or extends as if it were the `i1` value. Where the value
   must meet an `i1` (a conditional operator's `phi`) clang 19 emits
   invalid IR; kiln reports an IR lowering error there.
+- **`_Atomic` aggregates in calls (WP-183).** `_Atomic(T)` with `T` an
+  aggregate is evaluated as an aggregate (`is_atomic_aggregate`, clang's
+  `getEvaluationKind`) for a `return` operand, a parameter, an argument
+  and a call result, and is an aggregate for the ABI (kiln_abi
+  `is_aggregate`, clang's `isAggregateTypeForABI`): x86-64 classifies it
+  `MEMORY` (`sret`/`byval`), AArch64 as an integer-coerced or indirect
+  composite. An `EmitAtomicInit` from an `_Atomic` aggregate initializer
+  (a call result) writes the whole atomic object, unprojected.
 - **Floating `min`/`max_fetch` (WP-165), a deviation:** clang 19 compares
   the old value and the operand with an `icmp` (invalid IR); kiln yields
   `llvm.minnum` / `llvm.maxnum` of the two, the value `atomicrmw fmin` /

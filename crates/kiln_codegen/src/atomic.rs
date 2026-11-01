@@ -800,7 +800,7 @@ impl Cg<'_> {
         };
         if self.is_aggregate(vq) {
             if ast.types.as_atomic(ast.exprs.get(init).ty()).is_some() {
-                return self.emit_agg(init, Addr { ty: vty, ..lv.addr }, false);
+                return self.emit_agg(init, lv.addr, false);
             }
             if padded {
                 self.memset(lv.addr, 0, asize, false);

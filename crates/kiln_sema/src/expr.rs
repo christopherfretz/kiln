@@ -550,6 +550,13 @@ impl Sema<'_, '_> {
             let to = if self.ast.types.is_reference(ty) { ty } else { conv::strip_cv(self, ty) };
             return self.init_list_entity(to, &l, l.lbrace, ctx, None);
         }
+        // `_Atomic(T)` from a `T` of class type: `T` is initialized, then
+        // made atomic (a `return` or argument; WP-183).
+        if self.ast.types.as_atomic(ty).is_some()
+            && let Some(x) = self.atomic_class_init(ty, e, ctx, self.begin_loc(e))
+        {
+            return x;
+        }
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
             Err(err) => {
