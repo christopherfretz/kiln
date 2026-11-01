@@ -690,9 +690,12 @@ specification as written (`TypeNames` prints ` noexcept`,
     conflicts with declaration already in scope`, with notes at the
     target and the conflicting declaration; no shadow is made.
   - A later declaration that conflicts with a shadow
-    (`check_using_shadow_conflict`, from variable, function and typedef
-    declarations) reports `declaration conflicts with target of using
-    declaration already in scope`, and is marked invalid.
+    (`check_using_shadow_conflict`, from variable, function, typedef
+    and tag declarations, including operator, literal-operator and
+    conversion function names, WP-146) reports `declaration conflicts with
+    target of using declaration already in scope`, and is marked invalid;
+    in a class a member function instead hides the shadow
+    ([namespace.udecl]/14, `Decls::hidden_shadow`).
   - Repeating a using-declaration of the same entity is allowed; the new
     shadow redeclares the old one.
 - **Class scope:** kiln has no base classes yet (M3), so every

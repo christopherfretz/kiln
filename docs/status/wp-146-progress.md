@@ -16,7 +16,7 @@ green (`.build/ci-wp146.log` in the helper repo).
    through their inherited constructors; every other subobject is checked
    for a deleted or inaccessible default constructor or destructor; reference
    and const members must be initialized. A use is diagnosed with
-   `sema_deleted_inherited_ctor_use` (`class/special/define.rs:997`) and the
+   `sema_deleted_inherited_ctor_use` (`class/special/define.rs:1009`) and the
    "constructor inherited by" notes. `ctor_select.rs` reports the
    constructor as deleted, so `__is_constructible` is false.
    Test: `class.inhctor.init/deleted.cpp`.
@@ -64,7 +64,7 @@ green (`.build/ci-wp146.log` in the helper repo).
    expression. The Oven traps first with clang's `CheckLiteralType` note:
    `oven/compile/class.rs` `construct` calls `:515` `has_virtual_bases`.
    Test: `class.inhctor.init/constexpr-vbase.cpp`.
-6. [x] **"Non-literal type" for constexpr variables.** `sema/decl.rs:3086`
+6. [x] **"Non-literal type" for constexpr variables.** `sema/decl.rs:3100`
    `constexpr_var_virtual_base` emits clang's `RequireLiteralType` error and
    notes, one per virtual base in vbases() order, for a class or an array of
    one. Same test as item 5.
