@@ -492,6 +492,9 @@ impl Sema<'_, '_> {
         let e = *e;
         if !designator.is_empty()
             || self.ast.types.as_record(ty).is_some()
+            // `_Atomic(T)` from a `T` of class type is `atomic_class_init`
+            // (WP-165), not a conversion function call.
+            || self.ast.types.as_atomic(ty).is_some()
             || self.ast.types.is_reference(ty)
             || self.ast.types.is_array(ty)
             || self.ast.types.is_dependent(ty)
