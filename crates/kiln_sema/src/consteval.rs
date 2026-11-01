@@ -596,8 +596,15 @@ impl Sema<'_, '_> {
                 )
                 .with_note(self.diag(DiagId::note_declared_at, begin));
         }
+        // clang names the reason for a generic lambda's call operator
+        // specialization, not for a non-template call operator.
+        let plain_call_op = self.is_lambda_call_op(f)
+            && !matches!(
+                self.ast.templ_link(self.ast.first(f)).get(),
+                Some((kiln_ast::decl::TemplLinkKind::Specialization, _))
+            );
         if !consteval
-            && !self.is_lambda_call_op(f)
+            && !plain_call_op
             && let Some(why) = self.imm.reasons.get(&f).copied()
         {
             // A constructor is named by its class's unqualified name.
@@ -617,7 +624,7 @@ impl Sema<'_, '_> {
                     .arg(u8::from(!why.written)),
                 None => self
                     .diag(DiagId::note_immediate_function_reason, why.loc)
-                    .arg(name(f))
+                    .arg(if self.is_lambda_call_op(f) { self.unqualified_decl_name(f) } else { name(f) })
                     .arg(u8::from(why.call))
                     .arg(u8::from(self.is_consteval_kind(why.callee)))
                     .arg(name(why.callee))
