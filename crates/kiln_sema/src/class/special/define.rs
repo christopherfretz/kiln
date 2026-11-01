@@ -640,11 +640,11 @@ impl Sema<'_, '_> {
         ctor: DeclId,
         loc: Loc,
     ) -> Option<ExprId> {
+        if self.ast.decls.get(field).has(DeclFlags::INVALID) {
+            return None;
+        }
         if self.ast.decls.field(field).and_then(|x| x.init).is_none() {
-            // todo(WP-067b): clang's `default member initializer for 'x'
-            // needed within definition of enclosing class` (the
-            // initializer is not parsed yet).
-            self.unsupported("a default member initializer used before it is parsed", loc);
+            self.default_member_init_not_yet_parsed(field, loc);
             return None;
         }
         let fty = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
@@ -659,6 +659,31 @@ impl Sema<'_, '_> {
         let e = self.builder().default_init(field, ctor, ty, vk, loc);
         self.note_default_init_use(e, field, loc, ctor);
         Some(e)
+    }
+
+    /// clang `BuildCXXDefaultInitExpr` for an initializer not parsed yet
+    /// (it is parsed at the end of the outermost enclosing class,
+    /// [class.mem.general]/8): diagnosed at `loc` with the outermost
+    /// lexically enclosing class, the note at the field's name; the field
+    /// becomes invalid outside a SFINAE context so later uses are quiet.
+    fn default_member_init_not_yet_parsed(&mut self, field: DeclId, loc: Loc) {
+        let mut outer = self.ast.decls.get(field).ctx();
+        while let Some(c) = outer
+            && let Some(p) = self.ast.decls.lexical_ctx(c)
+            && self.kind_of(p) == DeclKind::CXXRecord
+        {
+            outer = Some(p);
+        }
+        let class = outer.map(|c| self.decl_arg(c)).unwrap_or_default();
+        let name = self.decl_arg(field);
+        let at = self.ast.decls.get(field).loc();
+        let note = self.diag(DiagId::note_default_member_init_not_yet_parsed, at);
+        let d =
+            self.diag(DiagId::sema_default_member_init_not_yet_parsed, loc).arg(class).arg(name);
+        self.emit(d.with_note(note));
+        if !self.inst.stack.is_sfinae() {
+            self.ast.decls.set_flags(field, DeclFlags::INVALID);
+        }
     }
 
     /// A reference to the first parameter of the special member being

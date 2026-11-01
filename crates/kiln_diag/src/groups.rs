@@ -77,7 +77,7 @@ diag_groups! {
     VecElemSize = "vec-elem-size" [];
     EnumConstexprConversion = "enum-constexpr-conversion" [];
     ConstantEvaluated = "constant-evaluated" [];
-    Unused = "unused" [UnusedValue, UnusedVariable];
+    Unused = "unused" [UnusedValue, UnusedVariable, UnusedButSetVariable];
     UnusedValue = "unused-value" [UnusedComparison, UnusedResult];
     UnusedComparison = "unused-comparison" [];
     UnusedResult = "unused-result" [];
@@ -201,7 +201,7 @@ diag_groups! {
     AtomicMemoryOrdering = "atomic-memory-ordering" [];
     // ----- WP-177 (implicit conversion warnings)
     LiteralConversion = "literal-conversion" [];
-    Conversion = "conversion" [LiteralConversion];
+    Conversion = "conversion" [LiteralConversion, ConstantConversion];
     // ----- WP-192 (designated initializers)
     ReorderInitList = "reorder-init-list" [];
     C99Designator = "c99-designator" [];
@@ -212,7 +212,7 @@ diag_groups! {
     Cxx17AttributeExtensions = "c++17-attribute-extensions" [];
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
     AddressOfPackedMember = "address-of-packed-member" [];
-    UnusedVariable = "unused-variable" [];
+    UnusedVariable = "unused-variable" [UnusedConstVariable];
     // ----- WP-193 (GNU designators)
     GnuDesignator = "gnu-designator" [];
     // ----- WP-219 (switch coverage, typeid, the GNU umbrella)
@@ -224,6 +224,20 @@ diag_groups! {
     PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
     GnuPointerArith = "gnu-pointer-arith" [];
     VlaExtension = "vla-extension" [VlaCxxExtension];
+    Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
+    // ----- WP-191 (vexing parse, null dereference, empty body)
+    RedundantParens = "redundant-parens" [];
+    NullDereference = "null-dereference" [];
+    EmptyBody = "empty-body" [];
+    // ----- WP-217 (unused / fallthrough / constant-conversion warnings)
+    UnusedButSetVariable = "unused-but-set-variable" [];
+    UnusedConstVariable = "unused-const-variable" [];
+    UnusedExceptionParameter = "unused-exception-parameter" [];
+    ConstantConversion = "constant-conversion" [];
+    ImplicitFallthrough = "implicit-fallthrough" [];
+    UnreachableCodeFallthrough = "unreachable-code-fallthrough" [];
+    UnreachableCode = "unreachable-code" [UnreachableCodeFallthrough];
+    UnreachableCodeAggressive = "unreachable-code-aggressive" [UnreachableCode];
     Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
 }
 

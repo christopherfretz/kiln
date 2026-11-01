@@ -519,11 +519,11 @@ fn dcl_mptr_template_id_qualifier_disambiguation() {
          }\n",
     );
     p.assert_clean();
-    p.assert_dump("VarDecl referenced p1 'I X<T>::*'");
-    p.assert_dump("VarDecl referenced p2 'I X<T>::Y::*'");
-    p.assert_dump("VarDecl referenced p3 'I X<T>::*'");
-    p.assert_dump("VarDecl referenced p4 'I N::Z<T>::*'");
+    p.assert_dump("VarDecl referenced p1 'I (X<T>::*)'");
+    p.assert_dump("VarDecl referenced p2 'I (X<T>::Y::*)'");
+    p.assert_dump("VarDecl referenced p3 'I (X<T>::*)'");
+    p.assert_dump("VarDecl referenced p4 'I (N::Z<T>::*)'");
     p.assert_dump("VarDecl referenced p5 ");
-    p.assert_dump("sizeof 'I X<T>::*'");
+    p.assert_dump("sizeof 'I (X<T>::*)'");
     p.assert_dump("BinaryOperator 'bool' '>'");
 }

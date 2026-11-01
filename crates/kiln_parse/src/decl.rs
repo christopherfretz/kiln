@@ -1492,9 +1492,10 @@ impl Parser<'_, '_> {
             let open = self.bump().span.lo;
             self.skip_attributes();
             self.parse_declarator(d);
-            self.expect_closing(Punct::RParen, Punct::LParen, open);
+            let close = self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
             d.outer_paren = Some((d.chunks.len(), open));
+            d.parens.push((d.chunks.len(), open, close));
             self.discard_prohibited_cxx11_attrs();
         } else if self.at_kw(Kw::Operator)
             && d.ctx != DeclaratorContext::TypeName
@@ -2156,7 +2157,6 @@ impl Parser<'_, '_> {
             return decls;
         }
         let mut base_ty: Option<QualType> = None;
-        let mut first = true;
         let direct_init = Self::may_have_direct_init(ctx, ds.storage);
         // [dcl.spec.auto.general]/3, /8: checked at the end of the group.
         let mut group = AutoGroup::default();
@@ -2207,7 +2207,7 @@ impl Parser<'_, '_> {
             // A function definition has no asm label: after one, `{` is
             // an initializer (clang's order of checks:
             // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
-            if first && d.is_function_declarator() && d.asm_label.is_none() {
+            if declarators == 0 && d.is_function_declarator() && d.asm_label.is_none() {
                 if allow_fn_def && self.at_function_definition_start() {
                     self.parse_function_definition_after_declarator(
                         &ds, base, &d, &mut decls, level,
@@ -2220,7 +2220,7 @@ impl Parser<'_, '_> {
                     return decls;
                 }
             }
-            first = false;
+            d.after_comma = declarators > 0;
             d.init_style = self.init_style_here();
             let v = self.s.act_on_declarator(&ds, base, &d);
             self.s.end_delayed_access_to(level, v);

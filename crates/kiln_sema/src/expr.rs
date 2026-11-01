@@ -469,6 +469,17 @@ impl Sema<'_, '_> {
         self.act_on_full_expr_at(e, cc)
     }
 
+    /// [`Sema::act_on_full_expr`] of a constant-expression
+    /// ([expr.const]/22: a `static_assert` condition, an array bound, a
+    /// bit-field width, an enumerator value, a `case` value, an alignment,
+    /// a template argument).
+    pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
+        self.constant_full_expr += 1;
+        let r = self.act_on_full_expr(e);
+        self.constant_full_expr -= 1;
+        r
+    }
+
     /// [`Sema::act_on_full_expr`] with conversion context `cc` for the
     /// implicit-conversion warnings (clang's `CheckCompletedExpr`
     /// location: the declared variable, `return`).
@@ -743,6 +754,14 @@ impl Sema<'_, '_> {
             }
         } else {
             d = d.range(self.expr_range(e));
+        }
+        // clang rebuilds every expression statement and for-increment of
+        // an instantiation (`TransformExprStmt` → `ActOnExprStmt`), so a
+        // non-dependent one warns again with the instantiation's notes,
+        // not deduplicated against the template definition's warning.
+        // The comma's left operand is checked only as the comma is built.
+        if !comma && !self.inst.stack.is_empty() {
+            d = d.allow_duplicate();
         }
         if let Some(n) = note {
             // The fix-it's range (clang `FixItHint::CreateReplacement` of
@@ -1670,6 +1689,7 @@ impl Sema<'_, '_> {
         }
         if n.kind() == DeclKind::Var {
             self.note_var_referenced(d, loc);
+            self.count_var_ref(d);
         }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
@@ -2446,6 +2466,7 @@ impl Sema<'_, '_> {
             _ if op.is_compound_assignment() => self.compound_assign(op, l, r, loc),
             BinaryOp::Comma => {
                 self.diagnose_comma_lhs(l);
+                self.discard_assignment_ref(l);
                 let ty = self.ety(r);
                 let res = self.builder().binary(op, l, r, ty, loc);
                 self.mark_bitfield_if(res, r);
@@ -2564,6 +2585,7 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_null_indirection(l);
         let lt = self.ety(l);
         let to = conv::strip_cv(self, lt);
         let conv = match conv::atomic_class_assign(self, to, r) {
@@ -2653,6 +2675,7 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_null_indirection(l);
         // [expr.ass]/6: the result `E1 op E2` is assigned back to `E1`. An
         // arithmetic computation type converts implicitly to any arithmetic
         // left type, but not to an unscoped enumeration ([conv.prom]/3
@@ -4295,6 +4318,7 @@ impl Sema<'_, '_> {
                 if self.check_builtin_fn_use(e) {
                     return self.recover(ty, &[e], loc);
                 }
+                self.discard_assignment_ref(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             return self.bad_cast(style, e, ty, loc);

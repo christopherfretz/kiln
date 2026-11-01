@@ -91,6 +91,9 @@ pub enum TypeView {
     Enum(DeclId),
     /// The type of an `UnresolvedUsingTypename` declaration (WP-179).
     UnresolvedUsing(DeclId),
+    /// Declarator parentheses around the inner type (clang's
+    /// `ParenType`, WP-191).
+    Paren(QualType),
     Complex(QualType),
     Atomic(QualType),
     Vector {
@@ -610,6 +613,7 @@ impl TypeContext {
             K::Record => TypeView::Record(d(n.data)),
             K::Enum => TypeView::Enum(d(n.data)),
             K::UnresolvedUsing => TypeView::UnresolvedUsing(d(n.data)),
+            K::Paren => TypeView::Paren(q(n.data)),
             K::Complex => TypeView::Complex(q(n.data)),
             K::Atomic => TypeView::Atomic(q(n.data)),
             K::Vector => {
@@ -949,7 +953,7 @@ impl TypeContext {
             TypeView::Typedef { underlying, .. } | TypeView::Using { underlying, .. } => {
                 add(underlying)
             }
-            TypeView::Elaborated { named, .. } => add(named),
+            TypeView::Elaborated { named, .. } | TypeView::Paren(named) => add(named),
             TypeView::QualifiedArray { .. } => self.canonical(q),
             TypeView::SubstTemplateTypeParm { replacement, .. } => add(replacement),
             TypeView::TemplateSpecialization { underlying: Some(u), .. } => add(u),

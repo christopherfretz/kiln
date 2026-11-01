@@ -24,12 +24,14 @@ pub mod conv;
 pub mod decl;
 pub mod declspec;
 mod deduce;
+mod empty_body;
 pub mod except;
 pub mod expr;
 mod fallthrough;
 mod forms;
 mod gnu;
 mod impcast;
+mod implicit_fallthrough;
 pub mod init;
 mod jump_scope;
 pub mod lambda;
@@ -38,10 +40,12 @@ mod literal_op;
 pub mod lookup;
 pub mod names;
 pub mod new_delete;
+mod null_deref;
 mod oven_bridge;
 pub mod overload;
 mod packed;
 mod predefined;
+mod qualified_decl;
 mod range_for;
 mod rtti;
 pub mod scope;
@@ -56,10 +60,12 @@ pub mod target;
 pub mod templ;
 mod try_stmt;
 mod type_diff;
+mod unused_file_scope;
 mod unused_var;
 pub mod using;
 mod vector;
 mod vector_ops;
+mod vexing;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
@@ -73,6 +79,7 @@ pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
     ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
+pub use empty_body::EmptyBodyStmt;
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
@@ -129,6 +136,12 @@ pub struct Sema<'a, 'sm> {
     /// Depth of immediate function contexts ([expr.const]/16) entered
     /// by `if consteval`.
     pub(crate) immediate: u32,
+    /// Depth of [`Sema::act_on_constant_full_expr`]: the full-expression
+    /// ending is a manifestly constant-evaluated constant-expression (no
+    /// runtime-behavior warnings, clang's `ConstantEvaluated` context).
+    pub(crate) constant_full_expr: u32,
+    /// The language standard (set by the parser; spellings in notes).
+    pub(crate) std: kiln_lex::Std,
     /// `DeclRefExpr`s of the current full-expression that are potential
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
@@ -174,6 +187,11 @@ pub struct Sema<'a, 'sm> {
     /// decomposition declared in a template, which instantiation
     /// deduces anew (the pattern's own may be deduced, spec/sema.md).
     pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
+    /// clang `RefsMinusAssignments`: per local variable, its references
+    /// minus those that are the target of a discarded assignment, and
+    /// whether it is a condition variable (clang `isCXXCondDecl`)
+    /// (`-Wunused-but-set-variable`, [`Self::diagnose_unused_locals`]).
+    pub(crate) refs_minus_assign: std::collections::HashMap<DeclId, (i32, bool)>,
     /// The declared (placeholder) return type of each function whose
     /// return type was deduced, by first declaration: redeclarations are
     /// matched against it ([dcl.spec.auto.general]/13).
@@ -185,6 +203,10 @@ pub struct Sema<'a, 'sm> {
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Loops whose body is a same-line null statement, awaiting their
+    /// enclosing compound statement (`-Wempty-body`, WP-191).
+    pub(crate) empty_loop_bodies:
+        kiln_source::fx::FxHashMap<kiln_ast::StmtId, (EmptyBodyStmt, Loc)>,
     /// The declared placeholder type and decl-specifiers' type location
     /// of each variable of a multi-declarator group in a template
     /// pattern: instantiation checks the group's deductions again
@@ -421,6 +443,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unevaluated: 0,
             decltype_calls: Vec::new(),
             immediate: 0,
+            constant_full_expr: 0,
+            std: kiln_lex::Std::Cxx26,
             pending_odr: Vec::new(),
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
@@ -434,9 +458,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declarator_records: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
             decomp_written: std::collections::HashMap::new(),
+            refs_minus_assign: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             constinit_locs: kiln_source::fx::FxHashMap::default(),
+            empty_loop_bodies: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             reverse_using_shadows: false,

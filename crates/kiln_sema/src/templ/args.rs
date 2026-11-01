@@ -303,8 +303,14 @@ impl Sema<'_, '_> {
                         DeclKind::ClassTemplate
                         | DeclKind::TypeAliasTemplate
                         | DeclKind::TemplateTemplateParm,
-                    )
-                    | None => Ok(a),
+                    ) => {
+                        let d = self.ast.types.template_decl(n);
+                        if d.is_some_and(|d| !self.check_template_template_arg(p, d, at)) {
+                            return Err(());
+                        }
+                        Ok(a)
+                    }
+                    None => Ok(a),
                     Some(_) => {
                         self.error(DiagId::sema_template_arg_must_be_template, at);
                         Err(())
@@ -468,7 +474,7 @@ impl Sema<'_, '_> {
                 return Err(());
             }
         };
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         match self.eval_const(c, EvalContext::converted(at)) {
             Ok(v) => {
                 // Integral values are re-interned at the canonical type so

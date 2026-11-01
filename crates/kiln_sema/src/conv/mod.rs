@@ -253,6 +253,8 @@ pub fn lvalue_to_rvalue(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     {
         return e;
     }
+    s.check_null_indirection(e);
+    let types = &s.ast.types;
     let to = strip_cv(s, t);
     let ck = if types.builtin(t) == Some(kiln_ast::types::BuiltinType::NullPtr) {
         CastKind::NullToPointer
@@ -849,6 +851,8 @@ fn bind_reference(
         }
         return Err(unsupported("binding a reference to a temporary"));
     }
+    // A direct binding (clang `SK_BindReference`).
+    s.check_null_reference_binding(e);
     let out_vk = vk;
     let target = strip_cv(s, referee);
     let target = s.ast.types.qualify(target, rq);
