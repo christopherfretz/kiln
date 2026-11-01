@@ -2504,21 +2504,46 @@ impl Sema<'_, '_> {
             None
         } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
             // A friend of a templated class redeclares nothing until
-            // instantiated (see `is_dependent_friend_fn`).
+            // instantiated (see `is_dependent_friend_fn`); a non-dependent
+            // one is checked against the using-declarators now (clang).
+            if new_fn.head.is_none() && !self.ast.types.is_dependent(ty) {
+                let shadows: Vec<DeclId> = self
+                    .ast
+                    .lookup_local(ctx, dname)
+                    .iter_with_inline()
+                    .filter(|&(x, via_inline)| !via_inline && self.kind_of(x) == DeclKind::UsingShadow)
+                    .map(|(x, _)| x)
+                    .collect();
+                invalid_redecl |= self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
+            }
             None
         } else if friend && d.qualifier.is_none() {
             // Redeclaration lookup in the namespace sees hidden friends,
             // but not the members of its inline namespaces: those are in
             // other scopes ([dcl.meaning.general]/2.3, [namespace.memdef]/3;
             // clang's `FilterLookupForScope` without `AllowInlineNamespace`).
-            let found: Vec<DeclId> = self
+            let mut found: Vec<DeclId> = self
                 .ast
                 .lookup_local(ctx, dname)
                 .iter_with_inline()
                 .filter(|&(d, via_inline)| !via_inline && !self.is_dependent_friend_fn(d))
                 .map(|(d, _)| d)
                 .collect();
-            self.pick_prev_function(&found, new_fn)
+            // A using-declarator of the namespace is not redeclared: the
+            // friend overloads its target, or, corresponding to it, cannot
+            // befriend it ([namespace.udecl]/10, [basic.scope.scope]/4;
+            // clang `err_using_decl_friend`).
+            let shadows: Vec<DeclId> = found
+                .iter()
+                .copied()
+                .filter(|&x| self.kind_of(x) == DeclKind::UsingShadow)
+                .collect();
+            found.retain(|&x| self.kind_of(x) != DeclKind::UsingShadow);
+            let prev = self.pick_prev_function(&found, new_fn);
+            if prev.is_none() {
+                invalid_redecl |= self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
+            }
+            prev
         } else if method {
             let found = self.prev_candidates_dn(dname, d.qualifier);
             self.pick_prev_function(&found, new_fn)
@@ -4312,6 +4337,36 @@ impl Sema<'_, '_> {
         };
         self.ast.decls.get(f).misc().friend() != FriendKind::None
             && self.in_templated_class(self.ast.decls.lexical_ctx(f))
+    }
+
+    /// [namespace.udecl]/10: an unqualified friend function (template)
+    /// `new` that corresponds to the target of one of the namespace's
+    /// using-declarators `shadows` would redeclare it: "cannot befriend
+    /// target of using declaration" at `loc` (clang). Returns whether it
+    /// was reported.
+    fn friend_befriends_using_target(&mut self, shadows: &[DeclId], new: NewFn, loc: Loc) -> bool {
+        for &s in shadows.iter().rev() {
+            let t = self.ast.strip_shadow(s);
+            let corresponds = match self.kind_of(t) {
+                DeclKind::FunctionTemplate => {
+                    let head = self.ast.template_info(t).map(|i| i.params);
+                    self.pattern_of(t).is_some_and(|p| self.fn_corresponds(p, head, new))
+                }
+                k if k.payload() == kiln_ast::decl::PayloadClass::Function => {
+                    self.fn_corresponds(t, None, new)
+                }
+                _ => false,
+            };
+            if corresponds {
+                let msg = self
+                    .diag(DiagId::sema_using_decl_friend, loc)
+                    .with_note(self.diag(DiagId::note_using_decl_target, self.ast.decls.get(t).loc()))
+                    .with_note(self.diag(DiagId::note_using_decl, self.ast.decls.get(s).loc()));
+                self.emit(msg);
+                return true;
+            }
+        }
+        false
     }
 
     /// True if lexical context `cur` is, or is nested in, a class template

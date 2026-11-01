@@ -1161,6 +1161,19 @@ specification as written (`TypeNames` prints ` noexcept`,
     target of using declaration already in scope`, and is marked invalid;
     in a class a member function instead hides the shadow
     ([namespace.udecl]/14, `Decls::hidden_shadow`).
+  - An unqualified friend function (template) in a class of a namespace
+    with a using-declarator of that name does not redeclare the shadow
+    (redeclaration lookup skips it): a friend that does not correspond to
+    the target overloads it as a hidden friend; one that corresponds
+    ([basic.scope.scope]/4, `fn_corresponds`) would redeclare the target
+    and reports `cannot befriend target of using declaration` with notes
+    at the target and the using-declarator, and is marked invalid
+    (clang `err_using_decl_friend`; `friend_befriends_using_target`). In
+    a templated class a friend that is neither a template nor of
+    dependent type is checked at definition, any other when instantiated
+    (WP-273; `namespace.udecl/hidden-friend-overloads-using-target.cpp`,
+    `friend-befriends-using-target.cpp`,
+    `libstdcxx-hidden-friend-vs-using.cpp`).
   - Repeating a using-declaration of the same entity is allowed; the new
     shadow redeclares the old one.
 - **Class scope:** kiln has no base classes yet (M3), so every

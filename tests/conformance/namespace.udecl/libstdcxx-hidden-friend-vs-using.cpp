@@ -5,7 +5,6 @@
 // <stop_token>, <thread>, 7 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): redefinition of 'swap' as different kind of symbol
 namespace std {
 namespace ep {
   struct exception_ptr { int p = 0; };
