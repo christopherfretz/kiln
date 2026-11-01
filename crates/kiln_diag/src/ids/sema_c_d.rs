@@ -49,6 +49,7 @@ sema_conditional_vector_mismatched = Error (2) "vector operands to the vector co
 sema_conditional_vector_operand_type = Error (1) "enumeration type {0} is not allowed in a vector conditional";
 sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
 sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
+sema_conflicting_types = Error (1) "conflicting types for '{0}'";
 sema_const_member_assign = Error (1) "cannot assign to non-static data member within const member function '{0}'";
 sema_constant_conversion = Warning [ConstantConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
 sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant integer";

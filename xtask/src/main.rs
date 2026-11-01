@@ -6,6 +6,7 @@ use std::process::ExitCode;
 mod bench;
 mod clang_ast;
 mod diag_split;
+mod features;
 mod gen_pp;
 mod jobs;
 mod libcxx;
@@ -35,6 +36,9 @@ commands:
   libcxx      run libc++'s own tests (llvmorg-19.1.7 libcxx/test; --tag picks another
               checkout) with kiln; --gate m3 is the M3 gate; not part of ci (`cargo xtask libcxx --help`; contract
               in spec/libcxx.md; needs scripts/fetch-libcxx-tests.sh)
+  features    check docs/status/cxx-features.md: done rows name passing tests and
+              kiln's __cpp_* values match clang 22's; an M4-gate check, not part of
+              ci (`cargo xtask features --help`; spec/harness.md \"Feature table\")
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
   ci          the merge gate: diag-split --check, fmt --check, clippy -D warnings, cargo test, then the
@@ -59,6 +63,7 @@ fn main() -> ExitCode {
         Some("diag-split") => diag_split::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("libcxx") => libcxx::main(args),
+        Some("features") => features::main(args),
         Some("stress") => stress(args),
         Some("jobserver") => jobs::main(args),
         Some("ci") => ci(args),
