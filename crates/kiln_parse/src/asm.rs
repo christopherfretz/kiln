@@ -82,6 +82,7 @@ impl Parser<'_, '_> {
         let mut outputs = Vec::new();
         let mut inputs = Vec::new();
         let mut clobbers = Vec::new();
+        let mut labels = Vec::new();
         if self.at(Punct::RParen) {
             bits |= asm_bits::BASIC;
         } else {
@@ -123,20 +124,43 @@ impl Parser<'_, '_> {
                     }
                 }
             }
-            if bits & asm_bits::GOTO != 0 {
-                self.unsupported("'asm goto'", loc);
+            let goto = bits & asm_bits::GOTO != 0;
+            if !goto && (!self.at(Punct::RParen) || extra) {
+                let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("')'");
+                self.emit(d);
                 self.skip_asm_rest();
                 return None;
             }
-            if !self.at(Punct::RParen) || extra {
-                let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("')'");
+            // `asm goto` labels (clang `ParseAsmStatement`: each is looked
+            // up or created as a label of the function).
+            if extra || self.at(Punct::Colon) {
+                if !extra {
+                    self.bump();
+                }
+                loop {
+                    let Some(name) = self.ident() else {
+                        let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+                        self.emit(d);
+                        self.skip_asm_rest();
+                        return None;
+                    };
+                    let at = self.bump().span.lo;
+                    labels.push((self.s.act_on_asm_goto_label(name, at), at));
+                    if self.eat(Punct::Comma).is_none() {
+                        break;
+                    }
+                }
+            } else if goto {
+                let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("':'");
                 self.emit(d);
                 self.skip_asm_rest();
                 return None;
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
-        let s = self.s.act_on_gcc_asm_stmt(loc, bits, string, &outputs, &inputs, &clobbers, rparen);
+        let s = self.s.act_on_gcc_asm_goto_stmt(
+            loc, bits, string, &outputs, &inputs, &clobbers, &labels, rparen,
+        );
         if self.eat(Punct::Semi).is_none() {
             let d =
                 self.s.diag(DiagId::parse_expected_semi_after_stmt, self.expected_loc()).arg("asm");

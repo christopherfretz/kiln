@@ -560,7 +560,8 @@ pub struct AsmOperandCounts<'a> {
     pub inputs: u32,
     /// `asm goto` labels.
     pub labels: u32,
-    /// The symbolic names of the outputs then inputs (`""` for none).
+    /// The symbolic names of the outputs, inputs then labels (`""` for
+    /// none).
     pub names: &'a [&'a str],
 }
 
@@ -583,7 +584,10 @@ fn named_operand(
         return Err((AsmStringError::UnknownName, *p as u32));
     };
     *p += len + 1;
-    Ok(n as u32)
+    // A label is numbered after the "+" operands' input halves too
+    // (clang's `getNamedOperand`, as LLVM numbers `callbr` operands).
+    let n = n as u32;
+    Ok(if n >= ops.outputs + ops.inputs { n + ops.plus } else { n })
 }
 
 /// A simple asm string (no operands): only `$` is escaped, as `$$`.

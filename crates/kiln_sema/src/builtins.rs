@@ -434,19 +434,18 @@ impl Sema<'_, '_> {
         }
         let mut out = Vec::with_capacity(6);
         for &a in &args[..5] {
-            match conv::implicit_convert(self, a, QualType::INT, ConvCtx::Argument) {
-                Ok(x) => out.push(x),
-                Err(_) => {
-                    // clang `PerformImplicitConversion(.., AA_Passing)`:
-                    // `DiagnoseAssignmentResult`'s incompatible case.
-                    let t = self.ety(a);
-                    let msg = self
-                        .diag(DiagId::sema_builtin_passing_incompatible, self.begin_loc(a))
-                        .arg(self.ty_arg(t))
-                        .arg(self.ty_arg(QualType::INT));
-                    self.emit(msg);
-                    return None;
-                }
+            if let Ok(x) = conv::implicit_convert(self, a, QualType::INT, ConvCtx::Argument) {
+                out.push(x);
+            } else {
+                // clang `PerformImplicitConversion(.., AA_Passing)`:
+                // `DiagnoseAssignmentResult`'s incompatible case.
+                let t = self.ety(a);
+                let msg = self
+                    .diag(DiagId::sema_builtin_passing_incompatible, self.begin_loc(a))
+                    .arg(self.ty_arg(t))
+                    .arg(self.ty_arg(QualType::INT));
+                self.emit(msg);
+                return None;
             }
         }
         let (mut x, _) = self.builtin_fp_classification(&args[5..], rparen)?;
