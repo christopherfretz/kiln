@@ -504,6 +504,13 @@ impl Printer<'_> {
         self.out.push_str(&n.to_string());
     }
 
+    /// Whether a `ParenType` around `inner` prints its parentheses.
+    fn paren_shown(&self, inner: QualType) -> bool {
+        !self.empty_ph
+            && !self.no_parens
+            && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function
+    }
+
     fn space_before_ph(&mut self) {
         if !self.empty_ph {
             self.out.push(' ');
@@ -731,10 +738,7 @@ impl Printer<'_> {
             // prints its own).
             TypeView::Paren(inner) => {
                 self.before(inner);
-                if !self.empty_ph
-                    && !self.no_parens
-                    && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function
-                {
+                if self.paren_shown(inner) {
                     self.push("(");
                 }
             }
@@ -1013,10 +1017,7 @@ impl Printer<'_> {
             }
             TypeView::Function(_) => self.function_after(t),
             TypeView::Paren(inner) => {
-                if !self.empty_ph
-                    && !self.no_parens
-                    && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function
-                {
+                if self.paren_shown(inner) {
                     self.push(")");
                 }
                 self.after(inner);
