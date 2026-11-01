@@ -1934,6 +1934,10 @@ impl Sema<'_, '_> {
         if self.unevaluated > 0 || !self.ast.types.is_integral(self.ety(r)) {
             return;
         }
+        // A value-dependent divisor (`sizeof(T)`) has no value yet.
+        if self.expr_is_value_dependent(r) {
+            return;
+        }
         if self.fold_int(r) == Some(0) {
             let what = if matches!(op, BinaryOp::Div | BinaryOp::DivAssign) {
                 "division"

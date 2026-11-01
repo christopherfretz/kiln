@@ -12,6 +12,7 @@
 mod decls;
 mod exprs;
 mod lambda;
+mod anon;
 mod local;
 mod stmts;
 mod types;

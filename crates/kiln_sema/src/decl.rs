@@ -4325,7 +4325,11 @@ impl Sema<'_, '_> {
         let ty = self.tag_type(rec);
         let h = DeclHead::new(ctx, DeclName::EMPTY, ds.loc).flags(DeclFlags::IMPLICIT);
         let obj = if in_class {
-            self.builder().field(h, ty, None, 0)
+            // The unnamed member has the access in effect
+            // ([class.access.spec]/1; standard-layout compares it).
+            let f = self.builder().field(h, ty, None, 0);
+            self.set_member_access(f);
+            f
         } else {
             let storage = match ds.storage {
                 Some((StorageSpec::Static, _)) => VarStorage::Static,
@@ -4747,7 +4751,7 @@ impl Sema<'_, '_> {
 
     /// An alignment argument ([dcl.align]/2): an integral constant
     /// expression whose value is a power of two (0 is ignored).
-    fn check_alignment_expr(&mut self, e: ExprId) -> Option<ExprId> {
+    pub(crate) fn check_alignment_expr(&mut self, e: ExprId) -> Option<ExprId> {
         if self.expr_is_value_dependent(e) {
             return Some(e);
         }

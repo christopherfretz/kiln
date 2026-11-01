@@ -993,10 +993,23 @@ impl Substituter<'_, '_, '_> {
         &mut self,
         spec: DeclId,
         def: DeclId,
+        local: Option<&mut Vec<LocalMethod>>,
+    ) {
+        self.class_body_with(spec, def, local, false);
+    }
+
+    /// [`Substituter::class_body`]; `anonymous` for an anonymous struct
+    /// or union (its `}` is followed by `;`).
+    pub(crate) fn class_body_with(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
         mut local: Option<&mut Vec<LocalMethod>>,
+        anonymous: bool,
     ) {
         let saved_entity = self.entity.replace(spec);
         self.sema.act_on_start_record_definition(spec);
+        self.class_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
         let specs = sub.class_bases(def);
@@ -1014,6 +1027,14 @@ impl Substituter<'_, '_, '_> {
             if n.kind() == DeclKind::Function
                 && n.misc().friend() != kiln_ast::decl::FriendKind::None
             {
+                continue;
+            }
+            if n.kind() == DeclKind::IndirectField {
+                // Injected by its anonymous struct or union.
+                continue;
+            }
+            if local.is_none() && sub.is_unnamed_member_class(m) {
+                let _ = sub.unnamed_member_class(m);
                 continue;
             }
             let r = if local.is_some()
@@ -1036,7 +1057,7 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         }
-        sub.sema.act_on_finish_record_definition(spec, false);
+        sub.sema.act_on_finish_record_definition(spec, anonymous);
         // Default member initializers: in the complete-class context
         // (clang instantiates them when a constructor uses them; a gap).
         if !nsdmis.is_empty() {
