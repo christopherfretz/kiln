@@ -10,7 +10,7 @@
 //! [`Sema::temporaries_bound_by`] and extended in place
 //! (`ExprArena::extend_temporary`, spec/sema-class.md §8.2).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, TlsKind, VarStorage};
+use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, DefinitionBits, TlsKind, VarStorage};
 use kiln_ast::expr::{
     BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, StorageDuration, ValueCategory,
 };
@@ -79,12 +79,11 @@ impl Sema<'_, '_> {
         // clang checks the destructor's access and deletion even when it
         // is trivial (then it binds nothing); an implicit trivial
         // destructor passes both.
-        use kiln_ast::decl::DefinitionBits as B;
         let bits = self.defn_bits(class);
-        let trivial = bits.contains(B::TRIVIAL_DTOR);
+        let trivial = bits.contains(DefinitionBits::TRIVIAL_DTOR);
         if trivial
-            && !bits.contains(B::USER_DECLARED_DTOR)
-            && !bits.contains(B::DEFAULTED_DTOR_DELETED)
+            && !bits.contains(DefinitionBits::USER_DECLARED_DTOR)
+            && !bits.contains(DefinitionBits::DEFAULTED_DTOR_DELETED)
         {
             return e;
         }
