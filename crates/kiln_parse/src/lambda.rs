@@ -56,6 +56,16 @@ impl Parser<'_, '_> {
             (params, variadic) = self.parse_param_clause(&mut d, false);
             rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         }
+        // clang `ParseLambdaExpressionAfterIntroducer`: GNU and `__declspec`
+        // attributes may precede the lambda-specifier-seq (GCC and MSVC
+        // compatibility); they appertain to the call operator.
+        while matches!(self.kw(), Some(Kw::Attribute | Kw::Declspec)) {
+            let before = self.pos();
+            self.parse_attributes(&mut specs.attrs);
+            if self.pos() == before {
+                break;
+            }
+        }
         self.parse_lambda_specifiers(&mut specs, &intro);
         let exc = if matches!(self.kw(), Some(Kw::Noexcept | Kw::Throw)) {
             self.parse_exception_spec()
