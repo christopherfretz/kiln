@@ -377,8 +377,16 @@ and returns the scope it names:
     definition (a hypothetical `X()` when there is none). An implicit
     guide is a detached `FunctionTemplate` over the class template's
     own parameter list (`AstContext::detached_template_decl`) with
-    return type `X<T…>`, the constructor's parameters (names and default
-    arguments) and trailing requires-clause;
+    return type `X<T…>`, the constructor's parameters (names) and
+    trailing requires-clause. A parameter with a default argument gets
+    a source-less `OpaqueValueExpr` of its type as the guide's default
+    (`guide_default_placeholder`, WP-152; clang's
+    `transformFunctionTypeParam`, printed `<null expr>`): the guide has
+    the constructor's arity but its default arguments are never
+    substituted or evaluated (the constructor's expression names the
+    constructor's template parameters, not the guide's). Substituting a
+    guide specialization's declaration (`Substituter::default_args`)
+    gives it another placeholder of the substituted type;
   - one guide per constructor template (`ctor_template_guide`, WP-134):
     the class parameters followed by the constructor template's,
     re-depthed one level shallower and renumbered after them
@@ -405,7 +413,16 @@ and returns the scope it names:
   `base_levels(tmpl)` plus the redeclared template's own parameters as
   arguments. Its member deduction guides are redeclared with it: the
   Substituter maps a `DeductionGuide(t)` name to the instantiated `t`.
-  Constructor templates of such a member give no guide yet.
+  Each constructor template of the original member gives a guide
+  (WP-152, `ctor_template_guide` with the member levels): the
+  redeclared template's parameters followed by the constructor
+  template's, retained at the redeclared template's depth.
+  The member is named as a placeholder through an alias of the
+  specialization (`using O = Outer<int>; O::In`) or through the
+  template-id itself (`Outer<int>::In`, WP-152): the lookahead finds
+  `In` in `Outer`'s primary pattern, so `parse_ctad_placeholder`
+  classifies the name again in the context the parsed
+  nested-name-specifier names and takes the instantiated member.
 - **Alias templates (P1814, WP-134).** For `A<…>` naming an alias
   template whose defining-type-id is a simple-template-id `C<…>`, each
   guide `g` of `C` is transformed (`build_alias_guide`): `g`'s return

@@ -756,9 +756,22 @@ impl Parser<'_, '_> {
         loc: Loc,
     ) {
         let mut nns = None;
+        let mut d = d;
         if qualified {
+            let name = self.ident_of(self.tok_at(end - 1));
             if let Ok(Some(q)) = self.parse_nested_name_nns() {
                 nns = Some(q.nns);
+                // `X<A>::M`: the lookahead found `M` in `X`'s primary
+                // pattern; the placeholder names the member template of
+                // the specialization the qualifier names (as `td::M`
+                // with `typedef X<A> td` does), so its guides are those
+                // of the instantiated member ([temp.mem]).
+                if let Some(name) = name
+                    && let NameClass::TypeTemplate(m) = self.s.classify_name(name, Some(q.ctx))
+                    && self.s.is_ctad_template(m)
+                {
+                    d = m;
+                }
             } else {
                 ds.invalid = true;
             }

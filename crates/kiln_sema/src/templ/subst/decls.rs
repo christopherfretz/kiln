@@ -722,6 +722,17 @@ impl Substituter<'_, '_, '_> {
             };
             let e = match self.sema.ast.exprs.get(def).kind() {
                 kiln_ast::expr::ExprKind::CXXDefaultArgExpr => continue,
+                // A deduction guide's placeholder ([`Sema::guide_default_placeholder`]):
+                // another placeholder, of the substituted type.
+                kiln_ast::expr::ExprKind::OpaqueValueExpr
+                    if self.sema.ast.exprs.opaque_source(def).is_none() =>
+                {
+                    let ty = self.sema.ast.decls.get(b).ty().unwrap_or(QualType::ERROR);
+                    let loc = self.sema.ast.exprs.get(def).loc();
+                    let ph = self.sema.guide_default_placeholder(ty, loc);
+                    let _ = self.sema.ast.decls.set_default_arg(b, ph);
+                    continue;
+                }
                 // `= {...}` with a dependent type or element: the list
                 // as written, list-initializing the substituted type.
                 kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
