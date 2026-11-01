@@ -241,7 +241,6 @@ impl Sema<'_, '_> {
             TypeSpecKind::None
             | TypeSpecKind::Int
             | TypeSpecKind::Char
-            | TypeSpecKind::Int128
             | TypeSpecKind::Float
             | TypeSpecKind::Double
             | TypeSpecKind::Float128 => true,
@@ -249,11 +248,17 @@ impl Sema<'_, '_> {
         };
         if !ok {
             if !ds.invalid && !self.is_error_type(base) {
-                let msg =
-                    self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(ds.base.spelling());
+                // clang `DeclSpec::getSpecifierName(TST_typename)`.
+                let name = match ds.base {
+                    TypeSpecKind::Named => "type-name",
+                    b => b.spelling(),
+                };
+                let msg = self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(name);
                 self.emit(msg);
             }
-            return QualType::ERROR;
+            // clang drops the `_Complex` (`TSC_unspecified`) and goes on
+            // with the base type.
+            return base;
         }
         self.ast.types.complex(base)
     }

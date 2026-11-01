@@ -2542,6 +2542,13 @@ impl Compiler<'_> {
     /// Increment/decrement of `place`; `out` receives the old value for a
     /// postfix operator, the new one for a prefix one.
     fn inc_dec(&mut self, place: Place, ty: OTy, op: UnaryOp, out: Option<u32>, e: ExprId) {
+        if let Some(elem) = self.cx_elem(ty) {
+            // clang `IncDecSubobjectHandler`: the real part only.
+            // A complex value is never read through `out` (the postfix
+            // form is a `cx_op`), so it is left unwritten.
+            let _ = (self.cx_inc_dec(place, elem, op, e), out);
+            return;
+        }
         let inc = matches!(op, UnaryOp::PostInc | UnaryOp::PreInc);
         let akind = if inc { ak::INCREMENT } else { ak::DECREMENT };
         let old = self.reg();

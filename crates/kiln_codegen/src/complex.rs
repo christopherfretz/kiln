@@ -444,7 +444,8 @@ impl Cg<'_> {
         Ok(match op {
             BinaryOp::Add | BinaryOp::Sub => {
                 let add = op == BinaryOp::Add;
-                let (fop, iop) = if add { (BinOp::FAdd, BinOp::Add) } else { (BinOp::FSub, BinOp::Sub) };
+                let (fop, iop) =
+                    if add { (BinOp::FAdd, BinOp::Add) } else { (BinOp::FSub, BinOp::Sub) };
                 if float {
                     let re = self.bin(fop, Flags::NONE, a, c);
                     let im = match (b, d) {
@@ -526,8 +527,10 @@ impl Cg<'_> {
         let lib_b = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(cont, false);
-        let rp = self.f.fir.push(Op::Phi { ty: t, inc: vec![(re, orig), (re, inan_b), (lr, lib_b)] }, t);
-        let ip = self.f.fir.push(Op::Phi { ty: t, inc: vec![(im, orig), (im, inan_b), (li, lib_b)] }, t);
+        let rp =
+            self.f.fir.push(Op::Phi { ty: t, inc: vec![(re, orig), (re, inan_b), (lr, lib_b)] }, t);
+        let ip =
+            self.f.fir.push(Op::Phi { ty: t, inc: vec![(im, orig), (im, inan_b), (li, lib_b)] }, t);
         Ok((rp, ip))
     }
 

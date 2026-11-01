@@ -77,7 +77,12 @@ impl Compiler<'_> {
         match n.kind() {
             ExprKind::UnaryOperator => matches!(
                 ast.exprs.unary_op(e),
-                UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::Extension
+                UnaryOp::Plus
+                    | UnaryOp::Minus
+                    | UnaryOp::Not
+                    | UnaryOp::Extension
+                    | UnaryOp::PostInc
+                    | UnaryOp::PostDec
             ),
             ExprKind::BinaryOperator => matches!(
                 ast.exprs.binary_op(e),
@@ -222,12 +227,52 @@ impl Compiler<'_> {
     fn cx_unary(&mut self, e: ExprId, elem: OTy) -> [u32; 2] {
         let op = self.ast().exprs.unary_op(e);
         let x = self.ast().exprs.operand(e);
+        if matches!(op, UnaryOp::PostInc | UnaryOp::PostDec) {
+            let place = self.lv_rmw(x, e);
+            return self.cx_inc_dec(place, elem, op, e);
+        }
         let [re, im] = self.cx_regs(x);
         match op {
             UnaryOp::Minus => [self.cx_neg(re, elem, e), self.cx_neg(im, elem, e)],
             UnaryOp::Not => [re, self.cx_neg(im, elem, e)],
             _ => [re, im],
         }
+    }
+
+    /// `++`/`--` of the complex object at `place`: clang's
+    /// `IncDecSubobjectHandler` steps the real part only. Returns the old
+    /// parts.
+    pub(super) fn cx_inc_dec(
+        &mut self,
+        place: Place,
+        elem: OTy,
+        op: UnaryOp,
+        e: ExprId,
+    ) -> [u32; 2] {
+        let Place::Mem(p) = place else {
+            self.unsupported(e);
+            return [self.reg(), self.reg()];
+        };
+        let inc = matches!(op, UnaryOp::PostInc | UnaryOp::PreInc);
+        let akind = if inc { ak::INCREMENT } else { ak::DECREMENT };
+        let old = self.cx_load(p, elem, akind, e);
+        let new = self.reg();
+        let one = self.reg();
+        match self.kind(elem) {
+            TyKind::Float(k) => {
+                self.konst(one, crate::arith::int_to_float(k, 1, true));
+                let fop = if inc { Op::FAdd } else { Op::FSub };
+                self.emit_at(fop, float_code(k), &[new, old[0], one], e);
+            }
+            k => {
+                let (w, s) = int_of(k).unwrap_or((32, true));
+                self.konst(one, 1);
+                let iop = if inc { Op::IAdd } else { Op::ISub };
+                self.emit_at(iop, int_aux(w as u8, s), &[new, old[0], one], e);
+            }
+        }
+        self.store(Place::Mem(p), new, elem, akind, e);
+        old
     }
 
     /// The negation of part `r` of element type `elem`: an integer wraps

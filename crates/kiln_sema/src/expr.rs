@@ -2301,8 +2301,8 @@ impl Sema<'_, '_> {
                 return self.recover_err(&[e], loc);
             }
         } else if self.ast.types.as_complex(t).is_some() {
-            // clang: a GNU extension for every complex type.
-            let msg = self.diag(DiagId::sema_increment_complex, loc).arg(self.ty_arg(t));
+            // clang 19 `ext_increment_complex`: every complex type.
+            let msg = self.diag(DiagId::sema_increment_complex, loc).arg(op.spelling());
             self.emit(msg);
         } else if !self.ast.types.is_arithmetic(t) {
             let msg = self

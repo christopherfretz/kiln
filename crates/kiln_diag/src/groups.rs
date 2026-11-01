@@ -93,6 +93,7 @@ diag_groups! {
     BuiltinMacroRedefined = "builtin-macro-redefined" [];
     Comment = "comment" [];
     C23Extensions = "c23-extensions" [];
+    C2yExtensions = "c2y-extensions" [];
     Cxx20Compat = "c++20-compat" [];
     RangeLoopConstruct = "range-loop-construct" [];
     RangeLoopBindReference = "range-loop-bind-reference" [];

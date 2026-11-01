@@ -588,7 +588,11 @@ impl Parser<'_, '_> {
                 Kw::Float => ds.set_base(TypeSpecKind::Float, None, loc),
                 Kw::Double => ds.set_base(TypeSpecKind::Double, None, loc),
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
-                Kw::Complex => ds.set_complex(loc),
+                Kw::Complex => {
+                    // clang `ext_c99_feature` on the keyword.
+                    self.s.error(DiagId::parse_c99_complex, loc);
+                    ds.set_complex(loc)
+                }
                 Kw::Auto => ds.set_base(TypeSpecKind::Auto, None, loc),
                 Kw::Struct | Kw::Class | Kw::Union | Kw::Enum => {
                     self.parse_tag_specifier(&mut ds, k, ctx);

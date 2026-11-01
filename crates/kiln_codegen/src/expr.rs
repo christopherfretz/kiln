@@ -1443,7 +1443,8 @@ impl Cg<'_> {
             // `EmitComplexCompoundAssignmentLValue` for an lvalue).
             let (lv, (v, _)) = self.cx_compound_assign(e)?;
             let v = v.unwrap_or_else(|| V::C(self.m.const_zero(LTy::I1)));
-            let v = if !self.is_complex(lv.q) && self.is_volatile(lv.q) { self.load_lv(lv) } else { v };
+            let v =
+                if !self.is_complex(lv.q) && self.is_volatile(lv.q) { self.load_lv(lv) } else { v };
             return Ok((lv, v));
         }
         let l = self.sub(e);
