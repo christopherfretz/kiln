@@ -419,8 +419,11 @@ impl Cg<'_> {
                 .filter_map(|b| ast.types.as_record(b.ty).map(|r| ast.first(r)))
                 .collect()
         });
-        let fields: Vec<DeclId> =
-            ast.decls.members(first).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
+        let fields: Vec<DeclId> = ast
+            .decls
+            .members(first)
+            .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
         for (i, m) in members.iter().enumerate() {
             let at = rel + offs[i];
             if let Some(f) = by_member[i] {

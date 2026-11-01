@@ -16,7 +16,7 @@ use kiln_llvm::{
 };
 use kiln_source::Loc;
 
-use crate::cleanup::{ArrayDelete, Cleanup, NewDelete, Saved};
+use crate::cleanup::{ArrayDelete, Cleanup, Depth, IrregularPartialArray, NewDelete, Saved};
 use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
@@ -38,6 +38,17 @@ pub(crate) struct AllocFn {
     pub nothrow_t: bool,
     /// Replaceable, with a `std::align_val_t` parameter at this index.
     pub align_param: Option<usize>,
+}
+
+/// The irregular partial-array cleanup of an array new-initializer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NewPartial {
+    depth: Depth,
+    /// clang's `dominatingIP` placeholder.
+    dominator: V,
+    /// `array.init.end`.
+    slot: V,
+    align: u64,
 }
 
 impl Cg<'_> {
@@ -876,7 +887,9 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `EmitNewArrayInitializer` (no constructors, no cookies).
+    /// clang `EmitNewArrayInitializer` (no constructors, no cookies). Its
+    /// `CleanupDeactivationScope` deactivates the irregular partial-array
+    /// cleanup of a list initializer on every exit.
     #[allow(clippy::too_many_arguments, reason = "mirrors clang's parameter list")]
     fn emit_new_array_init(
         &mut self,
@@ -888,6 +901,54 @@ impl Cg<'_> {
         num: V,
         size: V,
         loc: Option<Loc>,
+    ) -> R<()> {
+        let mut partial = None;
+        let geom = (base, esize, begin, align, num, size);
+        let r = self.new_array_init_body(x, geom, loc, &mut partial);
+        if let Some(p) = partial {
+            let d = Fir::last_inst(p.dominator);
+            self.deactivate_cleanup_block(p.depth, d);
+            self.f.fir.erase(d);
+        }
+        r
+    }
+
+    /// [except.ctor]/3 for the explicit elements of `new T[n]{...}`: an
+    /// EH cleanup destroying `[begin, *array.init.end)`
+    /// (`pushIrregularPartialArrayCleanup`, only when `needsEHCleanup`).
+    fn push_new_partial(&mut self, base: QualType, begin: V, record: DeclId) -> NewPartial {
+        let z = V::C(self.m.const_bool(false));
+        let dominator =
+            self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+        let mark = self.f.fir.mark();
+        let al = self.pref_align(LTy::PTR);
+        let slot = self.f.fir.alloca(LTy::PTR, al);
+        // The cleanup walks base elements: clang passes it the base
+        // element type of a multidimensional allocation.
+        let elem = self.mty(base);
+        let p = IrregularPartialArray {
+            begin,
+            saved: false,
+            end_slot: slot,
+            outer: elem,
+            depth: 0,
+            elem,
+            record,
+        };
+        self.push_full_expr_cleanup(Cleanup::IrregularPartialArray(Box::new(p)), false, true);
+        self.add_aux_allocas(mark);
+        NewPartial { depth: self.f.cl.depth(), dominator, slot, align: al }
+    }
+
+    /// The body of [`Cg::emit_new_array_init`]; `geom` is the base element
+    /// type, its size, the first element, its alignment, the element count
+    /// and the byte size.
+    fn new_array_init_body(
+        &mut self,
+        x: &NewExtra,
+        (base, esize, begin, align, num, size): (QualType, u64, V, u64, V, V),
+        loc: Option<Loc>,
+        partial: &mut Option<NewPartial>,
     ) -> R<()> {
         let ast = self.ast;
         let t = &ast.types;
@@ -919,8 +980,14 @@ impl Cg<'_> {
                 }
                 n_init = n_init.wrapping_mul(count);
             }
+            if let Some(record) = self.destructed_class(base).filter(|_| self.opts.exceptions) {
+                *partial = Some(self.push_new_partial(base, begin, record));
+            }
             let start_align = cur_align;
             for (k, &ie) in elems.iter().enumerate() {
+                if let Some(p) = *partial {
+                    self.store(cur, p.slot, p.align, false);
+                }
                 let q = ast.exprs.get(ie).ty();
                 let lv = LV {
                     addr: Addr { v: cur, ty: cur_ty, align: cur_align },
@@ -970,6 +1037,9 @@ impl Cg<'_> {
                 self.memset_v(Addr { v: cur, ty: base_ty, align: cur_align }, 0, rem, false);
                 return Ok(());
             }
+            if let Some(p) = *partial {
+                self.store(cur, p.slot, p.align, false);
+            }
             let mut rem = num;
             if n_init > 0 {
                 let k = self.i64c(i128::from(n_init));
@@ -1017,6 +1087,9 @@ impl Cg<'_> {
         }
         self.emit_block(lp, false);
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(cur, entry)] }, LTy::PTR);
+        if let Some(p) = *partial {
+            self.store(phi, p.slot, p.align, false);
+        }
         // clang switches a value-initialization to one of the element
         // type (multidimensional `new` of member pointers).
         let iq = if ivie { base } else { ast.exprs.get(init).ty() };

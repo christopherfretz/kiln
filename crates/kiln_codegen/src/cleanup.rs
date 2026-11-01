@@ -93,6 +93,9 @@ pub(crate) enum Saved {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct IrregularPartialArray {
     pub begin: V,
+    /// `begin` is a `cond-cleanup.save` slot holding the first element
+    /// (`saveValueInCond`).
+    pub saved: bool,
     pub end_slot: V,
     pub outer: LTy,
     pub depth: usize,
@@ -178,6 +181,9 @@ pub(crate) struct Scope {
     ext: bool,
     branch_afters: Vec<(Blk, u32)>,
     branches: Vec<Blk>,
+    /// `AuxAllocas`: allocas (and their stores) dropped again when the
+    /// cleanup is popped without ever being emitted.
+    pub aux: Vec<V>,
 }
 
 impl Scope {
@@ -357,6 +363,13 @@ impl Cg<'_> {
         self.push_scope(Kind::Cleanup(c), normal, eh);
     }
 
+    /// `AddAuxAllocas(AllocaTracker.Take())`: the allocas created since
+    /// `mark` belong to the cleanup on top of the stack.
+    pub(crate) fn add_aux_allocas(&mut self, mark: u32) {
+        let a = self.f.fir.allocas_from(mark);
+        self.f.cl.stack.last_mut().expect("cleanup scope").aux.extend(a);
+    }
+
     /// `pushFullExprCleanup`: outside a conditional branch a plain
     /// cleanup; inside one, its values are saved if they do not dominate
     /// the cleanup (`saveValueInCond`) and it runs only if its
@@ -405,14 +418,13 @@ impl Cg<'_> {
                 });
                 c
             }
-            Cleanup::IrregularPartialArray(ref p) if needs_saving(self, p.begin) => {
-                self.f.error.get_or_insert(crate::CodegenError {
-                    loc: None,
-                    msg: "a conditional array initialization at a computed address is not \
-                          supported yet"
-                        .into(),
-                });
-                c
+            Cleanup::IrregularPartialArray(mut p) if !p.saved && needs_saving(self, p.begin) => {
+                let al = self.pref_align(LTy::PTR);
+                let slot = self.f.fir.alloca(LTy::PTR, al);
+                self.store(p.begin, slot, al, false);
+                p.begin = slot;
+                p.saved = true;
+                Cleanup::IrregularPartialArray(p)
             }
             Cleanup::NewDelete(mut nd) => {
                 // EnterNewDeleteCleanup: the pointer, the size, then the
@@ -476,6 +488,7 @@ impl Cg<'_> {
             ext: false,
             branch_afters: Vec::new(),
             branches: Vec::new(),
+            aux: Vec::new(),
         });
     }
 
@@ -746,6 +759,12 @@ impl Cg<'_> {
         let has_prebranched = fallthrough_source.is_some_and(|b| self.f.fir.is_terminated(b));
         let requires_normal = is_normal && (has_fixups || has_existing_branches || has_fallthrough);
         let cleanup = self.f.cl.stack[top - 1].cleanup().clone();
+        let aux = std::mem::take(&mut self.f.cl.stack[top - 1].aux);
+        if !requires_normal && eh_entry.is_none() {
+            for &a in aux.iter().rev() {
+                self.f.fir.erase_with_users(a);
+            }
+        }
 
         if is_normal && has_prebranched && !requires_normal {
             let pre_dest = if fallthrough_is_branch_through {
@@ -997,8 +1016,10 @@ impl Cg<'_> {
                 self.array_destroy_range(begin, end, elem, record, true, false);
             }
             Cleanup::IrregularPartialArray(ref p) => {
-                let IrregularPartialArray { begin, end_slot, outer, depth, elem, record } = **p;
+                let IrregularPartialArray { begin, saved, end_slot, outer, depth, elem, record } =
+                    **p;
                 let al = self.pref_align(LTy::PTR);
+                let begin = if saved { self.load(LTy::PTR, begin, al, false) } else { begin };
                 let end = self.load(LTy::PTR, end_slot, al, false);
                 let (begin, end) = if depth > 0 {
                     let zero = self.i64c(0);

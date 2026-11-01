@@ -61,7 +61,8 @@ impl Cg<'_> {
         } else {
             self.ir(&IrType::RecordBase(first))
         };
-        let body = if complete { &rec.members } else { rec.base_members.as_ref().unwrap_or(&rec.members) };
+        let body =
+            if complete { &rec.members } else { rec.base_members.as_ref().unwrap_or(&rec.members) };
         let tys: Vec<LTy> = body.iter().map(|m| self.ir(m)).collect();
         let mut elems: Vec<Option<Value>> = vec![None; tys.len()];
         let Some(def) = ast.definition(rd) else {
@@ -77,8 +78,11 @@ impl Cg<'_> {
                 elems[i] = Some(self.null_const_for_base(bd, tys[i])?);
             }
         }
-        let fields: Vec<DeclId> =
-            ast.decls.members(def).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
+        let fields: Vec<DeclId> = ast
+            .decls
+            .members(def)
+            .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
         for f in fields {
             let fq = ast.decls.get(f).ty().unwrap_or(QualType::INT);
             if !rec.bitfields.contains_key(&f) {
@@ -92,7 +96,8 @@ impl Cg<'_> {
             }
         }
         if complete {
-            let mut vbases: Vec<(DeclId, u32)> = rec.vbase_index.iter().map(|(&d, &i)| (d, i)).collect();
+            let mut vbases: Vec<(DeclId, u32)> =
+                rec.vbase_index.iter().map(|(&d, &i)| (d, i)).collect();
             vbases.sort_by_key(|&(_, i)| i);
             for (vb, i) in vbases {
                 let i = i as usize;
@@ -101,8 +106,11 @@ impl Cg<'_> {
                 }
             }
         }
-        let vals: Vec<Value> =
-            elems.iter().zip(&tys).map(|(v, &t)| v.unwrap_or_else(|| self.m.const_zero(t))).collect();
+        let vals: Vec<Value> = elems
+            .iter()
+            .zip(&tys)
+            .map(|(v, &t)| v.unwrap_or_else(|| self.m.const_zero(t)))
+            .collect();
         self.m.const_struct(st, &vals).map_err(|e| ir_err(&e))
     }
 
@@ -170,7 +178,10 @@ impl Cg<'_> {
             base = e;
         }
         if base == q
-            && ast.types.as_record(q).is_some_and(|rd| self.class_bits(rd).contains(DefinitionBits::EMPTY))
+            && ast
+                .types
+                .as_record(q)
+                .is_some_and(|rd| self.class_bits(rd).contains(DefinitionBits::EMPTY))
         {
             return Ok(());
         }

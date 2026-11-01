@@ -3345,6 +3345,7 @@ impl Cg<'_> {
             let z = V::C(self.m.const_bool(false));
             let dominator =
                 self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+            let mark = self.f.fir.mark();
             let al = self.pref_align(LTy::PTR);
             let slot = self.f.fir.alloca(LTy::PTR, al);
             self.store(begin, slot, al, false);
@@ -3355,9 +3356,17 @@ impl Cg<'_> {
                 depth += 1;
             }
             let elem = self.mty(inner);
-            let p =
-                IrregularPartialArray { begin, end_slot: slot, outer: ety, depth, elem, record };
+            let p = IrregularPartialArray {
+                begin,
+                saved: false,
+                end_slot: slot,
+                outer: ety,
+                depth,
+                elem,
+                record,
+            };
             self.push_full_expr_cleanup(Cleanup::IrregularPartialArray(Box::new(p)), false, true);
+            self.add_aux_allocas(mark);
             partial = Some((self.f.cl.depth(), dominator, slot, al));
         }
         for (i, &init) in inits.iter().enumerate() {
