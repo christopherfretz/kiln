@@ -747,7 +747,24 @@ impl Substituter<'_, '_, '_> {
         let sig = params.and_then(|params| {
             let ret = self.ty(p.ret(), loc)?;
             self.check_return_type(ret, loc)?;
-            let exc = self.exc_spec(&p, loc)?;
+            // DR1330 ([temp.inst]/14): a dependent `noexcept(expr)` is
+            // not part of deduction; it is substituted when needed (clang
+            // `InitFunctionInstantiation` -> `EST_Uninstantiated`), from
+            // the specialization's own context. A local-scope pattern's is
+            // substituted now, as clang.
+            let exc = if matches!(
+                self.sema.ast.types.exc_spec(&p),
+                kiln_ast::types::ExcSpec::NoexceptExpr {
+                    value: kiln_ast::types::NoexceptValue::Dependent(_),
+                    ..
+                }
+            ) && !self.sema.decl_in_local_scope(pat)
+            {
+                self.sema.uninstantiated_exc.insert(spec, pat);
+                kiln_ast::types::ExcSpec::Deferred(spec)
+            } else {
+                self.exc_spec(&p, loc)?
+            };
             Ok((params, ret, exc))
         });
         self.sema.act_on_end_this_scope(this);

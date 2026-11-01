@@ -534,11 +534,17 @@ impl Sema<'_, '_> {
         let at = self.ast.exprs.get(expr).loc();
         let start = self.begin_loc(expr);
         // A friend's is in its class ([class.friend]/7), whose members it
-        // may name.
+        // may name. A function template specialization takes its template's
+        // (the friend template declared in the class specialization).
+        let lex = if self.is_function_spec(f) {
+            self.spec_args(f).and_then(|(t, _)| self.templated_function(t)).unwrap_or(f)
+        } else {
+            f
+        };
         let ctx = self
             .ast
             .decls
-            .lexical_ctx(f)
+            .lexical_ctx(lex)
             .filter(|&c| self.kind_of(c) == kiln_ast::decl::DeclKind::CXXRecord)
             .or_else(|| self.ast.decls.get(f).ctx())
             .unwrap_or(self.ast.tu);
