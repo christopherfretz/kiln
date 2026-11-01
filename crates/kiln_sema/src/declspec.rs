@@ -800,6 +800,12 @@ impl Declarator {
         matches!(self.chunks.first(), Some(Chunk::Function { .. }))
     }
 
+    /// True if the outermost operator applied to the name is an array
+    /// declarator of unknown bound (`d[]`; clang `isArrayOfUnknownBound`).
+    pub fn is_array_of_unknown_bound(&self) -> bool {
+        matches!(self.chunks.first(), Some(Chunk::Array { size: None, .. }))
+    }
+
     /// The parameters of a function declarator.
     pub fn function_params(&self) -> Option<&[ParamInfo]> {
         match self.chunks.first() {

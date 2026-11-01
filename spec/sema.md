@@ -1800,6 +1800,61 @@ for them.
     the Oven and codegen.
   - kiln does not wrap the elements of a namespace-scope literal in
     `ConstantExpr` nodes, as clang does.
+- **Flexible array members** (`flex_array.rs`, WP-271; a C99 feature,
+  clang `ActOnFields` / `CheckFlexibleArrayInit`). A non-static data
+  member of array-of-unknown-bound type `T[]` is accepted when its
+  element type is complete (`field_complete_type`; an incomplete or
+  abstract element is diagnosed as for a bounded array). The member
+  keeps the incomplete type; the class is complete and records
+  `DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER`. Layout: size zero at the
+  aligned end of the preceding members, counting for the alignment
+  (`sizeof(struct { int n; char d[]; }) == 4`); LLVM type `[0 x T]`;
+  implicit copies copy only the other members. At the `}`
+  (`check_flexible_array_members`, run per instantiation; each
+  diagnostic is `per_instantiation`, spec/diag.md §7.4), over the
+  fields in order:
+  - not the last field of a struct/class: error `flexible array member
+    'd' with type 'T[]' is not at the end of struct`, note `next field
+    declaration is here` at the next field; field and class invalid;
+  - in a union: `-Wgnu-flexible-array-union-member`; otherwise, when no
+    named field precedes it: `-Wgnu-empty-struct`;
+  - a class with a virtual base (direct or inherited): error `...not
+    allowed in struct which has a virtual base class`;
+  - always `flexible array members are a C99 feature` [-Wc99-extensions];
+  - a non-dependent element type with non-trivial destruction: error
+    `flexible array member 'd' of type 'T[]' with non-trivial
+    destruction`; field and class invalid;
+  - a field whose class has a flexible array member gives this class one
+    too; in a struct/class it warns `field 'a' with variable sized type
+    'A' not at the end of a struct or class is a GNU extension`
+    [-Wgnu-variable-sized-type-not-at-end, on by default] when not last,
+    else `'a' may not be nested in a struct due to flexible array member`
+    [-Wflexible-array-extensions];
+  - an array of such a class: `'A' may not be used as an array element
+    due to flexible array member` [-Wflexible-array-extensions] at the
+    `[` (the declarator's array chunk).
+
+  Except where noted, the warnings are Extensions (`-pedantic`). A
+  default member initializer of a `d[]` member is the parse error `array
+  bound cannot be deduced from a default member initializer` (at the `=`
+  or `{`; the member is invalid and gets no checks). In an aggregate
+  initialization the member's initializer is: an empty list, the GNU
+  extension `flexible array initialization is a GNU extension`
+  [-Wgnu-flexible-array-initializer] with the note `initialized flexible
+  array member 'd' is here` and `zero size arrays are an extension`
+  [-Wzero-length-array]; elements, an error `initialization of flexible
+  array member is not allowed` (same note) unless they initialize a
+  variable without automatic storage directly (`Sema::init_var` with no
+  `init_entity`). The Oven rejects the decay of a member subobject of
+  unknown bound (`array-to-pointer decay of array member without known
+  bound is not supported`, clang `addUnsizedArray`).
+
+  Deviation: elements initializing a static variable (clang's extension,
+  which emits the variable with a larger type) are reported as not
+  supported yet.
+- **Zero-length arrays** `T[0]`: `zero size arrays are an extension`
+  [-Wzero-length-array, in -Wgnu] at the bound, per instantiation; an
+  error in a SFINAE context (above).
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
@@ -2793,7 +2848,12 @@ template saved in `range_for_outer_depth` for instantiations).
   (`rebuild_with_dereference`); an iterator or loop-variable failure gets
   `selected 'begin' function with iterator type T` (the candidate notes
   are captured through `diag_capture` while each attempt runs and
-  released on success of the diagnosis).
+  released on success of the diagnosis). A SFINAE context entered
+  inside a capture (deeper on the instantiation stack than where the
+  capture began, such as deducing a converting constructor template
+  for a rewritten `operator==` candidate of `__begin != __end`) takes
+  its errors as substitution failures, not captured diagnostics
+  (WP-271).
 - **Templates.** A type-dependent range (or loop-variable type) keeps
   only `__range` and the loop variable in the pattern; instantiation
   (`templ/subst/stmts.rs` `range_for`) substitutes the range under a new
