@@ -5,7 +5,7 @@
 //! `spec/libcxx.md`.
 
 mod boolexpr;
-mod cluster;
+pub(crate) mod cluster;
 mod directives;
 mod features;
 mod report;

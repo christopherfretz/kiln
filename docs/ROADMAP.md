@@ -63,7 +63,7 @@ flow, `constexpr` functions and variables, `static_assert`, string literals,
 Status: done. The M3 libc++ gate (`cargo xtask libcxx --gate m3`) is 585/585
 on main `4c3e8be9` (`docs/status/libcxx-m3.md`); the 51 `.verify.cpp` tests
 the driver marks UNSUPPORTED need `-verify` (WP-143, M4). The clang 22
-oracle switch (WP-184) is unblocked.
+oracle switch (WP-184) waits for M3b.
 Member functions, constructors/destructors, references, overload resolution,
 implicit conversion sequences, class templates, function templates, deduction,
 partial/explicit specialization, `auto`, variadic templates, fold expressions,
@@ -77,6 +77,25 @@ record layout matching clang (checked by layout-dump differential tests).
 - Exit: `<type_traits>`, `<utility>`, `<array>`, `<string_view>`, `<span>`,
   `<bit>`, `<limits>`, `<initializer_list>` from libc++ compile and their
   libc++ tests pass.
+
+## M3b — libc++ 19 end to end (operator decision 2026-11-01)
+Before any C++23/26 feature work or the clang 22 oracle switch, the C++20-level
+base must be fully functional, and the measure is libc++ 19 driven end to end
+with the clang 19 oracle still in place: every libc++ 19 header compiles, the
+full test suite (8695 `.cpp`, 7898 under `std/`) runs under
+`cargo xtask libcxx`, and the pass rate is the headline number
+(`docs/status/libcxx.md`).
+- Method: a 10% stratified sample (every 10th `std/` test, 790 files,
+  `xtask libcxx` over the list) is cheap (~20 min at -j 3) and is rerun after
+  each batch of fixes; failures are clustered by diagnostic and the biggest
+  clusters become work packages (WP-268…276 are the first batch). Full-suite
+  runs baseline the status page between batches.
+- libstdc++ is secondary: `xtask libstdcxx` (`docs/status/libstdcxx.md`) is run
+  for overlap, and clusters that also block libc++ ride along.
+- Exit: full libc++ 19 suite ≥ 99% pass, remainder triaged as `UNSUPPORTED`/
+  `XFAIL` with a written reason that is not "kiln bug"; the per-directory gates
+  in `xtask libcxx` cover the whole of `std/`. Then WP-184 steps C–E (oracle
+  switch) run and M4 begins.
 
 ## M4 — Complete C++23, and C++26 as shipped by clang 22
 Namespaces/ADL corner cases, exceptions, RTTI, coroutines, modules (at least header units and `import std;` consumption),
@@ -101,10 +120,11 @@ static initialization order, inline variables.
   P2300-adjacent library hooks, expansion statements where clang ships them).
   Each row names its corpus/libc++ tests; status is `done`/`partial`/`todo`.
   Seeded by WP-185; `cargo xtask features` checks it (done rows have passing tests and clang 22's macro value).
-- **Oracle switch (WP-184):** at M3 exit the differential oracle, libc++ headers and
+- **Oracle switch (WP-184):** at M3b exit the differential oracle, libc++ headers and
   libc++ test checkout move from clang/llvm 19 to clang/llvm 22 (both are in the
   sandbox). The M3 gate is frozen on 19 so its numbers stay comparable; M4+ gates run
-  on 22 in `-std=c++26`.
+  on 22 in `-std=c++26`. Steps A/B (the `KILN_ORACLE` and `-fclang-compat`
+  knobs, default 19) landed early (WP-262/263); C–E are shelved until M3b exits.
 - Exit: every C++23 row is `done`; every clang-22 C++26 row is `done` or has a
   written reason; `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,
@@ -136,6 +156,7 @@ from the P2996 text.
   a differential check. A kiln-owned `<meta>` is a fallback only. The maturity
   bar for the compiler is consuming BOTH libc++ (M4/M5 gates) and libstdc++
   (consumption track from M4, WP-188; mirrorbind under GCC uses it).
+  libstdc++ header status: `docs/status/libstdcxx.md` (`cargo xtask libstdcxx`).
 - Exit: mirrorbind (`git@github.com:christopherfretz/mirrorbind.git`) builds
   and its tests pass; its compile time and peak memory with kiln are recorded
   against GCC 16.1 (whose constexpr memory growth is the problem kiln exists

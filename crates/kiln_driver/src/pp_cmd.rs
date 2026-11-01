@@ -131,6 +131,7 @@ impl Job<'_> {
         cfg.threadsafe_statics = p.threadsafe_statics.unwrap_or(true);
         cfg.sized_deallocation = p.sized_deallocation.unwrap_or(true);
         cfg.kiln_version = crate::version_pair();
+        cfg.clang_compat = p.clang_compat;
         Some(build_predefines(&base, &cfg, &self.args.macros))
     }
 
@@ -258,7 +259,9 @@ impl Job<'_> {
         // effective dialect (clang's default is GNU) goes last so it wins.
         let mut fargs = a.argv.clone();
         fargs.push(if self.std.gnu { "-std=gnu++" } else { "-std=c++" }.to_owned());
-        let Some(features) = ClangFeatures::from_args(triple, self.std.lex, &fargs) else {
+        let features = ClangFeatures::from_args(triple, self.std.lex, &fargs)
+            .map(|f| f.with_compat(a.predef.clang_compat));
+        let Some(features) = features else {
             // No silent fallback to `NoFeatures` (unreachable today:
             // `Target` only has triples the tables cover).
             Diag::new(DiagId::drv_unsupported_target, Span::INVALID).arg(triple).emit(engine);

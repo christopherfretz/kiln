@@ -3170,7 +3170,8 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 - **Overloading:** overload resolution beyond arity, user-defined
   conversions, operator overloading.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`
-  beyond the M2 basics. Design: spec/sema-templates.md.
+  beyond the M2 basics. Design: spec/sema-templates.md (the type-trait
+  list, including the clang 22 traits of WP-263, is its §9.1).
 - **Other language features:** lambdas, coroutines, reflection,
   contracts. (Exceptions landed with WP-100: §5.5, §7.5.)
 - **WP-064 follow-ups:**
