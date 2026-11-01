@@ -1636,6 +1636,10 @@ diag_ids! {
     sema_switch_bool_condition = Warning [SwitchBool] (0) "switch condition has boolean value";
     // [expr.typeid]/3 (WP-219)
     sema_side_effects_typeid = Warning [PotentiallyEvaluatedExpression] (0) "expression with side effects will be evaluated despite being used as an operand to 'typeid'";
+    // [expr.add]/1: in C++ a `void` or function pointee is an error, not
+    // the GNU extension of C (WP-219)
+    sema_arith_void_pointer_cxx = Error (1) "arithmetic on{0: a|} pointer{0:|s} to void";
+    sema_arith_function_pointer_cxx = Error (2) "arithmetic on{0: a|} pointer{0:|s} to the function type {1}";
 }
 
 impl DiagId {
