@@ -1213,7 +1213,7 @@ impl Sema<'_, '_> {
         let msg = self
             .diag(DiagId::sema_compound_qualified_function_type, loc)
             .arg(u8::from(reference))
-            .arg(u8::from(direct))
+            .arg(u8::from(!direct))
             .arg(self.ty_arg(ty))
             .arg(crate::class::members::method_quals_spelling(q, r));
         self.emit(msg);
