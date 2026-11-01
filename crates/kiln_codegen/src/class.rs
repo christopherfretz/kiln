@@ -1628,17 +1628,19 @@ impl Cg<'_> {
     }
 
     /// The call-site attributes of a call of `d` (`noreturn` per
-    /// `noreturn_call`) and whether `unreachable` follows it.
+    /// `noreturn_call`, `cold` / `hot` per
+    /// [`crate::builtins::cold_hot_attrs`]) and whether `unreachable`
+    /// follows it.
     fn noreturn_extra(&self, d: Option<DeclId>, fty: QualType) -> (Vec<kiln_llvm::Attr>, bool) {
         let (site, unreachable) = self.noreturn_call(d, fty);
-        (
-            if site {
-                vec![kiln_llvm::Attr::Flag(kiln_llvm::AttrKind::NoReturn)]
-            } else {
-                Vec::new()
-            },
-            unreachable,
-        )
+        let mut extra = Vec::new();
+        if site {
+            extra.push(kiln_llvm::Attr::Flag(kiln_llvm::AttrKind::NoReturn));
+        }
+        if let Some(d) = d {
+            crate::builtins::cold_hot_attrs(self.ast, d, &mut extra);
+        }
+        (extra, unreachable)
     }
 
     // ---- expressions ---------------------------------------------------

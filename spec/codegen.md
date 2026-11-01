@@ -154,6 +154,13 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
     whose row decides) adds `willreturn memory(none)` /
     `willreturn memory(read)` to the declaration, the definition and
     direct call sites (clang `ConstructAttributeList`);
+  - a GNU `cold` / `hot` attribute on some declaration of the callee adds
+    `cold` / `hot` to the declaration, the definition and direct call
+    sites, member calls included (`builtins::cold_hot_attrs`; WP-172,
+    `tests/codegen/cold_hot.cpp`; glibc's `abort` is `__COLD`). C library
+    functions recognized by name stay ordinary calls: clang's lowering of
+    a `BuiltinAttr` library call (`memcpy` to `llvm.memcpy`, a folded
+    `strlen("abc")`) is not done (a follow-up);
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary; an

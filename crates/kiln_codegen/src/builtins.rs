@@ -170,7 +170,9 @@ fn lib_attrs(b: u32, out: &mut Vec<Attr>) {
 /// attribute on some declaration of `d` gives its declaration and call
 /// sites (clang `ConstructAttributeList`: `nounwind willreturn` plus
 /// `memory(none)` / `memory(read)`); none for a builtin, whose
-/// [`lib_attrs`] already say so. Returns whether it added any.
+/// [`lib_attrs`] already say so. Returns whether it added any. A GNU
+/// `cold` / `hot` attribute adds `cold` / `hot` the same way (WP-172);
+/// it does not count toward the result.
 pub(crate) fn const_pure_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) -> bool {
     if ast.decls.builtin_id(d).is_some() {
         return false;
@@ -182,6 +184,7 @@ pub(crate) fn const_pure_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) -> boo
                 .any(|a| ast.attrs.get(a).kind == k)
         })
     };
+    cold_hot_attrs(ast, d, out);
     let mem = if has(kiln_ast::attr::AttrKind::CONST) {
         ModRef::None
     } else if has(kiln_ast::attr::AttrKind::PURE) {
@@ -192,6 +195,25 @@ pub(crate) fn const_pure_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) -> boo
     out.push(Attr::Flag(AttrKind::WillReturn));
     out.push(Attr::Memory(MemoryEffects::all(mem)));
     true
+}
+
+/// The `cold` / `hot` function attributes a GNU `cold` / `hot` attribute
+/// on some declaration of `d` gives its declaration and direct call sites
+/// (clang `ConstructAttributeList`; WP-172).
+pub(crate) fn cold_hot_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) {
+    let has = |k: kiln_ast::attr::AttrKind| {
+        ast.redecls_of(d).any(|r| {
+            ast.lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r))
+                .any(|a| ast.attrs.get(a).kind == k)
+        })
+    };
+    if has(kiln_ast::attr::AttrKind::COLD) {
+        out.push(Attr::Flag(AttrKind::Cold));
+    }
+    if has(kiln_ast::attr::AttrKind::HOT) {
+        out.push(Attr::Flag(AttrKind::Hot));
+    }
 }
 
 /// Whether `q` is a complete object type (an incomplete class has no
