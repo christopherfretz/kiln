@@ -1130,8 +1130,9 @@ impl Sema<'_, '_> {
             // `UnresolvedLookupExpr`; deduction is WP-071).
             if found.naming.is_some()
                 && found.decls.iter().any(|&x| self.member_via_dependent_base(x))
+                && let Some((this_ty, _)) = self.this_class()
             {
-                return self.builder().dependent_member(None, true, name, false, nns, None, loc);
+                return self.dependent_implicit_member(this_ty, name, nns, loc);
             }
             if found.naming.is_some() {
                 // A member template: the member overload set (an
@@ -1161,9 +1162,12 @@ impl Sema<'_, '_> {
             .copied()
             .filter(|&x| !self.ast.decls.get(x).has(DeclFlags::INVALID))
             .collect();
-        if fns && found.naming.is_some() && valid.iter().any(|&x| self.member_via_dependent_base(x))
+        if fns
+            && found.naming.is_some()
+            && valid.iter().any(|&x| self.member_via_dependent_base(x))
+            && let Some((this_ty, _)) = self.this_class()
         {
-            return self.builder().dependent_member(None, true, name, false, nns, None, loc);
+            return self.dependent_implicit_member(this_ty, name, nns, loc);
         }
         if fns && (valid.len() > 1 || self.call_uses_adl(&valid, qualifier.is_none())) {
             let e = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
@@ -1205,8 +1209,10 @@ impl Sema<'_, '_> {
             self.check_member_access(via, naming, object, loc);
         }
         if self.is_class_member_ref(d) {
-            if self.member_via_dependent_base(d) {
-                return self.builder().dependent_member(None, true, name, false, nns, None, loc);
+            if self.member_via_dependent_base(d)
+                && let Some((this_ty, _)) = self.this_class()
+            {
+                return self.dependent_implicit_member(this_ty, name, nns, loc);
             }
             let e = self.implicit_member_ref(d, loc, found.shadow(0), nns);
             self.set_qualified_begin(e, begin, loc);
