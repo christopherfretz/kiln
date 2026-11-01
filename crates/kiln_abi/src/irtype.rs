@@ -361,7 +361,14 @@ impl<'a> IrTypes<'a> {
             } else if self.is_empty_field(&f) {
                 i += 1;
             } else {
-                let ty = self.convert_mem(f.ty);
+                // A potentially-overlapping member ([[no_unique_address]]
+                // of class type) is stored as its base-subobject type, as
+                // the record layout places it (clang 19 accumulateFields):
+                // later members may live in its tail padding.
+                let ty = match self.overlapping_class(&f) {
+                    Some(c) => self.base_storage_type(c),
+                    None => self.convert_mem(f.ty),
+                };
                 members.push(Member {
                     offset: layout.fields[i] / 8,
                     data: Some(ty),
@@ -608,6 +615,19 @@ impl<'a> IrTypes<'a> {
             storage_size,
             storage_offset,
             is_signed: is_signed_or_enum(ast, f.ty, self.target()),
+        }
+    }
+
+    /// clang `FieldDecl::isPotentiallyOverlapping`: the class of a
+    /// `[[no_unique_address]]` member of class type.
+    fn overlapping_class(&self, f: &FieldDesc) -> Option<DeclId> {
+        if !f.nua {
+            return None;
+        }
+        let ast = self.ast();
+        match ast.types.canonical_view(f.ty) {
+            TypeView::Record(d) if ast.definition(d).is_some() => Some(d),
+            _ => None,
         }
     }
 
