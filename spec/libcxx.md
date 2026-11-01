@@ -33,7 +33,7 @@ cargo xtask libcxx [options] [<dir>...]
 | `<dir>` | Directories relative to `libcxx/test`, walked recursively. Each one is a row of the report. `Inputs/` directories are skipped, as lit skips them. With no `<dir>`, the default is `--gate m3`. |
 | `--gate m3` | The M3 gate directories (below). With `<dir>`s, those are added after them. |
 | `--libcxx-tests <dir>` | The `llvm-project` checkout. |
-| `--compiler <path>` | kiln binary. Default: `cargo build -p kiln_driver` (debug). |
+| `--compiler <path>` | kiln binary. Default: `cargo build -p kiln_driver` (debug), then `kiln++`. |
 | `--filter <s>` | Keep only tests whose path (relative to `libcxx/test`) contains `<s>`. |
 | `--list` | Print each selected test's kind and pre-run verdict (`run`, `run (XFAIL: …)`, `UNSUPPORTED (…)`). Nothing is compiled. |
 | `-j, --jobs <n>` | Tests in parallel. Default 2. |
@@ -153,7 +153,7 @@ afterwards unless `--keep` is given. Compiles use the flags below, then the
 `ADDITIONAL_COMPILE_FLAGS`, then the step flag, then the test path:
 
 ```
-kiln -std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread \
+kiln++ -std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread \
      -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL \
      -I <llvm-project>/libcxx/test/support  <ADDITIONAL_COMPILE_FLAGS>  \
      (-fsyntax-only | -c -o t.o)  <test>

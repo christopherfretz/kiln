@@ -868,6 +868,12 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   goes through `act_on_attributed_stmt` after the sub-statement is parsed,
   passing the language standard (sema has none of its own). So does one
   holding `likely`, `unlikely` or `fallthrough` (WP-182; spec/sema.md).
+- **Identifier argument (WP-230):** for `enum_extensibility` (clang
+  `attributeHasIdentifierArg`) a leading identifier is passed as
+  `AttrArg::Ident(name, loc)`; any further arguments, or a first one that
+  is not an identifier, parse as expressions. `flag_enum` and
+  `enum_extensibility` parse their arguments (so Sema can count them);
+  other attributes outside `takes_expr_args` skip theirs.
 - **No argument list (WP-182):** a standard attribute that takes no
   arguments (`carries_dependency`, `fallthrough`, `noreturn`,
   `no_unique_address`, `likely`, `unlikely`, `maybe_unused`), written
@@ -882,7 +888,7 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   `expected ']'` / `to match this '['` pair. The argument-count error of
   an `assume` without `(...)` still comes from Sema.
 
-## 7. Driver (`kiln -fsyntax-only [-fdump-ast]`)
+## 7. Driver (`kiln++ -fsyntax-only [-fdump-ast]`)
 - The driver builds the preprocessor exactly as `-E` does
   (`Job::build_preprocessor`: search list, predefines, `-D`/`-U`/
   `-include`, `#if` evaluation, feature queries; spec/driver.md). It

@@ -89,6 +89,15 @@ fn kiln(dir: &Path, args: &[&str]) -> (i32, String) {
     run(env!("CARGO_BIN_EXE_kiln"), dir, &all)
 }
 
+/// The `kiln++` beside the `kiln` binary (`kiln_driver`'s build script
+/// links it), spec/driver.md "Driver modes".
+fn kilnpp(dir: &Path, args: &[&str]) -> (i32, String) {
+    let exe = Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++");
+    let mut all = vec!["-std=c++26", "-fsyntax-only"];
+    all.extend_from_slice(args);
+    run(exe.to_str().unwrap(), dir, &all)
+}
+
 /// spec/diag.md §11.5-11.6: `@file:line` through an `#include`, markers
 /// (and an undefined one), `#line`, `-re`, counts; the report groups by
 /// level and kind, prints `(directive at ...)` for remote directives and
@@ -105,6 +114,7 @@ error: 'expected-warning' diagnostics expected but not seen: \n  File f1.cpp Lin
 4 errors generated.
 ";
     assert_eq!((code, err.as_str()), (1, want));
+    assert_eq!(kilnpp(&dir, &["-verify", "f1.cpp"]), (1, want.to_owned()), "kiln++");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -115,6 +125,8 @@ fn all_matched_is_success() {
     let dir = setup("matched");
     assert_eq!(kiln(&dir, &["-verify", "m.cpp"]), (0, String::new()));
     assert_eq!(kiln(&dir, &["-Xclang", "-verify", "m.cpp"]), (0, String::new()));
+    assert_eq!(kilnpp(&dir, &["-verify", "m.cpp"]), (0, String::new()));
+    assert_eq!(kilnpp(&dir, &["-Xclang", "-verify", "m.cpp"]), (0, String::new()));
     let (code, err) = kiln(&dir, &["m.cpp"]);
     assert_eq!(code, 1, "{err}");
     std::fs::remove_dir_all(&dir).ok();

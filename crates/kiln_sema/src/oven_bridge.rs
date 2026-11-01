@@ -293,6 +293,29 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         }
     }
 
+    /// The failed integral constant expression `c` (evaluation failure
+    /// `f`, diagnosed at `loc`) where clang's
+    /// `VerifyIntegerConstantExpression` allows folding (an enumerator
+    /// without a fixed underlying type, a bit-field width, an array
+    /// designator): when `c` folds laxly ([`Sema::fold_rvalue_int`]) its
+    /// value, with `expression is not an integral constant expression;
+    /// folding it to a constant is a GNU extension`
+    /// [-Wgnu-folding-constant, off unless -pedantic] and the notes; else
+    /// `None` after the `expression is not an integral constant
+    /// expression` error.
+    pub(crate) fn fold_not_ice(&mut self, c: ExprId, mut f: EvalFailure, loc: Loc) -> Option<i128> {
+        let at = Self::fold_lone_invalid(&mut f, loc);
+        let folded = self.fold_rvalue_int(c);
+        let id = if folded.is_some() {
+            kiln_diag::DiagId::sema_expr_not_ice_folded
+        } else {
+            kiln_diag::DiagId::sema_expr_not_ice
+        };
+        let d = Self::with_failure_notes(self.diag(id, at), f);
+        self.emit(d);
+        folded
+    }
+
     /// `d` with the notes explaining the failed evaluation `f` (the
     /// reason, the call stack and supporting notes, in clang's order).
     pub(crate) fn with_failure_notes(d: Diag, f: EvalFailure) -> Diag {

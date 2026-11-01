@@ -274,7 +274,7 @@ kiln-only `raw_string_literal` (`wide_raw_string_literal`, …), `other`,
   `lex_phases_sparse_splices_fuzz` covers long clean runs with rare
   splices; `cpp_cond_skip_plain_line_rest_preserves_line_starts` checks
   that skipping never moves a line-initial token or an `Eod`.
-- Later: `kiln -E -P` vs `clang -E -P` differential (tests/differential/pp/).
+- Later: `kiln++ -E -P` vs `clang -E -P` differential (tests/differential/pp/).
 
 ## Literals (`kiln_lex::literal`, [lex.ccon] [lex.string] [lex.icon] [lex.fcon] [lex.ext])
 The lexer only finds where a literal ends (`\` skips the next character).

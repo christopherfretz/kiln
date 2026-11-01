@@ -113,7 +113,7 @@ impl Sema<'_, '_> {
         for (i, arg) in args.iter().enumerate() {
             let v = match arg {
                 AttrArg::Expr(e) => self.fold_int(*e).map(|v| (v, self.ast.exprs.get(*e).loc())),
-                AttrArg::Type(_) => None,
+                AttrArg::Type(_) | AttrArg::Ident(..) => None,
             };
             let Some((v, at)) = v else {
                 let msg = self

@@ -71,7 +71,7 @@ source text
                   exceptions (landingpads), RTTI, vtables, thread_local, globals,
                   static init, debug info (later).
   ▼
-  kiln_driver     the `kiln` binary: clang-compatible command line, -E/-fsyntax-only/
+  kiln_driver     `kiln`/`kiln++`: clang-compatible command line, -E/-fsyntax-only/
                   -S -emit-llvm/-c/link, resource dir discovery, invokes llc/lld.
   kiln_harness    test + benchmark runner (`cargo xtask ...`): conformance tests,
                   differential tests against clang, libc++ lit driver, perf baselines.

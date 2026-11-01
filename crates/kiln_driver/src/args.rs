@@ -6,14 +6,20 @@ use kiln_pp::{CmdMacro, DirGroup, OptLevel, PicModel};
 
 use crate::toolchain::StdLib;
 
-/// The language of an input (`-x`, else the file extension).
+/// The language of an input (`-x`, else the file extension and the driver
+/// mode; spec/driver.md "Input languages").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
-    /// C (`-x c`, `-x c-header`, `.c`).
+    /// C (`-x c`, `-x c-header`, `.c`, `.h` and `.i` under `kiln`).
     C,
     /// C++ (`-x c++`, `-x c++-header`, everything else).
     Cxx,
 }
+
+/// A C input type that C++ mode compiles as C++, as clang's
+/// `lookupCXXTypeForCType`: clang's names of the type before and after
+/// (`treating '<c>' input as '<c++>' when in C++ mode`).
+pub type Promotion = (&'static str, &'static str);
 
 impl Lang {
     /// The language of a `-x` value.
@@ -25,13 +31,77 @@ impl Lang {
         }
     }
 
-    /// The language of a file by its extension: `.c` and `.i` are C,
-    /// anything else (`.h` included) is C++.
-    pub fn from_path(p: &str) -> Lang {
-        match p.rsplit_once('.').map(|(_, e)| e) {
-            Some("c" | "i") => Lang::C,
-            _ => Lang::Cxx,
+    /// clang's C input type of a file by its extension (`.c`, `.h`, `.i`;
+    /// case-sensitive, as clang's table: `.C` and `.H` are C++), as the
+    /// [`Promotion`] C++ mode applies to it; `None` for anything else.
+    pub fn c_type_of(p: &str) -> Option<Promotion> {
+        match std::path::Path::new(p).extension().and_then(|e| e.to_str()) {
+            Some("c") => Some(("c", "c++")),
+            Some("h") => Some(("c-header", "c++-header")),
+            Some("i") => Some(("cpp-output", "c++-cpp-output")),
+            _ => None,
         }
+    }
+
+    /// The language of an input without `-x` in `mode`. Under `kiln`
+    /// (`Gcc`) `.c`, `.h` and `.i` are C and standard input (`-`) is C;
+    /// everything else is C++. Under `kiln++` (`Gxx`) everything is C++,
+    /// and a C extension also returns its [`Promotion`] (the
+    /// `-Wdeprecated` warning).
+    pub fn of_input(p: &str, mode: DriverMode) -> (Lang, Option<Promotion>) {
+        match mode {
+            DriverMode::Gxx if p == "-" => (Lang::Cxx, None),
+            DriverMode::Gxx => (Lang::Cxx, Lang::c_type_of(p)),
+            DriverMode::Gcc if p == "-" => (Lang::C, None),
+            DriverMode::Gcc if Lang::c_type_of(p).is_some() => (Lang::C, None),
+            DriverMode::Gcc => (Lang::Cxx, None),
+        }
+    }
+}
+
+/// The driver mode, as clang's (`--driver-mode=`, else the program name;
+/// spec/driver.md "Driver modes"): what an input without `-x` is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DriverMode {
+    /// `kiln` (`--driver-mode=gcc`): C by extension, else C++.
+    #[default]
+    Gcc,
+    /// `kiln++` (`--driver-mode=g++`): every input is C++.
+    Gxx,
+}
+
+impl DriverMode {
+    /// The mode of a program name (`argv[0]`), as clang's driver name
+    /// parsing: the basename without `.exe`, then, if that does not decide
+    /// it, without a trailing version (`kiln++-0.1`, `clang++-19`). A name
+    /// ending in `++` (`kiln++`, `c++`) is C++ mode; anything else is `Gcc`
+    /// (clang's preprocessor-only `*-cpp` names too: there is no such mode).
+    pub fn from_program_name(argv0: &str) -> DriverMode {
+        let base = program_basename(argv0);
+        let base = base.strip_suffix(".exe").unwrap_or(base);
+        let cxx = |n: &str| n.ends_with("++");
+        let unversioned = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+        let unversioned = unversioned.strip_suffix('-').unwrap_or(unversioned);
+        if cxx(base) || cxx(unversioned) { DriverMode::Gxx } else { DriverMode::Gcc }
+    }
+
+    /// The mode a `--driver-mode=` value selects (`g++`, `gcc`); `None`
+    /// for anything else (clang's `cpp`, `cl`, ... are not implemented).
+    pub fn from_flag(v: &str) -> Option<DriverMode> {
+        match v {
+            "g++" => Some(DriverMode::Gxx),
+            "gcc" => Some(DriverMode::Gcc),
+            _ => None,
+        }
+    }
+}
+
+/// The basename of `argv0` (the name driver diagnostics carry, as clang's
+/// `clang++-19: error:`); `kiln` when it is empty.
+pub fn program_basename(argv0: &str) -> &str {
+    match argv0.rsplit('/').next() {
+        Some(b) if !b.is_empty() => b,
+        _ => "kiln",
     }
 }
 
@@ -190,6 +260,9 @@ pub enum ArgError {
     /// A flag with a value outside its set: `(argument, value)`
     /// ("invalid value '{v}' in '{arg}'").
     InvalidFlagValue(String, String),
+    /// An option whose value kiln does not support: `(option, value)`
+    /// ("unsupported argument '{v}' to option '{opt}'"; `--driver-mode=`).
+    UnsupportedValue(String, String),
 }
 
 /// The parsed command line.
@@ -198,6 +271,11 @@ pub enum ArgError {
 pub struct Args {
     /// The command line as given (for `ClangFeatures::from_args`).
     pub argv: Vec<String>,
+    /// The program name driver diagnostics carry (`kiln`, `kiln++`).
+    pub program: String,
+    /// The driver mode: the program name's, else the last
+    /// `--driver-mode=`.
+    pub mode: DriverMode,
     /// Input files, in order.
     pub inputs: Vec<Input>,
     /// `-fdump-ast[=<opts>]` (`-fsyntax-only`): the options, `""` for none.
@@ -316,9 +394,20 @@ const SEPARATE_OR_EQ: &[&str] =
     &["--sysroot", "-resource-dir", "-target", "--target", "-std", "--std"];
 
 impl Args {
-    /// Parses `argv` (without the program name).
+    /// Parses `argv` (without the program name) as `kiln++` would.
     pub fn parse(argv: &[String]) -> Args {
-        let mut a = Args { argv: argv.to_vec(), ..Args::default() };
+        Args::parse_as("kiln++", argv)
+    }
+
+    /// Parses `argv` (without the program name) for the program `argv0`,
+    /// which sets [`Args::program`] and the default [`Args::mode`].
+    pub fn parse_as(argv0: &str, argv: &[String]) -> Args {
+        let mut a = Args {
+            argv: argv.to_vec(),
+            program: program_basename(argv0).to_owned(),
+            mode: DriverMode::from_program_name(argv0),
+            ..Args::default()
+        };
         let mut x: Option<Lang> = None;
         let mut verify = VerifyRaw::default();
         let mut i = 0;
@@ -362,6 +451,23 @@ impl Args {
         }
         a.verify = verify.finish(&mut a.errors);
         a
+    }
+
+    /// The language of `input`: its `-x`, else [`Lang::of_input`] in
+    /// [`Args::mode`].
+    pub fn input_lang(&self, input: &Input) -> Lang {
+        input.lang.unwrap_or_else(|| Lang::of_input(&input.path, self.mode).0)
+    }
+
+    /// The inputs C++ mode compiles as C++ although their extension is C's
+    /// (no `-x`), with the [`Promotion`]: clang's deprecated
+    /// `treating 'c' input as 'c++'` warning, once per input.
+    pub fn promoted_inputs<'a>(&self, inputs: &[&'a Input]) -> Vec<(&'a Input, Promotion)> {
+        inputs
+            .iter()
+            .filter(|i| i.lang.is_none())
+            .filter_map(|&i| Lang::of_input(&i.path, self.mode).1.map(|p| (i, p)))
+            .collect()
     }
 
     fn valued(&mut self, opt: &str, v: &str, x: &mut Option<Lang>) {
@@ -456,6 +562,14 @@ impl Args {
                         "libc++" => self.stdlib = Some(StdLib::LibCxx),
                         "libstdc++" => self.stdlib = Some(StdLib::LibStdCxx),
                         _ => self.errors.push(ArgError::InvalidStdlib(arg.to_owned())),
+                    }
+                } else if let Some(v) = arg.strip_prefix("--driver-mode=") {
+                    match DriverMode::from_flag(v) {
+                        Some(m) => self.mode = m,
+                        None => self.errors.push(ArgError::UnsupportedValue(
+                            "--driver-mode=".to_owned(),
+                            v.to_owned(),
+                        )),
                     }
                 } else if let Some(v) = arg.strip_prefix("--embed-dir=") {
                     self.embed_dirs.push(v.to_owned());
@@ -732,10 +846,69 @@ mod tests {
     }
 
     #[test]
-    fn lang_from_path() {
-        assert_eq!(Lang::from_path("a.c"), Lang::C);
-        assert_eq!(Lang::from_path("a.h"), Lang::Cxx);
-        assert_eq!(Lang::from_path("dir.c/a"), Lang::Cxx);
+    fn lang_by_extension_and_mode() {
+        use DriverMode::{Gcc, Gxx};
+        let c = |p| Lang::of_input(p, Gcc);
+        assert_eq!(c("a.c"), (Lang::C, None));
+        assert_eq!(c("a.h"), (Lang::C, None));
+        assert_eq!(c("a.i"), (Lang::C, None));
+        assert_eq!(c("-"), (Lang::C, None));
+        for p in ["a.cpp", "a.cc", "a.C", "a.H", "a.hpp", "a.ii", "a.cppm", "dir.c/a", "a"] {
+            assert_eq!(c(p), (Lang::Cxx, None), "{p}");
+        }
+        let cxx = |p| Lang::of_input(p, Gxx);
+        assert_eq!(cxx("a.c"), (Lang::Cxx, Some(("c", "c++"))));
+        assert_eq!(cxx("d/a.h"), (Lang::Cxx, Some(("c-header", "c++-header"))));
+        assert_eq!(cxx("a.i"), (Lang::Cxx, Some(("cpp-output", "c++-cpp-output"))));
+        assert_eq!(cxx("-"), (Lang::Cxx, None));
+        assert_eq!(cxx("a.cpp"), (Lang::Cxx, None));
+    }
+
+    #[test]
+    fn mode_from_program_name() {
+        use DriverMode::{Gcc, Gxx};
+        for n in ["kiln++", "/usr/bin/kiln++", "kiln++.exe", "kiln++-0.1", "x/clang++-19", "c++"] {
+            assert_eq!(DriverMode::from_program_name(n), Gxx, "{n}");
+        }
+        let gcc = ["kiln", "/a/b/kiln", "kiln.exe", "kiln-0.1", "clang-19", "", "kiln++/kiln"];
+        for n in gcc.into_iter().chain(["kiln-cpp", "clang-cpp-19", "cpp"]) {
+            assert_eq!(DriverMode::from_program_name(n), Gcc, "{n}");
+        }
+        assert_eq!(program_basename("/usr/bin/kiln++"), "kiln++");
+        assert_eq!(program_basename(""), "kiln");
+    }
+
+    #[test]
+    fn driver_mode_flag_last_wins() {
+        let p = |a: &[&str]| {
+            Args::parse_as("kiln", &a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+        };
+        let a = p(&["a.c"]);
+        assert_eq!((a.program.as_str(), a.mode), ("kiln", DriverMode::Gcc));
+        let a = p(&["--driver-mode=g++", "a.c"]);
+        assert_eq!((a.program.as_str(), a.mode), ("kiln", DriverMode::Gxx));
+        let a = p(&["--driver-mode=g++", "a.c", "--driver-mode=gcc"]);
+        assert_eq!((a.mode, a.errors), (DriverMode::Gcc, vec![]));
+        let a = p(&["--driver-mode=cl", "a.c"]);
+        assert_eq!(a.errors, [ArgError::UnsupportedValue("--driver-mode=".into(), "cl".into())]);
+        assert_eq!(parse("a.c").mode, DriverMode::Gxx);
+    }
+
+    /// `-x` beats the mode and the extension; `-x none` gives them back.
+    #[test]
+    fn x_precedence() {
+        let a = parse("-x c a.cpp b.c -x none c.c -x c++ d.c");
+        let langs: Vec<Lang> = a.inputs.iter().map(|i| a.input_lang(i)).collect();
+        assert_eq!(langs, [Lang::C, Lang::C, Lang::Cxx, Lang::Cxx]);
+        let refs: Vec<&Input> = a.inputs.iter().collect();
+        let promoted: Vec<&str> =
+            a.promoted_inputs(&refs).iter().map(|(i, _)| i.path.as_str()).collect();
+        assert_eq!(promoted, ["c.c"]);
+        let mut g = a.clone();
+        g.mode = DriverMode::Gcc;
+        let langs: Vec<Lang> = g.inputs.iter().map(|i| g.input_lang(i)).collect();
+        assert_eq!(langs, [Lang::C, Lang::C, Lang::C, Lang::Cxx]);
+        assert_eq!(g.promoted_inputs(&refs), []);
     }
 
     /// spec/driver.md "-verify": clang `ParseDiagnosticArgs` semantics:

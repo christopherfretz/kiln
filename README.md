@@ -45,7 +45,7 @@ preprocessor parity with clang on all of libc++'s headers) and
 | `crates/kiln_ast`, `kiln_parse`, `kiln_sema` | syntax and semantics |
 | `crates/kiln_oven` | the constant evaluator |
 | `crates/kiln_abi`, `kiln_llvm`, `kiln_codegen` | Itanium ABI, IR model, lowering |
-| `crates/kiln_driver` | the `kiln` command |
+| `crates/kiln_driver` | the `kiln` and `kiln++` commands |
 | `xtask/` | test, bench and libc++ harness (`cargo xtask ...`) |
 | `spec/` | per-crate contracts |
 | `docs/` | architecture, roadmap, validation, contributor model |
