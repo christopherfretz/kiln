@@ -3147,14 +3147,11 @@ impl Sema<'_, '_> {
     /// The declaration of `v`'s entity that has `constinit`, and where
     /// (in its pattern, for an instantiated one).
     fn constinit_of(&self, v: DeclId) -> Option<(DeclId, Loc)> {
-        let (d, mut at) = match self.constinit_locs.get(&v) {
-            Some(&at) => (v, at),
-            None => {
-                self.ast.decls.redecl(v)?;
-                self.ast
-                    .redecls_of(v)
-                    .find_map(|d| self.constinit_locs.get(&d).map(|&at| (d, at)))?
-            }
+        let (d, mut at) = if let Some(&at) = self.constinit_locs.get(&v) {
+            (v, at)
+        } else {
+            self.ast.decls.redecl(v)?;
+            self.ast.redecls_of(v).find_map(|d| self.constinit_locs.get(&d).map(|&at| (d, at)))?
         };
         let mut x = d;
         while let Some(p) = self.ast.instantiated_from(x) {
