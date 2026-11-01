@@ -1572,9 +1572,17 @@ formed it:
   T::type g, (*h)(T::type);` both `g` and `h` fail at the first `T::type`
   and clang reports it twice. Kiln's diagnostic engine drops the
   identical second report (same id, location and context).
-- Dependent names inside expressions (`T::x` in a default argument,
-  `sizeof(typename T::type)`) are not affected. The expression keeps its
-  own location, so these are exact without the table. A partially
+- Dependent names inside expressions (`T::x` in a default argument) are
+  not affected. The expression keeps its own location, so these are
+  exact without the table. A type operand of `sizeof`, `alignof` or
+  `typeid` is a type, though: it uses *after* the keyword
+  (`Substituter::ty_written_after`, WP-220), so `T::type f(int =
+  sizeof(T::type))` reports the default argument's own occurrence, not
+  the nearer return type's.
+- `typename T::template Z<int>` checks the access of a member class or
+  alias template when it is substituted ([class.access]/4; WP-220), as
+  `typename T::type` does. A function template's access is checked by
+  overload resolution. A partially
   substituted member template is instantiated from its original pattern
   with all levels of arguments at once (`MultiLevelArgs`), so its types
   keep their written keys. Types formed during instantiation therefore

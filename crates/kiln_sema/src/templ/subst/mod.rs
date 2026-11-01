@@ -22,7 +22,7 @@ pub(crate) use local::LocalMethod;
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::ids::{ArgListId, ListId, NnsId};
+use kiln_ast::ids::{ArgListId, ListId, NnsId, QualType};
 use kiln_ast::types::{ArgView, Nns, TemplateArg, TemplateName, TypeFlags};
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
@@ -143,6 +143,16 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         self.written_scope = saved;
         let _ = self.written_used.replace(used);
         r
+    }
+
+    /// Type operand `t` of the expression at `loc` (`sizeof(T::type)`,
+    /// `typeid(T::type)`): its dependent names are the occurrences after
+    /// the keyword (§5.8), not the nearest ones, which may belong to the
+    /// enclosing declaration's type.
+    pub(crate) fn ty_written_after(&mut self, t: QualType, loc: Loc) -> SubstResult<QualType> {
+        use crate::templ::written::{WrittenScope, WrittenSide};
+        let scope = WrittenScope { anchor: loc, side: WrittenSide::After, bound: loc };
+        self.with_written_scope(scope, |s| s.ty(t, loc))
     }
 
     /// Where the dependent entity `key` was written nearest to `loc`

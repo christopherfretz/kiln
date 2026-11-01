@@ -541,6 +541,13 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         };
         if let Some(t) = self.sema.template_of(d) {
+            // [class.access]/4: a member class or alias template is
+            // checked now (a SFINAE failure in a deduction); a function
+            // template by overload resolution.
+            if matches!(self.sema.kind_of(t), DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate)
+            {
+                self.sema.check_found_access(&found, loc);
+            }
             return Ok(t);
         }
         let at = self.sema.ast.decls.get(d).loc();
