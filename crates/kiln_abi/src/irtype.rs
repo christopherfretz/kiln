@@ -101,6 +101,7 @@ pub struct BitFieldInfo {
 
 /// The lowered form of one class (clang `CGRecordLayout`).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts, as clang's CGRecordLayout")]
 pub struct IrRecord {
     /// The struct body.
     pub members: Vec<IrType>,

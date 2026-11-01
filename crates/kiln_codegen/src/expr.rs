@@ -253,11 +253,11 @@ impl Cg<'_> {
                 if ast.types.is_void(q) {
                     return Ok(None);
                 }
-                if !self.zero_init(q) {
-                    V::C(self.null_const(q)?)
-                } else {
+                if self.zero_init(q) {
                     let t = self.lty(q);
                     V::C(self.m.const_zero(t))
+                } else {
+                    V::C(self.null_const(q)?)
                 }
             }
             ExprKind::OffsetOfExpr => {
@@ -367,11 +367,11 @@ impl Cg<'_> {
                 if let Some(&x) = ast.lists.get(ast.exprs.init_list_inits(e)).first() {
                     return self.emit_scalar_opt(ExprId::new(x));
                 }
-                if !self.zero_init(q) {
-                    V::C(self.null_const(q)?)
-                } else {
+                if self.zero_init(q) {
                     let t = self.lty(q);
                     V::C(self.m.const_zero(t))
+                } else {
+                    V::C(self.null_const(q)?)
                 }
             }
             // clang `ScalarExprEmitter::VisitArraySubscriptExpr`: a vector

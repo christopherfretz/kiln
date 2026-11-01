@@ -85,11 +85,11 @@ impl Cg<'_> {
             .collect();
         for f in fields {
             let fq = ast.decls.get(f).ty().unwrap_or(QualType::INT);
-            if !rec.bitfields.contains_key(&f) {
-                if let Some(&i) = rec.field_index.get(&f) {
-                    let i = i as usize;
-                    elems[i] = Some(self.null_field_const(fq, tys[i])?);
-                }
+            if !rec.bitfields.contains_key(&f)
+                && let Some(&i) = rec.field_index.get(&f)
+            {
+                let i = i as usize;
+                elems[i] = Some(self.null_field_const(fq, tys[i])?);
             }
             if rec.is_union && self.names_data_member(f) {
                 break;
