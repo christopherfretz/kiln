@@ -647,8 +647,8 @@ diag_ids! {
     sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";
     sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";
     sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
-    note_immediate_function_reason = Note (4) "'{0}' is an immediate function because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} function '{3}'{1:| and that call is not a constant expression}";
-    note_immediate_default_init_reason = Note (5) "'{0}' is an immediate {1:function|constructor} because the default initializer of '{2}' contains a call to {3:an immediate|a consteval} function '{4}' and that call is not a constant expression";
+    note_immediate_function_reason = Note (6) "'{0}' is an immediate {4:function|constructor} because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} {5:function|constructor} '{3}'{1:| and that call is not a constant expression}";
+    note_immediate_default_init_reason = Note (7) "'{0}' is an immediate {1:function|constructor} because the{6:| default} initializer of '{2}' contains a call to {3:an immediate|a consteval} {5:function|constructor} '{4}' and that call is not a constant expression";
     note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
     sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
     sema_block_extern_init = Error (0) "declaration of block scope identifier with linkage cannot have an initializer";
@@ -818,6 +818,8 @@ diag_ids! {
     sema_unused_result = Warning [UnusedResult] (1) "ignoring return value of function declared with {0} attribute";
     sema_unused_result_msg = Warning [UnusedResult] (2) "ignoring return value of function declared with {0} attribute: {1}";
     sema_unused_expr = Warning [UnusedValue] (0) "expression result unused";
+    sema_unused_constructor = Warning [UnusedValue] (1) "ignoring temporary created by a constructor declared with {0} attribute";
+    sema_unused_constructor_msg = Warning [UnusedValue] (2) "ignoring temporary created by a constructor declared with {0} attribute: {1}";
     sema_unused_comparison = Warning [UnusedComparison] (1) "{0:equality|inequality|relational|three-way} comparison result unused";
     sema_deprecated = Warning [DeprecatedDeclarations] (1) "'{0}' is deprecated";
     sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated: {1}";

@@ -33,9 +33,12 @@ pub(crate) struct Escalation {
     callee: DeclId,
     /// A call that is not a constant expression (else the address).
     call: bool,
-    /// The field whose default member initializer holds the call (a
-    /// constructor using it; `loc` is the constructor).
+    /// The member whose initializer holds the call (a constructor's
+    /// default member initializer or mem-initializer; `loc` is the
+    /// constructor).
     default_init: Option<DeclId>,
+    /// `default_init` is a written mem-initializer ("the initializer of").
+    written: bool,
 }
 
 /// A use of a default argument or default member initializer whose
@@ -72,6 +75,10 @@ pub(crate) struct ImmPending {
     default_init: bool,
     /// The default arguments and default member initializers used.
     default_uses: Vec<DefaultUse>,
+    /// The next full-expression is the mem-initializer of this member,
+    /// written or not (an escalation names it, at the constructor, as
+    /// clang's `DiagnoseImmediateEscalatingReason` does).
+    member_init: Option<(DeclId, bool)>,
 }
 
 /// [`Sema`]'s immediate-invocation state.
@@ -184,6 +191,12 @@ impl Sema<'_, '_> {
     /// The next full-expression is the initializer of `v`.
     pub(crate) fn note_var_init_full_expr(&mut self, v: DeclId) {
         self.imm.pending.var_init = Some(v);
+    }
+
+    /// The next full-expression is the mem-initializer of member `f`,
+    /// `written` or implicit.
+    pub(crate) fn note_member_init_full_expr(&mut self, f: DeclId, written: bool) {
+        self.imm.pending.member_init = Some((f, written));
     }
 
     /// The next full-expression is a default argument or a default
@@ -303,9 +316,21 @@ impl Sema<'_, '_> {
                 Some(g) => {
                     let why = if ctor {
                         let loc = self.ast.decls.get(g).loc();
-                        Escalation { loc, callee, call: true, default_init: Some(decl) }
+                        Escalation {
+                            loc,
+                            callee,
+                            call: true,
+                            default_init: Some(decl),
+                            written: false,
+                        }
                     } else {
-                        Escalation { loc: at, callee, call: true, default_init: None }
+                        Escalation {
+                            loc: at,
+                            callee,
+                            call: true,
+                            default_init: None,
+                            written: false,
+                        }
                     };
                     self.escalate(g, why);
                     return;
@@ -358,6 +383,7 @@ impl Sema<'_, '_> {
     /// immediate functions ([expr.const]/16-19).
     pub(crate) fn finish_immediate_invocations(&mut self, e: ExprId) {
         let var = self.imm.pending.var_init.take();
+        let member_init = self.imm.pending.member_init.take();
         let default_init = std::mem::take(&mut self.imm.pending.default_init);
         let uses = std::mem::take(&mut self.imm.pending.default_uses);
         if self.imm.pending.candidates.is_empty()
@@ -412,11 +438,13 @@ impl Sema<'_, '_> {
                     Some(g) => {
                         self.ast.exprs.set_constant_elided(c);
                         self.mark_immediate_escalating(self.ast.exprs.operand(c));
-                        let loc = self.begin_loc(c);
-                        self.escalate(
-                            g,
-                            Escalation { loc, callee, call: true, default_init: None },
-                        );
+                        let (loc, field, written) = match member_init {
+                            Some((f, w)) => (self.ast.decls.get(g).loc(), Some(f), w),
+                            None => (self.begin_loc(c), None, false),
+                        };
+                        let why =
+                            Escalation { loc, callee, call: true, default_init: field, written };
+                        self.escalate(g, why);
                     }
                     None => self.report_immediate_call(c, callee, fail, None),
                 },
@@ -437,7 +465,10 @@ impl Sema<'_, '_> {
             let loc = self.begin_loc(r);
             if let Some(g) = escalating {
                 self.ast.exprs.set_immediate_escalating(r);
-                self.escalate(g, Escalation { loc, callee: d, call: false, default_init: None });
+                self.escalate(
+                    g,
+                    Escalation { loc, callee: d, call: false, default_init: None, written: false },
+                );
                 continue;
             }
             let consteval = self.is_consteval_kind(d);
@@ -575,24 +606,44 @@ impl Sema<'_, '_> {
                 )
                 .with_note(self.diag(DiagId::note_declared_at, begin));
         }
+        // clang names the reason for a generic lambda's call operator
+        // specialization, not for a non-template call operator.
+        let plain_call_op = self.is_lambda_call_op(f)
+            && !matches!(
+                self.ast.templ_link(self.ast.first(f)).get(),
+                Some((kiln_ast::decl::TemplLinkKind::Specialization, _))
+            );
         if !consteval
-            && !self.is_lambda_call_op(f)
+            && !plain_call_op
             && let Some(why) = self.imm.reasons.get(&f).copied()
         {
+            // A constructor is named by its class's unqualified name.
+            let is_ctor = |d: DeclId| self.ast.decls.get(d).kind() == DeclKind::CXXConstructor;
+            let name = |d: DeclId| {
+                if is_ctor(d) { self.unqualified_decl_name(d) } else { self.qualified_decl_name(d) }
+            };
             let note = match why.default_init {
                 Some(field) => self
                     .diag(DiagId::note_immediate_default_init_reason, why.loc)
                     .arg(self.unqualified_decl_name(f))
-                    .arg(u8::from(self.ast.decls.get(f).kind() == DeclKind::CXXConstructor))
+                    .arg(u8::from(is_ctor(f)))
                     .arg(self.unqualified_decl_name(field))
                     .arg(u8::from(self.is_consteval_kind(why.callee)))
-                    .arg(self.qualified_decl_name(why.callee)),
+                    .arg(name(why.callee))
+                    .arg(u8::from(is_ctor(why.callee)))
+                    .arg(u8::from(!why.written)),
                 None => self
                     .diag(DiagId::note_immediate_function_reason, why.loc)
-                    .arg(self.qualified_decl_name(f))
+                    .arg(if self.is_lambda_call_op(f) {
+                        self.unqualified_decl_name(f)
+                    } else {
+                        name(f)
+                    })
                     .arg(u8::from(why.call))
                     .arg(u8::from(self.is_consteval_kind(why.callee)))
-                    .arg(self.qualified_decl_name(why.callee)),
+                    .arg(name(why.callee))
+                    .arg(u8::from(is_ctor(f)))
+                    .arg(u8::from(is_ctor(why.callee))),
             };
             msg = msg.with_note(note);
         }

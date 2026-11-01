@@ -2042,9 +2042,17 @@ impl Cg<'_> {
             return Ok(None);
         }
         if self.is_aggregate(rq) {
-            let d = match dest {
-                Some(d) => d,
-                None => self.temp(rq),
+            // clang `EmitCall`: a given destination takes the data size
+            // (`getTypeInfoDataSizeInChars`; it may be a base subobject or
+            // a `[[no_unique_address]]` member whose tail padding holds
+            // other members), a fresh temporary the whole object.
+            let (size, _) = self.size_align(rq);
+            let (d, size) = match dest {
+                Some(d) => {
+                    let ds = self.ast.types.as_record(rq).and_then(|r| self.class_def(r));
+                    (d, ds.map_or(size, |r| self.tys.layouter().record(r).data_size))
+                }
+                None => (self.temp(rq), size),
             };
             let (ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. }) =
                 sig.info.ret.kind.clone()
@@ -2057,7 +2065,6 @@ impl Cg<'_> {
             } else {
                 // (Empty records are returned `Ignore` on both targets, so
                 // clang's empty-record skip cannot arise here.)
-                let (size, _) = self.size_align(rq);
                 self.coerced_store_sized(r, &coerce, d, size);
             }
             return Ok(None);
