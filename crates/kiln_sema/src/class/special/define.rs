@@ -14,13 +14,14 @@
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
     Access, BaseSpec, CtorInit, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits,
-    FnSpec, FnStorage, LinkageLang, builtin,
+    FnSpec, FnStorage, InitStyle, LinkageLang, VarSpec, builtin,
 };
 use kiln_ast::expr::{
     BinaryOp, CastKind, ConstructInfo, ConstructionKind, ExprFlags, ExprKind, NonOdrUse, Radix,
     UnaryOp, ValueCategory,
 };
 use kiln_ast::names::DeclName;
+use kiln_ast::stmt::LoopData;
 use kiln_ast::types::{ExcSpec, FuncInfo, Quals, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId, TypeId};
 use kiln_diag::{Diag, DiagId};
@@ -1282,7 +1283,7 @@ impl Sema<'_, '_> {
                 ValueCategory::LValue,
                 Some(path),
             );
-            match self.assign_subobject(f, spec.ty, to, from, loc, 0) {
+            match self.assign_subobject(spec.ty, to, from, loc) {
                 Some(s) => stmts.push(s),
                 None => invalid = true,
             }
@@ -1323,7 +1324,7 @@ impl Sema<'_, '_> {
             let from = self.field_access(from, m, fq, false, loc);
             let this = self.builder().this_expr(this_ty, false, loc);
             let to = self.field_access(this, m, obj_q, true, loc);
-            match self.assign_subobject(f, fty, to, from, loc, 0) {
+            match self.assign_subobject(fty, to, from, loc) {
                 Some(s) => stmts.push(s),
                 None => invalid = true,
             }
@@ -1341,16 +1342,25 @@ impl Sema<'_, '_> {
     }
 
     /// clang `buildSingleCopyAssign`: the assignment of the subobject `to`
-    /// of type `ty` from `from`, in the assignment operator `f`; `depth`
-    /// counts the enclosing array loops.
+    /// of type `ty` from `from`.
     fn assign_subobject(
         &mut self,
-        f: DeclId,
         ty: QualType,
         to: ExprId,
         from: ExprId,
         loc: Loc,
+    ) -> Option<StmtId> {
+        self.assign_subobject_at(ty, to, from, 0, loc)
+    }
+
+    /// clang `buildSingleCopyAssignRecursively` at array nesting `depth`.
+    fn assign_subobject_at(
+        &mut self,
+        ty: QualType,
+        to: ExprId,
+        from: ExprId,
         depth: u32,
+        loc: Loc,
     ) -> Option<StmtId> {
         if self.ast.types.is_array(ty) {
             let q = self.ast.types.effective_quals(ty);
@@ -1371,7 +1381,7 @@ impl Sema<'_, '_> {
                     return Some(self.memcpy_assign(ty, to, from, loc));
                 }
             }
-            return self.assign_array_loop(f, ty, to, from, loc, depth);
+            return self.assign_array_loop(ty, to, from, depth, loc);
         }
         if let Some(r) = self.ast.types.as_record(ty) {
             let c = self.ast.definition(r)?;
@@ -1404,56 +1414,53 @@ impl Sema<'_, '_> {
         Some(self.builder().expr_stmt(e))
     }
 
-    /// [class.copy.assign]/12.2, clang `buildSingleCopyAssignRecursively`:
-    /// an array whose elements are not copied by `memcpy` is assigned
-    /// element by element,
-    /// `for (size_t __iN = 0; __iN != n; ++__iN) to[__iN] = from[__iN];`
-    /// (an xvalue `from` gives xvalue elements).
+    /// The element-wise loop of [class.copy.assign]/12.2 for an array
+    /// subobject (clang `buildSingleCopyAssignRecursively`):
+    /// `for (size_t __iD = 0; __iD != N; ++__iD) to[__iD] = from[__iD];`,
+    /// the element assigned recursively (a move casts each element).
     fn assign_array_loop(
         &mut self,
-        f: DeclId,
         ty: QualType,
         to: ExprId,
         from: ExprId,
-        loc: Loc,
         depth: u32,
+        loc: Loc,
     ) -> Option<StmtId> {
-        let Some(n) = self.ast.types.array_size(ty).filter(|_| depth < 32) else {
+        let Some(n) = self.ast.types.array_size(ty) else {
             self.unsupported("implicit assignment of an array of this type", loc);
             return None;
         };
-        let q = self.ast.types.effective_quals(ty);
         let elem = self.ast.types.element(ty)?;
-        let elem = if q.is_empty() { elem } else { self.ast.types.qualify(elem, q) };
         let moving = self.ast.exprs.get(from).value_category() == ValueCategory::XValue;
-        let sz = self.size_type();
-        let name = self.intern(&format!("__i{depth}"));
-        let v = self.builder().var(
-            DeclHead::new(f, DeclName::ident(name), loc),
-            sz,
-            kiln_ast::decl::VarSpec::new(),
-            None,
-        );
-        let zero = self.builder().int_literal(sz, 0, Radix::Decimal, loc);
+        let size_t = self.size_type();
+        let sym = self.intern(&format!("__i{depth}"));
+        let mut h = DeclHead::new(self.ctx, DeclName::ident(sym), loc);
+        h.flags = h.flags.with(DeclFlags::IMPLICIT);
+        let spec = VarSpec::new().with_init_style(InitStyle::C);
+        let v = self.builder().var(h, size_t, spec, None);
+        let zero = self.builder().int_literal(size_t, 0, Radix::Decimal, loc);
         let _ = self.builder().set_var_init(v, zero);
+        self.ast.decls.set_flags(v, DeclFlags::REFERENCED);
         let init = self.builder().decl_stmt(&[v], loc);
-        let i = self.build_decl_ref(v, loc);
-        let bound = self.builder().int_literal(sz, n, Radix::Decimal, loc);
-        let cond = self.builtin_binary(BinaryOp::NE, i, bound, loc);
-        let i = self.build_decl_ref(v, loc);
-        let inc = self.builtin_unary(UnaryOp::PreInc, i, loc);
-        let i = self.build_decl_ref(v, loc);
-        let a = self.builtin_subscript(to, i, loc);
-        let i = self.build_decl_ref(v, loc);
-        let mut b = self.builtin_subscript(from, i, loc);
-        if self.is_err_expr(a) || self.is_err_expr(b) {
-            return None;
-        }
+        let iref = |s: &mut Self| {
+            let r = s.builder().decl_ref(v, size_t, loc, None, NonOdrUse::None, ExprFlags::NONE);
+            conv::lvalue_to_rvalue(s, r)
+        };
+        let i = iref(self);
+        let mut from_e = self.builtin_subscript(from, i, loc);
         if moving {
-            b = self.cast_for_moving(b);
+            from_e = self.cast_for_moving(from_e);
         }
-        let body = self.assign_subobject(f, elem, a, b, loc, depth + 1)?;
-        let data = kiln_ast::stmt::LoopData {
+        let i = iref(self);
+        let to_e = self.builtin_subscript(to, i, loc);
+        let body = self.assign_subobject_at(elem, to_e, from_e, depth + 1, loc)?;
+        let i = iref(self);
+        let bound = self.builder().int_literal(size_t, n, Radix::Decimal, loc);
+        let cond = self.builder().binary(BinaryOp::NE, i, bound, QualType::BOOL, loc);
+        let r = self.builder().decl_ref(v, size_t, loc, None, NonOdrUse::None, ExprFlags::NONE);
+        let flags = if n == u64::MAX { ExprFlags::NONE } else { ExprFlags::CANNOT_OVERFLOW };
+        let inc = self.builder().unary(UnaryOp::PreInc, r, size_t, loc, flags);
+        let data = LoopData {
             init: Some(init),
             cond_var: None,
             cond: Some(cond),

@@ -1665,6 +1665,9 @@ impl Cg<'_> {
         let this = Some(this.v);
         let r =
             self.call_vals_ret(&sig, callee, Some(f), this, &vals, args, dest, &extra, &ret_extra)?;
+        if let Some(p) = r {
+            self.alloc_align_assume(callee_md, &vals, p);
+        }
         if nr {
             self.finish_noreturn_call();
         }
@@ -1884,6 +1887,48 @@ impl Cg<'_> {
         let from = self.f.fir.cur().expect("insertion point");
         self.emit_block(end, false);
         self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
+    }
+
+    /// clang `GetAddressOfDerivedClass` on a pointer: `p - off`
+    /// (`getelementptr inbounds i8, p, -off`), null-checked when
+    /// `null_check` and the offset is not zero, through clang's
+    /// `cast.notnull` / `cast.null` / `cast.end` blocks.
+    pub(crate) fn derived_ptr(&mut self, p: V, off: u64, null_check: bool) -> V {
+        if off == 0 {
+            return p;
+        }
+        let neg = |cg: &mut Self| {
+            let o = cg.i64c(-i128::from(off));
+            cg.gep(LTy::I8, p, vec![o], true)
+        };
+        if !null_check {
+            return neg(self);
+        }
+        let cast_null = self.f.fir.create_block();
+        let not_null = self.f.fir.create_block();
+        let end = self.f.fir.create_block();
+        let null = V::C(self.m.const_null(LTy::PTR));
+        let is_null = self.icmp(IntPredicate::Eq, p, null);
+        self.cond_br(is_null, cast_null, not_null);
+        self.emit_block(not_null, false);
+        let adj = neg(self);
+        let from = self.f.fir.cur().expect("insertion point");
+        self.emit_branch(end);
+        self.emit_block(cast_null, false);
+        self.emit_block(end, false);
+        self.f
+            .fir
+            .push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, cast_null)] }, LTy::PTR)
+    }
+
+    /// The non-virtual offset of the base a base-to-derived cast `e` to
+    /// class `derived` converts from (clang `GetNonVirtualBaseClassOffset`;
+    /// sema rejects a path through a virtual base, [expr.static.cast]/2).
+    pub(crate) fn derived_cast_offset(&mut self, e: ExprId, derived: DeclId) -> R<u64> {
+        match self.base_path(e, derived)? {
+            (None, off) => Ok(off),
+            (Some(_), _) => err(self.loc_of(e), "base-to-derived cast from a virtual base"),
+        }
     }
 
     /// `QualType::isPODType` (C++11: trivial and standard-layout classes,

@@ -660,6 +660,18 @@ impl Cg<'_> {
                     self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0
                 }
             }
+            // clang `CK_BaseToDerived`: `GetAddressOfDerivedClass`, null-checked
+            // unless the operand is `this` (`ShouldNullCheckClassCastValue`).
+            CastKind::BaseToDerived => {
+                let p = self.emit_scalar(s)?;
+                let Some(derived) = ast.types.pointee(q).and_then(|t| ast.types.as_record(t))
+                else {
+                    return err(self.loc_of(e), "base-to-derived cast of a non-class pointer");
+                };
+                let off = self.derived_cast_offset(e, derived)?;
+                let null_check = !self.is_this_expr(s);
+                self.derived_ptr(p, off, null_check)
+            }
             // `__builtin_bit_cast` ([bit.cast]): the operand's bytes
             // loaded as the destination type (clang `EmitLoadOfLValue` of
             // the reinterpreted address).
@@ -1738,6 +1750,16 @@ impl Cg<'_> {
                     let ty = self.mty(q);
                     Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
                 }
+                // clang `EmitCastLValue` `CK_BaseToDerived`: never null-checked.
+                CastKind::BaseToDerived => {
+                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                    let Some(derived) = ast.types.as_record(q) else {
+                        return err(self.loc_of(e), "base-to-derived cast of a non-class");
+                    };
+                    let off = self.derived_cast_offset(e, derived)?;
+                    let v = self.derived_ptr(lv.addr.v, off, false);
+                    Ok(self.ref_lvalue(v, q))
+                }
                 CastKind::Dynamic => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
                     let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
@@ -2305,6 +2327,9 @@ impl Cg<'_> {
         }
         let r =
             self.call_vals_ret(&sig, callee, fid, None, &vals, &args, dest, &extra, &ret_extra)?;
+        if let (Some(d), Some(p)) = (direct, r) {
+            self.alloc_align_assume(d, &vals, p);
+        }
         if noreturn {
             self.finish_noreturn_call();
         }
@@ -2717,6 +2742,11 @@ impl Cg<'_> {
             }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
+            // clang `VisitCompoundLiteralExpr`: `EmitAggExpr` of the
+            // initializer into the slot (C++: not destroyed here).
+            ExprKind::CompoundLiteralExpr => {
+                self.emit_agg(ast.exprs.compound_literal_init(e), dest, zeroed)
             }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {

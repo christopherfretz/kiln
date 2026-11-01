@@ -5,6 +5,7 @@
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::ids::RawId;
 use kiln_ast::stmt::StmtKind;
+use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, ListId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -457,9 +458,7 @@ impl Sema<'_, '_> {
             return self.builder().compound_literal(ty, init, lparen);
         }
         if self.ast.types.is_array(ty) {
-            let what = self.temporary_unsupported(ty).unwrap_or("a temporary");
-            self.unsupported(&format!("compound literals of {what}"), lparen);
-            return self.recover(ty, &flat, lparen);
+            return self.array_compound_literal(ty, l, lparen, &flat);
         }
         if self.ast.types.is_reference(ty) {
             let to = self.non_reference(ty);
@@ -491,6 +490,42 @@ impl Sema<'_, '_> {
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], lparen);
         }
+        self.builder().compound_literal(ty, init, lparen)
+    }
+
+    /// An array compound literal: a prvalue of the written array type, its
+    /// unknown bound deduced from the list ([dcl.init.aggr]/4; clang's
+    /// `BuildCompoundLiteralExpr`).
+    fn array_compound_literal(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        lparen: Loc,
+        flat: &[ExprId],
+    ) -> ExprId {
+        if self.is_dependent_type(ty)
+            || !matches!(
+                self.ast.types.canonical_view(ty),
+                TypeView::ConstantArray(_) | TypeView::IncompleteArray(_)
+            )
+        {
+            let what = self.temporary_unsupported(ty).unwrap_or("a temporary");
+            self.unsupported(&format!("compound literals of {what}"), lparen);
+            return self.recover(ty, flat, lparen);
+        }
+        if self.func.is_none() {
+            self.unsupported("compound literals at namespace scope", lparen);
+            return self.recover(ty, flat, lparen);
+        }
+        let init = self.init_from_list_at(ty, l, Some(lparen));
+        if self.is_err_expr(init) {
+            return self.recover(ty, &[init], lparen);
+        }
+        let ty = if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
+            self.ety(init)
+        } else {
+            ty
+        };
         self.builder().compound_literal(ty, init, lparen)
     }
 }

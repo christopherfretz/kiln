@@ -1473,7 +1473,7 @@ definitions and temporaries. Modules in `kiln_sema/src/class/`:
   `kiln_ast::decl::builtin::MEMCPY`; other arrays by an element-wise
   `for (size_t __iN = 0; __iN != n; ++__iN) to[__iN] = from[__iN]` loop,
   one per dimension, moving the elements of an xvalue source, as clang
-  [class.copy.assign]/12.2, WP-201) and
+  [class.copy.assign]/12.2, WP-202) and
   destructors when odr-used, with the "in implicit ... first required
   here" notes (`Diag::with_context_notes`); `special/excspec.rs` resolves
   implicit exception specifications on use.
