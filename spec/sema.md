@@ -197,7 +197,7 @@ Constructors:
      the outer `[`, without notes). In a GNU dialect (`-std=gnu++NN`,
      `Sema::gnu`) the warning is clang's `ext_vla_cxx_in_gnu_mode`, an
      Extension that is off by default (`sema_vla_cxx_extension_gnu`;
-     clang also adds it to `-Wall` in GNU mode, kiln does not).
+     `-Wall` enables it, `vla-cxx-extension` being in `all`, WP-230).
      `check_vla_var` then handles the variable: `extern` is an error
      ("cannot have 'extern' linkage"); `static`/`thread_local` folds the
      bound (`fold_rvalue_int`) to a constant array with the
