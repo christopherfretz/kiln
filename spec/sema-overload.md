@@ -352,7 +352,11 @@ error by default).
 | reference | as the referenced type, bound to the temporary |
 | non-class, one element / empty | element's ICS (narrowing → `Bad(Narrowing)`) / identity |
 
-Wording: "cannot convert initializer list argument to 'int'".
+Wording: "cannot convert initializer list argument to 'int'". Every failure
+of a braced argument is `Bad(InitList)` naming the parameter type (for a
+reference, the cv-qualified referenced type: `'const G'` for the implicit
+copy constructor), as clang's `TryListConversion` fails with the list as the
+source (WP-152).
 
 ### 3.4 Comparing ICSs (`compare_ics`, [over.ics.rank])
 (1) /2: `Standard` < `UserDefined` = `Ambiguous` < `Ellipsis`. (2) /3.1

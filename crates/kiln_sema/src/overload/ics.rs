@@ -614,7 +614,14 @@ impl Sema<'_, '_> {
         let l = std::mem::replace(slot, empty);
         let r = self.list_ics(&l, to, opts);
         self.ovl.lists[i as usize] = l;
-        r
+        // clang's `TryListConversion` fails with the list itself as the
+        // source: "cannot convert initializer list argument to 'T'".
+        match r {
+            Ics::Bad(b) if b.kind != BadKind::InitList => {
+                Ics::bad(BadKind::InitList, QualType::VOID, b.to)
+            }
+            r => r,
+        }
     }
 
     /// The ICS of a braced-init-list ([over.ics.list]).
@@ -657,6 +664,9 @@ impl Sema<'_, '_> {
                     u.after.to_types[2] = r;
                     Ics::UserDefined(u)
                 }
+                // The failure names the referenced type (clang recurses
+                // on `T1`).
+                Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, r),
                 other => other,
             };
         }
