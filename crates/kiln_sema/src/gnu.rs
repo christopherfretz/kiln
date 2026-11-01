@@ -4,6 +4,7 @@
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::ids::RawId;
+use kiln_ast::expr::ExprKind;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, ListId, QualType, StmtId};
@@ -434,8 +435,10 @@ impl Sema<'_, '_> {
     /// to the list and more than one element for a scalar is reported
     /// as a function-style cast's (a vector's list is its elements); a
     /// function type is an illegal initializer type. Class and array
-    /// literals need temporary materialization and namespace-scope
-    /// literals constant elements; both are unsupported.
+    /// literals need temporary materialization; a namespace-scope literal
+    /// needs a constant initializer ([`Self::check_constant_literal_init`])
+    /// and a namespace-scope array literal (an lvalue in clang) is
+    /// unsupported.
     pub fn act_on_compound_literal(&mut self, ty: QualType, l: &InitList, lparen: Loc) -> ExprId {
         let flat = Self::list_exprs(l);
         if self.is_error_type(ty) {
@@ -451,20 +454,12 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return self.recover(ty, &flat, lparen);
             }
-            if self.func.is_none() {
-                self.unsupported("compound literals at namespace scope", lparen);
-                return self.recover(ty, &flat, lparen);
-            }
             let init = self.init_from_list_at(ty, l, Some(lparen));
             return self.builder().compound_literal(ty, init, lparen);
         }
         if self.is_dependent_type(ty) || self.init_list_type_dependent(l) {
             // Initialized at instantiation (clang's dependent
             // `InitializationSequence` keeps the list as written).
-            if self.func.is_none() {
-                self.unsupported("compound literals at namespace scope", lparen);
-                return self.recover(ty, &flat, lparen);
-            }
             let il = self.dependent_init_list(l);
             return self.builder().compound_literal(ty, il, lparen);
         }
@@ -496,10 +491,6 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_builtin_func_cast_more_than_one_arg, lparen);
             return self.recover(ty, &flat, lparen);
         }
-        if self.func.is_none() {
-            self.unsupported("compound literals at namespace scope", lparen);
-            return self.recover(ty, &flat, lparen);
-        }
         let to = conv::strip_cv(self, ty);
         // A class with constructors: [over.match.list] as for an explicit
         // cast, a `CXXTemporaryObjectExpr` (clang `CreateCStyleCast` with
@@ -511,6 +502,9 @@ impl Sema<'_, '_> {
         };
         let init = constructed.unwrap_or_else(|| self.init_from_list_at(to, l, Some(lparen)));
         if self.is_err_expr(init) {
+            return self.recover(ty, &[init], lparen);
+        }
+        if self.func.is_none() && !self.check_constant_literal_init(ty, init, lparen, l.lbrace) {
             return self.recover(ty, &[init], lparen);
         }
         let e = self.builder().compound_literal(ty, init, lparen);
@@ -528,18 +522,19 @@ impl Sema<'_, '_> {
         lparen: Loc,
         flat: &[ExprId],
     ) -> ExprId {
-        if self.is_dependent_type(ty)
-            || !matches!(
-                self.ast.types.canonical_view(ty),
-                TypeView::ConstantArray(_) | TypeView::IncompleteArray(_)
-            )
-        {
+        if !matches!(
+            self.ast.types.canonical_view(ty),
+            TypeView::ConstantArray(_) | TypeView::IncompleteArray(_)
+        ) {
             let what = self.temporary_unsupported(ty).unwrap_or("a temporary");
             self.unsupported(&format!("compound literals of {what}"), lparen);
             return self.recover(ty, flat, lparen);
         }
         if self.func.is_none() {
-            self.unsupported("compound literals at namespace scope", lparen);
+            // clang makes this an lvalue naming an internal
+            // `.compoundliteral` global; kiln has no static-storage
+            // compound-literal object in the Oven or codegen yet.
+            self.unsupported("array compound literals at namespace scope", lparen);
             return self.recover(ty, flat, lparen);
         }
         let init = self.init_from_list_at(ty, l, Some(lparen));
@@ -552,5 +547,66 @@ impl Sema<'_, '_> {
             ty
         };
         self.builder().compound_literal(ty, init, lparen)
+    }
+
+    /// clang's `CheckForConstantInitializer` for a namespace-scope
+    /// compound literal (C99 6.5.2.5p3, [GNU]): the literal's
+    /// initializer must be a constant initializer
+    /// (`Expr::isConstantInitializer`). The culprit is the first
+    /// element that does not fold, walking aggregate lists; a scalar
+    /// or vector literal is itself the culprit, reported at its `{`.
+    /// Reports and returns `false` on failure.
+    fn check_constant_literal_init(
+        &mut self,
+        ty: QualType,
+        init: ExprId,
+        lparen: Loc,
+        lbrace: Loc,
+    ) -> bool {
+        let aggregate =
+            self.ast.types.is_array(ty) || self.ast.types.as_record(ty).is_some();
+        let culprit = if aggregate && self.ast.exprs.get(init).kind() == ExprKind::InitListExpr {
+            self.constant_init_culprit(init)
+        } else if aggregate {
+            // A constructor call begins at the type-id after the `(`.
+            let at = match self.culprit_loc(init) {
+                at if at == lparen => self.next_token_loc(lparen),
+                at => at,
+            };
+            self.try_fold(init).is_none().then_some(at)
+        } else {
+            self.try_fold(init).is_none().then_some(lbrace)
+        };
+        let Some(at) = culprit else { return true };
+        self.error(DiagId::sema_init_element_not_constant, at);
+        false
+    }
+
+    /// The location of the first element of `e` that is not a constant
+    /// (an init list's elements recursively, else `e` itself).
+    fn constant_init_culprit(&mut self, e: ExprId) -> Option<Loc> {
+        if self.ast.exprs.get(e).kind() == ExprKind::InitListExpr {
+            let elems: Vec<ExprId> =
+                self.ast.lists.iter(self.ast.exprs.init_list_inits(e)).collect();
+            return elems.into_iter().find_map(|x| self.constant_init_culprit(x));
+        }
+        if self.ast.exprs.get(e).kind() == ExprKind::ImplicitValueInitExpr {
+            return None;
+        }
+        self.try_fold(e).is_none().then(|| self.culprit_loc(e))
+    }
+
+    /// clang's `getExprLoc` of a culprit: the operator of a binary or
+    /// member expression (kiln's node location), else its first token.
+    fn culprit_loc(&self, mut e: ExprId) -> Loc {
+        while self.ast.exprs.get(e).kind() == ExprKind::ImplicitCastExpr {
+            e = self.ast.exprs.operand(e);
+        }
+        match self.ast.exprs.get(e).kind() {
+            ExprKind::BinaryOperator
+            | ExprKind::CompoundAssignOperator
+            | ExprKind::MemberExpr => self.ast.exprs.get(e).loc(),
+            _ => self.begin_loc(e),
+        }
     }
 }

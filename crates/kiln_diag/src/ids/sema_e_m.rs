@@ -109,6 +109,7 @@ sema_indirection_through_null = Warning [NullDereference] (0) "indirection of no
 sema_init_base_direct_and_virtual = Error (1) "base class initializer {0} names both a direct base class and an inherited virtual base class";
 sema_init_conversion_failed = Error (5) "cannot initialize {0:a variable|a parameter|return object|a value|a new value|a member subobject|an array element|a base class|an exception object|a lambda capture} of type {1} with an {2:rvalue|lvalue} of type {3}{4}";
 sema_init_delegating_alone = Error (0) "an initializer for a delegating constructor must appear alone";
+sema_init_element_not_constant = Error (0) "initializer element is not a compile-time constant";
 sema_init_list_bad_dest = Error (1) "initializer list cannot be used on the left hand side of operator '{0}'";
 sema_init_list_constant_narrowing = WarningError [Cxx11Narrowing] (2) "constant expression evaluates to {0} which cannot be narrowed to type {1}";
 sema_init_list_type_narrowing = WarningError [Cxx11Narrowing] (2) "type {0} cannot be narrowed to {1} in initializer list";

@@ -1709,12 +1709,36 @@ for them.
     aggregate its `InitListExpr`; an abstract class is an error, and a
     class with a non-trivial destructor wraps the literal in a
     `CXXBindTemporaryExpr`;
-  - a dependent literal holds the list as written (an `InitListExpr`
-    of type `void`) until instantiation.
+  - a dependent literal, including an array literal whose element
+    type or bound is dependent, holds the list as written (an
+    `InitListExpr` of type `void`). Substitution rebuilds it through
+    `act_on_compound_literal`, so every check above runs per
+    instantiation (WP-235).
+  - a literal at namespace scope (no enclosing function; this includes
+    a default member initializer and a variable template's
+    initializer) is [GNU] and must have a constant initializer (C99
+    6.5.2.5p3; clang's `CheckForConstantInitializer`). Otherwise the
+    error is "initializer element is not a compile-time constant",
+    reported at the culprit (WP-235):
+    - for an aggregate list, the first element, recursively, that does
+      not fold (`try_fold`; implicit value-initializations are
+      constant). The location is that of clang's `getExprLoc`: the
+      operator of a binary or member expression, otherwise the first
+      token;
+    - for a constructor call, the type-id after the `(`;
+    - for a scalar or vector literal, its `{`.
 
-  Array literals of a dependent type and literals at namespace scope
-  (constant elements, `ConstantExpr` wrapping) are reported as not
-  supported yet.
+    A dependent literal is checked when instantiated. A valid
+    non-array literal is a prvalue, as it is inside a function, and its
+    variable is constant-initialized.
+
+  Deviations:
+  - Array literals at namespace scope are reported as not supported
+    yet. clang makes them lvalues naming an internal
+    `.compoundliteral` global, which needs a static-storage object in
+    the Oven and codegen.
+  - kiln does not wrap the elements of a namespace-scope literal in
+    `ConstantExpr` nodes, as clang does.
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
