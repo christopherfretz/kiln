@@ -163,7 +163,7 @@ impl Substituter<'_, '_, '_> {
         let name = self.sema.ast.decls.get(d).name().as_ident().map(|n| (n, loc));
         let saved = std::mem::replace(&mut self.declarator_name, name);
         let begin = self.decl_begin(d);
-        let outer = std::mem::replace(&mut self.type_begin, Some(begin));
+        let outer = self.type_begin.replace(begin);
         let scope = self.decl_written_scope(d, loc);
         let r = self.with_written_scope(scope, |s| s.ty(t, loc));
         self.declarator_name = saved;
@@ -433,7 +433,7 @@ impl Substituter<'_, '_, '_> {
             }
             let scope = self.decl_written_scope(p, n.loc());
             let begin = self.decl_begin(p);
-            let outer = std::mem::replace(&mut self.type_begin, Some(begin));
+            let outer = self.type_begin.replace(begin);
             let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()));
             self.type_begin = outer;
             let ty = ty?;
@@ -1028,7 +1028,7 @@ impl Substituter<'_, '_, '_> {
             self.decl_written_scope(d, loc)
         };
         let begin = self.decl_begin(d);
-        let outer = std::mem::replace(&mut self.type_begin, Some(begin));
+        let outer = self.type_begin.replace(begin);
         let ty = self.with_written_scope(scope, |s| s.ty(u, loc));
         self.type_begin = outer;
         let ty = ty?;
