@@ -399,7 +399,7 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
 ## 4. Statements
 - `stmt.rs` covers compound, declaration, expression, null, if (with
   init statement; constexpr and consteval if), switch (with case chains,
-  default, fall-through), while, do, for, break, continue, return,
+  default, fall-through, GNU case ranges §7l), while, do, for, break, continue, return,
   goto and labels, attributed statements and `static_assert` (no code).
 - A function's return goes through the `retval` slot and a single
   `return` block, as clang does; an sret return stores into the sret
@@ -947,19 +947,14 @@ off and sema rejects `try`/`throw`).
   `except.ctor/run-unwind-destroy`, `expr.new/run-delete-on-throw`.
 
 **Left (WP-100), each a `CodegenError` or noted:**
-- Lifetime-extended temporaries: their EH cleanups are not deferred
-  (clang `pushCleanupAfterFullExprWithActiveFlag`), and a lifetime-
-  extended temporary in a conditional branch is unsupported.
-- A conditional temporary or braced array at a computed address
-  (needs saving across the branch) is a `CodegenError` (a regular
-  partial-array cleanup is saved since WP-118).
-- A delegating constructor's EH cleanup in a base variant with virtual
-  bases passes the VTT incorrectly.
 - D0 calls D1 and then the deallocation function directly; clang runs
   the deallocation as a normal-and-EH `CallDtorDelete` cleanup, which
   differs only when D1 can throw (a `noexcept(false)` destructor, which
   sema rejects until WP-112 lands member exception specifications).
-- A conditional `new` with a class-type placement argument.
+
+(Lifetime-extended temporaries, conditional temporaries at a computed
+address, the delegating constructor's VTT and conditional `new` with a
+class placement argument landed with WP-205, §7l.)
 
 ## 7c. Landed (WP-140): GNU inline asm (`asm.rs`)
 `emit_asm` is clang's `CodeGenFunction::EmitAsmStmt`: outputs become
@@ -1440,6 +1435,69 @@ loop; `internal constant` (vs `global`) for constant temporaries bound
 by `const int& a = {};`; the `A{&d}` array temporary; parsing
 `new (void (T::*)())()`.
 
+## 7l. Landed (WP-205): WP-118 EH follow-ups and GNU case ranges
+- **Lifetime-extended temporaries** (clang `pushLifetimeExtendedDestroy`,
+  `class.rs` `push_lifetime_extended_destroy`): a temporary bound to a
+  reference with automatic storage gets an EH-only destroy cleanup whose
+  deactivation is deferred to the end of the enclosing full-expression
+  (`pushDestroyAndDeferDeactivation`), plus a lifetime-extended
+  normal-and-EH cleanup guarded by an active flag that is set at the end
+  of the full-expression (`pushCleanupAfterFullExprWithActiveFlag`).
+  Inside a conditional branch the address is saved
+  (`saveValueInCond`), the deferred cleanup gets its own `cleanup.cond`
+  flag, and both flags start false and are set in the branch.
+- **Deferred deactivation** (clang `CleanupDeactivationScope`;
+  `Cleanups::deferred`, `expr.rs` `push_deferred_destroy` /
+  `deactivate_deferred`): one stack of (cleanup, dominating placeholder)
+  pairs serves braced aggregate members, lambda captures, the
+  lifetime-extended EH cleanups above and statement scopes; the end of a
+  record/array init list, a lambda or a scope (`end_scope`) deactivates
+  every entry pushed since it began, innermost first, so the EH cleanups
+  of temporaries extended inside a braced aggregate are gone once the
+  aggregate is complete. Deactivation allocates its `cleanup.isactive`
+  flag as an auxiliary alloca of the enclosing scope, erased with it when
+  the cleanup turns out unused.
+- **Sema (flagged):** `temporaries_in_aggregate` also descends into both
+  arms of a conditional operator, so `const A& a = c ? A{T()} : A{T()}`
+  extends the `T` temporaries of each arm ([class.temporary]/6.10).
+- **Conditional temporaries at a computed address**
+  (`DominatingValue<Address>::save`): a complete-object destroy cleanup
+  (`Cleanup::SavedObject`; an array too) pushed in a conditional branch
+  at an address that is not in the entry block stores the address to a
+  `cond-cleanup.save` slot and reloads it in the cleanup.
+- **Delegating constructor with virtual bases** (clang
+  `CallDelegatingCtorDtor`, `Cleanup::DelegatingDtor`,
+  `class.rs` `call_dtor_delegating`): the base-object variant's EH
+  cleanup passes the current function's VTT parameter unadjusted
+  (`GetVTTParameter(Delegating)`), not a sub-VTT GEP.
+- **Conditional `new` with class placement arguments**
+  (`DominatingValue<RValue>::save` of an aggregate): the argument's
+  address is saved like a pointer when it needs saving
+  (`Saved::AggSlot`); an `agg.tmp` in the entry block is used as is.
+- **GNU case ranges** (`stmt.rs` `emit_case_range`, clang
+  `EmitCaseStmtRange`): the body block is emitted first; an empty range
+  adds nothing; a range of fewer than 64 values adds one switch case per
+  value; a wider one appends a `sw.caserange` block at the end of the
+  function (`sub cond, lo`; `icmp ule diff, hi - lo`; branch to the body,
+  else to the previous range block or the default), and the switch's
+  default destination becomes the last range block
+  (`SwitchCtx::range_head`). A switch with a case range is never folded
+  as a constant switch. Sema is in spec/sema.md §7.5.
+- **Deviation (documented):** namespace-scope and static local arrays
+  with a throwing destructor (`__cxx_global_array_dtor`) keep the
+  aarch64 loop-canonicalization deviation of §6;
+  `eh_array_destroy_throwing_global` is exact on x86_64 and listed in
+  `ir_vs_clang`'s deviations for aarch64.
+
+Tests: `tests/codegen/eh_lifetime_extended.cpp`,
+`eh_conditional_computed_addr.cpp`, `eh_delegating_vtt.cpp`,
+`eh_new_class_placement.cpp`, `gnu_case_range.cpp` (exact on both
+triples), `eh_array_destroy_throwing_global.cpp` (x86_64 exact);
+`run` tests `except.ctor/run-lifetime-extended-unwind`,
+`stmt.switch/run-gnu-case-range`; diagnostics
+`stmt.switch/gnu-case-range`,
+`except.terminate/throw-in-noexcept-reach-unevaluated`.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
@@ -1464,7 +1522,7 @@ no `result.ptr` spill).
    `thread_local` dynamic initialization (§7e).
 2. The Sema gaps above, then corpus cases for them: class copy-init,
    braced returns, reference casts, temporaries, range-for over arrays.
-3. Bit-field and base-class constants, case ranges, reference members.
+3. Bit-field and base-class constants, reference members.
 4. Header-dependent `run` tests, once `decltype` parses (drop their
    `xfail(kiln)`).
 5. WP-202 follow-ups: `p->m` through a base-to-derived (or derived-to-base)

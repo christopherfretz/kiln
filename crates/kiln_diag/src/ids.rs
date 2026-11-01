@@ -443,6 +443,7 @@ diag_ids! {
     parse_expected_expression = Error (0) "expected expression";
     parse_for_range_identifier = Error (0) "range-based for loop requires type for loop variable";
     parse_for_range_expected_decl = Error (0) "for range declaration must declare a variable";
+    parse_gnu_case_range = Extension [GnuCaseRange] (0) "use of GNU case range extension";
     parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
     parse_expected_name_of_pack = Error (0) "expected the name of a parameter pack";
     parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";
@@ -876,6 +877,7 @@ diag_ids! {
     sema_default_not_in_switch = Error (0) "'default' statement not in switch statement";
     sema_duplicate_case = Error (1) "duplicate case value '{0}'";
     note_duplicate_case_prev = Note (0) "previous case defined here";
+    sema_case_empty_range = Warning (0) "empty case range specified";
     sema_multiple_default_labels = Error (0) "multiple default labels in one switch";
     sema_statement_requires_integer = Error (1) "statement requires expression of integer type ({0} invalid)";
     sema_expr_not_cce = Error (1) "{0} is not a constant expression";

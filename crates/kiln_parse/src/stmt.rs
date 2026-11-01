@@ -608,12 +608,20 @@ impl Parser<'_, '_> {
             self.eat(Punct::Colon);
             return None;
         };
-        if self.at(Punct::Ellipsis) {
-            self.unsupported("case ranges", self.loc());
-            self.skip_until(&[Punct::Colon], true, true);
-            return None;
-        }
-        let v = self.s.act_on_case_value(v, loc);
+        // GNU `case lo ... hi:`.
+        let (v, rhs) = if let Some(dots) = self.eat(Punct::Ellipsis) {
+            let d = self.s.diag(DiagId::parse_gnu_case_range, dots);
+            self.emit(d);
+            let Some(hi) = self.parse_constant_expr() else {
+                self.skip_until(&[Punct::Colon, Punct::RBrace], true, false);
+                self.eat(Punct::Colon);
+                return None;
+            };
+            let (v, hi) = self.s.act_on_case_range(v, hi, loc);
+            (v, Some(hi))
+        } else {
+            (self.s.act_on_case_value(v, loc), None)
+        };
         if self.eat(Punct::Colon).is_none() {
             let d = self
                 .s
@@ -623,7 +631,7 @@ impl Parser<'_, '_> {
             self.emit(d);
         }
         let sub = self.parse_labeled_sub(false);
-        Some(self.s.act_on_case(v, sub, loc))
+        Some(self.s.act_on_case(v, rhs, sub, loc))
     }
 
     /// A loop condition `( condition )`; `do` takes only an expression.
