@@ -53,6 +53,7 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Typename
             | Kw::Decltype
             | Kw::Typeof
+            | Kw::Atomic
     )
 }
 
@@ -372,22 +373,29 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return out;
             };
-            let Some(name) = self.ident() else {
-                if self.at_kw(Kw::Operator) || self.at(Punct::Tilde) {
-                    let l = self.loc();
-                    self.unsupported("this kind of name in a using-declarator", l);
+            // [namespace.udecl]/1: any unqualified-id but a template-id;
+            // an operator- or conversion-function-id names the base's
+            // operators (`using B::operator=;`).
+            let nl = self.loc();
+            let name = if self.at_kw(Kw::Operator) {
+                let Some(n) = self.parse_operator_function_name() else {
+                    self.skip_to_semi();
+                    return out;
+                };
+                n
+            } else if let Some(name) = self.ident() {
+                self.bump();
+                DeclName::ident(name)
+            } else {
+                if self.at(Punct::Tilde) {
+                    self.unsupported("a destructor name in a using-declarator", nl);
                 } else {
                     self.error_here(DiagId::parse_expected_unqualified_id);
                 }
                 self.skip_to_semi();
                 return out;
             };
-            let nl = self.bump().span.lo;
-            if let Some(l) = self.eat(Punct::Ellipsis) {
-                self.unsupported("pack expansions in using-declarations", l);
-                self.skip_to_semi();
-                return out;
-            }
+            let ellipsis = self.eat(Punct::Ellipsis);
             let mut attrs = Vec::new();
             if self.at_cxx11_attr() {
                 let at = self.peek(2).span.lo;
@@ -395,7 +403,8 @@ impl Parser<'_, '_> {
             }
             self.parse_attributes(&mut attrs);
             let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
-            if let Some(d) = self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists) {
+            if let Some(d) = self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists, ellipsis)
+            {
                 out.push(d);
             }
             if self.eat(Punct::Comma).is_none() {
@@ -555,6 +564,10 @@ impl Parser<'_, '_> {
                     self.parse_decltype_into(&mut ds, loc);
                     continue;
                 }
+                Kw::Atomic => {
+                    self.parse_atomic_specifier_into(&mut ds, loc);
+                    continue;
+                }
                 Kw::Typename => {
                     let ty = self.parse_typename_specifier();
                     if ty.is_none() {
@@ -597,6 +610,32 @@ impl Parser<'_, '_> {
             }
         }
         ds
+    }
+
+    /// The C11 atomic-type-specifier `_Atomic ( type-id )` (a clang
+    /// extension in C++) added to `ds` as a named type. The `_Atomic`
+    /// type qualifier (no parenthesis) is not supported.
+    fn parse_atomic_specifier_into(&mut self, ds: &mut DeclSpec, loc: Loc) {
+        self.bump();
+        let ty = if let Some(open) = self.eat(Punct::LParen) {
+            let ty = self.parse_type_id();
+            if ty.is_none() {
+                self.skip_until(&[Punct::RParen], false, true);
+            } else {
+                self.expect_closing(Punct::RParen, Punct::LParen, open);
+            }
+            ty.and_then(|t| self.s.act_on_atomic_type(t, loc))
+        } else {
+            self.unsupported("the '_Atomic' type qualifier", loc);
+            None
+        };
+        if ty.is_none() {
+            ds.invalid = true;
+        }
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
     }
 
     /// A unary type transform `__transform ( type-id )` (spec/sema-templates.md

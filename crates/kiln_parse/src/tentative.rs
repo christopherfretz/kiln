@@ -256,7 +256,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     Some(Punct::LParen) => Tpr::Ambiguous,
                     _ => Tpr::True,
                 },
-                Kw::Decltype | Kw::Typeof => {
+                Kw::Decltype | Kw::Typeof | Kw::Atomic => {
                     if self.punct_at(self.i + 1) != Some(Punct::LParen) {
                         return Tpr::Error;
                     }
@@ -371,7 +371,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             return Tpr::Ambiguous;
         }
         match self.kw() {
-            Some(k @ (Kw::Decltype | Kw::Typeof)) => {
+            Some(k @ (Kw::Decltype | Kw::Typeof | Kw::Atomic)) => {
                 self.i += 1;
                 if !self.at(Punct::LParen) || !self.skip_group_here() {
                     return Tpr::Error;

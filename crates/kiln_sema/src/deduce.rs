@@ -96,6 +96,41 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// `_Atomic ( t )` (C11 6.7.2.4, a clang extension in C++): the atomic
+    /// type of `t`, or `None` after diagnosing an array, function,
+    /// reference, atomic or cv-qualified `t` (clang
+    /// `BuildAtomicType`). A dependent `t` is checked at instantiation.
+    pub fn act_on_atomic_type(&mut self, t: QualType, loc: Loc) -> Option<QualType> {
+        if t == QualType::ERROR {
+            return None;
+        }
+        let dependent = self
+            .ast
+            .types
+            .qflags(t)
+            .intersects(kiln_ast::types::TypeFlags::DEPENDENT);
+        if !dependent {
+            let c = self.ast.types.canonical(t);
+            let bad = match self.ast.types.view(c.ty()) {
+                _ if self.ast.types.is_array(c) => Some(0),
+                TypeView::Function(_) => Some(1),
+                TypeView::LValueRef(_) | TypeView::RValueRef(_) => Some(2),
+                TypeView::Atomic(_) => Some(3),
+                _ if !c.quals().is_empty() => Some(4),
+                _ => None,
+            };
+            if let Some(k) = bad {
+                let msg = self
+                    .diag(DiagId::sema_atomic_specifier_bad_type, loc)
+                    .arg(k.to_string())
+                    .arg(self.ty_arg(t));
+                self.emit(msg);
+                return None;
+            }
+        }
+        Some(self.ast.types.atomic(t))
+    }
+
     /// `decltype ( e )` ([dcl.type.decltype]/1): the type `decltype(e)`
     /// sugar over the computed type, or `None` when `e` is erroneous.
     /// `e` was parsed as an unevaluated operand.

@@ -1083,6 +1083,7 @@ diag_ids! {
     sema_typename_nested_not_found = Error (2) "no type named '{0}' in {1}";
     sema_pack_expansion_without_packs = Error (0) "pack expansion does not contain any unexpanded parameter packs";
     sema_unexpanded_pack = Error (2) "{0} contains unexpanded parameter pack {1}";
+    sema_atomic_specifier_bad_type = Error (2) "_Atomic cannot be applied to {0:array|function|reference|atomic|qualified} type {1}";
     sema_not_a_template = Error (1) "{0} is not a template";
     parse_template_args_expected_gt = Error (0) "expected '>'";
     sema_fold_packs_both_sides = Error (0) "binary fold expression has unexpanded parameter packs in both operands";

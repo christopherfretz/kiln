@@ -414,7 +414,8 @@ impl Substituter<'_, '_, '_> {
     /// substituted and the declarator is redone in the instantiation's
     /// block scope, introducing its shadows there.
     fn local_using_decl(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
-        let name = self.sema.ast.decls.get(d).name().as_ident().ok_or(SubstFail)?;
+        let dname = self.sema.ast.decls.get(d).name();
+        let name = dname.as_ident().ok_or(SubstFail)?;
         let nns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
         let nns = self.nns(nns, loc)?;
         if self.nns_still_dependent(nns) {
@@ -427,7 +428,7 @@ impl Substituter<'_, '_, '_> {
         let if_exists =
             self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc };
-        self.sema.act_on_using_declarator(loc, Some(q), name, loc, if_exists).ok_or(SubstFail)
+        self.sema.act_on_using_declarator(loc, Some(q), dname, loc, if_exists, None).ok_or(SubstFail)
     }
 
     /// A declaration of a declaration statement.
@@ -445,6 +446,13 @@ impl Substituter<'_, '_, '_> {
             }
             DeclKind::StaticAssert => self.static_assert_decl(d),
             DeclKind::Using => self.local_using_decl(d, loc),
+            // A block-scope using-directive ([namespace.udir]): the
+            // nominated namespace is never dependent; redone in the
+            // instantiation's block scope for its dependent lookups.
+            DeclKind::UsingDirective => {
+                let ns = self.sema.ast.using_target(d).ok_or(SubstFail)?;
+                Ok(self.sema.act_on_using_directive(ns, loc))
+            }
             DeclKind::CXXRecord => Ok(self.local_class(d, None)),
             DeclKind::Enum => {
                 let x = self.enum_decl(d)?;
