@@ -1327,6 +1327,8 @@ diag_ids! {
     sema_explicit_inst_not_known = Error (1) "explicit instantiation of '{0}' does not refer to a function template, variable template, member function, member class, or static data member";
     sema_explicit_inst_nontemplate_type = Error (1) "explicit instantiation of non-templated type '{0}'";
     sema_explicit_inst_requires_name = Error (0) "explicit instantiation declaration requires a name";
+    sema_explicit_inst_inline = Error (0) "explicit instantiation cannot be 'inline'";
+    sema_explicit_inst_constexpr = Error (0) "explicit instantiation cannot be 'constexpr'";
     sema_explicit_spec_non_template = Error (1) "explicit specialization of non-template {0}";
     note_explicit_spec_template_declared = Note (0) "explicitly specialized declaration is here";
     sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";

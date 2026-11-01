@@ -135,6 +135,10 @@ pub(crate) struct Cg<'a> {
     pub vt_layouts: FxHashMap<DeclId, std::rc::Rc<kiln_ast::class::VTableLayout>>,
     /// Vtables referenced but not yet defined (clang `DeferredVTables`).
     pub deferred_vtables: Vec<DeclId>,
+    /// Dynamic classes explicitly instantiated by a definition, in
+    /// order: their vtables are required ([temp.explicit]/10; Sema's
+    /// `MarkVTableUsed(DefinitionRequired)`).
+    pub explicit_vtables: Vec<DeclId>,
     /// Vtables already defined.
     pub vt_emitted: FxHashSet<DeclId>,
     /// `_ZTI` definitions by mangled name.
@@ -192,6 +196,7 @@ impl<'a> Cg<'a> {
             vtables: FxHashMap::default(),
             vt_layouts: FxHashMap::default(),
             deferred_vtables: Vec::new(),
+            explicit_vtables: Vec::new(),
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
@@ -220,12 +225,38 @@ impl<'a> Cg<'a> {
     fn emit_members(&mut self, ctx: DeclId) -> R<()> {
         let ast = self.ast;
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
+        self.emit_explicit_member_insts(ctx)?;
         for d in members {
+            self.emit_member(d)?;
+            self.emit_explicit_member_insts(d)?;
+        }
+        Ok(())
+    }
+
+    /// The member functions explicitly instantiated by a definition
+    /// right after `after` ([temp.explicit]/10).
+    fn emit_explicit_member_insts(&mut self, after: DeclId) -> R<()> {
+        let ast = self.ast;
+        for &m in ast.templates.explicit_member_insts_after(after) {
+            let Some(def) = ast.definition(m) else { continue };
+            match ast.decls.get(def).kind() {
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
+                    self.emit_global_structor(def)?;
+                }
+                _ => self.emit_global_fn(def)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_member(&mut self, d: DeclId) -> R<()> {
+        let ast = self.ast;
+        {
             let n = ast.decls.get(d);
             // A templated declaration ([temp.pre]/8: an out-of-line
             // member of a class template) is emitted only as instantiated.
             if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) {
-                continue;
+                return Ok(());
             }
             match n.kind() {
                 DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
@@ -285,6 +316,15 @@ impl<'a> Cg<'a> {
         if ast.decls.get(d).has(DeclFlags::INVALID) {
             return Ok(());
         }
+        // [temp.explicit]/10: an explicit instantiation definition of a
+        // class (or of a member class) defines every member that is not
+        // a template, used or not (clang `InstantiateClassMembers` hands
+        // each definition to `HandleTopLevelDecl`).
+        let explicit = self.class_explicit_inst_kind(ast.first(d))
+            == Some(SpecKind::ExplicitInstantiationDefinition);
+        if explicit && self.is_dynamic(d) {
+            self.explicit_vtables.push(ast.first(d));
+        }
         let members: Vec<DeclId> = ast.decls.members(d).collect();
         for m in members {
             let n = ast.decls.get(m);
@@ -292,6 +332,23 @@ impl<'a> Cg<'a> {
                 continue;
             }
             match n.kind() {
+                DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion if explicit => {
+                    if let Some(def) = ast.definition(m) {
+                        self.emit_global_fn(def)?;
+                    }
+                }
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor if explicit => {
+                    if let Some(def) = ast.definition(m) {
+                        self.emit_global_structor(def)?;
+                    }
+                }
+                // Any out-of-class redeclaration of a static data member
+                // is its definition ([class.static.data]/2).
+                DeclKind::Var if explicit && !self.var_is_inline(m) => {
+                    if let Some(def) = ast.redecls_of(m).find(|&r| r != ast.first(m)) {
+                        self.emit_global_var(def)?;
+                    }
+                }
                 // An in-class static data member declaration is a
                 // definition only when inline ([class.static.data]/3,4).
                 DeclKind::Var if self.var_is_inline(m) => self.emit_global_var(m)?,
@@ -465,7 +522,7 @@ impl<'a> Cg<'a> {
     }
 
     pub(crate) fn discardable_fn(&self, d: DeclId) -> bool {
-        self.fn_internal(d) || self.fn_is_inline(d)
+        self.fn_internal(d) || (self.fn_is_inline(d) && !self.is_explicit_inst_definition(d))
     }
 
     fn var_is_inline(&self, d: DeclId) -> bool {
@@ -474,9 +531,14 @@ impl<'a> Cg<'a> {
     }
 
     fn discardable_var(&self, d: DeclId) -> bool {
-        mangle::is_internal_symbol(self.ast, d)
-            || self.var_is_inline(d)
-            || self.var_instantiation_linkage(self.ast.first(d)) == Some(Linkage::LinkOnceOdr)
+        if mangle::is_internal_symbol(self.ast, d) {
+            return true;
+        }
+        // An explicit instantiation definition is emitted, inline or not.
+        match self.var_instantiation_linkage(self.ast.first(d)) {
+            Some(Linkage::WeakOdr) => false,
+            inst => self.var_is_inline(d) || inst == Some(Linkage::LinkOnceOdr),
+        }
     }
 
     /// Whether variable or function `first` is under an explicit
@@ -485,19 +547,35 @@ impl<'a> Cg<'a> {
     /// definition is provided; at -O0 clang emits none, even for inline
     /// members, which would be `available_externally`).
     pub(crate) fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
+        self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
+    }
+
+    /// Whether variable or function `first` is under an explicit
+    /// instantiation definition, itself or through its enclosing class
+    /// specialization ([temp.explicit]/10; clang `GVA_StrongODR`: the
+    /// definition is emitted `weak_odr` in a comdat, even when unused).
+    pub(crate) fn is_explicit_inst_definition(&self, first: DeclId) -> bool {
+        self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDefinition)
+    }
+
+    /// The explicit instantiation kind that governs variable or function
+    /// `first`: its own, else that of the innermost explicitly
+    /// instantiated or specialized enclosing class (clang propagates the
+    /// class's kind to its members in `InstantiateClassMembers`).
+    /// `None` when implicit or an explicit specialization.
+    fn explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
         let ast = self.ast;
         let first = ast.first(first);
+        let explicit = |k: SpecKind| match k {
+            SpecKind::ExplicitInstantiationDeclaration
+            | SpecKind::ExplicitInstantiationDefinition => Some(Some(k)),
+            SpecKind::ExplicitSpecialization => Some(None),
+            _ => None,
+        };
         match ast.templ_link(first).get() {
             Some((TemplLinkKind::MemberOfSpecialization, i)) => {
-                match ast.templates.member_spec(i).map(|m| m.kind) {
-                    Some(SpecKind::ExplicitInstantiationDeclaration) => return true,
-                    Some(
-                        SpecKind::ExplicitSpecialization
-                        | SpecKind::ExplicitInstantiationDefinition,
-                    ) => {
-                        return false;
-                    }
-                    _ => {}
+                if let Some(k) = ast.templates.member_spec(i).and_then(|m| explicit(m.kind)) {
+                    return k;
                 }
                 // The member's own kind is implicit: the innermost
                 // explicitly instantiated enclosing class decides.
@@ -509,34 +587,20 @@ impl<'a> Cg<'a> {
                     ) {
                         break;
                     }
-                    match ast.spec_info(c).map(|(_, s)| s.kind) {
-                        Some(SpecKind::ExplicitInstantiationDeclaration) => return true,
-                        Some(
-                            SpecKind::ExplicitInstantiationDefinition
-                            | SpecKind::ExplicitSpecialization,
-                        ) => {
-                            return false;
-                        }
-                        _ => {}
+                    if let Some(k) = ast.spec_info(c).and_then(|(_, s)| explicit(s.kind)) {
+                        return k;
                     }
-                    if let Some((_, m)) = ast.member_spec_info(c) {
-                        match m.kind {
-                            SpecKind::ExplicitInstantiationDeclaration => return true,
-                            SpecKind::ExplicitInstantiationDefinition
-                            | SpecKind::ExplicitSpecialization => {
-                                return false;
-                            }
-                            _ => {}
-                        }
+                    if let Some(k) = ast.member_spec_info(c).and_then(|(_, m)| explicit(m.kind)) {
+                        return k;
                     }
                     ctx = ast.decls.get(c).ctx();
                 }
-                false
+                None
             }
-            Some((TemplLinkKind::Specialization, _)) => ast
-                .spec_info(first)
-                .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitInstantiationDeclaration),
-            _ => false,
+            Some((TemplLinkKind::Specialization, _)) => {
+                ast.spec_info(first).and_then(|(_, s)| explicit(s.kind)).flatten()
+            }
+            _ => None,
         }
     }
 
@@ -1101,14 +1165,37 @@ impl<'a> Cg<'a> {
     /// Sets linkage and definition attributes of `f` defined by `d`.
     pub fn set_def_linkage(&mut self, f: FuncId, d: DeclId) {
         let internal = self.fn_internal(d);
+        // clang `GetGVALinkageForFunction`: an explicit instantiation
+        // definition is `GVA_StrongODR` (`weak_odr`), inline or not.
+        let weak = !internal && self.is_explicit_inst_definition(d);
         let inline = self.fn_is_inline(d);
-        let name = self.m.func(f).name().to_owned();
-        let comdat =
-            if !internal && inline { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
+        let mut name = self.m.func(f).name().to_owned();
+        // clang `getCodegenToUse` → `COMDAT`: a weak structor of a class
+        // without virtual bases puts its base-object and deleting
+        // variants in the `C5`/`D5` comdat (the complete-object variant
+        // is an alias).
+        if weak
+            && matches!(
+                self.ast.decls.get(d).kind(),
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor
+            )
+            && !self.structor_has_vbases(d)
+        {
+            name = mangle::mangle_structor_comdat(self.ast, &mut self.anon, self.ast.first(d));
+        }
+        let comdat = if !internal && (inline || weak) {
+            Some(self.m.comdat(&name, ComdatKind::Any))
+        } else {
+            None
+        };
         let func = self.m.func_mut(f);
         if internal {
             func.linkage = Linkage::Internal;
             func.dso_local = false;
+        } else if weak {
+            func.linkage = Linkage::WeakOdr;
+            func.dso_local = true;
+            func.comdat = comdat;
         } else if inline {
             func.linkage = Linkage::LinkOnceOdr;
             func.dso_local = true;
@@ -1307,8 +1394,10 @@ impl<'a> Cg<'a> {
                 if m.kind == SpecKind::ExplicitSpecialization {
                     return None;
                 }
-                let class = ast.decls.get(first).ctx().and_then(|c| ast.spec_info(c));
-                if explicit(m.kind) || class.is_some_and(|(_, s)| explicit(s.kind)) {
+                if explicit(m.kind)
+                    || self.explicit_inst_kind(first)
+                        == Some(SpecKind::ExplicitInstantiationDefinition)
+                {
                     Some(Linkage::WeakOdr)
                 } else {
                     Some(Linkage::LinkOnceOdr)
@@ -1350,7 +1439,9 @@ impl<'a> Cg<'a> {
         let align = self.global_align(ty);
         let constant = ast.types.effective_quals(ty).is_const();
         let encl = mangle::enclosing_function(ast, first);
-        let inline_fn = encl.is_some_and(|f| self.fn_is_inline(f) && !self.fn_internal(f));
+        let inline_fn = encl.is_some_and(|f| {
+            (self.fn_is_inline(f) || self.is_explicit_inst_definition(f)) && !self.fn_internal(f)
+        });
         let comdat = if inline_fn { Some(self.m.comdat(&name, ComdatKind::Any)) } else { None };
         let gv = self.m.global_mut(g);
         gv.is_constant = constant;

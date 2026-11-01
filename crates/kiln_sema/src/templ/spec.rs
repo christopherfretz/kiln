@@ -664,7 +664,12 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXConstructor
                 | DeclKind::CXXDestructor
                 | DeclKind::CXXConversion => self.instantiate_function_definition(m, loc),
-                DeclKind::Var => self.instantiate_static_member_init(m, loc),
+                DeclKind::Var => {
+                    // In-class initializer, else the out-of-line
+                    // definition (clang `InstantiateVariableDefinition`).
+                    self.instantiate_static_member_init(m, loc);
+                    self.instantiate_static_member_def(m, loc);
+                }
                 DeclKind::CXXRecord if self.instantiate_class(m, loc, false) => {
                     self.instantiate_members_of(m, loc, depth + 1);
                 }

@@ -516,9 +516,31 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   (clang would make it `available_externally` only when optimizing);
   references name the external symbol, structor calls the complete
   variant (D1/C1). Implicitly declared special members are not
-  instantiations and are still emitted. An explicit instantiation
-  *definition* is still emitted `linkonce_odr` where clang uses `weak_odr`
-  (open). The initializer is
+  instantiations and are still emitted.
+- **Explicit instantiation definitions** ([temp.explicit], WP-170;
+  `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
+  `GVA_StrongODR`): a function or variable that is an explicit
+  instantiation definition, or a member of a class under one (innermost
+  explicitly instantiated enclosing class decides, as above), is
+  `weak_odr dso_local` in its own COMDAT, inline or not, and is never
+  deferred. Naming a class (`template struct X<int>;`) emits every
+  non-template member, used or not, recursively through member classes,
+  including out-of-line and inline static data members
+  ([temp.explicit]/10; `emit_class_members`), plus a `weak_odr` vtable
+  and RTTI (`VtLinkage::Weak`, emitted after the strong key-function
+  vtables). A member explicit instantiation (`template void X<int>::f();`,
+  `template X<int>::X();`) is emitted right after the declaration that
+  precedes it lexically (sema records it in
+  `TemplateTables::explicit_member_insts`). Base-object structors of a
+  class without virtual bases share a `C5`/`D5` COMDAT (with `D0`) and
+  the complete-object symbol is a `weak_odr` alias (clang
+  `getCodegenToUse` -> `COMDAT`). Static locals of such functions stay
+  `linkonce_odr`. Ordering deviation: when an explicitly instantiated
+  class's constructor references a non-template polymorphic base whose
+  inline destructor is otherwise unused, clang emits that base
+  destructor at the end of the TU while kiln emits it right after the
+  derived destructor that calls it (same definitions, different order).
+  The initializer is
   `{ [N x ptr] ... }`, one array per primary/secondary group, with
   offset-to-top, RTTI, then the slots. Pure slots are
   `__cxa_pure_virtual`, deleted slots `__cxa_deleted_virtual`.
@@ -573,8 +595,8 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
 - **Template linkage policy**: vtables, RTTI and thunks of classes that
   are template specializations, or have no key function, are
   `linkonce_odr` and emitted only when used (deferred), as with inline
-  functions. Explicit instantiation definitions (`weak_odr`) are not
-  covered yet.
+  functions. Explicit instantiation definitions are `weak_odr` (see
+  above).
 
 - **Virtual bases** (clang `GetAddressOfBaseClass`,
   `ItaniumCXXABI::{buildStructorSignature, getImplicitConstructorArgs,
@@ -669,15 +691,6 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   pattern's signature (clang `InheritedTemplateArgs`), and a constructor
   template specialization's base variant is `C2` (WP-146; corpus
   `class_inheriting_ctors_variadic`).
-- Explicit instantiation definitions (`template struct X<int>;`) emit
-  nothing: the members are instantiated by sema but codegen emits only
-  used functions, with `linkonce_odr`. clang emits every member
-  `weak_odr`, the vtable/RTTI `weak_odr`, and a non-trivial destructor
-  as a `D5` COMDAT with a `weak_odr` D1 alias; `extern template` makes
-  the vtable an `external` declaration and suppresses the member
-  definitions. Kiln still treats both like implicit instantiations
-  (and explicit instantiation of function templates is a sema
-  "not yet implemented").
 - (Resolved by WP-100: `__cxa_bad_cast` / `__cxa_bad_typeid` are
   invoked inside EH scopes, §7b.)
 - RTTI of a pointer to member function with method qualifiers

@@ -594,9 +594,15 @@ impl Cg<'_> {
                         );
                     }
                 };
+                // The alias takes the base variant's linkage (`weak_odr`
+                // for an explicit instantiation definition).
+                let linkage = match self.m.func(f).linkage {
+                    Linkage::WeakOdr => Linkage::WeakOdr,
+                    _ => Linkage::External,
+                };
                 {
                     let al = self.m.alias_mut(a);
-                    al.linkage = Linkage::External;
+                    al.linkage = linkage;
                     al.dso_local = true;
                     al.unnamed_addr = UnnamedAddr::Global;
                 }

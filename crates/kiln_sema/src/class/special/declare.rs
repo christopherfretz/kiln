@@ -416,6 +416,20 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        // `[extern] template C<args>::C(params);`: an explicit
+        // instantiation of a constructor or destructor of a class
+        // template specialization ([temp.explicit]/3) declares nothing.
+        if let Some(p) = prev_ok
+            && !in_class
+            && self.at_explicit_head()
+            && let Some((ext, _)) = self.templ.explicit_inst
+            && self.ast.member_spec_info(p).is_some()
+        {
+            self.templ.explicit_inst = None;
+            self.templ.cur = None;
+            self.act_on_explicit_member_inst(self.ast.first(p), ext.is_some(), sloc);
+            return None;
+        }
         let mut spec = FnSpec::new();
         if ds.inline.is_some() {
             spec = spec.with_inline(true);

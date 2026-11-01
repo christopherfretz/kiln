@@ -1323,6 +1323,23 @@ impl Sema<'_, '_> {
         }
         false
     }
+    /// [temp.explicit]/1 (clang `ActOnExplicitInstantiation`): an
+    /// explicit instantiation cannot be `inline`, and that of a function
+    /// cannot be `constexpr` or `consteval`. Diagnosed; the instantiation
+    /// proceeds.
+    fn check_explicit_inst_specifiers(&mut self, ds: &DeclSpec, ty: QualType) {
+        if let Some(l) = ds.inline {
+            let msg = self
+                .diag(DiagId::sema_explicit_inst_inline, l)
+                .range(Span::new(l, l.with_offset(6)));
+            self.emit(msg);
+        }
+        if let Some(l) = ds.constexpr.or(ds.consteval)
+            && self.ast.types.is_function(ty)
+        {
+            self.error(DiagId::sema_explicit_inst_constexpr, l);
+        }
+    }
 
     /// `-Wvexing-parse` ([dcl.ambig.res]/1, clang's
     /// `warnAboutAmbiguousFunction`): a block-scope function declaration
@@ -1480,6 +1497,9 @@ impl Sema<'_, '_> {
             }
         }
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
+            self.check_explicit_inst_specifiers(ds, ty);
+        }
         if special {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
