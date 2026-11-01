@@ -826,8 +826,9 @@ impl Sema<'_, '_> {
     /// List-initialization of an entity at `entity` (its name, or the
     /// start of the expression for temporaries, return values and
     /// assignments): too many elements for a scalar are reported there
-    /// (clang's `FK_TooManyInitsForScalar`); nested lists report at the
-    /// excess element.
+    /// (clang's `FK_TooManyInitsForScalar`; a scalar member's nested list
+    /// passes its `{`); nested aggregate lists report at the excess
+    /// element.
     pub(crate) fn init_from_list_at(
         &mut self,
         ty: QualType,
@@ -920,7 +921,7 @@ impl Sema<'_, '_> {
         if let Some(extra) = l.items.get(1) {
             let at = entity.unwrap_or_else(|| extra.value.loc(self));
             let msg = self.diag(DiagId::sema_excess_initializers, at).arg("2");
-            self.emit(msg);
+            self.emit(self.ref_temp_noted(msg));
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
     }
@@ -958,7 +959,7 @@ impl Sema<'_, '_> {
         }
         if let Some(extra) = l.items.get(pos) {
             let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
-            self.emit(msg);
+            self.emit(self.ref_temp_noted(msg));
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
     }
@@ -1088,7 +1089,15 @@ impl Sema<'_, '_> {
         self.ctor_diag_ty = None;
         let tmp = match tmp {
             Some(t) => t,
-            None => self.init_from_list_at(r, l, entity),
+            None => {
+                // An aggregate temporary with too many elements gets
+                // clang's `diagnoseListInit` reference note.
+                let agg = self.ast.types.is_array(r) || self.ast.types.as_record(r).is_some();
+                let saved = self.ref_temp_note.replace(agg.then_some((r, at)));
+                let t = self.init_from_list_at(r, l, entity);
+                self.ref_temp_note.set(saved);
+                t
+            }
         };
         self.init_from_expr(ty, tmp, ConvCtx::Initialization, at)
     }
@@ -1177,7 +1186,21 @@ impl Sema<'_, '_> {
             "4"
         };
         let msg = self.diag(DiagId::sema_excess_initializers, item.value.loc(self)).arg(which);
-        self.emit(msg);
+        self.emit(self.ref_temp_noted(msg));
+    }
+
+    /// Adds the `in initialization of temporary ... created to
+    /// list-initialize this reference` note while a reference's
+    /// aggregate temporary is list-initialized (once).
+    fn ref_temp_noted(&self, d: kiln_diag::Diag) -> kiln_diag::Diag {
+        match self.ref_temp_note.take() {
+            Some((t, at)) => {
+                let n =
+                    self.diag(DiagId::note_reference_temporary_list_init, at).arg(self.ty_arg(t));
+                d.with_note(n)
+            }
+            None => d,
+        }
     }
 
     /// One element of an aggregate: a nested list, a brace-elided
@@ -1192,7 +1215,11 @@ impl Sema<'_, '_> {
         match &items[*pos].value {
             InitValue::List(sub) => {
                 *pos += 1;
-                self.init_from_list(ty, sub)
+                // A scalar member's nested list reports too many
+                // elements at its `{` (clang's `FK_TooManyInitsForScalar`
+                // for the member entity, whose location is the list).
+                let scalar = self.is_scalar(ty);
+                self.init_from_list_at(ty, sub, scalar.then_some(sub.lbrace))
             }
             InitValue::Expr(e) => {
                 let e = *e;

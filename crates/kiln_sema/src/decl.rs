@@ -2930,9 +2930,7 @@ impl Sema<'_, '_> {
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let local = self.find_prev(name, d.qualifier);
         let prev = match local {
-            None if ext || !self.in_local_scope() => {
-                self.find_prev_linkage(name, d.qualifier)
-            }
+            None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
         };
         if let Some(p) = prev {
@@ -3821,10 +3819,8 @@ impl Sema<'_, '_> {
             } else {
                 self.qualifier_desc(q)
             };
-            let msg = self
-                .diag(DiagId::sema_member_def_no_match, nloc)
-                .arg(sym_str(self, n))
-                .arg(scope);
+            let msg =
+                self.diag(DiagId::sema_member_def_no_match, nloc).arg(sym_str(self, n)).arg(scope);
             self.emit(msg);
             return;
         }

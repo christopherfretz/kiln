@@ -152,7 +152,10 @@ pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
         let n = ast.decls.get(ctx);
         match n.kind() {
             DeclKind::LinkageSpec => {
-                return ast.decls.scope(ctx).is_some_and(|s| s.linkage_lang() == Some(LinkageLang::C));
+                return ast
+                    .decls
+                    .scope(ctx)
+                    .is_some_and(|s| s.linkage_lang() == Some(LinkageLang::C));
             }
             DeclKind::TranslationUnit => return false,
             // Class members and local entities never have C language

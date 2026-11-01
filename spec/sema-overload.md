@@ -360,7 +360,11 @@ Wording: "cannot convert initializer list argument to 'int'". Every failure
 of a braced argument is `Bad(InitList)` naming the parameter type (for a
 reference, the cv-qualified referenced type: `'const G'` for the implicit
 copy constructor), as clang's `TryListConversion` fails with the list as the
-source (WP-152).
+source (WP-152). A non-const (or volatile) lvalue reference whose temporary
+would list-initialize is instead `Bad(LvalueRequired)` ("expects an lvalue
+for 1st argument"); a single-element candidate call reports the same detail
+(`forms.rs` `braced_argument`;
+`tests/conformance/over.ics.list/reference-parameter-notes.cpp`).
 
 ### 3.4 Comparing ICSs (`compare_ics`, [over.ics.rank])
 (1) /2: `Standard` < `UserDefined` = `Ambiguous` < `Ellipsis`. (2) /3.1
