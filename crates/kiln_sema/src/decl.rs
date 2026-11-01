@@ -2039,8 +2039,17 @@ impl Sema<'_, '_> {
         let prev = if global_new_delete {
             None
         } else if friend && d.qualifier.is_none() {
-            // Redeclaration lookup in the namespace sees hidden friends.
-            let found: Vec<DeclId> = self.ast.lookup_local(ctx, dname).iter().collect();
+            // Redeclaration lookup in the namespace sees hidden friends,
+            // but not the members of its inline namespaces: those are in
+            // other scopes ([dcl.meaning.general]/2.3, [namespace.memdef]/3;
+            // clang's `FilterLookupForScope` without `AllowInlineNamespace`).
+            let found: Vec<DeclId> = self
+                .ast
+                .lookup_local(ctx, dname)
+                .iter_with_inline()
+                .filter(|&(_, via_inline)| !via_inline)
+                .map(|(d, _)| d)
+                .collect();
             self.pick_prev_function(&found, new_fn)
         } else if method {
             let found = self.prev_candidates_dn(dname, d.qualifier);
