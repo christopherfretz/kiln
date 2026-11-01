@@ -431,6 +431,15 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Records the written qualifier of the qualified function
+    /// template-id `e` (an `UnresolvedLookupExpr`); dependent signatures
+    /// mangle it (`clsr3stdE7declvalIT_EE`, spec/abi.md §8.15).
+    pub fn set_template_id_qualifier(&mut self, e: ExprId, nns: NnsId) {
+        if self.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr {
+            let _ = self.ast.templates.expr_nns.insert(e, nns);
+        }
+    }
+
     /// The template name of template (or template template parameter)
     /// `d` as written.
     pub fn template_name_for(&mut self, d: DeclId) -> TemplateNameId {

@@ -292,11 +292,12 @@ pub fn decay(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
         return e;
     }
     if s.ast.types.is_array(t) {
-        if n.value_category().is_glvalue() {
-            let p = array_decayed(s, t);
-            return raw_cast(s, CastKind::ArrayToPointerDecay, e, p, ValueCategory::PRValue, None);
-        }
-        return e;
+        // An array prvalue (a compound literal) is materialized first
+        // ([conv.array]/1, clang `DefaultFunctionArrayConversion`).
+        let e =
+            if n.value_category().is_glvalue() { e } else { s.materialize_temporary(e, t, false) };
+        let p = array_decayed(s, t);
+        return raw_cast(s, CastKind::ArrayToPointerDecay, e, p, ValueCategory::PRValue, None);
     }
     lvalue_to_rvalue(s, e)
 }
@@ -969,6 +970,12 @@ pub fn implicit_convert(
     }
     if s.ast.types.is_dependent(from) || s.ast.types.is_dependent(to) {
         return Ok(e);
+    }
+    // clang's `InitializationSequence::Perform` drops a misaligned `&m`
+    // converted to a type that tolerates it (`-Waddress-of-packed-member`);
+    // a simple assignment does not (`CheckSingleAssignmentConstraints`).
+    if !s.misaligned.is_empty() && ctx != ConvCtx::Assignment {
+        s.discard_misaligned_member_address(to, e);
     }
     if s.check_builtin_fn_use(e) {
         let loc = s.eloc(e);

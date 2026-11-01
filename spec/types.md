@@ -653,7 +653,9 @@ stores ids.
   and becomes each printed scope's name; an empty name (anonymous
   namespace, unnamed tag) never drops one. So `'std::S'` (the canonical
   `aka` is the same and is dropped), but `'c::d::X'` when `c::e::X`
-  also exists.
+  also exists. A class specialization in a printed scope shows its
+  canonical arguments with their own scope (`write_arg_list_scoped`:
+  `'std::Ptr<int *, std::alloc<int>>::g'`, not `alloc<int>`; WP-172).
 - **R5 A thread-safe `&self` interner (sharded locks, as
   `kiln_lex::Interner`).** Sema is single-threaded per TU (spec/ast.md
   §13 Q8); parallelism is across TUs. A lock per type construction costs

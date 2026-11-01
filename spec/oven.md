@@ -166,9 +166,8 @@ the evaluator's flattened type table.
   `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
   that has an initializer (or a known value) but is not usable in constant
   expressions (a `const double`, a `const _Atomic(int)`, a `const` class,
-  array or pointer) is read as if it were (`VarInfo::lax`), except one
-  whose type contains a `mutable` member (the Oven has no "read of mutable
-  member" check yet, so such variables are excluded wholesale). Lax mode
+  array or pointer) is read as if it were (`VarInfo::lax`); its `mutable`
+  members are not (below, WP-183). Lax mode
   applies only to an outermost evaluation (nested in a bridge callback it
   is plain `try_fold`). Variables resolved under lax mode are recorded in
   `lax_globals` and reset to unresolved when the next outermost
@@ -182,6 +181,50 @@ the evaluator's flattened type table.
   is a local variable read as a global): "pointer to '…' is not a
   constant expression" (or "reference to …" when the frozen type is a
   reference; clang `note_constexpr_non_global`), with "declared here".
+- A **function parameter outside its call** (named in a template
+  argument or a `static_assert` in the body, where it has no frame;
+  WP-183) takes the same globals path as an external object that is never
+  usable (`var_info` returns early for `ParmVar`; a default argument is
+  not an initializer). So `X<&q>` and `Y<q>` (`const int&` parameter)
+  fail in the freeze above, as clang's `VisitVarDecl` `Success(VD)` does,
+  and only a read (`Z<q>`, `static_assert(r == 0)` through a reference)
+  is clang's `note_constexpr_function_param_value_unknown` ("function
+  parameter 'q' with unknown value cannot be used in a constant
+  expression") with "declared here" (`MemFault::External`, `notes.rs`).
+  This is a lowering change only; it is not on the interpreter hot path.
+
+- **Variable length arrays** (WP-183, GNU extension): a VLA local lowers
+  to a zero-sized opaque object, so declaring one in a constant
+  evaluation succeeds, `sizeof` of a VLA (`is_vla`) throws `Invalid`
+  ("subexpression not valid in a constant expression"), and an element
+  access is clang's `note_constexpr_access_unsized_array` ("{read
+  of,assignment to,...} element of array without known bound is not
+  allowed in a constant expression"). Clang's designator lets the
+  pointer arithmetic succeed and fails the access; kiln faults at the
+  arithmetic for a nonzero index, where the cold note path
+  (`indexes_vla`) reports it as a read whatever the access is.
+- **Mutable members** (WP-183, [expr.const]/4, /5.9): a `mutable`
+  subobject of an object usable in constant expressions is not usable, so
+  a read of it (or of anything inside it) from an object whose lifetime
+  began outside the evaluation is "read of mutable member 'm' is not
+  allowed in a constant expression" with "declared here" at the member
+  (clang `note_constexpr_access_mutable`), in strict and lax mode alike.
+  `TyInfo::has_mutable` and `FieldInfo::mutable` record the members; a
+  static object thawed from a value (`resolve_var`, a usable
+  `resolve_let`, `thaw`) whose type has one gets the allocation flag
+  `MUTABLE_OUTSIDE`. Loads from an allocation with that flag or
+  `HAS_UNION` take the outlined slow path (`slow_access`; no cost for
+  other allocations): `mutable_path` walks from the allocation root to
+  the read object (a union through its active member) and faults at the
+  outermost `mutable` member on the way; a read of a whole class object
+  (the `Copy` of a trivial copy) faults at the first `mutable` member it
+  reads (members before bases, recursively; not one of empty class type;
+  any in a union; clang `diagnoseMutableFields`). The object being
+  initialized (`RESOLVING`), its lifetime-extended temporaries, and
+  frame and heap objects never carry the flag, so their mutable members
+  are read and written freely. Deviations: clang also notes "in call to
+  'S(s)'" for the trivial copy constructor; clang rejects every such read
+  before C++14 and during constant destruction, kiln does not.
 
 ### Manifestly constant-evaluated context — normative (WP-063)
 `__builtin_is_constant_evaluated()` ([expr.const]/20, [meta.const.eval])

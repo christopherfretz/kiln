@@ -1608,6 +1608,11 @@ diag_ids! {
     note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
     note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
     sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
+    sema_vla_static_storage = Error (0) "variable length array declaration cannot have 'static' storage duration";
+    sema_vla_extern_linkage = Error (0) "variable length array declaration cannot have 'extern' linkage";
+    sema_vla_no_init = Error (0) "variable-sized object may not be initialized";
+    sema_vla_cxx_extension_gnu = Extension [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
+    sema_address_of_packed_member = Warning [AddressOfPackedMember] (2) "taking address of packed member {0} of class or structure {1} may result in an unaligned pointer value";
     sema_bad_cxx_cast_rvalue = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from rvalue to reference type {1}";
 }
 

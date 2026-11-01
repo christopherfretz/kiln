@@ -9,9 +9,9 @@
 //! in an expansion of the `_Pragma ( ... )` range, like clang's pragma
 //! lexer).
 
-use kiln_diag::{Diag, DiagId, Group};
+use kiln_diag::{Diag, DiagId, Severity};
 use kiln_lex::{Encoding, Lexer, Punct, TokFlags, TokKind, Token};
-use kiln_source::{ExpansionKind, Span};
+use kiln_source::{ExpansionKind, Loc, Span};
 
 use crate::callbacks::{FileChange, PragmaInfo, PragmaIntroducer, PragmaMessageKind};
 use crate::preprocessor::{Frame, Marker, Preprocessor};
@@ -220,7 +220,7 @@ impl Preprocessor<'_, '_> {
                         self.pragma_macro_annotation(k);
                     }
                     Some("diagnostic") => {
-                        if let Some(rest) = self.pragma_diagnostic() {
+                        if let Some(rest) = self.pragma_diagnostic(span.lo) {
                             let mut toks = vec![first.tok, second.tok];
                             toks.extend(rest);
                             self.pass_pragma(intro, span, toks);
@@ -508,7 +508,7 @@ impl Preprocessor<'_, '_> {
     /// yet, so the pragma is validated (and `push` / `pop` balanced) but
     /// has no effect on kiln's own diagnostics. Returns the tokens after
     /// `diagnostic` if the pragma is valid (it is then passed through).
-    fn pragma_diagnostic(&mut self) -> Option<Vec<Token>> {
+    fn pragma_diagnostic(&mut self, at: Loc) -> Option<Vec<Token>> {
         let t = self.lex_unexpanded();
         let Some(s) = t.ident() else {
             self.emit(Diag::new(DiagId::pp_pragma_diagnostic_invalid, t.tok.span));
@@ -520,12 +520,14 @@ impl Preprocessor<'_, '_> {
         if name == "push" || name == "pop" {
             let ok = if name == "push" {
                 self.diag_pushes += 1;
+                self.diags.pragma_push(at);
                 true
             } else if self.diag_pushes == 0 {
                 self.emit(Diag::new(DiagId::pp_pragma_diagnostic_cannot_pop, next.tok.span));
                 false
             } else {
                 self.diag_pushes -= 1;
+                self.diags.pragma_pop(at);
                 true
             };
             if !next.is_eod_or_eof() {
@@ -537,7 +539,7 @@ impl Preprocessor<'_, '_> {
             self.emit(Diag::new(DiagId::pp_pragma_diagnostic_invalid, next.tok.span));
             return None;
         }
-        let at = next.tok.span;
+        let opt_at = next.tok.span;
         let (opt, end) = self.finish_string(next, "pragma diagnostic", false, &mut toks)?;
         if !end.is_eod_or_eof() {
             self.emit(Diag::new(DiagId::pp_pragma_diagnostic_invalid_token, end.tok.span));
@@ -545,12 +547,20 @@ impl Preprocessor<'_, '_> {
         }
         let b = opt.as_bytes();
         if b.len() < 3 || b[0] != b'-' || (b[1] != b'W' && b[1] != b'R') {
-            self.emit(Diag::new(DiagId::pp_pragma_diagnostic_invalid_option, at));
+            self.emit(Diag::new(DiagId::pp_pragma_diagnostic_invalid_option, opt_at));
             return None;
         }
         let group = &opt[2..];
-        if group != "everything" && !Group::is_known_name(group) {
-            self.emit(Diag::new(DiagId::pp_pragma_diagnostic_unknown_warning, at).arg(&opt));
+        let sev = match name {
+            "ignored" => Severity::Ignored,
+            "warning" => Severity::Warning,
+            "error" => Severity::Error,
+            _ => Severity::Fatal,
+        };
+        // clang `PragmaDiagnosticHandler`: `setSeverityForAll` or
+        // `setSeverityForGroup` from the pragma's location on.
+        if !self.diags.pragma_set(at, b[1] == b'R', group, sev) {
+            self.emit(Diag::new(DiagId::pp_pragma_diagnostic_unknown_warning, opt_at).arg(&opt));
             return None;
         }
         Some(toks)

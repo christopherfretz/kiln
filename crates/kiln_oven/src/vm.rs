@@ -200,6 +200,12 @@ pub(crate) enum Fault {
         field: DeclId,
         active: Option<DeclId>,
     },
+    /// A read of a `mutable` member of an object whose lifetime began
+    /// outside the evaluation ([expr.const]/5.9).
+    Mutable {
+        ak: u32,
+        field: DeclId,
+    },
     VoidCast {
         from: OTy,
         to: OTy,
@@ -1545,6 +1551,114 @@ impl Oven {
 
     // ---- memory -----------------------------------------------------------
 
+    /// [expr.const]/5.9: a read of the object of type `ty` at `raw`, in an
+    /// allocation marked [`flags::MUTABLE_OUTSIDE`], must not reach a
+    /// `mutable` member on the path from the allocation root, nor (a
+    /// whole-object read of a class, a trivial copy) contain one that it
+    /// reads (clang `diagnoseMutableFields`). The slow path of a load:
+    /// only allocations with the flag take it.
+    #[cold]
+    pub(crate) fn mutable_path(&self, raw: u64, ty: OTy) -> Result<(), Fault> {
+        let p = Ptr::decode(raw);
+        let Some(a) = self.alloc_any(p) else { return Ok(()) };
+        let (mut t, mut base) = (a.ty, 0u64);
+        let target = u64::from(p.off);
+        loop {
+            if t == ty && base == target {
+                return match self.mutable_read(ty) {
+                    Some(field) => Err(Fault::Mutable { ak: ak::READ, field }),
+                    None => Ok(()),
+                };
+            }
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem).max(1);
+                    let i = (target - base) / es;
+                    if i >= n {
+                        return Ok(());
+                    }
+                    base += i * es;
+                    t = elem;
+                }
+                TyKind::Record { union, .. } => {
+                    let rel = target - base;
+                    let fields = self.types.fields(t);
+                    let contains = |f: &&crate::ty::FieldInfo| {
+                        rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
+                    };
+                    // A union member is the active one (a read of another
+                    // is diagnosed by `union_path`).
+                    let active = if union {
+                        self.mem
+                            .unions
+                            .get(&Ptr::union_key(raw, base))
+                            .and_then(|&i| fields.get(i as usize))
+                            .filter(contains)
+                    } else {
+                        None
+                    };
+                    let Some(f) = active.or_else(|| fields.iter().find(contains)) else {
+                        return Ok(());
+                    };
+                    if f.mutable {
+                        return Err(Fault::Mutable { ak: ak::READ, field: f.decl });
+                    }
+                    if f.width.is_some() {
+                        return Ok(());
+                    }
+                    base += f.offset;
+                    t = f.ty;
+                }
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    /// The first `mutable` member a read of a whole object of type `t`
+    /// reads: members before bases, recursively; a member of empty class
+    /// type is not read (clang `isReadByLvalueToRvalueConversion`), any
+    /// `mutable` member of a union is.
+    fn mutable_read(&self, t: OTy) -> Option<DeclId> {
+        let info = self.types.info(t);
+        if !info.has_mutable {
+            return None;
+        }
+        match info.kind {
+            TyKind::Array { elem, n } if n > 0 => self.mutable_read(elem),
+            TyKind::Record { union, .. } => {
+                let fields = self.types.fields(t);
+                let member = fields.iter().filter(|f| !f.base).find_map(|f| {
+                    if f.mutable && (union || self.reads_storage(f.ty)) {
+                        Some(f.decl)
+                    } else {
+                        self.mutable_read(f.ty)
+                    }
+                });
+                member.or_else(|| {
+                    fields.iter().filter(|f| f.base).find_map(|f| self.mutable_read(f.ty))
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether an lvalue-to-rvalue conversion of an object of type `t`
+    /// reads anything (not an empty class or an array of them).
+    fn reads_storage(&self, t: OTy) -> bool {
+        match self.types.kind(t) {
+            TyKind::Array { elem, n } => n > 0 && self.reads_storage(elem),
+            TyKind::Record { union, .. } => {
+                let fields = self.types.fields(t);
+                if union {
+                    !fields.is_empty()
+                } else {
+                    fields.iter().any(|f| self.reads_storage(f.ty))
+                }
+            }
+            _ => true,
+        }
+    }
+
     /// Checks the active members of the unions on the path from the
     /// allocation root to the `len`-byte object of type `ty` at `raw`.
     fn union_path(&self, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
@@ -1616,6 +1730,19 @@ impl Oven {
         }
     }
 
+    /// The checks of a load from an allocation with unions or with
+    /// `mutable` members it may not read (outlined from the hot path).
+    #[cold]
+    fn slow_access(&self, fl: u8, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        if fl & flags::MUTABLE_OUTSIDE != 0 && k == ak::READ {
+            self.mutable_path(raw, ty)?;
+        }
+        if fl & flags::HAS_UNION != 0 {
+            self.union_path(raw, ty, k)?;
+        }
+        Ok(())
+    }
+
     /// The bounds check of a load; the read half of a read-modify-write
     /// (`k` other than [`ak::READ`]) is checked as the write it precedes, so
     /// modifying an object visible outside the evaluation is diagnosed
@@ -1640,8 +1767,8 @@ impl Oven {
         let is_ptr = matches!(info.kind, TyKind::Ptr(_) | TyKind::NullPtr);
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, len, ty, k)?;
-        if a.flags & flags::HAS_UNION != 0 {
-            self.union_path(raw, ty, k)?;
+        if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
+            self.slow_access(a.flags, raw, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, len) {
@@ -1682,8 +1809,8 @@ impl Oven {
         let n = u64::from((bit + width).div_ceil(8));
         let fault = |f| Fault::Mem { f, ak: k, ty, p: raw };
         let (st, abs, a) = self.rmw_check(raw, n, ty, k)?;
-        if a.flags & flags::HAS_UNION != 0 {
-            self.union_path(raw, ty, k)?;
+        if a.flags & (flags::HAS_UNION | flags::MUTABLE_OUTSIDE) != 0 {
+            self.slow_access(a.flags, raw, ty, k)?;
         }
         let sp = self.mem.space(st);
         if !sp.is_init(abs, n) {
@@ -1742,12 +1869,15 @@ impl Oven {
 
     fn copy_obj(&mut self, dst: u64, src: u64, ty: OTy, init: bool) -> Result<(), Fault> {
         let size = self.types.size(ty);
-        let (ss, sa, _) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
+        let (ss, sa, sa_alloc) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
             f,
             ak: ak::READ,
             ty,
             p: src,
         })?;
+        if sa_alloc.flags & flags::MUTABLE_OUTSIDE != 0 {
+            self.mutable_path(src, ty)?;
+        }
         let k = if init { ak::INIT } else { ak::ASSIGN };
         let (ds, da, a) =
             self.mem.check(dst, size, true).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;

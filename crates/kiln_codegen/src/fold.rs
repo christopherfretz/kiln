@@ -13,7 +13,7 @@ use kiln_ast::consts::ConstStore;
 use kiln_ast::decl::{DeclFlags, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::stmt::StmtKind;
-use kiln_ast::types::{RecordLayout, TypeView};
+use kiln_ast::types::{RecordLayout, TypeFlags, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{Oven, SemaBridge, Subobject, SubobjectId};
@@ -308,11 +308,49 @@ impl Collect<'_> {
 
     fn local_decl(&mut self, d: DeclId) {
         let ast = self.ast;
+        // The variable length array bounds `EmitVariablyModifiedType`
+        // evaluates (WP-183).
+        match ast.decls.get(d).kind() {
+            DeclKind::Var => {
+                if let Some(t) = ast.decls.get(d).ty() {
+                    self.vla_bounds(t);
+                }
+            }
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                if let Some(t) = ast.decls.typedef(d) {
+                    self.vla_bounds(t.underlying);
+                }
+            }
+            _ => {}
+        }
         if ast.decls.get(d).kind() == DeclKind::Var {
             let is_static = ast.decls.var(d).is_some_and(|v| {
                 v.spec.storage() == VarStorage::Static || v.spec.storage() == VarStorage::Extern
             });
             self.var(d, is_static);
+        }
+    }
+
+    /// The bounds of the variable length arrays in `q` (through arrays,
+    /// pointers and references, like codegen's `emit_vla_bounds`).
+    fn vla_bounds(&mut self, mut q: QualType) {
+        let ast = self.ast;
+        loop {
+            if !ast.types.qflags(q).contains(TypeFlags::VARIABLY_MODIFIED) {
+                return;
+            }
+            match ast.types.canonical_view(q) {
+                TypeView::VariableArray { elem, size } => {
+                    self.expr(size);
+                    q = elem;
+                }
+                TypeView::ConstantArray(a) => q = a.elem,
+                TypeView::IncompleteArray(e)
+                | TypeView::Pointer(e)
+                | TypeView::LValueRef(e)
+                | TypeView::RValueRef(e) => q = e,
+                _ => return,
+            }
         }
     }
 
@@ -345,7 +383,12 @@ impl Collect<'_> {
             ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::LNot => {
                 self.out.push(ast.exprs.operand(e));
             }
-            ExprKind::UnaryExprOrTypeTraitExpr => self.out.push(e),
+            ExprKind::UnaryExprOrTypeTraitExpr => {
+                self.out.push(e);
+                if let Some(t) = ast.exprs.trait_type_arg(e) {
+                    self.vla_bounds(t);
+                }
+            }
             // clang `ScalarExprEmitter::VisitMemberExpr` tries
             // `EvaluateAsInt` on an integral member access.
             ExprKind::MemberExpr

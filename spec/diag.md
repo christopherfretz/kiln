@@ -226,6 +226,43 @@ kiln has none of those ids yet. Notes go with their parent.
 macro-redefinition checks in system headers when it is set, as clang
 does) and `is_enabled_at(id, loc)` combines §5.2 with this rule.
 
+### 5.5 Pragma state (WP-183)
+
+`#pragma clang diagnostic` and `#pragma GCC diagnostic` change the
+mapping by location (clang `DiagStateMap`, `pragma.rs`). The
+preprocessor calls `DiagEngine::pragma_push(at)`, `pragma_pop(at)` (false
+when nothing was pushed: kiln_pp's "could not pop") and
+`pragma_set(at, remark, group, severity)` for
+`ignored`/`warning`/`error`/`fatal` (false for an unknown group;
+`everything` is every warning, extension and remark of the flavor, as
+`setSeverityForAll`), with `at` the expansion location of the `pragma` /
+`_Pragma` token.
+
+- A pragma makes a new state current from `at` on: the current state's
+  overrides plus, for each group member, a user mapping with the
+  pragma's severity that keeps the old `no_werror` (`-Wno-error=`) and
+  drops `no_fatal`. Unlike a command-line `-Wfoo`, a `warning` pragma
+  overrides an error mapping. `pop` makes the state saved by `push`
+  current again. Overrides go through §5.2 like command-line mappings
+  (`Policy::severity_with`), so `-Werror`, `-w` and the extension rule
+  still apply.
+- The state at a location is the last transition point at or before its
+  expansion location in the same buffer range, else the state at the
+  range's include location, recursively (the command-line state at the
+  top). When the preprocessor leaves an included file it calls
+  `pragma_file_exit(resume)`, which adds a point at the includer's resume
+  location if the current state differs there: a pragma in a header
+  without `push`/`pop` reaches the rest of the includer, as in clang.
+  An invalid location uses the current state.
+- `emit`, `would_emit`, `is_enabled_at` and `severity_at(id, loc)` use
+  the state at the diagnostic's location, so a diagnostic emitted late
+  (an instantiation at the end of the TU) sees the pragmas around its
+  location. `severity(id)` stays the command-line severity;
+  `is_enabled(id)` is also true for an id some pragma enables. Sema's
+  error checks (trailing notes, SFINAE) use `severity_at`.
+- Cost: none until the first pragma (an atomic flag); then a read lock
+  and a binary search over the transition points per severity query.
+
 ## 6. Building diagnostics
 
 ```rust
@@ -559,14 +596,12 @@ control characters.
 | D10 | `-WX` is accepted as `-Werror`. | MSVC-style alias some build systems pass. |
 | D11 | JSON is kiln's own schema (with `option`, `fixits`, severity `fatal`), not clang's SARIF. | Built for the test harness. |
 | D12 | `pedantic` contains exactly the groupless extensions. | clang's `-Wpedantic` also has named subgroups kiln does not have yet. |
-| D13 | Policy is per TU; `#pragma clang diagnostic` is not supported. | Per-location state is future work (§12). |
+| D13 | *(Resolved by WP-183: `#pragma clang diagnostic` state, §5.5.)* | |
 
 ## 12. Integration notes and open questions
 
 - Lexer/preprocessor MUST pass `.range()` for underlines and MUST build
   expansion records as §8.5 describes; pasted/stringized tokens go in a
   buffer named `<scratch space>`.
-- `#pragma clang diagnostic push/pop/ignored` needs per-location policy
-  (clang's `DiagStatePoints`); the policy is immutable today.
 - `kiln_source` could expose a line-start query; `kiln_diag` derives it
   from `line_text` pointer arithmetic.
