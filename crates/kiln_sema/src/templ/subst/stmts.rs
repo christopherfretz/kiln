@@ -258,6 +258,28 @@ impl Substituter<'_, '_, '_> {
                 let (name, at) = self.label_name(DeclId::new(n.a()))?;
                 Ok(self.sema.act_on_goto(name, at, loc))
             }
+            // clang `TransformAttributedStmt`: each assumption is
+            // substituted and built again (`BuildCXXAssumeExpr`, so the
+            // instantiation gets its own conversion and `-Wassume`).
+            StmtKind::AttributedStmt => {
+                use kiln_ast::ids::RawId;
+                let list = self.sema.ast.stmts.stmt_attrs(s);
+                let attrs: Vec<kiln_ast::AttrId> = self.sema.ast.lists.iter(list).collect();
+                let mut kept = Vec::with_capacity(attrs.len());
+                for a in attrs {
+                    let node = *self.sema.ast.attrs.get(a);
+                    let Some(e) = ExprId::from_raw(node.a) else { continue };
+                    let e = self.expr(e)?;
+                    if let Some(c) = self.sema.build_cxx_assume_expr(e) {
+                        kept.push(self.sema.assume_attr(node, c));
+                    }
+                }
+                let sub = self.stmt(StmtId::new(n.b()));
+                if kept.is_empty() {
+                    return Ok(sub);
+                }
+                Ok(self.sema.builder().attributed_stmt(&kept, sub, loc))
+            }
             k => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
     }

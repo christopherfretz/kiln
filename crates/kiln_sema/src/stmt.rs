@@ -7,6 +7,7 @@ use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{CaseData, IfData, IfKind, LoopData, StmtKind, SwitchData};
 use kiln_ast::types::{BuiltinType, TypeView};
+use kiln_ast::ids::RawId;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -235,6 +236,104 @@ impl Sema<'_, '_> {
             }
         };
         self.act_on_full_expr(e)
+    }
+
+    /// The statement attributes `attrs` written before `sub`, at `loc`
+    /// ([dcl.attr.grammar]/5; clang's `ProcessStmtAttributes`). Only
+    /// `[[assume]]` is kept (in an `AttributedStmt`); it applies to a null
+    /// statement only ([dcl.attr.assume]/1). The assumption is
+    /// contextually converted to `bool` unless dependent, and a C++23
+    /// extension before C++23 (`pre_cxx23`, under `-pedantic`).
+    pub fn act_on_attributed_stmt(
+        &mut self,
+        attrs: &[kiln_ast::AttrId],
+        sub: StmtId,
+        loc: Loc,
+        pre_cxx23: bool,
+    ) -> StmtId {
+        use kiln_ast::attr::AttrKind;
+        let sub_kind = self.ast.stmts.get(sub).kind();
+        let mut kept = Vec::new();
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            if node.kind != AttrKind::ASSUME {
+                continue;
+            }
+            if sub_kind == StmtKind::DeclStmt {
+                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg("assume");
+                self.emit(msg);
+                continue;
+            }
+            if sub_kind != StmtKind::NullStmt {
+                let msg = self
+                    .diag(DiagId::sema_attribute_wrong_stmt_type, node.loc)
+                    .arg("assume")
+                    .arg("empty statements");
+                self.emit(msg);
+                continue;
+            }
+            let Some(e) = ExprId::from_raw(node.a) else { continue };
+            let Some(e) = self.build_cxx_assume_expr(e) else { continue };
+            if pre_cxx23 {
+                let msg = self.diag(DiagId::ext_cxx23_attr, node.loc).arg("assume");
+                self.emit(msg);
+            }
+            kept.push(self.assume_attr(node, e));
+        }
+        if kept.is_empty() {
+            return sub;
+        }
+        self.builder().attributed_stmt(&kept, sub, loc)
+    }
+
+    /// The `[[assume]]` attribute `node` with built assumption `e`
+    /// (`AttrNode::ASSUME_IGNORED` when it has possible side effects).
+    pub(crate) fn assume_attr(
+        &mut self,
+        node: kiln_ast::attr::AttrNode,
+        e: ExprId,
+    ) -> kiln_ast::AttrId {
+        let dependent = self
+            .ast
+            .exprs
+            .get(e)
+            .deps()
+            .intersects(ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::UNEXPANDED_PACK);
+        let mut flags = node.flags & !kiln_ast::attr::AttrNode::ASSUME_IGNORED;
+        if dependent || self.has_possible_side_effects(e) {
+            flags |= kiln_ast::attr::AttrNode::ASSUME_IGNORED;
+        }
+        let b = self.expr_loc(e).to_raw();
+        self.ast.attrs.push(kiln_ast::attr::AttrNode { flags, a: e.raw(), b, ..node })
+    }
+
+    /// clang's `BuildCXXAssumeExpr`: assumption `e` contextually converted
+    /// to `bool` ([dcl.attr.assume]/1), with `-Wassume` when it has
+    /// possible side effects (it is then not assumed; spec/codegen.md).
+    /// A dependent assumption is kept as written until instantiation;
+    /// `None` after an error.
+    pub(crate) fn build_cxx_assume_expr(&mut self, e: ExprId) -> Option<ExprId> {
+        let n = self.ast.exprs.get(e);
+        if n.deps().contains(ExprDeps::ERROR) || n.kind() == ExprKind::RecoveryExpr {
+            return None;
+        }
+        if n.deps().intersects(ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::UNEXPANDED_PACK) {
+            return Some(e);
+        }
+        let c = match conv::contextually_convert_to_bool(self, e) {
+            Ok(c) => c,
+            Err(err) => {
+                let loc = self.ast.exprs.get(e).loc();
+                self.emit(err.diag_at(self, loc));
+                return None;
+            }
+        };
+        let c = self.act_on_full_expr(c);
+        if self.has_possible_side_effects(c) {
+            let msg = self.diag(DiagId::sema_assume_side_effects, self.begin_loc(c));
+            self.emit(msg);
+        }
+        Some(c)
     }
 
     /// A condition declaration ([stmt.pre]/4): the variable `v` (already

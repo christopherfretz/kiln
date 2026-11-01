@@ -708,7 +708,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
+    pub(crate) fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
         let mut cur = Some(d);
         let mut n = 0;
         while let Some(x) = cur {

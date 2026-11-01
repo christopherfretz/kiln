@@ -320,6 +320,35 @@ Redeclaration and linkage rules:
   `expression with side effects has no effect in an unevaluated
   context`, at clang's expression location. Not in instantiations, not
   for type- or value-dependent operands, not for macro locations.
+- **`[[assume(e)]]`** ([dcl.attr.assume]; WP-160, `stmt.rs`
+  `act_on_attributed_stmt`). Clang's order is followed for each attribute:
+  - On a declaration: `'assume' attribute cannot be applied to a
+    declaration`.
+  - On a statement that is not null: `'assume' attribute only applies to
+    empty statements`.
+  - Otherwise, `build_cxx_assume_expr` contextually converts the
+    assumption to `bool` and makes it a full-expression. It warns
+    `assumption is ignored because it contains (potential) side-effects`
+    (`-Wassume`, at the expression's begin location) when
+    `side_effects.rs` `has_possible_side_effects` holds. That predicate is
+    clang's `HasSideEffects(IncludePossibleEffects=true)`: a call to a
+    function that is not `const`/`pure`, a volatile read, a `dynamic_cast`
+    to a reference, a non-trivial construction, a temporary with a
+    destructor, `new`/`delete`/`throw`, assignment, increment or
+    decrement, any dependent or unresolved node, and, through
+    default-argument, default-member-initializer and lambda-capture
+    initializers, whatever they contain.
+  - Before C++23, `-pedantic` adds `use of the 'assume' attribute is a C++23
+    extension` (`-Wc++23-attribute-extensions`, which is not under
+    `-Wc++23-extensions`).
+  - The result is an `AttributedStmt` with one `ASSUME` attribute per
+    assumption kept: `a` is the expression and `b` is clang's
+    `getExprLoc`. `AttrNode::ASSUME_IGNORED` marks a side-effecting or
+    dependent assumption, and codegen and the oven skip those.
+  - A dependent assumption is converted and checked again on
+    instantiation (`templ/subst/stmts.rs`).
+  - Not kept yet: `likely`/`unlikely`/`fallthrough` in the
+    `AttributedStmt`.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 

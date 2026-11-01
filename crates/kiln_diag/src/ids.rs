@@ -1267,6 +1267,12 @@ diag_ids! {
     // WP-087
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
+    // [dcl.attr.assume] (WP-160)
+    sema_assume_side_effects = Warning [Assume] (0) "assumption is ignored because it contains (potential) side-effects";
+    parse_assume_attr_expects_cond_expr = Error (1) "use of this expression in an '{0}' attribute requires parentheses";
+    sema_attribute_wrong_stmt_type = Error (2) "'{0}' attribute only applies to {1}";
+    sema_stmt_attribute_on_decl = Error (1) "'{0}' attribute cannot be applied to a declaration";
+    ext_cxx23_attr = Extension [Cxx23AttributeExtensions] (1) "use of the '{0}' attribute is a C++23 extension";
     sema_auto_non_deduced_not_alone = Error (1) "{0:function with deduced return type|declaration with trailing return type} must be the only declaration in its group";
     note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflicting {0:types|values|templates} for parameter '{1}' ({2} vs. {3})";
     note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";

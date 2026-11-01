@@ -3082,8 +3082,8 @@ explicit specialization errors remain. The blockers are:
   expression`, with the evaluation notes) in [0.0, 1.0] (`probability
   argument to __builtin_expect_with_probability is outside the range
   [0.0, 1.0]`); checked after `convert_call_args`
-  (`check_expect_probability`). Not yet: `-Wassume` (needs clang's
-  possible-effects flavour of `HasSideEffects`).
+  (`check_expect_probability`). `-Wassume` landed in WP-160 (spec/sema.md
+  §3, `[[assume]]`).
 - `kiln_ast`: `ExprKind::SourceLocExpr`, `SourceLocKind`,
   `SourceLocValues` and `exprs.cold.source_loc` (spec/ast.md §5.8);
   `kiln_parse` parses the six keywords.
