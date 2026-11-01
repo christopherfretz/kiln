@@ -1806,6 +1806,81 @@ and `DiagnoseMisalignedMembers`:
     clang prints `C::(anonymous union at ...)`.
 - Test: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`.
 
+### 5.15 GNU `_Complex` (`complex.rs`, `conv/`, WP-211)
+clang 19's C99/GNU complex support in C++:
+- **Types.** `_Complex` combines with `float`, `double`, `long double`
+  and the integer types (`char` through `long long`, signed or unsigned).
+  Plain `_Complex` is `_Complex double` with a warning. Any other base
+  (`bool`, `void`, `wchar_t`, `char8_t`, `char16_t`, `char32_t`,
+  `__int128`, `auto`, `__bf16`, a typedef name, spelled `'type-name'`) is
+  `sema_invalid_complex_spec`, and the declaration continues with the base
+  type (so `_Complex void v;` also reports the incomplete type).
+  `-pedantic` warns `'_Complex' is a C99 extension` on each keyword
+  (parser, `-Wc99-extensions`).
+- **Traits** (clang): `__is_arithmetic`, `__is_fundamental`,
+  `__is_scalar` and `__is_aggregate` are true for every complex type;
+  `__is_floating_point` is true for a complex floating type;
+  `__is_integral`, `__is_signed` and `__is_unsigned` are false.
+- **Standard conversions** (`conv/scs.rs`): complex promotion
+  (`_Complex float` to `_Complex double`, Promotion rank), complex
+  conversion, and complex-real conversion in either direction (a rank
+  worse than Conversion), plus complex-to-`bool`. The cast kinds are
+  clang's `*RealToComplex`, `*ComplexCast`, `*ComplexToReal`,
+  `*ComplexToBoolean`, `IntegralComplexToFloatingComplex` and back.
+  Sugar on the target type is kept in the cast type.
+- **Usual arithmetic conversions** (`conv/arith.rs`, clang
+  `handleComplexConversion`): a real floating operand keeps its realness
+  and only its precision is promoted. An integer operand of a complex
+  floating type, and a real operand of a complex integer type, become
+  complex. Two complex integer types take the elements' common integer
+  type without promotion (`_Complex unsigned char + _Complex unsigned
+  char` stays `_Complex unsigned char`). A compound assignment's left
+  operand is not converted.
+- **Operators.** Complex operands allow unary `+ - ~` (`~` is the
+  conjugate), `!`, binary `+ - * /`, `==`/`!=`, `&&`/`||`/`?:` conditions,
+  assignment and compound assignment. `<`/`>` and `%` are invalid
+  operands. `++`/`--` are allowed; under `-pedantic` they give
+  `'++' on an object of complex type is a C2y extension`
+  (`-Wc2y-extensions`) at the operator.
+- **`__real e` / `__imag e`** (clang `CheckRealImagOperand`): the element
+  type of a complex operand, or a real arithmetic operand's own type.
+  `__real` keeps the operand's value category. `__imag` does for a
+  complex operand, and is a zero prvalue otherwise.
+- **`__builtin_complex(re, im)`**: two operands of the same real floating
+  type `T` give `_Complex T`. Other operand types are diagnosed as clang
+  does.
+- **List initialization** (clang `CheckComplexType`): `{re, im}`
+  initializes the parts, each converted as a list element with narrowing
+  checked. A third clause is excess. One clause initializes from a
+  scalar.
+- **GNU imaginary constants.** The lexer sets `imaginary` for an
+  `i`/`j` suffix (spec/lex.md). `act_on_{integer,float}_literal` builds
+  the plain literal wrapped in an `ImaginaryLiteral` of `_Complex T`, and
+  emits `sema_imaginary_constant` ("imaginary constants are a GNU
+  extension", `-Wgnu-imaginary-constant`, off by default) at the literal.
+  When the suffix is also a valid ud-suffix (`1i`, `1.0if`, `1il`), literal
+  operator lookup runs first. If no cooked, raw or template form exists,
+  sema falls back to the imaginary constant without a diagnostic (clang
+  `LookupLiteralOperator` with `DiagnoseMissing = false`). The `<complex>`
+  operators therefore still win where they are visible.
+- **`-Wuser-defined-literals` tail.** "no literal will invoke this
+  operator" is omitted for any valid ud-suffix: the numeric library
+  suffixes and `sv`, using clang's `StringLiteralParser::isValidUDSuffix`.
+  Sema has no `-std`, so the C++20 set is used.
+- Tests: `tests/conformance/ext.complex/` (`types`, `constexpr`,
+  `diagnostics`, `pedantic`, `imaginary`).
+
+### 5.16 Value-dependent static member calls and dependent-base members (WP-211)
+- A call to a static member function of the current instantiation is
+  value-dependent ([temp.dep.constexpr]/2.3). An `if constexpr` on it in a
+  member initializer is deferred to instantiation, as libc++
+  `mdspan`'s `__rank_` needs
+  (`tests/conformance/temp.dep.constexpr/static-member-function-current-instantiation.cpp`).
+- An overloaded `B::f` named through a dependent base that is not `B`
+  is called without an object argument. It is diagnosed with clang's
+  `diagnoseInstanceReference` wording ("call to non-static member
+  function without an object argument").
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
