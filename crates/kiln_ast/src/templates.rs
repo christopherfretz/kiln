@@ -156,7 +156,8 @@ pub struct SpecInfo {
     pub from_args: Option<ArgListId>,
     /// Where the definition was first required ([temp.point]).
     pub point_of_instantiation: Loc,
-    /// The arguments names print with: `args` without the trailing
+    /// The arguments names print with: the canonical `args` (for a
+    /// class specialization formed from a template-id) without the trailing
     /// arguments that equal their parameter's default (clang's
     /// `SuppressDefaultTemplateArgs`).
     pub print_args: ArgListId,

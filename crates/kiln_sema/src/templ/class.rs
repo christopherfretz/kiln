@@ -177,7 +177,7 @@ impl Sema<'_, '_> {
             .and_then(|p| self.ast.decls.record(p))
             .map_or(TagKind::Struct, |r| r.tag);
         let spec = self.builder().class_spec(tmpl, conv.sugared, conv.canonical, tag);
-        let print = self.suppress_default_args(tmpl, conv.sugared, written.len(), loc);
+        let print = self.suppress_default_args(tmpl, conv.canonical, written.len(), loc);
         if let Some((i, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(i, |s| s.print_args = print);
         }

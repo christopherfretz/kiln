@@ -525,7 +525,12 @@ canonical type (`full_scope`), differs textually from `T` (clang's
 `type-parameter-D-I` gets no `aka` (clang's `Desugar` keeps the
 parameter's name, which the canonical printer cannot). A pair of class
 template specializations in a `%diff` argument prints the template diff
-instead (spec/diag.md §6.1). Representative goldens (each a unit test, checked against clang 19):
+instead (spec/diag.md §6.1). An implicitly instantiated class template
+specialization (the `Record` behind the sugar) prints its canonical
+arguments without trailing defaults, as clang prints a
+`ClassTemplateSpecializationDecl`: `pr<int, typename id<int>::type>`
+is `'pr<int, typename id<int>::type>' (aka 'pr<int, int>')`, and an
+instantiation note names `'X<int>'` for `X<I>`. Representative goldens (each a unit test, checked against clang 19):
 
 | type | prints |
 |---|---|
