@@ -1508,7 +1508,10 @@ impl Compiler<'_> {
             }
             // [expr.const]/5: evaluating a goto statement is not a core
             // constant expression (clang: the generic note at the `goto`).
-            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt => {
+            // [dcl.asm]/1, [expr.const]/5: an asm statement is never a
+            // core constant expression (clang: the generic note at `asm`;
+            // spec/oven.md, WP-140).
+            StmtKind::GotoStmt | StmtKind::IndirectGotoStmt | StmtKind::GCCAsmStmt => {
                 self.trap_loc(n.loc(), "subexpression not valid in a constant expression".into());
             }
             // A label is evaluated by evaluating its statement (clang

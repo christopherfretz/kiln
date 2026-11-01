@@ -3,15 +3,13 @@
 //! operand checks and the template analysis (clang's `ActOnGCCAsmStmt`).
 //! The target rules live in `kiln_abi::asm`.
 
-use kiln_abi::asm::{
-    self as tasm, AsmOperandCounts, AsmPiece, AsmStringError, ConstraintInfo,
-};
+use kiln_abi::asm::{self as tasm, AsmOperandCounts, AsmPiece, AsmStringError, ConstraintInfo};
 use kiln_ast::expr::{ExprDeps, ValueCategory};
 use kiln_ast::stmt::{AsmData, AsmOperand, asm_bits};
 use kiln_ast::types::TypeKind;
 use kiln_ast::{DeclId, ExprId, ListId, QualType, StmtId, StringLitId};
-use kiln_diag::DiagId;
-use kiln_source::Loc;
+use kiln_diag::{DiagId, FixIt};
+use kiln_source::{Loc, Span};
 
 use crate::Sema;
 use crate::conv;
@@ -19,7 +17,7 @@ use crate::conv;
 /// A string literal and its first token's location.
 pub type AsmStr = (StringLitId, Loc);
 
-impl Sema<'_, '_>  {
+impl Sema<'_, '_> {
     /// `asm qualifiers ( template : outputs : inputs : clobbers )`
     /// (clang's `ActOnGCCAsmStmt`). Errors in constraints, clobbers or
     /// the template are reported and still build the statement, as
@@ -51,7 +49,8 @@ impl Sema<'_, '_>  {
             let name = self.asm_name(op);
             let mut info = ConstraintInfo::new(&c, &name);
             if !tasm::validate_output_constraint(arch, &mut info) {
-                let d = self.diag(DiagId::sema_asm_invalid_output_constraint, op.constraint_loc).arg(c);
+                let d =
+                    self.diag(DiagId::sema_asm_invalid_output_constraint, op.constraint_loc).arg(c);
                 self.emit(d);
                 return build(self, &ops);
             }
@@ -63,7 +62,8 @@ impl Sema<'_, '_>  {
             }
             if !self.asm_output_lvalue_ok(e) {
                 let b = self.begin_loc(e);
-                if !self.is_complete(t) && !self.ast.types.is_array(t) && !self.ast.types.is_void(t) {
+                if !self.is_complete(t) && !self.ast.types.is_array(t) && !self.ast.types.is_void(t)
+                {
                     if !self.require_complete(t, b) {
                         self.report_incomplete_operand(t, b);
                         return None;
@@ -80,7 +80,8 @@ impl Sema<'_, '_>  {
             let name = self.asm_name(&op);
             let mut info = ConstraintInfo::new(&c, &name);
             if !tasm::validate_input_constraint(arch, &mut out_infos, &mut info) {
-                let d = self.diag(DiagId::sema_asm_invalid_input_constraint, op.constraint_loc).arg(c);
+                let d =
+                    self.diag(DiagId::sema_asm_invalid_input_constraint, op.constraint_loc).arg(c);
                 self.emit(d);
                 return build(self, &ops);
             }
@@ -109,10 +110,8 @@ impl Sema<'_, '_>  {
             }
             let t = self.ast.exprs.get(e).ty();
             if info.allows_register() && self.ast.types.is_void(t) {
-                let d = self
-                    .diag(DiagId::sema_asm_invalid_type_in_input, b)
-                    .arg(self.ty_arg(t))
-                    .arg(c);
+                let d =
+                    self.diag(DiagId::sema_asm_invalid_type_in_input, b).arg(self.ty_arg(t)).arg(c);
                 self.emit(d);
                 return None;
             }
@@ -120,7 +119,8 @@ impl Sema<'_, '_>  {
             if self.type_dependent(e) {
                 continue;
             }
-            if (!self.ast.types.is_void(t) || !in_infos.last().is_some_and(ConstraintInfo::allows_memory))
+            if (!self.ast.types.is_void(t)
+                || !in_infos.last().is_some_and(ConstraintInfo::allows_memory))
                 && !self.require_complete(t, b)
             {
                 self.report_incomplete_operand(t, b);
@@ -169,7 +169,7 @@ impl Sema<'_, '_>  {
         // Operand widths against the printed register (clang's
         // `validateConstraintModifier`).
         for p in &pieces {
-            let AsmPiece::Operand { no, modifier, percent } = *p else { continue };
+            let AsmPiece::Operand { no, modifier, percent, end } = *p else { continue };
             let mut idx = no;
             if idx >= total {
                 let mut cnt = idx - total;
@@ -195,12 +195,22 @@ impl Sema<'_, '_>  {
             let c = self.asm_str(ops[idx as usize].constraint);
             if let Err(suggest) = tasm::validate_constraint_modifier(arch, &c, modifier, size * 8) {
                 let b = self.begin_loc(e);
-                self.emit(self.diag(DiagId::sema_asm_mismatched_size_modifier, b));
+                let mut d =
+                    self.diag(DiagId::sema_asm_mismatched_size_modifier, b).allow_duplicate();
                 if let Some(m) = suggest {
                     let at = self.string_byte_loc(string.1, percent);
-                    let d = self.diag(DiagId::note_asm_missing_constraint_modifier, at).arg(m);
-                    self.emit(d);
+                    let stop = self.string_byte_loc(string.1, end);
+                    let range = Span::new(at, stop);
+                    let skip = percent as usize + 1 + usize::from(modifier != 0);
+                    let operand = String::from_utf8_lossy(&text[skip..end as usize]);
+                    let n = self
+                        .diag(DiagId::note_asm_missing_constraint_modifier, at)
+                        .arg(m)
+                        .range(range)
+                        .fixit(FixIt::replace(range, format!("%{m}{operand}")));
+                    d = d.with_note(n);
                 }
+                self.emit(d);
             }
         }
         // Every operand has the same number of alternatives.
@@ -229,11 +239,13 @@ impl Sema<'_, '_>  {
             let in_e = ops[nout + i].expr;
             if let Some(first) = matched[tied] {
                 let b = self.begin_loc(in_e);
-                let d = self.diag(DiagId::sema_asm_input_duplicate_match, b).arg(tied.to_string());
-                self.emit(d);
                 let fb = self.begin_loc(ops[nout + first].expr);
                 let n = self.diag(DiagId::note_asm_input_duplicate_first, fb).arg(tied.to_string());
-                self.emit(n);
+                let d = self
+                    .diag(DiagId::sema_asm_input_duplicate_match, b)
+                    .arg(tied.to_string())
+                    .with_note(n);
+                self.emit(d);
                 return build(self, &ops);
             }
             matched[tied] = Some(i);
@@ -259,7 +271,9 @@ impl Sema<'_, '_>  {
                 continue;
             }
             let mentioned = |n: usize| {
-                pieces.iter().any(|p| matches!(p, AsmPiece::Operand { no, .. } if *no as usize == n))
+                pieces
+                    .iter()
+                    .any(|p| matches!(p, AsmPiece::Operand { no, .. } if *no as usize == n))
             };
             let smaller_mentioned = (mentioned(nout + i) && in_size < out_size)
                 || (mentioned(tied) && out_size < in_size);
@@ -277,7 +291,9 @@ impl Sema<'_, '_>  {
                 && self.is_constant_operand(in_e)
             {
                 let out_u = conv::strip_cv(self, out_t);
-                if let Ok(c) = conv::implicit_convert(self, in_e, out_u, conv::ConvCtx::Initialization) {
+                if let Ok(c) =
+                    conv::implicit_convert(self, in_e, out_u, conv::ConvCtx::Initialization)
+                {
                     ops[nout + i].expr = c;
                 }
                 continue;
@@ -292,17 +308,20 @@ impl Sema<'_, '_>  {
         }
         // Operand names are unique (clang sorts them and reports the
         // first adjacent pair).
-        let mut named: Vec<(&str, usize)> =
-            names.iter().enumerate().filter(|(_, n)| !n.is_empty()).map(|(k, n)| (n.as_str(), k)).collect();
+        let mut named: Vec<(&str, usize)> = names
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| !n.is_empty())
+            .map(|(k, n)| (n.as_str(), k))
+            .collect();
         named.sort_by(|a, b| a.0.cmp(b.0));
         if let Some(w) = named.windows(2).find(|w| w[0].0 == w[1].0) {
             let (name, first, second) = (w[0].0.to_owned(), w[0].1, w[1].1);
             let b = self.begin_loc(ops[second].expr);
-            let d = self.diag(DiagId::sema_duplicate_asm_operand_name, b).arg(name.clone());
-            self.emit(d);
             let fb = self.begin_loc(ops[first].expr);
-            let n = self.diag(DiagId::note_duplicate_asm_operand_name, fb).arg(name);
-            self.emit(n);
+            let n = self.diag(DiagId::note_duplicate_asm_operand_name, fb).arg(name.clone());
+            let d = self.diag(DiagId::sema_duplicate_asm_operand_name, b).arg(name).with_note(n);
+            self.emit(d);
             return None;
         }
         build(self, &ops)
@@ -310,7 +329,7 @@ impl Sema<'_, '_>  {
 
     /// A namespace-scope `asm ( string-literal ) ;` ([dcl.asm]; clang's
     /// `FileScopeAsmDecl`).
-    pub fn act_on_file_scope_asm(&mut self, string: StringLitId, loc: Loc) -> DeclId {
+    pub fn act_on_file_scope_asm(&mut self, string: ExprId, loc: Loc) -> DeclId {
         let ctx = self.ctx;
         self.builder().file_scope_asm(ctx, loc, string)
     }
@@ -329,6 +348,11 @@ impl Sema<'_, '_>  {
         let cl: Vec<StringLitId> = clobbers.iter().map(|c| c.0).collect();
         let clobbers = self.ast.lists.push(&cl);
         let srclocs = self.asm_srclocs(string);
+        // Each operand ends a full-expression ([intro.execution]/5): its
+        // potential odr-uses are resolved here (clang marks them `used`).
+        let ops: Vec<AsmOperand> =
+            ops.iter().map(|o| AsmOperand { expr: self.act_on_full_expr(o.expr), ..*o }).collect();
+        let ops = &ops[..];
         let data = AsmData {
             string: string.0,
             string_loc: string.1,
@@ -345,18 +369,27 @@ impl Sema<'_, '_>  {
 
     /// clang's `getAsmSrcLocInfo`: the location of each line of a
     /// multi-line template (a `\n` before the last byte starts a line).
+    /// clang's `!srcloc` values for the template: the literal's begin
+    /// location, then the first byte of every later line. A value is
+    /// clang's raw encoding of a main-file location (byte offset + 2);
+    /// kiln uses the same formula for every file, so locations in headers
+    /// or macro expansions do not match clang's numbering.
     fn asm_srclocs(&mut self, string: AsmStr) -> ListId {
-        let b = self.ast.strings.bytes(string.0);
-        if b.len() < 2 || !b[..b.len() - 1].contains(&b'\n') {
-            return ListId::EMPTY;
-        }
-        let mut raws = vec![string.1.to_raw()];
-        for (i, &c) in b[..b.len() - 1].iter().enumerate() {
-            if c == b'\n' {
-                raws.push(self.string_byte_loc(string.1, i as u32 + 1).to_raw());
+        let enc = |s: &Self, l: Loc| {
+            let sm = s.diags.sm();
+            sm.offset_of(sm.expansion_loc(l)).map_or(0, |(_, o)| o.saturating_add(2))
+        };
+        let mut vals = vec![enc(self, string.1)];
+        let b = self.ast.strings.bytes(string.0).to_vec();
+        if b.len() >= 2 {
+            for (i, &c) in b[..b.len() - 1].iter().enumerate() {
+                if c == b'\n' {
+                    let l = self.string_byte_loc(string.1, i as u32 + 1);
+                    vals.push(enc(self, l));
+                }
             }
         }
-        self.ast.lists.push_raw(&raws)
+        self.ast.lists.push_raw(&vals)
     }
 
     fn asm_str(&self, s: StringLitId) -> String {
@@ -382,7 +415,9 @@ impl Sema<'_, '_>  {
         if self.ast.types.is_array(t) {
             return true;
         }
-        !self.ast.types.effective_quals(t).is_const() && self.is_complete(t) && !self.ast.types.is_void(t)
+        !self.ast.types.effective_quals(t).is_const()
+            && self.is_complete(t)
+            && !self.ast.types.is_void(t)
     }
 
     fn report_incomplete_operand(&self, t: QualType, at: Loc) {

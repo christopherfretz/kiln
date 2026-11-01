@@ -281,7 +281,7 @@ impl<'a> AstBuilder<'a> {
 
     /// A file-scope `asm("...")` declaration ([dcl.asm]); the inline
     /// payload is the template string.
-    pub fn file_scope_asm(&mut self, ctx: DeclId, loc: Loc, string: StringLitId) -> DeclId {
+    pub fn file_scope_asm(&mut self, ctx: DeclId, loc: Loc, string: ExprId) -> DeclId {
         let h = DeclHead::new(ctx, DeclName::EMPTY, loc);
         self.add_unregistered(h, DeclKind::FileScopeAsm, Payload::None(string.raw()), true)
     }

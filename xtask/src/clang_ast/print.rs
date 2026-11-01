@@ -1535,7 +1535,8 @@ impl<'a> Printer<'a, '_> {
                 }
             }
             "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt"
-            | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" | "CXXTryStmt" => {
+            | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" | "CXXTryStmt"
+            | "GCCAsmStmt" | "FileScopeAsmDecl" => {
                 line = k.to_owned();
                 kids_out = self.kid_trees(n)?;
             }

@@ -243,6 +243,7 @@ impl<'a> Cg<'a> {
                     self.emit_class_members(d)?;
                 }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
+                DeclKind::FileScopeAsm => self.emit_file_scope_asm(d),
                 _ => {}
             }
         }

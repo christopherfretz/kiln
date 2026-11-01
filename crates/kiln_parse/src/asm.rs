@@ -20,6 +20,11 @@ impl Parser<'_, '_> {
     /// adjacent literals concatenate; it must be an ordinary literal.
     /// `None` (reported) when missing or malformed.
     fn parse_asm_string(&mut self) -> Option<AsmStr> {
+        self.parse_asm_string_expr().map(|(s, _)| s)
+    }
+
+    /// [`Self::parse_asm_string`], also returning the literal expression.
+    fn parse_asm_string_expr(&mut self) -> Option<(AsmStr, kiln_ast::ExprId)> {
         if !self.at_string() {
             let d = self.s.diag(DiagId::parse_expected_string_literal_in, self.loc()).arg("'asm'");
             self.emit(d);
@@ -33,12 +38,13 @@ impl Parser<'_, '_> {
         }
         let lit = ast.exprs.string_lit(e);
         let which = match ast.strings.encoding(lit) {
-            StringEncoding::Ordinary => return Some((lit, start)),
+            StringEncoding::Ordinary => return Some(((lit, start), e)),
             StringEncoding::Wide16 | StringEncoding::Wide32 => "1",
             _ => "0",
         };
         let span = Span::new(start, self.prev_end());
-        let d = self.s.diag(DiagId::parse_asm_string_kind, start).arg(which).range(span);
+        // clang reports at the token after the literal.
+        let d = self.s.diag(DiagId::parse_asm_string_kind, self.loc()).arg(which).range(span);
         self.emit(d);
         None
     }
@@ -104,9 +110,7 @@ impl Parser<'_, '_> {
                 self.skip_asm_rest();
                 return None;
             }
-            if section(self, &mut extra)
-                && !extra
-                && self.parse_asm_operands(&mut inputs).is_none()
+            if section(self, &mut extra) && !extra && self.parse_asm_operands(&mut inputs).is_none()
             {
                 self.skip_asm_rest();
                 return None;
@@ -120,7 +124,7 @@ impl Parser<'_, '_> {
                 }
             }
             if bits & asm_bits::GOTO != 0 {
-                self.unsupported("'asm goto' statements", loc);
+                self.unsupported("'asm goto'", loc);
                 self.skip_asm_rest();
                 return None;
             }
@@ -132,10 +136,10 @@ impl Parser<'_, '_> {
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
-        let s =
-            self.s.act_on_gcc_asm_stmt(loc, bits, string, &outputs, &inputs, &clobbers, rparen);
+        let s = self.s.act_on_gcc_asm_stmt(loc, bits, string, &outputs, &inputs, &clobbers, rparen);
         if self.eat(Punct::Semi).is_none() {
-            let d = self.s.diag(DiagId::parse_expected_semi_after_stmt, self.expected_loc()).arg("asm");
+            let d =
+                self.s.diag(DiagId::parse_expected_semi_after_stmt, self.expected_loc()).arg("asm");
             self.emit(d);
             self.skip_until(&[Punct::RBrace], true, false);
             self.eat(Punct::Semi);
@@ -200,12 +204,12 @@ impl Parser<'_, '_> {
             self.skip_until(&[Punct::Semi], false, true);
             return;
         };
-        let Some(string) = self.parse_asm_string() else {
+        let Some((_, string)) = self.parse_asm_string_expr() else {
             self.skip_asm_rest();
             return;
         };
         self.expect_closing(Punct::RParen, Punct::LParen, lparen);
-        self.s.act_on_file_scope_asm(string.0, loc);
+        self.s.act_on_file_scope_asm(string, loc);
         if self.eat(Punct::Semi).is_none() {
             let d = self
                 .s

@@ -218,8 +218,9 @@ pub struct AsmData {
     pub labels: ListId,
     /// The closing `)`.
     pub rparen: Loc,
-    /// For a template spanning several lines, the raw [`Loc`] of each
-    /// line's first byte (clang's `!srcloc` entries); empty for one line.
+    /// clang's `!srcloc` values (a raw `u32` list): the template's begin
+    /// location then each later line's first byte, as clang's raw
+    /// `SourceLocation` encoding of a main-file location (offset + 2).
     pub srclocs: ListId,
 }
 

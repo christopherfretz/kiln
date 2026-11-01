@@ -41,7 +41,11 @@ const MATCHING_INPUT: u8 = 16;
 impl ConstraintInfo {
     /// A fresh info for `constraint` of the operand named `name`.
     pub fn new(constraint: &str, name: &str) -> Self {
-        ConstraintInfo { constraint: constraint.to_owned(), name: name.to_owned(), ..Self::default() }
+        ConstraintInfo {
+            constraint: constraint.to_owned(),
+            name: name.to_owned(),
+            ..Self::default()
+        }
     }
     /// `+`: the output is also read.
     pub fn is_read_write(&self) -> bool {
@@ -228,9 +232,8 @@ pub fn validate_input_constraint(
                 while i + 1 < c.len() && c[i + 1].is_ascii_digit() {
                     i += 1;
                 }
-                let Some(n) = std::str::from_utf8(&c[start..=i])
-                    .ok()
-                    .and_then(|s| s.parse::<u32>().ok())
+                let Some(n) =
+                    std::str::from_utf8(&c[start..=i]).ok().and_then(|s| s.parse::<u32>().ok())
                 else {
                     return false;
                 };
@@ -305,8 +308,8 @@ const AARCH64_REG_NAMES: &[&str] = &[
     "z9", "z10", "z11", "z12", "z13", "z14", "z15", "z16", "z17", "z18", "z19", "z20", "z21",
     "z22", "z23", "z24", "z25", "z26", "z27", "z28", "z29", "z30", "z31", "p0", "p1", "p2", "p3",
     "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "p12", "p13", "p14", "p15", "pn0", "pn1",
-    "pn2", "pn3", "pn4", "pn5", "pn6", "pn7", "pn8", "pn9", "pn10", "pn11", "pn12", "pn13",
-    "pn14", "pn15", "za", "zt0",
+    "pn2", "pn3", "pn4", "pn5", "pn6", "pn7", "pn8", "pn9", "pn10", "pn11", "pn12", "pn13", "pn14",
+    "pn15", "za", "zt0",
 ];
 
 /// AArch64 `GCCRegAliases`: `(alias, register)`.
@@ -329,10 +332,10 @@ fn aarch64_alias(name: &str) -> Option<&'static str> {
 const X86_REG_NAMES: &[&str] = &[
     "ax", "dx", "cx", "bx", "si", "di", "bp", "sp", "st", "st(1)", "st(2)", "st(3)", "st(4)",
     "st(5)", "st(6)", "st(7)", "argp", "flags", "fpcr", "fpsr", "dirflag", "frame", "xmm0", "xmm1",
-    "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6",
-    "mm7", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "xmm8", "xmm9", "xmm10", "xmm11",
-    "xmm12", "xmm13", "xmm14", "xmm15", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6",
-    "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15", "xmm16",
+    "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "mm0", "mm1", "mm2", "mm3", "mm4", "mm5",
+    "mm6", "mm7", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "xmm8", "xmm9", "xmm10",
+    "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5",
+    "ymm6", "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15", "xmm16",
     "xmm17", "xmm18", "xmm19", "xmm20", "xmm21", "xmm22", "xmm23", "xmm24", "xmm25", "xmm26",
     "xmm27", "xmm28", "xmm29", "xmm30", "xmm31", "ymm16", "ymm17", "ymm18", "ymm19", "ymm20",
     "ymm21", "ymm22", "ymm23", "ymm24", "ymm25", "ymm26", "ymm27", "ymm28", "ymm29", "ymm30",
@@ -340,9 +343,9 @@ const X86_REG_NAMES: &[&str] = &[
     "zmm10", "zmm11", "zmm12", "zmm13", "zmm14", "zmm15", "zmm16", "zmm17", "zmm18", "zmm19",
     "zmm20", "zmm21", "zmm22", "zmm23", "zmm24", "zmm25", "zmm26", "zmm27", "zmm28", "zmm29",
     "zmm30", "zmm31", "k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7", "cr0", "cr2", "cr3", "cr4",
-    "cr8", "dr0", "dr1", "dr2", "dr3", "dr6", "dr7", "bnd0", "bnd1", "bnd2", "bnd3", "tmm0", "tmm1",
-    "tmm2", "tmm3", "tmm4", "tmm5", "tmm6", "tmm7", "r16", "r17", "r18", "r19", "r20", "r21",
-    "r22", "r23", "r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31",
+    "cr8", "dr0", "dr1", "dr2", "dr3", "dr6", "dr7", "bnd0", "bnd1", "bnd2", "bnd3", "tmm0",
+    "tmm1", "tmm2", "tmm3", "tmm4", "tmm5", "tmm6", "tmm7", "r16", "r17", "r18", "r19", "r20",
+    "r21", "r22", "r23", "r24", "r25", "r26", "r27", "r28", "r29", "r30", "r31",
 ];
 
 /// X86 `AddlRegNames` (valid, kept as written by normalization).
@@ -520,7 +523,7 @@ pub fn simplify_constraint(arch: Arch, c: &str, outputs: &[ConstraintInfo]) -> S
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum AsmPiece {
     /// Literal text (already escaped for LLVM: `$` doubled, variants).
-    Text(String),
+    Text(Vec<u8>),
     /// An operand reference `%[mod]N` / `%[mod][name]`.
     Operand {
         /// The operand number (LLVM numbering: outputs, inputs, then the
@@ -530,6 +533,8 @@ pub enum AsmPiece {
         modifier: u8,
         /// Byte offset of the `%` in the template.
         percent: u32,
+        /// Byte offset just past the reference.
+        end: u32,
     },
 }
 
@@ -573,14 +578,14 @@ pub fn analyze_asm_string(
     ops: &AsmOperandCounts<'_>,
 ) -> Result<Vec<AsmPiece>, (AsmStringError, u32)> {
     let mut pieces = Vec::new();
-    let mut cur = String::new();
-    let push_byte = |cur: &mut String, b: u8| {
-        cur.push(b as char);
+    let mut cur = Vec::new();
+    let push_byte = |cur: &mut Vec<u8>, b: u8| {
+        cur.push(b);
     };
     if simple {
         for &b in s {
             if b == b'$' {
-                cur.push_str("$$");
+                cur.extend_from_slice("$$".as_bytes());
             } else {
                 push_byte(&mut cur, b);
             }
@@ -602,19 +607,19 @@ pub fn analyze_asm_string(
         p += 1;
         match ch {
             b'$' => {
-                cur.push_str("$$");
+                cur.extend_from_slice("$$".as_bytes());
                 continue;
             }
             b'{' => {
-                cur.push_str(if variants { "$(" } else { "{" });
+                cur.extend_from_slice(if variants { b"$(" } else { b"{" });
                 continue;
             }
             b'|' => {
-                cur.push_str(if variants { "$|" } else { "|" });
+                cur.extend_from_slice(if variants { b"$|" } else { b"|" });
                 continue;
             }
             b'}' => {
-                cur.push_str(if variants { "$)" } else { "}" });
+                cur.extend_from_slice(if variants { b"$)" } else { b"}" });
                 continue;
             }
             b'%' => {}
@@ -634,7 +639,7 @@ pub fn analyze_asm_string(
                 continue;
             }
             b'=' => {
-                cur.push_str("${:uid}");
+                cur.extend_from_slice("${:uid}".as_bytes());
                 continue;
             }
             _ => {}
@@ -663,7 +668,7 @@ pub fn analyze_asm_string(
             if n >= total {
                 return Err((AsmStringError::InvalidOperandNumber, (p - 1) as u32));
             }
-            pieces.push(AsmPiece::Operand { no: n as u32, modifier, percent });
+            pieces.push(AsmPiece::Operand { no: n as u32, modifier, percent, end: p as u32 });
             continue;
         }
         if esc == b'[' {
@@ -679,8 +684,8 @@ pub fn analyze_asm_string(
             else {
                 return Err((AsmStringError::UnknownName, p as u32));
             };
-            pieces.push(AsmPiece::Operand { no: n as u32, modifier, percent });
             p += len + 1;
+            pieces.push(AsmPiece::Operand { no: n as u32, modifier, percent, end: p as u32 });
             continue;
         }
         return Err((AsmStringError::InvalidEscape, (p - 1) as u32));
@@ -688,21 +693,21 @@ pub fn analyze_asm_string(
 }
 
 /// clang's `generateAsmString`: the LLVM template of analyzed pieces.
-pub fn generate_asm_string(pieces: &[AsmPiece]) -> String {
-    let mut out = String::new();
+pub fn generate_asm_string(pieces: &[AsmPiece]) -> Vec<u8> {
+    let mut out = Vec::new();
     for p in pieces {
         match p {
-            AsmPiece::Text(t) => out.push_str(t),
+            AsmPiece::Text(t) => out.extend_from_slice(t),
             AsmPiece::Operand { no, modifier: 0, .. } => {
-                out.push('$');
-                out.push_str(&no.to_string());
+                out.push(b'$');
+                out.extend_from_slice(no.to_string().as_bytes());
             }
             AsmPiece::Operand { no, modifier, .. } => {
-                out.push_str("${");
-                out.push_str(&no.to_string());
-                out.push(':');
-                out.push(*modifier as char);
-                out.push('}');
+                out.extend_from_slice(b"${");
+                out.extend_from_slice(no.to_string().as_bytes());
+                out.push(b':');
+                out.push(*modifier);
+                out.push(b'}');
             }
         }
     }
@@ -774,11 +779,11 @@ mod tests {
     fn template() {
         let names = ["", "nm"];
         let ops = AsmOperandCounts { outputs: 0, plus: 0, inputs: 2, labels: 0, names: &names };
-        let p = analyze_asm_string(Arch::X86_64, b"{a|b} $1 %0 %= %% %c1 %[nm]", false, &ops)
-            .unwrap();
-        assert_eq!(generate_asm_string(&p), "$(a$|b$) $$1 $0 ${:uid} % ${1:c} $1");
+        let p =
+            analyze_asm_string(Arch::X86_64, b"{a|b} $1 %0 %= %% %c1 %[nm]", false, &ops).unwrap();
+        assert_eq!(generate_asm_string(&p), b"$(a$|b$) $$1 $0 ${:uid} % ${1:c} $1");
         let p = analyze_asm_string(Arch::AArch64, b"{a|b}", false, &ops).unwrap();
-        assert_eq!(generate_asm_string(&p), "{a|b}");
+        assert_eq!(generate_asm_string(&p), b"{a|b}");
         let e = |s: &[u8]| analyze_asm_string(Arch::AArch64, s, false, &ops).unwrap_err();
         assert_eq!(e(b"%cc1"), (AsmStringError::InvalidEscape, 2));
         assert_eq!(e(b"ab %"), (AsmStringError::InvalidEscape, 3));
