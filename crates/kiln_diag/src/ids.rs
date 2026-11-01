@@ -1631,6 +1631,7 @@ diag_ids! {
     note_template_param_different_kind = Note (0) "template parameter has a different kind in template argument";
     note_template_parameter_pack_non_pack = Note (2) "{0:template type|non-type template|template template} parameter{1:| pack} does not match {0:template type|non-type template|template template} parameter{1: pack|} in template argument";
     note_template_nontype_parm_different_type = Note (1) "template non-type parameter has a different type {0} in template argument";
+    sema_access_dtor = Error (2) "calling a {1:private|protected} destructor of class {0}";
 }
 
 impl DiagId {
