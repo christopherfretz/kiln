@@ -168,8 +168,14 @@ impl<'a> IrTypes<'a> {
     /// clang `ConvertType`: the type of a value (`bool` is `i1`).
     pub fn convert(&mut self, q: QualType) -> IrType {
         let ast = self.ast();
-        if let TypeView::Builtin(BuiltinType::Bool) = ast.types.canonical_view(q) {
-            return IrType::Int(1);
+        match ast.types.canonical_view(q) {
+            TypeView::Builtin(BuiltinType::Bool) => return IrType::Int(1),
+            // A vector value is `<N x T>`; an `ext_vector_type` of `bool`
+            // is `<N x i1>` (clang `ConvertType`).
+            TypeView::Vector { elem, count, .. } => {
+                return IrType::Vector(Box::new(self.convert(elem)), u64::from(count));
+            }
+            _ => {}
         }
         self.convert_mem(q)
     }
@@ -210,6 +216,15 @@ impl<'a> IrTypes<'a> {
                     IrType::Struct(vec![IrType::Int(64), IrType::Int(64)], false)
                 } else {
                     IrType::Int(64)
+                }
+            }
+            // clang `ConvertTypeForMem`: a vector of `bool` is stored as
+            // an integer of at least 8 bits, one bit per element.
+            TypeView::Vector { elem, count, .. } => {
+                if let TypeView::Builtin(BuiltinType::Bool) = ast.types.canonical_view(elem) {
+                    IrType::Int(count.max(8))
+                } else {
+                    IrType::Vector(Box::new(self.convert_mem(elem)), u64::from(count))
                 }
             }
             // clang `ConvertTypeForMem(_Atomic(T))`: `T`, padded to the
@@ -289,8 +304,11 @@ impl<'a> IrTypes<'a> {
                 (s * n, a)
             }
             IrType::Vector(e, n) => {
-                let (s, _) = self.size_align(e);
-                let bytes = (s * n).next_power_of_two();
+                let bits = match **e {
+                    IrType::Int(b) => u64::from(b),
+                    ref e => self.size_align(e).0 * 8,
+                };
+                let bytes = (bits * n).div_ceil(8).next_power_of_two();
                 (bytes, bytes)
             }
             // The minimum (vscale = 1) size of a scalable vector; these
@@ -386,7 +404,14 @@ impl<'a> IrTypes<'a> {
             } else if self.is_empty_field(&f) {
                 i += 1;
             } else {
-                let ty = self.convert_mem(f.ty);
+                // A potentially-overlapping member ([[no_unique_address]]
+                // of class type) is stored as its base-subobject type, as
+                // the record layout places it (clang 19 accumulateFields):
+                // later members may live in its tail padding.
+                let ty = match self.overlapping_class(&f) {
+                    Some(c) => self.base_storage_type(c),
+                    None => self.convert_mem(f.ty),
+                };
                 members.push(Member {
                     offset: layout.fields[i] / 8,
                     data: Some(ty),
@@ -633,6 +658,19 @@ impl<'a> IrTypes<'a> {
             storage_size,
             storage_offset,
             is_signed: is_signed_or_enum(ast, f.ty, self.target()),
+        }
+    }
+
+    /// clang `FieldDecl::isPotentiallyOverlapping`: the class of a
+    /// `[[no_unique_address]]` member of class type.
+    fn overlapping_class(&self, f: &FieldDesc) -> Option<DeclId> {
+        if !f.nua {
+            return None;
+        }
+        let ast = self.ast();
+        match ast.types.canonical_view(f.ty) {
+            TypeView::Record(d) if ast.definition(d).is_some() => Some(d),
+            _ => None,
         }
     }
 

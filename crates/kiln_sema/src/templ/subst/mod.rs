@@ -253,8 +253,20 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         let r = match a.view() {
             ArgView::Type(q) => {
                 let Some(p) = type_pattern(self.sema, q) else { return Ok(None) };
-                match self.expand_pattern(|s| s.element_ty(p, loc))? {
-                    Expansion::Elements(v) => v.into_iter().map(TemplateArg::ty).collect(),
+                match self.expand_pattern_rewrap(None, |s| s.element_ty(p, loc))? {
+                    Expansion::Elements(v) => {
+                        let rw = self.take_rewrap();
+                        v.into_iter()
+                            .enumerate()
+                            .map(|(k, t)| {
+                                TemplateArg::ty(if rw.get(k) == Some(&true) {
+                                    self.sema.ast.types.pack_expansion(t, None)
+                                } else {
+                                    t
+                                })
+                            })
+                            .collect()
+                    }
                     Expansion::Unexpanded(t) => {
                         vec![TemplateArg::ty(self.sema.ast.types.pack_expansion(t, None))]
                     }
@@ -262,11 +274,21 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             }
             ArgView::Expr { expr, .. } => {
                 let Some(p) = expr_pattern(self.sema, expr) else { return Ok(None) };
-                match self.expand_pattern(|s| s.expr(p))? {
-                    Expansion::Elements(v) => v
-                        .into_iter()
-                        .map(|e| self.sema.ast.builder().template_arg_expr(e))
-                        .collect(),
+                match self.expand_pattern_rewrap(None, |s| s.expr(p))? {
+                    Expansion::Elements(v) => {
+                        let rw = self.take_rewrap();
+                        v.into_iter()
+                            .enumerate()
+                            .map(|(k, e)| {
+                                let e = if rw.get(k) == Some(&true) {
+                                    self.sema.act_pack_expansion(e, loc)
+                                } else {
+                                    e
+                                };
+                                self.sema.ast.builder().template_arg_expr(e)
+                            })
+                            .collect()
+                    }
                     Expansion::Unexpanded(e) => {
                         let x = self.sema.act_pack_expansion(e, loc);
                         vec![self.sema.ast.builder().template_arg_expr(x)]
@@ -274,8 +296,20 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 }
             }
             ArgView::TemplateExpansion { name, .. } => {
-                match self.expand_pattern(|s| s.template_name(name, loc))? {
-                    Expansion::Elements(v) => v.into_iter().map(TemplateArg::template).collect(),
+                match self.expand_pattern_rewrap(None, |s| s.template_name(name, loc))? {
+                    Expansion::Elements(v) => {
+                        let rw = self.take_rewrap();
+                        v.into_iter()
+                            .enumerate()
+                            .map(|(k, n)| {
+                                if rw.get(k) == Some(&true) {
+                                    TemplateArg::template_expansion(n, None)
+                                } else {
+                                    TemplateArg::template(n)
+                                }
+                            })
+                            .collect()
+                    }
                     Expansion::Unexpanded(n) => vec![TemplateArg::template_expansion(n, None)],
                 }
             }

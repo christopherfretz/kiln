@@ -18,7 +18,7 @@ that `expect: ast` goldens compare without special cases.
 | closure type | §3: call operator, conversion to pointer to function, static invoker, deleted special members, linkage, mangling numbers | |
 | captures | §4: by copy, by reference, init-captures (`= expr`), `this`, `*this`, implicit capture through `=` / `&`, nested lambdas | capture packs (`xs...`, `...xs = e`) |
 | generic | §5: `auto` parameters, template-parameter-lists, constraints, conversion-function templates | |
-| constant evaluation | §7: calls, captures, conversions, `this`/`*this`; `consteval` and escalated lambdas (§3.2, sema.md §5.10) | escalation of a generic lambda's conversion per specialization |
+| constant evaluation | §7: calls, captures, conversions, `this`/`*this`; `consteval` and escalated lambdas (§3.2, sema.md §5.10) | |
 | templates | §9: lambdas in templates and generic lambdas in templates | capture packs, lambdas as template arguments |
 | codegen | §8: IR-exact against clang for the corpus in `tests/codegen/lambda_*.cpp` | |
 
@@ -219,6 +219,16 @@ sequence fail, as in clang. `Ast::call_op_lambda` and `closure_thunk`
 accept specializations; a conversion specialization's target is the
 invoker (or call operator) specialization for the same arguments (clang
 `SpecializeCorrespondingLambdaCallOperatorAndInvoker`).
+A conversion specialization is named by its substituted target type with
+the placeholder return type kept (`operator auto (*)(int)`, as clang;
+mangling uses the template's name). Escalation is per specialization
+(WP-158): when the call operator specialization escalated, the
+conversion and invoker specializations are immediate too (§3.2;
+`expr.prim.lambda/consteval-conversion-generic.cpp`, which clang 19
+accepts). The escalation reason note names a generic call operator
+specialization unqualified (`'operator()<int>' is an immediate
+function because ...`); clang gives none for a non-template call
+operator.
 
 ### 5.3 Return types
 

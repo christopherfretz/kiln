@@ -30,6 +30,7 @@ use crate::init::InitList;
 use crate::literal;
 use crate::lookup::LookupKind;
 use crate::overload::oper::{OperForm, OperResult};
+use crate::vector_ops::VecParts;
 
 mod ref_cast;
 
@@ -548,7 +549,13 @@ impl Sema<'_, '_> {
         match conv::implicit_convert(self, e, ty, ctx) {
             Ok(x) => x,
             Err(err) => {
-                let d = err.diag(self, e);
+                // clang's `InitializationKind::CreateCopy` of a return
+                // operand or argument is at the expression's start.
+                let d = if matches!(ctx, ConvCtx::Return | ConvCtx::Argument) {
+                    err.diag_at(self, self.begin_loc(e))
+                } else {
+                    err.diag(self, e)
+                };
                 self.emit(d);
                 let loc = self.eloc(e);
                 self.recover(ty, &[e], loc)
@@ -672,13 +679,52 @@ impl Sema<'_, '_> {
             ExprKind::CXXScalarValueInitExpr if !self.ast.types.is_void(n.ty()) => {
                 Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
             }
-            ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr => (self
-                .ast
-                .exprs
-                .cast_kind(x)
-                != CastKind::ToVoid)
-                .then_some((DiagId::sema_unused_expr, loc, Vec::new())),
-            ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
+            ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr => {
+                match self.ast.exprs.cast_kind(x) {
+                    CastKind::ToVoid | CastKind::Dependent => None,
+                    // `X(1);` is checked through its constructor call
+                    // (clang `isUnusedResultAWarning`), reported at the cast.
+                    CastKind::ConstructorConversion => self
+                        .unused_warning(self.ast.exprs.operand(x))
+                        .map(|(id, _, args)| (id, loc, args)),
+                    _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
+                }
+            }
+            ExprKind::CXXStaticCastExpr => {
+                // Always unused, but a constructor conversion reports a
+                // nodiscard constructor or class (clang
+                // `DiagnoseUnusedExprResult`).
+                let unused = (DiagId::sema_unused_expr, loc, Vec::new());
+                if self.ast.exprs.cast_kind(x) != CastKind::ConstructorConversion {
+                    return Some(unused);
+                }
+                let inner = self.ignore_paren_imp_casts(self.ast.exprs.operand(x));
+                let ik = self.ast.exprs.get(inner).kind();
+                if !matches!(ik, ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr) {
+                    return Some(unused);
+                }
+                Some(self.unused_warning(inner).map_or(unused, |(id, _, args)| (id, loc, args)))
+            }
+            ExprKind::CXXBindTemporaryExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::ExprWithCleanups
+            | ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                // A temporary of a nodiscard class, or made by a nodiscard
+                // constructor ([dcl.attr.nodiscard]/4, clang
+                // `warn_unused_constructor`).
+                let ctor = self.ast.exprs.constructor(x);
+                let a = self.find_attr(ctor, AttrKind::NODISCARD).or_else(|| {
+                    let class = self.ast.types.as_record(n.ty())?;
+                    self.find_attr(class, AttrKind::NODISCARD)
+                })?;
+                let attr = *self.ast.attrs.get(a);
+                let name = "'nodiscard'".to_owned();
+                Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_text(m)) {
+                    Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),
+                    None => (DiagId::sema_unused_constructor, loc, vec![name]),
+                })
+            }
             ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
@@ -699,7 +745,6 @@ impl Sema<'_, '_> {
             | ExprKind::ArrayTypeTraitExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXTypeidExpr
-            | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
             | ExprKind::CXXConstCastExpr
             | ExprKind::CompoundLiteralExpr
@@ -788,9 +833,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The replaceable global allocation functions are visible to lookup
+    /// without `<new>` ([basic.stc.dynamic.general]/2): declares them
+    /// before an unqualified or `::`-qualified lookup of their names.
+    fn declare_global_new_delete_for(&mut self, name: DeclName, qualifier: Option<DeclId>) {
+        use kiln_ast::names::OverloadedOperator as O;
+        if qualifier.is_none_or(|q| q == self.ast.tu)
+            && matches!(name.as_operator(), Some(O::New | O::ArrayNew | O::Delete | O::ArrayDelete))
+        {
+            self.declare_global_new_delete();
+        }
+    }
+
     /// [`Sema::act_on_id_expression`] for any unqualified-id: an
     /// identifier, an operator-function-id or a conversion-function-id
     /// ([expr.prim.id.unqual]/1; WP-121).
+    #[allow(clippy::too_many_lines)]
     pub fn act_on_id_expression_dn(
         &mut self,
         name: DeclName,
@@ -800,6 +858,7 @@ impl Sema<'_, '_> {
         let nns = qualifier.map(|q| q.nns);
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
+        self.declare_global_new_delete_for(name, qualifier);
         let found = match qualifier {
             Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
             None => self.lookup_name_dn(name, LookupKind::Ordinary),
@@ -1542,7 +1601,7 @@ impl Sema<'_, '_> {
 
     /// [expr.assign]/1, [expr.pre.incr]: the operand must be a modifiable
     /// lvalue. Diagnoses and returns false otherwise.
-    fn check_modifiable(&mut self, e: ExprId, loc: Loc) -> bool {
+    pub(crate) fn check_modifiable(&mut self, e: ExprId, loc: Loc) -> bool {
         let n = *self.ast.exprs.get(e);
         let t = n.ty();
         if self.ast.types.is_function(t) || self.ast.types.is_array(t) {
@@ -1560,7 +1619,14 @@ impl Sema<'_, '_> {
             return false;
         }
         if self.ast.types.effective_quals(t).is_const() {
-            let base = self.ignore_parens(e);
+            let mut base = self.ignore_parens(e);
+            // clang classifies a vector element through its vector.
+            while self.ast.exprs.get(base).object_kind() == ObjectKind::VectorComponent
+                && self.ast.exprs.get(base).kind() == ExprKind::ArraySubscriptExpr
+            {
+                let v = ExprId::new(self.ast.exprs.get(base).a());
+                base = self.ignore_parens(v);
+            }
             if self.ast.exprs.get(base).kind() == ExprKind::DeclRefExpr
                 && self.ast.exprs.get(base).has(ExprFlags::REFERS_TO_ENCLOSING)
                 && let d = self.ast.exprs.decl(base)
@@ -1593,8 +1659,13 @@ impl Sema<'_, '_> {
     }
 
     fn mark_bitfield_if(&mut self, result: ExprId, from: ExprId) {
-        if self.is_bitfield(from) && self.ast.exprs.get(result).value_category().is_glvalue() {
+        if !self.ast.exprs.get(result).value_category().is_glvalue() {
+            return;
+        }
+        if self.is_bitfield(from) {
             self.ast.exprs.mark_bitfield(result);
+        } else if self.ast.exprs.get(from).object_kind() == ObjectKind::VectorComponent {
+            self.ast.exprs.mark_vector_component(result);
         }
     }
 
@@ -1629,6 +1700,14 @@ impl Sema<'_, '_> {
             s.emit(msg);
             s.recover_err(&[e], loc)
         };
+        if self.is_vector_type(t0)
+            && matches!(op, UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not | UnaryOp::LNot)
+        {
+            return match self.vector_unary(op, e, loc) {
+                Some(x) => x,
+                None => bad(self, e),
+            };
+        }
         // An `_Atomic(T)` operand is checked as its `T` (the lvalue
         // conversion strips it, clang `DefaultLvalueConversion`).
         let tv = self.ast.types.as_atomic(t0).unwrap_or(t0);
@@ -1754,6 +1833,10 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_addrof_bitfield, loc);
             return None;
         }
+        if n.object_kind() == ObjectKind::VectorComponent {
+            self.error(DiagId::sema_addrof_vector_element, loc);
+            return None;
+        }
         if n.value_category() != ValueCategory::LValue {
             let msg = self.diag(DiagId::sema_addrof_rvalue, loc).arg(self.ty_arg(n.ty()));
             self.emit(msg);
@@ -1832,10 +1915,8 @@ impl Sema<'_, '_> {
     // -- binary operators --------------------------------------------------------
 
     pub(crate) fn invalid_operands(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
-        let msg = self
-            .diag(DiagId::sema_invalid_operands, loc)
-            .arg(self.ty_arg(self.ety(l)))
-            .arg(self.ty_arg(self.ety(r)));
+        let (a, b) = self.ty_arg_pair(self.ety(l), self.ety(r));
+        let msg = self.diag(DiagId::sema_invalid_operands, loc).arg(a).arg(b);
         self.emit(msg);
         self.recover_err(&[l, r], loc)
     }
@@ -1900,6 +1981,11 @@ impl Sema<'_, '_> {
         // assignment's right operand has one.
         if self.check_overload_use(l) || (op != BinaryOp::Assign && self.check_overload_use(r)) {
             return self.recover_err(&[l, r], loc);
+        }
+        if !matches!(op, BinaryOp::Assign | BinaryOp::Comma | BinaryOp::PtrMemD | BinaryOp::PtrMemI)
+            && (self.is_vector_type(self.ety(l)) || self.is_vector_type(self.ety(r)))
+        {
+            return self.vector_binary(op, l, r, loc);
         }
         match op {
             BinaryOp::Assign => self.assign(l, r, loc),
@@ -2608,6 +2694,9 @@ impl Sema<'_, '_> {
             let ty = self.dependent_subscript_type(base, idx);
             return self.builder().subscript(base, idx, ty, loc);
         }
+        if self.is_vector_type(self.ety(base)) {
+            return self.vector_subscript(base, idx, loc);
+        }
         let b = conv::decay(self, base);
         let i = conv::decay(self, idx);
         let (bt, it) = (self.ety(b), self.ety(i));
@@ -2902,6 +2991,17 @@ impl Sema<'_, '_> {
             .and_then(|c| self.ast.decls.function(c.decl))
             .map(|x| self.ast.lists.iter::<DeclId>(x.params).collect())
             .unwrap_or_default();
+        // [temp.inst]/12: the default arguments this call uses are
+        // instantiated now.
+        if let Some(c) = named {
+            for &p in pdecls.iter().take(n).skip(have) {
+                if self.inst.lazy_defaults.contains_key(&p)
+                    && !self.instantiate_lazy_default(c.decl, p, self.begin_loc(callee))
+                {
+                    return None;
+                }
+            }
+        }
         let defaults: Vec<Option<ExprId>> = (0..n)
             .map(|i| {
                 pdecls.get(i).and_then(|&p| self.ast.decls.param(p)).and_then(|x| x.default_arg)
@@ -3885,6 +3985,37 @@ impl Sema<'_, '_> {
         style: CastStyle,
         loc: Loc,
     ) -> Option<CastKind> {
+        // clang `TryReinterpretCast`: a vector and a vector or integer of
+        // the same data size (`areLaxCompatibleVectorTypes`) bit-cast.
+        let (fv, tv) = (self.is_vector_type(from), self.is_vector_type(to));
+        if fv || tv {
+            if (!tv && !self.ast.types.is_integral(to))
+                || (!fv && !self.ast.types.is_integral(from))
+            {
+                return None;
+            }
+            // `areLaxCompatibleVectorTypes`: never between a scalar and an
+            // ext vector.
+            let ext = |q| self.vector_parts(q).is_some_and(VecParts::is_ext);
+            let scalar_ext = (!fv && ext(to)) || (!tv && ext(from));
+            if !scalar_ext
+                && self.lax_size(from).is_some()
+                && self.lax_size(from) == self.lax_size(to)
+            {
+                return Some(CastKind::BitCast);
+            }
+            let id = if !tv {
+                DiagId::sema_bad_cxx_cast_vector_to_scalar_different_size
+            } else if !fv {
+                DiagId::sema_bad_cxx_cast_scalar_to_vector_different_size
+            } else {
+                DiagId::sema_bad_cxx_cast_vector_to_vector_different_size
+            };
+            let msg =
+                self.diag(id, loc).arg(style.select()).arg(self.ty_arg(from)).arg(self.ty_arg(to));
+            self.emit(msg);
+            return Some(CastKind::BitCast);
+        }
         let (fp, tp) = (self.ast.types.is_pointer(from), self.ast.types.is_pointer(to));
         if fp && tp {
             if style == CastStyle::Reinterpret && self.casts_away_quals(from, to) {

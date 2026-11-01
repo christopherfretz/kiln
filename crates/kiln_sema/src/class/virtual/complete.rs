@@ -3,9 +3,13 @@
 //! after its complete-class contexts (the delayed exception-specification
 //! check and the key function).
 
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage};
+use kiln_ast::decl::{
+    ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage, TagKind, TemplLinkKind,
+};
+use kiln_ast::templates::SpecKind;
+use kiln_ast::types::Quals;
 use kiln_ast::{DeclId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::fx::FxHashMap;
 
 use super::graph::{self, is_method_kind, is_pure, is_virtual, overridden};
@@ -106,6 +110,7 @@ impl Sema<'_, '_> {
             self.recheck_abstract_members(r, r, 0);
         }
         if !dependent {
+            self.check_refconst_members(r, defn);
             self.report_overrides(r);
         }
     }
@@ -274,11 +279,42 @@ impl Sema<'_, '_> {
                 self.act_on_virtual_class_contexts(m, depth + 1);
             }
         }
-        if polymorphic && !self.ast.decls.cold.key_function.contains(r) {
+        if polymorphic
+            && self.may_have_key_function(r)
+            && !self.ast.decls.cold.key_function.contains(r)
+        {
             let key = members.iter().copied().find(|&m| self.is_key_function_candidate(m));
             if let Some(k) = key {
                 let _ = self.ast.decls.cold.key_function.insert(r, k);
             }
+        }
+    }
+
+    /// clang `computeKeyFunction`: a dependent class (a template pattern,
+    /// a partial specialization, or a class nested in one) has no vtable,
+    /// and a template instantiation (implicit or explicit, and a member
+    /// class of one) has no key function (Itanium C++ ABI §5.2.6: its
+    /// vtable has vague linkage and is emitted wherever it is used). An
+    /// explicit specialization is an ordinary class and keeps it.
+    fn may_have_key_function(&self, r: DeclId) -> bool {
+        let ast = &self.ast;
+        if ast.decls.get(r).has(DeclFlags::DEPENDENT_CTX) {
+            return false;
+        }
+        match ast.templ_link(r).get() {
+            None => true,
+            Some((
+                TemplLinkKind::Pattern
+                | TemplLinkKind::PartialSpecialization
+                | TemplLinkKind::DependentFriend,
+                _,
+            )) => false,
+            Some((TemplLinkKind::Specialization, _)) => {
+                ast.spec_info(r).is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization)
+            }
+            Some((TemplLinkKind::MemberOfSpecialization, _)) => ast
+                .member_spec_info(r)
+                .is_some_and(|(_, m)| m.kind == SpecKind::ExplicitSpecialization),
         }
     }
 
@@ -299,5 +335,63 @@ impl Sema<'_, '_> {
             && !s.is_deleted()
             && s.defaulted() == kiln_ast::decl::Defaulted::No
             && self.ast.definition(m).is_none_or(|d| d != m)
+    }
+
+    /// clang `CheckCompletedCXXClass`: a non-aggregate class with no
+    /// user-declared constructor cannot initialize its reference or const
+    /// scalar members that lack a default member initializer
+    /// ([class.default.ctor]/2 deletes the default constructor).
+    fn check_refconst_members(&mut self, r: DeclId, defn: DefinitionBits) {
+        if self.ast.decls.get(r).has(DeclFlags::INVALID)
+            || defn.contains(DefinitionBits::AGGREGATE)
+            || defn.contains(DefinitionBits::USER_DECLARED_CTOR)
+            || defn.contains(DefinitionBits::LAMBDA)
+        {
+            return;
+        }
+        let mut msg: Option<Diag> = None;
+        let fields: Vec<DeclId> =
+            self.ast.decls.members(r).filter(|&m| self.kind_of(m) == DeclKind::Field).collect();
+        for f in fields {
+            if self.field_has_nsdmi(f) || self.is_unnamed_bit_field(f) {
+                continue;
+            }
+            let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+            let which = if self.ast.types.is_reference(ty) {
+                1u8
+            } else if self.ast.types.canonical(ty).quals().contains(Quals::CONST)
+                && self.is_scalar(ty)
+            {
+                0
+            } else {
+                continue;
+            };
+            let m = msg.take().unwrap_or_else(|| {
+                let tag = match self.ast.decls.record(r).map(|x| x.tag) {
+                    Some(TagKind::Union) => 2u8,
+                    Some(TagKind::Class) => 3,
+                    _ => 0,
+                };
+                // clang names the declaration: a specialization with its
+                // template arguments, a nested class without an `aka`.
+                let name = if self.ast.spec_info(r).is_some() {
+                    let ty = self.this_class_type(r);
+                    self.ty_arg(ty)
+                } else {
+                    self.decl_arg(r)
+                };
+                self.diag(DiagId::sema_refconst_no_ctor, self.ast.decls.get(r).loc())
+                    .arg(tag)
+                    .arg(name)
+            });
+            let note = self
+                .diag(DiagId::note_refconst_member_not_initialized, self.ast.decls.get(f).loc())
+                .arg(which)
+                .arg(self.decl_arg(f));
+            msg = Some(m.with_note(note));
+        }
+        if let Some(m) = msg {
+            self.emit(m);
+        }
     }
 }

@@ -6,6 +6,7 @@ use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::IrType;
 use kiln_abi::mangle;
 use kiln_ast::decl::DeclKind;
+use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate, FuncId,
@@ -594,7 +595,21 @@ impl Cg<'_> {
     /// clang `EmitFunctionEpilog`.
     fn emit_epilog(&mut self) {
         let rv = match self.f.ret_kind {
-            RetKind::Void | RetKind::Sret => None,
+            RetKind::Void => None,
+            RetKind::Sret => {
+                // clang `EmitFunctionEpilog`, `TEK_Scalar` returned
+                // indirectly: reload the value and store it back.
+                let q = self.f.sig.as_ref().map(|g| g.ret);
+                if let (Some(q), Some(slot)) = (q, self.f.ret_slot)
+                    && !self.is_aggregate(q)
+                    && !matches!(self.ast.types.canonical_view(q), TypeView::Complex(_))
+                    && self.f.fir.cur().is_some()
+                {
+                    let v = self.load_scalar(slot, q);
+                    self.store_scalar(v, slot, q);
+                }
+                None
+            }
             RetKind::Scalar => {
                 let slot = self.f.ret_slot.expect("retval");
                 match self.dominating_store(slot) {
@@ -744,6 +759,9 @@ impl Cg<'_> {
     /// clang `EmitLoadOfScalar` (bools are truncated to `i1`).
     pub fn load_scalar(&mut self, a: Addr, q: QualType) -> V {
         let vol = self.ast.types.effective_quals(q).is_volatile();
+        if let Some(v) = self.vec_load(a, q, vol) {
+            return v;
+        }
         let v = self.load(a.ty, a.v, a.align, vol);
         if self.is_bool_value(q) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
     }
@@ -751,6 +769,9 @@ impl Cg<'_> {
     /// clang `EmitStoreOfScalar` (bools are zero-extended to memory).
     pub fn store_scalar(&mut self, v: V, a: Addr, q: QualType) {
         let vol = self.ast.types.effective_quals(q).is_volatile();
+        if self.vec_store(v, a, q, vol) {
+            return;
+        }
         let v = if self.is_bool_value(q) && self.f.fir.ty(&self.m, v) == LTy::I1 {
             self.cast(CastOp::ZExt, v, a.ty)
         } else {
@@ -1311,7 +1332,8 @@ impl Cg<'_> {
             };
             return V::C(self.m.const_bool(x));
         }
-        self.f.fir.push(Op::ICmp { p, l, r }, LTy::I1)
+        let rt = self.cmp_ty(l);
+        self.f.fir.push(Op::ICmp { p, l, r }, rt)
     }
 
     #[allow(clippy::float_cmp, reason = "constant folding is exact IEEE comparison")]
@@ -1331,7 +1353,149 @@ impl Cg<'_> {
             };
             return V::C(self.m.const_bool(x));
         }
-        self.f.fir.push(Op::FCmp { p, l, r }, LTy::I1)
+        let rt = self.cmp_ty(l);
+        self.f.fir.push(Op::FCmp { p, l, r }, rt)
+    }
+
+    /// The type of a comparison of `l`: `i1`, or `<N x i1>` for vectors.
+    fn cmp_ty(&mut self, l: V) -> LTy {
+        let t = self.f.fir.ty(&self.m, l);
+        match self.m.types.vector_info(t) {
+            Some((_, n, _)) => self.m.types.vector(LTy::I1, n),
+            None => LTy::I1,
+        }
+    }
+
+    // ---- vectors (WP-156) -------------------------------------------------
+
+    /// `(element type, count)` of a vector type `q`.
+    pub fn vec_of(&self, q: QualType) -> Option<(QualType, u32)> {
+        match self.ast.types.canonical_view(q) {
+            TypeView::Vector { elem, count, .. } => Some((elem, count)),
+            _ => None,
+        }
+    }
+
+    /// The elements of a constant vector `v`, if it is one.
+    fn vec_const_elems(&mut self, v: V) -> Option<Vec<Value>> {
+        let V::C(c) = v else { return None };
+        let (ty, data) = match self.m.const_of(c)? {
+            ConstData::Vector { elems, .. } => return Some(elems.to_vec()),
+            ConstData::Zero(t) => (*t, 0),
+            ConstData::Undef(t) => (*t, 1),
+            ConstData::Poison(t) => (*t, 2),
+            _ => return None,
+        };
+        let (et, n, _) = self.m.types.vector_info(ty)?;
+        let e = match data {
+            0 => self.m.const_zero(et),
+            1 => self.m.const_undef(et),
+            _ => self.m.const_poison(et),
+        };
+        Some(vec![e; n as usize])
+    }
+
+    /// `extractelement` (`IRBuilder` folds constants).
+    pub fn extract_elt(&mut self, vec: V, idx: V) -> V {
+        let t = self.f.fir.ty(&self.m, vec);
+        let et = self.m.types.vector_info(t).map_or(LTy::I8, |x| x.0);
+        if let Some((_, i, _)) = self.cint(idx)
+            && let Some(elems) = self.vec_const_elems(vec)
+            && let Some(&e) = elems.get(i as usize)
+        {
+            return V::C(e);
+        }
+        self.f.fir.push(Op::ExtractElement { vec, idx }, et)
+    }
+
+    /// `insertelement` (`IRBuilder` folds constants).
+    pub fn insert_elt(&mut self, vec: V, elt: V, idx: V) -> V {
+        let t = self.f.fir.ty(&self.m, vec);
+        if let (V::C(e), Some((_, i, _))) = (elt, self.cint(idx))
+            && let Some(mut elems) = self.vec_const_elems(vec)
+            && (i as usize) < elems.len()
+        {
+            elems[i as usize] = e;
+            if let Ok(k) = self.m.const_vector(&elems) {
+                return V::C(k);
+            }
+        }
+        self.f.fir.push(Op::InsertElement { vec, elt, idx }, t)
+    }
+
+    /// `shufflevector a, b, mask` (b poison when `None`).
+    pub fn shuffle(&mut self, a: V, b: Option<V>, mask: Vec<u32>) -> V {
+        let t = self.f.fir.ty(&self.m, a);
+        let et = self.m.types.vector_info(t).map_or(LTy::I8, |x| x.0);
+        let b = b.unwrap_or_else(|| V::C(self.m.const_poison(t)));
+        let rt = self.m.types.vector(et, mask.len() as u32);
+        self.f.fir.push(Op::ShuffleVector { a, b, mask }, rt)
+    }
+
+    /// `IRBuilder::CreateVectorSplat`: a constant splat folds.
+    pub fn splat(&mut self, v: V, n: u32) -> V {
+        let et = self.f.fir.ty(&self.m, v);
+        let vt = self.m.types.vector(et, n);
+        if let V::C(c) = v {
+            let elems = vec![c; n as usize];
+            if let Ok(k) = self.m.const_vector(&elems) {
+                return V::C(k);
+            }
+        }
+        let p = V::C(self.m.const_poison(vt));
+        let z = V::C(self.m.const_int(LTy::I64, 0));
+        let ins = self.insert_elt(p, v, z);
+        self.shuffle(ins, None, vec![0; n as usize])
+    }
+
+    /// clang `emitBoolVecConversion`: `<S x i1>` to `<n x i1>`.
+    fn bool_vec_resize(&mut self, v: V, n: u32) -> V {
+        let t = self.f.fir.ty(&self.m, v);
+        let s = self.m.types.vector_info(t).map_or(n, |x| x.1);
+        if s == n {
+            return v;
+        }
+        let mask =
+            (0..n).map(|i| if i < s.min(n) { i } else { kiln_llvm::SHUFFLE_POISON }).collect();
+        self.shuffle(v, None, mask)
+    }
+
+    /// clang `EmitFromMemory`/`EmitToMemory` for vectors: `Some(value)`
+    /// when `q` is a vector of `bool` (stored as `iP`) or of three
+    /// elements (accessed as four).
+    fn vec_load(&mut self, a: Addr, q: QualType, vol: bool) -> Option<V> {
+        let (elem, n) = self.vec_of(q)?;
+        if self.is_bool(elem) {
+            let raw = self.load(a.ty, a.v, a.align, vol);
+            let p = self.m.types.int_width(a.ty).unwrap_or(8);
+            let pv = self.m.types.vector(LTy::I1, p);
+            let v = self.cast(CastOp::BitCast, raw, pv);
+            return Some(self.bool_vec_resize(v, n));
+        }
+        if n == 3 {
+            let et = self.m.types.vector_info(a.ty)?.0;
+            let v4 = self.m.types.vector(et, 4);
+            let v = self.load(v4, a.v, a.align, vol);
+            return Some(self.shuffle(v, None, vec![0, 1, 2]));
+        }
+        None
+    }
+
+    fn vec_store(&mut self, v: V, a: Addr, q: QualType, vol: bool) -> bool {
+        let Some((elem, n)) = self.vec_of(q) else { return false };
+        if self.is_bool(elem) {
+            let p = self.m.types.int_width(a.ty).unwrap_or(8);
+            let w = self.bool_vec_resize(v, p);
+            let raw = self.cast(CastOp::BitCast, w, a.ty);
+            self.store(raw, a.v, a.align, vol);
+            return true;
+        }
+        if n == 3 {
+            let w = self.shuffle(v, None, vec![0, 1, 2, kiln_llvm::SHUFFLE_POISON]);
+            self.store(w, a.v, a.align, vol);
+            return true;
+        }
+        false
     }
 
     pub fn fneg(&mut self, v: V) -> V {

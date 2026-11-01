@@ -7,7 +7,7 @@ use kiln_ast::decl::{Access, BaseSpec, DeclKind, DefinitionBits, TagKind, VarSpe
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{Quals, RefQual, TypeView};
 use kiln_ast::{DeclHead, DeclId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::symbol::Symbol;
 
 use super::BaseSpecInfo;
@@ -275,6 +275,8 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
         }
         self.check_sizeless_var(v, false);
+        self.record_constinit(v, ds);
+        self.check_constexpr_var_literal(v);
         if d.qualifier.is_some() {
             // [class.static.data]/3: the initializer is in the scope of
             // the class (and its access context, [class.access]/7).
@@ -313,6 +315,93 @@ impl Sema<'_, '_> {
             TypeView::VariableArray { .. } | TypeView::Function(_) | TypeView::Invalid => false,
             _ => true,
         }
+    }
+
+    /// `msg` (reporting that `ty` is not a literal type) with clang
+    /// `RequireLiteralType`'s explanation of why the class element type
+    /// of `ty` is not literal ([basic.types.general]/10): its virtual
+    /// bases, the lack of a constexpr constructor, the first non-literal
+    /// (or volatile) base or member, or a non-constexpr destructor.
+    pub(crate) fn with_non_literal_notes(&self, mut msg: Diag, ty: QualType) -> Diag {
+        let elem = self.base_element(ty);
+        let Some(def) = self.ast.types.as_record(elem).and_then(|r| self.ast.definition(r)) else {
+            return msg;
+        };
+        let Some(rec) = self.ast.decls.record(def) else { return msg };
+        let bits = rec.defn;
+        let rd = self.ast.types.canonical(elem);
+        let rd = self.ty_arg(crate::conv::strip_cv(self, rd));
+        let def_loc = self.ast.decls.get(def).loc();
+        if bits.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            let vbases = self.virtual_bases(def);
+            let tag = 2 * u8::from(rec.tag == TagKind::Class);
+            msg = msg.with_note(
+                self.diag(DiagId::note_non_literal_virtual_base, def_loc)
+                    .arg(tag)
+                    .arg(u8::from(vbases.len() != 1)),
+            );
+            for (_, b) in vbases {
+                msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+            }
+            return msg;
+        }
+        if !bits.contains(DefinitionBits::AGGREGATE)
+            && !bits.contains(DefinitionBits::HAS_CONSTEXPR_CTOR)
+            && !bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
+            && !bits.contains(DefinitionBits::LAMBDA)
+        {
+            return msg.with_note(
+                self.diag(DiagId::note_non_literal_no_constexpr_ctors, def_loc).arg(rd),
+            );
+        }
+        for b in self.ast.decls.bases(def, &self.ast.lists) {
+            if !self.is_literal_type(b.ty) {
+                return msg.with_note(
+                    self.diag(DiagId::note_non_literal_base_class, b.loc)
+                        .arg(&rd)
+                        .arg(self.ty_arg(b.ty)),
+                );
+            }
+        }
+        let fields: Vec<DeclId> = self
+            .ast
+            .members(def)
+            .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
+        for f in fields {
+            let n = self.ast.decls.get(f);
+            let Some(q) = n.ty() else { continue };
+            let volatile = self.ast.types.effective_quals(q).is_volatile();
+            if !self.is_literal_type(q) || volatile {
+                return msg.with_note(
+                    self.diag(DiagId::note_non_literal_field, n.loc())
+                        .arg(&rd)
+                        .arg(self.decl_arg(f))
+                        .arg(self.ty_arg(q))
+                        .arg(u8::from(volatile)),
+                );
+            }
+        }
+        let dtor = self
+            .ast
+            .members(def)
+            .find(|&m| self.ast.decls.get(m).kind() == DeclKind::CXXDestructor);
+        if let Some(dtor) = dtor
+            && !self
+                .ast
+                .decls
+                .function(dtor)
+                .is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None)
+        {
+            msg = msg.with_note(
+                self.diag(
+                    DiagId::note_non_literal_non_constexpr_dtor,
+                    self.ast.decls.get(dtor).loc(),
+                )
+                .arg(rd),
+            );
+        }
+        msg
     }
 
     /// clang's in-class initializer checks for a non-inline static data
@@ -479,8 +568,14 @@ impl Sema<'_, '_> {
     /// initialized to the parameter type, its own full-expression.
     pub(crate) fn attach_default_arg(&mut self, p: DeclId, e: kiln_ast::ExprId) {
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let loc = self.ast.exprs.get(e).loc();
-        let c = self.perform_init(pty, crate::init::Initializer::Expr(e), loc, false);
+        let c = if self.is_error_type(pty) || self.ast.types.is_dependent(pty) {
+            let loc = self.ast.exprs.get(e).loc();
+            self.perform_init(pty, crate::init::Initializer::Expr(e), loc, false)
+        } else {
+            let note = self.param_decl_note(p);
+            let ploc = self.ast.decls.get(p).loc();
+            self.convert_default_arg(e, pty, ploc, note)
+        };
         self.note_default_init_full_expr();
         let c = self.act_on_full_expr(c);
         let _ = self.ast.decls.set_default_arg(p, c);
@@ -650,6 +745,7 @@ impl Sema<'_, '_> {
         let union = self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union);
         let mut accesses = [false; 3];
         let mut first = true;
+        let mut any_literal_field = false;
         let fields: Vec<DeclId> = self.ast.decls.members(r).collect();
         for f in fields {
             if self.kind_of(f) != DeclKind::Field {
@@ -689,8 +785,20 @@ impl Sema<'_, '_> {
                     _ => break,
                 }
             }
+            // [basic.types.general]/10.5: the members of a literal class
+            // are of non-volatile literal types; a union needs only one.
+            let literal =
+                self.is_literal_type(fty) && !self.ast.types.effective_quals(fty).is_volatile();
+            if union {
+                any_literal_field |= literal;
+            } else if !literal {
+                bits = bits.without(DefinitionBits::LITERAL).without(DefinitionBits::STRUCTURAL);
+            }
             if let Some(fr) = self.ast.types.as_record(et).and_then(|d| self.ast.definition(d)) {
-                let fb = self.ast.decls.record(fr).map(|x| x.defn).unwrap_or_default();
+                let mut fb = self.ast.decls.record(fr).map(|x| x.defn).unwrap_or_default();
+                if union {
+                    fb = fb.with(DefinitionBits::LITERAL);
+                }
                 and_with(&mut bits, fb);
                 if !fb.contains(DefinitionBits::STANDARD_LAYOUT) {
                     not_sl(&mut bits);
@@ -703,6 +811,9 @@ impl Sema<'_, '_> {
                 }
             }
             first = false;
+        }
+        if union && !first && !any_literal_field {
+            bits = bits.without(DefinitionBits::LITERAL).without(DefinitionBits::STRUCTURAL);
         }
         if accesses.iter().filter(|&&a| a).count() > 1 {
             not_sl(&mut bits);

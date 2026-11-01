@@ -640,7 +640,11 @@ explicitly initialize the reference member 'r'` / `... the const member 'c'` (+
 `declared here`), `constructor for 'UU' must explicitly initialize the member
 'u' which does not have a default constructor` (+ `member is declared here`,
 `'U' declared here`), `... the base class 'B' which does not have a default
-constructor`. Each written initializer is a full-expression. `reference member
+constructor`. Each written initializer is a full-expression; so is each implicit one
+(a default-initializing construction of a member with no NSDMI), which is
+an immediate-escalation site for an implicitly defined constructor
+([expr.const]/20; WP-158: `struct E { B b; }` with a consteval `B()`
+escalates `E()`, the reason naming the member). `reference member
 'r' binds to a temporary object whose lifetime would be shorter than the
 lifetime of the constructed object` + `reference member declared here`.
 Warnings: `field 'b' will be initialized after field 'a'` [-Wreorder-ctor],
@@ -911,6 +915,13 @@ Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 - **Guaranteed elision** ([dcl.init.general]/16.6.1): a prvalue of the same
   class (ignoring cv) initializes the object directly; no copy or move
   `CXXConstructExpr` is formed.
+- **No elision into a base or delegating target** (CWG2403; clang
+  `RequireActualConstructor`, WP-158): a prvalue initializing a base
+  subobject (a mem-initializer, or an aggregate's base element, whose
+  construction kind is `NonVirtualBase`) or the target of a delegating
+  constructor is materialized and copied or moved by a real constructor;
+  CWG2327 conversion-function candidates are not added for such targets
+  (`resolve_ctor_ex(.., actual_ctor: true)`).
 - **Implicit move** (C++23 [expr.prim.id.unqual]/4): in `return` and
   `co_return` operands an id-expression naming an implicitly movable entity is
   an xvalue (clang 19 dump: `ImplicitCastExpr 'const S' xvalue <NoOp>` before

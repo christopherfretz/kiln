@@ -78,16 +78,7 @@ impl Sema<'_, '_> {
         }
         // [expr.typeid]/3: a glvalue of polymorphic class type is
         // evaluated (WP-078a).
-        let evaluated = operand.is_ok_and(|e| {
-            self.ast.exprs.get(e).value_category().is_glvalue()
-                && self
-                    .ast
-                    .types
-                    .as_record(unqual)
-                    .and_then(|r| self.ast.definition(r))
-                    .and_then(|d| self.ast.decls.record(d))
-                    .is_some_and(|r| r.defn.contains(DefinitionBits::POLYMORPHIC))
-        });
+        let evaluated = operand.is_ok_and(|e| self.is_polymorphic_glvalue(e));
         if let Ok(e) = operand
             && !evaluated
         {
@@ -108,5 +99,20 @@ impl Sema<'_, '_> {
         let named = self.ast.types.elaborated(TagKeyword::None, Some(nns), rec);
         let ty = self.ast.types.qualify(named, Quals::CONST);
         self.builder().typeid_expr(operand, evaluated, ty, loc, rparen)
+    }
+
+    /// Whether `e` is a glvalue of (possibly cv-qualified) polymorphic
+    /// class type: the operand of `typeid` that is evaluated
+    /// ([expr.typeid]/3).
+    pub(crate) fn is_polymorphic_glvalue(&self, e: ExprId) -> bool {
+        let x = self.ast.exprs.get(e);
+        x.value_category().is_glvalue()
+            && self
+                .ast
+                .types
+                .as_record(x.ty())
+                .and_then(|r| self.ast.definition(r))
+                .and_then(|d| self.ast.decls.record(d))
+                .is_some_and(|r| r.defn.contains(DefinitionBits::POLYMORPHIC))
     }
 }
