@@ -1704,6 +1704,9 @@ diag_ids! {
     note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration to suppress this warning if '{0}' is explicitly instantiated in another translation unit";
     // ----- WP-228 (driver flags a target does not support)
     drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
+    // ----- WP-196 (designated initializers: partial overrides)
+    sema_initializer_overrides_destructed = Error (1) "initializer would partially override prior initialization of object of type {0} with non-trivial destruction";
+    note_init_previous_side_effects = Note (0) "previous initialization with side effects is here (side effects will not occur at run time)";
 }
 
 impl DiagId {

@@ -5,8 +5,8 @@ use kiln_ast::decl::{DeclKind, DefinitionBits, FieldData, TagKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
+use kiln_source::{Loc, Span};
 
 use crate::Sema;
 use crate::class::{ConstructSite, DeletedAs, InitStyle};
@@ -240,7 +240,7 @@ impl Sema<'_, '_> {
         let msg = self
             .diag(DiagId::sema_designated_init_non_aggregate, at)
             .arg(self.ty_arg(ty))
-            .range(kiln_source::Span::new(l.lbrace, end));
+            .range(Span::new(l.lbrace, end));
         self.emit(msg);
         let flat = Self::list_exprs(l);
         self.recover(ty, &flat, l.lbrace)
@@ -1658,7 +1658,7 @@ impl Sema<'_, '_> {
         lbrace: Loc,
         rbrace: Loc,
     ) -> ExprId {
-        let sub = Sub { braced, entry: None, prior: None };
+        let sub = Sub { braced, entry: None, prior: None, update: false };
         self.check_aggregate_in(ty, items, pos, sub, lbrace, rbrace)
     }
 
@@ -1810,10 +1810,7 @@ impl Sema<'_, '_> {
                 self.ast.decls.get(fields[cur - nb]).ty().unwrap_or(QualType::ERROR)
             };
             let e = if let Some(k2) = descend {
-                let prior = self.descend_prior(slots[cur], explicit[cur], item);
-                let at = self.designator_begin(&item.designator[0]);
-                let s = Sub { braced: false, entry: Some(k2), prior };
-                self.check_aggregate_in(ety, items, pos, s, at, at)
+                self.descend(ety, slots[cur], explicit[cur], sub.update, items, pos, k2)
             } else {
                 if explicit[cur]
                     && let Some(old) = slots[cur]
@@ -1842,6 +1839,33 @@ impl Sema<'_, '_> {
             cur += 1;
         }
         let mut inits = Vec::new();
+        if sub.update {
+            // An updater keeps the base's value wherever no clause
+            // re-initializes it (clang's `NoInitExpr`).
+            if union {
+                if let Some(f) = union_field
+                    && let Some(i) = fields.iter().position(|&x| x == f)
+                {
+                    inits.extend(slots[i]);
+                }
+            } else {
+                for (i, slot) in slots.into_iter().enumerate() {
+                    let e = match slot {
+                        Some(e) => e,
+                        None => {
+                            let t = if i < nb {
+                                bases[i]
+                            } else {
+                                self.ast.decls.get(fields[i - nb]).ty().unwrap_or(QualType::ERROR)
+                            };
+                            self.builder().no_init(t)
+                        }
+                    };
+                    inits.push(e);
+                }
+            }
+            return self.builder().init_list(ty, &inits, None, union_field, lbrace, rbrace);
+        }
         if union {
             if let Some(f) = union_field {
                 let i = fields.iter().position(|&x| x == f).unwrap_or(0);
@@ -1990,10 +2014,7 @@ impl Sema<'_, '_> {
                 // clause (clang re-checks it per element).
                 *pos = start;
                 let e = if let Some(k2) = descend {
-                    let prior = self.descend_prior(slots[x], explicit[x], item);
-                    let at = self.designator_begin(&item.designator[0]);
-                    let s = Sub { braced: false, entry: Some(k2), prior };
-                    self.check_aggregate_in(elem, items, pos, s, at, at)
+                    self.descend(elem, slots[x], explicit[x], sub.update, items, pos, k2)
                 } else {
                     if explicit[x]
                         && let Some(old) = slots[x]
@@ -2014,15 +2035,18 @@ impl Sema<'_, '_> {
         // A hole left by array designators also gives the list a filler
         // (clang `FillInEmptyInitializations`).
         let hole = slots.iter().any(Option::is_none);
+        // An updater's holes and filler keep the base's value.
+        let fill = |s: &mut Self| {
+            if sub.update { s.builder().no_init(elem) } else { s.filler(elem, rbrace) }
+        };
         for slot in slots {
             let e = match slot {
                 Some(e) => e,
-                None => self.filler(elem, rbrace),
+                None => fill(self),
             };
             inits.push(e);
         }
-        let filler =
-            if hole || (inits.len() as u64) < n { Some(self.filler(elem, rbrace)) } else { None };
+        let filler = if hole || (inits.len() as u64) < n { Some(fill(self)) } else { None };
         let lty = if bound.is_none() {
             let complete = self.ast.types.constant_array(elem, n, None);
             let q = self.ast.types.effective_quals(ty);
@@ -2126,11 +2150,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The end of the last token of a clause's initializer.
+    fn value_end(&self, item: &InitItem) -> Loc {
+        match &item.value {
+            InitValue::List(l) => self.token_end(l.rbrace).unwrap_or(l.rbrace),
+            InitValue::Expr(e) => self.expr_range(*e).hi,
+        }
+    }
+
     /// A filler a later designator may replace silently.
     fn is_filler_expr(&self, e: ExprId) -> bool {
         matches!(
             self.ast.exprs.get(e).kind(),
-            ExprKind::ImplicitValueInitExpr | ExprKind::CXXDefaultInitExpr
+            ExprKind::ImplicitValueInitExpr | ExprKind::CXXDefaultInitExpr | ExprKind::NoInitExpr
         )
     }
 
@@ -2139,31 +2171,116 @@ impl Sema<'_, '_> {
         prior.filter(|&p| self.ast.exprs.get(p).kind() == ExprKind::InitListExpr)
     }
 
-    /// The prior initializer a designator path descending into a slot
-    /// merges into. A subobject initialized by an expression would need
-    /// clang's `DesignatedInitUpdateExpr`.
-    fn descend_prior(
-        &self,
+    /// A designator path descending into the subobject of type `ty`
+    /// held by `slot` (clang `getStructuredSubobjectInit`), continuing
+    /// at designator `k2` of `items[*pos]`. A subobject initialized by a
+    /// list is merged into; one initialized by an expression is kept as
+    /// the base of a `DesignatedInitUpdateExpr` whose updater list
+    /// re-initializes only what the designators name ([dcl.init.aggr]/4
+    /// with C99 designators). `update`: the enclosing list is itself
+    /// (part of) an updater.
+    fn descend(
+        &mut self,
+        ty: QualType,
         slot: Option<ExprId>,
         explicit: bool,
-        item: &InitItem,
-    ) -> Option<ExprId> {
-        let old = slot?;
-        if explicit && self.ast.exprs.get(old).kind() != ExprKind::InitListExpr {
-            self.unsupported(
-                "a designator into a subobject initialized by an expression",
-                self.value_begin(item),
-            );
-            return None;
+        update: bool,
+        items: &[InitItem],
+        pos: &mut usize,
+        k2: usize,
+    ) -> ExprId {
+        let item = &items[*pos];
+        let at = self.designator_begin(&item.designator[0]);
+        let (prior, base) = match slot {
+            Some(old) => match self.ast.exprs.get(old).kind() {
+                ExprKind::InitListExpr => (Some(old), None),
+                ExprKind::DesignatedInitUpdateExpr => {
+                    let [b, u] = self.ast.exprs.designated_init_update(old);
+                    self.partial_override(item, k2, b);
+                    (Some(u), Some(b))
+                }
+                _ if explicit => {
+                    self.partial_override(item, k2, old);
+                    (None, Some(old))
+                }
+                _ => (None, None),
+            },
+            None => (None, None),
+        };
+        // Inside an updater, a designated subobject's untouched parts keep
+        // the prior value too (clang `FillInEmptyInitializations` with
+        // `FillWithNoInit`); a list merged into keeps how it was filled.
+        let update = base.is_some()
+            || match prior {
+                None => update,
+                Some(l) => self.is_update_list(l),
+            };
+        let s = Sub { braced: false, entry: Some(k2), prior, update };
+        let e = self.check_aggregate_in(ty, items, pos, s, at, at);
+        match base {
+            Some(b) => self.builder().designated_init_update(ty, b, e),
+            None => e,
         }
-        Some(old)
+    }
+
+    /// Whether list `l` was filled as (part of) an updater: its holes or
+    /// filler are `NoInitExpr` (a list with neither has no holes left).
+    fn is_update_list(&self, l: ExprId) -> bool {
+        let x = &self.ast.exprs;
+        let no_init = |e: ExprId| x.get(e).kind() == ExprKind::NoInitExpr;
+        x.init_list(l).array_filler.is_some_and(no_init)
+            || self.ast.lists.iter(x.init_list_inits(l)).any(no_init)
+    }
+
+    /// "initializer partially overrides prior initialization of this
+    /// subobject" at designator `k` of `item`, which descends into the
+    /// subobject `old` initialized (clang `diagnoseInitOverride` with
+    /// `FullyOverwritten` false). Keeping the old object while changing
+    /// part of it is an error when its type has non-trivial destruction.
+    fn partial_override(&mut self, item: &InitItem, k: usize, old: ExprId) {
+        let at = self.designator_begin(&item.designator[k]);
+        let oty = self.ast.exprs.get(old).ty();
+        let msg = if self.is_destructed_type(oty) {
+            self.diag(DiagId::sema_initializer_overrides_destructed, at).arg(self.ty_arg(oty))
+        } else {
+            self.diag(DiagId::sema_initializer_overrides, at).arg("0")
+        };
+        let msg = msg.range(Span::new(at, self.value_end(item)));
+        let note =
+            self.diag(DiagId::note_init_previous, self.begin_loc(old)).range(self.expr_range(old));
+        self.emit(msg.with_note(note));
+    }
+
+    /// clang `QualType::isDestructedType` for a class: a class, or an
+    /// array of them, with a non-trivial destructor.
+    fn is_destructed_type(&self, ty: QualType) -> bool {
+        let mut t = ty;
+        while let Some(e) = self.ast.types.element(t) {
+            t = e;
+        }
+        self.ast
+            .types
+            .as_record(t)
+            .and_then(|r| self.ast.definition(r))
+            .is_some_and(|def| !self.defn_bits(def).contains(DefinitionBits::TRIVIAL_DTOR))
     }
 
     /// "initializer overrides prior initialization of this subobject"
     /// ([dcl.init.aggr]/3.1 forbids it; clang `ext_initializer_overrides`).
     fn override_warning(&mut self, item: &InitItem, old: ExprId) {
-        let msg = self.diag(DiagId::sema_initializer_overrides, self.value_begin(item)).arg("1");
-        let note = self.diag(DiagId::note_init_previous, self.begin_loc(old));
+        let at = self.value_begin(item);
+        let msg = self
+            .diag(DiagId::sema_initializer_overrides, at)
+            .arg("1")
+            .range(Span::new(at, self.value_end(item)));
+        // clang `note_previous_initializer`: the side effects of the
+        // overridden initializer are dropped.
+        let id = if self.has_possible_side_effects(old) {
+            DiagId::note_init_previous_side_effects
+        } else {
+            DiagId::note_init_previous
+        };
+        let note = self.diag(id, self.begin_loc(old)).range(self.expr_range(old));
         self.emit(msg.with_note(note));
     }
 }
@@ -2180,4 +2297,7 @@ struct Sub {
     /// The subaggregate's initializer so far, when a designator path
     /// re-enters it: its elements are kept.
     prior: Option<ExprId>,
+    /// The list is the updater of a `DesignatedInitUpdateExpr`: what no
+    /// clause initializes is a `NoInitExpr`, not a filler.
+    update: bool,
 }
