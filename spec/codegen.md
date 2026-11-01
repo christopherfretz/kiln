@@ -1128,6 +1128,7 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
 - **Deviation (mangling, follow-up):** a namespace-scope anonymous union
   variable (`static union { int ga; };`) mangles as `_ZLUt_`; clang
   uses the first named member, `_Z2ga` (Itanium 5.1.2).
+
 ## 7h. Landed (WP-113): explicit instantiation linkage and order
 Linkage follows clang 19's `GetGVALinkageForFunction` /
 `GetGVALinkageForVariable` (`-O0`, ELF). "Under" means the entity's own
@@ -1169,10 +1170,9 @@ Where the definitions are emitted (clang hands them to
   definition is seen (for a variable template, after a non-defining
   `extern` declaration; sema `instantiate_late_var_spec` rebinds the
   specialization to the defining redeclaration): instantiated at the end
-  of the TU
-  and emitted after the last top-level declaration, in explicit
-  instantiation order, before the key-function vtables and the deferred
-  definitions (clang `PerformPendingInstantiations`;
+  of the TU and emitted after the last top-level declaration, in
+  explicit instantiation order, before the key-function vtables and the
+  deferred definitions (clang `PerformPendingInstantiations`;
   `TemplateTables::late_explicit_insts`, `Cg::emit_late_explicit_insts`).
   Members of an explicitly instantiated class that are defined after the
   class's explicit instantiation are not instantiated (as clang).
@@ -1183,9 +1183,10 @@ Where the definitions are emitted (clang hands them to
   them (sema `instantiate_members_of` and codegen `emit_class_members`
   skip `SpecKind::ExplicitSpecialization`, clang
   `InstantiateClassMembers`). An out-of-line `template<>` redeclaration
-  of a static data member or structor of an implicit specialization sets
-  that kind (`Sema::mark_member_explicit_spec`), with or without an
-  explicit instantiation.
+  of a static data member (`Sema::act_on_explicit_member_var_spec`,
+  WP-117) or structor (`Sema::mark_member_explicit_spec`) of an implicit
+  specialization sets that kind, with or without an explicit
+  instantiation.
 
 Tests: `tests/codegen/explicit_instantiation*.cpp`,
 `tests/codegen/structor_rauw_order.cpp` (IR parity on both triples).

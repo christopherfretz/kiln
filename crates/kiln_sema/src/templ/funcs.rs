@@ -807,11 +807,12 @@ impl Sema<'_, '_> {
         true
     }
 
-    /// After `template<>`, an out-of-line redeclaration `p` of a static
-    /// data member, constructor or destructor of an implicit class
-    /// template specialization explicitly specializes it
-    /// ([temp.expl.spec]/1, §4.5): it is no longer instantiated from the
-    /// pattern (clang `CheckMemberSpecialization`).
+    /// After `template<>`, an out-of-line redeclaration `p` of a
+    /// constructor or destructor of an implicit class template
+    /// specialization explicitly specializes it ([temp.expl.spec]/1,
+    /// §4.5): it is no longer instantiated from the pattern (clang
+    /// `CheckMemberSpecialization`). Static data members go through
+    /// `act_on_explicit_member_var_spec`.
     pub(crate) fn mark_member_explicit_spec(&mut self, p: DeclId) {
         if self.templ.explicit_spec.is_none() || !self.at_explicit_head() {
             return;

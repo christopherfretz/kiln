@@ -225,7 +225,6 @@ impl Sema<'_, '_> {
                         invalid = true;
                     } else {
                         prev_ok = Some(p);
-                        self.mark_member_explicit_spec(p);
                         let pspec = self.ast.decls.var(p).map(|x| x.spec).unwrap_or_default();
                         if pspec.is_inline() {
                             spec = spec.with_inline(true);
