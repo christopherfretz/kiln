@@ -91,7 +91,7 @@ impl Cg<'_> {
     }
 
     /// `getJumpDestForLabel`.
-    fn label_dest(&mut self, d: DeclId) -> JumpDest {
+    pub(crate) fn label_dest(&mut self, d: DeclId) -> JumpDest {
         if let Some(&j) = self.f.labels.get(&d) {
             return j;
         }

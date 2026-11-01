@@ -360,8 +360,9 @@ impl Sema<'_, '_> {
         match n.kind() {
             DeclKind::ParmVar => true,
             DeclKind::Var => {
-                self.ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::None)
-                    && n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+                self.ast.decls.var(d).is_some_and(|v| {
+                    matches!(v.spec.storage(), VarStorage::None | VarStorage::Register)
+                }) && n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
             }
             _ => false,
         }

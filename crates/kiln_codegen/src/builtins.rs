@@ -85,29 +85,29 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::NANS
         | id::NANSF
         | id::NANSL
-        | id::EXP
-        | id::EXPF
-        | id::EXPL
-        | id::EXP2
-        | id::EXP2F
-        | id::EXP2L
-        | id::EXPM1
-        | id::EXPM1F
-        | id::EXPM1L
-        | id::LDEXP
-        | id::LDEXPF
-        | id::LDEXPL
-        | id::POW
-        | id::POWF
-        | id::POWL
-        | id::SCALBN
-        | id::SCALBNF
-        | id::SCALBNL
-        | id::SCALBLN
-        | id::SCALBLNF
-        | id::SCALBLNL => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        | id::ABORT => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        _ if id::is_libm(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ => None,
     }
+}
+
+/// The elementwise LLVM floating-point intrinsic a builtin lowers to
+/// (clang `emitBuiltinWithOneOverloadedType`) and its operand count.
+fn fp_intrinsic(b: u32) -> Option<(&'static str, usize)> {
+    Some(match b {
+        id::FABS | id::FABSF | id::FABSL => ("llvm.fabs", 1),
+        id::COPYSIGN | id::COPYSIGNF | id::COPYSIGNL => ("llvm.copysign", 2),
+        id::FMAX | id::FMAXF | id::FMAXL => ("llvm.maxnum", 2),
+        id::FMIN | id::FMINF | id::FMINL => ("llvm.minnum", 2),
+        id::CEIL | id::CEILF | id::CEILL => ("llvm.ceil", 1),
+        id::FLOOR | id::FLOORF | id::FLOORL => ("llvm.floor", 1),
+        id::TRUNC | id::TRUNCF | id::TRUNCL => ("llvm.trunc", 1),
+        id::ROUND | id::ROUNDF | id::ROUNDL => ("llvm.round", 1),
+        id::RINT | id::RINTF | id::RINTL => ("llvm.rint", 1),
+        id::NEARBYINT | id::NEARBYINTF | id::NEARBYINTL => ("llvm.nearbyint", 1),
+        id::FMA | id::FMAF | id::FMAL => ("llvm.fma", 3),
+        _ => return None,
+    })
 }
 
 /// The `llvm.is.fpclass` test of a classification builtin
@@ -118,6 +118,9 @@ fn fp_class_test(b: u32) -> Option<i128> {
         id::ISINF => 0x204,
         id::ISNORMAL => 0x108,
         id::ISFINITE => 0x1f8,
+        id::ISSUBNORMAL => 0x090,
+        id::ISZERO => 0x060,
+        id::ISSIGNALING => 0x001,
         _ => return None,
     })
 }
@@ -139,6 +142,9 @@ fn fp_compare(b: u32) -> Option<FloatPredicate> {
 /// call sites: `Pure` and `Const` (clang `ConstructAttributeList`).
 fn lib_attrs(b: u32, out: &mut Vec<Attr>) {
     let bits = id::info(b).map_or(0, |i| i.attrs);
+    if bits & attr::NORETURN != 0 {
+        out.push(Attr::Flag(AttrKind::NoReturn));
+    }
     let mem = if bits & attr::CONST != 0 {
         ModRef::None
     } else if bits & attr::PURE != 0 {
@@ -239,7 +245,13 @@ impl Cg<'_> {
                 let f = kiln_llvm::intrinsics::bswap(&mut self.m, ty);
                 self.intrinsic_call(f, vec![x])
             }
-            id::ISNAN | id::ISINF | id::ISNORMAL | id::ISFINITE => {
+            id::ISNAN
+            | id::ISINF
+            | id::ISNORMAL
+            | id::ISFINITE
+            | id::ISSUBNORMAL
+            | id::ISZERO
+            | id::ISSIGNALING => {
                 let x = self.emit_scalar(a0)?;
                 let ty = self.f.fir.ty(&self.m, x);
                 let f = kiln_llvm::intrinsics::is_fpclass(&mut self.m, ty);
@@ -297,6 +309,81 @@ impl Cg<'_> {
                 let mt = self.mty(iq);
                 self.store_scalar(exp, Addr { v: p, ty: mt, align }, iq);
                 self.f.fir.push(Op::ExtractValue { agg: call, idx: 0 }, ty)
+            }
+            _ if fp_intrinsic(b).is_some() => {
+                let (name, n) = fp_intrinsic(b).unwrap_or(("llvm.fabs", 1));
+                let mut vs = Vec::with_capacity(n);
+                for i in 0..n {
+                    let Some(a) = arg(i) else {
+                        return err(self.loc_of(e), "math builtin with too few arguments");
+                    };
+                    vs.push(self.emit_scalar(a)?);
+                }
+                let ty = self.f.fir.ty(&self.m, vs[0]);
+                let f = kiln_llvm::intrinsics::fp_op(&mut self.m, name, ty, n);
+                self.intrinsic_call(f, vs)
+            }
+            id::ABS | id::LABS | id::LLABS => {
+                // clang 19: `llvm.abs(x, true)` (signed overflow is UB).
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let f = kiln_llvm::intrinsics::abs(&mut self.m, ty);
+                let t = V::C(self.m.const_bool(true));
+                self.intrinsic_call(f, vec![x, t])
+            }
+            id::INF | id::INFF | id::INFL => {
+                let ty = self.lty(q);
+                let w = self.m.types.float_width(ty).unwrap_or(64);
+                let bits: u128 = match w {
+                    32 => 0x7f80_0000,
+                    16 => 0x7c00,
+                    80 => 0x7fff_8000_0000_0000_0000,
+                    128 => 0x7fff_u128 << 112,
+                    _ => 0x7ff0_0000_0000_0000,
+                };
+                V::C(self.m.const_float_bits(ty, bits))
+            }
+            id::ISINF_SIGN => {
+                // clang: isinf(x) ? (signbit(x) ? -1 : 1) : 0.
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let abs = self.fabs_no_mem(x, ty);
+                let inf = self.fp_inf(ty);
+                let is_inf = self.fcmp(FloatPredicate::Oeq, abs, inf);
+                let w = self.m.types.float_width(ty).unwrap_or(64);
+                let it = self.m.types.int(w);
+                let bits = self.cast(CastOp::BitCast, x, it);
+                let zero = V::C(self.m.const_int(it, 0));
+                let neg = self.icmp(IntPredicate::Slt, bits, zero);
+                let rt = self.lty(q);
+                let m1 = V::C(self.m.const_int(rt, -1));
+                let p1 = V::C(self.m.const_int(rt, 1));
+                let z = V::C(self.m.const_int(rt, 0));
+                let sign = self.select(neg, m1, p1);
+                self.select(is_inf, sign, z)
+            }
+            id::FPCLASSIFY => {
+                return self.builtin_fpclassify(e, &args).map(|v| BuiltinCall::Emitted(Some(v)));
+            }
+            id::EXPECT => {
+                // At -O0 clang returns the value (both operands emitted).
+                let x = self.emit_scalar(a0)?;
+                if let Some(a1) = arg(1) {
+                    self.emit_scalar(a1)?;
+                }
+                x
+            }
+            id::ASSUME => {
+                let c = self.emit_scalar(a0)?;
+                let f = kiln_llvm::intrinsics::assume(&mut self.m);
+                self.intrinsic_call(f, vec![c]);
+                return Ok(BuiltinCall::Emitted(None));
+            }
+            id::TRAP => {
+                // clang `EmitTrapCall`: no `unreachable` follows.
+                let f = kiln_llvm::intrinsics::trap(&mut self.m);
+                self.intrinsic_call(f, vec![]);
+                return Ok(BuiltinCall::Emitted(None));
             }
             id::MEMCPY | id::MEMMOVE => {
                 let (Some(d), Some(s), Some(n)) = (arg(0), arg(1), arg(2)) else {
@@ -357,8 +444,97 @@ impl Cg<'_> {
         Ok(BuiltinCall::Emitted(Some(v)))
     }
 
+    /// clang `EmitFAbs`: `llvm.fabs` with a `memory(none)` call site.
+    fn fabs_no_mem(&mut self, x: V, ty: LTy) -> V {
+        let f = kiln_llvm::intrinsics::fabs(&mut self.m, ty);
+        let fa = self.m.attr_set(&[Attr::Memory(MemoryEffects::all(ModRef::None))]);
+        let opts =
+            CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
+        let fn_ty = self.m.func(f).ty();
+        let r = self.f.fir.push(
+            Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![x], opts: Box::new(opts) },
+            ty,
+        );
+        self.f.calls.push((Fir::last_inst(r), Some(f), true));
+        r
+    }
+
+    /// Positive infinity of floating-point type `ty`.
+    fn fp_inf(&mut self, ty: LTy) -> V {
+        V::C(self.m.const_float(ty, f64::INFINITY))
+    }
+
+    /// clang `EmitBuiltinExpr` for `__builtin_fpclassify(nan, inf, normal,
+    /// subnormal, zero, x)`: a compare chain into a `phi`, the end block
+    /// laid out right after the current one (`createBasicBlock(.., CurFn)`).
+    fn builtin_fpclassify(&mut self, e: ExprId, args: &[ExprId]) -> R<V> {
+        if args.len() != 6 {
+            return err(self.loc_of(e), "__builtin_fpclassify without six arguments");
+        }
+        let x = self.emit_scalar(args[5])?;
+        let ty = self.f.fir.ty(&self.m, x);
+        let rq = self.ast.exprs.get(args[0]).ty();
+        let rt = self.lty(rq);
+        let Some(begin) = self.f.fir.cur() else {
+            return err(self.loc_of(e), "__builtin_fpclassify without an insertion point");
+        };
+        let end = self.f.fir.create_block();
+        self.f.fir.place_at_end(end);
+        let phi = self.f.fir.push_in(end, Op::Phi { ty: rt, inc: vec![] }, rt);
+        let phi_i = Fir::last_inst(phi);
+        // x == 0 → zero
+        let zero = V::C(self.m.const_float(ty, 0.0));
+        let is_zero = self.fcmp(FloatPredicate::Oeq, x, zero);
+        let zv = self.emit_scalar(args[4])?;
+        let not_zero = self.f.fir.create_block();
+        self.f.fir.place_at_end(not_zero);
+        self.cond_br(is_zero, end, not_zero);
+        let from = self.f.fir.cur().unwrap_or(begin);
+        self.f.fir.add_incoming(phi_i, zv, from);
+        // x != x → nan
+        self.f.fir.set_cur(Some(not_zero));
+        let is_nan = self.fcmp(FloatPredicate::Uno, x, x);
+        let nv = self.emit_scalar(args[0])?;
+        let not_nan = self.f.fir.create_block();
+        self.f.fir.place_at_end(not_nan);
+        self.cond_br(is_nan, end, not_nan);
+        let from = self.f.fir.cur().unwrap_or(not_zero);
+        self.f.fir.add_incoming(phi_i, nv, from);
+        // |x| == inf → infinite
+        self.f.fir.set_cur(Some(not_nan));
+        let abs = self.fabs_no_mem(x, ty);
+        let inf = self.fp_inf(ty);
+        let is_inf = self.fcmp(FloatPredicate::Oeq, abs, inf);
+        let iv = self.emit_scalar(args[1])?;
+        let not_inf = self.f.fir.create_block();
+        self.f.fir.place_at_end(not_inf);
+        self.cond_br(is_inf, end, not_inf);
+        let from = self.f.fir.cur().unwrap_or(not_nan);
+        self.f.fir.add_incoming(phi_i, iv, from);
+        // |x| >= smallest normal → normal, else subnormal
+        self.f.fir.set_cur(Some(not_inf));
+        let w = self.m.types.float_width(ty).unwrap_or(64);
+        let min_bits: u128 = match w {
+            32 => 0x0080_0000,
+            16 => 0x0400,
+            80 => 0x0001_8000_0000_0000_0000,
+            128 => 1u128 << 112,
+            _ => 0x0010_0000_0000_0000,
+        };
+        let min = V::C(self.m.const_float_bits(ty, min_bits));
+        let is_normal = self.fcmp(FloatPredicate::Uge, abs, min);
+        let normal = self.emit_scalar(args[2])?;
+        let sub = self.emit_scalar(args[3])?;
+        let r = self.select(is_normal, normal, sub);
+        let from = self.f.fir.cur().unwrap_or(not_inf);
+        self.br(end);
+        self.f.fir.add_incoming(phi_i, r, from);
+        self.f.fir.set_cur(Some(end));
+        Ok(phi)
+    }
+
     /// A call of intrinsic `f` with no call-site attributes.
-    fn intrinsic_call(&mut self, f: FuncId, args: Vec<V>) -> V {
+    pub(crate) fn intrinsic_call(&mut self, f: FuncId, args: Vec<V>) -> V {
         let fty = self.m.func(f).ty();
         let rty = self.m.types.function_info(fty).map_or(LTy::VOID, |i| i.0);
         self.intrinsic_call_ty(f, args, rty)

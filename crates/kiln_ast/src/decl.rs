@@ -2831,6 +2831,103 @@ pub mod builtin {
     /// `__builtin_unreachable` (clang `Builtins.td` signature `v`).
     pub const UNREACHABLE: u32 = 1347;
 
+    /// `__builtin_fabs` (clang `Builtins.td` signature `dd`).
+    pub const FABS: u32 = 550;
+    /// `__builtin_fabsf` (clang `Builtins.td` signature `ff`).
+    pub const FABSF: u32 = 548;
+    /// `__builtin_fabsl` (clang `Builtins.td` signature `LdLd`).
+    pub const FABSL: u32 = 552;
+    /// `__builtin_copysign` (clang `Builtins.td` signature `ddd`).
+    pub const COPYSIGN: u32 = 356;
+    /// `__builtin_copysignf` (clang `Builtins.td` signature `fff`).
+    pub const COPYSIGNF: u32 = 354;
+    /// `__builtin_copysignl` (clang `Builtins.td` signature `LdLdLd`).
+    pub const COPYSIGNL: u32 = 358;
+    /// `__builtin_fmax` (clang `Builtins.td` signature `ddd`).
+    pub const FMAX: u32 = 585;
+    /// `__builtin_fmaxf` (clang `Builtins.td` signature `fff`).
+    pub const FMAXF: u32 = 583;
+    /// `__builtin_fmaxl` (clang `Builtins.td` signature `LdLdLd`).
+    pub const FMAXL: u32 = 587;
+    /// `__builtin_fmin` (clang `Builtins.td` signature `ddd`).
+    pub const FMIN: u32 = 593;
+    /// `__builtin_fminf` (clang `Builtins.td` signature `fff`).
+    pub const FMINF: u32 = 591;
+    /// `__builtin_fminl` (clang `Builtins.td` signature `LdLdLd`).
+    pub const FMINL: u32 = 595;
+    /// `__builtin_ceil` (clang `Builtins.td` signature `dd`).
+    pub const CEIL: u32 = 312;
+    /// `__builtin_ceilf` (clang `Builtins.td` signature `ff`).
+    pub const CEILF: u32 = 310;
+    /// `__builtin_ceill` (clang `Builtins.td` signature `LdLd`).
+    pub const CEILL: u32 = 314;
+    /// `__builtin_floor` (clang `Builtins.td` signature `dd`).
+    pub const FLOOR: u32 = 569;
+    /// `__builtin_floorf` (clang `Builtins.td` signature `ff`).
+    pub const FLOORF: u32 = 567;
+    /// `__builtin_floorl` (clang `Builtins.td` signature `LdLd`).
+    pub const FLOORL: u32 = 571;
+    /// `__builtin_trunc` (clang `Builtins.td` signature `dd`).
+    pub const TRUNC: u32 = 1334;
+    /// `__builtin_truncf` (clang `Builtins.td` signature `ff`).
+    pub const TRUNCF: u32 = 1332;
+    /// `__builtin_truncl` (clang `Builtins.td` signature `LdLd`).
+    pub const TRUNCL: u32 = 1336;
+    /// `__builtin_round` (clang `Builtins.td` signature `dd`).
+    pub const ROUND: u32 = 1042;
+    /// `__builtin_roundf` (clang `Builtins.td` signature `ff`).
+    pub const ROUNDF: u32 = 1040;
+    /// `__builtin_roundl` (clang `Builtins.td` signature `LdLd`).
+    pub const ROUNDL: u32 = 1044;
+    /// `__builtin_rint` (clang `Builtins.td` signature `dd`).
+    pub const RINT: u32 = 1018;
+    /// `__builtin_rintf` (clang `Builtins.td` signature `ff`).
+    pub const RINTF: u32 = 1016;
+    /// `__builtin_rintl` (clang `Builtins.td` signature `LdLd`).
+    pub const RINTL: u32 = 1020;
+    /// `__builtin_nearbyint` (clang `Builtins.td` signature `dd`).
+    pub const NEARBYINT: u32 = 905;
+    /// `__builtin_nearbyintf` (clang `Builtins.td` signature `ff`).
+    pub const NEARBYINTF: u32 = 903;
+    /// `__builtin_nearbyintl` (clang `Builtins.td` signature `LdLd`).
+    pub const NEARBYINTL: u32 = 907;
+    /// `__builtin_fma` (clang `Builtins.td` signature `dddd`).
+    pub const FMA: u32 = 577;
+    /// `__builtin_fmaf` (clang `Builtins.td` signature `ffff`).
+    pub const FMAF: u32 = 575;
+    /// `__builtin_fmal` (clang `Builtins.td` signature `LdLdLdLd`).
+    pub const FMAL: u32 = 579;
+    /// `__builtin_inf` (clang `Builtins.td` signature `d`).
+    pub const INF: u32 = 673;
+    /// `__builtin_inff` (clang `Builtins.td` signature `f`).
+    pub const INFF: u32 = 672;
+    /// `__builtin_infl` (clang `Builtins.td` signature `Ld`).
+    pub const INFL: u32 = 674;
+    /// `__builtin_abs` (clang `Builtins.td` signature `ii`).
+    pub const ABS: u32 = 92;
+    /// `__builtin_labs` (clang `Builtins.td` signature `LiLi`).
+    pub const LABS: u32 = 94;
+    /// `__builtin_llabs` (clang `Builtins.td` signature `LLiLLi`).
+    pub const LLABS: u32 = 96;
+    /// `__builtin_isinf_sign` (clang `Builtins.td` signature `i.`).
+    pub const ISINF_SIGN: u32 = 730;
+    /// `__builtin_fpclassify` (clang `Builtins.td` signature `iiiiii.`).
+    pub const FPCLASSIFY: u32 = 542;
+    /// `__builtin_issubnormal` (clang `Builtins.td` signature `i.`).
+    pub const ISSUBNORMAL: u32 = 741;
+    /// `__builtin_iszero` (clang `Builtins.td` signature `i.`).
+    pub const ISZERO: u32 = 745;
+    /// `__builtin_issignaling` (clang `Builtins.td` signature `i.`).
+    pub const ISSIGNALING: u32 = 739;
+    /// `__builtin_expect` (clang `Builtins.td` signature `LiLiLi`).
+    pub const EXPECT: u32 = 528;
+    /// `__builtin_assume` (clang `Builtins.td` signature `vb`).
+    pub const ASSUME: u32 = 148;
+    /// `__builtin_trap` (clang `Builtins.td` signature `v`).
+    pub const TRAP: u32 = 1331;
+    /// `__builtin_abort` (clang `Builtins.td` signature `v`).
+    pub const ABORT: u32 = 90;
+
     /// Attribute bits of an [`Info`] (clang's `Builtins.td` attributes).
     pub mod attr {
         /// `NoThrow`: an implicit `NoThrowAttr` and a `noexcept` type.
@@ -2844,6 +2941,11 @@ pub mod builtin {
         /// `CustomTypeChecking`: the arguments are not converted to the
         /// parameter types; sema checks the call itself.
         pub const CUSTOM: u8 = 16;
+        /// `ConstIgnoringExceptions` (`rint`, `fma`): with the default
+        /// floating-point exception mode the implicit `ConstAttr` is added
+        /// before the `NoThrowAttr` (clang `AddKnownFunctionAttributes`).
+        /// Set together with [`CONST`].
+        pub const CONST_EARLY: u8 = 32;
     }
 
     /// One builtin function.
@@ -2868,7 +2970,7 @@ pub mod builtin {
         Info { id, name, sig, attrs }
     }
 
-    use attr::{CONST as C, CUSTOM as T, NORETURN as R, NOTHROW as N, PURE as P};
+    use attr::{CONST as C, CONST_EARLY as E, CUSTOM as T, NORETURN as R, NOTHROW as N, PURE as P};
 
     /// Every builtin function kiln declares.
     pub const ALL: &[Info] = &[
@@ -2928,6 +3030,67 @@ pub mod builtin {
         row(NANS, "__builtin_nans", "dcC*", N | P),
         row(NANSF, "__builtin_nansf", "fcC*", N | P),
         row(NANSL, "__builtin_nansl", "LdcC*", N | P),
+        row(FABS, "__builtin_fabs", "dd", N | C),
+        row(FABSF, "__builtin_fabsf", "ff", N | C),
+        row(FABSL, "__builtin_fabsl", "LdLd", N | C),
+        row(COPYSIGN, "__builtin_copysign", "ddd", N | C),
+        row(COPYSIGNF, "__builtin_copysignf", "fff", N | C),
+        row(COPYSIGNL, "__builtin_copysignl", "LdLdLd", N | C),
+        row(FMAX, "__builtin_fmax", "ddd", N | C),
+        row(FMAXF, "__builtin_fmaxf", "fff", N | C),
+        row(FMAXL, "__builtin_fmaxl", "LdLdLd", N | C),
+        row(FMIN, "__builtin_fmin", "ddd", N | C),
+        row(FMINF, "__builtin_fminf", "fff", N | C),
+        row(FMINL, "__builtin_fminl", "LdLdLd", N | C),
+        row(CEIL, "__builtin_ceil", "dd", N | C),
+        row(CEILF, "__builtin_ceilf", "ff", N | C),
+        row(CEILL, "__builtin_ceill", "LdLd", N | C),
+        row(FLOOR, "__builtin_floor", "dd", N | C),
+        row(FLOORF, "__builtin_floorf", "ff", N | C),
+        row(FLOORL, "__builtin_floorl", "LdLd", N | C),
+        row(TRUNC, "__builtin_trunc", "dd", N | C),
+        row(TRUNCF, "__builtin_truncf", "ff", N | C),
+        row(TRUNCL, "__builtin_truncl", "LdLd", N | C),
+        row(ROUND, "__builtin_round", "dd", N | C),
+        row(ROUNDF, "__builtin_roundf", "ff", N | C),
+        row(ROUNDL, "__builtin_roundl", "LdLd", N | C),
+        row(RINT, "__builtin_rint", "dd", N | C | E),
+        row(RINTF, "__builtin_rintf", "ff", N | C | E),
+        row(RINTL, "__builtin_rintl", "LdLd", N | C | E),
+        row(NEARBYINT, "__builtin_nearbyint", "dd", N | C),
+        row(NEARBYINTF, "__builtin_nearbyintf", "ff", N | C),
+        row(NEARBYINTL, "__builtin_nearbyintl", "LdLd", N | C),
+        row(FMA, "__builtin_fma", "dddd", N | C | E),
+        row(FMAF, "__builtin_fmaf", "ffff", N | C | E),
+        row(FMAL, "__builtin_fmal", "LdLdLdLd", N | C | E),
+        row(INF, "__builtin_inf", "d", N | C),
+        row(INFF, "__builtin_inff", "f", N | C),
+        row(INFL, "__builtin_infl", "Ld", N | C),
+        row(ABS, "__builtin_abs", "ii", N | C),
+        row(LABS, "__builtin_labs", "LiLi", N | C),
+        row(LLABS, "__builtin_llabs", "LLiLLi", N | C),
+        row(ISINF_SIGN, "__builtin_isinf_sign", "i.", N | C | T),
+        row(FPCLASSIFY, "__builtin_fpclassify", "iiiiii.", N | C | T),
+        row(ISSUBNORMAL, "__builtin_issubnormal", "i.", N | C | T),
+        row(ISZERO, "__builtin_iszero", "i.", N | C | T),
+        row(ISSIGNALING, "__builtin_issignaling", "i.", N | C | T),
+        row(EXPECT, "__builtin_expect", "LiLiLi", N | C),
+        row(ASSUME, "__builtin_assume", "vb", N),
+        row(TRAP, "__builtin_trap", "v", N | R),
+        row(ABORT, "__builtin_abort", "v", N | R),
+        row(LAUNDER, "__builtin_launder", "v*v*", N | T),
+        row(OPERATOR_NEW, "__builtin_operator_new", "v*z", C | T),
+        row(OPERATOR_DELETE, "__builtin_operator_delete", "vv*", N | T),
+        row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
+    ];
+
+    /// The C library math functions ([c.math], C23 7.12) that are only
+    /// declared and called: never constant-evaluated by clang 19 (a call
+    /// in a constant expression is "subexpression not valid"), lowered to
+    /// a call of the library function the builtin names (`__builtin_sin`
+    /// -> `sin`; with clang's default `-fmath-errno` on Linux none of them
+    /// becomes an LLVM intrinsic). `frexp` is lowered to `llvm.frexp`.
+    pub const LIBM: &[Info] = &[
         row(EXP, "__builtin_exp", "dd", N),
         row(EXPF, "__builtin_expf", "ff", N),
         row(EXPL, "__builtin_expl", "LdLd", N),
@@ -2952,20 +3115,132 @@ pub mod builtin {
         row(SCALBLN, "__builtin_scalbln", "ddLi", N),
         row(SCALBLNF, "__builtin_scalblnf", "ffLi", N),
         row(SCALBLNL, "__builtin_scalblnl", "LdLdLi", N),
-        row(LAUNDER, "__builtin_launder", "v*v*", N | T),
-        row(OPERATOR_NEW, "__builtin_operator_new", "v*z", C | T),
-        row(OPERATOR_DELETE, "__builtin_operator_delete", "vv*", N | T),
-        row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
+        row(100, "__builtin_acos", "dd", N),
+        row(98, "__builtin_acosf", "ff", N),
+        row(108, "__builtin_acosh", "dd", N),
+        row(106, "__builtin_acoshf", "ff", N),
+        row(110, "__builtin_acoshl", "LdLd", N),
+        row(102, "__builtin_acosl", "LdLd", N),
+        row(135, "__builtin_asin", "dd", N),
+        row(133, "__builtin_asinf", "ff", N),
+        row(143, "__builtin_asinh", "dd", N),
+        row(141, "__builtin_asinhf", "ff", N),
+        row(145, "__builtin_asinhl", "LdLd", N),
+        row(137, "__builtin_asinl", "LdLd", N),
+        row(152, "__builtin_atan", "dd", N),
+        row(158, "__builtin_atan2", "ddd", N),
+        row(156, "__builtin_atan2f", "fff", N),
+        row(160, "__builtin_atan2l", "LdLdLd", N),
+        row(150, "__builtin_atanf", "ff", N),
+        row(167, "__builtin_atanh", "dd", N),
+        row(165, "__builtin_atanhf", "ff", N),
+        row(169, "__builtin_atanhl", "LdLd", N),
+        row(154, "__builtin_atanl", "LdLd", N),
+        row(293, "__builtin_cbrt", "dd", N | C),
+        row(291, "__builtin_cbrtf", "ff", N | C),
+        row(295, "__builtin_cbrtl", "LdLd", N | C),
+        row(378, "__builtin_cos", "dd", N),
+        row(376, "__builtin_cosf", "ff", N),
+        row(386, "__builtin_cosh", "dd", N),
+        row(384, "__builtin_coshf", "ff", N),
+        row(388, "__builtin_coshl", "LdLd", N),
+        row(380, "__builtin_cosl", "LdLd", N),
+        row(489, "__builtin_erf", "dd", N),
+        row(496, "__builtin_erfc", "dd", N),
+        row(494, "__builtin_erfcf", "ff", N),
+        row(498, "__builtin_erfcl", "LdLd", N),
+        row(487, "__builtin_erff", "ff", N),
+        row(491, "__builtin_erfl", "LdLd", N),
+        row(559, "__builtin_fdim", "ddd", N),
+        row(557, "__builtin_fdimf", "fff", N),
+        row(561, "__builtin_fdiml", "LdLdLd", N),
+        row(601, "__builtin_fmod", "ddd", N),
+        row(599, "__builtin_fmodf", "fff", N),
+        row(603, "__builtin_fmodl", "LdLdLd", N),
+        row(658, "__builtin_hypot", "ddd", N),
+        row(656, "__builtin_hypotf", "fff", N),
+        row(660, "__builtin_hypotl", "LdLdLd", N),
+        row(666, "__builtin_ilogb", "id", N),
+        row(664, "__builtin_ilogbf", "if", N),
+        row(668, "__builtin_ilogbl", "iLd", N),
+        row(767, "__builtin_lgamma", "dd", N),
+        row(765, "__builtin_lgammaf", "ff", N),
+        row(769, "__builtin_lgammal", "LdLd", N),
+        row(774, "__builtin_llrint", "LLid", N),
+        row(772, "__builtin_llrintf", "LLif", N),
+        row(776, "__builtin_llrintl", "LLiLd", N),
+        row(780, "__builtin_llround", "LLid", N),
+        row(778, "__builtin_llroundf", "LLif", N),
+        row(782, "__builtin_llroundl", "LLiLd", N),
+        row(788, "__builtin_log", "dd", N),
+        row(809, "__builtin_log10", "dd", N),
+        row(807, "__builtin_log10f", "ff", N),
+        row(811, "__builtin_log10l", "LdLd", N),
+        row(794, "__builtin_log1p", "dd", N),
+        row(792, "__builtin_log1pf", "ff", N),
+        row(796, "__builtin_log1pl", "LdLd", N),
+        row(801, "__builtin_log2", "dd", N),
+        row(799, "__builtin_log2f", "ff", N),
+        row(803, "__builtin_log2l", "LdLd", N),
+        row(819, "__builtin_logb", "dd", N),
+        row(817, "__builtin_logbf", "ff", N),
+        row(821, "__builtin_logbl", "LdLd", N),
+        row(786, "__builtin_logf", "ff", N),
+        row(790, "__builtin_logl", "LdLd", N),
+        row(827, "__builtin_lrint", "Lid", N),
+        row(825, "__builtin_lrintf", "Lif", N),
+        row(829, "__builtin_lrintl", "LiLd", N),
+        row(836, "__builtin_lround", "Lid", N),
+        row(834, "__builtin_lroundf", "Lif", N),
+        row(838, "__builtin_lroundl", "LiLd", N),
+        row(880, "__builtin_modf", "ddd*", N),
+        row(878, "__builtin_modff", "fff*", N),
+        row(882, "__builtin_modfl", "LdLdLd*", N),
+        row(912, "__builtin_nextafter", "ddd", N),
+        row(910, "__builtin_nextafterf", "fff", N),
+        row(914, "__builtin_nextafterl", "LdLdLd", N),
+        row(919, "__builtin_nexttoward", "ddLd", N),
+        row(917, "__builtin_nexttowardf", "ffLd", N),
+        row(921, "__builtin_nexttowardl", "LdLdLd", N),
+        row(1000, "__builtin_remainder", "ddd", N),
+        row(998, "__builtin_remainderf", "fff", N),
+        row(1002, "__builtin_remainderl", "LdLdLd", N),
+        row(1007, "__builtin_remquo", "dddi*", N),
+        row(1005, "__builtin_remquof", "fffi*", N),
+        row(1009, "__builtin_remquol", "LdLdLdi*", N),
+        row(1094, "__builtin_sin", "dd", N),
+        row(1092, "__builtin_sinf", "ff", N),
+        row(1102, "__builtin_sinh", "dd", N),
+        row(1100, "__builtin_sinhf", "ff", N),
+        row(1104, "__builtin_sinhl", "LdLd", N),
+        row(1096, "__builtin_sinl", "LdLd", N),
+        row(1117, "__builtin_sqrt", "dd", N),
+        row(1115, "__builtin_sqrtf", "ff", N),
+        row(1119, "__builtin_sqrtl", "LdLd", N),
+        row(1302, "__builtin_tan", "dd", N),
+        row(1300, "__builtin_tanf", "ff", N),
+        row(1310, "__builtin_tanh", "dd", N),
+        row(1308, "__builtin_tanhf", "ff", N),
+        row(1312, "__builtin_tanhl", "LdLd", N),
+        row(1304, "__builtin_tanl", "LdLd", N),
+        row(1320, "__builtin_tgamma", "dd", N),
+        row(1318, "__builtin_tgammaf", "ff", N),
+        row(1322, "__builtin_tgammal", "LdLd", N),
     ];
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
-        ALL.iter().find(|e| e.name == name).map(|e| e.id)
+        ALL.iter().chain(LIBM).find(|e| e.name == name).map(|e| e.id)
     }
 
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
-        ALL.iter().find(|e| e.id == id)
+        ALL.iter().chain(LIBM).find(|e| e.id == id)
+    }
+
+    /// Whether builtin `id` is a [`LIBM`] function.
+    pub fn is_libm(id: u32) -> bool {
+        LIBM.iter().any(|e| e.id == id)
     }
 
     /// Whether builtin `id` has custom type-checking.
