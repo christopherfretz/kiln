@@ -805,6 +805,8 @@ impl Sema<'_, '_> {
         self.inst.member_defs.remove(&first);
         self.inst.deferred_inits.remove(&first);
         true
+    }
+
     /// After `template<>`, an out-of-line redeclaration `p` of a static
     /// data member, constructor or destructor of an implicit class
     /// template specialization explicitly specializes it
