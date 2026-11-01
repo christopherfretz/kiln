@@ -379,6 +379,26 @@ impl Ast {
         self.lookup_local(record, name).iter().next()
     }
 
+    /// Whether the function `d` does not return (clang
+    /// `FunctionDecl::isNoReturn` minus the C11/Microsoft spellings): some
+    /// declaration of it carries `[[noreturn]]` /
+    /// `__attribute__((noreturn))` ([dcl.attr.noreturn]/1: the attribute
+    /// appertains to the function), or its type is `noreturn`.
+    pub fn is_noreturn_fn(&self, d: DeclId) -> bool {
+        let attr = |r: DeclId| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .any(|a| self.attrs.get(a).kind == crate::attr::AttrKind::NORETURN)
+        };
+        self.redecls_of(d).any(attr)
+            || self
+                .decls
+                .get(d)
+                .ty()
+                .and_then(|t| self.types.proto(t))
+                .is_some_and(|p| p.info().noreturn())
+    }
+
     /// clang `VarDecl::needsDestruction`: the (array element) type is a class
     /// with a non-trivial destructor ([basic.life]/1). Sema declares the
     /// destructor of every variable's class (spec/sema-class.md §4.8), so a

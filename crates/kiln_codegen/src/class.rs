@@ -1380,7 +1380,13 @@ impl Cg<'_> {
             self.emit_ignored(base)?;
             let f = self.get_fn(md)?;
             let sig = self.call_sig(fty, false, &arg_tys);
-            return self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &[]);
+            let (extra, nr) = self.noreturn_extra(Some(md), fty);
+            let r =
+                self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &extra)?;
+            if nr {
+                self.finish_noreturn_call();
+            }
+            return Ok(r);
         }
         // clang `EmitCXXMemberOrOperatorMemberCallExpr`: devirtualization.
         let is_virtual = ast.decls.function(md).is_some_and(|f| f.spec.is_virtual());
@@ -1433,10 +1439,35 @@ impl Cg<'_> {
             // loads the slot.
             let vals = self.emit_call_args(&sig, args)?;
             let fp = self.virtual_fn_ptr(md, None, this.v, this.align)?;
-            return self.call_vals(&sig, fp, None, Some(this.v), &vals, args, dest, &[]);
+            let (extra, nr) = self.noreturn_extra(Some(md), cfty);
+            let r = self.call_vals(&sig, fp, None, Some(this.v), &vals, args, dest, &extra)?;
+            if nr {
+                self.finish_noreturn_call();
+            }
+            return Ok(r);
         }
         let f = self.get_fn(callee_md)?;
-        self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), args, dest, &[])
+        let (extra, nr) = self.noreturn_extra(Some(callee_md), cfty);
+        let r =
+            self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), args, dest, &extra)?;
+        if nr {
+            self.finish_noreturn_call();
+        }
+        Ok(r)
+    }
+
+    /// The call-site attributes of a call of `d` (`noreturn` per
+    /// `noreturn_call`) and whether `unreachable` follows it.
+    fn noreturn_extra(&self, d: Option<DeclId>, fty: QualType) -> (Vec<kiln_llvm::Attr>, bool) {
+        let (site, unreachable) = self.noreturn_call(d, fty);
+        (
+            if site {
+                vec![kiln_llvm::Attr::Flag(kiln_llvm::AttrKind::NoReturn)]
+            } else {
+                Vec::new()
+            },
+            unreachable,
+        )
     }
 
     // ---- expressions ---------------------------------------------------

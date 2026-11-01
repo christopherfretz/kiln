@@ -267,6 +267,19 @@ array cookies).
   condition and an empty body clears `mustprogress` on the function and
   gets no loop metadata.
 - Case ranges (GNU) are an error.
+- A goto (forward, backward, out of nested scopes, loops and try blocks)
+  branches through the cleanups of every scope it leaves (`cleanup.rs`
+  branch fixups). A local default-initialized by a trivial constructor
+  still pushes its destructor cleanup whenever there is an insertion
+  point (clang `EmitAutoVarCleanups`). Sema rejects jumps into a
+  protected scope, so codegen never sees one (WP-153).
+- `noreturn` (WP-153): a function some declaration of which carries
+  `[[noreturn]]` / `__attribute__((noreturn))`, or whose type is
+  `noreturn`, gets the `noreturn` function attribute on its declaration
+  and definition. Its calls get the `noreturn` call-site attribute —
+  except a `[[noreturn]]` (C++11 spelling) virtual function's, whose
+  overriders may return — and are followed by `unreachable` and a dummy
+  block (`noreturn_call`, `finish_noreturn_call`).
 
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
@@ -734,8 +747,6 @@ off and sema rejects `try`/`throw`).
   differs only when D1 can throw (a `noexcept(false)` destructor, which
   sema rejects until WP-112 lands member exception specifications).
 - A conditional `new` with a class-type placement argument.
-- Calls of user `[[noreturn]]` functions are not followed by
-  `unreachable`.
 - Static locals with dynamic initialization (`__cxa_guard_*`, its EH
   abort) are M3.
 - The LLVM name of an anonymous union member type is

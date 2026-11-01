@@ -838,11 +838,7 @@ impl Sema<'_, '_> {
 
     /// Whether function `f` is declared `[[noreturn]]`.
     fn decl_is_noreturn(&self, f: DeclId) -> bool {
-        let attrs = self.ast.attrs.of_decl(f);
-        self.ast
-            .lists
-            .iter::<kiln_ast::AttrId>(attrs)
-            .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::NORETURN)
+        self.ast.is_noreturn_fn(f)
     }
 
     /// Whether control can reach the end of `s` (a structural
@@ -950,7 +946,10 @@ impl Sema<'_, '_> {
 
     fn is_noreturn_call(&self, e: ExprId) -> bool {
         let n = self.ast.exprs.get(e);
-        if !matches!(n.kind(), ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr) {
+        if !matches!(
+            n.kind(),
+            ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr | ExprKind::CXXMemberCallExpr
+        ) {
             return false;
         }
         let mut c = self.ast.exprs.callee(e);
@@ -966,12 +965,15 @@ impl Sema<'_, '_> {
                         return builtin::info(b)
                             .is_some_and(|i| i.attrs & builtin::attr::NORETURN != 0);
                     }
-                    let attrs = self.ast.attrs.of_decl(d);
-                    return self
-                        .ast
-                        .lists
-                        .iter::<kiln_ast::AttrId>(attrs)
-                        .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::NORETURN);
+                    return self.ast.decls.get(d).kind().is_function()
+                        && self.ast.is_noreturn_fn(d);
+                }
+                // `s.m()`: clang's CFG uses the direct callee, virtual or
+                // not.
+                ExprKind::MemberExpr => {
+                    let d = self.ast.exprs.decl(c);
+                    return self.ast.decls.get(d).kind().is_function()
+                        && self.ast.is_noreturn_fn(d);
                 }
                 _ => return false,
             }

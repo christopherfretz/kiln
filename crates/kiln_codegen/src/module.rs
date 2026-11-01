@@ -1001,6 +1001,9 @@ impl<'a> Cg<'a> {
         if sig.nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
+        if ast.is_noreturn_fn(first) {
+            fa.push(Attr::Flag(AttrKind::NoReturn));
+        }
         self.target_attrs(&mut fa);
         let fa = self.m.attr_set(&fa);
         let (fa, ret) = self.alloc_fn_attrs(first, fa, ret);
@@ -1051,6 +1054,7 @@ impl<'a> Cg<'a> {
         nounwind: bool,
         mustprogress: bool,
         vector_width: u64,
+        noreturn: bool,
     ) -> AttrSetId {
         let mut a = Vec::new();
         if mustprogress {
@@ -1059,6 +1063,9 @@ impl<'a> Cg<'a> {
         a.push(Attr::Flag(AttrKind::NoInline));
         if is_main {
             a.push(Attr::Flag(AttrKind::NoRecurse));
+        }
+        if noreturn {
+            a.push(Attr::Flag(AttrKind::NoReturn));
         }
         if nounwind {
             a.push(Attr::Flag(AttrKind::NoUnwind));
