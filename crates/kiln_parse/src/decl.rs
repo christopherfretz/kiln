@@ -1685,6 +1685,7 @@ impl Parser<'_, '_> {
                     pd.ellipsis.is_some(),
                     constraint,
                     pname,
+                    d.qualifier,
                 );
                 ds.base = TypeSpecKind::Named;
                 ds.named = Some(ty);

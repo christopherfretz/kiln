@@ -317,6 +317,14 @@ impl Sema<'_, '_> {
         if let Some(i) = self.scopes.iter().rposition(|s| s.kind == ScopeKind::TemplateParams) {
             self.scopes.truncate(i);
         }
+        // The invented head of an out-of-line member's abbreviated
+        // function template sits above the class template's head
+        // ([`Sema::act_on_invented_template_param`]); it ends first.
+        while self.templ.heads.last().is_some_and(|h| h.invented) {
+            self.templ.heads.pop();
+            self.ast.templates.dependent_depth =
+                self.ast.templates.dependent_depth.saturating_sub(1);
+        }
         self.templ.heads.pop();
         self.ast.templates.dependent_depth = self.ast.templates.dependent_depth.saturating_sub(1);
     }
@@ -994,18 +1002,34 @@ impl Sema<'_, '_> {
     /// contains `auto` ([dcl.fct]/22): added to the innermost open head,
     /// or to a new invented head one level deeper when the function has
     /// none. Returns its type; `constraint` is the type-constraint `C` of
-    /// `C auto` with its extra arguments.
+    /// `C auto` with its extra arguments. `qualifier` is the function
+    /// declarator's: the heads its class templates account for
+    /// (`template<class T> void A<T>::f(C auto)`, [temp.mem]/1) are not
+    /// the function's own, which is then invented ([dcl.fct]/22).
     pub fn act_on_invented_template_param(
         &mut self,
         loc: Loc,
         pack: bool,
         constraint: Option<(DeclId, Vec<TemplateArg>, Loc)>,
         param_name: Option<Symbol>,
+        qualifier: Option<DeclId>,
     ) -> QualType {
         // An explicit head is open once its list is built; an invented one
         // collects every `auto` parameter of the declarator.
-        let needs_new =
-            self.templ.heads.last().is_none_or(|h| h.taken || (!h.invented && h.list.is_none()));
+        let scope_heads = || {
+            let open = self
+                .templ
+                .heads
+                .iter()
+                .rev()
+                .take_while(|h| !h.taken)
+                .filter(|h| !h.invented)
+                .count();
+            open <= self.match_template_lists_to_scope(qualifier)
+        };
+        let needs_new = self.templ.heads.last().is_none_or(|h| {
+            h.taken || (!h.invented && (h.list.is_none() || qualifier.is_some() && scope_heads()))
+        });
         if needs_new {
             let depth = self.template_depth();
             self.templ.heads.push(HeadBuild {
