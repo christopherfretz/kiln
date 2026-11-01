@@ -287,8 +287,14 @@ impl Cg<'_> {
         let call = if goto {
             let normal = self.f.fir.create_block();
             let indirect = if split.is_empty() { transfer.clone() } else { split.clone() };
-            let opts = Box::new(call_opts);
-            let op = Op::CallBr { fn_ty, callee: V::C(callee), args, opts, normal, indirect };
+            let op = Op::CallBr {
+                fn_ty,
+                callee: V::C(callee),
+                args,
+                opts: Box::new(call_opts),
+                normal,
+                indirect,
+            };
             let call = self.f.fir.push(op, ret);
             self.f.calls.push((Fir::last_inst(call), None, true));
             self.emit_block(normal, false);

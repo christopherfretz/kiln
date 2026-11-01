@@ -4,7 +4,7 @@
 use kiln_ast::expr::ExprKind;
 use kiln_ast::stmt::{AsmOperand, asm_bits};
 use kiln_ast::strings::StringEncoding;
-use kiln_ast::{StmtId, StringLitId};
+use kiln_ast::{DeclId, StmtId, StringLitId};
 use kiln_diag::DiagId;
 use kiln_lex::Punct;
 use kiln_source::{Loc, Span};
@@ -126,10 +126,7 @@ impl Parser<'_, '_> {
             }
             let goto = bits & asm_bits::GOTO != 0;
             if !goto && (!self.at(Punct::RParen) || extra) {
-                let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("')'");
-                self.emit(d);
-                self.skip_asm_rest();
-                return None;
+                return self.asm_expected("')'");
             }
             // `asm goto` labels (clang `ParseAsmStatement`: each is looked
             // up or created as a label of the function).
@@ -137,24 +134,9 @@ impl Parser<'_, '_> {
                 if !extra {
                     self.bump();
                 }
-                loop {
-                    let Some(name) = self.ident() else {
-                        let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
-                        self.emit(d);
-                        self.skip_asm_rest();
-                        return None;
-                    };
-                    let at = self.bump().span.lo;
-                    labels.push((self.s.act_on_asm_goto_label(name, at), at));
-                    if self.eat(Punct::Comma).is_none() {
-                        break;
-                    }
-                }
+                labels = self.parse_asm_goto_labels()?;
             } else if goto {
-                let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("':'");
-                self.emit(d);
-                self.skip_asm_rest();
-                return None;
+                return self.asm_expected("':'");
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, lparen);
@@ -169,6 +151,34 @@ impl Parser<'_, '_> {
             self.eat(Punct::Semi);
         }
         s
+    }
+
+    /// The `asm goto` label list after its `:`: identifiers, each looked
+    /// up or created as a label of the function (clang
+    /// `ParseAsmStatement`).
+    fn parse_asm_goto_labels(&mut self) -> Option<Vec<(DeclId, Loc)>> {
+        let mut labels = Vec::new();
+        loop {
+            let Some(name) = self.ident() else {
+                let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+                self.emit(d);
+                self.skip_asm_rest();
+                return None;
+            };
+            let at = self.bump().span.lo;
+            labels.push((self.s.act_on_asm_goto_label(name, at), at));
+            if self.eat(Punct::Comma).is_none() {
+                return Some(labels);
+            }
+        }
+    }
+
+    /// Reports "expected {what}" and skips the rest of the statement.
+    fn asm_expected<T>(&mut self, what: &str) -> Option<T> {
+        let d = self.s.diag(DiagId::parse_expected, self.loc()).arg(what);
+        self.emit(d);
+        self.skip_asm_rest();
+        None
     }
 
     /// Skips to (and over) the closing `)` and a following `;`.
