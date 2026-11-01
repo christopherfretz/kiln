@@ -57,4 +57,4 @@ Branch `wp/158-consteval-class-followups`, worktree `kiln/.worktrees/wp-158`.
   value-initialization still queues the complete-object variant (same
   IR, emission order may differ).
 - Conversion function template specializations other than a lambda's
-  keep the pattern's name (`operator type-parameter-0-0`).
+  probably keep the pattern's name (unverified; clang substitutes it).
