@@ -630,6 +630,8 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     None
                 } else {
+                    // clang `MarkFunctionReferenced` on the selected guide.
+                    self.mark_used(f);
                     let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
                     let ret = self.ast.types.proto_of(ty.ty()).or_else(|| self.ast.types.proto(ty));
                     let ret = ret.map_or(QualType::ERROR, FuncProto::ret);

@@ -107,6 +107,7 @@ const FN_KINDS: &[&str] = &[
     "CXXConstructorDecl",
     "CXXDestructorDecl",
     "CXXConversionDecl",
+    "CXXDeductionGuideDecl",
 ];
 
 /// The template declaration kinds (spec/ast-dump.md §5).
@@ -815,7 +816,7 @@ impl<'a> Printer<'a, '_> {
                 kids_out = self.kid_trees(n)?;
             }
             "FunctionDecl" | "CXXMethodDecl" | "CXXConstructorDecl" | "CXXDestructorDecl"
-            | "CXXConversionDecl" => {
+            | "CXXConversionDecl" | "CXXDeductionGuideDecl" => {
                 let (l, pre) = self.function(n, k)?;
                 line = l;
                 kids_out = pre;
@@ -1611,7 +1612,8 @@ impl<'a> Printer<'a, '_> {
     /// `noexcept-unevaluated`) and the `Overrides:` child, which only
     /// members, friends and defaulted functions can carry.
     fn needs_side(&self, n: &Json, class: &str) -> bool {
-        class != "FunctionDecl"
+        // A deduction guide is never a member, friend or defaulted.
+        !matches!(class, "FunctionDecl" | "CXXDeductionGuideDecl")
             || self.ix.befriended.contains(id(n))
             || n.get("explicitlyDefaulted").is_some()
     }

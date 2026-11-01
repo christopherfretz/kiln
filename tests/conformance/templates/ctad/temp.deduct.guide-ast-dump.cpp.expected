@@ -1,0 +1,75 @@
+TranslationUnitDecl
+|-ClassTemplateDecl S
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct S definition
+| | `-CXXConstructorDecl S<T> 'void (T)'
+| |   `-ParmVarDecl 'T'
+| |-ClassTemplateSpecializationDecl struct S definition implicit_instantiation
+| | |-TemplateArgument type 'long'
+| | `-CXXConstructorDecl used S 'void (long)'
+| |   `-ParmVarDecl 'long'
+| |-ClassTemplateSpecializationDecl struct S
+| | `-TemplateArgument type 'short'
+| `-ClassTemplateSpecializationDecl struct S
+|   `-TemplateArgument type 'int'
+|-FunctionTemplateDecl <deduction guide for S>
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-CXXDeductionGuideDecl <deduction guide for S> 'auto (T *) -> S<T>'
+|   `-ParmVarDecl 'T *'
+|-CXXDeductionGuideDecl used <deduction guide for S> 'auto (int) -> S<long>'
+| `-ParmVarDecl x 'int'
+|-CXXDeductionGuideDecl <deduction guide for S> 'auto (char) -> S<short>'
+| `-ParmVarDecl 'char'
+|-VarDecl s 'S<long>' callinit
+| `-CXXConstructExpr 'S<long>' 'void (long)'
+|   `-ImplicitCastExpr 'long' <IntegralCast>
+|     `-IntegerLiteral 'int' 1
+|-NamespaceDecl N
+| |-ClassTemplateDecl P
+| | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| | |-TemplateTypeParmDecl referenced class depth 0 index 1 U
+| | |-CXXRecordDecl struct P definition
+| | | `-CXXConstructorDecl P<T, U> 'void (T, U)'
+| | |   |-ParmVarDecl 'T'
+| | |   `-ParmVarDecl 'U'
+| | |-ClassTemplateSpecializationDecl struct P definition implicit_instantiation
+| | | |-TemplateArgument type 'float'
+| | | |-TemplateArgument type 'float'
+| | | `-CXXConstructorDecl used P 'void (float, float)'
+| | |   |-ParmVarDecl 'float'
+| | |   `-ParmVarDecl 'float'
+| | `-ClassTemplateSpecializationDecl struct P
+| |   |-TemplateArgument type 'double'
+| |   `-TemplateArgument type 'double'
+| |-FunctionTemplateDecl <deduction guide for P>
+| | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| | `-CXXDeductionGuideDecl <deduction guide for P> 'auto (T *, T) -> P<T, int>'
+| |   |-ParmVarDecl 'T *'
+| |   `-ParmVarDecl 'T'
+| `-CXXDeductionGuideDecl used <deduction guide for P> 'auto (double, double) -> P<float, float>'
+|   |-ParmVarDecl 'double'
+|   `-ParmVarDecl 'double'
+|-VarDecl p 'N::P<float, float>' callinit
+| `-CXXConstructExpr 'N::P<float, float>' 'void (float, float)'
+|   |-ImplicitCastExpr 'float' <FloatingCast>
+|   | `-FloatingLiteral 'double' 1e0
+|   `-ImplicitCastExpr 'float' <FloatingCast>
+|     `-FloatingLiteral 'double' 2e0
+|-CXXRecordDecl struct O definition
+| |-ClassTemplateDecl I
+| | |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| | |-CXXRecordDecl struct I definition
+| | | `-CXXConstructorDecl I<T> 'void (T)'
+| | |   `-ParmVarDecl 'T'
+| | |-ClassTemplateSpecializationDecl struct I definition implicit_instantiation
+| | | |-TemplateArgument type 'int'
+| | | `-CXXConstructorDecl used I 'void (int)'
+| | |   `-ParmVarDecl 'int'
+| | `-ClassTemplateSpecializationDecl struct I
+| |   `-TemplateArgument type 'bool'
+| `-CXXDeductionGuideDecl used <deduction guide for I> 'auto (bool) -> I<int>'
+|   `-ParmVarDecl 'bool'
+`-VarDecl i 'O::I<int>' callinit
+  `-CXXConstructExpr 'O::I<int>' 'void (int)'
+    `-ImplicitCastExpr 'int' <IntegralCast>
+      `-CXXBoolLiteralExpr 'bool' true

@@ -870,7 +870,16 @@ impl Printer<'_> {
             // A placeholder deduced from a type-dependent initializer
             // prints as written (clang's dependent `AutoType`).
             TypeView::Auto { deduced: Some(d), .. } if d != QualType::DEPENDENT => self.before(d),
-            TypeView::DeducedTemplateSpecialization { deduced: Some(d), .. } => self.before(d),
+            // A qualified placeholder (`N::S x(1)`) keeps its qualifier,
+            // as clang's `ElaboratedType` around the deduced type does.
+            TypeView::DeducedTemplateSpecialization { name, deduced: Some(d) } => {
+                if let TemplateName::Qualified { nns, .. } = self.ctx.template_name_view(name) {
+                    self.nns(nns);
+                    self.with_scope(false, |p| p.before(d));
+                } else {
+                    self.before(d);
+                }
+            }
             TypeView::Auto { keyword, concept, args, .. } => {
                 if let Some(c) = concept {
                     self.decl(c, false);
@@ -962,7 +971,13 @@ impl Printer<'_> {
                 self.push("...");
             }
             TypeView::Auto { deduced: Some(d), .. } if d != QualType::DEPENDENT => self.after(d),
-            TypeView::DeducedTemplateSpecialization { deduced: Some(d), .. } => self.after(d),
+            TypeView::DeducedTemplateSpecialization { name, deduced: Some(d) } => {
+                if let TemplateName::Qualified { .. } = self.ctx.template_name_view(name) {
+                    self.with_scope(false, |p| p.after(d));
+                } else {
+                    self.after(d);
+                }
+            }
             TypeView::Attributed { kind, modified, equivalent } => {
                 let saved = self.inside_cc_attr;
                 self.inside_cc_attr = kind == TypeAttrKind::CallingConv;

@@ -173,7 +173,9 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ClassTemplatePartialSpecializationDecl", Keep),
     ("VarTemplateSpecializationDecl", Keep),
     ("VarTemplatePartialSpecializationDecl", Keep),
-    ("CXXDeductionGuideDecl", Unsupported(INSTANTIATION)),
+    // User-declared guides (WP-134); implicit ones are dropped as implicit
+    // decls are.
+    ("CXXDeductionGuideDecl", Keep),
     // Structured bindings (WP-122, spec/ast-dump.md §3).
     ("DecompositionDecl", Keep),
     ("BindingDecl", Keep),
@@ -312,6 +314,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
             "deletedMessage",
             "variadic",
         ],
+        // clang's JSON has no `explicit`, and its text dump prints none.
+        "CXXDeductionGuideDecl" => &["type"],
         "CXXCtorInitializer" => &["anyInit", "baseInit", "delegatingInit"],
         // `init` (always `c`, printed `cinit`): the default argument is the
         // child.
@@ -524,6 +528,7 @@ pub const TEMPLATE_KINDS: &[&str] = &[
     "VarTemplatePartialSpecializationDecl",
     "SubstNonTypeTemplateParmExpr",
     "FunctionTemplateDecl",
+    "CXXDeductionGuideDecl",
     "VarTemplateDecl",
     "TypeAliasTemplateDecl",
     "ConceptDecl",
