@@ -319,6 +319,14 @@ impl Sema<'_, '_> {
             if let Initializer::Expr(e) = init {
                 self.act_on_full_expr(e);
             }
+        } else if let Initializer::List(l) = &init
+            && (self.ast.types.is_dependent(fty) || self.init_list_type_dependent(l))
+        {
+            // Initialized when the class is instantiated ([temp.dep.expr]),
+            // the list kept as written (as for a variable).
+            let e = self.dependent_init_list(l);
+            let e = self.act_on_full_expr(e);
+            let _ = self.ast.decls.set_field_init(field, e);
         } else {
             let e = self.perform_init(fty, init, loc, direct);
             self.note_default_init_full_expr();

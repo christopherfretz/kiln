@@ -511,6 +511,16 @@ impl Substituter<'_, '_, '_> {
                 })
             }
             ExprKind::CXXNewExpr => self.new_expr(e, loc, end),
+            ExprKind::CXXDeleteExpr => {
+                // [expr.delete], rebuilt from the operand as written (clang
+                // `TransformCXXDeleteExpr`).
+                let o = ex(self).delete_operand(e);
+                let o = self.expr(o)?;
+                let global = n.has(ExprFlags::GLOBAL);
+                let array = n.has(ExprFlags::ARRAY_AS_WRITTEN);
+                let cxx26 = self.sema.delete_cxx26;
+                Ok(self.sema.act_on_cxx_delete(global, array, loc, o, cxx26))
+            }
             ExprKind::RecoveryExpr => self.recovery_expr(e, loc),
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }

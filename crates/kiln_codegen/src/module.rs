@@ -422,6 +422,26 @@ impl<'a> Cg<'a> {
         })
     }
 
+    /// The definition of static data member `first` of an implicitly
+    /// instantiated class template specialization, which no walk of the
+    /// translation unit reaches ([temp.inst]/5: instantiated when used).
+    fn instantiated_var_def(&self, first: DeclId) -> Option<DeclId> {
+        let ast = self.ast;
+        if !matches!(ast.templ_link(first).get(), Some((TemplLinkKind::MemberOfSpecialization, _)))
+            || self.is_explicit_inst_declaration(first)
+        {
+            return None;
+        }
+        ast.redecls_of(first).find(|&r| {
+            let n = ast.decls.get(r);
+            !n.has(DeclFlags::INVALID)
+                && !n.has(DeclFlags::DEPENDENT_CTX)
+                && ast.decls.var(r).is_some_and(|v| {
+                    v.init.is_some() && !matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                })
+        })
+    }
+
     pub fn fn_is_inline(&self, d: DeclId) -> bool {
         let ast = self.ast;
         self.is_implicit_instantiation(d)
@@ -1057,6 +1077,8 @@ impl<'a> Cg<'a> {
             // Emit it now if it is a discardable definition (its position
             // is the point of first use, as clang's GetOrCreateLLVMGlobal
             // followed by the deferred definition reusing it).
+            self.to_emit.push(Def::Decl(def));
+        } else if let Some(def) = self.instantiated_var_def(first) {
             self.to_emit.push(Def::Decl(def));
         }
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };

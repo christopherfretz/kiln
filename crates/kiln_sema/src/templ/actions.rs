@@ -238,8 +238,10 @@ impl Sema<'_, '_> {
     }
 
     /// The pattern definition named by `X<args>` when `args` are `X`'s own
-    /// parameters in order and `X`'s definition (or one of its members) is
-    /// being processed ([temp.dep.type]/1.2).
+    /// parameters in order, or the arguments of one of `X`'s partial
+    /// specializations ([temp.spec.partial.member]: its out-of-line
+    /// members), and that definition (or one of its members) is being
+    /// processed ([temp.dep.type]/1.2).
     pub(crate) fn current_instantiation(&self, tmpl: DeclId, ty: QualType) -> Option<DeclId> {
         if self.kind_of(tmpl) != DeclKind::ClassTemplate {
             return None;
@@ -250,16 +252,16 @@ impl Sema<'_, '_> {
         let info = self.ast.template_info(tmpl).copied()?;
         let list = *self.ast.templates.param_list(info.params);
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
-        let args = self.ast.types.args(args).to_vec();
-        if params.len() != args.len() {
-            return None;
-        }
-        for (&p, &a) in params.iter().zip(&args) {
-            if !self.arg_names_param(p, a) {
-                return None;
-            }
-        }
-        let pat = self.pattern_of(tmpl)?;
+        let written = self.ast.types.args(args).to_vec();
+        let own = params.len() == written.len()
+            && params.iter().zip(&written).all(|(&p, &a)| self.arg_names_param(p, a));
+        let pat = if own {
+            self.pattern_of(tmpl)?
+        } else {
+            let canonical = self.ast.types.canonical_args(args);
+            let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
+            self.ast.templates.partial(i)?.partial
+        };
         if !self.templ.entering_context && !self.encloses(pat, self.ctx) {
             // `X<P...>` outside `X` (an alias template's or another
             // template's own parameters at the same positions) is an

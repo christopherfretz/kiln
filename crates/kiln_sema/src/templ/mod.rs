@@ -638,8 +638,8 @@ impl Sema<'_, '_> {
     }
 
     /// How many template parameter lists the qualifier of an out-of-line
-    /// declaration accounts for: one per class template (pattern) on its
-    /// context chain that is not already open (clang's
+    /// declaration accounts for: one per class template (pattern) or
+    /// class template partial specialization on its context chain that is not already open (clang's
     /// `MatchTemplateParametersToScopeSpecifier`, [temp.mem]/1). Explicit
     /// specializations (`template<>`) are not matched yet (WP-070a).
     pub fn match_template_lists_to_scope(&self, qualifier: Option<DeclId>) -> usize {
@@ -647,7 +647,8 @@ impl Sema<'_, '_> {
         let mut n = 0;
         for _ in 0..1024 {
             if self.kind_of(c) == DeclKind::CXXRecord
-                && self.ast.described_template(self.ast.first(c)).is_some()
+                && (self.ast.described_template(self.ast.first(c)).is_some()
+                    || self.ast.partial_spec_info(self.ast.first(c)).is_some())
                 && !self.defining.iter().any(|&d| self.ast.first(d) == self.ast.first(c))
             {
                 n += 1;

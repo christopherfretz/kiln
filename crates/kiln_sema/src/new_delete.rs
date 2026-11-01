@@ -1231,6 +1231,20 @@ impl Sema<'_, '_> {
                 loc,
             );
         }
+        self.delete_cxx26 = cxx26;
+        if self.ast.exprs.get(operand).is_type_dependent() {
+            // [temp.dep.expr]: checked when instantiated (clang
+            // `ActOnCXXDelete` skips a type-dependent operand).
+            return self.builder().cxx_delete(
+                operand,
+                None,
+                flags,
+                false,
+                false,
+                QualType::VOID,
+                loc,
+            );
+        }
         let ety = self.ast.exprs.get(operand).ty();
         let t = &self.ast.types;
         if t.as_record(ety).is_some() && conv::has_conversion_functions(self, ety) {
