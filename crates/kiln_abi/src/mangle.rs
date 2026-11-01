@@ -509,6 +509,16 @@ pub fn mangle_structor(ast: &Ast, anon: &mut AnonIds, d: DeclId, v: Structor) ->
     m.out
 }
 
+/// The name of the comdat shared by the variants of structor `d`
+/// (Itanium 5.1.4.4 `C5`/`D5`, clang `mangleCXXCtorComdat` /
+/// `mangleCXXDtorComdat`): the base-object mangling with `5` for `2`.
+pub fn mangle_structor_comdat(ast: &Ast, anon: &mut AnonIds, d: DeclId) -> String {
+    let mut m = Mangler::new(ast, anon, "_Z");
+    m.comdat = true;
+    m.encoding(d, Structor::Base);
+    m.out
+}
+
 /// The linkage name of template parameter object `d` ([temp.param]/8):
 /// `_ZTA` and its value as a template argument.
 pub fn mangle_param_object(ast: &Ast, anon: &mut AnonIds, d: DeclId) -> String {
@@ -662,11 +672,13 @@ struct Mangler<'a, 'b> {
     anon: &'b mut AnonIds,
     out: String,
     subs: Vec<Sub>,
+    /// A structor comdat name: the base-object variant is `C5`/`D5`.
+    comdat: bool,
 }
 
 impl<'a, 'b> Mangler<'a, 'b> {
     fn new(ast: &'a Ast, anon: &'b mut AnonIds, prefix: &str) -> Self {
-        Mangler { ast, anon, out: String::from(prefix), subs: Vec::new() }
+        Mangler { ast, anon, out: String::from(prefix), subs: Vec::new(), comdat: false }
     }
 
     /// The semantic parent of `d`, looking through linkage
@@ -1025,7 +1037,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 // not a <type>: the class itself is neither looked up in nor
                 // added to the substitutions (only its prefixes are).
                 if ast.decls.inheriting_ctor_shadow(d).is_some() {
-                    self.out.push_str(if v == Structor::Base { "CI2" } else { "CI1" });
+                    self.out.push_str(match v {
+                        Structor::Base if self.comdat => "CI5",
+                        Structor::Base => "CI2",
+                        _ => "CI1",
+                    });
                     match ast.types.canonical_view(QualType::unqual(t)) {
                         TypeView::Record(base) => self.name(base, Structor::Complete),
                         _ => self.ty(QualType::unqual(t)),
@@ -1039,11 +1055,16 @@ impl<'a, 'b> Mangler<'a, 'b> {
                         self.template_args(args);
                     }
                 } else {
-                    self.out.push_str(if v == Structor::Base { "C2" } else { "C1" });
+                    self.out.push_str(match v {
+                        Structor::Base if self.comdat => "C5",
+                        Structor::Base => "C2",
+                        _ => "C1",
+                    });
                 }
             }
             DeclNameView::Destructor(_) => self.out.push_str(match v {
                 Structor::Complete => "D1",
+                Structor::Base if self.comdat => "D5",
                 Structor::Base => "D2",
                 Structor::Deleting => "D0",
             }),

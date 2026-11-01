@@ -130,6 +130,24 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        if let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+            && designator.is_empty()
+            && !self.expr_is_type_dependent(*x)
+            && self.is_class_or_derived(*x, ty)
+        {
+            // [dcl.init.list]/3.2 as clang applies DR1467 to every class
+            // (not only aggregates, CWG2137): a single element of the class
+            // or a derived class initializes the object, copy-initialized
+            // for copy-list-initialization (explicit constructors are not
+            // candidates) and direct-initialized for direct-list; no
+            // initializer-list constructor is considered.
+            let ctx = if style == InitStyle::DirectList {
+                ConvCtx::DirectInitialization
+            } else {
+                ConvCtx::Initialization
+            };
+            return Some(self.init_from_expr(ty, *x, ctx, at));
+        }
         if !l.items.is_empty()
             && let Some(e) = self.std_initializer_list_init(ty, l, at)
         {
@@ -682,7 +700,7 @@ impl Sema<'_, '_> {
                     let loc = self.begin_loc(a);
                     self.init_from_expr(ety, a, ConvCtx::Initialization, loc)
                 }
-                None if i < nb => self.paren_value_init(ety, at),
+                None if i < nb => self.as_base_subobject(|s| s.paren_value_init(ety, at)),
                 None => {
                     let f = fields[i - nb];
                     if self.field_has_nsdmi(f) {
@@ -768,23 +786,58 @@ impl Sema<'_, '_> {
                 .is_some_and(|(a, b)| self.ast.first(a) == self.ast.first(b))
     }
 
-    /// A base element initialized from the expression `e`: a prvalue of
-    /// the base class is materialized and moved from (clang does not
-    /// elide into a base subobject, which may overlap other members).
+    /// Whether `e` has the class type `ty` or a class derived from it.
+    fn is_class_or_derived(&self, e: ExprId, ty: QualType) -> bool {
+        self.ast.types.as_record(self.ety(e)).zip(self.ast.types.as_record(ty)).is_some_and(
+            |(a, b)| self.ast.first(a) == self.ast.first(b) || conv::is_derived_from(self, a, b),
+        )
+    }
+
+    /// Runs `f` with the outermost constructor call built for a base
+    /// subobject (clang `EK_Base`): the base-object variant is called
+    /// (Itanium C2; spec/sema-class.md §5.6). `f` must reach a
+    /// constructor of the base itself.
+    fn as_base_subobject<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.ctor_entity = Some((
+            crate::class::InitEntity::Base { inherited_virtual: false },
+            kiln_ast::expr::ConstructionKind::NonVirtualBase,
+        ));
+        let r = f(self);
+        self.ctor_entity = None;
+        r
+    }
+
+    /// Whether a braced or value-initialization of the base `bty` is by a
+    /// constructor of `bty` itself (not an aggregate initialization,
+    /// whose elements are complete objects).
+    fn base_inits_by_ctor(&self, bty: QualType) -> bool {
+        self.ast.types.as_record(bty).is_some() && !self.is_aggregate(bty)
+    }
+
+    /// A value-initialized or braced base element: a constructor call
+    /// builds the base subobject.
+    fn init_base_list(&mut self, bty: QualType, f: impl FnOnce(&mut Self) -> ExprId) -> ExprId {
+        if self.base_inits_by_ctor(bty) { self.as_base_subobject(f) } else { f(self) }
+    }
+
+    /// A base element initialized from the expression `e`. A source of
+    /// the base class or a class derived from it is copied or moved by
+    /// the base-object constructor; a prvalue of the base class is
+    /// materialized first (clang does not elide into a base subobject,
+    /// which may overlap other members). Anything else converts as a
+    /// complete object (a converting constructor's temporary).
     fn init_base_element(&mut self, bty: QualType, e: ExprId) -> ExprId {
         let ety = self.ety(e);
         let loc = self.begin_loc(e);
-        if self.is_prvalue_of_class(e, bty) {
-            let m = self.materialize_temporary(e, ety, false);
-            // The move constructs a base subobject (clang `EK_Base`): the
-            // base-object variant is called.
-            self.ctor_entity = Some((
-                crate::class::InitEntity::Base { inherited_virtual: false },
-                kiln_ast::expr::ConstructionKind::NonVirtualBase,
-            ));
-            let x =
-                self.construct_from_class(m, bty, ConvCtx::Initialization, loc, DeletedAs::Call);
-            self.ctor_entity = None;
+        if self.is_class_or_derived(e, bty) {
+            let m = if self.is_prvalue_of_class(e, bty) {
+                self.materialize_temporary(e, ety, false)
+            } else {
+                e
+            };
+            let x = self.as_base_subobject(|s| {
+                s.construct_from_class(m, bty, ConvCtx::Initialization, loc, DeletedAs::Call)
+            });
             if let Some(x) = x {
                 return x;
             }
@@ -1096,7 +1149,7 @@ impl Sema<'_, '_> {
     /// `E e{v};` for an enumeration `E` with a fixed underlying type `U`
     /// and `v` implicitly convertible to `U` ([dcl.init.list]/3.8): `v`
     /// is converted to `U` (narrowing rejected), then to `E`.
-    fn fixed_enum_list_init(&mut self, ty: QualType, l: &InitList) -> Option<ExprId> {
+    pub(crate) fn fixed_enum_list_init(&mut self, ty: QualType, l: &InitList) -> Option<ExprId> {
         let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
             return None;
         };
@@ -1309,9 +1362,12 @@ impl Sema<'_, '_> {
                 self.ast.decls.get(fields[cur - nb]).ty().unwrap_or(QualType::ERROR)
             };
             let e = match items[*pos].value {
-                InitValue::Expr(x) if cur < nb && self.is_prvalue_of_class(x, ety) => {
+                InitValue::Expr(x) if cur < nb && self.is_class_or_derived(x, ety) => {
                     *pos += 1;
                     self.init_base_element(ety, x)
+                }
+                InitValue::List(_) if cur < nb => {
+                    self.init_base_list(ety, |s| s.init_element(ety, items, pos, lbrace))
                 }
                 _ => self.init_element(ety, items, pos, lbrace),
             };
@@ -1337,7 +1393,10 @@ impl Sema<'_, '_> {
             for (i, slot) in slots.into_iter().enumerate() {
                 let e = match slot {
                     Some(e) => e,
-                    None if i < nb => self.filler(bases[i], rbrace),
+                    None if i < nb => {
+                        let b = bases[i];
+                        self.init_base_list(b, |s| s.filler(b, rbrace))
+                    }
                     None => self.field_filler(fields[i - nb], rbrace),
                 };
                 inits.push(e);

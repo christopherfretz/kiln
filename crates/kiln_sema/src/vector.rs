@@ -17,6 +17,8 @@
 //! `processTypeAttrs`, `HandleVectorSizeAttr`). Operations on vector
 //! values are in `vector_ops.rs` (WP-156); their constant evaluation is M4.
 
+use std::ops::ControlFlow;
+
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::ids::RawId;
 use kiln_ast::types::{TypeView, VectorKind};
@@ -56,6 +58,76 @@ impl Sema<'_, '_> {
             }
         };
         let node = AttrNode { kind, syntax, flags: 0, loc, a: e.raw(), b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// The attributes `act_on_attribute` hands off whole: the vector
+    /// attributes and the GNU allocation attributes (`Break` with the
+    /// result); `Continue` for any other kind.
+    pub(crate) fn attribute_with_args(
+        &mut self,
+        kind: AttrKind,
+        syntax: AttrSyntax,
+        raw: &str,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> ControlFlow<Option<AttrId>> {
+        match kind {
+            AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE => {
+                ControlFlow::Break(self.vector_attribute(kind, syntax, raw, args, loc))
+            }
+            AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN => {
+                ControlFlow::Break(self.alloc_attribute(kind, syntax, args, loc))
+            }
+            _ => ControlFlow::Continue(()),
+        }
+    }
+
+    /// GNU `alloc_size(n[, m])` / `alloc_align(n)` as written: integer
+    /// constants, each kept as an `IntegerLiteral` at its argument (zero
+    /// for a negative value, which is out of bounds) and checked against
+    /// the declaration in `check_decl_attrs` (clang `handleAllocSizeAttr`
+    /// / `AddAllocAlignAttr`).
+    pub(crate) fn alloc_attribute(
+        &mut self,
+        kind: AttrKind,
+        syntax: AttrSyntax,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let size = kind == AttrKind::ALLOC_SIZE;
+        let name = if size { "'alloc_size'" } else { "'alloc_align'" };
+        if size && (args.is_empty() || args.len() > 2) {
+            let msg =
+                self.diag(DiagId::sema_alloc_size_arg_count, loc).arg(u32::from(!args.is_empty()));
+            self.emit(msg);
+            return None;
+        }
+        if !size && args.len() != 1 {
+            let msg =
+                self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg("alloc_align").arg("1");
+            self.emit(msg);
+            return None;
+        }
+        let mut idx = [0u32; 2];
+        for (i, arg) in args.iter().enumerate() {
+            let v = match arg {
+                AttrArg::Expr(e) => self.fold_int(*e).map(|v| (v, self.ast.exprs.get(*e).loc())),
+                AttrArg::Type(_) => None,
+            };
+            let Some((v, at)) = v else {
+                let msg = self
+                    .diag(DiagId::sema_attribute_param_not_ice, loc)
+                    .arg(name)
+                    .arg((i + 1).to_string());
+                self.emit(msg);
+                return None;
+            };
+            let v = u64::try_from(v).unwrap_or(0);
+            let ty = self.size_type();
+            idx[i] = self.builder().int_literal(ty, v, kiln_ast::expr::Radix::Decimal, at).raw();
+        }
+        let node = AttrNode { kind, syntax, flags: 0, loc, a: idx[0], b: idx[1] };
         Some(self.ast.attrs.push(node))
     }
 
