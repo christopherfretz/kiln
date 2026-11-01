@@ -1987,7 +1987,7 @@ pointer constant: a zero integer literal, a `std::nullptr_t` value or
   does not parse `__null` yet.
 - Tests: `tests/conformance/expr.unary.op/null-dereference-indirection.cpp`,
   `tests/conformance/dcl.init.ref/null-dereference-binding.cpp`.
-### 5.15 GNU `_Complex` (`complex.rs`, `conv/`, WP-211)
+### 5.16 GNU `_Complex` (`complex.rs`, `conv/`, WP-211)
 clang 19's C99/GNU complex support in C++:
 - **Types.** `_Complex` combines with `float`, `double`, `long double`
   and the integer types (`char` through `long long`, signed or unsigned).
@@ -2051,7 +2051,7 @@ clang 19's C99/GNU complex support in C++:
 - Tests: `tests/conformance/ext.complex/` (`types`, `constexpr`,
   `diagnostics`, `pedantic`, `imaginary`).
 
-### 5.16 Value-dependent static member calls and dependent-base members (WP-211)
+### 5.17 Value-dependent static member calls and dependent-base members (WP-211)
 - A call to a static member function of the current instantiation is
   value-dependent ([temp.dep.constexpr]/2.3). An `if constexpr` on it in a
   member initializer is deferred to instantiation, as libc++
