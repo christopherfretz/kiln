@@ -321,7 +321,8 @@ The normative description is spec/driver.md "Code generation". In short:
   `kiln_driver::run` (`-S -emit-llvm -O0 -std=c++26 --target=<t> -o -`)
   and through `clang++-19` with the same flags, on
   `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, under the
-  same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
+  same normalization. A `//@ args: <opts>` line in a case appends
+  `<opts>` to both command lines (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
   corpus is 105 programs (ABI classification of 1- to 32-byte structs,
@@ -882,11 +883,22 @@ clang 19 `CGAtomic` at -O0, mirrored:
   otherwise); assignment evaluates the right side into a temporary of the
   assignment's type (the result) and stores it with
   `store atomic`/`__atomic_store` (`atomic_agg_store`).
+- **`++` of `_Atomic(bool)` (WP-165)**, accepted under
+  `-Wno-increment-bool`: as clang's `EmitScalarPrePostIncDec`,
+  pre-increment is `store atomic i8 1` (volatile when the object is)
+  yielding `true`; post-increment is `atomicrmw xchg i8 1` (never
+  volatile) yielding the old byte in its memory form (`i8`), which clang
+  then stores or extends as if it were the `i1` value. Where the value
+  must meet an `i1` (a conditional operator's `phi`) clang 19 emits
+  invalid IR; kiln reports an IR lowering error there.
+- **Floating `min`/`max_fetch` (WP-165), a deviation:** clang 19 compares
+  the old value and the operand with an `icmp` (invalid IR); kiln yields
+  `llvm.minnum` / `llvm.maxnum` of the two, the value `atomicrmw fmin` /
+  `fmax` stored. `fetch_min`/`fetch_max` match clang.
 - **Validation:** `tests/codegen/atomic_{builtins,orders,lvalues,wide,
-  qualifier,libcall,lv_libcall,padded,aggregate}.cpp` exact on aarch64
-  and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`.
-- **Not implemented** (a codegen error): floating `min`/`max_fetch`
-  (clang 19 emits invalid IR), `++` of `_Atomic(bool)`.
+  qualifier,libcall,lv_libcall,padded,aggregate,bool_inc}.cpp` exact on
+  aarch64 and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`
+  (`fp-minmax-fetch-run.cpp` without an oracle).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

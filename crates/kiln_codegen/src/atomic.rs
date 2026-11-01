@@ -7,9 +7,9 @@
 //! The shapes follow clang 19 at -O0: a constant memory order picks one
 //! ordering (an invalid one emits nothing), a non-constant one switches over
 //! the C ABI values; operands travel through `iN` temporaries of the atomic
-//! width. Sizes that need a libcall (`__atomic_load` & co.), padded
-//! `_Atomic` types and floating `min`/`max_fetch` (clang 19 emits invalid
-//! IR for those) are reported as unsupported.
+//! width. Sizes that need a libcall use the generic `__atomic_*` ABI
+//! (WP-165). Floating `min`/`max_fetch` deviate from clang 19 (which emits
+//! an invalid `icmp`): the result is `llvm.minnum` / `llvm.maxnum`.
 
 use kiln_ast::decl::builtin::atomic::{self as at, Form, Rmw};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind};
@@ -180,9 +180,6 @@ impl Cg<'_> {
         let use_libcall = !size.is_power_of_two() || size > 16;
         let rmw = at::rmw(id);
         let fp = ast.types.is_floating(value_q);
-        if fp && matches!(rmw, Some((Rmw::Max | Rmw::Min, true))) {
-            return err(self.loc_of(e), "floating-point atomic min/max_fetch is not supported yet");
-        }
         let (pv, palign) = self.pointer_and_align(ptr_e)?;
         if form == Form::Init {
             // clang `EmitAtomicInit`: a plain initialization.
@@ -447,6 +444,15 @@ impl Cg<'_> {
                 let old = self.f.fir.push(Op::AtomicRmw { op, ptr: ops.ptr.v, val: v, mem }, s.ty);
                 let res = match post {
                     None => old,
+                    Some(Rmw::Max | Rmw::Min) if fp => {
+                        // Deviation: clang 19 emits an (invalid) `icmp`
+                        // here; the new value is what `atomicrmw fmin` /
+                        // `fmax` stored, `llvm.minnum` / `llvm.maxnum`.
+                        let name =
+                            if post == Some(Rmw::Max) { "llvm.maxnum" } else { "llvm.minnum" };
+                        let f = kiln_llvm::intrinsics::fp_op(&mut self.m, name, s.ty, 2);
+                        self.intrinsic_call(f, vec![old, v])
+                    }
                     Some(Rmw::Max | Rmw::Min) => {
                         let max = post == Some(Rmw::Max);
                         let p = match (max, signed) {
@@ -940,8 +946,18 @@ impl Cg<'_> {
         pre: bool,
     ) -> R<V> {
         let ast = self.ast;
-        if self.is_bool(vq) {
-            return err(self.loc_of(e), "increment of an atomic bool is not supported yet");
+        if inc && self.is_bool(vq) {
+            // clang `EmitScalarPrePostIncDec`: pre-increment stores `true`
+            // and yields it; post-increment swaps in `true` and yields the
+            // old byte (its memory form, as clang does).
+            let one = self.icn(LTy::I8, 1);
+            if pre {
+                let vol = self.is_volatile(lv.q);
+                let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
+                self.f.fir.push(Op::Store { val: one, ptr: lv.addr.v, mem }, LTy::VOID);
+                return Ok(self.icn(LTy::I1, 1));
+            }
+            return Ok(self.atomic_rmw_lv(RmwOp::Xchg, lv, one));
         }
         let ty = self.mty(vq);
         if ast.types.is_integral(vq) {

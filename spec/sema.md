@@ -903,7 +903,9 @@ diagnostics and IR.
       by width, and an unscoped-enumeration left operand is then an
       error: sema-conv.md §6)
     - `?:`, the comma operator
-    - increment and decrement
+    - increment and decrement (of `bool`, or `_Atomic(bool)`: `++` is
+      clang's DefaultError `-Wincrement-bool` extension and is then
+      accepted, `--` is always an error; WP-165)
   - **calls:** argument conversion, arity notes, variadic default
     promotions
   - **member access:** `.` and `->` on records and through

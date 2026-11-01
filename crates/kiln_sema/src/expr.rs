@@ -1853,9 +1853,15 @@ impl Sema<'_, '_> {
         let t = atomic.unwrap_or(operand_t);
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
         if self.ast.types.builtin(t) == Some(BuiltinType::Bool) {
-            let msg = self.diag(DiagId::sema_incdec_bool, loc).arg(if inc { "0" } else { "1" });
+            // clang: decrementing is always an error; incrementing is a
+            // DefaultError extension (`-Wno-increment-bool` accepts it).
+            if !inc {
+                let msg = self.diag(DiagId::sema_decrement_bool, loc);
+                self.emit(msg);
+                return self.recover_err(&[e], loc);
+            }
+            let msg = self.diag(DiagId::sema_increment_bool, loc);
             self.emit(msg);
-            return self.recover_err(&[e], loc);
         }
         if self.ast.types.as_enum(t).is_some() {
             let msg = self

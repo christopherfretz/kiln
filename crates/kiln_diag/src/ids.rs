@@ -779,7 +779,8 @@ diag_ids! {
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
     sema_addrof_bitfield = Error (0) "address of bit-field requested";
     sema_addrof_vector_element = Error (0) "address of vector element requested";
-    sema_incdec_bool = Error (1) "ISO C++17 does not allow {0:incrementing|decrementing} expression of type bool";
+    sema_increment_bool = WarningError [IncrementBool] (0) "ISO C++17 does not allow incrementing expression of type bool";
+    sema_decrement_bool = Error (0) "cannot decrement expression of type bool";
     sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
     sema_ovl_no_viable_function_in_call = Error (1) "no matching function for call to '{0}'";
     note_ovl_candidate_not_viable = Note (1) "candidate function not viable: {0}";

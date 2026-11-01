@@ -151,6 +151,8 @@ diag_groups! {
     InconsistentMissingOverride = "inconsistent-missing-override" [];
     AbstractFinalClass = "abstract-final-class" [];
     InaccessibleBase = "inaccessible-base" [];
+    // WP-165
+    IncrementBool = "increment-bool" [];
     // WP-074
     DeprecatedBuiltins = "deprecated-builtins" [];
     // WP-087
