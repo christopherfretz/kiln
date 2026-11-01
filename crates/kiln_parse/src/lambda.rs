@@ -106,6 +106,7 @@ impl Parser<'_, '_> {
         let saved_stmt_expr = std::mem::replace(&mut self.in_stmt_expr, false);
         let (body, rbrace) = self.with_greater_op(true, |p| p.parse_compound(false));
         self.in_stmt_expr = saved_stmt_expr;
+        self.sync_attr_macros();
         Some(self.s.act_on_lambda_end(id, body, rbrace))
     }
 

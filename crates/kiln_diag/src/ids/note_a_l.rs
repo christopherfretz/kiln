@@ -140,3 +140,4 @@ note_lambda_default_by_value = Note (0) "default capture by value";
 note_lambda_init_capture = Note (2) "captured{0:| by reference} via initialization of lambda capture {1}";
 note_lambda_this_capture_fixit = Note (0) "explicitly capture 'this'";
 note_local_var_init = Note (2) "{0:via initialization of|binding reference} variable {1} here";
+note_loop_iteration_here = Note (1) "{0:decremented|incremented} here";

@@ -368,6 +368,7 @@ impl Sema<'_, '_> {
             let e = self.with_init_entity(crate::init::entity::MEMBER, |s| {
                 s.perform_init(fty, init, loc, direct)
             });
+            self.check_bit_field_init(field, e, loc);
             self.note_default_init_full_expr();
             let e = self.act_on_full_expr(e);
             // clang `ActOnFinishCXXInClassMemberInitializer`: a field whose

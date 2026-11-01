@@ -262,9 +262,9 @@ the target:
    `Sema::constant_full_expr` for array bounds, bit-field widths,
    enumerators, `static_assert`, `alignas`, case values and template
    arguments). Conditional arms are checked separately. The warning goes
-   through `diag_if_reachable`. An out-of-range constant assigned to a
-   bit-field is skipped (clang's -Wbitfield-constant-conversion is not
-   implemented). Not implemented: -Wbitfield-constant-conversion,
+   through `diag_if_reachable`. A constant truncated by the bit-field it
+   is assigned to reports -Wbitfield-constant-conversion instead and its
+   conversions are skipped (spec/sema.md §7.12). Not implemented:
    `-Wnull-conversion`, `-Wimplicit-int-conversion` and the other
    conversion warnings; non-dependent full-expressions are not
    re-checked per instantiation.

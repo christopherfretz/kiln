@@ -483,7 +483,7 @@ impl Sema<'_, '_> {
         }
         self.fn_saved.push(crate::class::SavedFn { func: self.func.take(), pushed: 0 });
         let mut fs = Scope::new(ScopeKind::Function, None);
-        fs.errors = self.diags.error_count();
+        fs.errors = self.diags.unrecoverable_error_count();
         self.scopes.push(fs);
         self.ctx = f;
         let params: Vec<DeclId> = self

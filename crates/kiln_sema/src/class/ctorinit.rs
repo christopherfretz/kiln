@@ -469,6 +469,7 @@ impl Sema<'_, '_> {
         self.ctor_entity = Some((InitEntity::Field(field), ConstructionKind::Complete));
         let e = self.with_init_entity(crate::init::entity::MEMBER, |s| s.mem_init_value(fty, info));
         self.ctor_entity = None;
+        self.check_bit_field_init(field, e, info.loc);
         if self.ast.types.is_reference(fty) {
             self.check_dangling_temporary(BindingSite::Member(field), e);
         }

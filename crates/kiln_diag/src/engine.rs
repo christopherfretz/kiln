@@ -46,6 +46,10 @@ pub struct DiagEngine<'sm> {
     /// Some pragma changed the state: severities depend on location.
     has_pragmas: AtomicBool,
     errors: AtomicU32,
+    /// Errors that are errors by default (clang `UncompilableErrorOccurred`).
+    uncompilable: AtomicU32,
+    /// Errors of class error (clang `isUnrecoverable`).
+    unrecoverable: AtomicU32,
     warnings: AtomicU32,
     fatal: AtomicBool,
 }
@@ -79,6 +83,8 @@ impl<'sm> DiagEngine<'sm> {
             pragmas: RwLock::new(Pragmas::new()),
             has_pragmas: AtomicBool::new(false),
             errors: AtomicU32::new(0),
+            uncompilable: AtomicU32::new(0),
+            unrecoverable: AtomicU32::new(0),
             warnings: AtomicU32::new(0),
             fatal: AtomicBool::new(false),
         };
@@ -196,6 +202,23 @@ impl<'sm> DiagEngine<'sm> {
     /// Errors emitted so far (fatal errors included).
     pub fn error_count(&self) -> u32 {
         self.errors.load(Ordering::Acquire)
+    }
+
+    /// Errors emitted so far whose id is an error by default (fatal
+    /// errors included): clang `hasUncompilableErrorOccurred`. A warning
+    /// promoted by `-Werror` counts for the exit status
+    /// ([`Self::error_count`]) but not here, so the analyses that stop
+    /// after an error (sema's flow warnings) go on as for a warning
+    /// (spec/diag.md §7.5).
+    pub fn uncompilable_error_count(&self) -> u32 {
+        self.uncompilable.load(Ordering::Acquire)
+    }
+
+    /// Errors emitted so far whose id is of class error (fatal errors
+    /// included): clang `DiagnosticErrorTrap::hasUnrecoverableErrorOccurred`,
+    /// which also leaves out a warning that is an error by default.
+    pub fn unrecoverable_error_count(&self) -> u32 {
+        self.unrecoverable.load(Ordering::Acquire)
     }
 
     /// Warnings emitted so far.
@@ -325,9 +348,17 @@ impl<'sm> DiagEngine<'sm> {
         match record.level {
             Level::Error => {
                 self.errors.fetch_add(1, Ordering::AcqRel);
+                if id.is_default_error() {
+                    self.uncompilable.fetch_add(1, Ordering::AcqRel);
+                }
+                if !id.is_warning_or_extension() {
+                    self.unrecoverable.fetch_add(1, Ordering::AcqRel);
+                }
             }
             Level::Fatal => {
                 self.errors.fetch_add(1, Ordering::AcqRel);
+                self.uncompilable.fetch_add(1, Ordering::AcqRel);
+                self.unrecoverable.fetch_add(1, Ordering::AcqRel);
                 self.fatal.store(true, Ordering::Release);
             }
             Level::Warning => {
