@@ -243,7 +243,7 @@ pub(crate) fn is_local_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
         DeclKind::ParmVar => true,
         DeclKind::Var => {
             let Some(v) = ast.decls.var(d) else { return false };
-            v.spec.storage() == VarStorage::None
+            matches!(v.spec.storage(), VarStorage::None | VarStorage::Register)
                 && n.ctx().is_some_and(|c| ast.decls.get(c).kind().is_function())
         }
         _ => false,

@@ -3,11 +3,13 @@
 //! (`CodeGenModule::EmitTopLevelDecl`, `FileScopeAsmDecl`).
 
 use kiln_abi::asm::{self as tasm, AsmOperandCounts, ConstraintInfo};
+use kiln_ast::decl::VarStorage;
+use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::stmt::asm_bits;
-use kiln_ast::{DeclId, QualType, StmtId};
+use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, AttrSetId, CallOpts, CastOp, InlineAsm, MemoryEffects, ModRef,
-    TypeId as LTy,
+    Attr, AttrKind, AttrList, AttrSetId, CallOpts, CastOp, InlineAsm, IntPredicate, MemoryEffects,
+    ModRef, TypeId as LTy,
 };
 
 use crate::fir::{Blk, Fir, Op, V};
@@ -20,6 +22,8 @@ struct AsmOuts {
     trunc_tys: Vec<LTy>,
     dests: Vec<(crate::expr::LV, QualType)>,
     needs_cast: Vec<bool>,
+    /// Condition-flag outputs (`=@cc<cond>`), whose value is 0 or 1.
+    is_flag: Vec<bool>,
 }
 
 impl Cg<'_> {
@@ -80,6 +84,7 @@ impl Cg<'_> {
         let mut trunc_tys: Vec<LTy> = Vec::new();
         let mut dests = Vec::new();
         let mut needs_cast: Vec<bool> = Vec::new();
+        let mut is_flag: Vec<bool> = Vec::new();
         let mut inout = String::new();
         let mut inout_args: Vec<(V, LTy, Option<LTy>)> = Vec::new();
         let mut out_constraints: Vec<String> = Vec::new();
@@ -89,6 +94,8 @@ impl Cg<'_> {
             let info = outs[i].clone();
             let c = cstr(o.constraint);
             let oc = tasm::simplify_constraint(arch, c.get(1..).unwrap_or(""), &outs);
+            let pinned = self.reg_var(o.expr).is_some();
+            let oc = self.var_constraint(oc, o.expr, info.early_clobber());
             out_constraints.push(oc.clone());
             let dest = self.emit_lvalue(o.expr)?;
             if !constraints.is_empty() {
@@ -110,6 +117,7 @@ impl Cg<'_> {
                 let cast = info.allows_register() && self.m.types.is_aggregate(mt);
                 trunc_tys.push(mt);
                 needs_cast.push(cast);
+                is_flag.push(oc.starts_with("{@cc"));
                 let mut rt = if cast {
                     let (size, _) = self.size_align(q);
                     if size == 0 {
@@ -134,7 +142,8 @@ impl Cg<'_> {
                 inout.push(',');
                 let (arg, elem) = self.asm_input_lvalue(&info, dest, q, &mut inout);
                 let at = self.f.fir.ty(&self.m, arg);
-                if info.allows_register() {
+                // Only an early-clobber physical register is tied.
+                if info.allows_register() && (!pinned || info.early_clobber()) {
                     inout.push_str(&i.to_string());
                 } else {
                     inout.push_str(&oc);
@@ -152,6 +161,7 @@ impl Cg<'_> {
                 constraints.push(',');
             }
             let ic = tasm::simplify_constraint(arch, &cstr(o.constraint), &outs);
+            let ic = self.var_constraint(ic, o.expr, false);
             let (mut arg, elem) = self.asm_input(&info, o.expr, &mut constraints)?;
             if let Some(out) = info.tied_operand() {
                 let oq = ast.exprs.get(ops[out as usize].expr).ty();
@@ -298,7 +308,7 @@ impl Cg<'_> {
         let kind = self.m.md_kind("srcloc");
         self.f.fir.add_md(inst, kind, md);
 
-        let out = AsmOuts { call, result_tys, trunc_tys, dests, needs_cast };
+        let out = AsmOuts { call, result_tys, trunc_tys, dests, needs_cast, is_flag };
         self.asm_stores(&out);
         let fallthrough = self.f.fir.cur();
         for (k, b) in split.into_iter().enumerate() {
@@ -313,6 +323,44 @@ impl Cg<'_> {
 
     /// clang `UpdateAsmCallInst`'s result extraction then `EmitAsmStores`,
     /// at the insertion point.
+    /// clang `AddVariableConstraints`: an operand naming a `register`
+    /// variable with an asm label (`register long r asm("x1")`) is pinned
+    /// to that register, `{x1}` (`&{x1}` when early-clobber).
+    fn var_constraint(&self, c: String, e: ExprId, early_clobber: bool) -> String {
+        match self.reg_var(e) {
+            Some(reg) => format!("{}{{{reg}}}", if early_clobber { "&" } else { "" }),
+            None => c,
+        }
+    }
+
+    /// The normalized register of a `register` variable with an asm label
+    /// that `e` names (after `IgnoreParenNoopCasts`).
+    fn reg_var(&self, e: ExprId) -> Option<String> {
+        let ast = self.ast;
+        // `IgnoreParenNoopCasts`: parentheses and identity casts.
+        let mut e = e;
+        loop {
+            let n = ast.exprs.get(e);
+            if n.kind() == ExprKind::ParenExpr
+                || (n.kind().is_cast()
+                    && matches!(ast.exprs.cast_kind(e), CastKind::LValueToRValue | CastKind::NoOp))
+            {
+                e = ast.exprs.operand(e);
+            } else {
+                break;
+            }
+        }
+        if ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
+            return None;
+        }
+        let d = ast.exprs.decl(e);
+        if !ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::Register) {
+            return None;
+        }
+        let reg = kiln_abi::mangle::asm_label(ast, d)?;
+        Some(tasm::normalized_register_name(self.target.triple.arch, &reg))
+    }
+
     fn asm_stores(&mut self, o: &AsmOuts) {
         let (call, result_tys, trunc_tys) = (o.call, &o.result_tys, &o.trunc_tys);
         let results: Vec<V> = if result_tys.len() == 1 {
@@ -326,6 +374,13 @@ impl Cg<'_> {
         };
         for (i, mut v) in results.into_iter().enumerate() {
             let (rt, tt) = (result_tys[i], trunc_tys[i]);
+            if o.is_flag[i] {
+                // clang: a flag output is 0 or 1; tell the optimizer.
+                let two = V::C(self.m.const_int(rt, 2));
+                let c = self.f.fir.push(Op::ICmp { p: IntPredicate::Ult, l: v, r: two }, LTy::I1);
+                let f = kiln_llvm::intrinsics::assume(&mut self.m);
+                self.intrinsic_call(f, vec![c]);
+            }
             if rt != tt {
                 let tys = &self.m.types;
                 if tys.is_float(tt) {
@@ -357,7 +412,7 @@ impl Cg<'_> {
     fn asm_input(
         &mut self,
         info: &ConstraintInfo,
-        e: kiln_ast::ExprId,
+        e: ExprId,
         cs: &mut String,
     ) -> R<(V, Option<LTy>)> {
         let q = self.ast.exprs.get(e).ty();

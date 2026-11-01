@@ -1706,7 +1706,7 @@ impl<'a> TypeFinder<'a> {
             InstKind::Gep { source, .. } => self.ty(source),
             InstKind::Alloca { allocated, .. } => self.ty(allocated),
             InstKind::Call(c) | InstKind::Invoke(c) | InstKind::CallBr(c) => {
-                self.attrs(&f.calls[c as usize].attrs)
+                self.attrs(&f.calls[c as usize].attrs);
             }
             _ => {}
         }

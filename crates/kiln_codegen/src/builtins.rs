@@ -534,7 +534,7 @@ impl Cg<'_> {
     }
 
     /// A call of intrinsic `f` with no call-site attributes.
-    fn intrinsic_call(&mut self, f: FuncId, args: Vec<V>) -> V {
+    pub(crate) fn intrinsic_call(&mut self, f: FuncId, args: Vec<V>) -> V {
         let fty = self.m.func(f).ty();
         let rty = self.m.types.function_info(fty).map_or(LTy::VOID, |i| i.0);
         self.intrinsic_call_ty(f, args, rty)

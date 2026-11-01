@@ -2627,6 +2627,7 @@ impl Sema<'_, '_> {
         match ds.storage {
             Some((StorageSpec::Static, _)) => spec = spec.with_storage(VarStorage::Static),
             Some((StorageSpec::Extern, _)) => spec = spec.with_storage(VarStorage::Extern),
+            Some((StorageSpec::Register, _)) => spec = spec.with_storage(VarStorage::Register),
             Some((StorageSpec::Mutable, loc)) => {
                 self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
             }
