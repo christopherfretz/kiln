@@ -2202,6 +2202,35 @@ impl Sema<'_, '_> {
             let l2 = conv::implicit_convert(self, l, rt, ConvCtx::Comparison).ok()?;
             return Some((l2, r, rt));
         }
+        self.cv_combined_pointer(l, r, lt, rt)
+    }
+
+    /// [expr.type]/4.3, /4.5 at one level: `void*` and `const T*` give
+    /// `const void*`, `Base*` and `const Derived*` give `const Base*` -- a
+    /// pointer to either pointee with both sides' cv-qualifiers, if both
+    /// operands convert to it.
+    fn cv_combined_pointer(
+        &mut self,
+        l: ExprId,
+        r: ExprId,
+        lt: QualType,
+        rt: QualType,
+    ) -> Option<(ExprId, ExprId, QualType)> {
+        let types = &self.ast.types;
+        let (lpe, rpe) = (types.pointee(lt)?, types.pointee(rt)?);
+        let cv = types.effective_quals(lpe) | types.effective_quals(rpe);
+        for side in [lpe, rpe] {
+            let pointee = self.ast.types.unqualified(side);
+            let pointee = self.ast.types.qualify(pointee, cv);
+            let to = self.ast.types.pointer_to(pointee);
+            if conv::standard_conversion(self, l, to, ConvCtx::Comparison).is_some()
+                && conv::standard_conversion(self, r, to, ConvCtx::Comparison).is_some()
+            {
+                let l2 = conv::implicit_convert(self, l, to, ConvCtx::Comparison).ok()?;
+                let r2 = conv::implicit_convert(self, r, to, ConvCtx::Comparison).ok()?;
+                return Some((l2, r2, to));
+            }
+        }
         None
     }
 

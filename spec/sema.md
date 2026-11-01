@@ -937,6 +937,15 @@ diagnostics and IR.
   Not yet: the composite type that needs a cv-union of both sides
   (`const int B::*` vs `volatile int D::*`; [expr.type]/4.6) and
   constant evaluation of the comparison (WP-076).
+- **Composite pointer type** ([expr.type]/4; `composite_pointer` in
+  `expr.rs`, used by `==`, `<`, `<=>` and `?:`): after the null,
+  same-type and one-way-conversion cases, `cv_combined_pointer` tries a
+  pointer to either side's unqualified pointee with the cv-qualifiers of
+  both (`void *` vs `const B *` is `const void *`; `B *` vs `const D *`
+  is `const B *`), taking the first that both operands reach by a
+  standard conversion (WP-155). Not yet: multi-level cv-combination
+  (`int **` vs `const int **` is `const int *const *`) and the member
+  pointer case above.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
