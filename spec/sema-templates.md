@@ -1617,7 +1617,10 @@ formed it:
    parameter type; Aᵢ is the argument's type and value category.
    - **Adjustments, when P is not a reference.** A undergoes
      array-to-pointer and function-to-pointer decay, and its top-level cv
-     is dropped. Top-level cv on P is dropped.
+     is dropped. Top-level cv on P is dropped too: the written
+     prototype that deduction reads keeps it (`void f(const T t)`
+     deduces `T = int` from an `int`, with or without a trailing
+     `requires requires { t; }`; WP-231).
    - **When P is a reference.** Use the referred type. A forwarding
      reference (`T&&`, where `T` is this template's own unqualified
      parameter) with an lvalue A uses A&. When the referred type is an
@@ -4000,7 +4003,12 @@ explicit specialization errors remain. The blockers are:
     MultiLevelArgs)` is filled by `function_decl` (non-template
     members) and `member_template` (member templates, whose
     `associated_constraints` and `check_constraints` then use the
-    pattern's clause with the outer levels plus their own);
+    pattern's clause with the outer levels plus their own), and by
+    `friend_function_template` for the namespace-scope template a
+    constrained friend template redeclares, so a constraint naming the
+    enclosing class's parameter ([temp.friend]/9, `requires C<T>` on
+    `template<class U> friend int f(X, U)`) sees that specialization's
+    arguments (WP-231);
   - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate

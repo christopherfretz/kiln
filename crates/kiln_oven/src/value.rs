@@ -468,6 +468,10 @@ impl Oven {
             && a.live
             && self.extends_object(b.ast(), t)
         {
+            // clang `CheckLValueConstantExpression`: a lifetime-extended
+            // temporary of destructed type cannot be part of a constant
+            // result, so its variable is dynamically initialized and the
+            // destructor registered at exit ([basic.start.term]; WP-231).
             self.check_let_destruction(b, t)?;
             if !self.let_pending.iter().any(|&(x, _)| x == t) {
                 self.let_pending.push((t, Ptr::with_off(raw, 0, false)));

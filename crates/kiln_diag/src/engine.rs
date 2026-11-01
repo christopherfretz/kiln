@@ -263,7 +263,7 @@ impl<'sm> DiagEngine<'sm> {
             return false;
         }
         st.seen.contains(&(id, d.span, d.context))
-            || (d.context != 0 && st.seen.contains(&(id, d.span, 0)))
+            || (d.context != 0 && !d.per_instantiation && st.seen.contains(&(id, d.span, 0)))
     }
 
     /// Applies policy to `d` and sinks it. Same as [`Diag::emit`].

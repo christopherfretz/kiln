@@ -4,7 +4,7 @@
 // (`Dk`), template-head and trailing requires-clauses (`Q`), and the
 // constraint expressions inside them: concept-ids, folds,
 // requires-expressions with `fp`/`fL` parameter references, member
-// access, construction, `new`, and member-like constrained friends.
+// access, construction, `new` (also braced), and member-like constrained friends.
 
 namespace std {
 template <class T, class U> concept same_as = __is_same(T, U);
@@ -121,6 +121,12 @@ template <class T> void e9(T t) requires requires { static_cast<int>(t.x); } {}
 template <class T> void e10(T *p) requires requires { p->x; p->size(); } {}
 struct W2 { W2(int, int); W2(); };
 template <class T> void e11(T) requires requires { new T(1, 2); ::new T(); new T[2]; } {}
+// Braced new-initializers: `il <braced-expression>* E` (WP-231).
+struct W3 { int a, b; };
+struct W4 { W3 w; int c; };
+template <class T> void e12(T) requires requires { new T{}; new T{1, 2}; ::new T{1}; } {}
+template <class T> void e13(T t) requires requires { new T[2]{}; new T[2]{t, t}; new T{t}; } {}
+template <class T, class... A> void e14(T, A... a) requires requires { new T{{1, 2}, 3}; new T{a...}; } {}
 
 // ---- constrained special members and member-like friends -----------------
 template <class T> struct Xs {
@@ -151,6 +157,7 @@ void use() {
   g1(1); g2(1); g3(1, 2); g4(1); g5(1); g6(1); g7(1); g8(1); int i; g9(&i, i); g10(1); g11(1);
   k1(1, 2.0); k2(1); k3(1, 2);
   V v; e1(v); e2(v); e3(v); e4(v); e5(v); e6(v); e7(v); e8(v); e9(v); e10(&v); e11(W2());
+  e12(W3{}); e13(W3{}); e14(W4{}, W3{}, 3);
   Xs<int> x; Xs<int> y(1); (void)int(x); fr(x); (void)(x == x); gr(x); Xs<int>::s();
   Ps<long> p; p.m(); p.n();
   auto l = [](C auto a) { return a; }; l(1);

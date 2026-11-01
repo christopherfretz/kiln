@@ -212,9 +212,11 @@ the evaluator's flattened type table.
   `const D&` member and `constexpr const D& d = {2}` fail; a temporary
   destroyed within the evaluation (`RD{{1}}.r.v`) does not. A
   non-constexpr variable so initialized is dynamically initialized and
-  the temporary's destructor registered (WP-233;
+  the temporary's destructor registered (WP-231, WP-233; see also
+  "Temporaries" below;
   `tests/conformance/class.temporary/constexpr-nontrivial-dtor.cpp`,
-  `tests/codegen/ref_temp_dtor_dynamic.cpp`).
+  `tests/codegen/ref_temp_dtor_dynamic.cpp`,
+  `tests/conformance/expr.const/constexpr-ref-temporary-nontrivial-dtor.cpp`).
 - A **function parameter outside its call** (named in a template
   argument or a `static_assert` in the body, where it has no frame;
   WP-183) takes the same globals path as an external object that is never
@@ -1207,7 +1209,12 @@ initializer with `Origin::Let(t)` (`t` the `LifetimeExtendedTemporary`),
 outlive the initializer's full-expression, and are frozen after the
 result: a pointer to one freezes as `PtrBase::Temporary(t)` and its value
 is written to `LetData.value` through the new
-`SemaBridge::set_temporary_value(t, v)` (write-once). Reading one later
+`SemaBridge::set_temporary_value(t, v)` (write-once). A pointer to one
+whose type needs destruction (`Ast::needs_destruction`) fails the result
+with clang's `non-trivial destruction of lifetime-extended temporary with
+type 'T' used in the result of a constant expression is not yet
+supported` at the temporary (`CheckLValueConstantExpression`; WP-231), so
+`const D& r = D{1};` is dynamically initialized. Reading one later
 thaws it from `LetData.value` when it is usable in constant expressions
 ([expr.const]/4: const non-volatile type, extended by a variable usable
 in constant expressions); otherwise it is an external object and a read
