@@ -1316,15 +1316,7 @@ impl Sema<'_, '_> {
             d = valid[0];
         } else if found.decls.len() > 1 {
             // Distinct entities found via using-directives ([namespace.udir]/6).
-            let text = self.decl_name_str(name);
-            let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
-            for c in self.ambiguity_order(&found.decls, qualifier.is_none()) {
-                let n = self
-                    .diag(DiagId::note_ambiguous_candidate, self.ast.decls.get(c).loc())
-                    .arg(self.qualified_decl_name(c));
-                msg = msg.with_note(n);
-            }
-            self.emit(msg);
+            self.diagnose_ambiguous_reference(name, &found.decls, qualifier.is_none(), loc);
             return self.recover_err(&[], loc);
         }
         if self.kind_of(d) == DeclKind::UnresolvedUsingIfExists {

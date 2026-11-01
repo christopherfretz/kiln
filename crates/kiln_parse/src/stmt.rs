@@ -199,6 +199,17 @@ impl Parser<'_, '_> {
             let sub = self.parse_labeled_sub(in_stmt_expr);
             return Some(self.s.act_on_label_stmt(l, sub, loc));
         }
+        // An unqualified name whose lookup is ambiguous starts neither a
+        // declaration nor an expression: reported, and the statement
+        // skipped ([basic.lookup.general]/1; clang's `ClassifyName`
+        // error in `ParseStatementOrDeclaration`).
+        if let Some(name) = self.ident()
+            && !self.peek_is(1, Punct::ColonColon)
+            && self.s.diagnose_ambiguous_name(name, None, loc)
+        {
+            self.skip_to_semi();
+            return None;
+        }
         if self.is_cxx_declaration_statement(false) {
             self.lead_decl_attrs = lead_attrs;
             let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);

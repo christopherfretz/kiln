@@ -242,6 +242,8 @@ diag_groups! {
     UndefinedVarTemplate = "undefined-var-template" [];
     // ----- WP-228 (driver flags a target does not support)
     OptionIgnored = "option-ignored" [];
+    // ----- WP-197 (DR482 namespace extra qualification)
+    ExtraQualification = "extra-qualification" [];
 }
 
 impl Group {

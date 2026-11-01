@@ -1704,6 +1704,9 @@ diag_ids! {
     note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration to suppress this warning if '{0}' is explicitly instantiated in another translation unit";
     // ----- WP-228 (driver flags a target does not support)
     drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";
+    // ----- WP-197 (DR482 namespace extra qualification; ambiguous member types)
+    sema_namespace_member_extra_qualification = Warning [ExtraQualification] (1) "extra qualification on member '{0}'";
+    note_ambiguous_member_type_found = Note (1) "member type {0} found by ambiguous name lookup";
 }
 
 impl DiagId {

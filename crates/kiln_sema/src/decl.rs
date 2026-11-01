@@ -2494,10 +2494,14 @@ impl Sema<'_, '_> {
             } else {
                 self.qualifier_desc(ctx)
             };
-            let msg = self
-                .diag(DiagId::sema_member_def_no_match, d.name_loc())
-                .arg(fname.clone())
-                .arg(scope);
+            // clang selects "declaration" or "definition" by whether a
+            // body follows.
+            let id = if self.templ.fn_def_next {
+                DiagId::sema_member_def_no_match
+            } else {
+                DiagId::sema_member_decl_no_match
+            };
+            let msg = self.diag(id, d.name_loc()).arg(fname.clone()).arg(scope);
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(p) = prev
@@ -5661,6 +5665,11 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
         let Some(&d) = found.decls.first() else { return NameClass::Undeclared };
+        // An ambiguous lookup that found a type recovers with the
+        // earliest type found ([basic.lookup.general]/1; clang's
+        // `getTypeName`): the parser commits to a type-name and
+        // [`Sema::diagnose_ambiguous_name`] reports the ambiguity once.
+        let d = self.ambiguous_type_recovery(&found).unwrap_or(d);
         let k = self.ast.decls.get(d).kind();
         if k == DeclKind::Namespace {
             return NameClass::Namespace(d);
@@ -5710,6 +5719,103 @@ impl Sema<'_, '_> {
             return NameClass::FunctionTemplate(self.ast.strip_shadow(f));
         }
         NameClass::Value(d)
+    }
+
+    /// True if `found`, the result of an ordinary lookup, is ambiguous
+    /// ([basic.lookup.general]/1, [namespace.udir]/6, [class.member.lookup]/6):
+    /// distinct entities that are not one overload set. A set with a
+    /// dependent using-declarator is resolved at instantiation.
+    pub(crate) fn is_ambiguous_lookup(&self, found: &crate::lookup::Found) -> bool {
+        if found.ambiguity.is_some() {
+            return true;
+        }
+        found.decls.len() > 1
+            && !found.decls.iter().any(|&x| {
+                matches!(
+                    self.kind_of(self.ast.strip_shadow(x)),
+                    DeclKind::UnresolvedUsingValue
+                        | DeclKind::UnresolvedUsingTypename
+                        | DeclKind::UnresolvedUsingIfExists
+                )
+            })
+            && !found.decls.iter().all(|&x| {
+                let k = self.kind_of(self.ast.strip_shadow(x));
+                k.is_function() || k == DeclKind::FunctionTemplate
+            })
+    }
+
+    /// The declaration an ambiguous lookup `found` recovers with when one
+    /// of the candidates is a type: the earliest such declaration, as
+    /// clang's `getTypeName` picks it (`None` if `found` is not ambiguous
+    /// or holds no type).
+    fn ambiguous_type_recovery(&self, found: &crate::lookup::Found) -> Option<DeclId> {
+        if found.decls.len() < 2 || !self.is_ambiguous_lookup(found) {
+            return None;
+        }
+        found
+            .decls
+            .iter()
+            .copied()
+            .filter(|&x| is_type_kind(self.kind_of(self.ast.strip_shadow(x))))
+            .min_by_key(|x| x.index())
+    }
+
+    /// Reports an ambiguous ordinary lookup of `name` (after `qualifier`)
+    /// where the parser commits to it: a type-name in a decl-specifier,
+    /// or an identifier that starts a statement (clang's `ClassifyName`).
+    /// Distinct entities are clang's `err_ambiguous_reference` with a
+    /// "candidate found by name lookup" note each; an ambiguous class
+    /// member lookup is [`Sema::diagnose_member_ambiguity`]'s. True if the
+    /// lookup was ambiguous ([basic.lookup.general]/1).
+    pub fn diagnose_ambiguous_name(
+        &mut self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        loc: Loc,
+    ) -> bool {
+        let qualifier = qualifier.map(|q| self.type_name_qualifier(q));
+        if qualifier.is_some_and(|q| {
+            self.kind_of(q) == DeclKind::ClassTemplate || self.is_dependent_ctx(q)
+        }) {
+            return false;
+        }
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        if !self.is_ambiguous_lookup(&found) {
+            return false;
+        }
+        if !self.diagnose_member_ambiguity(&found, DeclName::ident(name), loc) {
+            self.diagnose_ambiguous_reference(
+                DeclName::ident(name),
+                &found.decls,
+                qualifier.is_none(),
+                loc,
+            );
+        }
+        true
+    }
+
+    /// clang's `err_ambiguous_reference` for distinct entities `decls`
+    /// found by one lookup of `name` ([namespace.udir]/6), with a note
+    /// per candidate in clang's order.
+    pub(crate) fn diagnose_ambiguous_reference(
+        &self,
+        name: DeclName,
+        decls: &[DeclId],
+        unqualified: bool,
+        loc: Loc,
+    ) {
+        let text = self.decl_name_str(name);
+        let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
+        for c in self.ambiguity_order(decls, unqualified) {
+            let n = self
+                .diag(DiagId::note_ambiguous_candidate, self.ast.decls.get(c).loc())
+                .arg(self.qualified_decl_name(c));
+            msg = msg.with_note(n);
+        }
+        self.emit(msg);
     }
 
     /// The context a nested-name-specifier component `name::` names
