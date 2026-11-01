@@ -785,7 +785,8 @@ impl Oven {
     ) -> String {
         let signed = aux >> 8 & 1 != 0;
         let ty = site.e.map_or_else(|| "int".into(), |e| Self::qname(ast, ast.exprs.get(e).ty()));
-        let vec = site.e.map_or_else(String::new, |e| Self::vector_suffix(ast, ast.exprs.get(e).ty()));
+        let vec =
+            site.e.map_or_else(String::new, |e| Self::vector_suffix(ast, ast.exprs.get(e).ty()));
         match err {
             IntErr::Overflow => format!(
                 "value {} is outside the range of representable values of type '{ty}'{vec}",
