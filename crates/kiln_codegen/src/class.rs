@@ -301,7 +301,7 @@ impl Cg<'_> {
                 .get(ctor)
                 .ty()
                 .and_then(|t| ast.types.proto(ast.types.canonical(t)))
-                .is_some_and(|p| p.variadic())
+                .is_some_and(kiln_ast::types::FuncProto::variadic)
     }
 
     /// clang `EmitInlinedInheritingCXXConstructorCall`: variant `v` of
