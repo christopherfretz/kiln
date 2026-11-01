@@ -442,12 +442,16 @@ impl Sema<'_, '_> {
         let loc = self.begin_loc(e);
         let (params_of, this_ty) = self.constraint_function_scope(entity);
         // A member of a class template specialization: names of the
-        // pattern class are looked up in the specialization.
-        let pairs = match self.ast.decls.get(entity).ctx() {
-            Some(c) if self.kind_of(c) == kiln_ast::decl::DeclKind::CXXRecord => {
-                self.inst_context_pairs(c)
-            }
-            _ => Vec::new(),
+        // pattern class are looked up in the specialization. A friend
+        // defined in one (a hidden friend of a member class such as
+        // `view<V>::iterator`, [temp.friend]/1) maps the classes of the
+        // class that declared it, its lexical context, so the members of
+        // the enclosing specializations it names resolve ([temp.dep.type]).
+        let class = self.inst_lexical_class(entity);
+        let pairs = if self.kind_of(class) == kiln_ast::decl::DeclKind::CXXRecord {
+            self.inst_context_pairs(class)
+        } else {
+            Vec::new()
         };
         if let Some(t) = this_ty {
             self.nsdmi_this.push((entity, t));

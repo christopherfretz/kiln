@@ -2540,6 +2540,47 @@ headers. They are implemented in M3 because they cost one row each:
   classes; the same class (cv ignored) is true, else `D` must be complete
   and standard-layout with `B` as a base.
 
+**clang 22 rows** (WP-263, `templ/builtins/traits/cxx26.rs`), each to
+clang 22.1 `SemaTypeTraits.cpp`. kiln accepts them at every
+`-fclang-compat` level, a superset of clang 19 (which lacks them); only
+`__has_builtin` follows the level (spec/pp.md "clang compatibility
+level"). Likewise `__is_referenceable`, which clang 22 removed, stays
+implemented, and `__has_builtin` answers 0 for it at level 22.
+- `__builtin_is_virtual_base_of(B,D)` ([meta.rel], P2985; clang 20):
+  false unless both are non-union classes; `D` must then be complete
+  ("incomplete type 'X' where a complete type is required" plus the
+  forward-declaration note, answer false); true when some path from `D`
+  to `B` ends in a `virtual` base-specifier (`base_paths`, cv ignored).
+  The same class is false.
+- `__builtin_is_implicit_lifetime(T)` ([basic.types.general]/9,
+  [class.prop]/9; clang 20): completeness of a class operand (arrays
+  are not looked through); scalar, array and vector types are true,
+  other non-class types false; an aggregate whose destructor is not
+  user-provided is true; otherwise the destructor must be trivial and not
+  deleted, and some constructor trivial and not deleted (a declared one,
+  or an implicit default, copy or move constructor that would be).
+- `__builtin_is_cpp_trivially_relocatable(T)` (clang 21; P2786's
+  [class.prop] rules without its keywords): element completeness; the
+  element type is false when incomplete, true when scalar or vector; a
+  class needs no virtual base, every base and every non-reference field
+  trivially relocatable, and a destructor that is not deleted; then a
+  union with no user-declared copy/move constructor, copy/move
+  assignment or destructor is true, and otherwise the class must be
+  default-movable: move construction and move assignment from an xvalue
+  each select a member that is not user-provided and not deleted (or the
+  simple implicit one), and the destructor is not user-provided (one
+  defaulted after its first declaration is user-provided, so false).
+- **Staged off** (`Status::Owner("WP-263 follow-up")`, so `__has_builtin`
+  answers 0 at every level and the headers use their library
+  fallbacks): `__builtin_common_type` (a template builtin, like
+  `__type_pack_element`), `__builtin_structured_binding_size` (a `size_t`
+  value; `TypeTraitExpr` holds a `bool`), `__builtin_invoke`,
+  `__builtin_is_within_lifetime` and
+  `__builtin_{lt,le,gt,ge}_synthesizes_from_spaceship`. In compile
+  modes these are the only names of the probed set whose answer differs
+  from clang 22's at level 22; `-E` is unstaged and answers as clang. `__builtin_is_replaceable` and `__builtin_common_reference`
+  answer 0 in clang 22 as well.
+
 **Reference-from-temporary traits** (WP-138; libc++ `tuple`'s
 `std::tie` constructor uses `__reference_binds_to_temporary`). These are
 `__reference_binds_to_temporary(T,U)`,
@@ -4124,6 +4165,19 @@ explicit specialization errors remain. The blockers are:
     enclosing class's parameter ([temp.friend]/9, `requires C<T>` on
     `template<class U> friend int f(X, U)`) sees that specialization's
     arguments (WP-231);
+  - an atom of such a clause is substituted with the pattern classes
+    mapped to their instantiations ([`Sema::inst_context_pairs`]) from
+    the member's class, or for a friend (whose semantic context is the
+    namespace) from its lexical class (`inst_lexical_class`,
+    [temp.friend]/1): a hidden friend of a member class or member class
+    template of a class template (`view<V>::iterator`, libc++'s
+    `filter_view::__iterator`, `join_view::__iterator<Const>`) names
+    that member class, a member of the enclosing specialization, in its
+    parameter types and constraints ([temp.dep.type]/1), and without the
+    mapping `find_instantiated_decl` found no instantiated parent ("not
+    yet implemented: reference to a member of a dependent context"),
+    including when the friend is found only by argument-dependent lookup
+    inside a concept's requires-expression (WP-272);
   - `Sema::check_function_constraints(f, loc) -> Option<SatId>`;
     overload resolution marks a failing candidate
     `CandidateFailure::ConstraintsNotSatisfied { sat }` ("candidate
