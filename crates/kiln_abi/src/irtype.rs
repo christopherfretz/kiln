@@ -125,6 +125,14 @@ pub struct IrRecord {
     /// Virtual base (first declaration) → struct element index of the
     /// complete-object type.
     pub vbase_index: FxHashMap<DeclId, u32>,
+    /// A complete object is null-initialized by all-zero bytes (clang
+    /// `CGRecordLayout::isZeroInitializable`): false when a member or
+    /// base (transitively) holds an Itanium data member pointer, whose
+    /// null value is `-1`.
+    pub zero_init: bool,
+    /// The same for the class as a base subobject (virtual bases do not
+    /// count; clang `isZeroInitializableAsBase`).
+    pub zero_init_as_base: bool,
 }
 
 /// A conversion session (clang `CodeGenTypes` minus the LLVM context).
@@ -357,6 +365,8 @@ impl<'a> IrTypes<'a> {
             is_union,
             size: layout.size,
             align: u64::from(layout.align),
+            zero_init: true,
+            zero_init_as_base: true,
             ..IrRecord::default()
         };
         if ast.definition(d).is_none() {
@@ -370,6 +380,7 @@ impl<'a> IrTypes<'a> {
         let (members, packed) = self.lower_struct(def, &fields, &layout, false, false, &mut out);
         out.members = members;
         out.packed = packed;
+        self.calculate_zero_init(&fields, &layout, &mut out);
         // clang `ComputeRecordLayout`: the base-subobject type, lowered
         // with the complete type's packedness.
         if layout.nv_size != layout.size {
@@ -693,6 +704,77 @@ impl<'a> IrTypes<'a> {
         self.is_empty_class(d)
     }
 
+    /// clang `CGRecordLowering::calculateZeroInit` over the lowered
+    /// members: a non-empty, non-bit-field member of a type that is not
+    /// zero-initializable, or a non-empty base whose base subobject is
+    /// not, makes the class not zero-initializable (a virtual base only
+    /// the complete object).
+    fn calculate_zero_init(
+        &mut self,
+        fields: &[FieldDesc],
+        layout: &kiln_ast::types::RecordLayout,
+        out: &mut IrRecord,
+    ) {
+        let ast = self.ast();
+        for f in fields {
+            if f.bit_width.is_none()
+                && out.field_index.contains_key(&f.decl)
+                && !self.is_zero_initializable(f.ty)
+            {
+                out.zero_init = false;
+                out.zero_init_as_base = false;
+                return;
+            }
+        }
+        for &(b, _) in &layout.bases {
+            let b = ast.first(b);
+            if out.base_index.contains_key(&b) && !self.record(b).zero_init_as_base {
+                out.zero_init = false;
+                out.zero_init_as_base = false;
+                return;
+            }
+        }
+        for &(vb, _) in &layout.vbases {
+            let vb = ast.first(vb);
+            if !self.is_empty_class(vb) && !self.record(vb).zero_init_as_base {
+                out.zero_init = false;
+            }
+        }
+    }
+
+    /// clang `CodeGenTypes::isZeroInitializable(QualType)`: the null
+    /// value of `q` is all-zero bytes. Under Itanium only a data member
+    /// pointer (null `-1`) and classes and arrays containing one are not.
+    pub fn is_zero_initializable(&mut self, q: QualType) -> bool {
+        let ast = self.ast();
+        let mut q = q;
+        loop {
+            match ast.types.canonical_view(q) {
+                TypeView::ConstantArray(a) => {
+                    if ast.types.array_size(q) == Some(0) {
+                        return true;
+                    }
+                    q = a.elem;
+                }
+                TypeView::IncompleteArray(_) => return true,
+                TypeView::VariableArray { elem, .. } => q = elem,
+                TypeView::MemberPointer { pointee, .. } => return ast.types.is_function(pointee),
+                TypeView::Record(d) => return self.record(d).zero_init,
+                _ => return true,
+            }
+        }
+    }
+
+    /// clang `RecordDecl::findFirstNamedDataMember` (true when found).
+    fn has_named_data_member(&self, d: DeclId) -> bool {
+        let ast = self.ast();
+        let Some(def) = ast.definition(d) else { return false };
+        props::fields(ast, def).iter().any(|f| {
+            f.named
+                || matches!(ast.types.canonical_view(f.ty), TypeView::Record(r) if self.has_named_data_member(r))
+        })
+    }
+
     /// clang `getStorageType(const FieldDecl *)` for a bit-field.
     fn bitfield_storage_type(&mut self, f: &FieldDesc) -> IrType {
         let t = self.convert_mem(f.ty);
@@ -708,6 +790,7 @@ impl<'a> IrTypes<'a> {
     ) {
         let layout_size = layout.size;
         let mut storage: Option<IrType> = None;
+        let mut seen_named = false;
         for f in fields {
             if let Some(w) = f.bit_width {
                 if w == 0 {
@@ -737,6 +820,22 @@ impl<'a> IrTypes<'a> {
             } else {
                 self.convert_mem(f.ty)
             };
+            // clang `lowerUnion`: the first named member decides whether
+            // the union is zero-initializable; when it is not, its type is
+            // the storage type (no "better" one is looked for).
+            if !seen_named {
+                seen_named = f.named
+                    || matches!(self.ast().types.canonical_view(f.ty), TypeView::Record(r) if self.has_named_data_member(r));
+                if seen_named && !self.is_zero_initializable(f.ty) {
+                    out.zero_init = false;
+                    out.zero_init_as_base = false;
+                    storage = Some(ft);
+                    continue;
+                }
+            }
+            if !out.zero_init {
+                continue;
+            }
             let better = match &storage {
                 None => true,
                 Some(s) => {

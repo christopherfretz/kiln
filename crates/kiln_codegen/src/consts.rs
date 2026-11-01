@@ -238,6 +238,9 @@ impl Cg<'_> {
     /// The constant of IR type `it` stored at byte `off` of `img`.
     fn image_const(&mut self, img: &Img, off: u64, it: &IrType, e: Option<ExprId>) -> R<Value> {
         let t = self.ir(it);
+        if let Some(v) = self.member_ptr_reloc(img, off, it, t)? {
+            return Ok(v);
+        }
         match it {
             IrType::Int(w) => {
                 let n = u64::from(*w).div_ceil(8);
@@ -387,6 +390,24 @@ impl Cg<'_> {
             IrType::Void | IrType::ScalableVector(..) | IrType::TargetExt(_) => {
                 err(None, "scalable-vector and target-type constants are not supported yet (M3)")
             }
+        }
+    }
+
+    /// A member pointer stored in an image: the Oven records it as a
+    /// relocation (a `MemberPtr` or member `Null` scalar) over its `i64`
+    /// (data) or `{ i64, i64 }` (function) storage, whose bytes are 0; a
+    /// null data member pointer is `-1` (Itanium).
+    fn member_ptr_reloc(&mut self, img: &Img, off: u64, it: &IrType, t: LTy) -> R<Option<Value>> {
+        if !matches!(it, IrType::Int(64) | IrType::Struct(..)) {
+            return Ok(None);
+        }
+        let Some(r) = img.reloc(off) else { return Ok(None) };
+        match self.ast.consts.get(r) {
+            ConstValue::Scalar(
+                s @ (Scalar::MemberPtr { .. }
+                | Scalar::Null { kind: NullKind::MemberData | NullKind::MemberFunction, .. }),
+            ) => self.scalar_const(s, t).map(Some),
+            _ => Ok(None),
         }
     }
 

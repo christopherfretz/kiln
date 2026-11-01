@@ -1285,7 +1285,7 @@ impl Cg<'_> {
                 ConstructionKind::Complete | ConstructionKind::Delegating => {
                     if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                         let size = self.size_align(q).0;
-                        self.memset(dest, 0, size, false);
+                        self.emit_null_init(dest, q, size)?;
                     }
                 }
                 _ => {
@@ -1295,9 +1295,7 @@ impl Cg<'_> {
                         // clang `EmitNullBaseClassInitialization`: the
                         // store range is addressed as a byte offset (0;
                         // Itanium has no vbptr gaps) from the subobject.
-                        let z = V::C(self.m.const_int(LTy::I64, 0));
-                        let v = self.gep(LTy::I8, dest.v, vec![z], true);
-                        self.memset(Addr { v, ..dest }, 0, nv, false);
+                        self.emit_null_base_init(dest, def, nv)?;
                     }
                 }
             }
@@ -1399,7 +1397,11 @@ impl Cg<'_> {
         if zero_each && !self.class_bits(ctor_class).contains(DefinitionBits::EMPTY) {
             // clang `EmitNullInitialization` of the element.
             let size = self.alloc_size(elem);
-            self.memset(at, 0, size, false);
+            let mut eq = ast.exprs.get(e).ty();
+            while let Some(x) = self.array_elem(eq) {
+                eq = x;
+            }
+            self.emit_null_init(at, eq, size)?;
         }
         let r = self.construct_one(e, at, false);
         self.end_scope(sc);
