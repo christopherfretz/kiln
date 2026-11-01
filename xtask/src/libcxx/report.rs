@@ -169,7 +169,7 @@ pub fn render(
     let _ = writeln!(
         s,
         "\n### Results by directory\n\nPass rate is PASS / (total − UNSUPPORTED). \"driver\" counts the \
-         UNSUPPORTED tests the driver cannot run (for example `.verify.cpp`), as opposed to those the \
+         UNSUPPORTED tests the driver cannot run (for example `.sh.cpp`), as opposed to those the \
          configuration excludes (`UNSUPPORTED: c++03`).\n"
     );
     let _ = writeln!(

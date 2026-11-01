@@ -59,6 +59,18 @@ impl Config {
     }
 }
 
+/// The flags of a `.verify.cpp` compile: libc++'s `%{verify}`
+/// substitution (`libcxx/utils/libcxx/test/params.py`), outcome from the
+/// exit status (spec/libcxx.md ".verify.cpp").
+pub const VERIFY_FLAGS: &[&str] = &[
+    "-fsyntax-only",
+    "-Wno-error",
+    "-Xclang",
+    "-verify",
+    "-Xclang",
+    "-verify-ignore-unexpected=note",
+];
+
 /// The step a test failed in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Stage {
@@ -284,6 +296,8 @@ fn execute(
     let steps: Vec<(Stage, Command, bool)> = match kind {
         Kind::CompilePass => vec![(Stage::Compile, compile(&["-fsyntax-only"]), true)],
         Kind::CompileFail => vec![(Stage::Compile, compile(&["-fsyntax-only"]), false)],
+        // libc++'s `%{verify}` (`-ferror-limit=0` is in the base flags).
+        Kind::Verify => vec![(Stage::Compile, compile(VERIFY_FLAGS), true)],
         Kind::LinkPass => vec![
             (Stage::Compile, compile(&["-c", "-o", &obj_s]), true),
             (Stage::Link, link(), true),
@@ -326,7 +340,7 @@ fn execute(
         };
         r.wall += m.wall;
         r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
-        match judge(stage, &m) {
+        match judge(stage, &m, kind == Kind::Verify) {
             Step::Ok if expect_success => {}
             Step::Ok => {
                 r.outcome = Outcome::Fail(Stage::ExpectedFail);
@@ -360,7 +374,7 @@ fn execute(
 /// Classifies one step's end. A compiler step "crashes" on a panic, an LLVM
 /// crash banner or a signal; a test binary that aborts is an ordinary
 /// failure.
-fn judge(stage: Stage, m: &Measured) -> Step {
+fn judge(stage: Stage, m: &Measured, verify: bool) -> Step {
     let stderr = String::from_utf8_lossy(&m.stderr);
     if m.status.is_none() {
         return Step::Timeout;
@@ -375,7 +389,12 @@ fn judge(stage: Stage, m: &Measured) -> Step {
     let detail = tail(&stderr, 12);
     let signalled = out.code().is_none_or(|c| c >= 128);
     let label = stage.label();
-    let errors = cluster::staged(label, cluster::error_keys(&stderr));
+    let verify_keys = if verify { cluster::verify_keys(&stderr) } else { Vec::new() };
+    let errors = if verify_keys.is_empty() {
+        cluster::staged(label, cluster::error_keys(&stderr))
+    } else {
+        verify_keys
+    };
     if stage != Stage::Run {
         // A crash is the first key; the errors before it still count as
         // "any" occurrences of their clusters.
@@ -449,7 +468,7 @@ mod tests {
             p(Kind::Verify, "// REQUIRES: c++03"),
             Err(Outcome::Unsupported("REQUIRES: c++03".into()))
         );
-        assert_eq!(p(Kind::Verify, ""), Err(Outcome::Unsupported("driver: -verify".into())));
+        assert_eq!(p(Kind::Verify, ""), Ok((vec![], None)));
         assert_eq!(
             p(Kind::Pass, "// RUN: %{exec} x"),
             Err(Outcome::Unsupported("driver: RUN lines".into()))
@@ -513,17 +532,14 @@ mod tests {
             Step::Killed(_) => (vec!["killed".into()], false),
             Step::Timeout => (vec!["timeout".into()], false),
         };
-        assert_eq!(keys(judge(Stage::Compile, &m(0, ""))).0, ["ok"]);
+        assert_eq!(keys(judge(Stage::Compile, &m(0, ""), false)).0, ["ok"]);
         assert_eq!(
-            keys(judge(
-                Stage::Compile,
-                &m(256, "a.h:1:2: error: 'asm' statements is not supported yet\n")
-            )),
+            keys(judge(Stage::Compile, &m(256, "a.h:1:2: error: 'asm' statements is not supported yet\n"), false)),
             (vec!["compile: '…' statements is not supported yet".to_owned()], false)
         );
         let crash = "t.h:1:1: error: expected '>'\nthread 'kiln' panicked at crates/kiln_ast/src/decl.rs:1907:5:\ndecl has no Function payload\n";
         assert_eq!(
-            keys(judge(Stage::Compile, &m(101 << 8, crash))),
+            keys(judge(Stage::Compile, &m(101 << 8, crash), false)),
             (
                 vec![
                     "crash: panicked at crates/kiln_ast/src/decl.rs: decl has no Function payload"
@@ -534,28 +550,36 @@ mod tests {
             )
         );
         assert_eq!(
-            keys(judge(Stage::Compile, &m(11, ""))),
+            keys(judge(Stage::Compile, &m(11, ""), false)),
             (vec!["crash: killed by signal 11".to_owned()], true)
         );
         assert_eq!(
-            keys(judge(Stage::Link, &m(256, "/usr/bin/ld: t.o: in function `main':\nt.cpp:(.text+0x1): undefined reference to `foo()'\n"))).0,
+            keys(judge(Stage::Link, &m(256, "/usr/bin/ld: t.o: in function `main':\nt.cpp:(.text+0x1): undefined reference to `foo()'\n"), false)).0,
             ["link: undefined reference to '…'"]
         );
         assert_eq!(
-            keys(judge(
-                Stage::Run,
-                &m(6, "t.exe: t.cpp:3: int main(): Assertion `x == 1' failed.\n")
-            )),
+            keys(judge(Stage::Run, &m(6, "t.exe: t.cpp:3: int main(): Assertion `x == 1' failed.\n"), false)),
             (vec!["run: assertion failed".to_owned()], false)
         );
-        assert_eq!(keys(judge(Stage::Run, &m(256, ""))).0, ["run: exit code 1"]);
+        assert_eq!(keys(judge(Stage::Run, &m(256, ""), false)).0, ["run: exit code 1"]);
         assert_eq!(
-            keys(judge(Stage::Compile, &m(134, "memory allocation of 8 bytes failed\n"))).0,
+            keys(judge(Stage::Compile, &m(134, "memory allocation of 8 bytes failed\n"), false)).0,
             ["killed"]
         );
         let timed_out =
             Measured { status: None, stderr: Vec::new(), wall: Duration::ZERO, max_rss_kb: None };
-        assert_eq!(keys(judge(Stage::Run, &timed_out)).0, ["timeout"]);
+        assert_eq!(keys(judge(Stage::Run, &timed_out, false)).0, ["timeout"]);
+        // spec/libcxx.md ".verify.cpp": a verify report clusters by entry;
+        // other compile errors (a fatal include error) keep their keys.
+        let report = "error: 'expected-error' diagnostics expected but not seen: \n  File t.cpp Line 3: deleted\n1 error generated.\n";
+        assert_eq!(
+            keys(judge(Stage::Compile, &m(256, report), true)).0,
+            ["verify: error expected but not seen: deleted"]
+        );
+        assert_eq!(
+            keys(judge(Stage::Compile, &m(256, "t.cpp:1:1: error: boom\n"), true)).0,
+            ["compile: boom"]
+        );
     }
 
     #[test]

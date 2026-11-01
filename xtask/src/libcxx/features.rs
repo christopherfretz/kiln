@@ -38,6 +38,9 @@ const FEATURES: &[&str] = &[
     // Flags kiln accepts (lit probes them with hasCompileFlag).
     "-fsized-deallocation",
     "has-fconstexpr-steps",
+    // `hasCompileFlag("-Xclang -verify-ignore-unexpected")` (spec/libcxx.md
+    // ".verify.cpp").
+    "verify-support",
     // __config / __config_site macros (features.py `macros`).
     "libcpp-abi-version=1",
     "libcpp-has-no-availability-markup",
@@ -74,8 +77,9 @@ mod tests {
         assert!(all.contains(&format!("target={TARGET}")));
         assert!(all.iter().any(|f| f == STD));
         assert!(all.iter().any(|f| f == "kiln"));
+        assert!(all.iter().any(|f| f == "verify-support"));
         for f in &all {
-            for bad in ["clang", "gcc", "msvc", "apple-clang", "verify-support"] {
+            for bad in ["clang", "gcc", "msvc", "apple-clang"] {
                 assert!(
                     f != bad && !f.starts_with(&format!("{bad}-")),
                     "compiler-identity feature `{f}` in the static set"
