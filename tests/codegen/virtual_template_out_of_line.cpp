@@ -4,7 +4,7 @@
 // every virtual member, including those defined out of line and after the
 // point of instantiation; the vtable entries name the specialization's
 // members. An explicit specialization keeps its key function (strong or
-// external vtable). No vtable for the pattern. (Explicit instantiation
+// external vtable); an explicitly specialized member keeps its slot. No vtable for the pattern. (Explicit instantiation
 // definitions, `weak_odr` vtables: WP-113.) `typeid` of a template
 // parameter. (No virtual destructor and the specialization-defined-elsewhere
 // case first: kiln does not yet order end-of-TU instantiations in
@@ -65,3 +65,8 @@ struct Late : Count {
 Count *make_late() { return new Late<int>(9); }
 template <class T>
 void Late<T>::on_zero() noexcept { v = 0; }
+
+// An explicitly specialized virtual member keeps its slot.
+template <>
+void Late<char>::on_zero() noexcept { v = 1; }
+Count *make_late_char() { return new Late<char>('a'); }

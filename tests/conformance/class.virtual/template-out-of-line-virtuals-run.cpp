@@ -4,13 +4,15 @@
 // `__on_zero_shared`, `__get_deleter`) are instantiated, and no vtable is
 // emitted for the template pattern itself. A template instantiation has
 // no key function; an explicit specialization keeps one. Also a member
-// defined after the point of instantiation, `typeid` of a template
-// parameter ([expr.typeid]) and the trivial copy of an empty base that
-// shares its address with a pointer member ([intro.object]/8, the EBO of
-// libc++'s `__compressed_pair`).
+// defined after the point of instantiation, an explicitly specialized
+// virtual member (keeps its slot), `typeid` of a template parameter
+// ([expr.typeid]) and the trivial copy of an empty base that shares its
+// address with a pointer member ([intro.object]/8, the EBO of libc++'s
+// `__compressed_pair`).
 //@ expect: run
 //@ stdout: zero 3 deleter 1 other 0
 //@ stdout: spec 7 late 9
+//@ stdout: late char x
 //@ stdout: pair 42
 extern "C" int printf(const char *, ...);
 namespace std { class type_info; }
@@ -65,6 +67,10 @@ Count *make_late() { return new Late<int>(9); }
 template <class T>
 void Late<T>::on_zero() noexcept { printf("late %d\n", (int)v); }
 
+// An explicitly specialized virtual member keeps its vtable slot.
+template <>
+void Late<char>::on_zero() noexcept { printf("late char %c\n", v); }
+
 // The EBO of a compressed pair: the empty element's trivial copy writes
 // nothing over the pointer it overlaps.
 struct Empty {};
@@ -93,6 +99,9 @@ int main() {
   Count *l = make_late();
   l->on_zero();
   delete l;
+  Count *lc = new Late<char>('x');
+  lc->on_zero();
+  delete lc;
   int v = 42;
   Pair pr(&v, Empty{});
   printf("pair %d\n", *pr.p);
