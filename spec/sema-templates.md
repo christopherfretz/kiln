@@ -3743,6 +3743,10 @@ declarator scopes.**
   checks a user-declared trivial destructor too (access, deletion)
   without binding. A call that is a `decltype` operand defers that check
   to `exit_decltype`, which exempts the top-level call.
+- *Partial ordering with packs*: `partial_at_least_as_specialized`
+  makes an undeduced pack parameter empty (`empty_undeduced_packs`, as
+  matching already did). Without this, `C<A>` and `C<A, B...>` were
+  ambiguous for `C<int>`.
 - Tests: `templates/builtins/temp.builtin.type-pack-element-narrowing.cpp`,
   `templates/diag/temp.arg.nontype-narrowing-wno.cpp`,
   `dcl.fct/abominable-compound.cpp`, `expr.mptr.oper/ref-qualified-call.cpp`,
@@ -3755,7 +3759,8 @@ declarator scopes.**
   `temp.inst/local-class-member-pointer.cpp`, `expr.cond/class-operand-*.cpp`,
   `expr.call/function-rvalue-reference-result.cpp`,
   `templates/builtins/builtin.is-constructible-temporary-dtor.cpp`,
-  `class.temporary/trivial-dtor-checked.cpp`.
+  `class.temporary/trivial-dtor-checked.cpp`,
+  `templates/order/temp.spec.partial.order-empty-pack.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 
