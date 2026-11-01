@@ -1069,6 +1069,12 @@ recomputed exactly as for non-template code (clang's
   `__end` variables.
 - **`return` in a deduced-return function** deduces from the first
   non-discarded `return` (§6.3).
+- **Labels and `goto`** (WP-153). A `LabelStmt`, a `GotoStmt` and the
+  labels of an `asm goto` are rebuilt by name (`act_on_label`,
+  `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
+  `LabelDecl`s and the jump-scope checker (spec/sema.md §7.4) runs on it.
+  Not yet: `CXXTryStmt` (needs the handler's exception declaration
+  substituted through `act_on_exception_decl`).
 
 ### 5.6 Declarations
 
@@ -2964,6 +2970,19 @@ explicit specialization errors remain. The blockers are:
   defaulted argument) and the `std::source_location::__impl` check.
   `Sema::fold_lone_invalid` keeps clang's single "subexpression not
   valid" note for `__builtin_unreachable`.
+- Landed (WP-153): `__builtin_isfpclass(x, mask)` (custom: `x` a real
+  floating type, else `floating point classification requires argument
+  of floating point type`; `mask` an integer constant expression in
+  [0, 1023], else `argument to '__builtin_isfpclass' must be a constant
+  integer` / `argument value N is outside the valid range [0, 1023]`;
+  result `int`), and `__builtin_expect_with_probability(e, c, p)`, whose
+  `p` must be a `double` constant expression (`probability argument to
+  __builtin_expect_with_probability must be constant floating-point
+  expression`, with the evaluation notes) in [0.0, 1.0] (`probability
+  argument to __builtin_expect_with_probability is outside the range
+  [0.0, 1.0]`); checked after `convert_call_args`
+  (`check_expect_probability`). Not yet: `-Wassume` (needs clang's
+  possible-effects flavour of `HasSideEffects`).
 - `kiln_ast`: `ExprKind::SourceLocExpr`, `SourceLocKind`,
   `SourceLocValues` and `exprs.cold.source_loc` (spec/ast.md §5.8);
   `kiln_parse` parses the six keywords.
@@ -2981,8 +3000,8 @@ explicit specialization errors remain. The blockers are:
 - Gaps: `__builtin_source_location` in a function with a deduced return
   type prints `auto` (clang prints the deduced type). (The
   `[T = int]` template-argument suffix inside templates: Landed (WP-140),
-  spec/sema.md §7.8.) A `CXXDefaultInitExpr` does not yet take the
-  location of the constructor that uses it (owner: WP-067b).
+  spec/sema.md §7.8.) (`CXXDefaultInitExpr` use locations: Landed (WP-153), see
+  **Source location** above.)
 
 **Landed (WP-071): function templates.**
 - `deduce_call` (`templ/deduce_call.rs`, §6.1) builds each candidate's
