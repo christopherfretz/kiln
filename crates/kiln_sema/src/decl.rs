@@ -1464,8 +1464,12 @@ impl Sema<'_, '_> {
             self.set_member_access(t);
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
-        if d.qualifier.is_none() && d.op_name.is_none() && d.lit_suffix.is_none() {
-            self.check_using_shadow_conflict(decl, name);
+        if d.qualifier.is_none() {
+            // Operator and conversion function names too: a member
+            // `operator[]` hides a using-declared base one
+            // ([namespace.udecl]/14).
+            let dn = self.ast.decls.get(decl).name();
+            self.check_using_shadow_conflict(decl, dn);
         }
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
@@ -1502,6 +1506,12 @@ impl Sema<'_, '_> {
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
+        }
+        if d.qualifier.is_none() && self.kind_of(decl) == DeclKind::CXXConversion {
+            // A conversion function hides a using-declared base one with
+            // the same target type ([namespace.udecl]/14).
+            let dn = self.ast.decls.get(decl).name();
+            self.check_using_shadow_conflict(decl, dn);
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -1844,7 +1854,7 @@ impl Sema<'_, '_> {
         if let Some(t) = self.finish_template_pattern(td) {
             self.set_member_access(t);
         }
-        self.check_using_shadow_conflict(td, name);
+        self.check_using_shadow_conflict(td, DeclName::ident(name));
         if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(td, &attrs);
         }
@@ -3551,7 +3561,7 @@ impl Sema<'_, '_> {
             && qualifier.is_none()
             && prev.is_none()
         {
-            self.check_using_shadow_conflict(d, n);
+            self.check_using_shadow_conflict(d, DeclName::ident(n));
         }
         d
     }

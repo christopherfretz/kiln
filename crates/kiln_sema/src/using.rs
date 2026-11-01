@@ -625,8 +625,9 @@ impl Sema<'_, '_> {
     /// Checks a new declaration `d` named `name` against the using-shadows
     /// of the current scope ([namespace.udecl]/11); on a conflict, reports
     /// it, marks `d` invalid and returns true.
-    pub(crate) fn check_using_shadow_conflict(&mut self, d: DeclId, name: Symbol) -> bool {
-        let shadows = self.current_scope_shadows(name);
+    pub(crate) fn check_using_shadow_conflict(&mut self, d: DeclId, name: DeclName) -> bool {
+        let mut shadows = self.current_scope_raw_dn(name);
+        shadows.retain(|&s| self.kind_of(s) == DeclKind::UsingShadow);
         for s in shadows.into_iter().rev() {
             let t = self.ast.strip_shadow(s);
             if self.ast.first(t) == self.ast.first(d) || !self.using_conflicts(t, d) {
