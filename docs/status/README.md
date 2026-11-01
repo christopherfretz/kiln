@@ -13,3 +13,4 @@ C++23/C++26 language features (M4 checklist): [cxx-features.md](cxx-features.md)
 
 Harness through kiln: 565/575 pass, 8 xfail (among them the 5 header-dependent `run` tests: `decltype` in libstdc++'s c++config.h), 2 fail (reflection, contracts).
 Workspace: ~1,400 Rust tests across 12 crates, all `#![forbid(unsafe_code)]`.
+- `libcxx.md` — libc++ 19 end-to-end status (ROADMAP M3b): sample/full-suite pass rates, failure clusters → WPs.
