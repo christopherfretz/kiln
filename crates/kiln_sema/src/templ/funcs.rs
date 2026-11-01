@@ -557,7 +557,11 @@ impl Sema<'_, '_> {
         }
         self.instantiate_function_definition(s, name_loc);
         if self.ast.definition(s).is_none() {
+            // Defined later: instantiated, and emitted, at the end of the
+            // TU (clang `PerformPendingInstantiations`).
             self.queue_instantiation(s, name_loc);
+            let first = self.ast.first(s);
+            self.ast.templates.add_late_explicit_inst(first);
         }
     }
 
@@ -803,6 +807,28 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// After `template<>`, an out-of-line redeclaration `p` of a
+    /// constructor or destructor of an implicit class template
+    /// specialization explicitly specializes it ([temp.expl.spec]/1,
+    /// §4.5): it is no longer instantiated from the pattern (clang
+    /// `CheckMemberSpecialization`). Static data members go through
+    /// `act_on_explicit_member_var_spec`.
+    pub(crate) fn mark_member_explicit_spec(&mut self, p: DeclId) {
+        if self.templ.explicit_spec.is_none() || !self.at_explicit_head() {
+            return;
+        }
+        let Some((i, info)) = self.ast.member_spec_info(self.ast.first(p)).map(|(i, x)| (i, *x))
+        else {
+            return;
+        };
+        if info.kind == SpecKind::ImplicitInstantiation {
+            self.ast.templates.update_member_spec(i, |x| {
+                x.kind = SpecKind::ExplicitSpecialization;
+                x.point_of_instantiation = Loc::INVALID;
+            });
+        }
+    }
+
     /// `[extern] template R C<args>::f(params);` for member `m` of a
     /// class template specialization ([temp.explicit]/3, §4.5).
     pub(crate) fn act_on_explicit_member_inst(
@@ -874,6 +900,8 @@ impl Sema<'_, '_> {
             self.instantiate_function_definition(m, name_loc);
             if self.ast.definition(m).is_none() {
                 self.queue_instantiation(m, name_loc);
+                let first = self.ast.first(m);
+                self.ast.templates.add_late_explicit_inst(first);
             }
         }
     }

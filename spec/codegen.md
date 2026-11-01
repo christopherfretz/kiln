@@ -474,7 +474,10 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - **Structors** (clang `ItaniumCXXABI::emitCXXStructor`): constructors
   and destructors are emitted as the base variant (C2/D2) and then the
   complete variant (C1/D1). A discardable C1 is replaced by C2 (RAUW);
-  otherwise C1 is an `alias` to C2. Deleting destructors (D0) are WP-080.
+  otherwise C1 is an `alias` to C2. clang's `applyReplacements` moves
+  C2 to where the C1 declaration was created: when C2 already exists at
+  the first C1 reference, `structor_ref` moves it to the end of the
+  function list (`Module::move_function_to_end`, WP-113). Deleting destructors (D0) are WP-080.
   Structor references go through `structor_ref`. A cache hit on the base
   variant still queues it for definition, because clang's `EmitDeferred`
   is depth-first.
@@ -607,11 +610,8 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   class without virtual bases share a `C5`/`D5` COMDAT (with `D0`) and
   the complete-object symbol is a `weak_odr` alias (clang
   `getCodegenToUse` -> `COMDAT`). Static locals of such functions stay
-  `linkonce_odr`. Ordering deviation: when an explicitly instantiated
-  class's constructor references a non-template polymorphic base whose
-  inline destructor is otherwise unused, clang emits that base
-  destructor at the end of the TU while kiln emits it right after the
-  derived destructor that calls it (same definitions, different order).
+  `linkonce_odr`. Linkage table, emission order and the remaining cases
+  (WP-113): §7h.
   The initializer is
   `{ [N x ptr] ... }`, one array per primary/secondary group, with
   offset-to-top, RTTI, then the slots. Pure slots are
@@ -1070,8 +1070,7 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   `tests/conformance/basic.start.dynamic/order-run.cpp`,
   `tests/conformance/stmt.dcl/static-local-run.cpp`.
 - **Not implemented:** `init_priority`, `thread_local` dynamic
-  initialization (TLS wrappers), explicit instantiation definitions of
-  static data members, folding of uses of constant-initialized
+  initialization (TLS wrappers), folding of uses of constant-initialized
   references and of reads of `const` class objects that clang permits
   ([basic.start.static]/3).
 
@@ -1129,6 +1128,68 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
 - **Deviation (mangling, follow-up):** a namespace-scope anonymous union
   variable (`static union { int ga; };`) mangles as `_ZLUt_`; clang
   uses the first named member, `_Z2ga` (Itanium 5.1.2).
+
+## 7h. Landed (WP-113): explicit instantiation linkage and order
+Linkage follows clang 19's `GetGVALinkageForFunction` /
+`GetGVALinkageForVariable` (`-O0`, ELF). "Under" means the entity's own
+kind, else that of the innermost explicitly instantiated or specialized
+enclosing class (`Cg::explicit_inst_kind`):
+
+| Entity | clang GVA | kiln IR |
+|---|---|---|
+| implicit instantiation (function, variable, member) | `GVA_DiscardableODR` | `linkonce_odr` in its own COMDAT, deferred until used |
+| explicit specialization (`template<>`), non-inline | `GVA_StrongExternal` | strong `external` (`dso_local`); structors use C1/D1 aliases |
+| explicit specialization, inline / constexpr | `GVA_DiscardableODR` | `linkonce_odr` |
+| under an explicit instantiation definition | `GVA_StrongODR` | `weak_odr` in its own COMDAT, never deferred; vtable/RTTI `weak_odr`; C2/D2 in a C5/D5 COMDAT with `weak_odr` C1/D1 aliases |
+| under an explicit instantiation declaration | `GVA_AvailableExternally` (only defined when optimizing) | no definition; references name the external symbol; vtable an `external` declaration |
+| implicitly declared special member of either | `GVA_DiscardableODR` | `linkonce_odr` (not an instantiation) |
+| static local of a `weak_odr` function | `GVA_DiscardableODR` | `linkonce_odr` |
+
+Where the definitions are emitted (clang hands them to
+`HandleTopLevelDecl`, so the order also decides which callers are
+`nounwind`, clang `TryMarkNoThrow`):
+- `template struct X<int>;` and `template R f<int>(...)`: at the explicit
+  instantiation; members are emitted in member order
+  (`emit_class_members`). An implicit instantiation emitted earlier is
+  re-emitted there `weak_odr` (its deferred `linkonce_odr` definition is
+  never produced).
+- An explicit instantiation definition following an explicit
+  instantiation declaration of the same class: at the definition, not at
+  the declaration where sema first listed the specialization
+  (`TemplateTables::add_moved_class_inst`; codegen skips the class at its
+  listed position and emits it from `explicit_member_insts`).
+- A member explicit instantiation (`template void X<int>::f();`) or a
+  member class (`[extern] template struct O<int>::I;`, [temp.explicit]/3):
+  right after the declaration that precedes it lexically
+  (`TemplateTables::explicit_member_insts`). The member class gets the
+  explicit kind in its member-spec info, so its members and vtable follow
+  the table above; member templates are not instantiated
+  ([temp.explicit]/10).
+- A function, member function, structor or variable template
+  specialization explicitly instantiated before its template's
+  definition is seen (for a variable template, after a non-defining
+  `extern` declaration; sema `instantiate_late_var_spec` rebinds the
+  specialization to the defining redeclaration): instantiated at the end
+  of the TU and emitted after the last top-level declaration, in
+  explicit instantiation order, before the key-function vtables and the
+  deferred definitions (clang `PerformPendingInstantiations`;
+  `TemplateTables::late_explicit_insts`, `Cg::emit_late_explicit_insts`).
+  Members of an explicitly instantiated class that are defined after the
+  class's explicit instantiation are not instantiated (as clang).
+- Explicitly specialized members of an explicitly instantiated class
+  (`template<> void X<int>::f() {}`, also static data members and
+  structors) are ordinary strong definitions emitted where they appear;
+  the class's explicit instantiation neither instantiates nor re-emits
+  them (sema `instantiate_members_of` and codegen `emit_class_members`
+  skip `SpecKind::ExplicitSpecialization`, clang
+  `InstantiateClassMembers`). An out-of-line `template<>` redeclaration
+  of a static data member (`Sema::act_on_explicit_member_var_spec`,
+  WP-117) or structor (`Sema::mark_member_explicit_spec`) of an implicit
+  specialization sets that kind, with or without an explicit
+  instantiation.
+
+Tests: `tests/codegen/explicit_instantiation*.cpp`,
+`tests/codegen/structor_rauw_order.cpp` (IR parity on both triples).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

@@ -235,6 +235,7 @@ impl<'a> Cg<'a> {
     fn run_tu(&mut self) -> R<()> {
         let tu = self.ast.tu;
         self.emit_members(tu)?;
+        self.emit_late_explicit_insts()?;
         self.emit_key_function_vtables()?;
         self.emit_deferred()?;
         self.resolve_placeholders()?;
@@ -248,17 +249,49 @@ impl<'a> Cg<'a> {
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
         self.emit_explicit_member_insts(ctx)?;
         for d in members {
+            if ast.templates.is_late_explicit_inst(ast.first(d)) {
+                continue;
+            }
             self.emit_member(d)?;
             self.emit_explicit_member_insts(d)?;
         }
         Ok(())
     }
 
-    /// The member functions explicitly instantiated by a definition
-    /// right after `after` ([temp.explicit]/10).
+    /// The member functions and classes explicitly instantiated by a
+    /// definition right after `after` ([temp.explicit]/10).
     fn emit_explicit_member_insts(&mut self, after: DeclId) -> R<()> {
         let ast = self.ast;
         for &m in ast.templates.explicit_member_insts_after(after) {
+            if ast.templates.is_late_explicit_inst(ast.first(m)) {
+                continue;
+            }
+            let Some(def) = ast.definition(m) else { continue };
+            match ast.decls.get(def).kind() {
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
+                    self.emit_global_structor(def)?;
+                }
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    self.emit_class_members(def)?;
+                }
+                _ => self.emit_global_fn(def)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// The functions and variables explicitly instantiated before their
+    /// template was defined, instantiated at the end of the TU: clang
+    /// `PerformPendingInstantiations` hands them to `HandleTopLevelDecl`
+    /// after the last top-level declaration, before `Release`.
+    fn emit_late_explicit_insts(&mut self) -> R<()> {
+        let ast = self.ast;
+        for &m in ast.templates.late_explicit_insts() {
+            if ast.decls.get(m).kind() == DeclKind::Var {
+                // A variable template specialization is its own definition.
+                self.emit_global_var(m)?;
+                continue;
+            }
             let Some(def) = ast.definition(m) else { continue };
             match ast.decls.get(def).kind() {
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
@@ -295,7 +328,9 @@ impl<'a> Cg<'a> {
                 // and nested classes; inline member functions are emitted
                 // when first used.
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
-                    self.emit_class_members(d)?;
+                    if !ast.templates.is_moved_class_inst(ast.first(d)) {
+                        self.emit_class_members(d)?;
+                    }
                 }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
                 DeclKind::FileScopeAsm => self.emit_file_scope_asm(d),
@@ -352,6 +387,12 @@ impl<'a> Cg<'a> {
         for m in members {
             let n = ast.decls.get(m);
             if n.has(DeclFlags::INVALID) {
+                continue;
+            }
+            // An explicitly specialized member is an ordinary definition,
+            // emitted where it appears (clang `InstantiateClassMembers`
+            // skips `TSK_ExplicitSpecialization`).
+            if explicit && self.is_member_explicit_spec(m) {
                 continue;
             }
             match n.kind() {
@@ -598,6 +639,14 @@ impl<'a> Cg<'a> {
             Some(Linkage::WeakOdr) => false,
             inst => self.var_is_inline(d) || inst == Some(Linkage::LinkOnceOdr),
         }
+    }
+
+    /// Whether member `m` of a class template specialization is an
+    /// explicit specialization (`template<> void X<int>::f() {}`).
+    fn is_member_explicit_spec(&self, m: DeclId) -> bool {
+        let ast = self.ast;
+        ast.member_spec_info(ast.first(m))
+            .is_some_and(|(_, x)| x.kind == SpecKind::ExplicitSpecialization)
     }
 
     /// Whether variable or function `first` is under an explicit

@@ -187,6 +187,30 @@ impl Sema<'_, '_> {
         self.pop_inst_frame();
     }
 
+    /// The defining declaration of the pattern of variable template
+    /// specialization `v`, if one has been seen.
+    fn var_pattern_def(&self, v: DeclId) -> Option<DeclId> {
+        let (_, info) = self.ast.spec_info(v)?;
+        self.ast.redecls_of(info.from).find(|&r| self.is_var_definition(r))
+    }
+
+    /// The pending instantiation of variable template specialization `v`,
+    /// explicitly instantiated before its template's definition: the
+    /// initializer is instantiated from the definition seen since
+    /// ([temp.explicit]/10, clang `InstantiateVariableDefinition`).
+    pub(crate) fn instantiate_late_var_spec(&mut self, v: DeclId, poi: Loc) {
+        let Some(def) = self.var_pattern_def(v) else { return };
+        let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
+        if info.from == def || self.ast.decls.var(v).is_none_or(|x| x.init.is_some()) {
+            return;
+        }
+        self.ast.templates.update_spec(i, |s| s.from = def);
+        if self.ast.decls.var(def).is_some_and(|x| x.init.is_some()) {
+            self.inst.member_defs.insert(v);
+        }
+        self.instantiate_var_spec_init(v, poi);
+    }
+
     /// `v<int, 3>`: how the specialization of variable template `tmpl`
     /// with arguments `args` prints (its qualified name).
     pub(crate) fn spec_name(&self, tmpl: DeclId, args: ArgListId) -> String {
@@ -402,6 +426,13 @@ impl Sema<'_, '_> {
             if !declaration {
                 self.instantiate_var_spec_init(v, name_loc);
                 self.mark_used(v);
+                if self.var_pattern_def(v).is_none() {
+                    // Defined later: instantiated, and emitted, at the end
+                    // of the TU (clang `PerformPendingInstantiations`).
+                    self.queue_instantiation(v, name_loc);
+                    let first = self.ast.first(v);
+                    self.ast.templates.add_late_explicit_inst(first);
+                }
             }
             return;
         }
