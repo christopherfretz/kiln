@@ -653,7 +653,13 @@ not deleted (`attempt to use a deleted function`), and is marked referenced
 `act_on_mem_initializers(ctor, &[MemInitInfo], colon_loc)`, `MemInitInfo { id:
 Ident | TypeId, loc, init, pack_expansion }`. A mem-initializer-id names a
 non-static data member (anonymous-union members via `IndirectField`), else a
-direct or virtual base, or the class itself (delegating). Errors: `member
+direct or virtual base, or the class itself (delegating). An identifier that
+is not a field is looked up in the class first, where it may be a member typedef
+or an injected-class-name, including one inherited from a base
+([class.qual]/2). It is then classified in the enclosing scopes. There, a class
+template's injected-class-name is the injected type ([temp.local]/1). This is
+also true when an instantiated constructor re-resolves its ids, whose scope
+chain lacks the class scope. Errors: `member
 initializer 'y' does not name a non-static data member or base class`,
 `multiple initializations given for non-static member 'x'` (`... for base
 'B'`), `an initializer for a delegating constructor must appear alone`,
@@ -1419,7 +1425,14 @@ Constructors, destructors, conversion functions, `= default` and
   `TRIVIAL_*`, `IMPLICIT_*_CONST_PARAM` and deleted-ness bits and declare
   the eager members of the §4.1 table; `ensure_implicit(class, kind)`
   declares the rest lazily (the members' own declarator checks and
-  §4.2 selection call it). `declare_implicit` sets triviality from the
+  §4.2 selection call it). Lookup is `&self`, so a name that can denote an
+  implicit member is declared before it is looked up, as in clang's
+  `DeclareImplicitMemberFunctionsWithName`. `declare_implicit_named`
+  declares copy/move assignment for `operator=` and the destructor for a
+  destructor name. It runs in the class of a qualified id-expression and
+  in the class of a member access. It also runs in the nominated class of
+  a member using-declaration. An unqualified `operator=` runs
+  `declare_implicit_named_in_scope` over the enclosing class scopes. `declare_implicit` sets triviality from the
   class bits, or for copy/move members of a class with `NEEDS_OVL_*` from
   `selected_all_trivial` (clang `SpecialMemberIsTrivial`, §4.3); `constexpr`
   follows the C++23+ rules (§4.6).

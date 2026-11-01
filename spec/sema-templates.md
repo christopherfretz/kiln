@@ -1855,11 +1855,15 @@ cost is small.
     (`bool`) is fixed at construction.
 - **The associated constraints of a templated entity**
   ([temp.constr.decl]/3) are the conjunction, in this order, of:
-  1. the template-head's requires-clause;
-  2. each parameter's immediately-declared constraint, in order;
+  1. each template parameter's immediately-declared constraint, in order;
+  2. the template-head's requires-clause;
   3. the trailing requires-clause.
-  For abbreviated templates, the invented parameters come first in that
-  order, as clang does.
+  Satisfaction checks the conjuncts in this order and stops at the first
+  unsatisfied one, so a type-constraint guards substitution into the
+  requires-clause. The invented parameters of an abbreviated template are
+  template parameters, so their constraints come in step 1, before the
+  requires-clause, as in clang 19. The standard (/3.3) and GCC put them
+  after it.
 
 ### 8.2 Normalization and atomic-constraint identity
 

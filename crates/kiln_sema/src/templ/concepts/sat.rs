@@ -28,10 +28,9 @@ const MAX_NOTE_DEPTH: u32 = 64;
 
 impl Sema<'_, '_> {
     /// The associated constraints of template `tmpl` in order
-    /// ([temp.constr.decl]/3): each written parameter's
-    /// immediately-declared constraint, the template-head's
-    /// requires-clause, each invented parameter's, the trailing
-    /// requires-clause.
+    /// ([temp.constr.decl]/3, as clang 19 orders them): each template
+    /// parameter's immediately-declared constraint, the template-head's
+    /// requires-clause, the trailing requires-clause.
     pub(crate) fn associated_constraints(&self, tmpl: DeclId) -> Vec<ExprId> {
         if let Some(&(pattern, _)) = self.inst.concepts.member_constraints.get(&tmpl)
             && pattern != tmpl
@@ -51,35 +50,28 @@ impl Sema<'_, '_> {
         out
     }
 
-    /// A template-head's constraints in the order of [temp.constr.decl]/3:
-    /// each written parameter's immediately-declared constraint, its
-    /// requires-clause, then each invented parameter's (an abbreviated
-    /// function template's `C auto`, [dcl.fct]/22). Satisfaction checks
-    /// them in this order and stops at the first unsatisfied one, so a
-    /// type-constraint guards the substitution into the requires-clause.
+    /// A template-head's constraints: each template parameter's
+    /// immediately-declared constraint, then its requires-clause
+    /// ([temp.constr.decl]/3.1, /3.2). Satisfaction checks them in this
+    /// order and stops at the first unsatisfied one, so a type-constraint
+    /// guards the substitution into the requires-clause. An abbreviated
+    /// function template's invented parameters ([dcl.fct]/22) are template
+    /// parameters too and come before the requires-clause, as in clang 19
+    /// (the standard lists them after it, /3.3; GCC follows that).
     pub(crate) fn head_constraints(
         &self,
         params: kiln_ast::ids::ListId,
         requires: Option<ExprId>,
         out: &mut Vec<ExprId>,
     ) {
-        let invented = |p: DeclId| {
-            self.ast.decls.get(p).flags().contains(kiln_ast::decl::DeclFlags::IMPLICIT)
-        };
-        let push = |want_invented: bool, out: &mut Vec<ExprId>| {
-            for p in self.ast.lists.iter::<DeclId>(params) {
-                if invented(p) == want_invented
-                    && let Some(c) = self.ast.template_parm(p).and_then(|i| i.constraint)
-                {
-                    out.push(c);
-                }
+        for p in self.ast.lists.iter::<DeclId>(params) {
+            if let Some(c) = self.ast.template_parm(p).and_then(|i| i.constraint) {
+                out.push(c);
             }
-        };
-        push(false, out);
+        }
         if let Some(r) = requires {
             out.push(r);
         }
-        push(true, out);
     }
 
     /// Checks the satisfaction of concept-id `c<args>` (`args` converted,

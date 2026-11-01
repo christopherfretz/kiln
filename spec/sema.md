@@ -1795,6 +1795,13 @@ The vector operators themselves are summarized in spec/types.md
     [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
     narrowing rejected, then to `E`), as `E e{v};` does.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
+    The expression-list may hold braced-init-lists (`T(a, {b})`, `T({})`).
+    They are the placeholders of `act_on_braced_arg`, and the
+    construction list-initializes its parameter from them. A dependent
+    operand keeps the list as written (`dependent_init_list`), and
+    substitution makes it a placeholder again. A lone parenthesized list
+    for a non-class `T` is `sema_list_init_in_parens` (clang's
+    FK_ParenthesizedListInitForScalar).
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have
     constructors (WP-065).
