@@ -1,4 +1,4 @@
-//! `cargo xtask diag-split`: keeps kiln_diag's diagnostic-id and
+//! `cargo xtask diag-split`: keeps `kiln_diag`'s diagnostic-id and
 //! warning-group tables split into one file per area, each sorted by name,
 //! so work packages adding rows in parallel touch different lines
 //! (spec/diag.md §2.4).
@@ -321,7 +321,7 @@ fn group_file(
     }
     // Most ids; on a tie the first prefix in name order.
     let best = prefixes.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)));
-    Ok(best.map(|(p, _)| p.clone()).unwrap_or_else(|| MISC.to_owned()))
+    Ok(best.map_or_else(|| MISC.to_owned(), |(p, _)| p.clone()))
 }
 
 fn header(table: Table, stem: &str) -> String {
@@ -489,9 +489,12 @@ fn empty_tail(src: &str, table: Table) -> Result<String, String> {
     Ok(if src.ends_with('\n') { stripped + "\n" } else { stripped })
 }
 
+/// Files to write (repo-relative path, text) and files to remove.
+type Plan = (Vec<(String, String)>, Vec<String>);
+
 /// Every file the canonical layout of `w`'s rows writes, by repo-relative
 /// path, and the existing area files it no longer has rows for.
-fn plan(w: Worktree) -> Result<(Vec<(String, String)>, Vec<String>), Vec<String>> {
+fn plan(w: Worktree) -> Result<Plan, Vec<String>> {
     let Worktree { rows: [ids, groups], stems, legacy, .. } = w;
     let files = layout(ids, groups, &stems[0])?;
     let mut writes = Vec::new();
@@ -554,13 +557,13 @@ pub fn check(root: &Path) -> Result<(), Vec<String>> {
         }
     }
     for (k, name, stem) in &found {
-        if let Some(rel) = target.get(&(*k, name.as_str())) {
-            if !rel.ends_with(&format!("/{stem}.rs")) {
-                problems.push(format!(
-                    "`{name}` is in {}/{stem}.rs but belongs in {rel}",
-                    Table::BOTH[*k].dir()
-                ));
-            }
+        if let Some(rel) = target.get(&(*k, name.as_str()))
+            && !rel.ends_with(&format!("/{stem}.rs"))
+        {
+            problems.push(format!(
+                "`{name}` is in {}/{stem}.rs but belongs in {rel}",
+                Table::BOTH[*k].dir()
+            ));
         }
     }
     if problems.is_empty() {
@@ -604,7 +607,7 @@ fn rows_at(
     let src = git(root, &["show", &format!("{rev}:{}", table.legacy())])?;
     let mut rows = legacy_rows(&src, table, warnings)?.0;
     let listing = git(root, &["ls-tree", "--name-only", rev, "--", &format!("{}/", table.dir())])?;
-    for path in listing.lines().filter(|p| p.ends_with(".rs")) {
+    for path in listing.lines().filter(|p| Path::new(p).extension().is_some_and(|x| x == "rs")) {
         let text = git(root, &["show", &format!("{rev}:{path}")])?;
         let lines: Vec<&str> = text.lines().collect();
         rows.extend(parse_rows(&lines, None, &format!("{rev}:{path}"), warnings)?);
@@ -618,13 +621,13 @@ fn replay_rows(table: Table, base: &[Row], head: &[Row], cur: &mut Vec<Row>) -> 
     let by_name = |rows: &[Row]| -> HashMap<String, Row> {
         rows.iter().map(|r| (r.name.clone(), r.clone())).collect()
     };
-    let (b, h) = (by_name(base), by_name(head));
+    let (in_base, in_head) = (by_name(base), by_name(head));
     let mut conflicts = Vec::new();
     let pos = |cur: &Vec<Row>, name: &str| cur.iter().position(|r| r.name == name);
     // Head order, so added rows keep their relative order in messages.
     for hr in head {
         let i = pos(cur, &hr.name);
-        match (b.get(&hr.name), i) {
+        match (in_base.get(&hr.name), i) {
             (None, None) => cur.push(Row { stem: None, ..hr.clone() }),
             (None, Some(i)) if cur[i].text == hr.text => {}
             (None, Some(i)) => conflicts.push(format!(
@@ -652,7 +655,7 @@ fn replay_rows(table: Table, base: &[Row], head: &[Row], cur: &mut Vec<Row>) -> 
             }
         }
     }
-    for br in base.iter().filter(|r| !h.contains_key(&r.name)) {
+    for br in base.iter().filter(|r| !in_head.contains_key(&r.name)) {
         if let Some(i) = pos(cur, &br.name) {
             if cur[i].text == br.text {
                 cur.remove(i);
@@ -683,7 +686,7 @@ fn merge_changed(table: Table, base: &Row, head: &Row, cur: &Row) -> Option<Stri
         (false, false) if ho == co => co,
         (false, false) => return None,
     };
-    cs.retain(|s| !(bs.contains(s) && !hs.contains(s)));
+    cs.retain(|s| !bs.contains(s) || hs.contains(s));
     for s in hs.iter().filter(|s| !bs.contains(s)) {
         if !cs.contains(s) {
             cs.push(s.clone());
@@ -697,34 +700,31 @@ fn replay(
     revs: Option<(String, String)>,
 ) -> Result<(Vec<String>, Vec<String>), String> {
     let mut warnings = Vec::new();
-    let (base, head) = match revs {
-        Some(r) => r,
-        None => {
-            if git(root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_err() {
-                return Err(
-                    "--replay with no revisions must run during a merge (no MERGE_HEAD)".into()
-                );
-            }
-            let base = git(root, &["merge-base", "HEAD", "MERGE_HEAD"])?.trim().to_owned();
-            for table in Table::BOTH {
-                let theirs = git(root, &["show", &format!("MERGE_HEAD:{}", table.legacy())])?;
-                if blocks(&theirs, table)?.1 {
-                    return Err(format!(
-                        "MERGE_HEAD's {} is not split yet; nothing to replay onto",
-                        table.legacy()
-                    ));
-                }
-                let mine = read(root, table.legacy())?;
-                let conflicted =
-                    mine.lines().any(|l| l.starts_with("<<<<<<<") || l.starts_with(">>>>>>>"));
-                if conflicted || blocks(&mine, table).map_or(true, |b| b.1) {
-                    std::fs::write(root.join(table.legacy()), &theirs)
-                        .map_err(|e| format!("cannot write {}: {e}", table.legacy()))?;
-                    warnings.push(format!("reset {} to MERGE_HEAD's version", table.legacy()));
-                }
-            }
-            (base, "HEAD".to_owned())
+    let (base, head) = if let Some(r) = revs {
+        r
+    } else {
+        if git(root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_err() {
+            return Err("--replay with no revisions must run during a merge (no MERGE_HEAD)".into());
         }
+        let base = git(root, &["merge-base", "HEAD", "MERGE_HEAD"])?.trim().to_owned();
+        for table in Table::BOTH {
+            let theirs = git(root, &["show", &format!("MERGE_HEAD:{}", table.legacy())])?;
+            if blocks(&theirs, table)?.1 {
+                return Err(format!(
+                    "MERGE_HEAD's {} is not split yet; nothing to replay onto",
+                    table.legacy()
+                ));
+            }
+            let mine = read(root, table.legacy())?;
+            let conflicted =
+                mine.lines().any(|l| l.starts_with("<<<<<<<") || l.starts_with(">>>>>>>"));
+            if conflicted || blocks(&mine, table).map_or(true, |b| b.1) {
+                std::fs::write(root.join(table.legacy()), &theirs)
+                    .map_err(|e| format!("cannot write {}: {e}", table.legacy()))?;
+                warnings.push(format!("reset {} to MERGE_HEAD's version", table.legacy()));
+            }
+        }
+        (base, "HEAD".to_owned())
     };
     // Hand-written code the branch changed in a legacy file is not replayed.
     for table in Table::BOTH {
@@ -848,7 +848,7 @@ mod tests {
         let src =
             ["// header", "", "// about b", "b_x = Error (0) \"b\";", "a_y = Note (0) \"a\";"];
         let rows = parse_rows(&src, Some("a"), "t", &mut w).unwrap();
-        assert!(w.is_empty());
+        assert_eq!(w, Vec::<String>::new());
         assert_eq!(rows[0].comments, ["// about b"]);
         assert_eq!(rows[1].name, "a_y");
         assert!(parse_rows(&["oops"], None, "t", &mut w).is_err());
@@ -961,7 +961,7 @@ mod tests {
         );
         // Replaying again changes nothing.
         let again = cur.clone();
-        assert!(replay_rows(Table::Ids, &base, &head, &mut cur).is_empty());
+        assert_eq!(replay_rows(Table::Ids, &base, &head, &mut cur), Vec::<String>::new());
         assert_eq!(cur, again);
         // Both sides changed the same id: a conflict, theirs kept.
         let mut cur = vec![r("a_k = Error (0) \"k3\";")];
@@ -975,11 +975,11 @@ mod tests {
         let base = [r("Gnu = \"gnu\" [A, B];")];
         let head = [r("Gnu = \"gnu\" [A, B, Mine];")];
         let mut cur = vec![r("Gnu = \"gnu\" [B, Theirs];")];
-        assert!(replay_rows(Table::Groups, &base, &head, &mut cur).is_empty());
+        assert_eq!(replay_rows(Table::Groups, &base, &head, &mut cur), Vec::<String>::new());
         assert_eq!(cur[0].text, "Gnu = \"gnu\" [B, Theirs, Mine];");
         let head = [r("Gnu = \"gnu\" [B];")];
         let mut cur = vec![r("Gnu = \"gnu\" [A, B, Theirs];")];
-        assert!(replay_rows(Table::Groups, &base, &head, &mut cur).is_empty());
+        assert_eq!(replay_rows(Table::Groups, &base, &head, &mut cur), Vec::<String>::new());
         assert_eq!(cur[0].text, "Gnu = \"gnu\" [B, Theirs];");
     }
 }

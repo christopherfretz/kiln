@@ -8,6 +8,7 @@
 //! the generated file, after a `// src/<dir>/<file>` line naming its source.
 #![forbid(unsafe_code)]
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
@@ -36,7 +37,7 @@ fn generate(manifest: &Path, out: &Path, dir: &str, table: &str, inner: &str) {
         let rows =
             fs::read_to_string(f).unwrap_or_else(|e| panic!("cannot read {}: {e}", f.display()));
         let name = f.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-        text.push_str(&format!("            // src/{dir}/{name}\n"));
+        let _ = writeln!(text, "            // src/{dir}/{name}");
         for line in rows.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")) {
             text.push_str("            ");
             text.push_str(line);
