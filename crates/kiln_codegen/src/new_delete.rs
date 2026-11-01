@@ -16,7 +16,7 @@ use kiln_llvm::{
 };
 use kiln_source::Loc;
 
-use crate::cleanup::{Cleanup, NewDelete, Saved};
+use crate::cleanup::{ArrayDelete, Cleanup, NewDelete, Saved};
 use crate::expr::LV;
 use crate::fir::{Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
@@ -523,13 +523,16 @@ impl Cg<'_> {
         if matches!(t.canonical_view(base), TypeView::MemberPointer { .. }) {
             return err(loc, "new of a member pointer is not supported yet");
         }
-        if is_array && self.needs_array_cookie(base, x.operator_delete) {
-            return err(
-                loc,
-                "array new of a type that needs an array cookie (non-trivial destructor or \
-                 sized deallocation) is not supported yet",
-            );
-        }
+        // The array cookie (`GetArrayCookieSize`); none for the reserved
+        // placement form (Itanium `requiresArrayCookie`).
+        let cookie = if is_array
+            && !self.alloc_fn(op_new).is_some_and(|a| a.reserved)
+            && self.needs_array_cookie(base, x.operator_delete)
+        {
+            self.array_cookie_size(base)
+        } else {
+            0
+        };
         let (esize, alloc_align) = self.size_align(base);
         let Some(fty) = ast.decls.get(op_new).ty() else {
             return err(loc, "allocation function without a type");
@@ -570,7 +573,7 @@ impl Cg<'_> {
         }
 
         // EmitCXXNewAllocSize.
-        let (size, num_elems) = if is_array {
+        let (size, size_nc, num_elems) = if is_array {
             let Some(ae) = x.array_size else {
                 return err(loc, "array new without a size");
             };
@@ -582,10 +585,15 @@ impl Cg<'_> {
             if let Some((_, c, _)) = self.cint(nv) {
                 let c = c as u64;
                 let (bytes, ov) = c.overflowing_mul(tsm);
+                let (total, ov2) = bytes.overflowing_add(cookie);
                 let num = self.i64c(i128::from(c.wrapping_mul(asm)));
-                let size =
-                    if ov || c < min_elems { self.i64c(-1) } else { self.i64c(i128::from(bytes)) };
-                (size, Some(num))
+                let size = if ov || ov2 || c < min_elems {
+                    self.i64c(-1)
+                } else {
+                    self.i64c(i128::from(total))
+                };
+                let size_nc = if cookie == 0 { size } else { self.i64c(i128::from(bytes)) };
+                (size, size_nc, Some(num))
             } else {
                 let mut has_ov = None;
                 if min_elems > 0 {
@@ -595,24 +603,8 @@ impl Cg<'_> {
                 let mut size = nv;
                 let mut num = nv;
                 if tsm != 1 {
-                    let f = kiln_llvm::intrinsics::with_overflow(
-                        &mut self.m,
-                        OverflowOp::UMul,
-                        LTy::I64,
-                    );
-                    let fn_ty = self.m.func(f).ty();
-                    let rty = self.m.types.struct_literal(&[LTy::I64, LTy::I1], false);
                     let tv = self.i64c(i128::from(tsm));
-                    let r = self.f.fir.push(
-                        Op::Call {
-                            fn_ty,
-                            callee: V::C(Value::func(f)),
-                            args: vec![nv, tv],
-                            opts: Box::default(),
-                        },
-                        rty,
-                    );
-                    self.f.calls.push((Fir::last_inst(r), Some(f), true));
+                    let r = self.overflow_call(OverflowOp::UMul, nv, tv);
                     let ov = self.f.fir.push(Op::ExtractValue { agg: r, idx: 1 }, LTy::I1);
                     has_ov = Some(match has_ov {
                         Some(h) => self.bin(BinOp::Or, Flags::NONE, h, ov),
@@ -628,15 +620,30 @@ impl Cg<'_> {
                         };
                     }
                 }
+                let mut size_nc = size;
+                if cookie != 0 {
+                    let cv = self.i64c(i128::from(cookie));
+                    let r = self.overflow_call(OverflowOp::UAdd, size, cv);
+                    let ov = self.f.fir.push(Op::ExtractValue { agg: r, idx: 1 }, LTy::I1);
+                    has_ov = Some(match has_ov {
+                        Some(h) => self.bin(BinOp::Or, Flags::NONE, h, ov),
+                        None => ov,
+                    });
+                    size = self.f.fir.push(Op::ExtractValue { agg: r, idx: 0 }, LTy::I64);
+                }
                 if let Some(h) = has_ov {
                     let m1 = self.i64c(-1);
                     size = self.select(h, m1, size);
                 }
-                (size, Some(num))
+                if cookie == 0 {
+                    size_nc = size;
+                }
+                (size, size_nc, Some(num))
             }
         } else {
             let (sz, _) = self.size_align(x.allocated_ty);
-            (self.i64c(i128::from(sz)), None)
+            let size = self.i64c(i128::from(sz));
+            (size, size, None)
         };
 
         // The allocation.
@@ -739,10 +746,24 @@ impl Cg<'_> {
             del_cleanup = Some((c, dominator));
         }
 
+        // InitializeArrayCookie: the element count is stored just before
+        // the elements, which start `cookie` bytes into the allocation.
+        let num = num_elems.unwrap_or(size);
+        let (data, data_align) = if cookie != 0 {
+            // The cookie's `size_t` count makes the allocation at least
+            // `size_t`-aligned.
+            let allocation_align = allocation_align.max(8);
+            let off = cookie - 8;
+            let cp = self.byte_offset(alloc, off);
+            self.store(num, cp, min_align(allocation_align, off), false);
+            (self.byte_offset(alloc, cookie), min_align(allocation_align, cookie))
+        } else {
+            (alloc, allocation_align)
+        };
+
         // The initializer.
         if is_array {
-            let num = num_elems.unwrap_or(size);
-            self.emit_new_array_init(&x, base, esize, alloc, allocation_align, num, size, loc)?;
+            self.emit_new_array_init(&x, base, esize, data, data_align, num, size_nc, loc)?;
         } else if let Some(init) = x.init {
             let ty = self.mty(x.allocated_ty);
             let lv = LV {
@@ -769,9 +790,34 @@ impl Cg<'_> {
             return Ok(self
                 .f
                 .fir
-                .push(Op::Phi { ty: LTy::PTR, inc: vec![(alloc, nn_end), (z, nb)] }, LTy::PTR));
+                .push(Op::Phi { ty: LTy::PTR, inc: vec![(data, nn_end), (z, nb)] }, LTy::PTR));
         }
-        Ok(alloc)
+        Ok(data)
+    }
+
+    /// A call of the `llvm.{op}.with.overflow.i64` intrinsic on `a`, `b`.
+    fn overflow_call(&mut self, op: OverflowOp, a: V, b: V) -> V {
+        let f = kiln_llvm::intrinsics::with_overflow(&mut self.m, op, LTy::I64);
+        let fn_ty = self.m.func(f).ty();
+        let rty = self.m.types.struct_literal(&[LTy::I64, LTy::I1], false);
+        let r = self.f.fir.push(
+            Op::Call {
+                fn_ty,
+                callee: V::C(Value::func(f)),
+                args: vec![a, b],
+                opts: Box::default(),
+            },
+            rty,
+        );
+        self.f.calls.push((Fir::last_inst(r), Some(f), true));
+        r
+    }
+
+    /// Itanium `getArrayCookieSizeImpl`: room for a `size_t` count, padded
+    /// to the element type's alignment.
+    fn array_cookie_size(&mut self, elem: QualType) -> u64 {
+        let (_, al) = self.size_align(elem);
+        al.max(8)
     }
 
     /// Itanium `requiresArrayCookie`: elements of class type with a
@@ -1004,17 +1050,14 @@ impl Cg<'_> {
         let Some(mut dt) = t.pointee(ast.exprs.get(arg).ty()) else {
             return err(loc, "delete of a non-pointer");
         };
+        let mut cookie = 0;
         if ast.exprs.get(e).has(ExprFlags::ARRAY_FORM) {
             let mut b = dt;
             while let Some(el) = t.element(b) {
                 b = el;
             }
             if self.needs_array_cookie(b, Some(od)) {
-                return err(
-                    loc,
-                    "array delete of a type that needs an array cookie (non-trivial destructor \
-                     or sized deallocation) is not supported yet",
-                );
+                cookie = self.array_cookie_size(b);
             }
         }
         let p = self.emit_scalar(arg)?;
@@ -1034,13 +1077,46 @@ impl Cg<'_> {
                 idx.push(zero);
             }
             ptr = self.gep(src, p, idx, true);
-        } else if self.emit_object_delete(e, arg, p, dt, loc)? {
+        } else if cookie == 0 && self.emit_object_delete(e, arg, p, dt, loc)? {
             self.emit_block(end, false);
             return Ok(());
         }
-        self.emit_delete_call(od, ptr, dt, loc)?;
+        if cookie != 0 {
+            self.emit_array_delete(od, ptr, dt, cookie);
+        } else {
+            self.emit_delete_call(od, ptr, dt, loc)?;
+        }
         self.emit_block(end, false);
         Ok(())
+    }
+
+    /// clang `EmitArrayDelete` with an array cookie: reads the element
+    /// count back (`ReadArrayCookie`), destroys the elements in reverse
+    /// order and deallocates — the latter as a cleanup so that it also
+    /// runs if a destructor throws ([expr.delete]/6-7).
+    fn emit_array_delete(&mut self, od: DeclId, ptr: V, elem: QualType, cookie: u64) {
+        let (_, elem_align) = self.size_align(elem);
+        let back = self.i64c(-i128::from(cookie));
+        let alloc = self.gep(LTy::I8, ptr, vec![back], true);
+        let off = cookie - 8;
+        let np = self.byte_offset(alloc, off);
+        let num = self.load(LTy::I64, np, min_align(min_align(elem_align, cookie), off), false);
+        self.push_cleanup(Cleanup::ArrayDelete(Box::new(ArrayDelete {
+            op_delete: od,
+            ptr: alloc,
+            num,
+            elem,
+            cookie,
+        })));
+        if let Some(rd) = self.ast.types.as_record(elem)
+            && let Some(def) = self.class_def(rd)
+            && self.has_nontrivial_dtor(def)
+        {
+            let ety = self.mty(elem);
+            let end = self.gep(ety, ptr, vec![num], true);
+            self.array_destroy_range(ptr, end, ety, def, true, true);
+        }
+        self.pop_cleanup_block(false);
     }
 
     /// clang `EmitObjectDelete` (the destructor part): destroys the object
@@ -1165,7 +1241,7 @@ impl Cg<'_> {
     }
 
     /// `DominatingValue::restore`.
-    fn restore_saved(&mut self, s: Saved) -> CallArg {
+    pub(crate) fn restore_saved(&mut self, s: Saved) -> CallArg {
         match s {
             Saved::Direct(a) => a,
             Saved::Slot { slot, ty, align } => CallArg::Scalar(self.load(ty, slot, align, false)),
@@ -1180,6 +1256,20 @@ impl Cg<'_> {
         od: DeclId,
         ptr: V,
         dt: QualType,
+        loc: Option<Loc>,
+    ) -> R<()> {
+        self.emit_delete_call_n(od, ptr, dt, None, loc)
+    }
+
+    /// [`Self::emit_delete_call`] of an array of `n.0` elements of type
+    /// `dt` behind an array cookie of `n.1` bytes (the size passed to a
+    /// sized deallocation function covers both).
+    pub(crate) fn emit_delete_call_n(
+        &mut self,
+        od: DeclId,
+        ptr: V,
+        dt: QualType,
+        n: Option<(V, u64)>,
         loc: Option<Loc>,
     ) -> R<()> {
         let ast = self.ast;
@@ -1201,9 +1291,7 @@ impl Cg<'_> {
         let incomplete = t.is_void(dt)
             || t.as_record(dt).is_some_and(|r| {
                 ast.definition(r).is_none_or(|d| {
-                    !ast.decls
-                        .record(d)
-                        .is_some_and(|x| x.defn.contains(DefinitionBits::COMPLETE))
+                    !ast.decls.record(d).is_some_and(|x| x.defn.contains(DefinitionBits::COMPLETE))
                 })
             });
         if let Some(&q) = params.get(i)
@@ -1215,7 +1303,15 @@ impl Cg<'_> {
             }
             let (sz, _) = self.size_align(dt);
             let ty = self.lty(q);
-            vals.push(CallArg::Scalar(self.icn(ty, i128::from(sz))));
+            let mut size = self.icn(ty, i128::from(sz));
+            if let Some((num, cookie)) = n {
+                size = self.bin(BinOp::Mul, Flags::NONE, size, num);
+                if cookie != 0 {
+                    let c = self.icn(ty, i128::from(cookie));
+                    size = self.bin(BinOp::Add, Flags::NONE, size, c);
+                }
+            }
+            vals.push(CallArg::Scalar(size));
             arg_tys.push(q);
             i += 1;
         }

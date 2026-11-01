@@ -537,6 +537,11 @@ impl Sema<'_, '_> {
                 Err(()) => return self.recover_err(&kids, loc),
             }
         };
+        if array_form {
+            // [expr.new]/27: the destructor of an array's elements is
+            // potentially invoked (odr-used, [basic.def.odr]/8).
+            self.mark_element_dtor_referenced(elem, loc);
+        }
         let mut flags = ExprFlags::NONE;
         if global {
             flags = flags.with(ExprFlags::GLOBAL);
@@ -1350,20 +1355,8 @@ impl Sema<'_, '_> {
         while self.ast.types.is_array(elem) {
             elem = self.ast.types.element(elem).unwrap_or(QualType::ERROR);
         }
-        if complete
-            && let Some(rec) = self.ast.types.as_record(elem)
-            && let Some(def) = self.ast.definition(rec)
-        {
-            let defn = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
-            if !defn.contains(DefinitionBits::TRIVIAL_DTOR)
-                && let Selected::Found(m) =
-                    self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
-            {
-                // [expr.delete]/6: the destructor is invoked (odr-used,
-                // [basic.def.odr]/8).
-                self.mark_function_referenced(m, loc);
-            }
-        }
+        // [expr.delete]/6: the destructor is invoked.
+        let destructed = complete && self.mark_element_dtor_referenced(elem, loc);
         let align = if complete {
             crate::target::size_align(&self.ast, elem, &self.abi).map_or(1, |(_, a)| a)
         } else {
@@ -1371,9 +1364,10 @@ impl Sema<'_, '_> {
         };
         let aligned = align > self.abi.default_new_align;
         // [expr.delete]/10: a usual deallocation function; the sized one
-        // when the type is complete (and no array cookie is needed: a
-        // `delete[]` of a type without one is unsized, clang).
-        let want_sized = complete && !array;
+        // when the type is complete and the size is known: a `delete[]`
+        // knows it only from an array cookie, i.e. for elements with a
+        // non-trivial destructor (clang `CanProvideSize`).
+        let want_sized = complete && (!array || destructed);
         let op = if array { OverloadedOperator::ArrayDelete } else { OverloadedOperator::Delete };
         // Unless `::delete`, the class's own `operator delete` is looked
         // up first ([expr.delete]/9).
@@ -1395,6 +1389,30 @@ impl Sema<'_, '_> {
 }
 
 /// The expressions of the top-level clauses of `l`.
+impl Sema<'_, '_> {
+    /// Marks the destructor of `elem`'s innermost element class as
+    /// referenced (odr-used, [basic.def.odr]/8) when it is non-trivial,
+    /// returning whether it is.
+    fn mark_element_dtor_referenced(&mut self, mut elem: QualType, loc: Loc) -> bool {
+        while let Some(e) = self.ast.types.element(elem) {
+            elem = e;
+        }
+        let Some(def) = self.ast.types.as_record(elem).and_then(|r| self.ast.definition(r)) else {
+            return false;
+        };
+        let defn = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
+        if defn.contains(DefinitionBits::TRIVIAL_DTOR) {
+            return false;
+        }
+        if let Selected::Found(m) =
+            self.select_special(def, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+        {
+            self.mark_function_referenced(m, loc);
+        }
+        true
+    }
+}
+
 fn list_exprs(l: &InitList) -> Vec<ExprId> {
     l.items
         .iter()
