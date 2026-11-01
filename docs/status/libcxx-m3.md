@@ -13,8 +13,8 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Setup
 
-- kiln: debug build of the WP-207 branch (commit in the generated "Run" table below), with main
-  `b7fc2cf7` (WP-199 merged) merged in.
+- kiln: debug build of the WP-215 branch (commit in the generated "Run" table below), with main
+  `39583631` (WP-201 and WP-205 merged) merged in.
 - Tests and headers: libc++ `llvmorg-19.1.7`. The tests come from the sparse checkout. The headers,
   `libc++.so`, `libc++experimental.a` and `libc++abi` come from the clang 19 packages in the
   container.
@@ -24,7 +24,17 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Reading
 
-**Overall: 568/585 (97.1%)** on the WP-201 branch merged with main `58cb7724`. Main's last report
+**Overall: 571/585 (97.6%)** on the WP-215 branch merged with main `39583631`, up from 568.
+WP-215 (utility leftovers) takes `std/utilities/utility` from 141/145 to 144/145:
+`forward_like` (`T{}` of a cv-qualified class type keeps its cv-qualifiers),
+`construct_piecewise_pair` (a function template parameter pack that is not last still absorbs
+the extra explicit template arguments) and the `null_memory_resource` link failure (codegen's
+constant-fold prepass skipped try-blocks and handlers, so a `static const` member read inside one,
+`memory_resource::__max_align`, was odr-used against an `available_externally` definition).
+`pair_like` and `nttp.equivalence` were already fixed by WP-201. The one utility failure left is
+`pairs.by.type` (`_Complex`, WP-211). The Oven also evaluates an explicit trivial destructor call
+(`p->~T()`) as a no-op. Directories other than utility are unchanged from the WP-201 run.
+Before WP-215: **568/585 (97.1%)** on the WP-201 branch merged with main `58cb7724`. Main's last report
 (534, below) predates WP-194's merge into `58cb7724`; main's own binary at `58cb7724` passes 370
 of the 397 non-UNSUPPORTED tests in utility, support.limits, string.view, array and bit, against
 381 here, so WP-201 adds about 11 (main ≈ 557; 482 when WP-201 started). Per directory, this run:
@@ -148,7 +158,7 @@ WP-207 (merged with main `b7fc2cf7`):
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `1a883949` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `bbabf542` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -157,8 +167,8 @@ WP-207 (merged with main `b7fc2cf7`):
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 517.4 s |
-| peak RSS | 83 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
+| wall time | 532.6 s |
+| peak RSS | 84 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -167,21 +177,21 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 | directory | total | pass | fail | xfail | xpass | unsupported (driver) | killed | timeout | error | pass rate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | `std/utilities/meta` | 155 | 148 | 0 | 0 | 0 | 7 (6) | 0 | 0 | 0 | 100.0% |
-| `std/utilities/utility` | 168 | 141 | 4 | 0 | 0 | 23 (19) | 0 | 0 | 0 | 97.2% |
+| `std/utilities/utility` | 168 | 144 | 1 | 0 | 0 | 23 (19) | 0 | 0 | 0 | 99.3% |
 | `std/containers/sequences/array` | 47 | 37 | 0 | 0 | 0 | 10 (10) | 0 | 0 | 0 | 100.0% |
 | `std/strings/string.view` | 93 | 79 | 9 | 0 | 0 | 5 (5) | 0 | 0 | 0 | 89.8% |
 | `std/containers/views/views.span` | 45 | 34 | 1 | 0 | 0 | 10 (9) | 0 | 0 | 0 | 97.1% |
 | `std/numerics/bit` | 17 | 15 | 0 | 0 | 0 | 2 (2) | 0 | 0 | 0 | 100.0% |
 | `std/language.support/support.limits` | 112 | 109 | 3 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 97.3% |
 | `std/language.support/support.initlist` | 5 | 5 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
-| **total** | 642 | 568 | 17 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 97.1% |
+| **total** | 642 | 571 | 14 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 97.6% |
 
 ### Failures by stage
 
 | directory | compile | link | run | expected-fail-but-succeeded |
 |---|---:|---:|---:|---:|
 | `std/utilities/meta` | 0 | 0 | 0 | 0 |
-| `std/utilities/utility` | 3 | 1 | 0 | 0 |
+| `std/utilities/utility` | 1 | 0 | 0 | 0 |
 | `std/containers/sequences/array` | 0 | 0 | 0 | 0 |
 | `std/strings/string.view` | 7 | 2 | 0 | 0 |
 | `std/containers/views/views.span` | 1 | 0 | 0 | 0 |
@@ -196,7 +206,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | directory | clusters |
 |---|---|
 | `std/utilities/meta` | — |
-| `std/utilities/utility` | `compile: no matching function for call to '…'` (1); `compile: static assertion failed due to requirement '…'` (1); `compile: use of undeclared identifier '…'` (1) |
+| `std/utilities/utility` | `compile: use of undeclared identifier '…'` (1) |
 | `std/containers/sequences/array` | — |
 | `std/strings/string.view` | `compile: static assertion expression is not an integral constant expression` (7); `link: linker command failed with exit code N (use -v to see invocation)` (2) |
 | `std/containers/views/views.span` | `compile: static assertion expression is not an integral constant expression` (1) |
@@ -206,21 +216,19 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 
 ### Error clusters
 
-11 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 11:
+9 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 9:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
 | 1 | 8 | 8 | `compile: static assertion expression is not an integral constant expression` | `std/containers/views/views.span/span.elem/at.pass.cpp` | `static assertion expression is not an integral constant expression` |
 | 2 | 3 | 3 | `compile: use of undeclared identifier '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `use of undeclared identifier '_Complex'` |
-| 3 | 3 | 3 | `link: linker command failed with exit code N (use -v to see invocation)` | `std/strings/string.view/string.view.io/stream_insert.pass.cpp` | `linker command failed with exit code 1 (use -v to see invocation)` |
+| 3 | 2 | 2 | `link: linker command failed with exit code N (use -v to see invocation)` | `std/strings/string.view/string.view.io/stream_insert.pass.cpp` | `linker command failed with exit code 1 (use -v to see invocation)` |
 | 4 | 1 | 1 | `compile: constexpr if condition is not a constant expression` | `std/language.support/support.limits/support.limits.general/mdspan.version.compile.pass.cpp` | `constexpr if condition is not a constant expression` |
-| 5 | 1 | 1 | `compile: no matching function for call to '…'` | `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_piecewise_pair.pass.cpp` | `no matching function for call to 'checkConstruct'` |
-| 6 | 1 | 1 | `compile: static assertion failed due to requirement '…'` | `std/utilities/utility/forward/forward_like.pass.cpp` | `static assertion failed due to requirement 'is_same_v'` |
-| 7 | 0 | 3 | `compile: a type specifier is required for all declarations` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `a type specifier is required for all declarations` |
-| 8 | 0 | 3 | `compile: expected '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected '>'` |
-| 9 | 0 | 3 | `compile: expected '…' at end of declaration list` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected ';' at end of declaration list` |
-| 10 | 0 | 3 | `compile: expected parameter declarator` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected parameter declarator` |
-| 11 | 0 | 3 | `compile: non-static data member cannot be constexpr; did you intend to make it static?` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `non-static data member cannot be constexpr; did you intend to make it static?` |
+| 5 | 0 | 3 | `compile: a type specifier is required for all declarations` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `a type specifier is required for all declarations` |
+| 6 | 0 | 3 | `compile: expected '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected '>'` |
+| 7 | 0 | 3 | `compile: expected '…' at end of declaration list` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected ';' at end of declaration list` |
+| 8 | 0 | 3 | `compile: expected parameter declarator` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected parameter declarator` |
+| 9 | 0 | 3 | `compile: non-static data member cannot be constexpr; did you intend to make it static?` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `non-static data member cannot be constexpr; did you intend to make it static?` |
 
 ### Crashes
 
