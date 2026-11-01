@@ -98,7 +98,8 @@ impl Substituter<'_, '_, '_> {
     /// ([dcl.attr.grammar]/5 appertain to the class; clang
     /// `InstantiateAttrs`): copied, with a dependent `alignas` operand
     /// substituted. A failed operand drops the attribute (diagnosed).
-    /// Also used for a data member's attributes (`field_decl`).
+    /// Also used for a data member's attributes (`field_decl`) and a
+    /// function's (`function_decl`, `function_spec_signature`).
     pub(crate) fn class_attrs(&mut self, spec: DeclId, def: DeclId) {
         let ast = &self.sema.ast;
         let list = ast.attrs.of_decl(def);

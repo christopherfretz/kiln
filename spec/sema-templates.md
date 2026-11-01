@@ -798,6 +798,19 @@ are used. It only tells codegen not to emit them (WP-080).
      can recurse.
    - **attributes** that affect layout (`alignas`, `packed`,
      `trivial_abi`).
+   - A member function's declaration, and a function template
+     specialization's (at `function_spec_signature`), gets the pattern's
+     attributes (`class_attrs`; clang `InitFunctionInstantiation` →
+     `InstantiateAttrs`; WP-182): `const`/`pure`, `[[noreturn]]`,
+     `[[nodiscard]]`, `[[deprecated]]`, ... — so codegen, `-Wunused-result`
+     and `-Wdeprecated-declarations` see them on the specialization. A
+     dependent `alignas` operand is substituted; other arguments are
+     shared with the pattern (no attribute kind that kiln evaluates takes
+     a dependent operand on a function yet). A friend is skipped (it may
+     redeclare a function with its own attributes), as is a declaration
+     that already has attributes. `[[deprecated]]` names a function
+     template specialization with its arguments (`'f<int>' is
+     deprecated`, clang `getNameForDiagnostic`).
    - **member declarations**. [temp.inst]/3 decides what happens to each
      kind of member:
 

@@ -541,6 +541,13 @@ impl Substituter<'_, '_, '_> {
             // Recovery declared something else (an invalid redeclaration).
             return Ok(r);
         }
+        // The pattern's attributes (`const`, `pure`, `[[noreturn]]`,
+        // `[[nodiscard]]`, ...), as clang `InitFunctionInstantiation` →
+        // `InstantiateAttrs` (WP-182). A friend may redeclare a function
+        // that has its own.
+        if friend.is_none() {
+            self.class_attrs(f, d);
+        }
         if lazy_exc {
             let first = self.sema.ast.first(f);
             self.sema.uninstantiated_exc.insert(first, d);
@@ -635,6 +642,9 @@ impl Substituter<'_, '_, '_> {
         let _ = self.sema.builder().set_params(spec, &ids);
         self.forget_pattern_params(pat);
         self.defer_default_args(pat, spec);
+        // The pattern's attributes (clang `InitFunctionInstantiation` →
+        // `InstantiateAttrs`; WP-182).
+        self.class_attrs(spec, pat);
         Ok(())
     }
 

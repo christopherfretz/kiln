@@ -2188,7 +2188,7 @@ impl Cg<'_> {
         // A callee with a `NoThrowAttr` (a recognized C library function)
         // or a `const` / `pure` attribute.
         if let Some(d) = direct {
-            let const_pure = crate::builtins::const_pure_attrs(ast, d, &mut extra);
+            let const_pure = crate::builtins::const_pure_attrs(ast, d, &sig, &mut extra);
             sig.nothrow |= const_pure || ast.has_nothrow_attr(d);
         }
         let mut noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));

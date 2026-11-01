@@ -1331,7 +1331,16 @@ impl Sema<'_, '_> {
     fn diagnose_deprecated(&self, d: DeclId, loc: Loc) {
         let Some(a) = self.find_attr(d, AttrKind::DEPRECATED) else { return };
         let attr = *self.ast.attrs.get(a);
-        let name = self.decl_name(d);
+        // clang `getNameForDiagnostic`: a function template
+        // specialization (whose attributes are the pattern's) prints its
+        // template arguments, `f<int>`.
+        let mut name = self.decl_name(d);
+        if self.ast.decls.function(d).is_some()
+            && let Some((_, i)) = self.ast.spec_info(d)
+        {
+            let names = crate::names::SemaNames::new(self);
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, i.args, &mut name);
+        }
         let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
         let msg = match text {
             Some(t) => self.diag(DiagId::sema_deprecated_msg, loc).arg(name.clone()).arg(t),
