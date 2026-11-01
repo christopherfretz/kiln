@@ -1073,6 +1073,12 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   the Oven folded it (the fold bridge now records
   `set_temporary_value`), else initialized in the variable's init
   function with its destructor registered via `__cxa_atexit`.
+- **Backing arrays (WP-117).** A `_ZGR` temporary is `constant` only
+  when it is a constant-initialized `const` array with no destructor:
+  the backing array of a namespace-scope `std::initializer_list`. A scalar
+  or class temporary is materialized without cv-qualifiers, so it stays
+  `global` (clang `GetAddrOfGlobalTemporary`).
+  `tests/codegen/init_list_global.cpp`.
 - Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
   `tests/conformance/basic.start.dynamic/order-run.cpp`,
   `tests/conformance/stmt.dcl/static-local-run.cpp`.

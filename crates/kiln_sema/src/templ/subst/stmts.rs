@@ -24,6 +24,7 @@ impl Substituter<'_, '_, '_> {
             return self.sema.act_on_null_stmt(loc);
         }
         let (init_failures, errors) = (self.init_failures, self.sema.diags.error_count());
+        let body_errors = self.sema.inst.body_errors;
         match self.stmt_node(s) {
             Ok(x) => x,
             // The failure was diagnosed (an error in the instantiation, or
@@ -41,7 +42,10 @@ impl Substituter<'_, '_, '_> {
                 // in clang, not an error.
                 let decl_init = self.sema.ast.stmts.get(s).kind() == StmtKind::DeclStmt
                     && self.init_failures != init_failures;
-                let reported = self.sema.diags.error_count() != errors;
+                // Not counting the errors of another body instantiated
+                // meanwhile (`return s();` instantiating a failing `s`).
+                let nested = self.sema.inst.body_errors.saturating_sub(body_errors);
+                let reported = self.sema.diags.error_count().saturating_sub(errors) > nested;
                 if reported && !decl_init && self.lambda_bodies == 0 {
                     self.stmt_failed = true;
                 }

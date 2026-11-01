@@ -1462,6 +1462,31 @@ impl Cg<'_> {
     /// The bytes an aggregate copy of class `rd` writes (clang
     /// `EmitAggregateCopy`: the data size when the destination may
     /// overlap).
+    /// clang `EmitAggregateCopy` of an object of class `rd`: copying an
+    /// empty class is a no-op in C++ ("Ignore empty classes in C++").
+    pub(crate) fn agg_copy_record(
+        &mut self,
+        rd: DeclId,
+        dest: Addr,
+        src: Addr,
+        size: u64,
+        volatile: bool,
+    ) {
+        if self.class_def(rd).is_some_and(|def| self.tys.layouter().is_empty(def)) {
+            return;
+        }
+        self.memcpy(dest, src.v, src.align, size, volatile);
+    }
+
+    /// `EmitAggregateCopy` of an object of type `q` (see
+    /// [`Self::agg_copy_record`]).
+    pub(crate) fn agg_copy(&mut self, q: QualType, dest: Addr, src: Addr, size: u64, vol: bool) {
+        match self.ast.types.canonical_view(q) {
+            TypeView::Record(rd) => self.agg_copy_record(rd, dest, src, size, vol),
+            _ => self.memcpy(dest, src.v, src.align, size, vol),
+        }
+    }
+
     pub(crate) fn copy_size(&mut self, rd: DeclId, overlap: bool) -> u64 {
         let Some(def) = self.class_def(rd) else { return 0 };
         let l = self.tys.layouter().record(def);

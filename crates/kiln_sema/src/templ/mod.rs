@@ -219,6 +219,12 @@ pub struct InstState {
     pub(crate) pending: std::collections::VecDeque<pending::PendingInst>,
     /// One entry per active SFINAE context: the errors it captured (§5.7).
     pub(crate) sfinae: std::cell::RefCell<Vec<stack::SfinaeState>>,
+    /// Errors reported by function definition instantiations so far
+    /// (nested ones counted once): a statement whose substitution only
+    /// triggered a failing instantiation of another body is not itself
+    /// in error (clang: that body is invalid; a call naming it is a
+    /// `RecoveryExpr`).
+    pub(crate) body_errors: u32,
     /// Alias template specializations already substituted (§4.6).
     pub(crate) alias_cache: kiln_source::fx::FxHashMap<(DeclId, ArgListId), QualType>,
     /// The instantiation report (§11.3).

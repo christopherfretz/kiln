@@ -746,6 +746,31 @@ GPR/SSE counts (both zero means the argument is read from memory).
   (`init_field_lvalue` uses `field_lvalue_init`, clang
   `EmitLValueForFieldInitialization`), never stored through the member.
 
+### 8.14 Landed (WP-117): template mangling
+- **Members of class template specializations** defined out of line
+  mangle with the specialization's arguments (`N <template-prefix>
+  <template-args> <name> E`). Templated definitions (patterns, partial
+  specializations, dependent friends) are never emitted
+  (`ModuleCx::is_templated`). Implicitly instantiated static data
+  members are `linkonce_odr` in a comdat. `tests/mangle/out_of_line.cpp`.
+- **Class-type NTTPs**: `Xtl <type> <fields> E` (clang's trimming of
+  trailing zero members), `so` subobject paths for pointers or references
+  at an offset, `di` designators for unions, and `_ZTA` template
+  parameter objects. `tests/mangle/class_nttp.cpp`.
+- **`<template-param-decl>`** (clang 18+, cxx-abi #47): `Tn <type>` /
+  `Tp` before the argument of an overloadable function template's
+  non-type parameter whose type is dependent or undeduced. `Dc` is
+  `decltype(auto)`. Variable template specializations are `_Z1vIiE`.
+- **Dependent template-specialization types** in signatures
+  (`dependent_spec`): the template's unscoped name (`St`-prefixed in
+  `std`), or `N <template-prefix> <template-args> E` when it is nested,
+  then the arguments, e.g. `St16initializer_listIT_E` and `N1N1WIT_EE`.
+  A template template parameter is `T_` (a substitution candidate,
+  `Sub::TemplateParm`, the same one used when it is a template argument)
+  followed by its arguments. `tests/mangle/dependent_spec.cpp`.
+- **Not implemented:** `Tk`/`Tt`/`Q` (constrained parameters and
+  requires-clauses) and constrained `Dk` placeholders.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

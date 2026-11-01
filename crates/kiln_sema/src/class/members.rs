@@ -219,6 +219,10 @@ impl Sema<'_, '_> {
                         let msg = self.note_prev(msg, def, true);
                         self.emit(msg);
                         invalid = true;
+                    } else if self.has_explicit_spec_head()
+                        && !self.act_on_explicit_member_var_spec(p, loc)
+                    {
+                        invalid = true;
                     } else {
                         prev_ok = Some(p);
                         let pspec = self.ast.decls.var(p).map(|x| x.spec).unwrap_or_default();
@@ -597,7 +601,7 @@ impl Sema<'_, '_> {
         }
         let n = chain.len();
         for x in chain.into_iter().rev() {
-            let kind = if self.kind_of(x) == DeclKind::CXXRecord {
+            let kind = if self.ast.decls.record(x).is_some() {
                 crate::scope::ScopeKind::Record
             } else {
                 crate::scope::ScopeKind::Namespace

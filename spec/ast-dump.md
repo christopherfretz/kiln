@@ -524,6 +524,10 @@ spelling (`'const char[2]' lvalue __func__`) with the `StringLiteral` as
 its child (none when dependent), as clang does; kept by the normalizer.
 `tests/conformance/ast/dcl.fct.def.general/`.
 
+**Landed (WP-117).** A diagnostic's printed member call keeps its explicit
+template arguments (`s.get<0>().f(0)`); they are stored on the
+`MemberExpr`.
+
 **Landed (WP-160).** `LabelStmt 'name'` (the labelled statement is its
 child), `GotoStmt 'name'` (the target label; clang's text dump adds its
 address, the JSON names only the `LabelDecl` id, which the normalizer

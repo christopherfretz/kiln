@@ -668,11 +668,24 @@ impl Sema<'_, '_> {
         if self.ast.definition(f).is_some() || self.inst.fatal {
             return;
         }
+        // [temp.expl.spec]/7: an explicit specialization is never
+        // instantiated from the pattern (its definition, if any, is the
+        // user's, possibly in another translation unit).
+        let explicit = self
+            .ast
+            .spec_info(f)
+            .map(|(_, i)| i.kind)
+            .or_else(|| self.ast.member_spec_info(f).map(|(_, m)| m.kind));
+        if explicit == Some(SpecKind::ExplicitSpecialization) {
+            return;
+        }
         // A use inside a ctor-initializer (`B<int>(3)` calling a
         // constructor instantiated here) must not clobber the enclosing
         // constructor's mem-initializer state.
         let outer = std::mem::take(&mut self.mem_inits);
+        let (body_errors, errors) = (self.inst.body_errors, self.diags.error_count());
         self.instantiate_function_definition_inner(f, poi);
+        self.inst.body_errors = body_errors + self.diags.error_count().saturating_sub(errors);
         self.mem_inits = outer;
     }
 
@@ -956,6 +969,12 @@ impl Substituter<'_, '_, '_> {
             sub.sema.act_on_mem_initializers(f, &[], colon);
         }
         let b = sub.body(body);
+        if sub.stmt_failed {
+            // [temp.inst]: a body that failed to instantiate makes the
+            // member specialization invalid (clang `setInvalidDecl`), as
+            // for a function template specialization (funcs.rs).
+            sub.sema.ast.decls.set_flags(f, DeclFlags::INVALID);
+        }
         sub.sema.act_on_finish_function_def(f, b, rbrace);
     }
 

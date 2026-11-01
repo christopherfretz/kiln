@@ -184,6 +184,13 @@ impl Sema<'_, '_> {
             return Some(e);
         }
         let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
+        if let Some(targs) = m.targs
+            && self.ast.exprs.get(e).kind() == ExprKind::MemberExpr
+        {
+            // Kept as written for printing (`s.get<0>()`, clang's
+            // `StmtPrinter::VisitMemberExpr`).
+            let _ = self.ast.exprs.set_member_template_args(e, targs);
+        }
         if m.nns.is_some() && !self.is_err_expr(e) {
             self.member_refs
                 .insert(e, MemberRef { decl: d, error: false, qualified: true, begin: None });
