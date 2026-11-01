@@ -315,6 +315,7 @@ impl Cg<'_> {
             }
             ExprKind::StmtExpr => return self.emit_stmt_expr(e),
             ExprKind::AtomicExpr => return self.emit_atomic_expr(e, None),
+            ExprKind::VAArgExpr => return self.emit_va_arg(e, None),
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
             // clang `VisitInitListExpr` on a vector: `insertelement` of
@@ -1219,6 +1220,11 @@ impl Cg<'_> {
 
     /// clang `VisitAbstractConditionalOperator`.
     fn emit_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
+        if let kiln_ast::types::TypeView::Vector { kind, .. } =
+            self.ast.types.canonical_view(self.ast.exprs.get(c).ty())
+        {
+            return self.emit_vector_conditional(c, a, b, kind).map(Some);
+        }
         if let Some(x) = self.fold_bool(c) {
             return self.emit_scalar_opt(if x { a } else { b });
         }
@@ -1253,6 +1259,78 @@ impl Cg<'_> {
             (x, None) => x,
             (None, y) => y,
         })
+    }
+
+    /// clang `VisitAbstractConditionalOperator` with a vector condition:
+    /// all three operands are evaluated; an ext vector condition selects
+    /// by each lane's sign bit through masks (`(f & ~m) | (t & m)`, float
+    /// lanes bit-cast to the condition's type), a GNU vector condition by
+    /// lane `!= 0` through a `select`.
+    fn emit_vector_conditional(
+        &mut self,
+        c: ExprId,
+        a: ExprId,
+        b: ExprId,
+        kind: kiln_ast::types::VectorKind,
+    ) -> R<V> {
+        let cv = self.emit_scalar(c)?;
+        let x = self.emit_scalar(a)?;
+        let y = self.emit_scalar(b)?;
+        let ct = self.f.fir.ty(&self.m, cv);
+        let zero = V::C(self.m.const_zero(ct));
+        if kind != kiln_ast::types::VectorKind::Ext {
+            let m = self.icmp(IntPredicate::Ne, cv, zero);
+            return Ok(self.select(m, x, y));
+        }
+        if self.m.types.vector_info(ct).is_some_and(|(et, _, _)| et == LTy::I1) {
+            return err(None, "conditionals on bool vectors are not supported yet (M4)");
+        }
+        let msb = self.icmp(IntPredicate::Slt, cv, zero);
+        let mask = self.cast(CastOp::SExt, msb, ct);
+        let ones = self.icn(ct, -1);
+        let inv = self.bin(BinOp::Xor, Flags::NONE, mask, ones);
+        let rt = self.f.fir.ty(&self.m, y);
+        let float = self.is_float_ty(rt);
+        let (xt, yt) = if float {
+            let yt = self.bitcast_fold(y, ct);
+            (self.bitcast_fold(x, ct), yt)
+        } else {
+            (x, y)
+        };
+        let lo = self.bin(BinOp::And, Flags::NONE, yt, inv);
+        let hi = self.bin(BinOp::And, Flags::NONE, xt, mask);
+        let r = self.bin(BinOp::Or, Flags::NONE, lo, hi);
+        Ok(if float { self.cast(CastOp::BitCast, r, rt) } else { r })
+    }
+
+    /// A bitcast of `v` to the integer vector type `to`, folded (as by
+    /// LLVM's `ConstantFolder`) when `v` is a constant float vector.
+    fn bitcast_fold(&mut self, v: V, to: LTy) -> V {
+        if let V::C(c) = v
+            && let Some((et, _, _)) = self.m.types.vector_info(to)
+        {
+            match self.m.const_of(c) {
+                Some(ConstData::Zero(_)) => return V::C(self.m.const_zero(to)),
+                Some(ConstData::Vector { elems, .. }) => {
+                    let bits: Option<Vec<u128>> = elems
+                        .iter()
+                        .map(|&x| match self.m.const_of(x) {
+                            Some(ConstData::Float { bits, .. }) => Some(*bits),
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(bits) = bits {
+                        let ints: Vec<Value> =
+                            bits.iter().map(|&b| self.m.const_int(et, b as i128)).collect();
+                        if let Ok(r) = self.m.const_vector(&ints) {
+                            return V::C(r);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.cast(CastOp::BitCast, v, to)
     }
 
     /// clang `EmitCompoundAssignLValue`: the lvalue and the stored value.
@@ -1990,6 +2068,11 @@ impl Cg<'_> {
         let q = ast.exprs.get(e).ty();
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
+                if ast.exprs.get(e).kind() == ExprKind::VAArgExpr {
+                    // An ignored slot: the `va_list` advances, nothing is
+                    // copied (clang `EmitAggFinalDestCopy`).
+                    return self.emit_va_arg(e, None).map(|_| ());
+                }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
             }
@@ -2088,8 +2171,14 @@ impl Cg<'_> {
             let fty = ast.types.pointee(pq).expect("function pointer");
             (p, fty, false, None)
         };
-        let sig = self.call_sig(fty, extern_c, &arg_tys);
+        let mut sig = self.call_sig(fty, extern_c, &arg_tys);
         let mut extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
+        // A callee with a `NoThrowAttr` (a recognized C library function)
+        // or a `const` / `pure` attribute.
+        if let Some(d) = direct {
+            let const_pure = crate::builtins::const_pure_attrs(ast, d, &mut extra);
+            sig.nothrow |= const_pure || ast.has_nothrow_attr(d);
+        }
         let mut noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
         if !noreturn {
             let (site, unreachable) = self.noreturn_call(direct, fty);
@@ -2463,6 +2552,7 @@ impl Cg<'_> {
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
             ExprKind::AtomicExpr => self.emit_atomic_expr(e, Some(dest)).map(|_| ()),
+            ExprKind::VAArgExpr => self.emit_va_arg(e, Some(dest)).map(|_| ()),
             ExprKind::CXXThrowExpr => self.emit_throw(e, true),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)

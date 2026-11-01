@@ -1959,6 +1959,37 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// `__builtin_va_arg(list, T)` (clang's `VAArgExpr`): a prvalue of
+    /// `ty` (the non-reference form of `written`, clang's
+    /// `getNonLValueExprType`) reading the next variadic argument through
+    /// the `va_list` lvalue `list`; `ty_loc` is where `written` begins
+    /// and `rparen` is the closing `)`. Dependence is `written`'s plus `list`'s without its type
+    /// dependence (clang's `computeDependence(VAArgExpr *)`).
+    pub fn va_arg_expr(
+        &mut self,
+        list: ExprId,
+        written: QualType,
+        ty: QualType,
+        ty_loc: Loc,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let deps = self.type_deps(written) | self.deps(list).without(ExprDeps::TYPE);
+        let e = self.simple(
+            ExprKind::VAArgExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            list.raw(),
+            written.to_raw(),
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.trait_rhs_loc.insert(e, ty_loc).expect("fresh expression");
+        e
+    }
+
     /// `noexcept(operand)` ([expr.unary.noexcept]): a `bool` prvalue whose
     /// `value` sema computed from the unevaluated `operand`; `rparen` is
     /// the closing `)`. Value-dependent if `operand` is type- or

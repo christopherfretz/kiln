@@ -379,6 +379,18 @@ impl Ast {
         self.lookup_local(record, name).iter().next()
     }
 
+    /// Whether some declaration of function `d` carries a `NoThrowAttr`
+    /// (clang `hasAttr<NoThrowAttr>()`, inherited by redeclarations): the
+    /// implicit one of a recognized C library function
+    /// (spec/sema.md §5.4) or of a lazily declared builtin.
+    pub fn has_nothrow_attr(&self, d: DeclId) -> bool {
+        self.redecls_of(d).any(|r| {
+            self.lists
+                .iter::<crate::ids::AttrId>(self.attrs.of_decl(r))
+                .any(|a| self.attrs.get(a).kind == crate::attr::AttrKind::NOTHROW)
+        })
+    }
+
     /// Whether the function `d` does not return (clang
     /// `FunctionDecl::isNoReturn` minus the C11/Microsoft spellings): some
     /// declaration of it carries `[[noreturn]]` /

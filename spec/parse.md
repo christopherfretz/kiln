@@ -672,6 +672,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
       `expected ','`, `expected identifier` (skip past `)`), a missing
       `]` (reported, parsing continues) and a missing `)` (reported;
       the expression fails).
+    - `__builtin_va_arg ( assignment-expression , type-id )` (WP-171) goes
+      to `act_on_va_arg` with the type's begin location and the `)`.
+      Errors as clang: `expected '(' after '__builtin_va_arg'`,
+      `expected ','`, a missing `)`.
 - **The GNU `x ?: y`** goes to `act_on_binary_conditional`; the middle
   operand of an ordinary `?:` is a full expression.
 - **Missing closers** (`expect_closing`) are reported at the current

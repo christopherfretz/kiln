@@ -32,6 +32,7 @@ mod lambda;
 mod mptr;
 mod new_delete;
 mod rtti;
+mod vector;
 
 pub(crate) use builtins::designator_type;
 pub(crate) use new_delete::is_std_named;
@@ -882,10 +883,11 @@ impl<'a> Compiler<'a> {
             // expression that `containsErrors()`).
             return self.trap(e, "");
         }
-        if k == ExprKind::AtomicExpr {
-            // clang 19 never constant-evaluates an atomic builtin: the
-            // generic note at the call (the lock-free queries are folded in
-            // `compile/builtins.rs` before they reach here).
+        if matches!(k, ExprKind::AtomicExpr | ExprKind::VAArgExpr) {
+            // clang 19 never constant-evaluates an atomic builtin or a
+            // `__builtin_va_arg`: the generic note at the expression (the
+            // lock-free queries are folded in `compile/builtins.rs` before
+            // they reach here).
             return self.throw_invalid(e);
         }
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
@@ -1062,6 +1064,10 @@ impl Scan<'_> {
     fn expr(&mut self, e: ExprId, ok: bool) {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
+        if matches!(ast.types.canonical_view(n.ty()), TypeView::Vector { .. }) {
+            // A vector operation may materialize its operands (WP-173).
+            self.temps = true;
+        }
         match n.kind() {
             ExprKind::DeclRefExpr => {
                 let d = ast.exprs.decl(e);
@@ -3025,6 +3031,16 @@ impl Compiler<'_> {
                 let r = self.rv(op);
                 self.convert(r, from, ty, dst, e);
             }
+            CastKind::BitCast if self.lanes(ty).is_some() || self.is_vector_expr(op) => {
+                if self.lanes(ty).is_some() {
+                    self.vec_bitcast(e, dst, None);
+                } else {
+                    // clang 19 folds no bit cast of a vector to a scalar
+                    // (spec/oven.md "Vectors").
+                    let loc = self.begin(e);
+                    self.trap_loc(loc, "subexpression not valid in a constant expression".into());
+                }
+            }
             CastKind::BitCast => {
                 let from = self.ety(op);
                 let (fk, tk) = (self.kind(from), self.kind(ty));
@@ -3240,6 +3256,23 @@ impl Compiler<'_> {
                 Place::Mem(r)
             }
             ExprKind::MemberExpr => self.member(e, acc),
+            ExprKind::ArraySubscriptExpr
+                if {
+                    let [a, b] = self.ast().exprs.operands(e);
+                    self.is_vector_expr(a) || self.is_vector_expr(b)
+                } =>
+            {
+                // clang 19 does not evaluate a vector lane access: the
+                // generic note at the base (spec/oven.md "Vectors").
+                let loc = self.begin(e);
+                self.trap_loc(loc, "subexpression not valid in a constant expression".into());
+                Place::Mem(self.reg())
+            }
+            ExprKind::ExtVectorElementExpr => {
+                // Nor an ext vector element access, silently.
+                self.trap(e, "");
+                Place::Mem(self.reg())
+            }
             ExprKind::ArraySubscriptExpr => {
                 let ast = self.ast();
                 let [a, b] = ast.exprs.operands(e);
@@ -3519,6 +3552,9 @@ impl Compiler<'_> {
     fn assign(&mut self, e: ExprId) -> Place {
         let [a, b] = self.ast().exprs.operands(e);
         let ty = self.ety(a);
+        if self.lanes(ty).is_some() {
+            return self.vec_assign(e, ty);
+        }
         if self.o.types.is_aggregate(ty) {
             let src = self.lv_mem(b, Access::Read);
             let dstp = self.lv_mem(a, Access::Write);
@@ -3540,6 +3576,10 @@ impl Compiler<'_> {
         let x = *ast.exprs.compound_assign(e);
         let op = ast.exprs.binary_op(e);
         let lhs = ExprId::new(n.a());
+        let lty = self.ety(lhs);
+        if self.lanes(lty).is_some() {
+            return self.vec_compound_assign(e, lty);
+        }
         let r = self.rv_copy(x.rhs);
         let place = self.lv_rmw(lhs, e);
         let ty = self.ety(lhs);
@@ -3615,6 +3655,10 @@ impl Compiler<'_> {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
                 return;
             }
+            ExprKind::CompoundLiteralExpr if self.o.types.is_aggregate(ty) => {
+                let init = self.ast().exprs.compound_literal_init(e);
+                return self.init_inner(init, p, ty);
+            }
             // Default-initialization by a trivial constructor performs no
             // initialization ([dcl.init.general]/7.1): the object stays
             // indeterminate.
@@ -3672,6 +3716,9 @@ impl Compiler<'_> {
             let r = self.reg();
             self.bit_cast(e, r, Some(p));
             return;
+        }
+        if self.vec_op(e) && self.lanes(ty).is_some() {
+            return self.vec_init(e, p, ty);
         }
         if !self.o.types.is_aggregate(ty) {
             let r = self.rv(e);
@@ -3972,6 +4019,11 @@ impl Compiler<'_> {
         let m = self.next;
         let n = self.node(e);
         let ty = self.ety(e);
+        if self.vec_op(e) && self.lanes(ty).is_some() {
+            let _ = self.vec_regs(e);
+            self.next = m;
+            return;
+        }
         match n.kind() {
             ExprKind::CXXThrowExpr => self.throw_invalid(e),
             ExprKind::StmtExpr => self.stmt_expr(e, None),

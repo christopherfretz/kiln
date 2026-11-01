@@ -98,7 +98,14 @@ panic and never silently wrong IR.
     `lshr`/`and` (unsigned); stores mask, clear and `or` into the unit;
   - `++`/`--` on bool, integers, floats and pointers, including bit-fields.
 - Calls:
-  - a call site gets `nounwind` only when the callee's prototype is nothrow;
+  - a call site gets `nounwind` only when the callee's prototype is
+    nothrow, or the direct callee has a `NoThrow` attribute (a
+    recognized C library function, spec/sema.md §5.4) or a `const` /
+    `pure` attribute; the declaration and a definition get it too;
+  - a written or implicit `const` / `pure` attribute (not on a builtin,
+    whose row decides) adds `willreturn memory(none)` /
+    `willreturn memory(read)` to the declaration, the definition and
+    direct call sites (clang `ConstructAttributeList`);
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary.
@@ -926,6 +933,47 @@ clang 19 `CGAtomic` at -O0, mirrored:
   qualifier,libcall,lv_libcall,padded,aggregate,bool_inc,alignment}.cpp` exact on
   aarch64 and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`
   (`fp-minmax-fetch-run.cpp` without an oracle).
+
+## 7e. Landed (WP-171): `__builtin_va_arg` (`va_arg.rs`)
+- **`emit_va_arg(e, dest)`** reads the address of the next argument
+  (`va_arg_addr`) and loads a scalar, or `memcpy`s an aggregate into
+  `dest`; an ignored aggregate read copies nothing (clang 19
+  `Slot.asRValue()`), and an ignored `Ignore`-class type emits no code.
+  The `va_list` base is the operand's lvalue, or its value when the
+  operand is the decayed x86-64 array pointer.
+- **Classification** comes from `kiln_abi::call::classify_va_arg`.
+- **AAPCS64** (clang `AArch64ABIInfo::EmitAAPCSVAArg`), block order
+  `vaarg.maybe_reg`, `vaarg.in_reg`, `vaarg.on_stack`, `vaarg.end`:
+  - GPR types use `__gr_offs`/`__gr_top` (fields 3/1); FP and vector
+    types use `__vr_offs`/`__vr_top` (fields 4/2).
+  - The register size is `alignTo(size, 8)` for GPR (8 when passed
+    indirectly) or 16 × the HFA member count for FPR. A GPR offset is
+    realigned when the type's alignment exceeds 8.
+  - An HFA/HVA with more than one member is copied from 16-byte-strided
+    q-register slots into an `[N x base]` temporary.
+  - On the stack: the pointer is rounded up with `llvm.ptrmask` when the
+    alignment exceeds 8 and the argument is direct, then advanced by the
+    slot size.
+  - The `phi` address takes the smaller alignment. An indirect argument
+    loads the pointer.
+- **SysV x86-64** (clang `X86_64ABIInfo::EmitVAArg`):
+  - `needed_int`/`needed_sse` gate `fits_in_gp` (`gp_offset ≤ 48-8n`) and
+    `fits_in_fp` (`fp_offset ≤ 176-16n`).
+  - In registers, the address comes from `reg_save_area`. Mixed int/SSE
+    and two-SSE structs are reassembled into a temporary of the coerce
+    type. A single register class is read in place, or through a
+    temporary when the coerce type sits at offset 8, the type is larger
+    than the register span, or an integer type is over-aligned.
+  - Otherwise the address is `overflow_arg_area` (ptrmask-aligned above
+    8), advanced by `alignTo(size, 8)`.
+- **`min-legal-vector-width` of a definition** (`def_vector_width`) counts
+  only IR vector parameters/returns, as clang's
+  `CodeGenFunction::StartFunction` does, not vectors nested in coerced
+  structs. Call sites keep the recursive `CallInfo::max_vector_width`.
+- **Validation:** `tests/codegen/va_arg.cpp` exact on aarch64 and
+  x86_64; `tests/conformance/cstdarg.syn/va-arg.cpp` (run).
+- **Not implemented:** `_Complex` operands (unsupported in codegen
+  generally).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

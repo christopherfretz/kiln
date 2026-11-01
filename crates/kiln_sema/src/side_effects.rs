@@ -97,6 +97,7 @@ impl Sema<'_, '_> {
                 ExprKind::CXXNewExpr
                 | ExprKind::CXXDeleteExpr
                 | ExprKind::AtomicExpr
+                | ExprKind::VAArgExpr
                 | ExprKind::CXXThrowExpr
                 | ExprKind::CoawaitExpr
                 | ExprKind::DependentCoawaitExpr

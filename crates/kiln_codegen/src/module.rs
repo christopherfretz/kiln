@@ -1080,9 +1080,15 @@ impl<'a> Cg<'a> {
         };
         let (ret, params) = self.sig_attrs(sig, sig.params.len(), false);
         let mut fa = Vec::new();
-        if sig.nothrow {
+        // clang `ConstructAttributeList`: a non-throwing type or a
+        // `NoThrowAttr` (a recognized C library function).
+        let mut cp = Vec::new();
+        let const_pure = crate::builtins::const_pure_attrs(ast, first, &mut cp);
+        let nothrow = sig.nothrow || const_pure || ast.has_nothrow_attr(first);
+        if nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));
         }
+        fa.extend(cp);
         if ast.is_noreturn_fn(first) {
             fa.push(Attr::Flag(AttrKind::NoReturn));
         }
@@ -1104,7 +1110,7 @@ impl<'a> Cg<'a> {
                 func.unnamed_addr = UnnamedAddr::Global;
             }
         }
-        self.nounwind.insert(f, sig.nothrow);
+        self.nounwind.insert(f, nothrow);
         Ok(f)
     }
 
@@ -1131,7 +1137,7 @@ impl<'a> Cg<'a> {
 
     /// The function attributes of a definition.
     pub fn def_fn_attrs(&mut self, f: DefFnAttrs) -> AttrSetId {
-        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn } = f;
+        let DefFnAttrs { is_main, nounwind, mustprogress, vector_width, noreturn, extra } = f;
         let mut a = Vec::new();
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
@@ -1147,6 +1153,7 @@ impl<'a> Cg<'a> {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
         a.push(Attr::Flag(AttrKind::OptimizeNone));
+        a.extend(extra);
         a.push(Attr::UwTable(UwTableKind::Async));
         self.target_attrs(&mut a);
         if self.is_x86() {
@@ -1517,7 +1524,7 @@ pub(crate) fn gval(g: GlobalId) -> Value {
 
 /// The inputs of [`Cg::def_fn_attrs`]: the flags that decide a
 /// definition's function attributes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools, reason = "independent attribute flags")]
 pub(crate) struct DefFnAttrs {
     pub(crate) is_main: bool,
@@ -1525,4 +1532,6 @@ pub(crate) struct DefFnAttrs {
     pub(crate) mustprogress: bool,
     pub(crate) vector_width: u64,
     pub(crate) noreturn: bool,
+    /// `const` / `pure` attributes (`crate::builtins::const_pure_attrs`).
+    pub(crate) extra: Vec<Attr>,
 }
