@@ -44,10 +44,8 @@ impl Sema<'_, '_> {
             return true;
         }
         if !bits.contains(DefinitionBits::LITERAL) {
-            let mut d = self.diag(DiagId::sema_nttp_non_literal, loc).arg(self.ty_arg(ty));
-            if let Some(n) = self.non_literal_note(ty) {
-                d = d.with_note(n);
-            }
+            let d = self.diag(DiagId::sema_nttp_non_literal, loc).arg(self.ty_arg(ty));
+            let d = self.with_non_literal_notes(d, ty);
             self.emit(d);
             return false;
         }
@@ -172,55 +170,6 @@ impl Sema<'_, '_> {
             ty = q;
         }
         notes
-    }
-
-    /// Why class type `ty` is not literal ([basic.types.general]/10;
-    /// clang `RequireLiteralType`'s notes), as far as kiln tracks it.
-    fn non_literal_note(&self, ty: QualType) -> Option<Diag> {
-        let def = self.ast.types.as_record(ty).and_then(|r| self.ast.definition(r))?;
-        let bits = self.record_bits(def);
-        let shown = self.ty_arg(ty);
-        if !bits.contains(DefinitionBits::AGGREGATE)
-            && !bits.contains(DefinitionBits::HAS_CONSTEXPR_CTOR)
-            && !bits.contains(DefinitionBits::LAMBDA)
-        {
-            let loc = self.ast.decls.get(def).loc();
-            return Some(self.diag(DiagId::note_non_literal_no_constexpr_ctors, loc).arg(shown));
-        }
-        for b in self.ast.decls.bases(def, &self.ast.lists) {
-            if !self.is_literal_type(b.ty) {
-                return Some(
-                    self.diag(DiagId::note_non_literal_base_class, b.loc)
-                        .arg(&shown)
-                        .arg(self.ty_arg(b.ty)),
-                );
-            }
-        }
-        for f in self.fields_in(def) {
-            let n = self.ast.decls.get(f);
-            let q = n.ty()?;
-            if !self.is_literal_type(q) {
-                return Some(
-                    self.diag(DiagId::note_non_literal_field, n.loc())
-                        .arg(&shown)
-                        .arg(self.decl_arg(f))
-                        .arg(self.ty_arg(q)),
-                );
-            }
-        }
-        let dtor = self
-            .ast
-            .members(def)
-            .find(|&m| self.ast.decls.get(m).kind() == DeclKind::CXXDestructor)?;
-        let constexpr = self
-            .ast
-            .decls
-            .function(dtor)
-            .is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None);
-        (!constexpr).then(|| {
-            self.diag(DiagId::note_non_literal_non_constexpr_dtor, self.ast.decls.get(dtor).loc())
-                .arg(shown)
-        })
     }
 
     /// A template argument `e` for a non-type parameter of class type

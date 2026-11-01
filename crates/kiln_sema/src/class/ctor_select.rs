@@ -51,6 +51,19 @@ impl Sema<'_, '_> {
         args: &[ExprId],
         style: InitStyle,
     ) -> Selected {
+        self.resolve_ctor_ex(class, args, style, false)
+    }
+
+    /// [`Sema::resolve_ctor`]; `actual_ctor` drops the CWG2327
+    /// conversion-function candidates, as for a base subobject or a
+    /// delegating constructor's target (clang `RequireActualConstructor`).
+    pub(crate) fn resolve_ctor_ex(
+        &mut self,
+        class: DeclId,
+        args: &[ExprId],
+        style: InitStyle,
+        actual_ctor: bool,
+    ) -> Selected {
         let c = self.class_def(class);
         let loc = args.first().map_or(Loc::INVALID, |&a| self.begin_loc(a));
         // [over.match.copy]: converting constructors only, the argument
@@ -66,7 +79,9 @@ impl Sema<'_, '_> {
             set.args.push(info);
         }
         self.add_ctor_candidates(&mut set, c, opts, false);
-        if let [arg] = args {
+        if let [arg] = args
+            && !actual_ctor
+        {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
         self.order_template_candidates(&mut set);

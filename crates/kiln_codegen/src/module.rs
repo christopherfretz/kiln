@@ -263,6 +263,9 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         let first = ast.first(d);
+        if self.is_explicit_inst_declaration(first) {
+            return Ok(());
+        }
         if !self.discardable_fn(d) {
             return self.emit_fn_def(d);
         }
@@ -404,6 +407,9 @@ impl<'a> Cg<'a> {
     /// defined in its class, an implicit instantiation).
     pub(crate) fn inline_def(&self, first: DeclId) -> Option<DeclId> {
         let ast = self.ast;
+        if self.is_explicit_inst_declaration(first) {
+            return None;
+        }
         ast.redecls_of(first).find(|&r| {
             let Some(f) = ast.decls.function(r) else { return false };
             if f.body.is_none() || matches!(f.templ.get(), Some((TemplLinkKind::Pattern, _))) {
@@ -473,18 +479,63 @@ impl<'a> Cg<'a> {
             || self.var_instantiation_linkage(self.ast.first(d)) == Some(Linkage::LinkOnceOdr)
     }
 
-    /// Whether variable `first` is under an explicit instantiation
-    /// declaration (`extern template`), itself or through its class.
-    fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
+    /// Whether variable or function `first` is under an explicit
+    /// instantiation declaration (`extern template`), itself or through
+    /// its enclosing class specialization ([temp.explicit]/14: no
+    /// definition is provided; at -O0 clang emits none, even for inline
+    /// members, which would be `available_externally`).
+    pub(crate) fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
         let ast = self.ast;
-        let decl = |k: SpecKind| k == SpecKind::ExplicitInstantiationDeclaration;
+        let first = ast.first(first);
         match ast.templ_link(first).get() {
             Some((TemplLinkKind::MemberOfSpecialization, i)) => {
-                ast.templates.member_spec(i).is_some_and(|m| decl(m.kind))
+                match ast.templates.member_spec(i).map(|m| m.kind) {
+                    Some(SpecKind::ExplicitInstantiationDeclaration) => return true,
+                    Some(
+                        SpecKind::ExplicitSpecialization
+                        | SpecKind::ExplicitInstantiationDefinition,
+                    ) => {
+                        return false;
+                    }
+                    _ => {}
+                }
+                // The member's own kind is implicit: the innermost
+                // explicitly instantiated enclosing class decides.
+                let mut ctx = ast.decls.get(first).ctx();
+                while let Some(c) = ctx {
+                    if !matches!(
+                        ast.decls.get(c).kind(),
+                        DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+                    ) {
+                        break;
+                    }
+                    match ast.spec_info(c).map(|(_, s)| s.kind) {
+                        Some(SpecKind::ExplicitInstantiationDeclaration) => return true,
+                        Some(
+                            SpecKind::ExplicitInstantiationDefinition
+                            | SpecKind::ExplicitSpecialization,
+                        ) => {
+                            return false;
+                        }
+                        _ => {}
+                    }
+                    if let Some((_, m)) = ast.member_spec_info(c) {
+                        match m.kind {
+                            SpecKind::ExplicitInstantiationDeclaration => return true,
+                            SpecKind::ExplicitInstantiationDefinition
+                            | SpecKind::ExplicitSpecialization => {
+                                return false;
+                            }
+                            _ => {}
+                        }
+                    }
+                    ctx = ast.decls.get(c).ctx();
+                }
+                false
             }
-            Some((TemplLinkKind::Specialization, _)) => {
-                ast.spec_info(first).is_some_and(|(_, s)| decl(s.kind))
-            }
+            Some((TemplLinkKind::Specialization, _)) => ast
+                .spec_info(first)
+                .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitInstantiationDeclaration),
             _ => false,
         }
     }

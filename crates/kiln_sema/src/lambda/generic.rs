@@ -4,7 +4,7 @@
 //! call operator and invoker specializations they forward to (clang
 //! `SpecializeCorrespondingLambdaCallOperatorAndInvoker`).
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, FnSpec};
 use kiln_ast::types::{ExcSpec, FuncInfo, Quals, RefQual, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_source::Loc;
@@ -77,11 +77,22 @@ impl Sema<'_, '_> {
         let exc = self.ast.types.exc_spec(&p);
         let info = p.info().with_this_quals(Quals::NONE).with_ref_qual(RefQual::None);
         let invoker = self.ast.types.function(p.ret(), &params, info, exc);
+        // P2564 / [expr.prim.lambda.closure]/10 per specialization: an
+        // escalated call operator specialization makes this conversion
+        // specialization and its invoker immediate (as `add_function_pointer_conversion`
+        // does for a non-generic lambda).
+        let escalated = self.ast.decls.function(op_spec).is_some_and(|x| x.spec.escalated());
+        if escalated {
+            self.ast.decls.mark_function(conv, FnSpec::new().with_escalated(true));
+        }
         if let Some(inv) = self.ast.closure_invoker(closure)
             && let Some(inv_t) = self.ast.described_template(inv)
         {
             let Ok(inv_spec) = self.get_function_spec(inv_t, &args, loc) else { return false };
             self.ast.decls.set_ty(inv_spec, invoker);
+            if escalated {
+                self.ast.decls.mark_function(inv_spec, FnSpec::new().with_escalated(true));
+            }
         }
         let ptr = self.ast.types.pointer_to(invoker);
         let conv_ty = self.ast.types.function(
@@ -91,6 +102,25 @@ impl Sema<'_, '_> {
             ExcSpec::BasicNoexcept,
         );
         self.ast.decls.set_ty(conv, conv_ty);
+        // The specialization is named by the substituted target type,
+        // its placeholder return type kept (clang: `operator auto
+        // (*)(int)`); mangling uses the template's name.
+        let pattern_ret =
+            self.ast.decls.get(op).ty().and_then(|t| match self.ast.types.view(t.ty()) {
+                TypeView::Function(f) => Some(f.ret()),
+                _ => None,
+            });
+        // (In the pattern, the placeholder is deduced as dependent.)
+        let is_placeholder = |r: QualType| {
+            matches!(self.ast.types.canonical_view(r), TypeView::Auto { .. })
+                || self.contains_undeduced_auto(r)
+        };
+        let name_ret = pattern_ret.filter(|&r| is_placeholder(r)).unwrap_or(p.ret());
+        let named = self.ast.types.function(name_ret, &params, info, exc);
+        let named = self.ast.types.pointer_to(named);
+        let canon = self.ast.types.canonical(named);
+        let name = self.ast.names.conversion(canon);
+        self.ast.decls.set_name(conv, name);
         true
     }
 }

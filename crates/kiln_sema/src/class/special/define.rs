@@ -13,8 +13,8 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
-    BaseSpec, CtorInit, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, FnSpec,
-    FnStorage, LinkageLang, builtin,
+    Access, BaseSpec, CtorInit, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits,
+    FnSpec, FnStorage, LinkageLang, builtin,
 };
 use kiln_ast::expr::{
     BinaryOp, CastKind, ConstructInfo, ConstructionKind, ExprFlags, ExprKind, NonOdrUse, Radix,
@@ -407,8 +407,10 @@ impl Sema<'_, '_> {
         }
         if !info.out.is_empty() {
             let _ = self.builder().set_ctor_inits(ctor, &info.out);
-            self.mark_base_and_member_dtors_referenced(loc, class);
         }
+        // [class.base.init]/12: every constructor potentially invokes the
+        // destructors of the subobjects, written initializers or not.
+        self.mark_base_and_member_dtors_referenced(loc, class);
         // [basic.def.odr]/8: a constructor definition uses the vtable (at
         // the use requiring an implicit definition).
         let use_loc = self.synth.last().filter(|c| c.member == ctor).map_or(loc, |c| c.loc);
@@ -685,6 +687,20 @@ impl Sema<'_, '_> {
         Some((p, self.non_reference(ty)))
     }
 
+    /// The end of an implicit mem-initializer `init`, a full-expression
+    /// ([intro.execution]/5.4): its immediate invocations are evaluated,
+    /// escalating the defaulted constructor being defined (clang's
+    /// `SynthesizedFunctionScope` context, [expr.const]/18), and its
+    /// temporaries destroyed.
+    /// `field` names the member it initializes.
+    fn finish_implicit_init(&mut self, init: ExprId, field: Option<DeclId>) -> ExprId {
+        if let Some(f) = field {
+            self.note_member_init_full_expr(f, false);
+        }
+        self.finish_immediate_invocations(init);
+        self.finish_cleanups(init)
+    }
+
     /// clang `BuildImplicitBaseInitializer` for the base-specifier `spec`
     /// (path index `idx`) of the constructor being defined.
     fn implicit_base_init(
@@ -737,7 +753,7 @@ impl Sema<'_, '_> {
                 self.construct_special(spec.ty, bclass, k, Some(arg), ck, loc, entity)?
             }
         };
-        let init = self.finish_cleanups(init);
+        let init = self.finish_implicit_init(init, None);
         Some(CtorInit {
             target: spec.ty.ty().index(),
             kind: if is_virtual { CtorInitKind::VirtualBase } else { CtorInitKind::Base },
@@ -771,7 +787,7 @@ impl Sema<'_, '_> {
                 mem = self.cast_for_moving(mem);
             }
             let init = self.init_subobject_from(fty, mem, InitEntity::Field(field), loc)?;
-            return Ok(Some(self.finish_cleanups(init)));
+            return Ok(Some(self.finish_implicit_init(init, Some(field))));
         }
         let elem = self.base_element(fty);
         if let Some(r) = self.ast.types.as_record(elem) {
@@ -787,7 +803,7 @@ impl Sema<'_, '_> {
                     InitEntity::Field(field),
                 )
                 .ok_or(())?;
-            return Ok(Some(self.finish_cleanups(init)));
+            return Ok(Some(self.finish_implicit_init(init, Some(field))));
         }
         let parent_union = self.ast.decls.get(field).ctx().is_some_and(|p| self.is_union(p));
         if !parent_union {
@@ -1486,7 +1502,7 @@ impl Sema<'_, '_> {
             }
             let Some(fc) = self.element_class(fty) else { continue };
             if self.ast.decls.get(fc).flags().contains(DeclFlags::INVALID)
-                || self.defn_bits(fc).contains(DefinitionBits::TRIVIAL_DTOR)
+                || self.has_irrelevant_dtor(fc)
                 || self.is_union(fc) && self.is_anonymous_member(f)
             {
                 continue;
@@ -1548,14 +1564,25 @@ impl Sema<'_, '_> {
     /// The destructor of subobject class `c` whose use is relevant (not
     /// trivial, `c` valid).
     fn subobject_dtor(&mut self, c: DeclId) -> Option<DeclId> {
-        if self.ast.decls.get(c).flags().contains(DeclFlags::INVALID)
-            || self.defn_bits(c).contains(DefinitionBits::TRIVIAL_DTOR)
+        if self.ast.decls.get(c).flags().contains(DeclFlags::INVALID) || self.has_irrelevant_dtor(c)
         {
             return None;
         }
         match self.select_special(c, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
             Selected::Found(d) | Selected::Deleted(d) => Some(d),
             _ => None,
+        }
+    }
+
+    /// clang `hasIrrelevantDestructor`: the destructor of `c` is trivial,
+    /// public and not deleted, so a use needs no access or deletion check.
+    fn has_irrelevant_dtor(&mut self, c: DeclId) -> bool {
+        if !self.defn_bits(c).contains(DefinitionBits::TRIVIAL_DTOR) {
+            return false;
+        }
+        match self.select_special(c, SpecialKind::Dtor, Quals::NONE, Quals::NONE) {
+            Selected::Found(d) => self.ast.decls.get(d).misc().access() == Access::Public,
+            _ => false,
         }
     }
 }

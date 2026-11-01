@@ -757,6 +757,9 @@ impl Substituter<'_, '_, '_> {
             dr.init_style = Some(InitStyle::C);
         }
         let f = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
+        // Its attributes (`[[no_unique_address]]`, `alignas`, ...) as for
+        // the class (clang `InstantiateAttrs`).
+        self.class_attrs(f, d);
         // Where the declaration begins ("declared here" for its default
         // member initializer).
         if let Some(&b) = self.sema.ast.decls.cold.begin_loc.get(d) {
