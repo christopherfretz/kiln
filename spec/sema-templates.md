@@ -602,6 +602,20 @@ When a dependent unqualified call or operator is substituted:
    **current** state of the namespace tables.
 3. For operators, the built-in candidates are added (S3O).
 
+*Implementation (WP-207).* `Substituter::callee` keeps the stored decls
+when every one is a namespace-scope function or function template (through
+`using` shadows, linkage specifications and `export`) and the call has no
+explicit template arguments: it rebuilds the `UnresolvedLookupExpr` from
+them with `requires_adl` set, and the call resolves against them plus ADL.
+It does not look the name up again from the scope current at
+instantiation. That scope can differ from the definition's: constraint
+satisfaction (§8) substitutes outside the instantiation context, so a
+re-lookup from, say, namespace `std` found `std::swap` instead of the
+deleted `ranges::__swap::swap` poison pill, or the `ranges::begin`
+object instead of the deleted `ranges::__begin::begin`. Other stored sets
+(class members, block-scope declarations, calls with explicit template
+arguments) still take the earlier path.
+
 Kiln, like clang, does not model the lookup scope at each point of
 instantiation. Namespace contents are append-only, so ADL at instantiation
 sees every declaration made up to that moment. Pending instantiations run
@@ -1327,7 +1341,12 @@ retained, since the AST is append-only. They are metered as
      is dropped. Top-level cv on P is dropped.
    - **When P is a reference.** Use the referred type. A forwarding
      reference (`T&&`, where `T` is this template's own unqualified
-     parameter) with an lvalue A uses A&.
+     parameter) with an lvalue A uses A&. When the referred type is an
+     array more cv-qualified than A, its qualifiers are intersected
+     with A's before matching (clang's `getUnqualifiedArrayType` rule
+     in `DeduceTemplateArgumentsByTypeMatch`; WP-207): `const T (&)[N]`
+     against `int[3]` deduces `T = int`, and the "more qualified" check
+     of /4.1 accepts the result (an array's cv is its element's).
    - **A braced list.** If P is `initializer_list<P'>` or `P'[N]`, deduce
      P' from each element (and N). Otherwise it is non-deduced.
    - **An overload set.** If exactly one member deduces, use it (/6). If
