@@ -141,6 +141,9 @@ pub(crate) struct Cg<'a> {
     pub rtti_globals: FxHashMap<String, GlobalId>,
     /// Bodies using placeholders, lowered once the module is complete.
     pub pending: Vec<(FuncId, DeclId, crate::fir::Fir)>,
+    /// Warnings codegen reports itself (clang's `CGM.getDiags()`, e.g.
+    /// `-Watomic-alignment`), in emission order.
+    pub diags: Vec<kiln_diag::Diag>,
     /// Per-function state.
     pub f: Fx,
     /// The `$_N` ids of unnamed classes, in first-mangle order.
@@ -195,6 +198,7 @@ impl<'a> Cg<'a> {
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
+            diags: Vec::new(),
             f: Fx::empty(),
             anon: mangle::AnonIds::new(),
         }
@@ -206,15 +210,21 @@ impl<'a> Cg<'a> {
 
     // ---- driving -------------------------------------------------------
 
-    /// Emits the whole translation unit.
-    pub fn run(mut self) -> R<Module> {
+    /// Emits the whole translation unit; also returns the warnings
+    /// reported on the way (even when emission fails).
+    pub fn run(mut self) -> (R<Module>, Vec<kiln_diag::Diag>) {
+        let r = self.run_tu();
+        (r.map(|()| self.m), self.diags)
+    }
+
+    fn run_tu(&mut self) -> R<()> {
         let tu = self.ast.tu;
         self.emit_members(tu)?;
         self.emit_key_function_vtables()?;
         self.emit_deferred()?;
         self.resolve_placeholders()?;
         self.trailer();
-        Ok(self.m)
+        Ok(())
     }
 
     fn emit_members(&mut self, ctx: DeclId) -> R<()> {

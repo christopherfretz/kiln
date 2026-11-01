@@ -153,6 +153,7 @@ diag_groups! {
     InaccessibleBase = "inaccessible-base" [];
     // WP-165
     IncrementBool = "increment-bool" [];
+    AtomicAlignment = "atomic-alignment" [];
     // WP-074
     DeprecatedBuiltins = "deprecated-builtins" [];
     // WP-087

@@ -1328,7 +1328,7 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   is the right side's lvalue conversion then `NonAtomicToAtomic`
   (`conv::atomic_class_assign`, C11 6.5.16.1). Assignment errors to any
   `_Atomic` target are reported at the operator, as clang's C path.
-- **Not done:** `-Watomic-alignment` (the libcall-size warning).
+- `-Watomic-alignment` is reported by codegen (spec/codegen.md §7d).
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

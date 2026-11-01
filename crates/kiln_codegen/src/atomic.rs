@@ -14,10 +14,12 @@
 use kiln_ast::decl::builtin::atomic::{self as at, Form, Rmw};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind};
 use kiln_ast::{ExprId, QualType};
+use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, CmpXchgOpts, Flags, IntPredicate, MemOpts,
     Ordering, RmwOp, SyncScope, TypeId as LTy, Value,
 };
+use kiln_source::Span;
 
 use crate::expr::LV;
 use crate::fir::{Blk, Fir, Op, V};
@@ -188,6 +190,7 @@ impl Cg<'_> {
             self.atomic_init(v1, LV { addr, q: atomic_q, bf: None, vidx: None })?;
             return Ok(None);
         }
+        self.atomic_alignment_warnings(e, size, palign);
         let Some(order_e) = sub(1) else { return err(self.loc_of(e), "malformed AtomicExpr") };
         let order = self.emit_scalar(order_e)?;
         // `ShouldCastToIntPtrTy`: floating add/sub/min/max work on the
@@ -567,6 +570,21 @@ impl Cg<'_> {
 
     /// clang `AtomicInfo::shouldUseLibcall`: the target has no lock-free
     /// instruction for an `_Atomic` object of type `q`.
+    /// clang `EmitAtomicExpr`'s `-Watomic-alignment` warnings at the
+    /// start of `e`: the pointer's alignment is not a multiple of the size,
+    /// and the size exceeds the target's maximum inline atomic width.
+    fn atomic_alignment_warnings(&mut self, e: ExprId, size: u64, align: u64) {
+        let span = self.loc_of(e).map_or(Span::INVALID, Span::empty);
+        if !align.is_multiple_of(size) {
+            let d = Diag::new(DiagId::cg_atomic_misaligned, span).arg(size).arg(align);
+            self.diags.push(d);
+        }
+        let max = u64::from(self.target.types.max_atomic_inline_bytes);
+        if size > max {
+            self.diags.push(Diag::new(DiagId::cg_atomic_oversized, span).arg(size).arg(max));
+        }
+    }
+
     fn atomic_lv_libcall(&mut self, q: QualType) -> bool {
         let (size, align) = self.size_align(q);
         size > u64::from(self.target.types.max_atomic_inline_bytes) || align < size

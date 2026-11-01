@@ -24,7 +24,10 @@ A construct outside M2 is a `CodegenError` ("not supported in M2"), never a
 panic and never silently wrong IR.
 
 ## 2. Architecture
-- `lib.rs`: `emit(ast, oven, target, opts) -> Result<Module, CodegenError>`.
+- `lib.rs`: `emit(ast, oven, target, opts) -> Result<Module, CodegenError>`;
+  `emit_with_diags` also returns the warnings codegen reports itself
+  (`Cg::diags`, `kiln_diag::Diag`s in emission order, as clang's
+  `CGM.getDiags()`; WP-165), returned even when emission fails.
 - `fold.rs`: a pre-pass that asks the Oven to fold initializers and
   constant-reference loads (the `Folds` table). A const var is foldable
   only when it is non-volatile and either static storage, integral or enum
@@ -895,8 +898,15 @@ clang 19 `CGAtomic` at -O0, mirrored:
   the old value and the operand with an `icmp` (invalid IR); kiln yields
   `llvm.minnum` / `llvm.maxnum` of the two, the value `atomicrmw fmin` /
   `fmax` stored. `fetch_min`/`fetch_max` match clang.
+- **`-Watomic-alignment` (WP-165)**, clang `EmitAtomicExpr`: for every
+  atomic builtin except `__c11_atomic_init` (never for `_Atomic` lvalue
+  accesses), at the expression's start, `cg_atomic_misaligned` (size,
+  pointer alignment) when the pointer's alignment is not a multiple of
+  the size, then `cg_atomic_oversized` (size, max inline width: 16 on
+  aarch64, 8 on x86_64) when the size exceeds it; clang's texts, the
+  latter with its double space before "bytes".
 - **Validation:** `tests/codegen/atomic_{builtins,orders,lvalues,wide,
-  qualifier,libcall,lv_libcall,padded,aggregate,bool_inc}.cpp` exact on
+  qualifier,libcall,lv_libcall,padded,aggregate,bool_inc,alignment}.cpp` exact on
   aarch64 and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`
   (`fp-minmax-fetch-run.cpp` without an oracle).
 
