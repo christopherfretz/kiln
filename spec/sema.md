@@ -1531,13 +1531,20 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   specification, gets implicit `NoThrow` and `Const`/`Pure` attributes
   (after its written ones). Sig letter `a` is `__builtin_va_list`
   (decayed when an array), `P` the type of the TU-scope `FILE`
-  typedef (none yet: not recognized). Redeclarations inherit them
+  typedef (none yet: not recognized), `R` adds `restrict` to the type
+  before it (WP-270; skipped when counting `I` arguments). Redeclarations inherit them
   (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
   a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
   true). No `Builtin` attribute is attached, so the call stays an
   ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
   calls to intrinsics and its implicit `format` / `alloc_size`
   attributes (`-Wformat*`) are not modelled.
+- **Custom-checked builtins** (WP-270): the generic
+  `__builtin_{add,sub,mul}_overflow` (`builtin_overflow`) and the
+  alignment of `__builtin_alloca_with_align` (`check_alloca_align`) are
+  checked as clang's `SemaBuiltinOverflow` / `SemaBuiltinAllocaWithAlign`;
+  the rules and the builtin table are spec/sema-templates.md §9
+  ("checked arithmetic", "stack allocation", "printf family" rows).
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:
