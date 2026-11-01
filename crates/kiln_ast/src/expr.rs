@@ -1343,6 +1343,8 @@ impl ExprArena {
     }
 
     fn expect_kind(&self, e: ExprId, k: ExprKind) -> &ExprNode {
+        // Invariant (WP-145): accessors are called on the kind they read;
+        // a mismatch is a Sema/AST bug, never input (spec/ast.md).
         let n = self.get(e);
         assert!(n.kind == k, "expected {k:?}, found {:?}", n.kind);
         n
