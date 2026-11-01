@@ -284,9 +284,12 @@ impl Sema<'_, '_> {
 
     /// One type of a `Builtins.td` signature and the rest of the string.
     fn builtin_sig_type<'s>(&mut self, mut s: &'s [u8]) -> (QualType, &'s [u8]) {
-        let (mut unsigned, mut longs) = (false, 0);
+        let (mut unsigned, mut longs, mut complex) = (false, 0, false);
         while let Some(&c) = s.first() {
             match c {
+                // `_Complex` of the type that follows (`__builtin_cexp`'s
+                // "XdXd").
+                b'X' => complex = true,
                 b'U' => unsigned = true,
                 b'L' => longs += 1,
                 // An integer constant expression argument (checked by
@@ -320,6 +323,9 @@ impl Sema<'_, '_> {
             (b'P', ..) => self.file_type(),
             _ => QualType::VOID,
         };
+        if complex {
+            t = self.ast.types.complex(t);
+        }
         while let Some(&c) = s.first() {
             t = match c {
                 b'C' => self.ast.types.qualify(t, Quals::CONST),

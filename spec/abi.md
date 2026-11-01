@@ -920,6 +920,13 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   `x` x87, `t` binary128), basic (algebraic) or improved (Smith's
   division). Constant evaluation always computes the full-range result
   (spec/oven.md "Complex values"), as clang does.
+- **Complex math builtins** (WP-237): `__builtin_cabs`, `__builtin_cexp`,
+  ... (C23 7.3, the 57 `f`/plain/`l` forms libstdc++ `<complex>` calls)
+  are declared with clang's types and lowered to a call of the library
+  function under the same classification as any `_Complex` argument or
+  result. A `const` one (`cproj`) whose argument or result is passed by
+  address (x86-64 `_Complex long double`) is `memory(argmem: readwrite)`
+  (clang `AddPotentialArgAccess`). `tests/codegen/complex_math_builtins.cpp`.
 - **Deviations.** `-fcomplex-arithmetic=promoted` (clang widens a
   division's operands to the next type with twice the exponent range,
   warning when none exists) is rejected with "unsupported argument";

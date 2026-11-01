@@ -109,7 +109,9 @@ impl Parser<'_, '_> {
     }
 
     /// `__extension__` before an alias- or using-declaration (libc++
-    /// `__extension__ using __calc_type = unsigned __int128;`): the GNU
+    /// `__extension__ using __calc_type = unsigned __int128;`) or a
+    /// template declaration (libstdc++ `__extension__ template<> struct
+    /// __is_integer_nonstrict<__int128>`, WP-237): the GNU
     /// keyword only silences extension diagnostics, so it is dropped and
     /// the declaration parsed as usual (clang skips it in
     /// `ParseExternalDeclaration`, `ParseCXXClassMemberDeclaration` and
@@ -120,7 +122,7 @@ impl Parser<'_, '_> {
         while self.kw_of(self.peek(n)) == Some(Kw::Extension) {
             n += 1;
         }
-        if n > 0 && self.kw_of(self.peek(n)) == Some(Kw::Using) {
+        if n > 0 && matches!(self.kw_of(self.peek(n)), Some(Kw::Using | Kw::Template)) {
             for _ in 0..n {
                 self.bump();
             }

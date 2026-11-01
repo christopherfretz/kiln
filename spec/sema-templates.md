@@ -2544,6 +2544,7 @@ records it in `TABLE`.
 | coroutines (WP-171) | `__builtin_coro_resume`/`destroy`/`done`/`promise`/`noop`/`size`/`align`/`frame`/`free`/`id`/`alloc`/`begin`/`end`/`suspend` (`builtin::CORO`, clang 19's types and `noexcept`; an `I` signature argument must be an integer constant expression, `sema_constant_integer_arg_type` at the call, through `check_builtin_ice_args`) | no (the generic note) | not implemented (a codegen error) |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
+| complex math (WP-237) | `__builtin_cabs`/`carg`/`cacos`/`cacosh`/`casin`/`casinh`/`catan`/`catanh`/`ccos`/`ccosh`/`cexp`/`clog`/`cpow`/`cproj`/`csin`/`csinh`/`csqrt`/`ctan`/`ctanh`, each with the `f` and `l` forms (`builtin::LIBM`; the signature prefix `X` is `_Complex` of the type after it; `cproj` is `const`) | no (clang 19) | libcall through the complex call ABI (spec/abi.md §8.17) |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
 
 **Landed (WP-088).** Every row above is implemented in sema, the Oven
