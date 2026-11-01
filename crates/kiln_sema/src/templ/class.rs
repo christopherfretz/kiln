@@ -305,33 +305,44 @@ impl Sema<'_, '_> {
     /// canonical `InjectedClassNameType` prints as `X<T>`, where kiln's
     /// canonical form is the dependent specialization).
     fn alias_subst_args(&mut self, sugared: ArgListId) -> ArgListId {
-        let out: Vec<TemplateArg> = self
-            .ast
-            .types
-            .args(sugared)
-            .to_vec()
-            .into_iter()
-            .map(|a| match a.view() {
-                ArgView::Type(q) if q.quals().is_empty() => {
-                    let mut t = q;
-                    loop {
-                        if matches!(self.ast.types.view(t.ty()), TypeView::InjectedClassName { .. })
-                        {
-                            break TemplateArg::ty(t);
+        let out: Vec<TemplateArg> =
+            self.ast
+                .types
+                .args(sugared)
+                .to_vec()
+                .into_iter()
+                .map(|a| match a.view() {
+                    ArgView::Type(q) if q.quals().is_empty() => {
+                        let mut t = q;
+                        loop {
+                            if matches!(
+                                self.ast.types.view(t.ty()),
+                                TypeView::InjectedClassName { .. }
+                            ) {
+                                break TemplateArg::ty(t);
+                            }
+                            let n = self.ast.types.desugar_once(t);
+                            if n == t {
+                                break self.ast.types.canonical_arg(a);
+                            }
+                            t = n;
                         }
-                        let n = self.ast.types.desugar_once(t);
-                        if n == t {
-                            break self.ast.types.canonical_arg(a);
-                        }
-                        t = n;
                     }
-                }
-                // A dependent expression stays one: its canonical form
-                // (a profile) cannot be substituted.
-                ArgView::Expr { profile: Some(_), .. } => a,
-                _ => self.ast.types.canonical_arg(a),
-            })
-            .collect();
+                    // A dependent expression stays one: its canonical form
+                    // (a profile) cannot be substituted.
+                    ArgView::Expr { profile: Some(_), .. } => a,
+                    // A pack holding a pack expansion (`index_sequence<Is...>`)
+                    // keeps its elements substitutable the same way.
+                    ArgView::Pack(l)
+                        if self.ast.types.args(l).iter().any(|e| {
+                            matches!(e.view(), ArgView::Expr { profile: Some(_), .. })
+                        }) =>
+                    {
+                        TemplateArg::pack(self.alias_subst_args(l))
+                    }
+                    _ => self.ast.types.canonical_arg(a),
+                })
+                .collect();
         self.ast.types.arg_list(&out)
     }
 
@@ -1157,9 +1168,38 @@ impl Substituter<'_, '_, '_> {
             }
             let ctx = self.nns_context(nns, loc)?;
             let q = crate::using::Qualifier { ctx, nns, loc };
+            let resolved = self.sema.kind_of(m) == DeclKind::Using;
+            let reverse = std::mem::replace(&mut self.sema.reverse_using_shadows, resolved);
             last = self.sema.instantiate_class_using(q, name, loc, inheriting).or(last);
+            self.sema.reverse_using_shadows = reverse;
         }
         Ok(last)
+    }
+
+    /// Redoes the dependent `using typename B<T>::name;` that pattern
+    /// alias `m` stands for, with its substituted qualifier (clang's
+    /// `UnresolvedUsingTypenameDecl` instantiation): a using-declaration
+    /// and its shadows, or "'typename' keyword used on a non-type".
+    fn member_using_typename(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
+        let Some(u) = self.sema.ast.decls.typedef(m).map(|t| t.underlying) else { return Ok(None) };
+        let TypeView::DependentName { nns: pnns, name, .. } = self.sema.ast.types.view(u.ty())
+        else {
+            return Ok(None);
+        };
+        let nns = self.nns(pnns, loc)?;
+        if self.nns_still_dependent(nns) {
+            return self.unimplemented("dependent using-declarations in templates", loc);
+        }
+        let ctx = self.nns_context(nns, loc)?;
+        let q = crate::using::Qualifier { ctx, nns, loc };
+        Ok(self.sema.act_on_using_typename_declarator(
+            loc,
+            Some(q),
+            DeclName::ident(name),
+            loc,
+            false,
+            None,
+        ))
     }
 
     /// Replays member `m` of the pattern class (§4.6).
@@ -1195,6 +1235,9 @@ impl Substituter<'_, '_, '_> {
                 // An out-of-line redeclaration is not a member of the
                 // class's member list; only the first declaration is.
                 self.function_decl(m, DeclaratorContext::Member, None)?
+            }
+            DeclKind::TypeAlias if self.sema.using_typename.contains(&m) => {
+                return self.member_using_typename(m, loc);
             }
             DeclKind::Typedef | DeclKind::TypeAlias => self.typedef_decl(m)?,
             DeclKind::StaticAssert => {

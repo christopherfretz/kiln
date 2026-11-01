@@ -49,6 +49,19 @@ impl Substituter<'_, '_, '_> {
             DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm => {
                 self.sema.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
             }
+            // A `using typename B<T>::type;` member instantiated as a
+            // using-declaration (WP-169): the type its shadow names.
+            DeclKind::Using => {
+                let node = *self.sema.ast.decls.get(d);
+                let (ctx, name) = (node.ctx(), node.name());
+                let target = ctx.and_then(|c| {
+                    self.sema.ast.lookup_local(c, name).iter().find_map(|s| {
+                        let t = self.sema.ast.strip_shadow(s);
+                        (s != t && self.sema.kind_of(t) != DeclKind::Using).then_some(t)
+                    })
+                });
+                target.map_or(QualType::ERROR, |t| self.decl_type(t))
+            }
             _ => self.sema.tag_type(d),
         }
     }
@@ -122,6 +135,12 @@ impl Substituter<'_, '_, '_> {
                 let t = &self.sema.ast.types;
                 if t.is_void(e) || t.is_function(e) || t.is_reference(e) {
                     return self.chunk(e, Chunk::Array { size: None, loc }, loc);
+                }
+                // clang rebuilds the array (`BuildArrayType`): a zero
+                // bound is an error in a SFINAE context (see decl.rs).
+                if a.size == 0 && self.sema.inst.stack.is_sfinae() {
+                    self.sema.error(DiagId::sema_zero_array_size_sfinae, loc);
+                    return Err(SubstFail);
                 }
                 Ok(self.sema.ast.types.constant_array(e, a.size, None))
             }
@@ -309,12 +328,21 @@ impl Substituter<'_, '_, '_> {
             }
             TypeView::DependentVector { elem, size: ExprOperand::Expr(s), kind } => {
                 let e = self.ty(elem, loc)?;
-                // Diagnosed at the size operand (clang: at the attribute,
-                // whose location the type does not keep).
-                let at = self.sema.begin_loc(s);
+                // Diagnosed at the attribute, as clang does.
+                let at = match self.sema.inst.vector_attr_locs.get(&s) {
+                    Some(&l) => l,
+                    None => self.sema.begin_loc(s),
+                };
                 let s = self.expr(s)?;
                 let v = self.sema.build_vector_type(e, s, kind, at);
-                if self.sema.is_error_type(v) { Err(SubstFail) } else { Ok(v) }
+                if !self.sema.is_error_type(v) {
+                    Ok(v)
+                } else if self.sema.inst.stack.is_sfinae() {
+                    Err(SubstFail)
+                } else {
+                    // clang leaves the type unchanged after the error.
+                    Ok(e)
+                }
             }
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
                 let n = self.nns(nns, loc)?;

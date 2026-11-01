@@ -187,6 +187,17 @@ pub(crate) enum BuiltinCall {
 }
 
 impl Cg<'_> {
+    /// clang `EmitVAListRef`: the address of the `va_list` operand `x`, a
+    /// `__builtin_va_list` lvalue, or the decayed pointer when the
+    /// target's `va_list` is an array (x86-64).
+    fn va_list_ref(&mut self, x: ExprId) -> R<V> {
+        if self.ast.types.is_pointer(self.ast.exprs.get(x).ty()) {
+            self.emit_scalar(x)
+        } else {
+            Ok(self.emit_lvalue(x)?.addr.v)
+        }
+    }
+
     /// clang `EmitBuiltinExpr` for the call `e` of builtin `b`:
     /// [`BuiltinCall::Library`] for a library builtin, which the caller
     /// emits as an ordinary call of [`Cg::lib_fn`].
@@ -240,6 +251,46 @@ impl Cg<'_> {
                         self.select(is_zero, fv, r)
                     }
                 }
+            }
+            // WP-156: clang `emitBuiltinWithOneOverloadedType` of
+            // `llvm.vector.reduce.*` (min/max by element signedness).
+            id::REDUCE_ADD
+            | id::REDUCE_MUL
+            | id::REDUCE_AND
+            | id::REDUCE_OR
+            | id::REDUCE_XOR
+            | id::REDUCE_MIN
+            | id::REDUCE_MAX => {
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let aq = ast.exprs.get(a0).ty();
+                let eq = self.scalar_of(aq);
+                let max = b == id::REDUCE_MAX;
+                let op = match b {
+                    id::REDUCE_ADD => "add",
+                    id::REDUCE_MUL => "mul",
+                    id::REDUCE_AND => "and",
+                    id::REDUCE_OR => "or",
+                    id::REDUCE_XOR => "xor",
+                    _ if ast.types.is_floating(eq) => {
+                        if max {
+                            "fmax"
+                        } else {
+                            "fmin"
+                        }
+                    }
+                    _ if self.is_signed(eq) && !self.is_bool(eq) => {
+                        if max {
+                            "smax"
+                        } else {
+                            "smin"
+                        }
+                    }
+                    _ if max => "umax",
+                    _ => "umin",
+                };
+                let f = kiln_llvm::intrinsics::vector_reduce(&mut self.m, op, ty);
+                self.intrinsic_call(f, vec![x])
             }
             id::POPCOUNT | id::POPCOUNTL | id::POPCOUNTLL | id::POPCOUNTG => {
                 let x = self.emit_scalar(a0)?;
@@ -404,6 +455,25 @@ impl Cg<'_> {
                 let c = self.emit_scalar(a0)?;
                 let f = kiln_llvm::intrinsics::assume(&mut self.m);
                 self.intrinsic_call(f, vec![c]);
+                return Ok(BuiltinCall::Emitted(None));
+            }
+            id::VA_START | id::VA_END | id::VA_COPY => {
+                // clang `EmitVAStartEnd` / `__builtin_va_copy`: the
+                // `llvm.va_*` intrinsics on the `va_list`'s address (the
+                // second `va_start` operand is not evaluated).
+                let mut ops = vec![self.va_list_ref(a0)?];
+                let f = match b {
+                    id::VA_START => kiln_llvm::intrinsics::va_start(&mut self.m),
+                    id::VA_END => kiln_llvm::intrinsics::va_end(&mut self.m),
+                    _ => {
+                        let Some(src) = arg(1) else {
+                            return err(self.loc_of(e), "__builtin_va_copy without two arguments");
+                        };
+                        ops.push(self.va_list_ref(src)?);
+                        kiln_llvm::intrinsics::va_copy(&mut self.m)
+                    }
+                };
+                self.intrinsic_call(f, ops);
                 return Ok(BuiltinCall::Emitted(None));
             }
             id::TRAP => {

@@ -469,6 +469,16 @@ impl Sema<'_, '_> {
                     None => self.qualified_decl_name(f.entity),
                 }
             }
+            // clang: the unqualified name, then the innermost template
+            // arguments (`f<B>` for a member of `A<B>`).
+            FrameKind::DefaultFunctionArg => {
+                let mut s = self.decl_name(f.entity);
+                if let Some(l) = f.args {
+                    let names = crate::names::SemaNames::new(self);
+                    kiln_ast::types::write_arg_list(&self.ast.types, &names, l, &mut s);
+                }
+                s
+            }
             // clang names the function unqualified here.
             FrameKind::ExceptionSpec | FrameKind::BindingInit => self.decl_name(f.entity),
             _ => self.qualified_decl_name(f.entity),

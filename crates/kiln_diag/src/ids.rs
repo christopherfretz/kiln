@@ -509,6 +509,7 @@ diag_ids! {
     sema_using_decl_conflict = Error (0) "target of using declaration conflicts with declaration already in scope";
     sema_using_decl_conflict_reverse = Error (0) "declaration conflicts with target of using declaration already in scope";
     note_using_decl_target = Note (0) "target of using declaration";
+    sema_using_typename_non_type = Error (0) "'typename' keyword used on a non-type";
     note_using_decl_conflict = Note (0) "conflicting declaration";
     note_using_decl = Note (0) "using declaration";
     sema_use_of_empty_using_if_exists = Error (0) "reference to unresolved using declaration";
@@ -639,6 +640,16 @@ diag_ids! {
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
     sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
     sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
+    sema_constinit_local = Error (0) "local variable cannot be declared 'constinit'";
+    sema_constinit_non_constant = Error (0) "variable does not have a constant initializer";
+    sema_missing_constinit = Warning [MissingConstinit] (1) "'constinit' specifier missing on initializing declaration of '{0}'";
+    sema_va_start_fixed_function = Error (0) "'va_start' used in function with fixed args";
+    sema_va_start_outside_function = Error (0) "'va_start' cannot be used outside a function";
+    sema_va_start_not_last_named_param = Warning [Varargs] (0) "second argument to 'va_start' is not the last named parameter";
+    sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object that undergoes default argument promotion|an object of reference type|a parameter declared with the 'register' keyword} to 'va_start' has undefined behavior";
+    note_va_start_parameter_type = Note (1) "parameter of type {0} is declared here";
+    sema_refconst_no_ctor = Warning (2) "{0:struct|interface|union|class|enum} {1} does not declare any constructor to initialize its non-modifiable members";
+    note_refconst_member_not_initialized = Note (2) "{0:const|reference} member {1} will never be initialized";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
     sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
@@ -647,8 +658,8 @@ diag_ids! {
     sema_constexpr_redecl_mismatch = Error (3) "{0:non-constexpr|constexpr|consteval} declaration of '{1}' follows {2:non-constexpr|constexpr|consteval} declaration";
     sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";
     sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
-    note_immediate_function_reason = Note (4) "'{0}' is an immediate function because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} function '{3}'{1:| and that call is not a constant expression}";
-    note_immediate_default_init_reason = Note (5) "'{0}' is an immediate {1:function|constructor} because the default initializer of '{2}' contains a call to {3:an immediate|a consteval} function '{4}' and that call is not a constant expression";
+    note_immediate_function_reason = Note (6) "'{0}' is an immediate {4:function|constructor} because its body {1:evaluates the address of|contains a call to} {2:an immediate|a consteval} {5:function|constructor} '{3}'{1:| and that call is not a constant expression}";
+    note_immediate_default_init_reason = Note (7) "'{0}' is an immediate {1:function|constructor} because the{6:| default} initializer of '{2}' contains a call to {3:an immediate|a consteval} {5:function|constructor} '{4}' and that call is not a constant expression";
     note_in_default_initializer = Note (1) "in the default initializer of '{0}'";
     sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
     sema_block_extern_init = Error (0) "declaration of block scope identifier with linkage cannot have an initializer";
@@ -688,10 +699,22 @@ diag_ids! {
     sema_alignment_too_big = Error (1) "requested alignment must be {0} bytes or smaller";
     sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";
     sema_vector_zero_size = Error (0) "zero vector size";
+    sema_zero_array_size_sfinae = Error (0) "zero-length arrays are not permitted in C++";
     sema_vector_size_too_large = Error (0) "vector size too large";
     sema_vector_size_not_multiple = Error (0) "vector size not an integral multiple of component size";
     sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";
     sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
+    sema_vector_not_convertible = Error (2) "cannot convert between vector values of different size ({0} and {1})";
+    sema_vector_not_convertible_non_scalar = Error (2) "cannot convert between vector and non-scalar values ({0} and {1})";
+    sema_vector_implicit_truncation = Error (3) "cannot convert between {0:scalar|vector} type {1} and vector type {2} as implicit conversion would cause truncation";
+    sema_vector_lengths_not_equal = Error (2) "vector operands do not have the same number of elements ({0} and {1})";
+    sema_vector_element_sizes_not_equal = WarningError [VecElemSize] (2) "vector operands do not have the same elements sizes ({0} and {1})";
+    sema_expect_int = Error (1) "used type {0} where integer is required";
+    sema_three_way_vector_comparison = Error (0) "three-way comparison between vectors is not supported";
+    sema_convertvector_non_vector = Error (0) "first argument to __builtin_convertvector must be a vector";
+    sema_convertvector_non_vector_type = Error (0) "second argument to __builtin_convertvector must be of vector type";
+    sema_convertvector_incompatible_vector = Error (0) "first two arguments to __builtin_convertvector must have the same number of elements";
+    sema_builtin_arg_must_be = Error (3) "{0:1st|2nd|3rd|4th|5th} argument must be a {1} (was {2})";
     sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
     sema_static_assert_failed = Error (0) "static assertion failed";
     sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";
@@ -753,10 +776,12 @@ diag_ids! {
     sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer types ({0} and {1})";
     sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
     sema_arith_incomplete_pointee = Error (1) "arithmetic on a pointer to an incomplete type {0}";
+    sema_subscript_incomplete_type = Error (1) "subscript of pointer to incomplete type {0}";
     sema_arith_void_pointer = Extension [PointerArith] (1) "arithmetic on{0: a pointer| pointers} to void is a GNU extension";
     sema_arith_function_pointer = Extension [PointerArith] (2) "arithmetic on{0: a pointer| pointers} to the function type {1} is a GNU extension";
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
     sema_addrof_bitfield = Error (0) "address of bit-field requested";
+    sema_addrof_vector_element = Error (0) "address of vector element requested";
     sema_incdec_bool = Error (1) "ISO C++17 does not allow {0:incrementing|decrementing} expression of type bool";
     sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
     sema_ovl_no_viable_function_in_call = Error (1) "no matching function for call to '{0}'";
@@ -802,6 +827,9 @@ diag_ids! {
     sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
     sema_sizeof_bitfield = Error (1) "invalid application of '{0}' to bit-field";
     sema_bad_cxx_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} is not allowed";
+    sema_bad_cxx_cast_vector_to_scalar_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to scalar {2} of different size";
+    sema_bad_cxx_cast_scalar_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from scalar {1} to vector {2} of different size";
+    sema_bad_cxx_cast_vector_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to vector {2} of different size";
     sema_bad_cast_qualifiers_away = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} casts away qualifiers";
     sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
     sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
@@ -818,6 +846,8 @@ diag_ids! {
     sema_unused_result = Warning [UnusedResult] (1) "ignoring return value of function declared with {0} attribute";
     sema_unused_result_msg = Warning [UnusedResult] (2) "ignoring return value of function declared with {0} attribute: {1}";
     sema_unused_expr = Warning [UnusedValue] (0) "expression result unused";
+    sema_unused_constructor = Warning [UnusedValue] (1) "ignoring temporary created by a constructor declared with {0} attribute";
+    sema_unused_constructor_msg = Warning [UnusedValue] (2) "ignoring temporary created by a constructor declared with {0} attribute: {1}";
     sema_unused_comparison = Warning [UnusedComparison] (1) "{0:equality|inequality|relational|three-way} comparison result unused";
     sema_deprecated = Warning [DeprecatedDeclarations] (1) "'{0}' is deprecated";
     sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated: {1}";
@@ -1184,6 +1214,7 @@ diag_ids! {
     sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
     sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
     sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";
+    sema_builtin_pass_in_regs_non_class = Error (1) "argument {0} is not an unqualified class type";
     sema_dimension_expr_not_const = Error (0) "dimension expression does not evaluate to a constant unsigned int";
     sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only compatible with non-bool integers and enum types, but was given {1}";
     sema_only_enums_have_underlying = Error (0) "only enumeration types have underlying types";
@@ -1262,6 +1293,7 @@ diag_ids! {
     note_in_binding_decl_init = Note (1) "in implicit initialization of binding declaration '{0}'";
     sema_binding_in_own_initializer = Error (1) "binding '{0}' cannot appear in the initializer of its own decomposition declaration";
     sema_reference_bind_to_bitfield = Error (2) "{0:non-const|volatile} reference cannot bind to bit-field{1}";
+    sema_reference_bind_to_vector_element = Error (1) "{0:non-const|volatile} reference cannot bind to vector element";
     // WP-087
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
@@ -1448,10 +1480,12 @@ diag_ids! {
     note_not_structural_subobject = Note (3) "{0} is not a structural type because it has a {1:non-static data member|base class} of non-structural type {2}";
     note_non_literal_no_constexpr_ctors = Note (1) "{0} is not literal because it is not an aggregate and has no constexpr constructors other than copy or move constructors";
     note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
-    note_non_literal_field = Note (3) "{0} is not literal because it has data member {1} of non-literal type {2}";
+    note_non_literal_field = Note (4) "{0} is not literal because it has data member {1} of {3:non-literal|volatile} type {2}";
     note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
     note_non_literal_virtual_base = Note (2) "{0:struct|interface|class} with virtual base {1:class|classes} is not a literal type";
     note_constexpr_virtual_base_here = Note (0) "virtual base class declared here";
+    note_constinit_specified_here = Note (0) "required by 'constinit' specifier here";
+    note_constinit_missing_here = Note (0) "variable declared constinit here";
     // GNU asm statements (WP-140)
     parse_asm_duplicate_qual = Error (1) "duplicate asm qualifier '{0}'";
     parse_asm_qualifier_ignored = Error (0) "expected 'volatile', 'inline', 'goto', or '('";

@@ -77,7 +77,17 @@ impl Sema<'_, '_> {
         }
         let vk = self.ast.exprs.get(e).value_category();
         if vk == ValueCategory::PRValue && conv::bases::same_class(self, src, class) {
-            return Some(e);
+            // Not into a base subobject or a delegating constructor's
+            // object (clang `TryConstructorInitialization`, per CWG2403:
+            // a base may overlap other members): the object is
+            // move-constructed from the materialized prvalue.
+            let base_or_delegating = matches!(
+                self.ctor_entity,
+                Some((InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating))
+            );
+            if !base_or_delegating {
+                return Some(e);
+            }
         }
         let k =
             if vk == ValueCategory::LValue { SpecialKind::CopyCtor } else { SpecialKind::MoveCtor };
@@ -135,17 +145,13 @@ impl Sema<'_, '_> {
         let (entity, ck) = self.take_ctor_entity();
         let diag_ty = self.ctor_diag_ty.take();
         let loc = site.loc;
-        if style.is_list()
-            && self.has_init_list_ctor(class)
-            && self.init_list_phase1_viable(class, args)
-        {
-            // todo(WP-067b follow-up): building the initializer_list
-            // object for an initializer-list constructor
-            // ([dcl.init.list]/3.7, [over.match.list]/1.1; phase 2 below).
-            self.unsupported("initialization by an initializer-list constructor", loc);
-            return Some(self.recover(ty, args, loc));
-        }
-        let sel = self.resolve_ctor(class, args, style);
+        // [over.match.list]/1.1 (phase 1) was done by the caller
+        // (`init_list_ctor_init`); this is phase 2.
+        let actual = matches!(
+            (entity, ck),
+            (InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating)
+        );
+        let sel = self.resolve_ctor_ex(class, args, style, actual);
         if sel == Selected::Missing
             && style == InitStyle::Direct
             && !args.is_empty()
@@ -296,7 +302,11 @@ impl Sema<'_, '_> {
         let ctor = self.ast.exprs.constructor(c);
         let zeroing = !self.is_user_provided(ctor);
         let info = ConstructInfo { zeroing, ..ConstructInfo::COMPLETE };
-        let t = self.builder().temporary_object(ty, ctor, &[], info, ExprFlags::NONE, loc, rparen);
+        // The default constructor's default arguments, if any.
+        let args: Vec<ExprId> =
+            self.ast.lists.iter::<ExprId>(self.ast.exprs.construct_args(c)).collect();
+        let t =
+            self.builder().temporary_object(ty, ctor, &args, info, ExprFlags::NONE, loc, rparen);
         let t = self.check_immediate_invocation(t, ctor, None);
         Some(self.maybe_bind_temporary(t))
     }

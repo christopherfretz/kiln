@@ -52,6 +52,7 @@ mod try_stmt;
 mod type_diff;
 pub mod using;
 mod vector;
+mod vector_ops;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
@@ -168,6 +169,9 @@ pub struct Sema<'a, 'sm> {
     /// declaration (clang `getTypeSpecStartLoc`), where the handler-order
     /// warnings point ([except.handle]/4, WP-100).
     pub(crate) handler_type_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Where `constinit` was written on each variable declaration that
+    /// has it ([dcl.constinit]; WP-159).
+    pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// The declared placeholder type and decl-specifiers' type location
     /// of each variable of a multi-declarator group in a template
     /// pattern: instantiation checks the group's deductions again
@@ -178,6 +182,13 @@ pub struct Sema<'a, 'sm> {
     /// known to be non-dependent ([temp.dep.candidate]), and ADL applies
     /// (spec/sema-overload.md §2.2).
     pub(crate) deferring_call_ref: bool,
+    /// Replaying a non-dependent class-scope using-declaration of a
+    /// pattern: clang walks the pattern's shadow list, which is newest
+    /// first, so the instantiation's shadows come in reverse (WP-159).
+    pub(crate) reverse_using_shadows: bool,
+    /// The type `__builtin_va_list` names (its typedef sugar; the `A` of
+    /// a builtin signature), once declared.
+    pub(crate) va_list_type: Option<QualType>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -298,6 +309,10 @@ pub struct Sema<'a, 'sm> {
     /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
     /// their templates per specialization.
     pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
+    /// The member aliases standing for a dependent `using typename
+    /// B<T>::name;` ([`Sema::act_on_using_typename_declarator`]): an
+    /// instantiation redoes the using-declarator.
+    pub(crate) using_typename: kiln_source::fx::FxHashSet<DeclId>,
     pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
     /// The inheriting constructors declared, by (derived class, base
     /// constructor) (WP-114, clang `findInheritingConstructor`'s lookup).
@@ -382,8 +397,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             decomp_written: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
+            constinit_locs: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
+            reverse_using_shadows: false,
+            va_list_type: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             deferred_call_refs: Vec::new(),
@@ -421,6 +439,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
+            using_typename: kiln_source::fx::FxHashSet::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),
@@ -532,13 +551,79 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 
     /// `q` as clang prints a type argument: `'T'`, or `'T' (aka 'int')`
     /// when the canonical spelling differs.
+    /// A vector type adds ` (vector of N 'E' values)` (clang's
+    /// `ConvertTypeToDiagnosticString`).
+    /// clang's `desugarForDiagnostic`
+    /// does not desugar `__builtin_va_list`, so a difference only there
+    /// gives no `aka`.
     pub fn ty_arg(&self, q: QualType) -> String {
         let names = names::SemaNames::new(self);
         let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
-        match aka(&self.ast.types, &names, q) {
+        if let kiln_ast::types::TypeView::Vector { elem, count, .. } =
+            self.ast.types.canonical_view(q)
+        {
+            // clang's `Desugar` stops before a vector type ("people want
+            // their vec4"), and prints the vector details only without
+            // an `aka`.
+            if let Some(d) = self.vector_aka(q) {
+                let a = print_type(&self.ast.types, &names, d, PrintOptions::SUGARED);
+                if a != s {
+                    return format!("'{s}' (aka '{a}')");
+                }
+            }
+            let top = self.ast.types.desugar_top(q);
+            let elem = match self.ast.types.view(top.ty()) {
+                kiln_ast::types::TypeView::Vector { elem, .. } => elem,
+                _ => elem,
+            };
+            let e = print_type(&self.ast.types, &names, elem, PrintOptions::SUGARED);
+            let v = if count == 1 { "value" } else { "values" };
+            return format!("'{s}' (vector of {count} '{e}' {v})");
+        }
+        let a = aka(&self.ast.types, &names, q).filter(|a| {
+            self.va_list_type.is_none_or(|v| {
+                let vc = print_type(&self.ast.types, &names, v, PrintOptions::CANONICAL);
+                s.replace("__builtin_va_list", &vc) != *a
+            })
+        });
+        match a {
             Some(a) => format!("'{s}' (aka '{a}')"),
             None => format!("'{s}'"),
         }
+    }
+
+    /// clang's `Desugar` for a type whose canonical type is a vector: the
+    /// type desugared step by step, stopping at the sugar whose
+    /// underlying type is the vector itself; `None` when no step counts
+    /// for an `aka` (template parameter substitution, `using` and
+    /// elaborated names, attributes and deduced types do not).
+    fn vector_aka(&self, q: QualType) -> Option<QualType> {
+        use kiln_ast::types::TypeView as V;
+        let t = &self.ast.types;
+        let mut cur = q;
+        let mut aka = false;
+        for _ in 0..256 {
+            let next = t.desugar_once(cur);
+            if next == cur {
+                break;
+            }
+            match t.view(cur.ty()) {
+                // clang substitutes canonical template arguments.
+                V::SubstTemplateTypeParm { .. } => {
+                    cur = t.canonical(cur);
+                    continue;
+                }
+                V::Elaborated { .. } | V::Using { .. } | V::Attributed { .. } | V::Auto { .. } => {}
+                _ => {
+                    if matches!(t.view(next.ty()), V::Vector { .. }) {
+                        break;
+                    }
+                    aka = true;
+                }
+            }
+            cur = next;
+        }
+        aka.then_some(cur)
     }
 
     /// `q` printed canonically (fully qualified) without quotes.

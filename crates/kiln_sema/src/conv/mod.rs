@@ -762,7 +762,26 @@ fn bind_reference(
         }
         return Err(unsupported("binding a reference to a temporary"));
     }
-    if related && vk.is_glvalue() && s.ast.exprs.get(e).object_kind() == ObjectKind::BitField {
+    if related
+        && vk.is_glvalue()
+        && s.ast.exprs.get(e).object_kind() == ObjectKind::VectorComponent
+        && plain_lref
+    {
+        // A vector element is not referenceable either (clang
+        // `err_reference_bind_to_vector_element`).
+        let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
+        return Err(ConvError::new(
+            DiagId::sema_reference_bind_to_vector_element,
+            vec![sel.into()],
+        ));
+    }
+    if related
+        && vk.is_glvalue()
+        && matches!(
+            s.ast.exprs.get(e).object_kind(),
+            ObjectKind::BitField | ObjectKind::VectorComponent
+        )
+    {
         // A bit-field is not referenceable ([dcl.init.ref]/5.1, clang
         // `isNonReferenceableGLValue`): a non-const lvalue reference is
         // ill-formed, any other binds a temporary copy (/5.4.2).

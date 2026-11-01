@@ -118,7 +118,13 @@ impl Cg<'_> {
         }
         let params: Vec<DeclId> = ast.lists.iter(fd.params).collect();
         let pty = |p: DeclId| ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
-        let has_default = |p: DeclId| ast.decls.param(p).is_some_and(|x| x.default_arg.is_some());
+        // A default not instantiated yet ([temp.inst]/12) still counts.
+        let has_default = |p: DeclId| {
+            ast.decls.param(p).is_some_and(|x| {
+                x.default_arg.is_some()
+                    || x.flags & kiln_ast::decl::ParamData::DEFAULT_ARG_PENDING != 0
+            })
+        };
         let is_class = |t: QualType| ast.types.as_record(t).is_some_and(|r| ast.first(r) == class);
         if kind == DeclKind::CXXConstructor {
             let &p0 = params.first()?;
@@ -180,6 +186,9 @@ impl Cg<'_> {
     /// The definition of structor `first` to emit, if any.
     fn structor_def(&self, first: DeclId) -> Option<DeclId> {
         let ast = self.ast;
+        if self.is_explicit_inst_declaration(first) {
+            return None;
+        }
         ast.redecls_of(first).find(|&r| {
             ast.decls.function(r).is_some_and(|f| {
                 f.body.is_some()
@@ -271,7 +280,12 @@ impl Cg<'_> {
             }
         }
         if !from_vbase && self.inlines_inheriting_ctor(ctor) {
-            return self.emit_inlined_inheriting_ctor(ctor, dest, Structor::Base, vals, ptys);
+            let vtt = if self.structor_has_vbases(first) {
+                Some(self.vtt_arg(rd, kind == ConstructionKind::VirtualBase, false)?)
+            } else {
+                None
+            };
+            return self.emit_inlined_inheriting_ctor(ctor, dest, Structor::Base, vals, ptys, vtt);
         }
         let fty = ast.decls.get(first).ty().expect("constructor type");
         let mut sig = self.call_sig_this(fty, false, &ptys, Some(rd));
@@ -307,7 +321,10 @@ impl Cg<'_> {
     /// clang `EmitInlinedInheritingCXXConstructorCall`: variant `v` of
     /// inheriting constructor `ctor` emitted in place on the object at
     /// `dest`, its `CXXInheritedCtorInitExpr`s forwarding the call's
-    /// evaluated arguments `vals` (of types `tys`).
+    /// evaluated arguments `vals` (of types `tys`). `vtt` is the VTT
+    /// argument of a base-object variant of a class with virtual bases,
+    /// computed by the caller (`addImplicitConstructorArgs`); it becomes
+    /// the inlined body's VTT parameter.
     pub(crate) fn emit_inlined_inheriting_ctor(
         &mut self,
         ctor: DeclId,
@@ -315,6 +332,7 @@ impl Cg<'_> {
         v: Structor,
         vals: Vec<CallArg>,
         tys: Vec<QualType>,
+        vtt: Option<V>,
     ) -> R<()> {
         let ast = self.ast;
         let first = ast.first(ctor);
@@ -325,12 +343,11 @@ impl Cg<'_> {
         else {
             return err(Some(ast.decls.get(ctor).loc()), "inheriting constructor is not defined");
         };
-        if v == Structor::Base && self.structor_has_vbases(first) {
-            return err(
-                Some(ast.decls.get(ctor).loc()),
-                "inlined C-variadic inheriting constructor of a base with virtual bases is not supported yet",
-            );
-        }
+        debug_assert_eq!(
+            vtt.is_some(),
+            v == Structor::Base && self.structor_has_vbases(first),
+            "VTT argument of an inlined inheriting constructor"
+        );
         let saved = (
             self.f.decl,
             self.f.this,
@@ -340,11 +357,17 @@ impl Cg<'_> {
             self.f.vtt.take(),
             self.f.inh_args.take(),
         );
-        // The simplified prolog: `this` is spilled and reloaded as by a
-        // function prolog (`EmitParmDecl` + `EmitInstanceFunctionProlog`).
+        // The simplified prolog: `this` and the VTT are spilled and
+        // reloaded as by a function prolog (`EmitParmDecl` +
+        // `EmitInstanceFunctionProlog`).
         let a = self.f.fir.alloca(LTy::PTR, 8);
+        let vtt_addr = vtt.map(|_| self.f.fir.alloca(LTy::PTR, 8));
         self.store(dest.v, a, 8, false);
+        if let (Some(t), Some(va)) = (vtt, vtt_addr) {
+            self.store(t, va, 8, false);
+        }
         let this = self.load(LTy::PTR, a, 8, false);
+        self.f.vtt = vtt_addr.map(|va| self.load(LTy::PTR, va, 8, false));
         self.f.decl = Some(def);
         self.f.this = Some(this);
         self.f.this_class = Some(rd);
@@ -481,6 +504,9 @@ impl Cg<'_> {
             return Ok(());
         }
         let first = ast.first(d);
+        if self.is_explicit_inst_declaration(first) {
+            return Ok(());
+        }
         let is_ctor = ast.decls.get(d).kind() == DeclKind::CXXConstructor;
         let abstract_ = ast
             .decls
@@ -1370,8 +1396,13 @@ impl Cg<'_> {
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
         if self.memcpy_equivalent(ctor) {
             let src = self.emit_lvalue(args[0])?;
-            let size = self.copy_size(rd, overlap);
-            self.memcpy(dest, src.addr.v, src.addr.align, size, false);
+            // clang `EmitAggregateCopy` ignores empty classes: an empty
+            // base shares its address with another subobject ([intro.object]
+            // /8), which a one-byte copy would clobber.
+            if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
+                let size = self.copy_size(rd, overlap);
+                self.memcpy(dest, src.addr.v, src.addr.align, size, false);
+            }
             return Ok(());
         }
         let v = match info.kind {
@@ -1397,7 +1428,14 @@ impl Cg<'_> {
         self.f.dest_destructed = saved;
         let vals = vals?;
         if self.inlines_inheriting_ctor(ctor) {
-            return self.emit_inlined_inheriting_ctor(ctor, dest, v, vals, arg_tys);
+            let vtt = if needs_vtt {
+                let virt = info.kind == ConstructionKind::VirtualBase;
+                let delegating = info.kind == ConstructionKind::Delegating;
+                Some(self.vtt_arg(rd, virt, delegating)?)
+            } else {
+                None
+            };
+            return self.emit_inlined_inheriting_ctor(ctor, dest, v, vals, arg_tys, vtt);
         }
         if needs_vtt {
             let virt = info.kind == ConstructionKind::VirtualBase;
@@ -1504,8 +1542,11 @@ impl Cg<'_> {
             }
             if matches!(self.special_of(md), Some(Special::CopyAssign | Special::MoveAssign)) {
                 let src = self.emit_lvalue(args[0])?;
-                let size = self.copy_size(rd, true);
-                self.memcpy(this, src.addr.v, src.addr.align, size, false);
+                // clang `EmitAggregateCopy`: empty classes are ignored.
+                if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
+                    let size = self.copy_size(rd, true);
+                    self.memcpy(this, src.addr.v, src.addr.align, size, false);
+                }
                 return Ok(Some(this.v));
             }
         }

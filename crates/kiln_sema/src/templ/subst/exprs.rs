@@ -5,7 +5,9 @@
 //! expression is rebuilt through the Sema actions the parser calls.
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::{CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, ValueCategory};
+use kiln_ast::expr::{
+    CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, TypeidOperand, ValueCategory,
+};
 use kiln_ast::ids::RawId;
 use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::types::{ArgView, BuiltinType, Nns};
@@ -431,6 +433,11 @@ impl Substituter<'_, '_, '_> {
                 let o = self.expr(ex(self).operand(e))?;
                 Ok(self.sema.act_on_builtin_bit_cast(ty, o, loc, end))
             }
+            ExprKind::ConvertVectorExpr => {
+                let ty = self.ty(n.ty(), loc)?;
+                let o = self.expr(ex(self).operand(e))?;
+                Ok(self.sema.act_on_convert_vector(o, ty, loc, end))
+            }
             ExprKind::CXXUnresolvedConstructExpr => {
                 let ty = self.ty(n.ty(), loc)?;
                 let l = kiln_ast::ids::ListId::new(n.a());
@@ -464,6 +471,21 @@ impl Substituter<'_, '_, '_> {
                     let o = self.unevaluated_operand(o)?;
                     Ok(self.sema.act_on_trait_expr(kind, o, loc))
                 }
+            }
+            // [expr.typeid]: rebuilt by the parser's action. As clang's
+            // `TransformCXXTypeidExpr`, an expression operand is first
+            // substituted as an unevaluated operand and substituted again,
+            // potentially evaluated, if it turns out to be a glvalue of
+            // polymorphic class type (/3).
+            ExprKind::CXXTypeidExpr => {
+                let operand = match ex(self).typeid_operand(e) {
+                    TypeidOperand::Type(t) => Err(self.ty(t, loc)?),
+                    TypeidOperand::Expr(o) => {
+                        let u = self.unevaluated_operand(o)?;
+                        if self.sema.is_polymorphic_glvalue(u) { Ok(self.expr(o)?) } else { Ok(u) }
+                    }
+                };
+                Ok(self.sema.act_on_typeid(operand, loc, end))
             }
             // spec/sema-templates.md §9.1, §9.4: rebuilt through the
             // parser's builders (no deprecation warning on instantiation).

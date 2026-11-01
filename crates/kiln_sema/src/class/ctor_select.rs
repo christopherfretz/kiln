@@ -51,6 +51,19 @@ impl Sema<'_, '_> {
         args: &[ExprId],
         style: InitStyle,
     ) -> Selected {
+        self.resolve_ctor_ex(class, args, style, false)
+    }
+
+    /// [`Sema::resolve_ctor`]; `actual_ctor` drops the CWG2327
+    /// conversion-function candidates, as for a base subobject or a
+    /// delegating constructor's target (clang `RequireActualConstructor`).
+    pub(crate) fn resolve_ctor_ex(
+        &mut self,
+        class: DeclId,
+        args: &[ExprId],
+        style: InitStyle,
+        actual_ctor: bool,
+    ) -> Selected {
         let c = self.class_def(class);
         let loc = args.first().map_or(Loc::INVALID, |&a| self.begin_loc(a));
         // [over.match.copy]: converting constructors only, the argument
@@ -65,13 +78,53 @@ impl Sema<'_, '_> {
             let info = self.ctor_arg_info(a);
             set.args.push(info);
         }
-        self.add_ctor_candidates(&mut set, c, opts, false);
-        if let [arg] = args {
+        // [over.match.copy]/1.1: from a non-class expression, converting
+        // constructors only (clang `TryUserDefinedConversion` keeps
+        // `isConvertingConstructor` ones, so a default constructor is
+        // not a noted candidate).
+        if let [arg] = args
+            && style == InitStyle::Copy
+            && self.ast.types.as_record(self.ety(*arg)).is_none()
+        {
+            self.add_converting_ctor_candidates(&mut set, c, opts);
+        } else {
+            self.add_ctor_candidates(&mut set, c, opts, false);
+        }
+        if let [arg] = args
+            && !actual_ctor
+        {
             self.add_elision_candidates(&mut set, c, *arg, style);
         }
         self.order_template_candidates(&mut set);
         let out = self.best_viable(&mut set);
         self.selected_of(set, out)
+    }
+
+    /// The converting constructors of class `c` ([class.conv.ctor]; clang
+    /// `isConvertingConstructor`: callable with one argument, or a
+    /// variadic one without parameters), and its inherited ones.
+    fn add_converting_ctor_candidates(
+        &mut self,
+        set: &mut OverloadCandidateSet,
+        c: DeclId,
+        opts: IcsOptions,
+    ) {
+        let c = self.class_def(c);
+        self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
+        self.ensure_implicit(c, crate::class::SpecialKind::CopyCtor);
+        self.ensure_implicit(c, crate::class::SpecialKind::MoveCtor);
+        let mut found: Vec<DeclId> = self.ast.constructors(c).iter().collect();
+        found.extend(self.ctor_shadows(c));
+        let mut params = Vec::new();
+        found.retain(|&f| {
+            if self.kind_of(f) != DeclKind::CXXConstructor {
+                return true;
+            }
+            params.clear();
+            let variadic = self.fn_param_types(f, &mut params);
+            if params.is_empty() { variadic } else { self.fn_min_args(f) <= 1 }
+        });
+        self.add_found_candidates(set, &found, crate::overload::CandidateKind::Ctor, opts, false);
     }
 
     /// clang's workaround for C++17 guaranteed copy elision (CWG2327):
@@ -200,45 +253,8 @@ impl Sema<'_, '_> {
                     .is_some_and(|d| self.ast.decls.get(d).name() == name),
                 _ => false,
             };
-            if named {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Whether [over.match.list]/1.1 (phase 1) would select an
-    /// initializer-list constructor of `class` for the list elements
-    /// `args`: some initializer-list constructor's element type is
-    /// reachable from every element ([over.ics.list]/5). An empty list
-    /// with a default constructor value-initializes ([dcl.init.list]/3.5);
-    /// a constructor template or a nested braced list is assumed viable.
-    pub(crate) fn init_list_phase1_viable(&mut self, class: DeclId, args: &[ExprId]) -> bool {
-        let c = self.class_def(class);
-        if args.is_empty() && self.has_default_ctor_cheap(c) {
-            return false;
-        }
-        if args
-            .iter()
-            .any(|&a| self.ast.exprs.get(a).kind() == kiln_ast::expr::ExprKind::InitListExpr)
-        {
-            return true;
-        }
-        for f in self.ctors_and_inherited(c) {
-            match self.kind_of(f) {
-                DeclKind::FunctionTemplate => return true,
-                DeclKind::CXXConstructor if self.is_init_list_ctor(f) => {}
-                _ => continue,
-            }
-            let params = self.param_decls(f);
-            let pty = self.ast.decls.get(params[0]).ty().unwrap_or(QualType::ERROR);
-            let t = self.non_reference(pty);
-            let Some(elem) = self.initializer_list_element(t) else { continue };
-            let ok = args.iter().all(|&a| {
-                let info = self.arg_info(a);
-                !self.try_implicit_conversion(&info, elem, IcsOptions::NONE).is_bad()
-            });
-            if ok {
+            // A constructor template's dependent `initializer_list<U>`.
+            if named || self.initializer_list_param(t).is_some() {
                 return true;
             }
         }

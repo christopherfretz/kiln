@@ -92,10 +92,6 @@ pub struct Row {
     pub oven: Oven,
 }
 
-/// The owner of the overload-resolution traits (spec §9.1 `init_check`,
-/// `conv_check`).
-pub const OVERLOAD_WP: &str = "WP-068a";
-
 /// The arity of trait `t`.
 pub fn arity(t: TypeTrait) -> Arity {
     use TypeTrait as T;
@@ -146,7 +142,8 @@ pub fn completeness(t: TypeTrait) -> Complete {
         | T::IsTrivial
         | T::IsTriviallyCopyable
         | T::IsTriviallyEqualityComparable
-        | T::IsTriviallyRelocatable => Complete::Element,
+        | T::IsTriviallyRelocatable
+        | T::CanPassInRegs => Complete::Element,
         T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
             Complete::BoundedElement
         }
@@ -173,31 +170,10 @@ pub fn deprecated_replacement(t: TypeTrait) -> Option<&'static str> {
 }
 
 /// The status of trait `t`.
-pub fn trait_status(t: TypeTrait) -> Status {
-    use TypeTrait as T;
-    match t {
-        // [meta.unary.prop] initialization and conversion checks: these
-        // need the unevaluated `init_check` / `conv_check` of overload
-        // resolution.
-        T::HasNothrowAssign
-        | T::HasNothrowConstructor
-        | T::HasNothrowCopy
-        | T::HasNothrowMoveAssign
-        | T::IsTriviallyEqualityComparable => Status::Owner(OVERLOAD_WP),
-        // Layout-compatibility and register-passing queries (not used by
-        // the M3 headers).
-        T::IsLayoutCompatible
-        | T::IsPointerInterconvertibleBaseOf
-        | T::CanPassInRegs
-        | T::IsBitwiseCloneable => Status::Owner("M4 (unassigned)"),
-        // clang 19 answers `canPassInRegisters` for a class, which needs the
-        // S3C class properties to set `DefinitionBits::TRIVIALLY_RELOCATABLE`
-        // (nothing sets it yet). libc++ falls back to trivially copyable.
-        T::IsTriviallyRelocatable => {
-            Status::Owner("unowned: S3C canPassInRegisters (DefinitionBits::TRIVIALLY_RELOCATABLE)")
-        }
-        _ => Status::Done,
-    }
+pub fn trait_status(_t: TypeTrait) -> Status {
+    // Every trait clang 19 knows is implemented (WP-166 finished the
+    // `__has_nothrow_*`, layout and register-passing queries).
+    Status::Done
 }
 
 /// The kind of trait `t`'s row.
@@ -223,12 +199,7 @@ const DONE: Status = Status::Done;
 /// The non-trait rows: §9.3 templates, then §9.4-9.5 functions.
 pub static TABLE: &[Row] = &[
     Row { name: "__make_integer_seq", kind: Kind::Template, status: Status::Done, oven: Oven::No },
-    Row {
-        name: "__type_pack_element",
-        kind: Kind::Template,
-        status: Status::Owner("WP-072 (pack expansion of Ts...)"),
-        oven: Oven::No,
-    },
+    Row { name: "__type_pack_element", kind: Kind::Template, status: Status::Done, oven: Oven::No },
     // §9.4
     f("__builtin_is_constant_evaluated", DONE, Oven::Yes),
     f("__builtin_constant_p", DONE, Oven::Yes),
@@ -378,6 +349,14 @@ pub static TABLE: &[Row] = &[
     f("__builtin_abs", DONE, Oven::No),
     f("__builtin_labs", DONE, Oven::No),
     f("__builtin_llabs", DONE, Oven::No),
+    // WP-156: vectors
+    f("__builtin_reduce_add", DONE, Oven::No),
+    f("__builtin_reduce_and", DONE, Oven::No),
+    f("__builtin_reduce_max", DONE, Oven::No),
+    f("__builtin_reduce_min", DONE, Oven::No),
+    f("__builtin_reduce_mul", DONE, Oven::No),
+    f("__builtin_reduce_or", DONE, Oven::No),
+    f("__builtin_reduce_xor", DONE, Oven::No),
     // WP-150: the remaining GCC integer and memory builtins
     // (`builtin::INT_MEM`); `memset`/`mempcpy` are not constant in clang 19
     f("__builtin_ffs", DONE, Oven::Yes),
@@ -470,8 +449,9 @@ mod tests {
     fn overload_traits_are_staged_off() {
         assert_eq!(has_builtin_staged("__is_trivially_constructible"), Some(true));
         assert_eq!(has_builtin_staged("__is_trivially_assignable"), Some(true));
-        assert_eq!(has_builtin_staged("__has_nothrow_assign"), Some(false));
-        assert_eq!(has_builtin_staged("__is_layout_compatible"), Some(false));
+        assert_eq!(has_builtin_staged("__has_nothrow_assign"), Some(true));
+        assert_eq!(has_builtin_staged("__is_layout_compatible"), Some(true));
+        assert_eq!(has_builtin_staged("__type_pack_element"), Some(true));
         assert_eq!(has_builtin_staged("__is_constructible"), Some(true));
         assert_eq!(has_builtin_staged("__is_convertible"), Some(true));
         assert_eq!(has_builtin_staged("__is_same"), Some(true));
