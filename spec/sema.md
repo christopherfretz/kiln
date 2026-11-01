@@ -431,8 +431,47 @@ Redeclaration and linkage rules:
     The errors come in clang's `SmallPtrSet<_, 8>` order: source order,
     each valid one erased (by its label's order) moving the last element
     into its hole; past 8, source order (clang's is by pointer).
-    -Wimplicit-fallthrough and -Wunreachable-code-fallthrough are not
-    implemented.
+  - **Unannotated fall-through (WP-217; `implicit_fallthrough.rs`,
+    clang `DiagnoseSwitchLabelsFallthrough` / `FallthroughMapper`)**,
+    run first in `late_analysis` (so after the queued runtime warnings
+    and before the placement errors), not in a template definition or
+    once an error occurred, but in each instantiation:
+    - kiln has no CFG. A label's predecessors are found structurally:
+      the statements before it in its block, walked back past empty
+      ones (`;`, `{}`, an empty label block, which clang's
+      `getLastStmt` counts as the predecessor itself), the branches of
+      an `if` ending there (plus the false edge of an `if` with no
+      else), and the condition of an `if`/`while`/`for` whose branch or
+      body the label starts. Reachability comes from `Sema::stmt_flow`
+      (`try_stmt/reach.rs`): the `Reach` walk recording each
+      statement's live-in and live-out with every case label reachable
+      (clang `fillReachableBlocks`). A switch dispatch, a label directly
+      before (`case 1: case 2:`, `L: case 2:`) and an unreachable
+      predecessor are good; a reachable `[[fallthrough]];` is
+      annotated; anything else is unannotated.
+    - At each label with an unannotated predecessor:
+      `unannotated fall-through between switch labels`
+      [-Wimplicit-fallthrough, off by default, not in -Wall/-Wextra] at
+      the `case`/`default`. In an instantiation the instantiation note
+      comes next. Then, when no predecessor is annotated and the label
+      is not spelled by a macro: `insert '[[fallthrough]];' to silence
+      this warning` (`'[[clang::fallthrough]];'` before C++17, from
+      `Sema::std`, set by the parser) unless the label's block holds
+      only `break`, then `insert 'break;' to avoid fall-through`, each
+      with an insertion fix-it at the label.
+    - An unreachable `[[fallthrough]];` that falls into a label (found by
+      scanning the unreachable straight-line run backwards): `fallthrough
+      annotation in unreachable code` [-Wunreachable-code-fallthrough, in
+      -Wunreachable-code] at the attribute, before that label's warning;
+      it counts as annotated. Not in an instantiation.
+    - Gaps: clang suggests a macro whose expansion is `[[fallthrough]]`
+      (`Preprocessor::getLastMacroWithSpelling`) instead of the
+      attribute; a label in a `do` or range-`for` body, or deeper in a
+      branch, is not followed (Duff's device works because its labels
+      follow statements in the `do` body); -Wimplicit-fallthrough-per-
+      function is not implemented; a -Werror-promoted warning counts as
+      an error and stops the analysis (clang's
+      `hasUncompilableErrorOccurred` ignores promoted warnings).
   - A `likely` after an `unlikely` (or the reverse) in the same
     sequence: `'unlikely' and 'likely' attributes are not compatible` at
     the second, with `note: conflicting attribute is here` at the first;
@@ -1445,10 +1484,43 @@ for them.
     created (`diagnose_unused_inst_var`, from `subst` `var_decl`, clang
     `TemplateDeclInstantiator::VisitVarDecl`) by the pattern's
     referenced flag, with the instantiation note.
-  - Gaps: -Wunused-but-set-variable, -Wunused-const-variable,
-    -Wunused-exception-parameter and decompositions are not diagnosed; a
-    type-dependent class-typed initializer is always skipped (clang
-    skips only when some constructor is non-trivial).
+  - Structured bindings (WP-217): a structured binding declaration is
+    diagnosed at its `[`, named `[a, b]`, when none of its bindings is
+    referenced or marked unused (and not all are placeholders), whatever
+    its storage or reference kind; one of dependent type is diagnosed as
+    it is instantiated.
+  - A class-typed variable with a type-dependent initializer (WP-217) is
+    diagnosed in the template definition unless its class declares a
+    non-trivial constructor or the initializer is an unresolved
+    construction with dependent arguments.
+  - `-Wunused-exception-parameter` (WP-217, clang
+    `warn_unused_exception_param`, off by default): a named exception
+    variable never referenced, when its handler scope is left; not a `_`,
+    `[[maybe_unused]]` (the parser takes attributes on the handler's
+    declaration) or one whose class has a non-trivial destructor (a
+    reference to one still counts).
+  - `-Wunused-but-set-variable` (WP-217, clang `DiagnoseUnusedButSetDecl`
+    / `RefsMinusAssignments`, in -Wunused): `variable 'x' set but not
+    used` for a local whose every reference is the target of a
+    discarded-value assignment, compound assignment or increment (an
+    expression statement, a comma's left operand, a for-increment, an
+    operand cast to void). `Sema::refs_minus_assign` counts references
+    minus such targets. Not for a reference, class, dependent,
+    `[[maybe_unused]]` or `_` variable, a parenthesized assignment, or a
+    compound assignment/increment of a volatile one; diagnosed with the
+    unused variables in location order.
+  - Namespace-scope variables (WP-217, `unused_file_scope.rs`, clang
+    `ShouldWarnIfUnusedFileScopedDecl`): at the end of the translation
+    unit, a variable with internal linkage declared in the main file and
+    never referenced is `unused variable 'x'` [-Wunused-variable], or
+    `unused variable 'x'` [-Wunused-const-variable, in -Wunused-variable]
+    when `const`, in declaration order and none once an error occurred;
+    not a variable template, a static data member, or one referenced but
+    not odr-used.
+  - Gaps: -Wunused-but-set-parameter; -Wunneeded-internal-declaration
+    and -Wunused-template for variables; static data members of class
+    templates; C++26 `_` placeholder redeclarations ("redefinition of
+    '_'").
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
   with `OffsetofComponent`s; clang's `BuildBuiltinOffsetOf`): a
   `size_t` prvalue `OffsetOfExpr`.
@@ -2379,7 +2451,8 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   - `dynamic_cast` and polymorphic `typeid`
   - class and array temporaries (§6.1) and compound literals (§5.8)
   - `-Wconstant-conversion` and `-Wliteral-conversion` alongside
-    narrowing errors in list-initialization
+    narrowing errors in list-initialization (outside braced lists they
+    landed: spec/sema-conv.md §9)
   - statement expressions: `-Wgnu-statement-expression`, jumps into
     one, and class-glvalue results
 - **Constant evaluation** (what the Oven supports in M2 is in
