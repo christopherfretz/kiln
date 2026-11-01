@@ -673,9 +673,11 @@ u8_enum!(
 u8_enum!(
     /// The clang type-trait keywords (spec/sema-templates.md §9.1, §9.4):
     /// the `aux` of `TypeTraitExpr`, `ArrayTypeTraitExpr` and
-    /// `ExpressionTraitExpr`. Spellings are the keywords; aliases
-    /// (`__is_same_as`, `__is_convertible_to`, `__is_literal`) are their
-    /// own rows because clang dumps the spelling's trait. Arity, status and
+    /// `ExpressionTraitExpr`. Spellings are the keywords. The clang
+    /// `ALIAS` keywords `__is_same_as` and `__is_literal_type` have rows
+    /// for `__has_builtin`, but a built expression names the aliased
+    /// trait (`__is_same`, `__is_literal`), as clang prints it;
+    /// `__is_convertible_to` is a trait of its own. Arity, status and
     /// the evaluator live in `kiln_sema::templ::builtins::TABLE`.
     TypeTrait {
         /// `__has_nothrow_assign`.
@@ -736,9 +738,9 @@ u8_enum!(
         IsFundamental = "__is_fundamental",
         /// `__is_integral`.
         IsIntegral = "__is_integral",
-        /// `__is_literal` (an alias of `__is_literal_type`).
+        /// `__is_literal`.
         IsLiteral = "__is_literal",
-        /// `__is_literal_type`.
+        /// `__is_literal_type` (an alias of `__is_literal`).
         IsLiteralType = "__is_literal_type",
         /// `__is_lvalue_reference`.
         IsLvalueReference = "__is_lvalue_reference",
@@ -808,7 +810,7 @@ u8_enum!(
         IsAssignable = "__is_assignable",
         /// `__is_convertible`.
         IsConvertible = "__is_convertible",
-        /// `__is_convertible_to` (an alias of `__is_convertible`).
+        /// `__is_convertible_to` (clang's own trait, not an alias).
         IsConvertibleTo = "__is_convertible_to",
         /// `__is_layout_compatible`.
         IsLayoutCompatible = "__is_layout_compatible",

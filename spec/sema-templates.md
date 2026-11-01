@@ -1908,6 +1908,11 @@ used in type trait expression". Each "complete" check calls
 
 ### 9.1 Type predicates (`TypeTraitExpr`, `bool` prvalue, unevaluated operands)
 
+The clang `ALIAS` keywords `__is_same_as` and `__is_literal_type` build
+a `TypeTraitExpr` of the aliased trait (`__is_same`, `__is_literal`),
+which diagnostics and dumps print (WP-171); `__is_convertible_to` is a
+trait of its own.
+
 | Builtin | True iff | Query |
 |---|---|---|
 | `__is_same(T,U)` | the canonical types are equal (cv included) | `tc.canonical` |
