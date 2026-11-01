@@ -1025,8 +1025,18 @@ impl Substituter<'_, '_, '_> {
             }
             FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::ClassTemplate => {
                 // `template<class U> friend class X;` names a namespace
-                // scope template, which substitution leaves unchanged.
+                // scope template, which substitution leaves unchanged; a
+                // qualified `A<T>::B` names a member template of a class
+                // template, found again in the instantiated class.
                 let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+                let in_class = self
+                    .sema
+                    .ast
+                    .decls
+                    .get(t)
+                    .ctx()
+                    .is_some_and(|c| self.sema.kind_of(c) == DeclKind::CXXRecord);
+                let t = if in_class { self.find_instantiated_decl(t, loc)? } else { t };
                 self.check_friend_class_head(t);
                 let fd = self.sema.builder().friend(record, loc, FriendTarget::Decl(t));
                 let first = self.sema.ast.first(t);

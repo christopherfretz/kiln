@@ -1784,7 +1784,9 @@ The vector operators themselves are summarized in spec/types.md
   copy-list-initialization of the returned object.
 - **`x = {...}`** ([expr.assign]/8, `act_on_assign_list`): the list
   initializes a temporary of the left operand's type, which is then
-  assigned.
+  assigned. A type-dependent left operand or list element makes it a
+  dependent `BinaryOperator` with the written list as its right operand,
+  assigned again from the substituted list at instantiation.
 - **Other operators:** a braced list as their operand is ill-formed
   (`act_on_misplaced_init_list`).
 - **Functional casts** ([expr.type.conv]):
