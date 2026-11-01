@@ -182,7 +182,11 @@ impl Oven {
             Fault::FloatRange { kind, bits } => {
                 let t = site
                     .e
-                    .map_or_else(|| "int".into(), |e| Self::qname(ast, ast.exprs.get(e).ty()));
+                    .map_or_else(|| "int".into(), |e| {
+                        // A complex part: its element type (clang).
+                        let q = ast.exprs.get(e).ty();
+                        Self::qname(ast, ast.types.as_complex(q).unwrap_or(q))
+                    });
                 (
                     site.loc,
                     format!(

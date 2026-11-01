@@ -204,11 +204,16 @@ impl Compiler<'_> {
                 if self.kind(xe) == self.kind(elem) {
                     return src;
                 }
-                src.map(|r| {
+                // clang reports an out-of-range part at the operand.
+                let at = self.sites_len();
+                let out = src.map(|r| {
                     let d = self.reg();
                     self.convert(r, xe, elem, d, e);
                     d
-                })
+                });
+                let begin = self.begin(x);
+                self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
+                out
             }
         }
     }
