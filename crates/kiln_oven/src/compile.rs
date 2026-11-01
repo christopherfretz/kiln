@@ -3122,6 +3122,24 @@ impl Compiler<'_> {
                 self.konst(r, u128::from(fn_ptr(f)));
                 r
             }
+            // A static member function named by a member access (`t.f`):
+            // the object expression is evaluated, then discarded
+            // ([expr.ref]/7.3.1).
+            ExprKind::MemberExpr
+                if self.ast().decls.get(self.ast().exprs.decl(e)).kind().is_function() =>
+            {
+                let d = self.ast().exprs.decl(e);
+                let base = self.ast().exprs.operand(e);
+                if self.node(e).has(kiln_ast::expr::ExprFlags::ARROW) {
+                    self.rv(base);
+                } else {
+                    self.lv(base, Access::Addr);
+                }
+                let f = self.o.func_index(self.b.ast(), d);
+                let r = self.reg();
+                self.konst(r, u128::from(fn_ptr(f)));
+                r
+            }
             ExprKind::UnaryOperator if self.ast().exprs.unary_op(e) == UnaryOp::Deref => {
                 let x = self.ast().exprs.operand(e);
                 self.rv(x)
@@ -3134,10 +3152,10 @@ impl Compiler<'_> {
                 let x = self.ast().exprs.operand(e);
                 self.fn_lv(x)
             }
-            _ => {
-                self.unsupported(e);
-                self.reg()
-            }
+            // A reference to a function reached otherwise (a member
+            // `P&& p` bound to `f`, then `s.p(…)`): the reference holds the
+            // function's address, which is the place [`Self::lv`] yields.
+            _ => self.lv_mem(e, Access::Addr),
         }
     }
 
@@ -3231,6 +3249,11 @@ impl Compiler<'_> {
             }
             ExprKind::DeclRefExpr => {
                 let d = self.ast().exprs.decl(e);
+                // A function lvalue ([expr.prim.id.unqual]/3) bound to a
+                // reference (`P&& p = f`): its place is its address.
+                if self.ast().decls.get(d).kind().is_function() {
+                    return Place::Mem(self.fn_lv(e));
+                }
                 if let Some(p) = self.captured_var_place(e, d) {
                     return p;
                 }
@@ -3296,6 +3319,11 @@ impl Compiler<'_> {
                 let r = self.reg();
                 self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
                 Place::Mem(r)
+            }
+            ExprKind::MemberExpr
+                if self.ast().decls.get(self.ast().exprs.decl(e)).kind().is_function() =>
+            {
+                Place::Mem(self.fn_lv(e))
             }
             ExprKind::MemberExpr => self.member(e, acc),
             ExprKind::ArraySubscriptExpr

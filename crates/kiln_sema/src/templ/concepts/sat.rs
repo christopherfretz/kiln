@@ -452,14 +452,30 @@ impl Sema<'_, '_> {
         if let Some(t) = this_ty {
             self.nsdmi_this.push((entity, t));
         }
-        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
-            let mut sub = Substituter::new(s, levels);
-            sub.map_contexts(&pairs);
-            if let Some(f) = params_of {
-                sub.seed_function_params(f).ok()?;
+        let run = |s: &mut Self| {
+            s.in_sfinae(FrameKind::ConstraintSubstitution, entity, None, loc, |s| {
+                let mut sub = Substituter::new(s, levels);
+                sub.map_contexts(&pairs);
+                if let Some(f) = params_of {
+                    sub.seed_function_params(f).ok()?;
+                }
+                sub.expr(e).ok()
+            })
+        };
+        // The names of a concept or a namespace-scope template's
+        // constraints are looked up again from where they were written,
+        // not from where satisfaction is checked ([temp.point]/1,
+        // [temp.dep.candidate]): `swap(a, b)` in libc++'s
+        // `ranges::__swap` concepts must find the deleted poison pill, not
+        // `std::swap`, when checked from namespace `std`.
+        let r = match self.ast.decls.get(entity).ctx() {
+            Some(c)
+                if this_ty.is_none() && self.kind_of(c) == kiln_ast::decl::DeclKind::Namespace =>
+            {
+                self.in_inst_context(c, run)
             }
-            sub.expr(e).ok()
-        });
+            _ => run(self),
+        };
         if this_ty.is_some() {
             self.nsdmi_this.pop();
         }
