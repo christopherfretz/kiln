@@ -2608,6 +2608,15 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   parameters. A class-template forward redeclaration creates no new
   decl, so chained default checks are partial.
 - A template template parameter's inner list is not order-checked.
+- `TT<args>` for a template template parameter `TT` checks only the arity
+  against `TT`'s own list (`check_ttp_arity`: "too few/many template
+  arguments for template template parameter 'TT'", note at `TT`); a pack
+  parameter or a pack-expansion argument skips it, and argument kinds are
+  not checked. Matching a template template argument's parameter list
+  against the parameter's ([temp.arg.template]/3-4, clang's "template
+  template argument has different template parameters") is not
+  implemented: `Q<P>` with a mismatched `P` is accepted
+  (`tests/conformance/temp.names/ttp-specialization-arity.cpp`).
 - P0846 (ADL for an unknown name followed by `<`) is not implemented.
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
