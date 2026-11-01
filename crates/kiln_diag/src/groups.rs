@@ -211,6 +211,9 @@ diag_groups! {
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
     AddressOfPackedMember = "address-of-packed-member" [];
     UnusedVariable = "unused-variable" [];
+    // ----- WP-193 (GNU designators)
+    GnuDesignator = "gnu-designator" [];
+    // ----- WP-191 (vexing parse, null dereference, empty body)
     RedundantParens = "redundant-parens" [];
     NullDereference = "null-dereference" [];
     EmptyBody = "empty-body" [];
