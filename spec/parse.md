@@ -402,8 +402,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - `_Atomic ( type-id )` (a clang extension in C++, C11 6.7.2.4) is a
     type specifier, built by `Sema::act_on_atomic_type` (array, function,
     reference, atomic and qualified operands are
-    `sema_atomic_specifier_bad_type`); the bare `_Atomic` qualifier is
-    "not supported yet".
+    `sema_atomic_specifier_bad_type`). The bare `_Atomic` qualifier
+    (WP-154) is parsed with the cv-qualifiers (`tentative.rs` treats it as
+    a decl-specifier when not followed by `(`) and applied as clang's
+    `BuildQualifiedType`: `_Atomic T` is `_Atomic(T)`, with the same
+    operand checks.
 - **Exception specifications** (`parse_exception_spec`, after the
   function parameters, [except.spec]/1): at most one per declarator.
   - `noexcept` is `ExcSpec::BasicNoexcept`.

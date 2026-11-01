@@ -1,4 +1,4 @@
-//! Atomic operations (WP-154; spec/codegen.md §16): clang `CGAtomic`'s
+//! Atomic operations (WP-154; spec/codegen.md §7d): clang `CGAtomic`'s
 //! `EmitAtomicExpr` for the `__c11_atomic_*` / `__atomic_*` builtins, the
 //! loads, stores and read-modify-writes of `_Atomic` lvalues, and the atomic
 //! builtins `CGBuiltin` lowers itself (`test_and_set`, `clear`, the fences,

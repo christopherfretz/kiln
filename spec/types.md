@@ -165,7 +165,7 @@ id each, no representation change.
 | `Record` | D | C | data = first `DeclId` of the class | one per class, shared by its redeclarations; a specialization of a class template is its own `Record` |
 | `Enum` | D | C | data = first `DeclId` of the enum | |
 | `Complex` | I | C | data = element QualType | GNU `_Complex` (*M4*) |
-| `Atomic` | I | C | data = value QualType | `_Atomic(T)`; libc++ `<atomic>` uses it via `__c11_atomic_*` (*M4*) |
+| `Atomic` | I | C | data = value QualType | `_Atomic(T)` (WP-154); size is `T`'s rounded up to a power of two when it is at most 16 bytes, alignment is that size (clang's `getTypeInfo` of `AtomicType`); libc++ `<atomic>` uses it via `__c11_atomic_*` |
 | `Vector` | I | C | aux = `VectorKind` (Generic, Neon, NeonPoly, Ext), pairs [element, count] | `vector_size`, `ext_vector_type` (libc++ `simd_utils.h`) (*M4*) |
 | `DependentVector` dep | I | S/C | aux = kind, pairs [element, size ExprId / ProfileId] | |
 | `ExtQual` | I | C | pairs [base TypeId, ext-qual word] | reserved: address spaces etc. (M7+) |
