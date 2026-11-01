@@ -38,8 +38,8 @@ Spec: `spec/sema-class.md` §4.10 (Landed), `spec/codegen.md` (Gaps),
   constexpr with an `oven:` budget, constexpr-fail, overload-access),
   `over.match.best/inherited-ctor.cpp`, `ast/class.inhctor.init/`,
   codegen `class_inheriting_ctors`, mangle `inheriting_ctors`.
-- `<optional>` 25 → 8 errors; `<tuple>` 23 → 23 (blocked earlier, on a
-  mem-initializer pack expansion).
+- `<optional>` 25 → 8 errors; `<tuple>` 23 → 19 (with WP-141 merged; first
+  blocker `sizeof...(T) >= 1` in a template argument).
 
 ## Deferred
 - Deleted inheriting constructors for subobjects other than

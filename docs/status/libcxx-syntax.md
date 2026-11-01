@@ -47,7 +47,7 @@ feature. Every header preprocesses identically to clang (see
 | `<array>` | 0 | 0 | — | none (clean since WP-133, 2026-10-31) | |
 | `<string_view>` | 0 | 0 | — | none (clean since WP-131 + WP-133, 2026-10-31) | |
 | `<optional>` | 1 | 8 | — | two constructor templates whose non-type template parameters' types differ only in a dependent call (`enable_if_t<C<U>::template imp<U>(), int>` vs `...exp<U>()...`) are taken as redeclarations (`constructor cannot be redeclared`, optional:685; 3) | that (3); `>` inside parentheses in a template argument (`decltype(declval<T>() > declval<U>())`, 5). After WP-114 (inheriting constructors; was 25) |
-| `<tuple>` | 1 | 23 | — | pack expansion in a mem-initializer list (`__tuple_leaf<...>(...)...`) | that (4); partially substituted pack expansion in a requires-expression (8); functional cast of a template-id with a pack (`tuple<_Tp&...>(__t...)`, 5); member-template partial specialization in a class template (3); `sizeof...(T) >= 1` in a template argument. Unchanged by WP-114 (23) |
+| `<tuple>` | 1 | 19 | — | `sizeof...(_Tp) >= 1` in a template argument (`_BoolConstant<sizeof...(_Tp) >= 1>`, tuple:575: `expected '>'`) | partially substituted pack expansion in a requires-expression; functional cast of a template-id with a pack (`tuple<_Tp&...>(__t...)`); member-template partial specialization in a class template. 23 → 19 after WP-141 (template-id mem-initializers) + WP-114 |
 
 The single-header counts rose a little: before WP-065 the parser gave
 up on a class at its first constructor or operator (one "special member
