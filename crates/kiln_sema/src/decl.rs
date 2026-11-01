@@ -426,7 +426,49 @@ impl Sema<'_, '_> {
         if self.kind_of(qual) != DeclKind::CXXRecord {
             return base;
         }
-        let TypeView::DependentName { keyword, nns, name } = self.ast.types.view(base.ty()) else {
+        self.rebuild_ci_type(base, qual, 0)
+    }
+
+    /// [`Sema::rebuild_in_current_instantiation`] of `base`, also through
+    /// the type arguments of a template-id (libc++'s
+    /// `pair<typename __hash_table<...>::iterator, bool>
+    /// __hash_table<...>::__node_insert_unique(...)`).
+    fn rebuild_ci_type(&mut self, base: QualType, qual: DeclId, depth: u32) -> QualType {
+        if depth > 32 || !self.is_dependent_type(base) {
+            return base;
+        }
+        let view = self.ast.types.view(base.ty());
+        if let TypeView::Elaborated { keyword, nns, named } = view {
+            let r = self.rebuild_ci_type(named, qual, depth + 1);
+            if r == named {
+                return base;
+            }
+            let t = self.ast.types.elaborated(keyword, nns, r);
+            return self.ast.types.qualify(t, base.quals());
+        }
+        if let TypeView::TemplateSpecialization { name, args, underlying: None, alias: false } =
+            view
+        {
+            let list = self.ast.types.args(args).to_vec();
+            let mut out = Vec::with_capacity(list.len());
+            let mut changed = false;
+            for a in list {
+                if let kiln_ast::types::ArgView::Type(t) = a.view() {
+                    let r = self.rebuild_ci_type(t, qual, depth + 1);
+                    changed |= r != t;
+                    out.push(kiln_ast::types::TemplateArg::ty(r));
+                } else {
+                    out.push(a);
+                }
+            }
+            if !changed {
+                return base;
+            }
+            let l = self.ast.types.arg_list(&out);
+            let t = self.ast.types.template_specialization(name, l, None, false);
+            return self.ast.types.qualify(t, base.quals());
+        }
+        let TypeView::DependentName { keyword, nns, name } = view else {
             return base;
         };
         let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else {

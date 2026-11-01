@@ -961,6 +961,29 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qualifier = self.parse_tag_qualifier(ds);
+        // `class-key M<args>` with `M` a template template parameter
+        // ([dcl.type.elab]/1, a dependent specialization; libc++'s
+        // `friend struct _MapOrSetSpecifics<...>;` in <__node_handle>): the
+        // type as written, a friend type in `friend class-key M<args>;`.
+        if keyword != TagKeyword::Enum
+            && qualifier.is_none()
+            && let Some(n) = self.ident()
+            && Self::punct_of(self.tok_at(self.pos() + 1)) == Some(Punct::Less)
+            && let NameClass::TypeTemplate(t) = self.s.classify_name(n, None)
+            && self.s.ast.decls.get(t).kind() == kiln_ast::decl::DeclKind::TemplateTemplateParm
+        {
+            let ty = self.parse_template_type_name(ctx);
+            if ty.is_none() {
+                ds.invalid = true;
+            }
+            if let Err(e) =
+                ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), kw_loc)
+            {
+                ds.invalid = true;
+                self.spec_error(&e, kw_loc);
+            }
+            return;
+        }
         let name = self.ident().map(|n| (n, self.bump().span.lo));
         if name.is_none() && qualifier.is_some() {
             self.error_here(DiagId::parse_expected_unqualified_id);
