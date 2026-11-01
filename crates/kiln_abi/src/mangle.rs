@@ -9,12 +9,15 @@
 //! spec/abi.md §"Mangling".
 
 use kiln_ast::Ast;
+use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{ByteImage, ConstValue, Member, PrintEnv, PtrBase, Scalar, Shape};
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
 use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
 use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView};
 use kiln_source::fx::FxHashMap;
+
+mod dep;
 
 /// The ids of unnamed classes that have no mangling number (`$_N`; clang
 /// `getAnonymousStructId`), handed out in first-mangle order: per function
@@ -130,8 +133,12 @@ enum Sub {
     Template(DeclId),
     /// A (canonical, possibly qualified) type.
     Type(QualType),
-    /// A template template parameter `(depth, index)` used as the
-    /// template of a dependent specialization.
+    /// A canonical identifier nested-name-specifier (`T::type::`).
+    Nns(kiln_ast::ids::NnsId),
+    /// A dependent template name `nns::template name` (canonical `nns`).
+    DepTemplate(kiln_ast::ids::NnsId, kiln_source::symbol::Symbol),
+    /// A template template parameter `(depth, index)`, as a template
+    /// argument or as the template of a dependent specialization.
     TemplateParm(u32, u32),
 }
 
@@ -447,6 +454,7 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
         // A variable template specialization is `_Z1vIiE`.
         DeclKind::Var => {
             in_global_ns(ast, d)
+                && abi_tags(ast, d).is_none()
                 && !is_local(ast, d)
                 && !has_internal_linkage(ast, d)
                 && ast.spec_info(ast.first(d)).is_none()
@@ -493,6 +501,72 @@ pub fn enclosing_function(ast: &Ast, d: DeclId) -> Option<DeclId> {
 pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
     let l = ast.decls.cold.asm_label.get(ast.first(d))?;
     Some(String::from_utf8_lossy(ast.strings.bytes(*l)).into_owned())
+}
+
+/// The `abi_tag` tags of `d` (sorted, unique, `,`-separated), from any
+/// redeclaration or, for an instantiation, its pattern (clang instantiates
+/// `AbiTagAttr` and clones it onto redeclarations). Once the walk crosses
+/// a class-template member instantiation, a function pattern with a
+/// definition contributes only that definition's tags: clang 19 takes the
+/// instantiated member's attributes from the pattern definition, so an
+/// out-of-line definition that does not repeat the tag drops it
+/// (spec/abi.md §8.15).
+fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
+    let mut work = vec![(d, false)];
+    let mut steps = 0;
+    while let Some((cur, member)) = work.pop() {
+        steps += 1;
+        if steps > 16 {
+            break;
+        }
+        let def_only =
+            member && is_function_kind(ast.decls.get(cur).kind()) && ast.definition(cur).is_some();
+        let tag_of = |r: DeclId| {
+            crate::layout::props::attrs(ast, r)
+                .find(|a| a.kind == AttrKind::ABI_TAG)
+                .map(|a| ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(a.a)))
+        };
+        let f = ast.first(cur);
+        // An instantiated function carries its pattern's attributes
+        // (sema `InstantiateAttrs`), but its tags are the pattern's as
+        // found below, so its own are not consulted. That includes the
+        // pattern of a member template instantiated with its class,
+        // whose tags are those of the original member's definition.
+        let member_tmpl = ast
+            .described_template(f)
+            .and_then(|t| ast.instantiated_from(t))
+            .and_then(|t| ast.template_info(t))
+            .and_then(|i| i.pattern);
+        let instantiated = is_function_kind(ast.decls.get(cur).kind())
+            && (ast.instantiated_from(f).is_some()
+                || member_tmpl.is_some()
+                || ast.spec_info(f).is_some_and(|(_, s)| {
+                    s.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
+                }));
+        if instantiated {
+        } else if def_only {
+            if let Some(t) = ast.definition(cur).and_then(tag_of) {
+                return Some(t);
+            }
+        } else if let Some(t) = ast.redecls_of(cur).find_map(tag_of) {
+            return Some(t);
+        }
+        if let Some(p) = ast.template_info(f).and_then(|i| i.pattern) {
+            work.push((p, member));
+        }
+        if let Some((_, s)) = ast.spec_info(f)
+            && let Some(p) = ast.template_info(s.template).and_then(|i| i.pattern)
+        {
+            work.push((p, member));
+        }
+        if let Some(p) = ast.instantiated_from(f) {
+            work.push((p, true));
+        }
+        if let Some(p) = member_tmpl {
+            work.push((p, true));
+        }
+    }
+    None
 }
 
 /// The linkage name of a function, variable or static data member (a
@@ -1028,6 +1102,17 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// <unqualified-name>: operator, constructor, destructor, conversion
     /// or literal-operator names, else the <source-name>.
     fn unqualified(&mut self, d: DeclId, v: Structor) {
+        self.unqualified_untagged(d, v);
+        // <abi-tags> follow the unqualified name (clang `writeAbiTags`).
+        if let Some(tags) = abi_tags(self.ast, d) {
+            for t in tags.split(',') {
+                self.out.push('B');
+                self.source_name(t);
+            }
+        }
+    }
+
+    fn unqualified_untagged(&mut self, d: DeclId, v: Structor) {
         let ast = self.ast;
         let n = ast.decls.get(d);
         match ast.names.view(n.name()) {
@@ -1281,9 +1366,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 }
                 self.out.push('E');
             }
-            ArgView::Null | ArgView::Expr { .. } | ArgView::Profile(_) => {
-                self.out.push_str("XLi0EE");
-            }
+            ArgView::Expr { expr, .. } => self.template_arg_expr(Some(expr)),
+            ArgView::Profile(p) => self.template_arg_expr(self.ast.types.profile_expr(p)),
+            ArgView::Null => self.out.push_str("XLi0EE"),
         }
     }
 
@@ -1917,42 +2002,21 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             TypeView::Auto { .. } => self.out.push_str("Da"),
             TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
-            TypeView::TemplateSpecialization { name, args, .. } => self.dependent_spec(name, args),
-            _ => self.out.push_str("u7unknown"),
-        }
-    }
-
-    /// A dependent template specialization type `T<args>` (clang
-    /// `mangleType(const TemplateSpecializationType *)`): the template's
-    /// unscoped (`St`-prefixed in `std`) or nested name and its arguments,
-    /// e.g. `St16initializer_listIT_E`, `N1N1WIT_EE`; a template template
-    /// parameter is `T_` followed by the arguments.
-    fn dependent_spec(&mut self, name: TemplateNameId, args: ArgListId) {
-        let ast = self.ast;
-        let name = ast.types.canonical_template_name(name);
-        match ast.types.template_name_view(name) {
-            TemplateName::Template(t) => {
-                let parent = self.parent(t);
-                let top =
-                    parent.is_none_or(|p| ast.decls.get(p).kind() == DeclKind::TranslationUnit);
-                if top || parent.is_some_and(|p| self.is_std(p)) {
-                    self.unscoped_template(t, !top);
-                    self.template_args(args);
-                } else {
-                    self.out.push('N');
-                    self.template_prefix(t, None, Structor::Complete);
-                    self.template_args(args);
-                    self.out.push('E');
-                }
+            TypeView::TemplateSpecialization { name, args, .. } => self.dependent_tst(name, args),
+            TypeView::DependentName { keyword, nns, name } => {
+                self.dependent_name(keyword, nns, name);
             }
-            TemplateName::TemplateTemplateParm { depth, index, .. }
-            | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
-                let key = Sub::TemplateParm(depth, index);
-                if !self.try_sub(key) {
-                    self.template_param(index);
-                    self.subs.push(key);
-                }
-                self.template_args(args);
+            TypeView::DependentTemplateSpecialization { nns, name, args, .. } => {
+                self.dependent_template_spec(nns, name, args);
+            }
+            TypeView::DependentDecltype(p) => self.dependent_decltype(ast.types.profile_expr(p)),
+            // A dependent transform: `u <vendor builtin name> I <base> E`.
+            TypeView::UnaryTransform { kind, base, .. } => {
+                self.out.push('u');
+                self.source_name(kind.spelling());
+                self.out.push('I');
+                self.ty(base);
+                self.out.push('E');
             }
             _ => self.out.push_str("u7unknown"),
         }

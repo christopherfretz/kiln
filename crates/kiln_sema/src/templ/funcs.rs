@@ -103,7 +103,7 @@ impl Sema<'_, '_> {
     /// with `args`) prints in an instantiation note.
     pub(crate) fn function_spec_name(&self, spec: DeclId, tmpl: DeclId, args: ArgListId) -> String {
         if self.kind_of(spec) != DeclKind::CXXConversion {
-            return self.spec_name(tmpl, args);
+            return self.spec_decl_name(tmpl, args);
         }
         // A conversion function template specialization is named by its
         // substituted target type, then its arguments (`operator int<int>`).
@@ -433,7 +433,7 @@ impl Sema<'_, '_> {
                 };
                 let note = self
                     .diag(DiagId::note_fn_template_spec_matched, self.loc_of(m.template))
-                    .arg(self.spec_name(info.template, info.print_args))
+                    .arg(self.spec_decl_name(info.template, info.print_args))
                     .arg(self.template_args_desc(info.template, info.args));
                 e = e.with_note(note);
             }
@@ -473,7 +473,7 @@ impl Sema<'_, '_> {
                 .arg(explicit);
             let e = self
                 .diag(DiagId::sema_spec_after_instantiation, name_loc)
-                .arg(self.spec_name(info.template, info.print_args))
+                .arg(self.spec_decl_name(info.template, info.print_args))
                 .with_note(note);
             self.emit(e);
             return None;
@@ -500,7 +500,7 @@ impl Sema<'_, '_> {
     fn act_on_explicit_function_inst(&mut self, m: SpecMatch, declaration: bool, name_loc: Loc) {
         let s = m.spec;
         let Some((i, info)) = self.ast.spec_info(s).map(|(i, x)| (i, *x)) else { return };
-        let name = self.spec_name(info.template, info.print_args);
+        let name = self.spec_decl_name(info.template, info.print_args);
         match (info.kind, declaration) {
             (
                 SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDeclaration,
@@ -568,7 +568,11 @@ impl Sema<'_, '_> {
         }
         self.instantiate_function_definition(s, name_loc);
         if self.ast.definition(s).is_none() {
+            // Defined later: instantiated, and emitted, at the end of the
+            // TU (clang `PerformPendingInstantiations`).
             self.queue_instantiation(s, name_loc);
+            let first = self.ast.first(s);
+            self.ast.templates.add_late_explicit_inst(first);
         }
     }
 
@@ -814,6 +818,28 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// After `template<>`, an out-of-line redeclaration `p` of a
+    /// constructor or destructor of an implicit class template
+    /// specialization explicitly specializes it ([temp.expl.spec]/1,
+    /// §4.5): it is no longer instantiated from the pattern (clang
+    /// `CheckMemberSpecialization`). Static data members go through
+    /// `act_on_explicit_member_var_spec`.
+    pub(crate) fn mark_member_explicit_spec(&mut self, p: DeclId) {
+        if self.templ.explicit_spec.is_none() || !self.at_explicit_head() {
+            return;
+        }
+        let Some((i, info)) = self.ast.member_spec_info(self.ast.first(p)).map(|(i, x)| (i, *x))
+        else {
+            return;
+        };
+        if info.kind == SpecKind::ImplicitInstantiation {
+            self.ast.templates.update_member_spec(i, |x| {
+                x.kind = SpecKind::ExplicitSpecialization;
+                x.point_of_instantiation = Loc::INVALID;
+            });
+        }
+    }
+
     /// `[extern] template R C<args>::f(params);` for member `m` of a
     /// class template specialization ([temp.explicit]/3, §4.5).
     pub(crate) fn act_on_explicit_member_inst(
@@ -885,6 +911,8 @@ impl Sema<'_, '_> {
             self.instantiate_function_definition(m, name_loc);
             if self.ast.definition(m).is_none() {
                 self.queue_instantiation(m, name_loc);
+                let first = self.ast.first(m);
+                self.ast.templates.add_late_explicit_inst(first);
             }
         }
     }

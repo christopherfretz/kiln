@@ -38,7 +38,7 @@ keywords! {
     Asm = "asm" | "__asm" | "__asm__";
     Atomic = "_Atomic";
     Auto = "auto";
-    Bool = "bool" | "_Bool";
+    Bool = "bool";
     Break = "break";
     Case = "case";
     Catch = "catch";

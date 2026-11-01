@@ -279,12 +279,34 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
 /// Renders template-argument list `l` as written (clang's
 /// `printTemplateArgumentList`: `<int, N>`), appending to `out`.
 pub fn write_arg_list(ctx: &TypeContext, names: &dyn TypeNames, l: ArgListId, out: &mut String) {
+    arg_list_with_scope(ctx, names, l, false, out);
+}
+
+/// [`write_arg_list`] with every type argument's scope printed (clang
+/// printing canonical arguments, which carry no `ElaboratedType` to
+/// suppress it): `<std::alloc<int>>`.
+pub fn write_arg_list_scoped(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    out: &mut String,
+) {
+    arg_list_with_scope(ctx, names, l, true, out);
+}
+
+fn arg_list_with_scope(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    scope: bool,
+    out: &mut String,
+) {
     let mut p = Printer {
         ctx,
         names,
         out: std::mem::take(out),
         empty_ph: true,
-        scope: false,
+        scope,
         suppress_tag: false,
         c_policy: false,
         inside_cc_attr: false,

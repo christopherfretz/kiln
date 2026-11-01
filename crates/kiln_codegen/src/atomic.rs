@@ -108,7 +108,7 @@ impl Cg<'_> {
                 CastKind::ArrayToPointerDecay => {
                     let lv = self.emit_lvalue(s)?;
                     let decl = self.lvalue_from_decl(s);
-                    let v = self.decay(lv.addr);
+                    let v = self.decay(lv.addr, lv.q);
                     return Ok(((v, lv.addr.align), decl));
                 }
                 _ => {}
@@ -800,7 +800,7 @@ impl Cg<'_> {
         };
         if self.is_aggregate(vq) {
             if ast.types.as_atomic(ast.exprs.get(init).ty()).is_some() {
-                return self.emit_agg(init, Addr { ty: vty, ..lv.addr }, false);
+                return self.emit_agg(init, lv.addr, false);
             }
             if padded {
                 self.memset(lv.addr, 0, asize, false);

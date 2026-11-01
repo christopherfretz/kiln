@@ -55,6 +55,7 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::ASM_LABEL => "AsmLabel",
         AttrKind::BUILTIN => "Builtin",
         AttrKind::USING_IF_EXISTS => "UsingIfExists",
+        AttrKind::HOT => "Hot",
         _ => return None,
     })
 }

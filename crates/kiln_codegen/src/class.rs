@@ -465,7 +465,7 @@ impl Cg<'_> {
             let (val, _) = self.declare_structor(first, v)?;
             return Ok((V::C(val), None));
         };
-        self.c1_decl.insert(first);
+        let first_ref = self.c1_decl.insert(first);
         if self.structor_has_vbases(first) {
             // A separate complete-object function.
             let (val, f) = self.declare_structor(first, v)?;
@@ -474,8 +474,14 @@ impl Cg<'_> {
         }
         if self.complete_is_rauw(def) {
             // The complete-object declaration is later replaced by the
-            // base variant, which takes its place in the module.
+            // base variant, which takes its place in the module (clang
+            // `applyReplacements` moves the base function to where the
+            // complete-object declaration was created: here, at the end).
+            let existed = self.sfns.contains_key(&(first, Structor::Base));
             let f = self.base_fn(first, false)?;
+            if existed && first_ref {
+                self.m.move_function_to_end(f);
+            }
             self.queue_structor(first, v);
             return Ok((V::C(Value::func(f)), None));
         }
@@ -504,7 +510,7 @@ impl Cg<'_> {
             return Ok(());
         }
         let first = ast.first(d);
-        if self.is_explicit_inst_declaration(first) {
+        if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return Ok(());
         }
         let is_ctor = ast.decls.get(d).kind() == DeclKind::CXXConstructor;
@@ -1537,7 +1543,7 @@ impl Cg<'_> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn emit_method_call(
         &mut self,
-        _e: ExprId,
+        e: ExprId,
         md: DeclId,
         base: ExprId,
         arrow: bool,
@@ -1571,6 +1577,30 @@ impl Cg<'_> {
             base = b;
             use_virtual = false;
         }
+        let rd = ast.decls.get(md).ctx().expect("method class");
+        let trivial = ast.decls.function(md).is_some_and(|f| f.spec.is_trivial())
+            || (self.is_union(rd) && self.is_defaulted(md));
+        let kind = ast.decls.get(md).kind();
+        let trivial_assign = trivial
+            && matches!(self.special_of(md), Some(Special::CopyAssign | Special::MoveAssign));
+        // clang: an assignment operator call (`a = b`, `a += b`, ...)
+        // evaluates its right operand before the object
+        // ([expr.ass]/1, [over.match.oper]/2; `EvaluationOrder::
+        // ForceRightToLeft`): the trivial assignment's source lvalue, or
+        // the call arguments.
+        let rtl = ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
+            && is_assignment_operator(ast.exprs.operator_call_op(e));
+        let mut rtl_src = None;
+        let mut rtl_vals = None;
+        if rtl && trivial_assign {
+            rtl_src = Some(self.emit_lvalue(args[0])?);
+        }
+        let crd = ast.decls.get(callee_md).ctx().expect("method class");
+        let cfty = ast.decls.get(callee_md).ty().expect("method type");
+        if rtl && !trivial {
+            let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
+            rtl_vals = Some(self.emit_call_args(&sig, args)?);
+        }
         let this = if arrow {
             let p = self.emit_scalar(base)?;
             let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
@@ -1580,16 +1610,15 @@ impl Cg<'_> {
         } else {
             self.emit_lvalue(base)?.addr
         };
-        let rd = ast.decls.get(md).ctx().expect("method class");
-        let trivial = ast.decls.function(md).is_some_and(|f| f.spec.is_trivial())
-            || (self.is_union(rd) && self.is_defaulted(md));
-        let kind = ast.decls.get(md).kind();
         if trivial {
             if kind == DeclKind::CXXDestructor {
                 return Ok(None);
             }
-            if matches!(self.special_of(md), Some(Special::CopyAssign | Special::MoveAssign)) {
-                let src = self.emit_lvalue(args[0])?;
+            if trivial_assign {
+                let src = match rtl_src {
+                    Some(src) => src,
+                    None => self.emit_lvalue(args[0])?,
+                };
                 // clang `EmitAggregateCopy`: empty classes are ignored.
                 if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                     let size = self.copy_size(rd, true);
@@ -1598,8 +1627,6 @@ impl Cg<'_> {
                 return Ok(Some(this.v));
             }
         }
-        let crd = ast.decls.get(callee_md).ctx().expect("method class");
-        let cfty = ast.decls.get(callee_md).ty().expect("method type");
         if kind == DeclKind::CXXDestructor {
             let sig = self.call_sig_this(cfty, false, &[], Some(crd));
             if use_virtual {
@@ -1613,7 +1640,10 @@ impl Cg<'_> {
         if use_virtual {
             // The arguments come first; `prepareConcreteCallee` then
             // loads the slot.
-            let vals = self.emit_call_args(&sig, args)?;
+            let vals = match rtl_vals {
+                Some(v) => v,
+                None => self.emit_call_args(&sig, args)?,
+            };
             let (extra, nr) = self.call_extra(md, cfty, &mut sig);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
             let r =
@@ -1625,7 +1655,10 @@ impl Cg<'_> {
         }
         let f = self.get_fn(callee_md)?;
         let (mut extra, nr) = self.call_extra(callee_md, cfty, &mut sig);
-        let vals = self.emit_call_args(&sig, args)?;
+        let vals = match rtl_vals {
+            Some(v) => v,
+            None => self.emit_call_args(&sig, args)?,
+        };
         let mut ret_extra = Vec::new();
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
         let callee = V::C(Value::func(f));
@@ -1870,4 +1903,23 @@ impl Cg<'_> {
             None => true,
         }
     }
+}
+
+/// clang `CXXOperatorCallExpr::isAssignmentOp`.
+fn is_assignment_operator(op: kiln_ast::names::OverloadedOperator) -> bool {
+    use kiln_ast::names::OverloadedOperator as O;
+    matches!(
+        op,
+        O::Equal
+            | O::StarEqual
+            | O::SlashEqual
+            | O::PercentEqual
+            | O::PlusEqual
+            | O::MinusEqual
+            | O::LessLessEqual
+            | O::GreaterGreaterEqual
+            | O::AmpEqual
+            | O::CaretEqual
+            | O::PipeEqual
+    )
 }

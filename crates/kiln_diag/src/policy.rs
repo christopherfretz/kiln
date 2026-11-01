@@ -23,14 +23,14 @@ pub enum Severity {
 
 /// Per-id mapping state (clang's `DiagnosticMapping`).
 #[derive(Clone, Copy, Debug)]
-struct Mapping {
-    severity: Severity,
-    /// Set by an option (as opposed to the default).
-    user: bool,
+pub(crate) struct Mapping {
+    pub(crate) severity: Severity,
+    /// Set by an option or a pragma (as opposed to the default).
+    pub(crate) user: bool,
     /// `-Wno-error=<group>` (or a `DefaultWarnNoWerror` id).
-    no_werror: bool,
+    pub(crate) no_werror: bool,
     /// `-Wno-fatal-errors=<group>`.
-    no_fatal: bool,
+    pub(crate) no_fatal: bool,
 }
 
 /// The resolved policy. Immutable once built.
@@ -251,10 +251,20 @@ impl Policy {
     /// The severity `id` is emitted with (clang's `getDiagnosticSeverity`).
     /// Notes report `Ignored`; they follow their parent.
     pub(crate) fn severity(&self, id: DiagId) -> Severity {
+        self.severity_with(id, self.map[id as usize])
+    }
+
+    /// The command-line mapping of `id`.
+    pub(crate) fn mapping(&self, id: DiagId) -> Mapping {
+        self.map[id as usize]
+    }
+
+    /// [`Self::severity`] with `m` (a pragma's mapping) in place of the
+    /// command-line mapping of `id`.
+    pub(crate) fn severity_with(&self, id: DiagId, m: Mapping) -> Severity {
         if id.class() == DiagClass::Note {
             return Severity::Ignored;
         }
-        let m = self.map[id as usize];
         let mut r = m.severity;
         if self.enable_all && r == Severity::Ignored && !m.user && id.class() != DiagClass::Remark {
             r = Severity::Warning;

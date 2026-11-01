@@ -38,6 +38,7 @@ pub mod names;
 pub mod new_delete;
 mod oven_bridge;
 pub mod overload;
+mod packed;
 mod predefined;
 mod range_for;
 mod rtti;
@@ -103,6 +104,9 @@ pub struct Sema<'a, 'sm> {
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
+    /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
+    /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
+    pub gnu: bool,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -125,6 +129,9 @@ pub struct Sema<'a, 'sm> {
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
     pub(crate) pending_odr: Vec<ExprId>,
+    /// `&m` of members a `packed` attribute may misalign, reported at the
+    /// end of the full-expression (`-Waddress-of-packed-member`).
+    pub(crate) misaligned: Vec<packed::Misaligned>,
     /// Immediate invocations and references to immediate functions of
     /// the current full-expression, and why escalated functions are
     /// immediate (spec/sema.md §5.10).
@@ -383,6 +390,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             exceptions: true,
             rtti: true,
             range_lifetime_extension: false,
+            gnu: false,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope {
                 first_decl: 0,
@@ -394,6 +402,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             decltype_calls: Vec::new(),
             immediate: 0,
             pending_odr: Vec::new(),
+            misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
             defining: Vec::new(),
             enums: Vec::new(),
@@ -522,7 +531,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return;
         }
         if !self.trailing_notes.borrow().is_empty()
-            && d.id().is_some_and(|id| self.diags.severity(id) >= kiln_diag::Severity::Error)
+            && d.id()
+                .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
         {
             for n in self.trailing_notes.take() {
                 d = d.with_note(n);
@@ -533,7 +543,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         {
             // Dedup is per instantiation (spec/diag.md §7.4).
             d = d.context(self.inst.stack.context_key());
-            let sev = self.diags.severity(id);
+            let sev = self.diags.severity_at(id, d.loc());
             if self.inst.stack.is_sfinae() {
                 if sev >= kiln_diag::Severity::Error
                     && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()

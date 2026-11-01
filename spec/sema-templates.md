@@ -78,7 +78,10 @@ P4 **Bounded native stack.**
     runs at **every** substitution step (`Substituter::expr`, `ty`,
     `stmt`), not every 16th, as well as at every frame push, at the
     parser's recursive rules and at each Oven entry from sema (§10.3).
-- End-of-TU instantiation is a worklist (`pending`), not recursion.
+- End-of-TU instantiation is a worklist (`pending`), not recursion: the
+  drain keeps an explicit stack of saved queues to visit instantiations
+  depth-first, in clang's `GlobalEagerInstantiationScope` order
+  (WP-172, spec/codegen.md §2a).
 
 P5 **Diagnostics identical to clang 19.**
 - This covers note texts, note order, elision, and when the instantiation
@@ -1565,6 +1568,13 @@ and keeps the typedef as sugar, without instantiating the class
 (`Substituter::class_not_instantiated`). clang's guide transform clones
 the typedef instead.
 
+A template template parameter named alone (`C(args)`, `C{args}`,
+`C x(args);`) is a placeholder for a deduced class type as in clang
+(`is_ctad_template`, `names_class_type`): a dependent
+`DeducedTemplateSpecialization` whose template name substitution replaces
+with the argument's template, after which the placeholder is deduced as
+above (libc++ `ranges::to`; WP-198).
+
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
 implemented and what is deferred (P2582 inherited-constructor guides).
 
@@ -2343,6 +2353,22 @@ pub struct InstFrame {          // 20 B
 | `BuildingDeductionGuides` | inherit | while building implicit deduction guide first needed here |
 | `LambdaSubstitution` | inherit | while substituting into a lambda expression here |
 | `DeclaringSpecialMember`, `DefiningSynthesizedFunction`, `RewritingOperatorAsSpaceship` | — | owned by S3C/S3O; listed here so that they count toward depth and elision |
+
+A specialization in a note (and in the other diagnostics naming a
+specialization declaration: an ambiguous or late explicit
+specialization, a redefinition) prints as clang's
+`getNameForDiagnostic` does (`spec_decl_name`, WP-172): the qualified
+template name, then the canonical arguments with every type scoped,
+never the typedef they were written with (`'std::v<std::D<int, int>>'`
+for `std::v<_Del>`; `'std::Ptr<int *, std::D<int, int>,
+std::alloc<int>>::g'` for a member of a specialization spelled through
+the typedefs `_Del`, `_AllocT`). Known gap: clang instantiates the
+functions a function instantiation uses while that instantiation's
+frame is still open (`PerformPendingInstantiations` inside
+`InstantiateFunctionDefinition`), so their notes carry the chain
+(`in instantiation of function template specialization 'std::make<int>'
+requested here`); kiln instantiates them later from the TU-level queue
+and prints only the innermost note.
 
 A conversion function template specialization keeps the pattern's
 declaration name (`operator T`, which the mangling uses: `cvT_`), but
@@ -3407,7 +3433,15 @@ explicit specialization errors remain. The blockers are:
   `extern template`) go through `member_of_spec_candidate` and
   `act_on_explicit_member_{spec,inst}` (MemberSpecInfo transitions).
   `template<> template<>` heads, in-class explicit specializations and
-  operator template-ids work.
+  operator template-ids work. A member class specialization
+  (`template<> struct O<long>::I { ... };`, WP-172): `act_on_tag` gives
+  the `template<>` to the qualifier (it is cleared before the body, so
+  the class's own member functions are not function template
+  specializations) and marks the member `ExplicitSpecialization`;
+  `scope_slots` stops at it, so its out-of-line members are defined
+  without `template<>` ([temp.expl.spec]/5). Member *enumeration*
+  specializations (`template<> enum class O<long>::E { ... };`) still
+  report "not yet implemented".
 - **Template candidates**: conversion-function templates
   ([temp.deduct.conv], `deduce_conversion`, `more_specialized_conversion`),
   `operator->` templates (`arrow.rs`), reversed/rewritten operator
@@ -3799,6 +3833,13 @@ requires-clause scope.**
   are supported.
 - *Friend templates* ([temp.friend]): `template<class U> friend class X;`
   (`act_on_friend_class_template`, `Sema.friend_class_template`),
+  a qualified `template<class U> friend class N::X;` /
+  `template<bool> friend class A<T>::B;` befriending the class template
+  qualified lookup finds, without declaring anything
+  (`act_on_qualified_friend_class_template`; a member template is found
+  again in the instantiated class; another kind of entity is
+  `sema_redefinition_different_kind`, nothing found in a namespace
+  `sema_friend_def_no_match`),
   `template<class U> friend R f(U);` (`friend_function_template`), and
   friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
   (`Declarator::friend`, `friend_spec_template`,
