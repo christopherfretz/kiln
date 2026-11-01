@@ -305,11 +305,11 @@ The normative description is spec/driver.md "Code generation". In short:
   same normalization. A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 64 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 105 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
-  WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, and the WP-079
-  `class_*` cases of §7): 128/128 pairs
+  WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
+  `class_*` cases of §7, and the WP-137 `consteval_oversized` case): 210/210 pairs
   exact, `DEVIATIONS` is empty.
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
@@ -335,9 +335,21 @@ The normative description is spec/driver.md "Code generation". In short:
   `getMinimumObjectSize` uses the full size for a `final` class; with no
   virtual bases in M2 the two agree.
 - **Call results stored through a coercion** (`CreateCoercedStore`) use
-  the object size, where clang uses the type's data size. They differ
-  only for a class with tail padding reusable by a derived class, which
-  M2 does not have.
+  the object size, where clang uses the type's data size when the slot
+  may overlap (`AggValueSlot::getPreferredSize`). They differ only for a
+  class with tail padding reusable by a derived class: a base subobject
+  initialized from a call writes the whole object where clang goes
+  through a temporary and copies the data size. An immediate invocation
+  (a valued `ConstantExpr`, WP-137) does use the data size of a
+  `MayOverlap` slot (a materialized temporary): an oversized constant is
+  stored to a temporary of its own type and the data size copied out,
+  as clang 19.
+- **Record constants** follow `ConstantAggregateBuilder::buildFrom`: the
+  fields at their offsets with `undef` padding for gaps, unpacked when
+  the natural layout fits the type's size (tail-padded with `undef`),
+  packed otherwise; the named type only when layout-identical. A class
+  that is not POD for layout (packed IR type with tail padding) is
+  therefore a literal `{ i32, i8 }`, as clang.
 - Sema gaps (kiln_sema) that keep `run` tests and corpus cases simple:
   casts to reference types (`static_cast<int&&>`), binding
   `const T(&)[N]` to a `T[N]` argument, copy-initializing a class object

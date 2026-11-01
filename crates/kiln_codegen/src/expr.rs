@@ -1380,7 +1380,28 @@ impl Cg<'_> {
                 let sq = ast.exprs.get(s).ty();
                 let tmp = self.temp(sq);
                 if self.is_aggregate(sq) {
-                    self.emit_agg_into(s, tmp, false)?;
+                    // clang `EmitAnyExprToMem`: a materialized temporary is
+                    // a `MayOverlap` slot, which only a constructor call or
+                    // an immediate invocation consumes.
+                    let mut inner = s;
+                    loop {
+                        let k = ast.exprs.get(inner).kind();
+                        if k == ExprKind::ParenExpr
+                            || (k.is_cast() && ast.exprs.cast_kind(inner) == CastKind::NoOp)
+                        {
+                            inner = ast.exprs.operand(inner);
+                        } else {
+                            break;
+                        }
+                    }
+                    let overlap = n.kind() == ExprKind::MaterializeTemporaryExpr
+                        && matches!(
+                            ast.exprs.get(inner).kind(),
+                            ExprKind::ConstantExpr
+                                | ExprKind::CXXConstructExpr
+                                | ExprKind::CXXTemporaryObjectExpr
+                        );
+                    self.emit_agg_into(s, tmp, overlap)?;
                 } else {
                     let v = self.emit_scalar(s)?;
                     self.store_scalar(v, tmp, sq);
@@ -2077,9 +2098,18 @@ impl Cg<'_> {
             ExprKind::ConstantExpr if ast.exprs.constant_value(e).is_some() => {
                 // clang `AggExprEmitter::VisitConstantExpr`: the value of
                 // an immediate invocation, stored by `CreateCoercedStore`.
+                // The destination size is `AggValueSlot::getPreferredSize`:
+                // the data size when the slot may overlap.
+                let overlap = std::mem::take(&mut self.f.overlap);
                 let c = ast.exprs.constant_value(e).expect("guarded");
                 let k = self.const_value(c, q, Some(e), true)?;
-                self.coerced_store_const(k, dest, self.is_volatile(q));
+                let size = match ast.types.as_record(q) {
+                    Some(rd) if overlap && self.array_elem(q).is_none() => {
+                        Some(self.copy_size(rd, true))
+                    }
+                    _ => None,
+                };
+                self.coerced_store_const(k, dest, size, self.is_volatile(q));
                 Ok(())
             }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
@@ -2939,8 +2969,8 @@ impl Cg<'_> {
     /// clang 19 `CreateCoercedStore` of constant `k` into `dst` (whose
     /// size is that of its IR type), with `BuildAggStore` splitting a
     /// first-class struct into one store per element.
-    fn coerced_store_const(&mut self, k: Value, dst: Addr, vol: bool) {
-        let dst_size = self.alloc_size(dst.ty);
+    fn coerced_store_const(&mut self, k: Value, dst: Addr, size: Option<u64>, vol: bool) {
+        let dst_size = size.unwrap_or_else(|| self.alloc_size(dst.ty));
         if dst_size == 0 {
             return;
         }
@@ -2951,7 +2981,15 @@ impl Cg<'_> {
             dst = self.enter_struct_for_coerce(dst, ssize);
         }
         if ssize > dst_size {
-            let a = self.ir_layout(st).1.max(dst.align);
+            // `CreateTempAllocaForCoercion`: at least the preferred
+            // alignment (8 for a struct, `a:0:64` on both targets).
+            let pref = if self.m.types.struct_fields(st).is_some() {
+                let abi = if self.m.types.struct_is_packed(st) { 1 } else { self.ir_layout(st).1 };
+                abi.max(8)
+            } else {
+                self.ir_layout(st).1
+            };
+            let a = pref.max(dst.align);
             let tmp = self.f.fir.alloca(st, a);
             self.store(V::C(k), tmp, a, vol);
             self.memcpy_v(dst, tmp, a, dst_size);
