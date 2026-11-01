@@ -2037,6 +2037,9 @@ The counts are 49 type predicates (§9.1), `__array_extent`, 15 transforms,
 2 builtin templates and 76 `__builtin_*` names (2 of them in §9.4). That gives 143
 builtins in total (§13.3). `TABLE` also holds the 6 source-location
 names, for 82 function rows (91 with WP-140's string builtins, §9.5).
+WP-150 adds 26 function rows (`builtin::INT_MEM`: the GCC integer builtins,
+`bcmp`, `wmemcpy`/`wmemmove`, `memset`, `mempcpy`; folding status in
+spec/oven.md "Builtins").
 
 ## 10. Diagnostics
 

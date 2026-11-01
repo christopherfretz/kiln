@@ -13,7 +13,7 @@ use kiln_ast::expr::{CastKind, ExprKind, UnaryOp};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, CallOpts, CastOp, FloatPredicate, FuncId, IntPredicate,
+    Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, Flags, FloatPredicate, FuncId, IntPredicate,
     MemoryEffects, ModRef, TypeId as LTy, Value,
 };
 
@@ -92,7 +92,10 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::NANS
         | id::NANSF
         | id::NANSL
-        | id::ABORT => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        | id::ABORT
+        | id::BCMP
+        | id::WMEMCPY
+        | id::WMEMMOVE => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ if id::is_libm(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ => None,
     }
@@ -409,17 +412,17 @@ impl Cg<'_> {
                 self.intrinsic_call(f, vec![]);
                 return Ok(BuiltinCall::Emitted(None));
             }
-            id::MEMCPY | id::MEMMOVE => {
+            id::MEMCPY | id::MEMMOVE | id::MEMPCPY => {
                 let (Some(d), Some(s), Some(n)) = (arg(0), arg(1), arg(2)) else {
                     return err(self.loc_of(e), "memory builtin without three arguments");
                 };
                 let (dv, da) = self.ptr_align(d)?;
                 let (sv, sa) = self.ptr_align(s)?;
                 let nv = self.emit_scalar(n)?;
-                let f = if b == id::MEMCPY {
-                    kiln_llvm::intrinsics::memcpy(&mut self.m, LTy::I64)
-                } else {
+                let f = if b == id::MEMMOVE {
                     kiln_llvm::intrinsics::memmove(&mut self.m, LTy::I64)
+                } else {
+                    kiln_llvm::intrinsics::memcpy(&mut self.m, LTy::I64)
                 };
                 let fn_ty = self.m.func(f).ty();
                 let vb = self.m.const_bool(false);
@@ -440,7 +443,114 @@ impl Cg<'_> {
                     LTy::VOID,
                 );
                 self.f.calls.push((Fir::last_inst(c), Some(f), true));
+                if b == id::MEMPCPY {
+                    // clang: the end of the destination.
+                    self.gep(LTy::I8, dv, vec![nv], true)
+                } else {
+                    dv
+                }
+            }
+            // WP-150: clang `EmitBuiltinExpr` for `memset` and the GCC
+            // integer builtins.
+            id::MEMSET => {
+                let (Some(d), Some(c), Some(n)) = (arg(0), arg(1), arg(2)) else {
+                    return err(self.loc_of(e), "memory builtin without three arguments");
+                };
+                let (dv, da) = self.ptr_align(d)?;
+                let cv = self.emit_scalar(c)?;
+                let cv = self.int_cast(cv, LTy::I8, false);
+                let nv = self.emit_scalar(n)?;
+                let f = kiln_llvm::intrinsics::memset(&mut self.m, LTy::I64);
+                let fn_ty = self.m.func(f).ty();
+                let vb = self.m.const_bool(false);
+                let pa = self.m.attr_set(&[Attr::Align(da)]);
+                let none = self.m.attr_set(&[]);
+                let opts = CallOpts {
+                    attrs: AttrList { params: vec![pa, none, none, none], ..AttrList::default() },
+                    ..CallOpts::default()
+                };
+                let c = self.f.fir.push(
+                    Op::Call {
+                        fn_ty,
+                        callee: V::C(Value::func(f)),
+                        args: vec![dv, cv, nv, V::C(vb)],
+                        opts: Box::new(opts),
+                    },
+                    LTy::VOID,
+                );
+                self.f.calls.push((Fir::last_inst(c), Some(f), true));
                 dv
+            }
+            id::FFS | id::FFSL | id::FFSLL => {
+                // `x ? cttz(x, true) + 1 : 0`.
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let f = kiln_llvm::intrinsics::cttz(&mut self.m, ty);
+                let t = V::C(self.m.const_bool(true));
+                let tz = self.intrinsic_call(f, vec![x, t]);
+                let one = V::C(self.m.const_int(ty, 1));
+                let r = self.bin(BinOp::Add, Flags::NONE, tz, one);
+                let zero = V::C(self.m.const_int(ty, 0));
+                let is_zero = self.icmp(IntPredicate::Eq, x, zero);
+                let r = self.select(is_zero, zero, r);
+                let rt = self.lty(q);
+                self.int_cast(r, rt, false)
+            }
+            id::PARITY | id::PARITYL | id::PARITYLL => {
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let f = kiln_llvm::intrinsics::ctpop(&mut self.m, ty);
+                let r = self.intrinsic_call(f, vec![x]);
+                let one = V::C(self.m.const_int(ty, 1));
+                let r = self.bin(BinOp::And, Flags::NONE, r, one);
+                let rt = self.lty(q);
+                self.int_cast(r, rt, false)
+            }
+            id::CLRSB | id::CLRSBL | id::CLRSBLL => {
+                // `ctlz(x < 0 ? ~x : x, false) - 1`.
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let zero = V::C(self.m.const_int(ty, 0));
+                let neg = self.icmp(IntPredicate::Slt, x, zero);
+                let all = V::C(self.m.const_int(ty, -1));
+                let inv = self.bin(BinOp::Xor, Flags::NONE, x, all);
+                let v = self.select(neg, inv, x);
+                let f = kiln_llvm::intrinsics::ctlz(&mut self.m, ty);
+                let fl = V::C(self.m.const_bool(false));
+                let lz = self.intrinsic_call(f, vec![v, fl]);
+                let one = V::C(self.m.const_int(ty, 1));
+                let r = self.bin(BinOp::Sub, Flags::NONE, lz, one);
+                let rt = self.lty(q);
+                self.int_cast(r, rt, false)
+            }
+            id::BITREVERSE8 | id::BITREVERSE16 | id::BITREVERSE32 | id::BITREVERSE64 => {
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let f = kiln_llvm::intrinsics::fp_op(&mut self.m, "llvm.bitreverse", ty, 1);
+                self.intrinsic_call(f, vec![x])
+            }
+            id::ROTATELEFT8
+            | id::ROTATELEFT16
+            | id::ROTATELEFT32
+            | id::ROTATELEFT64
+            | id::ROTATERIGHT8
+            | id::ROTATERIGHT16
+            | id::ROTATERIGHT32
+            | id::ROTATERIGHT64 => {
+                // `llvm.fshl(x, x, n)` / `llvm.fshr(x, x, n)`.
+                let Some(n) = arg(1) else {
+                    return err(self.loc_of(e), "rotate builtin without two arguments");
+                };
+                let x = self.emit_scalar(a0)?;
+                let nv = self.emit_scalar(n)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let left = matches!(
+                    b,
+                    id::ROTATELEFT8 | id::ROTATELEFT16 | id::ROTATELEFT32 | id::ROTATELEFT64
+                );
+                let name = if left { "llvm.fshl" } else { "llvm.fshr" };
+                let f = kiln_llvm::intrinsics::fp_op(&mut self.m, name, ty, 3);
+                self.intrinsic_call(f, vec![x, x, nv])
             }
             // [ptr.launder]: the pointer itself (no `llvm.launder.invariant.group`
             // without `-fstrict-vtable-pointers`).

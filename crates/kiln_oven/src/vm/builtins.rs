@@ -197,7 +197,30 @@ impl Oven {
                 }
             }
             bi::MEMCPY => {
-                self.bi_memcpy(ast, a as u64, b as u64, c as u64, t1, t2, sub != 0).map(|()| a)
+                let (mv, wide) = (sub & bi::MOVE != 0, sub & bi::WCHAR != 0);
+                self.bi_memcpy(ast, a as u64, b as u64, c as u64, [t1, t2], mv, wide).map(|()| a)
+            }
+            bi::INT_OP => {
+                let w = sub & 0xFF;
+                let v = a & mask(w);
+                Ok(match sub >> 8 {
+                    bi::FFS if v == 0 => 0,
+                    bi::FFS => u128::from(v.trailing_zeros() + 1),
+                    bi::PARITY => u128::from(v.count_ones() & 1),
+                    bi::CLRSB => {
+                        // The redundant sign bits: `clz` of `v` (or of
+                        // `~v` when negative) in `w` bits, minus one.
+                        let s = if v >> (w - 1) & 1 != 0 { !v & mask(w) } else { v };
+                        u128::from(s.leading_zeros() - (128 - w) - 1)
+                    }
+                    bi::BITREVERSE => v.reverse_bits() >> (128 - w),
+                    k => {
+                        // clang: the amount modulo the width.
+                        let n = ((b & mask(w)) % u128::from(w)) as u32;
+                        let n = if k == bi::ROTL { n } else { (w - n) % w };
+                        if n == 0 { v } else { (v << n | v >> (w - n)) & mask(w) }
+                    }
+                })
             }
             bi::BIT_CAST => {
                 let (to_mem, read) = (sub == bi::TO_MEM, sub == bi::READ_ONLY);
@@ -429,9 +452,9 @@ impl Oven {
         dst: u64,
         src: u64,
         n: u64,
-        t1: u32,
-        t2: u32,
+        [t1, t2]: [u32; 2],
         mv: bool,
+        wide: bool,
     ) -> Result<(), Fault> {
         if n == 0 {
             return Ok(());
@@ -451,10 +474,14 @@ impl Oven {
         if size == 0 {
             return Err(Fault::Invalid);
         }
-        if !n.is_multiple_of(size) {
+        // `wmemcpy`/`wmemmove` count elements (clang: no size check).
+        let (n, ne) = if wide {
+            (n.saturating_mul(size), n)
+        } else if !n.is_multiple_of(size) {
             return Err(Fault::Bi(BiFault::CopySize { mv, t, n, size }));
-        }
-        let ne = n / size;
+        } else {
+            (n, n / size)
+        };
         for (p, is_src) in [(src, true), (dst, false)] {
             let (_, len, cur, _) = self.extent_of(p, t)?;
             if ne > len - cur {

@@ -2719,6 +2719,62 @@ pub mod builtin {
     pub const BSWAP32: u32 = 180;
     /// `__builtin_bswap64` (clang `Builtins.td` signature `ULiULi`).
     pub const BSWAP64: u32 = 181;
+
+    // WP-150: the remaining GCC integer and memory builtins
+    // (spec/oven.md "Builtins", [`INT_MEM`]).
+    /// `__builtin_ffs` (clang `Builtins.td` signature `ii`).
+    pub const FFS: u32 = 539;
+    /// `__builtin_ffsl` (clang `Builtins.td` signature `iLi`).
+    pub const FFSL: u32 = 540;
+    /// `__builtin_ffsll` (clang `Builtins.td` signature `iLLi`).
+    pub const FFSLL: u32 = 541;
+    /// `__builtin_parity` (clang `Builtins.td` signature `iUi`).
+    pub const PARITY: u32 = 958;
+    /// `__builtin_parityl` (clang `Builtins.td` signature `iULi`).
+    pub const PARITYL: u32 = 959;
+    /// `__builtin_parityll` (clang `Builtins.td` signature `iULLi`).
+    pub const PARITYLL: u32 = 960;
+    /// `__builtin_clrsb` (clang `Builtins.td` signature `ii`).
+    pub const CLRSB: u32 = 337;
+    /// `__builtin_clrsbl` (clang `Builtins.td` signature `iLi`).
+    pub const CLRSBL: u32 = 338;
+    /// `__builtin_clrsbll` (clang `Builtins.td` signature `iLLi`).
+    pub const CLRSBLL: u32 = 339;
+    /// `__builtin_bitreverse8` (clang `Builtins.td` signature `UcUc`).
+    pub const BITREVERSE8: u32 = 186;
+    /// `__builtin_bitreverse16` (clang `Builtins.td` signature `UsUs`).
+    pub const BITREVERSE16: u32 = 187;
+    /// `__builtin_bitreverse32` (clang `Builtins.td` signature `UiUi`).
+    pub const BITREVERSE32: u32 = 188;
+    /// `__builtin_bitreverse64` (clang `Builtins.td` signature `ULiULi`).
+    pub const BITREVERSE64: u32 = 189;
+    /// `__builtin_rotateleft8` (clang `Builtins.td` signature `UcUcUc`).
+    pub const ROTATELEFT8: u32 = 1024;
+    /// `__builtin_rotateleft16` (clang `Builtins.td` signature `UsUsUs`).
+    pub const ROTATELEFT16: u32 = 1025;
+    /// `__builtin_rotateleft32` (clang `Builtins.td` signature `UiUiUi`).
+    pub const ROTATELEFT32: u32 = 1026;
+    /// `__builtin_rotateleft64` (clang `Builtins.td` signature `ULiULiULi`).
+    pub const ROTATELEFT64: u32 = 1027;
+    /// `__builtin_rotateright8` (clang `Builtins.td` signature `UcUcUc`).
+    pub const ROTATERIGHT8: u32 = 1028;
+    /// `__builtin_rotateright16` (clang `Builtins.td` signature `UsUsUs`).
+    pub const ROTATERIGHT16: u32 = 1029;
+    /// `__builtin_rotateright32` (clang `Builtins.td` signature `UiUiUi`).
+    pub const ROTATERIGHT32: u32 = 1030;
+    /// `__builtin_rotateright64` (clang `Builtins.td` signature `ULiULiULi`).
+    pub const ROTATERIGHT64: u32 = 1031;
+    /// `__builtin_bcmp` (clang `Builtins.td` signature `ivC*vC*z`).
+    pub const BCMP: u32 = 202;
+    /// `__builtin_wmemcpy` (clang `Builtins.td` signature `w*w*wC*z`).
+    pub const WMEMCPY: u32 = 1381;
+    /// `__builtin_wmemmove` (clang `Builtins.td` signature `w*w*wC*z`).
+    pub const WMEMMOVE: u32 = 1383;
+    /// `__builtin_memset` (clang `Builtins.td` signature `v*v*iz`).
+    pub const MEMSET: u32 = 869;
+    /// `__builtin_mempcpy` (clang `Builtins.td` signature `v*v*vC*z`).
+    pub const MEMPCPY: u32 = 220;
+
     /// `__builtin_memcmp` (clang `Builtins.td` signature `ivC*vC*z`).
     pub const MEMCMP: u32 = 218;
     /// `__builtin_memcpy` (clang `Builtins.td` signature `v*v*vC*z`).
@@ -3112,6 +3168,38 @@ pub mod builtin {
         row(UNREACHABLE, "__builtin_unreachable", "v", N | R),
     ];
 
+    /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,
+    /// `clrsb`, `bitreverse`, `rotate*`) and memory builtins. All but
+    /// `memset`/`mempcpy` are constant-evaluated (clang 19 `Constexpr`).
+    pub const INT_MEM: &[Info] = &[
+        row(FFS, "__builtin_ffs", "ii", N | C),
+        row(FFSL, "__builtin_ffsl", "iLi", N | C),
+        row(FFSLL, "__builtin_ffsll", "iLLi", N | C),
+        row(PARITY, "__builtin_parity", "iUi", N | C),
+        row(PARITYL, "__builtin_parityl", "iULi", N | C),
+        row(PARITYLL, "__builtin_parityll", "iULLi", N | C),
+        row(CLRSB, "__builtin_clrsb", "ii", N | C),
+        row(CLRSBL, "__builtin_clrsbl", "iLi", N | C),
+        row(CLRSBLL, "__builtin_clrsbll", "iLLi", N | C),
+        row(BITREVERSE8, "__builtin_bitreverse8", "UcUc", N | C),
+        row(BITREVERSE16, "__builtin_bitreverse16", "UsUs", N | C),
+        row(BITREVERSE32, "__builtin_bitreverse32", "UiUi", N | C),
+        row(BITREVERSE64, "__builtin_bitreverse64", "ULiULi", N | C),
+        row(ROTATELEFT8, "__builtin_rotateleft8", "UcUcUc", N | C),
+        row(ROTATELEFT16, "__builtin_rotateleft16", "UsUsUs", N | C),
+        row(ROTATELEFT32, "__builtin_rotateleft32", "UiUiUi", N | C),
+        row(ROTATELEFT64, "__builtin_rotateleft64", "ULiULiULi", N | C),
+        row(ROTATERIGHT8, "__builtin_rotateright8", "UcUcUc", N | C),
+        row(ROTATERIGHT16, "__builtin_rotateright16", "UsUsUs", N | C),
+        row(ROTATERIGHT32, "__builtin_rotateright32", "UiUiUi", N | C),
+        row(ROTATERIGHT64, "__builtin_rotateright64", "ULiULiULi", N | C),
+        row(BCMP, "__builtin_bcmp", "ivC*vC*z", N),
+        row(WMEMCPY, "__builtin_wmemcpy", "w*w*wC*z", N),
+        row(WMEMMOVE, "__builtin_wmemmove", "w*w*wC*z", N),
+        row(MEMSET, "__builtin_memset", "v*v*iz", N),
+        row(MEMPCPY, "__builtin_mempcpy", "v*v*vC*z", N),
+    ];
+
     /// The C library math functions ([c.math], C23 7.12) that are only
     /// declared and called: never constant-evaluated by clang 19 (a call
     /// in a constant expression is "subexpression not valid"), lowered to
@@ -3258,12 +3346,12 @@ pub mod builtin {
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
-        ALL.iter().chain(LIBM).find(|e| e.name == name).map(|e| e.id)
+        ALL.iter().chain(INT_MEM).chain(LIBM).find(|e| e.name == name).map(|e| e.id)
     }
 
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
-        ALL.iter().chain(LIBM).find(|e| e.id == id)
+        ALL.iter().chain(INT_MEM).chain(LIBM).find(|e| e.id == id)
     }
 
     /// Whether builtin `id` is a [`LIBM`] function.

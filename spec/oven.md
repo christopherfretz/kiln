@@ -347,6 +347,30 @@ literal is one instruction and one step, not an interpreted loop.
   same string and `__impl` objects. Inside a `CXXDefaultArgExpr` whose
   call site sema recorded, the outermost such default argument supplies
   the values.
+- **Landed (WP-150): GCC integer and remaining memory builtins**
+  (`builtin::INT_MEM`). Folding status, as clang 19:
+
+  | builtin | Oven | evaluation |
+  |---|---|---|
+  | `ffs`, `ffsl`, `ffsll` | yes | `bi::INT_OP`/`FFS`: 0 for 0, else trailing zeros + 1 |
+  | `parity`, `parityl`, `parityll` | yes | `INT_OP`/`PARITY`: popcount mod 2 |
+  | `clrsb`, `clrsbl`, `clrsbll` | yes | `INT_OP`/`CLRSB`: redundant sign bits (width − significant bits) |
+  | `bitreverse8`..`64` | yes | `INT_OP`/`BITREVERSE` |
+  | `rotateleft8`..`64`, `rotateright8`..`64` | yes | `INT_OP`/`ROTL`/`ROTR`: amount (unsigned) modulo the width |
+  | `bcmp` | yes | `MEMCMP` sub 0 (as `memcmp`; the unsupported note names `'__builtin_bcmp'`) |
+  | `wmemcpy`, `wmemmove` | yes | `MEMCPY` with `WCHAR` (and `MOVE`): the count is in elements, no size-multiple check; notes say `'wmemcpy'`/`'wmemmove'` |
+  | `memset`, `mempcpy` | no | trap "subexpression not valid in a constant expression" |
+  | `abs`, `labs`, `llabs` (WP-144) | no | trap, as above |
+
+  The notes take the builtin's name from the call's callee
+  (`notes.rs` `called_builtin`). Codegen follows clang `EmitBuiltinExpr`:
+  `ffs` is `cttz(x, true) + 1` selected against zero, `parity` is
+  `ctpop(x) & 1`, `clrsb` is `ctlz(x < 0 ? ~x : x, false) - 1`,
+  `bitreverse` is `llvm.bitreverse`, the rotates are `llvm.fshl`/`fshr`
+  of `(x, x, n)`, `memset` is `llvm.memset` of the truncated byte with
+  the destination's known alignment, `mempcpy` is `llvm.memcpy` plus an
+  `i8` GEP by the count; `bcmp`, `wmemcpy` and `wmemmove` call the
+  library functions.
 
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,

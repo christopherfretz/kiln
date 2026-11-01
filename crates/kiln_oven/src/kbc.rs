@@ -288,6 +288,26 @@ pub(crate) mod bi {
     /// before the compiler's static ones).
     pub const READ_ONLY: u32 = 2;
 
+    // WP-150: the GCC integer builtins and `wmemcpy`/`wmemmove`.
+    /// An integer operation on `a` (and the amount `b`): sub = width |
+    /// `FFS`..`ROTR` << 8 (clang 19 `IntExprEvaluator::VisitBuiltinCallExpr`).
+    pub const INT_OP: u32 = 20;
+    /// `INT_OP`: `__builtin_ffs*`.
+    pub const FFS: u32 = 0;
+    /// `INT_OP`: `__builtin_parity*`.
+    pub const PARITY: u32 = 1;
+    /// `INT_OP`: `__builtin_clrsb*`.
+    pub const CLRSB: u32 = 2;
+    /// `INT_OP`: `__builtin_bitreverse*`.
+    pub const BITREVERSE: u32 = 3;
+    /// `INT_OP`: `__builtin_rotateleft*`.
+    pub const ROTL: u32 = 4;
+    /// `INT_OP`: `__builtin_rotateright*`.
+    pub const ROTR: u32 = 5;
+    /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
+    /// bytes.
+    pub const WCHAR: u32 = 2;
+
     /// Classes of `FP_CLASS`.
     pub const FINITE: u32 = 0;
     pub const INF: u32 = 1;
