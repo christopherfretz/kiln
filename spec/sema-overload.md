@@ -273,6 +273,14 @@ inside a cast).
 
 ## 3. Viable functions ([over.match.viable])
 
+Some functions are never added as candidates (`add_candidate`). These are
+a defaulted move constructor or move assignment operator that is defined as
+deleted, whether implicit or `= default` ([class.copy.ctor]/10,
+[class.copy.assign]/7, CWG1402). Such a function is not listed in the notes
+either. An rvalue argument then selects the copy, as in clang's
+`AddOverloadCandidate` and `AddMethodCandidate`. An explicitly deleted move
+member still participates.
+
 ### 3.1 Arity
 With `n` declared parameters (explicit object parameter included, implicit
 excluded) and `m` arguments, viable only if `m == n`, or `m < n` and
