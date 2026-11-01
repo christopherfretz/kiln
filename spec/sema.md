@@ -1049,9 +1049,9 @@ specification as written (`TypeNames` prints ` noexcept`,
   the spec is part of the type (clang's `DiagnoseUseOfDecl`).
 - *Lazy dependent specs* ([temp.inst]/14, clang `EST_Uninstantiated`):
   when a member of a class template specialization is instantiated and
-  its `noexcept(expr)` is value-dependent, and the member is neither a
-  member template nor in a still-dependent context (`lazy_exc_spec`),
-  the member gets `ExcSpec::Deferred(pattern)` and an entry in
+  its `noexcept(expr)` is value-dependent, and the member is not in a
+  still-dependent context (`lazy_exc_spec`; WP-269 below for member and
+  friend templates), the member gets `ExcSpec::Deferred(pattern)` and an entry in
   `uninstantiated_exc: FxHashMap<DeclId, DeclId>` (first declaration to
   pattern). `resolve_exc` calls `instantiate_exception_spec(f, poi)`
   first. That function substitutes the pattern's expression in the
@@ -1102,6 +1102,76 @@ specification as written (`TypeNames` prints ` noexcept`,
   resolved through `class/special/excspec.rs` (sema-class.md §4.7). The
   `noexcept` operator sees these specs through constructor, destructor
   and member calls (§5.3).
+
+**Landed (WP-269).** Friends, member templates and function template
+specializations ([class.mem.general]/7, [except.spec]/13, [temp.inst]/14):
+- *Friends*: an unqualified friend function or friend template declared
+  in a class has its *noexcept-specifier* saved for the complete-class
+  context like a member's (clang 19 does too), so it names members
+  declared later (libc++ `move_iterator::iter_move` / `iter_swap` on
+  `__current_`). A redeclaration whose spec is not known yet
+  (`Deferred`, or a still-uninstantiated one) is matched against the
+  previous declaration ignoring the spec, and the pair goes into
+  `delayed_exc_equiv` (clang `DelayedEquivalentExceptionSpecChecks`).
+  `set_member_exception_spec` then runs `check_delayed_exc_equiv(f)`:
+  if the nothrow-ness differs, `exception specification in declaration
+  does not match previous declaration` at the friend, noted `previous
+  declaration is here`. `set_member_exception_spec` only rewrites
+  redeclarations still `Deferred(f)`, so an earlier namespace-scope
+  declaration keeps its own spec.
+- *Redeclaring a delayed friend* (merged with WP-268's missing-spec
+  path): a previous declaration's still-uninstantiated spec is
+  instantiated first, as clang does in `CheckEquivalentExceptionSpec`. While
+  either spec is still `Deferred`, the redeclaration is never treated as
+  missing a spec; the pair is queued and checked when either is
+  replayed. A redeclaration written without a spec then takes
+  `merge_missing_exc_spec` (`'m' is missing exception specification
+  'noexcept(S::x)'`), and otherwise gets the mismatch error.
+- *Unparsed through the redeclaration chain*: `exc_unparsed(f)` is true
+  when `f`, its first declaration, or the pattern it waits on is in
+  `unparsed_exc`. Both `resolve_exc_for_type` and
+  `diagnose_unparsed_exc_spec` use it. A use before the class is
+  complete gives the error once (clang 19 gives it twice for a friend
+  template, and leaves the specialization unresolved afterwards).
+- *Member and friend templates of class template specializations*: the
+  redeclared pattern keeps `Deferred` (`lazy_exc_spec(d, p, friend)`:
+  the spec is dependent at no more than the template's own level; a
+  friend template that is declared but not defined in the class is
+  substituted at once). Its specializations wait on the original pattern
+  (`defer_spec_exception_spec`).
+- *Function template specializations* (DR1330, clang
+  `InitFunctionInstantiation`): `function_spec_signature` does not
+  substitute a dependent `noexcept(expr)` during deduction. Unless the
+  pattern is in a local scope, the specialization gets `Deferred(spec)`
+  and `uninstantiated_exc[spec] = pat`. `deduce_noexcept` accepts an
+  unresolved spec. `substitute_exception_spec` substitutes it later with
+  the specialization's full argument levels (`spec_args`,
+  `spec_pairs_ctx`), in the lexical class of the specialization's
+  template for a friend. Access is therefore checked as the friend: it
+  may name its own class's private members, but not those of another
+  specialization ([class.friend]/2). The frame note names the
+  specialization with its arguments (`'h<long>'`), as clang does.
+- *Consumers*: `noexcept(...)`, the resolution of overloads on a
+  noexcept function pointer, member pointers and codegen's `nounwind`
+  all go through `exc_spec_needed` / `resolve_exc_for_type`, so each
+  sees the resolved spec.
+- *Other complete-class contexts* (tests in
+  `tests/conformance/class.mem.general/`):
+  - A default argument used before the class is complete gives clang's
+    `use of default argument to function 'f' that is declared later in
+    class 'S'` (sema-class.md §2.7).
+  - An NSDMI needed early gives `default member initializer ... needed
+    within definition of enclosing class` (existing).
+  - A trailing requires-clause is not a complete-class context. A later
+    member is undeclared there, and an invalid clause no longer also
+    gives `non-templated function cannot have a requires clause`.
+- *Divergences from clang*:
+  - A local class in a function template gets its members'
+    noexcept-specifiers deferred like any class. clang 19 substitutes
+    them with the class (`no member 'y' in 'L'; it has not yet been
+    instantiated`).
+  - A friend declared in a local class is not diagnosed (clang: `no
+    matching function found in local scope`).
 
 ### 4.8 Using-declarations, `using enum`, namespace aliases (`using.rs`)
 - **Using-declarators** ([namespace.udecl]):

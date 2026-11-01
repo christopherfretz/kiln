@@ -409,9 +409,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     is `err_stmt_expr_in_default_arg`, skipped to `,`/`)`). In a member
     declarator whose function chunk applies to the name directly,
     default arguments and a parenthesized *noexcept-specifier* are
-    saved instead (§2.4): the parameter gets `DefaultArg::Unparsed(=)`,
-    the declarator `late_noexcept`, and the chunk `ExcSpec::None` until
-    replay. The
+    saved instead (§2.4): the parameter gets `DefaultArg::Unparsed(=,
+    arg)` (the `=` and the argument's first token), the declarator
+    `late_noexcept`, and the chunk `ExcSpec::None` until replay. A friend
+    function or friend template declared in the class has its
+    *noexcept-specifier* saved too (WP-269); a qualified friend
+    (`friend void N::f() noexcept(...)`) does not. The
     parameter-declaration-clause brackets `act_on_start_prototype` /
     `act_on_prototype_param` / `act_on_end_prototype` (closed after the
     trailing return type): each parameter is declared at its point of

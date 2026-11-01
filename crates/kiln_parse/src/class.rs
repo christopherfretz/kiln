@@ -37,6 +37,14 @@ pub(crate) struct LateToks {
     end: Loc,
 }
 
+impl LateToks {
+    /// Where the saved tokens after the first start (a default
+    /// argument's expression after its `=`), else `or`.
+    pub(crate) fn second_loc(&self, or: Loc) -> Loc {
+        self.toks.get(1).map_or(or, |t| t.span.lo)
+    }
+}
+
 /// The saved parts of a member function declarator: its default
 /// arguments (by parameter index) and its *noexcept-specifier*. The
 /// `delay_*` switches tell the declarator parser whether to save them.
@@ -1232,7 +1240,10 @@ impl Parser<'_, '_> {
             d.friend = ds.friend.is_some();
             self.late_fn = LateFnParts {
                 delay_args: !is_typedef,
-                delay_noexcept: !is_typedef && ds.friend.is_none(),
+                // A friend function's noexcept-specifier is a
+                // complete-class context too ([class.mem.general]/7), as
+                // in clang 19, unless it names a member of another class.
+                delay_noexcept: !is_typedef,
                 ..LateFnParts::default()
             };
             if !self.at(Punct::Colon) {

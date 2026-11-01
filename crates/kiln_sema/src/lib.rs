@@ -405,6 +405,17 @@ pub struct Sema<'a, 'sm> {
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
+    /// Redeclarations whose exception specification was not known when
+    /// they were declared (a friend's, saved for its complete-class
+    /// context or left uninstantiated), paired with the previous
+    /// declaration: compared once it is (clang's
+    /// `DelayedEquivalentExceptionSpecChecks`, spec/sema.md §4.7).
+    pub(crate) delayed_exc_equiv: Vec<(DeclId, DeclId)>,
+    /// Parameters whose default argument waits for its complete-class
+    /// context, with the argument's location: a use before then is
+    /// clang's "use of default argument to function ... that is declared
+    /// later in class" ([class.mem.general]/7).
+    pub(crate) unparsed_default_args: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// Members of class template specializations whose dependent
     /// *noexcept-specifier* is instantiated when needed ([temp.inst]/14,
     /// clang's `EST_Uninstantiated`): the first declaration maps to its
@@ -579,6 +590,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_for_outer_depth: None,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
+            delayed_exc_equiv: Vec::new(),
+            unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
