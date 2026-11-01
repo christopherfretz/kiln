@@ -123,6 +123,12 @@ impl Substituter<'_, '_, '_> {
                 if t.is_void(e) || t.is_function(e) || t.is_reference(e) {
                     return self.chunk(e, Chunk::Array { size: None, loc }, loc);
                 }
+                // clang rebuilds the array (`BuildArrayType`): a zero
+                // bound is an error in a SFINAE context (see decl.rs).
+                if a.size == 0 && self.sema.inst.stack.is_sfinae() {
+                    self.sema.error(DiagId::sema_zero_array_size_sfinae, loc);
+                    return Err(SubstFail);
+                }
                 Ok(self.sema.ast.types.constant_array(e, a.size, None))
             }
             TypeView::IncompleteArray(elem) => {

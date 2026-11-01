@@ -1,7 +1,7 @@
 // __has_builtin in the modes that run sema answers from TABLE's
 // implemented column (spec/sema-templates.md §9, Q10): every row kiln
-// implements answers 1, as clang 19 does. The rows staged off are
-// has-builtin-staged-off.cpp.
+// implements answers 1, as clang 19 does (WP-166 implemented the last
+// staged-off trait rows).
 //@ strict-diags
 #if !__has_builtin(__add_lvalue_reference)
 #error __add_lvalue_reference
@@ -245,6 +245,39 @@
 #endif
 #if !__has_builtin(__underlying_type)
 #error __underlying_type
+#endif
+#if !__has_builtin(__can_pass_in_regs)
+#error __can_pass_in_regs
+#endif
+#if !__has_builtin(__has_nothrow_assign)
+#error __has_nothrow_assign
+#endif
+#if !__has_builtin(__has_nothrow_constructor)
+#error __has_nothrow_constructor
+#endif
+#if !__has_builtin(__has_nothrow_copy)
+#error __has_nothrow_copy
+#endif
+#if !__has_builtin(__has_nothrow_move_assign)
+#error __has_nothrow_move_assign
+#endif
+#if !__has_builtin(__is_bitwise_cloneable)
+#error __is_bitwise_cloneable
+#endif
+#if !__has_builtin(__is_layout_compatible)
+#error __is_layout_compatible
+#endif
+#if !__has_builtin(__is_pointer_interconvertible_base_of)
+#error __is_pointer_interconvertible_base_of
+#endif
+#if !__has_builtin(__is_trivially_equality_comparable)
+#error __is_trivially_equality_comparable
+#endif
+#if !__has_builtin(__is_trivially_relocatable)
+#error __is_trivially_relocatable
+#endif
+#if !__has_builtin(__type_pack_element)
+#error __type_pack_element
 #endif
 #if !__has_builtin(__builtin_COLUMN)
 #error __builtin_COLUMN
