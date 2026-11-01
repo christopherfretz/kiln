@@ -173,6 +173,10 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
             ArgView::Template(n) => Ok(TemplateArg::template(self.template_name(n, loc)?)),
+            // A converted argument pack (a partial specialization's
+            // `<U>` against `class... Up` is the pack `{U}`): its
+            // elements, expansions expanded (§7.2).
+            ArgView::Pack(l) => Ok(TemplateArg::pack(self.args(l, loc)?)),
             // A canonical value-dependent argument: its first expression
             // stands for it (an implicit deduction guide's, WP-134).
             ArgView::Profile(p) if !flags.contains(TypeFlags::UNEXPANDED_PACK) => {
@@ -180,7 +184,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 let e = self.expr(e)?;
                 Ok(self.sema.ast.builder().template_arg_expr(e))
             }
-            ArgView::Pack(_) | ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
+            ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
                 self.unimplemented("pack expansion", loc)
             }
             ArgView::Null | ArgView::Value { .. } => Ok(a),

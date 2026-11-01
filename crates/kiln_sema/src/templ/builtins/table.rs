@@ -181,9 +181,6 @@ pub fn trait_status(t: TypeTrait) -> Status {
         // resolution.
         T::IsTriviallyConstructible
         | T::IsTriviallyAssignable
-        | T::ReferenceBindsToTemporary
-        | T::ReferenceConstructsFromTemporary
-        | T::ReferenceConvertsFromTemporary
         | T::HasNothrowAssign
         | T::HasNothrowConstructor
         | T::HasNothrowCopy

@@ -445,6 +445,20 @@ impl Substituter<'_, '_, '_> {
             }
         };
         let mut ds = self.pattern_declspec(d, ret);
+        // `explicit(expr)`: substituted, so the declaration resolves it
+        // when it no longer depends on these levels ([dcl.fct.spec]/3,
+        // [temp.inst]/3; clang `InstantiateExplicitSpecifier`).
+        if ds.explicit.is_some()
+            && let Some(&e) = self.sema.ast.decls.cold.explicit_expr.get(d)
+        {
+            match self.expr(e) {
+                Ok(e) => ds.explicit_expr = Some(e),
+                Err(e) => {
+                    self.forget_pattern_params(d);
+                    return Err(e);
+                }
+            }
+        }
         ds.friend = friend;
         let mut dr = self.pattern_declarator(d, ctx)?;
         if matches!(
@@ -612,6 +626,38 @@ impl Substituter<'_, '_, '_> {
         Ok(())
     }
 
+    /// The explicit-specifier of function template specialization
+    /// `spec`: the pattern's `explicit(expr)` substituted, as part of
+    /// deduction ([temp.deduct.general]/7, so a failure is a deduction
+    /// failure), and resolved ([dcl.fct.spec]/3): `explicit(false)` makes
+    /// the specialization a converting constructor (conversion function).
+    pub(crate) fn function_spec_explicit(&mut self, pat: DeclId, spec: DeclId) -> SubstResult<()> {
+        if !self.sema.fn_spec(pat).is_explicit() {
+            return Ok(());
+        }
+        let Some(&e) = self.sema.ast.decls.cold.explicit_expr.get(pat) else { return Ok(()) };
+        let x = self.sema.ast.exprs.get(e);
+        if !x.is_value_dependent() && !x.is_type_dependent() {
+            return Ok(());
+        }
+        let e = self.expr(e)?;
+        match self.sema.explicit_value(e) {
+            Some(true) => {}
+            Some(false) => {
+                let s = self.sema.fn_spec(spec).with_explicit(false);
+                self.sema.ast.decls.respecify_function(spec, s);
+            }
+            None => {
+                let x = self.sema.ast.exprs.get(e);
+                if !x.is_value_dependent() && !x.is_type_dependent() {
+                    return Err(SubstFail);
+                }
+                let _ = self.sema.ast.decls.cold.explicit_expr.insert(spec, e);
+            }
+        }
+        Ok(())
+    }
+
     /// Drops the mapping of pattern function `pat`'s parameters
     /// ([`Self::param_infos`]).
     pub(crate) fn forget_pattern_params(&mut self, pat: DeclId) {
@@ -669,6 +715,14 @@ impl Substituter<'_, '_, '_> {
             };
             let e = match self.sema.ast.exprs.get(def).kind() {
                 kiln_ast::expr::ExprKind::CXXDefaultArgExpr => continue,
+                // `= {...}` with a dependent type or element: the list
+                // as written, list-initializing the substituted type.
+                kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
+                    if let Ok(l) = self.init_list(def) {
+                        self.sema.act_on_param_default_list(b, &l);
+                    }
+                    continue;
+                }
                 _ => self.expr(def),
             };
             if let Ok(e) = e {
