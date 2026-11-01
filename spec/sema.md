@@ -409,9 +409,30 @@ Redeclaration and linkage rules:
     attribute only applies to empty statements`; outside a switch of the
     current function (a lambda body has its own): `fallthrough annotation
     is outside switch statement` (clang `handleFallThroughAttr`, checked
-    in a template definition). Whether it directly precedes a case label
-    (`fallthrough annotation does not directly precede switch label`) is
-    clang's CFG analysis and is not checked.
+    in a template definition). `[[clang::fallthrough]]` is accepted
+    (WP-203).
+  - **Placement (WP-203; `fallthrough.rs`, clang
+    `DiagnoseSwitchLabelsFallthrough`)**: when the body built a
+    fallthrough statement (`FnState::has_fallthrough`; an instantiation
+    copies them and is not checked, as clang's `HasFallthroughStmt` is
+    only set by `ProcessStmtAttributes`), `end_function_body` checks,
+    after the return-type check and before the throw-in-nothrow check
+    and like them only with no error so far and outside a template,
+    that each one directly precedes a switch label: `fallthrough
+    annotation does not directly precede switch label` at the
+    `AttributedStmt`. A reachable one must be followed, past null
+    statements and empty blocks and out of a compound, branch, try block,
+    handler or inner switch, by a `case`/`default` label (a loop body
+    flows back, a named label starts a new block); an unreachable one
+    (`unreachable_attributed_stmts`, every case label reachable, clang
+    `fillReachableBlocks`) needs only be the last fallthrough of a
+    straight-line run (expression and declaration statements) that
+    falls into a label. With no CFG (`if consteval`) nothing is checked.
+    The errors come in clang's `SmallPtrSet<_, 8>` order: source order,
+    each valid one erased (by its label's order) moving the last element
+    into its hole; past 8, source order (clang's is by pointer).
+    -Wimplicit-fallthrough and -Wunreachable-code-fallthrough are not
+    implemented.
   - A `likely` after an `unlikely` (or the reverse) in the same
     sequence: `'unlikely' and 'likely' attributes are not compatible` at
     the second, with `note: conflicting attribute is here` at the first;
@@ -419,15 +440,16 @@ Redeclaration and linkage rules:
   - `-pedantic` before C++17 (`fallthrough`) or C++20 (`likely`,
     `unlikely`): `use of the 'x' attribute is a C++17/C++20 extension`
     (`-Wc++17-attribute-extensions`, `-Wc++20-attribute-extensions`,
-    not under `-Wc++NN-extensions`). Under `[[clang::fallthrough]]`
-    the scope is not recorded, so the C++17 extension warns for it too
-    (clang does not).
+    not under `-Wc++NN-extensions`). A scoped `[[clang::fallthrough]]`
+    / `[[gnu::fallthrough]]` (`AttrNode::FALLTHROUGH_SCOPED`) is no
+    extension (WP-203).
   - `act_on_if`: both branches `AttributedStmt`s with the same
     likelihood warn `conflicting attributes 'likely' are ignored`
     (`-Wignored-attributes`) at the then-branch attribute, with the
     note at the else-branch one. As clang's `Diags.Report`, it goes
     straight to the engine (`allow_duplicate`, no instantiation notes),
-    so each instantiation repeats it.
+    so each instantiation repeats it, as clang 19 does (checked, WP-203:
+    `conflict-per-instantiation.cpp`).
   - Instantiation keeps these attributes unchanged
     (`templ/subst/stmts.rs`); they are not checked again.
   - The parser rejects an argument list on a standard attribute that
@@ -716,8 +738,19 @@ and returns the scope it names:
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
     discarded call, or a discarded by-value result of such a type,
-    warns.
-  - `deprecated` warns on use.
+    warns. The callee is clang's `getReferencedDeclOfCallee` (WP-203):
+    a name or member access (`m.f()`, `p->f()`, `m.operator-(1)`, a
+    static member through an object), under parens, implicit casts and
+    substituted template parameters, through `.*`/`->*` (the right
+    operand) and unary `*`/`&`/`+`. A call without one never warns. The
+    result type's attribute wins over the callee's (clang
+    `getUnusedResultAttr`); a call returning a reference has no by-value
+    result. Not for a `void` call. Reported at the callee's start.
+  - `deprecated` warns on use: a name, and a member named by a member
+    access or an implicit `this->` (clang `DiagnoseUseOfDecl` in
+    `BuildMemberReferenceExpr`, WP-203). Unlike clang, a non-dependent
+    use in a template is not diagnosed again at instantiation (nor is
+    a non-dependent discarded nodiscard call).
   - `maybe_unused` suppresses unused warnings.
   - `alignas` is validated as a power of two and fed into layout.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
@@ -1342,7 +1375,11 @@ for them.
   cleanups; a constructor call warns only when the constructor or its
   class is `[[nodiscard]]` (`ignoring temporary created by a constructor
   declared with 'nodiscard' attribute[: msg]`, -Wunused-value). A braced
-  or scalar functional cast warns `expression result unused`.
+  or scalar functional cast warns `expression result unused`. A C-style
+  cast written `(void*)` (exactly, not through a typedef) warns
+  `expression result unused; should this cast be to 'void'?`
+  (-Wunused-value, clang `warn_unused_voidptr`) with only the fix-it
+  removing the `*` as its range (WP-203).
   - `emit_unused` (WP-182) follows clang's order: a comparison is
     `-Wunused-comparison` only when it is the unused expression itself
     (`top_comparison`: not parenthesized, not a comma's right operand or
@@ -1362,11 +1399,56 @@ for them.
     checked in an unevaluated operand or for a type-dependent operand
     (it is checked on instantiation, with the instantiation note), and
     an `[[assume(...)]]` argument is checked like any other expression.
-  - Unlike clang, the warnings are emitted at once, not deferred to the
-    end of the function and dropped when unreachable (`DiagIfReachable`),
-    and a macro-argument location gets no `expanded from macro` note.
+  - **Reachability (WP-203)**: the generic warnings (`expression result
+    unused`, `left operand of comma operator has no effect`) go through
+    `diag_if_reachable` (clang `DiagIfReachable`); the comparison,
+    `nodiscard`, `pure`/`const` and `(void*)` warnings are emitted at
+    once. In a function body the warning is queued on
+    `FnState::runtime_diags` with its expression as anchor; at the end
+    of the body, when no error occurred and outside a template, those
+    whose anchor the reachability walk (`unreachable_exprs`, the
+    structured CFG mirror of §7.5) meets only on dead paths are dropped
+    (`return; x;`, `if (0) x;`, the unmatched case of a constant
+    switch, the pruned arm of `true ? a : (x, 1)`); a template's are
+    emitted unfiltered and an instantiation filters its own; an `if
+    consteval` in the body (no CFG) keeps them all. Outside a function
+    the warning is not emitted in the initializer of a `constexpr`
+    variable or of a static data member's first, non-inline declaration
+    (clang's `ManglingContextDecl` test, read from
+    `lambda_mangle.var`); otherwise at once.
+  - The warning carries the expression's range, so a macro-argument
+    location gets clang's `expanded from macro` note (spec/diag.md §8.4).
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
+- **Unused variables (WP-203; clang `ShouldDiagnoseUnusedDecl` /
+  `DiagnoseUnusedDecl`)**: `unused variable 'x'` [-Wunused-variable, in
+  -Wunused and so -Wall; off by default] at the variable's location.
+  - When a block scope is popped (`pop_scope`; the function-body scope
+    from `end_function_body`, before the queued runtime warnings, as
+    clang leaves the body scope before `ActOnFinishFunctionBody`), its
+    unreferenced local variables are diagnosed sorted by location
+    (`unused_var.rs`, `diagnose_unused_locals`), unless an error was
+    reported since the scope was entered (`Scope::errors`, clang
+    `hasUnrecoverableErrorOccurred`) or the scope belongs to an
+    instantiation.
+  - Not diagnosed: an invalid or unnamed variable; one referenced or
+    used (`sizeof(x)` counts); one marked `[[maybe_unused]]` /
+    `__attribute__((unused))`, or whose typedef or class is; a `_`
+    placeholder with automatic storage; a variable outside a function,
+    `extern` or a handler's exception variable; one of dependent or
+    incomplete type; one whose (array element) class has a non-trivial
+    destructor, or is initialized by a non-trivial constructor call that
+    is not a constant initialization, or by a type-dependent
+    initializer. A reference lifetime-extending a temporary is judged by
+    the temporary's type.
+  - A variable of dependent type is diagnosed as its instantiation is
+    created (`diagnose_unused_inst_var`, from `subst` `var_decl`, clang
+    `TemplateDeclInstantiator::VisitVarDecl`) by the pattern's
+    referenced flag, with the instantiation note.
+  - Gaps: -Wunused-but-set-variable, -Wunused-const-variable,
+    -Wunused-exception-parameter and decompositions are not diagnosed; a
+    type-dependent class-typed initializer is always skipped (clang
+    skips only when some constructor is non-trivial).
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
   with `OffsetofComponent`s; clang's `BuildBuiltinOffsetOf`): a
   `size_t` prvalue `OffsetOfExpr`.
@@ -1631,7 +1713,11 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   `FnState::runtime_diags` and flushed in `end_function_body`; in an
   unevaluated operand or an immediate context they are dropped; outside a
   function (a namespace-scope initializer) they are emitted at once.
-  **Gaps:** clang filters queued diagnostics by CFG reachability
+  Each queued diagnostic has an optional anchor expression; an anchored
+  one is dropped at the flush when the anchor is unreachable (see the
+  unused-value reachability rule, WP-203).
+  **Gaps:** the `diag_runtime_behavior` callers queue without an anchor,
+  so clang's CFG reachability filter does not apply to them
   (`if (0) va_arg(ap, char)` is silent there, reported here), and a
   non-dependent expression shared by a template and its instantiation is
   checked once, at definition.

@@ -1506,10 +1506,7 @@ impl<'a> Cg<'a> {
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
         let mut needs_init = false;
         let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
-            None => {
-                let t = self.mty(ty);
-                self.m.const_zero(t)
-            }
+            None => self.null_const(ty)?,
             Some(e) => {
                 if let Some(c) = self.folds.get(e) {
                     self.const_value(c, ty, Some(e), true)?
@@ -1517,8 +1514,7 @@ impl<'a> Cg<'a> {
                     // Dynamic initialization ([basic.start.dynamic]): zero
                     // until the initialization function runs.
                     needs_init = true;
-                    let t = self.mty(ty);
-                    self.m.const_zero(t)
+                    self.null_const(ty)?
                 }
             }
         };
@@ -1653,7 +1649,7 @@ impl<'a> Cg<'a> {
         // A dynamic initializer runs, guarded, at the declaration
         // statement ([stmt.dcl]/3; `static_local_init`).
         let init = match init_expr.and_then(|e| self.folds.get(e).map(|c| (e, c))) {
-            None => self.m.const_zero(mt),
+            None => self.null_const(ty)?,
             Some((e, c)) => self.const_value(c, ty, Some(e), true)?,
         };
         let ity = self.m.const_type(init);

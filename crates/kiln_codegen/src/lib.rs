@@ -33,6 +33,7 @@ mod lambda;
 mod memptr;
 mod module;
 mod new_delete;
+mod null_init;
 mod stmt;
 mod try_catch;
 mod va_arg;

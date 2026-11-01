@@ -605,6 +605,8 @@ dependent). Unknown attributes are diagnosed and dropped (not stored).
 `AttrKind::ASM_LABEL` (88): `a` = raw `StringLitId` of the label,
 flags bit 1 = inherited from the previous declaration.
 `AttrKind::BUILTIN` (89): implicit, `a` = builtin id, invalid location.
+`AttrKind::FALLTHROUGH`: flags bit 2 (`FALLTHROUGH_SCOPED`) = written
+with an attribute scope (`clang::`, `gnu::`; WP-203).
 
 ## 8. Templates (M3; representation fixed now)
 ### 8.1 Parameters
