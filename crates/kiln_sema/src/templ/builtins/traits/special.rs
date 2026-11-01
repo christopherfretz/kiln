@@ -12,7 +12,8 @@ use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, DefinitionBits};
 use kiln_ast::expr::{BinaryOp, ExprKind, TypeTrait, ValueCategory};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{Quals, TypeView};
-use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_ast::attr::AttrKind;
+use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -326,31 +327,31 @@ impl Sema<'_, '_> {
     }
 
     /// `__is_bitwise_cloneable(T)` (clang 19 `isBitwiseCloneableType`):
-    /// trivially copyable, or an array or class whose subobjects all are.
+    /// an array of such elements, any complete non-class non-`void` type,
+    /// or a complete class whose fields all are.
     pub(super) fn is_bitwise_cloneable(&self, q: QualType, depth: usize) -> bool {
         let c = self.ast.types.canonical(q);
-        if depth > MAX_DEPTH
-            || self.ast.types.is_void(c)
-            || !self.is_complete(c)
-            || self.is_dependent_type(c)
-        {
+        if depth > MAX_DEPTH || self.is_dependent_type(c) {
             return false;
-        }
-        if self.is_trivially_copyable_type(c) {
-            return true;
         }
         if self.ast.types.is_array(c) {
             return self.is_bitwise_cloneable(self.base_element(c), depth + 1);
         }
-        let Some(r) = self.defined_record(c) else { return false };
+        if self.ast.types.is_void(c) {
+            return false;
+        }
+        // Every non-class type (references and functions included) is
+        // bitwise cloneable; a class needs every field to be (clang 19
+        // `QualType::isBitwiseCloneableType`; polymorphism is allowed).
+        let Some(r) = self.ast.types.as_record(c) else { return true };
+        if self.ast.definition(r).is_none() {
+            return false;
+        }
         let d = self.class_def(r);
-        let mut subs: Vec<QualType> = self
-            .fields_of(d)
+        self.fields_of(d)
             .into_iter()
             .map(|f| self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR))
-            .collect();
-        subs.extend(self.ast.decls.bases(d, &self.ast.lists).map(|b| b.ty));
-        subs.into_iter().all(|t| self.is_bitwise_cloneable(t, depth + 1))
+            .all(|t| self.is_bitwise_cloneable(t, depth + 1))
     }
 
     /// `__is_layout_compatible(T, U)` ([basic.types.general]/11, clang 19
@@ -360,7 +361,11 @@ impl Sema<'_, '_> {
     pub(super) fn eval_layout_compatible(&mut self, a: (QualType, Loc), b: (QualType, Loc)) -> bool {
         for (q, at) in [a, b] {
             let tys = &self.ast.types;
+            // A function or reference type is complete (clang
+            // `isIncompleteType`).
             if tys.is_void(q)
+                || tys.is_function(q)
+                || tys.is_reference(q)
                 || matches!(tys.canonical_view(q), TypeView::IncompleteArray(_))
                 || self.require_complete(q, at)
             {
@@ -375,15 +380,15 @@ impl Sema<'_, '_> {
 
     /// clang's `isLayoutCompatible(QualType, QualType)`.
     fn layout_compatible(&self, a: QualType, b: QualType, depth: usize) -> bool {
-        let tys = &self.ast.types;
-        let a = tys.canonical(a).without_quals();
-        let b = tys.canonical(b).without_quals();
-        if tys.same_type(a, b) {
-            return true;
-        }
         if depth > MAX_DEPTH {
             return false;
         }
+        if self.same_unqualified(a, b, depth) {
+            return true;
+        }
+        let tys = &self.ast.types;
+        let a = tys.canonical(a).without_quals();
+        let b = tys.canonical(b).without_quals();
         match (tys.canonical_view(a), tys.canonical_view(b)) {
             (TypeView::Enum(x), TypeView::Enum(y)) => {
                 let int_ty = |e: DeclId| {
@@ -430,15 +435,72 @@ impl Sema<'_, '_> {
             }
             return unmatched.is_empty();
         }
-        let bx: Vec<QualType> = self.ast.decls.bases(x, &self.ast.lists).map(|b| b.ty).collect();
-        let by: Vec<QualType> = self.ast.decls.bases(y, &self.ast.lists).map(|b| b.ty).collect();
-        bx.len() == by.len()
-            && bx.iter().zip(&by).all(|(&p, &q)| self.layout_compatible(p, q, depth))
-            && fx.len() == fy.len()
+        // clang 19 compares the fields of the classes that declare them
+        // (`getStandardLayoutBaseWithFields`, [class.mem.general]/26).
+        let fx = self.fields_of(self.standard_layout_base_with_fields(x, depth));
+        let fy = self.fields_of(self.standard_layout_base_with_fields(y, depth));
+        fx.len() == fy.len()
             && fx.iter().zip(&fy).all(|(&f, &g)| self.fields_layout_compatible(f, g, false, depth))
     }
 
     /// clang's `isLayoutCompatible(FieldDecl, FieldDecl)`.
+    /// `a` and `b` are the same type once every qualifier, including
+    /// those an array carries on its element, is dropped (clang's
+    /// `getCanonicalType().getUnqualifiedType()` comparison).
+    fn same_unqualified(&self, a: QualType, b: QualType, depth: usize) -> bool {
+        let tys = &self.ast.types;
+        match (tys.canonical_view(a), tys.canonical_view(b)) {
+            (TypeView::ConstantArray(_), TypeView::ConstantArray(_))
+            | (TypeView::IncompleteArray(_), TypeView::IncompleteArray(_)) => {
+                depth <= MAX_DEPTH
+                    && tys.array_size(a) == tys.array_size(b)
+                    && match (self.array_element(a), self.array_element(b)) {
+                        (Some(x), Some(y)) => self.same_unqualified(x, y, depth + 1),
+                        _ => false,
+                    }
+            }
+            _ => tys.same_type(tys.canonical(a).without_quals(), tys.canonical(b).without_quals()),
+        }
+    }
+
+    /// The immediate element type of the array type `q`.
+    fn array_element(&self, q: QualType) -> Option<QualType> {
+        match self.ast.types.canonical_view(q) {
+            TypeView::ConstantArray(a) => Some(a.elem),
+            TypeView::IncompleteArray(e) => Some(e),
+            _ => None,
+        }
+    }
+
+    /// clang's `CXXRecordDecl::getStandardLayoutBaseWithFields`: the
+    /// class among `d` and its bases that declares the non-static data
+    /// members (`d` itself when none does).
+    fn standard_layout_base_with_fields(&self, d: DeclId, depth: usize) -> DeclId {
+        if !self.fields_of(d).is_empty() || depth > MAX_DEPTH {
+            return d;
+        }
+        for b in self.ast.decls.bases(d, &self.ast.lists).map(|b| b.ty).collect::<Vec<_>>() {
+            if let Some(r) = self.defined_record(b) {
+                let r = self.class_def(r);
+                let w = self.standard_layout_base_with_fields(r, depth + 1);
+                if !self.fields_of(w).is_empty() {
+                    return w;
+                }
+            }
+        }
+        d
+    }
+
+    /// `[[no_unique_address]]` written on the field `f`.
+    fn has_nua(&self, f: DeclId) -> bool {
+        self.ast.decls.get(f).has(DeclFlags::HAS_ATTRS)
+            && self
+                .ast
+                .lists
+                .iter::<AttrId>(self.ast.attrs.of_decl(f))
+                .any(|a| self.ast.attrs.get(a).kind == AttrKind::NO_UNIQUE_ADDRESS)
+    }
+
     fn fields_layout_compatible(&self, f: DeclId, g: DeclId, in_union: bool, depth: usize) -> bool {
         let ty = |d: DeclId| self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         if !self.layout_compatible(ty(f), ty(g), depth) {
@@ -455,7 +517,7 @@ impl Sema<'_, '_> {
             }
             _ => return false,
         }
-        if df.no_unique_address() || dg.no_unique_address() {
+        if df.no_unique_address() || dg.no_unique_address() || self.has_nua(f) || self.has_nua(g) {
             return false;
         }
         in_union
