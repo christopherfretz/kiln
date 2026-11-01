@@ -276,9 +276,9 @@ pub struct Args {
     pub opt_flag: Option<String>,
     /// `-###`: print the commands instead of running them.
     pub print_commands: bool,
-    /// `-m[no-]outline-atomics` (the last wins): AArch64's
+    /// `-m[no-]outline-atomics` (the last wins): `AArch64`'s
     /// `+outline-atomics` target feature; ignored on x86-64. `None` is the
-    /// target's default (on, as clang 19 on an AArch64 Linux host).
+    /// target's default (on, as clang 19 on an `AArch64` Linux host).
     pub outline_atomics: Option<bool>,
 }
 

@@ -69,7 +69,14 @@ panic and never silently wrong IR.
   `Fir::lower` writes the result into the module in one pass.
 - `module.rs`: `Cg`, the module-level state. It owns type lowering,
   signatures (`kiln_abi::call`), mangling, globals, linkage and function
-  attribute sets.
+  attribute sets. `Cg::target_attrs` gives every function clang 19's
+  target string attributes: on AArch64 `"target-cpu"="generic"` and
+  `"target-features"="+fp-armv8,+neon,+outline-atomics,+v8a,-fmv"`, or
+  `"+fp-armv8,+neon,+v8a,-fmv,-outline-atomics"` when
+  `CodegenOptions::outline_atomics` is false (`-mno-outline-atomics`,
+  WP-226; `tests/codegen/no_outline_atomics.cpp`); on x86-64
+  `"target-cpu"="x86-64"`, the baseline features and
+  `"tune-cpu"="generic"`.
 - `func.rs`: per-function state (`Fx`) and the prolog and epilog: the
   return slot, the main `retval` store of 0, parameter spills, the
   fall-off-the-end trap/unreachable, mustprogress, and helpers for
@@ -483,8 +490,13 @@ The normative description is spec/driver.md "Code generation". In short:
   `kiln_driver::run` (`-S -emit-llvm -O0 -std=c++26 --target=<t> -o -`)
   and through `clang++-19` with the same flags, on
   `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`, under the
-  same normalization. A `//@ args: <opts>` line in a case appends
-  `<opts>` to both command lines (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
+  same normalization. On aarch64 both command lines also get
+  `-moutline-atomics` (WP-226): clang 19 enables that feature by default
+  only when it finds a GCC >= 9.3.1 installation for the target, which a
+  native AArch64 host has and an x86-64 host cross-targeting aarch64 (the
+  GitHub runner) does not, so the flag keeps the comparison independent of
+  the host. A `//@ args: <opts>` line in a case appends
+  `<opts>` to both command lines after it (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
   corpus is 200 programs (ABI classification of 1- to 32-byte structs,
