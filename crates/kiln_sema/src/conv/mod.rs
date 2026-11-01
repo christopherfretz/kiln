@@ -1070,3 +1070,20 @@ pub fn usual_arithmetic_conversions(
 pub fn contextually_convert_to_bool(s: &mut Sema<'_, '_>, e: ExprId) -> Result<ExprId, ConvError> {
     implicit_convert(s, e, QualType::BOOL, ConvCtx::Condition)
 }
+
+/// Assignment to `_Atomic(T)`, `T` a class, from a `T` or `_Atomic(T)`
+/// (clang `CheckAssignmentConstraints` on the value type, C11
+/// 6.5.16.1p1): the right side's lvalue conversion, then
+/// `NonAtomicToAtomic`.
+pub(crate) fn atomic_class_assign(s: &mut Sema<'_, '_>, to: QualType, r: ExprId) -> Option<ExprId> {
+    let v = s.ast.types.as_atomic(to)?;
+    s.ast.types.as_record(v)?;
+    let rt = ty(s, r);
+    let rv = s.ast.types.as_atomic(rt).unwrap_or(rt);
+    if !s.ast.types.same_unqualified(rv, v) {
+        return None;
+    }
+    let r = lvalue_to_rvalue(s, r);
+    let to = strip_cv(s, to);
+    Some(raw_cast(s, CastKind::NonAtomicToAtomic, r, to, ValueCategory::PRValue, None))
+}

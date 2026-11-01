@@ -827,7 +827,8 @@ impl Cg<'_> {
         let [l, r] = ast.exprs.operands(e);
         Ok(Some(match op {
             BinaryOp::Assign => {
-                if self.is_aggregate(ast.exprs.get(e).ty()) {
+                let q = ast.exprs.get(e).ty();
+                if self.is_aggregate(q) || self.is_atomic_aggregate(q) {
                     let lv = self.emit_lvalue(e)?;
                     return Ok(Some(lv.addr.v));
                 }
@@ -1489,6 +1490,20 @@ impl Cg<'_> {
                             let lv = self.emit_lvalue(l)?;
                             self.emit_agg(r, lv.addr, false)?;
                             return Ok(lv);
+                        }
+                        if self.is_atomic_aggregate(q) {
+                            // clang `AggExprEmitter::VisitBinAssign` on an
+                            // `_Atomic` left side (WP-165).
+                            // The right side goes into a temporary of the
+                            // assignment's type (`EmitAggExprToLValue`),
+                            // which is the result.
+                            let lv = self.emit_lvalue(l)?;
+                            let t = self.temp(q);
+                            self.f.slot_volatile = self.is_volatile(q);
+                            self.emit_agg(r, t, false)?;
+                            self.f.slot_volatile = false;
+                            self.atomic_agg_store(t, lv);
+                            return Ok(LV { addr: t, q, bf: None, vidx: None });
                         }
                         let v = self.emit_scalar(r)?;
                         let lv = self.emit_lvalue(l)?;
@@ -2481,6 +2496,14 @@ impl Cg<'_> {
                 self.emit_member_call(e, Some(dest))?;
                 Ok(())
             }
+            // A braced `_Atomic` initializer holds its one converted
+            // element (clang `InitListExpr::isTransparent`).
+            ExprKind::InitListExpr if ast.types.as_atomic(q).is_some() => {
+                match ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(e)).next() {
+                    Some(x) => self.agg_visit(x, dest, zeroed),
+                    None => err(self.loc_of(e), "empty `_Atomic` initializer list"),
+                }
+            }
             ExprKind::InitListExpr => {
                 if ast.types.is_array(q) {
                     self.array_init(e, dest, zeroed)
@@ -2508,6 +2531,14 @@ impl Cg<'_> {
             k if k.is_cast()
                 && matches!(
                     ast.exprs.cast_kind(e),
+                    CastKind::NonAtomicToAtomic | CastKind::AtomicToNonAtomic
+                ) =>
+            {
+                self.agg_atomic_cast(e, dest, zeroed)
+            }
+            k if k.is_cast()
+                && matches!(
+                    ast.exprs.cast_kind(e),
                     CastKind::NoOp
                         | CastKind::LValueToRValue
                         | CastKind::LValueToRValueBitCast
@@ -2518,6 +2549,10 @@ impl Cg<'_> {
                 let s = ast.exprs.operand(e);
                 if self.is_glvalue(s) {
                     let lv = self.emit_lvalue(s)?;
+                    if self.is_atomic_aggregate(lv.q) {
+                        self.atomic_agg_load(lv, dest);
+                        return Ok(());
+                    }
                     let size = self.size_align(q).0;
                     let vol = self.is_volatile(q) || self.is_volatile(lv.q);
                     self.memcpy(dest, lv.addr.v, lv.addr.align, size, vol);
@@ -2531,6 +2566,10 @@ impl Cg<'_> {
             | ExprKind::ArraySubscriptExpr
             | ExprKind::UnaryOperator => {
                 let lv = self.emit_lvalue(e)?;
+                if self.is_atomic_aggregate(lv.q) {
+                    self.atomic_agg_load(lv, dest);
+                    return Ok(());
+                }
                 let size = self.size_align(q).0;
                 self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
                 Ok(())
@@ -2670,6 +2709,10 @@ impl Cg<'_> {
         if matches!(k, ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr) {
             return self.null_init_lvalue(lv, zeroed);
         }
+        if lv.bf.is_none() && self.ast.types.as_atomic(lv.q).is_some() {
+            // clang `EmitAtomicInit` (WP-165).
+            return self.atomic_init(e, lv);
+        }
         if self.is_aggregate(lv.q) {
             // `AggValueSlot::IsDestructed`: the enclosing object owns the
             // destruction, so a bound temporary initializing it in place
@@ -2680,12 +2723,7 @@ impl Cg<'_> {
             return r;
         }
         let v = self.emit_scalar(e)?;
-        if lv.bf.is_none() && self.ast.types.as_atomic(lv.q).is_some() {
-            // An initialization of an `_Atomic` object is a plain store.
-            self.store_scalar(v, lv.addr, lv.q);
-        } else {
-            self.store_lv(v, lv, false);
-        }
+        self.store_lv(v, lv, false);
         Ok(())
     }
 
@@ -3147,6 +3185,10 @@ impl Cg<'_> {
             let p = self.emit_ref_binding(init)?;
             self.store(p, addr.v, addr.align, false);
             return Ok(());
+        }
+        if ast.types.as_atomic(q).is_some() {
+            // clang `EmitExprAsInit` -> `EmitAtomicInit` (WP-165).
+            return self.atomic_init(init, LV { addr, q, bf: None, vidx: None });
         }
         let fold = self.folds.get(init);
         if self.is_aggregate(q) {

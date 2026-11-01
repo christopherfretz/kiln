@@ -1316,7 +1316,16 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   and compound assignment are allowed on a modifiable `_Atomic` lvalue
   and yield an lvalue of `T` (`++`) or `_Atomic(T)` (compound assignment),
   as clang 19's `decltype` shows. A braced list initializing an `_Atomic`
-  object is `sema_illegal_initializer_type`, as clang.
+  object is `sema_illegal_initializer_type`, as clang, unless it holds
+  one element of class type.
+- **`_Atomic(T)` of class type `T` (WP-165).** Initialized from a `T` or
+  a class derived from `T` (copy, direct, or a one-element braced list)
+  as `T` is, then `NonAtomicToAtomic` (clang `InitializeFrom`
+  `NeedAtomicConversion`; `Sema::atomic_class_init`); other class sources
+  fail as a conversion to `_Atomic(T)`. Assignment from `T` or `_Atomic(T)`
+  is the right side's lvalue conversion then `NonAtomicToAtomic`
+  (`conv::atomic_class_assign`, C11 6.5.16.1). Assignment errors to any
+  `_Atomic` target are reported at the operator, as clang's C path.
 - **Not done:** `-Watomic-alignment` (the libcall-size warning).
 
 ## 6. Initialization (`init.rs`)

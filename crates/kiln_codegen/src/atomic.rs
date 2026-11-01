@@ -133,6 +133,16 @@ impl Cg<'_> {
         }
     }
 
+    /// `DataLayout::getTypeSizeInBits` of `q`'s memory type (80 for the
+    /// x87 `long double`, the allocation size otherwise).
+    fn mem_bits(&mut self, q: QualType) -> u64 {
+        let t = self.mty(q);
+        match self.m.types.float_width(t) {
+            Some(w) => u64::from(w),
+            None => self.size_align(q).0 * 8,
+        }
+    }
+
     /// clang `EmitValToTemp`: `e` evaluated into a fresh temporary.
     fn val_to_temp(&mut self, e: ExprId, ty: LTy) -> R<Addr> {
         let q = self.ast.exprs.get(e).ty();
@@ -164,12 +174,6 @@ impl Cg<'_> {
         let value_q = ast.types.as_atomic(atomic_q).unwrap_or(atomic_q);
         let volatile = self.is_volatile(atomic_q);
         let size = self.size_align(atomic_q).0;
-        if self.size_align(value_q).0 != size {
-            return err(
-                self.loc_of(e),
-                "atomic operation on a padded _Atomic type is not supported yet",
-            );
-        }
         if size == 0 {
             return err(self.loc_of(e), "atomic operation on a zero-sized object");
         }
@@ -183,14 +187,8 @@ impl Cg<'_> {
         if form == Form::Init {
             // clang `EmitAtomicInit`: a plain initialization.
             let Some(v1) = sub(1) else { return err(self.loc_of(e), "malformed AtomicExpr") };
-            if self.is_aggregate(value_q) {
-                let ty = self.mty(atomic_q);
-                self.emit_agg(v1, Addr { v: pv, ty, align: palign }, false)?;
-            } else {
-                let v = self.emit_scalar(v1)?;
-                let ty = self.mty(value_q);
-                self.store_scalar(v, Addr { v: pv, ty, align: palign }, value_q);
-            }
+            let addr = Addr { v: pv, ty: self.mty(atomic_q), align: palign };
+            self.atomic_init(v1, LV { addr, q: atomic_q, bf: None, vidx: None })?;
             return Ok(None);
         }
         let Some(order_e) = sub(1) else { return err(self.loc_of(e), "malformed AtomicExpr") };
@@ -225,6 +223,10 @@ impl Cg<'_> {
         let need = |i: usize| -> R<ExprId> {
             sub(i).map_or_else(|| err(None, "malformed AtomicExpr"), Ok)
         };
+        // The source types of `val1`/`val2`, for `convertToAtomicIntPointer`.
+        let pointee = |x: ExprId| ast.types.pointee(ast.exprs.get(x).ty());
+        let ty_of = |x: ExprId| Some(ast.exprs.get(x).ty());
+        let mut src: [Option<QualType>; 2] = [None, None];
         match form {
             Form::Init | Form::Load => {}
             Form::LoadCopy => {
@@ -234,20 +236,25 @@ impl Cg<'_> {
             Form::Copy if !at::by_value(id) => {
                 let (v, a) = self.pointer_and_align(need(2)?)?;
                 ops.val1 = Some(Addr { v, ty: op_ty, align: a });
+                src[0] = pointee(need(2)?);
             }
             Form::GnuXchg => {
                 let (v, a) = self.pointer_and_align(need(2)?)?;
                 ops.val1 = Some(Addr { v, ty: op_ty, align: a });
+                src[0] = pointee(need(2)?);
                 let (v, a) = self.pointer_and_align(need(3)?)?;
                 ops.dest = Some(Addr { v, ty: op_ty, align: a });
             }
             Form::C11CmpXchg | Form::GnuCmpXchg => {
                 let (v, a) = self.pointer_and_align(need(2)?)?;
                 ops.val1 = Some(Addr { v, ty: op_ty, align: a });
+                src[0] = pointee(need(2)?);
                 ops.val2 = Some(if id == at::CMPXCHG {
                     let (v, a) = self.pointer_and_align(need(4)?)?;
+                    src[1] = pointee(need(4)?);
                     Addr { v, ty: op_ty, align: a }
                 } else {
+                    src[1] = ty_of(need(4)?);
                     self.val_to_temp(need(4)?, op_ty)?
                 });
                 ops.order_fail = Some(self.emit_scalar(need(3)?)?);
@@ -275,16 +282,27 @@ impl Cg<'_> {
                 let t = self.temp(v1q);
                 self.store_scalar(x, t, v1q);
                 ops.val1 = Some(Addr { ty: op_ty, ..t });
+                src[0] = Some(v1q);
             }
             _ => {
                 let v1 = need(2)?;
-                if self.size_align(ast.exprs.get(v1).ty()).0 != size {
-                    return err(
-                        self.loc_of(e),
-                        "atomic operand of a different size is not supported yet",
-                    );
-                }
+                src[0] = ty_of(v1);
                 ops.val1 = Some(self.val_to_temp(v1, op_ty)?);
+            }
+        }
+        if op_ty == int_ty {
+            // clang `AtomicInfo::convertToAtomicIntPointer`: an operand
+            // whose memory type is not as wide as the atomic one is copied
+            // into an atomic-sized temporary first.
+            let abits = size * 8;
+            for (slot, q) in [(&mut ops.val1, src[0]), (&mut ops.val2, src[1])] {
+                let (Some(a), Some(q)) = (*slot, q) else { continue };
+                let bits = self.mem_bits(q);
+                if bits != abits {
+                    let t = self.temp(atomic_q);
+                    self.memcpy(t, a.v, a.align, abits.min(bits) / 8, false);
+                    *slot = Some(Addr { ty: op_ty, ..t });
+                }
             }
         }
         let rq = ast.exprs.get(e).ty();
@@ -651,6 +669,131 @@ impl Cg<'_> {
             return self.load_scalar(Addr { ty, ..t }, vq);
         }
         if self.is_bool(vq) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
+    }
+
+    /// Whether `q` is `_Atomic(T)` with `T` an aggregate (clang
+    /// `getEvaluationKind` is `TEK_Aggregate`).
+    pub(crate) fn is_atomic_aggregate(&self, q: QualType) -> bool {
+        self.ast.types.as_atomic(q).is_some_and(|v| self.is_aggregate(v))
+    }
+
+    /// clang `EmitAtomicLoad` of the aggregate `_Atomic` lvalue `lv`
+    /// into the slot `dest` (`ConvertToValueOrAtomic` slams the integer
+    /// into the slot; the libcall loads straight into it).
+    pub(crate) fn atomic_agg_load(&mut self, lv: LV, dest: Addr) {
+        if self.atomic_lv_libcall(lv.q) {
+            self.atomic_lv_libcall_op(false, lv, dest.v);
+            return;
+        }
+        let vol = self.is_volatile(lv.q);
+        let size = self.size_align(lv.q).0;
+        let at = self.m.types.int(u32::try_from(size * 8).unwrap_or(8));
+        let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
+        let v = self.f.fir.push(Op::Load { ty: at, ptr: lv.addr.v, mem }, at);
+        let slot_vol = std::mem::take(&mut self.f.slot_volatile);
+        self.store(v, dest.v, dest.align, slot_vol);
+    }
+
+    /// clang `EmitAtomicStore` of the aggregate r-value in `src` (a slot
+    /// of the `_Atomic` type) to the `_Atomic` lvalue `lv`.
+    pub(crate) fn atomic_agg_store(&mut self, src: Addr, lv: LV) {
+        if self.atomic_lv_libcall(lv.q) {
+            self.atomic_lv_libcall_op(true, lv, src.v);
+            return;
+        }
+        let vol = self.is_volatile(lv.q);
+        let size = self.size_align(lv.q).0;
+        let at = self.m.types.int(u32::try_from(size * 8).unwrap_or(8));
+        let v = self.load(at, src.v, src.align, false);
+        let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
+        self.f.fir.push(Op::Store { val: v, ptr: lv.addr.v, mem }, LTy::VOID);
+    }
+
+    /// clang `AggExprEmitter::VisitCastExpr` for `NonAtomicToAtomic` and
+    /// `AtomicToNonAtomic` casts of aggregates `e` into `dest`.
+    pub(crate) fn agg_atomic_cast(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
+        let ast = self.ast;
+        let to_atomic = ast.exprs.cast_kind(e) == CastKind::NonAtomicToAtomic;
+        let s = ast.exprs.operand(e);
+        let (aq, vq) = if to_atomic {
+            (ast.exprs.get(e).ty(), ast.exprs.get(s).ty())
+        } else {
+            (ast.exprs.get(s).ty(), ast.exprs.get(e).ty())
+        };
+        let asize = self.size_align(aq).0;
+        if self.size_align(vq).0 == asize {
+            return self.emit_agg(s, dest, zeroed);
+        }
+        // `findPeephole`: the reverse cast under no-op casts and parens.
+        let peep =
+            if to_atomic { CastKind::AtomicToNonAtomic } else { CastKind::NonAtomicToAtomic };
+        let mut op = s;
+        loop {
+            let n = ast.exprs.get(op);
+            if n.kind() == ExprKind::ParenExpr
+                || (n.kind().is_cast() && ast.exprs.cast_kind(op) == CastKind::NoOp)
+            {
+                op = ast.exprs.operand(op);
+            } else {
+                break;
+            }
+        }
+        if ast.exprs.get(op).kind().is_cast() && ast.exprs.cast_kind(op) == peep {
+            return self.emit_agg(ast.exprs.operand(op), dest, zeroed);
+        }
+        if to_atomic {
+            if !zeroed {
+                self.memset(dest, 0, asize, false);
+            }
+            let aty = self.mty(aq);
+            let v = self.struct_gep(aty, dest.v, 0);
+            let vty = self.mty(vq);
+            return self.emit_agg(s, Addr { v, ty: vty, align: dest.align }, true);
+        }
+        let t = self.temp(aq);
+        self.emit_agg(s, t, false)?;
+        let aty = self.mty(aq);
+        let v = self.struct_gep(aty, t.v, 0);
+        let n = self.size_align(vq).0;
+        self.memcpy(dest, v, t.align, n, false);
+        Ok(())
+    }
+
+    /// clang `EmitAtomicInit`: `init` stored into the `_Atomic` object
+    /// `lv` (not atomically). The object is zeroed first when it has
+    /// padding or its value does not fill it (`emitMemSetZeroIfNecessary`;
+    /// an aggregate from an `_Atomic` initializer is copied whole), and the
+    /// value goes into the padded struct's first field (`projectValue`).
+    pub(crate) fn atomic_init(&mut self, init: ExprId, lv: LV) -> R<()> {
+        let ast = self.ast;
+        let vq = ast.types.as_atomic(lv.q).unwrap_or(lv.q);
+        let asize = self.size_align(lv.q).0;
+        let padded = self.size_align(vq).0 != asize;
+        let vty = self.mty(vq);
+        let project = |cg: &mut Self| {
+            let v = if padded { cg.struct_gep(lv.addr.ty, lv.addr.v, 0) } else { lv.addr.v };
+            Addr { v, ty: vty, align: lv.addr.align }
+        };
+        if self.is_aggregate(vq) {
+            if ast.types.as_atomic(ast.exprs.get(init).ty()).is_some() {
+                return self.emit_agg(init, Addr { ty: vty, ..lv.addr }, false);
+            }
+            if padded {
+                self.memset(lv.addr, 0, asize, false);
+            }
+            let dest = project(self);
+            return self.emit_agg(init, dest, padded);
+        }
+        let v = match self.folds.get(init) {
+            Some(c) => V::C(self.const_scalar_value(c, vq)?),
+            None => self.emit_scalar(init)?,
+        };
+        if padded || self.mem_bits(lv.q) != asize * 8 {
+            self.memset(lv.addr, 0, asize, false);
+        }
+        let dest = project(self);
+        self.store_scalar(v, dest, vq);
+        Ok(())
     }
 
     /// clang `AtomicInfo::materializeRValue`: `v` in a temporary of the

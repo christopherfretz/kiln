@@ -855,14 +855,38 @@ clang 19 `CGAtomic` at -O0, mirrored:
   integers and a `cmpxchg` loop (`atomic_cont`/`atomic_exit`) otherwise.
   On x86_64 a 16-byte `_Atomic` lvalue load/store is the
   `__atomic_load`/`__atomic_store` libcall with order 5, as clang.
+- **Library calls (WP-165).** An `AtomicExpr` whose size is not a power
+  of two or exceeds 16 bytes is the generic libatomic call
+  (`__atomic_load(size, obj, ret, order)`, `__atomic_store(size, obj,
+  val, order)`, `__atomic_exchange(size, obj, val, ret, order)`,
+  `__atomic_compare_exchange(size, obj, expected, desired, success,
+  failure)` returning `i1`, `noundef` and on x86_64 `zeroext`); every
+  argument `noundef`, the declaration `nounwind willreturn`, orders passed
+  as given (no switch). A `cmpxchg` loop on an `_Atomic` lvalue that needs
+  a libcall (x86_64 16-byte x87 `long double` and `__int128`) materializes
+  expected and desired in `_Atomic` temporaries (zeroed first when the
+  value does not fill them) and reads the old value back from the
+  expected buffer.
+- **Padded and aggregate `_Atomic` (WP-165).** `_Atomic(T)` of at most 16
+  bytes is laid out as `{ T, [n x i8] }` rounded to a power of two
+  (`size_align`); operands whose memory size (x87: 80 bits) differs from
+  the atomic width are copied into an `_Atomic`-typed temporary first
+  (`convertToAtomicIntPointer`). Initialization is `EmitAtomicInit`
+  (`atomic_init`, used for locals, `init_to_lvalue` and
+  `__c11_atomic_init`): the object is zeroed when padded or not filled by
+  its value, and the value goes into field 0. Aggregate `_Atomic` reads
+  load the atomic integer straight into the slot (or `__atomic_load`
+  into it); `NonAtomicToAtomic`/`AtomicToNonAtomic` aggregate casts
+  follow `AggExprEmitter::VisitCastExpr` (peephole of a reverse pair;
+  zero + field 0 for a padded destination; through an atomic temporary
+  otherwise); assignment evaluates the right side into a temporary of the
+  assignment's type (the result) and stores it with
+  `store atomic`/`__atomic_store` (`atomic_agg_store`).
 - **Validation:** `tests/codegen/atomic_{builtins,orders,lvalues,wide,
-  qualifier}.cpp` exact on aarch64 and x86_64; `run` tests under
-  `tests/conformance/ext.c11.atomic/`.
-- **Not implemented** (a codegen error): `AtomicExpr` library calls (size
-  above the inline width or not a power of two), padded `_Atomic` types,
-  floating `min`/`max_fetch` (clang 19 emits invalid IR), aggregate
-  `_Atomic` lvalue loads and stores, `++` of `_Atomic(bool)`, a `cmpxchg`
-  loop that needs a libcall (x86_64 16 bytes, x87 `long double`).
+  qualifier,libcall,lv_libcall,padded,aggregate}.cpp` exact on aarch64
+  and x86_64; `run` tests under `tests/conformance/ext.c11.atomic/`.
+- **Not implemented** (a codegen error): floating `min`/`max_fetch`
+  (clang 19 emits invalid IR), `++` of `_Atomic(bool)`.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

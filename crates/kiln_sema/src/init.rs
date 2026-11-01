@@ -368,6 +368,9 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return e;
         }
+        if let Some(x) = self.atomic_class_init(ty, e, ctx, at) {
+            return x;
+        }
         if let Some(x) = self.construct_from_class(e, ty, ctx, at, DeletedAs::Call) {
             return x;
         }
@@ -398,6 +401,30 @@ impl Sema<'_, '_> {
                 self.recover(ty, &[e], loc)
             }
         }
+    }
+
+    /// Initialization of `_Atomic(T)`, `T` a class, from `e` of class
+    /// type `T` or derived from `T` (clang `InitializeFrom`
+    /// `NeedAtomicConversion`): `T` is initialized from `e`, then
+    /// converted by `NonAtomicToAtomic` (WP-165).
+    fn atomic_class_init(
+        &mut self,
+        ty: QualType,
+        e: ExprId,
+        ctx: ConvCtx,
+        at: Loc,
+    ) -> Option<ExprId> {
+        let v = self.ast.types.as_atomic(ty)?;
+        let vr = self.ast.types.as_record(v)?;
+        let er = self.ast.types.as_record(self.ety(e))?;
+        if !self.derived_inclusive(er, vr) {
+            return None;
+        }
+        let v = conv::strip_cv(self, v);
+        let x = self.init_from_expr(v, e, ctx, at);
+        let to = conv::strip_cv(self, ty);
+        let ck = kiln_ast::expr::CastKind::NonAtomicToAtomic;
+        Some(conv::cast_to(self, ck, x, to, None))
     }
 
     /// `char s[N] = "..."` ([dcl.init.string]).
@@ -671,8 +698,16 @@ impl Sema<'_, '_> {
         l: &InitList,
         entity: Option<Loc>,
     ) -> ExprId {
-        // `_Atomic(T)` takes no braces (clang `InitListChecker`).
+        // `_Atomic(T)` takes no braces (clang `InitListChecker`), but a
+        // single element of class type initializes it (WP-165).
         if self.ast.types.as_atomic(ty).is_some() {
+            if let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+                && designator.is_empty()
+                && self.ast.types.as_record(self.ety(*x)).is_some()
+            {
+                let at = entity.unwrap_or(l.lbrace);
+                return self.init_from_expr(ty, *x, ConvCtx::Initialization, at);
+            }
             let msg =
                 self.diag(DiagId::sema_illegal_initializer_type, l.lbrace).arg(self.ty_arg(ty));
             self.emit(msg);

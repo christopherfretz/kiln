@@ -2114,10 +2114,20 @@ impl Sema<'_, '_> {
         }
         let lt = self.ety(l);
         let to = conv::strip_cv(self, lt);
-        let r2 = match conv::implicit_convert(self, r, to, ConvCtx::Assignment) {
+        let conv = match conv::atomic_class_assign(self, to, r) {
+            Some(x) => Ok(x),
+            None => conv::implicit_convert(self, r, to, ConvCtx::Assignment),
+        };
+        let r2 = match conv {
             Ok(x) => x,
             Err(err) => {
-                let d = err.diag(self, r);
+                // An `_Atomic` target is checked as in C, at the operator
+                // (clang `DiagnoseAssignmentResult`).
+                let d = if self.ast.types.as_atomic(to).is_some() {
+                    err.diag_at(self, loc)
+                } else {
+                    err.diag(self, r)
+                };
                 self.emit(d);
                 return self.recover_err(&[l, r], loc);
             }
