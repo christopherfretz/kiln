@@ -800,6 +800,9 @@ impl Parser<'_, '_> {
         }
         let class = self.s.classify_name(name, Some(q.ctx));
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
+            if let NameClass::TypeTemplate(d) = class {
+                self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
+            }
             return match self.parse_template_id_rest(class, name, name_loc) {
                 // The qualifier as written is sugar: `'O::I<int>'`.
                 Ok(TemplateIdRef::Type(t)) => {

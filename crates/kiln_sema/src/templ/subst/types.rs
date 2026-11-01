@@ -266,6 +266,9 @@ impl Substituter<'_, '_, '_> {
                     return Err(SubstFail);
                 }
                 self.sema.mark_type_referenced(d);
+                // [class.access]/4, [temp.deduct.general]/8: checked now,
+                // a substitution failure in a SFINAE context.
+                self.sema.check_found_access(&found, loc);
                 let t = self.decl_type(d);
                 // The keyword is kept as written (clang: `typename S::type`).
                 Ok(self.sema.ast.types.elaborated(keyword, Some(n), t))

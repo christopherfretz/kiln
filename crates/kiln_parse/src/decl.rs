@@ -400,6 +400,7 @@ impl Parser<'_, '_> {
             }
             self.parse_attributes(&mut attrs);
             let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
+            self.s.check_using_declarator_access(qual, name, nl);
             let d = if typename {
                 self.s.act_on_using_typename_declarator(
                     using_loc, qual, name, nl, if_exists, ellipsis,

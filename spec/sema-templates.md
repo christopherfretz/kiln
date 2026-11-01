@@ -879,9 +879,15 @@ Later uses of it are silent.
   re-run in each instantiation of it (a class at the end of its
   instantiation, a member function after its body; clang
   `PerformDependentDiagnostics`, WP-151); an error the instantiation
-  already reported is not repeated. Known gaps: function template
-  specializations and lambdas are not replayed, and access of type names
-  is not checked at all (spec/sema-class.md open issue 8).
+  already reported is not repeated. The innermost entity skips a
+  non-generic lambda's call operator and closure type (instantiated with
+  their enclosing function: a lambda in `X<char>::l` replays with `l`); a
+  function template specialization (`X<char>::m<int>`, a generic lambda's
+  `operator()<int>`) replays its pattern's checks after its body, and a
+  generic lambda rebuilt by substitution inherits its pattern's checks
+  (`Sema::copy_dependent_access`), so the error carries the
+  `in instantiation of function template specialization` note (WP-174).
+  Type names are checked as other names (spec/sema-class.md §2.4).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 

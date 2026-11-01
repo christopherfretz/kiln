@@ -489,6 +489,34 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The access check of the members a member using-declarator names
+    /// ([namespace.udecl]/19: each must be accessible), at `loc`. Nothing
+    /// outside a class, for a dependent or non-class qualifier, or for
+    /// inherited constructors.
+    pub fn check_using_declarator_access(
+        &mut self,
+        qual: Option<crate::using::Qualifier>,
+        name: kiln_ast::names::DeclName,
+        loc: Loc,
+    ) {
+        let Some(q) = qual else { return };
+        if self.kind_of(self.ctx) != DeclKind::CXXRecord
+            || self.kind_of(q.ctx) != DeclKind::CXXRecord
+            || self.is_dependent_ctx(q.ctx)
+        {
+            return;
+        }
+        let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
+        let Some(naming) = found.naming else { return };
+        for (i, &d) in found.decls.iter().enumerate() {
+            if self.kind_of(d) == DeclKind::CXXConstructor || self.injected_class(d, naming).is_some() {
+                continue;
+            }
+            let via = found.found.get(i).copied().unwrap_or(d);
+            self.check_member_access(via, naming, None, loc);
+        }
+    }
+
     fn member_target(&self, found: DeclId, object: Option<DeclId>) -> Option<Target> {
         let declaring = self.declaring_class(found)?;
         let target = self.ast.strip_shadow(found);
@@ -500,6 +528,19 @@ impl Sema<'_, '_> {
             instance_member,
             object: object.filter(|_| instance_member),
         })
+    }
+
+    /// The entity whose instantiations replay a dependent check made in
+    /// `ec` ([`Sema::replay_dependent_access`]): the innermost function or
+    /// class, except a non-generic lambda's call operator and closure
+    /// type, which are instantiated with their enclosing function
+    /// (a generic lambda's call operator is instantiated on its own).
+    fn dependent_access_key(&self, ec: &EffectiveContext) -> Option<DeclId> {
+        let f = ec.functions.iter().find(|&&g| {
+            !self.is_lambda_call_op(g) || self.ast.described_template(g).is_some()
+        });
+        let r = || ec.records.iter().find(|&&r| self.ast.decls.record(r).is_none_or(|x| x.lambda.is_none()));
+        f.or_else(r).map(|&k| self.ast.first(k))
     }
 
     /// A non-static member other than an explicit object member function
@@ -537,14 +578,14 @@ impl Sema<'_, '_> {
             // each instantiation of the innermost function or class
             // ([`Sema::replay_dependent_access`]).
             if self.speculative_friend.take()
-                && let Some(&k) = ec.functions.first().or(ec.records.first())
+                && let Some(k) = self.dependent_access_key(&ec)
             {
-                self.dependent_access.entry(self.ast.first(k)).or_default().push(c);
+                self.dependent_access.entry(k).or_default().push(c);
             }
             return true;
         }
         // Not repeated by the replay of a check the instantiation redid.
-        let key = ec.functions.first().or(ec.records.first()).map(|&k| self.ast.first(k));
+        let key = self.dependent_access_key(&ec);
         if let Some(k) = key
             && !self.access_failed.insert((c.member, c.loc, k))
             && self.replaying_access
@@ -899,6 +940,19 @@ impl Sema<'_, '_> {
         }
         self.replaying_access = false;
         (self.ctx, self.initializing) = saved;
+    }
+
+    /// Makes the instantiations of `new` (a generic lambda's call
+    /// operator rebuilt from `pattern`) replay `pattern`'s dependent
+    /// access checks.
+    pub(crate) fn copy_dependent_access(&mut self, pattern: DeclId, new: DeclId) {
+        let (p, n) = (self.ast.first(pattern), self.ast.first(new));
+        if p == n {
+            return;
+        }
+        if let Some(checks) = self.dependent_access.get(&p).cloned() {
+            self.dependent_access.entry(n).or_default().extend(checks);
+        }
     }
 
     /// Opens a delay point: access checks until the matching
