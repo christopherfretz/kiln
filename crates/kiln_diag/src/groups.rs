@@ -238,7 +238,6 @@ diag_groups! {
     UnreachableCode = "unreachable-code" [UnreachableCodeFallthrough];
     UnreachableCodeAggressive = "unreachable-code-aggressive" [UnreachableCode];
     Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
-    Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
     // ----- WP-220 (undefined variable templates)
     UndefinedVarTemplate = "undefined-var-template" [];
 }
