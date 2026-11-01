@@ -4,6 +4,10 @@ Branch `wp/149-gate-unblockers-3`, worktree `kiln/.worktrees/wp-149`, base
 5ea147b. The first-error and any-error counts come from the WP-142 reading of
 `docs/status/libcxx-m3.md`.
 
+Result: the M3 gate is 317/585, up from 312 on main before WP-149. That is 315 before
+merging main at 5ef890a (WP-144). `<variant>` drops from 42 errors to 22. CI is green
+(`.build/ci-wp149.log` in the helper repo).
+
 ## Items
 1. [x] **Operator and conversion function names in using-declarators**
    (28 first, 40 any; `using B::operator=;` through
