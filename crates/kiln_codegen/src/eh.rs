@@ -486,6 +486,7 @@ impl Cg<'_> {
             } else {
                 let v = self.f.fir.alloca(LTy::I1, 1);
                 self.f.cl.stack[c - 1].active_flag = Some(Addr { v, ty: LTy::I1, align: 1 });
+                self.f.cl.stack[c - 1].aux.push(v);
                 let t = V::C(self.m.const_bool(true));
                 let st = Op::Store { val: t, ptr: v, mem: MemOpts::aligned(1) };
                 if let Some(&outer) = self.f.conds.first() {
