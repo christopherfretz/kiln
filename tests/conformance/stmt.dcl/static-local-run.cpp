@@ -7,10 +7,11 @@
 //@ stdout: start C1 1 1 2 throw C2 3 done 3 ~C2 ~C1
 extern "C" int printf(const char*, ...);
 
+int live = 0;
 struct C {
   int v;
-  C(int x) : v(x) { printf("C%d ", v); }
-  ~C() { printf("~C%d ", v); }
+  C(int x) : v(x) { ++live; printf("C%d ", v); }
+  ~C() { printf(--live ? "~C%d " : "~C%d\n", v); }
 };
 inline C *get() {
   static C c(1);

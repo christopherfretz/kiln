@@ -11,10 +11,11 @@
 //@ stdout: I6 T7 A1 g=11 A2 R3 M5 main 1 11 2 7 6 3 5 48 ~R3 ~A2 ~A1 ~T7 ~I6
 extern "C" int printf(const char*, ...);
 
+int live = 0; // constant-initialized: usable by every dynamic initializer
 struct A {
   int v;
-  A(int x) : v(x) { printf("%s%d ", tag(), v); }
-  ~A() { printf("~%s%d ", tag(), v); }
+  A(int x) : v(x) { ++live; printf("%s%d ", tag(), v); }
+  ~A() { printf(--live ? "~%s%d " : "~%s%d\n", tag(), v); }
   const char *tag() const { return v == 7 ? "T" : v == 6 ? "I" : v == 3 ? "R" : "A"; }
 };
 int f(int x) { return x + 10; }
