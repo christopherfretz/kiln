@@ -947,8 +947,11 @@ impl Substituter<'_, '_, '_> {
         Ok(self.sema.act_on_static_assert(c, m, loc))
     }
 
-    /// An enumeration of the pattern: defined now (§4.6; clang defines
-    /// member enumerations with the class).
+    /// An enumeration of the pattern: an unscoped one is defined now
+    /// (§4.6; clang defines member enumerations with the class), a scoped
+    /// member enumeration only when it is required
+    /// ([temp.inst]/3: "the declarations, but not the definitions, of
+    /// scoped member enumerations"; `Sema::instantiate_member_enum`).
     pub(crate) fn enum_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
         let n = *self.sema.ast.decls.get(d);
         let loc = n.loc();
@@ -969,19 +972,26 @@ impl Substituter<'_, '_, '_> {
         let src = self.sema.ast.definition(d).filter(|&x| {
             x == d || self.sema.ast.decls.get(x).ctx() == self.sema.ast.decls.get(d).ctx()
         });
-        let defined = src.is_some();
-        let use_ = if defined {
+        let member = n.ctx().is_some_and(|c| self.sema.kind_of(c) == DeclKind::CXXRecord);
+        let src = src.filter(|_| scoped == 0 || !member);
+        let use_ = if src.is_some() {
             crate::decl::TagUse::Definition
         } else {
             crate::decl::TagUse::Declaration
         };
         let kw = kiln_ast::types::TagKeyword::Enum;
         let e = self.sema.act_on_tag(kw, name, None, use_, scoped, fixed, loc);
-        if !defined {
-            return Ok(e);
+        if let Some(src) = src {
+            self.enum_definition(e, src)?;
         }
+        Ok(e)
+    }
+
+    /// Defines enumeration `e` from the pattern's definition `src`: its
+    /// enumerators are substituted in order ([temp.inst]/3).
+    pub(crate) fn enum_definition(&mut self, e: DeclId, src: DeclId) -> SubstResult<()> {
         self.sema.act_on_start_enum_definition(e);
-        let ens: Vec<DeclId> = self.sema.ast.decls.members(src.unwrap_or(d)).collect();
+        let ens: Vec<DeclId> = self.sema.ast.decls.members(src).collect();
         for en in ens {
             let m = *self.sema.ast.decls.get(en);
             if m.kind() != DeclKind::EnumConstant {
@@ -989,7 +999,13 @@ impl Substituter<'_, '_, '_> {
             }
             let init = self.sema.ast.decls.enumerator(en).and_then(|x| x.init);
             let init = match init {
-                Some(i) => Some(self.expr(i)?),
+                Some(i) => match self.expr(i) {
+                    Ok(x) => Some(x),
+                    Err(f) => {
+                        self.sema.act_on_finish_enum_definition(e);
+                        return Err(f);
+                    }
+                },
                 None => None,
             };
             let Some(s) = m.name().as_ident() else { continue };
@@ -1001,7 +1017,7 @@ impl Substituter<'_, '_, '_> {
             self.sema.ast.templates.record_member(e, en, x);
         }
         self.sema.act_on_finish_enum_definition(e);
-        Ok(e)
+        Ok(())
     }
 
     /// Records that `inst` was instantiated from pattern member `pattern`

@@ -1712,7 +1712,8 @@ impl Sema<'_, '_> {
             self.templ.explicit_inst = None;
             // [temp.explicit]/3: of a variable template or static data
             // member.
-            self.act_on_explicit_var_inst(d, ext.is_some(), invalid);
+            let type_loc = ds.type_loc.unwrap_or(ds.loc);
+            self.act_on_explicit_var_inst(d, (ty, type_loc), ext.is_some(), invalid);
             return None;
         }
         if let Some(sid) = &d.spec_id {
@@ -2002,7 +2003,14 @@ impl Sema<'_, '_> {
             self.inst.suppress_next_error.set(true);
             return msg;
         }
-        let loc = self.ast.decls.get(rec).loc();
+        // A member class of an implicit specialization declared
+        // explicitly specialized: clang moves the instantiation's
+        // location to that declaration ([temp.expl.spec]/1).
+        let explicit_member = self.ast.member_spec_info(self.ast.first(rec)).is_some_and(|(_, m)| {
+            m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization
+        });
+        let at = if explicit_member { self.ast.latest(rec) } else { rec };
+        let loc = self.ast.decls.get(at).loc();
         msg.with_note(
             self.diag(DiagId::note_forward_declaration, loc)
                 .arg(format!("'{}'", self.qualified_decl_name(rec))),
@@ -4284,12 +4292,18 @@ impl Sema<'_, '_> {
                 self.check_enum_redecl(p, scoped, fixed, nloc, use_);
             }
             if let Some(p) = prev {
-                if use_ == TagUse::Reference {
+                if member_class_spec && !self.check_member_tag_spec(p, nloc) {
+                    // [temp.expl.spec]/7, diagnosed: a definition is
+                    // still parsed, as an unrelated class.
+                    if use_ == TagUse::Declaration {
+                        return p;
+                    }
+                    prev = None;
+                } else if use_ == TagUse::Reference {
                     self.mark_type_referenced(p);
                     self.check_name_access_as(n, qualifier, p, nloc, LookupKind::Tag);
                     return p;
-                }
-                if use_ == TagUse::Definition {
+                } else if use_ == TagUse::Definition {
                     if let Some(def) = self.ast.definition(p) {
                         let msg = self.diag(DiagId::sema_redefinition, nloc).arg(sym_str(self, n));
                         let msg = self.note_prev(msg, def, true);
@@ -4302,6 +4316,10 @@ impl Sema<'_, '_> {
                     // declares the member template specialized
                     // ([temp.expl.spec]/16): a new decl (below).
                     && self.templ.member_spec.is_none()
+                    // `template<> struct A<int>::B;` declares the member
+                    // explicitly specialized ([temp.expl.spec]/1): a new
+                    // decl (below), which an incomplete-type note names.
+                    && !member_class_spec
                 {
                     // A redeclaration creates no new decl (a deviation:
                     // clang adds a `ClassTemplateDecl` per redeclaration),
@@ -5607,7 +5625,9 @@ impl Sema<'_, '_> {
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
                 // [temp.inst]/2: a specialization named through an alias
                 // is instantiated like one named by its template-id.
-                if self.undefined_spec(ty).is_some() && !self.require_complete_nns(ty, loc) {
+                if (self.undefined_spec(ty).is_some() || self.undefined_member_enum(ty).is_some())
+                    && !self.require_complete_nns(ty, loc)
+                {
                     return None;
                 }
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));

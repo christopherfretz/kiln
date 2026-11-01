@@ -66,6 +66,37 @@ impl Parser<'_, '_> {
 
     // -- template declarations ---------------------------------------------------------
 
+    /// Whether the `enum` at the current token names its enumeration with
+    /// a nested-name-specifier (`enum class A<int>::E`).
+    fn at_qualified_enum(&self) -> bool {
+        let mut n = 1;
+        if matches!(self.kw_of(self.peek(1)), Some(Kw::Class | Kw::Struct)) {
+            n += 1;
+        }
+        self.peek_is(n, Punct::ColonColon)
+            || (matches!(self.peek(n).kind, TokKind::Identifier(_))
+                && (self.peek_is(n + 1, Punct::ColonColon) || self.peek_is(n + 1, Punct::Less)))
+    }
+
+    /// An unqualified `enum` after `template<>` or an explicit
+    /// instantiation's `template`: like clang, "enumeration cannot be a
+    /// template" at the token after the name and enum-base and
+    /// "declaration does not declare anything" at `enum`; the declaration
+    /// is skipped.
+    fn enum_template_declaration(&mut self) {
+        let enum_loc = self.loc();
+        let mut n = 1;
+        while !matches!(
+            self.peek(n).kind,
+            TokKind::Punct(Punct::Semi | Punct::LBrace | Punct::RBrace) | TokKind::Eof
+        ) {
+            n += 1;
+        }
+        self.s.error(DiagId::sema_enum_template, self.peek(n).span.lo);
+        self.s.error(DiagId::sema_no_declarators_error, enum_loc);
+        self.skip_unsupported_declaration();
+    }
+
     /// A declaration starting at `template` or `extern template`
     /// ([temp.pre]/1, [temp.explicit], [temp.expl.spec]) in namespace
     /// (`File`) or class (`Member`) scope.
@@ -80,7 +111,17 @@ impl Parser<'_, '_> {
                 self.s.act_explicit_inst_end();
                 return;
             }
-            let _ = self.s.act_explicit_instantiation(extern_loc, loc);
+            if self.at_kw(Kw::Enum) && !self.at_qualified_enum() {
+                self.enum_template_declaration();
+                return;
+            }
+            if self.at_kw(Kw::Enum) {
+                // [temp.explicit]/3 names no enumerations (clang's
+                // `err_explicit_instantiation_enum`).
+                self.error_here(DiagId::sema_enum_explicit_instantiation);
+            } else {
+                let _ = self.s.act_explicit_instantiation(extern_loc, loc);
+            }
             self.skip_unsupported_declaration();
             return;
         }
@@ -107,8 +148,15 @@ impl Parser<'_, '_> {
                 self.s.act_member_template_spec_end();
                 return;
             }
+            if self.at_kw(Kw::Enum) && !self.at_qualified_enum() {
+                self.enum_template_declaration();
+                return;
+            }
+            // `template<> enum class A<int>::E : int { ... };` explicitly
+            // specializes a member enumeration ([temp.expl.spec]/1).
             if self.at_partial_specialization()
                 || self.at_var_template_spec()
+                || self.at_kw(Kw::Enum)
                 || !self.at_spec_tag_or_template()
             {
                 self.s.act_explicit_spec_start(loc);

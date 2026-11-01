@@ -396,16 +396,52 @@ impl Sema<'_, '_> {
 }
 
 impl Sema<'_, '_> {
+    /// [temp.explicit]/3: the type declared by an explicit instantiation
+    /// of variable template specialization `v` of `tmpl` must be the
+    /// specialization's type (clang `ActOnExplicitInstantiation`,
+    /// `err_invalid_var_template_spec_type`). False after a diagnostic.
+    /// clang does not check a static data member's type (nor does kiln).
+    fn check_explicit_var_inst_type(
+        &mut self,
+        tmpl: DeclId,
+        v: DeclId,
+        (declared, type_loc): (QualType, Loc),
+    ) -> bool {
+        let Some(expected) = self.ast.decls.get(v).ty() else { return true };
+        let types = &self.ast.types;
+        if types.same_type(declared, expected)
+            || types.is_dependent(expected)
+            || self.is_error_type(expected)
+            || self.is_error_type(declared)
+        {
+            return true;
+        }
+        let name = self.decl_name_str(self.ast.decls.get(tmpl).name());
+        let at = self.ast.decls.get(self.ast.latest(tmpl)).loc();
+        let note = self.diag(DiagId::note_template_declared_here, at).arg(2u32).arg(name.clone());
+        let e = self
+            .diag(DiagId::sema_var_template_spec_type, type_loc)
+            .arg(0u32)
+            .arg(name)
+            .arg(self.ty_arg(declared))
+            .arg(self.ty_arg(expected))
+            .with_note(note);
+        self.emit(e);
+        false
+    }
+
     /// `[extern] template T v<args>;` or `[extern] template T
     /// C<args>::m;` ([temp.explicit]/3): an explicit instantiation of a
     /// variable template specialization or of a static data member of a
     /// class template specialization. A definition instantiates the
     /// variable's definition (initializer) now and keeps it for emission
     /// ([temp.explicit]/12); a declaration only records the kind
-    /// ([temp.explicit]/14).
+    /// ([temp.explicit]/14). `declared` is the declared type and the
+    /// location of its type specifier.
     pub(crate) fn act_on_explicit_var_inst(
         &mut self,
         d: &Declarator,
+        declared: (QualType, Loc),
         declaration: bool,
         invalid: bool,
     ) {
@@ -423,6 +459,9 @@ impl Sema<'_, '_> {
             let Ok(v) = self.get_var_spec(sid.template, &sid.args, &sid.arg_locs, sid.loc) else {
                 return;
             };
+            if !self.check_explicit_var_inst_type(sid.template, v, declared) {
+                return;
+            }
             let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
             match info.kind {
                 SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDefinition => {

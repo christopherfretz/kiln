@@ -566,6 +566,8 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
             let ty = self.sema.tag_type(inst_parent);
             let _ = self.sema.require_complete_silent(ty, loc);
+        } else {
+            self.sema.require_member_enum(inst_parent, loc);
         }
         if let Some(m) = self.sema.ast.templates.find_member(inst_parent, d) {
             return Ok(m);
@@ -578,6 +580,24 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             && let Some(m) = self.sema.ast.templates.find_member(inst_parent, first)
         {
             return Ok(m);
+        }
+        // A member of the pattern that an explicitly specialized member
+        // ([temp.expl.spec]/7) does not have: clang looks the name up
+        // again in the specialization.
+        let first_parent = self.sema.ast.first(inst_parent);
+        if self
+            .sema
+            .ast
+            .member_spec_info(first_parent)
+            .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization)
+        {
+            let name = self.sema.decl_name_str(node.name());
+            let e = self
+                .sema
+                .diag(kiln_diag::DiagId::sema_no_member, loc)
+                .arg(name)
+                .arg(self.ctx_arg(inst_parent));
+            self.sema.emit(e);
         }
         // A member not instantiated (an invalid member of the
         // specialization): already diagnosed.

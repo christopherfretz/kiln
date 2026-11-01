@@ -388,6 +388,26 @@ impl Sema<'_, '_> {
         self.ast.definition(r).is_none().then_some(r)
     }
 
+    /// The member enumeration of a class template specialization that `q`
+    /// names, if not yet defined: a scoped one is defined only when
+    /// required ([temp.inst]/3, `Substituter::enum_decl`).
+    pub(crate) fn undefined_member_enum(&self, q: QualType) -> Option<DeclId> {
+        let e = self.ast.types.as_enum(q)?;
+        (self.ast.definition(e).is_none() && self.ast.instantiated_from(e).is_some()).then_some(e)
+    }
+
+    /// Defines member enumeration `e` of a class template specialization
+    /// if it is one and not yet defined (`using enum`, a qualified
+    /// enumerator named from a template's pattern).
+    pub(crate) fn require_member_enum(&mut self, e: DeclId, loc: Loc) {
+        if self.kind_of(e) == DeclKind::Enum
+            && self.ast.definition(e).is_none()
+            && self.ast.instantiated_from(e).is_some()
+        {
+            let _ = self.instantiate_class(e, loc, false);
+        }
+    }
+
     /// Whether `q` is complete at `loc`, first instantiating the class
     /// template specialization it names ([temp.inst]/2: a complete type
     /// is required). Errors in the instantiation are diagnosed.
@@ -426,6 +446,13 @@ impl Sema<'_, '_> {
     pub fn require_complete_nns(&mut self, q: QualType, loc: Loc) -> bool {
         if let Some(r) = self.undefined_spec(q) {
             return self.instantiate_class(r, loc, true);
+        }
+        if let Some(e) = self.undefined_member_enum(q) {
+            // A scoped member enumeration is defined when named in a
+            // nested-name-specifier (clang `RequireCompleteDeclContext`);
+            // one without a definition is opaque, so its scope is empty.
+            let _ = self.instantiate_class(e, loc, false);
+            return true;
         }
         if let Some(r) = self.ast.types.as_record(q)
             && !self.is_complete(q)
@@ -642,7 +669,19 @@ impl Sema<'_, '_> {
     /// definition (the caller reports the incomplete type).
     fn instantiate_member_class(&mut self, r: DeclId, poi: Loc) -> bool {
         let Some(pattern) = self.ast.instantiated_from(r) else { return false };
-        let Some(def) = self.ast.definition(pattern) else { return false };
+        let first = self.ast.first(r);
+        if let Some((i, info)) = self.ast.member_spec_info(first).map(|(i, x)| (i, *x)) {
+            // [temp.expl.spec]/7: an explicitly specialized member is
+            // never instantiated from the pattern; one only declared is
+            // incomplete (the caller reports it).
+            if info.kind == SpecKind::ExplicitSpecialization {
+                return false;
+            }
+            if info.point_of_instantiation == Loc::INVALID && poi != Loc::INVALID {
+                self.ast.templates.update_member_spec(i, |m| m.point_of_instantiation = poi);
+            }
+        }
+        let Some(def) = self.member_pattern_definition(r, pattern) else { return false };
         // The enclosing instantiated classes, innermost first, up to the
         // specialization whose arguments the member is substituted with.
         let mut outer = Vec::new();
@@ -659,6 +698,9 @@ impl Sema<'_, '_> {
             c = self.ast.decls.get(x).ctx();
         }
         let Some(args) = args else { return false };
+        if self.kind_of(r) == DeclKind::Enum {
+            return self.instantiate_member_enum(r, def, (&args, &outer), poi);
+        }
         if !self.push_inst_frame(FrameKind::MemberClass, r, pattern, poi) {
             return false;
         }
@@ -667,6 +709,42 @@ impl Sema<'_, '_> {
         self.replay_dependent_access(def, r);
         self.pop_inst_frame();
         self.ast.definition(r).is_some()
+    }
+
+    /// The definition of member `r`'s pattern `pattern`: for an
+    /// enumeration, one in the pattern's class or out of line before the
+    /// class was instantiated ([temp.mem.enum]; `Substituter::enum_decl`).
+    fn member_pattern_definition(&self, r: DeclId, pattern: DeclId) -> Option<DeclId> {
+        let def = self.ast.definition(pattern)?;
+        if self.kind_of(r) != DeclKind::Enum {
+            return Some(def);
+        }
+        let ctx = |d: DeclId| self.ast.decls.get(d).ctx();
+        (def == pattern || ctx(def) == ctx(pattern)).then_some(def)
+    }
+
+    /// Defines scoped member enumeration `e` of a class template
+    /// specialization from pattern definition `def` when it is first
+    /// required ([temp.inst]/3; clang `InstantiateEnum`).
+    fn instantiate_member_enum(
+        &mut self,
+        e: DeclId,
+        def: DeclId,
+        (args, outer): (&MultiLevelArgs, &[(DeclId, DeclId)]),
+        poi: Loc,
+    ) -> bool {
+        if !self.push_inst_frame(FrameKind::Enum, e, def, poi) {
+            return false;
+        }
+        let parent = self.ast.decls.get(e).ctx().unwrap_or(self.ast.tu);
+        self.in_inst_context(parent, |s| {
+            let mut sub = Substituter::new(s, args);
+            sub.entity = Some(parent);
+            sub.map_contexts(outer);
+            let _ = sub.enum_definition(e, def);
+        });
+        self.pop_inst_frame();
+        self.ast.definition(e).is_some()
     }
 
     /// Defines `spec` from pattern definition `def`. `outer` maps the

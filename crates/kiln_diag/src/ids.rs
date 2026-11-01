@@ -1615,6 +1615,11 @@ diag_ids! {
     sema_address_of_packed_member = Warning [AddressOfPackedMember] (2) "taking address of packed member {0} of class or structure {1} may result in an unaligned pointer value";
     sema_explicit_inst_undefined_func_template = Error (1) "explicit instantiation of undefined function template '{0}'";
     sema_bad_cxx_cast_rvalue = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from rvalue to reference type {1}";
+    sema_var_template_spec_type = Error (4) "type {2} of {0:explicit instantiation|explicit specialization|partial specialization|redeclaration} of '{1}' does not match expected type {3}";
+    note_template_declared_here = Note (2) "{0:function template|class template|variable template|alias template|template template parameter|template} '{1}' declared here";
+    sema_enum_explicit_instantiation = Error (0) "enumerations cannot be explicitly instantiated";
+    sema_enum_template = Error (0) "enumeration cannot be a template";
+    sema_no_declarators_error = Error (0) "declaration does not declare anything";
 }
 
 impl DiagId {
