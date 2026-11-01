@@ -14,8 +14,8 @@ use kiln_source::symbol::Symbol;
 
 use super::AccessCheck;
 use crate::Sema;
-use crate::lookup::LookupKind;
 use crate::conv::bases::{BasePath, base_paths, is_derived_from, same_class};
+use crate::lookup::LookupKind;
 
 /// Restrictiveness: public < protected < private < none (clang's
 /// `AccessSpecifier` order).
@@ -434,14 +434,18 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        let qualifier = qualifier.map(|q| self.type_name_qualifier(q));
+        if qualifier.is_some_and(|q| self.is_dependent_ctx(q)) {
+            return;
+        }
+        // Fast path: a member of an enclosing class, named in that class
+        // (unqualified or `C::m`), is accessible to its members.
+        let owner = self.declaring_class(d).unwrap_or(d);
+        if qualifier.is_none_or(|q| same_class(self, q, owner)) && self.encloses_ctx(owner) {
+            return;
+        }
         let found = match qualifier {
-            Some(q) => {
-                let q = self.type_name_qualifier(q);
-                if self.is_dependent_ctx(q) {
-                    return;
-                }
-                self.lookup_qualified(q, name, kind)
-            }
+            Some(q) => self.lookup_qualified(q, name, kind),
             None => self.lookup_name(name, kind),
         };
         if found.decls.first().is_some_and(|&x| self.ast.first(x) == self.ast.first(d)) {
@@ -459,6 +463,19 @@ impl Sema<'_, '_> {
         let def = self.ast.definition(found)?;
         let naming = self.ast.definition(naming).unwrap_or(naming);
         self.derived_inclusive(naming, def).then_some(def)
+    }
+
+    /// Whether class `c` is (or encloses) the current context.
+    fn encloses_ctx(&self, c: DeclId) -> bool {
+        let mut cur = Some(self.ctx);
+        for _ in 0..256 {
+            let Some(x) = cur else { return false };
+            if self.kind_of(x) == DeclKind::CXXRecord && same_class(self, x, c) {
+                return true;
+            }
+            cur = self.ast.decls.get(x).ctx();
+        }
+        false
     }
 
     /// Whether a lookup qualified by `qualifier` (or unqualified, from
@@ -509,7 +526,9 @@ impl Sema<'_, '_> {
         let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
         let Some(naming) = found.naming else { return };
         for (i, &d) in found.decls.iter().enumerate() {
-            if self.kind_of(d) == DeclKind::CXXConstructor || self.injected_class(d, naming).is_some() {
+            if self.kind_of(d) == DeclKind::CXXConstructor
+                || self.injected_class(d, naming).is_some()
+            {
                 continue;
             }
             let via = found.found.get(i).copied().unwrap_or(d);
@@ -536,10 +555,15 @@ impl Sema<'_, '_> {
     /// type, which are instantiated with their enclosing function
     /// (a generic lambda's call operator is instantiated on its own).
     fn dependent_access_key(&self, ec: &EffectiveContext) -> Option<DeclId> {
-        let f = ec.functions.iter().find(|&&g| {
-            !self.is_lambda_call_op(g) || self.ast.described_template(g).is_some()
-        });
-        let r = || ec.records.iter().find(|&&r| self.ast.decls.record(r).is_none_or(|x| x.lambda.is_none()));
+        let f = ec
+            .functions
+            .iter()
+            .find(|&&g| !self.is_lambda_call_op(g) || self.ast.described_template(g).is_some());
+        let r = || {
+            ec.records
+                .iter()
+                .find(|&&r| self.ast.decls.record(r).is_none_or(|x| x.lambda.is_none()))
+        };
         f.or_else(r).map(|&k| self.ast.first(k))
     }
 
