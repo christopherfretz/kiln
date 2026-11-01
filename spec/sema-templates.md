@@ -1482,6 +1482,12 @@ When a non-list argument has already been diagnosed (a `RecoveryExpr` or
 an error type, such as a variable whose own deduction failed), nothing is
 deduced and no further error is emitted. clang likewise deduces nothing
 from an initializer that contains errors (WP-192).
+An implicit guide's parameter types may name member typedefs of the class
+template (libc++ `vector(initializer_list<value_type>)`). Substituting
+the guide's arguments into such a typedef substitutes its underlying type
+and keeps the typedef as sugar, without instantiating the class
+(`Substituter::class_not_instantiated`). clang's guide transform clones
+the typedef instead.
 
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
 implemented and what is deferred (P2582 inherited-constructor guides).
