@@ -207,6 +207,21 @@ impl<'a> IrTypes<'a> {
                     IrType::Int(64)
                 }
             }
+            // clang `ConvertTypeForMem(_Atomic(T))`: `T`, padded to the
+            // promoted atomic size with a byte array.
+            TypeView::Atomic(v) => {
+                let inner = self.convert_mem(v);
+                let full = self.lay.type_layout(q).size;
+                let value = self.lay.type_layout(v).size;
+                if full > value {
+                    IrType::Struct(
+                        vec![inner, IrType::Array(Box::new(IrType::Int(8)), full - value)],
+                        false,
+                    )
+                } else {
+                    inner
+                }
+            }
             _ => IrType::Int(8),
         }
     }

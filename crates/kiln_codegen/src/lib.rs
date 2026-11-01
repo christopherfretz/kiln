@@ -17,6 +17,7 @@
 )]
 
 mod asm;
+mod atomic;
 mod builtins;
 mod class;
 mod cleanup;

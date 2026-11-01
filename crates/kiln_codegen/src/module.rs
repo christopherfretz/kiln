@@ -728,6 +728,15 @@ impl<'a> Cg<'a> {
         matches!(self.ast.types.canonical_view(q), TypeView::Builtin(BuiltinType::Bool))
     }
 
+    /// [`Cg::is_bool`], seeing through `_Atomic` (the memory form of an
+    /// `_Atomic(bool)` is `i8` too).
+    pub fn is_bool_value(&self, q: QualType) -> bool {
+        match self.ast.types.canonical_view(q) {
+            TypeView::Atomic(v) => self.is_bool(v),
+            _ => self.is_bool(q),
+        }
+    }
+
     pub fn is_signed(&self, q: QualType) -> bool {
         kiln_abi::irtype::is_signed_or_enum(self.ast, q, self.target)
     }
