@@ -2620,9 +2620,10 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `-Wdivision-by-zero`: an integer divisor that folds to 0
-    /// ([expr.mul]/4), outside unevaluated operands.
+    /// ([expr.mul]/4), a run-time behavior diagnostic
+    /// (`DiagRuntimeBehavior` anchored at the divisor).
     fn diagnose_division_by_zero(&mut self, op: BinaryOp, r: ExprId, loc: Loc) {
-        if self.unevaluated > 0 || !self.ast.types.is_integral(self.ety(r)) {
+        if self.runtime_diag_quiet() || !self.ast.types.is_integral(self.ety(r)) {
             return;
         }
         // A value-dependent divisor (`sizeof(T)`) has no value yet.
@@ -2636,15 +2637,16 @@ impl Sema<'_, '_> {
                 "remainder"
             };
             let msg = self.diag(DiagId::sema_division_by_zero, loc).arg(what);
-            self.emit(msg);
+            self.diag_if_reachable(msg, r);
         }
     }
 
     /// clang's `-Wshift-count-negative`/`-Wshift-count-overflow`: a
     /// constant shift count outside `[0, width)` of the promoted left
-    /// operand type `lty` ([expr.shift]/1).
+    /// operand type `lty` ([expr.shift]/1), a run-time behavior
+    /// diagnostic (clang `DiagnoseBadShiftValues`).
     fn diagnose_shift_count(&mut self, r: ExprId, lty: QualType, loc: Loc) {
-        if self.unevaluated > 0 {
+        if self.runtime_diag_quiet() {
             return;
         }
         let Some((width, _)) = int_info(&self.ast, lty) else { return };
@@ -2657,7 +2659,7 @@ impl Sema<'_, '_> {
             return;
         };
         let msg = self.diag(id, loc);
-        self.emit(msg);
+        self.diag_if_reachable(msg, r);
     }
 
     fn assign(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {

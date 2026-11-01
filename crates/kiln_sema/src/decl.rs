@@ -24,8 +24,8 @@ use crate::class::ClassBuild;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
-    StorageSpec, TypeSpecKind, Width,
+    Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign,
+    SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
@@ -675,6 +675,11 @@ impl Sema<'_, '_> {
         spec_loc: Loc,
         d: &Declarator,
     ) -> QualType {
+        // A type-id's redundant parentheses (a new-type-id's are checked
+        // by `act_on_new`, before its bounds are split off).
+        if d.ctx == DeclaratorContext::TypeName && d.site != DeclSite::New {
+            self.warn_redundant_parens(None, d);
+        }
         // [dcl.type.class.deduct]/2.
         let mut ty = self.ctad_declarator_check(base, spec_loc, d);
         let name = self.declarator_name(d);
@@ -1059,6 +1064,7 @@ impl Sema<'_, '_> {
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
         let base = self.type_from_declspec(ds);
         let base = self.apply_declspec_vector_attrs(base, ds);
+        self.warn_redundant_parens(None, d);
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if let Some((s, loc)) = ds.storage
             && s != StorageSpec::Register
@@ -1739,6 +1745,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let unqualified;
+        let mut dropped_local = false;
         let d = match if d.dropped {
             QualifiedDecl::Keep
         } else {
@@ -1752,6 +1759,11 @@ impl Sema<'_, '_> {
             QualifiedDecl::Drop => {
                 self.templ.cur = None;
                 return None;
+            }
+            QualifiedDecl::DropLocal => {
+                dropped_local = true;
+                unqualified = Declarator { qualifier: None, invalid: true, ..d.clone() };
+                &unqualified
             }
         };
         if !d.dropped
@@ -1776,7 +1788,7 @@ impl Sema<'_, '_> {
         // so `__attribute__((vector_size(8))) short f();` returns a vector.
         let base = self.apply_declspec_vector_attrs(base, ds);
         let base = self.ctad_decl_spec_check(ds, base, d);
-        self.warn_redundant_parens(ds, base, d);
+        self.warn_redundant_parens(Some((ds, base)), d);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {
@@ -1871,6 +1883,9 @@ impl Sema<'_, '_> {
         };
         if invalid {
             self.ast.decls.set_flags(decl, DeclFlags::INVALID);
+        }
+        if dropped_local {
+            self.dropped_qualified_locals.insert(decl);
         }
         if let Some(r) = d.trailing_requires {
             self.act_on_trailing_requires(decl, r);
@@ -3328,6 +3343,116 @@ impl Sema<'_, '_> {
                 .is_some_and(|s| s.aux & kiln_ast::decl::ScopeData::LINKAGE_BRACELESS != 0)
     }
 
+    /// For a variable declarator qualified by namespace `qualifier`: when
+    /// redeclaration lookup of `name` there finds more than one entity (a
+    /// member of the namespace and one of its inline namespaces, or two
+    /// inline namespaces; [namespace.def.general]/7, [dcl.meaning]/3), the
+    /// first-declared one, which clang's ambiguous lookup reports as
+    /// "different kind of symbol" (WP-235).
+    fn ambiguous_qualified_prev(&self, name: Symbol, qualifier: Option<DeclId>) -> Option<DeclId> {
+        let q = qualifier?;
+        if !matches!(self.kind_of(q), DeclKind::Namespace | DeclKind::TranslationUnit) {
+            return None;
+        }
+        let mut firsts: Vec<DeclId> = self
+            .prev_candidates(name, Some(q))
+            .into_iter()
+            .filter(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function))
+            .map(|d| self.ast.first(d))
+            .collect();
+        firsts.sort_unstable();
+        firsts.dedup();
+        if firsts.len() > 1 { firsts.first().copied() } else { None }
+    }
+
+    /// clang's `MergeVarDecl` for a block-scope variable `name` of type
+    /// `ty` and storage `storage` at `loc` whose name is already declared
+    /// in the block (a variable or a parameter `p`), in clang's order: the
+    /// types (unless `p` is invalid), `static` after a declaration with
+    /// external linkage, non-`static` after `static`, `extern` after a
+    /// declaration without linkage and the reverse, then the redefinition
+    /// (spec/sema.md §4.2; WP-235); an `extern` that also finds a
+    /// declaration with linkage outside the block is a different kind of
+    /// symbol. Only an `extern` redeclaring an `extern` is accepted.
+    fn merge_local_var(
+        &mut self,
+        p: DeclId,
+        ty: QualType,
+        storage: VarStorage,
+        loc: Loc,
+        name: Symbol,
+    ) {
+        let pn = *self.ast.decls.get(p);
+        let pty = pn.ty().unwrap_or(QualType::ERROR);
+        let old_storage = self.ast.decls.var(p).map(|x| x.spec.storage());
+        let old_extern = old_storage == Some(VarStorage::Extern);
+        let old_static = old_storage == Some(VarStorage::Static);
+        let old_linkage = old_extern || self.dropped_qualified_locals.contains(&p);
+        let old_invalid = pn.has(DeclFlags::INVALID) || self.is_error_type(pty);
+        let old_def = !old_extern;
+        let new_extern = storage == VarStorage::Extern;
+        let new_static = storage == VarStorage::Static;
+        let t = &self.ast.types;
+        let compatible = t.same_type(pty, ty)
+            || t.is_array(pty)
+                && t.is_array(ty)
+                && (t.array_size(pty).is_none() || t.array_size(ty).is_none())
+                && t.element(pty).zip(t.element(ty)).is_some_and(|(a, b)| t.same_type(a, b));
+        let n = sym_str(self, name);
+        // An `extern` that also finds a declaration with linkage in the
+        // enclosing namespace (or an earlier block-scope `extern`) sees an
+        // ambiguous set: clang reports a different kind of symbol.
+        let outer_linkage = new_extern && !old_linkage && {
+            let ns = self.enclosing_namespace();
+            ns.is_some_and(|ns| {
+                self.lookup_in(ns, name, LookupKind::Ordinary)
+                    .decls
+                    .iter()
+                    .any(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function))
+                    || self.local_externs.iter().any(|&(n, s, _)| n == ns && s == name)
+            })
+        };
+        let msg = if outer_linkage {
+            self.diag(DiagId::sema_redefinition_different_kind, loc).arg(&n)
+        } else if !old_invalid && !compatible {
+            let id = if new_extern {
+                DiagId::sema_redeclaration_different_type
+            } else {
+                DiagId::sema_redefinition_different_type
+            };
+            self.diag(id, loc).arg(&n).diff_args(self, ty, pty)
+        } else if new_static && old_extern {
+            self.diag(DiagId::sema_static_non_static, loc).arg(&n)
+        } else if (!new_extern || !old_linkage) && !new_static && old_static {
+            self.diag(DiagId::sema_non_static_static, loc).arg(&n)
+        } else if new_extern && !old_linkage {
+            self.diag(DiagId::sema_extern_non_extern, loc).arg(&n)
+        } else if old_linkage && !new_extern {
+            self.diag(DiagId::sema_non_extern_extern, loc).arg(&n)
+        } else if !new_extern {
+            self.diag(DiagId::sema_redefinition, loc).arg(&n)
+        } else {
+            return;
+        };
+        let msg = self.note_prev(msg, p, old_def);
+        self.emit(msg);
+    }
+
+    /// `int Q::t;` naming members of several inline namespaces of `Q`:
+    /// clang's "redefinition of 't' as different kind of symbol", noted
+    /// at one of them (WP-235). True when diagnosed.
+    fn diagnose_ambiguous_qualified_var(&mut self, name: Symbol, d: &Declarator) -> bool {
+        let Some(rep) = self.ambiguous_qualified_prev(name, d.qualifier) else {
+            return false;
+        };
+        let msg = self
+            .diag(DiagId::sema_redefinition_different_kind, d.name_loc())
+            .arg(sym_str(self, name));
+        let msg = self.note_prev(msg, rep, true);
+        self.emit(msg);
+        true
+    }
+
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
@@ -3338,10 +3463,14 @@ impl Sema<'_, '_> {
         let mut prev_ok = None;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let local = self.find_prev(name, d.qualifier);
-        let prev = match local {
+        let mut prev = match local {
             None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
         };
+        let ambiguous = self.diagnose_ambiguous_qualified_var(name, d);
+        if ambiguous {
+            prev = None;
+        }
         // [dcl.link]/6-7: a C-linkage variable of another scope.
         let prev = match prev {
             None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
@@ -3385,10 +3514,10 @@ impl Sema<'_, '_> {
                     prev_ok = Some(p);
                 }
             } else if block && matches!(pn.kind(), DeclKind::Var | DeclKind::ParmVar) {
-                let msg =
-                    self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
-                let msg = self.note_prev(msg, p, true);
-                self.emit(msg);
+                let new_invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+                if !new_invalid {
+                    self.merge_local_var(p, ty, spec.storage(), d.name_loc(), name);
+                }
             } else {
                 let msg = self
                     .diag(DiagId::sema_redefinition_different_kind, d.name_loc())
@@ -3405,6 +3534,9 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        if ambiguous {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
         if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_dependent_type(ty) {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
