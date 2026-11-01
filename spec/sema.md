@@ -213,6 +213,11 @@ Redeclaration and linkage rules:
   asm label, where `{` is not a body) is
   `illegal initializer (only variables can be initialized)` at the
   declaration, which becomes invalid.
+- **An `extern` variable with an initializer** is an error at block
+  scope; elsewhere it warns `'extern' variable has an initializer`
+  (-Wextern-initializer) unless its base element type is const, it is
+  `extern "C"`, or it is a template instantiation (clang
+  `AddInitializerToDecl`). Explicit and partial specializations warn.
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.

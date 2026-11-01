@@ -2900,6 +2900,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Whether initializing `extern` variable `v` warns (clang
+    /// `AddInitializerToDecl`): not a const object or an `extern "C"`
+    /// variable in C++, nor an instantiation.
+    fn warns_extern_init(&self, v: DeclId) -> bool {
+        use kiln_ast::templates::SpecKind;
+        let t = self.base_element(self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR));
+        !self.ast.types.effective_quals(t).is_const()
+            && !kiln_abi::mangle::is_extern_c(&self.ast, v)
+            && !self.ast.spec_info(v).is_some_and(|(_, i)| {
+                !matches!(i.kind, SpecKind::Undeclared | SpecKind::ExplicitSpecialization)
+            })
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -2921,7 +2934,9 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_block_extern_init, loc);
                 return;
             }
-            self.error(DiagId::sema_extern_init, loc);
+            if self.warns_extern_init(v) {
+                self.error(DiagId::sema_extern_init, loc);
+            }
         }
         let mut ty = vn.ty().unwrap_or(QualType::ERROR);
         let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
