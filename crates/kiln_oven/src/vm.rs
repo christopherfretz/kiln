@@ -200,6 +200,15 @@ pub(crate) enum Fault {
         field: DeclId,
         active: Option<DeclId>,
     },
+    /// A trivial copy of the class object `src` of type `whole` whose
+    /// subobject (member `field`, or of type `ty`) is not initialized
+    /// (clang's `CheckFullyInitialized` in `handleTrivialCopy`).
+    Uninit {
+        field: Option<DeclId>,
+        ty: OTy,
+        src: u64,
+        whole: OTy,
+    },
     /// A read of a `mutable` member of an object whose lifetime began
     /// outside the evaluation ([expr.const]/5.9).
     Mutable {
@@ -817,7 +826,9 @@ impl Oven {
                 }
                 Op::Copy => {
                     let ty = OTy(arg!(2) as u32);
-                    if let Err(f) = self.copy_obj(reg!(0) as u64, reg!(1) as u64, ty, aux & 1 != 0)
+                    let full = (aux & 2 != 0).then(|| b.ast());
+                    if let Err(f) =
+                        self.copy_obj(reg!(0) as u64, reg!(1) as u64, ty, aux & 1 != 0, full)
                     {
                         fail!(f);
                     }
@@ -1628,7 +1639,7 @@ impl Oven {
                     let active = if union {
                         self.mem
                             .unions
-                            .get(&Ptr::union_key(raw, base))
+                            .get(&Ptr::union_key(raw, base, t))
                             .and_then(|&i| fields.get(i as usize))
                             .filter(contains)
                     } else {
@@ -1724,7 +1735,7 @@ impl Oven {
                         rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
                     };
                     if union {
-                        let active = self.mem.unions.get(&Ptr::union_key(raw, base)).copied();
+                        let active = self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied();
                         let reach = |f: &crate::ty::FieldInfo| {
                             contains(f)
                                 && (f.width.is_some()
@@ -1742,11 +1753,16 @@ impl Oven {
                                 continue;
                             }
                         }
-                        let Some(f) = fields
-                            .iter()
-                            .find(|f| reach(f))
-                            .or_else(|| fields.iter().find(|f| contains(f)))
-                        else {
+                        // The object of a member call can be one the
+                        // layout does not model (an empty base sharing
+                        // the union's offset, libc++'s `__compressed_pair`
+                        // allocator): only a member holding it is wrong.
+                        let fallback = || {
+                            (k != ak::MEMBER_CALL)
+                                .then(|| fields.iter().find(|f| contains(f)))
+                                .flatten()
+                        };
+                        let Some(f) = fields.iter().find(|f| reach(f)).or_else(fallback) else {
                             return Ok(());
                         };
                         return Err(Fault::Union {
@@ -1910,7 +1926,20 @@ impl Oven {
         Ok(())
     }
 
-    fn copy_obj(&mut self, dst: u64, src: u64, ty: OTy, init: bool) -> Result<(), Fault> {
+    /// Copies the object of type `ty` at `src` to `dst` (`init`: into
+    /// storage whose object's lifetime begins). With `full` (a trivial
+    /// copy constructor or assignment operator of a class, clang's
+    /// `handleTrivialCopy`), the source must be fully initialized
+    /// ([expr.const]/5.9 via the lvalue-to-rvalue conversion of the
+    /// object); a union copies its object representation unchecked.
+    fn copy_obj(
+        &mut self,
+        dst: u64,
+        src: u64,
+        ty: OTy,
+        init: bool,
+        full: Option<&kiln_ast::Ast>,
+    ) -> Result<(), Fault> {
         let size = self.types.size(ty);
         let (ss, sa, sa_alloc) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
             f,
@@ -1920,6 +1949,13 @@ impl Oven {
         })?;
         if sa_alloc.flags & flags::MUTABLE_OUTSIDE != 0 {
             self.mutable_path(src, ty)?;
+        }
+        if let Some(ast) = full
+            && !matches!(self.types.kind(ty), TyKind::Record { union: true, .. })
+            && let off = u64::from(Ptr::decode(src).off)
+            && let Some((field, sub)) = self.first_uninit(ast, ss, sa, src, off, ty, None)
+        {
+            return Err(Fault::Uninit { field, ty: sub, src, whole: ty });
         }
         let k = if init { ak::INIT } else { ak::ASSIGN };
         let (ds, da, a) =
@@ -1936,12 +1972,72 @@ impl Oven {
             let (so, dof) = (u64::from(Ptr::decode(src).off), u64::from(Ptr::decode(dst).off));
             let (a, z) = self.types.info(ty).upos;
             for i in a..z {
-                let o = self.types.union_pos[i as usize].0;
-                let v = self.mem.unions.get(&Ptr::union_key(src, so + o)).copied();
-                self.mem.union_put(Ptr::union_key(dst, dof + o), v);
+                let (o, ut) = self.types.union_pos[i as usize];
+                let v = self.mem.unions.get(&Ptr::union_key(src, so + o, ut)).copied();
+                self.mem.union_put(Ptr::union_key(dst, dof + o, ut), v);
             }
         }
         Ok(())
+    }
+
+    /// The first subobject of the object of type `t` at byte `abs` of
+    /// space `sp` (byte `off` of the allocation of `raw`) that is not
+    /// initialized, as `(member, type)`: clang's `CheckFullyInitialized`,
+    /// walked as freezing walks a value (an unnamed or zero-width
+    /// bit-field and an inactive union member are not part of the value;
+    /// a base class subobject has no member name).
+    #[allow(clippy::too_many_arguments)]
+    fn first_uninit(
+        &self,
+        ast: &kiln_ast::Ast,
+        sp: Sp,
+        abs: u64,
+        raw: u64,
+        off: u64,
+        t: OTy,
+        field: Option<DeclId>,
+    ) -> Option<(Option<DeclId>, OTy)> {
+        let info = *self.types.info(t);
+        let s = self.mem.space(sp);
+        if s.is_init(abs, info.size) {
+            return None;
+        }
+        match info.kind {
+            TyKind::Bool | TyKind::Int { .. } | TyKind::Float(_) => {
+                (!s.is_init(abs, value_len(info.size, info.kind))).then_some((field, t))
+            }
+            TyKind::Ptr(_) | TyKind::NullPtr | TyKind::MemPtr { .. } => Some((field, t)),
+            TyKind::Array { elem, n } => {
+                let es = self.types.size(elem);
+                (0..n).find_map(|i| {
+                    self.first_uninit(ast, sp, abs + i * es, raw, off + i * es, elem, field)
+                })
+            }
+            TyKind::Record { union, first, count, .. } => {
+                let fields = if union {
+                    let &i = self.mem.unions.get(&Ptr::union_key(raw, off, t))?;
+                    first + i..first + i + 1
+                } else {
+                    first..first + count
+                };
+                fields.into_iter().find_map(|i| {
+                    let f = self.types.fields[i as usize];
+                    match f.width {
+                        None => {
+                            let named = (!f.base).then_some(f.decl);
+                            let (a, o) = (abs + f.offset, off + f.offset);
+                            self.first_uninit(ast, sp, a, raw, o, f.ty, named)
+                        }
+                        Some(w) if w == 0 || ast.decls.get(f.decl).name().is_empty() => None,
+                        Some(w) => {
+                            let n = u64::from((f.bit + w).div_ceil(8));
+                            (!s.is_init(abs + f.offset, n)).then_some((Some(f.decl), f.ty))
+                        }
+                    }
+                })
+            }
+            TyKind::Void | TyKind::Func | TyKind::Opaque => None,
+        }
     }
 
     /// Activates the first member of every union reached through first
@@ -1962,13 +2058,13 @@ impl Oven {
                     // Clear stale entries of nested unions first.
                     let (a, z) = self.types.info(t).upos;
                     for i in a..z {
-                        let o = self.types.union_pos[i as usize].0;
-                        self.mem.union_put(Ptr::union_key(raw, off + o), None);
+                        let (o, ut) = self.types.union_pos[i as usize];
+                        self.mem.union_put(Ptr::union_key(raw, off + o, ut), None);
                     }
                     if count == 0 {
                         return;
                     }
-                    self.mem.union_put(Ptr::union_key(raw, off), Some(0));
+                    self.mem.union_put(Ptr::union_key(raw, off, t), Some(0));
                     let f = self.types.fields[first as usize];
                     if self.types.info(f.ty).has_union {
                         self.zero_unions(raw, off + f.offset, f.ty);
@@ -2041,14 +2137,17 @@ impl Oven {
     fn end_life(&mut self, raw: u64, ty: OTy, aux: u32) -> Result<(), Fault> {
         let size = self.types.size(ty);
         if aux & 4 != 0 {
-            // A member call: only the lifetime of `std::allocator` storage
-            // (clang's `checkDynamicType`); other faults surface in the
-            // body, at the accesses that make them.
-            if let Ok((_, abs, a)) = self.mem.check_storage(raw, size, false)
-                && a.flags & flags::STD_ALLOC != 0
-                && !self.mem.heap.is_live(abs, size)
-            {
+            // A member call (clang's `checkDynamicType` with
+            // `AK_MemberCall`): the lifetime of `std::allocator` storage
+            // and the active members of the unions on the path to the
+            // object ([class.union.general]/6, WP-224); other faults
+            // surface in the body, at the accesses that make them.
+            let Ok((_, abs, a)) = self.mem.check_storage(raw, size, false) else { return Ok(()) };
+            if a.flags & flags::STD_ALLOC != 0 && !self.mem.heap.is_live(abs, size) {
                 return Err(Fault::Mem { f: MemFault::Lifetime, ak: ak::MEMBER_CALL, ty, p: raw });
+            }
+            if a.flags & flags::HAS_UNION != 0 {
+                self.union_path(raw, ty, ak::MEMBER_CALL)?;
             }
             return Ok(());
         }
@@ -2110,7 +2209,7 @@ impl Oven {
             return Err(Fault::Mem { f, ak: k, ty: uty, p: raw });
         }
         let off = u64::from(Ptr::decode(raw).off);
-        let key = Ptr::union_key(raw, off);
+        let key = Ptr::union_key(raw, off, uty);
         if self.mem.unions.get(&key) == Some(&idx) {
             return Ok(());
         }
@@ -2122,8 +2221,8 @@ impl Oven {
         }
         let (a0, z) = self.types.info(uty).upos;
         for i in a0..z {
-            let o = self.types.union_pos[i as usize].0;
-            self.mem.union_put(Ptr::union_key(raw, off + o), None);
+            let (o, ut) = self.types.union_pos[i as usize];
+            self.mem.union_put(Ptr::union_key(raw, off + o, ut), None);
         }
         self.mem.union_put(key, Some(idx));
         Ok(())
@@ -2185,7 +2284,7 @@ impl Oven {
             // The access itself reports it.
             return Ok(());
         }
-        let active = self.mem.unions.get(&Ptr::union_key(raw, u64::from(p.off))).copied();
+        let active = self.mem.unions.get(&Ptr::union_key(raw, u64::from(p.off), uty)).copied();
         if active == Some(idx) {
             return Ok(());
         }
