@@ -190,6 +190,7 @@ impl CodegenJob<'_> {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 ident: ident(),
+                outline_atomics: a.outline_atomics.unwrap_or(true),
             };
             let (r, warnings) = emit_with_diags(&mut tu.ast, &mut tu.oven, &target, &opts);
             for w in warnings {
