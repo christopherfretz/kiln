@@ -311,6 +311,7 @@ impl<'a> Preprocessor<'a, '_> {
         }
         let def = Rc::new(def);
         self.callbacks.macro_defined(name, &def);
+        self.note_macro_change(name, Some(&def), def.name_span.lo);
         self.macros.map.insert(name, def);
     }
 
@@ -371,6 +372,7 @@ impl<'a> Preprocessor<'a, '_> {
                 self.emit(Diag::new(DiagId::pp_builtin_macro_undefined, ntok.tok.span));
             }
             self.macros.map.remove(&name);
+            self.note_macro_change(name, None, ntok.tok.span.lo);
         }
     }
 

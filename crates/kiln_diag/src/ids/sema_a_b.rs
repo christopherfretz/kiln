@@ -143,6 +143,7 @@ sema_binding_in_own_initializer = Error (1) "binding '{0}' cannot appear in the 
 sema_binding_null_to_reference = Warning [NullDereference] (0) "binding dereferenced null pointer to reference has undefined behavior";
 sema_bit_cast_not_trivially_copyable = Error (1) "__builtin_bit_cast {0:source|destination} type must be trivially copyable";
 sema_bit_cast_size_mismatch = Error (2) "__builtin_bit_cast source size does not equal destination size ({0} vs {1})";
+sema_bitfield_constant_conversion = Warning [BitfieldConstantConversion] (3) "implicit truncation from {0} to bit-field changes value from {1} to {2}";
 sema_bitfield_negative_width = Error (2) "bit-field '{0}' has negative width ({1})";
 sema_bitfield_non_integral = Error (2) "bit-field '{0}' has non-integral type {1}";
 sema_bitfield_width_exceeds = Warning [BitfieldWidth] (4) "width of bit-field '{0}' ({1} bits) exceeds the width of its type; value will be truncated to {2} bit{3}";

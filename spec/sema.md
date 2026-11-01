@@ -489,7 +489,14 @@ Redeclaration and linkage rules:
       `getLastStmt` counts as the predecessor itself), the branches of
       an `if` ending there (plus the false edge of an `if` with no
       else), and the condition of an `if`/`while`/`for` whose branch or
-      body the label starts. Reachability comes from `Sema::stmt_flow`
+      body the label starts. A label starting a `do` body (WP-234) is
+      entered from the statements before the `do` (walked as above) and
+      from the condition (clang's empty loop-back block, whose
+      predecessor ends in the `do`), counted unannotated when the
+      condition is reached (the body falls off its end or a `continue`
+      of that loop is reached) and is not a constant false; the
+      placement check likewise lets a `[[fallthrough]];` before such a
+      `do` precede that label. Reachability comes from `Sema::stmt_flow`
       (`try_stmt/reach.rs`): the `Reach` walk recording each
       statement's live-in and live-out with every case label reachable
       (clang `fillReachableBlocks`). A switch dispatch, a label directly
@@ -501,24 +508,33 @@ Redeclaration and linkage rules:
       [-Wimplicit-fallthrough, off by default, not in -Wall/-Wextra] at
       the `case`/`default`. In an instantiation the instantiation note
       comes next. Then, when no predecessor is annotated and the label
-      is not spelled by a macro: `insert '[[fallthrough]];' to silence
-      this warning` (`'[[clang::fallthrough]];'` before C++17, from
-      `Sema::std`, set by the parser) unless the label's block holds
+      is not spelled by a macro: `insert '<spelling>;' to silence this
+      warning` unless the label's block holds
       only `break`, then `insert 'break;' to avoid fall-through`, each
-      with an insertion fix-it at the label.
+      with an insertion fix-it at the label. The spelling (WP-234, clang
+      `getFallthroughAttrSpelling`) is the name of the latest-defined
+      object-like macro in effect at the label whose replacement list is
+      `[[fallthrough]]` or `[[clang::fallthrough]]` (before C++17,
+      `Sema::std`, the clang spelling is tried first; from C++17 the
+      standard one), else `[[fallthrough]]` (`[[clang::fallthrough]]`
+      before C++17). The macro history comes from the preprocessor's
+      `attr_macros` (spec/pp.md), copied in by the parser through
+      `Sema::sync_attr_macros` before each function or lambda body is
+      finished; locations are ordered by their include chains, and a
+      macro from outside the main file's include tree (predefines, `-D`)
+      precedes everything.
     - An unreachable `[[fallthrough]];` that falls into a label (found by
       scanning the unreachable straight-line run backwards): `fallthrough
       annotation in unreachable code` [-Wunreachable-code-fallthrough, in
       -Wunreachable-code] at the attribute, before that label's warning;
       it counts as annotated. Not in an instantiation.
-    - Gaps: clang suggests a macro whose expansion is `[[fallthrough]]`
-      (`Preprocessor::getLastMacroWithSpelling`) instead of the
-      attribute; a label in a `do` or range-`for` body, or deeper in a
-      branch, is not followed (Duff's device works because its labels
-      follow statements in the `do` body); -Wimplicit-fallthrough-per-
-      function is not implemented; a -Werror-promoted warning counts as
-      an error and stops the analysis (clang's
-      `hasUncompilableErrorOccurred` ignores promoted warnings).
+    - Gaps: a label in a range-`for` body, a `try` block or a handler
+      is not followed (jumping there is ill-formed, so clang stops at
+      the error); -Wimplicit-fallthrough-per-function is not
+      implemented; the macro history a function's labels see is the one
+      at the end of its body (a later `#define` cannot precede a label,
+      so only a lookahead past the `}` is visible, and it is filtered by
+      location).
   - A `likely` after an `unlikely` (or the reverse) in the same
     sequence: `'unlikely' and 'likely' attributes are not compatible` at
     the second, with `note: conflicting attribute is here` at the first;
@@ -1638,10 +1654,24 @@ for them.
     when `const`, in declaration order and none once an error occurred;
     not a variable template, a static data member, or one referenced but
     not odr-used.
-  - Gaps: -Wunused-but-set-parameter; -Wunneeded-internal-declaration
-    and -Wunused-template for variables; static data members of class
-    templates; C++26 `_` placeholder redeclarations ("redefinition of
-    '_'").
+  - Parameters (WP-234): a parameter that is only assigned is
+    `parameter 'p' set but not used` [-Wunused-but-set-parameter, in
+    -Wextra], by the same rule as a variable (never a `_` placeholder).
+    The parameters' warnings come first, in location order, then the
+    body's (clang reports them in `ActOnFinishFunctionBody` before the
+    body scope is popped).
+  - Unneeded file-scope variables (WP-234, clang
+    `ShouldRemoveFromUnused`): an internal variable that is referenced
+    but not odr-used is `variable 'x' is not needed and will not be
+    emitted` [-Wunneeded-internal-declaration, in -Wunused-function and
+    -Wunused-template]; an unused variable template is `unused variable
+    template 'x'` [-Wunused-template]. Static data members of classes
+    with internal linkage, and out-of-line explicit specializations of
+    class template members, are diagnosed at their definition; inline
+    variables in the main file are diagnosed as clang does.
+  - Gaps: a variable named only in a default argument counts as
+    odr-used, so it is not reported as unneeded; C++26 `_` placeholder
+    redeclarations ("redefinition of '_'").
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
   with `OffsetofComponent`s; clang's `BuildBuiltinOffsetOf`): a
   `size_t` prvalue `OffsetOfExpr`.
@@ -2752,6 +2782,125 @@ semicolon on a separate line to silence this warning" are both at the
   a loop before it may warn where clang (which begins at the `[[`) does
   not.
 - Test: `tests/conformance/stmt.pre/empty-body-warning.cpp`.
+
+### 7.10 `-Wunreachable-code` (`unreachable_code.rs`, WP-234)
+clang 19's `CheckUnreachable` (`ReachableCode.cpp`) with Sema's
+`UnreachableCodeHandler`, run with the other flow warnings at the end of
+a function body, never in a dependent context, in an instantiation or
+after an error (`uncompilable_error_count`, spec/diag.md §7.5).
+- `Sema::dead_scan` (in `try_stmt/reach.rs`) follows control through the
+  body as clang's CFG does. A constant branch condition prunes its dead
+  edge unless it is a configuration value (`is_configuration_value`:
+  a `constexpr` call, a global or `const` local, `sizeof`, or a
+  parenthesized or macro-expanded literal).
+- Each round reports one dead root: the last dead element, in
+  evaluation order, that no reached or dead element flows into. It is
+  then treated as reached and the scan repeats, so the regions come out
+  last first, as clang scans its blocks in reverse. The cost is
+  O(regions × body).
+- A root that is a `break` is `'break' will never be executed`
+  [-Wunreachable-code-break]; a `return`, or part of a returned value
+  whose evaluation does not branch, is `'return' will never be executed`
+  [-Wunreachable-code-return]; otherwise `code will never be executed`
+  [-Wunreachable-code]. The warning is at clang's `GetUnreachableLoc`:
+  an operator's token, a member's name, else where the element begins.
+- Not reported: a root in a macro expansion, the literal or enumerator
+  condition of `do { ... } while (0)`, or a reference to
+  `__builtin_unreachable`.
+- A dead `for` increment is `loop will run at most once (loop increment
+  never executed)` [-Wunreachable-code-loop-increment] at the increment.
+- A dead branch pruned by a bare literal condition has the note
+  `silence by adding parentheses to mark code as explicitly dead`, with
+  the `/* DISABLES CODE */ (` ... `)` fix-its around the literal. A root
+  whose note repeats the previous root's literal is dropped.
+- A dead `[[fallthrough]];` is reported by -Wunreachable-code-fallthrough
+  (§ implicit fallthrough) instead when that is enabled.
+- Groups: -Wunreachable-code = {-Wunreachable-code-fallthrough,
+  -Wunreachable-code-loop-increment}; -Wunreachable-code-aggressive adds
+  -break and -return. None is in -Wall.
+- Tests: `tests/conformance/stmt.return/unreachable-code*.cpp`,
+  `stmt.break/unreachable-code-break.cpp`,
+  `stmt.if/unreachable-code-config.cpp`.
+
+### 7.11 `-Wfor-loop-analysis` (`for_loop_analysis.rs`, WP-234)
+clang 19's `CheckForLoopConditionalStatement` and
+`CheckForRedundantIteration`. `act_on_for` runs both as each `for` is
+built, so a template definition is checked, and every instantiation is
+checked again (the warnings are `allow_duplicate`, so each
+instantiation repeats them, as clang does).
+- **Condition** (not with a condition variable). The condition must be
+  simple (clang `DeclExtractor`): literals (integer, floating, `bool`,
+  character, `__null`, imaginary), casts, parentheses, built-in
+  unary operators except `*`, binary and compound-assignment operators,
+  `?:` and `?:` with an omitted middle operand, and names of variables
+  or parameters. Unevaluated operands (`sizeof`, `noexcept`, an
+  unevaluated `typeid`) are skipped. Anything else (a member, a call, an
+  array subscript, an enumerator, `nullptr`, a template parameter) is
+  not simple and nothing is checked.
+- None of those variables may be `volatile` or lack automatic storage
+  (a parameter has it; a `static`, `thread_local` or namespace-scope
+  variable does not).
+- The condition, the increment and the body are then searched (clang
+  `DeclMatcher`, an evaluated-expression walk): any `return`, `break`
+  or `goto`, or any use of one of the variables that is not read
+  through an lvalue-to-rvalue conversion (an assignment, `++`, `&x`,
+  binding a reference, a discarded-value `x;`), silences the warning.
+  A read through `?:` arms counts as a read. Lambda bodies are not
+  searched, only their capture initializers.
+- Otherwise: `variable 'i' used in loop condition not modified in loop
+  body`, `variables 'i' and 'n' ...`, up to four names, and `variables
+  used ...` with five or more [-Wfor-loop-analysis] at the first name.
+- **Redundant iteration.** The body is a braced, non-empty block whose
+  last statement and the increment are both `++x`/`x++` (or both
+  `--`), built-in or overloaded, applied directly to the same name (no
+  parentheses). Unless the body has a `continue` of this loop (a nested
+  `switch` is searched; nested loops other than their init-statements
+  are not): `variable 'i' is incremented both in the loop header and in
+  the loop body` [-Wfor-loop-analysis] at the body's name, with the note
+  `incremented here` at the header's name.
+- Groups: -Wloop-analysis = {-Wfor-loop-analysis,
+  -Wrange-loop-analysis}; not in -Wall.
+- Tests: `tests/conformance/stmt.for/for-loop-analysis.cpp`,
+  `stmt.for/loop-analysis.cpp`.
+
+### 7.12 `-Wbitfield-constant-conversion` (`bitfield_constant.rs`, WP-234)
+clang 19's `AnalyzeBitFieldAssignment`. An integral or enumeration
+constant (implicit casts and parentheses stripped, folded) stored into a
+bit-field of width N that cannot hold it reports `implicit truncation
+from T to bit-field changes value from V to W` [-Wbitfield-constant-
+conversion, on by default; a subgroup of -Wconstant-conversion], where T
+is the constant's type and W the value of its low N bits read with the
+bit-field's signedness ([conv.integral]/3). Storing 1 into a one-bit
+wide signed bit-field reports `... to a one-bit wide bit-field ...`
+[-Wsingle-bit-bitfield-constant-conversion, a subgroup].
+- Nothing is reported for a `bool` bit-field, a dependent or invalid
+  bit-field, a value-dependent or non-constant value, or a value of
+  128 or more bits.
+- The value needs the width of its type, except that a negated or
+  complemented constant (`-5`, `~0u`), or any unsigned constant written
+  that way, needs only its significant bits (`APInt::getSignificantBits`
+  of the bit pattern), so `u2 = -1` and `u4 = ~0u` are silent.
+- **Sites.** A simple assignment `b = v` (not a compound one), at the
+  operator, from the implicit-conversion walk of the full-expression
+  (`impcast.rs`); when it is reported the conversions of `v` are not
+  analyzed further. The initialization of a bit-field member (clang
+  `CheckBitFieldInitialization`): aggregate initialization (including
+  designated and brace-elided elements, `new T{...}`) and parenthesized
+  aggregate initialization, at the element; a mem-initializer, at the
+  member name; a default member initializer, at the initializer (the
+  `{` of a braced one). A braced scalar initializer `{v}` is reported at
+  `v` with `v`'s type and again at the initialization's location with
+  the bit-field's declared type (clang checks the element and then the
+  `InitListExpr`; the significant-bits rule does not apply to the
+  second).
+- Each template instantiation is checked again (`allow_duplicate`).
+- **Gaps.** A default member initializer of a class template
+  specialization is instantiated with the class rather than at its
+  first use, so its warnings carry `in instantiation of template class`
+  instead of clang's default-member-initializer notes. The enumeration
+  checks of `AnalyzeBitFieldAssignment` for a non-constant value
+  (`-Wbitfield-enum-conversion`) and `-Wsigned-enum-bitfield` are not
+  implemented.
 
 ## 8. Constant evaluation (`oven_bridge.rs`)
 

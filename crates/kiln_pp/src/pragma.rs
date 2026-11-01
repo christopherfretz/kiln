@@ -417,6 +417,7 @@ impl Preprocessor<'_, '_> {
         if stack.is_empty() {
             self.pushed.remove(&name);
         }
+        self.note_macro_change(name, def.as_deref(), t.tok.span.lo);
         match def {
             Some(d) => {
                 self.macros.map.insert(name, d);

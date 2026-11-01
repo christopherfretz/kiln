@@ -53,7 +53,7 @@ pub use include::{
     EmbedData, EmbedRequest, IncludeKind, IncludeRequest, IncludeResolver, MemoryResolver,
     NoIncludes, ResolvedInclude,
 };
-pub use macros::{MacroDef, MacroTable};
+pub use macros::{AttrMacro, MacroDef, MacroTable};
 pub use options::PpOptions;
 pub use predef::{CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};
 pub use preprocessor::{Marker, PpItem, Preprocessor};

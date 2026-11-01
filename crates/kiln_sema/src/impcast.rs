@@ -15,7 +15,6 @@ use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
-use crate::conv::bit_field_width;
 use crate::conv::narrow::float_kind;
 use crate::conv::rank::{int_signed, int_width, is_integral_or_unscoped_enum};
 use crate::conv::soft;
@@ -46,13 +45,14 @@ impl Sema<'_, '_> {
                 ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::StmtExpr | ExprKind::LambdaExpr => {
                     continue;
                 }
-                // clang's `AnalyzeAssignment`: a constant out of range of
-                // the bit-field assigned (`-Wbitfield-constant-conversion`,
-                // not implemented) skips the conversions of the right
-                // operand.
+                // clang's `AnalyzeAssignment`: a constant truncated by the
+                // bit-field assigned (`-Wbitfield-constant-conversion`)
+                // skips the conversions of the right operand.
                 ExprKind::BinaryOperator
-                    if self.ast.exprs.binary_op(s) == BinaryOp::Assign
-                        && self.bit_field_overflow(s) =>
+                    if self.ast.exprs.binary_op(s) == BinaryOp::Assign && {
+                        let [l, r] = self.ast.exprs.operands(s);
+                        self.check_bit_field_assignment(l, r, n.loc())
+                    } =>
                 {
                     let [l, r] = self.ast.exprs.operands(s);
                     let at = n.loc();
@@ -76,26 +76,8 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Whether assignment `e` stores into a bit-field an integral constant
-    /// its width cannot represent.
-    fn bit_field_overflow(&mut self, e: ExprId) -> bool {
-        let [l, r] = self.ast.exprs.operands(e);
-        let Some(w) = bit_field_width(self, l) else { return false };
-        let r = self.strip_impcast(r);
-        let ty = self.ast.exprs.get(r).ty();
-        if !is_integral_or_unscoped_enum(self, ty)
-            || !self.ast.exprs.get(r).deps().is_none()
-            || self.ast.types.builtin(self.ast.exprs.get(l).ty()) == Some(BuiltinType::Bool)
-        {
-            return false;
-        }
-        let Some(v) = self.fold_int(r) else { return false };
-        let signed = int_signed(self, self.ast.exprs.get(l).ty());
-        !representable(v < 0, v.unsigned_abs(), w, signed)
-    }
-
     /// clang's `IgnoreParenImpCasts`.
-    fn strip_impcast(&self, mut e: ExprId) -> ExprId {
+    pub(crate) fn strip_impcast(&self, mut e: ExprId) -> ExprId {
         for _ in 0..256 {
             match self.ast.exprs.get(e).kind() {
                 ExprKind::ParenExpr

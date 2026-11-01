@@ -4128,7 +4128,7 @@ impl Sema<'_, '_> {
 
     /// True if lexical context `cur` is, or is nested in, a class template
     /// or partial specialization before any namespace scope.
-    fn in_templated_class(&self, mut cur: Option<DeclId>) -> bool {
+    pub(crate) fn in_templated_class(&self, mut cur: Option<DeclId>) -> bool {
         while let Some(c) = cur {
             match self.kind_of(c) {
                 DeclKind::ClassTemplatePartialSpecialization => return true,
@@ -4163,7 +4163,7 @@ impl Sema<'_, '_> {
         let pushed = self.enter_definition_scopes(f);
         self.fn_saved.push(crate::class::SavedFn { func: self.func.take(), pushed });
         let mut fs = Scope::new(ScopeKind::Function, None);
-        fs.errors = self.diags.error_count();
+        fs.errors = self.diags.unrecoverable_error_count();
         self.scopes.push(fs);
         self.ctx = f;
         let params: Vec<DeclId> = self

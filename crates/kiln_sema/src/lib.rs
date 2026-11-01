@@ -15,6 +15,7 @@
 )]
 
 mod asm;
+mod bitfield_constant;
 mod builtins;
 pub mod class;
 mod complex;
@@ -29,6 +30,7 @@ pub mod except;
 pub mod expr;
 mod extern_c;
 mod fallthrough;
+mod for_loop_analysis;
 mod forms;
 mod gnu;
 mod impcast;
@@ -62,6 +64,7 @@ pub mod target;
 pub mod templ;
 mod try_stmt;
 mod type_diff;
+mod unreachable_code;
 mod unused_file_scope;
 mod unused_var;
 pub mod using;
@@ -83,6 +86,7 @@ pub use declspec::{
 };
 pub use empty_body::EmptyBodyStmt;
 pub use gnu::{OffsetofComponent, StmtExprScope};
+pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
@@ -202,6 +206,10 @@ pub struct Sema<'a, 'sm> {
     /// whether it is a condition variable (clang `isCXXCondDecl`)
     /// (`-Wunused-but-set-variable`, [`Self::diagnose_unused_locals`]).
     pub(crate) refs_minus_assign: std::collections::HashMap<DeclId, (i32, bool)>,
+    /// The preprocessor's attribute-macro history and its generation, as
+    /// last copied by [`Self::sync_attr_macros`] (the fix-it spelling of
+    /// `-Wimplicit-fallthrough`).
+    pub(crate) attr_macros: (u32, Vec<AttrMacro>),
     /// The declared (placeholder) return type of each function whose
     /// return type was deduced, by first declaration: redeclarations are
     /// matched against it ([dcl.spec.auto.general]/13).
@@ -493,6 +501,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unowned_params: std::collections::HashSet::new(),
             decomp_written: std::collections::HashMap::new(),
             refs_minus_assign: std::collections::HashMap::new(),
+            attr_macros: (0, Vec::new()),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
