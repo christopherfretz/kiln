@@ -301,14 +301,18 @@ impl Sema<'_, '_> {
         }
         match ast.templ_link(r).get() {
             None => true,
-            Some((TemplLinkKind::Pattern | TemplLinkKind::PartialSpecialization, _)) => false,
+            Some((
+                TemplLinkKind::Pattern
+                | TemplLinkKind::PartialSpecialization
+                | TemplLinkKind::DependentFriend,
+                _,
+            )) => false,
             Some((TemplLinkKind::Specialization, _)) => {
                 ast.spec_info(r).is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization)
             }
             Some((TemplLinkKind::MemberOfSpecialization, _)) => ast
                 .member_spec_info(r)
                 .is_some_and(|(_, m)| m.kind == SpecKind::ExplicitSpecialization),
-            Some((TemplLinkKind::DependentFriend, _)) => false,
         }
     }
 
