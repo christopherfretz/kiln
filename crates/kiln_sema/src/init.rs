@@ -12,6 +12,27 @@ use crate::Sema;
 use crate::class::{ConstructSite, DeletedAs, InitStyle};
 use crate::conv::{self, ConvCtx};
 
+/// clang `InitializedEntity` kinds a failed initialization names: the
+/// `{0:...}` select of `sema_init_conversion_failed` (spec/sema-conv.md
+/// §5). `"0"` ("a variable") is the default, replaced through
+/// [`Sema::init_entity`].
+pub(crate) mod entity {
+    /// `EK_Temporary`: "a value" (`T{x}`).
+    pub(crate) const VALUE: &str = "3";
+    /// `EK_New`: "a new value".
+    pub(crate) const NEW: &str = "4";
+    /// `EK_Member` / `EK_ParenAggInitMember`: "a member subobject".
+    pub(crate) const MEMBER: &str = "5";
+    /// `EK_ArrayElement`: "an array element".
+    pub(crate) const ELEMENT: &str = "6";
+    /// `EK_Base`: "a base class".
+    pub(crate) const BASE: &str = "7";
+    /// `EK_Exception`: "an exception object".
+    pub(crate) const EXCEPTION: &str = "8";
+    /// `EK_LambdaCapture`: "a lambda capture".
+    pub(crate) const CAPTURE: &str = "9";
+}
+
 /// An initializer as written ([dcl.init.general]/1).
 #[derive(Clone, Debug)]
 pub enum Initializer {
@@ -788,7 +809,7 @@ impl Sema<'_, '_> {
                 return self.recover(ty, args, at);
             }
             let inits: Vec<ExprId> =
-                args.iter().map(|&a| self.paren_element_init(elem, a)).collect();
+                args.iter().map(|&a| self.paren_element_init(elem, a, entity::ELEMENT)).collect();
             if inits.iter().any(|&e| self.is_err_expr(e)) {
                 return self.recover(ty, args, at);
             }
@@ -835,7 +856,7 @@ impl Sema<'_, '_> {
                     }),
                     None => self.init_base_element(ety, a),
                 },
-                Some(&a) => self.paren_element_init(ety, a),
+                Some(&a) => self.paren_element_init(ety, a, entity::MEMBER),
                 None if i < nb => self.as_base_subobject(|s| s.paren_value_init(ety, at)),
                 None => {
                     let f = fields[i - nb];
@@ -862,12 +883,28 @@ impl Sema<'_, '_> {
     /// a braced-init-list argument (`int a[2][2]({1, 2}, {3})`, the
     /// call-argument placeholder of [`Sema::act_on_braced_arg`]) is
     /// copy-list-initialization of the element.
-    fn paren_element_init(&mut self, ety: QualType, a: ExprId) -> ExprId {
-        if let Some(l) = self.take_braced_arg(a) {
-            return self.init_list_entity(ety, &l, l.lbrace, ConvCtx::Initialization, None);
-        }
-        let loc = self.begin_loc(a);
-        self.init_from_expr(ety, a, ConvCtx::Initialization, loc)
+    /// `entity` names it in a failed conversion ([`entity`]).
+    fn paren_element_init(&mut self, ety: QualType, a: ExprId, entity: &'static str) -> ExprId {
+        self.with_init_entity(entity, |s| {
+            if let Some(l) = s.take_braced_arg(a) {
+                return s.init_list_entity(ety, &l, l.lbrace, ConvCtx::Initialization, None);
+            }
+            let loc = s.begin_loc(a);
+            s.init_from_expr(ety, a, ConvCtx::Initialization, loc)
+        })
+    }
+
+    /// Runs `f` with `entity` as the entity a failed initialization
+    /// names ([`Sema::init_entity`]), restoring the enclosing one.
+    pub(crate) fn with_init_entity<T>(
+        &mut self,
+        entity: &'static str,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let saved = self.init_entity.replace(entity);
+        let r = f(self);
+        self.init_entity = saved;
+        r
     }
 
     /// Parenthesized aggregate initialization of the union `ty` (definition
@@ -891,7 +928,7 @@ impl Sema<'_, '_> {
             return self.recover(ty, args, at);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let init = self.paren_element_init(fty, a);
+        let init = self.paren_element_init(fty, a, entity::MEMBER);
         if self.is_err_expr(init) {
             return self.recover(ty, args, at);
         }
@@ -1313,6 +1350,10 @@ impl Sema<'_, '_> {
             self.ref_temp_note.set(saved);
             t
         };
+        // The temporary is bound (clang `shouldBindAsTemporary` of
+        // `EK_Temporary`): an aggregate or array of a class with a
+        // non-trivial destructor is destroyed with its full-expression.
+        let tmp = if self.is_err_expr(tmp) { tmp } else { self.maybe_bind_temporary(tmp) };
         self.init_from_expr(ty, tmp, ConvCtx::Initialization, at)
     }
 
@@ -1677,10 +1718,13 @@ impl Sema<'_, '_> {
                         *pos += 1;
                         self.init_base_element(ety, x)
                     }
-                    InitValue::List(_) if cur < nb => {
-                        self.init_base_list(ety, |s| s.init_element(ety, items, pos, lbrace))
+                    InitValue::List(_) if cur < nb => self.with_init_entity(entity::BASE, |s| {
+                        s.init_base_list(ety, |s| s.init_element(ety, items, pos, lbrace))
+                    }),
+                    _ => {
+                        let k = if cur < nb { entity::BASE } else { entity::MEMBER };
+                        self.with_init_entity(k, |s| s.init_element(ety, items, pos, lbrace))
                     }
-                    _ => self.init_element(ety, items, pos, lbrace),
                 }
             };
             slots[cur] = Some(e);
@@ -1804,7 +1848,7 @@ impl Sema<'_, '_> {
                 {
                     self.override_warning(item, old);
                 }
-                self.init_element(elem, items, pos, lbrace)
+                self.with_init_entity(entity::ELEMENT, |s| s.init_element(elem, items, pos, lbrace))
             };
             slots[i] = Some(e);
             explicit[i] = true;
