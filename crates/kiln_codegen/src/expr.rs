@@ -606,29 +606,7 @@ impl Cg<'_> {
         let sq = ast.exprs.get(s).ty();
         let ck = ast.exprs.cast_kind(e);
         Ok(Some(match ck {
-            CastKind::LValueToRValue => {
-                if let Some(c) = self.folds.get(e)
-                    && !self.is_aggregate(q)
-                    && !self.is_complex(q)
-                {
-                    return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
-                }
-                // A call returning a reference yields the referee's address
-                // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
-                // result is `EmitLoadOfLValue`).
-                let inner = self.skip_parens(s);
-                if matches!(
-                    ast.exprs.get(inner).kind(),
-                    ExprKind::CallExpr
-                        | ExprKind::CXXMemberCallExpr
-                        | ExprKind::CXXOperatorCallExpr
-                ) && self.is_glvalue(inner)
-                {
-                    let lv = self.emit_lvalue(s)?;
-                    return Ok(Some(self.load_lv(lv)));
-                }
-                return self.emit_scalar_opt(s);
-            }
+            CastKind::LValueToRValue => return self.emit_load_cast(e, q, s),
             // clang `ScalarExprEmitter::VisitCastExpr`: a user-defined or
             // constructor conversion is its (call) operand.
             // A vector bitcast reinterprets the value (clang `CK_BitCast`
@@ -653,34 +631,9 @@ impl Cg<'_> {
             | CastKind::ConstructorConversion => {
                 return self.emit_scalar_opt(s);
             }
-            CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
-                let p = self.emit_scalar(s)?;
-                let Some(derived) = ast.types.pointee(sq).and_then(|t| ast.types.as_record(t))
-                else {
-                    return err(self.loc_of(e), "derived-to-base cast of a non-class pointer");
-                };
-                let (vb, off) = self.base_path(e, derived)?;
-                let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
-                if vb.is_none() {
-                    self.base_ptr(p, off, null_check)
-                } else {
-                    let ty = self.mty(ast.types.pointee(sq).expect("checked"));
-                    let align = self.record_align_of(sq);
-                    self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0
-                }
-            }
-            // clang `CK_BaseToDerived`: `GetAddressOfDerivedClass`, null-checked
-            // unless the operand is `this` (`ShouldNullCheckClassCastValue`).
-            CastKind::BaseToDerived => {
-                let p = self.emit_scalar(s)?;
-                let Some(derived) = ast.types.pointee(q).and_then(|t| ast.types.as_record(t))
-                else {
-                    return err(self.loc_of(e), "base-to-derived cast of a non-class pointer");
-                };
-                let off = self.derived_cast_offset(e, derived)?;
-                let null_check = !self.is_this_expr(s);
-                self.derived_ptr(p, off, null_check)
-            }
+            CastKind::DerivedToBase
+            | CastKind::UncheckedDerivedToBase
+            | CastKind::BaseToDerived => self.emit_class_ptr_cast(e, ck, q, sq, s)?,
             // `__builtin_bit_cast` ([bit.cast]): the operand's bytes
             // loaded as the destination type (clang `EmitLoadOfLValue` of
             // the reinterpreted address).
@@ -706,34 +659,13 @@ impl Cg<'_> {
                 self.emit_lvalue(s)?.addr.v
             }
             CastKind::NullToPointer => {
-                // clang `MustVisitNullValue`: a `nullptr_t` operand is
-                // evaluated for its side effects.
-                let sq = ast.exprs.get(s).ty();
-                if matches!(
-                    ast.types.canonical_view(sq),
-                    kiln_ast::types::TypeView::Builtin(kiln_ast::types::BuiltinType::NullPtr)
-                ) {
-                    self.emit_ignored(s)?;
-                }
+                self.visit_null_operand(s, sq)?;
                 V::C(self.m.const_null(LTy::PTR))
             }
-            CastKind::NullToMemberPointer => {
-                if matches!(
-                    ast.types.canonical_view(sq),
-                    kiln_ast::types::TypeView::Builtin(kiln_ast::types::BuiltinType::NullPtr)
-                ) {
-                    self.emit_ignored(s)?;
-                }
-                self.null_mp(q)
-            }
-            CastKind::BaseToDerivedMemberPointer | CastKind::DerivedToBaseMemberPointer => {
-                let v = self.emit_scalar(s)?;
-                self.mp_convert(e, v)?
-            }
-            CastKind::MemberPointerToBoolean => {
-                let v = self.emit_scalar(s)?;
-                self.mp_is_not_null(v, sq)
-            }
+            CastKind::NullToMemberPointer
+            | CastKind::BaseToDerivedMemberPointer
+            | CastKind::DerivedToBaseMemberPointer
+            | CastKind::MemberPointerToBoolean => self.emit_member_ptr_cast(e, ck, q, sq, s)?,
             CastKind::IntegralToPointer => {
                 let v = self.emit_scalar(s)?;
                 let w = self.int_cast(v, LTy::I64, self.is_signed(sq));
@@ -759,20 +691,131 @@ impl Cg<'_> {
                 let v = self.emit_scalar(s)?;
                 self.conv(v, sq, q)
             }
-            // clang `ScalarExprEmitter::VisitCastExpr`: the real part only,
-            // or both parts tested against zero.
-            CastKind::FloatingComplexToReal | CastKind::IntegralComplexToReal => {
-                match self.emit_cx(s, (false, true))?.0 {
-                    Some(v) => v,
-                    None => return err(self.loc_of(e), "a complex value without a real part"),
-                }
-            }
-            CastKind::FloatingComplexToBoolean | CastKind::IntegralComplexToBoolean => {
-                let v = self.emit_complex(s)?;
-                self.cx_to_scalar(v, sq, q)
+            CastKind::FloatingComplexToReal
+            | CastKind::IntegralComplexToReal
+            | CastKind::FloatingComplexToBoolean
+            | CastKind::IntegralComplexToBoolean => {
+                self.emit_complex_to_scalar_cast(e, ck, q, sq, s)?
             }
             k => return err(self.loc_of(e), format!("cast {k:?} is not supported yet")),
         }))
+    }
+
+    /// `CK_LValueToRValue` in clang's `ScalarExprEmitter::VisitCastExpr`:
+    /// a folded constant, the load of a reference-returning call, or the
+    /// operand's scalar value.
+    fn emit_load_cast(&mut self, e: ExprId, q: QualType, s: ExprId) -> R<Option<V>> {
+        if let Some(c) = self.folds.get(e)
+            && !self.is_aggregate(q)
+            && !self.is_complex(q)
+        {
+            return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
+        }
+        // A call returning a reference yields the referee's address
+        // (clang `ScalarExprEmitter::VisitCallExpr`: a reference
+        // result is `EmitLoadOfLValue`).
+        let inner = self.skip_parens(s);
+        if matches!(
+            self.ast.exprs.get(inner).kind(),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+        ) && self.is_glvalue(inner)
+        {
+            let lv = self.emit_lvalue(s)?;
+            return Ok(Some(self.load_lv(lv)));
+        }
+        self.emit_scalar_opt(s)
+    }
+
+    /// The class pointer casts `CK_DerivedToBase`, `CK_UncheckedDerivedToBase`
+    /// (clang `GetAddressOfBaseClass`) and `CK_BaseToDerived`
+    /// (`GetAddressOfDerivedClass`), null-checked unless unchecked or the
+    /// operand is `this` (`ShouldNullCheckClassCastValue`).
+    fn emit_class_ptr_cast(
+        &mut self,
+        e: ExprId,
+        ck: CastKind,
+        q: QualType,
+        sq: QualType,
+        s: ExprId,
+    ) -> R<V> {
+        let ast = self.ast;
+        let p = self.emit_scalar(s)?;
+        if ck == CastKind::BaseToDerived {
+            let Some(derived) = ast.types.pointee(q).and_then(|t| ast.types.as_record(t)) else {
+                return err(self.loc_of(e), "base-to-derived cast of a non-class pointer");
+            };
+            let off = self.derived_cast_offset(e, derived)?;
+            let null_check = !self.is_this_expr(s);
+            return Ok(self.derived_ptr(p, off, null_check));
+        }
+        let Some(derived) = ast.types.pointee(sq).and_then(|t| ast.types.as_record(t)) else {
+            return err(self.loc_of(e), "derived-to-base cast of a non-class pointer");
+        };
+        let (vb, off) = self.base_path(e, derived)?;
+        let null_check = ck == CastKind::DerivedToBase && !self.is_this_expr(s);
+        if vb.is_none() {
+            Ok(self.base_ptr(p, off, null_check))
+        } else {
+            let ty = self.mty(ast.types.pointee(sq).expect("checked"));
+            let align = self.record_align_of(sq);
+            Ok(self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0)
+        }
+    }
+
+    /// clang `MustVisitNullValue`: a `nullptr_t` operand of a null pointer
+    /// conversion is evaluated for its side effects.
+    fn visit_null_operand(&mut self, s: ExprId, sq: QualType) -> R<()> {
+        if matches!(
+            self.ast.types.canonical_view(sq),
+            kiln_ast::types::TypeView::Builtin(kiln_ast::types::BuiltinType::NullPtr)
+        ) {
+            self.emit_ignored(s)?;
+        }
+        Ok(())
+    }
+
+    /// The member pointer casts: `CK_NullToMemberPointer`, the base/derived
+    /// conversions (clang `EmitMemberPointerConversion`) and
+    /// `CK_MemberPointerToBoolean`.
+    fn emit_member_ptr_cast(
+        &mut self,
+        e: ExprId,
+        ck: CastKind,
+        q: QualType,
+        sq: QualType,
+        s: ExprId,
+    ) -> R<V> {
+        if ck == CastKind::NullToMemberPointer {
+            self.visit_null_operand(s, sq)?;
+            return Ok(self.null_mp(q));
+        }
+        let v = self.emit_scalar(s)?;
+        if ck == CastKind::MemberPointerToBoolean {
+            Ok(self.mp_is_not_null(v, sq))
+        } else {
+            self.mp_convert(e, v)
+        }
+    }
+
+    /// clang `ScalarExprEmitter::VisitCastExpr` for a complex operand:
+    /// `CK_*ComplexToReal` takes the real part only, `CK_*ComplexToBoolean`
+    /// tests both parts against zero.
+    fn emit_complex_to_scalar_cast(
+        &mut self,
+        e: ExprId,
+        ck: CastKind,
+        q: QualType,
+        sq: QualType,
+        s: ExprId,
+    ) -> R<V> {
+        if matches!(ck, CastKind::FloatingComplexToReal | CastKind::IntegralComplexToReal) {
+            return match self.emit_cx(s, (false, true))?.0 {
+                Some(v) => Ok(v),
+                None => err(self.loc_of(e), "a complex value without a real part"),
+            };
+        }
+        let v = self.emit_complex(s)?;
+        Ok(self.cx_to_scalar(v, sq, q))
     }
 
     /// `gep inbounds [N x T], p, i64 0, i64 0`.
@@ -1625,27 +1668,7 @@ impl Cg<'_> {
             ExprKind::DeclRefExpr => self.decl_lvalue(e, ast.exprs.decl(e), q),
             // clang `EmitPredefinedLValue`: the literal's global, named
             // `<identifier>.<current function>` when first emitted.
-            ExprKind::PredefinedExpr => {
-                let Some(sl) = ast.exprs.predefined_name(e) else {
-                    return err(self.loc_of(e), "dependent predefined identifier");
-                };
-                let lit = ast.exprs.string_lit(sl);
-                let fname = self.f.func.map(|f| self.m.func(f).name().to_owned());
-                let g = match fname {
-                    Some(fname) => {
-                        let name = format!("{}.{}", ast.exprs.predefined_kind(e).spelling(), fname);
-                        let bytes = ast.strings.bytes(lit).to_vec();
-                        let mut bytes = bytes;
-                        let total = ast.strings.object_bytes(lit);
-                        bytes.resize(total as usize, 0);
-                        self.string_global_named(&bytes, 1, total, &name)
-                    }
-                    None => self.lit_global(lit),
-                };
-                let ty = self.m.global(g).value_type();
-                let align = self.m.global(g).align.unwrap_or(1);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
-            }
+            ExprKind::PredefinedExpr => self.predefined_lvalue(e, q),
             ExprKind::StringLiteral => {
                 let g = self.lit_global(ast.exprs.string_lit(e));
                 let ty = self.m.global(g).value_type();
@@ -1654,68 +1677,8 @@ impl Cg<'_> {
             }
             ExprKind::MemberExpr => self.member_lvalue(e),
             ExprKind::ArraySubscriptExpr => self.subscript_lvalue(e),
-            ExprKind::UnaryOperator => match ast.exprs.unary_op(e) {
-                UnaryOp::Deref => {
-                    let p = self.emit_scalar(ast.exprs.operand(e))?;
-                    let ty = if ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
-                    let align = self.natural_align(q);
-                    Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
-                }
-                op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
-                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
-                    if self.is_complex(lv.q) {
-                        self.cx_inc_dec(lv, op == UnaryOp::PreInc)?;
-                    } else {
-                        self.inc_dec(e, lv, op)?;
-                    }
-                    Ok(lv)
-                }
-                op @ (UnaryOp::Real | UnaryOp::Imag) => {
-                    self.real_imag_lvalue(e, op == UnaryOp::Imag)
-                }
-                UnaryOp::Extension => self.emit_lvalue(ast.exprs.operand(e)),
-                op => err(self.loc_of(e), format!("lvalue unary {op:?} is not supported yet")),
-            },
-            ExprKind::BinaryOperator => {
-                let [l, r] = ast.exprs.operands(e);
-                match ast.exprs.binary_op(e) {
-                    BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.mp_data_lvalue(e),
-                    BinaryOp::Assign => {
-                        if self.is_aggregate(q) {
-                            let lv = self.emit_lvalue(l)?;
-                            self.emit_agg(r, lv.addr, false)?;
-                            return Ok(lv);
-                        }
-                        if self.is_atomic_aggregate(q) {
-                            // clang `AggExprEmitter::VisitBinAssign` on an
-                            // `_Atomic` left side (WP-165).
-                            // The right side goes into a temporary of the
-                            // assignment's type (`EmitAggExprToLValue`),
-                            // which is the result.
-                            let lv = self.emit_lvalue(l)?;
-                            let t = self.temp(q);
-                            self.f.slot_volatile = self.is_volatile(q);
-                            self.emit_agg(r, t, false)?;
-                            self.f.slot_volatile = false;
-                            self.atomic_agg_store(t, lv);
-                            return Ok(LV { addr: t, q, bf: None, vidx: None });
-                        }
-                        if self.is_complex(q) {
-                            return Ok(self.cx_assign(e)?.0);
-                        }
-                        let v = self.emit_scalar(r)?;
-                        let lv = self.emit_lvalue(l)?;
-                        self.store_lv(v, lv, false);
-                        Ok(lv)
-                    }
-                    BinaryOp::Comma => {
-                        self.emit_ignored(l)?;
-                        self.ensure_insert_point();
-                        self.emit_lvalue(r)
-                    }
-                    op => err(self.loc_of(e), format!("lvalue binary {op:?} is not supported yet")),
-                }
-            }
+            ExprKind::UnaryOperator => self.unary_lvalue(e, q),
+            ExprKind::BinaryOperator => self.binary_lvalue(e, q),
             ExprKind::CompoundAssignOperator => Ok(self.emit_compound_assign(e)?.0),
             ExprKind::ConditionalOperator => {
                 let [a, b] = ast.exprs.cond_arms(e);
@@ -1745,97 +1708,203 @@ impl Cg<'_> {
             | ExprKind::CallExpr
             | ExprKind::CXXOperatorCallExpr
             | ExprKind::InitListExpr
-            | ExprKind::CXXParenListInitExpr => {
-                let s =
-                    if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
-                let sq = ast.exprs.get(s).ty();
-                // [class.temporary]/6: a temporary bound to a reference
-                // with static storage duration is a `_ZGR` global.
-                let static_tmp = n.kind() == ExprKind::MaterializeTemporaryExpr
-                    && ast.exprs.temporary_storage(e) == StorageDuration::Static;
-                let (tmp, needs_init) =
-                    if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
-                if !needs_init {
-                    return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
-                }
-                if self.is_aggregate(sq) {
-                    // clang `EmitAnyExprToMem`: a materialized temporary is
-                    // a `MayOverlap` slot, which only a constructor call or
-                    // an immediate invocation consumes.
-                    let mut inner = s;
-                    loop {
-                        let k = ast.exprs.get(inner).kind();
-                        if k == ExprKind::ParenExpr
-                            || (k.is_cast() && ast.exprs.cast_kind(inner) == CastKind::NoOp)
-                        {
-                            inner = ast.exprs.operand(inner);
-                        } else {
-                            break;
-                        }
-                    }
-                    let overlap = n.kind() == ExprKind::MaterializeTemporaryExpr
-                        && matches!(
-                            ast.exprs.get(inner).kind(),
-                            ExprKind::ConstantExpr
-                                | ExprKind::CXXConstructExpr
-                                | ExprKind::CXXTemporaryObjectExpr
-                        );
-                    self.emit_agg_into(s, tmp, overlap)?;
-                } else if self.is_complex(sq) {
-                    let v = self.emit_complex(s)?;
-                    self.cx_store(v, tmp, sq);
-                } else {
-                    let v = self.emit_scalar(s)?;
-                    self.store_scalar(v, tmp, sq);
-                }
-                if static_tmp {
-                    self.register_temporary_dtor(e, tmp)?;
-                } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
-                    self.push_temporary_cleanup(e, tmp);
-                }
-                Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
-            }
-            k if k.is_cast() => match ast.exprs.cast_kind(e) {
-                CastKind::NoOp
-                | CastKind::LValueBitCast
-                | CastKind::LValueToRValue
-                | CastKind::UserDefinedConversion => {
-                    let mut lv = self.emit_lvalue(ast.exprs.operand(e))?;
-                    if lv.bf.is_none() && !ast.types.is_function(q) {
-                        lv.addr.ty = self.mty(q);
-                    }
-                    lv.q = q;
-                    Ok(lv)
-                }
-                CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
-                    let s = ast.exprs.operand(e);
-                    let lv = self.emit_lvalue(s)?;
-                    let Some(derived) = ast.types.as_record(ast.exprs.get(s).ty()) else {
-                        return err(self.loc_of(e), "derived-to-base cast of a non-class");
-                    };
-                    let (vb, off) = self.base_path(e, derived)?;
-                    let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
-                    let ty = self.mty(q);
-                    Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
-                }
-                // clang `EmitCastLValue` `CK_BaseToDerived`: never null-checked.
-                CastKind::BaseToDerived => {
-                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
-                    let Some(derived) = ast.types.as_record(q) else {
-                        return err(self.loc_of(e), "base-to-derived cast of a non-class");
-                    };
-                    let off = self.derived_cast_offset(e, derived)?;
-                    let v = self.derived_ptr(lv.addr.v, off, false);
-                    Ok(self.ref_lvalue(v, q))
-                }
-                CastKind::Dynamic => {
-                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
-                    let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
-                    Ok(self.ref_lvalue(p, q))
-                }
-                k => err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet")),
-            },
+            | ExprKind::CXXParenListInitExpr => self.temporary_lvalue(e),
+            k if k.is_cast() => self.cast_lvalue(e, q),
             k => err(self.loc_of(e), format!("lvalue {k:?} is not supported yet")),
+        }
+    }
+
+    /// clang `EmitPredefinedLValue`: the literal's global, named
+    /// `<identifier>.<current function>` when first emitted.
+    fn predefined_lvalue(&mut self, e: ExprId, q: QualType) -> R<LV> {
+        let ast = self.ast;
+        let Some(sl) = ast.exprs.predefined_name(e) else {
+            return err(self.loc_of(e), "dependent predefined identifier");
+        };
+        let lit = ast.exprs.string_lit(sl);
+        let fname = self.f.func.map(|f| self.m.func(f).name().to_owned());
+        let g = match fname {
+            Some(fname) => {
+                let name = format!("{}.{}", ast.exprs.predefined_kind(e).spelling(), fname);
+                let bytes = ast.strings.bytes(lit).to_vec();
+                let mut bytes = bytes;
+                let total = ast.strings.object_bytes(lit);
+                bytes.resize(total as usize, 0);
+                self.string_global_named(&bytes, 1, total, &name)
+            }
+            None => self.lit_global(lit),
+        };
+        let ty = self.m.global(g).value_type();
+        let align = self.m.global(g).align.unwrap_or(1);
+        Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
+    }
+
+    /// clang `EmitUnaryOpLValue`: `*p`, `++x`/`--x`, `__real`/`__imag`
+    /// and `__extension__`.
+    fn unary_lvalue(&mut self, e: ExprId, q: QualType) -> R<LV> {
+        let ast = self.ast;
+        match ast.exprs.unary_op(e) {
+            UnaryOp::Deref => {
+                let p = self.emit_scalar(ast.exprs.operand(e))?;
+                let ty = if ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
+                let align = self.natural_align(q);
+                Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
+            }
+            op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
+                let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                if self.is_complex(lv.q) {
+                    self.cx_inc_dec(lv, op == UnaryOp::PreInc)?;
+                } else {
+                    self.inc_dec(e, lv, op)?;
+                }
+                Ok(lv)
+            }
+            op @ (UnaryOp::Real | UnaryOp::Imag) => self.real_imag_lvalue(e, op == UnaryOp::Imag),
+            UnaryOp::Extension => self.emit_lvalue(ast.exprs.operand(e)),
+            op => err(self.loc_of(e), format!("lvalue unary {op:?} is not supported yet")),
+        }
+    }
+
+    /// clang `EmitBinaryOperatorLValue`: `.*`/`->*`, assignment (scalar,
+    /// aggregate, `_Atomic` aggregate, complex) and the comma operator.
+    fn binary_lvalue(&mut self, e: ExprId, q: QualType) -> R<LV> {
+        let ast = self.ast;
+        let [l, r] = ast.exprs.operands(e);
+        match ast.exprs.binary_op(e) {
+            BinaryOp::PtrMemD | BinaryOp::PtrMemI => self.mp_data_lvalue(e),
+            BinaryOp::Assign => {
+                if self.is_aggregate(q) {
+                    let lv = self.emit_lvalue(l)?;
+                    self.emit_agg(r, lv.addr, false)?;
+                    return Ok(lv);
+                }
+                if self.is_atomic_aggregate(q) {
+                    // clang `AggExprEmitter::VisitBinAssign` on an
+                    // `_Atomic` left side (WP-165).
+                    // The right side goes into a temporary of the
+                    // assignment's type (`EmitAggExprToLValue`),
+                    // which is the result.
+                    let lv = self.emit_lvalue(l)?;
+                    let t = self.temp(q);
+                    self.f.slot_volatile = self.is_volatile(q);
+                    self.emit_agg(r, t, false)?;
+                    self.f.slot_volatile = false;
+                    self.atomic_agg_store(t, lv);
+                    return Ok(LV { addr: t, q, bf: None, vidx: None });
+                }
+                if self.is_complex(q) {
+                    return Ok(self.cx_assign(e)?.0);
+                }
+                let v = self.emit_scalar(r)?;
+                let lv = self.emit_lvalue(l)?;
+                self.store_lv(v, lv, false);
+                Ok(lv)
+            }
+            BinaryOp::Comma => {
+                self.emit_ignored(l)?;
+                self.ensure_insert_point();
+                self.emit_lvalue(r)
+            }
+            op => err(self.loc_of(e), format!("lvalue binary {op:?} is not supported yet")),
+        }
+    }
+
+    /// A materialized temporary, or a prvalue call / init list used as an
+    /// lvalue (clang `EmitMaterializeTemporaryExpr`, `EmitAnyExprToMem`).
+    fn temporary_lvalue(&mut self, e: ExprId) -> R<LV> {
+        let ast = self.ast;
+        let n = *ast.exprs.get(e);
+        let s = if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
+        let sq = ast.exprs.get(s).ty();
+        // [class.temporary]/6: a temporary bound to a reference
+        // with static storage duration is a `_ZGR` global.
+        let static_tmp = n.kind() == ExprKind::MaterializeTemporaryExpr
+            && ast.exprs.temporary_storage(e) == StorageDuration::Static;
+        let (tmp, needs_init) =
+            if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
+        if !needs_init {
+            return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
+        }
+        if self.is_aggregate(sq) {
+            // clang `EmitAnyExprToMem`: a materialized temporary is
+            // a `MayOverlap` slot, which only a constructor call or
+            // an immediate invocation consumes.
+            let mut inner = s;
+            loop {
+                let k = ast.exprs.get(inner).kind();
+                if k == ExprKind::ParenExpr
+                    || (k.is_cast() && ast.exprs.cast_kind(inner) == CastKind::NoOp)
+                {
+                    inner = ast.exprs.operand(inner);
+                } else {
+                    break;
+                }
+            }
+            let overlap = n.kind() == ExprKind::MaterializeTemporaryExpr
+                && matches!(
+                    ast.exprs.get(inner).kind(),
+                    ExprKind::ConstantExpr
+                        | ExprKind::CXXConstructExpr
+                        | ExprKind::CXXTemporaryObjectExpr
+                );
+            self.emit_agg_into(s, tmp, overlap)?;
+        } else if self.is_complex(sq) {
+            let v = self.emit_complex(s)?;
+            self.cx_store(v, tmp, sq);
+        } else {
+            let v = self.emit_scalar(s)?;
+            self.store_scalar(v, tmp, sq);
+        }
+        if static_tmp {
+            self.register_temporary_dtor(e, tmp)?;
+        } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
+            self.push_temporary_cleanup(e, tmp);
+        }
+        Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
+    }
+
+    /// clang `EmitCastLValue`.
+    fn cast_lvalue(&mut self, e: ExprId, q: QualType) -> R<LV> {
+        let ast = self.ast;
+        match ast.exprs.cast_kind(e) {
+            CastKind::NoOp
+            | CastKind::LValueBitCast
+            | CastKind::LValueToRValue
+            | CastKind::UserDefinedConversion => {
+                let mut lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                if lv.bf.is_none() && !ast.types.is_function(q) {
+                    lv.addr.ty = self.mty(q);
+                }
+                lv.q = q;
+                Ok(lv)
+            }
+            CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
+                let s = ast.exprs.operand(e);
+                let lv = self.emit_lvalue(s)?;
+                let Some(derived) = ast.types.as_record(ast.exprs.get(s).ty()) else {
+                    return err(self.loc_of(e), "derived-to-base cast of a non-class");
+                };
+                let (vb, off) = self.base_path(e, derived)?;
+                let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
+                let ty = self.mty(q);
+                Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
+            }
+            // clang `EmitCastLValue` `CK_BaseToDerived`: never null-checked.
+            CastKind::BaseToDerived => {
+                let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                let Some(derived) = ast.types.as_record(q) else {
+                    return err(self.loc_of(e), "base-to-derived cast of a non-class");
+                };
+                let off = self.derived_cast_offset(e, derived)?;
+                let v = self.derived_ptr(lv.addr.v, off, false);
+                Ok(self.ref_lvalue(v, q))
+            }
+            CastKind::Dynamic => {
+                let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
+                Ok(self.ref_lvalue(p, q))
+            }
+            k => err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet")),
         }
     }
 
