@@ -1,0 +1,67 @@
+Dumping f:
+FunctionDecl f 'int (int)'
+|-ParmVarDecl used x 'int'
+`-CompoundStmt
+  |-IfStmt has_else
+  | |-BinaryOperator 'bool' '>'
+  | | |-ImplicitCastExpr 'int' <LValueToRValue>
+  | | | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  | | `-IntegerLiteral 'int' 0
+  | |-AttributedStmt
+  | | |-LikelyAttr
+  | | `-CompoundStmt
+  | |   `-CallExpr 'int'
+  | |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+  | |     | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+  | |     `-IntegerLiteral 'int' 1
+  | `-AttributedStmt
+  |   |-UnlikelyAttr
+  |   `-CallExpr 'int'
+  |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+  |     | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+  |     `-IntegerLiteral 'int' 2
+  |-SwitchStmt
+  | |-ImplicitCastExpr 'int' <LValueToRValue>
+  | | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  | `-CompoundStmt
+  |   |-AttributedStmt
+  |   | |-LikelyAttr
+  |   | `-CaseStmt
+  |   |   |-ConstantExpr 'int' value=1
+  |   |   | `-IntegerLiteral 'int' 1
+  |   |   `-CallExpr 'int'
+  |   |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+  |   |     | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+  |   |     `-IntegerLiteral 'int' 3
+  |   |-AttributedStmt
+  |   | |-FallThroughAttr
+  |   | `-NullStmt
+  |   |-CaseStmt
+  |   | |-ConstantExpr 'int' value=2
+  |   | | `-IntegerLiteral 'int' 2
+  |   | `-CallExpr 'int'
+  |   |   |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+  |   |   | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+  |   |   `-IntegerLiteral 'int' 4
+  |   |-BreakStmt
+  |   `-AttributedStmt
+  |     |-UnlikelyAttr
+  |     `-DefaultStmt
+  |       `-BreakStmt
+  |-WhileStmt
+  | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+  | | `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  | `-AttributedStmt
+  |   |-LikelyAttr
+  |   `-UnaryOperator 'int' lvalue prefix '--'
+  |     `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  |-ForStmt
+  | `-AttributedStmt
+  |   |-UnlikelyAttr
+  |   `-BreakStmt
+  `-AttributedStmt
+    |-UnlikelyAttr
+    `-ReturnStmt
+      `-IntegerLiteral 'int' 0
+

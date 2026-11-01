@@ -54,6 +54,9 @@ pub(crate) enum FState {
     /// running, and may evaluate nested constant expressions): a call to it
     /// meanwhile fails as a call to an undefined function.
     Compiling,
+    /// An invalid declaration (its template instantiation failed): a
+    /// call is "subexpression not valid" (clang `isInvalidDecl`).
+    Invalid,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -528,6 +531,10 @@ impl Oven {
         };
         let ast = b.ast();
         let def = ast.definition(d).unwrap_or(d);
+        if ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID) {
+            self.funcs[idx as usize].state = FState::Invalid;
+            return;
+        }
         let params: Vec<DeclId> = ast
             .decls
             .function(def)
@@ -1181,7 +1188,7 @@ fn hunt_cost(ast: &kiln_ast::Ast, s: StmtId, locs: &mut Vec<Loc>) {
     match n.kind() {
         StmtKind::CaseStmt => hunt_cost(ast, ast.stmts.case_data(s).sub, locs),
         StmtKind::DefaultStmt => hunt_cost(ast, ast.stmts.default_sub(s), locs),
-        StmtKind::LabelStmt => hunt_cost(ast, StmtId::new(n.b()), locs),
+        StmtKind::LabelStmt | StmtKind::AttributedStmt => hunt_cost(ast, StmtId::new(n.b()), locs),
         StmtKind::CompoundStmt => {
             for &c in ast.lists.get(ast.stmts.compound_body(s)) {
                 hunt_cost(ast, StmtId::new(c), locs);
@@ -1200,13 +1207,24 @@ fn hunt_cost(ast: &kiln_ast::Ast, s: StmtId, locs: &mut Vec<Loc>) {
     }
 }
 
+/// Whether `s` is an `AttributedStmt` (`[[likely]]`, `[[unlikely]]`)
+/// directly on a `case`/`default` label: transparent to the switch's
+/// label collection, charging its own step (clang `EvaluateStmt`).
+fn attributed_label(ast: &kiln_ast::Ast, s: StmtId) -> bool {
+    ast.stmts.get(s).kind() == StmtKind::AttributedStmt
+        && matches!(
+            ast.stmts.get(ast.stmts.sub_stmt(s)).kind(),
+            StmtKind::CaseStmt | StmtKind::DefaultStmt
+        )
+}
+
 /// Whether `s` contains a `case`/`default` label (stopping at nested
 /// switches).
 fn has_case(ast: &kiln_ast::Ast, s: StmtId) -> bool {
     let n = *ast.stmts.get(s);
     match n.kind() {
         StmtKind::CaseStmt | StmtKind::DefaultStmt => true,
-        StmtKind::LabelStmt => has_case(ast, StmtId::new(n.b())),
+        StmtKind::LabelStmt | StmtKind::AttributedStmt => has_case(ast, StmtId::new(n.b())),
         StmtKind::CompoundStmt => {
             ast.lists.get(ast.stmts.compound_body(s)).iter().any(|&c| has_case(ast, StmtId::new(c)))
         }
@@ -1811,6 +1829,12 @@ impl Compiler<'_> {
                         (Some((lo, hi)), cd.sub)
                     }
                     StmtKind::DefaultStmt => (None, ast.stmts.default_sub(cur)),
+                    // `[[likely]] case 1:`: one step on the way in.
+                    _ if attributed_label(ast, cur) => {
+                        chain.push(ast.stmts.get(cur).loc());
+                        cur = ast.stmts.sub_stmt(cur);
+                        continue;
+                    }
                     _ => {
                         nested |= has_case(ast, cur);
                         break;
@@ -1903,6 +1927,12 @@ impl Compiler<'_> {
                 let sub = match k {
                     StmtKind::CaseStmt => ast.stmts.case_data(cur).sub,
                     StmtKind::DefaultStmt => ast.stmts.default_sub(cur),
+                    _ if attributed_label(ast, cur) => {
+                        let sub = ast.stmts.sub_stmt(cur);
+                        self.step(cur);
+                        cur = sub;
+                        continue;
+                    }
                     _ => {
                         self.stmt(cur);
                         break;

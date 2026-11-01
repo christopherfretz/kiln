@@ -60,9 +60,15 @@ pub(crate) enum Cleanup {
     /// (`depth` levels deep), both ends are first drilled down to the
     /// innermost `elem` objects (`emitPartialArrayDestroy`).
     IrregularPartialArray(Box<IrregularPartialArray>),
+    /// A [`Cleanup::PartialArray`] pushed inside a conditional branch,
+    /// its ends saved where they do not dominate the cleanup.
+    SavedPartialArray(Box<SavedPartialArray>),
     /// Calls the deallocation function of a new-expression whose
     /// initialization threw (`CallDeleteDuringNew`, [expr.new]/28).
     NewDelete(Box<NewDelete>),
+    /// Calls the deallocation function of an array delete-expression
+    /// even if a destructor throws (`CallArrayDelete`, [expr.delete]/7).
+    ArrayDelete(Box<ArrayDelete>),
     /// Ends a catch handler (`CallEndCatch`); `might_throw` when the
     /// caught object has a class type whose destructor may throw.
     EndCatch { might_throw: bool },
@@ -94,6 +100,15 @@ pub(crate) struct IrregularPartialArray {
     pub record: DeclId,
 }
 
+/// The operands of a [`Cleanup::SavedPartialArray`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SavedPartialArray {
+    pub begin: Saved,
+    pub end: Saved,
+    pub elem: LTy,
+    pub record: DeclId,
+}
+
 /// The operands of a [`Cleanup::NewDelete`].
 #[derive(Clone, Debug)]
 pub(crate) struct NewDelete {
@@ -106,6 +121,20 @@ pub(crate) struct NewDelete {
     pub pass_align: bool,
     /// The placement arguments and their types.
     pub placement: Vec<(Saved, QualType)>,
+}
+
+/// The operands of a [`Cleanup::ArrayDelete`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ArrayDelete {
+    pub op_delete: DeclId,
+    /// The start of the allocation (before the array cookie).
+    pub ptr: V,
+    /// The element count read back from the cookie.
+    pub num: V,
+    /// The (innermost) element type.
+    pub elem: QualType,
+    /// The array cookie's size in bytes.
+    pub cookie: u64,
 }
 
 /// A handler of a catch scope (clang `EHCatchScope::Handler`): the
@@ -348,9 +377,25 @@ impl Cg<'_> {
                 self.store(exn, slot, al, false);
                 Cleanup::FreeException { exn: slot, saved: true }
             }
-            Cleanup::Dtor { addr, .. }
-            | Cleanup::ArrayDtor { addr: Addr { v: addr, .. }, .. }
-            | Cleanup::PartialArray { end: addr, .. }
+            Cleanup::PartialArray { begin, end, elem, record }
+                if needs_saving(self, begin) || needs_saving(self, end) =>
+            {
+                // `pushRegularPartialArrayCleanup` inside a conditional
+                // branch (e.g. the elements of a nothrow `new[]`).
+                let save = |cg: &mut Self, v: V| {
+                    if !needs_saving(cg, v) {
+                        return Saved::Direct(CallArg::Scalar(v));
+                    }
+                    let al = cg.pref_align(LTy::PTR);
+                    let slot = cg.f.fir.alloca(LTy::PTR, al);
+                    cg.store(v, slot, al, false);
+                    Saved::Slot { slot, ty: LTy::PTR, align: al }
+                };
+                let begin = save(self, begin);
+                let end = save(self, end);
+                Cleanup::SavedPartialArray(Box::new(SavedPartialArray { begin, end, elem, record }))
+            }
+            Cleanup::Dtor { addr, .. } | Cleanup::ArrayDtor { addr: Addr { v: addr, .. }, .. }
                 if needs_saving(self, addr) =>
             {
                 self.f.error.get_or_insert(crate::CodegenError {
@@ -924,8 +969,11 @@ impl Cg<'_> {
                 self.call_dtor(record, addr, false);
                 self.emit_block(skip, false);
             }
-            Cleanup::ArrayDtor { addr, record } => self.array_destroy_at(addr, record),
-            Cleanup::Field { field, record } => self.destroy_field_of_this(field, record),
+            // clang `isForNormalCleanup() && useEHCleanupForArray`.
+            Cleanup::ArrayDtor { addr, record } => self.array_destroy_at(addr, record, !for_eh),
+            Cleanup::Field { field, record } => {
+                self.destroy_field_of_this(field, record, !for_eh);
+            }
             Cleanup::BaseOfThis { base, offset, virt } => {
                 let this = self.this_value();
                 let p = self.byte_offset(this, offset);
@@ -937,7 +985,16 @@ impl Cg<'_> {
                 self.nounwind_runtime_call(f, LTy::VOID, vec![exn]);
             }
             Cleanup::PartialArray { begin, end, elem, record } => {
-                self.array_destroy_range(begin, end, elem, record, true);
+                self.array_destroy_range(begin, end, elem, record, true, false);
+            }
+            Cleanup::SavedPartialArray(ref p) => {
+                let SavedPartialArray { begin, end, elem, record } = **p;
+                let (CallArg::Scalar(begin), CallArg::Scalar(end)) =
+                    (self.restore_saved(begin), self.restore_saved(end))
+                else {
+                    return;
+                };
+                self.array_destroy_range(begin, end, elem, record, true, false);
             }
             Cleanup::IrregularPartialArray(ref p) => {
                 let IrregularPartialArray { begin, end_slot, outer, depth, elem, record } = **p;
@@ -951,10 +1008,19 @@ impl Cg<'_> {
                 } else {
                     (begin, end)
                 };
-                self.array_destroy_range(begin, end, elem, record, true);
+                self.array_destroy_range(begin, end, elem, record, true, false);
             }
             Cleanup::NewDelete(ref nd) => {
                 if let Err(e) = self.emit_new_delete_cleanup(nd) {
+                    self.f.error.get_or_insert(e);
+                }
+            }
+            Cleanup::ArrayDelete(ref ad) => {
+                let ArrayDelete { op_delete, ptr, num, elem, cookie } = **ad;
+                let loc = Some(self.ast.decls.get(op_delete).loc());
+                if let Err(e) =
+                    self.emit_delete_call_n(op_delete, ptr, elem, Some((num, cookie)), loc)
+                {
                     self.f.error.get_or_insert(e);
                 }
             }
@@ -972,14 +1038,16 @@ impl Cg<'_> {
     }
 
     /// `emitArrayDestroy` for a non-empty array of constant length.
-    pub(crate) fn array_destroy(&mut self, begin: V, n: u64, elem: LTy, record: DeclId) {
+    pub(crate) fn array_destroy(&mut self, begin: V, n: u64, elem: LTy, record: DeclId, eh: bool) {
         let nn = self.i64c(i128::from(n));
         let end = self.gep(elem, begin, vec![nn], true);
-        self.array_destroy_range(begin, end, elem, record, false);
+        self.array_destroy_range(begin, end, elem, record, false, eh);
     }
 
     /// `emitArrayDestroy` of `[begin, end)`; `check_zero` tests for an
-    /// empty range first (`checkZeroLength`).
+    /// empty range first (`checkZeroLength`); `eh` destroys the elements
+    /// not yet destroyed if a destructor throws (`useEHCleanup`,
+    /// [except.ctor]/2).
     pub(crate) fn array_destroy_range(
         &mut self,
         begin: V,
@@ -987,6 +1055,7 @@ impl Cg<'_> {
         elem: LTy,
         record: DeclId,
         check_zero: bool,
+        eh: bool,
     ) {
         let body = self.f.fir.create_block();
         let out = self.f.fir.create_block();
@@ -999,7 +1068,17 @@ impl Cg<'_> {
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(end, entry)] }, LTy::PTR);
         let m1 = self.i64c(-1);
         let el = self.gep(elem, phi, vec![m1], true);
+        if eh {
+            self.push_cleanup_kind(
+                Cleanup::PartialArray { begin, end: el, elem, record },
+                false,
+                true,
+            );
+        }
         self.call_dtor(record, el, false);
+        if eh {
+            self.pop_cleanup_block(false);
+        }
         let done = self.icmp(IntPredicate::Eq, el, begin);
         let cur = self.f.fir.cur().expect("insertion point");
         self.f.fir.add_incoming(crate::fir::Fir::last_inst(phi), el, cur);

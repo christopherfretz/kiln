@@ -539,6 +539,12 @@ impl TypeContext {
         self.decl_type(TypeKind::Enum, decl, dependent)
     }
 
+    /// The type named by `UnresolvedUsingTypename` declaration `decl`
+    /// (clang's `UnresolvedUsingType`; canonical and dependent).
+    pub fn unresolved_using_type(&mut self, decl: DeclId) -> TypeId {
+        self.decl_type(TypeKind::UnresolvedUsing, decl, true)
+    }
+
     fn decl_type(&mut self, kind: TypeKind, decl: DeclId, dependent: bool) -> TypeId {
         let flags = if dependent { TypeFlags::DEPENDENT_INSTANTIATION } else { TypeFlags::NONE };
         self.intern_with(Key::inline(kind, u16::from(dependent), decl.raw()), flags, |_| None)

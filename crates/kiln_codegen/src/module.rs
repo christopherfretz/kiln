@@ -61,6 +61,13 @@ impl Sig {
     pub fn sret(&self) -> bool {
         matches!(self.info.ret.kind, ArgKind::Indirect { .. })
     }
+
+    /// The return or some argument is passed by address (`sret`,
+    /// `byval`, or a pointer to a temporary): clang
+    /// `ConstructAttributeList`'s `AddPotentialArgAccess` cases.
+    pub fn passes_indirect(&self) -> bool {
+        self.sret() || self.info.args.iter().any(|a| matches!(a.kind, ArgKind::Indirect { .. }))
+    }
 }
 
 /// A definition to emit (clang `DeferredDeclsToEmit` entry).
@@ -228,6 +235,7 @@ impl<'a> Cg<'a> {
     fn run_tu(&mut self) -> R<()> {
         let tu = self.ast.tu;
         self.emit_members(tu)?;
+        self.emit_late_explicit_insts()?;
         self.emit_key_function_vtables()?;
         self.emit_deferred()?;
         self.resolve_placeholders()?;
@@ -241,17 +249,49 @@ impl<'a> Cg<'a> {
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
         self.emit_explicit_member_insts(ctx)?;
         for d in members {
+            if ast.templates.is_late_explicit_inst(ast.first(d)) {
+                continue;
+            }
             self.emit_member(d)?;
             self.emit_explicit_member_insts(d)?;
         }
         Ok(())
     }
 
-    /// The member functions explicitly instantiated by a definition
-    /// right after `after` ([temp.explicit]/10).
+    /// The member functions and classes explicitly instantiated by a
+    /// definition right after `after` ([temp.explicit]/10).
     fn emit_explicit_member_insts(&mut self, after: DeclId) -> R<()> {
         let ast = self.ast;
         for &m in ast.templates.explicit_member_insts_after(after) {
+            if ast.templates.is_late_explicit_inst(ast.first(m)) {
+                continue;
+            }
+            let Some(def) = ast.definition(m) else { continue };
+            match ast.decls.get(def).kind() {
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
+                    self.emit_global_structor(def)?;
+                }
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    self.emit_class_members(def)?;
+                }
+                _ => self.emit_global_fn(def)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// The functions and variables explicitly instantiated before their
+    /// template was defined, instantiated at the end of the TU: clang
+    /// `PerformPendingInstantiations` hands them to `HandleTopLevelDecl`
+    /// after the last top-level declaration, before `Release`.
+    fn emit_late_explicit_insts(&mut self) -> R<()> {
+        let ast = self.ast;
+        for &m in ast.templates.late_explicit_insts() {
+            if ast.decls.get(m).kind() == DeclKind::Var {
+                // A variable template specialization is its own definition.
+                self.emit_global_var(m)?;
+                continue;
+            }
             let Some(def) = ast.definition(m) else { continue };
             match ast.decls.get(def).kind() {
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
@@ -269,7 +309,8 @@ impl<'a> Cg<'a> {
             let n = ast.decls.get(d);
             // A templated declaration ([temp.pre]/8: an out-of-line
             // member of a class template) is emitted only as instantiated.
-            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) {
+            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) || self.is_templated(d)
+            {
                 return Ok(());
             }
             match n.kind() {
@@ -287,7 +328,9 @@ impl<'a> Cg<'a> {
                 // and nested classes; inline member functions are emitted
                 // when first used.
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
-                    self.emit_class_members(d)?;
+                    if !ast.templates.is_moved_class_inst(ast.first(d)) {
+                        self.emit_class_members(d)?;
+                    }
                 }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
                 DeclKind::FileScopeAsm => self.emit_file_scope_asm(d),
@@ -346,6 +389,12 @@ impl<'a> Cg<'a> {
             if n.has(DeclFlags::INVALID) {
                 continue;
             }
+            // An explicitly specialized member is an ordinary definition,
+            // emitted where it appears (clang `InstantiateClassMembers`
+            // skips `TSK_ExplicitSpecialization`).
+            if explicit && self.is_member_explicit_spec(m) {
+                continue;
+            }
             match n.kind() {
                 DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion if explicit => {
                     if let Some(def) = ast.definition(m) {
@@ -380,7 +429,9 @@ impl<'a> Cg<'a> {
     fn emit_global_var(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
-        if v.spec.storage() == VarStorage::Extern && v.init.is_none() {
+        // [dcl.link]/8: `extern "C" int x;` declares, like `extern`.
+        let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);
+        if ext && v.init.is_none() {
             return Ok(());
         }
         if matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _))) {
@@ -445,6 +496,39 @@ impl<'a> Cg<'a> {
     }
 
     // ---- linkage -------------------------------------------------------
+
+    /// Whether `d` is a templated entity ([temp.pre]/8): the pattern of a
+    /// template or a partial specialization, or declared in one (an
+    /// out-of-line member definition `template<class T> void A<T>::g()
+    /// {}` is a member of `A`'s pattern). Templated entities are never
+    /// emitted; only their instantiations are (clang `isDependentContext`
+    /// in `EmitTopLevelDecl`).
+    pub(crate) fn is_templated(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let mut c = Some(d);
+        while let Some(x) = c {
+            let n = ast.decls.get(x);
+            if kiln_ast::templates::is_template_kind(n.kind()) {
+                return true;
+            }
+            if matches!(
+                ast.templ_link(x).get(),
+                Some((
+                    TemplLinkKind::Pattern
+                        | TemplLinkKind::PartialSpecialization
+                        | TemplLinkKind::DependentFriend,
+                    _
+                ))
+            ) {
+                return true;
+            }
+            if n.kind() == DeclKind::TranslationUnit {
+                return false;
+            }
+            c = n.ctx();
+        }
+        false
+    }
 
     /// Whether `d` is (a member of) an implicit template instantiation,
     /// which has vague (`linkonce_odr`) linkage.
@@ -555,6 +639,14 @@ impl<'a> Cg<'a> {
             Some(Linkage::WeakOdr) => false,
             inst => self.var_is_inline(d) || inst == Some(Linkage::LinkOnceOdr),
         }
+    }
+
+    /// Whether member `m` of a class template specialization is an
+    /// explicit specialization (`template<> void X<int>::f() {}`).
+    fn is_member_explicit_spec(&self, m: DeclId) -> bool {
+        let ast = self.ast;
+        ast.member_spec_info(ast.first(m))
+            .is_some_and(|(_, x)| x.kind == SpecKind::ExplicitSpecialization)
     }
 
     /// Whether variable or function `first` is under an explicit
@@ -688,6 +780,9 @@ impl<'a> Cg<'a> {
         // clang `ComputeRecordLayout`: the base-subobject type is created
         // before the complete type's body is filled in.
         if let Some(bm) = &rec.base_members {
+            // `addRecordTypeName(D, BaseTy, ".base")` spells the record's
+            // own name, uniquified on its own (an empty non-POD class
+            // consumes a counter value for an unused `.base`).
             let bt = self.m.types.named_struct(&format!("{name}.base"));
             self.named_base.insert(first, bt);
             let bf: Vec<LTy> = bm.iter().map(|x| self.ir(x)).collect();
@@ -1153,7 +1248,7 @@ impl<'a> Cg<'a> {
         // clang `ConstructAttributeList`: a non-throwing type or a
         // `NoThrowAttr` (a recognized C library function).
         let mut cp = Vec::new();
-        let const_pure = crate::builtins::const_pure_attrs(ast, first, &mut cp);
+        let const_pure = crate::builtins::const_pure_attrs(ast, first, sig, &mut cp);
         let nothrow = sig.nothrow || const_pure || ast.has_nothrow_attr(first);
         if nothrow {
             fa.push(Attr::Flag(AttrKind::NoUnwind));

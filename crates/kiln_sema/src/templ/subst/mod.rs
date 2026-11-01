@@ -481,6 +481,20 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         }
     }
 
+    /// Whether member `d` of a class sits in a dependent class this
+    /// substitution does not instantiate and whose levels it does not
+    /// keep ([`Substituter::find_instantiated_decl`] has no member to
+    /// find for it).
+    pub(crate) fn class_not_instantiated(&mut self, d: DeclId, loc: Loc) -> SubstResult<bool> {
+        let node = *self.sema.ast.decls.get(d);
+        if !node.flags().contains(DeclFlags::DEPENDENT_CTX) || self.pairs.iter().any(|p| p.0 == d) {
+            return Ok(false);
+        }
+        let Some(parent) = node.ctx() else { return Ok(false) };
+        let inst_parent = self.find_instantiated_decl(parent, loc)?;
+        Ok(inst_parent == parent && !self.levels_retained(self.sema.ctx_template_levels(parent)))
+    }
+
     /// The declaration of the instantiation that pattern declaration `d`
     /// became (clang's `FindInstantiatedDecl`, §5.6): a local of the
     /// pattern, a member of an instantiated class, or `d` itself when it

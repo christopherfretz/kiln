@@ -117,6 +117,7 @@ pub fn is_type_kind(k: DeclKind) -> bool {
             | DeclKind::Typedef
             | DeclKind::TypeAlias
             | DeclKind::TemplateTypeParm
+            | DeclKind::UnresolvedUsingTypename
     )
 }
 
@@ -408,6 +409,55 @@ impl Sema<'_, '_> {
         Found::default()
     }
 
+    /// The order in which clang lists the declarations of an ambiguous
+    /// lookup result `decls` (in lookup-table order). An unqualified
+    /// lookup that ends at a namespace scope first finds the names
+    /// declared in that open scope instance, most recent first (clang's
+    /// `IdentifierResolver` chain), then the namespace's lookup table;
+    /// duplicates are then removed by moving the last entry into the
+    /// duplicate's place (`LookupResult::resolveKind`).
+    pub(crate) fn ambiguity_order(&self, decls: &[DeclId], unqualified: bool) -> Vec<DeclId> {
+        if !unqualified {
+            return decls.to_vec();
+        }
+        let ctx_of = |d: DeclId| {
+            self.ast.decls.get(d).ctx().map(|c| self.ast.first(self.ast.redecl_context(c)))
+        };
+        let Some(scope) = self.scopes.iter().rev().find(|s| {
+            matches!(s.kind, ScopeKind::Namespace | ScopeKind::TranslationUnit)
+                && s.entity.is_some_and(|e| {
+                    let e = self.ast.first(e);
+                    decls.iter().any(|&d| ctx_of(d) == Some(e))
+                })
+        }) else {
+            return decls.to_vec();
+        };
+        let entity = scope.entity.map(|e| self.ast.first(e));
+        let mut in_scope: Vec<DeclId> = decls
+            .iter()
+            .copied()
+            .filter(|&d| ctx_of(d) == entity && d.index() >= scope.first_decl)
+            .collect();
+        if in_scope.is_empty() {
+            return decls.to_vec();
+        }
+        in_scope.sort_by_key(|d| std::cmp::Reverse(d.index()));
+        let mut v = in_scope;
+        v.extend_from_slice(decls);
+        let mut i = 0;
+        while i < v.len() {
+            if v[..i].contains(&v[i]) {
+                let last = v.pop().expect("non-empty");
+                if i < v.len() {
+                    v[i] = last;
+                }
+                continue;
+            }
+            i += 1;
+        }
+        v
+    }
+
     /// Class member lookup of `name` in class `c` ([class.member.lookup]):
     /// the class's own members (its injected-class-name included,
     /// [class.pre]/2), else the members found in its direct bases,
@@ -670,8 +720,22 @@ impl Sema<'_, '_> {
     }
 
     /// [`Sema::current_scope_raw`] for any declaration name (block scopes
-    /// hold identifiers only).
+    /// hold identifiers only). The members of a namespace's inline
+    /// namespaces are in other scopes and are not included
+    /// ([basic.scope.scope]/4, [namespace.def.general]/6; clang's
+    /// `FilterLookupForScope` without `AllowInlineNamespace`).
     pub(crate) fn current_scope_raw_dn(&self, dname: DeclName) -> Vec<DeclId> {
+        self.current_scope_raw_impl(dname, false)
+    }
+
+    /// [`Sema::current_scope_raw_dn`] including the members of inline
+    /// namespaces: what an explicit specialization may name
+    /// ([temp.expl.spec]/3, [namespace.memdef]/2).
+    pub(crate) fn current_scope_with_inline_dn(&self, dname: DeclName) -> Vec<DeclId> {
+        self.current_scope_raw_impl(dname, true)
+    }
+
+    fn current_scope_raw_impl(&self, dname: DeclName, with_inline: bool) -> Vec<DeclId> {
         let Some(i) = self.scopes.iter().rposition(|s| !s.is_transparent()) else {
             return Vec::new();
         };
@@ -691,7 +755,13 @@ impl Sema<'_, '_> {
             return out;
         }
         match s.entity {
-            Some(e) => self.ast.lookup_local(e, dname).iter().collect(),
+            Some(e) => self
+                .ast
+                .lookup_local(e, dname)
+                .iter_with_inline()
+                .filter(|&(_, via_inline)| with_inline || !via_inline)
+                .map(|(d, _)| d)
+                .collect(),
             None => Vec::new(),
         }
     }

@@ -130,7 +130,15 @@ impl Oven {
         }
         let ast = b.ast();
         let mut site = self.site(pc);
-        if self.code.get(pc).is_some_and(|&w| Op::from_u8(w as u8) == Op::VCall)
+        if let Fault::Trap(i) = fault
+            && self.traps[i as usize].msg.is_empty()
+        {
+            // A silent failure (an expression sema already diagnosed, as
+            // clang's contains-errors RecoveryExpr): no notes at all.
+            return Vec::new();
+        }
+        if (matches!(fault, Fault::Callee(_))
+            || self.code.get(pc).is_some_and(|&w| Op::from_u8(w as u8) == Op::VCall))
             && let Some(e) = site.e
             && matches!(
                 ast.exprs.get(e).kind(),
@@ -139,7 +147,8 @@ impl Oven {
             && let m = skip_parens(ast, ast.exprs.callee(e))
             && ast.exprs.get(m).kind() == ExprKind::MemberExpr
         {
-            // clang diagnoses a dispatch at the member name.
+            // clang diagnoses a dispatch, and a call of an unusable member
+            // function, at the member name.
             site.loc = ast.exprs.get(m).loc();
         }
         let mut extra = Vec::new();
@@ -343,6 +352,9 @@ impl Oven {
                         d.trim_start_matches('&')
                     ),
                 )
+            }
+            Fault::Callee(f) if self.funcs[f as usize].state == FState::Invalid => {
+                (site.loc, "subexpression not valid in a constant expression".into())
             }
             Fault::Callee(f) => {
                 let func = &self.funcs[f as usize];

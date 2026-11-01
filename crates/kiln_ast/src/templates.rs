@@ -13,7 +13,7 @@
 //! [`AstBuilder::class_partial_spec`].
 
 use kiln_source::Loc;
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::ast::Ast;
 use crate::builder::{AstBuilder, DeclHead};
@@ -299,6 +299,19 @@ pub struct TemplateTables {
     /// itself when its member list was empty): codegen defines them at
     /// that point, as clang's `HandleTopLevelDecl` does.
     explicit_member_insts: FxHashMap<DeclId, Vec<DeclId>>,
+    /// Classes in `explicit_member_insts` whose members codegen defines
+    /// only there, not where the class was first declared in its lexical
+    /// context: an explicit instantiation definition following an
+    /// explicit instantiation declaration (`extern template struct
+    /// X<int>; ... template struct X<int>;`).
+    moved_class_insts: FxHashSet<DeclId>,
+    /// Functions explicitly instantiated by a definition before their
+    /// template's definition was seen, in order: instantiated at the end
+    /// of the TU, where codegen defines them (clang
+    /// `PerformPendingInstantiations` hands them to `HandleTopLevelDecl`),
+    /// not at the explicit instantiation.
+    late_explicit_insts: Vec<DeclId>,
+    late_explicit_set: FxHashSet<DeclId>,
     /// `(first decl of template, canonical args) -> specialization`
     /// (spec/ast.md §8.3).
     specializations: FxHashMap<(DeclId, ArgListId), DeclId>,
@@ -363,6 +376,9 @@ impl Default for TemplateTables {
             specs: Vec::new(),
             member_specs: Vec::new(),
             explicit_member_insts: FxHashMap::default(),
+            moved_class_insts: FxHashSet::default(),
+            late_explicit_insts: Vec::new(),
+            late_explicit_set: FxHashSet::default(),
             specializations: FxHashMap::default(),
             spec_order: FxHashMap::default(),
             instantiated_from: FxHashMap::default(),
@@ -465,6 +481,41 @@ impl TemplateTables {
         self.explicit_member_insts.entry(after).or_default().push(member);
     }
 
+    /// Records that the explicit instantiation definition of class
+    /// `class` appears right after `after`, later than the class's first
+    /// declaration in its lexical context (see `moved_class_insts`).
+    pub fn add_moved_class_inst(&mut self, after: DeclId, class: DeclId) {
+        self.add_explicit_member_inst(after, class);
+        let _ = self.moved_class_insts.insert(class);
+    }
+
+    /// Whether the members of class `class` are defined at a later
+    /// explicit instantiation definition (see `moved_class_insts`).
+    pub fn is_moved_class_inst(&self, class: DeclId) -> bool {
+        self.moved_class_insts.contains(&class)
+    }
+
+    /// Records that function `d` (a first declaration) is explicitly
+    /// instantiated by a definition before its template's definition
+    /// (see `late_explicit_insts`).
+    pub fn add_late_explicit_inst(&mut self, d: DeclId) {
+        if self.late_explicit_set.insert(d) {
+            self.late_explicit_insts.push(d);
+        }
+    }
+
+    /// The late explicit instantiations (see `late_explicit_insts`), in
+    /// order.
+    pub fn late_explicit_insts(&self) -> &[DeclId] {
+        &self.late_explicit_insts
+    }
+
+    /// Whether `d` (a first declaration) is a late explicit
+    /// instantiation (see `late_explicit_insts`).
+    pub fn is_late_explicit_inst(&self, d: DeclId) -> bool {
+        self.late_explicit_set.contains(&d)
+    }
+
     /// The members explicitly instantiated right after `after`, in order.
     pub fn explicit_member_insts_after(&self, after: DeclId) -> &[DeclId] {
         self.explicit_member_insts.get(&after).map_or(&[], Vec::as_slice)
@@ -474,6 +525,15 @@ impl TemplateTables {
     /// [`TemplLink`] (fields, enumerators, parameters, typedefs, locals).
     pub fn set_instantiated_from(&mut self, inst: DeclId, pattern: DeclId) {
         let _ = self.instantiated_from.insert(inst, pattern);
+    }
+
+    /// Forgets the pattern recorded for `inst`: a member template of a
+    /// class template specialization that was itself specialized
+    /// (`template<> template<class U> struct A<int>::B {...}`,
+    /// [temp.expl.spec]/16) is no longer instantiated from the member
+    /// template of the class template's pattern.
+    pub fn clear_instantiated_from(&mut self, inst: DeclId) {
+        let _ = self.instantiated_from.remove(&inst);
     }
 
     /// The pattern recorded by [`TemplateTables::set_instantiated_from`].

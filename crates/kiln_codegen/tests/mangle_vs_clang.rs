@@ -87,6 +87,9 @@ fn kiln_names(src: &str, arch: Arch) -> Result<BTreeSet<String>, String> {
                     }
                 }
             }
+            DeclKind::TemplateParamObject => {
+                names.insert(mangle::mangle_param_object(ast, anon, d));
+            }
             _ => {}
         }
     }

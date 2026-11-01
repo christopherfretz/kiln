@@ -465,7 +465,7 @@ impl Cg<'_> {
             let (val, _) = self.declare_structor(first, v)?;
             return Ok((V::C(val), None));
         };
-        self.c1_decl.insert(first);
+        let first_ref = self.c1_decl.insert(first);
         if self.structor_has_vbases(first) {
             // A separate complete-object function.
             let (val, f) = self.declare_structor(first, v)?;
@@ -474,8 +474,14 @@ impl Cg<'_> {
         }
         if self.complete_is_rauw(def) {
             // The complete-object declaration is later replaced by the
-            // base variant, which takes its place in the module.
+            // base variant, which takes its place in the module (clang
+            // `applyReplacements` moves the base function to where the
+            // complete-object declaration was created: here, at the end).
+            let existed = self.sfns.contains_key(&(first, Structor::Base));
             let f = self.base_fn(first, false)?;
+            if existed && first_ref {
+                self.m.move_function_to_end(f);
+            }
             self.queue_structor(first, v);
             return Ok((V::C(Value::func(f)), None));
         }
@@ -1110,8 +1116,9 @@ impl Cg<'_> {
         self.emit_delete_call(od, this.v, ty, loc)
     }
 
-    /// `DestroyField`: destroys field `field` of `*this` (class `record`).
-    pub(crate) fn destroy_field_of_this(&mut self, field: DeclId, record: DeclId) {
+    /// `DestroyField`: destroys field `field` of `*this` (class `record`);
+    /// `eh` as for [`Self::array_destroy_at`].
+    pub(crate) fn destroy_field_of_this(&mut self, field: DeclId, record: DeclId, eh: bool) {
         let ast = self.ast;
         let _ = record;
         let this = self.this_addr();
@@ -1123,22 +1130,24 @@ impl Cg<'_> {
                 return;
             }
         };
-        self.destroy_object(lv.addr, q);
+        self.destroy_object(lv.addr, q, eh);
     }
 
     /// clang `emitDestroy` with `destroyCXXObject`.
-    pub(crate) fn destroy_object(&mut self, a: Addr, q: QualType) {
+    pub(crate) fn destroy_object(&mut self, a: Addr, q: QualType, eh: bool) {
         let Some(rd) = self.destructed_class(q) else { return };
         if self.array_elem(q).is_some() {
-            self.array_destroy_at(a, rd);
+            self.array_destroy_at(a, rd, eh);
         } else {
             self.call_dtor(rd, a.v, false);
         }
     }
 
     /// `emitArrayLength` + `emitArrayDestroy` for the constant-length
-    /// array at `a` (IR type `a.ty`) of objects of class `rd`.
-    pub(crate) fn array_destroy_at(&mut self, a: Addr, rd: DeclId) {
+    /// array at `a` (IR type `a.ty`) of objects of class `rd`; `eh`
+    /// destroys the rest if a destructor throws (clang
+    /// `useEHCleanupForArray`, on the normal path only).
+    pub(crate) fn array_destroy_at(&mut self, a: Addr, rd: DeclId, eh: bool) {
         let mut idx = vec![self.icn(LTy::I32, 0)];
         let mut t = a.ty;
         let mut n = 1u64;
@@ -1151,7 +1160,7 @@ impl Cg<'_> {
             return;
         }
         let begin = self.gep(a.ty, a.v, idx, true);
-        self.array_destroy(begin, n, t, rd);
+        self.array_destroy(begin, n, t, rd, eh);
     }
 
     /// Calls the destructor of `record` on the object at `addr` (`base`:
@@ -1344,13 +1353,15 @@ impl Cg<'_> {
         let elem_size = self.alloc_size(elem);
         let elem_align = min_align(dest.align, elem_size);
         let nn = self.i64c(i128::from(n));
-        self.construct_array_n(e, begin, elem, elem_align, nn)
+        self.construct_array_n(e, begin, elem, elem_align, nn, false)
     }
 
     /// The element loop of clang `EmitCXXAggrConstructorCall`: `num`
     /// objects of type `elem` from `begin`, each constructed by `e` in
     /// its own cleanup scope; a non-constant count is checked for zero
-    /// first (`isempty`).
+    /// first (`isempty`). With `zero_each` every element is
+    /// zero-initialized before its constructor runs (an array new's
+    /// value-initialization, clang's `zeroInitialize`).
     pub(crate) fn construct_array_n(
         &mut self,
         e: ExprId,
@@ -1358,6 +1369,7 @@ impl Cg<'_> {
         elem: LTy,
         elem_align: u64,
         num: V,
+        zero_each: bool,
     ) -> R<()> {
         let ast = self.ast;
         let mut out = None;
@@ -1383,7 +1395,13 @@ impl Cg<'_> {
             let c = Cleanup::PartialArray { begin, end: phi, elem, record: ctor_class };
             self.push_full_expr_cleanup(c, false, true);
         }
-        let r = self.construct_one(e, Addr { v: phi, ty: elem, align: elem_align }, false);
+        let at = Addr { v: phi, ty: elem, align: elem_align };
+        if zero_each && !self.class_bits(ctor_class).contains(DefinitionBits::EMPTY) {
+            // clang `EmitNullInitialization` of the element.
+            let size = self.alloc_size(elem);
+            self.memset(at, 0, size, false);
+        }
+        let r = self.construct_one(e, at, false);
         self.end_scope(sc);
         r?;
         let one = self.i64c(1);
@@ -1462,6 +1480,31 @@ impl Cg<'_> {
     /// The bytes an aggregate copy of class `rd` writes (clang
     /// `EmitAggregateCopy`: the data size when the destination may
     /// overlap).
+    /// clang `EmitAggregateCopy` of an object of class `rd`: copying an
+    /// empty class is a no-op in C++ ("Ignore empty classes in C++").
+    pub(crate) fn agg_copy_record(
+        &mut self,
+        rd: DeclId,
+        dest: Addr,
+        src: Addr,
+        size: u64,
+        volatile: bool,
+    ) {
+        if self.class_def(rd).is_some_and(|def| self.tys.layouter().is_empty(def)) {
+            return;
+        }
+        self.memcpy(dest, src.v, src.align, size, volatile);
+    }
+
+    /// `EmitAggregateCopy` of an object of type `q` (see
+    /// [`Self::agg_copy_record`]).
+    pub(crate) fn agg_copy(&mut self, q: QualType, dest: Addr, src: Addr, size: u64, vol: bool) {
+        match self.ast.types.canonical_view(q) {
+            TypeView::Record(rd) => self.agg_copy_record(rd, dest, src, size, vol),
+            _ => self.memcpy(dest, src.v, src.align, size, vol),
+        }
+    }
+
     pub(crate) fn copy_size(&mut self, rd: DeclId, overlap: bool) -> u64 {
         let Some(def) = self.class_def(rd) else { return 0 };
         let l = self.tys.layouter().record(def);
@@ -1515,8 +1558,8 @@ impl Cg<'_> {
             // A static member function called through an object.
             self.emit_ignored(base)?;
             let f = self.get_fn(md)?;
-            let sig = self.call_sig(fty, false, &arg_tys);
-            let (extra, nr) = self.noreturn_extra(Some(md), fty);
+            let mut sig = self.call_sig(fty, false, &arg_tys);
+            let (extra, nr) = self.call_extra(md, fty, &mut sig);
             let r =
                 self.call_with(&sig, V::C(Value::func(f)), Some(f), None, args, dest, &extra)?;
             if nr {
@@ -1572,12 +1615,12 @@ impl Cg<'_> {
             let (callee, fid) = self.structor_ref(callee_md, Structor::Complete)?;
             return self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[]);
         }
-        let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
+        let mut sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
         if use_virtual {
             // The arguments come first; `prepareConcreteCallee` then
             // loads the slot.
             let vals = self.emit_call_args(&sig, args)?;
-            let (extra, nr) = self.noreturn_extra(Some(md), cfty);
+            let (extra, nr) = self.call_extra(md, cfty, &mut sig);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
             let r =
                 self.call_vals_to(&sig, fp, None, Some(this.v), &vals, args, dest, &extra, &[])?;
@@ -1587,7 +1630,7 @@ impl Cg<'_> {
             return Ok(r);
         }
         let f = self.get_fn(callee_md)?;
-        let (mut extra, nr) = self.noreturn_extra(Some(callee_md), cfty);
+        let (mut extra, nr) = self.call_extra(callee_md, cfty, &mut sig);
         let vals = self.emit_call_args(&sig, args)?;
         let mut ret_extra = Vec::new();
         self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
@@ -1613,6 +1656,16 @@ impl Cg<'_> {
             },
             unreachable,
         )
+    }
+
+    /// [`Cg::noreturn_extra`] plus the `const` / `pure` attributes of
+    /// method `d` (clang `ConstructAttributeList` on a member call's
+    /// target decl, the method named even when the call is virtual),
+    /// which also make the call `nounwind`.
+    fn call_extra(&self, d: DeclId, fty: QualType, sig: &mut Sig) -> (Vec<kiln_llvm::Attr>, bool) {
+        let (mut extra, nr) = self.noreturn_extra(Some(d), fty);
+        sig.nothrow |= crate::builtins::const_pure_attrs(self.ast, d, sig, &mut extra);
+        (extra, nr)
     }
 
     // ---- expressions ---------------------------------------------------

@@ -1117,6 +1117,13 @@ impl Sema<'_, '_> {
             return;
         }
         let e = match init {
+            // Initialized at instantiation ([temp.dep.expr]), the list
+            // kept as written (WP-192: a designated list needs it).
+            Initializer::List(l)
+                if self.ast.types.is_dependent(p.ty) || self.init_list_type_dependent(&l) =>
+            {
+                self.dependent_init_list(&l)
+            }
             Initializer::List(mut l) => {
                 let scalar = !self.ast.types.is_array(p.ty)
                     && self.ast.types.as_record(p.ty).is_none()
@@ -1776,6 +1783,9 @@ impl Sema<'_, '_> {
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
+            if d.qualifier.is_some() && self.templ.member_spec.is_some() {
+                self.specialize_member_template(t);
+            }
         }
         self.act_on_asm_label(ds, d, decl, &mut attrs);
         if d.qualifier.is_none() {
@@ -1823,6 +1833,9 @@ impl Sema<'_, '_> {
         self.set_member_access(decl);
         if let Some(t) = self.finish_template_pattern(decl) {
             self.set_member_access(t);
+            if d.qualifier.is_some() && self.templ.member_spec.is_some() {
+                self.specialize_member_template(t);
+            }
         }
         if d.qualifier.is_none() && self.kind_of(decl) == DeclKind::CXXConversion {
             // A conversion function hides a using-declared base one with
@@ -2363,7 +2376,9 @@ impl Sema<'_, '_> {
             // previously declared member of the nominated class or
             // namespace.
             let scope = if method {
-                format!("'{}'", self.qualified_decl_name(ctx))
+                // clang prints a class context as its type (`A<T>`,
+                // `N::A<long>::C`).
+                self.class_context_str(ctx)
             } else {
                 self.qualifier_desc(ctx)
             };
@@ -3077,10 +3092,22 @@ impl Sema<'_, '_> {
         if self.is_in_class_static(v) {
             return self.ast.decls.var(v).is_some_and(|x| x.spec.is_inline());
         }
-        self.ast
-            .decls
-            .var(v)
-            .is_some_and(|x| x.spec.storage() != VarStorage::Extern || x.init.is_some())
+        // [dcl.link]/8: `extern "C" int x;` is treated as `extern`.
+        let ext = |x: &kiln_ast::decl::VarData| {
+            x.spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v)
+        };
+        self.ast.decls.var(v).is_some_and(|x| !ext(x) || x.init.is_some())
+    }
+
+    /// True while declaring the declaration directly contained in a
+    /// linkage specification without braces ([dcl.link]/8).
+    fn in_single_line_linkage(&self) -> bool {
+        self.kind_of(self.ctx) == DeclKind::LinkageSpec
+            && self
+                .ast
+                .decls
+                .scope(self.ctx)
+                .is_some_and(|s| s.aux & kiln_ast::decl::ScopeData::LINKAGE_BRACELESS != 0)
     }
 
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
@@ -3091,11 +3118,10 @@ impl Sema<'_, '_> {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
         let mut prev_ok = None;
+        let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let local = self.find_prev(name, d.qualifier);
         let prev = match local {
-            None if spec.storage() == VarStorage::Extern || !self.in_local_scope() => {
-                self.find_prev_linkage(name, d.qualifier)
-            }
+            None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
         };
         if let Some(p) = prev {
@@ -3115,7 +3141,7 @@ impl Sema<'_, '_> {
                     // the new declaration is a definition (judged before its
                     // initializer is seen), and the note says whether the
                     // old one was.
-                    let new_def = spec.storage() != VarStorage::Extern;
+                    let new_def = !ext;
                     let id = if new_def {
                         DiagId::sema_redefinition_different_type
                     } else {
@@ -3127,7 +3153,7 @@ impl Sema<'_, '_> {
                         .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
-                } else if spec.storage() != VarStorage::Extern && self.is_var_definition(p) {
+                } else if !ext && self.is_var_definition(p) {
                     let msg =
                         self.diag(DiagId::sema_redefinition, d.name_loc()).arg(sym_str(self, name));
                     let msg = self.note_prev(msg, p, true);
@@ -3250,6 +3276,25 @@ impl Sema<'_, '_> {
         let _ = self.builder().set_var_init(v, e);
     }
 
+    /// clang `AddInitializerToDecl`: a declaration that was not a
+    /// definition before its initializer (`extern int a = 2;`) still
+    /// redefines an earlier definition. Diagnoses it and marks `v`
+    /// invalid; true when it did.
+    fn extern_init_redefines(&mut self, v: DeclId, spec: VarSpec, loc: Loc) -> bool {
+        let ext = spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v);
+        if !ext || self.in_local_scope() || self.is_in_class_static(v) {
+            return false;
+        }
+        let def = self.ast.redecls_of(v).find(|&x| x != v && self.is_var_definition(x));
+        let Some(def) = def else { return false };
+        let name = self.ast.decls.get(v).name();
+        let msg = self.diag(DiagId::sema_redefinition, loc).arg(self.decl_name_str(name));
+        let msg = self.note_prev(msg, def, true);
+        self.emit(msg);
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        true
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -3266,6 +3311,10 @@ impl Sema<'_, '_> {
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
+        if self.extern_init_redefines(v, spec, loc) {
+            self.discard_initializer(&init);
+            return;
+        }
         if spec.storage() == VarStorage::Extern && !self.check_extern_init(v, loc) {
             return;
         }
@@ -4016,6 +4065,7 @@ impl Sema<'_, '_> {
         nloc: Loc,
         q: DeclId,
         use_: TagUse,
+        templated: bool,
     ) {
         if use_ == TagUse::Definition
             && let Some(&other) = self.lookup_qualified(q, n, LookupKind::All).decls.first()
@@ -4024,6 +4074,22 @@ impl Sema<'_, '_> {
             let msg =
                 self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
             let msg = self.note_prev(msg, other, true);
+            self.emit(msg);
+            return;
+        }
+        if templated {
+            // A qualified class template declaration names a member
+            // template of the nominated scope (clang's `CheckClassTemplate`
+            // reports `err_member_decl_does_not_match` as a definition,
+            // with or without a body).
+            let scope = if self.kind_of(q) == DeclKind::CXXRecord {
+                let t = self.this_class_type(q);
+                format!("'{}'", self.ty_str(t))
+            } else {
+                self.qualifier_desc(q)
+            };
+            let msg =
+                self.diag(DiagId::sema_member_def_no_match, nloc).arg(sym_str(self, n)).arg(scope);
             self.emit(msg);
             return;
         }
@@ -4150,6 +4216,10 @@ impl Sema<'_, '_> {
                     }
                 } else if use_ == TagUse::Declaration
                     && self.ast.decls.get(p).misc().friend() != FriendKind::Undeclared
+                    // `template<> template<class U> struct A<int>::B;`
+                    // declares the member template specialized
+                    // ([temp.expl.spec]/16): a new decl (below).
+                    && self.templ.member_spec.is_none()
                 {
                     // A redeclaration creates no new decl (a deviation:
                     // clang adds a `ClassTemplateDecl` per redeclaration),
@@ -4157,11 +4227,15 @@ impl Sema<'_, '_> {
                     // template's ([temp.param]/12, /14). One of a class
                     // only a friend declaration introduced makes it
                     // visible ([namespace.memdef]/3): a new decl (below).
-                    self.check_redeclared_class_head(p);
+                    // `[extern] template struct C<args>::I;` explicitly
+                    // instantiates a member class ([temp.explicit]/3).
+                    if qualifier.is_none() || !self.act_on_explicit_member_class_inst(p, nloc) {
+                        self.check_redeclared_class_head(p);
+                    }
                     return p;
                 }
             } else if let Some(q) = qualifier {
-                self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_);
+                self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
@@ -4178,10 +4252,12 @@ impl Sema<'_, '_> {
         if qualifier.is_none() {
             self.set_member_access(d);
         }
-        if let Some(t) = self.finish_template_pattern(d)
-            && qualifier.is_none()
-        {
-            self.set_member_access(t);
+        if let Some(t) = self.finish_template_pattern(d) {
+            if qualifier.is_none() {
+                self.set_member_access(t);
+            } else if self.templ.member_spec.is_some() {
+                self.specialize_member_template(t);
+            }
         }
         if let Some((n, _)) = name
             && self.in_local_scope()
@@ -4212,6 +4288,13 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> DeclId {
         let ns = self.enclosing_namespace().unwrap_or(self.ast.tu);
+        if let (Some((n, nloc)), Some(q)) = (name, qualifier)
+            && keyword != TagKeyword::Enum
+            && self.has_pending_head()
+            && let Some(d) = self.act_on_qualified_friend_class_template(keyword, n, nloc, q)
+        {
+            return d;
+        }
         let (Some((n, nloc)), None, false) = (name, qualifier, keyword == TagKeyword::Enum) else {
             return self.act_on_tag(
                 keyword,
@@ -4322,6 +4405,61 @@ impl Sema<'_, '_> {
         let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
         self.friend_class_template = self.finish_template_pattern(d);
         d
+    }
+
+    /// `template<class U> friend class N::X;` ([temp.friend]/1,
+    /// [dcl.type.elab]/4): a qualified name befriends the class template
+    /// `N::X` that qualified lookup finds (a member template of the
+    /// current instantiation too: `template<bool> friend class A<T>::B;`);
+    /// no declaration is introduced. The template is left in
+    /// [`Sema::friend_class_template`] for `act_on_friend`. Another kind
+    /// of entity is clang's "redefinition as different kind of symbol";
+    /// nothing found in a namespace is its "friend declaration does not
+    /// match". `None` when nothing is found in a class (the caller
+    /// reports it).
+    fn act_on_qualified_friend_class_template(
+        &mut self,
+        keyword: TagKeyword,
+        n: Symbol,
+        nloc: Loc,
+        q: DeclId,
+    ) -> Option<DeclId> {
+        let found = self.lookup_qualified(q, n, LookupKind::All).decls;
+        let t = found.iter().copied().find(|&d| self.kind_of(d) == DeclKind::ClassTemplate);
+        if t.is_none() && found.is_empty() && self.kind_of(q) != DeclKind::Namespace {
+            return None;
+        }
+        // The friend's own template head declares nothing (clang matches
+        // it against the template's only on instantiation).
+        let _ = self.take_template_head(None);
+        self.templ.cur = None;
+        let Some((t, p)) = t.and_then(|t| self.pattern_of(t).map(|p| (t, p))) else {
+            let msg = if let Some(&other) = found.first() {
+                let msg =
+                    self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
+                self.note_prev(msg, other, true)
+            } else {
+                self.diag(DiagId::sema_friend_def_no_match, nloc)
+                    .arg(sym_str(self, n))
+                    .arg(self.qualifier_desc(q))
+            };
+            self.emit(msg);
+            // Recovery: an invalid class, hidden from lookup.
+            let mut h = DeclHead::new(q, DeclName::ident(n), nloc);
+            h.lexical = Some(self.ctx);
+            h.misc = h.misc.with_friend(FriendKind::Undeclared);
+            let d = self.builder().record(h, Self::tag_kind_of(keyword), None);
+            self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            return Some(d);
+        };
+        if !self.tag_matches(p, keyword) {
+            let msg = self.diag(DiagId::sema_use_with_wrong_tag, nloc).arg(sym_str(self, n));
+            let msg = self.note_prev(msg, p, false);
+            self.emit(msg);
+        }
+        self.mark_type_referenced(p);
+        self.friend_class_template = Some(t);
+        Some(p)
     }
 
     fn check_enum_redecl(
@@ -4835,7 +4973,9 @@ impl Sema<'_, '_> {
             // ... followed by an implicit `using namespace unique;`.
             let _ = self.using_directive(ns, loc, DeclFlags::IMPLICIT);
         }
-        self.scopes.push(Scope::new(ScopeKind::Namespace, Some(ns)));
+        let mut scope = Scope::new(ScopeKind::Namespace, Some(ns));
+        scope.first_decl = ns.index() + 1;
+        self.scopes.push(scope);
         self.ctx = ns;
         ns
     }
@@ -4865,6 +5005,12 @@ impl Sema<'_, '_> {
         self.scopes.push(Scope::new(ScopeKind::LinkageSpec, Some(ls)));
         self.ctx = ls;
         ls
+    }
+
+    /// The linkage specification `ls` has no braces: it directly
+    /// contains one declaration ([dcl.link]/8).
+    pub fn act_on_linkage_spec_braceless(&mut self, ls: DeclId) {
+        self.ast.decls.set_linkage_braceless(ls);
     }
 
     /// The end of a linkage specification.
@@ -5247,7 +5393,10 @@ impl Sema<'_, '_> {
         if is_type_kind(k) {
             let ty = if matches!(
                 k,
-                DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm
+                DeclKind::Typedef
+                    | DeclKind::TypeAlias
+                    | DeclKind::TemplateTypeParm
+                    | DeclKind::UnresolvedUsingTypename
             ) {
                 self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
             } else {
@@ -5349,7 +5498,11 @@ impl Sema<'_, '_> {
                 }
                 Some(self.ast.definition(d).unwrap_or(d))
             }
-            DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm => Some(d),
+            // A dependent `using typename B<T>::x;` member nests like a
+            // template parameter (`x::value`, WP-179).
+            DeclKind::TemplateTypeParm
+            | DeclKind::TemplateTemplateParm
+            | DeclKind::UnresolvedUsingTypename => Some(d),
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
                 let what = if self.kind_of(d) == DeclKind::ClassTemplate {
                     "class template"
@@ -5813,6 +5966,23 @@ pub(crate) const fn operator_uses(op: OverloadedOperator) -> (bool, bool, bool) 
         O::Equal | O::Subscript | O::Call => (false, true, true),
         O::Arrow => (true, false, true),
         _ => (false, true, false),
+    }
+}
+
+impl Sema<'_, '_> {
+    /// Class `c` as clang prints a class declaration context in a
+    /// diagnostic (`ak_declcontext`: the class's type): the
+    /// injected-class-name `A<T>` of a pattern, else the class with its
+    /// scope (`N::A<long>::C`).
+    pub(crate) fn class_context_str(&mut self, c: DeclId) -> String {
+        let t = self.this_class_type(c);
+        let injected = t != self.tag_type(c);
+        let names = crate::names::SemaNames::new(self);
+        let opts = kiln_ast::types::PrintOptions {
+            full_scope: !injected,
+            ..kiln_ast::types::PrintOptions::SUGARED
+        };
+        format!("'{}'", kiln_ast::types::print_type(&self.ast.types, &names, t, opts))
     }
 }
 

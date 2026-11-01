@@ -89,6 +89,13 @@ impl Sema<'_, '_> {
             // diagnostics are clang's for a one-candidate set.
             let (d, f) = cands[0];
             let e = self.finish_overload_ref(d, f, naming, n.loc(), nns, ule, true);
+            if !adl && decls.len() == 1 && self.ast.decls.get(d).has(DeclFlags::INVALID) {
+                // A name clang resolves without an overload set (a
+                // `DeclRefExpr` built directly) whose function became
+                // invalid when its definition was instantiated by that
+                // reference: the call is erroneous, undiagnosed.
+                return Some(self.recover_err(&[e], n.loc()));
+            }
             self.ovl.adl_single = adl.then_some(e);
             return Some(e);
         }
@@ -261,10 +268,12 @@ impl Sema<'_, '_> {
             OvlOutcome::Success(b) => return Some(b),
             OvlOutcome::Deleted(b) => {
                 let d = set.cand(b).func();
+                // clang names the lookup name (`ULE->getName()`), not the
+                // selected specialization: 'show', not 'show<int>'.
                 let (id, name) = if member {
                     (DiagId::sema_ovl_deleted_member_call, text)
                 } else {
-                    (DiagId::sema_call_deleted_function, self.decl_arg(d))
+                    (DiagId::sema_call_deleted_function, format!("'{text}'"))
                 };
                 let msg = self.diag(id, at).arg(name).arg(self.delete_message_suffix(d));
                 let msg = self.with_ovl_notes(msg, set, false);

@@ -1088,12 +1088,12 @@ impl Sema<'_, '_> {
                         .diff_args(self, from, ty)
                 } else if spec.defaulted() == Defaulted::No {
                     self.diag(DiagId::sema_call_deleted_ctor, sites.deleted)
-                        .arg(self.ty_arg(ty))
+                        .arg(self.ty_arg(named))
                         .arg(self.delete_message_suffix(m))
                 } else {
                     self.diag(DiagId::sema_call_implicitly_deleted_ctor, sites.deleted)
                         .arg(mk.unwrap_or(k).index())
-                        .arg(self.ty_arg(ty))
+                        .arg(self.ty_arg(named))
                 };
                 for n in self.deleted_function_notes(m, 0) {
                     msg = msg.with_note(n);

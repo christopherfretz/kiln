@@ -460,6 +460,7 @@ impl Oven {
         let ast = b.ast();
         let sub = offset != 0 || p.past || pointee != a.ty;
         let what = if sub { "subobject of " } else { "" };
+        let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
         let mut notes = Vec::with_capacity(2);
         match a.origin {
             Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
@@ -476,14 +477,14 @@ impl Oven {
             Origin::Temp(e) => {
                 notes.push(Note::new(
                     loc,
-                    format!("pointer to {what}temporary is not a constant expression"),
+                    format!("{kind} to {what}temporary is not a constant expression"),
                 ));
                 notes.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
             }
             Origin::Let(t) => {
                 notes.push(Note::new(
                     loc,
-                    format!("pointer to {what}temporary is not a constant expression"),
+                    format!("{kind} to {what}temporary is not a constant expression"),
                 ));
                 if let Some(e) = let_mte(ast, t) {
                     notes.push(Note::new(ast.exprs.get(e).loc(), "temporary created here"));
@@ -494,7 +495,7 @@ impl Oven {
             Origin::Heap(e, _) => {
                 notes.push(Note::new(
                     loc,
-                    format!("pointer to {what}heap-allocated object is not a constant expression"),
+                    format!("{kind} to {what}heap-allocated object is not a constant expression"),
                 ));
                 if a.live {
                     notes.push(Note::new(ast.exprs.get(e).loc(), "heap allocation performed here"));

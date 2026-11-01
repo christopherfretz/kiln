@@ -24,6 +24,7 @@ impl Substituter<'_, '_, '_> {
             return self.sema.act_on_null_stmt(loc);
         }
         let (init_failures, errors) = (self.init_failures, self.sema.diags.error_count());
+        let body_errors = self.sema.inst.body_errors;
         match self.stmt_node(s) {
             Ok(x) => x,
             // The failure was diagnosed (an error in the instantiation, or
@@ -41,7 +42,10 @@ impl Substituter<'_, '_, '_> {
                 // in clang, not an error.
                 let decl_init = self.sema.ast.stmts.get(s).kind() == StmtKind::DeclStmt
                     && self.init_failures != init_failures;
-                let reported = self.sema.diags.error_count() != errors;
+                // Not counting the errors of another body instantiated
+                // meanwhile (`return s();` instantiating a failing `s`).
+                let nested = self.sema.inst.body_errors.saturating_sub(body_errors);
+                let reported = self.sema.diags.error_count().saturating_sub(errors) > nested;
                 if reported && !decl_init && self.lambda_bodies == 0 {
                     self.stmt_failed = true;
                 }
@@ -260,7 +264,9 @@ impl Substituter<'_, '_, '_> {
             }
             // clang `TransformAttributedStmt`: each assumption is
             // substituted and built again (`BuildCXXAssumeExpr`, so the
-            // instantiation gets its own conversion and `-Wassume`).
+            // instantiation gets its own conversion and `-Wassume`); the
+            // other statement attributes (likelihood, fallthrough) are
+            // kept as they are, already checked in the definition.
             StmtKind::AttributedStmt => {
                 use kiln_ast::ids::RawId;
                 let list = self.sema.ast.stmts.stmt_attrs(s);
@@ -268,6 +274,10 @@ impl Substituter<'_, '_, '_> {
                 let mut kept = Vec::with_capacity(attrs.len());
                 for a in attrs {
                     let node = *self.sema.ast.attrs.get(a);
+                    if node.kind != kiln_ast::attr::AttrKind::ASSUME {
+                        kept.push(a);
+                        continue;
+                    }
                     let Some(e) = ExprId::from_raw(node.a) else { continue };
                     let e = self.expr(e)?;
                     if let Some(c) = self.sema.build_cxx_assume_expr(e) {
@@ -551,14 +561,21 @@ impl Substituter<'_, '_, '_> {
         let nns = self.sema.ast.using_qualifier(d).ok_or(SubstFail)?;
         let nns = self.nns(nns, loc)?;
         if self.nns_still_dependent(nns) {
-            return self.unimplemented("dependent using-declarations in templates", loc);
+            // Still dependent (a generic lambda's body inside a function
+            // template specialization): the local stays unresolved, its
+            // uses dependent, until the lambda's own instantiation.
+            let h = kiln_ast::builder::DeclHead::new(self.sema.ctx, dname, loc);
+            let x = self.sema.builder().unresolved_using_value(h, nns, false);
+            self.sema.push_local(name, x);
+            return Ok(x);
         }
         let ctx = self.nns_context(nns, loc)?;
         // A using-declaration whose lookup finds nothing survives in the
         // pattern only with `using_if_exists` (the qualifier is not
-        // dependent, so the lookup is the definition's).
-        let if_exists =
-            self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
+        // dependent, so the lookup is the definition's). A dependent one
+        // (`UnresolvedUsingValue`) is checked now.
+        let if_exists = self.sema.kind_of(d) == DeclKind::Using
+            && self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc };
         self.sema
             .act_on_using_declarator(loc, Some(q), dname, loc, if_exists, None)
@@ -579,7 +596,7 @@ impl Substituter<'_, '_, '_> {
                 Ok(x)
             }
             DeclKind::StaticAssert => self.static_assert_decl(d),
-            DeclKind::Using => self.local_using_decl(d, loc),
+            DeclKind::Using | DeclKind::UnresolvedUsingValue => self.local_using_decl(d, loc),
             // A block-scope using-directive ([namespace.udir]): the
             // nominated namespace is never dependent; redone in the
             // instantiation's block scope for its dependent lookups.

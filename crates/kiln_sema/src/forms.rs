@@ -36,6 +36,12 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// Whether `e` is a braced-init-list placeholder of
+    /// [`Sema::act_on_braced_arg`] (not yet taken).
+    pub(crate) fn is_braced_arg(&self, e: ExprId) -> bool {
+        self.braced_args.iter().any(|(x, _)| *x == e)
+    }
+
     /// The braced-init-list behind placeholder `e`, if `e` is one.
     pub(crate) fn take_braced_arg(&mut self, e: ExprId) -> Option<InitList> {
         let i = self.braced_args.iter().position(|(x, _)| *x == e)?;
@@ -72,7 +78,8 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
                 .arg(self.decl_name(d));
-            let detail = format!("cannot convert initializer list argument to {}", self.ty_arg(pt));
+            let ics = self.list_arg_ics(to, l);
+            let detail = self.bad_conversion_detail(&ics, Some(i));
             let fl = self.ast.decls.get(d).loc();
             let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
             self.emit(msg.with_note(note));
@@ -86,9 +93,12 @@ impl Sema<'_, '_> {
     /// conversion sequence ([over.ics.list]): the one-candidate set's
     /// argument conversion.
     fn list_viable(&mut self, ty: QualType, l: &InitList) -> bool {
-        if self.is_error_type(ty) {
-            return true;
-        }
+        self.is_error_type(ty) || !self.list_arg_ics(ty, l).is_bad()
+    }
+
+    /// The conversion sequence of braced argument `l` to parameter type
+    /// `ty` ([over.ics.list]).
+    fn list_arg_ics(&mut self, ty: QualType, l: &InitList) -> crate::overload::Ics {
         let idx = u32::try_from(self.ovl.lists.len()).unwrap_or(u32::MAX);
         self.ovl.lists.push(l.clone());
         let a = crate::overload::ArgInfo {
@@ -97,7 +107,7 @@ impl Sema<'_, '_> {
         };
         let ics = self.try_implicit_conversion(&a, ty, crate::overload::IcsOptions::CANDIDATE_ARG);
         self.ovl.lists.pop();
-        !ics.is_bad()
+        ics
     }
 
     /// The number of scalar subobjects of aggregate `ty` that brace
@@ -168,8 +178,36 @@ impl Sema<'_, '_> {
             return self.builder().return_stmt(Some(e), None, loc);
         }
         let e = self.init_list_entity(ret, l, l.lbrace, ConvCtx::Return, None);
+        if self.returns_list_backing_array(e) {
+            // clang's `checkExprLifetime` for a return: the
+            // `std::initializer_list`'s backing array is a local temporary
+            // ([dcl.init.list]/6).
+            let msg = self.diag(DiagId::sema_return_local_temp_addr, l.lbrace);
+            self.emit(msg);
+        }
         let e = self.act_on_full_expr(e);
         self.builder().return_stmt(Some(e), None, loc)
+    }
+
+    /// Whether the returned `e` is a `std::initializer_list` built over a
+    /// braced list (through implicit no-op conversions and cleanups).
+    fn returns_list_backing_array(&self, mut e: ExprId) -> bool {
+        for _ in 0..64 {
+            let n = self.ast.exprs.get(e);
+            match n.kind() {
+                ExprKind::CXXStdInitializerListExpr => return true,
+                ExprKind::ExprWithCleanups
+                | ExprKind::ParenExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::ConstantExpr => e = self.ast.exprs.operand(e),
+                k if k.is_cast() && matches!(self.ast.exprs.cast_kind(e), CastKind::NoOp) => {
+                    e = self.ast.exprs.operand(e);
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// `x op= { ... }` ([expr.assign]/8): the list initializes a
@@ -187,9 +225,17 @@ impl Sema<'_, '_> {
             kids.extend(flat);
             return self.recover_err(&kids, op_loc);
         }
+        // [temp.dep.expr]/3: a type-dependent left operand or list
+        // element makes the assignment dependent; the written list is
+        // kept and assigned again at instantiation (clang's
+        // `BuildOverloadedBinOp` on a type-dependent operand).
+        if self.expr_is_type_dependent(lhs) || self.init_list_type_dependent(l) {
+            let r = self.dependent_init_list(l);
+            return self.builder().dependent_binary(op, lhs, r, op_loc);
+        }
         let lt = self.ast.exprs.get(lhs).ty();
         let lt = conv::strip_cv(self, self.non_reference(lt));
-        if self.ast.types.as_record(lt).is_some() && !self.expr_is_type_dependent(lhs) {
+        if self.ast.types.as_record(lt).is_some() {
             // [expr.assign]/8: the list is the argument of the
             // assignment operator function ([over.match.oper]).
             let r = self.act_on_braced_arg(l.clone());

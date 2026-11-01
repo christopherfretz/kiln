@@ -50,7 +50,8 @@ impl Sema<'_, '_> {
             | DeclKind::TemplateTemplateParm
             | DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
-            | DeclKind::BuiltinTemplate => true,
+            | DeclKind::BuiltinTemplate
+            | DeclKind::UnresolvedUsingTypename => true,
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.ast.decls.get(d).ty().is_some_and(|t| {
                     self.is_dependent_type(t) && self.ast.types.as_record(t).is_none()
@@ -237,6 +238,21 @@ impl Sema<'_, '_> {
             let r = self.ast.types.as_record(ty)?;
             return Some((self.ast.definition(r).unwrap_or(r), n));
         }
+        // `template<class T> void P<T*>::f()`: a declarator qualifier
+        // naming a partial specialization by its own arguments
+        // ([temp.spec.partial.general]/7, [temp.class.general]/3).
+        if self.templ.entering_context
+            && let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty())
+        {
+            let canonical = self.ast.types.canonical_args(args);
+            let t = self.ast.first(tmpl);
+            if let Some(i) = self.ast.templates.find_partial(t, canonical)
+                && let Some(p) = self.ast.templates.partial(i)
+            {
+                let p = p.partial;
+                return Some((self.ast.definition(p).unwrap_or(p), n));
+            }
+        }
         Some((tmpl, n))
     }
 
@@ -269,13 +285,25 @@ impl Sema<'_, '_> {
             let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
             self.ast.templates.partial(i)?.partial
         };
-        if !self.templ.entering_context && !self.encloses(pat, self.ctx) {
+        if !self.templ.entering_context
+            && !self.encloses(pat, self.ctx)
+            && !self.in_declarator_scope_of(pat)
+        {
             // `X<P...>` outside `X` (an alias template's or another
             // template's own parameters at the same positions) is an
             // ordinary dependent specialization.
             return None;
         }
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// Whether the class scope of pattern `pat` was entered for the rest
+    /// of a qualified declarator (`A<T>::f(typename A<T>::X)`).
+    fn in_declarator_scope_of(&self, pat: DeclId) -> bool {
+        let pat = self.ast.first(pat);
+        self.scopes.iter().any(|s| {
+            s.kind == ScopeKind::Record && s.entity.is_some_and(|e| self.ast.first(e) == pat)
+        })
     }
 
     /// `template<int S> void B<1, S>::g()`: a dependent template-id keeps
@@ -419,6 +447,34 @@ impl Sema<'_, '_> {
         self.ast.types.template_name_of(self.ast.first(d))
     }
 
+    /// The arity of `TT<args>` for a template template parameter `TT`
+    /// (clang's `CheckTemplateArgumentList` on the parameter's own list:
+    /// "too few/many template arguments for template template parameter
+    /// 'TT'"). Arguments that are pack expansions are matched later.
+    fn check_ttp_arity(&mut self, ttp: DeclId, args: &[TemplateArg], l: Loc) -> Result<(), ()> {
+        if args.iter().any(|&a| self.is_pack_expansion_arg(a)) {
+            return Ok(());
+        }
+        let Some(list) = self.ast.template_parm(ttp).and_then(|x| x.params) else {
+            return Ok(());
+        };
+        let l2 = *self.ast.templates.param_list(list);
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l2.params).collect();
+        let is_pack = |s: &Self, p: DeclId| s.ast.template_parm(p).is_some_and(|x| x.pack);
+        if params.iter().any(|&p| is_pack(self, p)) {
+            return Ok(());
+        }
+        let too_many = args.len() > params.len();
+        let too_few = params
+            .get(args.len()..)
+            .is_some_and(|rest| rest.iter().any(|&p| self.template_default(p).is_none()));
+        if too_many || too_few {
+            self.diag_template_arity(ttp, too_many, l);
+            return Err(());
+        }
+        Ok(())
+    }
+
     /// `name < args >` ([temp.names]): what the template-id names, by the
     /// kind of the template. Dependent specializations are built as
     /// written; non-dependent class and alias template specializations
@@ -439,6 +495,11 @@ impl Sema<'_, '_> {
             | self.ast.types.template_name_flags(name))
         .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
         let Some(d) = self.ast.types.template_decl(name) else {
+            if let TemplateName::TemplateTemplateParm { decl, .. } =
+                self.ast.types.template_name_view(name)
+            {
+                self.check_ttp_arity(decl, args, l)?;
+            }
             return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
                 // `TT<args>` for a template template parameter `TT`.
                 TemplateName::TemplateTemplateParm { .. }
@@ -461,6 +522,9 @@ impl Sema<'_, '_> {
             }
             DeclKind::ClassTemplate | DeclKind::TemplateTemplateParm => {
                 let ttp = self.kind_of(d) == DeclKind::TemplateTemplateParm;
+                if ttp {
+                    self.check_ttp_arity(d, args, l)?;
+                }
                 if !dep_args && !ttp {
                     let locs = std::mem::take(&mut self.templ.arg_locs);
                     let t = self.class_template_type(name, d, args, &locs, l)?;
@@ -966,23 +1030,77 @@ impl Sema<'_, '_> {
                 crate::init::InitValue::Expr(e) => *e,
                 crate::init::InitValue::List(n) => self.dependent_init_list(n),
             };
+            let e = if it.designator.is_empty() {
+                e
+            } else {
+                // A designated clause is a `DesignatedInitExpr` (clang
+                // `ActOnDesignatedInitializer`), rebuilt at instantiation.
+                let ds: Vec<kiln_ast::expr::Designator> =
+                    it.designator.iter().map(|d| self.designator_ast(d)).collect();
+                let loc = it.designator[0].loc();
+                // A designated pack expansion `.x = u...` is the
+                // expansion of the designated clause (clang parses the
+                // `...` after the whole designation).
+                match crate::templ::pack::expr_pattern(self, e) {
+                    Some(pat) => {
+                        let ellipsis = self.ast.exprs.get(e).loc();
+                        let d = self.builder().designated_init(&ds, pat, loc);
+                        self.builder().pack_expansion_expr(d, ellipsis)
+                    }
+                    None => self.builder().designated_init(&ds, e, loc),
+                }
+            };
             inits.push(e);
         }
-        let e = self.builder().init_list(QualType::VOID, &inits, None, None, l.lbrace, l.rbrace);
-        // Designators are kept beside the list and re-applied when it is
-        // substituted ([dcl.init.aggr]/3.1 is checked at instantiation).
-        if l.items.iter().any(|it| !it.designator.is_empty()) {
-            let d = l.items.iter().map(|it| it.designator.clone()).collect();
-            self.templ.init_designators.insert(e, d);
-        }
-        e
+        self.builder().init_list(QualType::VOID, &inits, None, None, l.lbrace, l.rbrace)
     }
 
-    /// True if any initializer of `l` (recursively) is type-dependent.
+    /// The AST form of designator `d`: a value-dependent array index
+    /// stays as written; a constant one is wrapped in its
+    /// `ConstantExpr` (clang `CheckArrayDesignatorExpr`).
+    fn designator_ast(&mut self, d: &crate::init::Designator) -> kiln_ast::expr::Designator {
+        let crate::init::Designator::Index(e, loc) = *d else { return d.to_ast() };
+        if self.expr_is_value_dependent(e) || self.is_err_expr(e) {
+            return d.to_ast();
+        }
+        let c = crate::conv::lvalue_to_rvalue(self, e);
+        let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, loc);
+        let index = match self.eval_int(c, ctx) {
+            Ok(v) => {
+                let ty = self.ast.exprs.get(c).ty();
+                let cv = self.int_const(ty, v);
+                self.builder().constant_expr(c, Some(cv))
+            }
+            Err(_) => e,
+        };
+        kiln_ast::expr::Designator::Index { index, loc }
+    }
+
+    /// Records the written form of the semantic list `sem` built from
+    /// the designated list `l` in a template pattern, for its
+    /// instantiation to rebuild from (§5.6 of spec/ast.md; clang keeps
+    /// the syntactic form of every list).
+    pub(crate) fn note_syntactic_list(&mut self, sem: ExprId, l: &crate::init::InitList) {
+        if self.ast.exprs.get(sem).kind() != ExprKind::InitListExpr
+            || self.ast.exprs.syntactic_list(sem).is_some()
+        {
+            return;
+        }
+        let w = self.dependent_init_list(l);
+        self.ast.exprs.set_syntactic_list(sem, w);
+    }
+
+    /// True if any initializer of `l` (recursively) is type-dependent,
+    /// or an array designator's index is value-dependent (the element it
+    /// names is known only at instantiation).
     pub(crate) fn init_list_type_dependent(&self, l: &crate::init::InitList) -> bool {
-        l.items.iter().any(|it| match &it.value {
-            crate::init::InitValue::Expr(e) => self.expr_is_type_dependent(*e),
-            crate::init::InitValue::List(n) => self.init_list_type_dependent(n),
+        l.items.iter().any(|it| {
+            it.designator.iter().any(|d| {
+                matches!(*d, crate::init::Designator::Index(e, _) if self.expr_is_value_dependent(e))
+            }) || match &it.value {
+                crate::init::InitValue::Expr(e) => self.expr_is_type_dependent(*e),
+                crate::init::InitValue::List(n) => self.init_list_type_dependent(n),
+            }
         })
     }
 
@@ -1203,7 +1321,14 @@ impl Sema<'_, '_> {
                 c = if semantic { sem.or(lex) } else { lex.or(sem) };
             }
         }
-        None
+        // The class scopes entered for the rest of a qualified declarator
+        // (`template<class T> void A<T>::f(const A&)`, [basic.lookup.unqual]/1).
+        self.scopes.iter().rev().filter(|s| s.kind == ScopeKind::Record).find_map(|s| {
+            let x = s.entity?;
+            (self.kind_of(x) == DeclKind::CXXRecord
+                && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl))
+            .then_some(x)
+        })
     }
 
     /// The injected-class-name of class template `tmpl` used without

@@ -662,7 +662,12 @@ the running `Substituter` instead.
 2. Probe `specializations[(first(tmpl), canonical)]`. On a hit, return
    that decl.
 3. On a miss, create a `ClassTemplateSpecialization` decl with
-   `SpecInfo{kind: Undeclared, args: sugared}` and insert it.
+   `SpecInfo{kind: Undeclared, args: canonical}` and insert it. The
+   implicit specialization's arguments are canonical (clang's
+   `ClassTemplateSpecializationDecl`), so its members see `unsigned long`,
+   not the alias `sz` it was first named with; the written spelling stays
+   on the `TemplateSpecialization` sugar
+   (`tests/conformance/temp.inst/canonical-arguments-in-instantiation.cpp`).
    - No instantiation happens. The type `X<int>` is
      `TemplateSpecialization(sugar) → Record(spec)`.
    - This is clang's `CheckTemplateIdType`.
@@ -796,6 +801,36 @@ are used. It only tells codegen not to emit them (WP-080).
 3. Set its `MemberSpecInfo.kind = ExplicitSpecialization` and attach the
    new definition.
 
+**Member templates of an implicit instantiation** ([temp.expl.spec]/16),
+such as `template<> template<class U> struct A<int>::B {...}` (also
+partial specializations `A<int>::B<U*>`, and function and variable
+member templates):
+1. The parser sees `template<>` immediately followed by `template <`
+   and brackets the inner declaration with
+   `act_member_template_spec_start/end`. While `TemplState.member_spec`
+   is set, the outer empty head does not count as a member-spec header.
+2. The qualified lookup into `A<int>` finds the member template that
+   `Substituter::member_template` redeclared there. The new declaration
+   becomes a redeclaration of it, even when it is only a declaration
+   (`template<> template<class U> struct A<int>::B;`).
+3. `specialize_member_template` removes the `instantiated_from` link of
+   the first declaration. `inst_template` and the pattern selection then
+   stop at this declaration, like clang's `setMemberSpecialization`, so
+   `A<int>::B<X>` instantiates the new definition.
+4. If the name is not found in `A<int>`, the error is "out-of-line
+   definition of 'N' does not match any declaration in 'A<int>'". This
+   is the same text used for templated qualified tags in general (the
+   scope is printed with written template parameter names, for example
+   'A<T>').
+5. "implicit instantiation of undefined template" notes "template is
+   declared here" at the latest redeclaration of the pattern when no
+   partial specialization matched, as clang does.
+
+Not done: when the inner head does not match the member template's head
+(for example, different parameter count), clang drops the declaration.
+kiln still links it as a redeclaration, so later uses get cascading
+errors.
+
 ### 4.6 `instantiate_class(spec, poi)` and member-wise laziness
 
 1. If the specialization already has a definition, or is invalid, return.
@@ -813,6 +848,19 @@ are used. It only tells codegen not to emit them (WP-080).
      can recurse.
    - **attributes** that affect layout (`alignas`, `packed`,
      `trivial_abi`).
+   - A member function's declaration, and a function template
+     specialization's (at `function_spec_signature`), gets the pattern's
+     attributes (`class_attrs`; clang `InitFunctionInstantiation` →
+     `InstantiateAttrs`; WP-182): `const`/`pure`, `[[noreturn]]`,
+     `[[nodiscard]]`, `[[deprecated]]`, ... — so codegen, `-Wunused-result`
+     and `-Wdeprecated-declarations` see them on the specialization. A
+     dependent `alignas` operand is substituted; other arguments are
+     shared with the pattern (no attribute kind that kiln evaluates takes
+     a dependent operand on a function yet). A friend is skipped (it may
+     redeclare a function with its own attributes), as is a declaration
+     that already has attributes. `[[deprecated]]` names a function
+     template specialization with its arguments (`'f<int>' is
+     deprecated`, clang `getNameForDiagnostic`).
    - **member declarations**. [temp.inst]/3 decides what happens to each
      kind of member:
 
@@ -1109,6 +1157,19 @@ recomputed exactly as for non-template code (clang's
 - **`ConceptSpecializationExpr`, `RequiresExpr`.** §8.
 - **Lambdas** get a new closure class per instantiation (WP-075).
 - **`SizeOfPackExpr`, folds, expansions.** §7.
+- **Braced lists** (`Substituter::init_list`, WP-192). A dependent list
+  is rebuilt clause by clause and re-run through the initialization
+  action. A semantic list that has a written form (`syntactic_list`,
+  spec/ast.md §5.6) is rebuilt from that form, as clang's
+  `TransformInitListExpr` uses the syntactic form. A
+  `DesignatedInitExpr` gives its designators back, with array indices
+  substituted. A `PackExpansionExpr` of a `DesignatedInitExpr` expands to
+  one designated clause per element. Designated lists in default member
+  initializers, default arguments (`T t = {.y = 2}`, kept dependent when
+  the parameter type is), NTTP arguments and requirements are handled
+  the same way. An unknown field in a requirement is a substitution
+  failure. The aggregate checks of spec/sema.md §6 run on the
+  instantiated type.
 
 ### 5.5 Statements
 
@@ -1157,7 +1218,8 @@ recomputed exactly as for non-template code (clang's
   (`body` of a non-compound body).
 - **`[[assume]]`** (WP-160): an `AttributedStmt`'s assumptions are
   substituted, converted and checked again (`build_cxx_assume_expr`,
-  -Wassume at instantiation).
+  -Wassume at instantiation). Its other attributes (`likely`,
+  `unlikely`, `fallthrough`; WP-182) are kept as they are.
 
 ### 5.6 Declarations
 
@@ -1175,6 +1237,9 @@ recomputed exactly as for non-template code (clang's
   defined with the outermost local class. Member function bodies are
   defined after it is complete, in the re-entered class scopes, as the
   parser replays them. Local enumerations are substituted the same way.
+  An anonymous struct or union member of a local class is instantiated as
+  in a class template (`unnamed_member_class`), which declares its member
+  object and injects its members' names (WP-192).
 - **Member templates** are created as in §4.6.
 - **`static_assert`** is evaluated with the substituted condition.
 - **`using` declarations** with packs give a `UsingPack` decl.
@@ -1468,6 +1533,23 @@ initializer-list guides first, with the whole list as the argument.
 Without user guides, an aggregate class template adds the aggregate
 deduction candidate (P1816). An alias template deduces through the
 transformed guides of the template its defining-type-id names (P1814).
+When a non-list argument has already been diagnosed (a `RecoveryExpr` or
+an error type, such as a variable whose own deduction failed), nothing is
+deduced and no further error is emitted. clang likewise deduces nothing
+from an initializer that contains errors (WP-192).
+An implicit guide's parameter types may name member typedefs of the class
+template (libc++ `vector(initializer_list<value_type>)`). Substituting
+the guide's arguments into such a typedef substitutes its underlying type
+and keeps the typedef as sugar, without instantiating the class
+(`Substituter::class_not_instantiated`). clang's guide transform clones
+the typedef instead.
+
+A template template parameter named alone (`C(args)`, `C{args}`,
+`C x(args);`) is a placeholder for a deduced class type as in clang
+(`is_ctad_template`, `names_class_type`): a dependent
+`DeducedTemplateSpecialization` whose template name substitution replaces
+with the argument's template, after which the placeholder is deduced as
+above (libc++ `ranges::to`; WP-198).
 
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
 implemented and what is deferred (P2582 inherited-constructor guides).
@@ -2164,7 +2246,14 @@ containing one records, on the `CXXDefaultInitExpr`, the values of the
 constructor's name (the class name for an implicit constructor) or of the
 `}`/`)` of an aggregate initialization, with the constructor or the
 enclosing function as the function (clang `CXXDefaultInitExpr::
-getUsedLocation`/`getUsedContext`). The Oven and codegen read them from
+getUsedLocation`/`getUsedContext`). For a parenthesized aggregate
+initialization by a C-style cast `(S)x` that is the operand's last token
+(`Sema::expr_end_loc`, clang `getEndLoc`; WP-182): a stored closing token
+(a call's or a parenthesized operand's `)`, a `}`), else the end of the
+last operand of an implicit node, cast, prefix/binary operator or
+conditional, else the node's own location (a name, literal, member name,
+postfix operator). A built-in subscript records no `]`, so `(S)a[i]`
+takes the `[` (clang: the `]`). The Oven and codegen read them from
 the outermost such default argument or member initializer in scope, and
 the codegen prepass evaluates the immediate invocations of such a member
 initializer per use (`fold_immediate_in`). Substitution drops the trailing
@@ -2603,6 +2692,15 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   parameters. A class-template forward redeclaration creates no new
   decl, so chained default checks are partial.
 - A template template parameter's inner list is not order-checked.
+- `TT<args>` for a template template parameter `TT` checks only the arity
+  against `TT`'s own list (`check_ttp_arity`: "too few/many template
+  arguments for template template parameter 'TT'", note at `TT`); a pack
+  parameter or a pack-expansion argument skips it, and argument kinds are
+  not checked. Matching a template template argument's parameter list
+  against the parameter's ([temp.arg.template]/3-4, clang's "template
+  template argument has different template parameters") is not
+  implemented: `Q<P>` with a mismatched `P` is accepted
+  (`tests/conformance/temp.names/ttp-specialization-arity.cpp`).
 - P0846 (ADL for an unknown name followed by `<`) is not implemented.
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is
@@ -3670,6 +3768,13 @@ requires-clause scope.**
   are supported.
 - *Friend templates* ([temp.friend]): `template<class U> friend class X;`
   (`act_on_friend_class_template`, `Sema.friend_class_template`),
+  a qualified `template<class U> friend class N::X;` /
+  `template<bool> friend class A<T>::B;` befriending the class template
+  qualified lookup finds, without declaring anything
+  (`act_on_qualified_friend_class_template`; a member template is found
+  again in the instantiated class; another kind of entity is
+  `sema_redefinition_different_kind`, nothing found in a namespace
+  `sema_friend_def_no_match`),
   `template<class U> friend R f(U);` (`friend_function_template`), and
   friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
   (`Declarator::friend`, `friend_spec_template`,
@@ -3814,6 +3919,41 @@ declarator scopes.**
   `class.temporary/trivial-dtor-checked.cpp`,
   `templates/order/temp.spec.partial.order-empty-pack.cpp`,
   `templates/spec/temp.spec.partial.match-cv-array.cpp`.
+
+**Landed (WP-117): out-of-line members and specialization follow-ups.**
+- *Declarator scope*: the parser brackets a qualified declarator's
+  suffix with `act_on_enter_declarator_scope` /
+  `act_on_exit_declarator_scope` (clang `EnterDeclaratorScope`), so
+  `S::vt S::f(vt)` finds `vt` in `S`. The injected-class-name is found
+  through that scope, and `typename A<T>::vt A<T>::g(vt)` is rebuilt in
+  the current instantiation (`rebuild_in_current_instantiation`) to
+  match the in-class declaration, including partial-specialization
+  qualifiers `P<T*>::f`.
+- *Member specializations*: `template<> int A<long>::s = 9;` explicitly
+  specializes the static member (`act_on_explicit_member_var_spec`).
+  An explicit specialization (of a function template or a member) is
+  never instantiated from the pattern ([temp.expl.spec]/7). A member
+  whose body fails to instantiate is marked invalid (clang
+  `setInvalidDecl`). `template<> template<class U> A<long>::g(U)` uses
+  WP-181's member-template specialization.
+- *Invalid bodies*: errors while instantiating a nested function body
+  are counted separately (`InstState::body_errors`). They do not make
+  the calling statement invalid. A call that names an invalid function
+  through a plain `DeclRefExpr` recovers without a follow-on error
+  (clang `RecoveryExpr`); member calls and explicit template-id calls
+  still report one.
+- *Placeholder NTTPs* (`auto*`, `const auto&`, `decltype(auto)`) are
+  deduced through `deduce_auto`; a failure is
+  `sema_nttp_deduction_failed`.
+- *Printer*: a member call keeps its explicit template arguments
+  (`s.get<0>()`); sema stores them on the `MemberExpr`
+  (`set_member_template_args`).
+- Tests: `templates/spec/temp.expl.spec-member-not-instantiated.cpp`,
+  `templates/spec/temp.inst-invalid-member-call.cpp`,
+  `templates/spec/temp.inst-member-template-args-printed.cpp`,
+  `templates/spec/temp.expl.spec-static-member-{run,after-use}.cpp`,
+  `templates/nttp/temp.param-placeholder-deduction.cpp`,
+  `basic.lookup.unqual/qualified-declarator-run.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 

@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 
 use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
 
 use crate::ids::{
     ArgListId, ConstValueId, DeclId, ExprId, LambdaId, ListId, NnsId, QualType, RawId, StmtId,
@@ -77,6 +78,9 @@ pub enum ExprKind {
     // initialization
     InitListExpr,
     ImplicitValueInitExpr,
+    /// An initializer-clause with designators in a dependent
+    /// `InitListExpr` (template patterns only, §5.6).
+    DesignatedInitExpr,
     CXXConstructExpr,
     CXXTemporaryObjectExpr,
     CXXInheritedCtorInitExpr,
@@ -1034,6 +1038,26 @@ pub struct CompoundAssignExtra {
     pub result_ty: QualType,
 }
 
+/// One designator of a `DesignatedInitExpr` ([dcl.init.aggr]/3.1;
+/// clang's `DesignatedInitExpr::Designator`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Designator {
+    /// `.name`; `loc` is the name.
+    Field {
+        /// The member name.
+        name: Symbol,
+        /// The name's location.
+        loc: Loc,
+    },
+    /// `[index]` (an extension in C++); `loc` is the `[`.
+    Index {
+        /// The index expression.
+        index: ExprId,
+        /// The `[`.
+        loc: Loc,
+    },
+}
+
 /// Side record of an `InitListExpr` (semantic form, §5.6).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct InitListExtra {
@@ -1103,8 +1127,15 @@ pub struct ColdExprData {
     pub end_loc: ColdMap<ExprId, Loc>,
     /// `MemberExpr` qualifier / template args / found decl.
     pub member_extra: ColdMap<ExprId, DeclRefExtra>,
-    /// Designators as written for `InitListExpr` (§5.6).
-    pub designators: ColdMap<ExprId, ListId>,
+    /// The designators of a `DesignatedInitExpr` (§5.6), outermost
+    /// first.
+    pub designators: ColdMap<ExprId, Box<[Designator]>>,
+    /// The written form of a semantic `InitListExpr` with designators
+    /// built in a template pattern: a dependent `InitListExpr` whose
+    /// designated clauses are `DesignatedInitExpr`s, which instantiation
+    /// rebuilds from (clang's syntactic form, kept only in templates;
+    /// §5.6).
+    pub syntactic_list: ColdMap<ExprId, ExprId>,
     /// `ArrayTypeTraitExpr`: the dimension operand of `__array_extent`
     /// (unevaluated by codegen; kept for substitution) and the value.
     pub array_trait: ColdMap<ExprId, ArrayTraitExtra>,
@@ -1239,6 +1270,7 @@ impl Default for ColdExprData {
             end_loc: ColdMap::new("end_loc"),
             member_extra: ColdMap::new("member_extra"),
             designators: ColdMap::new("designators"),
+            syntactic_list: ColdMap::new("syntactic_list"),
             array_trait: ColdMap::new("array_trait"),
             trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
             source_loc: ColdMap::new("source_loc"),
@@ -1502,6 +1534,34 @@ impl ExprArena {
         }
         n.aux = v as u8;
         Ok(())
+    }
+
+    /// Records the explicit template arguments `targs` written on the
+    /// member access `e` (`b.f<int>`, clang's `hasExplicitTemplateArgs`),
+    /// known only once the call resolved the member template. Write-once.
+    ///
+    /// # Panics
+    /// If `e` is not a `MemberExpr`.
+    pub fn set_member_template_args(
+        &mut self,
+        e: ExprId,
+        targs: ArgListId,
+    ) -> Result<(), AlreadySet> {
+        let kind = self.nodes[e.index() as usize].kind;
+        assert!(kind == ExprKind::MemberExpr, "expected MemberExpr, found {kind:?}");
+        match self.cold.member_extra.get(e).copied() {
+            Some(x) if x.template_args.is_some() => {
+                Err(AlreadySet { slot: "MemberExpr.template_args", existing: 0 })
+            }
+            Some(x) => {
+                self.cold.member_extra.refine(e, DeclRefExtra { template_args: Some(targs), ..x });
+                Ok(())
+            }
+            None => self.cold.member_extra.insert(
+                e,
+                DeclRefExtra { qualifier: None, template_args: Some(targs), found_decl: None },
+            ),
+        }
     }
 
     /// Marks the call `e` (`CallExpr` or `CXXOperatorCallExpr`) as calling
@@ -1885,6 +1945,39 @@ impl ExprArena {
     /// (a glvalue of polymorphic class type, [expr.typeid]/4).
     pub fn typeid_potentially_evaluated(&self, e: ExprId) -> bool {
         self.expect_kind(e, ExprKind::CXXTypeidExpr).aux & 1 != 0
+    }
+
+    /// The initializer of a `DesignatedInitExpr`.
+    pub fn designated_init(&self, e: ExprId) -> ExprId {
+        ExprId::new(self.expect_kind(e, ExprKind::DesignatedInitExpr).a)
+    }
+
+    /// The designators of a `DesignatedInitExpr`, outermost first.
+    pub fn designators(&self, e: ExprId) -> &[Designator] {
+        self.expect_kind(e, ExprKind::DesignatedInitExpr);
+        self.cold.designators.get(e).map_or(&[], |d| &d[..])
+    }
+
+    /// The index expressions of a `DesignatedInitExpr`'s array
+    /// designators, in order.
+    pub fn designated_indices(&self, e: ExprId) -> impl Iterator<Item = ExprId> + '_ {
+        self.cold.designators.get(e).into_iter().flat_map(|d| {
+            d.iter().filter_map(|x| match *x {
+                Designator::Index { index, .. } => Some(index),
+                Designator::Field { .. } => None,
+            })
+        })
+    }
+
+    /// The written form of a semantic `InitListExpr` built in a template
+    /// pattern from a list with designators (§5.6).
+    pub fn syntactic_list(&self, e: ExprId) -> Option<ExprId> {
+        self.cold.syntactic_list.get(e).copied()
+    }
+
+    /// Records `syntactic` as the written form of `semantic` (§5.6).
+    pub fn set_syntactic_list(&mut self, semantic: ExprId, syntactic: ExprId) {
+        let _ = self.cold.syntactic_list.insert(semantic, syntactic);
     }
 
     /// The explicit initializers of an `InitListExpr` (a `ListId` of
@@ -2276,6 +2369,10 @@ impl ExprArena {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
+            ExprKind::DesignatedInitExpr => {
+                v.extend(id(n.a));
+                v.extend(self.designated_indices(e));
+            }
             ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
             ExprKind::LambdaExpr => {
                 if let Some(l) = self.lambdas.get(LambdaId::new(n.a)).inits {
@@ -2330,6 +2427,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.end_loc.mem_row().prefixed("cold"));
         r.push(self.cold.member_extra.mem_row().prefixed("cold"));
         r.push(self.cold.designators.mem_row().prefixed("cold"));
+        r.push(self.cold.syntactic_list.mem_row().prefixed("cold"));
         r.push(self.cold.array_trait.mem_row().prefixed("cold"));
         r.push(self.cold.trait_rhs_loc.mem_row().prefixed("cold"));
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));

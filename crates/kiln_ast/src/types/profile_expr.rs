@@ -336,6 +336,23 @@ impl Ast {
                 out.push(tag(k, 0));
                 self.push_list(ListId::new(n.a()), stack);
             }
+            K::DesignatedInitExpr => {
+                // clang `VisitDesignatedInitExpr`: the designators, then
+                // the initializer.
+                let ds = x.designators(e);
+                out.push(tag(k, ds.len() as u32));
+                for d in ds {
+                    match *d {
+                        crate::expr::Designator::Field { name, .. } => {
+                            stack.extend([Work::Word(1), Work::Word(name.index())]);
+                        }
+                        crate::expr::Designator::Index { index, .. } => {
+                            stack.extend([Work::Word(2), Work::Expr(index)]);
+                        }
+                    }
+                }
+                stack.push(Work::Opt(id(n.a())));
+            }
 
             // ----- casts and construction: the written type matters
             K::CStyleCastExpr

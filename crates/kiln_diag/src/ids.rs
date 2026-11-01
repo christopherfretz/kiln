@@ -1377,6 +1377,7 @@ diag_ids! {
     // WP-067b: construction, ctor-initializers, implicit definitions,
     // temporaries ([class.base.init], [class.temporary], spec/sema-class.md §4.5-§5).
     sema_temp_return_local = Error (0) "returning reference to local temporary object";
+    sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";
     sema_temp_member_ref = Error (1) "reference member {0} binds to a temporary object whose lifetime would be shorter than the lifetime of the constructed object";
     note_temp_member_ref_here = Note (0) "reference member declared here";
     sema_temp_dtor_access = Error (2) "temporary of type {0} has {1:private|protected} destructor";
@@ -1504,6 +1505,7 @@ diag_ids! {
     sema_nttp_not_structural = Error (1) "type {0} of non-type template parameter is not a structural type";
     sema_nttp_non_literal = Error (1) "non-type template parameter has non-literal type {0}";
     sema_nttp_rvalue_ref = Error (1) "non-type template parameter has rvalue reference type {0}";
+    sema_nttp_deduction_failed = Error (3) "non-type template parameter '{0}' with type {1} has incompatible initializer of type {2}";
     note_not_structural_non_public = Note (2) "{0} is not a structural type because it has a {1:non-static data member|base class} that is not public";
     note_not_structural_mutable_field = Note (1) "{0} is not a structural type because it has a mutable non-static data member";
     note_not_structural_rvalue_ref_field = Note (1) "{0} is not a structural type because it has a non-static data member of rvalue reference type";
@@ -1577,6 +1579,35 @@ diag_ids! {
     sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
     parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
     sema_lvalue_cast_not_supported = Error (0) "assignment to cast is illegal, lvalue casts are not supported";
+    note_reference_temporary_list_init = Note (1) "in initialization of temporary of type {0} created to list-initialize this reference";
+    // ----- WP-192 (designated initializers; clang `SemaInit.cpp`)
+    sema_designated_init_reordered = ExtWarn [ReorderInitList] (2) "ISO C++ requires field designators to be specified in declaration order; field {1} will be initialized after field {0}";
+    note_previous_field_init = Note (1) "previous initialization for field {0} is here";
+    sema_designated_init_mixed = ExtWarn [C99Designator] (0) "mixture of designated and non-designated initializers in the same initializer list is a C99 extension";
+    note_designated_init_mixed = Note (0) "first non-designated initializer is here";
+    sema_designated_init_nested = ExtWarn [C99Designator] (0) "nested designators are a C99 extension";
+    sema_designated_init_array = ExtWarn [C99Designator] (0) "array designators are a C99 extension";
+    sema_initializer_overrides = ExtWarn [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
+    sema_initializer_union_overrides = WarningError [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
+    sema_field_designator_unknown = Error (2) "field designator '{0}' does not refer to any field in type {1}";
+    sema_field_designator_non_record = Error (1) "field designator cannot initialize a non-class type {0}";
+    sema_array_designator_non_array = Error (1) "array designator cannot initialize non-array type {0}";
+    // [dcl.init.general]/16 (WP-182)
+    sema_list_init_in_parens = Error (2) "cannot initialize {0:non-class|reference} type {1} with a parenthesized initializer list";
+    // [dcl.attr.likelihood], [dcl.attr.fallthrough] (WP-182)
+    ext_cxx17_attr = Extension [Cxx17AttributeExtensions] (1) "use of the '{0}' attribute is a C++17 extension";
+    ext_cxx20_attr = Extension [Cxx20AttributeExtensions] (1) "use of the '{0}' attribute is a C++20 extension";
+    sema_attributes_not_compatible = Error (2) "'{0}' and '{1}' attributes are not compatible";
+    note_conflicting_attribute = Note (0) "conflicting attribute is here";
+    sema_likelihood_if_conflict = Warning [IgnoredAttributes] (1) "conflicting attributes '{0}' are ignored";
+    sema_fallthrough_outside_switch = Error (0) "fallthrough annotation is outside switch statement";
+    parse_attribute_forbids_arguments = Error (1) "attribute '{0}' cannot have an argument list";
+    // [expr.comma] -Wunused-value (WP-182)
+    sema_unused_comma_left_operand = Warning [UnusedValue] (0) "left operand of comma operator has no effect";
+    sema_unused_call = Warning [UnusedValue] (1) "ignoring return value of function declared with {0} attribute";
+    note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
+    note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
+    sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
     sema_vla_static_storage = Error (0) "variable length array declaration cannot have 'static' storage duration";
     sema_vla_extern_linkage = Error (0) "variable length array declaration cannot have 'extern' linkage";
     sema_vla_no_init = Error (0) "variable-sized object may not be initialized";

@@ -70,6 +70,39 @@ impl Sema<'_, '_> {
         self.templ.explicit_spec = None;
     }
 
+    /// `template<>` followed by a non-empty template head was parsed
+    /// (`template<> template<class U> struct A<int>::B {...}`,
+    /// [temp.expl.spec]/16): the template declared next specializes a
+    /// member template of an implicitly instantiated class. Paired with
+    /// [`Sema::act_member_template_spec_end`].
+    pub fn act_member_template_spec_start(&mut self, loc: Loc) {
+        self.templ.member_spec = Some(loc);
+    }
+
+    /// The declaration after `template<> template<...>` ended.
+    pub fn act_member_template_spec_end(&mut self) {
+        self.templ.member_spec = None;
+    }
+
+    /// `t` redeclares, after `template<> template<...>`, a member
+    /// template of an implicitly instantiated class
+    /// ([temp.expl.spec]/16): the member template is specialized, so its
+    /// specializations are instantiated from this declaration's
+    /// definition with its own arguments only (clang's
+    /// `setMemberSpecialization`; `getTemplateInstantiationPattern`
+    /// stops there).
+    pub(crate) fn specialize_member_template(&mut self, t: DeclId) {
+        let first = self.ast.first(t);
+        if self
+            .ast
+            .templates
+            .instantiated_from_map(first)
+            .is_some_and(|x| kiln_ast::templates::is_template_kind(self.kind_of(x)))
+        {
+            self.ast.templates.clear_instantiated_from(first);
+        }
+    }
+
     /// `[extern] template` without `<` was parsed: the class template-id
     /// declared next is explicitly instantiated ([temp.explicit]/2).
     /// Paired with [`Sema::act_explicit_inst_end`].
@@ -601,14 +634,95 @@ impl Sema<'_, '_> {
                 s.point_of_instantiation = name_loc;
             }
         });
+        let lexical = self.ctx;
         if first_explicit {
-            let lexical = self.ctx;
             self.builder().declare_spec_in(spec, lexical, name_loc);
+        } else if !declaration && let Some(list) = self.ast.decls.member_list(lexical) {
+            // After an explicit instantiation declaration, clang hands
+            // the members to codegen here, not at the declaration.
+            let after = list.last.unwrap_or(lexical);
+            self.ast.templates.add_moved_class_inst(after, spec);
         }
         if !declaration {
             self.instantiate_members_of(spec, name_loc, 0);
         }
         Ok(spec)
+    }
+
+    /// `[extern] template struct C<args>::I;`, the qualified class `p`
+    /// declared after an explicit instantiation's `template`: when `p` is
+    /// a member class of a class template specialization
+    /// ([temp.explicit]/3), it is explicitly instantiated (true).
+    pub(crate) fn act_on_explicit_member_class_inst(&mut self, p: DeclId, name_loc: Loc) -> bool {
+        let m = self.ast.first(p);
+        if !self.at_explicit_head() || self.ast.member_spec_info(m).is_none() {
+            return false;
+        }
+        let Some((ext, _)) = self.templ.explicit_inst.take() else { return false };
+        self.explicit_member_class_inst(m, ext.is_some(), name_loc);
+        true
+    }
+
+    /// `[extern] template struct C<args>::I;` for member class `m` of a
+    /// class template specialization ([temp.explicit]/3, /10): its
+    /// definition is instantiated and, for a definition, the definitions
+    /// of its members, handed to codegen here (clang
+    /// `ActOnExplicitInstantiation` for a member class).
+    fn explicit_member_class_inst(&mut self, m: DeclId, declaration: bool, name_loc: Loc) {
+        let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) else { return };
+        match (info.kind, declaration) {
+            // [temp.explicit]/8 (clang: no effect); a repeated
+            // declaration is harmless.
+            (SpecKind::ExplicitSpecialization, _)
+            | (SpecKind::ExplicitInstantiationDeclaration, true) => return,
+            (SpecKind::ExplicitInstantiationDefinition, false) => {
+                // [temp.spec.general]/5: at most once.
+                let note = self.diag(
+                    DiagId::note_previous_explicit_instantiation,
+                    info.point_of_instantiation,
+                );
+                let t = self.tag_type(m);
+                let d = self
+                    .diag(DiagId::sema_explicit_inst_duplicate, name_loc)
+                    .arg(self.ty_str(t))
+                    .with_note(note);
+                self.emit(d);
+                return;
+            }
+            (SpecKind::ExplicitInstantiationDefinition, true) => {
+                // [temp.explicit]/11.
+                let note = self.diag(
+                    DiagId::note_explicit_instantiation_definition_here,
+                    info.point_of_instantiation,
+                );
+                let d = self
+                    .diag(DiagId::sema_explicit_inst_declaration_after_definition, name_loc)
+                    .with_note(note);
+                self.emit(d);
+                return;
+            }
+            _ => {}
+        }
+        if !self.instantiate_class(m, name_loc, false) {
+            return;
+        }
+        let kind = if declaration {
+            SpecKind::ExplicitInstantiationDeclaration
+        } else {
+            SpecKind::ExplicitInstantiationDefinition
+        };
+        self.ast.templates.update_member_spec(i, |x| {
+            x.kind = kind;
+            x.point_of_instantiation = name_loc;
+        });
+        if !declaration {
+            let lexical = self.ctx;
+            if let Some(list) = self.ast.decls.member_list(lexical) {
+                let after = list.last.unwrap_or(lexical);
+                self.ast.templates.add_explicit_member_inst(after, m);
+            }
+            self.instantiate_members_of(m, name_loc, 0);
+        }
     }
 
     /// Instantiates the definition of `spec` for an explicit
@@ -656,6 +770,16 @@ impl Sema<'_, '_> {
             }
             let n = *self.ast.decls.get(m);
             if n.flags().contains(DeclFlags::IMPLICIT) || self.ast.instantiated_from(m).is_none() {
+                continue;
+            }
+            // An explicitly specialized member is not instantiated from
+            // the pattern ([temp.explicit]/10, clang
+            // `InstantiateClassMembers` skips `TSK_ExplicitSpecialization`).
+            if self
+                .ast
+                .member_spec_info(self.ast.first(m))
+                .is_some_and(|(_, x)| x.kind == SpecKind::ExplicitSpecialization)
+            {
                 continue;
             }
             match n.kind() {

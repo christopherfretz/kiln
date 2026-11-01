@@ -333,7 +333,12 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<SpecMatch> {
         let explicit = d.spec_id.as_ref().map(|s| self.ast.types.arg_list(&s.args));
-        let found = self.prev_candidates_dn(name, d.qualifier);
+        // An explicit specialization may name a template of an inline
+        // namespace ([temp.expl.spec]/3).
+        let found = match d.qualifier {
+            None => self.current_scope_with_inline_dn(name),
+            Some(_) => self.prev_candidates_dn(name, d.qualifier),
+        };
         let templates = self.function_templates_in(&found);
         self.match_function_spec_in(&templates, explicit, name, ty, inst, loc)
     }
@@ -552,7 +557,11 @@ impl Sema<'_, '_> {
         }
         self.instantiate_function_definition(s, name_loc);
         if self.ast.definition(s).is_none() {
+            // Defined later: instantiated, and emitted, at the end of the
+            // TU (clang `PerformPendingInstantiations`).
             self.queue_instantiation(s, name_loc);
+            let first = self.ast.first(s);
+            self.ast.templates.add_late_explicit_inst(first);
         }
     }
 
@@ -580,7 +589,10 @@ impl Sema<'_, '_> {
         if !in_spec {
             return None;
         }
-        let cands = self.prev_candidates_dn(name, Some(q));
+        let mut cands = self.prev_candidates_dn(name, Some(q));
+        // An invalid out-of-line declaration is not found (clang does
+        // not add it to its context).
+        cands.retain(|&c| !self.ast.decls.get(c).has(DeclFlags::INVALID));
         // A non-template member that matches wins over the member
         // templates of the same name (clang's `ActOnExplicitInstantiation`
         // and `CheckMemberSpecialization` try the non-templates first;
@@ -640,7 +652,7 @@ impl Sema<'_, '_> {
         let e = self
             .diag(id, d.name_loc())
             .arg(self.decl_name_str(name))
-            .arg(format!("'{}'", self.ty_str(self.class_type(q))));
+            .arg(self.class_context_str(q));
         self.emit(e);
         Some(None)
     }
@@ -759,6 +771,64 @@ impl Sema<'_, '_> {
         Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
     }
 
+    /// `template<> T C<args>::s ...;` for static data member `m` of an
+    /// implicit class template specialization ([temp.expl.spec]/1): the
+    /// member's definition is no longer instantiated from the pattern
+    /// (clang `CheckMemberSpecialization`). False after a diagnostic
+    /// ([temp.expl.spec]/7).
+    pub(crate) fn act_on_explicit_member_var_spec(&mut self, m: DeclId, name_loc: Loc) -> bool {
+        let first = self.ast.first(m);
+        let Some((i, info)) = self.ast.member_spec_info(first).map(|(i, x)| (i, *x)) else {
+            return true;
+        };
+        let after_inst = match info.kind {
+            SpecKind::ImplicitInstantiation => self.ast.decls.get(first).has(DeclFlags::USED),
+            SpecKind::ExplicitInstantiationDeclaration
+            | SpecKind::ExplicitInstantiationDefinition => true,
+            SpecKind::Undeclared | SpecKind::ExplicitSpecialization => false,
+        };
+        if after_inst {
+            let explicit = u32::from(info.kind != SpecKind::ImplicitInstantiation);
+            let at = self.member_use_loc(first, info.point_of_instantiation);
+            let note = self.diag(DiagId::note_instantiation_required_here, at).arg(explicit);
+            let e = self
+                .diag(DiagId::sema_spec_after_instantiation, name_loc)
+                .arg(self.decl_name_str(self.ast.decls.get(first).name()))
+                .with_note(note);
+            self.emit(e);
+            return false;
+        }
+        self.ast.templates.update_member_spec(i, |x| {
+            x.kind = SpecKind::ExplicitSpecialization;
+            x.point_of_instantiation = Loc::INVALID;
+        });
+        self.inst.member_defs.remove(&first);
+        self.inst.deferred_inits.remove(&first);
+        true
+    }
+
+    /// After `template<>`, an out-of-line redeclaration `p` of a
+    /// constructor or destructor of an implicit class template
+    /// specialization explicitly specializes it ([temp.expl.spec]/1,
+    /// §4.5): it is no longer instantiated from the pattern (clang
+    /// `CheckMemberSpecialization`). Static data members go through
+    /// `act_on_explicit_member_var_spec`.
+    pub(crate) fn mark_member_explicit_spec(&mut self, p: DeclId) {
+        if self.templ.explicit_spec.is_none() || !self.at_explicit_head() {
+            return;
+        }
+        let Some((i, info)) = self.ast.member_spec_info(self.ast.first(p)).map(|(i, x)| (i, *x))
+        else {
+            return;
+        };
+        if info.kind == SpecKind::ImplicitInstantiation {
+            self.ast.templates.update_member_spec(i, |x| {
+                x.kind = SpecKind::ExplicitSpecialization;
+                x.point_of_instantiation = Loc::INVALID;
+            });
+        }
+    }
+
     /// `[extern] template R C<args>::f(params);` for member `m` of a
     /// class template specialization ([temp.explicit]/3, §4.5).
     pub(crate) fn act_on_explicit_member_inst(
@@ -830,6 +900,8 @@ impl Sema<'_, '_> {
             self.instantiate_function_definition(m, name_loc);
             if self.ast.definition(m).is_none() {
                 self.queue_instantiation(m, name_loc);
+                let first = self.ast.first(m);
+                self.ast.templates.add_late_explicit_inst(first);
             }
         }
     }

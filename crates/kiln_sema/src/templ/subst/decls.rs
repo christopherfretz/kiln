@@ -244,8 +244,22 @@ impl Substituter<'_, '_, '_> {
         (v.init.is_some() || missing)
             && (v.spec.is_inline() || v.spec.is_constexpr())
             && v.spec.storage() == VarStorage::Static
-            && !matches!(ast.types.view(t.ty()), TypeView::Auto { .. })
+            && !Self::has_placeholder(ast, t)
             && !matches!(ast.types.view(ast.types.canonical(t).ty()), TypeView::IncompleteArray(_))
+    }
+
+    /// Whether `t` is a placeholder under pointer and reference
+    /// declarators (`auto`, `auto*`, `const auto&`).
+    fn has_placeholder(ast: &kiln_ast::Ast, t: QualType) -> bool {
+        let mut cur = t;
+        for _ in 0..256 {
+            match ast.types.view(cur.ty()) {
+                TypeView::Auto { .. } => return true,
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Declares pattern static data member `d` with its initializer
@@ -279,7 +293,12 @@ impl Substituter<'_, '_, '_> {
             return Ok(());
         };
         let style = data.spec.init_style();
-        if let Ok(i) = self.initializer(init, style) {
+        // A lambda in the initializer is numbered in `v`'s context
+        // (spec/sema-lambda.md; clang `TemplatedVariable`).
+        let saved = self.sema.lambda_mangle.var.replace(v);
+        let i = self.initializer(init, style);
+        self.sema.lambda_mangle.var = saved;
+        if let Ok(i) = i {
             match i {
                 Some(i) => self.sema.act_on_init(v, i),
                 None => self.sema.act_on_uninit(v),
@@ -541,6 +560,13 @@ impl Substituter<'_, '_, '_> {
             // Recovery declared something else (an invalid redeclaration).
             return Ok(r);
         }
+        // The pattern's attributes (`const`, `pure`, `[[noreturn]]`,
+        // `[[nodiscard]]`, ...), as clang `InitFunctionInstantiation` →
+        // `InstantiateAttrs` (WP-182). A friend may redeclare a function
+        // that has its own.
+        if friend.is_none() {
+            self.class_attrs(f, d);
+        }
         if lazy_exc {
             let first = self.sema.ast.first(f);
             self.sema.uninstantiated_exc.insert(first, d);
@@ -641,6 +667,9 @@ impl Substituter<'_, '_, '_> {
         let _ = self.sema.builder().set_params(spec, &ids);
         self.forget_pattern_params(pat);
         self.defer_default_args(pat, spec);
+        // The pattern's attributes (clang `InitFunctionInstantiation` →
+        // `InstantiateAttrs`; WP-182).
+        self.class_attrs(spec, pat);
         Ok(())
     }
 
@@ -797,7 +826,12 @@ impl Substituter<'_, '_, '_> {
             }
             // `= {...}` with a dependent type or element: the list
             // as written, list-initializing the substituted type.
-            kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
+            // (A `void` list was kept as written for a dependent
+            // parameter type, even with non-dependent elements.)
+            kiln_ast::expr::ExprKind::InitListExpr
+                if self.needs_rebuild(def)
+                    || self.sema.ast.exprs.get(def).ty() == QualType::VOID =>
+            {
                 if let Ok(l) = self.init_list(def) {
                     self.sema.act_on_param_default_list(b, &l);
                 }
@@ -991,8 +1025,18 @@ impl Substituter<'_, '_, '_> {
             }
             FriendTarget::Decl(t) if self.sema.kind_of(t) == DeclKind::ClassTemplate => {
                 // `template<class U> friend class X;` names a namespace
-                // scope template, which substitution leaves unchanged.
+                // scope template, which substitution leaves unchanged; a
+                // qualified `A<T>::B` names a member template of a class
+                // template, found again in the instantiated class.
                 let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+                let in_class = self
+                    .sema
+                    .ast
+                    .decls
+                    .get(t)
+                    .ctx()
+                    .is_some_and(|c| self.sema.kind_of(c) == DeclKind::CXXRecord);
+                let t = if in_class { self.find_instantiated_decl(t, loc)? } else { t };
                 self.check_friend_class_head(t);
                 let fd = self.sema.builder().friend(record, loc, FriendTarget::Decl(t));
                 let first = self.sema.ast.first(t);

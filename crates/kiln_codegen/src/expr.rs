@@ -2280,7 +2280,7 @@ impl Cg<'_> {
         // A callee with a `NoThrowAttr` (a recognized C library function)
         // or a `const` / `pure` attribute.
         if let Some(d) = direct {
-            let const_pure = crate::builtins::const_pure_attrs(ast, d, &mut extra);
+            let const_pure = crate::builtins::const_pure_attrs(ast, d, &sig, &mut extra);
             sig.nothrow |= const_pure || ast.has_nothrow_attr(d);
         }
         let mut noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
@@ -2652,12 +2652,26 @@ impl Cg<'_> {
         inits.iter().map(|&i| self.non_zero_bytes(i)).sum()
     }
 
+    /// clang `CheckAggExprForMemSetUse`'s first test: objects of (arrays
+    /// of) a class with a user-declared constructor are never zeroed by
+    /// a `memset` first.
+    fn base_class_has_user_ctor(&self, q: QualType) -> bool {
+        let ast = self.ast;
+        let mut q = q;
+        while let Some(e) = ast.types.element(q) {
+            q = e;
+        }
+        ast.types.as_record(q).is_some_and(|rd| {
+            self.class_bits_of(rd).contains(kiln_ast::decl::DefinitionBits::USER_DECLARED_CTOR)
+        })
+    }
+
     /// clang `EmitAggExpr` (with `CheckAggExprForMemSetUse`).
     pub(crate) fn emit_agg(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         let mut zeroed = zeroed;
-        if !zeroed && !self.is_volatile(q) {
+        if !zeroed && !self.is_volatile(q) && !self.base_class_has_user_ctor(q) {
             let size = self.size_align(q).0;
             if size > 16 && self.non_zero_bytes(e) * 4 <= size {
                 self.memset(dest, 0, size, false);
@@ -2737,7 +2751,7 @@ impl Cg<'_> {
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::CXXMemberCallExpr => {
@@ -2765,7 +2779,7 @@ impl Cg<'_> {
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr if self.is_glvalue(e) => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
@@ -2806,7 +2820,7 @@ impl Cg<'_> {
                     }
                     let size = self.size_align(q).0;
                     let vol = self.is_volatile(q) || self.is_volatile(lv.q);
-                    self.memcpy(dest, lv.addr.v, lv.addr.align, size, vol);
+                    self.agg_copy(q, dest, lv.addr, size, vol);
                     Ok(())
                 } else {
                     self.agg_visit(s, dest, zeroed)
@@ -2822,7 +2836,7 @@ impl Cg<'_> {
                     return Ok(());
                 }
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::BinaryOperator if ast.exprs.binary_op(e) == BinaryOp::Comma => {
