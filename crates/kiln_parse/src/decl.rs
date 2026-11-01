@@ -1392,7 +1392,12 @@ impl Parser<'_, '_> {
                     }
                 }
                 self.expect_closing(Punct::RSquare, Punct::LSquare, open);
-                self.skip_attributes();
+                // clang `ParseBracketDeclarator` takes only C++11
+                // attributes here; GNU ones after the declarator apply to
+                // the whole declared type (`int b[2] __attribute__((..))`).
+                if self.at_cxx11_attr() {
+                    self.skip_attributes();
+                }
                 d.chunks.push(Chunk::Array { size, loc: open });
             } else if self.at(Punct::LParen) {
                 // [dcl.ambig.res]/1: after a name that could take a direct

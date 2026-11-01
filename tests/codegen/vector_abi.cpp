@@ -41,3 +41,8 @@ d4 fd4(d4 x) { return x; }
 struct S { f2 a; f2 b; };
 S fs(S s) { return s; }
 int call(i8v a, b4 b, f2 c) { fi8(a); fb4(b); ff2(c); return 0; }
+
+// Vector attributes among the decl-specifiers apply to the return and
+// parameter types (WP-156).
+__attribute__((vector_size(8))) short ret_g(__attribute__((vector_size(8))) short x) { return x + 1; }
+__attribute__((vector_size(16))) int *ret_gp(__attribute__((vector_size(16))) int *p) { return p + 1; }

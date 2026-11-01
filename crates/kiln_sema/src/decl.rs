@@ -773,6 +773,7 @@ impl Sema<'_, '_> {
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
         let base = self.type_from_declspec(ds);
+        let base = self.apply_declspec_vector_attrs(base, ds);
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if let Some((s, loc)) = ds.storage
             && s != StorageSpec::Register
@@ -787,7 +788,7 @@ impl Sema<'_, '_> {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
         }
-        let mut attrs = ds.attrs.clone();
+        let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
         if self.ast.types.is_array(ty) {
@@ -1365,6 +1366,10 @@ impl Sema<'_, '_> {
             self.templ.cur = None;
             return None;
         }
+        // GNU vector attributes among the decl-specifiers apply to the
+        // decl-specifier type (clang `processTypeAttrs(TAL_DeclSpec)`),
+        // so `__attribute__((vector_size(8))) short f();` returns a vector.
+        let base = self.apply_declspec_vector_attrs(base, ds);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {
@@ -1413,7 +1418,7 @@ impl Sema<'_, '_> {
         if d.qualifier.is_none() {
             self.check_template_param_shadow(name, name_loc);
         }
-        let mut attrs = ds.attrs.clone();
+        let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         if let Some(op) = d.op_name
             && (ds.is_typedef() || !self.ast.types.is_function(ty))
