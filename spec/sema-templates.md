@@ -3733,6 +3733,82 @@ declarator scopes.**
   `temp.spec.partial.member/non-type-arg-scope.cpp`,
   `templates/builtins/builtin.is-trivially-constructible-assignable.cpp`.
 
+**Landed (WP-176): libc++ `<type_traits>` follow-ups.**
+- *Converted-constant narrowing* (§9.3): `sema_cce_narrowing_value` is
+  clang's `ext_cce_narrowing`, a `-Wc++11-narrowing` warning-as-error
+  that recovers with the converted value. `__type_pack_element<-1, T>`
+  therefore reports both the narrowing and the index out of bounds; with
+  `-Wno-c++11-narrowing` only the latter. noexcept specifiers and
+  template arguments recover the same way.
+- *Abominable function types*: `__decay` of a cv- or ref-qualified
+  function type is the type itself (clang `BuiltinDecay` defers to
+  `BuiltinAddPointer`). Forming a pointer or reference to one is
+  diagnosed, and in a substitution it is a SFINAE failure.
+- *Traits*: `__is_convertible(From, To)` is false when `To` is an
+  abstract class (`To test()` is ill-formed, clang
+  `CheckConvertibilityForTypeTraits`). A function lvalue binds directly
+  to `T&&` ([dcl.init.ref]/5.3.1).
+- *Pointer-to-member calls*: `.*`/`->*` on a member function checks the
+  ref-qualifier against the object's value category and the cv against
+  the object's ([expr.mptr.oper]/6). The call's noexcept-ness comes from
+  the member pointer's prototype (`member_call_can_throw`).
+- *Current instantiation in template arguments*: an out-of-line member's
+  return type rebuilds `typename A<T>::B` inside template arguments
+  (`rebuild_ci_type`, e.g. `pair<iterator, bool>`).
+- *Elaborated template template parameter*: `friend class TT<Args>;`
+  with `TT` a template template parameter names its specialization
+  (parser `parse_tag_specifier`).
+- *Designators in dependent lists*: a dependent braced-init-list keeps
+  its designators in `TemplState::init_designators` (keyed by the
+  `InitListExpr`, since the dependent node has no designator storage).
+  `subst` re-applies them, substituting `[i]` indices.
+- *`&L::m` in a local class of a template*: an implicit member reference
+  written `L::m` keeps its qualifier (`DeclRefExtra::qualifier`), and a
+  dependent `&L::m` drops its pending `member_refs` entry, so that
+  instantiation rebuilds a pointer to member, not `&this->m`.
+- *[expr.cond]/4 class unification* (clang `TryClassUnification`): when
+  the operands differ in type and either is a class, each is tried
+  against the other. The order is: /4.1–4.2, a glvalue target binding
+  directly; /4.3.1–4.3.2, same or derived class with at least the
+  target's cv (otherwise no conversion); /4.3.3, implicit conversion to
+  the other's prvalue type. If both directions succeed, the result is
+  `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
+  /6 overloaded-operator candidates are not tried.
+- *Calls returning `F&&`*: a call whose result type is an rvalue
+  reference to function is an lvalue ([expr.call]/14), so
+  `declval<Fn>()()` is callable and `decltype` of it is `F&`.
+- *Constructible traits make a temporary* (clang `InitializeTemporary`):
+  the initialization `__is_constructible` (and its nothrow and trivially
+  forms) checks is bound with `maybe_bind_temporary`. So a private or
+  deleted destructor makes the trait false, and a potentially-throwing
+  destructor makes the nothrow form false. `maybe_bind_temporary` now
+  checks a user-declared trivial destructor too (access, deletion)
+  without binding. A call that is a `decltype` operand defers that check
+  to `exit_decltype`, which exempts the top-level call.
+- *Partial ordering with packs*: `partial_at_least_as_specialized`
+  makes an undeduced pack parameter empty (`empty_undeduced_packs`, as
+  matching already did). Without this, `C<A>` and `C<A, B...>` were
+  ambiguous for `C<int>`.
+- *Matching prefilter and cv arrays*: `ArgShape::admits` compares an
+  array argument's effective (element) qualifiers, so `S<const F>`
+  matches `const int[10]` (libc++ `__copy_cv`, common_reference of
+  arrays).
+- Tests: `templates/builtins/temp.builtin.type-pack-element-narrowing.cpp`,
+  `templates/diag/temp.arg.nontype-narrowing-wno.cpp`,
+  `dcl.fct/abominable-compound.cpp`, `expr.mptr.oper/ref-qualified-call.cpp`,
+  `templates/builtins/builtin.decay-convertible-functions.cpp`,
+  `temp.friend/friend-template-template-param-specialization.cpp`,
+  `temp.mem/out-of-line-nested-typename-in-template-args.cpp`,
+  `dcl.init.aggr/designated-in-template.cpp`,
+  `dcl.init.aggr/reference-member.cpp`,
+  `except.spec/noexcept-pointer-to-member-call.cpp`,
+  `temp.inst/local-class-member-pointer.cpp`, `expr.cond/class-operand-*.cpp`,
+  `expr.call/function-rvalue-reference-result.cpp`,
+  `templates/builtins/builtin.is-constructible-temporary-dtor.cpp`,
+  `class.temporary/trivial-dtor-checked.cpp`,
+  `templates/order/temp.spec.partial.order-empty-pack.cpp`,
+  `templates/spec/temp.spec.partial.match-cv-array.cpp`.
+
 ### 11.3 Instantiation report and memory accounting
 
 **Meter.** Each instantiation frame records, at push, `(Ast::bytes(),

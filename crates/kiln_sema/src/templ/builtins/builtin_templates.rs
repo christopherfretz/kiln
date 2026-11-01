@@ -207,8 +207,10 @@ impl Sema<'_, '_> {
                 .arg("non-type template argument")
                 .arg(raw.to_string())
                 .arg(self.ty_arg(pty));
+            // A `-Wc++11-narrowing` error by default; clang goes on with
+            // the converted value (`__type_pack_element<-1, int>` then
+            // also reports the index out of bounds).
             self.emit(msg);
-            return Err(());
         }
         let c = match conv::implicit_convert(self, c, pty, ConvCtx::Initialization) {
             Ok(c) => c,

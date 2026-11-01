@@ -28,6 +28,17 @@ pub(crate) enum Opaque {
     Lv(LV),
 }
 
+/// The callee of [`Cg::call_vals_to`] (clang `CGCallee`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Callee {
+    /// A function pointer already computed.
+    Value(V),
+    /// Virtual method `md` of the object at `this` (alignment `align`):
+    /// its vtable slot is loaded after the arguments are lowered
+    /// (clang `CGCallee::forVirtual`).
+    Virtual { md: DeclId, this: V, align: u64 },
+}
+
 /// An lvalue: an address, its source type and the bit-field access.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LV {
@@ -1857,6 +1868,16 @@ impl Cg<'_> {
         self.field_lvalue_init(base, field, q)
     }
 
+    /// The lvalue an aggregate initializer stores to: a reference member's
+    /// own slot (to bind), any other field as `field_lvalue` (bit-fields).
+    fn init_field_lvalue(&mut self, base: Addr, field: DeclId, q: QualType) -> R<LV> {
+        if self.referee(q).is_some() {
+            self.field_lvalue_init(base, field, q)
+        } else {
+            self.field_lvalue(base, field, q)
+        }
+    }
+
     /// The storage of field `field` of the object at `base` (a reference
     /// member's own slot, not its referee): clang `EmitLValueForFieldInitialization`.
     pub(crate) fn field_lvalue_init(&mut self, base: Addr, field: DeclId, q: QualType) -> R<LV> {
@@ -2085,6 +2106,24 @@ impl Cg<'_> {
                     // copied (clang `EmitAggFinalDestCopy`).
                     return self.emit_va_arg(e, None).map(|_| ());
                 }
+                // clang `AggExprEmitter::withReturnValueSlot`: an ignored
+                // slot gives the call no address, so `EmitCall` makes its
+                // `sret`/coerce temporary after the arguments' `agg.tmp`s.
+                let mut c = e;
+                while ast.exprs.get(c).kind() == ExprKind::ParenExpr {
+                    c = ast.exprs.operand(c);
+                }
+                match ast.exprs.get(c).kind() {
+                    ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
+                        self.emit_call(c, None)?;
+                        return Ok(());
+                    }
+                    ExprKind::CXXMemberCallExpr => {
+                        self.emit_member_call(c, None)?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
             }
@@ -2306,7 +2345,7 @@ impl Cg<'_> {
         dest: Option<Addr>,
         extra: &[Attr],
     ) -> R<Option<V>> {
-        self.call_vals_ret(sig, callee, fid, this, vals, args, dest, extra, &[])
+        self.call_vals_to(sig, Callee::Value(callee), fid, this, vals, args, dest, extra, &[])
     }
 
     /// [`Self::call_vals`] with extra return attributes `ret_extra`.
@@ -2315,6 +2354,26 @@ impl Cg<'_> {
         &mut self,
         sig: &Sig,
         callee: V,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        vals: &[CallArg],
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+        ret_extra: &[Attr],
+    ) -> R<Option<V>> {
+        self.call_vals_to(sig, Callee::Value(callee), fid, this, vals, args, dest, extra, ret_extra)
+    }
+
+    /// [`Self::call_vals_ret`] with a callee that may be computed only after
+    /// the arguments are lowered (clang `EmitCall` step 2,
+    /// `prepareConcreteCallee`: a virtual call loads its vtable slot after
+    /// the argument coercions).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_vals_to(
+        &mut self,
+        sig: &Sig,
+        callee: Callee,
         fid: Option<FuncId>,
         this: Option<V>,
         vals: &[CallArg],
@@ -2358,6 +2417,10 @@ impl Cg<'_> {
             let loc = args.get(i).and_then(|&a| self.loc_of(a));
             self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
         }
+        let callee = match callee {
+            Callee::Value(v) => v,
+            Callee::Virtual { md, this, align } => self.virtual_fn_ptr(md, None, this, align)?,
+        };
         let rty = match &sig.info.ret.kind {
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
                 let c = coerce.clone();
@@ -2714,6 +2777,27 @@ impl Cg<'_> {
                 self.ensure_insert_point();
                 self.agg_visit(r, dest, zeroed)
             }
+            // clang `AggExprEmitter::VisitAbstractConditionalOperator`: each
+            // arm initializes the destination in its own block.
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                let c = self.sub(e);
+                if let Some(x) = self.fold_bool(c) {
+                    return self.agg_visit(if x { a } else { b }, dest, zeroed);
+                }
+                let lb = self.f.fir.create_block();
+                let rb = self.f.fir.create_block();
+                let cont = self.f.fir.create_block();
+                let start = self.f.fir.cur();
+                self.branch_on_bool(c, lb, rb)?;
+                self.emit_block(lb, false);
+                self.cond_eval(start, |cg| cg.agg_visit(a, dest, zeroed))?;
+                self.br(cont);
+                self.emit_block(rb, false);
+                self.cond_eval(start, |cg| cg.agg_visit(b, dest, zeroed))?;
+                self.emit_block(cont, false);
+                Ok(())
+            }
             ExprKind::StringLiteral => {
                 // A literal initializing a (possibly longer) char array:
                 // copy from the literal's constant padded to the array.
@@ -2843,6 +2927,13 @@ impl Cg<'_> {
         if matches!(k, ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr) {
             return self.null_init_lvalue(lv, zeroed);
         }
+        if lv.bf.is_none() && self.referee(lv.q).is_some() {
+            // A reference member binds to its initializer's address
+            // (clang `EmitInitializationToLValue`, reference case).
+            let p = self.emit_ref_binding(e)?;
+            self.store(p, lv.addr.v, lv.addr.align, false);
+            return Ok(());
+        }
         if lv.bf.is_none() && self.ast.types.as_atomic(lv.q).is_some() {
             // clang `EmitAtomicInit` (WP-165).
             return self.atomic_init(e, lv);
@@ -2940,7 +3031,7 @@ impl Cg<'_> {
         if is_union {
             let Some(f) = union_field else { return Ok(()) };
             let fq = ast.decls.get(f).ty().expect("field type");
-            let lv = self.field_lvalue(base, f, fq)?;
+            let lv = self.init_field_lvalue(base, f, fq)?;
             return match inits.first() {
                 Some(&i) => self.init_to_lvalue(i, lv, zeroed),
                 None => self.null_init_lvalue(lv, zeroed),
@@ -2991,7 +3082,7 @@ impl Cg<'_> {
                 break;
             }
             let fq = ast.decls.get(f).ty().expect("field type");
-            let lv = self.field_lvalue(base, f, fq)?;
+            let lv = self.init_field_lvalue(base, f, fq)?;
             if k < inits.len() {
                 self.init_to_lvalue(inits[k], lv, zeroed)?;
                 k += 1;

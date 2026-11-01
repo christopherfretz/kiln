@@ -426,7 +426,49 @@ impl Sema<'_, '_> {
         if self.kind_of(qual) != DeclKind::CXXRecord {
             return base;
         }
-        let TypeView::DependentName { keyword, nns, name } = self.ast.types.view(base.ty()) else {
+        self.rebuild_ci_type(base, qual, 0)
+    }
+
+    /// [`Sema::rebuild_in_current_instantiation`] of `base`, also through
+    /// the type arguments of a template-id (libc++'s
+    /// `pair<typename __hash_table<...>::iterator, bool>
+    /// __hash_table<...>::__node_insert_unique(...)`).
+    fn rebuild_ci_type(&mut self, base: QualType, qual: DeclId, depth: u32) -> QualType {
+        if depth > 32 || !self.is_dependent_type(base) {
+            return base;
+        }
+        let view = self.ast.types.view(base.ty());
+        if let TypeView::Elaborated { keyword, nns, named } = view {
+            let r = self.rebuild_ci_type(named, qual, depth + 1);
+            if r == named {
+                return base;
+            }
+            let t = self.ast.types.elaborated(keyword, nns, r);
+            return self.ast.types.qualify(t, base.quals());
+        }
+        if let TypeView::TemplateSpecialization { name, args, underlying: None, alias: false } =
+            view
+        {
+            let list = self.ast.types.args(args).to_vec();
+            let mut out = Vec::with_capacity(list.len());
+            let mut changed = false;
+            for a in list {
+                if let kiln_ast::types::ArgView::Type(t) = a.view() {
+                    let r = self.rebuild_ci_type(t, qual, depth + 1);
+                    changed |= r != t;
+                    out.push(kiln_ast::types::TemplateArg::ty(r));
+                } else {
+                    out.push(a);
+                }
+            }
+            if !changed {
+                return base;
+            }
+            let l = self.ast.types.arg_list(&out);
+            let t = self.ast.types.template_specialization(name, l, None, false);
+            return self.ast.types.qualify(t, base.quals());
+        }
+        let TypeView::DependentName { keyword, nns, name } = view else {
             return base;
         };
         let kiln_ast::types::Nns::Type { ty, .. } = self.ast.types.nns_view(nns) else {
@@ -585,6 +627,9 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         return QualType::ERROR;
                     }
+                    if self.check_qualified_function(ty, false, *loc) {
+                        return QualType::ERROR;
+                    }
                     let p = self.ast.types.pointer_to(ty);
                     ty = if quals.is_empty() { p } else { self.ast.types.qualify(p, *quals) };
                     prev_ref = false;
@@ -624,6 +669,10 @@ impl Sema<'_, '_> {
                         self.error(DiagId::sema_reference_to_void, *loc);
                         return QualType::ERROR;
                     }
+                    if self.check_qualified_function(ty, true, *loc) {
+                        return QualType::ERROR;
+                    }
+                    let t = &self.ast.types;
                     let lref = matches!(chunk, Chunk::LRef { .. });
                     // Reference collapsing through typedefs ([dcl.ref]/7).
                     ty = if let TypeView::LValueRef(inner) = t.canonical_view(ty) {
@@ -1141,6 +1190,35 @@ impl Sema<'_, '_> {
             Chunk::Array { .. } => Some(2),
             Chunk::Function { .. } => None,
         }
+    }
+
+    /// [dcl.fct]/6: a pointer or reference to an abominable function type
+    /// (one with a cv-qualifier-seq or ref-qualifier) is ill-formed
+    /// (clang's `checkQualifiedFunction`, also run when substitution
+    /// rebuilds `T*` / `T&` / `T&&`, a SFINAE error there).
+    pub(crate) fn check_qualified_function(
+        &mut self,
+        ty: QualType,
+        reference: bool,
+        loc: Loc,
+    ) -> bool {
+        let Some(p) = self.ast.types.proto(ty).copied() else { return false };
+        let info = p.info();
+        let (q, r) = (info.this_quals(), info.ref_qual());
+        if q.is_empty() && r == RefQual::None {
+            return false;
+        }
+        // The type is named only when written through sugar (a typedef or
+        // a substituted parameter), as clang's `isa<FunctionType>`.
+        let direct = matches!(self.ast.types.view(ty.ty()), TypeView::Function(_));
+        let msg = self
+            .diag(DiagId::sema_compound_qualified_function_type, loc)
+            .arg(u8::from(reference))
+            .arg(u8::from(!direct))
+            .arg(self.ty_arg(ty))
+            .arg(crate::class::members::method_quals_spelling(q, r));
+        self.emit(msg);
+        true
     }
 
     fn chunk_loc(chunk: &Chunk) -> Loc {

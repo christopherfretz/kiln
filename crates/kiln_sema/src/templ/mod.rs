@@ -164,6 +164,12 @@ pub struct TemplState {
     /// The `...` of each fold-expression (clang `CXXFoldExpr::EllipsisLoc`;
     /// the AST node stores only the parentheses).
     pub(crate) fold_ellipsis: kiln_source::fx::FxHashMap<ExprId, Loc>,
+    /// The designators of a dependent braced-init-list's clauses, by
+    /// clause position (an `InitListExpr` of type `void` stores only the
+    /// clauses; [`Sema::dependent_init_list`]). Absent when no clause is
+    /// designated.
+    pub(crate) init_designators:
+        kiln_source::fx::FxHashMap<ExprId, Vec<Vec<crate::init::Designator>>>,
     /// The dependent-scope marker of dependent `decltype(e)::` qualifiers
     /// (an unlinked alias of `<dependent type>`, created on first use;
     /// [`Sema::act_on_nested_name_decltype`]).

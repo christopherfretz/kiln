@@ -941,6 +941,38 @@ impl Parser<'_, '_> {
         })
     }
 
+    /// `class-key M<args>` with `M` a template template parameter
+    /// ([dcl.type.elab]/1, a dependent specialization; libc++'s
+    /// `friend struct _MapOrSetSpecifics<...>;` in `<__node_handle>`): the
+    /// type as written, a friend type in `friend class-key M<args>;`.
+    /// False (nothing consumed) when the next tokens are not that form.
+    fn parse_ttp_elaborated(
+        &mut self,
+        ds: &mut DeclSpec,
+        kw_loc: Loc,
+        ctx: DeclaratorContext,
+    ) -> bool {
+        let Some(n) = self.ident() else { return false };
+        if Self::punct_of(self.tok_at(self.pos() + 1)) != Some(Punct::Less) {
+            return false;
+        }
+        let NameClass::TypeTemplate(t) = self.s.classify_name(n, None) else { return false };
+        if self.s.ast.decls.get(t).kind() != kiln_ast::decl::DeclKind::TemplateTemplateParm {
+            return false;
+        }
+        let ty = self.parse_template_type_name(ctx);
+        if ty.is_none() {
+            ds.invalid = true;
+        }
+        if let Err(e) =
+            ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), kw_loc)
+        {
+            ds.invalid = true;
+            self.spec_error(&e, kw_loc);
+        }
+        true
+    }
+
     /// class-specifier, enum-specifier or elaborated-type-specifier
     /// ([class.pre], [dcl.enum], [dcl.type.elab]).
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
@@ -962,6 +994,12 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qualifier = self.parse_tag_qualifier(ds);
+        if keyword != TagKeyword::Enum
+            && qualifier.is_none()
+            && self.parse_ttp_elaborated(ds, kw_loc, ctx)
+        {
+            return;
+        }
         let name = self.ident().map(|n| (n, self.bump().span.lo));
         if name.is_none() && qualifier.is_some() {
             self.error_here(DiagId::parse_expected_unqualified_id);

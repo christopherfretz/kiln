@@ -125,7 +125,7 @@ impl Cg<'_> {
                 let ty = self.ast.decls.get(t).ty().unwrap_or(QualType::INT);
                 Ok(gval(self.let_global(t, ty)?))
             }
-            PtrBase::TypeInfo(_) => err(None, "typeid constants are not supported yet (M3)"),
+            PtrBase::TypeInfo(t) => self.rtti(t),
         }
     }
 
