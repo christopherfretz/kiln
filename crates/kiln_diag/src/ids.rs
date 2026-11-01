@@ -1623,6 +1623,9 @@ diag_ids! {
     sema_plain_complex = Warning (0) "plain '_Complex' requires a type specifier; assuming '_Complex double'";
     sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
     sema_complex_to_real_cxx = Error (2) "implicit conversion from {0} to {1} is not permitted in C++";
+    sema_realimag_invalid_type = Error (2) "invalid type {0} to {1} operator";
+    sema_call_requires_real_fp = Error (1) "argument type {0} is not a real floating point type";
+    sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";
 }
 
 impl DiagId {

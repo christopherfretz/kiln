@@ -17,6 +17,7 @@
 mod asm;
 mod builtins;
 pub mod class;
+mod complex;
 mod consteval;
 pub mod constfold;
 pub mod conv;

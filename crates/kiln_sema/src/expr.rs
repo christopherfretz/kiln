@@ -158,9 +158,19 @@ impl Sema<'_, '_> {
 
     pub(crate) fn is_scalar(&self, t: QualType) -> bool {
         self.ast.types.is_arithmetic(t)
+            || self.ast.types.as_complex(t).is_some()
             || self.ast.types.as_enum(t).is_some()
             || self.ast.types.is_pointer(t)
             || self.is_nullptr_type(t)
+    }
+
+    /// An arithmetic, unscoped enumeration or GNU complex type: the
+    /// operand types of the arithmetic operators (clang's
+    /// `isArithmeticType`, which includes complex types).
+    pub(crate) fn is_arith_operand(&self, t: QualType) -> bool {
+        self.ast.types.is_arithmetic(t)
+            || conv::is_unscoped_enum(self, t)
+            || self.ast.types.as_complex(t).is_some()
     }
 
     pub(crate) fn is_nullptr_type(&self, t: QualType) -> bool {
@@ -2124,8 +2134,7 @@ impl Sema<'_, '_> {
         let tv = self.ast.types.as_atomic(t0).unwrap_or(t0);
         match op {
             UnaryOp::Plus | UnaryOp::Minus => {
-                let ok = self.ast.types.is_arithmetic(tv)
-                    || conv::is_unscoped_enum(self, tv)
+                let ok = self.is_arith_operand(tv)
                     || (op == UnaryOp::Plus
                         && (self.ast.types.is_pointer(tv) || self.ast.types.is_array(t0)));
                 if !ok {
@@ -2142,7 +2151,10 @@ impl Sema<'_, '_> {
                 self.builder().unary(op, x, ty, loc, flags)
             }
             UnaryOp::Not => {
-                if !(self.ast.types.is_integral(tv) || conv::is_unscoped_enum(self, tv)) {
+                // GNU: `~` of a complex operand is its conjugate.
+                let complex = self.ast.types.as_complex(tv).is_some();
+                if !(complex || self.ast.types.is_integral(tv) || conv::is_unscoped_enum(self, tv))
+                {
                     return bad(self, e);
                 }
                 let x = conv::usual_unary_conversions(self, e);
@@ -2182,6 +2194,7 @@ impl Sema<'_, '_> {
                 self.builder().unary(op, x, p, loc, ExprFlags::CANNOT_OVERFLOW)
             }
             UnaryOp::AddrOf => self.address_of(e, loc),
+            UnaryOp::Real | UnaryOp::Imag => self.real_imag(op, e, loc),
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
                 self.inc_dec(op, e, loc)
             }
@@ -2456,10 +2469,7 @@ impl Sema<'_, '_> {
                     ArithConvKind::Arithmetic
                 };
                 let (lt, rt) = (self.value_ty(l), self.value_ty(r));
-                let arith = |s: &Self, t: QualType| {
-                    s.ast.types.is_arithmetic(t) || conv::is_unscoped_enum(s, t)
-                };
-                if !arith(self, lt) || !arith(self, rt) {
+                if !self.is_arith_operand(lt) || !self.is_arith_operand(rt) {
                     return self.invalid_operands(l, r, loc);
                 }
                 match conv::usual_arithmetic_conversions_kind(self, l, r, kind) {
@@ -2596,10 +2606,7 @@ impl Sema<'_, '_> {
                 (r2, p, p)
             }
             _ => {
-                let arith = |s: &Self, t: QualType| {
-                    s.ast.types.is_arithmetic(t) || conv::is_unscoped_enum(s, t)
-                };
-                if !arith(self, lt) || !arith(self, rt) {
+                if !self.is_arith_operand(lt) || !self.is_arith_operand(rt) {
                     return self.invalid_operands(l, r, loc);
                 }
                 match conv::usual_arithmetic_conversions_kind(
@@ -2633,7 +2640,9 @@ impl Sema<'_, '_> {
         // left type, but not to an unscoped enumeration ([conv.prom]/3
         // promoted it), so `e += 1` is ill-formed (clang's
         // `CheckAssignmentOperands` with the computation result type).
-        if conv::is_unscoped_enum(self, lt)
+        let real_from_complex = self.ast.types.as_complex(res_ty).is_some()
+            && self.ast.types.as_complex(lt).is_none();
+        if (real_from_complex || conv::is_unscoped_enum(self, lt))
             && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
         {
             let msg = self.diag(DiagId::sema_assign_incompatible, loc).diff_args(self, lt, res_ty);
@@ -2692,9 +2701,7 @@ impl Sema<'_, '_> {
         if lp || rp {
             return self.invalid_operands(l, r, loc);
         }
-        let arith =
-            |s: &Self, t: QualType| s.ast.types.is_arithmetic(t) || conv::is_unscoped_enum(s, t);
-        if !arith(self, lt) || !arith(self, rt) {
+        if !self.is_arith_operand(lt) || !self.is_arith_operand(rt) {
             return self.invalid_operands(l, r, loc);
         }
         match conv::usual_arithmetic_conversions_kind(self, l, r, ArithConvKind::Arithmetic) {
@@ -2818,6 +2825,10 @@ impl Sema<'_, '_> {
             return self.recover_err(&[l2, r2], loc);
         }
         if !self.is_scalar(lt) || !self.is_scalar(rt) {
+            return self.invalid_operands(l, r, loc);
+        }
+        let complex = self.ast.types.as_complex(lt).is_some() || self.ast.types.as_complex(rt).is_some();
+        if complex && !matches!(op, BinaryOp::EQ | BinaryOp::NE) {
             return self.invalid_operands(l, r, loc);
         }
         match conv::usual_arithmetic_conversions_kind(self, l, r, ArithConvKind::Comparison) {
@@ -3047,7 +3058,9 @@ impl Sema<'_, '_> {
             }
         }
         let arith = |s: &Self, q: QualType| {
-            s.ast.types.is_arithmetic(q) || s.ast.types.as_enum(q).is_some()
+            s.ast.types.is_arithmetic(q)
+                || s.ast.types.as_enum(q).is_some()
+                || s.ast.types.as_complex(q).is_some()
         };
         // [expr.cond]/7: after the standard conversions, operands of the
         // same type give that type (no promotion: `b ? s1 : s2` is
@@ -3067,7 +3080,13 @@ impl Sema<'_, '_> {
                 f,
                 ArithConvKind::Conditional,
             ) {
-                Ok((t2, f2, ty)) => self.builder().conditional(c2, t2, f2, ty, loc),
+                Ok((t2, f2, ty)) => {
+                    // clang's `PrepareScalarCast` to the result type: a
+                    // real arm of a complex result becomes complex.
+                    let t2 = self.real_to_complex(t2, ty);
+                    let f2 = self.real_to_complex(f2, ty);
+                    self.builder().conditional(c2, t2, f2, ty, loc)
+                }
                 Err(err) => self.conv_failed(&err, t, f, loc),
             };
         }

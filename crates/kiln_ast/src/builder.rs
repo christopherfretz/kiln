@@ -1521,8 +1521,8 @@ impl<'a> AstBuilder<'a> {
 
     /// A built-in unary operator ([expr.unary.op], [expr.post.incr],
     /// [expr.pre.incr]): `*` and prefix `++`/`--` are lvalues, `__real` /
-    /// `__imag` / `__extension__` keep the operand's category, the rest are
-    /// prvalues.
+    /// `__imag` / `__extension__` keep the operand's category (`__imag` of
+    /// a real operand is a prvalue), the rest are prvalues.
     pub fn unary(
         &mut self,
         op: UnaryOp,
@@ -1533,6 +1533,12 @@ impl<'a> AstBuilder<'a> {
     ) -> ExprId {
         let vk = match op {
             UnaryOp::Deref | UnaryOp::PreInc | UnaryOp::PreDec => ValueCategory::LValue,
+            // `__imag` of a real operand is a prvalue (its zero).
+            UnaryOp::Imag
+                if self.ast.types.as_complex(self.ast.exprs.get(operand).ty()).is_none() =>
+            {
+                ValueCategory::PRValue
+            }
             UnaryOp::Real | UnaryOp::Imag | UnaryOp::Extension => self.vk(operand),
             _ => ValueCategory::PRValue,
         };
