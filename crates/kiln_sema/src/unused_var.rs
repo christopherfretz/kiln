@@ -110,7 +110,8 @@ impl Sema<'_, '_> {
         let name = n.name().as_ident()?;
         // A variable marked unused, or a placeholder `_` (which behaves
         // as if `[[maybe_unused]]`).
-        if self.unused_marked(v) || (self.has_automatic_storage(v) && self.ast.symbols().as_str(name) == "_")
+        if self.unused_marked(v)
+            || (self.has_automatic_storage(v) && self.ast.symbols().as_str(name) == "_")
         {
             return None;
         }
@@ -138,7 +139,8 @@ impl Sema<'_, '_> {
     /// counts for `-Wunused-but-set-variable` when it is a local, not
     /// `extern`, variable.
     pub(crate) fn count_var_ref(&mut self, d: DeclId) {
-        let local = self.ast.decls.get(d).ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function());
+        let local =
+            self.ast.decls.get(d).ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function());
         if local && self.ast.decls.var(d).is_some_and(|x| x.spec.storage() != VarStorage::Extern) {
             self.refs_minus_assign.entry(d).or_insert((0, false)).0 += 1;
         }
@@ -157,8 +159,8 @@ impl Sema<'_, '_> {
                 let op = ex.binary_op(e);
                 let ch = ex.children(e, &self.ast.lists);
                 let (l, r) = (ch[0], ch[1]);
-                let dependent =
-                    self.ast.types.is_dependent(self.ety(l)) || self.ast.types.is_dependent(self.ety(r));
+                let dependent = self.ast.types.is_dependent(self.ety(l))
+                    || self.ast.types.is_dependent(self.ety(r));
                 if (dependent && op != BinaryOp::Assign) || !op.is_assignment() {
                     return;
                 }
@@ -212,9 +214,10 @@ impl Sema<'_, '_> {
             // is referenced by the bindings), unless all are placeholders.
             let mut bindings = self.decomp_binding_list(v);
             bindings.extend(self.decomp_binding_list(pattern));
-            if bindings.iter().any(|&b| {
-                self.ast.decls.get(b).has(DeclFlags::REFERENCED) || self.unused_marked(b)
-            }) {
+            if bindings
+                .iter()
+                .any(|&b| self.ast.decls.get(b).has(DeclFlags::REFERENCED) || self.unused_marked(b))
+            {
                 return false;
             }
             let automatic = self.has_automatic_storage(v);

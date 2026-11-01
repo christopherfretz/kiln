@@ -4,9 +4,9 @@
 //! internal linkage, declared in the main file and never referenced, is
 //! `-Wunused-const-variable` when `const`, else `-Wunused-variable`.
 
+use kiln_ast::DeclId;
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits};
-use kiln_ast::DeclId;
 use kiln_ast::expr::ExprKind;
 use kiln_diag::DiagId;
 
@@ -95,7 +95,8 @@ impl Sema<'_, '_> {
                 return false;
             }
         }
-        if !self.in_main_file(n.loc()) || !kiln_abi::mangle::has_internal_linkage(&self.ast, first) {
+        if !self.in_main_file(n.loc()) || !kiln_abi::mangle::has_internal_linkage(&self.ast, first)
+        {
             return false;
         }
         // clang `DeclMustBeEmitted`: a variable whose initialization or
