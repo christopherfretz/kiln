@@ -1,7 +1,8 @@
 //! The driver-level IR-diff corpus (spec/codegen.md §6, "IR-diff corpus").
 //!
-//! Every `tests/codegen/*.cpp` is compiled in-process by the kiln driver
-//! with `-S -emit-llvm -O0 -std=c++26 --target=<triple>` for each triple in
+//! Every `tests/codegen/*.cpp` is compiled in-process by the kiln driver,
+//! as `kiln++` (`kiln_driver::run`), with
+//! `-S -emit-llvm -O0 -std=c++26 --target=<triple>` for each triple in
 //! [`TRIPLES`], and by `clang++-19` with the same flags. Both outputs go
 //! through `opt-19 -S -passes=verify` and [`normalize`] (as in `lower.rs`)
 //! and must be byte-identical, unless the (case, triple) pair is listed in

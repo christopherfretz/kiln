@@ -17,7 +17,7 @@ use kiln_pp::{
 };
 use kiln_source::{FileId, SourceManager, Span};
 
-use crate::args::{Args, Lang};
+use crate::args::Args;
 use crate::deps::{DepCallbacks, DepList, on_search_event};
 use crate::toolchain::{LangStd, SystemIncludes, Toolchain};
 use crate::{SharedWriter, make_engine, time};
@@ -301,11 +301,6 @@ impl Job<'_> {
         drop(pp);
         result.deps = deps.map(|d| d.borrow().files().to_vec());
     }
-}
-
-/// The language of an input.
-pub fn input_lang(lang: Option<Lang>, path: &str) -> Lang {
-    lang.unwrap_or_else(|| if path == "-" { Lang::Cxx } else { Lang::from_path(path) })
 }
 
 /// clang 19's feature answers with kiln's builtin staging applied
