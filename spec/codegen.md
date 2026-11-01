@@ -293,8 +293,11 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
     elements without an initializer.
 - Constants (`consts.rs`): a union constant is its active member followed
   by `[N x i8] undef` padding, typed as the union when the element types
-  match its IR type, else as a literal struct. Records with bit-fields and
-  base classes are still M3 errors in constants.
+  match its IR type, else as a literal struct. A record with bit-fields
+  is built like any other, each bit-field storage unit read from the
+  image's bytes as its IR type (the Oven's object representation already
+  packs the fields in target bit order; WP-207). Base classes are still
+  M3 errors in constants.
 
 ### 3.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
@@ -525,11 +528,9 @@ The normative description is spec/driver.md "Code generation". In short:
   `const T(&)[N]` to a `T[N]` argument, copy-initializing a class object
   from an lvalue (so a function cannot return a named local or a
   parameter of class type), `S{...}` temporaries, and binding a
-  reference to a temporary. In kiln_codegen itself, a constant
-  initializer of an aggregate with bit-fields (`Flags f = {};`) reports
-  `bit-field constants are not supported yet (M3)`, without a location;
-  a local aggregate whose folded initializer the constant lowering cannot
-  spell is instead initialized as written (`emit_agg_into`, WP-201).
+  reference to a temporary. In kiln_codegen itself, a local aggregate
+  whose folded initializer the constant lowering cannot spell is
+  initialized as written (`emit_agg_into`, WP-201).
 - **New/delete (§3.1).** The EH cleanup is emulated only for
   initializers that cannot throw; clang's `invoke` + landing pad for a
   throwing one waits for EH. The placement-argument alignment is

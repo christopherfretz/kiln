@@ -314,9 +314,6 @@ impl Cg<'_> {
                 if rec.is_union {
                     return self.union_const(img, off, t, rec.size, e);
                 }
-                if !rec.bitfields.is_empty() {
-                    return err(None, "bit-field constants are not supported yet (M3)");
-                }
                 let offs = self.tys.struct_offsets(&rec.members, rec.packed);
                 let mut by_member: Vec<Option<DeclId>> = vec![None; rec.members.len()];
                 for (&f, &i) in &rec.field_index {
@@ -347,7 +344,11 @@ impl Cg<'_> {
                 // to `ConstantAggregateBuilder::buildFrom`.
                 let mut elems: Vec<(u64, Value)> = Vec::with_capacity(rec.members.len());
                 for (i, m) in rec.members.iter().enumerate() {
+                    // A bit-field storage unit is rebuilt from its bytes
+                    // (the object representation already packs the
+                    // fields, in target bit order), with no initializer.
                     let sub = by_member[i]
+                        .filter(|f| !rec.bitfields.contains_key(f))
                         .and_then(|f| fields.iter().position(|&x| x == f))
                         .and_then(|p| inits.get(p).copied());
                     if by_member[i].is_none() {

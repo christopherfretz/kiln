@@ -476,10 +476,13 @@ impl Substituter<'_, '_, '_> {
                     let il = InitList { items: out, lbrace: loc, rbrace: end };
                     return Ok(self.sema.act_on_list_cast(ty, &il, loc));
                 }
-                let args = self.expr_list(l)?;
+                // `T(a, {b})`: a braced operand is a placeholder again.
+                let args = self.call_arg_list(l)?;
                 Ok(match args.as_slice() {
                     [] => self.sema.act_on_value_init_cast(ty, loc, end),
-                    [a] => self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end),
+                    [a] if !self.sema.is_braced_arg(*a) => {
+                        self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end)
+                    }
                     _ => self.sema.act_on_paren_list_cast(ty, &args, loc, end),
                 })
             }
@@ -897,6 +900,19 @@ impl Substituter<'_, '_, '_> {
         if decls.is_empty() {
             return Ok(self.sema.act_on_undeclared_call_name_dn(name, n.loc()));
         }
+        if targs.is_none() && decls.iter().all(|&d| self.namespace_scope_decl(d)) {
+            // [temp.dep.candidate]/1 (§3.5): the declarations unqualified
+            // lookup found at the definition, plus argument-dependent
+            // lookup at the call. Looking the name up again from the
+            // context the instantiation runs in would see that context's
+            // names instead (a `swap` of the namespace that requires a
+            // concept, hiding the poison pill beside the concept).
+            let r = self.sema.builder().unresolved_lookup(name, &decls, true, None, None, n.loc());
+            if let Some(f) = self.sema.ovl.ule_found.get(&c).cloned() {
+                self.sema.ovl.ule_found.insert(r, f);
+            }
+            return Ok(r);
+        }
         let r = self.sema.act_on_call_name_dn(name, n.loc());
         if let Some(t) = targs {
             if self.sema.ast.exprs.get(r).kind() == ExprKind::UnresolvedLookupExpr {
@@ -920,6 +936,26 @@ impl Substituter<'_, '_, '_> {
             }
         }
         Ok(r)
+    }
+
+    /// Whether `d`, found by an unqualified lookup at a template's
+    /// definition, is a namespace member (not a class member, which
+    /// needs the instantiated class and an implicit `this`, nor a
+    /// block-scope declaration, which needs the instantiated function).
+    fn namespace_scope_decl(&self, d: DeclId) -> bool {
+        let d = self.sema.ast.strip_shadow(d);
+        if !matches!(self.sema.kind_of(d), DeclKind::Function | DeclKind::FunctionTemplate) {
+            return false;
+        }
+        let mut c = self.sema.ast.decls.get(d).ctx();
+        while let Some(x) = c {
+            match self.sema.kind_of(x) {
+                DeclKind::Namespace | DeclKind::TranslationUnit => return true,
+                DeclKind::LinkageSpec | DeclKind::Export => c = self.sema.ast.decls.get(x).ctx(),
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// A reference to a non-type template parameter (§5.4): the

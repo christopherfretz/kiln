@@ -38,7 +38,7 @@ impl Sema<'_, '_> {
 
     /// Whether `e` is a braced-init-list placeholder of
     /// [`Sema::act_on_braced_arg`] (not yet taken).
-    pub(crate) fn is_braced_arg(&self, e: ExprId) -> bool {
+    pub fn is_braced_arg(&self, e: ExprId) -> bool {
         self.braced_args.iter().any(|(x, _)| *x == e)
     }
 
@@ -384,18 +384,32 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
+        // Braced-init-list operands (`T(a, {b})`) are placeholders of
+        // [`Sema::act_on_braced_arg`] until the initialization is known.
         if self.is_error_type(ty) || args.iter().any(|&a| self.is_err_expr(a)) {
-            return self.recover(ty, args, loc);
+            return self.recover_dropping_braced(ty, args, loc);
         }
         let ty = self.ctad_cast_type(ty, args, loc);
         if self.is_error_type(ty) {
-            return self.recover(ty, args, loc);
+            return self.recover_dropping_braced(ty, args, loc);
         }
-        if self.ast.types.is_dependent(ty) || args.iter().any(|&a| self.expr_is_type_dependent(a)) {
-            return self.builder().unresolved_construct(ty, args, false, loc, rparen);
+        let braced_dep = args.iter().any(|&a| {
+            self.braced_args.iter().any(|(x, l)| *x == a && self.init_list_type_dependent(l))
+        });
+        if braced_dep
+            || self.ast.types.is_dependent(ty)
+            || args.iter().any(|&a| self.expr_is_type_dependent(a))
+        {
+            // Kept as written; list-initializes at instantiation
+            // ([temp.dep.expr]/3).
+            let args: Vec<ExprId> = args
+                .iter()
+                .map(|&a| self.take_braced_arg(a).map_or(a, |l| self.dependent_init_list(&l)))
+                .collect();
+            return self.builder().unresolved_construct(ty, &args, false, loc, rparen);
         }
         if self.require_non_abstract_alloc(loc, ty) {
-            return self.recover(QualType::ERROR, args, loc);
+            return self.recover_dropping_braced(QualType::ERROR, args, loc);
         }
         // A class: a temporary direct-initialized by a constructor
         // ([expr.type.conv]/2, clang's `CXXTemporaryObjectExpr`).
@@ -426,12 +440,30 @@ impl Sema<'_, '_> {
                 );
             }
         }
+        if let [a] = args
+            && self.is_braced_arg(*a)
+        {
+            // clang's FK_ParenthesizedListInitForScalar: `int({1})`.
+            let msg =
+                self.diag(DiagId::sema_list_init_in_parens, loc).arg(0u8).arg(self.ty_arg(ty));
+            self.emit(msg);
+            return self.recover_dropping_braced(ty, args, loc);
+        }
         if let Some(what) = self.temporary_unsupported(ty) {
             self.unsupported(&format!("direct-initialization of {what}"), loc);
-            return self.recover(ty, args, loc);
+            return self.recover_dropping_braced(ty, args, loc);
         }
         let msg = self.diag(DiagId::sema_excess_initializers, loc).arg("2");
         self.emit(msg);
+        self.recover_dropping_braced(ty, args, loc)
+    }
+
+    /// [`Sema::recover`] after discarding the braced-init-list
+    /// placeholders among `args`.
+    fn recover_dropping_braced(&mut self, ty: QualType, args: &[ExprId], loc: Loc) -> ExprId {
+        for &a in args {
+            let _ = self.take_braced_arg(a);
+        }
         self.recover(ty, args, loc)
     }
 

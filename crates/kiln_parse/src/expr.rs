@@ -1543,34 +1543,14 @@ impl Parser<'_, '_> {
             let rparen = self.bump().span.lo;
             return Some(self.s.act_on_value_init_cast(ty, loc, rparen));
         }
-        let mut args = Vec::new();
-        let mut expansion = false;
-        loop {
-            if self.at(Punct::LBrace) {
-                self.unsupported("braced-init-list operands of a functional cast", self.loc());
-                self.skip_until(&[Punct::RParen], false, true);
-                return None;
-            }
-            let Some(e) = self.parse_assignment_expr() else {
-                self.skip_until(&[Punct::RParen], false, true);
-                return None;
-            };
-            // `T(args...)` ([temp.variadic]/5: an expression-list).
-            let e = match self.eat(Punct::Ellipsis) {
-                Some(l) => {
-                    expansion = true;
-                    self.s.act_pack_expansion(e, l)
-                }
-                None => e,
-            };
-            args.push(e);
-            if self.eat(Punct::Comma).is_none() {
-                break;
-            }
-        }
+        // An expression-list of initializer-clauses ([expr.type.conv]/1):
+        // a braced-init-list is a placeholder argument that the
+        // construction list-initializes its parameter from.
+        let args = self.parse_expr_list(Punct::RParen)?;
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         if let [e] = args[..]
-            && !expansion
+            && self.s.ast.exprs.get(e).kind() != ExprKind::PackExpansionExpr
+            && !self.s.is_braced_arg(e)
         {
             return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc, rparen));
         }

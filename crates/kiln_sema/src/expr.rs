@@ -173,6 +173,18 @@ impl Sema<'_, '_> {
 
     /// A `RecoveryExpr` of type `ty` over `kids`.
     pub(crate) fn recover(&mut self, ty: QualType, kids: &[ExprId], loc: Loc) -> ExprId {
+        // clang `CreateRecoveryExpr`: a reference type is the referenced
+        // type, an lvalue (`T&`, a function) or an xvalue (`T&&`).
+        if ty != QualType::ERROR && self.ast.types.is_reference(ty) {
+            let lref = matches!(self.ast.types.canonical_view(ty), TypeView::LValueRef(_));
+            let r = self.non_reference(ty);
+            let vk = if lref || self.ast.types.is_function(r) {
+                ValueCategory::LValue
+            } else {
+                ValueCategory::XValue
+            };
+            return self.builder().recovery(Some(r), vk, kids, loc);
+        }
         self.builder().recovery(Some(ty), ValueCategory::PRValue, kids, loc)
     }
 
@@ -1083,6 +1095,10 @@ impl Sema<'_, '_> {
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
         self.declare_global_new_delete_for(name, qualifier);
+        match qualifier {
+            Some(q) => self.declare_implicit_named(q, name),
+            None => self.declare_implicit_named_in_scope(name),
+        }
         let found = match qualifier {
             Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
             None => self.lookup_name_dn(name, LookupKind::Ordinary),

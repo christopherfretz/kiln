@@ -610,7 +610,7 @@ impl Types {
                         return Some((base, n, true));
                     }
                     // The array object itself (`&arr`), not an element.
-                    if t == p {
+                    if self.same_unqualified(t, p) {
                         return Some((base, 1, false));
                     }
                     let es = self.size(elem);
@@ -666,42 +666,40 @@ impl Types {
     /// Whether an object of type `p` lives at byte `off` of an object of
     /// type `root` (C++26 [expr.static.cast]/14 for `void*` casts).
     pub fn has_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
-        self.subobject_at(root, off, p, false)
-    }
-
-    /// [`Self::has_subobject`], where a bit-field of type `p` whose first
-    /// bit is in byte `off` counts too: the member a bit-field access at
-    /// `off` reaches, through members of class type
-    /// (`u.s.anon.bits = 1`, [class.union]/2).
-    pub fn has_member_at(&self, root: OTy, off: u64, p: OTy) -> bool {
-        self.subobject_at(root, off, p, true)
-    }
-
-    fn subobject_at(&self, root: OTy, off: u64, p: OTy, bits: bool) -> bool {
         if p == root && off == 0 {
             return true;
         }
         match self.kind(root) {
             TyKind::Array { elem, n } => {
                 let es = self.size(elem);
-                es != 0 && off / es < n && self.subobject_at(elem, off % es, p, bits)
+                es != 0 && off / es < n && self.has_subobject(elem, off % es, p)
             }
-            TyKind::Record { union: false, .. } => {
-                self.field_at(root, off)
-                    .is_some_and(|f| self.subobject_at(f.ty, off - f.offset, p, bits))
-                    || bits
-                        && self
-                            .fields(root)
-                            .iter()
-                            .any(|f| f.width.is_some() && f.ty == p && off == f.offset)
+            TyKind::Record { .. } => self.fields(root).iter().any(|f| {
+                f.width.is_none()
+                    && off >= f.offset
+                    && off < f.offset + self.size(f.ty).max(1)
+                    && self.has_subobject(f.ty, off - f.offset, p)
+            }),
+            _ => false,
+        }
+    }
+
+    /// Whether the storage unit of a bit-field of type `p` lies at `off`
+    /// inside `root` (a bit-field is not a subobject that a pointer can
+    /// designate, but its accesses still go through the unions above it).
+    pub fn has_bit_unit(&self, root: OTy, off: u64, p: OTy) -> bool {
+        match self.kind(root) {
+            TyKind::Array { elem, n } => {
+                let es = self.size(elem);
+                es != 0 && off / es < n && self.has_bit_unit(elem, off % es, p)
             }
             TyKind::Record { .. } => self.fields(root).iter().any(|f| match f.width {
+                Some(_) => off == f.offset && f.ty == p,
                 None => {
                     off >= f.offset
                         && off < f.offset + self.size(f.ty).max(1)
-                        && self.subobject_at(f.ty, off - f.offset, p, bits)
+                        && self.has_bit_unit(f.ty, off - f.offset, p)
                 }
-                Some(_) => bits && f.ty == p && off == f.offset,
             }),
             _ => false,
         }

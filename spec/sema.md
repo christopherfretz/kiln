@@ -1136,10 +1136,22 @@ diagnostics and IR.
     `kiln_abi` layout
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
-    `mark_part_of_explicit_cast`. `const_cast<T&&>(prvalue)` of a class
-    type ([expr.const.cast]/4) materializes the prvalue and yields an
-    xvalue `NoOp` cast of the temporary (`ref_cast`, WP-201; libc++
-    `__movable_box`)
+    `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
+    WP-207): `const_cast<T&&>` (and the C-style cast's const step) of a
+    class prvalue of the same unqualified class materializes it
+    (`MaterializeTemporaryExpr`, [expr.const.cast]/3) and is a `NoOp`
+    xvalue; `reinterpret_cast` (and the C-style cast's reinterpret step)
+    binds any glvalue, an xvalue as an lvalue reference too (`NoOp` for
+    the same type, else `LValueBitCast`); `const_cast` of a non-lvalue to
+    `T&`, of a non-class prvalue to `T&&`, and `reinterpret_cast` of a
+    prvalue are `{const_cast|reinterpret_cast} from rvalue to reference
+    type 'T &'` (clang `err_bad_cxx_cast_rvalue`). A failed cast's
+    `RecoveryExpr` has the referenced type and the reference's value
+    category, as every `RecoveryExpr` of a reference type does (clang
+    `CreateRecoveryExpr`), so it is not diagnosed again. Not yet: the
+    C-style cast's own rvalue message (`(S&)mk()` reports the
+    initialization failure of its static step instead of `C-style cast
+    from rvalue to reference type`).
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold.
 - **Member-pointer equality** ([expr.eq]/4, clang's
@@ -1864,6 +1876,13 @@ and `DiagnoseMisalignedMembers`:
     [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
     narrowing rejected, then to `E`), as `E e{v};` does.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
+    The expression-list may hold braced-init-lists (`T(a, {b})`, `T({})`).
+    They are the placeholders of `act_on_braced_arg`, and the
+    construction list-initializes its parameter from them. A dependent
+    operand keeps the list as written (`dependent_init_list`), and
+    substitution makes it a placeholder again. A lone parenthesized list
+    for a non-class `T` is `sema_list_init_in_parens` (clang's
+    FK_ParenthesizedListInitForScalar).
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have
     constructors (WP-065).

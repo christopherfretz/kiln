@@ -1,12 +1,12 @@
 // [class.access]/4, [temp.deduct.general]/8: T::type is access-checked after
 // substitution; in a SFINAE context an inaccessible one is a deduction failure.
-// The location is the declarator's, not the name's (spec/sema-class.md deviation 8).
+// Both are reported at the name as written (spec/sema-templates.md §5.8).
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 22 error "'type' is a private member of 'A'"
+//@ diag: 22:42 error "'type' is a private member of 'A'"
 //@ diag: 24:6 note "in instantiation of template class 'W<A>' requested here"
 //@ diag: 13:15 note "implicitly declared private here"
-//@ diag: 25 error "'N' is a private member of 'A'"
+//@ diag: 25:42 error "'N' is a private member of 'A'"
 //@ diag: 26:6 note "in instantiation of template class 'G<A>' requested here"
 //@ diag: 14:10 note "implicitly declared private here"
 class A {

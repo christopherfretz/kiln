@@ -343,6 +343,7 @@ impl Sema<'_, '_> {
             }
             return Some(self.inheriting_using(class, q, name_loc));
         }
+        self.declare_implicit_named(q.ctx, name);
         let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
         if found.is_empty() {
             let msg = self

@@ -143,11 +143,16 @@ here` / `implicitly declared private here`.
 nested-name-specifier component (`A::Priv::X`), an elaborated reference
 (`struct A::Priv *`), a base-specifier (checked at once in the deriving class's
 context without its bases, as clang 19 does) and `T::type` after substitution
-(a SFINAE failure in a SFINAE context), a qualified member template name
+(a SFINAE failure in a SFINAE context; reported at the name as written,
+spec/sema-templates.md §5.8, or at an alias template's `using` with clang's
+access context, §4.10), a qualified member template name
 (`A::PT<int>`), a mem-initializer-id, and each member a member
 using-declarator names ([namespace.udecl]/19; named through an object of the
 current class, as clang's `BuildUsingDeclaration` does, so `using B::m;` of a
-protected member of a base is accessible). The parser's classification
+protected member of a base is accessible). A using-declarator with a dependent
+qualifier (`using T::f;`, `using typename T::type;`) is checked when the class
+is instantiated, at the declarator's name (`member_using`,
+`member_using_typename`; WP-194); inheriting constructors are not checked. The parser's classification
 (`classify_name`) is side-effect free; `Sema::check_type_name_access` redoes
 the lookup for a class member to learn the naming class and using-shadow. An
 injected-class-name is a public member of its own class (`struct G : F2 {
@@ -661,7 +666,13 @@ not deleted (`attempt to use a deleted function`), and is marked referenced
 `act_on_mem_initializers(ctor, &[MemInitInfo], colon_loc)`, `MemInitInfo { id:
 Ident | TypeId, loc, init, pack_expansion }`. A mem-initializer-id names a
 non-static data member (anonymous-union members via `IndirectField`), else a
-direct or virtual base, or the class itself (delegating). Errors: `member
+direct or virtual base, or the class itself (delegating). An identifier that
+is not a field is looked up in the class first, where it may be a member typedef
+or an injected-class-name, including one inherited from a base
+([class.qual]/2). It is then classified in the enclosing scopes. There, a class
+template's injected-class-name is the injected type ([temp.local]/1). This is
+also true when an instantiated constructor re-resolves its ids, whose scope
+chain lacks the class scope. Errors: `member
 initializer 'y' does not name a non-static data member or base class`,
 `multiple initializations given for non-static member 'x'` (`... for base
 'B'`), `an initializer for a delegating constructor must appear alone`,
@@ -1427,7 +1438,14 @@ Constructors, destructors, conversion functions, `= default` and
   `TRIVIAL_*`, `IMPLICIT_*_CONST_PARAM` and deleted-ness bits and declare
   the eager members of the §4.1 table; `ensure_implicit(class, kind)`
   declares the rest lazily (the members' own declarator checks and
-  §4.2 selection call it). `declare_implicit` sets triviality from the
+  §4.2 selection call it). Lookup is `&self`, so a name that can denote an
+  implicit member is declared before it is looked up, as in clang's
+  `DeclareImplicitMemberFunctionsWithName`. `declare_implicit_named`
+  declares copy/move assignment for `operator=` and the destructor for a
+  destructor name. It runs in the class of a qualified id-expression and
+  in the class of a member access. It also runs in the nominated class of
+  a member using-declaration. An unqualified `operator=` runs
+  `declare_implicit_named_in_scope` over the enclosing class scopes. `declare_implicit` sets triviality from the
   class bits, or for copy/move members of a class with `NEEDS_OVL_*` from
   `selected_all_trivial` (clang `SpecialMemberIsTrivial`, §4.3); `constexpr`
   follows the C++23+ rules (§4.6).
@@ -1859,9 +1877,7 @@ polymorphic classes) for `final_overrider`/vtable cache size.
 7. (WP-066b) `DeclRefExpr`/`MemberExpr` carry no nested-name-specifier;
    `(a.f)()` loses the parentheses when the call is rebuilt. Dumps that
    would show either differ.
-8. (WP-066b, WP-174) A type name checked after substitution (`T::type`) is
-   reported at the location the substitution was given (the declarator,
-   or the use of an alias template) rather than at the name; `&B::m`'s [class.protected] rule and member-pointer
+8. (WP-066b, WP-174) `&B::m`'s [class.protected] rule and member-pointer
    base-to-derived conversion access are not re-checked; an unqualified
    `&f` naming a member function gets no `must explicitly qualify name of
    member function` diagnostic; calls through member pointers get no

@@ -43,22 +43,12 @@ impl Sema<'_, '_> {
         let et = n.ty();
         let evk = n.value_category();
         let binds = evk == ValueCategory::LValue || (!lref && evk == ValueCategory::XValue);
+        // [expr.reinterpret.cast]/11: any glvalue (clang accepts an xvalue
+        // as an lvalue reference too).
+        let reinterprets = style.allows_reinterpret() && evk != ValueCategory::PRValue;
         let keeps_cv =
             self.ast.types.effective_quals(r).contains(self.ast.types.effective_quals(et));
         let same = self.ast.types.same_unqualified(r, et);
-        // [expr.const.cast]/3: a prvalue of class type as an xvalue of a
-        // similar type (`const_cast<const T&&>(f())`), materialized first
-        // (clang `TryConstCast`).
-        if style == CastStyle::Const
-            && !lref
-            && evk == ValueCategory::PRValue
-            && same
-            && self.ast.types.as_record(et).is_some()
-        {
-            let x = self.maybe_bind_temporary(e);
-            let m = self.materialize_temporary(x, et, false);
-            return self.typed_cast(style, CastKind::NoOp, m, r, vk, None, loc, rparen);
-        }
         if binds {
             // [expr.static.cast]/4, [expr.const.cast]/4: the same type,
             // (for `const_cast` and the C-style cast) cv-qualification
@@ -73,19 +63,51 @@ impl Sema<'_, '_> {
             {
                 return x;
             }
-            // [expr.reinterpret.cast]/11: an lvalue as another type.
-            if style.allows_reinterpret() && (keeps_cv || style.allows_const()) && !same {
-                return self.typed_cast(
-                    style,
-                    CastKind::LValueBitCast,
-                    e,
-                    r,
-                    vk,
-                    None,
-                    loc,
-                    rparen,
-                );
+        }
+        if binds || reinterprets {
+            // [expr.reinterpret.cast]/11: a glvalue as the same type (an
+            // xvalue as an lvalue) or another type.
+            if style.allows_reinterpret() && (keeps_cv || style.allows_const()) {
+                let ck = if same { CastKind::NoOp } else { CastKind::LValueBitCast };
+                if !binds || !same {
+                    return self.typed_cast(style, ck, e, r, vk, None, loc, rparen);
+                }
             }
+        }
+        // [expr.const.cast]/3: a class prvalue as an xvalue of the same
+        // class (cv-qualification changed) by `const_cast<T&&>` (or the
+        // C-style cast's const_cast step), through temporary
+        // materialization (clang `TryConstCast`'s
+        // `NeedToMaterializeTemporary`).
+        if !lref
+            && evk == ValueCategory::PRValue
+            && style.allows_const()
+            && same
+            && self.ast.types.as_record(et).is_some()
+        {
+            let x = self.materialize_temporary(e, et, false);
+            return self.typed_cast(style, CastKind::NoOp, x, r, vk, None, loc, rparen);
+        }
+        // clang `err_bad_cxx_cast_rvalue`: `const_cast` binds a reference
+        // only to an lvalue (or, for `T&&`, an xvalue or a class prvalue),
+        // `reinterpret_cast` only to a glvalue.
+        let rvalue = match style {
+            CastStyle::Const => {
+                !binds
+                    && (lref
+                        || (evk == ValueCategory::PRValue
+                            && self.ast.types.as_record(et).is_none()))
+            }
+            CastStyle::Reinterpret => evk == ValueCategory::PRValue,
+            _ => false,
+        };
+        if rvalue {
+            let msg = self
+                .diag(DiagId::sema_bad_cxx_cast_rvalue, loc)
+                .arg(style.select())
+                .arg(self.ty_arg(ty));
+            self.emit(msg);
+            return self.recover(ty, &[e], loc);
         }
         if style.allows_static() && style != CastStyle::Functional {
             // [expr.static.cast]/4: `T& t(e);` (a prvalue bound to an rvalue

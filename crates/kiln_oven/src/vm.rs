@@ -1687,7 +1687,8 @@ impl Oven {
                         let reach = |f: &crate::ty::FieldInfo| {
                             contains(f)
                                 && (f.width.is_some()
-                                    || self.types.has_member_at(f.ty, rel - f.offset, ty))
+                                    || self.types.has_subobject(f.ty, rel - f.offset, ty)
+                                    || self.types.has_bit_unit(f.ty, rel - f.offset, ty))
                         };
                         if let Some(i) = active {
                             let f = fields[i as usize];
