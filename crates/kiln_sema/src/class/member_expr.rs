@@ -97,6 +97,22 @@ impl Sema<'_, '_> {
         self.derived_inclusive(c, declaring).then_some(c)
     }
 
+    /// Whether an id-expression naming instance member `d` (or a member
+    /// template of instance member functions) is an implicit
+    /// `this->Q::name` resolved at instantiation: `d`'s class is not
+    /// (yet) known to be a base of `*this`, whose class has a dependent
+    /// base ([temp.dep.type]/6; clang `IMA_Dependent`).
+    pub(crate) fn member_via_dependent_base(&self, d: DeclId) -> bool {
+        let d = if self.kind_of(d) == DeclKind::FunctionTemplate {
+            self.pattern_of(d).unwrap_or(d)
+        } else {
+            d
+        };
+        self.is_class_member_ref(d)
+            && self.implicit_object_class(d).is_none()
+            && self.this_class().is_some_and(|(_, c)| self.has_dependent_bases(c))
+    }
+
     /// An id-expression naming the non-static member `d`
     /// ([expr.prim.id.general]/3): `(*this).d` where `this` may be used
     /// and its class is (derived from) `d`'s class; otherwise a
