@@ -115,9 +115,15 @@ pub fn qualification_relation(s: &Sema<'_, '_>, from: QualType, to: QualType) ->
         let cv_changed = i >= 1 && (cv3[i - 1] != cv1[i - 1] || cv3[i - 1] != cv2[i - 1]);
         let p_changed = i < n && (p3[i] != p1[i] || p3[i] != p2[i]);
         if cv_changed || p_changed {
-            // const on every cv3_k for 0 < k < i.
-            for c in cv3.iter_mut().take(i.saturating_sub(1)) {
-                *c |= Quals::CONST;
+            // const on every cv3_k for 0 < k < i. An array's cv_k is its
+            // element's cv_{k+1} ([basic.type.qualifier]/3), not a level
+            // of its own: `int (*)[]` converts to `volatile int (*)[]`
+            // (clang unwraps an array with the level below it,
+            // `UnwrapSimilarTypes`).
+            for (k, c) in cv3.iter_mut().enumerate().take(i.saturating_sub(1)) {
+                if !matches!(p3[k + 1], Level::Array(_)) {
+                    *c |= Quals::CONST;
+                }
             }
         }
     }
