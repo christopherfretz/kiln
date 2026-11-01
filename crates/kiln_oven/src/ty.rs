@@ -189,6 +189,24 @@ impl Types {
         }
     }
 
+    /// The non-bit-field member (or base) of the record `t` that holds
+    /// byte `off`. A member of non-zero size wins over a zero-size one at
+    /// the same offset (a zero-length array, GNU `T x[0]`, holds no byte:
+    /// libc++'s `char __padding_[0]` before `__data_` in `basic_string`),
+    /// which is found only when nothing else is there.
+    pub fn field_at(&self, t: OTy, off: u64) -> Option<FieldInfo> {
+        let fs = self.fields(t);
+        let sized = |f: &&FieldInfo| {
+            f.width.is_none() && off >= f.offset && off < f.offset + self.size(f.ty)
+        };
+        fs.iter()
+            .find(sized)
+            .or_else(|| {
+                fs.iter().find(|f| f.width.is_none() && self.size(f.ty) == 0 && off == f.offset)
+            })
+            .copied()
+    }
+
     pub fn unions(&self, t: OTy) -> &[(u64, OTy)] {
         let (a, b) = self.info(t).upos;
         &self.union_pos[a as usize..b as usize]
@@ -226,6 +244,23 @@ impl Types {
         let t = self.build(bridge, c);
         self.map.insert(c, t);
         t
+    }
+
+    /// Whether `a` and `b` are the same type but for the qualifiers of
+    /// array elements (`const char[2]` and `char[2]` intern apart; every
+    /// other type is interned unqualified).
+    pub fn same_unqualified(&self, mut a: OTy, mut b: OTy) -> bool {
+        loop {
+            if a == b {
+                return true;
+            }
+            match (self.kind(a), self.kind(b)) {
+                (TyKind::Array { elem: x, n }, TyKind::Array { elem: y, n: m }) if n == m => {
+                    (a, b) = (x, y);
+                }
+                _ => return false,
+            }
+        }
     }
 
     /// A synthetic array of `n` elements of `elem` (string literal objects
@@ -571,11 +606,11 @@ impl Types {
         loop {
             match self.kind(t) {
                 TyKind::Array { elem, n } => {
-                    if elem == p {
+                    if self.same_unqualified(elem, p) {
                         return Some((base, n, true));
                     }
                     // The array object itself (`&arr`), not an element.
-                    if t == p {
+                    if self.same_unqualified(t, p) {
                         return Some((base, 1, false));
                     }
                     let es = self.size(elem);
@@ -586,27 +621,25 @@ impl Types {
                     base += i * es;
                     t = elem;
                 }
-                _ if t == p => return Some((base, 1, false)),
-                TyKind::Record { union, .. } => {
+                _ if self.same_unqualified(t, p) => return Some((base, 1, false)),
+                TyKind::Record { union: true, .. } => {
                     let rel = o - base;
-                    let mut found = None;
                     for f in self.fields(t) {
                         if f.width.is_some() {
                             continue;
                         }
                         let sz = self.size(f.ty);
-                        if rel >= f.offset && rel < f.offset + sz.max(1) {
-                            if union {
-                                if let Some(r) = self.extent_in(f.ty, base + f.offset, o, p) {
-                                    return Some(r);
-                                }
-                                continue;
-                            }
-                            found = Some(*f);
-                            break;
+                        if rel >= f.offset
+                            && rel < f.offset + sz.max(1)
+                            && let Some(r) = self.extent_in(f.ty, base + f.offset, o, p)
+                        {
+                            return Some(r);
                         }
                     }
-                    let f = found?;
+                    return None;
+                }
+                TyKind::Record { .. } => {
+                    let f = self.field_at(t, o - base)?;
                     base += f.offset;
                     t = f.ty;
                 }
