@@ -3429,6 +3429,15 @@ any AST change) and `sat.count` (no satisfaction counter until WP-073);
 `-ftime-trace -ftime-trace-granularity=0` output. The gate is
 `kiln inst.count ≤ clang`.
 
+**Landed (WP-140): [temp.deduct.partial]/9 reference tie-break.** When
+partial ordering deduces in both directions, a parameter pair where both
+were reference types is broken as the standard says: an lvalue reference
+beats an rvalue reference, otherwise the more cv-qualified referred-to
+type is at least as specialized (`templ/order.rs`, `OrderingType.refq`);
+one template is more specialized only if it wins some pair and loses
+none. This makes the `DoNotOptimize(T&)` / `DoNotOptimize(const T&)`
+pair of libc++'s `test_macros.h` unambiguous for a non-const lvalue.
+
 ## 12. Agent parallelization
 
 ```

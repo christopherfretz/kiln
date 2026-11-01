@@ -1213,6 +1213,13 @@ Remaining (each traps with a `kiln:` note today):
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the
   front end puts the volatile qualifier on the read expression's type.
 
+**Landed (WP-140): asm statements.** A `GCCAsmStmt` is never a core
+constant expression ([dcl.asm]/1, [expr.const]/5.?): the Oven compiler
+lowers it to the same trap as `goto`, giving clang's
+`subexpression not valid in a constant expression` note at the `asm`.
+A constexpr function that contains asm on a path not taken still
+evaluates.
+
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:
 - `expr_const.rs`: one test per [expr.const]/5 bullet reachable in M2 with

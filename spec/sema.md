@@ -1368,6 +1368,30 @@ template saved in `range_for_outer_depth` for instantiations).
   warnings (groups declared, not emitted); the begin/end-types-differ
   pre-C++17 extension warning; clang's recovery for `for (int x, y : a)`.
 
+### 7.7 Landed (WP-140): GNU asm statements (`asm.rs`)
+`act_on_gcc_asm_stmt` follows clang's `ActOnGCCAsmStmt`: output and input
+constraints are validated per target (`kiln_abi::asm`, aarch64 and
+x86_64), outputs must be modifiable lvalues
+(`invalid lvalue in asm output`), a register-only input is converted to a
+prvalue (lvalue-to-rvalue) and a memory input stays an lvalue, an
+immediate input (`i`, `n`) must be an integer constant expression, a
+tied operand must have a compatible type, and the template is parsed
+(`%N`, `%[name]`, `%=`, `%%`, modifiers) with clang's errors for an
+invalid operand number, unknown name and a mismatched modifier (the
+aarch64 `-Wasm-operand-widths` warning with its `%w` fix-it note).
+Clobbers are checked against the target's register names. Each operand
+ends a full-expression (its odr-uses are resolved). The `!srcloc`
+values clang attaches are precomputed into `AsmData.srclocs` (literal
+begin, then every later template line; offset + 2). Templates are
+substituted (`subst/stmts.rs`) and rechecked at instantiation.
+`act_on_file_scope_asm` builds a `FileScopeAsmDecl`. Not implemented:
+`asm goto` (rejected by the parser), immediate range checks
+(`validateInputSize`/`validateOutputSize`), `=@cc` flag outputs, register
+variables (`register int r asm("x0")`) as operands and their clobber
+conflict check, the C++17 "asm in constexpr function" extension warning;
+`!srcloc` values in headers and macro expansions do not match clang's
+encoding.
+
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
 Sema does no constant evaluation of its own: every constant it needs

@@ -726,6 +726,27 @@ off and sema rejects `try`/`throw`).
 - The LLVM name of an anonymous union member type is
   `%"union.U::anon"` (clang `%union.anon`).
 
+## 7c. Landed (WP-140): GNU inline asm (`asm.rs`)
+`emit_asm` is clang's `CodeGenFunction::EmitAsmStmt`: outputs become
+`=`+simplified constraint (register) or `=*` with an `elementtype` (an
+indirect memory output); a register aggregate of size 1/2/4/8/16 is
+passed as `iN`; a `+` output adds its input half (tied by number when
+the constraint allows a register); a tied input narrower than its output
+is zero/fp-extended, and a wider one widens the result; inputs are
+prvalues, `i`/`n` constants, or `*m` pointers with `elementtype`. The
+template is rewritten to LLVM syntax (`${N:mod}`, `$$`, `${:uid}`).
+Clobbers: `memory` drops `memory(read)`/`memory(none)`, `cc` is kept,
+others become `~{reg}` (normalized names); x86_64 appends
+`~{dirflag},~{fpsr},~{flags}`. The call is `call ... asm sideeffect` for
+volatile or output-less asm, is `nounwind`, and carries `!srcloc`.
+Multiple outputs are a struct return taken apart with `extractvalue`
+and stored with the operand's lvalue store (truncating back for
+widened results). A `FileScopeAsmDecl` becomes `module asm` lines.
+Validation: `tests/codegen/asm_stmt.cpp` matches clang 19 exactly on
+aarch64 and x86_64. Not implemented: `asm goto` (callbr), the `unwind`
+clobber inside a `try` (no `invoke`), `=@cc` outputs, register-variable
+operands, MMX type adjustment.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

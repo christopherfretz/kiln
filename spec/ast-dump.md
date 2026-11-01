@@ -501,6 +501,12 @@ Known gaps:
 - Explicit specializations of members of an implicit specialization are
   not implemented (spec/sema-templates.md §11.2, WP-070b).
 
+**Landed (WP-140).** `FileScopeAsmDecl` (no attributes; its literal is
+the child) and `GCCAsmStmt` (no attributes; the output then input
+operand expressions are the children; the template, constraints and
+clobbers are not printed, as in clang's text dump). Both are kept by the
+`xtask clang-ast` normalizer. `tests/conformance/ast/dcl.asm/`.
+
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]
 [--all-files] [--filter=<substr>] [-- <clang args>]` prints clang's AST of

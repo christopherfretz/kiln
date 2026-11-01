@@ -1088,3 +1088,14 @@ These refine or replace the text above where they differ; each says why.
     dependence propagation as "const-qualified or `constexpr`" (no
     integral/enumeration type check): over-approximating value dependence
     is safe (it only defers evaluation to instantiation).
+
+**Landed (WP-140): GNU asm nodes.** `GCCAsmStmt`'s side record is
+`AsmData` (`StmtArena::asm_data`): template literal and location, a slice
+of the operand table (`asm_operands(s)`: `AsmOperand { name, constraint,
+constraint_loc, expr }`, outputs then inputs), clobbers and labels
+(`ListId`s), the closing `)`, and `srclocs` (a raw `u32` list of clang's
+`!srcloc` values, filled by sema); `aux` holds `asm_bits`
+(`VOLATILE`, `GOTO`, `INLINE`, `BASIC`). Built with
+`AstBuilder::gcc_asm_stmt(data, ops, bits, loc)`. A namespace-scope
+asm-declaration is `DeclKind::FileScopeAsm` (`AstBuilder::file_scope_asm`,
+`Ast::file_scope_asm_string`). `labels` is always empty (no `asm goto`).
