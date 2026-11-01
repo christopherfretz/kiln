@@ -2989,6 +2989,14 @@ impl<'a> AstBuilder<'a> {
         self.stmt(StmtKind::LabelStmt, 0, loc, label.raw(), sub.raw())
     }
 
+    /// An attributed statement `[[attrs]] sub` ([stmt.pre]/1, clang's
+    /// `AttributedStmt`): `a` = the `AttrId` list, `b` = the statement.
+    /// `loc` is the first attribute-specifier.
+    pub fn attributed_stmt(&mut self, attrs: &[AttrId], sub: StmtId, loc: Loc) -> StmtId {
+        let list = self.ast.lists.push(attrs);
+        self.stmt(StmtKind::AttributedStmt, 0, loc, list.raw(), sub.raw())
+    }
+
     /// `goto label;` ([stmt.goto]); `a` = the `Label` declaration.
     pub fn goto_stmt(&mut self, label: DeclId, loc: Loc) -> StmtId {
         self.stmt(StmtKind::GotoStmt, 0, loc, label.raw(), 0)
