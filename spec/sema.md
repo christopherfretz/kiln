@@ -1136,7 +1136,22 @@ diagnostics and IR.
     `kiln_abi` layout
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
-    `mark_part_of_explicit_cast`
+    `mark_part_of_explicit_cast`. To a reference (`expr/ref_cast.rs`,
+    WP-207): `const_cast<T&&>` (and the C-style cast's const step) of a
+    class prvalue of the same unqualified class materializes it
+    (`MaterializeTemporaryExpr`, [expr.const.cast]/3) and is a `NoOp`
+    xvalue; `reinterpret_cast` (and the C-style cast's reinterpret step)
+    binds any glvalue, an xvalue as an lvalue reference too (`NoOp` for
+    the same type, else `LValueBitCast`); `const_cast` of a non-lvalue to
+    `T&`, of a non-class prvalue to `T&&`, and `reinterpret_cast` of a
+    prvalue are `{const_cast|reinterpret_cast} from rvalue to reference
+    type 'T &'` (clang `err_bad_cxx_cast_rvalue`). A failed cast's
+    `RecoveryExpr` has the referenced type and the reference's value
+    category, as every `RecoveryExpr` of a reference type does (clang
+    `CreateRecoveryExpr`), so it is not diagnosed again. Not yet: the
+    C-style cast's own rvalue message (`(S&)mk()` reports the
+    initialization failure of its static step instead of `C-style cast
+    from rvalue to reference type`).
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold.
 - **Member-pointer equality** ([expr.eq]/4, clang's
