@@ -826,7 +826,20 @@ Later uses of it are silent.
   is substituted and then matched against the namespace-scope templates
   when it is instantiated.
 - A friend class (`friend class B<T>;`) is substituted and grants access
-  (S3C).
+  (S3C). A dependent friend specialization (`friend struct X<T>;`,
+  `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the
+  pattern's `FriendDecl` as a dependent `FriendTarget::Type`; each
+  instantiation of the class substitutes it and befriends the resulting
+  specialization (WP-136). A non-dependent one (`friend struct X<int>;`)
+  names the specialization directly, in the pattern as outside a
+  template. In the pattern (or a partial specialization) of `X`, a
+  member access befriended through a specialization of `X` is accepted:
+  whether the instantiation is the befriended one is decided then
+  (clang's dependent access result; kiln does not re-check a
+  non-dependent access at instantiation, a known gap shared with friend
+  function specializations).
+- `template<class U> friend struct Y<U*>;` is "partial specialization
+  cannot be declared as a friend" ([temp.friend]/9).
 
 ### 4.9 Default member initializers
 
