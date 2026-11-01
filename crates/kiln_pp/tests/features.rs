@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 
 use std::collections::BTreeMap;
 
-use ifeval_common::{clang_available, run_clang, run_kiln_with};
+use ifeval_common::{clang_available, clang_version_line, run_clang, run_kiln_with};
 use kiln_lex::Std;
 use kiln_pp::{ClangFeatures, FeatureFlag, FeatureQueries, MemoryResolver, TargetQuery};
 
@@ -153,8 +153,53 @@ fn values(text: &str) -> BTreeMap<usize, String> {
     m
 }
 
+/// The traits whose `__has_builtin` clang 19.1.0-19.1.2 answers 0
+/// (llvm/llvm-project#111477, fixed in 19.1.3).
+const GH111477: [&str; 4] = [
+    "__can_pass_in_regs",
+    "__reference_binds_to_temporary",
+    "__reference_constructs_from_temporary",
+    "__reference_converts_from_temporary",
+];
+
+/// The `[major, minor, patch]` after `clang version ` in a `--version` line.
+fn clang_version(line: &str) -> Option<[u32; 3]> {
+    let rest = &line[line.find("clang version ")? + "clang version ".len()..];
+    let mut it = rest.split(|c: char| !c.is_ascii_digit()).map(str::parse);
+    Some([it.next()?.ok()?, it.next()?.ok()?, it.next()?.ok()?])
+}
+
+/// Why a mismatch on `query` (clang answering `clang`, kiln `kiln`) is a
+/// known defect of the installed clang, whose `--version` line is
+/// `version`, rather than of kiln's table (docs/VALIDATION.md "Known oracle
+/// defects"). kiln models upstream clang 19.1.3+ as Debian ships it (19.1.7).
+fn oracle_defect(
+    version: &str,
+    query: &str,
+    clang: Option<&str>,
+    kiln: Option<&str>,
+) -> Option<&'static str> {
+    let builtin = query.strip_prefix("__has_builtin(").and_then(|q| q.strip_suffix(')'));
+    if let Some(v) = clang_version(version)
+        && v[..2] == [19, 1]
+        && v[2] < 3
+        && builtin.is_some_and(|b| GH111477.contains(&b))
+        && (clang, kiln) == (Some("0"), Some("1"))
+    {
+        return Some("llvm/llvm-project#111477 (clang 19.1.0-19.1.2)");
+    }
+    if version.starts_with("Ubuntu clang version 19.")
+        && query == "__is_target_environment(gnut64)"
+        && (clang, kiln) == (Some("1"), Some("0"))
+    {
+        return Some("Ubuntu's clang 19 package knows the gnut64 environment");
+    }
+    None
+}
+
 /// Mismatches between kiln (with `ClangFeatures::from_args(triple, std,
-/// args)`, no predefines) and `clang -undef args` on `queries`.
+/// args)`, no predefines) and `clang -undef args` on `queries`; known
+/// oracle defects ([`oracle_defect`]) are not mismatches.
 fn compare(triple: &str, std: Std, args: &[&str], queries: &[String]) -> Vec<String> {
     let mut src = String::new();
     for (i, q) in queries.iter().enumerate() {
@@ -170,7 +215,8 @@ fn compare(triple: &str, std: Std, args: &[&str], queries: &[String]) -> Vec<Str
     let (c, k) = (values(&clang.text), values(&kiln.text));
     let mut bad = Vec::new();
     for (i, q) in queries.iter().enumerate() {
-        if c.get(&i) != k.get(&i) {
+        let (cv, kv) = (c.get(&i).map(String::as_str), k.get(&i).map(String::as_str));
+        if cv != kv && oracle_defect(clang_version_line(), q, cv, kv).is_none() {
             bad.push(format!(
                 "{triple} {std:?} {args:?}: {q}: clang {:?}, kiln {:?}",
                 c.get(&i),
@@ -462,6 +508,29 @@ fn is_target_matches_clang() {
 }
 
 // ---- unit tests (no clang needed) -------------------------------------------
+
+/// WP-239: the oracle defects the differential tests tolerate, and only
+/// those (the CI image's clang is Debian's 19.1.7, which has neither).
+#[test]
+fn oracle_defects_are_narrow() {
+    let ubuntu = "Ubuntu clang version 19.1.1 (1ubuntu1~24.04.2)";
+    let debian = "Debian clang version 19.1.7 (3+b1)";
+    let q = "__has_builtin(__can_pass_in_regs)";
+    let (zero, one) = (Some("0"), Some("1"));
+    assert_eq!(clang_version(ubuntu), Some([19, 1, 1]));
+    assert_eq!(clang_version("clang version 19.1.2git"), Some([19, 1, 2]));
+    assert!(oracle_defect(ubuntu, q, zero, one).is_some());
+    assert!(oracle_defect("clang version 19.1.2", q, zero, one).is_some());
+    assert!(oracle_defect("clang version 19.1.3", q, zero, one).is_none());
+    assert!(oracle_defect(debian, q, zero, one).is_none());
+    assert!(oracle_defect(ubuntu, q, one, zero).is_none(), "only clang's 0 is excused");
+    assert!(oracle_defect(ubuntu, "__has_builtin(__is_pod)", zero, one).is_none());
+    assert!(oracle_defect(ubuntu, "__has_feature(__can_pass_in_regs)", zero, one).is_none());
+    let env = "__is_target_environment(gnut64)";
+    assert!(oracle_defect(ubuntu, env, one, zero).is_some());
+    assert!(oracle_defect(debian, env, one, zero).is_none());
+    assert!(oracle_defect(ubuntu, "__is_target_environment(gnux32)", one, zero).is_none());
+}
 
 fn cf(triple: &str, std: Std, args: &[&str]) -> ClangFeatures {
     ClangFeatures::from_args(triple, std, args).unwrap()

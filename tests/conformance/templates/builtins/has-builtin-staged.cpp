@@ -246,9 +246,6 @@
 #if !__has_builtin(__underlying_type)
 #error __underlying_type
 #endif
-#if !__has_builtin(__can_pass_in_regs)
-#error __can_pass_in_regs
-#endif
 #if !__has_builtin(__has_nothrow_assign)
 #error __has_nothrow_assign
 #endif

@@ -92,7 +92,15 @@ pub enum ExprKind {
     ArrayInitIndexExpr,
     CXXStdInitializerListExpr,
     CompoundLiteralExpr,
+    /// An element of a [`ExprKind::DesignatedInitUpdateExpr`] updater
+    /// that keeps the base's initialization.
     NoInitExpr,
+    /// A subobject initialized by an expression, then partly
+    /// re-initialized by a designator into it ([dcl.init.aggr]/4 with
+    /// C99 designators; clang's `DesignatedInitUpdateExpr`): the base
+    /// and an updater `InitListExpr` whose `NoInitExpr` elements keep
+    /// the base's values.
+    DesignatedInitUpdateExpr,
     // temporaries
     MaterializeTemporaryExpr,
     CXXBindTemporaryExpr,
@@ -1949,6 +1957,12 @@ impl ExprArena {
         [ExprId::new(n.a), ExprId::new(n.b)]
     }
 
+    /// The base and updater of a `DesignatedInitUpdateExpr`.
+    pub fn designated_init_update(&self, e: ExprId) -> [ExprId; 2] {
+        let n = self.expect_kind(e, ExprKind::DesignatedInitUpdateExpr);
+        [ExprId::new(n.a), ExprId::new(n.b)]
+    }
+
     /// The source expression of an `OpaqueValueExpr` (shared: not one of
     /// its [`ExprArena::children`]).
     pub fn opaque_source(&self, e: ExprId) -> Option<ExprId> {
@@ -2364,7 +2378,7 @@ impl ExprArena {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
                 v.extend(id(n.b));
             }
-            ExprKind::ArrayInitLoopExpr => {
+            ExprKind::ArrayInitLoopExpr | ExprKind::DesignatedInitUpdateExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
             }

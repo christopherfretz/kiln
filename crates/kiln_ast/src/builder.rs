@@ -3044,6 +3044,36 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A `DesignatedInitUpdateExpr`: `base` initializes the subobject of
+    /// type `ty`, then the `updater` list re-initializes the elements
+    /// that are not `NoInitExpr` ([dcl.init.aggr]/4, C99 designators).
+    pub fn designated_init_update(
+        &mut self,
+        ty: QualType,
+        base: ExprId,
+        updater: ExprId,
+    ) -> ExprId {
+        let deps = self.type_deps(ty) | self.deps(base) | self.deps(updater);
+        let loc = self.ast.exprs.get(base).loc();
+        self.simple(
+            ExprKind::DesignatedInitUpdateExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            base.raw(),
+            updater.raw(),
+        )
+    }
+
+    /// A `NoInitExpr` of type `ty`: an updater element that keeps the
+    /// base's value.
+    pub fn no_init(&mut self, ty: QualType) -> ExprId {
+        let deps = self.type_deps(ty);
+        self.simple(ExprKind::NoInitExpr, ValueCategory::PRValue, deps, 0, ty, Loc::INVALID, 0, 0)
+    }
+
     /// The current index of the innermost `ArrayInitLoopExpr` (a
     /// `std::size_t` prvalue of type `ty`).
     pub fn array_init_index(&mut self, ty: QualType, loc: Loc) -> ExprId {

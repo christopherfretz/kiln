@@ -703,7 +703,7 @@ was used). Type sugar (`'Z':'N::Z'`) is the printer's job (ast-dump.md).
 
 ## 9. Diagnostics
 
-### 9.1 New diagnostic ids (`kiln_diag/src/ids.rs`, clang wording)
+### 9.1 New diagnostic ids (`kiln_diag/src/ids/*.rs`, clang wording)
 | id | text |
 |---|---|
 | `sema_ovl_no_viable_member_function_in_call` | "no matching member function for call to '{0}'" |

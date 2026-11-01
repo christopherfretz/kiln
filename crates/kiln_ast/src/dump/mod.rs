@@ -732,6 +732,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
+            ExprKind::DesignatedInitUpdateExpr => {
+                for c in exprs.designated_init_update(e) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
             ExprKind::ArrayInitLoopExpr => {
                 for c in exprs.array_init_loop(e) {
                     kids.push((Node::Expr(c), None));

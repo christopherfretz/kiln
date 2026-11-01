@@ -6,6 +6,10 @@ on:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+# Two jobs rather than a matrix: a matrix would rename the required status
+# check `check` to `check (<axis>)`. The shared steps live once in the
+# composite action .github/actions/kiln-ci (WP-239); each job only installs
+# git, which checkout needs before the local action can be read.
 jobs:
   check:
     # The reference environment (docs/VALIDATION.md "GitHub Actions"): an
@@ -18,22 +22,12 @@ jobs:
     env:
       KILN_REQUIRE_LLVM: "1"
     steps:
-      - name: Install the toolchain packages
+      - name: Install git
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends \
-            ca-certificates curl git build-essential procps time \
-            clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev >/dev/null
-          clang++-19 --version | head -1
+          apt-get install -y -qq --no-install-recommends ca-certificates git >/dev/null
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { toolchain: "1.99.1", components: "rustfmt, clippy" }
-      # Saved even when `ci` fails, so the next run starts warm.
-      - uses: Swatinem/rust-cache@v2
-        with: { cache-on-failure: true }
-      # fmt, clippy, cargo test, then both corpus runs (clang self-check and
-      # kiln), as `cargo xtask ci` locally.
-      - run: cargo xtask ci
+      - uses: ./.github/actions/kiln-ci
   check-x86_64:
     # The same Debian 13 environment on an x86-64 host (WP-228): the default
     # target is x86_64-unknown-linux-gnu, so this covers the host-dependent
@@ -44,16 +38,9 @@ jobs:
     env:
       KILN_REQUIRE_LLVM: "1"
     steps:
-      - name: Install the toolchain packages
+      - name: Install git
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends \
-            ca-certificates curl git build-essential procps time \
-            clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev >/dev/null
-          clang++-19 --version | head -1
+          apt-get install -y -qq --no-install-recommends ca-certificates git >/dev/null
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { toolchain: "1.99.1", components: "rustfmt, clippy" }
-      - uses: Swatinem/rust-cache@v2
-        with: { cache-on-failure: true }
-      - run: cargo xtask ci
+      - uses: ./.github/actions/kiln-ci

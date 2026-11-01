@@ -358,6 +358,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CallExpr
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::CXXPseudoDestructorExpr
+                | ExprKind::DesignatedInitUpdateExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
@@ -426,6 +427,11 @@ impl Sema<'_, '_> {
                 ExprKind::UnaryOperator => !self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
                     e = self.ast.exprs.rewritten_semantic(e);
+                    continue;
+                }
+                // clang: the base's range.
+                ExprKind::DesignatedInitUpdateExpr => {
+                    e = self.ast.exprs.designated_init_update(e)[0];
                     continue;
                 }
                 ExprKind::CXXOperatorCallExpr => {
