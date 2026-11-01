@@ -1840,6 +1840,15 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.tag(d);
                 return;
             }
+            // An undeduced `auto` / `decltype(auto)` is not a candidate
+            // (clang `isTypeSubstitutable`, ABI compat > Clang 6).
+            TypeView::Auto { keyword, .. } => {
+                self.out.push_str(match keyword {
+                    kiln_ast::types::AutoKeyword::DecltypeAuto => "Dc",
+                    _ => "Da",
+                });
+                return;
+            }
             _ => {}
         }
         let key = Sub::Type(q);
@@ -1911,11 +1920,6 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push_str("Dp");
                 self.ty(pattern);
             }
-            // <builtin-type> ::= Dc  # decltype(auto)
-            TypeView::Auto { keyword: kiln_ast::types::AutoKeyword::DecltypeAuto, .. } => {
-                self.out.push_str("Dc");
-            }
-            TypeView::Auto { .. } => self.out.push_str("Da"),
             TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
             TypeView::TemplateSpecialization { name, args, .. } => self.dependent_spec(name, args),
             _ => self.out.push_str("u7unknown"),

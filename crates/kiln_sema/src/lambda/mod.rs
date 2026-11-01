@@ -363,6 +363,21 @@ impl Sema<'_, '_> {
     fn lambda_numbering_context(&self, closure: DeclId) -> Option<(DeclId, Option<DeclId>)> {
         let ctx = self.ast.decls.get(closure).ctx()?;
         let kind = self.kind_of(ctx);
+        if is_function(kind)
+            && let Some(p) = self.lambda_mangle.default_arg
+            && self.ast.decls.get(p).ctx() == Some(ctx)
+        {
+            // An instantiated default argument of `ctx`'s parameter `p`
+            // (clang `getCurrentMangleNumberContext`, `DefaultArgument`):
+            // numbered per parameter only for a member function defined
+            // in its class; otherwise it has no number.
+            let in_class = self
+                .ast
+                .decls
+                .lexical_ctx(ctx)
+                .is_some_and(|l| self.kind_of(l) == DeclKind::CXXRecord);
+            return in_class.then_some((p, Some(p)));
+        }
         if is_function(kind) {
             // clang `getCurrentMangleNumberContext`: `inTemplateInstantiation()
             // || CurContext->isDependentContext()` numbers it too; a
