@@ -1,0 +1,41 @@
+TranslationUnitDecl
+|-ClassTemplateDecl X
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct X definition
+| | |-CXXRecordDecl struct N definition
+| | | `-FieldDecl a 'T'
+| | |-EnumDecl class F 'int'
+| | | |-EnumConstantDecl a 'X::F'
+| | | `-EnumConstantDecl b 'X::F'
+| | |-EnumDecl U 'int'
+| | | `-EnumConstantDecl u 'X::U'
+| | `-EnumDecl class G 'int'
+| |-ClassTemplateSpecializationDecl struct X definition implicit_instantiation
+| | |-TemplateArgument type 'int'
+| | |-CXXRecordDecl struct N
+| | |-EnumDecl class F 'int'
+| | |-EnumDecl U 'int'
+| | | `-EnumConstantDecl u 'X<int>::U' value=0
+| | `-EnumDecl class G 'int'
+| `-ClassTemplateSpecializationDecl struct X definition implicit_instantiation
+|   |-TemplateArgument type 'long'
+|   |-CXXRecordDecl struct N
+|   |-EnumDecl class F 'int'
+|   |-EnumDecl U 'int'
+|   | `-EnumConstantDecl u 'X<long>::U' value=0
+|   `-EnumDecl class G 'int'
+|-CXXRecordDecl parent referenced struct N definition
+| `-FieldDecl z 'long'
+|-EnumDecl parent class F 'int'
+| `-EnumConstantDecl referenced p 'X<int>::F' value=10
+|   `-ConstantExpr 'int' value=10
+|     `-IntegerLiteral 'int' 10
+|-EnumDecl parent class G 'int'
+| `-EnumConstantDecl g 'X<int>::G' value=0
+|-VarDecl xl 'X<long>' callinit
+| `-CXXConstructExpr 'X<long>' 'void () noexcept'
+|-VarDecl xn 'X<int>::N' callinit
+| `-CXXConstructExpr 'X<int>::N' 'void () noexcept'
+`-VarDecl xf 'int' cinit
+  `-CXXFunctionalCastExpr 'int' functional cast to int <IntegralCast>
+    `-DeclRefExpr 'X<int>::F' EnumConstant 'p' 'X<int>::F'

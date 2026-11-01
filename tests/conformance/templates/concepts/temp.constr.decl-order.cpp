@@ -1,3 +1,4 @@
+//@ expect: compile-ok
 // [temp.constr.decl]/3: the associated constraints are the template
 // parameters' type-constraints, then the requires-clause, then the
 // trailing requires-clause; satisfaction stops at the first unsatisfied
@@ -48,3 +49,37 @@ template <class T>
 void k(never auto x, T) {}
 template <class T> concept can_k = requires(int i, T t) { k(i, t); };
 static_assert(!can_k<int>);
+
+// The same shape at every kind of constrained declaration: a constructor
+// of a class template, a function with a trailing requires-clause (beside
+// a viable `...` overload), and a class template. `Bad<T>` is never
+// instantiated because `Huge` fails first.
+namespace pairlike {
+template <class T> struct Bad {
+  static_assert(sizeof(T) == 0, "instantiated");
+  using type = int;
+};
+template <class T> concept Huge = sizeof(T) == 1000;
+template <class T> typename Bad<T>::type get(T);
+
+template <class A> struct P {
+  template <Huge T>
+    requires(sizeof(decltype(get(T()))) > 0)
+  P(T &&);
+  P(int);
+};
+struct X {};
+static_assert(!__is_constructible(P<int>, X));
+
+template <Huge T>
+  requires(sizeof(decltype(get(T()))) > 0)
+void f(T) requires(sizeof(typename Bad<T>::type) > 0);
+void f(...);
+void g() { f(X()); }
+
+template <Huge T>
+  requires(sizeof(decltype(get(T()))) > 0)
+struct C {};
+template <class T> concept HasC = requires { typename C<T>; };
+static_assert(!HasC<X>);
+} // namespace pairlike

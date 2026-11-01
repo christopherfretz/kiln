@@ -1712,7 +1712,8 @@ impl Sema<'_, '_> {
             self.templ.explicit_inst = None;
             // [temp.explicit]/3: of a variable template or static data
             // member.
-            self.act_on_explicit_var_inst(d, ext.is_some(), invalid);
+            let type_loc = ds.type_loc.unwrap_or(ds.loc);
+            self.act_on_explicit_var_inst(d, (ty, type_loc), ext.is_some(), invalid);
             return None;
         }
         if let Some(sid) = &d.spec_id {
@@ -2002,7 +2003,15 @@ impl Sema<'_, '_> {
             self.inst.suppress_next_error.set(true);
             return msg;
         }
-        let loc = self.ast.decls.get(rec).loc();
+        // A member class of an implicit specialization declared
+        // explicitly specialized: clang moves the instantiation's
+        // location to that declaration ([temp.expl.spec]/1).
+        let explicit_member = self
+            .ast
+            .member_spec_info(self.ast.first(rec))
+            .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization);
+        let at = if explicit_member { self.ast.latest(rec) } else { rec };
+        let loc = self.ast.decls.get(at).loc();
         msg.with_note(
             self.diag(DiagId::note_forward_declaration, loc)
                 .arg(format!("'{}'", self.qualified_decl_name(rec))),
@@ -3433,8 +3442,22 @@ impl Sema<'_, '_> {
         }
         if spec.is_constexpr() {
             self.check_constexpr_init(v, e);
-        } else if !spec.is_inline() && self.is_in_class_static(v) {
+        } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
+        }
+    }
+
+    /// The declaration whose initializer `v` carries: an instantiated
+    /// variable template specialization's pattern (a member variable
+    /// template defined out of line is not initialized in its class, as
+    /// clang's `BuildVariableInstantiation` keeps the pattern's lexical
+    /// context), else `v` itself.
+    fn init_written_in(&self, v: DeclId) -> DeclId {
+        match self.ast.spec_info(v) {
+            Some((_, s)) if s.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization => {
+                s.from
+            }
+            _ => v,
         }
     }
 
@@ -4017,7 +4040,16 @@ impl Sema<'_, '_> {
         let first = self.ast.first(d);
         // (Not a class a friend declaration introduced: clang leaves it
         // unreferenced once a later declaration makes the name visible.)
-        if first != d && self.ast.decls.get(first).misc().friend() != FriendKind::Undeclared {
+        // (Nor a member of an implicit specialization explicitly
+        // specialized: lookup finds the specialization, [temp.expl.spec]/1.)
+        let explicit_member = self
+            .ast
+            .member_spec_info(first)
+            .is_some_and(|(_, m)| m.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization);
+        if first != d
+            && self.ast.decls.get(first).misc().friend() != FriendKind::Undeclared
+            && !explicit_member
+        {
             self.ast.decls.set_flags(first, DeclFlags::REFERENCED);
         }
     }
@@ -4237,6 +4269,26 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The template head a tag declaration consumes: a class's own head,
+    /// or none for an enumeration, whose heads (`template<class T> enum
+    /// class A<T>::E { ... }`) belong to the qualifier's class templates
+    /// ([temp.mem.enum]).
+    fn tag_template_head(
+        &mut self,
+        is_enum: bool,
+        qualifier: Option<DeclId>,
+        use_: TagUse,
+    ) -> Option<kiln_ast::ids::TemplateParamListId> {
+        if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
+            return self.take_template_head(qualifier);
+        }
+        if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
+            let _ = self.take_template_head(qualifier);
+            self.templ.cur = None;
+        }
+        None
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -4258,17 +4310,7 @@ impl Sema<'_, '_> {
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         self.check_enum_fixed_type(fixed, loc);
         let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
-        let head = if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
-            self.take_template_head(qualifier)
-        } else {
-            if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
-                // `template<class T> enum class A<T>::E { ... }`: the heads
-                // belong to the qualifier's class templates ([temp.mem.enum]).
-                let _ = self.take_template_head(qualifier);
-                self.templ.cur = None;
-            }
-            None
-        };
+        let head = self.tag_template_head(is_enum, qualifier, use_);
         let mut prev = None;
         if let Some((n, nloc)) = name {
             if qualifier.is_none() && use_ != TagUse::Reference {
@@ -4290,12 +4332,18 @@ impl Sema<'_, '_> {
                 self.check_enum_redecl(p, scoped, fixed, nloc, use_);
             }
             if let Some(p) = prev {
-                if use_ == TagUse::Reference {
+                if member_class_spec && !self.check_member_tag_spec(p, nloc) {
+                    // [temp.expl.spec]/7, diagnosed: a definition is
+                    // still parsed, as an unrelated class.
+                    if use_ == TagUse::Declaration {
+                        return p;
+                    }
+                    prev = None;
+                } else if use_ == TagUse::Reference {
                     self.mark_type_referenced(p);
                     self.check_name_access_as(n, qualifier, p, nloc, LookupKind::Tag);
                     return p;
-                }
-                if use_ == TagUse::Definition {
+                } else if use_ == TagUse::Definition {
                     if let Some(def) = self.ast.definition(p) {
                         let msg = self.diag(DiagId::sema_redefinition, nloc).arg(sym_str(self, n));
                         let msg = self.note_prev(msg, def, true);
@@ -4308,6 +4356,10 @@ impl Sema<'_, '_> {
                     // declares the member template specialized
                     // ([temp.expl.spec]/16): a new decl (below).
                     && self.templ.member_spec.is_none()
+                    // `template<> struct A<int>::B;` declares the member
+                    // explicitly specialized ([temp.expl.spec]/1): a new
+                    // decl (below), which an incomplete-type note names.
+                    && !member_class_spec
                 {
                     // A redeclaration creates no new decl (a deviation:
                     // clang adds a `ClassTemplateDecl` per redeclaration),
@@ -5619,7 +5671,9 @@ impl Sema<'_, '_> {
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
                 // [temp.inst]/2: a specialization named through an alias
                 // is instantiated like one named by its template-id.
-                if self.undefined_spec(ty).is_some() && !self.require_complete_nns(ty, loc) {
+                if (self.undefined_spec(ty).is_some() || self.undefined_member_enum(ty).is_some())
+                    && !self.require_complete_nns(ty, loc)
+                {
                     return None;
                 }
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));

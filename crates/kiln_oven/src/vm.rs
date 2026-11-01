@@ -13,7 +13,7 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::failure::{EvalFailure, FailKind};
 use crate::kbc::{Op, ak, cmp, new_aux};
-use crate::mem::{Alloc, MemFault, Origin, Ptr, Sp, TrialMode, flags};
+use crate::mem::{Alloc, DynKind, MemFault, Origin, Ptr, Sp, TrialMode, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{OTy, TyKind};
 use crate::{Oven, SemaBridge};
@@ -222,6 +222,19 @@ pub(crate) enum Fault {
         v: u128,
         signed: bool,
         k: u64,
+    },
+    /// `::operator new` in `std::allocator<T>::allocate` of a byte count
+    /// that is not a multiple of `sizeof(T)` (clang's
+    /// `note_constexpr_operator_new_bad_size`).
+    NewBadSize {
+        bytes: u128,
+        elem: OTy,
+    },
+    /// A placement new of `to` into storage whose object there is a `from`
+    /// (clang's `note_constexpr_placement_new_wrong_type`).
+    PlacementType {
+        from: OTy,
+        to: OTy,
     },
     /// A library builtin's own failure.
     Bi(BiFault),
@@ -847,7 +860,16 @@ impl Oven {
                     };
                     let origin = Origin::Heap(e, self.mem.heap_allocs as u32);
                     let bound = if aux & new_aux::ARRAY != 0 {
-                        match self.new_bound(reg!(2), aux, elem, arg!(4) as u64) {
+                        let mut v = reg!(2);
+                        if aux & new_aux::STD != 0 {
+                            // A byte count ([allocator.members]/5).
+                            let es = u128::from(self.types.size(elem).max(1));
+                            if !v.is_multiple_of(es) {
+                                fail!(Fault::NewBadSize { bytes: v, elem });
+                            }
+                            v /= es;
+                        }
+                        match self.new_bound(v, aux, elem, arg!(4) as u64) {
                             Ok(n) => Some(n),
                             Err(_) if aux & new_aux::NOTHROW != 0 => None,
                             Err(f) => fail!(f),
@@ -868,7 +890,12 @@ impl Oven {
                 Op::Delete => {
                     let mut raw = reg!(0) as u64;
                     let mut pointee = OTy(arg!(1) as u32);
-                    if aux & 1 == 0 && raw != 0 {
+                    let kind = match aux & 9 {
+                        0 => DynKind::New,
+                        1 => DynKind::ArrayNew,
+                        _ => DynKind::Std,
+                    };
+                    if kind == DynKind::New && raw != 0 {
                         match self.delete_base(raw, pointee, aux & 4 != 0) {
                             Ok(Some((r, t))) => (raw, pointee) = (r, t),
                             Ok(None) => {}
@@ -877,12 +904,24 @@ impl Oven {
                     }
                     // aux 2: the checks only (before the destructors run).
                     let r = if aux & 2 != 0 {
-                        self.mem.heap_check(raw, aux & 1 != 0, Some(pointee), &self.types).map(drop)
+                        self.mem.heap_check(raw, kind, Some(pointee), &self.types).map(drop)
                     } else {
-                        self.mem.heap_free(raw, aux & 1 != 0, Some(pointee), &self.types)
+                        self.mem.heap_free(raw, kind, Some(pointee), &self.types)
                     };
                     if let Err(f) = r {
                         fail!(Fault::Mem { f, ak: ak::READ, ty: pointee, p: raw });
+                    }
+                    pc += 3;
+                }
+                Op::Placement => {
+                    if let Err(f) = self.placement(reg!(0) as u64, OTy(arg!(1) as u32)) {
+                        fail!(f);
+                    }
+                    pc += 3;
+                }
+                Op::EndLife => {
+                    if let Err(f) = self.end_life(reg!(0) as u64, OTy(arg!(1) as u32), aux) {
+                        fail!(f);
                     }
                     pc += 3;
                 }
@@ -1385,6 +1424,8 @@ impl Oven {
     fn new_alloc(&mut self, elem: OTy, n: u64, aux: u32, origin: Origin) -> Result<u64, Fault> {
         let (ty, fl) = if n == u64::MAX {
             (elem, 0)
+        } else if aux & new_aux::STD != 0 {
+            (self.types.array_of(elem, n), flags::STD_ALLOC)
         } else {
             (self.types.array_of(elem, n), flags::ARRAY_NEW)
         };
@@ -1970,7 +2011,7 @@ impl Oven {
         let Some(a) = self.mem.alloc_any(p) else { return Ok(None) };
         let off = u64::from(p.off);
         if a.ty == pointee
-            || a.flags & flags::ARRAY_NEW != 0
+            || a.flags & (flags::ARRAY_NEW | flags::STD_ALLOC) != 0
             || !self.types.has_base_subobject(a.ty, off, pointee)
         {
             return Ok(None);
@@ -1979,6 +2020,46 @@ impl Oven {
             return Err(Fault::DeleteNonVirtual { stat: pointee, dynamic: a.ty });
         }
         Ok(Some((Ptr::with_off(raw, 0, false), a.ty)))
+    }
+
+    /// `Op::Placement`: a placement new of a `ty` at `raw` (clang's
+    /// `VisitCXXNewExpr` placement path: `findCompleteObject` for
+    /// construction, then the type of the designated subobject).
+    fn placement(&mut self, raw: u64, ty: OTy) -> Result<(), Fault> {
+        let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
+        let a = *self.mem.check_storage(raw, 0, true).map_err(fault)?.2;
+        let off = u64::from(Ptr::decode(raw).off);
+        if !self.types.has_subobject(a.ty, off, ty) {
+            let from = self.dynamic_type(a.ty, off);
+            return Err(Fault::PlacementType { from, to: ty });
+        }
+        self.mem.set_lifetime(raw, self.types.size(ty), true).map_err(fault)
+    }
+
+    /// `Op::EndLife`: an explicit destruction of the `ty` object at `raw`
+    /// (aux 1: check that its lifetime has not ended; aux 2: end it).
+    fn end_life(&mut self, raw: u64, ty: OTy, aux: u32) -> Result<(), Fault> {
+        let size = self.types.size(ty);
+        if aux & 4 != 0 {
+            // A member call: only the lifetime of `std::allocator` storage
+            // (clang's `checkDynamicType`); other faults surface in the
+            // body, at the accesses that make them.
+            if let Ok((_, abs, a)) = self.mem.check_storage(raw, size, false)
+                && a.flags & flags::STD_ALLOC != 0
+                && !self.mem.heap.is_live(abs, size)
+            {
+                return Err(Fault::Mem { f: MemFault::Lifetime, ak: ak::MEMBER_CALL, ty, p: raw });
+            }
+            return Ok(());
+        }
+        let fault = |f| Fault::Mem { f, ak: ak::DESTROY, ty, p: raw };
+        if aux & 1 != 0 {
+            self.mem.check(raw, size, true).map_err(fault)?;
+        }
+        if aux & 2 != 0 {
+            self.mem.set_lifetime(raw, size, false).map_err(fault)?;
+        }
+        Ok(())
     }
 
     /// The most derived object containing the byte at `off` of an object

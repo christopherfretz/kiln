@@ -313,16 +313,18 @@ impl Sema<'_, '_> {
             let flat = Self::list_exprs(l);
             return self.recover(QualType::ERROR, &flat, loc);
         }
-        let to = conv::strip_cv(self, ty);
+        // [expr.type.conv]/2, [expr.prop]/[basic.lval]/7: a class prvalue
+        // keeps the cv-qualifiers (and the sugar) of the written type, so
+        // `CU{}` is a `const U` prvalue; only a non-class prvalue drops them.
         if let Some(x) =
-            self.list_construct(to, l, crate::class::InitStyle::DirectList, loc, Some(l.rbrace))
+            self.list_construct(ty, l, crate::class::InitStyle::DirectList, loc, Some(l.rbrace))
         {
             return if self.is_err_expr(x) { x } else { self.maybe_bind_temporary(x) };
         }
-        if self.ast.types.as_record(to).is_some() && self.is_complete(to) {
+        if self.ast.types.as_record(ty).is_some() && self.is_complete(ty) {
             // An aggregate temporary: the list, destroyed at the end of
             // the full-expression, then a no-op functional cast.
-            let init = self.init_from_list_at(to, l, Some(loc));
+            let init = self.init_from_list_at(ty, l, Some(loc));
             if self.is_err_expr(init) {
                 return self.recover(ty, &[init], loc);
             }
@@ -330,7 +332,7 @@ impl Sema<'_, '_> {
             return self.builder().functional_cast(
                 CastKind::NoOp,
                 init,
-                to,
+                ty,
                 ValueCategory::PRValue,
                 None,
                 loc,

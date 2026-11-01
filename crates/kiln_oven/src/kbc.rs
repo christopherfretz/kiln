@@ -162,7 +162,9 @@ ops! {
     // is an array of `count` elements; `dst` points to its first.
     New = 5,
     // [p, static pointee type]; aux 1 = `delete[]`; aux 2 = the checks
-    // only (made before the destructors run)
+    // only (made before the destructors run); aux 4 = through a virtual
+    // destructor; aux 8 = `std::allocator<T>::deallocate` (`::operator
+    // delete` in it), `p` a pointer to the first `T` of the storage
     Delete = 2,
     // [p, dtor func, type]: registers the destruction of the object at
     // `p` (an array: of each element, in order) by the enclosing scope
@@ -229,6 +231,18 @@ ops! {
     // rolled back (a resource limit still fails the evaluation); execution
     // resumes at `end`.
     Speculate = 3,
+    // [p, type]: a placement new of `type` at `p` in a function of
+    // namespace std ([expr.const]/5.18, `std::construct_at`): checks the
+    // storage (null, deleted, bounds, a subobject of `type` there) and
+    // begins the object's lifetime, its bytes uninitialized for the
+    // initialization that follows (spec/oven.md "Transient allocation").
+    Placement = 2,
+    // [p, type]: an explicit destructor call (or pseudo-destructor call)
+    // of the `type` object at `p`; aux 1 = check that its lifetime has
+    // not ended, aux 2 = end it (`std::allocator` storage only); aux 4 =
+    // a member call on it instead: `std::allocator` storage must be
+    // within its lifetime.
+    EndLife = 2,
 }
 
 /// The kinds of `Builtin` and their operands.
@@ -348,6 +362,10 @@ pub(crate) mod new_aux {
     /// The bound register holds a signed value (canonical, so a negative
     /// bound is diagnosed as such).
     pub const SIGNED: u32 = 8;
+    /// `std::allocator<T>::allocate` (`::operator new` in it): with
+    /// `ARRAY`, the count register holds a byte count, a multiple of
+    /// `sizeof(T)`; the elements are outside their lifetime.
+    pub const STD: u32 = 16;
 }
 
 impl Op {
