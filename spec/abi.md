@@ -713,6 +713,31 @@ errors) with `generate_asm_string` producing LLVM's `$`-syntax as bytes.
 Not implemented: other targets, immediate range validation of operand
 sizes.
 
+### 8.12 Landed (WP-176): register passing and call-order details
+- *`can_pass_in_registers`* (`call.rs`, clang `canPassInRegisters` under
+  the Itanium C++ ABI): a class is passed indirectly when any copy or
+  move constructor or the destructor is non-trivial and not deleted, or
+  when every copy/move constructor is deleted. There is no "a trivial
+  copy constructor suffices" shortcut (that is the MSVC x64 rule), so a
+  class with a trivial copy constructor and a user-provided move
+  constructor goes in memory. Golden: `tests/codegen/class_nontrivial_move_abi.cpp`.
+- *Call IR order* (codegen): a call whose aggregate result is ignored
+  gets no destination, so its `sret`/coerce temporary is made after the
+  arguments' `agg.tmp`s (clang `AggExprEmitter::withReturnValueSlot`);
+  a virtual call loads its callee from the vtable after the arguments
+  are evaluated (`Callee::Virtual`, resolved in `call_vals_to`).
+- *`typeid` constants*: a `const std::type_info*` or `&typeid(T)` in a
+  constant initializer folds to `PtrBase::TypeInfo(T)` (oven `freeze`/
+  `thaw`) and is emitted as the RTTI global `_ZTI...` (`consts.rs`).
+  Golden: `tests/codegen/typeid_constant.cpp`.
+- *Aggregate conditional*: `c ? a : b` of class type emits each arm
+  into the destination slot (clang `AggExprEmitter::
+  VisitAbstractConditionalOperator`; a constant condition emits one arm).
+- *Reference members in aggregate init*: the initializer is bound
+  (`emit_ref_binding`) and its address stored into the member's slot
+  (`init_field_lvalue` uses `field_lvalue_init`, clang
+  `EmitLValueForFieldInitialization`), never stored through the member.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.
