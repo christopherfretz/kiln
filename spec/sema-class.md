@@ -1065,9 +1065,10 @@ through a local reference is `returning reference to local temporary
 object` (reference return) or `returning address of local temporary
 object`, with the same notes. Reference parameters, statics,
 `->` access, captured variables named inside a lambda and aggregate
-(non-lambda) prvalues are not followed. Kiln's per-`(id, span)`
-deduplication (diag.md §7.4) drops clang's repeat of a non-dependent
-return's warning in each instantiation.
+(non-lambda) prvalues are not followed. The warning is
+`per_instantiation` (diag.md §7.4): as in clang, a non-dependent return
+warns in the template definition and once more in each instantiation
+(WP-231).
 
 **Dangling local pointers (WP-227, clang `LK_Extended` on a pointer
 variable).** `check_dangling_pointer_var(v, init)` (`stack_addr.rs`) runs

@@ -6,7 +6,7 @@ use kiln_abi::irtype::BitFieldInfo;
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, VarStorage};
 use kiln_ast::expr::{
-    BinaryOp, CastKind, ExprFlags, ExprKind, StorageDuration, UnaryOp, ValueCategory,
+    BinaryOp, CastKind, ExprFlags, ExprKind, NonOdrUse, StorageDuration, UnaryOp, ValueCategory,
 };
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
@@ -1551,6 +1551,9 @@ impl Cg<'_> {
                 Ok(LV { q, ..lv })
             }
             DeclKind::Var | DeclKind::ParmVar => {
+                if let Some(lv) = self.constant_ref_lvalue(e, d, q)? {
+                    return Ok(lv);
+                }
                 if ast.exprs.get(e).has(ExprFlags::REFERS_TO_ENCLOSING)
                     && let Some(lv) = self.captured_var_lvalue(d, q)?
                 {
@@ -1594,6 +1597,31 @@ impl Cg<'_> {
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
+    }
+
+    /// clang `EmitDeclRefLValue` on a reference variable named without
+    /// being odr-used ([basic.def.odr]/5: it is usable in constant
+    /// expressions, sema's `non_odr_use_constant`): the address its
+    /// constant initializer designates, read through without loading the
+    /// reference (WP-231). `None` when the initializer did not fold.
+    fn constant_ref_lvalue(&mut self, e: ExprId, d: DeclId, q: QualType) -> R<Option<LV>> {
+        let ast = self.ast;
+        if ast.exprs.non_odr_use(e) != NonOdrUse::Constant {
+            return Ok(None);
+        }
+        let Some(dq) = ast.decls.get(d).ty() else { return Ok(None) };
+        if self.referee(dq).is_none() {
+            return Ok(None);
+        }
+        let Some(init) = std::iter::once(d)
+            .chain(ast.redecls_of(d))
+            .find_map(|x| ast.decls.var(x).and_then(|v| v.init))
+        else {
+            return Ok(None);
+        };
+        let Some(c) = self.folds.get(init) else { return Ok(None) };
+        let k = self.const_value(c, dq, Some(init), true)?;
+        Ok(Some(self.ref_lvalue(V::C(k), q)))
     }
 
     /// The global holding a namespace-scope or static reference variable.

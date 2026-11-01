@@ -198,8 +198,12 @@ impl Collect<'_> {
         let Some(init) = v.init else { return };
         let Some(ty) = ast.decls.get(d).ty() else { return };
         let quals = ast.types.effective_quals(ty);
+        // A reference is usable in constant expressions when its
+        // initializer is constant ([expr.const]/4): its named uses read
+        // through the value (`Cg::constant_ref_lvalue`, WP-231).
         let constant_init = is_static
             || v.spec.is_constexpr()
+            || ast.types.is_reference(ty)
             || (quals.is_const()
                 && !quals.is_volatile()
                 && (ast.types.is_integral(ty)
@@ -524,7 +528,12 @@ pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
     if ast.decls.get(d).kind() != DeclKind::Var {
         return false;
     }
-    let Some(ty) = ast.decls.get(d).ty() else { return false };
+    let Some(mut ty) = ast.decls.get(d).ty() else { return false };
+    // A reference to a const object (clang `CEK_AsValueOrReference`): the
+    // read folds to the referee's value when that is constant (WP-231).
+    if let Some(p) = ast.types.pointee(ty).filter(|_| ast.types.is_reference(ty)) {
+        ty = p;
+    }
     let q = ast.types.effective_quals(ty);
     q.is_const() && !q.is_volatile()
 }
