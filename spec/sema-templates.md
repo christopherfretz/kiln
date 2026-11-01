@@ -1542,7 +1542,15 @@ flag, to name the first pack.
    `pack_index`, and give `PackExpansion(subst_pattern)`.
 3. **Check the lengths.** They must all be equal. Otherwise: "pack
    expansion contains parameter packs 'T' and 'U' that have different
-   lengths (2 vs. 3)". This is SFINAE-able.
+   lengths (2 vs. 3)". This is SFINAE-able. When exactly one of the two
+   is an *outer* pack (a pack kept from an earlier substitution,
+   `SubstTemplateTypeParmPack` / `SubstNonTypeTemplateParmPackExpr`, or
+   one of a shallower depth than the other), clang's multilevel text is
+   used instead, naming the inner pack: "pack expansion contains
+   parameter pack 'U' that has a different length (2 vs. 1) from outer
+   parameter packs" (outer length first). clang's "(at least 3 vs. 2)"
+   variant, for an explicitly specified pack that deduction may still
+   extend, is not produced: kiln reports the plain multilevel text.
 4. **Expand.** For k in 0..N, substitute the pattern with
    `pack_index = Some(k)`. Restore the previous index afterwards. Inner
    expansions keep their own packs untouched.
@@ -1560,9 +1568,30 @@ type parameter pack becomes `SubstTemplateTypeParmPack {associated,
 index, pack}`, which is dependent and unexpanded, and the result is
 `PackExpansion(pattern')`. A later substitution that expands the
 pattern takes element *i* of the recorded pack (clang's
-`SubstTemplateTypeParmPackType`). Only type packs are kept so far.
-Non-type and function parameter packs in keep mode are still "not yet
-implemented".
+`SubstTemplateTypeParmPackType`).
+
+A substituted non-type pack is kept the same way, as
+`SubstNonTypeTemplateParmPackExpr {param, pack}` (value- and
+instantiation-dependent, unexpanded; its type is the first element's).
+`All<O<T, I>...>` in a member alias of `Imp<Seq<I...>>` thus keeps `I`
+until `T` is supplied (libc++ `<variant>` `__all_overloads`). Both kept
+forms count as outer packs for the length check (step 3) and print as
+their parameter's name (`P<T, U>...`).
+
+A function parameter pack whose type is partially substituted
+(`P<T, U>... ps` in a member template of `S<T...>`) stays one pack
+parameter of type `PackExpansion(P<SubstPack(T), U>)`. Deduction against
+it substitutes the kept pack element by element: while deducing element
+*i* of the expansion, a `SubstTemplateTypeParmPack` in P is matched as
+element *i* of its pack. kiln has no final [temp.deduct.call]/4
+"deduced A" compatibility check, so an element mismatch is reported as
+"could not match 'P<T, U>' against 'P<char, long>'" where clang says
+"deduced type 'P<int, [...]>' of 1st parameter does not match adjusted
+type 'P<char, [...]>' of argument".
+
+Function parameter packs and pack expansion expressions met in keep
+mode (`FunctionParmPackExpr`, `PackExpansionExpr` patterns) are still
+"not yet implemented".
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial
@@ -1746,6 +1775,18 @@ Its requirements are processed **in order**, each under
 
 A `requires`-expression outside any template whose requirement is
 ill-formed is a hard error ([expr.prim.req.general]/5, clang).
+
+A parameter pack in the parameter list (`requires(T... t, U u)`) is
+expanded like a function parameter pack (§7.2): one parameter per
+element, numbered consecutively with the other parameters. When the
+pack's expansion names a retained level, it stays one pack parameter.
+A requirement whose substituted form is still dependent (it names a
+retained level: a generic lambda's `auto` inside an instantiated
+function template) is not checked. The requires-expression is then
+rebuilt as a dependent `RequiresExpr` with the substituted parameters
+and requirements, and evaluated when the remaining level is
+substituted. A compound requirement's type-constraint keeps its
+invented first argument in that case.
 
 The expression is a `bool` prvalue. `RequiresExpr` stores the value plus
 the index of the failed requirement.

@@ -1063,7 +1063,13 @@ impl Sema<'_, '_> {
         idx: u16,
     ) -> DeclId {
         let name = p.name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
-        let d = self.builder().param(body, name, p.loc, p.ty, idx, 0);
+        // A parameter pack ([temp.variadic]/5), expanded on substitution.
+        let pack = matches!(
+            self.ast.types.view(p.ty.ty()),
+            TypeView::PackExpansion { .. }
+        );
+        let flags = if pack { kiln_ast::decl::ParamData::PACK } else { 0 };
+        let d = self.builder().param(body, name, p.loc, p.ty, idx, flags);
         if p.invalid {
             self.ast.decls.set_flags(d, DeclFlags::INVALID);
         }
