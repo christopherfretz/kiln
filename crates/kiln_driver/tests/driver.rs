@@ -186,9 +186,20 @@ fn dependencies() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
-/// `-v` prints clang's search list for each `resource/include-paths` file
-/// (generated from clang 19 on the reference container). Skipped where the
-/// LLVM 19 installation the goldens describe is missing.
+/// The search block of a `-v` run (`ignoring ...` lines, both
+/// `#include ... search starts here:` headers and the directories): from the
+/// line after `<name> -cc1 version` through `End of search list.`.
+fn search_block(stderr: &str, cc1: &str) -> String {
+    let start = stderr.find(cc1).unwrap_or_else(|| panic!("no `{cc1}` line in\n{stderr}"));
+    let rest = stderr[start..].split_once('\n').unwrap().1;
+    rest.split("End of search list.\n").next().unwrap().to_owned() + "End of search list.\n"
+}
+
+/// `-v` prints clang's search list for each (target, stdlib) pair that has a
+/// `resource/include-paths` file. The lists depend on the host's GCC
+/// installations, so kiln is compared with clang++-19 run live on this host;
+/// the files themselves are the reference container's (WP-228). Skipped
+/// where clang++-19 or its resource directory is missing.
 #[test]
 fn verbose_search_lists_match_clang() {
     let clang_res = "/usr/lib/llvm-19/lib/clang/19";
@@ -204,32 +215,19 @@ fn verbose_search_lists_match_clang() {
         let cmd = text.lines().nth(1).unwrap();
         let target = cmd.split_whitespace().find_map(|w| w.strip_prefix("--target=")).unwrap();
         let stdlib = cmd.split_whitespace().find(|w| w.starts_with("-stdlib=")).unwrap();
-        let want: String = text
-            .lines()
-            .filter_map(|l| {
-                if let Some(m) = l.strip_prefix("# ignoring") {
-                    Some(format!("ignoring{m}\n"))
-                } else if l.starts_with("# ") {
-                    None
-                } else {
-                    Some(format!("{l}\n"))
-                }
-            })
-            .collect();
-        // Driver -> cc1 lines end where the search block ends.
-        let want = want.split("End of search list.\n").next().unwrap().to_owned()
-            + "End of search list.\n";
         let tflag = format!("--target={target}");
-        let o = kiln(
-            &[&tflag, stdlib, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"],
-            "",
-        );
+        let args =
+            [&tflag, stdlib, "-resource-dir", clang_res, "-E", "-v", "-x", "c++", "/dev/null"];
+        let Ok(clang) = std::process::Command::new("clang++-19").args(args).output() else {
+            eprintln!("skipped: no clang++-19");
+            return;
+        };
+        assert!(clang.status.success(), "clang++-19 {args:?} failed");
+        let want = search_block(&String::from_utf8_lossy(&clang.stderr), "clang -cc1 version");
+        let o = kiln(&args, "");
         assert_eq!(o.code, 0, "{}", o.stderr);
-        let start = o.stderr.find("kiln -cc1 version").expect("cc1 line");
-        let got = o.stderr[start..].split_once('\n').unwrap().1;
-        let got =
-            got.split("End of search list.\n").next().unwrap().to_owned() + "End of search list.\n";
-        assert_eq!(got, want, "{}", path.display());
+        let got = search_block(&o.stderr, "kiln -cc1 version");
+        assert_eq!(got, want, "{target} {stdlib} ({})", path.display());
         n += 1;
     }
     assert!(n >= 4);
