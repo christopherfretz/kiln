@@ -3746,6 +3746,26 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Initializes variable `v` of type `ty` from `init`. A variable
+    /// names itself, even when declared inside the initializer of another
+    /// entity (a lambda body); `init_var` is the variable being
+    /// initialized (WP-271 `diag_capture`).
+    fn perform_var_init(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        init: Initializer,
+        loc: Loc,
+        direct: bool,
+    ) -> ExprId {
+        let entity = self.init_entity.take();
+        let var = self.init_var.replace(v);
+        let e = self.perform_init(ty, init, loc, direct);
+        self.init_entity = entity;
+        self.init_var = var;
+        e
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -3827,14 +3847,8 @@ impl Sema<'_, '_> {
             self.discard_initializer(&init);
             return;
         }
-        // A variable names itself, even when declared inside the
-        // initializer of another entity (a lambda body).
-        let entity = self.init_entity.take();
-        let var = self.init_var.replace(v);
         let braced = matches!(init, Initializer::List(_));
-        let e = self.perform_init(ty, init, loc, direct);
-        self.init_entity = entity;
-        self.init_var = var;
+        let e = self.perform_var_init(v, ty, init, loc, direct);
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
             // P0960 (clang's `parenlistinit`).
             let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);

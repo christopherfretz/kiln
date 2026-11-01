@@ -1205,6 +1205,23 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The default member initializer of `decl`, saved for the complete
+    /// class. [dcl.array]/3: for an array of unknown bound (`unbounded`)
+    /// it is not an initializer that can deduce a bound (clang
+    /// `err_incomplete_array_member_init`), at the initializer; the member
+    /// is invalid (no flexible array member checks, spec/sema.md §5.8).
+    fn save_member_nsdmi(&mut self, unbounded: bool, decl: Option<DeclId>) {
+        if !unbounded {
+            self.save_nsdmi(decl);
+            return;
+        }
+        self.error_here(DiagId::parse_incomplete_array_member_init);
+        self.skip_until(&[Punct::Comma], true, false);
+        if let Some(x) = decl {
+            self.s.ast.decls.set_flags(x, DeclFlags::INVALID);
+        }
+    }
+
     /// member-declaration ([class.mem]; clang's
     /// `ParseCXXClassMemberDeclaration`).
     pub(crate) fn parse_member_declaration(&mut self) {
@@ -1287,18 +1304,8 @@ impl Parser<'_, '_> {
             if let Some(x) = decl {
                 self.s.act_on_group_declarator(&mut group, x);
             }
-            if nsdmi && d.is_array_of_unknown_bound() {
-                // [dcl.array]/3: a brace-or-equal-initializer of a member
-                // is not an initializer that can deduce a bound (clang
-                // `err_incomplete_array_member_init`); the member is
-                // invalid (no flexible array member checks, §5.8).
-                self.error_here(DiagId::parse_incomplete_array_member_init);
-                self.skip_until(&[Punct::Comma], true, false);
-                if let Some(x) = decl {
-                    self.s.ast.decls.set_flags(x, DeclFlags::INVALID);
-                }
-            } else if nsdmi {
-                self.save_nsdmi(decl);
+            if nsdmi {
+                self.save_member_nsdmi(d.is_array_of_unknown_bound(), decl);
             } else {
                 self.parse_member_init_in_place(&d, decl, init, is_static);
             }

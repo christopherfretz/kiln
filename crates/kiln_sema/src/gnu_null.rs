@@ -72,7 +72,7 @@ impl Sema<'_, '_> {
         for _ in 0..256 {
             match sm.expansion_info(loc) {
                 Some(x) if x.kind == ExpansionKind::MacroArg => {
-                    loc = sm.immediate_spelling_loc(loc)
+                    loc = sm.immediate_spelling_loc(loc);
                 }
                 _ => break,
             }
