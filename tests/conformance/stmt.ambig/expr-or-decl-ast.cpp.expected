@@ -1,0 +1,149 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct T definition
+| |-CXXConstructorDecl used T 'void ()'
+| |-CXXConstructorDecl used T 'void (int)'
+| | `-ParmVarDecl 'int'
+| |-CXXConstructorDecl used T 'void (int, int)'
+| | |-ParmVarDecl 'int'
+| | `-ParmVarDecl 'int'
+| |-CXXMethodDecl used operator-> 'T *()'
+| |-CXXMethodDecl used f 'void ()'
+| |-FieldDecl referenced m 'int'
+| |-CXXMethodDecl used operator++ 'T (int)'
+| | `-ParmVarDecl 'int'
+| |-CXXMethodDecl used operator<< 'T (int)'
+| | `-ParmVarDecl 'int'
+| `-CXXConversionDecl used operator bool 'bool () const'
+|-VarDecl used a 'int'
+|-VarDecl used c 'int'
+|-FunctionDecl s4 'void ()'
+| `-CompoundStmt
+|   `-DeclStmt
+|     `-VarDecl e 'T[3]' callinit
+|       `-CXXConstructExpr 'T[3]' 'void ()'
+|-FunctionDecl s5 'void ()'
+| `-CompoundStmt
+|   `-DeclStmt
+|     `-VarDecl e 'T' cinit
+|       `-ImplicitCastExpr 'T' <ConstructorConversion>
+|         `-CXXConstructExpr 'T' 'void (int)'
+|           `-IntegerLiteral 'int' 1
+|-FunctionDecl s6 'void ()'
+| `-CompoundStmt
+|   `-DeclStmt
+|     |-VarDecl e 'T' callinit
+|     | `-CXXConstructExpr 'T' 'void ()'
+|     `-VarDecl b 'T' callinit
+|       `-CXXConstructExpr 'T' 'void ()'
+|-FunctionDecl s7 'void ()'
+| `-CompoundStmt
+|   `-DeclStmt
+|     |-VarDecl e 'T' callinit
+|     | `-CXXConstructExpr 'T' 'void ()'
+|     `-VarDecl y 'T' cinit
+|       `-ImplicitCastExpr 'T' <ConstructorConversion>
+|         `-CXXConstructExpr 'T' 'void (int)'
+|           `-IntegerLiteral 'int' 2
+|-FunctionDecl s1 'void ()'
+| `-CompoundStmt
+|   `-DeclStmt
+|     |-FunctionDecl x 'T (T)'
+|     | `-ParmVarDecl a 'T'
+|     `-VarDecl y 'T' callinit
+|       `-CXXConstructExpr 'T' 'void ()'
+|-FunctionDecl s3 'void ()'
+| `-CompoundStmt
+|   `-DeclStmt
+|     `-VarDecl p 'T (*)(int)'
+|-FunctionDecl s12 'void ()'
+| `-CompoundStmt
+|   `-DeclStmt
+|     `-VarDecl f 'T' cinit
+|       `-CXXConstructExpr 'T' 'void (int)' list
+|         `-IntegerLiteral 'int' 1
+|-FunctionDecl s2 'void ()'
+| `-CompoundStmt
+|   `-ExprWithCleanups 'void'
+|     `-CXXMemberCallExpr 'void'
+|       `-MemberExpr '<bound member function type>' ->f
+|         `-CXXOperatorCallExpr 'T *' '->'
+|           |-ImplicitCastExpr 'T *(*)()' <FunctionToPointerDecay>
+|           | `-DeclRefExpr 'T *()' lvalue CXXMethod 'operator->' 'T *()'
+|           `-MaterializeTemporaryExpr 'T' lvalue
+|             `-CXXFunctionalCastExpr 'T' functional cast to T <ConstructorConversion>
+|               `-CXXConstructExpr 'T' 'void (int)'
+|                 `-ImplicitCastExpr 'int' <LValueToRValue>
+|                   `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|-FunctionDecl s8 'void ()'
+| `-CompoundStmt
+|   `-ExprWithCleanups 'int' lvalue
+|     `-BinaryOperator 'int' lvalue '='
+|       |-MemberExpr 'int' lvalue ->m
+|       | `-CXXOperatorCallExpr 'T *' '->'
+|       |   |-ImplicitCastExpr 'T *(*)()' <FunctionToPointerDecay>
+|       |   | `-DeclRefExpr 'T *()' lvalue CXXMethod 'operator->' 'T *()'
+|       |   `-MaterializeTemporaryExpr 'T' lvalue
+|       |     `-CXXFunctionalCastExpr 'T' functional cast to T <ConstructorConversion>
+|       |       `-CXXConstructExpr 'T' 'void (int)'
+|       |         `-ImplicitCastExpr 'int' <LValueToRValue>
+|       |           `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|       `-IntegerLiteral 'int' 7
+|-FunctionDecl s9 'void ()'
+| `-CompoundStmt
+|   `-ExprWithCleanups 'T'
+|     `-CXXOperatorCallExpr 'T' '++'
+|       |-ImplicitCastExpr 'T (*)(int)' <FunctionToPointerDecay>
+|       | `-DeclRefExpr 'T (int)' lvalue CXXMethod 'operator++' 'T (int)'
+|       |-MaterializeTemporaryExpr 'T' lvalue
+|       | `-CXXFunctionalCastExpr 'T' functional cast to T <ConstructorConversion>
+|       |   `-CXXConstructExpr 'T' 'void (int)'
+|       |     `-ImplicitCastExpr 'int' <LValueToRValue>
+|       |       `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|       `-IntegerLiteral 'int' 0
+|-FunctionDecl s10 'void ()'
+| `-CompoundStmt
+|   `-ExprWithCleanups 'T'
+|     `-CXXOperatorCallExpr 'T' '<<'
+|       |-ImplicitCastExpr 'T (*)(int)' <FunctionToPointerDecay>
+|       | `-DeclRefExpr 'T (int)' lvalue CXXMethod 'operator<<' 'T (int)'
+|       |-MaterializeTemporaryExpr 'T' lvalue
+|       | `-CXXTemporaryObjectExpr 'T' 'void (int, int)'
+|       |   |-ImplicitCastExpr 'int' <LValueToRValue>
+|       |   | `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|       |   `-IntegerLiteral 'int' 5
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-DeclRefExpr 'int' lvalue Var 'c' 'int'
+|-FunctionDecl s14 'void ()'
+| `-CompoundStmt
+|   `-ForStmt has_init
+|     |-DeclStmt
+|     | `-VarDecl e 'T' callinit
+|     |   `-CXXConstructExpr 'T' 'void ()'
+|     `-BreakStmt
+|-FunctionDecl s15 'void ()'
+| `-CompoundStmt
+|   `-IfStmt has_var
+|     |-DeclStmt
+|     | `-VarDecl used e 'T' cinit
+|     |   `-ImplicitCastExpr 'T' <ConstructorConversion>
+|     |     `-CXXConstructExpr 'T' 'void (int)'
+|     |       `-IntegerLiteral 'int' 1
+|     |-ImplicitCastExpr 'bool' <UserDefinedConversion>
+|     | `-CXXMemberCallExpr 'bool'
+|     |   `-MemberExpr '<bound member function type>' .operator bool
+|     |     `-ImplicitCastExpr 'const T' lvalue <NoOp>
+|     |       `-DeclRefExpr 'T' lvalue Var 'e' 'T'
+|     `-CompoundStmt
+`-FunctionDecl s16 'void ()'
+  `-CompoundStmt
+    `-IfStmt
+      |-ExprWithCleanups 'bool'
+      | `-ImplicitCastExpr 'bool' <IntegralToBoolean>
+      |   `-ImplicitCastExpr 'int' <LValueToRValue>
+      |     `-MemberExpr 'int' xvalue .m
+      |       `-MaterializeTemporaryExpr 'T' xvalue
+      |         `-CXXFunctionalCastExpr 'T' functional cast to T <ConstructorConversion>
+      |           `-CXXConstructExpr 'T' 'void (int)'
+      |             `-ImplicitCastExpr 'int' <LValueToRValue>
+      |               `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+      `-CompoundStmt

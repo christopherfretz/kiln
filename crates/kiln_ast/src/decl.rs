@@ -1559,6 +1559,11 @@ pub struct ColdDeclData {
     /// Using-shadow in a class → the member of the class that hides it
     /// ([namespace.udecl]/14; recorded at the class's `}`).
     pub hidden_shadow: ColdMap<DeclId, DeclId>,
+    /// Conversion function template specialization → the target type its
+    /// name prints with (the pattern's, substituted before any return
+    /// type deduction; clang's instantiated declaration name). The
+    /// declaration keeps the pattern's name for the mangling (WP-170).
+    pub conversion_spec_target: ColdMap<DeclId, QualType>,
 }
 
 impl Default for ColdDeclData {
@@ -1591,12 +1596,13 @@ impl Default for ColdDeclData {
             inheriting_ctor: ColdMap::new("inheriting_ctor"),
             inherited_ctor: ColdMap::new("inherited_ctor"),
             hidden_shadow: ColdMap::new("hidden_shadow"),
+            conversion_spec_target: ColdMap::new("conversion_spec_target"),
         }
     }
 }
 
 impl ColdDeclData {
-    fn rows(&self) -> [MemRow; 27] {
+    fn rows(&self) -> [MemRow; 28] {
         [
             self.lexical_ctx.mem_row(),
             self.begin_loc.mem_row(),
@@ -1625,6 +1631,7 @@ impl ColdDeclData {
             self.inheriting_ctor.mem_row(),
             self.inherited_ctor.mem_row(),
             self.hidden_shadow.mem_row(),
+            self.conversion_spec_target.mem_row(),
         ]
     }
 }

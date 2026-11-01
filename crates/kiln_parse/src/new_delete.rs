@@ -5,6 +5,7 @@
 use kiln_ast::ExprId;
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokFlags, TokKind};
+use kiln_sema::DeclSite;
 use kiln_sema::DeclaratorContext;
 use kiln_sema::declspec::{Chunk, Declarator};
 use kiln_sema::new_delete::{NewInit, NewPlacement, NewTypeId};
@@ -200,6 +201,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
+        d.site = DeclSite::New;
         self.parse_declarator(&mut d);
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         let base = self.s.type_from_declspec(&ds);
@@ -216,6 +218,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
+        d.site = DeclSite::New;
         self.parse_new_declarator(&mut d);
         let base = self.s.type_from_declspec(&ds);
         let loc = ds.type_loc.unwrap_or(loc);

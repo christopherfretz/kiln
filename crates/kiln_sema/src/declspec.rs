@@ -612,6 +612,43 @@ pub struct Declarator {
     /// declarator-id may be a template-id naming a specialization of a
     /// function template without a template head ([temp.friend]/1.3).
     pub friend: bool,
+    /// What the declarator declares, beyond `ctx`, where that decides
+    /// whether a placeholder for a deduced class type may appear
+    /// ([dcl.type.class.deduct]/2; clang's finer `DeclaratorContext`s).
+    pub site: DeclSite,
+    /// The outermost grouping parentheses and the number of chunks inside
+    /// them (`B (x)`: `(0, loc of '(')`; [dcl.type.class.deduct]/2).
+    pub outer_paren: Option<(usize, Loc)>,
+}
+
+/// Where a declarator appears, refining [`DeclaratorContext`] for the
+/// contexts clang distinguishes when a placeholder for a deduced class
+/// type is not allowed (`err_auto_not_allowed`, `err_template_missing_args`).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum DeclSite {
+    /// As `ctx` says (a type-id: a cast, `sizeof`, `typeid`, ...).
+    #[default]
+    Plain,
+    /// A parameter of a lambda-declarator.
+    LambdaParam,
+    /// A parameter of a requires-expression.
+    RequiresParam,
+    /// A non-type template parameter (a placeholder is allowed: C++20
+    /// [temp.param]/6).
+    TemplateParam,
+    /// A conversion-type-id.
+    ConversionId,
+    /// The type-id of a new-expression (a placeholder is allowed).
+    New,
+    /// A type-id template argument (a class template name alone is a
+    /// template template argument, parsed apart).
+    TemplateArg,
+    /// A type-id in which clang's parser forms no placeholder (an
+    /// alias-declaration, a trailing return type): the template name
+    /// lacks its arguments.
+    NoDeduction,
+    /// A declarator rebuilt by template substitution (already checked).
+    Subst,
 }
 
 /// The bracketed identifier list of a structured binding declaration
@@ -678,6 +715,8 @@ impl Declarator {
             grouping: false,
             asm_label: None,
             special: None,
+            site: DeclSite::Plain,
+            outer_paren: None,
             virt_override: None,
             virt_final: None,
             pure: None,

@@ -9,6 +9,7 @@ use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
+use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
@@ -320,7 +321,7 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return Vec::new();
             }
-            let Some(ty) = self.parse_type_id_into(Some(&mut attrs)) else {
+            let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::NoDeduction) else {
                 self.skip_to_semi();
                 return Vec::new();
             };
@@ -1410,6 +1411,8 @@ impl Parser<'_, '_> {
             self.parse_declarator(d);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
+            d.outer_paren = Some((d.chunks.len(), open));
+            self.discard_prohibited_cxx11_attrs();
         } else if self.at_kw(Kw::Operator)
             && d.ctx != DeclaratorContext::TypeName
             && matches!(self.kw_of(self.peek(1)), Some(Kw::New | Kw::Delete))
@@ -1636,7 +1639,7 @@ impl Parser<'_, '_> {
         let delay_args = delayable && self.late_fn.delay_args;
         let open = self.bump().span.lo;
         self.s.act_on_start_prototype();
-        let (params, variadic) = self.parse_param_clause(d, delay_args);
+        let (params, variadic) = self.parse_param_clause(d, delay_args, DeclSite::Plain);
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         let (exc, quals, ref_qual, trailing) = self.parse_function_qualifiers(d, delayable);
         self.s.act_on_end_prototype();
@@ -1678,6 +1681,7 @@ impl Parser<'_, '_> {
         &mut self,
         d: &mut Declarator,
         delay_args: bool,
+        site: DeclSite,
     ) -> (Vec<ParamInfo>, bool) {
         let mut params = Vec::new();
         let mut variadic = false;
@@ -1701,6 +1705,7 @@ impl Parser<'_, '_> {
                 break;
             }
             let mut pd = Declarator::new(DeclaratorContext::Prototype, start);
+            pd.site = site;
             pd.explicit_object = this_loc;
             let placeholder = matches!(ds.base, TypeSpecKind::Auto);
             let hint = placeholder
@@ -1852,7 +1857,7 @@ impl Parser<'_, '_> {
                     // function's trailing return type.
                     let this =
                         self.s.act_on_start_this_scope(d.ctx == DeclaratorContext::Member, quals);
-                    let ty = self.parse_type_id().unwrap_or(QualType::ERROR);
+                    let ty = self.parse_type_id_no_ctad().unwrap_or(QualType::ERROR);
                     self.s.act_on_end_this_scope(this);
                     trailing = Some((ty, loc));
                     return (exc.unwrap_or_default(), quals, ref_qual, trailing);
@@ -1913,13 +1918,25 @@ impl Parser<'_, '_> {
 
     /// type-id ([dcl.name]).
     pub(crate) fn parse_type_id(&mut self) -> Option<QualType> {
-        self.parse_type_id_into(None)
+        self.parse_type_id_into(None, DeclSite::Plain)
+    }
+
+    /// A type-id where clang's parser forms no placeholder for a deduced
+    /// class type (a trailing return type, a template argument;
+    /// [dcl.type.class.deduct]/2): a class template name alone lacks its
+    /// arguments.
+    pub(crate) fn parse_type_id_no_ctad(&mut self) -> Option<QualType> {
+        self.parse_type_id_into(None, DeclSite::NoDeduction)
     }
 
     /// A type-id whose vector attributes in the decl-specifiers
     /// (`int __attribute__((ext_vector_type(4)))`) move to `out`, as clang
     /// `ParseTypeName`'s `Attrs` hands them to an alias-declaration.
-    pub(crate) fn parse_type_id_into(&mut self, out: Option<&mut Vec<AttrId>>) -> Option<QualType> {
+    pub(crate) fn parse_type_id_into(
+        &mut self,
+        out: Option<&mut Vec<AttrId>>,
+        site: DeclSite,
+    ) -> Option<QualType> {
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::TypeName);
         if let Some(out) = out {
             let ast = &self.s.ast;
@@ -1934,6 +1951,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
+        d.site = site;
         self.parse_declarator(&mut d);
         let base = self.s.type_from_declspec(&ds);
         Some(self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d))

@@ -431,6 +431,18 @@ impl Sema<'_, '_> {
     /// operand of an lvalue-to-rvalue conversion is not odr-used
     /// (`non_odr_use_constant`); every other named variable is `used`.
     pub fn act_on_full_expr(&mut self, e: ExprId) -> ExprId {
+        let cc = match self.ast.exprs.get(e).kind() {
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => self.begin_loc(e),
+            _ => self.eloc(e),
+        };
+        self.act_on_full_expr_at(e, cc)
+    }
+
+    /// [`Sema::act_on_full_expr`] with conversion context `cc` for the
+    /// implicit-conversion warnings (clang's `CheckCompletedExpr`
+    /// location: the declared variable, `return`).
+    pub(crate) fn act_on_full_expr_at(&mut self, e: ExprId, cc: Loc) -> ExprId {
+        self.check_implicit_conversions(e, cc);
         self.flush_member_refs();
         if !self.special.pending_deleted.is_empty() {
             self.flush_pending_deleted();
@@ -1821,6 +1833,19 @@ impl Sema<'_, '_> {
             return false;
         }
         if n.value_category() != ValueCategory::LValue {
+            // clang's `CM_LValueCast`: an explicit cast of an lvalue, for a
+            // better diagnostic than the generic one (GCC's cast-as-lvalue).
+            let inner = self.ignore_parens(e);
+            if n.value_category() == ValueCategory::PRValue
+                && self.ast.exprs.get(inner).kind().is_explicit_cast()
+            {
+                let sub = self.ignore_paren_imp_casts(self.ast.exprs.operand(inner));
+                if self.ast.exprs.get(sub).value_category() == ValueCategory::LValue {
+                    let at = self.begin_loc(inner);
+                    self.error(DiagId::sema_lvalue_cast_not_supported, at);
+                    return false;
+                }
+            }
             self.error(DiagId::sema_not_assignable, loc);
             return false;
         }

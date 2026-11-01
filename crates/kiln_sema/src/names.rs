@@ -48,9 +48,10 @@ impl<'s> SemaNames<'s> {
         let name = self.ast.decls.get(d).name();
         let s = self.ast.names.simple_spelling(name, self.ast.symbols()).unwrap_or_else(|| {
             // Constructor, destructor and conversion-function names
-            // (`X`, `~X`, `operator int`).
+            // (`X`, `~X`, `operator int`, a conversion function template
+            // specialization by its substituted target type).
             let mut s = String::new();
-            kiln_ast::dump::AstNames::new(self.ast).write_decl_name_value(name, &mut s);
+            kiln_ast::dump::AstNames::new(self.ast).write_name(d, &mut s);
             s
         });
         (!s.is_empty()).then_some(s)

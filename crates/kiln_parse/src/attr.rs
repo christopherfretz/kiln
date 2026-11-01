@@ -28,6 +28,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "warn_unused_result"
             | "ext_vector_type"
             | "vector_size"
+            | "alloc_size"
+            | "alloc_align"
     )
 }
 
@@ -118,6 +120,30 @@ impl Parser<'_, '_> {
             } else {
                 return;
             }
+        }
+    }
+
+    /// `[[...]]` where no attribute-specifier may appear, such as after
+    /// a parenthesized declarator (`int (x) [[a]];`; clang's
+    /// `CheckProhibitedCXX11Attribute` in `ParseBracketDeclarator`):
+    /// each specifier is reported at its `[[` and skipped unparsed.
+    pub(crate) fn discard_prohibited_cxx11_attrs(&mut self) {
+        while self.at_cxx11_attr() {
+            let at = self.bump().span.lo;
+            let mut depth = 1usize;
+            while depth > 0 {
+                let t = self.tok();
+                if t.kind == TokKind::Eof {
+                    break;
+                }
+                match Self::punct_of(t) {
+                    Some(Punct::LSquare) => depth += 1,
+                    Some(Punct::RSquare) => depth -= 1,
+                    _ => {}
+                }
+                self.bump();
+            }
+            self.s.error(DiagId::parse_attributes_not_allowed, at);
         }
     }
 

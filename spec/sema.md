@@ -636,6 +636,22 @@ and returns the scope it names:
     a `vector_size` vector) gives a `DependentVector` (spec/types.md);
     after substitution it is diagnosed at the size operand (clang: at
     the attribute name).
+  - GNU `malloc` (function with a pointer result, else `'malloc'
+    attribute only applies to return values that are pointers`; on a
+    non-function `... only applies to functions`), `alloc_size(n[, m])`
+    and `alloc_align(n)` (`vector.rs::alloc_attribute`, checked in
+    `decl.rs::check_alloc_attr` as clang's `handleAllocSizeAttr` /
+    `AddAllocAlignAttr`): integer-constant one-based indices (`requires
+    parameter N to be an integer constant`; arity: `takes at least 1
+    argument` / `takes no more than 2 arguments` / `takes one argument`)
+    naming an integer parameter (`parameter N is out of bounds`, `argument
+    may only refer to a function parameter of integer type` at the
+    argument, a dependent parameter included; index 1 of an implicit
+    object member function: `is invalid for the implicit this
+    argument`); the result must be a pointer (`alloc_align`: or a
+    reference), else a `-Wignored-attributes` warning; on a non-function
+    `only applies to non-K&R-style functions`. Codegen: spec/codegen.md
+    "Allocation functions".
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -648,6 +664,9 @@ and returns the scope it names:
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
   | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
   | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
+  | MALLOC | — | — |
+  | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
+  | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -1643,6 +1662,9 @@ The vector operators themselves are summarized in spec/types.md
   - `T()` (`act_on_value_init_cast`) value-initializes; `void()` is
     a `void` prvalue.
   - `T{...}` (`act_on_list_cast`) is direct-list-initialization.
+    For an enumeration with a fixed underlying type that includes
+    [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
+    narrowing rejected, then to `E`), as `E e{v};` does.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have

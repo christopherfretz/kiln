@@ -196,6 +196,9 @@ diag_groups! {
     PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
     // ----- WP-154 (atomic builtins)
     AtomicMemoryOrdering = "atomic-memory-ordering" [];
+    // ----- WP-177 (implicit conversion warnings)
+    LiteralConversion = "literal-conversion" [];
+    Conversion = "conversion" [LiteralConversion];
     // ----- WP-182 (statement attributes)
     Cxx17AttributeExtensions = "c++17-attribute-extensions" [];
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];

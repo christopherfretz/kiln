@@ -229,7 +229,25 @@ array cookies).
   `nobuiltin`, and `operator new` also `allocsize(0)` and the
   `nonnull`/`noalias` return attributes clang adds implicitly
   (`alloc_fn_attrs`, applied in `module.rs::get_fn` and
-  `func.rs::emit_fn_def`).
+  `func.rs::emit_fn_def`). `alloc_fn_attrs` also gives any function
+  with GNU `malloc` and a pointer result a `noalias` result (clang
+  `RestrictAttr`) and turns GNU `alloc_size(n[, m])` into
+  `allocsize(n-1[,m-1])` (the LLVM index counts `this`, like the
+  one-based source index). `extern "C"` namespace-scope `malloc`,
+  `calloc`, `realloc` and `aligned_alloc` with a pointer result are the
+  library builtins clang gives an implicit `allocsize` (`(0)`, `(0,1)`,
+  `(1)`, `(1)`; `aligned_alloc` also an implicit `alloc_align(1)`) (clang
+  `AddKnownFunctionAttributes`).
+- **Direct calls** (`alloc_call_attrs`, from `emit_call` and the
+  non-virtual member call): a direct call of a replaceable `operator
+  new` gets `allocsize(0)`, `noalias` and `nonnull` unless nothrow;
+  other callees their `allocsize` and, with GNU `malloc`, `noalias`
+  (clang `ConstructAttributeList`). An `alloc_align` argument
+  (GNU `alloc_align(n)`, `aligned_alloc`'s, or the `std::align_val_t` of
+  a replaceable `operator new`) that is a constant power of two gives
+  the result `align N`. *Deviation:* for any other alignment clang emits
+  `llvm.assume(i1 true) ["align"(ptr %r, i64 %a)]` after the call; kiln
+  emits nothing (an optimization hint only).
 - **Calls** (`emit_new_delete_call`, clang's `EmitNewDeleteCall`): a
   replaceable callee called from a new- or delete-expression gets the
   `builtin` call-site attribute; an `operator new` call also
@@ -250,7 +268,10 @@ array cookies).
   `select` gives `-1`, in clang's instruction order. The flattened
   element count of a multidimensional new is the count times the inner
   bounds.
-- **Null check.** A `noexcept` allocation function that is neither the
+- **Null check.** (clang: nothrow and (non-POD or `hasInitializer`);
+  class default-init always has a `CXXConstructExpr` initializer in
+  clang's AST, so a nothrow `new` of any class is checked.) A `noexcept`
+  allocation function that is neither the
   reserved placement form nor a replaceable non-nothrow `operator new`
   may return null: when there is an initializer, the result is compared
   with `null` and initialization runs in a not-null block, joined by a `phi`
@@ -404,7 +425,10 @@ The normative description is spec/driver.md "Code generation". In short:
   may overlap (`AggValueSlot::getPreferredSize`). A base subobject
   initialized from a call (WP-158) goes through a temporary and copies
   the data size, as clang; an aggregate's base element is initialized by
-  the base-object (C2) constructor variant. An immediate invocation
+  the base-object (C2) constructor variant (sema-class.md §5.6), and a
+  zeroing construction of a base subobject memsets its non-virtual size
+  through an `inbounds i8` GEP at offset 0 (clang
+  `EmitNullBaseClassInitialization`). An immediate invocation
   (a valued `ConstantExpr`, WP-137) does use the data size of a
   `MayOverlap` slot (a materialized temporary): an oversized constant is
   stored to a temporary of its own type and the data size copied out,
@@ -562,9 +586,35 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   (clang would make it `available_externally` only when optimizing);
   references name the external symbol, structor calls the complete
   variant (D1/C1). Implicitly declared special members are not
-  instantiations and are still emitted. An explicit instantiation
-  *definition* is still emitted `linkonce_odr` where clang uses `weak_odr`
-  (open). The initializer is
+  instantiations and are still emitted.
+- **Explicit instantiation definitions** ([temp.explicit], WP-170;
+  `Cg::is_explicit_inst_definition`, clang `GetGVALinkageForFunction` ->
+  `GVA_StrongODR`): a function or variable that is an explicit
+  instantiation definition, or a member of a class under one (innermost
+  explicitly instantiated enclosing class decides, as above), is
+  `weak_odr dso_local` in its own COMDAT, inline or not, and is never
+  deferred. Naming a class (`template struct X<int>;`) emits every
+  non-template member, used or not, recursively through member classes,
+  including out-of-line and inline static data members
+  ([temp.explicit]/10; `emit_class_members`), plus a `weak_odr` vtable
+  and RTTI (`VtLinkage::Weak`, emitted after the strong key-function
+  vtables). A member class that was already defined when the enclosing
+  class was explicitly instantiated keeps an implicit vtable (emitted
+  `linkonce_odr` only if used; `Cg::vtable_explicit_inst_kind`), though
+  its member functions are still `weak_odr` (clang
+  `InstantiateClassMembers`). A member explicit instantiation (`template void X<int>::f();`,
+  `template X<int>::X();`) is emitted right after the declaration that
+  precedes it lexically (sema records it in
+  `TemplateTables::explicit_member_insts`). Base-object structors of a
+  class without virtual bases share a `C5`/`D5` COMDAT (with `D0`) and
+  the complete-object symbol is a `weak_odr` alias (clang
+  `getCodegenToUse` -> `COMDAT`). Static locals of such functions stay
+  `linkonce_odr`. Ordering deviation: when an explicitly instantiated
+  class's constructor references a non-template polymorphic base whose
+  inline destructor is otherwise unused, clang emits that base
+  destructor at the end of the TU while kiln emits it right after the
+  derived destructor that calls it (same definitions, different order).
+  The initializer is
   `{ [N x ptr] ... }`, one array per primary/secondary group, with
   offset-to-top, RTTI, then the slots. Pure slots are
   `__cxa_pure_virtual`, deleted slots `__cxa_deleted_virtual`.
@@ -619,8 +669,8 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
 - **Template linkage policy**: vtables, RTTI and thunks of classes that
   are template specializations, or have no key function, are
   `linkonce_odr` and emitted only when used (deferred), as with inline
-  functions. Explicit instantiation definitions (`weak_odr`) are not
-  covered yet.
+  functions. Explicit instantiation definitions are `weak_odr` (see
+  above).
 
 - **Virtual bases** (clang `GetAddressOfBaseClass`,
   `ItaniumCXXABI::{buildStructorSignature, getImplicitConstructorArgs,
@@ -715,15 +765,6 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   pattern's signature (clang `InheritedTemplateArgs`), and a constructor
   template specialization's base variant is `C2` (WP-146; corpus
   `class_inheriting_ctors_variadic`).
-- Explicit instantiation definitions (`template struct X<int>;`) emit
-  nothing: the members are instantiated by sema but codegen emits only
-  used functions, with `linkonce_odr`. clang emits every member
-  `weak_odr`, the vtable/RTTI `weak_odr`, and a non-trivial destructor
-  as a `D5` COMDAT with a `weak_odr` D1 alias; `extern template` makes
-  the vtable an `external` declaration and suppresses the member
-  definitions. Kiln still treats both like implicit instantiations
-  (and explicit instantiation of function templates is a sema
-  "not yet implemented").
 - (Resolved by WP-100: `__cxa_bad_cast` / `__cxa_bad_typeid` are
   invoked inside EH scopes, §7b.)
 - RTTI of a pointer to member function with method qualifiers

@@ -644,6 +644,12 @@ impl Substituter<'_, '_, '_> {
         }
         let fty = self.sema.ast.types.function(ret, &ptys, info, exc);
         self.sema.ast.decls.set_ty(spec, fty);
+        if self.sema.kind_of(spec) == DeclKind::CXXConversion {
+            // Its printed name (`operator int<int>`); the declaration
+            // keeps the pattern's name for the mangling.
+            let target = self.sema.ast.types.canonical(ret);
+            let _ = self.sema.ast.decls.cold.conversion_spec_target.insert(spec, target);
+        }
         let _ = self.sema.builder().set_params(spec, &ids);
         self.forget_pattern_params(pat);
         self.defer_default_args(pat, spec);
