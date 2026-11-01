@@ -1633,6 +1633,10 @@ diag_ids! {
     sema_array_designator_too_large = Error (2) "array designator index ({0}) exceeds array bounds ({1})";
     sema_gnu_array_range = Extension [GnuDesignator] (0) "use of GNU array range extension";
     sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
+    // ----- WP-220 (-Wundefined-var-template; clang `InstantiateVariableDefinition`)
+    sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
+    note_forward_template_decl = Note (0) "forward declaration of template entity is here";
+    note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration to suppress this warning if '{0}' is explicitly instantiated in another translation unit";
 }
 
 impl DiagId {

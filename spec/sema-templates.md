@@ -1125,6 +1125,39 @@ the same rule, which is clang's `DoMarkVarDeclReferenced`.
 This is why the chain `R<N>::v = R<N-1>::v` recurses one frame per level
 in clang (the d1 test in §10.2). Kiln matches its notes exactly.
 
+**Undefined variables at the end of the TU** (`-Wundefined-var-template`,
+WP-220; clang `InstantiateVariableDefinition`). When the pending queue is
+drained (`instantiate_pending`) and an implicitly instantiated variable
+specialization or static data member still has no definition to
+instantiate from, kiln warns "instantiation of variable 'v<int>' required
+here, but no definition is available" at its point of instantiation,
+with the notes "forward declaration of template entity is here" (the
+pattern's latest declaration) and "add an explicit instantiation
+declaration to suppress this warning if 'v<int>' is explicitly
+instantiated in another translation unit" (the POI again). The rules
+follow clang:
+- Only odr-uses queue the variable; a variable usable in constant
+  expressions is never queued (it is instantiated at the reference), so
+  it is never warned about.
+- The POI is the first reference, even an unevaluated one
+  (`InstState.undefined_var_uses`).
+- A variable template specialization is queued again on every odr-use,
+  so each use warns again (same POI; `allow_duplicate`). A static data
+  member is queued once.
+- No warning for explicit specializations, explicit instantiation
+  declarations (`extern template int v<long>;`), members of a class
+  named in `extern template struct S<char>;`
+  (`in_explicit_inst_declaration`), patterns in a system header, or once
+  any error has been reported (clang checks `hasErrorOccurred()` at the
+  end of the TU).
+- An explicit instantiation definition of the class (`template struct
+  U<int>;`) leaves an undefined static member implicit, so it warns.
+
+`tests/conformance/temp.inst/undefined-var-template.cpp` pins all of
+this. A variable template defined later in the TU is instantiated
+silently, but codegen still emits it as an external declaration
+(follow-up).
+
 **Member variable templates defined out of line** (`template<class T>
 T A::v = T(1);`, WP-206). The implicit specialization `A::v<int>` is a
 single declaration in `A`. Its initializer is instantiated from the

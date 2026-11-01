@@ -213,6 +213,8 @@ diag_groups! {
     UnusedVariable = "unused-variable" [];
     // ----- WP-193 (GNU designators)
     GnuDesignator = "gnu-designator" [];
+    // ----- WP-220 (undefined variable templates)
+    UndefinedVarTemplate = "undefined-var-template" [];
 }
 
 impl Group {
