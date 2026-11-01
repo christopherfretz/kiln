@@ -162,15 +162,21 @@ impl Sema<'_, '_> {
                 // instantiated, [temp.friend]) when the context is the
                 // pattern or a partial specialization of that template.
                 _ => {
-                    ec.records.iter().any(|&r| same_class(self, r, f))
-                        || self.ast.spec_info(f).is_some_and(|(_, s)| {
-                            let t = Some(self.ast.first(s.template));
-                            ec.records.iter().any(|&r| {
-                                (self.ast.described_template(self.ast.first(r)).is_some()
-                                    || self.ast.partial_spec_info(r).is_some())
-                                    && self.friend_template_of(r) == t
-                            })
+                    if ec.records.iter().any(|&r| same_class(self, r, f)) {
+                        return true;
+                    }
+                    let spec = self.ast.spec_info(f).is_some_and(|(_, s)| {
+                        let t = Some(self.ast.first(s.template));
+                        ec.records.iter().any(|&r| {
+                            (self.ast.described_template(self.ast.first(r)).is_some()
+                                || self.ast.partial_spec_info(r).is_some())
+                                && self.friend_template_of(r) == t
                         })
+                    });
+                    if spec {
+                        self.speculative_friend.set(true);
+                    }
+                    spec
                 }
             }
         })
@@ -413,8 +419,26 @@ impl Sema<'_, '_> {
         let naming = self.ast.definition(c.naming_class).unwrap_or(c.naming_class);
         let ec = self.effective_context();
         let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
+        self.speculative_friend.set(false);
         if self.is_accessible(&ec, &t, naming, unpriv) {
+            // Accepted in a pattern only because its class may
+            // instantiate to a befriended specialization: re-checked in
+            // each instantiation of the innermost function or class
+            // ([`Sema::replay_dependent_access`]).
+            if self.speculative_friend.take()
+                && let Some(&k) = ec.functions.first().or(ec.records.first())
+            {
+                self.dependent_access.entry(self.ast.first(k)).or_default().push(c);
+            }
             return true;
+        }
+        // Not repeated by the replay of a check the instantiation redid.
+        let key = ec.functions.first().or(ec.records.first()).map(|&k| self.ast.first(k));
+        if let Some(k) = key
+            && !self.access_failed.insert((c.member, c.loc, k))
+            && self.replaying_access
+        {
+            return false;
         }
         let name = self.decl_name(c.member);
         let msg = self
@@ -746,6 +770,24 @@ impl Sema<'_, '_> {
             }
         }
         None
+    }
+
+    /// Re-runs, in `inst` (an instantiated class or member function), the
+    /// access checks of its pattern `pattern` that relied on a befriended
+    /// specialization (spec/sema-templates.md §4.8; clang
+    /// `PerformDependentDiagnostics`).
+    pub(crate) fn replay_dependent_access(&mut self, pattern: DeclId, inst: DeclId) {
+        let Some(checks) = self.dependent_access.get(&self.ast.first(pattern)).cloned() else {
+            return;
+        };
+        let saved = (self.ctx, self.initializing.take());
+        self.ctx = self.ast.definition(inst).unwrap_or(inst);
+        self.replaying_access = true;
+        for c in checks {
+            self.run_access_check(c);
+        }
+        self.replaying_access = false;
+        (self.ctx, self.initializing) = saved;
     }
 
     /// Opens a delay point: access checks until the matching
