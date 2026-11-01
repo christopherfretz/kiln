@@ -52,6 +52,9 @@ pub(crate) enum SynthKind {
     Special(SpecialKind),
     /// A defaulted comparison operator ([class.compare.default]).
     Comparison(crate::class::compare::CmpKind),
+    /// An inheriting constructor ([class.inhctor.init]; clang prints no
+    /// note for it).
+    Inheriting,
 }
 
 /// How a constructor initializes the subobjects it has no
@@ -200,6 +203,7 @@ impl Sema<'_, '_> {
             .synth
             .iter()
             .rev()
+            .filter(|c| c.kind != SynthKind::Inheriting)
             .map(|c| match c.kind {
                 SynthKind::Special(kind) => {
                     let spec =
@@ -210,7 +214,8 @@ impl Sema<'_, '_> {
                         .arg(kind.index())
                         .arg(self.ty_arg(self.tag_type(class)))
                 }
-                SynthKind::Comparison(k) => {
+                SynthKind::Comparison(_) | SynthKind::Inheriting => {
+                    let SynthKind::Comparison(k) = c.kind else { unreachable!("filtered") };
                     let class = self.cmp_class(c.member).unwrap_or(self.ast.tu);
                     self.diag(DiagId::note_defaulted_cmp_synthesized_at, c.loc)
                         .arg(k.index())
@@ -920,11 +925,17 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return None;
                 }
-                let mk = self.special_kind_of(m).filter(|x| x.is_ctor());
+                // An inheriting constructor is accessed, and takes its
+                // arguments (with default arguments), as the base
+                // constructor ([namespace.udecl]/19, [class.inhctor.init]).
+                let bc = self.inherited_ctor_base(m);
+                let am = bc.unwrap_or(m);
+                let aclass = bc.and_then(|b| self.ast.decls.get(b).ctx()).unwrap_or(class);
+                let mk = self.special_kind_of(m).filter(|x| x.is_ctor() && bc.is_none());
                 let sel = mk.map_or(3, SpecialKind::index);
-                let class_ty = self.ast.types.canonical(self.class_type(class));
+                let class_ty = self.ast.types.canonical(self.class_type(aclass));
                 let msg = match entity {
-                    InitEntity::Var => self.special_member_access(m, class, |s, prot| {
+                    InitEntity::Var => self.special_member_access(am, aclass, |s, prot| {
                         s.diag(DiagId::sema_access_ctor, sites.access)
                             .arg(u8::from(prot))
                             .arg(s.ty_arg(class_ty))
@@ -950,7 +961,7 @@ impl Sema<'_, '_> {
                     return None;
                 }
                 self.mark_function_referenced(m, loc);
-                let args = self.ctor_args(m, call.args, call.narrowing)?;
+                let args = self.ctor_args(am, call.args, call.narrowing)?;
                 let zeroing = call.info.zeroing || call.value_init && !self.is_user_provided(m);
                 let info = ConstructInfo { zeroing, ..call.info };
                 let e = match call.temp_end {

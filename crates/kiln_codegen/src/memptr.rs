@@ -99,7 +99,7 @@ impl Cg<'_> {
     }
 
     /// The byte offset of field `f` in its class.
-    fn field_byte_offset(&mut self, f: DeclId) -> R<u64> {
+    pub(crate) fn field_byte_offset(&mut self, f: DeclId) -> R<u64> {
         let ast = self.ast;
         let Some(rd) = ast.decls.get(f).ctx() else {
             return err(Some(ast.decls.get(f).loc()), "field outside a class");

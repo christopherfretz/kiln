@@ -112,9 +112,7 @@ impl Sema<'_, '_> {
                 Some(d) => Selected::Found(d),
             };
         }
-        if k.is_ctor() && bits.contains(DefinitionBits::HAS_INHERITED_CTOR)
-            || k.is_assign() && bits.contains(DefinitionBits::HAS_INHERITED_ASSIGN)
-        {
+        if k.is_assign() && bits.contains(DefinitionBits::HAS_INHERITED_ASSIGN) {
             return Selected::Unsupported;
         }
         // clang `LookupSpecialMember`: an argument of the class type (an
@@ -131,6 +129,7 @@ impl Sema<'_, '_> {
             let mut found = std::mem::take(&mut set.found);
             found.clear();
             found.extend(self.ast.constructors(c).iter());
+            found.extend(self.ctor_shadows(c));
             self.add_found_candidates(
                 &mut set,
                 &found,

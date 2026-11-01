@@ -520,6 +520,9 @@ diag_ids! {
     sema_using_decl_nested_name_specifier_is_not_class = Error (1) "using declaration in class refers into '{0}', which is not a class";
     sema_using_decl_refers_to_own_class = Error (0) "using declaration refers to its own class";
     sema_using_decl_not_base_class = Error (2) "using declaration refers into '{0}', which is not a base class of '{1}'";
+    sema_using_decl_constructor_not_in_direct_base = Error (2) "{0} is not a direct base of {1}, cannot inherit constructors";
+    sema_using_decl_redeclaration = Error (0) "redeclaration of using declaration";
+    note_previous_using_decl = Note (0) "previous using declaration";
     sema_using_decl_can_not_refer_to_class_member = Error (0) "using declaration cannot refer to class member";
     note_using_decl_class_member_alias = Note (0) "use an alias declaration instead";
     note_using_decl_class_member_reference = Note (0) "use a reference instead";
@@ -1319,6 +1322,8 @@ diag_ids! {
     note_ovl_candidate_kind_not_viable = Note (2) "candidate {0} not viable: {1}";
     note_ovl_candidate_deleted = Note (2) "candidate {0} has been {1:explicitly|implicitly} deleted";
     note_ovl_candidate_illegal_constructor = Note (1) "candidate {0:constructor|template} ignored: instantiation {0:takes|would take} its own class type by value";
+    note_ovl_candidate_inherited_constructor_slice = Note (2) "candidate {0:constructor|template} ignored: inherited constructor cannot be used to {1:copy|move} object";
+    note_ovl_candidate_inherited_constructor = Note (1) "constructor from base class {0} inherited here";
     note_ovl_candidate_explicit = Note (1) "explicit {0:constructor|conversion function|deduction guide} is not a candidate";
     note_possible_target = Note (0) "possible target for call";
     sema_addr_ovl_cast = Error (3) "address of overloaded function '{0}' cannot be {1:cast|static_cast} to type {2}";

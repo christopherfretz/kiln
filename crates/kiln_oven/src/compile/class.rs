@@ -561,7 +561,21 @@ impl Compiler<'_> {
         let ast = self.ast();
         let ctor = ast.exprs.constructor(e);
         if ast.exprs.inherited_ctor_info(e).1 {
-            self.trap(e, VIRTUAL_UNSUPPORTED);
+            // The inherited constructor lives in a virtual base, so the
+            // inheriting constructor's class has a virtual base and is not
+            // constexpr-suitable ([dcl.constexpr]/3): the call is rejected
+            // before its body runs (`Fault::Callee`, as clang's
+            // `note_constexpr_invalid_inhctor`). Reaching this body anyway
+            // reports the same note.
+            let base = ast.decls.get(ctor).ctx();
+            let name = base.map(|b| crate::notes::notes_name(ast, b)).unwrap_or_default();
+            self.trap(
+                e,
+                &format!(
+                    "constructor inherited from base class '{name}' cannot be used in a \
+                     constant expression; derived class cannot be implicitly initialized"
+                ),
+            );
             return;
         }
         let params = self.cur_params.clone();

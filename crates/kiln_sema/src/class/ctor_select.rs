@@ -5,7 +5,7 @@
 //! skipped template or an unchecked *requires-clause* (WP-073) could
 //! change answers [`Selected::Unsupported`].
 
-use kiln_ast::decl::{DeclKind, DefinitionBits};
+use kiln_ast::decl::DeclKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -52,11 +52,6 @@ impl Sema<'_, '_> {
         style: InitStyle,
     ) -> Selected {
         let c = self.class_def(class);
-        if self.defn_bits(c).contains(DefinitionBits::HAS_INHERITED_CTOR) {
-            // todo(WP-068a follow-up): inherited constructors
-            // ([over.match.funcs]/8) are not candidates yet.
-            return Selected::Unsupported;
-        }
         let loc = args.first().map_or(Loc::INVALID, |&a| self.begin_loc(a));
         // [over.match.copy]: converting constructors only, the argument
         // without user-defined conversions ([over.best.ics]/4.2).
@@ -115,6 +110,19 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The function candidate `b` of `set` calls: for an inherited
+    /// constructor, the derived class's inheriting constructor
+    /// ([namespace.udecl]/13, clang `findInheritingConstructor`).
+    fn selected_ctor(&mut self, set: &OverloadCandidateSet, b: u32) -> DeclId {
+        let c = set.cand(b);
+        let f = c.func();
+        if c.found != f && self.kind_of(c.found) == DeclKind::ConstructorUsingShadow {
+            self.find_inheriting_ctor(c.found, f)
+        } else {
+            f
+        }
+    }
+
     /// Maps the outcome of a constructor or special-member set to
     /// [`Selected`], keeping a failed set for its notes.
     pub(crate) fn selected_of(&mut self, set: OverloadCandidateSet, out: OvlOutcome) -> Selected {
@@ -127,8 +135,8 @@ impl Sema<'_, '_> {
             {
                 Selected::Unsupported
             }
-            OvlOutcome::Success(b) => Selected::Found(set.cand(b).func()),
-            OvlOutcome::Deleted(b) => Selected::Deleted(set.cand(b).func()),
+            OvlOutcome::Success(b) => Selected::Found(self.selected_ctor(&set, b)),
+            OvlOutcome::Deleted(b) => Selected::Deleted(self.selected_ctor(&set, b)),
             OvlOutcome::NoViable | OvlOutcome::Ambiguous if skipped => Selected::Unsupported,
             OvlOutcome::NoViable => Selected::Missing,
             OvlOutcome::Ambiguous => Selected::Ambiguous,

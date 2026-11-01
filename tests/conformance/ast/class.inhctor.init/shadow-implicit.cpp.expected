@@ -1,0 +1,8 @@
+Dumping D::B:
+CXXConstructorDecl implicit used B 'void (int, int) noexcept(false)' inline
+|-ParmVarDecl implicit 'int'
+|-ParmVarDecl implicit 'int'
+|-CXXCtorInitializer 'B'
+| `-CXXInheritedCtorInitExpr 'B'
+`-CompoundStmt
+

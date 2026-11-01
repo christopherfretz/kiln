@@ -18,7 +18,7 @@ use kiln_llvm::{FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value
 
 use crate::cleanup::Cleanup;
 use crate::fir::{Op, V};
-use crate::func::{Addr, min_align};
+use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, Def, R, Sig, err};
 
 /// A special member function (clang `CXXSpecialMemberKind`, the subset
@@ -203,7 +203,10 @@ impl Cg<'_> {
     /// parameter of a base-object structor of a class with virtual
     /// bases).
     pub(crate) fn structor_sig(&mut self, first: DeclId, v: Option<Structor>) -> R<Sig> {
-        let sig = self.decl_sig(first)?;
+        let mut sig = self.decl_sig(first)?;
+        if self.inheriting_drops_params(first, v) {
+            sig = self.without_params(sig);
+        }
         let k = self.ast.decls.get(first).kind();
         if v == Some(Structor::Base)
             && matches!(k, DeclKind::CXXConstructor | DeclKind::CXXDestructor)
@@ -212,6 +215,68 @@ impl Cg<'_> {
             return Ok(self.with_vtt(sig));
         }
         Ok(sig)
+    }
+
+    /// Whether variant `v` of constructor `first` is the base-object
+    /// variant of an inheriting constructor whose constructor-using-shadow
+    /// constructs a virtual base: it takes no parameters but the VTT,
+    /// since only the complete-object variant constructs that base (clang
+    /// `inheritingCtorHasParams`, [class.inhctor.init]/2).
+    pub(crate) fn inheriting_drops_params(&self, first: DeclId, v: Option<Structor>) -> bool {
+        v == Some(Structor::Base)
+            && self
+                .ast
+                .decls
+                .inheriting_ctor_shadow(first)
+                .is_some_and(|s| self.ast.shadow_constructed(s).1)
+    }
+
+    /// clang `EmitInheritedCXXConstructorCall`: the base subobject at
+    /// `dest` constructed by the base-object variant of `e`'s constructor
+    /// with the enclosing inheriting constructor's parameters forwarded
+    /// (none when the constructor is inherited through a virtual base,
+    /// which only the complete-object variant constructs).
+    pub(crate) fn emit_inherited_ctor_init(&mut self, e: ExprId, dest: Addr) -> R<()> {
+        let ast = self.ast;
+        let ctor = ast.exprs.constructor(e);
+        let (kind, from_vbase) = ast.exprs.inherited_ctor_info(e);
+        let rd = ast.decls.get(ctor).ctx().expect("constructor class");
+        let first = ast.first(ctor);
+        let mut vals = Vec::new();
+        let mut ptys = Vec::new();
+        if !from_vbase {
+            let outer = self.f.decl.and_then(|d| ast.decls.function(d)).map(|f| f.params);
+            let params: Vec<DeclId> =
+                outer.map(|l| ast.lists.iter(l).collect()).unwrap_or_default();
+            for p in params {
+                let q = ast.decls.get(p).ty().expect("param type");
+                let Some(&a) = self.f.locals.get(&p) else {
+                    return err(self.loc_of(e), "inherited constructor parameter not bound");
+                };
+                // EmitDelegateCallArg.
+                vals.push(if self.referee(q).is_some() {
+                    CallArg::Scalar(self.load(LTy::PTR, a.v, a.align, false))
+                } else if self.is_aggregate(q) {
+                    CallArg::Agg(a)
+                } else {
+                    CallArg::Scalar(self.load_scalar(a, q))
+                });
+                ptys.push(q);
+            }
+        }
+        let fty = ast.decls.get(first).ty().expect("constructor type");
+        let mut sig = self.call_sig_this(fty, false, &ptys, Some(rd));
+        if from_vbase {
+            sig = self.without_params(sig);
+        }
+        if self.structor_has_vbases(first) {
+            sig = self.with_vtt(sig);
+            let vtt = self.vtt_arg(rd, kind == ConstructionKind::VirtualBase, false)?;
+            self.f.call_vtt = Some(vtt);
+        }
+        let (callee, fid) = self.structor_ref(ctor, Structor::Base)?;
+        self.call_vals(&sig, callee, fid, Some(dest.v), &vals, &[], None, &[])?;
+        Ok(())
     }
 
     /// Declares structor variant `v` of `first` (clang
@@ -1233,6 +1298,10 @@ impl Cg<'_> {
         let first = ast.first(ctor);
         let fty = ast.decls.get(first).ty().expect("constructor type");
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
+        // A base-object inheriting constructor that drops its parameters
+        // is still called with the arguments (clang
+        // `arrangeCXXConstructorCall` with `PassProtoArgs` false keeps the
+        // argument list; only the callee's prototype omits them).
         let mut sig = self.call_sig_this(fty, false, &arg_tys, Some(rd));
         let needs_vtt = v == Structor::Base && self.structor_has_vbases(first);
         if needs_vtt {

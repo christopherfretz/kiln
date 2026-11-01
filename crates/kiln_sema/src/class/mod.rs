@@ -16,6 +16,7 @@ mod construct;
 mod ctor_select;
 mod ctorinit;
 pub(crate) mod friend;
+pub(crate) mod inhctor;
 mod member_expr;
 mod members;
 mod special;

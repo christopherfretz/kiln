@@ -231,6 +231,28 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        // /2.7: a constructor of a derived class over an inherited
+        // constructor; of two inherited ones, the more derived class's
+        // (clang; the same-parameter-types condition is not checked).
+        let inh = |c: &Candidate| {
+            c.found != c.func() && self.kind_of(c.found) == DeclKind::ConstructorUsingShadow
+        };
+        match (inh(x), inh(y)) {
+            (false, true) => return true,
+            (true, false) => return false,
+            (true, true) => {
+                let cls = |c: &Candidate| self.ast.decls.get(c.func()).ctx();
+                if let (Some(a), Some(b)) = (cls(x), cls(y)) {
+                    if a != b && crate::conv::bases::is_derived_from(self, a, b) {
+                        return true;
+                    }
+                    if a != b && crate::conv::bases::is_derived_from(self, b, a) {
+                        return false;
+                    }
+                }
+            }
+            (false, false) => {}
+        }
         // /2.8: a non-rewritten candidate over a rewritten one; /2.9:
         // of two rewritten candidates, the one not reversed.
         if (x.rewrite == Rewrite::None) != (y.rewrite == Rewrite::None) {
@@ -255,8 +277,6 @@ impl Sema<'_, '_> {
                 return c1;
             }
         }
-        // /2.7 (constructor of a derived class over an inherited
-        // constructor): inherited constructors are not candidates yet.
         false
     }
 

@@ -149,6 +149,7 @@ impl Ast {
         let n = self.decls.get(d);
         match n.kind() {
             DeclKind::UsingShadow
+            | DeclKind::ConstructorUsingShadow
             | DeclKind::UsingEnum
             | DeclKind::NamespaceAlias
             | DeclKind::UsingDirective => DeclId::try_new(n.data()),
@@ -165,18 +166,73 @@ impl Ast {
     /// The nested-name-specifier written in a `Using` declaration.
     pub fn using_qualifier(&self, d: DeclId) -> Option<crate::ids::NnsId> {
         let n = self.decls.get(d);
-        if n.kind() == DeclKind::Using { crate::ids::NnsId::try_new(n.data()) } else { None }
+        if matches!(n.kind(), DeclKind::Using | DeclKind::UnresolvedUsingValue) {
+            crate::ids::NnsId::try_new(n.data())
+        } else {
+            None
+        }
     }
 
     /// `d` with using-shadows looked through: the declaration a
     /// `UsingShadow` introduces (an `UnresolvedUsingIfExists` for an
     /// unresolved `using_if_exists` target), else `d`.
     pub fn strip_shadow(&self, d: DeclId) -> DeclId {
-        if self.decls.get(d).kind() == DeclKind::UsingShadow {
+        if matches!(
+            self.decls.get(d).kind(),
+            DeclKind::UsingShadow | DeclKind::ConstructorUsingShadow
+        ) {
             self.using_target(d).unwrap_or(d)
         } else {
             d
         }
+    }
+
+    /// The class (first declaration) whose constructor
+    /// constructor-using-shadow `shadow` nominates: that of its
+    /// nominated base's shadow `s`, or for `None` that of its target.
+    pub fn shadow_base_class(&self, s: Option<DeclId>, shadow: DeclId) -> Option<DeclId> {
+        let d = match s {
+            Some(s) => s,
+            None => self.using_target(shadow)?,
+        };
+        self.decls.get(d).ctx().map(|c| self.first(c))
+    }
+
+    /// clang `ConstructorUsingShadowDecl`'s constructed base class shadow
+    /// (`None`: the target's class) and `constructsVirtualBase`: a
+    /// shadow whose nominated base is a virtual base, or whose nominated
+    /// shadow constructs one, constructs that virtual base directly
+    /// ([class.inhctor.init]/2).
+    pub fn shadow_constructed(&self, s: DeclId) -> (Option<DeclId>, bool) {
+        let mut chain = vec![s];
+        let mut cur = s;
+        while let Some(n) = self.decls.ctor_shadow_nominated(cur) {
+            if chain.len() > 256 {
+                break;
+            }
+            chain.push(n);
+            cur = n;
+        }
+        // Innermost first: the first shadow nominating a virtual base
+        // fixes the constructed shadow for every shadow above it.
+        let mut out: (Option<DeclId>, bool) = (None, false);
+        for &sh in chain.iter().rev() {
+            let ns = self.decls.ctor_shadow_nominated(sh);
+            if out.1 {
+                continue;
+            }
+            let virt = match (self.decls.get(sh).ctx(), self.shadow_base_class(ns, sh)) {
+                (Some(d), Some(n)) => self.definition(d).is_some_and(|def| {
+                    self.decls.bases(def, &self.lists).any(|b| {
+                        b.is_virtual
+                            && self.types.as_record(b.ty).is_some_and(|c| self.first(c) == n)
+                    })
+                }),
+                _ => false,
+            };
+            out = (ns, virt);
+        }
+        out
     }
 
     /// The namespace a `NamespaceAlias` denotes (aliases of aliases

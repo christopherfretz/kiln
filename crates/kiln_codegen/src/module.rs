@@ -757,6 +757,17 @@ impl<'a> Cg<'a> {
         Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false }
     }
 
+    /// `sig` without its parameters (only `this`, and the VTT if any,
+    /// remain): clang `inheritingCtorHasParams` false.
+    pub(crate) fn without_params(&mut self, mut sig: Sig) -> Sig {
+        let vtt = sig.vtt;
+        sig.params.clear();
+        sig.info.args.clear();
+        sig.fn_ty = self.fn_type(&sig.info, sig.this.is_some(), false);
+        sig.vtt = false;
+        if vtt { self.with_vtt(sig) } else { sig }
+    }
+
     /// `sig` with a VTT parameter after `this`.
     pub(crate) fn with_vtt(&mut self, mut sig: Sig) -> Sig {
         if sig.vtt {

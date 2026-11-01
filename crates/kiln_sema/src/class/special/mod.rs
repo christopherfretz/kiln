@@ -252,7 +252,7 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        if self.ast.described_template(f).is_some() {
+        if self.ast.described_template(f).is_some() || self.inh_ctor_base.contains_key(&f) {
             return None;
         }
         let class = self.ast.decls.get(f).ctx()?;
