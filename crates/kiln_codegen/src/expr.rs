@@ -647,6 +647,21 @@ impl Cg<'_> {
                     self.base_address(Addr { v: p, ty, align }, derived, vb, off, null_check)?.0
                 }
             }
+            // A downcast ([expr.static.cast]/11), never through a virtual
+            // base: the path runs from the derived class to the operand's.
+            CastKind::BaseToDerived => {
+                let p = self.emit_scalar(s)?;
+                let Some(derived) = ast.types.pointee(q).and_then(|t| ast.types.as_record(t))
+                else {
+                    return err(self.loc_of(e), "base-to-derived cast to a non-class pointer");
+                };
+                let (vb, off) = self.base_path(e, derived)?;
+                if vb.is_some() {
+                    return err(self.loc_of(e), "base-to-derived cast through a virtual base");
+                }
+                let null_check = !self.is_this_expr(s);
+                self.derived_ptr(p, off, null_check)
+            }
             // `__builtin_bit_cast` ([bit.cast]): the operand's bytes
             // loaded as the destination type (clang `EmitLoadOfLValue` of
             // the reinterpreted address).
@@ -1711,6 +1726,19 @@ impl Cg<'_> {
                 CastKind::Dynamic => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
                     let p = self.emit_dynamic_cast(e, lv.addr.v, lv.addr.align)?;
+                    Ok(self.ref_lvalue(p, q))
+                }
+                // `static_cast<D&>(b)` ([expr.static.cast]/2): no null check.
+                CastKind::BaseToDerived => {
+                    let lv = self.emit_lvalue(ast.exprs.operand(e))?;
+                    let Some(derived) = ast.types.as_record(q) else {
+                        return err(self.loc_of(e), "base-to-derived cast to a non-class");
+                    };
+                    let (vb, off) = self.base_path(e, derived)?;
+                    if vb.is_some() {
+                        return err(self.loc_of(e), "base-to-derived cast through a virtual base");
+                    }
+                    let p = self.derived_ptr(lv.addr.v, off, false);
                     Ok(self.ref_lvalue(p, q))
                 }
                 k => err(self.loc_of(e), format!("lvalue cast {k:?} is not supported yet")),

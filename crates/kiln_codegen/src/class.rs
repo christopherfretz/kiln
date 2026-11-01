@@ -1834,11 +1834,26 @@ impl Cg<'_> {
     /// clang `GetAddressOfBaseClass` on a pointer: `p + off`, null-checked
     /// when `null_check` and the offset is not zero.
     pub(crate) fn base_ptr(&mut self, p: V, off: u64, null_check: bool) -> V {
-        if off == 0 {
+        self.adjust_ptr(p, i128::from(off), null_check)
+    }
+
+    /// clang `GetAddressOfDerivedClass`: the object of which `p` points to
+    /// the non-virtual base subobject at byte offset `off` (a downcast,
+    /// [expr.static.cast]/2, /11), `p - off`, null-checked when
+    /// `null_check` and the offset is not zero.
+    pub(crate) fn derived_ptr(&mut self, p: V, off: u64, null_check: bool) -> V {
+        self.adjust_ptr(p, -i128::from(off), null_check)
+    }
+
+    /// `p` moved by `delta` bytes (an inbounds `i8` GEP); a null `p` stays
+    /// null when `null_check`.
+    fn adjust_ptr(&mut self, p: V, delta: i128, null_check: bool) -> V {
+        if delta == 0 {
             return p;
         }
         if !null_check {
-            return self.byte_offset(p, off);
+            let o = self.i64c(delta);
+            return self.gep(LTy::I8, p, vec![o], true);
         }
         let not_null = self.f.fir.create_block();
         let end = self.f.fir.create_block();
@@ -1847,7 +1862,8 @@ impl Cg<'_> {
         let orig = self.f.fir.cur().expect("insertion point");
         self.cond_br(is_null, end, not_null);
         self.emit_block(not_null, false);
-        let adj = self.byte_offset(p, off);
+        let o = self.i64c(delta);
+        let adj = self.gep(LTy::I8, p, vec![o], true);
         let from = self.f.fir.cur().expect("insertion point");
         self.emit_block(end, false);
         self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(adj, from), (null, orig)] }, LTy::PTR)
