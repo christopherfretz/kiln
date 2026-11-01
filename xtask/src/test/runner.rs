@@ -278,12 +278,27 @@ impl Test<'_> {
         }
         c.arg(format!("-std={}", spec.std));
         c.args(mode);
+        if let Some(n) = self.clang_compat(program) {
+            c.arg(format!("-fclang-compat={n}"));
+        }
         c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
         c.arg(&self.case.name);
         if let Some(o) = out {
             c.arg("-o").arg(o);
         }
         c
+    }
+
+    /// The `-fclang-compat=<major>` kiln is run with: the oracle clang's
+    /// major version, so kiln answers the feature queries as the oracle
+    /// does (`spec/harness.md` "Oracle"; WP-263). `None` when
+    /// `program` is not kiln or no clang oracle is configured.
+    fn clang_compat(&self, program: &Path) -> Option<u32> {
+        let kiln = program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Kiln;
+        if !kiln || self.cfg.oracle_kind != CompilerKind::Clang {
+            return None;
+        }
+        self.cfg.oracle_clang.map(|v| v[0])
     }
 
     /// The value of an `args:` placeholder (`spec/harness.md` "Placeholders").

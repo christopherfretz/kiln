@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use ifeval_common::{clang_available, clang_version_line, run_clang, run_kiln_with};
 use kiln_lex::Std;
-use kiln_pp::{ClangFeatures, FeatureFlag, FeatureQueries, MemoryResolver, TargetQuery};
+use kiln_pp::{ClangCompat, ClangFeatures, FeatureFlag, FeatureQueries, MemoryResolver, TargetQuery};
 
 const TABLE: &str = include_str!("../src/features_table.rs");
 const TRIPLES: [&str; 2] = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"];
@@ -617,4 +617,46 @@ fn triples_and_target_flags() {
     assert!(!x.is_target(TargetQuery::VariantOs, "linux"));
     assert!(a.is_target(TargetQuery::Arch, "arm64"));
     assert!(!a.is_target(TargetQuery::Arch, "x86_64"));
+}
+
+/// spec/pp.md "clang compatibility level": every builtin the libc++ 19,
+/// libc++ 22 and libstdc++ 14 headers probe answers as the recorded
+/// clang++-19 and clang++-22 do at the matching `-fclang-compat` level
+/// (`tests/probed_builtins.txt`; clang-independent).
+#[test]
+fn probed_builtins_match_recorded_clang_answers() {
+    let base = cf("aarch64-unknown-linux-gnu", Std::Cxx26, &[]);
+    assert_eq!(base.compat(), ClangCompat::Clang19);
+    let c22 = base.clone().with_compat(ClangCompat::Clang22);
+    let mut bad = Vec::new();
+    let mut n = 0;
+    for line in include_str!("probed_builtins.txt").lines() {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split(' ').collect();
+        let v = |s: &str| s.trim_end_matches('L').parse::<u32>().expect("recorded value");
+        let (name, a19, a22) = (f[0], v(f[1]), v(f[2]));
+        n += 1;
+        for (fq, want, lvl) in [(&base, a19, 19), (&c22, a22, 22)] {
+            let got = fq.has_builtin(name);
+            if got != want {
+                bad.push(format!("{name} at {lvl}: kiln {got}, clang {want}"));
+            }
+        }
+    }
+    assert!(n > 100, "{n} probed names");
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+/// The 19 to 22 `__has_builtin` differences of the probed set, both ways.
+#[test]
+fn has_builtin_under_both_levels() {
+    let c19 = cf("x86_64-unknown-linux-gnu", Std::Cxx26, &[]);
+    let c22 = c19.clone().with_compat(ClangCompat::Clang22);
+    for name in ["__builtin_is_virtual_base_of", "__builtin_is_implicit_lifetime", "__builtin_invoke"] {
+        assert_eq!((c19.has_builtin(name), c22.has_builtin(name)), (0, 1), "{name}");
+    }
+    assert_eq!((c19.has_builtin("__is_referenceable"), c22.has_builtin("__is_referenceable")), (1, 0));
+    assert_eq!((c19.has_builtin("__is_same"), c22.has_builtin("__is_same")), (1, 1));
 }
