@@ -23,6 +23,7 @@ pub mod conv;
 pub mod decl;
 pub mod declspec;
 mod deduce;
+mod empty_body;
 pub mod except;
 pub mod expr;
 mod fallthrough;
@@ -38,10 +39,12 @@ mod literal_op;
 pub mod lookup;
 pub mod names;
 pub mod new_delete;
+mod null_deref;
 mod oven_bridge;
 pub mod overload;
 mod packed;
 mod predefined;
+mod qualified_decl;
 mod range_for;
 mod rtti;
 pub mod scope;
@@ -61,6 +64,7 @@ mod unused_var;
 pub mod using;
 mod vector;
 mod vector_ops;
+mod vexing;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, aka, print_type};
@@ -74,6 +78,7 @@ pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
     ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
+pub use empty_body::EmptyBodyStmt;
 pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
@@ -197,6 +202,10 @@ pub struct Sema<'a, 'sm> {
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// Loops whose body is a same-line null statement, awaiting their
+    /// enclosing compound statement (`-Wempty-body`, WP-191).
+    pub(crate) empty_loop_bodies:
+        kiln_source::fx::FxHashMap<kiln_ast::StmtId, (EmptyBodyStmt, Loc)>,
     /// The declared placeholder type and decl-specifiers' type location
     /// of each variable of a multi-declarator group in a template
     /// pattern: instantiation checks the group's deductions again
@@ -448,6 +457,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             constinit_locs: kiln_source::fx::FxHashMap::default(),
+            empty_loop_bodies: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             reverse_using_shadows: false,

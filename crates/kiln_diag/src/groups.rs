@@ -223,6 +223,10 @@ diag_groups! {
     GnuPointerArith = "gnu-pointer-arith" [];
     VlaExtension = "vla-extension" [VlaCxxExtension];
     Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
+    // ----- WP-191 (vexing parse, null dereference, empty body)
+    RedundantParens = "redundant-parens" [];
+    NullDereference = "null-dereference" [];
+    EmptyBody = "empty-body" [];
     // ----- WP-217 (unused / fallthrough / constant-conversion warnings)
     UnusedButSetVariable = "unused-but-set-variable" [];
     UnusedConstVariable = "unused-const-variable" [];

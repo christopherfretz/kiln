@@ -5,8 +5,8 @@
 //! declaration with substituted types.
 
 use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, EnumData, FieldData, FnStorage, FriendTarget, InitStyle,
-    ParamData, TlsKind, VarStorage,
+    ConstexprKind, DeclFlags, DeclKind, EnumData, FieldData, FnStorage, FriendTarget, ParamData,
+    TlsKind, VarStorage,
 };
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclNameKind;
@@ -963,8 +963,8 @@ impl Substituter<'_, '_, '_> {
         if let Some(w) = fd.and_then(|x| x.bit_width) {
             dr.bit_width = Some(self.expr(w)?);
         }
-        if fd.and_then(|x| x.init).is_some() {
-            dr.init_style = Some(InitStyle::C);
+        if let Some(x) = fd.filter(|x| x.init.is_some()) {
+            dr.init_style = Some(x.init_style());
         }
         let f = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
         // Its attributes (`[[no_unique_address]]`, `alignas`, ...) as for

@@ -74,8 +74,9 @@ impl Sema<'_, '_> {
     /// clang's `FnDesc` for a function template specialization
     /// candidate (`[with T = int]`). A conversion that failed for a
     /// parameter of non-dependent type was checked before the
-    /// specialization was formed (CWG1391), so that note names the
-    /// template.
+    /// specialization was formed (CWG1391), as was one made
+    /// non-dependent by the explicit template arguments, so that note
+    /// names the template.
     fn spec_desc(&self, c: &Candidate, oper_fn: bool) -> Option<String> {
         let f = c.func();
         if !self.is_function_spec(f) {
@@ -96,7 +97,8 @@ impl Sema<'_, '_> {
             } else {
                 usize::from(arg) + usize::from(self.has_explicit_object(f))
             };
-            if ptys.get(param).is_some_and(|&p| !self.is_dependent_type(p)) {
+            let explicit = !oper_fn && param < 64 && c.explicit_nondep >> param & 1 != 0;
+            if explicit || ptys.get(param).is_some_and(|&p| !self.is_dependent_type(p)) {
                 return None;
             }
         }

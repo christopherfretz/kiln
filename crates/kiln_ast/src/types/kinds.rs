@@ -370,11 +370,14 @@ pub enum TypeKind {
     /// (clang's `UnresolvedUsingType`): canonical and dependent, one per
     /// `UnresolvedUsingTypename` declaration (WP-179).
     UnresolvedUsing,
+    /// Redundant parentheses in a declarator (clang's `ParenType`): sugar
+    /// over the type the parentheses enclose (`T (*)`; WP-191).
+    Paren,
 }
 
 impl TypeKind {
     /// Number of kinds.
-    pub const COUNT: usize = TypeKind::UnresolvedUsing as usize + 1;
+    pub const COUNT: usize = TypeKind::Paren as usize + 1;
 
     const ALL: [TypeKind; TypeKind::COUNT] = [
         TypeKind::Invalid,
@@ -420,6 +423,7 @@ impl TypeKind {
         TypeKind::Attributed,
         TypeKind::Splice,
         TypeKind::UnresolvedUsing,
+        TypeKind::Paren,
     ];
 
     /// The kind with discriminant `v` (`Invalid` for out-of-range values).

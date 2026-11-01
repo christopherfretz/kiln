@@ -619,6 +619,14 @@ pub struct Declarator {
     /// The outermost grouping parentheses and the number of chunks inside
     /// them (`B (x)`: `(0, loc of '(')`; [dcl.type.class.deduct]/2).
     pub outer_paren: Option<(usize, Loc)>,
+    /// Every pair of grouping parentheses, in the order they close: the
+    /// number of chunks inside them and the locations of `(` and `)`
+    /// (clang's `DeclaratorChunk::Paren`; `ParenType` sugar and
+    /// `-Wvexing-parse`'s redundant-parentheses warning, WP-191).
+    pub parens: Vec<(usize, Loc, Loc)>,
+    /// Not the first declarator of its declaration (clang's
+    /// `!isFirstDeclarator()`: a comma precedes it).
+    pub after_comma: bool,
 }
 
 /// Where a declarator appears, refining [`DeclaratorContext`] for the
@@ -717,6 +725,8 @@ impl Declarator {
             special: None,
             site: DeclSite::Plain,
             outer_paren: None,
+            parens: Vec::new(),
+            after_comma: false,
             virt_override: None,
             virt_final: None,
             pure: None,
