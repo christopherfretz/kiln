@@ -472,7 +472,15 @@ impl Parser<'_, '_> {
     /// compound-statement (else statement)?`.
     fn parse_if(&mut self) -> Option<StmtId> {
         let loc = self.bump().span.lo;
-        let constexpr = self.eat_kw(Kw::Constexpr).is_some();
+        let constexpr_tok = self.eat_kw(Kw::Constexpr);
+        let constexpr = constexpr_tok.is_some();
+        if let Some(cl) = constexpr_tok
+            && self.std < Std::Cxx17
+        {
+            // clang (ext_constexpr_if): at the `constexpr` keyword.
+            let w = self.s.diag(DiagId::parse_ext_constexpr_if, cl);
+            self.emit(w);
+        }
         let negated = self.eat(Punct::Exclaim).is_some();
         if !constexpr && self.at_kw(Kw::Consteval) {
             return self.parse_if_consteval(loc, negated);
