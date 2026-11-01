@@ -1626,6 +1626,13 @@ diag_ids! {
     sema_enum_template = Error (0) "enumeration cannot be a template";
     sema_no_declarators_error = Error (0) "declaration does not declare anything";
     sema_explicit_inst_undefined_var_template = Error (1) "explicit instantiation of undefined variable template '{0}'";
+    // ----- WP-193 (designator checks; clang `ActOnDesignatedInitializer`)
+    sema_ice_not_integral = Error (1) "integral constant expression must have integral or unscoped enumeration type, not {0}";
+    sema_array_designator_negative = Error (1) "array designator value '{0}' is negative";
+    sema_array_designator_empty_range = Error (2) "array designator range [{0}, {1}] is empty";
+    sema_array_designator_too_large = Error (2) "array designator index ({0}) exceeds array bounds ({1})";
+    sema_gnu_array_range = Extension [GnuDesignator] (0) "use of GNU array range extension";
+    sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
     sema_unused_but_set_variable = WarningOff [UnusedButSetVariable] (1) "variable {0} set but not used";
     sema_unused_exception_param = WarningOff [UnusedExceptionParameter] (1) "unused exception parameter {0}";
     sema_unused_const_variable = WarningOff [UnusedConstVariable] (1) "unused variable {0}";

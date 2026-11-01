@@ -211,6 +211,8 @@ diag_groups! {
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
     AddressOfPackedMember = "address-of-packed-member" [];
     UnusedVariable = "unused-variable" [UnusedConstVariable];
+    // ----- WP-193 (GNU designators)
+    GnuDesignator = "gnu-designator" [];
     // ----- WP-217 (unused / fallthrough / constant-conversion warnings)
     UnusedButSetVariable = "unused-but-set-variable" [];
     UnusedConstVariable = "unused-const-variable" [];

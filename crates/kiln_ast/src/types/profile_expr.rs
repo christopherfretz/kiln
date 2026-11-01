@@ -349,6 +349,9 @@ impl Ast {
                         crate::expr::Designator::Index { index, .. } => {
                             stack.extend([Work::Word(2), Work::Expr(index)]);
                         }
+                        crate::expr::Designator::Range { first, last, .. } => {
+                            stack.extend([Work::Word(3), Work::Expr(first), Work::Expr(last)]);
+                        }
                     }
                 }
                 stack.push(Work::Opt(id(n.a())));

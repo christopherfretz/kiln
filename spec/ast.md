@@ -458,7 +458,8 @@ needed later). Values of non-constant-context folding (`try_fold`) are
   [Designator]`. A `Designator` is `Field { name, loc }` (loc = the
   name) or `Index { index, loc }` (loc = the `[`; a constant index is
   wrapped in its `ConstantExpr`, a value-dependent one is kept as
-  written). `.m = e...` is a `PackExpansionExpr` of the
+  written) or the GNU `Range { first, last, loc, ellipsis }` (WP-193;
+  both bounds as for `Index`, dumped `[first ... last]`). `.m = e...` is a `PackExpansionExpr` of the
   `DesignatedInitExpr`, as in clang. A non-dependent designated list in
   a template pattern is analyzed at once, and its written form (the same
   `void` list) is kept in the cold map `syntactic_list: ExprId -> ExprId`

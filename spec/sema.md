@@ -1921,7 +1921,9 @@ and `DiagnoseMisalignedMembers`:
     `-Wbraced-scalar-init`, and narrowing checked on the user
     conversion's result
 - **Designators** (WP-192; clang `SemaInit.cpp`). The parser reads
-  `.name`, nested `.a.b`, `[i]` (C99) and mixtures of them. A leading
+  `.name`, nested `.a.b`, `[i]` (C99), the GNU range `[a ... b]`
+  (WP-193; `-Wgnu-designator`, an Extension shown under `-pedantic`, at
+  the `...`) and mixtures of them. A leading
   `[` begins a designator unless it begins a lambda (clang
   `MayBeDesignationStart`): `[=`, `[...` and `[]` are lambdas, and
   `[&`, `[*` or `[identifier` scan to the matching `]` and are a
@@ -1936,6 +1938,22 @@ and `DiagnoseMisalignedMembers`:
       item 0 is designated, at item 0 with the note on the positional
       item. A designated pack expansion `.m = e...` counts as
       non-designated here, as in clang.
+  - Designation checks (WP-193; clang `ActOnDesignatedInitializer`) run
+    in `act_on_designation` when the parser has read a designation,
+    on each non-dependent index (`designator_index`), all at the
+    index's begin:
+    - not integral or unscoped enumeration type: `integral constant
+      expression must have integral or unscoped enumeration type, not T`
+    - not constant: `expression is not an integral constant expression`
+      with the evaluator's notes
+    - negative: `array designator value '-1' is negative`
+    - an empty range: `array designator range [3, 1] is empty`, at the
+      `...`.
+    A failed designation makes the parser drop the whole braced list,
+    after reading it through its `}` (clang `ParseBraceInitializer`).
+    Nothing more is diagnosed for that list (no syntactic warnings, no
+    conversion of its clauses), and its declaration is invalid. The
+    same checks run again on instantiated indices in `check_array`.
   - Semantic checks run in `check_aggregate_in` and `check_array`,
     again at every instantiation. A designator names a direct field or
     a field of an anonymous member (`designated_field`). A nested or
@@ -1961,9 +1979,19 @@ and `DiagnoseMisalignedMembers`:
       initialize a non-class type`, at the `.`.
     - an array designator into a class: `array designator cannot
       initialize non-array type`, at the `[`.
+    - an index (or range end) at or past a known bound: `array
+      designator index (5) exceeds array bounds (3)`, at that index.
+    - a range `[a ... b]` initializes each element from the same
+      clause, re-checked per element; positional items continue at
+      `b + 1`.
     - an array designator leaving a hole gives the list an
       `array_filler`, even when the element count equals the bound.
     - non-aggregate types are `designated_non_aggregate`.
+    - a union initialized by `{}` initializes the variant member with a
+      default member initializer, directly or within an anonymous
+      member (`union_default_member`, [dcl.init.aggr]/5; clang
+      `CheckStructUnionTypes`), and otherwise value-initializes its
+      first member.
   - In templates (spec/ast.md §5.6, spec/sema-templates.md §5.4), the
     designators are carried in `DesignatedInitExpr`s and in the written
     form of non-dependent lists. The semantic checks run on the
@@ -1973,9 +2001,10 @@ and `DiagnoseMisalignedMembers`:
     - A non-dependent designated list in a template pattern is not
       re-checked at instantiation, so clang's repeated
       `-Wreorder-init-list` under the instantiation note is missing.
-    - An array designator beyond the bound is reported as excess
-      elements, not as clang's `array designator index exceeds array
-      bounds`.
+    - A range designator whose clause has side effects evaluates the
+      clause once per element. clang's codegen refuses it ("cannot
+      compile this GNU array range designator extension yet"), and GCC
+      evaluates it once.
     - Reorder and override warnings do not cause a substitution failure
       (clang's are warnings too, but SFINAE-visible as errors under
       `-Werror`).
