@@ -126,6 +126,11 @@ Constructors:
   per [basic.link]/6 and clang's local extern decls.
 - **`classify_name`** gives the parser a name's category: type,
   namespace, value, or undeclared.
+  Landed (WP-140): a non-dependent typedef or alias qualifier is
+  replaced by the class or enumeration it names before the lookup, as
+  `act_on_nested_name` does, so `typedef D J; J::T x;` declares `x`
+  (libc++ `<typeinfo>`'s `__impl::__type_name_t`;
+  `tests/conformance/basic.lookup.qual/typedef-qualifier-decl.cpp`).
 
 ## 4. Declarations (`decl.rs`, `declspec.rs`)
 
