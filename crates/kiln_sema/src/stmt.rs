@@ -590,6 +590,18 @@ impl Sema<'_, '_> {
         self.builder().goto_stmt(d, loc)
     }
 
+    /// An `asm goto` label operand (clang `LookupOrCreateLabel` then
+    /// `ActOnAddrLabel`, which marks it used).
+    pub fn act_on_asm_goto_label(&mut self, name: Symbol, name_loc: Loc) -> DeclId {
+        let d = self.label_decl(name, name_loc);
+        self.ast.decls.set_flags(d, DeclFlags::USED);
+        if let Some(l) = self.func.as_mut().and_then(|f| f.labels.iter_mut().find(|l| l.decl == d))
+        {
+            l.first_use.get_or_insert(name_loc);
+        }
+        d
+    }
+
     /// `return e;` ([stmt.return]).
     pub fn act_on_return(&mut self, value: Option<ExprId>, loc: Loc) -> StmtId {
         let Some((fdecl, mut ret)) = self.func.as_ref().map(|f| (f.decl, f.ret)) else {

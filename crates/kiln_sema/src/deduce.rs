@@ -432,6 +432,7 @@ impl Sema<'_, '_> {
         for d in redecls {
             self.ast.decls.set_ty(d, nty);
         }
+        self.finish_source_locs(f);
     }
 
     /// The type of function `f` as declared: with the placeholder return

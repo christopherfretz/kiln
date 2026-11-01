@@ -1168,6 +1168,7 @@ diag_ids! {
     sema_call_too_many_args_at_most = Error (2) "too many arguments to function call, expected at most {0}, have {1}";
     sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
     sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";
+    sema_builtin_passing_incompatible = Error (2) "passing {0} to parameter of incompatible type {1}";
     sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";
     sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";
     sema_builtin_new_delete_not_usual = Error (1) "call to '{0:__builtin_operator_new|__builtin_operator_delete}' selects non-usual {0:allocation|deallocation} function";

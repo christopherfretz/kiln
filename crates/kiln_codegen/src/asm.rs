@@ -3,35 +3,49 @@
 //! (`CodeGenModule::EmitTopLevelDecl`, `FileScopeAsmDecl`).
 
 use kiln_abi::asm::{self as tasm, AsmOperandCounts, ConstraintInfo};
+use kiln_ast::decl::VarStorage;
+use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::stmt::asm_bits;
-use kiln_ast::{QualType, StmtId};
+use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
-    Attr, AttrKind, AttrList, AttrSetId, CallOpts, CastOp, InlineAsm, MemoryEffects, ModRef,
-    TypeId as LTy,
+    Attr, AttrKind, AttrList, AttrSetId, CallOpts, CastOp, InlineAsm, IntPredicate, MemoryEffects,
+    ModRef, TypeId as LTy,
 };
 
-use crate::fir::{Fir, Op, V};
+use crate::fir::{Blk, Fir, Op, V};
 use crate::module::{Cg, R, err};
 
+/// The register outputs of an asm call and where they are stored.
+struct AsmOuts {
+    call: V,
+    result_tys: Vec<LTy>,
+    trunc_tys: Vec<LTy>,
+    dests: Vec<(crate::expr::LV, QualType)>,
+    needs_cast: Vec<bool>,
+    /// Condition-flag outputs (`=@cc<cond>`), whose value is 0 or 1.
+    is_flag: Vec<bool>,
+}
+
 impl Cg<'_> {
-    /// clang `EmitAsmStmt` for a `GCCAsmStmt` without `goto` labels.
+    /// clang `EmitAsmStmt` for a `GCCAsmStmt` (`asm goto` is a `callbr`).
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn emit_asm(&mut self, s: StmtId) -> R<()> {
         let ast = self.ast;
         let st = &ast.stmts;
         let loc = st.get(s).loc();
         let data = *st.asm_data(s);
         let bits = st.asm_bits(s);
-        if bits & asm_bits::GOTO != 0 {
-            return err(Some(loc), "'asm goto' is not supported yet");
-        }
+        let goto = bits & asm_bits::GOTO != 0;
+        let labels: Vec<DeclId> = ast.lists.iter::<DeclId>(data.labels).collect();
         let ops = st.asm_operands(s).to_vec();
         let nout = data.num_outputs as usize;
         let arch = self.target.triple.arch;
         let cstr = |l| String::from_utf8_lossy(ast.strings.bytes(l)).into_owned();
-        let names: Vec<String> = ops
-            .iter()
-            .map(|o| o.name.map_or_else(String::new, |n| ast.symbols().as_str(n).to_owned()))
-            .collect();
+        let ident = |n: Option<kiln_source::symbol::Symbol>| {
+            n.map_or_else(String::new, |n| ast.symbols().as_str(n).to_owned())
+        };
+        let mut names: Vec<String> = ops.iter().map(|o| ident(o.name)).collect();
+        names.extend(labels.iter().map(|&l| ident(ast.decls.get(l).name().as_ident())));
 
         // The final template (`generateAsmString`).
         let simple = bits & asm_bits::BASIC != 0;
@@ -52,7 +66,7 @@ impl Cg<'_> {
             outputs: nout as u32,
             plus: outs.iter().filter(|o| o.is_read_write()).count() as u32,
             inputs: data.num_inputs,
-            labels: 0,
+            labels: labels.len() as u32,
             names: &name_refs,
         };
         let Ok(pieces) =
@@ -70,6 +84,7 @@ impl Cg<'_> {
         let mut trunc_tys: Vec<LTy> = Vec::new();
         let mut dests = Vec::new();
         let mut needs_cast: Vec<bool> = Vec::new();
+        let mut is_flag: Vec<bool> = Vec::new();
         let mut inout = String::new();
         let mut inout_args: Vec<(V, LTy, Option<LTy>)> = Vec::new();
         let mut out_constraints: Vec<String> = Vec::new();
@@ -79,6 +94,8 @@ impl Cg<'_> {
             let info = outs[i].clone();
             let c = cstr(o.constraint);
             let oc = tasm::simplify_constraint(arch, c.get(1..).unwrap_or(""), &outs);
+            let pinned = self.reg_var(o.expr).is_some();
+            let oc = self.var_constraint(oc, o.expr, info.early_clobber());
             out_constraints.push(oc.clone());
             let dest = self.emit_lvalue(o.expr)?;
             if !constraints.is_empty() {
@@ -100,6 +117,7 @@ impl Cg<'_> {
                 let cast = info.allows_register() && self.m.types.is_aggregate(mt);
                 trunc_tys.push(mt);
                 needs_cast.push(cast);
+                is_flag.push(oc.starts_with("{@cc"));
                 let mut rt = if cast {
                     let (size, _) = self.size_align(q);
                     if size == 0 {
@@ -124,7 +142,8 @@ impl Cg<'_> {
                 inout.push(',');
                 let (arg, elem) = self.asm_input_lvalue(&info, dest, q, &mut inout);
                 let at = self.f.fir.ty(&self.m, arg);
-                if info.allows_register() {
+                // Only an early-clobber physical register is tied.
+                if info.allows_register() && (!pinned || info.early_clobber()) {
                     inout.push_str(&i.to_string());
                 } else {
                     inout.push_str(&oc);
@@ -142,6 +161,7 @@ impl Cg<'_> {
                 constraints.push(',');
             }
             let ic = tasm::simplify_constraint(arch, &cstr(o.constraint), &outs);
+            let ic = self.var_constraint(ic, o.expr, false);
             let (mut arg, elem) = self.asm_input(&info, o.expr, &mut constraints)?;
             if let Some(out) = info.tied_operand() {
                 let oq = ast.exprs.get(ops[out as usize].expr).ty();
@@ -172,6 +192,17 @@ impl Cg<'_> {
             args.push(a);
         }
         constraints.push_str(&inout);
+
+        // `asm goto` labels: one `!i` each (clang `getJumpDestForLabel`;
+        // no cleanups run on these edges).
+        let mut transfer = Vec::with_capacity(labels.len());
+        for &l in &labels {
+            transfer.push(self.label_dest(l).blk);
+            if !constraints.is_empty() {
+                constraints.push(',');
+            }
+            constraints.push_str("!i");
+        }
 
         let mut can_throw = false;
         for l in ast.lists.iter::<kiln_ast::StringLitId>(data.clobbers) {
@@ -224,7 +255,7 @@ impl Cg<'_> {
 
         // clang `UpdateAsmCallInst`.
         let mut fattrs = Vec::new();
-        if !can_throw {
+        if !can_throw || goto {
             fattrs.push(Attr::Flag(AttrKind::NoUnwind));
         }
         if !side_effect {
@@ -246,12 +277,33 @@ impl Cg<'_> {
             attrs: AttrList { func, params, ..AttrList::default() },
             ..CallOpts::default()
         };
-        let call = self
-            .f
-            .fir
-            .push(Op::Call { fn_ty, callee: V::C(callee), args, opts: Box::new(call_opts) }, ret);
+        // With outputs, each indirect destination gets its own block that
+        // stores them (clang splits every indirect edge).
+        let split: Vec<Blk> = if goto && !result_tys.is_empty() {
+            transfer.iter().map(|_| self.f.fir.create_block()).collect()
+        } else {
+            Vec::new()
+        };
+        let call = if goto {
+            let normal = self.f.fir.create_block();
+            let indirect = if split.is_empty() { transfer.clone() } else { split.clone() };
+            let op = Op::CallBr {
+                fn_ty,
+                callee: V::C(callee),
+                args,
+                opts: Box::new(call_opts),
+                normal,
+                indirect,
+            };
+            let call = self.f.fir.push(op, ret);
+            self.f.calls.push((Fir::last_inst(call), None, true));
+            self.emit_block(normal, false);
+            call
+        } else {
+            // An `unwind` clobber may throw: an `invoke` in an EH scope.
+            self.emit_call_op(fn_ty, V::C(callee), args, call_opts, ret, None, !can_throw)
+        };
         let inst = Fir::last_inst(call);
-        self.f.calls.push((inst, None, !can_throw));
         let mut locs = Vec::new();
         for &raw in ast.lists.get(data.srclocs) {
             let i64t = self.m.types.int(64);
@@ -262,6 +314,61 @@ impl Cg<'_> {
         let kind = self.m.md_kind("srcloc");
         self.f.fir.add_md(inst, kind, md);
 
+        let out = AsmOuts { call, result_tys, trunc_tys, dests, needs_cast, is_flag };
+        self.asm_stores(&out);
+        let fallthrough = self.f.fir.cur();
+        for (k, b) in split.into_iter().enumerate() {
+            self.f.fir.set_cur(Some(b));
+            self.asm_stores(&out);
+            self.f.fir.push(Op::Br { dest: transfer[k] }, LTy::VOID);
+            self.f.fir.place_at_end(b);
+        }
+        self.f.fir.set_cur(fallthrough);
+        Ok(())
+    }
+
+    /// clang `UpdateAsmCallInst`'s result extraction then `EmitAsmStores`,
+    /// at the insertion point.
+    /// clang `AddVariableConstraints`: an operand naming a `register`
+    /// variable with an asm label (`register long r asm("x1")`) is pinned
+    /// to that register, `{x1}` (`&{x1}` when early-clobber).
+    fn var_constraint(&self, c: String, e: ExprId, early_clobber: bool) -> String {
+        match self.reg_var(e) {
+            Some(reg) => format!("{}{{{reg}}}", if early_clobber { "&" } else { "" }),
+            None => c,
+        }
+    }
+
+    /// The normalized register of a `register` variable with an asm label
+    /// that `e` names (after `IgnoreParenNoopCasts`).
+    fn reg_var(&self, e: ExprId) -> Option<String> {
+        let ast = self.ast;
+        // `IgnoreParenNoopCasts`: parentheses and identity casts.
+        let mut e = e;
+        loop {
+            let n = ast.exprs.get(e);
+            if n.kind() == ExprKind::ParenExpr
+                || (n.kind().is_cast()
+                    && matches!(ast.exprs.cast_kind(e), CastKind::LValueToRValue | CastKind::NoOp))
+            {
+                e = ast.exprs.operand(e);
+            } else {
+                break;
+            }
+        }
+        if ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
+            return None;
+        }
+        let d = ast.exprs.decl(e);
+        if !ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::Register) {
+            return None;
+        }
+        let reg = kiln_abi::mangle::asm_label(ast, d)?;
+        Some(tasm::normalized_register_name(self.target.triple.arch, &reg))
+    }
+
+    fn asm_stores(&mut self, o: &AsmOuts) {
+        let (call, result_tys, trunc_tys) = (o.call, &o.result_tys, &o.trunc_tys);
         let results: Vec<V> = if result_tys.len() == 1 {
             vec![call]
         } else {
@@ -271,9 +378,15 @@ impl Cg<'_> {
                 })
                 .collect()
         };
-        // clang `EmitAsmStores`.
         for (i, mut v) in results.into_iter().enumerate() {
             let (rt, tt) = (result_tys[i], trunc_tys[i]);
+            if o.is_flag[i] {
+                // clang: a flag output is 0 or 1; tell the optimizer.
+                let two = V::C(self.m.const_int(rt, 2));
+                let c = self.f.fir.push(Op::ICmp { p: IntPredicate::Ult, l: v, r: two }, LTy::I1);
+                let f = kiln_llvm::intrinsics::assume(&mut self.m);
+                self.intrinsic_call(f, vec![c]);
+            }
             if rt != tt {
                 let tys = &self.m.types;
                 if tys.is_float(tt) {
@@ -290,8 +403,8 @@ impl Cg<'_> {
                     v = self.int_cast(v, tt, false);
                 }
             }
-            let (mut dest, q) = dests[i];
-            if needs_cast[i] {
+            let (mut dest, q) = o.dests[i];
+            if o.needs_cast[i] {
                 dest.addr.ty = rt;
                 let vol = self.ast.types.effective_quals(q).is_volatile();
                 self.store(v, dest.addr.v, dest.addr.align, vol);
@@ -299,14 +412,13 @@ impl Cg<'_> {
             }
             self.store_lv(v, dest, false);
         }
-        Ok(())
     }
 
     /// clang `EmitAsmInput`.
     fn asm_input(
         &mut self,
         info: &ConstraintInfo,
-        e: kiln_ast::ExprId,
+        e: ExprId,
         cs: &mut String,
     ) -> R<(V, Option<LTy>)> {
         let q = self.ast.exprs.get(e).ty();
@@ -348,7 +460,7 @@ impl Cg<'_> {
 
     /// A namespace-scope `asm("...")` (clang appends it to the module's
     /// inline assembly).
-    pub(crate) fn emit_file_scope_asm(&mut self, d: kiln_ast::DeclId) {
+    pub(crate) fn emit_file_scope_asm(&mut self, d: DeclId) {
         let Some(e) = self.ast.file_scope_asm_string(d) else { return };
         let lit = self.ast.exprs.string_lit(e);
         let text = String::from_utf8_lossy(self.ast.strings.bytes(lit)).into_owned();

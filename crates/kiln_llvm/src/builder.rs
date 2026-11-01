@@ -939,6 +939,7 @@ impl<'m> IrBuilder<'m> {
             fmf: o.fmf,
             normal,
             unwind,
+            indirect: Vec::new(),
             bundles: o.bundles.clone(),
         });
         (f.calls.len() - 1) as u32
@@ -991,6 +992,33 @@ impl<'m> IrBuilder<'m> {
         }
         let c = self.push_call(fn_ty, callee, args, o, Some(normal), Some(unwind));
         self.insert(InstKind::Invoke(c), ret)
+    }
+
+    /// `callbr ... to label %normal [label %indirect, ...]` (clang's
+    /// `asm goto`; the callee is inline asm).
+    pub fn callbr_ex(
+        &mut self,
+        fn_ty: TypeId,
+        callee: Value,
+        args: &[Value],
+        normal: BlockId,
+        indirect: &[BlockId],
+        o: &CallOpts,
+    ) -> IrResult<Value> {
+        let ret = self.check_call(fn_ty, callee, args, o)?;
+        self.check_block(normal)?;
+        for &b in indirect {
+            self.check_block(b)?;
+        }
+        if o.tail != TailKind::None {
+            return err(IrErrorKind::BadCall, "callbr cannot have a tail marker");
+        }
+        if self.block.is_none() {
+            return err(IrErrorKind::DetachedBlock, "builder is not positioned in a block");
+        }
+        let c = self.push_call(fn_ty, callee, args, o, Some(normal), None);
+        self.func().calls[c as usize].indirect = indirect.to_vec();
+        self.insert(InstKind::CallBr(c), ret)
     }
 
     /// `invoke` of a function in this module.

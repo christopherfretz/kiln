@@ -385,6 +385,10 @@ impl Function {
                 let c = &self.calls[c as usize];
                 c.normal.into_iter().chain(c.unwind).collect()
             }
+            K::CallBr(c) => {
+                let c = &self.calls[c as usize];
+                c.normal.into_iter().chain(c.indirect.iter().copied()).collect()
+            }
             K::CatchSwitch { handlers, unwind, .. } => {
                 let mut v: Vec<BlockId> = self.ops(handlers).iter().map(|b| b.as_block()).collect();
                 v.extend(unwind.opt().map(Value::as_block));

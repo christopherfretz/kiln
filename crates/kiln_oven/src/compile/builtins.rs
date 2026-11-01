@@ -113,6 +113,35 @@ fn nan_bits(ast: &Ast, mut arg: ExprId, kind: FloatKind, signaling: bool) -> Opt
     Some(softfloat::make_nan(kind, fill, signaling))
 }
 
+/// The builtins lowered to LLVM rounding / fused intrinsics, which clang
+/// 19 does not evaluate.
+fn is_rounding(b: u32) -> bool {
+    matches!(
+        b,
+        id::CEIL
+            | id::CEILF
+            | id::CEILL
+            | id::FLOOR
+            | id::FLOORF
+            | id::FLOORL
+            | id::TRUNC
+            | id::TRUNCF
+            | id::TRUNCL
+            | id::ROUND
+            | id::ROUNDF
+            | id::ROUNDL
+            | id::RINT
+            | id::RINTF
+            | id::RINTL
+            | id::NEARBYINT
+            | id::NEARBYINTF
+            | id::NEARBYINTL
+            | id::FMA
+            | id::FMAF
+            | id::FMAL
+    )
+}
+
 impl Compiler<'_> {
     fn int_width(&mut self, e: ExprId) -> u32 {
         let t = self.ety(e);
@@ -214,7 +243,14 @@ impl Compiler<'_> {
                 };
                 op(self, k, w, [a, dst, dst], [0, 0], begin);
             }
-            id::ISFINITE | id::ISINF | id::ISNAN | id::ISNORMAL => {
+            id::ISFINITE
+            | id::ISINF
+            | id::ISNAN
+            | id::ISNORMAL
+            | id::ISSUBNORMAL
+            | id::ISZERO
+            | id::ISSIGNALING
+            | id::ISINF_SIGN => {
                 let x = arg(0)?;
                 let Some(fk) = self.float_kind(x) else {
                     self.trap_loc(begin, INVALID.into());
@@ -225,11 +261,81 @@ impl Compiler<'_> {
                     id::ISFINITE => bi::FINITE,
                     id::ISINF => bi::INF,
                     id::ISNAN => bi::NAN,
+                    id::ISSUBNORMAL => bi::SUBNORMAL,
+                    id::ISZERO => bi::ZERO,
+                    id::ISSIGNALING => bi::SIGNALING,
+                    id::ISINF_SIGN => {
+                        let sub = float_code(fk) | bi::ISINF_SIGN << 4;
+                        op(self, bi::FP_OP, sub, [a, dst, dst], [0, 0], begin);
+                        return Some(self.finish_builtin(dst));
+                    }
                     _ => bi::NORMAL,
                 };
                 op(self, bi::FP_CLASS, float_code(fk) | class << 4, [a, dst, dst], [0, 0], begin);
             }
-            id::HUGE_VAL | id::HUGE_VALF | id::HUGE_VALL => {
+            id::FPCLASSIFY => {
+                // clang: the operand, then only the argument its class
+                // selects (nan, infinite, normal, subnormal, zero).
+                let (Some(x), true) = (arg(5), args.len() == 6) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let Some(fk) = self.float_kind(x) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let a = self.rv(x);
+                let mut ends = Vec::new();
+                for (i, class) in [(0, bi::NAN), (1, bi::INF), (2, bi::NORMAL), (3, bi::SUBNORMAL)]
+                {
+                    op(
+                        self,
+                        bi::FP_CLASS,
+                        float_code(fk) | class << 4,
+                        [a, dst, dst],
+                        [0, 0],
+                        begin,
+                    );
+                    let j = self.jmp_if(dst, false);
+                    self.rv_into(args[i], dst);
+                    ends.push(self.jmp());
+                    self.patch_here(j);
+                }
+                self.rv_into(args[4], dst);
+                for j in ends {
+                    self.patch_here(j);
+                }
+            }
+            id::FABS
+            | id::FABSF
+            | id::FABSL
+            | id::COPYSIGN
+            | id::COPYSIGNF
+            | id::COPYSIGNL
+            | id::FMAX
+            | id::FMAXF
+            | id::FMAXL
+            | id::FMIN
+            | id::FMINF
+            | id::FMINL => {
+                let Some(fk) = self.float_kind(e) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let k = match bid {
+                    id::FABS | id::FABSF | id::FABSL => bi::FABS,
+                    id::COPYSIGN | id::COPYSIGNF | id::COPYSIGNL => bi::COPYSIGN,
+                    id::FMAX | id::FMAXF | id::FMAXL => bi::FMAX,
+                    _ => bi::FMIN,
+                };
+                let a = self.rv(arg(0)?);
+                let b = match arg(1) {
+                    Some(y) => self.rv(y),
+                    None => a,
+                };
+                op(self, bi::FP_OP, float_code(fk) | k << 4, [a, b, dst], [0, 0], begin);
+            }
+            id::INF | id::INFF | id::INFL | id::HUGE_VAL | id::HUGE_VALF | id::HUGE_VALL => {
                 let fk = self.float_kind(e)?;
                 self.konst(dst, softfloat::inf(fk));
             }
@@ -242,6 +348,11 @@ impl Compiler<'_> {
                 }
             }
             id::LAUNDER => self.rv_into(arg(0)?, dst),
+            // clang: the value of the first operand (the expected value is
+            // not evaluated).
+            id::EXPECT => self.rv_into(arg(0)?, dst),
+            // clang: the assumption is not evaluated.
+            id::ASSUME => self.konst(dst, 0),
             id::OPERATOR_NEW => self.trap_loc(begin, UNTYPED_NEW.into()),
             // Not evaluated by clang 19: the call is not a constant
             // expression, its arguments unevaluated.
@@ -254,33 +365,16 @@ impl Compiler<'_> {
             | id::ISLESSEQUAL
             | id::ISLESSGREATER
             | id::ISUNORDERED
-            | id::EXP
-            | id::EXPF
-            | id::EXPL
-            | id::EXP2
-            | id::EXP2F
-            | id::EXP2L
-            | id::EXPM1
-            | id::EXPM1F
-            | id::EXPM1L
-            | id::FREXP
-            | id::FREXPF
-            | id::FREXPL
-            | id::LDEXP
-            | id::LDEXPF
-            | id::LDEXPL
-            | id::POW
-            | id::POWF
-            | id::POWL
-            | id::SCALBN
-            | id::SCALBNF
-            | id::SCALBNL
-            | id::SCALBLN
-            | id::SCALBLNF
-            | id::SCALBLNL
+            | id::ABS
+            | id::LABS
+            | id::LLABS
+            | id::TRAP
+            | id::ABORT
             | id::STRRCHR
             | id::STRPBRK
             | id::STRSTR => self.trap_loc(begin, INVALID.into()),
+            // The libm functions and the rounding intrinsics.
+            _ if id::is_libm(bid) || is_rounding(bid) => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {
                 let x = arg(0)?;
                 let q = self.ast().exprs.get(x).ty();
