@@ -218,7 +218,8 @@ impl Ast {
             let virt = match (self.decls.get(sh).ctx(), self.shadow_base_class(ns, sh)) {
                 (Some(d), Some(n)) => self.definition(d).is_some_and(|def| {
                     self.decls.bases(def, &self.lists).any(|b| {
-                        b.is_virtual && self.types.as_record(b.ty).is_some_and(|c| self.first(c) == n)
+                        b.is_virtual
+                            && self.types.as_record(b.ty).is_some_and(|c| self.first(c) == n)
                     })
                 }),
                 _ => false,

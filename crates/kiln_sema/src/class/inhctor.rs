@@ -114,7 +114,9 @@ impl Sema<'_, '_> {
             .filter(|(_, b)| !b.is_virtual)
             .filter_map(|(_, b)| self.base_class(&b).map(|c| (self.ast.first(c), false)))
             .collect();
-        specs.extend(self.virtual_bases(class).into_iter().map(|(vb, _)| (self.ast.first(vb), true)));
+        specs.extend(
+            self.virtual_bases(class).into_iter().map(|(vb, _)| (self.ast.first(vb), true)),
+        );
         for (b, is_virtual) in specs {
             let Some(&(_, via)) = entries.iter().find(|e| e.0 == b) else { continue };
             let (ctor, from_vbase) = match via {
@@ -162,7 +164,13 @@ impl Sema<'_, '_> {
                 loc: at,
             });
         }
-        let failed = self.complete_ctor_inits(dc, class, &written, super::special::ImplicitInit::Default, false);
+        let failed = self.complete_ctor_inits(
+            dc,
+            class,
+            &written,
+            super::special::ImplicitInit::Default,
+            false,
+        );
         if failed {
             self.ast.decls.set_flags(dc, DeclFlags::INVALID);
         } else {

@@ -1625,7 +1625,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             // constructor's is its canonical class type).
             DeclKind::UnresolvedUsingValue => {
                 self.line.push(' ');
-                if let crate::names::DeclNameView::Constructor(t) = ast.names.view(ast.decls.get(d).name()) {
+                if let crate::names::DeclNameView::Constructor(t) =
+                    ast.names.view(ast.decls.get(d).name())
+                {
                     let opts = PrintOptions { full_scope: false, ..PrintOptions::CANONICAL };
                     write_type(&ast.types, &self.names, QualType::unqual(t), opts, &mut self.line);
                 } else {

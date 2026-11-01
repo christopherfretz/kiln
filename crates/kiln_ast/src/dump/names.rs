@@ -133,12 +133,11 @@ impl<'a> AstNames<'a> {
                     out.push_str(", ");
                 }
                 let parm = self.ast.template_parm(q).copied();
-                match self.ast.decls.get(q).name().as_ident() {
-                    Some(n) => out.push_str(self.ast.symbols().as_str(n)),
-                    None => {
-                        let (depth, index) = parm.map_or((0, 0), |p| (p.depth, p.index));
-                        let _ = write!(out, "type-parameter-{depth}-{index}");
-                    }
+                if let Some(n) = self.ast.decls.get(q).name().as_ident() {
+                    out.push_str(self.ast.symbols().as_str(n));
+                } else {
+                    let (depth, index) = parm.map_or((0, 0), |p| (p.depth, p.index));
+                    let _ = write!(out, "type-parameter-{depth}-{index}");
                 }
                 if parm.is_some_and(|p| p.pack) {
                     out.push_str("...");

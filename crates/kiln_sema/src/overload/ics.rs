@@ -935,8 +935,7 @@ impl Sema<'_, '_> {
         }
         let moving = self.ast.types.canonical_kind(pty) == kiln_ast::types::TypeKind::RValueRef;
         let Some(p) = self.ast.types.pointee(pty) else { return };
-        let (Some(c), Some(d)) =
-            (self.ast.decls.get(f).ctx(), self.ast.decls.get(shadow).ctx())
+        let (Some(c), Some(d)) = (self.ast.decls.get(f).ctx(), self.ast.decls.get(shadow).ctx())
         else {
             return;
         };

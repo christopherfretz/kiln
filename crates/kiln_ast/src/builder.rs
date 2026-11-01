@@ -298,7 +298,12 @@ impl<'a> AstBuilder<'a> {
         nns: crate::ids::NnsId,
         register: bool,
     ) -> DeclId {
-        let d = self.add_unregistered(h, DeclKind::UnresolvedUsingValue, Payload::None(nns.raw()), true);
+        let d = self.add_unregistered(
+            h,
+            DeclKind::UnresolvedUsingValue,
+            Payload::None(nns.raw()),
+            true,
+        );
         if register {
             self.register_name(h.ctx, h.name, d, None, false, false);
         }

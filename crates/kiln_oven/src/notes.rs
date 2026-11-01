@@ -314,7 +314,9 @@ impl Oven {
                     .and_then(|s| ast.using_target(s))
                     .map(|t| ast.first(t));
                 if let Some(t) = inh
-                    && !ast.decls.function(t).is_some_and(|f| f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None)
+                    && !ast.decls.function(t).is_some_and(|f| {
+                        f.spec.constexpr_kind() != kiln_ast::decl::ConstexprKind::None
+                    })
                 {
                     d = t;
                     what = "non-constexpr";

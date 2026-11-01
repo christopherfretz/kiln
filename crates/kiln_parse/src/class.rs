@@ -846,8 +846,7 @@ impl Parser<'_, '_> {
             // instantiated class, where the parameter is not in scope.
             None => match self.s.classify_name(name, None) {
                 NameClass::Type(ty, d)
-                    if self.s.ast.decls.get(d).kind()
-                        == DeclKind::TemplateTypeParm =>
+                    if self.s.ast.decls.get(d).kind() == DeclKind::TemplateTypeParm =>
                 {
                     MemInitId::Type(self.named_type(ty, d))
                 }

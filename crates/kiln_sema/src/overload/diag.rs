@@ -48,8 +48,8 @@ impl Sema<'_, '_> {
                 Some(SpecialKind::MoveCtor) => "constructor (the implicit move constructor)",
                 _ => "constructor (the implicit copy constructor)",
             },
-            CandidateKind::Ctor if c.found != f
-                && self.kind_of(c.found) == DeclKind::ConstructorUsingShadow =>
+            CandidateKind::Ctor
+                if c.found != f && self.kind_of(c.found) == DeclKind::ConstructorUsingShadow =>
             {
                 "inherited constructor"
             }
@@ -317,9 +317,9 @@ impl Sema<'_, '_> {
                 let found = set.cand(c).found;
                 if self.kind_of(found) == DeclKind::ConstructorUsingShadow {
                     let nominated = self.ast.decls.ctor_shadow_nominated(found);
-                    let base = nominated
-                        .and_then(|n| self.ast.decls.get(n).ctx())
-                        .or_else(|| self.ast.using_target(found).and_then(|t| self.ast.decls.get(t).ctx()));
+                    let base = nominated.and_then(|n| self.ast.decls.get(n).ctx()).or_else(|| {
+                        self.ast.using_target(found).and_then(|t| self.ast.decls.get(t).ctx())
+                    });
                     if let Some(b) = base {
                         let ty = self.class_type(b);
                         let loc = self.ast.decls.get(found).loc();

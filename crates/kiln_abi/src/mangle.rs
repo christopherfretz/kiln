@@ -1016,7 +1016,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 if ast.decls.inheriting_ctor_shadow(d).is_some() {
                     self.out.push_str(if v == Structor::Base { "CI2" } else { "CI1" });
                     match ast.types.canonical_view(QualType::unqual(t)) {
-                        TypeView::Record(b) => self.name(b, Structor::Complete),
+                        TypeView::Record(base) => self.name(base, Structor::Complete),
                         _ => self.ty(QualType::unqual(t)),
                     }
                 } else {

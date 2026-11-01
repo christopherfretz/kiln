@@ -246,7 +246,8 @@ impl Cg<'_> {
         let mut ptys = Vec::new();
         if !from_vbase {
             let outer = self.f.decl.and_then(|d| ast.decls.function(d)).map(|f| f.params);
-            let params: Vec<DeclId> = outer.map(|l| ast.lists.iter(l).collect()).unwrap_or_default();
+            let params: Vec<DeclId> =
+                outer.map(|l| ast.lists.iter(l).collect()).unwrap_or_default();
             for p in params {
                 let q = ast.decls.get(p).ty().expect("param type");
                 let Some(&a) = self.f.locals.get(&p) else {

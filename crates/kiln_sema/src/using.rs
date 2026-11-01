@@ -191,9 +191,13 @@ impl Sema<'_, '_> {
             return None;
         }
         let inheriting = force_inheriting || self.nns_last_name(q.nns) == Some(name);
-        if self.is_dependent_ctx(q.ctx) || self.ast.types.nns_flags(q.nns).intersects(
-            kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION,
-        ) && qk != DeclKind::CXXRecord
+        if self.is_dependent_ctx(q.ctx)
+            || self
+                .ast
+                .types
+                .nns_flags(q.nns)
+                .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
+                && qk != DeclKind::CXXRecord
         {
             return Some(self.dependent_class_using(class, q, name, name_loc, inheriting));
         }
@@ -421,7 +425,8 @@ impl Sema<'_, '_> {
         let bits = self.ast.decls.record(def).map(|r| r.defn).unwrap_or_default();
         if !bits.contains(kiln_ast::decl::DefinitionBits::HAS_INHERITED_CTOR)
             && !self.classes.iter().any(|c| {
-                c.record == def && c.bits.contains(kiln_ast::decl::DefinitionBits::HAS_INHERITED_CTOR)
+                c.record == def
+                    && c.bits.contains(kiln_ast::decl::DefinitionBits::HAS_INHERITED_CTOR)
             })
         {
             return Vec::new();
@@ -487,9 +492,9 @@ impl Sema<'_, '_> {
                     if in_class && self.ast.decls.hidden_shadow(e).is_none() {
                         // [namespace.udecl]/10: a using-declarator in a
                         // class cannot be repeated.
-                        let msg = self
-                            .diag(DiagId::sema_using_decl_redeclaration, loc)
-                            .with_note(self.diag(DiagId::note_previous_using_decl, self.decl_loc(e)));
+                        let msg = self.diag(DiagId::sema_using_decl_redeclaration, loc).with_note(
+                            self.diag(DiagId::note_previous_using_decl, self.decl_loc(e)),
+                        );
                         self.emit(msg);
                         return None;
                     }
