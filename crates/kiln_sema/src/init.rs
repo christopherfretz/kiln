@@ -2153,6 +2153,100 @@ impl Sema<'_, '_> {
             .map(|i| (i, false))
     }
 
+    /// Whether the designated clauses of `l`, for aggregate `ty`,
+    /// initialize a subobject twice: in overload resolution clang
+    /// rejects any override (`InOverloadResolution` in
+    /// `diagnoseInitOverride`), so `void f(U), f(S); f({.a = 1, .b = 2})`
+    /// with a union `U` calls `f(S)` ([over.ics.list]/8,
+    /// [dcl.init.aggr]/3.1). Reordering is not a failure there. Only
+    /// what the designators name is compared: a field (through anonymous
+    /// members), a literal index; any other designator differs from
+    /// everything. As in clang, a braced value's own designators are not
+    /// checked here.
+    pub(crate) fn designators_override(&self, ty: QualType, l: &InitList) -> bool {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Key {
+            Field(DeclId),
+            Index(u64),
+            Unknown,
+        }
+        // Each clause's path, with each step's union-ness.
+        let mut paths: Vec<Vec<(Key, bool)>> = Vec::new();
+        for item in l.items.iter().filter(|i| !i.designator.is_empty()) {
+            let mut path = Vec::new();
+            let mut cur = Some(ty);
+            for d in &item.designator {
+                let t = cur.take();
+                match *d {
+                    Designator::Field(name, _) => {
+                        let mut r = t.and_then(|t| self.ast.types.as_record(t));
+                        while let Some(rec) = r.take() {
+                            let def = self.ast.definition(rec).unwrap_or(rec);
+                            let union =
+                                self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union);
+                            let fields = self.init_fields(def);
+                            let Some((i, direct)) = self.designated_field(&fields, name) else {
+                                break;
+                            };
+                            path.push((Key::Field(fields[i]), union));
+                            let fty = self.ast.decls.get(fields[i]).ty();
+                            if direct {
+                                cur = fty;
+                            } else {
+                                r = fty.and_then(|t| self.ast.types.as_record(t));
+                            }
+                        }
+                        if cur.is_none() {
+                            path.push((Key::Unknown, false));
+                        }
+                    }
+                    Designator::Index(e, _) => {
+                        let e = self.ignore_paren_imp_casts(e);
+                        let v = (self.ast.exprs.get(e).kind() == ExprKind::IntegerLiteral)
+                            .then(|| self.ast.exprs.int_value(e))
+                            .flatten();
+                        path.push((v.map_or(Key::Unknown, Key::Index), false));
+                        cur = t.and_then(|t| self.ast.types.element(t));
+                    }
+                    Designator::Range(..) => path.push((Key::Unknown, false)),
+                }
+                if path.last().is_some_and(|k| k.0 == Key::Unknown) {
+                    break;
+                }
+            }
+            for prev in &paths {
+                let mut i = 0;
+                let conflict = loop {
+                    match (prev.get(i), path.get(i)) {
+                        (Some(&(a, union)), Some(&(b, _))) => {
+                            if a == Key::Unknown || b == Key::Unknown {
+                                break false;
+                            }
+                            if a != b {
+                                // Another member of the same union.
+                                break union && matches!((a, b), (Key::Field(_), Key::Field(_)));
+                            }
+                        }
+                        // The same subobject, or a later clause naming
+                        // a whole object an earlier one initialized part
+                        // of.
+                        (None, None) | (Some(_), None) => break true,
+                        // A later clause naming part of an object an
+                        // earlier clause initialized (a braced value
+                        // too).
+                        (None, Some(_)) => break true,
+                    }
+                    i += 1;
+                };
+                if conflict {
+                    return true;
+                }
+            }
+            paths.push(path);
+        }
+        false
+    }
+
     /// Whether anonymous member `f` has a member `name` (directly or in
     /// a nested anonymous member).
     fn anonymous_contains(&self, f: DeclId, name: Symbol) -> bool {

@@ -751,7 +751,9 @@ impl Sema<'_, '_> {
                 return self.list_ctor_conversion(l, c, to, opts);
             }
             // /8: an aggregate.
-            if l.items.len() as u64 <= self.aggregate_capacity(to) {
+            if l.items.len() as u64 <= self.aggregate_capacity(to)
+                && !self.designators_override(to, l)
+            {
                 let id = StandardConversion::identity(to, to, RefBinding::NONE);
                 return Ics::UserDefined(UserConv {
                     before: id,

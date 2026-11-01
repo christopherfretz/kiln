@@ -332,7 +332,7 @@ impl Substituter<'_, '_, '_> {
                     self.sema.emit(d.clone());
                     return None;
                 }
-                let text = self.sema.expr_text(e);
+                let text = self.sema.expr_text_as_written(e);
                 recs.push(invalid_record(self.sema, first.as_ref(), loc, text));
                 None
             }
