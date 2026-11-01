@@ -1000,14 +1000,34 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let (end, split, class, _, qual) = self.scan_name_qual_at(i)?;
         let q = qual?;
         if split
-            || class != NameClass::Dependent
-            || end < i + 4
-            || self.s.ast.decls.get(q).kind() != kiln_ast::decl::DeclKind::ClassTemplate
+            || !matches!(class, NameClass::Dependent | NameClass::Undeclared)
+            || end < i + 3
+            || !self.unresolved_specialization_scope(q)
             || self.tok_at(end - 2).kind != TokKind::Punct(Punct::ColonColon)
         {
             return None;
         }
         Some(end - 2)
+    }
+
+    /// True if the lookahead's scope `q` stands for a class template
+    /// specialization it cannot look into: a class template (`X<A>::`,
+    /// looked up in the primary pattern), or a typedef naming a
+    /// specialization that is not instantiated yet (`hours::period` with
+    /// `typedef duration<long, ratio<3600>> hours`).
+    fn unresolved_specialization_scope(&self, q: DeclId) -> bool {
+        use kiln_ast::decl::DeclKind;
+        let ast = &self.s.ast;
+        match ast.decls.get(q).kind() {
+            DeclKind::ClassTemplate => true,
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                let ty = ast.decls.get(q).ty().unwrap_or(kiln_ast::QualType::ERROR);
+                ast.types.as_record(ty).is_some_and(|r| {
+                    ast.definition(r).is_none() && ast.spec_info(ast.first(r)).is_some()
+                })
+            }
+            _ => false,
+        }
     }
 
     /// At a qualified name whose qualifier the lookahead cannot resolve

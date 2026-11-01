@@ -3,6 +3,7 @@
 
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::types::{AutoKeyword, Quals, TypeView};
+use kiln_ast::decl::DeclFlags;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -453,6 +454,9 @@ impl Sema<'_, '_> {
                 return false;
             }
         }
+        if self.undeduced_dependent_use(d) {
+            return false;
+        }
         let name = self.decl_name(d);
         let note = self
             .diag(DiagId::note_entity_declared_at, self.ast.decls.get(d).loc())
@@ -461,5 +465,23 @@ impl Sema<'_, '_> {
             self.diag(DiagId::sema_auto_fn_used_before_defined, loc).arg(name).with_note(note);
         self.emit(msg);
         true
+    }
+
+    /// True if a use of `d` inside a template definition, whose return
+    /// type is still undeduced, is dependent: `d` is declared in the
+    /// templated class being defined, so its definition is instantiated
+    /// (and the type deduced) with each specialization. The reference is
+    /// type-dependent (clang accepts `using C = decltype(get());` after
+    /// `static auto get() { ... }` in a class template; libc++
+    /// `move_iterator::__get_iter_concept`).
+    pub(crate) fn undeduced_dependent_use(&self, d: DeclId) -> bool {
+        self.in_template()
+            && self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX)
+            && self.ast.decls.get(d).ty().is_some_and(|fty| {
+                self.ast
+                    .types
+                    .proto(fty)
+                    .is_some_and(|p| self.contains_undeduced_auto(p.ret()))
+            })
     }
 }

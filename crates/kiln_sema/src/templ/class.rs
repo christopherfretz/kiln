@@ -389,7 +389,14 @@ impl Sema<'_, '_> {
         if let Some(r) = self.undefined_spec(q) {
             return self.instantiate_class(r, loc, true);
         }
-        if self.ast.types.as_record(q).is_some() && !self.is_complete(q) {
+        if let Some(r) = self.ast.types.as_record(q)
+            && !self.is_complete(q)
+            // The class being defined may be named: lookup finds the
+            // members declared so far ([class.mem.general]/8; clang's
+            // `RequireCompleteDeclContext`), e.g. `C::duration` in a
+            // default template argument substituted inside `C`.
+            && !self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(r))
+        {
             let d = self.diag(DiagId::sema_incomplete_nested_name_spec, loc).arg(self.ty_arg(q));
             self.emit(d);
             return false;

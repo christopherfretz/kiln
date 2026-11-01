@@ -36,3 +36,20 @@ int f() {
   cr<int*>::type y = 0;
   return y + sizeof(ut<E>::type);
 }
+
+// Through a typedef naming a specialization not yet instantiated
+// (libc++ `<chrono>`: `hours::period::num`, `system_clock`'s
+// `typedef duration::rep rep;`).
+template <long N> struct ratio { static constexpr long num = N; };
+template <class R, class P = ratio<1>> struct duration { typedef R rep; typedef P period; };
+typedef duration<long long, ratio<3600>> hours;
+typedef duration<long long, ratio<60>> minutes;
+static_assert(hours::period::num == 3600);
+static_assert(static_cast<minutes::rep>(2) == 2LL);
+struct clk {
+  typedef minutes duration;
+  typedef duration::rep rep;
+  typedef duration::period period;
+};
+static_assert(same<clk::rep, long long>::value);
+static_assert(clk::period::num == 60);
