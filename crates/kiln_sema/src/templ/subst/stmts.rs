@@ -25,6 +25,15 @@ impl Substituter<'_, '_, '_> {
         }
         match self.stmt_node(s) {
             Ok(x) => x,
+            // The failure was diagnosed (an error in the instantiation, or
+            // a `RecoveryExpr` of the pattern): the statement becomes an
+            // erroneous one, so a constant evaluation that reaches it fails
+            // without a follow-on note (dropping it would report, e.g.,
+            // "control reached end of constexpr function" for a `return`).
+            Err(SubstFail) if self.sema.has_errors() => {
+                let e = self.sema.recover_err(&[], loc);
+                self.sema.builder().expr_stmt(e)
+            }
             Err(SubstFail) => self.sema.act_on_null_stmt(loc),
         }
     }

@@ -100,6 +100,13 @@ impl Oven {
 
     /// The notes of `fault` at `pc`, with the call stack.
     pub(crate) fn render(&self, b: &dyn SemaBridge, fault: Fault, pc: usize) -> Vec<Note> {
+        if let Fault::Trap(i) = fault
+            && self.traps[i as usize].msg.is_empty()
+        {
+            // A silent trap: the failure was already diagnosed (an
+            // erroneous expression); no note, no call stack.
+            return Vec::new();
+        }
         let ast = b.ast();
         let mut site = self.site(pc);
         if self.code.get(pc).is_some_and(|&w| Op::from_u8(w as u8) == Op::VCall)

@@ -501,8 +501,38 @@ impl Substituter<'_, '_, '_> {
                 })
             }
             ExprKind::CXXNewExpr => self.new_expr(e, loc, end),
+            ExprKind::RecoveryExpr => self.recovery_expr(e, loc),
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }
+    }
+
+    /// An erroneous expression of the pattern (spec/ast.md §5.3): the
+    /// error was diagnosed when the pattern was parsed, so the
+    /// instantiation is a fresh `RecoveryExpr` over the substituted
+    /// children and is never diagnosed again (clang
+    /// `TreeTransform::TransformRecoveryExpr`). Its `ERROR` dependence
+    /// suppresses follow-on diagnostics in the enclosing expressions. The
+    /// type is kept when it was known and substitutes cleanly; otherwise
+    /// it is the error type (never dependent after instantiation).
+    fn recovery_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        let n = self.sema.ast.exprs.get(e);
+        let (ty, l, vk) = (n.ty(), kiln_ast::ids::ListId::new(n.a()), n.value_category());
+        let kids: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        let mut out = Vec::with_capacity(kids.len());
+        for k in kids {
+            out.push(self.expr(k)?);
+        }
+        let ty = if self.sema.is_error_type(ty)
+            || self.sema.ast.types.builtin(ty) == Some(BuiltinType::Dependent)
+        {
+            QualType::ERROR
+        } else {
+            match self.ty(ty, loc) {
+                Ok(t) if !self.sema.is_dependent_type(t) => t,
+                _ => QualType::ERROR,
+            }
+        };
+        Ok(self.sema.builder().recovery(Some(ty), vk, &out, loc))
     }
 
     /// A dependent new-expression ([expr.new]), as
