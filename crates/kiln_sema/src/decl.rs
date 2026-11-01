@@ -4043,7 +4043,7 @@ impl Sema<'_, '_> {
 
     /// True if lexical context `cur` is, or is nested in, a class template
     /// or partial specialization before any namespace scope.
-    fn in_templated_class(&self, mut cur: Option<DeclId>) -> bool {
+    pub(crate) fn in_templated_class(&self, mut cur: Option<DeclId>) -> bool {
         while let Some(c) = cur {
             match self.kind_of(c) {
                 DeclKind::ClassTemplatePartialSpecialization => return true,

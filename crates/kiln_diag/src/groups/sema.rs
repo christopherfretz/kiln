@@ -75,6 +75,7 @@ SwitchDefault = "switch-default" [];
 SwitchEnum = "switch-enum" [];
 // ----- WP-220 (undefined variable templates)
 UndefinedVarTemplate = "undefined-var-template" [];
+UnneededInternalDeclaration = "unneeded-internal-declaration" [];
 UnreachableCodeBreak = "unreachable-code-break" [];
 UnreachableCodeFallthrough = "unreachable-code-fallthrough" [];
 UnreachableCodeLoopIncrement = "unreachable-code-loop-increment" [];
