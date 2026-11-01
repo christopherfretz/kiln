@@ -1,18 +1,19 @@
-// [cpp.cond]/13 (C++23, P2334R1): `#elifdef` and `#elifndef`.
-// WP-185 feature probe.
+// [cpp.cond]/13 (C++23, P2334R1): `#elifdef` and `#elifndef`. Lines in
+// skipped groups end in `_wrong` (the cpp.cond marker convention of
+// crates/kiln_pp/tests/ifeval_conformance.rs). WP-185 feature probe.
 //@ expect: compile-ok
 //@ std: c++23
 //@ strict-diags
 #define A
 #ifdef NOT_DEFINED
-static_assert(false);
+int ifdef_wrong;
 #elifdef A
 constexpr int x = 1;
 #else
-static_assert(false);
+int else_wrong;
 #endif
 #if 0
-static_assert(false);
+int if0_wrong;
 #elifndef NOT_DEFINED
 constexpr int y = 2;
 #endif
