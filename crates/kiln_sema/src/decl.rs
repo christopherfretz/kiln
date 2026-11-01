@@ -2454,6 +2454,8 @@ impl Sema<'_, '_> {
         }
         let mut prev_ok = None;
         let mut invalid_redecl = false;
+        let late_exc = d.late_noexcept.is_some()
+            || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,
@@ -2591,7 +2593,18 @@ impl Sema<'_, '_> {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
                 let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
-                if self.ast.types.same_type(pty, ty) {
+                // A friend whose noexcept-specifier waits for the end of
+                // its class (or, instantiated, until needed) matches
+                // whatever the previous declaration has; the
+                // specifications are compared once it is known (clang's
+                // `DelayedEquivalentExceptionSpecChecks`).
+                let cmp = if late_exc {
+                    let pexc = self.written_exc_spec(pty);
+                    self.with_exc_spec(ty, pexc)
+                } else {
+                    ty
+                };
+                if self.ast.types.same_type(pty, cmp) {
                     prev_ok = Some(p);
                     // [dcl.spec.auto.general]/13: the redeclaration has
                     // the deduced return type.
@@ -2761,6 +2774,9 @@ impl Sema<'_, '_> {
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
+        if late_exc && let Some(p) = prev_ok {
+            self.delayed_exc_equiv.push((f, p));
+        }
         if d.lit_suffix.is_some() {
             if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
                 && !self.check_literal_operator_decl(f)

@@ -1232,7 +1232,10 @@ impl Parser<'_, '_> {
             d.friend = ds.friend.is_some();
             self.late_fn = LateFnParts {
                 delay_args: !is_typedef,
-                delay_noexcept: !is_typedef && ds.friend.is_none(),
+                // A friend function's noexcept-specifier is a
+                // complete-class context too ([class.mem.general]/7), as
+                // in clang 19, unless it names a member of another class.
+                delay_noexcept: !is_typedef,
                 ..LateFnParts::default()
             };
             if !self.at(Punct::Colon) {

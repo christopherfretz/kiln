@@ -520,7 +520,7 @@ impl Substituter<'_, '_, '_> {
             _ => self.param_infos(d),
         };
         let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
-        let lazy_exc = friend.is_none() && self.sema.lazy_exc_spec(d, p);
+        let lazy_exc = self.sema.lazy_exc_spec(d, p, friend.is_some());
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = match early_ret {
@@ -662,7 +662,18 @@ impl Substituter<'_, '_, '_> {
         }
         if lazy_exc {
             let first = self.sema.ast.first(f);
-            self.sema.uninstantiated_exc.insert(first, d);
+            if first == f {
+                self.sema.uninstantiated_exc.insert(first, d);
+            } else {
+                // A friend redeclaring a function: [except.spec]/5 makes
+                // its specification the earlier declaration's.
+                self.sema.delayed_exc_equiv.retain(|&(n, _)| n != f);
+                let pexc = self.sema.declared_fn_type(first).map(|t| self.sema.written_exc_spec(t));
+                if let (Some(pexc), Some(ty)) = (pexc, self.sema.ast.decls.get(f).ty()) {
+                    let t = self.sema.with_exc_spec(ty, pexc);
+                    self.sema.ast.decls.set_ty(f, t);
+                }
+            }
         }
         if requires.is_some() {
             self.sema.inst.concepts.member_constraints.insert(f, (d, self.args.clone()));
@@ -740,6 +751,15 @@ impl Substituter<'_, '_, '_> {
             Ok((params, ret, exc))
         });
         self.sema.act_on_end_this_scope(this);
+        // A pattern whose specification waits (a member template's
+        // redeclared pattern, or one awaiting its complete-class context):
+        // so does the specialization's ([`Sema::defer_spec_exception_spec`]).
+        let sig = sig.map(|(params, ret, exc)| match exc {
+            kiln_ast::types::ExcSpec::Deferred(_) if self.sema.defer_spec_exception_spec(pat, spec) => {
+                (params, ret, kiln_ast::types::ExcSpec::Deferred(spec))
+            }
+            _ => (params, ret, exc),
+        });
         let (params, ret, exc) = match sig {
             Ok(x) => x,
             Err(e) => {

@@ -1959,7 +1959,11 @@ impl Parser<'_, '_> {
                     quals |= q;
                 }
                 Some(Kw::Noexcept | Kw::Throw) if exc.is_none() => {
-                    if delayable && self.late_fn.delay_noexcept && self.peek_is(1, Punct::LParen) {
+                    if delayable
+                        && self.late_fn.delay_noexcept
+                        && !(d.friend && d.qualifier.is_some())
+                        && self.peek_is(1, Punct::LParen)
+                    {
                         d.late_noexcept = Some(loc);
                         self.late_fn.noexcept = Some(self.capture_exception_spec());
                         exc = Some(ExcSpec::None);
