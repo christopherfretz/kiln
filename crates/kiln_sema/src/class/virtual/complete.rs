@@ -3,7 +3,10 @@
 //! after its complete-class contexts (the delayed exception-specification
 //! check and the key function).
 
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage};
+use kiln_ast::decl::{
+    ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage, TemplLinkKind,
+};
+use kiln_ast::templates::SpecKind;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::fx::FxHashMap;
@@ -274,11 +277,42 @@ impl Sema<'_, '_> {
                 self.act_on_virtual_class_contexts(m, depth + 1);
             }
         }
-        if polymorphic && !self.ast.decls.cold.key_function.contains(r) {
+        if polymorphic
+            && self.may_have_key_function(r)
+            && !self.ast.decls.cold.key_function.contains(r)
+        {
             let key = members.iter().copied().find(|&m| self.is_key_function_candidate(m));
             if let Some(k) = key {
                 let _ = self.ast.decls.cold.key_function.insert(r, k);
             }
+        }
+    }
+
+    /// clang `computeKeyFunction`: a dependent class (a template pattern,
+    /// a partial specialization, or a class nested in one) has no vtable,
+    /// and a template instantiation (implicit or explicit, and a member
+    /// class of one) has no key function (Itanium C++ ABI §5.2.6: its
+    /// vtable has vague linkage and is emitted wherever it is used). An
+    /// explicit specialization is an ordinary class and keeps it.
+    fn may_have_key_function(&self, r: DeclId) -> bool {
+        let ast = &self.ast;
+        if ast.decls.get(r).has(DeclFlags::DEPENDENT_CTX) {
+            return false;
+        }
+        match ast.templ_link(r).get() {
+            None => true,
+            Some((
+                TemplLinkKind::Pattern
+                | TemplLinkKind::PartialSpecialization
+                | TemplLinkKind::DependentFriend,
+                _,
+            )) => false,
+            Some((TemplLinkKind::Specialization, _)) => {
+                ast.spec_info(r).is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization)
+            }
+            Some((TemplLinkKind::MemberOfSpecialization, _)) => ast
+                .member_spec_info(r)
+                .is_some_and(|(_, m)| m.kind == SpecKind::ExplicitSpecialization),
         }
     }
 
