@@ -176,6 +176,9 @@ pub struct AccessCheck {
     pub object_class: Option<DeclId>,
     /// Where the name was written.
     pub loc: Loc,
+    /// Made substituting an alias template: reported at every use, even
+    /// at the same location (clang re-substitutes the alias each time).
+    pub repeat: bool,
 }
 
 /// Whether the current full-expression needs an `ExprWithCleanups`
