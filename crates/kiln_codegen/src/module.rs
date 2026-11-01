@@ -346,6 +346,12 @@ impl<'a> Cg<'a> {
             if n.has(DeclFlags::INVALID) {
                 continue;
             }
+            // An explicitly specialized member is an ordinary definition,
+            // emitted where it appears (clang `InstantiateClassMembers`
+            // skips `TSK_ExplicitSpecialization`).
+            if explicit && self.is_member_explicit_spec(m) {
+                continue;
+            }
             match n.kind() {
                 DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion if explicit => {
                     if let Some(def) = ast.definition(m) {
@@ -557,6 +563,14 @@ impl<'a> Cg<'a> {
             Some(Linkage::WeakOdr) => false,
             inst => self.var_is_inline(d) || inst == Some(Linkage::LinkOnceOdr),
         }
+    }
+
+    /// Whether member `m` of a class template specialization is an
+    /// explicit specialization (`template<> void X<int>::f() {}`).
+    fn is_member_explicit_spec(&self, m: DeclId) -> bool {
+        let ast = self.ast;
+        ast.member_spec_info(ast.first(m))
+            .is_some_and(|(_, x)| x.kind == SpecKind::ExplicitSpecialization)
     }
 
     /// Whether variable or function `first` is under an explicit

@@ -691,6 +691,16 @@ impl Sema<'_, '_> {
             if n.flags().contains(DeclFlags::IMPLICIT) || self.ast.instantiated_from(m).is_none() {
                 continue;
             }
+            // An explicitly specialized member is not instantiated from
+            // the pattern ([temp.explicit]/10, clang
+            // `InstantiateClassMembers` skips `TSK_ExplicitSpecialization`).
+            if self
+                .ast
+                .member_spec_info(self.ast.first(m))
+                .is_some_and(|(_, x)| x.kind == SpecKind::ExplicitSpecialization)
+            {
+                continue;
+            }
             match n.kind() {
                 DeclKind::Function
                 | DeclKind::CXXMethod

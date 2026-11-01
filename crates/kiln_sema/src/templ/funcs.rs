@@ -759,6 +759,27 @@ impl Sema<'_, '_> {
         Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
     }
 
+    /// After `template<>`, an out-of-line redeclaration `p` of a static
+    /// data member, constructor or destructor of an implicit class
+    /// template specialization explicitly specializes it
+    /// ([temp.expl.spec]/1, §4.5): it is no longer instantiated from the
+    /// pattern (clang `CheckMemberSpecialization`).
+    pub(crate) fn mark_member_explicit_spec(&mut self, p: DeclId) {
+        if self.templ.explicit_spec.is_none() || !self.at_explicit_head() {
+            return;
+        }
+        let Some((i, info)) = self.ast.member_spec_info(self.ast.first(p)).map(|(i, x)| (i, *x))
+        else {
+            return;
+        };
+        if info.kind == SpecKind::ImplicitInstantiation {
+            self.ast.templates.update_member_spec(i, |x| {
+                x.kind = SpecKind::ExplicitSpecialization;
+                x.point_of_instantiation = Loc::INVALID;
+            });
+        }
+    }
+
     /// `[extern] template R C<args>::f(params);` for member `m` of a
     /// class template specialization ([temp.explicit]/3, §4.5).
     pub(crate) fn act_on_explicit_member_inst(
