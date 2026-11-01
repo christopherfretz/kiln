@@ -379,6 +379,30 @@ impl Ast {
         self.lookup_local(record, name).iter().next()
     }
 
+    /// clang `VarDecl::needsDestruction`: the (array element) type is a class
+    /// with a non-trivial destructor ([basic.life]/1). Sema declares the
+    /// destructor of every variable's class (spec/sema-class.md §4.8), so a
+    /// class without a declared destructor is not destroyed.
+    pub fn needs_destruction(&self, t: crate::ids::QualType) -> bool {
+        let mut t = t;
+        for _ in 0..256 {
+            match self.types.element(t) {
+                Some(e) if self.types.is_array(t) => t = e,
+                _ => break,
+            }
+        }
+        let Some(def) = self.types.as_record(t).and_then(|r| self.definition(r)) else {
+            return false;
+        };
+        self.decls
+            .record(def)
+            .is_some_and(|x| !x.defn.contains(crate::decl::DefinitionBits::TRIVIAL_DTOR))
+            && self
+                .destructor(def)
+                .and_then(|d| self.decls.function(d))
+                .is_some_and(|f| !f.spec.is_trivial())
+    }
+
     /// True if `e` is a `CXXConstructExpr` calling a trivial constructor
     /// with no arguments: default-initialization that performs no
     /// initialization ([dcl.init.general]/7, [class.default.ctor]/3).

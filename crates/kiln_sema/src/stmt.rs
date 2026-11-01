@@ -65,6 +65,9 @@ pub struct FnState {
     /// The `return`s with an NRVO candidate, re-checked at the end of
     /// the body (clang `FunctionScopeInfo::Returns`, §5.5).
     pub(crate) returns: Vec<StmtId>,
+    /// The body has a `switch` (a goto or `asm goto` shows in `labels`):
+    /// the jump-scope check runs (clang `NeedsScopeChecking`).
+    pub(crate) has_switch: bool,
 }
 
 impl FnState {
@@ -80,6 +83,7 @@ impl FnState {
             this_ty: None,
             this_override: None,
             returns: Vec::new(),
+            has_switch: false,
         }
     }
 }
@@ -384,6 +388,7 @@ impl Sema<'_, '_> {
         };
         let cond = self.act_on_full_expr(cond);
         if let Some(f) = self.func.as_mut() {
+            f.has_switch = true;
             f.switches.push(SwitchState {
                 cond_ty,
                 values: Vec::new(),
@@ -781,6 +786,11 @@ impl Sema<'_, '_> {
                     .arg(self.ast.symbols().as_str(l.name).to_string());
                 self.emit(msg);
             }
+        }
+        // [stmt.dcl]/3, [except.handle]/2: jumps into protected scopes
+        // (clang `DiagnoseInvalidJumps`, ahead of the flow warnings).
+        if state.has_switch || !state.labels.is_empty() {
+            self.check_jump_scopes(body);
         }
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred

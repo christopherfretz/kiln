@@ -28,6 +28,7 @@ pub mod expr;
 mod forms;
 mod gnu;
 pub mod init;
+mod jump_scope;
 pub mod lambda;
 pub mod literal;
 mod literal_op;

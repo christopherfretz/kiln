@@ -1,0 +1,518 @@
+//! Jump-scope checking ([stmt.dcl]/3, [except.handle]/2, [stmt.if]/2;
+//! spec/sema.md §7.4): clang's `JumpScopeChecker` (`JumpDiagnostics.cpp`).
+//!
+//! A first walk over the body builds a tree of *protected scopes*: one
+//! per variable whose initialization a jump would bypass (or whose
+//! destructor an `asm goto` would skip), per try block and handler, per
+//! arm of a constexpr / consteval `if`, per GNU statement expression and
+//! per lifetime-extended temporary with a destructor. Every label, case
+//! and jump records the scope it is in. A `goto` or a `switch` may leave
+//! scopes (codegen runs their cleanups) but not enter one with an
+//! "in" diagnostic; an `asm goto` may do neither, because `callbr` cannot
+//! run cleanups.
+
+use kiln_ast::decl::{DeclKind, InitStyle, VarStorage};
+use kiln_ast::expr::{CastKind, ExprKind, StorageDuration};
+use kiln_ast::stmt::{IfKind, StmtKind};
+use kiln_ast::types::TypeView;
+use kiln_ast::{DeclId, ExprId, QualType, StmtId};
+use kiln_diag::DiagId;
+use kiln_source::Loc;
+use kiln_source::fx::FxHashMap;
+
+use crate::Sema;
+
+/// One protected scope (clang `GotoScope`).
+#[derive(Clone, Copy, Debug)]
+struct GotoScope {
+    /// The enclosing scope (`u32::MAX` for the function's own).
+    parent: u32,
+    /// The note for a jump into this scope (`None`: entering is fine).
+    in_diag: Option<DiagId>,
+    /// The note for an `asm goto` out of this scope.
+    out_diag: Option<DiagId>,
+    loc: Loc,
+}
+
+struct Checker<'s, 'a, 'sm> {
+    sema: &'s Sema<'a, 'sm>,
+    scopes: Vec<GotoScope>,
+    /// The scope of every label, case, default, goto, switch and
+    /// `asm goto` (clang `LabelAndGotoScopes`).
+    at: FxHashMap<StmtId, u32>,
+    /// The `LabelStmt` of each label declaration.
+    label_stmts: FxHashMap<DeclId, StmtId>,
+    /// gotos, switches and `asm goto`s, in walk order.
+    jumps: Vec<StmtId>,
+}
+
+impl Sema<'_, '_> {
+    /// clang `DiagnoseInvalidJumps`: checks every goto, `asm goto` and
+    /// switch of the function body `body`.
+    pub(crate) fn check_jump_scopes(&self, body: StmtId) {
+        let mut c = Checker {
+            sema: self,
+            scopes: vec![GotoScope {
+                parent: u32::MAX,
+                in_diag: None,
+                out_diag: None,
+                loc: Loc::INVALID,
+            }],
+            at: FxHashMap::default(),
+            label_stmts: FxHashMap::default(),
+            jumps: Vec::new(),
+        };
+        let mut parent = 0;
+        c.stmt(body, &mut parent);
+        c.verify_jumps();
+    }
+}
+
+impl Checker<'_, '_, '_> {
+    fn push(
+        &mut self,
+        parent: u32,
+        in_diag: Option<DiagId>,
+        out_diag: Option<DiagId>,
+        loc: Loc,
+    ) -> u32 {
+        self.scopes.push(GotoScope { parent, in_diag, out_diag, loc });
+        u32::try_from(self.scopes.len() - 1).expect("scope count fits u32")
+    }
+
+    /// `BuildScopeInformation(Stmt*)` for a statement: scopes opened
+    /// inside it do not outlive it, except a declaration statement's,
+    /// which extend to the end of the enclosing block (`parent` is the
+    /// enclosing block's running scope).
+    fn stmt(&mut self, s: StmtId, parent: &mut u32) {
+        let ast = &self.sema.ast;
+        let st = &ast.stmts;
+        let n = *st.get(s);
+        if n.kind() == StmtKind::DeclStmt {
+            for d in ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)).collect::<Vec<_>>() {
+                self.decl(d, parent);
+            }
+            return;
+        }
+        // Cases, defaults and labels are not scope parents: a declaration
+        // labelled by one extends to the end of the enclosing block.
+        match n.kind() {
+            StmtKind::CaseStmt => {
+                self.at.insert(s, *parent);
+                let sub = st.case_data(s).sub;
+                return self.stmt(sub, parent);
+            }
+            StmtKind::DefaultStmt => {
+                self.at.insert(s, *parent);
+                return self.stmt(st.default_sub(s), parent);
+            }
+            StmtKind::LabelStmt => {
+                self.at.insert(s, *parent);
+                self.label_stmts.insert(DeclId::new(n.a()), s);
+                return self.stmt(StmtId::new(n.b()), parent);
+            }
+            _ => {}
+        }
+        let mut local = *parent;
+        let p = &mut local;
+        match n.kind() {
+            StmtKind::CompoundStmt => {
+                for c in ast.lists.iter::<StmtId>(st.compound_body(s)).collect::<Vec<_>>() {
+                    self.stmt(c, p);
+                }
+            }
+            StmtKind::ExprStmt => self.expr(st.expr_stmt_expr(s), parent),
+            StmtKind::IfStmt => {
+                let d = *st.if_data(s);
+                let kind = st.if_kind(s);
+                if kind == IfKind::Ordinary {
+                    self.opt_stmt(d.init, p);
+                    if let Some(v) = d.cond_var {
+                        self.decl(v, p);
+                    }
+                    self.opt_expr(d.cond, p);
+                    self.opt_stmt(d.then, p);
+                    self.opt_stmt(d.els, p);
+                    return;
+                }
+                let diag = if kind == IfKind::Constexpr {
+                    DiagId::note_protected_by_constexpr_if
+                } else {
+                    DiagId::note_protected_by_consteval_if
+                };
+                if let Some(v) = d.cond_var {
+                    self.decl(v, p);
+                }
+                // Neither the condition nor either arm may be entered.
+                let mut np = self.push(*p, Some(diag), None, n.loc());
+                if kind == IfKind::Constexpr {
+                    self.opt_expr(d.cond, &mut np);
+                }
+                let mut np = self.push(*p, Some(diag), None, n.loc());
+                self.opt_stmt(d.then, &mut np);
+                if let Some(e) = d.els {
+                    let mut np = self.push(*p, Some(diag), None, n.loc());
+                    self.stmt(e, &mut np);
+                }
+            }
+            StmtKind::SwitchStmt => {
+                let d = *st.switch_data(s);
+                self.opt_stmt(d.init, p);
+                if let Some(v) = d.cond_var {
+                    self.decl(v, p);
+                }
+                self.record_jump(s, *p);
+                self.expr(d.cond, p);
+                self.stmt(d.body, p);
+            }
+            StmtKind::AttributedStmt => self.stmt(StmtId::new(n.b()), p),
+            StmtKind::GotoStmt => self.record_jump(s, *p),
+            StmtKind::GCCAsmStmt => {
+                if st.asm_bits(s) & kiln_ast::stmt::asm_bits::GOTO != 0 {
+                    self.record_jump(s, *p);
+                }
+                for op in st.asm_operands(s).to_vec() {
+                    self.expr(op.expr, p);
+                }
+            }
+            StmtKind::WhileStmt | StmtKind::ForStmt => {
+                let d = *st.loop_data(s);
+                self.opt_stmt(d.init, p);
+                if let Some(v) = d.cond_var {
+                    self.decl(v, p);
+                }
+                self.opt_expr(d.cond, p);
+                self.opt_expr(d.inc, p);
+                self.opt_stmt(d.body, p);
+            }
+            StmtKind::DoStmt => {
+                let d = *st.loop_data(s);
+                self.opt_stmt(d.body, p);
+                self.opt_expr(d.cond, p);
+            }
+            StmtKind::CXXForRangeStmt => {
+                let d = *st.range_for_data(s);
+                self.opt_stmt(d.init, p);
+                self.decl(d.range, p);
+                if let Some(b) = d.begin {
+                    self.decl(b, p);
+                }
+                if let Some(e) = d.end {
+                    self.decl(e, p);
+                }
+                self.opt_expr(d.cond, p);
+                self.opt_expr(d.inc, p);
+                self.decl(d.loop_var, p);
+                self.stmt(d.body, p);
+            }
+            StmtKind::ReturnStmt => self.opt_expr(st.return_value(s), p),
+            StmtKind::CXXTryStmt => {
+                let loc = n.loc();
+                let mut np = self.push(
+                    *p,
+                    Some(DiagId::note_protected_by_cxx_try),
+                    Some(DiagId::note_exits_cxx_try),
+                    loc,
+                );
+                self.stmt(st.try_block(s), &mut np);
+                // A jump from a handler into the try block (or another
+                // handler) is not allowed either.
+                for h in ast.lists.iter::<StmtId>(st.try_handlers(s)).collect::<Vec<_>>() {
+                    let mut np = self.push(
+                        *p,
+                        Some(DiagId::note_protected_by_cxx_catch),
+                        Some(DiagId::note_exits_cxx_catch),
+                        st.get(h).loc(),
+                    );
+                    self.stmt(st.catch_block(h), &mut np);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn opt_stmt(&mut self, s: Option<StmtId>, parent: &mut u32) {
+        if let Some(s) = s {
+            self.stmt(s, parent);
+        }
+    }
+
+    fn opt_expr(&mut self, e: Option<ExprId>, parent: &mut u32) {
+        if let Some(e) = e {
+            self.expr(e, parent);
+        }
+    }
+
+    fn record_jump(&mut self, s: StmtId, scope: u32) {
+        self.at.insert(s, scope);
+        self.jumps.push(s);
+    }
+
+    /// `BuildScopeInformation(Stmt*)` for an expression: a scope opened
+    /// inside it (a lifetime-extended temporary) lasts as long as the
+    /// enclosing statement's.
+    fn expr(&mut self, e: ExprId, parent: &mut u32) {
+        let ast = &self.sema.ast;
+        let n = *ast.exprs.get(e);
+        match n.kind() {
+            ExprKind::StmtExpr => {
+                // [GNU] Jumping into a statement expression is not
+                // permitted; jumping out of one is.
+                let mut np = self.push(
+                    *parent,
+                    Some(DiagId::note_enters_statement_expression),
+                    None,
+                    n.loc(),
+                );
+                self.stmt(ast.exprs.stmt_expr_body(e), &mut np);
+                return;
+            }
+            ExprKind::MaterializeTemporaryExpr
+                if ast.exprs.temporary_storage(e) == StorageDuration::Automatic =>
+            {
+                if let Some(&sub) = ast.exprs.children(e, &ast.lists).first() {
+                    let obj = self.skip_rvalue_adjustments(sub);
+                    if ast.needs_destruction(ast.exprs.get(obj).ty()) {
+                        *parent = self.push(
+                            *parent,
+                            None,
+                            Some(DiagId::note_exits_temporary_dtor),
+                            ast.exprs.get(obj).loc(),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+        for c in ast.exprs.children(e, &ast.lists) {
+            self.expr(c, parent);
+        }
+    }
+
+    /// clang `Expr::skipRValueSubobjectAdjustments` (derived-to-base and
+    /// no-op casts, member accesses).
+    fn skip_rvalue_adjustments(&self, mut e: ExprId) -> ExprId {
+        let ex = &self.sema.ast.exprs;
+        for _ in 0..1024 {
+            let k = ex.get(e).kind();
+            let next = if k.is_cast()
+                && matches!(
+                    ex.cast_kind(e),
+                    CastKind::NoOp | CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase
+                ) {
+                ex.children(e, &self.sema.ast.lists).first().copied()
+            } else if k == ExprKind::MemberExpr {
+                ex.children(e, &self.sema.ast.lists).first().copied()
+            } else {
+                None
+            };
+            match next {
+                Some(x) => e = x,
+                None => break,
+            }
+        }
+        e
+    }
+
+    /// `BuildScopeInformation(Decl*)`: a declaration that protects its
+    /// scope opens one, and its initializer is walked inside it.
+    fn decl(&mut self, d: DeclId, parent: &mut u32) {
+        let (in_diag, out_diag) = self.diags_for_decl(d);
+        if in_diag.is_some() || out_diag.is_some() {
+            let loc = self.sema.ast.decls.get(d).loc();
+            *parent = self.push(*parent, in_diag, out_diag, loc);
+        }
+        if let Some(init) = self.sema.ast.decls.var(d).and_then(|v| v.init) {
+            self.expr(init, parent);
+        }
+    }
+
+    /// clang `GetDiagForGotoScopeDecl`.
+    fn diags_for_decl(&self, d: DeclId) -> (Option<DiagId>, Option<DiagId>) {
+        let sema = self.sema;
+        let ast = &sema.ast;
+        let n = ast.decls.get(d);
+        match n.kind() {
+            DeclKind::Var => {}
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                let vm = n.ty().is_some_and(|t| self.variably_modified(t));
+                let id = if n.kind() == DeclKind::Typedef {
+                    DiagId::note_protected_by_vla_typedef
+                } else {
+                    DiagId::note_protected_by_vla_type_alias
+                };
+                return (vm.then_some(id), None);
+            }
+            _ => return (None, None),
+        }
+        let Some(v) = ast.decls.var(d) else { return (None, None) };
+        let Some(ty) = n.ty() else { return (None, None) };
+        let mut in_diag = self.variably_modified(ty).then_some(DiagId::note_protected_by_vla);
+        let local = !matches!(v.spec.storage(), VarStorage::Static | VarStorage::Extern)
+            && v.spec.tls() == kiln_ast::decl::TlsKind::None;
+        let out_diag = (local && ast.needs_destruction(ty)).then_some(DiagId::note_exits_dtor);
+        if let Some(init) = v.init
+            && local
+            && !self.contains_errors(init)
+        {
+            // [stmt.dcl]/3: bypassing a declaration with an initializer
+            // is ill-formed, unless it is default-initialization by a
+            // trivial default constructor of a class with a trivial
+            // destructor (a non-POD such class is only a C++98 error).
+            in_diag = Some(DiagId::note_protected_by_variable_init);
+            if ast.exprs.get(init).kind() == ExprKind::CXXConstructExpr
+                && v.spec.init_style() == InitStyle::Call
+                && ast.lists.is_empty(ast.exprs.construct_args(init))
+                && ast
+                    .decls
+                    .function(ast.exprs.constructor(init))
+                    .is_some_and(|f| f.spec.is_trivial())
+            {
+                in_diag = out_diag.map(|_| DiagId::note_protected_by_variable_nontriv_destructor);
+            }
+        }
+        (in_diag, out_diag)
+    }
+
+    /// `Expr::containsErrors`, approximated: a recovery expression or an
+    /// error type at the top.
+    fn contains_errors(&self, e: ExprId) -> bool {
+        let x = self.sema.ast.exprs.get(e);
+        x.kind() == ExprKind::RecoveryExpr || self.sema.is_error_type(x.ty())
+    }
+
+    /// `Type::isVariablyModifiedType`.
+    fn variably_modified(&self, q: QualType) -> bool {
+        let t = &self.sema.ast.types;
+        let mut q = q;
+        for _ in 0..256 {
+            q = match t.canonical_view(q) {
+                TypeView::VariableArray { .. } => return true,
+                TypeView::ConstantArray(a) => a.elem,
+                TypeView::IncompleteArray(e)
+                | TypeView::Pointer(e)
+                | TypeView::LValueRef(e)
+                | TypeView::RValueRef(e) => e,
+                _ => return false,
+            };
+        }
+        false
+    }
+
+    /// clang `GetDeepestCommonScope`: inner scopes have higher indices.
+    fn common_scope(&self, mut a: u32, mut b: u32) -> u32 {
+        while a != b {
+            if a < b {
+                b = self.scopes[b as usize].parent;
+            } else {
+                a = self.scopes[a as usize].parent;
+            }
+        }
+        a
+    }
+
+    /// clang `VerifyJumps` (the jumps are checked last first).
+    fn verify_jumps(&mut self) {
+        let st = &self.sema.ast.stmts;
+        while let Some(j) = self.jumps.pop() {
+            let n = *st.get(j);
+            match n.kind() {
+                StmtKind::GotoStmt => {
+                    if let Some(&to) = self.label_stmts.get(&DeclId::new(n.a())) {
+                        self.check_jump(j, to, n.loc(), DiagId::sema_goto_into_protected_scope);
+                    }
+                }
+                StmtKind::GCCAsmStmt => {
+                    let labels: Vec<DeclId> =
+                        self.sema.ast.lists.iter(st.asm_data(j).labels).collect();
+                    for l in labels {
+                        let Some(&to) = self.label_stmts.get(&l) else { continue };
+                        let (from_scope, to_scope) = (self.at[&j], self.at[&to]);
+                        if from_scope != to_scope {
+                            self.diagnose_asm_jump(j, from_scope, to, to_scope);
+                        }
+                    }
+                }
+                StmtKind::SwitchStmt => {
+                    // clang's `getSwitchCaseList` is in reverse order.
+                    let cases: Vec<StmtId> =
+                        self.sema.ast.lists.iter(st.switch_data(j).cases).collect();
+                    for c in cases.into_iter().rev() {
+                        if self.at.contains_key(&c) {
+                            let loc = st.get(c).loc();
+                            self.check_jump(j, c, loc, DiagId::sema_switch_into_protected_scope);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// clang `CheckJump`: leaving scopes is fine; entering one with an
+    /// "in" note is an error listing them innermost first.
+    fn check_jump(&self, from: StmtId, to: StmtId, loc: Loc, err: DiagId) {
+        let (Some(&fs), Some(&ts)) = (self.at.get(&from), self.at.get(&to)) else { return };
+        if fs == ts {
+            return;
+        }
+        let common = self.common_scope(fs, ts);
+        if common == ts {
+            return;
+        }
+        let mut msg = None;
+        let mut i = ts;
+        while i != common {
+            let sc = self.scopes[i as usize];
+            if let Some(id) = sc.in_diag {
+                let d = msg.take().unwrap_or_else(|| self.sema.diag(err, loc));
+                msg = Some(d.with_note(self.sema.diag(id, sc.loc)));
+            }
+            i = sc.parent;
+        }
+        if let Some(d) = msg {
+            self.sema.emit(d);
+        }
+    }
+
+    /// clang `DiagnoseIndirectOrAsmJump` for an `asm goto`: neither
+    /// leaving a scope with an "out" note nor entering one with an "in"
+    /// note is allowed.
+    fn diagnose_asm_jump(&self, jump: StmtId, from: u32, target: StmtId, to: u32) {
+        let st = &self.sema.ast.stmts;
+        let common = self.common_scope(from, to);
+        let mut msg: Option<kiln_diag::Diag> = None;
+        let note = |msg: &mut Option<kiln_diag::Diag>, id: DiagId, loc: Loc| {
+            let d = msg.take().unwrap_or_else(|| {
+                self.sema
+                    .diag(DiagId::sema_indirect_goto_in_protected_scope, st.get(jump).loc())
+                    .arg(1)
+                    .with_note(
+                        self.sema
+                            .diag(DiagId::note_indirect_goto_target, st.get(target).loc())
+                            .arg(1),
+                    )
+            });
+            *msg = Some(d.with_note(self.sema.diag(id, loc)));
+        };
+        let mut i = from;
+        while i != common {
+            let sc = self.scopes[i as usize];
+            if let Some(id) = sc.out_diag {
+                note(&mut msg, id, sc.loc);
+            }
+            i = sc.parent;
+        }
+        let mut i = to;
+        while i != common {
+            let sc = self.scopes[i as usize];
+            if let Some(id) = sc.in_diag {
+                note(&mut msg, id, sc.loc);
+            }
+            i = sc.parent;
+        }
+        if let Some(d) = msg {
+            self.sema.emit(d);
+        }
+    }
+}
