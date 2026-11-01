@@ -49,8 +49,9 @@ panic and never silently wrong IR.
   double`, `const _Atomic(int)`, a `const` array or class element), so a
   global whose every use folds is not emitted. A load of a const variable
   is recognized through parentheses and `NoOp` casts (the xvalue cast of
-  an implicitly moved `return x;`). Variables with a `mutable` member are
-  not folded (clang folds their non-mutable members; deviation).
+  an implicitly moved `return x;`). A read of a `mutable` member is not
+  folded (the Oven's "read of mutable member" check, spec/oven.md); the
+  variable's other members are.
   Validation: `tests/codegen/const_fold_lax.cpp`.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
@@ -1031,7 +1032,11 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   variable whose initializer does not fold gets a zero initializer and
   needs construction, one of class type with a non-trivial destructor
   (not a reference) needs destruction. The global is `constant` only
-  when it is `const` (not `mutable`) or a reference and needs neither.
+  when it is `const` or a reference and needs neither, and its type is
+  not a class (or array of classes) with a `mutable` member, directly or
+  in a subobject (clang `isTypeConstant`: `hasMutableFields`; WP-183,
+  `module.rs` `has_mutable`, also for static locals and the static data
+  members emitted with their class; `tests/codegen/const_mutable_fields.cpp`).
   Constant-initialized variables keep the constant path unchanged.
 - **Init functions.** Each such variable gets an internal
   `__cxx_global_var_init[.N]` in `.text.startup` (`noinline`, `nounwind`
