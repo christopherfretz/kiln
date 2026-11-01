@@ -1617,7 +1617,10 @@ formed it:
    parameter type; Aᵢ is the argument's type and value category.
    - **Adjustments, when P is not a reference.** A undergoes
      array-to-pointer and function-to-pointer decay, and its top-level cv
-     is dropped. Top-level cv on P is dropped.
+     is dropped. Top-level cv on P is dropped too: the written
+     prototype that deduction reads keeps it (`void f(const T t)`
+     deduces `T = int` from an `int`, with or without a trailing
+     `requires requires { t; }`; WP-231).
    - **When P is a reference.** Use the referred type. A forwarding
      reference (`T&&`, where `T` is this template's own unqualified
      parameter) with an lvalue A uses A&. When the referred type is an
