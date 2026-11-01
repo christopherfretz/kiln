@@ -1435,6 +1435,23 @@ impl Sema<'_, '_> {
         }
         false
     }
+    /// [temp.explicit]/1 (clang `ActOnExplicitInstantiation`): an
+    /// explicit instantiation cannot be `inline`, and that of a function
+    /// cannot be `constexpr` or `consteval`. Diagnosed; the instantiation
+    /// proceeds.
+    fn check_explicit_inst_specifiers(&mut self, ds: &DeclSpec, ty: QualType) {
+        if let Some(l) = ds.inline {
+            let msg = self
+                .diag(DiagId::sema_explicit_inst_inline, l)
+                .range(Span::new(l, l.with_offset(6)));
+            self.emit(msg);
+        }
+        if let Some(l) = ds.constexpr.or(ds.consteval)
+            && self.ast.types.is_function(ty)
+        {
+            self.error(DiagId::sema_explicit_inst_constexpr, l);
+        }
+    }
 
     /// `-Wvexing-parse` ([dcl.ambig.res]/1, clang's
     /// `warnAboutAmbiguousFunction`): a block-scope function declaration
@@ -1592,6 +1609,9 @@ impl Sema<'_, '_> {
             }
         }
         let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
+            self.check_explicit_inst_specifiers(ds, ty);
+        }
         if special {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
@@ -3459,7 +3479,19 @@ impl Sema<'_, '_> {
     /// False after a diagnostic.
     pub(crate) fn check_constexpr_var_literal(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
-        if vn.has(DeclFlags::INVALID) || !self.constexpr_var_non_literal(v) {
+        if vn.has(DeclFlags::INVALID) {
+            return true;
+        }
+        // `RequireLiteralType` first requires a complete type, which
+        // instantiates a class template specialization ([temp.inst]/2).
+        if self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            && let Some(q) = vn.ty()
+            && !self.is_error_type(q)
+            && !self.is_dependent_type(q)
+        {
+            let _ = self.require_complete_silent(self.base_element(q), vn.loc());
+        }
+        if !self.constexpr_var_non_literal(v) {
             return true;
         }
         let q = vn.ty().unwrap_or(QualType::ERROR);
@@ -3468,6 +3500,54 @@ impl Sema<'_, '_> {
         self.emit(msg);
         self.ast.decls.set_flags(v, DeclFlags::INVALID);
         false
+    }
+
+    /// [dcl.constexpr]/4 (clang `CheckConstexprFunctionDefinition`, which
+    /// applies it to every non-static member function): a `constexpr`
+    /// member function defined outside an instantiation, in a class with
+    /// virtual bases, is an error with a note per virtual base; the
+    /// function is invalid.
+    fn check_constexpr_virtual_base(&mut self, f: DeclId) {
+        let kind = self.kind_of(f);
+        let member = matches!(
+            kind,
+            DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+        );
+        if !member
+            || self.is_static_method(f)
+            || !self.inst.stack.frames.is_empty()
+            || self.ast.decls.get(f).has(DeclFlags::INVALID)
+            || !self
+                .ast
+                .decls
+                .function(f)
+                .is_some_and(|x| x.spec.constexpr_kind() != ConstexprKind::None)
+        {
+            return;
+        }
+        let Some(class) = self.ast.decls.get(f).ctx() else { return };
+        let Some(def) = self.ast.definition(class) else { return };
+        if !self.defn_bits(def).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return;
+        }
+        let vbases = self.virtual_bases(def);
+        if vbases.is_empty() {
+            return;
+        }
+        let tag = self.ast.decls.record(def).map_or(0, |r| 2 * u8::from(r.tag == TagKind::Class));
+        let mut msg = self
+            .diag(DiagId::sema_constexpr_virtual_base, self.ast.decls.get(f).loc())
+            .arg(u8::from(kind == DeclKind::CXXConstructor))
+            .arg(tag)
+            .arg(u8::from(vbases.len() != 1));
+        for (_, b) in vbases {
+            msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+        }
+        self.emit(msg);
+        self.ast.decls.set_flags(f, DeclFlags::INVALID);
     }
 
     /// Whether `v` is a `constexpr` variable of a known, complete
@@ -3687,6 +3767,7 @@ impl Sema<'_, '_> {
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
         }
+        self.check_constexpr_virtual_base(f);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()
@@ -5270,43 +5351,20 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
-        let kind = match (n.as_str(), std, gnu) {
-            ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
-            ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,
-            ("unused", _, true) => AttrKind::UNUSED,
-            ("deprecated", _, _) => AttrKind::DEPRECATED,
-            ("noreturn", _, _) => AttrKind::NORETURN,
-            ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
-            ("assume", true, _) => AttrKind::ASSUME,
-            ("likely", true, _) => AttrKind::LIKELY,
-            ("unlikely", true, _) => AttrKind::UNLIKELY,
-            ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
-            ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
-            ("packed", _, true) => AttrKind::PACKED,
-            ("used", _, true) => AttrKind::USED,
-            ("noinline", _, true) => AttrKind::NOINLINE,
-            ("always_inline", _, true) => AttrKind::ALWAYS_INLINE,
-            ("weak", _, true) => AttrKind::WEAK,
-            ("const", _, true) => AttrKind::CONST,
-            ("pure", _, true) => AttrKind::PURE,
-            ("cold", _, true) => AttrKind::COLD,
-            ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
-            ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
-            ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
-            ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
-            ("visibility" | "section" | "format", _, true) => {
-                let msg = self.diag(DiagId::parse_attribute_ignored, loc).arg(raw);
-                self.emit(msg);
-                return None;
-            }
-            _ => {
-                let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
-                self.emit(msg);
-                return None;
-            }
+        let Some(kind) = attr_kind_of(&n, std, gnu, clang_scope) else {
+            let id = if gnu && matches!(n.as_str(), "visibility" | "section" | "format") {
+                DiagId::parse_attribute_ignored
+            } else {
+                DiagId::parse_unknown_attribute
+            };
+            let msg = self.diag(id, loc).arg(raw);
+            self.emit(msg);
+            return None;
         };
-        if matches!(kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE) {
-            return self.vector_attribute(kind, syntax, &raw, args, loc);
+        if let std::ops::ControlFlow::Break(r) =
+            self.attribute_with_args(kind, syntax, &raw, args, loc)
+        {
+            return r;
         }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
@@ -5439,6 +5497,14 @@ impl Sema<'_, '_> {
                 }
                 AttrKind::PACKED => (kind != DeclKind::Field && kind != DeclKind::CXXRecord)
                     .then_some("structs, unions, classes and fields"),
+                AttrKind::MALLOC if !kind.is_function() => Some("functions"),
+                AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN if !kind.is_function() => {
+                    Some("non-K&R-style functions")
+                }
+                AttrKind::MALLOC | AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN => {
+                    self.check_alloc_attr(d, node);
+                    None
+                }
                 _ => None,
             };
             if let Some(what) = bad {
@@ -5446,11 +5512,75 @@ impl Sema<'_, '_> {
                     AttrKind::NODISCARD => "'nodiscard'",
                     AttrKind::NORETURN => "'noreturn'",
                     AttrKind::PACKED => "'packed'",
+                    AttrKind::MALLOC => "'malloc'",
+                    AttrKind::ALLOC_SIZE => "'alloc_size'",
+                    AttrKind::ALLOC_ALIGN => "'alloc_align'",
                     _ => "'alignas'",
                 };
                 let msg =
                     self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc).arg(name).arg(what);
                 self.emit(msg);
+            }
+        }
+    }
+
+    /// GNU `malloc` / `alloc_size` / `alloc_align` on function `d`: the
+    /// return type must be a pointer (`alloc_align`: or a reference), and
+    /// the indices (one-based; index 1 of an implicit object member
+    /// function is `this`) must name integer parameters (clang
+    /// `handleRestrictAttr` / `handleAllocSizeAttr` / `AddAllocAlignAttr`).
+    fn check_alloc_attr(&mut self, d: DeclId, node: AttrNode) {
+        let Some(proto) = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t)) else {
+            return;
+        };
+        let name = match node.kind {
+            AttrKind::MALLOC => "'malloc'",
+            AttrKind::ALLOC_SIZE => "'alloc_size'",
+            _ => "'alloc_align'",
+        };
+        let t = &self.ast.types;
+        let ret = proto.ret();
+        let refs = node.kind == AttrKind::ALLOC_ALIGN;
+        if !(t.is_pointer(ret) || t.is_dependent(ret) || (refs && t.is_reference(ret))) {
+            let id = if refs {
+                DiagId::sema_attribute_pointers_refs_only
+            } else {
+                DiagId::sema_attribute_pointers_only
+            };
+            let msg = self.diag(id, node.loc).arg(name);
+            self.emit(msg);
+            return;
+        }
+        if node.kind == AttrKind::MALLOC {
+            return;
+        }
+        let params = self.ast.types.params(proto).to_vec();
+        let this = u32::from(self.is_implicit_object_member(d));
+        for (i, raw) in [node.a, node.b].into_iter().enumerate() {
+            let Some(e) = ExprId::from_raw(raw) else { continue };
+            let n = self.ast.exprs.int_value(e).unwrap_or(0);
+            let pos = (i + 1).to_string();
+            if this == 1 && n == 1 {
+                let msg = self.diag(DiagId::sema_attribute_implicit_this_arg, node.loc).arg(name);
+                self.emit(msg);
+                return;
+            }
+            let k = n.checked_sub(1 + u64::from(this)).and_then(|k| usize::try_from(k).ok());
+            let Some(&p) = k.and_then(|k| params.get(k)) else {
+                let msg = self
+                    .diag(DiagId::sema_attribute_param_out_of_bounds, node.loc)
+                    .arg(name)
+                    .arg(pos);
+                self.emit(msg);
+                return;
+            };
+            // clang `checkParamIsIntegerType`: a dependent parameter is
+            // not an integer either.
+            if !self.ast.types.is_integral(p) {
+                let at = self.ast.exprs.get(e).loc();
+                let msg = self.diag(DiagId::sema_attribute_param_integers_only, at).arg(name);
+                self.emit(msg);
+                return;
             }
         }
     }
@@ -5579,4 +5709,39 @@ pub(crate) const fn operator_uses(op: OverloadedOperator) -> (bool, bool, bool) 
         O::Arrow => (true, false, true),
         _ => (false, true, false),
     }
+}
+
+/// The attribute `n` (its `__` affixes removed) names, given whether it
+/// was written as a standard (`std`), GNU (`gnu`) or `clang::` attribute;
+/// `None` for an unknown or ignored one.
+fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<AttrKind> {
+    Some(match (n, std, gnu) {
+        ("nodiscard", true, _) | ("warn_unused_result", _, true) => AttrKind::NODISCARD,
+        ("maybe_unused", true, _) => AttrKind::MAYBE_UNUSED,
+        ("unused", _, true) => AttrKind::UNUSED,
+        ("deprecated", _, _) => AttrKind::DEPRECATED,
+        ("noreturn", _, _) => AttrKind::NORETURN,
+        ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
+        ("assume", true, _) => AttrKind::ASSUME,
+        ("likely", true, _) => AttrKind::LIKELY,
+        ("unlikely", true, _) => AttrKind::UNLIKELY,
+        ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
+        ("aligned", _, true) | ("alignas", _, _) => AttrKind::ALIGNED,
+        ("packed", _, true) => AttrKind::PACKED,
+        ("used", _, true) => AttrKind::USED,
+        ("noinline", _, true) => AttrKind::NOINLINE,
+        ("always_inline", _, true) => AttrKind::ALWAYS_INLINE,
+        ("weak", _, true) => AttrKind::WEAK,
+        ("const", _, true) => AttrKind::CONST,
+        ("pure", _, true) => AttrKind::PURE,
+        ("cold", _, true) => AttrKind::COLD,
+        ("malloc", _, true) => AttrKind::MALLOC,
+        ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
+        ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
+        ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
+        ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
+        ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
+        ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
+        _ => return None,
+    })
 }

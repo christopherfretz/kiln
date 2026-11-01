@@ -1,0 +1,30 @@
+TranslationUnitDecl
+|-EnumDecl referenced class E 'unsigned long'
+|-EnumDecl referenced F 'int'
+|-FunctionDecl used take 'E (E)'
+| |-ParmVarDecl used e 'E'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ImplicitCastExpr 'E' <LValueToRValue>
+|       `-ImplicitCastExpr 'E' xvalue <NoOp>
+|         `-DeclRefExpr 'E' lvalue ParmVar 'e' 'E'
+|-FunctionDecl g 'E (int)'
+| |-ParmVarDecl n 'int'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CallExpr 'E'
+|       |-ImplicitCastExpr 'E (*)(E)' <FunctionToPointerDecay>
+|       | `-DeclRefExpr 'E (E)' lvalue Function 'take' 'E (E)'
+|       `-CXXFunctionalCastExpr 'E' functional cast to E <NoOp>
+|         `-InitListExpr 'E'
+|           `-ImplicitCastExpr 'E' <IntegralCast>
+|             `-IntegerLiteral 'int' 3
+`-FunctionDecl h 'F (short)'
+  |-ParmVarDecl used s 'short'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXFunctionalCastExpr 'F' functional cast to F <NoOp>
+        `-InitListExpr 'F'
+          `-ImplicitCastExpr 'F' <IntegralCast>
+            `-ImplicitCastExpr 'short' <LValueToRValue>
+              `-DeclRefExpr 'short' lvalue ParmVar 's' 'short'

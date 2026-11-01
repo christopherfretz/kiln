@@ -623,6 +623,9 @@ pub struct TemplateTables {
     instantiated_from: HashMap<DeclId, DeclId>,  // sparse: Field, EnumConstant, ParmVar, Typedef, UsingShadow, locals
     member_map: HashMap<(DeclId /*spec*/, DeclId /*pattern member*/), DeclId>,
     param_objects: HashMap<(QualType, ConstValueId), DeclId>,
+    explicit_member_insts: HashMap<DeclId, Vec<DeclId>>,  // member explicit instantiation
+        // definitions (`template void X<int>::f();`), keyed by the decl they follow in their
+        // lexical context (the context itself when it was empty); codegen emits them there
 }
 pub struct TemplateInfo {                    // 24 B
     params: TemplateParamListId, pattern: DeclId,
@@ -768,8 +771,20 @@ Out-of-class partial specializations of a member template (WP-150):
 
 **An explicit instantiation definition** of a class ([temp.explicit]/10)
 instantiates the definitions of every member that is defined in the
-pattern and not yet explicitly specialized. Member templates are
-excluded.
+pattern and not yet explicitly specialized, including the out-of-line
+definitions of static data members (clang `InstantiateVariableDefinition`)
+and the members of member classes. Member templates are excluded. A
+member class that is not yet defined at that point gets the member
+specialization kind `ExplicitInstantiationDefinition` (so its vtable and
+RTTI are emitted `weak_odr`); one already defined keeps its implicit
+kind (clang `InstantiateClassMembers`; `instantiate_members_of`). A
+member explicit instantiation of a constructor or destructor
+(`template X<int>::X();`) reaches sema through the special-member
+declarator path and names the existing member (WP-170). An explicit
+instantiation may not be `inline` ("explicit instantiation cannot be
+'inline'"), nor `constexpr`/`consteval` when it names a function
+("explicit instantiation cannot be 'constexpr'"); both are diagnosed and
+the instantiation proceeds (clang `ActOnExplicitInstantiation`).
 
 **An explicit instantiation declaration** (`extern template`) does not
 stop sema from instantiating inline and `constexpr` members when they
@@ -2202,6 +2217,15 @@ pub struct InstFrame {          // 20 B
 | `BuildingDeductionGuides` | inherit | while building implicit deduction guide first needed here |
 | `LambdaSubstitution` | inherit | while substituting into a lambda expression here |
 | `DeclaringSpecialMember`, `DefiningSynthesizedFunction`, `RewritingOperatorAsSpaceship` | — | owned by S3C/S3O; listed here so that they count toward depth and elision |
+
+A conversion function template specialization keeps the pattern's
+declaration name (`operator T`, which the mangling uses: `cvT_`), but
+every printed name of it (notes, `%0` above, constant-evaluation call
+notes, the AST dump) uses its target type substituted before any
+return type deduction, as clang's instantiated declaration name does:
+`'G::operator int<int>'`, `'operator auto (*)(int)<int>'` for a generic
+lambda (`ColdDeclData::conversion_spec_target`, read by
+`AstNames::write_name`; WP-170).
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.

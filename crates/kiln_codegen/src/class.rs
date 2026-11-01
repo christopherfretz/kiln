@@ -594,9 +594,15 @@ impl Cg<'_> {
                         );
                     }
                 };
+                // The alias takes the base variant's linkage (`weak_odr`
+                // for an explicit instantiation definition).
+                let linkage = match self.m.func(f).linkage {
+                    Linkage::WeakOdr => Linkage::WeakOdr,
+                    _ => Linkage::External,
+                };
                 {
                     let al = self.m.alias_mut(a);
-                    al.linkage = Linkage::External;
+                    al.linkage = linkage;
                     al.dso_local = true;
                     al.unnamed_addr = UnnamedAddr::Global;
                 }
@@ -1277,7 +1283,12 @@ impl Cg<'_> {
                     if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
                         let def = self.class_def(rd).expect("class definition");
                         let nv = self.tys.layouter().record(def).nv_size;
-                        self.memset(dest, 0, nv, false);
+                        // clang `EmitNullBaseClassInitialization`: the
+                        // store range is addressed as a byte offset (0;
+                        // Itanium has no vbptr gaps) from the subobject.
+                        let z = V::C(self.m.const_int(LTy::I64, 0));
+                        let v = self.gep(LTy::I8, dest.v, vec![z], true);
+                        self.memset(Addr { v, ..dest }, 0, nv, false);
                     }
                 }
             }
@@ -1568,16 +1579,22 @@ impl Cg<'_> {
             let vals = self.emit_call_args(&sig, args)?;
             let (extra, nr) = self.noreturn_extra(Some(md), cfty);
             let fp = crate::expr::Callee::Virtual { md, this: this.v, align: this.align };
-            let r = self.call_vals_to(&sig, fp, None, Some(this.v), &vals, args, dest, &extra)?;
+            let r =
+                self.call_vals_to(&sig, fp, None, Some(this.v), &vals, args, dest, &extra, &[])?;
             if nr {
                 self.finish_noreturn_call();
             }
             return Ok(r);
         }
         let f = self.get_fn(callee_md)?;
-        let (extra, nr) = self.noreturn_extra(Some(callee_md), cfty);
+        let (mut extra, nr) = self.noreturn_extra(Some(callee_md), cfty);
+        let vals = self.emit_call_args(&sig, args)?;
+        let mut ret_extra = Vec::new();
+        self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
+        let callee = V::C(Value::func(f));
+        let this = Some(this.v);
         let r =
-            self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), args, dest, &extra)?;
+            self.call_vals_ret(&sig, callee, Some(f), this, &vals, args, dest, &extra, &ret_extra)?;
         if nr {
             self.finish_noreturn_call();
         }

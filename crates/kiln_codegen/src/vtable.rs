@@ -33,6 +33,9 @@ pub(crate) enum VtLinkage {
     Strong,
     /// `linkonce_odr` in a comdat.
     LinkOnce,
+    /// `weak_odr` in a comdat (the class is explicitly instantiated,
+    /// [temp.explicit]/10).
+    Weak,
     /// `internal` (the class has internal linkage).
     Internal,
 }
@@ -163,10 +166,31 @@ impl Cg<'_> {
                 .is_some_and(|(_, m)| m.kind != SpecKind::ExplicitSpecialization)
     }
 
-    /// Whether class `first` is under an explicit instantiation
-    /// declaration, itself (`extern template struct X<int>;`) or as a
-    /// member class of one.
-    fn class_explicit_inst_declaration(&self, first: DeclId) -> bool {
+    /// [`Self::class_explicit_inst_kind`] for the vtable and RTTI: a member
+    /// class already defined when its enclosing class was explicitly
+    /// instantiated by a definition keeps its implicit kind (Sema marks
+    /// the member classes that instantiation defined; clang
+    /// `InstantiateClassMembers`), so its vtable is emitted only if used.
+    pub(crate) fn vtable_explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
+        let ast = self.ast;
+        match self.class_explicit_inst_kind(first) {
+            Some(SpecKind::ExplicitInstantiationDefinition) => {
+                let own = ast
+                    .spec_info(first)
+                    .map(|(_, s)| s.kind)
+                    .or_else(|| ast.member_spec_info(first).map(|(_, m)| m.kind));
+                (own == Some(SpecKind::ExplicitInstantiationDefinition))
+                    .then_some(SpecKind::ExplicitInstantiationDefinition)
+            }
+            k => k,
+        }
+    }
+
+    /// The explicit instantiation kind of class `first`, itself or as a
+    /// member class of an explicitly instantiated class (the innermost
+    /// non-implicit kind decides; `None` when implicit or explicitly
+    /// specialized).
+    pub(crate) fn class_explicit_inst_kind(&self, first: DeclId) -> Option<SpecKind> {
         let ast = self.ast;
         let mut c = Some(first);
         while let Some(d) = c {
@@ -174,20 +198,23 @@ impl Cg<'_> {
                 ast.decls.get(d).kind(),
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
             ) {
-                return false;
+                return None;
             }
             let kind = ast
                 .spec_info(d)
                 .map(|(_, s)| s.kind)
                 .or_else(|| ast.member_spec_info(d).map(|(_, m)| m.kind));
             match kind {
-                Some(SpecKind::ExplicitInstantiationDeclaration) => return true,
+                Some(
+                    k @ (SpecKind::ExplicitInstantiationDeclaration
+                    | SpecKind::ExplicitInstantiationDefinition),
+                ) => return Some(k),
                 Some(SpecKind::ImplicitInstantiation | SpecKind::Undeclared) => {}
-                _ => return false,
+                _ => return None,
             }
             c = ast.decls.get(d).ctx();
         }
-        false
+        None
     }
 
     /// clang `getVTableLinkage` / `isVTableExternal` (at `-O0`).
@@ -201,8 +228,12 @@ impl Cg<'_> {
         }
         // [temp.explicit]/14: `extern template` — the vtable is defined
         // by the explicit instantiation definition elsewhere.
-        if self.class_explicit_inst_declaration(first) {
-            return VtLinkage::External;
+        match self.vtable_explicit_inst_kind(first) {
+            Some(SpecKind::ExplicitInstantiationDeclaration) => return VtLinkage::External,
+            // Template instantiations have no key function (Itanium
+            // 5.2.6); an explicit instantiation definition is `weak_odr`.
+            Some(_) => return VtLinkage::Weak,
+            None => {}
         }
         match self.key_function(rd) {
             None => VtLinkage::LinkOnce,
@@ -275,6 +306,9 @@ impl Cg<'_> {
             if self.vtable_linkage(c) == VtLinkage::Strong {
                 self.emit_vtable_def(c)?;
             }
+        }
+        for c in std::mem::take(&mut self.explicit_vtables) {
+            self.emit_vtable_def(c)?;
         }
         Ok(())
     }
@@ -1537,6 +1571,7 @@ impl Cg<'_> {
         if self.is_dynamic(rd) {
             return match self.vtable_linkage(rd) {
                 VtLinkage::Strong => VtLinkage::Strong,
+                VtLinkage::Weak => VtLinkage::Weak,
                 VtLinkage::Internal => VtLinkage::Internal,
                 _ => VtLinkage::LinkOnce,
             };
@@ -1623,8 +1658,8 @@ impl Cg<'_> {
     /// Linkage, `dso_local` and comdat of an RTTI or vtable definition.
     pub(crate) fn set_vague_linkage(&mut self, g: GlobalId, linkage: VtLinkage) {
         let name = self.m.global(g).name().to_owned();
-        let comdat =
-            (linkage == VtLinkage::LinkOnce).then(|| self.m.comdat(&name, ComdatKind::Any));
+        let comdat = matches!(linkage, VtLinkage::LinkOnce | VtLinkage::Weak)
+            .then(|| self.m.comdat(&name, ComdatKind::Any));
         let gv = self.m.global_mut(g);
         match linkage {
             VtLinkage::Internal => {
@@ -1633,6 +1668,11 @@ impl Cg<'_> {
             }
             VtLinkage::LinkOnce => {
                 gv.linkage = Linkage::LinkOnceOdr;
+                gv.dso_local = true;
+                gv.comdat = comdat;
+            }
+            VtLinkage::Weak => {
+                gv.linkage = Linkage::WeakOdr;
                 gv.dso_local = true;
                 gv.comdat = comdat;
             }

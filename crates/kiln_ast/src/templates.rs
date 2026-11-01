@@ -293,6 +293,12 @@ pub struct TemplateTables {
     pub dependent_depth: u32,
     specs: Vec<SpecInfo>,
     member_specs: Vec<MemberSpecInfo>,
+    /// Members of class specializations explicitly instantiated by a
+    /// definition (`template void X<int>::f();`), keyed by the
+    /// declaration they follow in their lexical context (the context
+    /// itself when its member list was empty): codegen defines them at
+    /// that point, as clang's `HandleTopLevelDecl` does.
+    explicit_member_insts: FxHashMap<DeclId, Vec<DeclId>>,
     /// `(first decl of template, canonical args) -> specialization`
     /// (spec/ast.md §8.3).
     specializations: FxHashMap<(DeclId, ArgListId), DeclId>,
@@ -356,6 +362,7 @@ impl Default for TemplateTables {
             dependent_depth: 0,
             specs: Vec::new(),
             member_specs: Vec::new(),
+            explicit_member_insts: FxHashMap::default(),
             specializations: FxHashMap::default(),
             spec_order: FxHashMap::default(),
             instantiated_from: FxHashMap::default(),
@@ -450,6 +457,17 @@ impl TemplateTables {
     /// instantiated from the pattern member `pattern`.
     pub fn record_member(&mut self, spec: DeclId, pattern: DeclId, inst: DeclId) {
         let _ = self.member_map.insert((spec, pattern), inst);
+    }
+
+    /// Records that `member` was explicitly instantiated by a definition
+    /// right after `after` (see `explicit_member_insts`).
+    pub fn add_explicit_member_inst(&mut self, after: DeclId, member: DeclId) {
+        self.explicit_member_insts.entry(after).or_default().push(member);
+    }
+
+    /// The members explicitly instantiated right after `after`, in order.
+    pub fn explicit_member_insts_after(&self, after: DeclId) -> &[DeclId] {
+        self.explicit_member_insts.get(&after).map_or(&[], Vec::as_slice)
     }
 
     /// Records the pattern of an instantiated decl that has no
