@@ -18,6 +18,7 @@ use kiln_ast::{DeclId, ExprId, QualType, TypeId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
+use kiln_source::symbol::Symbol;
 
 use super::special::{ImplicitInit, InitEntity, Selected, SpecialKind};
 use super::temporary::BindingSite;
@@ -345,15 +346,56 @@ impl Sema<'_, '_> {
         {
             return Named::Member(m);
         }
-        if let crate::NameClass::Type(ty, d) = self.classify_name(name, None) {
-            self.mark_type_referenced(d);
+        // A type member of the class or of a base: an injected-class-name
+        // (`B` for base `B<int>`, [class.pre]/2) or a member typedef. This
+        // is the class-scope step of the unqualified lookup, which the
+        // scope chain lacks when the constructor of a class template is
+        // instantiated.
+        if let Some(ty) = self.mem_init_class_member_type(def, name) {
             return Named::Class(ty);
+        }
+        match self.classify_name(name, None) {
+            crate::NameClass::Type(ty, d) => {
+                self.mark_type_referenced(d);
+                return Named::Class(ty);
+            }
+            // The injected-class-name of a class template, its partial
+            // specializations and its specializations, not followed by
+            // `<`, is a type-name ([temp.local]/1): a delegating
+            // constructor `X(...)` of a member of a class template.
+            crate::NameClass::TypeTemplate(t) => {
+                if let Some(ty) = self.injected_class_type(t) {
+                    return Named::Class(ty);
+                }
+            }
+            _ => {}
         }
         let msg = self
             .diag(DiagId::sema_init_mem_not_member_or_base, info.loc)
             .arg(crate::decl::sym_str(self, name));
         self.emit(msg);
         Named::Error
+    }
+
+    /// The type a type member named `name` of class `def` (or of one of
+    /// its bases) names, for [`Sema::mem_init_named`].
+    fn mem_init_class_member_type(&mut self, def: DeclId, name: Symbol) -> Option<QualType> {
+        let found = self.lookup_in_class(def, name, LookupKind::Ordinary);
+        if found.ambiguity.is_some() {
+            return None;
+        }
+        let d = *found.decls.first()?;
+        match self.kind_of(d) {
+            DeclKind::Typedef | DeclKind::TypeAlias => {
+                self.mark_type_referenced(d);
+                self.ast.decls.get(d).ty()
+            }
+            DeclKind::CXXRecord => {
+                self.mark_type_referenced(d);
+                Some(self.this_class_type(d))
+            }
+            _ => None,
+        }
     }
 
     /// clang `BuildMemberInitializer`: the member `m` (a field or an

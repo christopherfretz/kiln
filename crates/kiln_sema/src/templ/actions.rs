@@ -21,6 +21,7 @@ use crate::decl::sym_str;
 use crate::lookup::LookupKind;
 use crate::scope::{Scope, ScopeKind};
 use crate::templ::MemberScope;
+use crate::templ::written::WrittenKey;
 
 /// What a template-id names ([temp.names]/3-8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +80,7 @@ impl Sema<'_, '_> {
             && self.is_dependent_ctx(p)
         {
             let n = self.ast.types.nns(Nns::Identifier { prefix: Some(pn), name });
+            self.note_written_loc(WrittenKey::Nns(n), loc);
             return Some((p, n));
         }
         let scope = self.templ.member_scope.take();
@@ -90,6 +92,9 @@ impl Sema<'_, '_> {
         }
         let (ctx, spelled) = self.act_on_nested_name_spelled(prefix.map(|p| p.0), name, loc)?;
         let n = self.nns_component(prefix.map(|p| p.1), ctx, spelled);
+        if self.ast.types.nns_flags(n).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+            self.note_written_loc(WrittenKey::Nns(n), loc);
+        }
         Some((ctx, n))
     }
 
@@ -497,6 +502,22 @@ impl Sema<'_, '_> {
         r: Loc,
     ) -> Result<TemplateIdRef, ()> {
         let _ = r;
+        let res = self.template_id(name, args, l);
+        // A dependent specialization type: where it was written (§5.8).
+        if let Ok(TemplateIdRef::Type(t)) = res
+            && self.is_dependent_type(t)
+        {
+            self.note_written_loc(WrittenKey::Type(t.without_quals()), l);
+        }
+        res
+    }
+
+    fn template_id(
+        &mut self,
+        name: TemplateNameId,
+        args: &[TemplateArg],
+        l: Loc,
+    ) -> Result<TemplateIdRef, ()> {
         let list = self.ast.types.arg_list(args);
         // A member template of a class template's pattern is dependent
         // too ([temp.dep.type]/9).
@@ -650,6 +671,21 @@ impl Sema<'_, '_> {
             Some(a) => self.ast.types.dependent_template_specialization(kw, nns, name, a),
             None => self.ast.types.dependent_name(kw, nns, name),
         }
+    }
+
+    /// [`Sema::act_dependent_name`] for a name written at `loc`, which
+    /// diagnostics found after substitution point at (§5.8).
+    pub fn act_dependent_name_at(
+        &mut self,
+        nns: NnsId,
+        name: Symbol,
+        targs: Option<ArgListId>,
+        kw: TagKeyword,
+        loc: Loc,
+    ) -> QualType {
+        let t = self.act_dependent_name(nns, name, targs, kw);
+        self.note_written_loc(WrittenKey::Type(t.without_quals()), loc);
+        t
     }
 
     /// `nns::name` (with optional explicit arguments) in an expression,

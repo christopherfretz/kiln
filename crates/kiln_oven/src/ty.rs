@@ -633,28 +633,40 @@ impl Types {
     /// Whether an object of type `p` lives at byte `off` of an object of
     /// type `root` (C++26 [expr.static.cast]/14 for `void*` casts).
     pub fn has_subobject(&self, root: OTy, off: u64, p: OTy) -> bool {
-        self.reaches(root, off, p, false)
-    }
-
-    /// [`Self::has_subobject`], or a bit-field of `root` whose storage the
-    /// `p` at `off` holds (a bit-field access touches its storage unit).
-    pub fn reaches(&self, root: OTy, off: u64, p: OTy, bits: bool) -> bool {
         if p == root && off == 0 {
             return true;
         }
         match self.kind(root) {
             TyKind::Array { elem, n } => {
                 let es = self.size(elem);
-                es != 0 && off / es < n && self.reaches(elem, off % es, p, bits)
+                es != 0 && off / es < n && self.has_subobject(elem, off % es, p)
             }
             TyKind::Record { .. } => self.fields(root).iter().any(|f| {
-                off >= f.offset
+                f.width.is_none()
+                    && off >= f.offset
                     && off < f.offset + self.size(f.ty).max(1)
-                    && if f.width.is_some() {
-                        bits
-                    } else {
-                        self.reaches(f.ty, off - f.offset, p, bits)
-                    }
+                    && self.has_subobject(f.ty, off - f.offset, p)
+            }),
+            _ => false,
+        }
+    }
+
+    /// Whether the storage unit of a bit-field of type `p` lies at `off`
+    /// inside `root` (a bit-field is not a subobject that a pointer can
+    /// designate, but its accesses still go through the unions above it).
+    pub fn has_bit_unit(&self, root: OTy, off: u64, p: OTy) -> bool {
+        match self.kind(root) {
+            TyKind::Array { elem, n } => {
+                let es = self.size(elem);
+                es != 0 && off / es < n && self.has_bit_unit(elem, off % es, p)
+            }
+            TyKind::Record { .. } => self.fields(root).iter().any(|f| match f.width {
+                Some(_) => off == f.offset && f.ty == p,
+                None => {
+                    off >= f.offset
+                        && off < f.offset + self.size(f.ty).max(1)
+                        && self.has_bit_unit(f.ty, off - f.offset, p)
+                }
             }),
             _ => false,
         }

@@ -30,6 +30,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::templ::args::{ArgLookup, MultiLevelArgs};
+use crate::templ::written::WrittenKey;
 
 /// A substitution failure, already diagnosed (or captured, §5.7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +85,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (depth, index): its length is a lower bound, checked against the
     /// other packs of an expansion.
     pub(crate) partial_pack: Option<(u16, u16)>,
+    /// Diagnostics on a dependent name point at where it was written
+    /// nearest to the given location (§5.8); off for an alias template,
+    /// whose substitution clang reports at the alias declaration.
+    pub(crate) written_locs: bool,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -112,7 +117,14 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             stmt_failed: false,
             init_failures: 0,
             partial_pack: None,
+            written_locs: true,
         }
+    }
+
+    /// Where the dependent entity `key` was written nearest to `loc`
+    /// ([`Substituter::written_locs`]).
+    pub(crate) fn written(&self, key: WrittenKey, loc: Loc) -> Loc {
+        if self.written_locs { self.sema.written_loc(key, loc) } else { loc }
     }
 
     /// Records that the pattern context `pattern` is instantiated as
@@ -420,16 +432,17 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 Nns::Type { prefix, ty, template_kw }
             }
             Nns::Identifier { prefix, name } => {
-                let Some(p) = prefix else { return self.unimplemented("dependent name", loc) };
-                let p = self.nns(p, loc)?;
+                let Some(orig) = prefix else { return self.unimplemented("dependent name", loc) };
+                let p = self.nns(orig, loc)?;
                 if self.nns_still_dependent(p) {
                     // Substituted with dependent arguments: `X::name::`
                     // stays dependent ([temp.dep.type]/6), rebuilt on
                     // the substituted prefix (WP-121).
                     return Ok(self.sema.ast.types.nns(Nns::Identifier { prefix: Some(p), name }));
                 }
-                let ctx = self.nns_context(p, loc)?;
-                let Some((c, spelled)) = self.sema.act_on_nested_name_spelled(Some(ctx), name, loc)
+                let ctx = self.nns_context(p, self.written(WrittenKey::Nns(orig), loc))?;
+                let nl = self.written(WrittenKey::Nns(n), loc);
+                let Some((c, spelled)) = self.sema.act_on_nested_name_spelled(Some(ctx), name, nl)
                 else {
                     return Err(SubstFail);
                 };

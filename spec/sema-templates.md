@@ -605,6 +605,20 @@ When a dependent unqualified call or operator is substituted:
    **current** state of the namespace tables.
 3. For operators, the built-in candidates are added (S3O).
 
+*Implementation (WP-207).* `Substituter::callee` keeps the stored decls
+when every one is a namespace-scope function or function template (through
+`using` shadows, linkage specifications and `export`) and the call has no
+explicit template arguments: it rebuilds the `UnresolvedLookupExpr` from
+them with `requires_adl` set, and the call resolves against them plus ADL.
+It does not look the name up again from the scope current at
+instantiation. That scope can differ from the definition's: constraint
+satisfaction (§8) substitutes outside the instantiation context, so a
+re-lookup from, say, namespace `std` found `std::swap` instead of the
+deleted `ranges::__swap::swap` poison pill, or the `ranges::begin`
+object instead of the deleted `ranges::__begin::begin`. Other stored sets
+(class members, block-scope declarations, calls with explicit template
+arguments) still take the earlier path.
+
 Kiln, like clang, does not model the lookup scope at each point of
 instantiation. Namespace contents are append-only, so ADL at instantiation
 sees every declaration made up to that moment. Pending instantiations run
@@ -793,6 +807,20 @@ instantiation may not be `inline` ("explicit instantiation cannot be
 'inline'"), nor `constexpr`/`consteval` when it names a function
 ("explicit instantiation cannot be 'constexpr'"); both are diagnosed and
 the instantiation proceeds (clang `ActOnExplicitInstantiation`).
+
+**An explicit instantiation definition of a function or static data
+member whose template is not yet defined** (clang
+`InstantiateFunctionDefinition`/`InstantiateVariableDefinition`) is
+queued (§4.4) and instantiated at the end of the TU, so a later
+definition is used and emitted. If the pattern is still undefined there,
+the explicit instantiation is an error at its point of instantiation:
+"explicit instantiation of undefined function template 'h'" for a
+function template specialization (a member template's included), else
+"explicit instantiation of undefined {member function|static data
+member} 'f' of class template 'X<int>'". Either has the note "explicit
+instantiation refers here" at the pattern declaration (WP-194). A
+class explicit instantiation skips undefined members, and an explicit
+instantiation declaration is never diagnosed.
 
 **An explicit instantiation declaration** (`extern template`) does not
 stop sema from instantiating inline and `constexpr` members when they
@@ -991,6 +1019,23 @@ Later uses of it are silent.
 - A pack expansion as the argument for a non-pack parameter is
   diagnosed when the alias is dependent: "pack expansion used as argument
   for non-pack parameter of alias template" (clang, CWG1430).
+- **Locations and access (WP-194).** clang substitutes an alias's
+  aliased type with trivial `TypeLoc`s, so every error found in it is
+  reported at the alias's `using` keyword (`templ.alias_using_loc`), not
+  at the names as written (§5.8 is off: `Substituter::written_locs =
+  false`). The "in instantiation of template type alias 'X' requested
+  here" frame is still pushed at the use. Access checks
+  ([class.access]/4) use clang's context: the use site for an alias at
+  namespace scope, the alias's class for a member alias (clang's
+  `CheckTemplateIdType` enters the alias's context only when it is not a
+  file context). The override is `Sema::access_ctx`, read by
+  `access_start` and cleared by `in_inst_context`.
+- clang re-substitutes the alias at every use, so an access error repeats
+  per use. kiln does not cache a result whose substitution ran an access
+  check (`Sema::access_checks` changed), and a check made directly in an
+  alias frame is emitted with `allow_duplicate` (spec/diag.md §7.4).
+  The SFINAE outcome of such a use is therefore never taken from the
+  cache.
 
 ### 4.11 Variable templates and static data members (and the Oven)
 
@@ -1326,6 +1371,33 @@ pub enum Tdk { Invalid, InstantiationDepth, Incomplete, IncompletePack, Inconsis
 retained, since the AST is append-only. They are metered as
 `templ.sfinae_discarded` (§11.3).
 
+### 5.8 Written locations of dependent names
+
+Kiln's types are interned and carry no `TypeLoc`, so the substituter
+only knows an anchor `loc` (the pattern declarator or the use). To report
+errors found after substitution where clang does, at the name as written,
+`templ.written_locs` (`templ/written.rs`) maps a dependent type or NNS
+(`WrittenKey::Type`/`Nns`) to the sorted locations where the parser
+formed it:
+
+- `act_dependent_name_at` (`T::type`, `T::template Z<int>` written with
+  `typename`), `act_on_nested_name_component` (a dependent `T::`/`T::N::`
+  prefix) and `act_template_id` (a dependent template-id) record the name's
+  location.
+- Recording happens only while parsing (the instantiation stack is
+  empty), so instantiation never grows the table.
+- `Substituter::written(key, loc)` returns the recorded location nearest
+  `loc` (ties to the earlier), or `loc` when none is recorded. The
+  DependentName, DependentTemplateSpecialization and TemplateSpecialization
+  arms of `ty` and the identifier arm of `nns` use it for "no type named",
+  "typename specifier refers to non-type member", "no member named",
+  "cannot be used prior to '::'" and access errors. The notes are
+  unchanged.
+- An interned type written at several places resolves to the occurrence
+  nearest the anchor. That is exact when each declarator writes its own
+  type. Two identical dependent types in one declaration may swap
+  locations.
+
 ## 6. Function templates
 
 ### 6.1 Pipeline for a call: `deduce_call(ft, explicit, args, ctx)`
@@ -1345,7 +1417,12 @@ retained, since the AST is append-only. They are metered as
      is dropped. Top-level cv on P is dropped.
    - **When P is a reference.** Use the referred type. A forwarding
      reference (`T&&`, where `T` is this template's own unqualified
-     parameter) with an lvalue A uses A&.
+     parameter) with an lvalue A uses A&. When the referred type is an
+     array more cv-qualified than A, its qualifiers are intersected
+     with A's before matching (clang's `getUnqualifiedArrayType` rule
+     in `DeduceTemplateArgumentsByTypeMatch`; WP-207): `const T (&)[N]`
+     against `int[3]` deduces `T = int`, and the "more qualified" check
+     of /4.1 accepts the result (an array's cv is its element's).
    - **A braced list.** If P is `initializer_list<P'>` or `P'[N]`, deduce
      P' from each element (and N). Otherwise it is non-deduced.
    - **An overload set.** If exactly one member deduces, use it (/6). If

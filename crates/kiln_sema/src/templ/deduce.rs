@@ -702,8 +702,23 @@ impl Sema<'_, '_> {
             return Tdk::MiscellaneousDeductionFailure;
         }
         let t = &self.ast.types;
-        let p = t.canonical(p);
+        let mut p = t.canonical(p);
         let a = t.canonical(a);
+        // [temp.deduct.call]/4.1: the type a reference parameter refers to
+        // may be more cv-qualified than `A`; its qualifiers that `A` lacks
+        // drop out first (clang `DeduceTemplateArgumentsByTypeMatch`, with
+        // `getUnqualifiedArrayType`). An array's are its element's, out of
+        // reach of the `cv T` case below once the elements are matched
+        // (`const T (&)[N]` from `int[3]`).
+        if flags.contains(TdfFlags::PARAM_WITH_REFERENCE_TYPE) && t.is_array(p) {
+            let (pq, aq) = (t.effective_quals(p), t.effective_quals(a));
+            if pq.bits() & !aq.bits() != 0 {
+                let t = &mut self.ast.types;
+                let u = t.unqualified(p);
+                p = t.qualify(u, kiln_ast::types::Quals::from_bits(pq.bits() & aq.bits()));
+            }
+        }
+        let t = &self.ast.types;
         let mismatch = |d: &mut DeducedArgs| {
             d.info.first = Some(TemplateArg::ty(p));
             d.info.second = Some(TemplateArg::ty(a));

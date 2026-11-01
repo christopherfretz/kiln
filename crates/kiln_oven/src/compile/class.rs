@@ -810,10 +810,17 @@ impl Compiler<'_> {
             && !qualified
             && !class_final
             && !self.exact_dynamic_type(obj, arrow);
+        // [class.union.general]/6: `u.m = x` by a trivial assignment
+        // operator makes `m` (and each union member on the access chain)
+        // active, as a built-in assignment does (clang's
+        // `MaybeHandleUnionActiveMemberChange`).
+        let trivial_assign = spec.is_some_and(kiln_ast::decl::FnSpec::is_trivial)
+            && self.ast().decls.get(md).name().as_operator()
+                == Some(kiln_ast::names::OverloadedOperator::Equal);
         let this = if arrow {
             self.rv(obj)
         } else if self.node(obj).value_category().is_glvalue() {
-            self.lv_mem(obj, Access::Addr)
+            self.lv_mem(obj, if trivial_assign { Access::Write } else { Access::Addr })
         } else {
             let oty = self.ety(obj);
             self.materialize(obj, oty)

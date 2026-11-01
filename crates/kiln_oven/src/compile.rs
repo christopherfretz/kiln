@@ -3116,6 +3116,12 @@ impl Compiler<'_> {
         let e = skip_parens(self.ast(), e);
         let n = self.node(e);
         match n.kind() {
+            // A reference to a function (`_Pred& __pred`): its referent.
+            ExprKind::DeclRefExpr
+                if !self.ast().decls.get(self.ast().exprs.decl(e)).kind().is_function() =>
+            {
+                self.lv_mem(e, Access::Read)
+            }
             ExprKind::DeclRefExpr => {
                 let d = self.ast().exprs.decl(e);
                 let f = self.o.func_index(self.b.ast(), d);
@@ -3126,6 +3132,14 @@ impl Compiler<'_> {
             ExprKind::UnaryOperator if self.ast().exprs.unary_op(e) == UnaryOp::Deref => {
                 let x = self.ast().exprs.operand(e);
                 self.rv(x)
+            }
+            // `static_cast<F&&>(f)` and other no-op casts of a function
+            // lvalue ([expr.static.cast]/4) designate the same function.
+            k if k == ExprKind::ConstantExpr
+                || (k.is_cast() && self.ast().exprs.cast_kind(e) == CastKind::NoOp) =>
+            {
+                let x = self.ast().exprs.operand(e);
+                self.fn_lv(x)
             }
             _ => {
                 self.unsupported(e);
@@ -3228,6 +3242,11 @@ impl Compiler<'_> {
                     return p;
                 }
                 let ast = self.ast();
+                if ast.decls.get(d).kind().is_function() {
+                    // A function lvalue (bound to a reference to function):
+                    // its address is the function pointer value.
+                    return Place::Mem(self.fn_lv(e));
+                }
                 if ast.decls.get(d).kind() == DeclKind::Binding {
                     // A binding names its expression ([dcl.struct.bind]).
                     let Some(b) = ast.decls.binding_expr(d) else {
@@ -3509,6 +3528,23 @@ impl Compiler<'_> {
         let base = ExprId::new(n.a());
         let fd = ast.exprs.decl(e);
         let arrow = n.has(kiln_ast::expr::ExprFlags::ARROW);
+        if ast.decls.get(fd).kind() == DeclKind::Var {
+            // A static data member named by a class member access: the
+            // object expression is evaluated, then discarded
+            // ([expr.ref]/2; clang `VisitIgnoredBaseExpression`).
+            self.effect(base);
+            let g = self.o.global_index(self.b.ast(), fd);
+            let r = self.reg();
+            self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
+            if is_reference_var(self.b.ast(), fd) {
+                let q = self.ast().decls.get(fd).ty().unwrap_or(QualType::INT);
+                let rt = self.ty(q);
+                let a = self.reg();
+                self.emit_at(Op::Load, ak::READ, &[a, r, rt.0], e);
+                return Place::Mem(a);
+            }
+            return Place::Mem(r);
+        }
         let bq = ast.exprs.get(base).ty();
         let bt = self.ty(bq);
         let rt = if arrow {
