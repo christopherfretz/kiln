@@ -1784,7 +1784,16 @@ immediate context: errors are hard.
   signature (or any substituted function type) whose return type is an
   array or function type fails with `function cannot return
   {array|function} type T`, a deduction failure under SFINAE (clang
-  `BuildFunctionType`; `Subst::check_return_type`, WP-201).
+  `BuildFunctionType`; `Subst::check_return_type`, WP-201). It is
+  reported where the function type begins (clang's `FunctionTypeLoc`
+  begin): a member function's return type as written (WP-222), and for
+  a function type inside a parameter's, variable's, data member's,
+  typedef's or alias's declarator (`T (*p)()`, `static const T (*s)()`,
+  `using U = T (*)();`) the declaration's first type-specifier, recorded
+  for dependent declarations in `Sema::type_spec_locs` and carried as
+  `Subst::type_begin` while the declaration's type is substituted
+  (cleared inside the function type's parameters; WP-241). Without a
+  recorded location the declarator's name is used.
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.

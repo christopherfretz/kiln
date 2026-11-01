@@ -162,10 +162,20 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<QualType> {
         let name = self.sema.ast.decls.get(d).name().as_ident().map(|n| (n, loc));
         let saved = std::mem::replace(&mut self.declarator_name, name);
+        let begin = self.decl_begin(d);
+        let outer = std::mem::replace(&mut self.type_begin, Some(begin));
         let scope = self.decl_written_scope(d, loc);
         let r = self.with_written_scope(scope, |s| s.ty(t, loc));
         self.declarator_name = saved;
+        self.type_begin = outer;
         r
+    }
+
+    /// Where pattern declaration `d`'s type begins: its first
+    /// type-specifier when recorded, else its name.
+    fn decl_begin(&self, d: DeclId) -> Loc {
+        let s = &self.sema;
+        s.type_spec_locs.get(&d).copied().unwrap_or_else(|| s.ast.decls.get(d).loc())
     }
 
     /// A variable of the pattern (local or static data member): declared
@@ -388,6 +398,7 @@ impl Substituter<'_, '_, '_> {
                             invalid: false,
                             default_arg: DefaultArg::None,
                             range: (loc, loc),
+                            type_loc: loc,
                             decl: Some(np),
                             explicit_object: None,
                         });
@@ -411,6 +422,7 @@ impl Substituter<'_, '_, '_> {
                         invalid: false,
                         default_arg: DefaultArg::None,
                         range: (loc, loc),
+                        type_loc: loc,
                         decl: Some(np),
                         explicit_object: None,
                     });
@@ -420,7 +432,11 @@ impl Substituter<'_, '_, '_> {
                 continue;
             }
             let scope = self.decl_written_scope(p, n.loc());
-            let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()))?;
+            let begin = self.decl_begin(p);
+            let outer = std::mem::replace(&mut self.type_begin, Some(begin));
+            let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()));
+            self.type_begin = outer;
+            let ty = ty?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
             // ([basic.scope.param]); the function adopts it.
@@ -438,6 +454,7 @@ impl Substituter<'_, '_, '_> {
                 invalid: false,
                 default_arg: DefaultArg::None,
                 range: (n.loc(), n.loc()),
+                type_loc: n.loc(),
                 decl: Some(np),
                 explicit_object: (eo != 0).then_some(n.loc()),
             });
@@ -512,7 +529,7 @@ impl Substituter<'_, '_, '_> {
             };
             // [dcl.fct]/11, at the return type as written (clang's
             // `BuildFunctionType` after the parameters).
-            let ret_loc = self.sema.ret_type_locs.get(&d).copied().unwrap_or(loc);
+            let ret_loc = self.sema.type_spec_locs.get(&d).copied().unwrap_or(loc);
             self.check_return_type(ret, ret_loc)?;
             // A dependent `noexcept(expr)` waits until needed (WP-112).
             let exc = if lazy_exc {
@@ -1010,10 +1027,14 @@ impl Substituter<'_, '_, '_> {
         } else {
             self.decl_written_scope(d, loc)
         };
-        let ty = self.with_written_scope(scope, |s| s.ty(u, loc))?;
+        let begin = self.decl_begin(d);
+        let outer = std::mem::replace(&mut self.type_begin, Some(begin));
+        let ty = self.with_written_scope(scope, |s| s.ty(u, loc));
+        self.type_begin = outer;
+        let ty = ty?;
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
-            return Ok(self.sema.act_on_alias_decl(name, loc, ty, &[]));
+            return Ok(self.sema.act_on_alias_decl(name, loc, ty, &[], Loc::INVALID));
         }
         let mut ds = self.pattern_declspec(d, ty);
         ds.storage = Some((StorageSpec::Typedef, loc));
