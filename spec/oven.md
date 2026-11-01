@@ -88,6 +88,9 @@ the evaluator's flattened type table.
   union type) (`mem::UKey`), so unions nested at one offset (`union {
   char c; union { int x; float y; } q; }`) each have their own entry
   (WP-224); two members of one union type at one offset share it.
+  `mem::Memory::union_alts` holds, per entry, the other members that may
+  equally be active after a placement new whose pointer names several
+  (WP-233, "Classes").
   Any write into a granule clears its pointer bit, so a class holding no
   data (`Types::holds_no_data`: an empty class, or one of only such
   subobjects) is zero-initialized and copied as zero bytes: an empty base
@@ -209,6 +212,23 @@ the evaluator's flattened type table.
   is a local variable read as a global): "pointer to '…' is not a
   constant expression" (or "reference to …" when the frozen type is a
   reference; clang `note_constexpr_non_global`), with "declared here".
+- Freezing a pointer or reference to a temporary lifetime-extended by
+  the variable being initialized ([class.temporary]/6) rejects one whose
+  type is destructed (`Ast::needs_destruction`: a non-trivial destructor
+  of the type, an array element or a member; clang
+  `CheckLValueConstantExpression`): "non-trivial destruction of
+  lifetime-extended temporary with type 'const D' used in the result of a
+  constant expression is not yet supported" at the
+  `MaterializeTemporaryExpr`, the type as materialized (`const D`,
+  `const D[2]`, `D` for `D&& r = D{3}`). `constexpr RD rd{{1}}` with a
+  `const D&` member and `constexpr const D& d = {2}` fail; a temporary
+  destroyed within the evaluation (`RD{{1}}.r.v`) does not. A
+  non-constexpr variable so initialized is dynamically initialized and
+  the temporary's destructor registered (WP-231, WP-233; see also
+  "Temporaries" below;
+  `tests/conformance/class.temporary/constexpr-nontrivial-dtor.cpp`,
+  `tests/codegen/ref_temp_dtor_dynamic.cpp`,
+  `tests/conformance/expr.const/constexpr-ref-temporary-nontrivial-dtor.cpp`).
 - A **function parameter outside its call** (named in a template
   argument or a `static_assert` in the body, where it has no frame;
   WP-183) takes the same globals path as an external object that is never
@@ -1108,7 +1128,27 @@ is lowered as a write, clang's `MaybeHandleUnionActiveMemberChange`,
 WP-207; only the operator syntax does: `u.m.operator=(x)` is a member call
 on `m`, checked as above, WP-224). Nested unions are tracked per union
 subobject, so `n.q.x = 1` activates `q` in `n` and `x` in `q`
-(`tests/conformance/class.union/constexpr-nested-same-offset.cpp`). The active-member check on the path to an access reaches a
+(`tests/conformance/class.union/constexpr-nested-same-offset.cpp`).
+A placement new (`std::construct_at`, `Op::Placement`) walks the unions
+on the path to the constructed object (`Vm::place_in_unions`, clang's
+`findSubobject` with `AK_Construct`): an inactive member that is the
+constructed object itself becomes the active member (the union's bytes
+and nested entries reset as by an assignment, [class.union.general]/6);
+an inactive member holding it is "construction of subobject of member
+'p' of union with {active member 'a'|no active member} is not allowed in
+a constant expression" at the new-expression. A pointer is an
+allocation and an offset with no designator, so the constructed member
+is identified by offset and type. When several members may be it (two
+members of one type at one offset, or a member and a subobject of the
+active member), the entry keeps one and `Memory::union_alts` the others;
+a member access or assignment naming any of them is accepted, and an
+assignment makes it the only active member. Deviation: after
+`std::construct_at(&s.b, 7)` in `union S { int a; int b; }`, reading
+`s.a` is accepted (clang rejects it; xfail
+`tests/conformance/class.union/constexpr-placement-same-type.cpp`); a
+frozen union records the one kept member
+(`tests/conformance/class.union/constexpr-placement-activate.cpp`,
+WP-233). The active-member check on the path to an access reaches a
 bit-field's storage unit inside a member of class type
 (`Types::has_bit_unit`; a bit-field is not a `has_subobject` target),
 so libc++'s short-string `__s.__is_long_` reads and writes check against
