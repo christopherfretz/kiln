@@ -13,19 +13,20 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Setup
 
-- kiln: debug build of the WP-211 branch (commit in the generated "Run" table below), with main
-  `00061c4e` (WP-193 merged) merged in.
+- kiln: debug build of main `4c3e8be9` (commit in the generated "Run" table below; WP-211 and
+  everything through PR #15 merged).
 - Tests and headers: libc++ `llvmorg-19.1.7`. The tests come from the sparse checkout. The headers,
   `libc++.so`, `libc++experimental.a` and `libc++abi` come from the clang 19 packages in the
   container.
 - Host: aarch64 Debian 13 container, with `-j 2` and an 8 GiB address-space cap per process.
+  The wall time was measured while six implementer builds shared the box; it is not a benchmark.
 - Driver: lit-format subset with a static feature set. `.verify.cpp` tests are UNSUPPORTED by the
   driver because kiln has no `-verify`. See `spec/libcxx.md`.
 
 ## Reading
 
-**Overall: 585/585 (100.0%)** on the WP-211 branch (main `00061c4e` merged in), up from 581,
-with no test newly failing. WP-211 clears the last four: GNU `_Complex` (support.limits
+**Overall: 585/585 (100.0%)** on main `4c3e8be9` (the M3 exit; ROADMAP M3 is closed on this
+run), confirming the 585/585 first reached on the WP-211 branch, up from 581. WP-211 clears the last four: GNU `_Complex` (support.limits
 `is_specialized` and `complex.version`, utility `pairs.by.type`) and the `if constexpr` on a
 static member function of the current instantiation in mdspan's `__rank_` (`mdspan.version`).
 
@@ -129,17 +130,17 @@ driver-UNSUPPORTED tests (mostly `.verify.cpp`, which needs `-verify`) are the n
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `607aa3d3` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `4c3e8be9` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
 | command | `cargo xtask libcxx --gate m3 -j 2` |
-| compile flags | `-std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL -I <llvm-project>/libcxx/test/support <ADDITIONAL_COMPILE_FLAGS> <test>` |
+| compile flags | `-std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL -I <repo>/.toolchain/llvm-project/libcxx/test/support <ADDITIONAL_COMPILE_FLAGS> <test>` |
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 392.2 s |
-| peak RSS | 77 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
+| wall time | 548.8 s |
+| peak RSS | 78 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
