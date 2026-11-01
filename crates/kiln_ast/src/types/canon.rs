@@ -580,9 +580,10 @@ impl TypeContext {
     /// sugar whose canonical type is `canonical(inner)`.
     pub fn paren_type(&mut self, inner: QualType) -> QualType {
         let flags = self.qflags(inner);
-        let t: TypeId = self.intern_with(Key::inline(TypeKind::Paren, 0, raw(inner)), flags, |ctx| {
-            Some(ctx.canonical(inner))
-        });
+        let t: TypeId =
+            self.intern_with(Key::inline(TypeKind::Paren, 0, raw(inner)), flags, |ctx| {
+                Some(ctx.canonical(inner))
+            });
         t.into()
     }
 

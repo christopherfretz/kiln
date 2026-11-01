@@ -709,8 +709,7 @@ impl Printer<'_> {
             // prints its own).
             TypeView::Paren(inner) => {
                 self.before(inner);
-                if !self.empty_ph && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function
-                {
+                if !self.empty_ph && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function {
                     self.push("(");
                 }
             }
