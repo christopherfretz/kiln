@@ -812,6 +812,8 @@ diag_ids! {
     sema_unused_result = Warning [UnusedResult] (1) "ignoring return value of function declared with {0} attribute";
     sema_unused_result_msg = Warning [UnusedResult] (2) "ignoring return value of function declared with {0} attribute: {1}";
     sema_unused_expr = Warning [UnusedValue] (0) "expression result unused";
+    sema_unused_constructor = Warning [UnusedValue] (1) "ignoring temporary created by a constructor declared with {0} attribute";
+    sema_unused_constructor_msg = Warning [UnusedValue] (2) "ignoring temporary created by a constructor declared with {0} attribute: {1}";
     sema_unused_comparison = Warning [UnusedComparison] (1) "{0:equality|inequality|relational|three-way} comparison result unused";
     sema_deprecated = Warning [DeprecatedDeclarations] (1) "'{0}' is deprecated";
     sema_deprecated_msg = Warning [DeprecatedDeclarations] (2) "'{0}' is deprecated: {1}";

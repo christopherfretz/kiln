@@ -665,12 +665,51 @@ impl Sema<'_, '_> {
             ExprKind::CXXScalarValueInitExpr if !self.ast.types.is_void(n.ty()) => {
                 Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
             }
-            ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr => (self
-                .ast
-                .exprs
-                .cast_kind(x)
-                != CastKind::ToVoid)
-                .then_some((DiagId::sema_unused_expr, loc, Vec::new())),
+            ExprKind::CStyleCastExpr | ExprKind::CXXFunctionalCastExpr => {
+                match self.ast.exprs.cast_kind(x) {
+                    CastKind::ToVoid | CastKind::Dependent => None,
+                    // `X(1);` is checked through its constructor call
+                    // (clang `isUnusedResultAWarning`), reported at the cast.
+                    CastKind::ConstructorConversion => self
+                        .unused_warning(self.ast.exprs.operand(x))
+                        .map(|(id, _, args)| (id, loc, args)),
+                    _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
+                }
+            }
+            ExprKind::CXXStaticCastExpr => {
+                // Always unused, but a constructor conversion reports a
+                // nodiscard constructor or class (clang
+                // `DiagnoseUnusedExprResult`).
+                let unused = (DiagId::sema_unused_expr, loc, Vec::new());
+                if self.ast.exprs.cast_kind(x) != CastKind::ConstructorConversion {
+                    return Some(unused);
+                }
+                let inner = self.ignore_paren_imp_casts(self.ast.exprs.operand(x));
+                let ik = self.ast.exprs.get(inner).kind();
+                if !matches!(ik, ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr) {
+                    return Some(unused);
+                }
+                Some(self.unused_warning(inner).map_or(unused, |(id, _, args)| (id, loc, args)))
+            }
+            ExprKind::CXXBindTemporaryExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::ExprWithCleanups => self.unused_warning(self.ast.exprs.operand(x)),
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                // A temporary of a nodiscard class, or made by a nodiscard
+                // constructor ([dcl.attr.nodiscard]/4, clang
+                // `warn_unused_constructor`).
+                let ctor = self.ast.exprs.constructor(x);
+                let a = self.find_attr(ctor, AttrKind::NODISCARD).or_else(|| {
+                    let class = self.ast.types.as_record(n.ty())?;
+                    self.find_attr(class, AttrKind::NODISCARD)
+                })?;
+                let attr = *self.ast.attrs.get(a);
+                let name = "'nodiscard'".to_owned();
+                Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_text(m)) {
+                    Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),
+                    None => (DiagId::sema_unused_constructor, loc, vec![name]),
+                })
+            }
             ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
             ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
@@ -692,7 +731,6 @@ impl Sema<'_, '_> {
             | ExprKind::ArrayTypeTraitExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXTypeidExpr
-            | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXReinterpretCastExpr
             | ExprKind::CXXConstCastExpr
             | ExprKind::CompoundLiteralExpr
