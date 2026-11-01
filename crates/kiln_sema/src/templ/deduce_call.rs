@@ -242,7 +242,10 @@ impl Sema<'_, '_> {
             return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
         };
         let is_pack = |s: &Self, p: DeclId| s.ast.template_parm(p).is_some_and(|x| x.pack);
-        let last_pack = params.last().is_some_and(|&p| is_pack(self, p));
+        // [temp.arg.explicit]/9: a template parameter pack anywhere in the
+        // list (`template <class... A, class T>`) takes every remaining
+        // explicit argument; only a list without one has a maximum arity.
+        let has_pack = params.iter().any(|&p| is_pack(self, p));
         // §6.1 step 1: the explicitly-specified arguments.
         let (mut ptys, variadic) = self.proto_param_types(templated);
         // [temp.deduct.funcaddr]: P is the function type, with the
@@ -253,7 +256,7 @@ impl Sema<'_, '_> {
         let written: Vec<TemplateArg> =
             explicit.map(|l| self.ast.types.args(l).to_vec()).unwrap_or_default();
         if !written.is_empty() {
-            if written.len() > n && !last_pack {
+            if written.len() > n && !has_pack {
                 // clang: a substitution failure with the arity message.
                 let msg = self
                     .diag(DiagId::sema_template_arg_list_different_arity, loc)
