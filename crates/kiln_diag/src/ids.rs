@@ -647,6 +647,8 @@ diag_ids! {
     sema_va_start_not_last_named_param = Warning [Varargs] (0) "second argument to 'va_start' is not the last named parameter";
     sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object that undergoes default argument promotion|an object of reference type|a parameter declared with the 'register' keyword} to 'va_start' has undefined behavior";
     note_va_start_parameter_type = Note (1) "parameter of type {0} is declared here";
+    sema_refconst_no_ctor = Warning (2) "{0:struct|interface|union|class|enum} {1} does not declare any constructor to initialize its non-modifiable members";
+    note_refconst_member_not_initialized = Note (2) "{0:const|reference} member {1} will never be initialized";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
     sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
