@@ -449,13 +449,15 @@ fn read_rss_file(path: &Path) -> Option<u64> {
 #[cfg(unix)]
 fn kill_group(pid: u32) {
     // The child is the leader of its own process group (pgid == pid); the
-    // pid cannot be reused before our waiter thread reaps it.
-    let _ = Command::new("kill")
-        .args(["-KILL", "--", &format!("-{pid}")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    // pid cannot be reused before our waiter thread reaps it. Without a
+    // `kill` executable (a minimal container without procps) the shell's
+    // builtin does it; dash's takes no `--`.
+    let quiet = |c: &mut Command| {
+        c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status()
+    };
+    if quiet(Command::new("kill").args(["-KILL", "--", &format!("-{pid}")])).is_err() {
+        let _ = quiet(Command::new("sh").args(["-c", &format!("kill -KILL -{pid}")]));
+    }
 }
 
 #[cfg(not(unix))]
