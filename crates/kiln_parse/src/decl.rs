@@ -2312,6 +2312,36 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// Whether the `[` at the current token in a braced-init-list starts
+    /// a (C99) array designator rather than a lambda (clang
+    /// `MayBeDesignationStart`): `[=`, `[...` and `[]` begin a lambda;
+    /// after `[&`, `[*` or `[name` it is a designator when the matching
+    /// `]` is followed by `=`; anything else is a designator.
+    fn array_designator_start(&self) -> bool {
+        match self.peek(1).kind {
+            TokKind::Punct(Punct::Equal | Punct::Ellipsis | Punct::RSquare) => false,
+            TokKind::Punct(Punct::Amp | Punct::Star) | TokKind::Identifier(_) => {
+                let mut depth = 0usize;
+                let mut n = 0;
+                loop {
+                    match self.peek(n).kind {
+                        TokKind::Punct(Punct::LSquare | Punct::LParen | Punct::LBrace) => depth += 1,
+                        TokKind::Punct(Punct::RSquare | Punct::RParen | Punct::RBrace) => {
+                            depth = depth.saturating_sub(1);
+                            if depth == 0 {
+                                return self.peek_is(n + 1, Punct::Equal);
+                            }
+                        }
+                        TokKind::Eof => return false,
+                        _ => {}
+                    }
+                    n += 1;
+                }
+            }
+            _ => true,
+        }
+    }
+
     /// braced-init-list ([dcl.init.general]), with C++20 designators.
     pub(crate) fn parse_init_list(&mut self) -> Result<InitList, ()> {
         if !self.stack_ok() {
@@ -2331,7 +2361,9 @@ impl Parser<'_, '_> {
                     };
                     let l = self.bump().span.lo;
                     designator.push(Designator::Field(n, l));
-                } else if self.at(Punct::LSquare) && !designator.is_empty() {
+                } else if self.at(Punct::LSquare)
+                    && (!designator.is_empty() || self.array_designator_start())
+                {
                     let l = self.bump().span.lo;
                     let Some(e) = self.parse_constant_expr() else {
                         self.skip_until(&[Punct::RBrace], false, true);
@@ -2378,7 +2410,9 @@ impl Parser<'_, '_> {
             }
         }
         let rbrace = self.expect_closing(Punct::RBrace, Punct::LBrace, lbrace);
-        Ok(InitList { items, lbrace, rbrace })
+        let l = InitList { items, lbrace, rbrace };
+        self.s.act_on_init_list_syntax(&l);
+        Ok(l)
     }
 }
 
