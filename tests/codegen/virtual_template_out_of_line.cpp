@@ -6,12 +6,14 @@
 // members. An explicit specialization keeps its key function (strong or
 // external vtable); an explicitly specialized member keeps its slot. No vtable for the pattern. (Explicit instantiation
 // definitions, `weak_odr` vtables: WP-113.) `typeid` of a template
-// parameter. (No virtual destructor and the specialization-defined-elsewhere
-// case first: kiln does not yet order end-of-TU instantiations in
-// `DeferredDeclsToEmit` as clang does.)
+// parameter. An inline virtual destructor in the base puts the
+// specializations' implicit destructors (complete and deleting) in their
+// vtables, emitted in clang's end-of-TU instantiation order (WP-172,
+// spec/codegen.md §2a).
 namespace std { class type_info; }
 
 struct Count {
+  virtual ~Count() {}
   virtual void on_zero() noexcept = 0;
   virtual const void *get_deleter(const std::type_info &) const noexcept;
 };

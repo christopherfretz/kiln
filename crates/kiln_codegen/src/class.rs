@@ -11,7 +11,6 @@ use kiln_ast::decl::{
     CtorInitKind, DeclKind, Defaulted, DefinitionBits, FnStorage, TagKind, TemplLinkKind,
 };
 use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
-use kiln_ast::names::OverloadedOperator;
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
@@ -511,7 +510,7 @@ impl Cg<'_> {
             return Ok(());
         }
         let first = ast.first(d);
-        if self.is_explicit_inst_declaration(first) {
+        if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return Ok(());
         }
         let is_ctor = ast.decls.get(d).kind() == DeclKind::CXXConstructor;
@@ -1584,18 +1583,22 @@ impl Cg<'_> {
         let kind = ast.decls.get(md).kind();
         let trivial_assign = trivial
             && matches!(self.special_of(md), Some(Special::CopyAssign | Special::MoveAssign));
-        let crd = ast.decls.get(callee_md).ctx().expect("method class");
-        let cfty = ast.decls.get(callee_md).ty().expect("method type");
-        // [expr.ass]/1 (C++17): the right operand of an assignment
-        // operator is sequenced before the object (clang's `RtlArgs`).
+        // clang: an assignment operator call (`a = b`, `a += b`, ...)
+        // evaluates its right operand before the object
+        // ([expr.ass]/1, [over.match.oper]/2; `EvaluationOrder::
+        // ForceRightToLeft`): the trivial assignment's source lvalue, or
+        // the call arguments.
         let rtl = ast.exprs.get(e).kind() == ExprKind::CXXOperatorCallExpr
-            && is_assignment_op(ast.exprs.operator_call_op(e));
-        let mut sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
-        let mut rtl_rhs = None;
+            && is_assignment_operator(ast.exprs.operator_call_op(e));
+        let mut rtl_src = None;
         let mut rtl_vals = None;
         if rtl && trivial_assign {
-            rtl_rhs = Some(self.emit_lvalue(args[0])?);
-        } else if rtl && kind != DeclKind::CXXDestructor {
+            rtl_src = Some(self.emit_lvalue(args[0])?);
+        }
+        let crd = ast.decls.get(callee_md).ctx().expect("method class");
+        let cfty = ast.decls.get(callee_md).ty().expect("method type");
+        if rtl && !trivial {
+            let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
             rtl_vals = Some(self.emit_call_args(&sig, args)?);
         }
         let this = if arrow {
@@ -1612,8 +1615,8 @@ impl Cg<'_> {
                 return Ok(None);
             }
             if trivial_assign {
-                let src = match rtl_rhs {
-                    Some(lv) => lv,
+                let src = match rtl_src {
+                    Some(src) => src,
                     None => self.emit_lvalue(args[0])?,
                 };
                 // clang `EmitAggregateCopy`: empty classes are ignored.
@@ -1633,6 +1636,7 @@ impl Cg<'_> {
             let (callee, fid) = self.structor_ref(callee_md, Structor::Complete)?;
             return self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[]);
         }
+        let mut sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
         if use_virtual {
             // The arguments come first; `prepareConcreteCallee` then
             // loads the slot.
@@ -1946,22 +1950,21 @@ impl Cg<'_> {
     }
 }
 
-/// clang `CXXOperatorCallExpr::isAssignmentOp`: `=` and the compound
-/// assignments.
-fn is_assignment_op(op: OverloadedOperator) -> bool {
-    use OverloadedOperator as O;
+/// clang `CXXOperatorCallExpr::isAssignmentOp`.
+fn is_assignment_operator(op: kiln_ast::names::OverloadedOperator) -> bool {
+    use kiln_ast::names::OverloadedOperator as O;
     matches!(
         op,
         O::Equal
-            | O::PlusEqual
-            | O::MinusEqual
             | O::StarEqual
             | O::SlashEqual
             | O::PercentEqual
-            | O::CaretEqual
-            | O::AmpEqual
-            | O::PipeEqual
+            | O::PlusEqual
+            | O::MinusEqual
             | O::LessLessEqual
             | O::GreaterGreaterEqual
+            | O::AmpEqual
+            | O::CaretEqual
+            | O::PipeEqual
     )
 }

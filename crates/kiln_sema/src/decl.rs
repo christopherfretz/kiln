@@ -4154,6 +4154,45 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Checks a definition's member specialization header, then returns
+    /// whether a qualified class head is `template<> struct O<long>::I`
+    /// ([temp.expl.spec]/1, a member class of an implicit
+    /// specialization). The header then belongs to the qualifier, and the
+    /// class's own members are ordinary declarations, not explicit
+    /// specializations, so the pending explicit specialization is taken.
+    fn begin_member_class_spec(
+        &mut self,
+        name: Option<(Symbol, Loc)>,
+        qualifier: Option<DeclId>,
+        use_: TagUse,
+        loc: Loc,
+    ) -> bool {
+        if use_ == TagUse::Definition
+            && let Some((_, nloc)) = name
+        {
+            self.check_member_spec_header(qualifier, nloc, loc);
+        }
+        let spec = qualifier.is_some()
+            && matches!(use_, TagUse::Definition | TagUse::Declaration)
+            && self.templ.explicit_spec.is_some()
+            && self.at_explicit_head();
+        if spec {
+            self.templ.explicit_spec = None;
+        }
+        spec
+    }
+
+    /// Marks member class `d` explicitly specialized when `spec` (clang
+    /// `CheckMemberSpecialization`): its out-of-line members are then
+    /// defined without `template<>` ([temp.expl.spec]/5).
+    fn finish_member_class_spec(&mut self, spec: bool, d: DeclId) {
+        if spec && let Some((i, _)) = self.ast.member_spec_info(self.ast.first(d)) {
+            self.ast.templates.update_member_spec(i, |m| {
+                m.kind = kiln_ast::templates::SpecKind::ExplicitSpecialization;
+            });
+        }
+    }
+
     /// A class-key or `enum` followed by a name ([dcl.type.elab],
     /// [class.pre], [dcl.enum]). `scoped` is `EnumData::SCOPED[_STRUCT]`
     /// bits; `fixed` the enum-base. Returns the tag declaration.
@@ -4174,11 +4213,7 @@ impl Sema<'_, '_> {
         let is_enum = keyword == TagKeyword::Enum;
         let fixed = fixed.or(if is_enum && scoped != 0 { Some(QualType::INT) } else { None });
         self.check_enum_fixed_type(fixed, loc);
-        if use_ == TagUse::Definition
-            && let Some((_, nloc)) = name
-        {
-            self.check_member_spec_header(qualifier, nloc, loc);
-        }
+        let member_class_spec = self.begin_member_class_spec(name, qualifier, use_, loc);
         let head = if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
             self.take_template_head(qualifier)
         } else {
@@ -4258,6 +4293,7 @@ impl Sema<'_, '_> {
             self.mark_pattern_next();
             self.builder().record(h, Self::tag_kind_of(keyword), prev)
         };
+        self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
             self.set_member_access(d);
         }
@@ -5633,6 +5669,9 @@ impl Sema<'_, '_> {
         {
             return r;
         }
+        if kind == AttrKind::ABI_TAG {
+            return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
             AttrKind::ALIGNED => {
@@ -5682,6 +5721,41 @@ impl Sema<'_, '_> {
             return None;
         }
         let node = AttrNode { kind, syntax, flags: 0, loc, a, b };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// GNU `abi_tag("t", ...)`: string literals, kept sorted and unique
+    /// (clang `handleAbiTagAttr`) as one interned symbol in `a`, the tags
+    /// separated by `,` (spec/abi.md §8.15). A tag-less `abi_tag` (only
+    /// meaningful on an inline namespace) is dropped.
+    fn abi_tag_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        n: &str,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let mut tags: Vec<String> = Vec::new();
+        for arg in args {
+            let lit = match arg {
+                AttrArg::Expr(e) => self.string_lit_of(*e),
+                AttrArg::Type(_) => None,
+            };
+            let Some(lit) = lit else {
+                let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
+                self.emit(msg);
+                return None;
+            };
+            let id = self.ast.exprs.string_lit(lit);
+            tags.push(String::from_utf8_lossy(self.ast.strings.bytes(id)).into_owned());
+        }
+        if tags.is_empty() {
+            return None;
+        }
+        tags.sort();
+        tags.dedup();
+        let a = self.intern(&tags.join(",")).index();
+        let node = AttrNode { kind: AttrKind::ABI_TAG, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
     }
 
@@ -6019,12 +6093,14 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("const", _, true) => AttrKind::CONST,
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,
+        ("hot", _, true) => AttrKind::HOT,
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
         ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
+        ("abi_tag", _, true) => AttrKind::ABI_TAG,
         ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
         _ => return None,
     })

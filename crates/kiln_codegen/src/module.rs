@@ -97,6 +97,10 @@ pub(crate) struct Cg<'a> {
     pub deferred: FxHashMap<DeclId, DeclId>,
     /// Definitions to emit (clang `DeferredDeclsToEmit`).
     pub to_emit: Vec<Def>,
+    /// First declarations of the end-of-TU instantiations not yet handed
+    /// to `EmitGlobal` (§2a): while held, a reference only declares them,
+    /// as clang's references to a pending instantiation without a body.
+    pub held: FxHashSet<DeclId>,
     /// String literal globals by (array type, bytes).
     pub strings: FxHashMap<(LTy, Vec<u8>), GlobalId>,
     /// Named struct types by record.
@@ -186,6 +190,7 @@ impl<'a> Cg<'a> {
             nounwind: FxHashMap::default(),
             gvars: FxHashMap::default(),
             deferred: FxHashMap::default(),
+            held: ast.templates.end_of_tu_defs().iter().map(|&d| ast.first(d)).collect(),
             to_emit: Vec::new(),
             strings: FxHashMap::default(),
             named: FxHashMap::default(),
@@ -237,6 +242,7 @@ impl<'a> Cg<'a> {
         self.emit_members(tu)?;
         self.emit_late_explicit_insts()?;
         self.emit_key_function_vtables()?;
+        self.emit_end_of_tu_instantiations()?;
         self.emit_deferred()?;
         self.resolve_placeholders()?;
         self.emit_global_init_trailer()?;
@@ -351,7 +357,7 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         let first = ast.first(d);
-        if self.is_explicit_inst_declaration(first) {
+        if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return Ok(());
         }
         if !self.discardable_fn(d) {
@@ -440,7 +446,8 @@ impl<'a> Cg<'a> {
         let first = ast.first(d);
         // [temp.explicit]/14: an explicit instantiation declaration
         // provides no definition (references name the external symbol).
-        if self.is_explicit_inst_declaration(first) {
+        // A held end-of-TU instantiation is handed over later (§2a).
+        if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return Ok(());
         }
         if !self.discardable_var(d) || self.var_must_emit(d) {
@@ -451,6 +458,51 @@ impl<'a> Cg<'a> {
             self.to_emit.push(Def::Decl(d));
         } else {
             self.deferred.insert(first, d);
+        }
+        Ok(())
+    }
+
+    /// The definitions Sema instantiated at the end of the translation
+    /// unit, handed to `EmitGlobal` in instantiation order (clang's
+    /// `PerformPendingInstantiations` calling `HandleTopLevelDecl` for
+    /// each, after the TU's declarations and the key-function vtables
+    /// of `DefineUsedVTables`, before `EmitDeferred`; §2a).
+    fn emit_end_of_tu_instantiations(&mut self) -> R<()> {
+        let ast = self.ast;
+        for &d in ast.templates.end_of_tu_defs() {
+            let first = ast.first(d);
+            if !self.held.remove(&first) {
+                continue;
+            }
+            match ast.decls.get(first).kind() {
+                DeclKind::Var => {
+                    // The out-of-line definition Sema instantiated, with or
+                    // without an initializer (`template<class T> T A<T>::s;`).
+                    let def = self.instantiated_var_def(first).or_else(|| {
+                        ast.redecls_of(first).filter(|&r| r != first).find(|&r| {
+                            let n = ast.decls.get(r);
+                            !n.has(DeclFlags::INVALID)
+                                && !n.has(DeclFlags::DEPENDENT_CTX)
+                                && ast.decls.var(r).is_some_and(|v| {
+                                    !matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                                })
+                        })
+                    });
+                    if let Some(def) = def {
+                        self.emit_global_var(def)?;
+                    }
+                }
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
+                    if let Some(def) = ast.definition(first) {
+                        self.emit_global_structor(def)?;
+                    }
+                }
+                _ => {
+                    if let Some(def) = ast.definition(first) {
+                        self.emit_global_fn(def)?;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -564,7 +616,7 @@ impl<'a> Cg<'a> {
     /// defined in its class, an implicit instantiation).
     pub(crate) fn inline_def(&self, first: DeclId) -> Option<DeclId> {
         let ast = self.ast;
-        if self.is_explicit_inst_declaration(first) {
+        if self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return None;
         }
         ast.redecls_of(first).find(|&r| {
@@ -592,6 +644,7 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         if !matches!(ast.templ_link(first).get(), Some((TemplLinkKind::MemberOfSpecialization, _)))
             || self.is_explicit_inst_declaration(first)
+            || self.held.contains(&first)
         {
             return None;
         }
