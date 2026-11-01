@@ -22,7 +22,7 @@ jobs:
         run: |
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends \
-            ca-certificates curl git build-essential time \
+            ca-certificates curl git build-essential procps time \
             clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev >/dev/null
           clang++-19 --version | head -1
       - uses: actions/checkout@v4
@@ -31,14 +31,6 @@ jobs:
       # Saved even when `ci` fails, so the next run starts warm.
       - uses: Swatinem/rust-cache@v2
         with: { cache-on-failure: true }
-      # WP-226 discovery (temporary): every failing test binary and corpus
-      # test at once.
-      - run: |
-          cargo test --workspace --no-fail-fast 2>&1 | grep -E -A8 '^test .*FAILED|panicked at|test result: FAILED|^error' | head -300 || true
-      - run: |
-          cargo build -p kiln_driver && cargo xtask test --compiler clang++-19 2>&1 | grep -E -A3 '^(FAIL|XPASS|ERROR|KILLED) |^test result' | head -200 || true
-      - run: |
-          cargo xtask test 2>&1 | grep -E -A3 '^(FAIL|XPASS|ERROR|KILLED) |^test result' | head -200 || true
       # fmt, clippy, cargo test, then both corpus runs (clang self-check and
       # kiln), as `cargo xtask ci` locally.
       - run: cargo xtask ci
