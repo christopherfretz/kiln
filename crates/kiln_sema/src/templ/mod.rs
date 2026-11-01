@@ -32,6 +32,7 @@ pub mod report;
 pub mod spec;
 pub mod stack;
 pub mod subst;
+mod ttarg;
 pub mod var;
 pub(crate) mod written;
 
@@ -165,6 +166,12 @@ pub struct TemplState {
     /// substitution-failure note of a later deduction that finds it
     /// memoized (§6.1 step 4).
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
+    /// The function parameters the last call deduction found
+    /// non-dependent once its explicit template arguments were
+    /// substituted, as a bit set by index (CWG1391: their conversions
+    /// are checked before the specialization is formed, so a failure
+    /// names the template; spec/sema-overload.md §10.4).
+    pub(crate) explicit_nondep: u64,
     /// Pack elements produced by expansions (§11.3 `templ.pack_elements`).
     pub pack_elements: u64,
     /// The `...` of each fold-expression (clang `CXXFoldExpr::EllipsisLoc`;

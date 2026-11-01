@@ -303,8 +303,14 @@ impl Sema<'_, '_> {
                         DeclKind::ClassTemplate
                         | DeclKind::TypeAliasTemplate
                         | DeclKind::TemplateTemplateParm,
-                    )
-                    | None => Ok(a),
+                    ) => {
+                        let d = self.ast.types.template_decl(n);
+                        if d.is_some_and(|d| !self.check_template_template_arg(p, d, at)) {
+                            return Err(());
+                        }
+                        Ok(a)
+                    }
+                    None => Ok(a),
                     Some(_) => {
                         self.error(DiagId::sema_template_arg_must_be_template, at);
                         Err(())

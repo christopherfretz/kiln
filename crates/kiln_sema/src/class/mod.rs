@@ -23,7 +23,7 @@ mod special;
 mod temporary;
 mod r#virtual;
 
-use kiln_ast::decl::{Access, DeclKind, DefinitionBits, TagKind};
+use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::types::ExcSpec;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -342,7 +342,17 @@ impl Sema<'_, '_> {
             Initializer::List(l) => l.lbrace,
             Initializer::Paren(..) => self.ast.decls.get(field).loc(),
         };
-        let direct = !matches!(init, Initializer::Expr(_));
+        // `= {..}` is copy-list-initialization, `{..}` direct
+        // ([dcl.init.general]/15; the style is kept on the field).
+        let direct = match &init {
+            Initializer::Expr(_) => false,
+            Initializer::Paren(..) => true,
+            Initializer::List(_) => self
+                .ast
+                .decls
+                .field(field)
+                .is_some_and(|f| f.init_style() == kiln_ast::decl::InitStyle::List),
+        };
         if self.is_error_type(fty) {
             if let Initializer::Expr(e) = init {
                 self.act_on_full_expr(e);
@@ -361,6 +371,13 @@ impl Sema<'_, '_> {
             });
             self.note_default_init_full_expr();
             let e = self.act_on_full_expr(e);
+            // clang `ActOnFinishCXXInClassMemberInitializer`: a field whose
+            // initializer failed is invalid, so no use of it (a
+            // constructor, aggregate initialization, an instantiation)
+            // reports again.
+            if self.is_err_expr(e) {
+                self.ast.decls.set_flags(field, DeclFlags::INVALID);
+            }
             let _ = self.ast.decls.set_field_init(field, e);
         }
         if self.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {

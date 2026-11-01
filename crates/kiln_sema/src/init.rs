@@ -776,6 +776,11 @@ impl Sema<'_, '_> {
     /// `CXXDefaultInitExpr`), else the value-initializing [`Sema::filler`].
     pub(crate) fn field_filler(&mut self, f: DeclId, at: Loc) -> ExprId {
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        // A field whose initializer failed (clang: `BuildCXXDefaultInitExpr`
+        // fails, the list is invalid).
+        if self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID) {
+            return self.recover(fty, &[], at);
+        }
         if self.field_has_nsdmi(f) {
             let ctx = self.context();
             if let Some(e) = self.default_member_init(f, ctx, at) {
@@ -1735,6 +1740,7 @@ impl Sema<'_, '_> {
                 union_field = Some(f);
             }
         } else {
+            let mut invalid = false;
             for (i, slot) in slots.into_iter().enumerate() {
                 let e = match slot {
                     Some(e) => e,
@@ -1742,9 +1748,18 @@ impl Sema<'_, '_> {
                         let b = bases[i];
                         self.init_base_list(b, |s| s.filler(b, rbrace))
                     }
-                    None => self.field_filler(fields[i - nb], rbrace),
+                    None => {
+                        let f = fields[i - nb];
+                        invalid |= self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID);
+                        self.field_filler(f, rbrace)
+                    }
                 };
                 inits.push(e);
+            }
+            // A field whose initializer failed makes the list invalid
+            // (clang: no `-Wunused-value`, no constant evaluation).
+            if invalid {
+                return self.recover(ty, &inits, lbrace);
             }
         }
         self.builder().init_list(ty, &inits, None, union_field, lbrace, rbrace)

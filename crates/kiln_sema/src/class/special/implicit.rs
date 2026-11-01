@@ -746,7 +746,10 @@ impl Sema<'_, '_> {
             return;
         }
         let flags = self.ast.decls.get(d).flags();
-        if flags.contains(DeclFlags::DEPENDENT_CTX) || flags.contains(DeclFlags::INVALID) {
+        // A specialization made invalid by its members still has its
+        // special members (clang `CanDeclareSpecialMemberFunction`).
+        let invalid = flags.contains(DeclFlags::INVALID) && self.ast.spec_info(d).is_none();
+        if flags.contains(DeclFlags::DEPENDENT_CTX) || invalid {
             return;
         }
         if self.needs_implicit(d, k) {

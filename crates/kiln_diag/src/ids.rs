@@ -1626,6 +1626,11 @@ diag_ids! {
     sema_enum_template = Error (0) "enumeration cannot be a template";
     sema_no_declarators_error = Error (0) "declaration does not declare anything";
     sema_explicit_inst_undefined_var_template = Error (1) "explicit instantiation of undefined variable template '{0}'";
+    sema_template_arg_template_params_mismatch = Error (0) "template template argument has different template parameters than its corresponding template template parameter";
+    note_template_param_list_different_arity = Note (1) "{0:too few|too many} template parameters in template template argument";
+    note_template_param_different_kind = Note (0) "template parameter has a different kind in template argument";
+    note_template_parameter_pack_non_pack = Note (2) "{0:template type|non-type template|template template} parameter{1:| pack} does not match {0:template type|non-type template|template template} parameter{1: pack|} in template argument";
+    note_template_nontype_parm_different_type = Note (1) "template non-type parameter has a different type {0} in template argument";
 }
 
 impl DiagId {
