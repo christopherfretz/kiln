@@ -2305,6 +2305,12 @@ impl ExprArena {
         )
     }
 
+    /// True if the destructor name of a `CXXPseudoDestructorExpr` was
+    /// qualified (`p->T::~T`; [`crate::builder::AstBuilder::pseudo_destructor_q`]).
+    pub fn pseudo_destructor_qualified(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::CXXPseudoDestructorExpr).aux & 2 != 0
+    }
+
     /// The closing-token location of `e`, if stored.
     pub fn end_loc(&self, e: ExprId) -> Option<Loc> {
         let n = self.get(e);

@@ -1683,7 +1683,26 @@ access, out-of-line declarator scope.**
   (instantiation). The destructor `MemberExpr` is located at the `~` (clang's
   name start), so a deleted destructor's use is diagnosed there; when
   rebuilt at instantiation it is at the destroyed type, as clang (WP-193).
-  A qualified destructor name (`p->D::~D()`) is not parsed yet.
+  Qualified destructor names (WP-223, [basic.lookup.qual.general]/4):
+  `act_on_member_destructor_q(base, qual, first, name, ..)`. On a class
+  object (`x.N::~Q`; `first` is `None`, `qual` the whole
+  nested-name-specifier) `Q` is looked up in `N`, then in the object's
+  class, then here, and the destructor of the class it names is accessed
+  as a qualified member of `N` through `member_access` (so `N` must be
+  the object's class or a base, the call is not virtual, and the errors
+  are clang's "no member named '~X' in 'W'" / "'X::~X' is not a member of
+  class 'W'"). On a scalar or dependent object
+  (`may_be_pseudo_destructor`) the parser splits `p->S::F::~Q` into the
+  prefix `S`, the first type-name `F` and `Q`; both are looked up in `S`
+  if present, else here, and each must denote the object type
+  (`sema_pseudo_dtor_not_type`, `sema_pseudo_dtor_type_mismatch`, second
+  name first, as clang). A qualified dependent form is a
+  `CXXPseudoDestructorExpr` whose qualified bit
+  (`Builder::pseudo_destructor_q`, `Ast::pseudo_destructor_qualified`)
+  makes `rebuild_member_destructor(.., qualified, ..)` name a class
+  type's destructor as a qualified member of that class (non-virtual,
+  and a base class's destructor is allowed: `this->B::~B()`). A
+  qualified destructor template-id (`p->N::~X<T>()`) is a gap.
   A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
@@ -1716,11 +1735,13 @@ access, out-of-line declarator scope.**
   (`sema_dtor_type_mismatch`, `note_dtor_type_found`,
   `sema_dtor_name_undeclared`, `sema_pseudo_dtor_*`) and
   `sema_qualified_member_of_unrelated`, with clang 19's text.
-- *Gaps*: qualified destructor names (`p->N::~T()`); dependent
+- *Gaps*: qualified destructor template-ids (`p->N::~X<T>()`); a
+  pseudo-destructor qualifier in a dependent scope; dependent
   `operator T()` printing in dumps; the "member has the same name as its
   class" error.
 - Tests: `tests/conformance/expr.ref/`, `dcl.meaning/`,
-  `ast/expr.ref/`, `class.member.lookup/ambiguous.cpp` (flipped).
+  `ast/expr.ref/`, `class.member.lookup/ambiguous.cpp` (flipped);
+  `expr.prim.id.dtor/`, `ast/expr.prim.id.dtor/` (WP-223).
 
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with
