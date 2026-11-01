@@ -160,7 +160,8 @@ pub fn parse_table(text: &str) -> Result<Vec<Row>, Vec<String>> {
     let mut tables = 0;
     while i < lines.len() {
         let line = lines[i].trim();
-        if !line.starts_with('|') || split_cells(line).first().map(String::as_str) != Some("Paper") {
+        if !line.starts_with('|') || split_cells(line).first().map(String::as_str) != Some("Paper")
+        {
             i += 1;
             continue;
         }
@@ -176,10 +177,10 @@ pub fn parse_table(text: &str) -> Result<Vec<Row>, Vec<String>> {
             ));
         }
         i += 1;
-        if !lines.get(i).is_some_and(|l| l.trim().starts_with("|-")) {
-            errors.push(format!("line {}: expected the |---| separator row", i + 1));
-        } else {
+        if lines.get(i).is_some_and(|l| l.trim().starts_with("|-")) {
             i += 1;
+        } else {
+            errors.push(format!("line {}: expected the |---| separator row", i + 1));
         }
         while i < lines.len() && lines[i].trim().starts_with('|') {
             match parse_row(lines[i], i + 1) {
@@ -324,6 +325,42 @@ fn kiln_predefs(kiln: &Path) -> Result<BTreeMap<String, String>, String> {
     Ok(parse_predefs(&String::from_utf8_lossy(&o.stdout)))
 }
 
+/// Check (b): one runner invocation over every existing test of a `done`
+/// row; each must PASS. Problems are added per paper; returns the number of
+/// tests run.
+fn check_done_tests(
+    rows: &[Row],
+    tests_dir: &Path,
+    kiln: PathBuf,
+    problems: &mut BTreeMap<String, Vec<String>>,
+) -> Result<usize, String> {
+    let done_tests: BTreeSet<&str> = rows
+        .iter()
+        .filter(|r| r.status == FeatureStatus::Done)
+        .flat_map(|r| r.tests.iter().map(String::as_str))
+        .filter(|t| tests_dir.join(t).is_file())
+        .collect();
+    let results = test::execute(&test::Options {
+        compiler: Some(kiln),
+        paths: done_tests.iter().map(|t| tests_dir.join(t)).collect(),
+        ..Default::default()
+    })?;
+    let outcome: BTreeMap<String, &'static str> =
+        results.iter().map(|r| (r.name.clone(), r.status.label())).collect();
+    for row in rows.iter().filter(|r| r.status == FeatureStatus::Done) {
+        for t in row.tests.iter().filter(|t| done_tests.contains(t.as_str())) {
+            match outcome.get(&format!("tests/{t}")).copied() {
+                Some("PASS") => {}
+                got => problems
+                    .entry(row.paper.clone())
+                    .or_default()
+                    .push(format!("(b) `tests/{t}`: {}", got.unwrap_or("not run"))),
+            }
+        }
+    }
+    Ok(done_tests.len())
+}
+
 pub fn main(args: impl Iterator<Item = String>) -> ExitCode {
     let args = match parse_args(args) {
         Ok(Some(a)) => a,
@@ -377,37 +414,13 @@ pub fn main(args: impl Iterator<Item = String>) -> ExitCode {
     let mut problems: BTreeMap<String, Vec<String>> =
         check_static(&rows, |t| tests_dir.join(t).is_file(), &predefs).into_iter().collect();
 
-    // (b): one runner invocation over every existing test of a `done` row.
-    let done_tests: BTreeSet<&str> = rows
-        .iter()
-        .filter(|r| r.status == FeatureStatus::Done)
-        .flat_map(|r| r.tests.iter().map(String::as_str))
-        .filter(|t| tests_dir.join(t).is_file())
-        .collect();
-    let results = match test::execute(&test::Options {
-        compiler: Some(kiln),
-        paths: done_tests.iter().map(|t| tests_dir.join(t)).collect(),
-        ..Default::default()
-    }) {
-        Ok(r) => r,
+    let ran = match check_done_tests(&rows, &tests_dir, kiln, &mut problems) {
+        Ok(n) => n,
         Err(e) => {
             eprintln!("xtask features: {e}");
             return ExitCode::from(2);
         }
     };
-    let outcome: BTreeMap<String, &'static str> =
-        results.iter().map(|r| (r.name.clone(), r.status.label())).collect();
-    for row in rows.iter().filter(|r| r.status == FeatureStatus::Done) {
-        for t in row.tests.iter().filter(|t| done_tests.contains(t.as_str())) {
-            match outcome.get(&format!("tests/{t}")).copied() {
-                Some("PASS") => {}
-                got => problems
-                    .entry(row.paper.clone())
-                    .or_default()
-                    .push(format!("(b) `tests/{t}`: {}", got.unwrap_or("not run"))),
-            }
-        }
-    }
 
     let count = |s| rows.iter().filter(|r| r.status == s).count();
     println!(
@@ -416,7 +429,7 @@ pub fn main(args: impl Iterator<Item = String>) -> ExitCode {
         count(FeatureStatus::Done),
         count(FeatureStatus::Partial),
         count(FeatureStatus::Todo),
-        done_tests.len()
+        ran
     );
     if problems.is_empty() {
         println!("xtask features: ok");
@@ -464,7 +477,7 @@ mod tests {
         // The second table; a `|` inside a code span in Notes does not split.
         assert_eq!(rows[3].paper, "P1967R14");
         assert_eq!(rows[3].status, FeatureStatus::Todo);
-        assert!(rows[3].tests.is_empty());
+        assert_eq!(rows[3].tests, Vec::<String>::new());
     }
 
     #[test]
@@ -527,11 +540,8 @@ mod tests {
         let rows = parse_table(&text).expect("docs/status/cxx-features.md parses");
         assert!(rows.iter().any(|r| r.paper == "P0847R7"));
         let tests = util::repo_root().join("tests");
-        let missing: Vec<_> = rows
-            .iter()
-            .flat_map(|r| r.tests.iter())
-            .filter(|t| !tests.join(t).is_file())
-            .collect();
+        let missing: Vec<_> =
+            rows.iter().flat_map(|r| r.tests.iter()).filter(|t| !tests.join(t).is_file()).collect();
         assert!(missing.is_empty(), "tests named in the table do not exist: {missing:?}");
     }
 }
