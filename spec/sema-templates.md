@@ -833,6 +833,20 @@ instantiation refers here" at the pattern declaration (WP-194). A
 class explicit instantiation skips undefined members, and an explicit
 instantiation declaration is never diagnosed.
 
+The same holds for a variable template specialization (WP-214):
+"explicit instantiation of undefined variable template 'N::v<int>'",
+printed qualified and with the canonical arguments. It is reported once.
+The location follows clang's point of instantiation.
+- If the specialization was odr-used before the explicit instantiation,
+  the error is at its first reference, even an unevaluated one
+  (`Sema::note_var_referenced` records it in `inst.undefined_var_uses`).
+- Otherwise the error is at the explicit instantiation.
+
+A static data member that an earlier use already queued is queued again
+by its explicit instantiation (`queue_explicit_instantiation`). It is
+then reported at both places, as clang's duplicate
+`PendingInstantiations` entries do.
+
 **An explicit instantiation declaration** (`extern template`) does not
 stop sema from instantiating inline and `constexpr` members when they
 are used. It only tells codegen not to emit them (WP-080).
@@ -1404,10 +1418,42 @@ formed it:
   "typename specifier refers to non-type member", "no member named",
   "cannot be used prior to '::'" and access errors. The notes are
   unchanged.
-- An interned type written at several places resolves to the occurrence
-  nearest the anchor. That is exact when each declarator writes its own
-  type. Two identical dependent types in one declaration may swap
-  locations.
+- An interned type written at several places resolves by occurrence,
+  not by distance (WP-214). While a declaration's type is substituted,
+  `Substituter::written_scope` (a `WrittenScope`: anchor, side, bound)
+  says which occurrence it wrote, and `written_loc_in` picks it.
+  - *After* `bound`: the first occurrence at or after `bound`.
+  - *Before* `bound`: the last occurrence at or before `bound`.
+  - The scope applies only while the anchor matches. A type substituted
+    at another anchor (a default argument, an initializer) falls back to
+    the nearest occurrence.
+- The rule each declaration uses (`subst/decls.rs`):
+  - A parameter, field or variable whose decl-specifiers' start is
+    recorded (`decls.cold.begin_loc`) uses *after* that start. This finds
+    `int (*p)(T::type)`'s own occurrence, which is written after `p`.
+    Otherwise it uses *before* the declarator-id, or before where an
+    unnamed parameter's name would be.
+  - A leading return type uses *before* the function's name.
+  - A typedef uses *before* its name. An alias-declaration uses *after*
+    its name.
+  - A trailing return type, and a conversion function's type, use
+    *after* the last parameter's location.
+- Order. A leading return type is substituted before the parameters, so
+  the first error reported is the first one written, as in clang's
+  `TransformFunctionProtoType`. A trailing return type is substituted
+  after them. The parameters still enter scope before the exception
+  specification.
+- Known gaps. A typedef or variable whose declarator writes the type
+  again after the name (`typedef int (*f)(T::type)`) has no recorded
+  begin, so it can pick an earlier occurrence. So can a trailing return
+  type after a parameter of function-pointer type.
+- Dependent names inside expressions (`T::x` in a default argument,
+  `sizeof(typename T::type)`) are not affected. The expression keeps its
+  own location, so these are exact without the table. A partially
+  substituted member template is instantiated from its original pattern
+  with all levels of arguments at once (`MultiLevelArgs`), so its types
+  keep their written keys. Types formed during instantiation therefore
+  do not need recording.
 
 ## 6. Function templates
 

@@ -189,7 +189,7 @@ impl Sema<'_, '_> {
 
     /// The defining declaration of the pattern of variable template
     /// specialization `v`, if one has been seen.
-    fn var_pattern_def(&self, v: DeclId) -> Option<DeclId> {
+    pub(crate) fn var_pattern_def(&self, v: DeclId) -> Option<DeclId> {
         let (_, info) = self.ast.spec_info(v)?;
         self.ast.redecls_of(info.from).find(|&r| self.is_var_definition(r))
     }
@@ -440,8 +440,13 @@ impl Sema<'_, '_> {
                 self.mark_used(v);
                 if self.var_pattern_def(v).is_none() {
                     // Defined later: instantiated, and emitted, at the end
-                    // of the TU (clang `PerformPendingInstantiations`).
-                    self.queue_instantiation(v, name_loc);
+                    // of the TU (clang `PerformPendingInstantiations`),
+                    // or an error at its first odr-use.
+                    let poi = match self.inst.undefined_var_uses.get(&v) {
+                        Some(&(at, true)) => at,
+                        _ => name_loc,
+                    };
+                    self.queue_instantiation(v, poi);
                     let first = self.ast.first(v);
                     self.ast.templates.add_late_explicit_inst(first);
                 }
@@ -492,8 +497,9 @@ impl Sema<'_, '_> {
         self.instantiate_static_member_def(m, name_loc);
         if self.inst.member_defs.contains(&m) {
             // Defined later, or an error at the end of the TU (clang
-            // `PerformPendingInstantiations`, spec/sema-templates.md §4.4).
-            self.queue_instantiation(m, name_loc);
+            // `PerformPendingInstantiations`, spec/sema-templates.md §4.4),
+            // here as well as at an implicit use queued earlier.
+            self.queue_explicit_instantiation(m, name_loc);
         }
         self.mark_used(m);
     }
