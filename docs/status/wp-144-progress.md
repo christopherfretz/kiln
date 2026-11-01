@@ -20,7 +20,7 @@ Branch `wp/144-asm-followups`, worktree `kiln/.worktrees/wp-144`.
     (`Oven::fold_immediate_in`, `kiln_oven/src/lib.rs:396`).
   - A deduced return type's `function_name()` is refined once the type is
     deduced.
-- **asm goto** (`kiln_codegen/src/asm.rs:291`):
+- **asm goto** (`kiln_codegen/src/asm.rs:290`):
   - Lowers to `callbr` with one `!i` per label (`Op::CallBr`, llvm
     `callbr_ex` at `kiln_llvm/src/builder.rs:999`).
   - With register outputs, each indirect edge gets its own block that
@@ -37,7 +37,7 @@ Branch `wp/144-asm-followups`, worktree `kiln/.worktrees/wp-144`.
 - **Register-variable operands.**
   - clang `AddVariableConstraints`: `register T v asm("reg")` operands
     become `{reg}` (normalized; `&{reg}` when early-clobber), and the input
-    half of a "+" operand repeats `{reg}` (`kiln_codegen/src/asm.rs:338`).
+    half of a "+" operand repeats `{reg}` (`kiln_codegen/src/asm.rs:344`).
   - Sema now records the `register` storage class (`var_spec`).
 - **MMX: N/A.** kiln's targets are aarch64 and x86_64. The x86 MMX
   `adjustInlineAsmType` path (`y` constraints mapping to `x86_mmx`) only
