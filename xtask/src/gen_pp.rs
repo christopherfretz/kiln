@@ -394,13 +394,12 @@ mod tests {
         assert_eq!(parse_args(strings(&["-h"])).unwrap(), None);
     }
 
-    /// A fake libc++ and sysroot: categories, exclusions, std suffixes,
-    /// idempotence and stale-file removal.
-    #[test]
-    fn generates_idempotently() {
+    /// Builds a fake libc++ (`v1`) and sysroot (`include`) under a fresh
+    /// directory named after `tag`; returns (base, libcxx, sysroot, out).
+    fn fixture(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
         let base = crate::util::target_dir(&repo_root())
             .unwrap()
-            .join(format!("xtask-gen-pp-test-{}", std::process::id()));
+            .join(format!("xtask-{tag}-test-{}", std::process::id()));
         let (lib, sys, out) = (base.join("v1"), base.join("include"), base.join("out"));
         for d in [
             lib.join("experimental/__simd"),
@@ -427,6 +426,14 @@ mod tests {
         for f in ["stdio.h", "unistd.h", "regexp.h", "sys/types.h", "notes.txt"] {
             fs::write(sys.join(f), "").unwrap();
         }
+        (base, lib, sys, out)
+    }
+
+    /// A fake libc++ and sysroot: categories, exclusions, std suffixes,
+    /// idempotence and stale-file removal.
+    #[test]
+    fn generates_idempotently() {
+        let (base, lib, sys, out) = fixture("gen-pp");
         let opts = |std: &str| Options {
             std: std.into(),
             libcxx: lib.clone(),
@@ -492,8 +499,23 @@ mod tests {
         assert_eq!(st.removed, 0);
         assert!(out.join("libcxx.c++20/vector.cpp").is_file());
         assert!(out.join("libcxx/vector.cpp").is_file());
-        // The no-crash guard: libc++ categories only, no-crash tests.
-        let nc = plan(&Options { no_crash: true, ..opts("c++26") }).unwrap();
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// `--no-crash`: libc++ categories only, `expect: no-crash` tests
+    /// without an error limit.
+    #[test]
+    fn no_crash_plan() {
+        let (base, lib, sys, out) = fixture("gen-pp-no-crash");
+        let opts = |std: &str| Options {
+            std: std.into(),
+            libcxx: lib.clone(),
+            sysroot: sys.clone(),
+            out: Some(out.clone()),
+            check: false,
+            no_crash: true,
+        };
+        let nc = plan(&opts("c++26")).unwrap();
         let names: Vec<String> =
             nc.files.keys().map(|k| k.to_string_lossy().replace('\\', "/")).collect();
         assert_eq!(
@@ -501,6 +523,7 @@ mod tests {
             [
                 "libcxx/cxxabi.h.cpp",
                 "libcxx/experimental/simd.cpp",
+                "libcxx/map.cpp",
                 "libcxx/vector.cpp",
                 "libcxx-c/stdio.h.cpp",
             ]

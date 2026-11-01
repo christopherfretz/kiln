@@ -119,6 +119,8 @@ struct Pool {
     helper: Condvar,
 }
 
+// Four independent flags of one mutex-guarded state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 struct State {
     implicit_free: bool,

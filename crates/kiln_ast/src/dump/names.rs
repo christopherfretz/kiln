@@ -1036,12 +1036,11 @@ impl AstNames<'_> {
             ValueCategory::LValue => false,
             ValueCategory::XValue => true,
         };
-        match types.find_reference_to(t, rvalue) {
-            Some(r) => write_type(types, self, r, self.expr_types, out),
-            None => {
-                write_type(types, self, t, self.expr_types, out);
-                out.push_str(if rvalue { " &&" } else { " &" });
-            }
+        if let Some(r) = types.find_reference_to(t, rvalue) {
+            write_type(types, self, r, self.expr_types, out);
+        } else {
+            write_type(types, self, t, self.expr_types, out);
+            out.push_str(if rvalue { " &&" } else { " &" });
         }
     }
 
