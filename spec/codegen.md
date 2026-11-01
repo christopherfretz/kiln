@@ -215,6 +215,18 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
       call site too).
+  - a call of one of the standard functions clang treats as builtins
+    (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
+    `forward_like`, `as_const`, `addressof`, `__addressof`, declared in
+    namespace `std` through inline namespaces, one non-variadic parameter;
+    `CheckBuiltinFunctionCall`: the parameter a reference, the return a
+    reference or pointer to the same type up to qualifiers) is the address
+    of its argument's lvalue at every optimization level, so the function
+    is not referenced and not emitted (`Cg::is_std_builtin`, `emit_call`;
+    landed in WP-172, `tests/codegen/std_builtin_fold.cpp`). The algorithm
+    `std::move(first, last, out)` and a `move` outside `std` are ordinary
+    calls. Not done: clang's `-Wunused-value` "ignoring return value of
+    function declared with const attribute" on a discarded call of one.
   - a source-location builtin (`SourceLocExpr`, spec/ast.md §5.8) is
     the value sema recorded for it: `__builtin_LINE`/`_COLUMN` an
     integer constant; `__builtin_FILE`/`_FILE_NAME`/`_FUNCTION` a

@@ -215,6 +215,44 @@ pub(crate) enum BuiltinCall {
 }
 
 impl Cg<'_> {
+    /// Whether `d` is one of the standard functions clang treats as a
+    /// builtin and folds at every optimization level (spec/codegen.md §3,
+    /// "Calls"; clang `isStdBuiltin` + `CheckBuiltinFunctionCall`):
+    /// `std::move`, `move_if_noexcept`, `forward`, `forward_like`,
+    /// `as_const`, `addressof` and `__addressof`, declared in namespace
+    /// `std` (through inline namespaces) with one non-variadic parameter of
+    /// reference type, returning a reference or pointer to the same type up
+    /// to qualifiers. A call of one is the address of its argument's
+    /// lvalue; the function itself is not referenced.
+    pub(crate) fn is_std_builtin(&self, d: DeclId) -> bool {
+        const NAMES: [&str; 7] = [
+            "move",
+            "move_if_noexcept",
+            "forward",
+            "forward_like",
+            "as_const",
+            "addressof",
+            "__addressof",
+        ];
+        let ast = self.ast;
+        if ast.decls.get(d).kind() != DeclKind::Function || !NAMES.iter().any(|n| self.in_std(d, n))
+        {
+            return false;
+        }
+        let Some(fty) = ast.decls.get(d).ty() else { return false };
+        let Some(p) = ast.types.proto(fty) else { return false };
+        let [param] = ast.types.params(p) else { return false };
+        if p.variadic() || !ast.types.is_reference(*param) {
+            return false;
+        }
+        let ret = p.ret();
+        (ast.types.is_reference(ret) || ast.types.is_pointer(ret))
+            && match (ast.types.pointee(*param), ast.types.pointee(ret)) {
+                (Some(a), Some(b)) => ast.types.same_unqualified(a, b),
+                _ => false,
+            }
+    }
+
     /// clang `EmitVAListRef`: the address of the `va_list` operand `x`, a
     /// `__builtin_va_list` lvalue, or the decayed pointer when the
     /// target's `va_list` is an array (x86-64).
