@@ -30,9 +30,11 @@ pub(crate) struct JumpDest {
 #[derive(Clone, Debug)]
 pub(crate) enum Cleanup {
     /// Calls the destructor variant of `record` on the object at `addr`
-    /// (`DestroyObject` with `destroyCXXObject`, `CallBaseDtor`,
-    /// `CallDtorDelegating`).
+    /// (`DestroyObject` with `destroyCXXObject`, `CallBaseDtor`).
     Dtor { addr: V, record: DeclId, base: bool },
+    /// `CallDelegatingCtorDtor`: a [`Cleanup::Dtor`] of `*this` whose
+    /// base-object variant forwards the current function's VTT.
+    DelegatingDtor { addr: V, record: DeclId, base: bool },
     /// Destroys the constant-length array at `addr` of objects of class
     /// `record` (`emitDestroy` + `emitArrayDestroy`).
     ArrayDtor { addr: Addr, record: DeclId },
@@ -93,7 +95,18 @@ pub(crate) enum Cleanup {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Saved {
     Direct(CallArg),
-    Slot { slot: V, ty: LTy, align: u64 },
+    Slot {
+        slot: V,
+        ty: LTy,
+        align: u64,
+    },
+    /// An aggregate argument whose address was saved to the
+    /// `cond-cleanup.save` slot `slot` (`DominatingValue<RValue>`'s
+    /// `AggregateAddress`); `addr.v` is unused.
+    AggSlot {
+        slot: V,
+        addr: Addr,
+    },
 }
 
 /// The operands of a [`Cleanup::IrregularPartialArray`].
@@ -506,13 +519,11 @@ impl Cg<'_> {
                 self.store(v, slot, align, false);
                 *s = Saved::Slot { slot, ty, align };
             }
-            Saved::Direct(CallArg::Agg(_)) => {
-                self.f.error.get_or_insert(crate::CodegenError {
-                    loc: None,
-                    msg: "a conditional new-expression with a class placement argument is not \
-                          supported yet"
-                        .into(),
-                });
+            Saved::Direct(CallArg::Agg(addr)) if self.needs_saving(addr.v) => {
+                let al = self.pref_align(LTy::PTR);
+                let slot = self.f.fir.alloca(LTy::PTR, al);
+                self.store(addr.v, slot, al, false);
+                *s = Saved::AggSlot { slot, addr };
             }
             _ => {}
         }
@@ -1018,6 +1029,9 @@ impl Cg<'_> {
     fn run_cleanup(&mut self, c: &Cleanup, for_eh: bool) {
         match *c {
             Cleanup::Dtor { addr, record, base } => self.call_dtor(record, addr, base),
+            Cleanup::DelegatingDtor { addr, record, base } => {
+                self.call_dtor_delegating(record, addr, base);
+            }
             // Along the exceptions path the destructor always runs.
             Cleanup::NrvoDtor { addr, record, .. } if for_eh => {
                 self.call_dtor(record, addr, false);

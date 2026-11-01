@@ -751,7 +751,7 @@ impl Cg<'_> {
                     // ([except.ctor]/4), so a throw destroys it.
                     if self.opts.exceptions && self.has_nontrivial_dtor(rd) {
                         let base = self.f.structor == Some(Structor::Base);
-                        let c = Cleanup::Dtor { addr: this.v, record: rd, base };
+                        let c = Cleanup::DelegatingDtor { addr: this.v, record: rd, base };
                         self.push_cleanup_kind(c, false, true);
                     }
                 }
@@ -1174,12 +1174,22 @@ impl Cg<'_> {
     /// virtual base of `*this` (its VTT argument, clang
     /// `GetVTTParameter(ForVirtualBase)`).
     pub(crate) fn call_dtor_of(&mut self, record: DeclId, addr: V, base: bool, virt: bool) {
-        if let Err(e) = self.try_call_dtor(record, addr, base, virt) {
+        if let Err(e) = self.try_call_dtor(record, addr, base, (virt, false)) {
             self.f.error.get_or_insert(e);
         }
     }
 
-    fn try_call_dtor(&mut self, record: DeclId, addr: V, base: bool, virt: bool) -> R<()> {
+    /// clang `CallDelegatingCtorDtor`: destroys `*this` after a delegating
+    /// constructor's target returned; a base-object variant forwards the
+    /// current function's VTT (`GetVTTParameter(Delegating)`).
+    pub(crate) fn call_dtor_delegating(&mut self, record: DeclId, addr: V, base: bool) {
+        if let Err(e) = self.try_call_dtor(record, addr, base, (false, true)) {
+            self.f.error.get_or_insert(e);
+        }
+    }
+
+    /// `vtt`: (virtual base, delegating) for `vtt_arg`.
+    fn try_call_dtor(&mut self, record: DeclId, addr: V, base: bool, vtt: (bool, bool)) -> R<()> {
         let ast = self.ast;
         let Some(def) = self.class_def(record) else { return Ok(()) };
         if !self.has_nontrivial_dtor(def) {
@@ -1195,7 +1205,7 @@ impl Cg<'_> {
         let mut sig = self.call_sig_this(fty, false, &[], Some(def));
         if base && self.structor_has_vbases(first) {
             sig = self.with_vtt(sig);
-            let vtt = self.vtt_arg(def, virt, false)?;
+            let vtt = self.vtt_arg(def, vtt.0, vtt.1)?;
             self.f.call_vtt = Some(vtt);
         }
         self.call_vals(&sig, callee, fid, Some(addr), &[], &[], None, &[])?;
