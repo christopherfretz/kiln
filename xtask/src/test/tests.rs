@@ -262,8 +262,8 @@ fn fixtures_produce_expected_statuses() {
     let mut o = clang_opts(&[dir]);
     o.run_timeout = Duration::from_secs(1);
     let results = execute(&o).unwrap();
-    // 35 tests: helper.h and Inputs/* are not discovered.
-    check_fixture_statuses(&results, 35);
+    // 37 tests: helper.h and Inputs/* are not discovered.
+    check_fixture_statuses(&results, 37);
     let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
     assert!(by_name("fail-timeout.cpp").details.contains("timed out"));
     assert!(by_name("fail-crash.cpp").details.contains("signal"));
@@ -274,6 +274,7 @@ fn fixtures_produce_expected_statuses() {
     );
     assert!(by_name("fail-diag-wrong-line.cpp").details.contains("3:11 error"));
     assert!(by_name("fail-strict-unexpected.cpp").details.contains("unexpected diagnostics"));
+    assert!(by_name("fail-verify.cpp").details.contains("diagnostics expected but not seen"));
     let has = |n: &str, what: &str| {
         let d = &by_name(n).details;
         assert!(d.contains(what), "{n}: {what:?} not in\n{d}");

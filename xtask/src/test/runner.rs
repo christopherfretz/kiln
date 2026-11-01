@@ -186,6 +186,10 @@ impl Test<'_> {
                 format!("not supported by this compiler (kiln-specific `{directive}` directive)");
             return (Status::Skip, Some(reason), String::new());
         }
+        if spec.verify && kind == CompilerKind::Other {
+            let reason = "not supported by this compiler (`verify` needs kiln or clang)";
+            return (Status::Skip, Some(reason.to_owned()), String::new());
+        }
         if spec.expect == Expect::Ast && kind == CompilerKind::Other {
             let reason = "not supported by this compiler (`expect: ast` needs kiln or clang)";
             return (Status::Skip, Some(reason.to_owned()), String::new());
@@ -444,6 +448,9 @@ impl Test<'_> {
     }
 
     fn compile_ok(&mut self, spec: &TestSpec) -> Check {
+        if spec.verify {
+            return self.verify(spec);
+        }
         let o = self.compile(spec, &["-fsyntax-only"], None)?;
         if !o.success() {
             return Err(Problem::Fail(format!(
@@ -453,6 +460,29 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))
+    }
+
+    /// `verify`: the compiler's `-Xclang -verify` check of the test's
+    /// `expected-*` comments must pass (exit 0), and so must the oracle's
+    /// (else the comments themselves are wrong: ERROR). kiln accepts
+    /// `-Xclang -verify` as clang does.
+    fn verify(&mut self, spec: &TestSpec) -> Check {
+        const MODE: &[&str] = &["-fsyntax-only", "-Xclang", "-verify"];
+        let o = self.compile(spec, MODE, None)?;
+        if !o.success() {
+            return Err(Problem::Fail(format!(
+                "the compiler's -verify check failed ({})\n{}",
+                o.describe_end(),
+                indent(&o.stderr_str())
+            )));
+        }
+        if spec.oracle
+            && let Some(oracle) = self.cfg.oracle.clone()
+            && (self.cfg.compiler_kind == CompilerKind::Kiln || oracle != self.cfg.compiler)
+        {
+            self.oracle_compile(&oracle, spec, MODE, None)?;
+        }
+        Ok(())
     }
 
     fn compile_fail(&mut self, spec: &TestSpec) -> Check {
