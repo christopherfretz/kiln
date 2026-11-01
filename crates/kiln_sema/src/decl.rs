@@ -2479,7 +2479,28 @@ impl Sema<'_, '_> {
                         | OverloadedOperator::ArrayDelete
                 )
         });
-        let prev = if global_new_delete {
+        // A qualified friend of a namespace function in a templated class
+        // whose own head or type is dependent is matched only when the class
+        // is instantiated: its template parameters are a level deeper than
+        // the namespace template's, and the match may depend on the class's
+        // arguments ([temp.friend]/1, [temp.over.link]/6). A name that finds
+        // nothing is diagnosed now (clang `ActOnFunctionDeclarator`).
+        let templated_friend = friend
+            && d.qualifier.is_some()
+            && !method
+            && self.in_templated_class(Some(lexical));
+        let deferred_friend = templated_friend
+            && (self.templ.cur.is_some() || self.ast.types.is_dependent(ty))
+            && {
+                let found = self.prev_candidates_dn(dname, d.qualifier);
+                !found.is_empty()
+                    && found.iter().all(|&x| {
+                        let k = self.kind_of(self.ast.strip_shadow(x));
+                        k.payload() == kiln_ast::decl::PayloadClass::Function
+                            || k == DeclKind::FunctionTemplate
+                    })
+            };
+        let prev = if global_new_delete || deferred_friend {
             None
         } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
             // A friend of a templated class redeclares nothing until
@@ -2524,6 +2545,15 @@ impl Sema<'_, '_> {
                 && self.ast.decls.get(p).ty().is_some()
                 && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
         });
+        // An instantiated qualified friend template that matches no
+        // template declares nothing visible, without a diagnostic (clang).
+        let quiet_friend = deferred_friend
+            || friend
+                && d.qualifier.is_some()
+                && !method
+                && prev.is_none()
+                && new_fn.head.is_some()
+                && self.instantiating_friend_template;
         let mut ty = ty;
         if let Some(op) = d.op_name
             && global_new_delete
@@ -2531,7 +2561,9 @@ impl Sema<'_, '_> {
             let (t, p) = self.act_on_global_new_delete_decl(op, ty);
             ty = t;
             prev_ok = p;
-        } else if friend && d.qualifier.is_some() && (prev.is_none() || method && !matches_member) {
+        } else if friend && d.qualifier.is_some() && !quiet_friend
+            && (prev.is_none() || method && !matches_member)
+        {
             let msg = self
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
                 .arg(fname.clone())
@@ -2700,7 +2732,7 @@ impl Sema<'_, '_> {
                         && !fl.contains(LookupFlags::ADL_ONLY)
                 })
             });
-            let k = if visible || d.qualifier.is_some() {
+            let k = if visible || d.qualifier.is_some() && !quiet_friend {
                 FriendKind::Declared
             } else {
                 FriendKind::Undeclared
@@ -2752,6 +2784,8 @@ impl Sema<'_, '_> {
         }
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        } else if templated_friend {
+            self.friend_qualifiers.insert(f, ctx);
         }
         if d.op_name.is_none() && d.lit_suffix.is_none() {
             self.note_local_extern(name, f);

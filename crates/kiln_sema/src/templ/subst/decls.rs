@@ -585,6 +585,9 @@ impl Substituter<'_, '_, '_> {
         }
         ds.friend = friend;
         let mut dr = self.pattern_declarator(d, ctx)?;
+        if friend.is_some() {
+            dr.qualifier = self.sema.friend_qualifiers.get(&d).copied();
+        }
         if matches!(
             self.sema.ast.decls.get(d).name().kind(),
             DeclNameKind::Constructor | DeclNameKind::Destructor | DeclNameKind::Conversion

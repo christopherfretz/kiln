@@ -1073,6 +1073,26 @@ class name" at `B`
 - A friend template, or a friend specialization (`friend void f<>(T)`),
   is substituted and then matched against the namespace-scope templates
   when it is instantiated.
+- A friend function or function template declared with a qualified name
+  in a templated class (`template<class U> friend R N::f(X<U>);`,
+  `friend R N::g(T);`) whose template head or type is dependent is not
+  matched when the class template is defined: its own parameters are a
+  level deeper than `N::f`'s and the match may depend on the class's
+  arguments ([temp.friend]/1, [temp.over.link]/6). It is kept as a hidden
+  pattern (like an unqualified one) and its qualifier recorded
+  (`Sema::friend_qualifiers`); each instantiation of the class declares it
+  again with that qualifier, so the substituted friend (now at `N::f`'s
+  depth, parameters compared by position) redeclares the namespace member
+  and befriends it, wherever the class itself lives. A non-template
+  friend that matches nothing then is "friend declaration of 'g' does not
+  match any declaration in namespace 'N'" with the instantiation note
+  (clang adds a candidate note kiln does not emit); a friend template
+  that matches no template is accepted silently, as clang does
+  (`Sema::instantiating_friend_template`). At definition, a qualified
+  name that finds nothing at all is diagnosed at once (clang), as is a
+  mismatch in a non-template class or of a non-dependent friend
+  (WP-273; `temp.friend/qualified-friend-template-*.cpp`,
+  `qualified-friend-mismatch-at-instantiation.cpp`).
 - A friend class (`friend class B<T>;`) is substituted and grants access
   (S3C). A dependent friend specialization (`friend struct X<T>;`,
   `friend class Y<T*>;`, `friend class ns::Z<T...>;`) is kept in the
