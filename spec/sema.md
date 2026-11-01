@@ -185,6 +185,25 @@ Constructors:
      evaluation's notes) and the ExtWarn "variable length array folded
      to constant array as an extension" [-Wgnu-folding-constant] at the
      declarator name (WP-165)
+   - variable length arrays in a function (WP-183, clang `BuildArrayType`):
+     a non-constant bound of a block-scope declarator (variable, typedef,
+     alias, type-id) makes a `VariableArray` even when it would fold.
+     `-Wvla-cxx-extension` is emitted at the bound with the strict
+     evaluation's notes (an array of a VLA, `int k[3][n]`, warns once at
+     the outer `[`, without notes). In a GNU dialect (`-std=gnu++NN`,
+     `Sema::gnu`) the warning is clang's `ext_vla_cxx_in_gnu_mode`, an
+     Extension that is off by default (`sema_vla_cxx_extension_gnu`;
+     clang also adds it to `-Wall` in GNU mode, kiln does not).
+     `check_vla_var` then handles the variable: `extern` is an error
+     ("cannot have 'extern' linkage"); `static`/`thread_local` folds the
+     bound (`fold_rvalue_int`) to a constant array with the
+     -Wgnu-folding-constant ExtWarn at the name, or is an error ("cannot
+     have 'static' storage duration"). Any initializer is the error
+     "variable-sized object may not be initialized" at the bound. A VLA
+     variable counts as complete. Template substitution rebuilds a
+     `VariableArray` with the substituted bound. Kiln's diagnostic
+     dedupe keeps an instantiation from repeating the warning (clang
+     repeats it), and `sizeof(T[n])` warns once (clang twice).
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
    are compatible, and links the redeclaration chain.
@@ -631,7 +650,8 @@ and returns the scope it names:
   - `likely`/`unlikely`
   - `no_unique_address`
   - `alignas`/`aligned`, `packed`
-  - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`
+  - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
+    `hot` (`AttrKind::HOT`, WP-172)
   - `using_if_exists` (`__attribute__((using_if_exists))` or
     `[[clang::using_if_exists]]`; other `clang::` attributes are still
     ignored), on using-declarations (§4.8)
@@ -1558,8 +1578,11 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
 - **`_Atomic(T)` of class type `T` (WP-165).** Initialized from a `T` or
   a class derived from `T` (copy, direct, or a one-element braced list)
   as `T` is, then `NonAtomicToAtomic` (clang `InitializeFrom`
-  `NeedAtomicConversion`; `Sema::atomic_class_init`); other class sources
-  fail as a conversion to `_Atomic(T)`. Assignment from `T` or `_Atomic(T)`
+  `NeedAtomicConversion`; `Sema::atomic_class_init`); a `return` operand
+  too (`convert_for_init`, WP-183), while an argument is not converted
+  (clang's implicit conversion sequence has no such step, so the call is
+  "no matching function"); other class sources fail as a conversion to
+  `_Atomic(T)`. Assignment from `T` or `_Atomic(T)`
   is the right side's lvalue conversion then `NonAtomicToAtomic`
   (`conv::atomic_class_assign`, C11 6.5.16.1). Assignment errors to any
   `_Atomic` target are reported at the operator, as clang's C path.
@@ -1624,6 +1647,47 @@ The vector operators themselves are summarized in spec/types.md
   converted to `bool` as usual, and the arms are converted as for a
   binary vector operator without `bool` vectors. A `bool`-vector arm is
   `invalid operands to binary expression`.
+
+### 5.14 `-Waddress-of-packed-member` (`packed.rs`, WP-183)
+
+clang's `RefersToMemberWithReducedAlignment`, `DiscardMisalignedMemberAddress`
+and `DiagnoseMisalignedMembers`:
+
+- **Candidates.** `&m` (parentheses stripped) of a `MemberExpr` chain
+  `a.b.c` is recorded when all of these hold:
+  - every link names a non-static data member (not an indirect field);
+  - some link is packed, either the member or its class;
+  - the top base, with parentheses and implicit casts stripped, is a
+    `DeclRefExpr` or `this`;
+  - the member's type is aligned to more than 1 byte;
+  - the summed field offsets are not a multiple of that alignment, or
+    the outermost class's alignment is lower.
+
+  For `.` on a non-reference variable, the outermost class's alignment
+  is raised to the variable's own alignment (type or `alignas`). The
+  culprit is the innermost member that is packed or is in a packed
+  class. Its alignment is the smaller of its type's and its class's.
+- **Discard.** A conversion of the recorded `&m` drops it when the
+  target is an integer, a dependent type, or a pointer to an incomplete
+  type or to a type aligned no more than the culprit:
+  - every cast node in the full-expression (implicit and explicit);
+  - `implicit_convert` in any context except simple assignment (clang's
+    `InitializationSequence::Perform` step, even for an identity
+    conversion);
+  - both operands of a pointer-pointer comparison.
+
+  A conditional operator's arms, a pointer arithmetic operand, `(void)`
+  and the right side of `=` do not discard.
+- **Report.** At the end of the full-expression (`act_on_full_expr`), at
+  the `MemberExpr`'s begin location: `taking address of packed member
+  'm' of class or structure 'C' may result in an unaligned pointer
+  value`. An anonymous class is named by its typedef.
+- **Deviations:**
+  - A non-dependent `&m` in a template is reported once, at the
+    definition. clang repeats it in every instantiation.
+  - An anonymous union or struct member as the culprit prints as `''`.
+    clang prints `C::(anonymous union at ...)`.
+- Test: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

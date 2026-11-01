@@ -121,7 +121,7 @@ impl Cg<'_> {
 
     /// `d` is named `name` and declared in namespace `std` (clang
     /// `isInStdNamespace`: through inline namespaces).
-    fn in_std(&self, d: DeclId, name: &str) -> bool {
+    pub(crate) fn in_std(&self, d: DeclId, name: &str) -> bool {
         let decls = &self.ast.decls;
         if !self.decl_named(d, name) {
             return false;
@@ -443,7 +443,7 @@ impl Cg<'_> {
                 CastKind::ArrayToPointerDecay => {
                     let lv = self.emit_lvalue(s)?;
                     let decl = self.lvalue_from_decl(s);
-                    let v = self.decay(lv.addr);
+                    let v = self.decay(lv.addr, lv.q);
                     return Ok((v, decl.then_some(lv.addr.align)));
                 }
                 _ => {}

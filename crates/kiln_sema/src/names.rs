@@ -100,7 +100,11 @@ impl<'s> SemaNames<'s> {
                     let mut s = String::new();
                     self.write_unscoped(c, &mut s);
                     if let Some(args) = self.ast.spec_print_args(c) {
-                        kiln_ast::types::write_arg_list(&self.ast.types, self, args, &mut s);
+                        // clang `AppendScope` / `printNestedNameSpecifier`
+                        // print a specialization's canonical arguments,
+                        // which carry no sugar to suppress their scope
+                        // (`std::Ptr<std::D<int>>::g`, WP-172).
+                        kiln_ast::types::write_arg_list_scoped(&self.ast.types, self, args, &mut s);
                     }
                     chain.push(s);
                     name_in_scope = n.name();

@@ -40,6 +40,7 @@ pub use tokens::{Event, TokenSource};
 
 /// Options for [`parse_file`], [`parse_tu`] and [`parse_preprocessed`].
 #[derive(Clone, Copy, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ParseOptions {
     /// The language standard.
     pub std: Std,
@@ -52,6 +53,8 @@ pub struct ParseOptions {
     /// Run-time type information is enabled (`-f[no-]rtti`): `typeid`
     /// is an error otherwise (clang's `err_no_typeid_with_fno_rtti`).
     pub rtti: bool,
+    /// A GNU dialect (`-std=gnu++NN`, [`kiln_sema::Sema::gnu`]).
+    pub gnu: bool,
     /// `-ftemplate-depth=` / `-ftemplate-backtrace-limit=`.
     pub inst_limits: kiln_sema::templ::stack::InstLimits,
     /// `-fkiln-instantiation-report[=all|json]`.
@@ -65,6 +68,7 @@ impl Default for ParseOptions {
             keep_tokens: false,
             exceptions: true,
             rtti: true,
+            gnu: false,
             inst_limits: kiln_sema::templ::stack::InstLimits::default(),
             inst_report: kiln_sema::templ::report::ReportFormat::Off,
         }
@@ -178,6 +182,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
     s.exceptions = opts.exceptions;
     s.rtti = opts.rtti;
+    s.gnu = opts.gnu;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;

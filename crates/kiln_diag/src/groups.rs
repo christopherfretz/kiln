@@ -208,6 +208,7 @@ diag_groups! {
     // ----- WP-182 (statement attributes)
     Cxx17AttributeExtensions = "c++17-attribute-extensions" [];
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
+    AddressOfPackedMember = "address-of-packed-member" [];
 }
 
 impl Group {

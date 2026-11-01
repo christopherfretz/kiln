@@ -262,7 +262,10 @@ impl Cg<'_> {
             }
             ExprKind::UnaryExprOrTypeTraitExpr => match self.folds.get(e) {
                 Some(c) => V::C(self.const_scalar_value(c, q)?),
-                None => return err(self.loc_of(e), "unfolded type trait expression"),
+                None => match self.emit_vla_sizeof(e)? {
+                    Some(v) => v,
+                    None => return err(self.loc_of(e), "unfolded type trait expression"),
+                },
             },
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 return self.emit_scalar_opt(ExprId::new(n.b()));
@@ -569,7 +572,17 @@ impl Cg<'_> {
     pub(crate) fn eval_bool(&mut self, e: ExprId) -> R<V> {
         let q = self.ast.exprs.get(e).ty();
         let v = self.emit_scalar(e)?;
-        Ok(if self.is_bool(q) { v } else { self.conv_to_bool(v, q) })
+        if !self.is_bool(q) {
+            return Ok(self.conv_to_bool(v, q));
+        }
+        // A post-increment of `_Atomic(bool)` yields its old byte in memory
+        // form (`i8`, `atomic_incdec`); clang 19 branches on it as is
+        // (invalid IR), kiln truncates it (spec/codegen.md, WP-183).
+        Ok(if self.f.fir.ty(&self.m, v) == LTy::I8 {
+            self.cast(CastOp::Trunc, v, LTy::I1)
+        } else {
+            v
+        })
     }
 
     fn zext_or_same(&mut self, v: V, to: LTy) -> V {
@@ -666,7 +679,7 @@ impl Cg<'_> {
             }
             CastKind::ArrayToPointerDecay => {
                 let lv = self.emit_lvalue(s)?;
-                self.decay(lv.addr)
+                self.decay(lv.addr, lv.q)
             }
             CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr => {
                 self.emit_lvalue(s)?.addr.v
@@ -730,7 +743,12 @@ impl Cg<'_> {
     }
 
     /// `gep inbounds [N x T], p, i64 0, i64 0`.
-    pub(crate) fn decay(&mut self, a: Addr) -> V {
+    pub(crate) fn decay(&mut self, a: Addr, q: QualType) -> V {
+        // clang `EmitArrayToPointerDecay`: a variable length array's
+        // address already points to its first element.
+        if self.is_vla(q) {
+            return a.v;
+        }
         let z = self.i64c(0);
         self.gep(a.ty, a.v, vec![z, z], true)
     }
@@ -1261,7 +1279,19 @@ impl Cg<'_> {
         let lb = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(rb, false);
-        let y = self.cond_eval(start, |cg| cg.emit_scalar_opt(b))?;
+        let mut y = self.cond_eval(start, |cg| cg.emit_scalar_opt(b))?;
+        // A `bool` arm that is a post-increment of `_Atomic(bool)` is an
+        // `i8` (`atomic_incdec`); clang 19 feeds it to a phi of the other
+        // arm's type (invalid IR). Kiln converts the second arm to the
+        // first's type, which stays the phi's type as in clang
+        // (spec/codegen.md, WP-183).
+        if let (Some(xv), Some(yv)) = (x, y) {
+            let (xt, yt) = (self.f.fir.ty(&self.m, xv), self.f.fir.ty(&self.m, yv));
+            if xt != yt && matches!((xt, yt), (LTy::I1, LTy::I8) | (LTy::I8, LTy::I1)) {
+                let op = if xt == LTy::I1 { CastOp::Trunc } else { CastOp::ZExt };
+                y = Some(self.cast(op, yv, xt));
+            }
+        }
         let rb = self.f.fir.cur().expect("insert point");
         self.emit_block(cont, false);
         Ok(match (x, y) {
@@ -1917,7 +1947,13 @@ impl Cg<'_> {
         if n.kind() == ExprKind::ImplicitCastExpr
             && ast.exprs.cast_kind(e) == CastKind::ArrayToPointerDecay
         {
-            return Some(ast.exprs.operand(e));
+            let a = ast.exprs.operand(e);
+            // clang `isSimpleArrayDecayOperand`: not a variable length
+            // array.
+            if self.is_vla(ast.exprs.get(a).ty()) {
+                return None;
+            }
+            return Some(a);
         }
         None
     }
@@ -2011,8 +2047,8 @@ impl Cg<'_> {
         let (base, idx) = if swapped { (r, l) } else { (l, r) };
         let pre = if swapped { Some(self.emit_scalar(idx)?) } else { None };
         let iq = ast.exprs.get(idx).ty();
-        let esz = self.size_align(q).0;
-        let ety = self.mty(q);
+        let mut esz = self.size_align(q).0;
+        let mut ety = self.mty(q);
         let (addr, indices) = if let Some(arr) = self.simple_decay_operand(base) {
             let alv = if ast.exprs.get(arr).kind() == ExprKind::ArraySubscriptExpr {
                 self.subscript_lvalue(arr)?
@@ -2026,6 +2062,23 @@ impl Cg<'_> {
             let iv = self.int_cast(iv, LTy::I64, self.is_signed(iq));
             let z = self.i64c(0);
             (alv.addr, vec![z, iv])
+        } else if self.is_vla_decay(base) || self.is_vla(q) {
+            // clang `EmitPointerWithAlignment`: the decayed variable
+            // length array's alignment; an element of variable length
+            // array type scales the index by its element count.
+            let (p, align) = self.ptr_align(base)?;
+            let iv = match pre {
+                Some(v) => v,
+                None => self.emit_scalar(idx)?,
+            };
+            let iv = self.int_cast(iv, LTy::I64, self.is_signed(iq));
+            if let Some((iv, elem)) = self.vla_scaled_index(q, iv)? {
+                esz = self.size_align(elem).0;
+                ety = self.mty(elem);
+                (Addr { v: p, ty: ety, align }, vec![iv])
+            } else {
+                (Addr { v: p, ty: ety, align }, vec![iv])
+            }
         } else {
             let p = self.emit_scalar(base)?;
             let align = self.natural_align(q);
@@ -2198,6 +2251,13 @@ impl Cg<'_> {
         }
         // A builtin is never emitted as a function (spec/codegen.md §3, "Calls"):
         // it folds, lowers inline, or calls the library function it names.
+        // `std::move(x)` and its kin fold to the address of `x`.
+        if let Some(d) = direct
+            && self.is_std_builtin(d)
+            && let Some(a) = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).next()
+        {
+            return Ok(Some(self.emit_lvalue(a)?.addr.v));
+        }
         let mut lib = None;
         if let Some(d) = direct
             && let Some(id) = ast.decls.builtin_id(d)
@@ -2316,7 +2376,7 @@ impl Cg<'_> {
             let v = if self.referee(sig.params[i]).is_some() {
                 // A reference parameter binds the argument glvalue.
                 CallArg::Scalar(self.emit_lvalue(a)?.addr.v)
-            } else if self.is_aggregate(arg_tys[i]) {
+            } else if self.is_aggregate(arg_tys[i]) || self.is_atomic_aggregate(arg_tys[i]) {
                 let t = self.temp(arg_tys[i]);
                 let saved = std::mem::take(&mut self.f.dest_destructed);
                 let r = self.emit_agg(a, t, false);
@@ -2449,6 +2509,7 @@ impl Cg<'_> {
             // clang `convertTempToRValue`: a scalar returned indirectly
             // (a vector wider than the registers) is loaded back.
             if !self.is_aggregate(rq)
+                && !self.is_atomic_aggregate(rq)
                 && !matches!(
                     self.ast.types.canonical_view(rq),
                     kiln_ast::types::TypeView::Complex(_)
@@ -2459,9 +2520,14 @@ impl Cg<'_> {
             return Ok(None);
         }
         if rty == LTy::VOID {
+            if matches!(sig.info.ret.kind, ArgKind::Ignore) && self.is_aggregate(rq) {
+                // clang `EmitCall` -> `GetUndefRValue`: an ignored
+                // aggregate result still gets its (unused) temporary.
+                self.temp(rq);
+            }
             return Ok(None);
         }
-        if self.is_aggregate(rq) {
+        if self.is_aggregate(rq) || self.is_atomic_aggregate(rq) {
             // clang `EmitCall`: a given destination takes the data size
             // (`getTypeInfoDataSizeInChars`; it may be a base subobject or
             // a `[[no_unique_address]]` member whose tail padding holds
@@ -3362,6 +3428,13 @@ impl Cg<'_> {
             _ => {}
         }
         let q = ast.decls.get(d).ty().expect("var type");
+        if self.is_vla(q) {
+            let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
+            return self.emit_vla_var(d, q, init);
+        }
+        // clang `EmitAutoVarAlloca`: `EmitVariablyModifiedType` (a pointer
+        // or reference to a variable length array).
+        self.emit_vla_bounds(q)?;
         let ty = self.mty(q);
         let dtor_class = self.destructed_class(q);
         // NRVO: the variable lives in the return slot (clang

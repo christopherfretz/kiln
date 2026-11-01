@@ -6,15 +6,17 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard};
 
-use kiln_source::{SourceManager, Span};
+use kiln_source::{Loc, SourceManager, Span};
 
 use crate::diag::{Diag, Diagnostic, Level};
+use crate::groups::Flavor;
 use crate::ids::DiagId;
 use crate::json::JsonSink;
 use crate::options::{DiagOptions, Format};
 use crate::policy::{Policy, Severity};
+use crate::pragma::Pragmas;
 use crate::text::TextSink;
 
 /// Where emitted diagnostics go. Sinks are called under the engine's lock,
@@ -39,6 +41,10 @@ pub struct DiagEngine<'sm> {
     policy: Policy,
     error_limit: u32,
     state: Mutex<State<'sm>>,
+    /// `#pragma clang diagnostic` state ([`crate::pragma`]).
+    pragmas: RwLock<Pragmas>,
+    /// Some pragma changed the state: severities depend on location.
+    has_pragmas: AtomicBool,
     errors: AtomicU32,
     warnings: AtomicU32,
     fatal: AtomicBool,
@@ -70,6 +76,8 @@ impl<'sm> DiagEngine<'sm> {
             policy,
             error_limit: opts.error_limit,
             state: Mutex::new(State { sink: Box::new(sink), seen: HashSet::new() }),
+            pragmas: RwLock::new(Pragmas::new()),
+            has_pragmas: AtomicBool::new(false),
             errors: AtomicU32::new(0),
             warnings: AtomicU32::new(0),
             fatal: AtomicBool::new(false),
@@ -95,9 +103,64 @@ impl<'sm> DiagEngine<'sm> {
         self.sm
     }
 
-    /// The severity `id` would be emitted with (`Ignored` for notes).
+    /// The severity `id` would be emitted with by the command-line
+    /// options alone (`Ignored` for notes); see [`Self::severity_at`].
     pub fn severity(&self, id: DiagId) -> Severity {
         self.policy.severity(id)
+    }
+
+    /// The severity `id` located at `loc` would be emitted with, under
+    /// the diagnostic pragmas in effect there (an invalid location: the
+    /// current state). Ignores the system-header rule.
+    pub fn severity_at(&self, id: DiagId, loc: Loc) -> Severity {
+        if !self.has_pragmas.load(Ordering::Acquire) {
+            return self.policy.severity(id);
+        }
+        match self.pragmas().mapping_at(self.sm, id, loc) {
+            Some(m) => self.policy.severity_with(id, m),
+            None => self.policy.severity(id),
+        }
+    }
+
+    fn pragmas(&self) -> RwLockReadGuard<'_, Pragmas> {
+        self.pragmas.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn update_pragmas<T>(&self, f: impl FnOnce(&mut Pragmas) -> T) -> T {
+        let mut p = self.pragmas.write().unwrap_or_else(PoisonError::into_inner);
+        let r = f(&mut p);
+        self.has_pragmas.store(!p.is_empty(), Ordering::Release);
+        r
+    }
+
+    /// `#pragma clang diagnostic push` (or `GCC`) at `at`.
+    pub fn pragma_push(&self, _at: Loc) {
+        self.update_pragmas(Pragmas::push);
+    }
+
+    /// `#pragma clang diagnostic pop` at `at`; false if nothing was
+    /// pushed ("pragma diagnostic pop could not pop").
+    pub fn pragma_pop(&self, at: Loc) -> bool {
+        let at = self.sm.expansion_loc(at);
+        self.update_pragmas(|p| p.pop(at))
+    }
+
+    /// `#pragma clang diagnostic ignored/warning/error/fatal "-W<group>"`
+    /// (`remark`: `"-R<group>"`) at `at`; `group` may be `everything`.
+    /// False if the group is unknown.
+    pub fn pragma_set(&self, at: Loc, remark: bool, group: &str, sev: Severity) -> bool {
+        let at = self.sm.expansion_loc(at);
+        let flavor = if remark { Flavor::Remark } else { Flavor::WarningOrError };
+        self.update_pragmas(|p| p.set(&self.policy, at, flavor, group, sev))
+    }
+
+    /// The preprocessor left an included file, resuming its includer at
+    /// `resume`: the diagnostic state at the end of the file continues
+    /// there (a pragma in a header without `push` reaches the includer).
+    pub fn pragma_file_exit(&self, resume: Loc) {
+        if self.has_pragmas.load(Ordering::Acquire) {
+            self.update_pragmas(|p| p.file_exit(self.sm, resume));
+        }
     }
 
     /// Whether warnings located in system headers are dropped: true
@@ -108,24 +171,26 @@ impl<'sm> DiagEngine<'sm> {
 
     /// Whether `id` located at `loc` would be emitted: enabled
     /// ([`Self::is_enabled`]) and not suppressed in a system header (§5.4).
-    pub fn is_enabled_at(&self, id: DiagId, loc: kiln_source::Loc) -> bool {
-        self.is_enabled(id) && !self.suppressed_in_system_header(id, loc)
+    pub fn is_enabled_at(&self, id: DiagId, loc: Loc) -> bool {
+        self.severity_at(id, loc) != Severity::Ignored && !self.suppressed_in_system_header(id, loc)
     }
 
     /// clang's system-header rule (the tail of `getDiagnosticSeverity`):
     /// a diagnostic that does not show in system headers, whose location's
     /// expansion is in one, is ignored unless `-Wsystem-headers`.
-    fn suppressed_in_system_header(&self, id: DiagId, loc: kiln_source::Loc) -> bool {
+    fn suppressed_in_system_header(&self, id: DiagId, loc: Loc) -> bool {
         self.policy.suppress_system
             && !id.shows_in_system_header()
             && loc.is_valid()
             && self.sm.is_in_system_header(loc)
     }
 
-    /// Whether `id` would be emitted at all. Use it to skip expensive
-    /// checks for disabled warnings.
+    /// Whether `id` would be emitted at all: enabled by the options or
+    /// by some diagnostic pragma. Use it to skip expensive checks for
+    /// disabled warnings.
     pub fn is_enabled(&self, id: DiagId) -> bool {
         self.severity(id) != Severity::Ignored
+            || (self.has_pragmas.load(Ordering::Acquire) && self.pragmas().enables(id))
     }
 
     /// Errors emitted so far (fatal errors included).
@@ -180,7 +245,7 @@ impl<'sm> DiagEngine<'sm> {
     /// diagnostic that will be dropped.
     pub fn would_emit(&self, d: &Diag) -> bool {
         let Some(id) = d.id else { return false };
-        if self.has_fatal() || self.policy.severity(id) == Severity::Ignored {
+        if self.has_fatal() || self.severity_at(id, d.span.lo) == Severity::Ignored {
             return false;
         }
         if self.suppressed_in_system_header(id, d.span.lo) {
@@ -210,7 +275,7 @@ impl<'sm> DiagEngine<'sm> {
         if self.has_fatal() {
             return;
         }
-        let level = match self.policy.severity(id) {
+        let level = match self.severity_at(id, d.span.lo) {
             Severity::Ignored => return,
             Severity::Remark => Level::Remark,
             Severity::Warning => Level::Warning,

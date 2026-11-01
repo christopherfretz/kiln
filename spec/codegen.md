@@ -49,8 +49,9 @@ panic and never silently wrong IR.
   double`, `const _Atomic(int)`, a `const` array or class element), so a
   global whose every use folds is not emitted. A load of a const variable
   is recognized through parentheses and `NoOp` casts (the xvalue cast of
-  an implicitly moved `return x;`). Variables with a `mutable` member are
-  not folded (clang folds their non-mutable members; deviation).
+  an implicitly moved `return x;`). A read of a `mutable` member is not
+  folded (the Oven's "read of mutable member" check, spec/oven.md); the
+  variable's other members are.
   Validation: `tests/codegen/const_fold_lax.cpp`.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
@@ -69,6 +70,56 @@ panic and never silently wrong IR.
   memcpy/memset/GEP/casts.
 - `expr.rs`: scalar, lvalue and aggregate expression emission (§3).
 - `stmt.rs`: statement emission (§4).
+
+### 2a. Emission order (WP-172)
+Function and global positions in the module are **creation order** (the
+first `get_fn`/`get_gvar` of a name creates its declaration); a later
+definition fills the existing declaration in place. Emission order still
+matters, because it decides where declarations created inside a body
+land, the order in which comdats are created (at definition), and
+nounwind inference: clang's `TryMarkNoThrow` marks a definition
+`nounwind` when every call in it is to a `nounwind` callee, so a callee
+defined earlier turns a caller's `invoke` into `call`. kiln mirrors
+clang's `CodeGenModule` pipeline:
+1. **Top-level walk** (`emit_members`, clang `HandleTopLevelDecl` per
+   declaration, in parse order). Strong definitions are emitted now.
+   Discardable ones (`linkonce_odr`: inline functions, implicit
+   instantiations, ...) go to `deferred` (clang `DeferredDecls`) unless
+   their name was already referenced, in which case they go straight to
+   `to_emit` (`DeferredDeclsToEmit`). The first reference to a deferred
+   name (`get_fn`/`get_gvar`) moves its definition to `to_emit`. A
+   variable with a side-effecting dynamic initializer is must-emit and is
+   emitted at its `HandleTopLevelDecl`.
+2. **Key-function vtables** (`emit_key_function_vtables`, clang
+   `DefineUsedVTables` -> `HandleVTable`).
+3. **End-of-TU instantiations** (`emit_end_of_tu_instantiations`). Sema's
+   end-of-TU drain (`kiln_sema::templ::pending`) records each definition
+   it instantiates in `TemplateTables::end_of_tu_defs`, in clang's order:
+   every instantiation is recursive (`GlobalEagerInstantiationScope`), so
+   after a body is instantiated, the vtables and definitions it requires
+   are instantiated before the rest of the enclosing queue (depth-first,
+   pre-order; an already queued definition is never queued again, and
+   constexpr and deduced-return functions are instantiated at their
+   use, [temp.inst]/5). Codegen holds these definitions back from the
+   top-level walk (`Cg::held`: `inline_def`, `instantiated_var_def` and
+   the walk's `emit_global_*` skip them, including instantiated
+   out-of-line static member definitions that sema appends to the TU)
+   and replays them through `emit_global_*` in that order, which is
+   clang's `HandleTopLevelDecl` of each instantiation (a static data
+   member's replayed definition is its instantiated out-of-line
+   redeclaration, initializer or not: `template<class T> T A<T>::s;`).
+4. **`emit_deferred`** (clang `EmitDeferred`): deferred vtables first,
+   then `to_emit`, recursing depth-first into the names each definition
+   newly references.
+
+Deviation: clang's `applyReplacements` moves a base-object structor
+(`D2`/`C2`) that replaces a complete-object alias to the position of the
+replaced declaration; `kiln_llvm` cannot reorder functions, so kiln keeps
+it at its creation position (only visible when a complete-object
+structor declaration is created before its base variant is defined, e.g.
+a virtual destructor of a template base called from a cleanup in a
+strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
+`tests/codegen/virtual_template_out_of_line.cpp`.
 
 ## 3. Expressions (clang CGExprScalar/CGExprAgg/CGDecl rules mirrored)
 `expr.rs` mirrors clang's `ScalarExprEmitter`, `EmitLValue`,
@@ -116,9 +167,27 @@ panic and never silently wrong IR.
     `sret` `writable` pointer). A template specialization carries the
     pattern's attributes (spec/sema-templates.md §5)
     (`tests/codegen/const_pure_call_sites.cpp`, WP-182);
+  - a GNU `cold` / `hot` attribute on some declaration of the callee adds
+    `cold` / `hot` to the declaration, the definition and direct call
+    sites, member calls included (`builtins::cold_hot_attrs`; WP-172,
+    `tests/codegen/cold_hot.cpp`; glibc's `abort` is `__COLD`). C library
+    functions recognized by name stay ordinary calls: clang's lowering of
+    a `BuiltinAttr` library call (`memcpy` to `llvm.memcpy`, a folded
+    `strlen("abc")`) is not done (a follow-up);
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
-    call initializes an aggregate, otherwise into a temporary.
+    call initializes an aggregate, otherwise into a temporary; an
+    ignored aggregate call makes that temporary itself, after the
+    arguments, and an empty-class (`Ignore`) result still gets an unused
+    temporary (clang `GetUndefRValue`; WP-172);
+  - an assignment operator call (`CXXOperatorCallExpr` with `=`, `+=`,
+    ... and a member callee) evaluates its right operand before the
+    object (clang `EvaluationOrder::ForceRightToLeft`): a trivial
+    copy/move assignment emits the source lvalue, then the object, then
+    the `memcpy` (nothing for an empty class); any other assignment
+    operator emits its argument, then the object, then names the callee.
+    `a.operator=(b)` keeps object-first order (WP-172;
+    `tests/codegen/assign_rhs_first.cpp`).
   - a call of a builtin (callee a `BuiltinFnToFnPtr` cast of a
     `kiln_ast::decl::builtin` function) is never a call of the builtin
     (`builtins.rs`, clang `EmitBuiltinExpr`; landed in WP-088):
@@ -166,6 +235,18 @@ panic and never silently wrong IR.
       with the builtin's type, `nounwind`, and `willreturn
       memory(read)` / `memory(none)` for `Pure` / `Const` builtins (on the
       call site too).
+  - a call of one of the standard functions clang treats as builtins
+    (clang `isStdBuiltin`: `std::move`, `move_if_noexcept`, `forward`,
+    `forward_like`, `as_const`, `addressof`, `__addressof`, declared in
+    namespace `std` through inline namespaces, one non-variadic parameter;
+    `CheckBuiltinFunctionCall`: the parameter a reference, the return a
+    reference or pointer to the same type up to qualifiers) is the address
+    of its argument's lvalue at every optimization level, so the function
+    is not referenced and not emitted (`Cg::is_std_builtin`, `emit_call`;
+    landed in WP-172, `tests/codegen/std_builtin_fold.cpp`). The algorithm
+    `std::move(first, last, out)` and a `move` outside `std` are ordinary
+    calls. Not done: clang's `-Wunused-value` "ignoring return value of
+    function declared with const attribute" on a discarded call of one.
   - a source-location builtin (`SourceLocExpr`, spec/ast.md §5.8) is
     the value sema recorded for it: `__builtin_LINE`/`_COLUMN` an
     integer constant; `__builtin_FILE`/`_FILE_NAME`/`_FUNCTION` a
@@ -382,12 +463,13 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 105 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 184 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
-  `class_*` cases of §7, and the WP-137 `consteval_oversized` case): 210/210 pairs
-  exact, `DEVIATIONS` is empty.
+  `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
+  work packages' cases): 367/368 pairs exact; `DEVIATIONS` holds
+  `global_init_array_eh` on aarch64 (§7f).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
   are compiled, linked and run by kiln and by clang, and their stdout and
@@ -962,8 +1044,23 @@ clang 19 `CGAtomic` at -O0, mirrored:
   yielding `true`; post-increment is `atomicrmw xchg i8 1` (never
   volatile) yielding the old byte in its memory form (`i8`), which clang
   then stores or extends as if it were the `i1` value. Where the value
-  must meet an `i1` (a conditional operator's `phi`) clang 19 emits
-  invalid IR; kiln reports an IR lowering error there.
+  must meet an `i1` clang 19 emits invalid IR; kiln deviates there
+  (WP-183): `eval_bool` (a branch condition, `!`, `&&`, `||`, a `?:`
+  condition) truncates an `i8` value of a `bool` expression to `i1`, and
+  `emit_conditional` converts its second arm to the first arm's type
+  when one is `i1` and the other `i8` (`trunc`, or `zext` that folds a
+  constant), so the `phi` keeps clang's type (the first arm's). Two `i8`
+  arms stay an `i8` `phi`, as in clang (valid IR, oracle-checked in
+  `tests/codegen/atomic_bool_inc.cpp`); the invalid-in-clang cases are a
+  run test with no oracle (`ext.c11.atomic/bool-postinc-run.cpp`).
+- **`_Atomic` aggregates in calls (WP-183).** `_Atomic(T)` with `T` an
+  aggregate is evaluated as an aggregate (`is_atomic_aggregate`, clang's
+  `getEvaluationKind`) for a `return` operand, a parameter, an argument
+  and a call result, and is an aggregate for the ABI (kiln_abi
+  `is_aggregate`, clang's `isAggregateTypeForABI`): x86-64 classifies it
+  `MEMORY` (`sret`/`byval`), AArch64 as an integer-coerced or indirect
+  composite. An `EmitAtomicInit` from an `_Atomic` aggregate initializer
+  (a call result) writes the whole atomic object, unprojected.
 - **Floating `min`/`max_fetch` (WP-165), a deviation:** clang 19 compares
   the old value and the operand with an `icmp` (invalid IR); kiln yields
   `llvm.minnum` / `llvm.maxnum` of the two, the value `atomicrmw fmin` /
@@ -1028,7 +1125,11 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   variable whose initializer does not fold gets a zero initializer and
   needs construction, one of class type with a non-trivial destructor
   (not a reference) needs destruction. The global is `constant` only
-  when it is `const` (not `mutable`) or a reference and needs neither.
+  when it is `const` or a reference and needs neither, and its type is
+  not a class (or array of classes) with a `mutable` member, directly or
+  in a subobject (clang `isTypeConstant`: `hasMutableFields`; WP-183,
+  `module.rs` `has_mutable`, also for static locals and the static data
+  members emitted with their class; `tests/codegen/const_mutable_fields.cpp`).
   Constant-initialized variables keep the constant path unchanged.
 - **Init functions.** Each such variable gets an internal
   `__cxx_global_var_init[.N]` in `.text.startup` (`noinline`, `nounwind`
@@ -1190,6 +1291,34 @@ Where the definitions are emitted (clang hands them to
 
 Tests: `tests/codegen/explicit_instantiation*.cpp`,
 `tests/codegen/structor_rauw_order.cpp` (IR parity on both triples).
+
+## 7i. Landed (WP-183): variable length arrays (`vla.rs`)
+Clang's `EmitAutoVarAlloca` / `EmitVariablyModifiedType` for the GNU
+extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
+- **Bounds.** `emit_vla_bounds(q)` walks a variably modified type
+  (arrays, pointers, references) and evaluates each `VariableArray` bound
+  once per function, zext/trunc to `i64` as unsigned, into
+  `Fx::vla_sizes` (clang `VLASizeMap`). Variable declarations, and
+  `typedef`/alias declarations in a `DeclStmt`, evaluate their bounds at
+  the declaration. The fold prepass (`fold.rs` `vla_bounds`) visits the
+  same bounds, so a `const _Atomic(int)` bound folds to a constant as in
+  clang's `tryEmitAsConstant`.
+- **Stack save.** The first VLA in a scope (`Fx::did_stack_save`, reset by
+  `begin_scope` and restored by `end_scope`, clang `RunCleanupsScope`)
+  allocates a `saved_stack` pointer slot, calls `@llvm.stacksave.p0`, and
+  pushes a normal-only `Cleanup::StackRestore` (`@llvm.stackrestore.p0`).
+- **Allocation.** After the save, `vla_size` multiplies the nested
+  dimensions (`mul nuw`), and `Op::DynAlloca` emits `alloca elem, i64 n`
+  aligned to the element alignment (at least 16 on x86-64, clang's large
+  array alignment). Each non-constant dimension gets an `__vla_expr` `i64`
+  slot and store (debug-info shadow, as clang). VLA elements of class type
+  needing construction or destruction are an M3 "not supported yet" error.
+- **Uses.** Array-to-pointer decay of a VLA emits no GEP; a subscript
+  through a decayed VLA uses the pointer's alignment, and one whose result
+  is itself a VLA scales the index by the element count (`mul nsw`).
+  `sizeof` of a VLA operand or type emits the operand ignored (or its
+  bounds) then `mul nuw` by the element size (skipped for size 1).
+  `kiln_abi::convert_mem` lowers a `VariableArray` as its element type.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

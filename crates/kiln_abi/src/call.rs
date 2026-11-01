@@ -181,6 +181,8 @@ fn is_aggregate(t: &IrTypes<'_>, q: QualType) -> bool {
         TypeView::MemberPointer { pointee, .. } => {
             matches!(t.ast().types.canonical_view(pointee), TypeView::Function(_))
         }
+        // `hasScalarEvaluationKind(_Atomic(T))` is that of `T` (WP-183).
+        TypeView::Atomic(v) => is_aggregate(t, v),
         _ => false,
     }
 }
