@@ -2692,8 +2692,10 @@ impl Sema<'_, '_> {
         // /4.3.1, /4.3.2: the same class or a base of it, at least as
         // cv-qualified.
         let fty = a.ty;
-        if let (Some(fr), Some(tr)) = (self.ast.types.as_record(fty), self.ast.types.as_record(tty)) {
-            let same = conv::scs::class_decl(self, fty.ty()) == conv::scs::class_decl(self, tty.ty())
+        if let (Some(fr), Some(tr)) = (self.ast.types.as_record(fty), self.ast.types.as_record(tty))
+        {
+            let same = conv::scs::class_decl(self, fty.ty())
+                == conv::scs::class_decl(self, tty.ty())
                 || self.ast.types.same_unqualified(fty, tty);
             let fd = self.ast.definition(fr).unwrap_or(fr);
             let td = self.ast.definition(tr).unwrap_or(tr);
@@ -3309,10 +3311,7 @@ impl Sema<'_, '_> {
             let r = self.non_reference(ret);
             let lvalue = matches!(self.ast.types.canonical_view(ret), TypeView::LValueRef(_))
                 || self.ast.types.is_function(r);
-            (
-                r,
-                if lvalue { ValueCategory::LValue } else { ValueCategory::XValue },
-            )
+            (r, if lvalue { ValueCategory::LValue } else { ValueCategory::XValue })
         } else {
             (conv::strip_cv(self, ret), ValueCategory::PRValue)
         };

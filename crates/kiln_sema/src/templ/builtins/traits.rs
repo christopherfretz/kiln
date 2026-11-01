@@ -490,6 +490,11 @@ impl Sema<'_, '_> {
                 let init = crate::init::Initializer::Paren(ops, loc, rparen);
                 s.perform_init(ty, init, loc, false)
             };
+            // clang initializes `InitializedEntity::InitializeTemporary`:
+            // a class temporary is bound (`MaybeBindToTemporary`), so its
+            // destructor must be accessible and not deleted, and counts
+            // for the nothrow form.
+            let e = if s.is_err_expr(e) { e } else { s.maybe_bind_temporary(e) };
             s.exit_unevaluated();
             !s.is_err_expr(e) && s.init_check_holds(check, e)
         });

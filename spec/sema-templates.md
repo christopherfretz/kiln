@@ -3735,6 +3735,14 @@ declarator scopes.**
 - *Calls returning `F&&`*: a call whose result type is an rvalue
   reference to function is an lvalue ([expr.call]/14), so
   `declval<Fn>()()` is callable and `decltype` of it is `F&`.
+- *Constructible traits make a temporary* (clang `InitializeTemporary`):
+  the initialization `__is_constructible` (and its nothrow and trivially
+  forms) checks is bound with `maybe_bind_temporary`. So a private or
+  deleted destructor makes the trait false, and a potentially-throwing
+  destructor makes the nothrow form false. `maybe_bind_temporary` now
+  checks a user-declared trivial destructor too (access, deletion)
+  without binding. A call that is a `decltype` operand defers that check
+  to `exit_decltype`, which exempts the top-level call.
 - Tests: `templates/builtins/temp.builtin.type-pack-element-narrowing.cpp`,
   `templates/diag/temp.arg.nontype-narrowing-wno.cpp`,
   `dcl.fct/abominable-compound.cpp`, `expr.mptr.oper/ref-qualified-call.cpp`,
@@ -3745,7 +3753,9 @@ declarator scopes.**
   `dcl.init.aggr/reference-member.cpp`,
   `except.spec/noexcept-pointer-to-member-call.cpp`,
   `temp.inst/local-class-member-pointer.cpp`, `expr.cond/class-operand-*.cpp`,
-  `expr.call/function-rvalue-reference-result.cpp`.
+  `expr.call/function-rvalue-reference-result.cpp`,
+  `templates/builtins/builtin.is-constructible-temporary-dtor.cpp`,
+  `class.temporary/trivial-dtor-checked.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 
