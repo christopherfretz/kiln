@@ -70,6 +70,21 @@ impl Substituter<'_, '_, '_> {
                 let r = self.ty(replacement, loc)?;
                 Ok(self.sema.ast.types.subst_template_type_parm(r, associated, index, pack_index))
             }
+            // A substituted pack of a partially substituted expansion
+            // (§7.2): its element for the current index; it stays while
+            // another partial expansion is rebuilt.
+            TypeView::SubstTemplateTypeParmPack { associated, index, pack } => {
+                if self.pack.keep && self.pack_index.is_none() {
+                    return Ok(q);
+                }
+                let args = self.sema.ast.types.args(pack);
+                let n = u32::try_from(args.len()).unwrap_or(u32::MAX);
+                let i = self.pack_reached(n, |s| s.sema.ty_str(q), loc)?;
+                let ArgView::Type(t) = self.sema.ast.types.args(pack)[i as usize].view() else {
+                    return Err(SubstFail);
+                };
+                Ok(self.sema.ast.types.subst_template_type_parm(t, associated, index, Some(i)))
+            }
             TypeView::Pointer(p) => {
                 let p = self.ty(p, loc)?;
                 self.chunk(p, Chunk::Pointer { quals: kiln_ast::types::Quals::NONE, loc }, loc)
@@ -113,7 +128,15 @@ impl Substituter<'_, '_, '_> {
                 let e = self.ty(elem, loc)?;
                 self.chunk(e, Chunk::Array { size: None, loc }, loc)
             }
-            TypeView::DependentSizedArray { elem, size: ExprOperand::Expr(s) } => {
+            TypeView::DependentSizedArray { elem, size } => {
+                // A canonical array's bound is profiled: its first
+                // expression stands for it (an implicit guide's, WP-134).
+                let s = match size {
+                    ExprOperand::Expr(s) => s,
+                    ExprOperand::Profile(p) => {
+                        self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?
+                    }
+                };
                 let e = self.ty(elem, loc)?;
                 let s = self.expr(s)?;
                 self.chunk(e, Chunk::Array { size: Some(s), loc }, loc)
@@ -331,9 +354,29 @@ impl Substituter<'_, '_, '_> {
     ) -> SubstResult<QualType> {
         match self.lookup(depth, index) {
             ArgLookup::Arg(a) => {
+                if self.pack.keep
+                    && self.pack_index.is_none()
+                    && let ArgView::Pack(l) = a.view()
+                {
+                    // Rebuilding a partially substituted expansion (§7.2).
+                    let assoc = self.assoc(depth).ok_or(SubstFail)?;
+                    let p = self.sema.ast.types.subst_template_type_parm_pack(
+                        assoc,
+                        u32::from(index),
+                        l,
+                    );
+                    return Ok(QualType::new(p.ty(), q.quals_bits() | p.quals_bits()));
+                }
                 let a = self.element(a, decl, loc)?;
                 let ArgView::Type(t) = a.view() else { return Err(SubstFail) };
                 let Some(assoc) = self.assoc(depth) else { return Ok(t) };
+                // A pack element that is itself an expansion (`Ts` = <`Us...`>,
+                // an alias template guide's) stays visibly one (WP-134).
+                if self.pack_index.is_some()
+                    && matches!(self.sema.ast.types.view(t.ty()), TypeView::PackExpansion { .. })
+                {
+                    return Ok(t);
+                }
                 Ok(self.sema.ast.types.subst_template_type_parm(
                     t,
                     assoc,

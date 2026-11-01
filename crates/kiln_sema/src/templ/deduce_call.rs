@@ -56,6 +56,29 @@ impl DeductionFailure {
 }
 
 impl Sema<'_, '_> {
+    /// The elements of the trailing function parameter pack with
+    /// pattern `pat` given explicitly ([temp.arg.explicit]/9): only the
+    /// first template parameter pack takes explicit arguments (it takes
+    /// the rest of them), so none when the pattern (`U`, `U&&`, `U*`)
+    /// expands another pack (`f<int>(tys<int>, 'a')` for
+    /// `template<class... T, class... U> f(tys<T...>, U...)`). A pattern
+    /// of another shape is taken to expand the first pack.
+    fn trailing_pack_skip(&self, pat: QualType, params: &[DeclId], d: &DeducedArgs) -> usize {
+        let types = &self.ast.types;
+        let mut q = types.canonical(pat);
+        while let Some(p) = types.pointee(q) {
+            q = types.canonical(p);
+        }
+        let first = params.iter().position(|&p| self.ast.template_parm(p).is_some_and(|x| x.pack));
+        if let TypeView::CanonTemplateTypeParm { depth, index, .. } = types.view(q.ty())
+            && depth == u32::from(d.depth)
+            && first.is_some_and(|f| f != index as usize)
+        {
+            return 0;
+        }
+        self.explicit_pack_len(params, d)
+    }
+
     /// Runs `f` in a SFINAE frame of `kind` for template `ft` showing
     /// `args`: its result, and the first error captured (`Some` when
     /// substitution failed). `None` when the instantiation depth limit
@@ -304,7 +327,11 @@ impl Sema<'_, '_> {
                 return Err(DeductionFailure::new(r, d));
             }
         }
-        // §6.1 step 2: each (P, A).
+        // §6.1 step 2: each (P, A). The explicitly given prefix of a
+        // pack is fixed before any deduction: a pack deduced from an
+        // earlier parameter (`tys<Tf...>`) is not a prefix of the
+        // trailing function parameter pack.
+        let skip = fn_pack.map_or(0, |pat| self.trailing_pack_skip(pat, &params, &d));
         for (i, a) in args.iter().enumerate() {
             let Some(&p) = ptys.get(i) else { break };
             if i + 1 == ptys.len()
@@ -313,7 +340,6 @@ impl Sema<'_, '_> {
                 // [temp.deduct.call]/1: the trailing function parameter
                 // pack's pattern against each remaining argument; the
                 // elements given explicitly are not deduced.
-                let skip = self.explicit_pack_len(&params, &d);
                 let rest = &args[i..];
                 let r = self.deduce_pack_elements_from(skip, rest.len(), &mut d, |s, k, d| {
                     s.deduce_call_arg(pat, &rest[k], d)
@@ -388,7 +414,32 @@ impl Sema<'_, '_> {
         });
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-            Some((Ok(spec), Ok(()))) => Ok(spec),
+            Some((Ok(spec), Ok(()))) => {
+                // [over.match.class.deduct]/3: a guide formed for an alias
+                // template is constrained on the alias template's
+                // arguments being deducible from its return type.
+                if let Some(&(alias, rhs)) = self.templ.ctad_alias.get(&ft) {
+                    let ty = self.ast.decls.get(spec).ty().unwrap_or(QualType::ERROR);
+                    let ret = self
+                        .ast
+                        .types
+                        .proto(ty)
+                        .map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+                    if !self.alias_deducible(alias, rhs, ret) {
+                        let at = self.ast.decls.get(ft).loc();
+                        let n = self.decl_name_str(self.ast.decls.get(alias).name());
+                        let why = self
+                            .diag(DiagId::note_alias_not_deducible, at)
+                            .arg(n)
+                            .arg(self.ty_arg(ret));
+                        let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
+                        f.args = (!self.ast.types.args(sugared).is_empty()).then_some(sugared);
+                        f.diag = Some(why);
+                        return Err(f);
+                    }
+                }
+                Ok(spec)
+            }
             Some((_, failed)) => {
                 let mut diag = failed.err().flatten();
                 if let Some(spec) = self.ast.templates.find_spec(ft, canonical) {
@@ -462,16 +513,29 @@ impl Sema<'_, '_> {
                 TypeView::LValueRef(x) | TypeView::RValueRef(x) => t.canonical(x),
                 _ => p,
             };
-            let Some(elem) = self.initializer_list_param(inner) else {
-                // A non-deduced context.
-                return Tdk::Success;
-            };
             let items: Vec<crate::init::InitValue> = self
                 .ovl
                 .lists
                 .get(li as usize)
                 .map(|l| l.items.iter().map(|x| x.value.clone()).collect())
                 .unwrap_or_default();
+            // `P'[N]` with a non-empty list: each element deduces `P'`,
+            // and the list's length deduces `N` (WP-134: the aggregate
+            // deduction candidate's `T(&&)[N]` parameters).
+            let t = &self.ast.types;
+            let array = match t.canonical_view(inner) {
+                TypeView::ConstantArray(pa) if !items.is_empty() => Some((pa.elem, None)),
+                TypeView::DependentSizedArray { elem, size } if !items.is_empty() => {
+                    Some((elem, Some(size)))
+                }
+                _ => None,
+            };
+            let Some(elem) = array.map(|x| x.0).or_else(|| self.initializer_list_param(inner))
+            else {
+                // A non-deduced context.
+                return Tdk::Success;
+            };
+            let n = u64::try_from(items.len()).unwrap_or(u64::MAX);
             for v in items {
                 let crate::init::InitValue::Expr(e) = v else { continue };
                 let info = self.arg_info(e);
@@ -479,6 +543,9 @@ impl Sema<'_, '_> {
                 if r != Tdk::Success {
                     return r;
                 }
+            }
+            if let Some((_, Some(size))) = array {
+                return self.deduce_array_bound(size, Some(Ok(n)), d);
             }
             return Tdk::Success;
         }
@@ -584,7 +651,7 @@ impl Sema<'_, '_> {
     }
 
     /// `E` when `p` is `std::initializer_list<E>` (dependent or not).
-    fn initializer_list_param(&mut self, p: QualType) -> Option<QualType> {
+    pub(crate) fn initializer_list_param(&mut self, p: QualType) -> Option<QualType> {
         if let TypeView::TemplateSpecialization { name, args, .. } =
             self.ast.types.canonical_view(p)
         {
@@ -643,9 +710,11 @@ impl Sema<'_, '_> {
                 let d = self
                     .diag(DiagId::note_ovl_candidate_unsatisfied_constraints, loc)
                     .arg(with.unwrap_or_default());
-                match f.sat {
-                    Some(id) => self.with_sat_notes(d, id),
-                    None => d,
+                match (f.sat, &f.diag) {
+                    (Some(id), _) => self.with_sat_notes(d, id),
+                    // An alias template guide's deducibility constraint.
+                    (None, Some(why)) => d.with_note(why.clone()),
+                    (None, None) => d,
                 }
             }
             Tdk::SubstitutionFailure => {

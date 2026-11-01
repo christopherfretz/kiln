@@ -673,7 +673,16 @@ impl Substituter<'_, '_, '_> {
             }
             _ => {
                 let q = self.nns(n, loc)?;
-                Ok((self.nns_context(q, loc)?, q))
+                let c = self.nns_context(q, loc)?;
+                // The injected-class-name of the class template being
+                // instantiated (`this->S::f()` in `S<A>`) names the
+                // pattern: map it to the instantiation (§5.6).
+                let c = if self.sema.kind_of(c) == DeclKind::CXXRecord {
+                    self.find_instantiated_decl(c, loc)?
+                } else {
+                    c
+                };
+                Ok((c, q))
             }
         }
     }

@@ -535,7 +535,10 @@ impl Sema<'_, '_> {
             Some(m) => {
                 args = self.base_levels(tmpl);
                 args.push(m.args, m.partial, LevelMode::Substitute);
-                Some(m.partial)
+                // A partial specialization redeclared with its member
+                // template ([`Substituter::member_partial_spec`]) is
+                // defined by the original.
+                Some(self.ast.templates.instantiated_from_map(m.partial).unwrap_or(m.partial))
             }
             None => self.pattern_of(self.inst_template(tmpl)),
         };
@@ -1191,6 +1194,10 @@ impl Substituter<'_, '_, '_> {
             | DeclKind::CXXRecord
                 if n.misc().friend() != kiln_ast::decl::FriendKind::None =>
             {
+                return Ok(None);
+            }
+            DeclKind::CXXRecord if self.sema.ast.partial_spec_info(m).is_some() => {
+                self.member_partial_spec(m)?;
                 return Ok(None);
             }
             DeclKind::CXXRecord => self.member_class_decl(m)?,

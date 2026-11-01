@@ -346,7 +346,7 @@ and returns the scope it names:
   `DependentNameType` (`typename S::type`, as clang's
   `ElaboratedType`); it was dropped before.
 
-### 4.3.2 Class template argument deduction (`templ/ctad.rs`, WP-071b)
+### 4.3.2 Class template argument deduction (`templ/ctad.rs`, WP-071b, WP-134)
 [dcl.type.class.deduct], [over.match.class.deduct], [temp.deduct.guide].
 
 **Implemented.**
@@ -369,52 +369,104 @@ and returns the scope it names:
 
   The result is the DTS with the deduced type (printed as the
   specialization, as clang), with the declared cv-qualifiers.
-- **Guide set.** The set is cached per template in `TemplState::ctad_guides`,
-  once the class has a definition. It contains:
+- **Guide set** (`ctad_guides`). The implicit guides are cached per
+  template in `TemplState::ctad_guides` once the class has a
+  definition; `TemplState::ctad_origin` records each one's origin
+  (`GuideOrigin::{Ctor, CtorTemplate, Copy, Aggregate}`). The set is:
   - one implicit guide per non-template constructor of the primary
     definition (a hypothetical `X()` when there is none). An implicit
     guide is a detached `FunctionTemplate` over the class template's
     own parameter list (`AstContext::detached_template_decl`) with
-    return type `X<T…>`;
-  - the copy deduction candidate `X(X<T…>) -> X<T…>`
-    (`TemplState::ctad_copy`);
-  - the user guides.
+    return type `X<T…>`, the constructor's parameters (names and default
+    arguments) and trailing requires-clause;
+  - one guide per constructor template (`ctor_template_guide`, WP-134):
+    the class parameters followed by the constructor template's,
+    re-depthed one level shallower and renumbered after them
+    (`ctad_redepth_param`; the class level is substituted by null
+    arguments, which retain it); its constraints are the class
+    template's and the constructor template's, conjoined;
+  - the copy deduction candidate `X(X<T…>) -> X<T…>`;
+  - P1816 (WP-134): when `X` has no user guides and the initializer is
+    a non-empty braced or parenthesized list, the aggregate deduction
+    candidate (`aggregate_guide`): one parameter per element the
+    initializers initialize (bases, then fields), brace elision assumed
+    only for a non-dependent sub-aggregate or an array whose bound is
+    not value-dependent; a braced element or string literal for an
+    array of dependent bound is `T(&&)[N]` / `const T(&)[N]`. Not cached: it depends on the initializer. Call
+    deduction deduces `P'[N]` from a braced list (each element deduces
+    `P'`, the length `N`);
+  - the user guides (`user_guides`).
+- **Member templates** (WP-134). A member class template of a class
+  template specialization (`Outer<int>::In`, redeclared at
+  instantiation, [temp.mem]) has no definition until one of its
+  specializations is instantiated. Its implicit guides
+  (`member_ctor_guides`) take the original member's non-template
+  constructors, their parameter types substituted with
+  `base_levels(tmpl)` plus the redeclared template's own parameters as
+  arguments. Its member deduction guides are redeclared with it: the
+  Substituter maps a `DeductionGuide(t)` name to the instantiated `t`.
+  Constructor templates of such a member give no guide yet.
+- **Alias templates (P1814, WP-134).** For `A<…>` naming an alias
+  template whose defining-type-id is a simple-template-id `C<…>`, each
+  guide `g` of `C` is transformed (`build_alias_guide`): `g`'s return
+  type is deduced from the RHS (packs deduce element-wise,
+  `DeducedArgs::expansions`); the alias parameters used by the
+  deductions are kept (renumbered when only some are); the deductions
+  are resugared to them; `g`'s undeduced parameters follow. The guide
+  carries `ctad_alias[g'] = (alias, rhs)`, and `deduce_call` checks
+  clang's `__is_deducible(A, R)` on the deduced return type
+  (`note_alias_not_deducible`). An RHS that is not a simple-template-id
+  is `sema_ctad_non_deducible_template`.
 - **Resolution.** The usual candidate machinery with `deduce_call`, then
   `order_template_candidates` and `best_viable`.
+  - List-initialization runs [over.match.list] phase 1 first (WP-134):
+    the initializer-list guides (first parameter (reference to cv)
+    `std::initializer_list<E>`, dependent or not; any others defaulted;
+    `is_init_list_guide`) with the whole list as one argument. A
+    viable or ambiguous phase 1 decides; otherwise phase 2 runs all
+    guides on the elements. A single element whose type is a
+    specialization of `X` or derived from one skips phase 1
+    (`ctad_list_of_spec`).
   - In copy-initialization (`=` and `= {…}`), explicit guides and
     constructors are non-viable (`CandidateFailure::Explicit`).
   - In copy-list-initialization, an explicit winner is
     `sema_ctad_explicit_copy_list` plus `note_ctad_explicit_here`.
-  - Tie-breakers in `overload/best.rs`: [over.match.best]/2.10 (a user
-    guide beats an implicit one) and 2.11 (the copy deduction candidate
-    beats the others).
+  - Tie-breakers in `overload/best.rs`
+    ([over.match.best.general]/2.11-2.13): a user guide beats an
+    implicit one; the copy deduction candidate beats the others; a
+    non-template constructor's guide beats a constructor template's.
 - **Diagnostics** use clang's wording: `sema_ctad_no_viable`,
   `sema_ctad_ambiguous`, and the explicit-copy-list error and note
   above. Each implicit-guide candidate note is followed by
   `implicit deduction guide declared as '<sig>'`
-  (`implicit_guide_signature`).
+  (`implicit_guide_signature`; parameter names as clang's DeclPrinter
+  places them, `Ts ...xs`, and an inherited default argument as
+  `= <null expr>`).
+- **Array new.** `new X[n]{…}` with a placeholder element type is
+  `sema_ctad_compound_type` ("cannot form array of deduced class
+  template specialization type") at the innermost bound, as clang.
+- **AST dump.** A user-declared `CXXDeductionGuideDecl` is compared
+  against clang (spec/ast-dump.md); implicit guides are not dumped.
 - **Dependent initializers.** A type-dependent argument gives the DTS
   deduced as `QualType::DEPENDENT`. The Substituter maps it back to the
   undeduced placeholder, so deduction is redone for the instantiation.
   A non-dependent use in a template is deduced at definition.
 
-**Deferred (diagnosed as unsupported, or no candidate).**
-- Constructor templates as implicit guides, which need their template
-  parameters re-depthed. Tie-breaker 2.12 (a guide from a template
-  constructor is more specialized) is deferred with them.
-- Aggregate deduction P1816 (`templates/ctad/over.match.class.deduct-aggregate.cpp`,
-  xfail) and alias-template CTAD P1814 (`…-alias.cpp`, xfail).
-- Inherited-constructor guides (P2582).
-- Guides of a member class template of a class template once it is
-  instantiated.
-- [over.match.list] phase 1 (initializer-list constructors) for braced
-  CTAD.
-- `new X[n]{…}` with CTAD.
+**Deferred (no candidate, or diagnosed as unsupported).**
+- Inherited-constructor guides (P2582): clang 19 does not implement
+  them either, so `D d(args)` through `using B<T>::B;` finds only `D`'s
+  own guides, as clang 19 does. Implementing it is the alias transform
+  of `B`'s guides with `D`'s base-specifier as the right-hand side.
+- Guides from constructor templates of a member class template of an
+  instantiated class template (only its non-template constructors and
+  user guides are used).
+- Qualified CTAD through a template-id, `Outer<int>::In x(…)`: the
+  parser classifies `In` as a dependent name, giving a variable of a
+  dependent type with no diagnostic (name classification, not CTAD;
+  `using O = Outer<int>; O::In x(…)` works).
 - `sema_ctad_deleted` (a deleted constructor selected) and
   `sema_ctad_not_allowed` (a placeholder in a non-deducible position)
   are reserved ids that nothing emits yet.
-- The AST dump of `CXXDeductionGuideDecl` is still `Unsupported` in the
-  normalizer (`xtask/src/clang_ast/table.rs`).
 
 ### 4.4 Tags, enumerations, bit-fields and anonymous records
 - **`act_on_tag(kind, name, TagUse, …)`** implements [dcl.type.elab]

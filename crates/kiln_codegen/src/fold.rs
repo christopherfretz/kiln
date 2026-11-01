@@ -17,7 +17,7 @@ use kiln_ast::types::{RecordLayout, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{Oven, SemaBridge, Subobject, SubobjectId};
-use kiln_source::fx::FxHashMap;
+use kiln_source::fx::{FxHashMap, FxHashSet};
 
 /// The folded values of the expressions codegen may ask about.
 #[derive(Debug, Default)]
@@ -79,7 +79,12 @@ impl SemaBridge for Bridge<'_> {
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
     let (cands, inits) = {
-        let mut c = Collect { ast, out: Vec::new(), inits: FxHashMap::default() };
+        let mut c = Collect {
+            ast,
+            out: Vec::new(),
+            inits: FxHashMap::default(),
+            defaults: FxHashSet::default(),
+        };
         c.tu();
         (c.out, c.inits)
     };
@@ -111,6 +116,9 @@ struct Collect<'a> {
     /// storage, `constexpr`, or usable in constant expressions as a
     /// `const` non-volatile integral or enumeration).
     inits: FxHashMap<ExprId, DeclId>,
+    /// Parameters whose default argument was already walked: a
+    /// `CXXDefaultArgExpr` has no children, its expression is shared.
+    defaults: FxHashSet<DeclId>,
 }
 
 impl Collect<'_> {
@@ -273,7 +281,9 @@ impl Collect<'_> {
             ExprKind::CXXNoexceptExpr
             | ExprKind::TypeTraitExpr
             | ExprKind::ArrayTypeTraitExpr
-            | ExprKind::ExpressionTraitExpr => return,
+            | ExprKind::ExpressionTraitExpr
+            | ExprKind::ConceptSpecializationExpr
+            | ExprKind::RequiresExpr => return,
             ExprKind::BinaryOperator
                 if matches!(ast.exprs.binary_op(e), BinaryOp::LAnd | BinaryOp::LOr) =>
             {
@@ -300,6 +310,15 @@ impl Collect<'_> {
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.
             ExprKind::CXXNewExpr => self.out.extend(ast.exprs.new_extra(e).array_size),
             ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
+            // The default argument is emitted at each call that uses it.
+            ExprKind::CXXDefaultArgExpr => {
+                let p = ast.exprs.default_arg_param(e);
+                if self.defaults.insert(p)
+                    && let Some(d) = ast.decls.param(p).and_then(|x| x.default_arg)
+                {
+                    self.expr(d);
+                }
+            }
             ExprKind::ImplicitCastExpr
                 if ast.exprs.cast_kind(e) == CastKind::LValueToRValue
                     && refers_to_const_var(ast, ast.exprs.operand(e)) =>

@@ -151,11 +151,20 @@ impl Sema<'_, '_> {
                     .types
                     .arg_list_flags(list)
                     .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
-                if dependent || use_ == TagUse::Friend && self.in_template() {
-                    if use_ == TagUse::Friend {
-                        self.templ_unimplemented("friend class template specialization", name_loc);
-                        return Err(());
-                    }
+                // [temp.friend]/9: `template<class U> friend struct
+                // Y<U*>;` would declare a partial specialization.
+                if use_ == TagUse::Friend && self.take_template_head(qualifier).is_some() {
+                    let d = self
+                        .diag(DiagId::sema_partial_spec_friend, kw_loc)
+                        .range(Span::new(name_loc, r_angle.with_offset(1)));
+                    self.emit(d);
+                    return Err(());
+                }
+                // A dependent `friend struct X<T>;` ([class.friend]/3,
+                // [temp.friend]) stays a dependent type in the pattern's
+                // `FriendDecl`; each instantiation of the class befriends
+                // the substituted specialization (§4.8).
+                if dependent {
                     let t = self.ast.types.template_specialization(name, list, None, false);
                     return Ok((None, self.ast.types.elaborated(keyword, None, t)));
                 }
