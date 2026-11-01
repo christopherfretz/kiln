@@ -962,23 +962,50 @@ impl Sema<'_, '_> {
     pub(crate) fn dependent_init_list(&mut self, l: &crate::init::InitList) -> ExprId {
         let mut inits = Vec::with_capacity(l.items.len());
         for it in &l.items {
-            if !it.designator.is_empty() {
-                self.templ_unimplemented("designated initializers in a template", l.lbrace);
-            }
             let e = match &it.value {
                 crate::init::InitValue::Expr(e) => *e,
                 crate::init::InitValue::List(n) => self.dependent_init_list(n),
+            };
+            let e = if it.designator.is_empty() {
+                e
+            } else {
+                // A designated clause is a `DesignatedInitExpr` (clang
+                // `ActOnDesignatedInitializer`), rebuilt at instantiation.
+                let ds: Vec<kiln_ast::expr::Designator> =
+                    it.designator.iter().map(|d| d.to_ast()).collect();
+                let loc = it.designator[0].loc();
+                self.builder().designated_init(&ds, e, loc)
             };
             inits.push(e);
         }
         self.builder().init_list(QualType::VOID, &inits, None, None, l.lbrace, l.rbrace)
     }
 
-    /// True if any initializer of `l` (recursively) is type-dependent.
+    /// Records the written form of the semantic list `sem` built from
+    /// the designated list `l` in a template pattern, for its
+    /// instantiation to rebuild from (§5.6 of spec/ast.md; clang keeps
+    /// the syntactic form of every list).
+    pub(crate) fn note_syntactic_list(&mut self, sem: ExprId, l: &crate::init::InitList) {
+        if self.ast.exprs.get(sem).kind() != ExprKind::InitListExpr
+            || self.ast.exprs.syntactic_list(sem).is_some()
+        {
+            return;
+        }
+        let w = self.dependent_init_list(l);
+        self.ast.exprs.set_syntactic_list(sem, w);
+    }
+
+    /// True if any initializer of `l` (recursively) is type-dependent,
+    /// or an array designator's index is value-dependent (the element it
+    /// names is known only at instantiation).
     pub(crate) fn init_list_type_dependent(&self, l: &crate::init::InitList) -> bool {
-        l.items.iter().any(|it| match &it.value {
-            crate::init::InitValue::Expr(e) => self.expr_is_type_dependent(*e),
-            crate::init::InitValue::List(n) => self.init_list_type_dependent(n),
+        l.items.iter().any(|it| {
+            it.designator.iter().any(|d| {
+                matches!(*d, crate::init::Designator::Index(e, _) if self.expr_is_value_dependent(e))
+            }) || match &it.value {
+                crate::init::InitValue::Expr(e) => self.expr_is_type_dependent(*e),
+                crate::init::InitValue::List(n) => self.init_list_type_dependent(n),
+            }
         })
     }
 

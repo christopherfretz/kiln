@@ -674,6 +674,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::CXXRewrittenBinaryOperator | ExprKind::PredefinedExpr => push(n.a()),
+            ExprKind::DesignatedInitExpr => {
+                push(n.a());
+                for c in exprs.designated_indices(e) {
+                    push(c.raw());
+                }
+            }
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 push(n.a());
                 for c in lists.iter::<ExprId>(exprs.call_args(e)) {

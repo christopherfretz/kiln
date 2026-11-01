@@ -53,6 +53,23 @@ pub enum Designator {
     Index(ExprId, Loc),
 }
 
+impl Designator {
+    /// The location of the designator (the name of `.name`, the `[`).
+    pub fn loc(&self) -> Loc {
+        match *self {
+            Designator::Field(_, l) | Designator::Index(_, l) => l,
+        }
+    }
+
+    /// The AST form (a `DesignatedInitExpr` designator).
+    pub fn to_ast(&self) -> kiln_ast::expr::Designator {
+        match *self {
+            Designator::Field(name, loc) => kiln_ast::expr::Designator::Field { name, loc },
+            Designator::Index(index, loc) => kiln_ast::expr::Designator::Index { index, loc },
+        }
+    }
+}
+
 /// An initializer-clause.
 #[derive(Clone, Debug)]
 pub enum InitValue {

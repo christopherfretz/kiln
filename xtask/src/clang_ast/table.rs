@@ -86,6 +86,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("UnaryExprOrTypeTraitExpr", Keep),
     ("InitListExpr", Keep),
     ("ImplicitValueInitExpr", Keep),
+    // Designated clauses of a dependent list (WP-192; template patterns).
+    ("DesignatedInitExpr", Keep),
     ("ConstantExpr", Keep),
     ("CXXConstructExpr", Keep),
     ("CXXTemporaryObjectExpr", Keep),
@@ -224,7 +226,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("VAArgExpr", Keep),
     ("PredefinedExpr", Keep),
     ("UserDefinedLiteral", Unsupported(NOT_M2)),
-    ("DesignatedInitExpr", Unsupported(NOT_M2)),
     ("DesignatedInitUpdateExpr", Unsupported(NOT_M2)),
     ("NoInitExpr", Unsupported(NOT_M2)),
     ("ImaginaryLiteral", Unsupported(NOT_M2)),
@@ -377,6 +378,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "UnaryExprOrTypeTraitExpr" => &["name", "argType"],
         "InitListExpr" => &["field", "array_filler"],
         "ImplicitValueInitExpr" => &[],
+        // clang's JSON has no designators (its text dump neither).
+        "DesignatedInitExpr" => &[],
         "ConstantExpr" => &["value"],
         // `hadMultipleCandidates` and `constructionKind` are not printed
         // (clang's text dump prints neither); `elidable` is rejected.

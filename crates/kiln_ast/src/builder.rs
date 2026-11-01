@@ -2168,6 +2168,37 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// An initializer-clause `designators = init` of a dependent
+    /// braced-init-list (§5.6; clang `ActOnDesignatedInitializer`):
+    /// `DesignatedInitExpr` of type `void`, with the value category of
+    /// `init`. `loc` is its start (the first designator).
+    pub fn designated_init(
+        &mut self,
+        designators: &[crate::expr::Designator],
+        init: ExprId,
+        loc: Loc,
+    ) -> ExprId {
+        let mut deps = self.deps(init);
+        for d in designators {
+            if let crate::expr::Designator::Index { index, .. } = *d {
+                deps |= self.deps(index);
+            }
+        }
+        let vk = self.vk(init);
+        let e = self.simple(
+            ExprKind::DesignatedInitExpr,
+            vk,
+            deps,
+            0,
+            QualType::VOID,
+            loc,
+            init.raw(),
+            0,
+        );
+        let _ = self.ast.exprs.cold.designators.insert(e, designators.into());
+        e
+    }
+
     /// An `ImplicitValueInitExpr` ([dcl.init.general]/9: value-initialize
     /// an element with no explicit initializer).
     pub fn implicit_value_init(&mut self, ty: QualType) -> ExprId {

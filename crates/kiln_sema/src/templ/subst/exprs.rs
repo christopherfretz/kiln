@@ -1048,14 +1048,49 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
-    /// An initializer-clause of a braced list.
+    /// An initializer-clause of a braced list; a `DesignatedInitExpr`
+    /// gives back its designators (clang `TransformDesignatedInitExpr`).
     fn init_value(&mut self, x: ExprId) -> SubstResult<InitItem> {
+        let (designator, x) = if self.sema.ast.exprs.get(x).kind() == ExprKind::DesignatedInitExpr
+        {
+            let ds = self.sema.ast.exprs.designators(x).to_vec();
+            let init = self.sema.ast.exprs.designated_init(x);
+            (self.designators(&ds)?, init)
+        } else {
+            (Vec::new(), x)
+        };
         let value = if self.sema.ast.exprs.get(x).kind() == ExprKind::InitListExpr {
             InitValue::List(self.init_list(x)?)
         } else {
             InitValue::Expr(self.expr(x)?)
         };
-        Ok(InitItem { designator: Vec::new(), value })
+        Ok(InitItem { designator, value })
+    }
+
+    /// The designators of a clause, array indices substituted.
+    fn designators(
+        &mut self,
+        ds: &[kiln_ast::expr::Designator],
+    ) -> SubstResult<Vec<crate::init::Designator>> {
+        use crate::init::Designator as D;
+        use kiln_ast::expr::Designator as A;
+        let mut out = Vec::with_capacity(ds.len());
+        for d in ds {
+            out.push(match *d {
+                A::Field { name, loc } => D::Field(name, loc),
+                A::Index { index, loc } => D::Index(self.expr(index)?, loc),
+            });
+        }
+        Ok(out)
+    }
+
+    /// The designators of a written clause, array indices substituted.
+    fn written_designators(
+        &mut self,
+        ds: &[crate::init::Designator],
+    ) -> SubstResult<Vec<crate::init::Designator>> {
+        let v: Vec<kiln_ast::expr::Designator> = ds.iter().map(|d| d.to_ast()).collect();
+        self.designators(&v)
     }
 
     /// The initializer-clauses `items` of a braced list, pack expansions
@@ -1074,8 +1109,14 @@ impl Substituter<'_, '_, '_> {
         Ok(out)
     }
 
-    /// A braced-init-list of the pattern (designators: a gap).
+    /// A braced-init-list of the pattern. A semantic list built from a
+    /// designated list is rebuilt from its written form (spec/ast.md
+    /// §5.6), as clang's `TransformInitListExpr` uses the syntactic form.
     pub(crate) fn init_list(&mut self, e: ExprId) -> SubstResult<InitList> {
+        if let Some(w) = self.sema.ast.exprs.syntactic_list(e) {
+            self.note_default_uses(e);
+            return self.init_list(w);
+        }
         let n = *self.sema.ast.exprs.get(e);
         let l = self.sema.ast.exprs.init_list_inits(e);
         let mut items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
@@ -1101,15 +1142,34 @@ impl Substituter<'_, '_, '_> {
         Ok(InitList { items: out, lbrace: n.loc(), rbrace })
     }
 
+    /// [`Substituter::init_list`]'s default-member-initializer uses of
+    /// the semantic list `e` (all of its elements, nested lists too).
+    fn note_default_uses(&mut self, e: ExprId) {
+        let rbrace = self.sema.ast.exprs.end_loc(e).unwrap_or(self.sema.ast.exprs.get(e).loc());
+        let l = self.sema.ast.exprs.init_list_inits(e);
+        let items: Vec<ExprId> = self.sema.ast.lists.iter::<ExprId>(l).collect();
+        for x in items {
+            match self.sema.ast.exprs.get(x).kind() {
+                ExprKind::CXXDefaultInitExpr => {
+                    let f = self.sema.ast.exprs.default_init_field(x);
+                    self.sema.note_default_use(x, f, rbrace);
+                }
+                ExprKind::InitListExpr => self.note_default_uses(x),
+                _ => {}
+            }
+        }
+    }
+
     /// A braced-init-list as the parser built it (a mem-initializer's).
     fn written_list(&mut self, l: &InitList) -> SubstResult<InitList> {
         let mut items = Vec::with_capacity(l.items.len());
         for it in &l.items {
-            if !it.designator.is_empty() {
-                return self.unimplemented("designated initializers in a template", l.lbrace);
-            }
+            let designator = self.written_designators(&it.designator)?;
             let value = match &it.value {
-                InitValue::Expr(e) if crate::templ::pack::expr_pattern(self.sema, *e).is_some() => {
+                InitValue::Expr(e)
+                    if designator.is_empty()
+                        && crate::templ::pack::expr_pattern(self.sema, *e).is_some() =>
+                {
                     for y in self.expand_exprs(&[*e])? {
                         items.push(InitItem { designator: Vec::new(), value: InitValue::Expr(y) });
                     }
@@ -1118,7 +1178,7 @@ impl Substituter<'_, '_, '_> {
                 InitValue::Expr(e) => InitValue::Expr(self.written_arg(*e)?),
                 InitValue::List(n) => InitValue::List(self.written_list(n)?),
             };
-            items.push(InitItem { designator: Vec::new(), value });
+            items.push(InitItem { designator, value });
         }
         Ok(InitList { items, lbrace: l.lbrace, rbrace: l.rbrace })
     }
