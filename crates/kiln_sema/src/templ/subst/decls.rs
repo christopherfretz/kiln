@@ -125,8 +125,16 @@ impl Substituter<'_, '_, '_> {
                     dr.special = Some((SpecialName::LiteralOperator(s), loc));
                 }
             }
+            // A member class template's guide ([temp.deduct.guide]/3):
+            // for the member template of the instantiated class (WP-134).
             DeclNameKind::DeductionGuide => {
-                return self.unimplemented("deduction guides in class templates", loc);
+                let kiln_ast::names::DeclNameView::DeductionGuide(t) =
+                    self.sema.ast.names.view(name)
+                else {
+                    return Err(SubstFail);
+                };
+                let t = self.find_instantiated_decl(t, loc)?;
+                dr.special = Some((SpecialName::DeductionGuide(t), loc));
             }
         }
         Ok(dr)

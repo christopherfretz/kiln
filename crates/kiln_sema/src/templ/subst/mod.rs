@@ -177,6 +177,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             // `<U>` against `class... Up` is the pack `{U}`): its
             // elements, expansions expanded (§7.2).
             ArgView::Pack(l) => Ok(TemplateArg::pack(self.args(l, loc)?)),
+            // A canonical value-dependent argument: its first expression
+            // stands for it (an implicit deduction guide's, WP-134).
+            ArgView::Profile(p) if !flags.contains(TypeFlags::UNEXPANDED_PACK) => {
+                let e = self.sema.ast.types.profile_expr(p).ok_or(SubstFail)?;
+                let e = self.expr(e)?;
+                Ok(self.sema.ast.builder().template_arg_expr(e))
+            }
             ArgView::TemplateExpansion { .. } | ArgView::Profile(_) => {
                 self.unimplemented("pack expansion", loc)
             }
@@ -478,10 +485,21 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
 }
 
 impl Substituter<'_, '_, '_> {
-    /// True if none of the outermost `n` levels is substituted.
+    /// True if none of the outermost `n` levels is substituted (a level of
+    /// undeduced arguments keeps its parameters, as a class template's
+    /// does in the guide of a constructor template, WP-134).
     fn levels_retained(&self, n: u16) -> bool {
         (0..n).all(|k| {
-            self.args.level(k).is_none_or(|l| l.mode == crate::templ::args::LevelMode::Retain)
+            self.args.level(k).is_none_or(|l| {
+                l.mode == crate::templ::args::LevelMode::Retain
+                    || self
+                        .sema
+                        .ast
+                        .types
+                        .args(l.args)
+                        .iter()
+                        .all(|a| matches!(a.view(), ArgView::Null))
+            })
         })
     }
 }

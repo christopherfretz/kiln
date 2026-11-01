@@ -255,7 +255,7 @@ impl Sema<'_, '_> {
             }
             CandidateFailure::Explicit => {
                 let which = match self.ctad_guide_kind(f, cand.template) {
-                    Some((false, _)) => 2,
+                    Some(None) => 2,
                     _ => u8::from(cand.kind == CandidateKind::ConvFn),
                 };
                 return self.diag(DiagId::note_ovl_candidate_explicit, loc).arg(which);
@@ -330,7 +330,7 @@ impl Sema<'_, '_> {
                 // clang `NoteDeductionGuide`: an implicit guide's notes
                 // say what it was synthesized as.
                 let cand = set.cand(c);
-                if let Some((true, _)) = self.ctad_guide_kind(cand.func(), cand.template)
+                if let Some(Some(_)) = self.ctad_guide_kind(cand.func(), cand.template)
                     && let Some(t) = cand.template
                     && let Some(sig) = self.implicit_guide_signature(t)
                 {
@@ -477,6 +477,13 @@ impl Sema<'_, '_> {
                 match (ded(l), ded(r)) {
                     (true, false) => return Ordering::Less,
                     (false, true) => return Ordering::Greater,
+                    (true, true) => {
+                        // clang `RankDeductionFailure`.
+                        let (lr, rr) = (deduction_rank(l), deduction_rank(r));
+                        if lr != rr {
+                            return lr.cmp(&rr);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -524,5 +531,26 @@ impl Sema<'_, '_> {
             }
         }
         x.len().cmp(&y.len())
+    }
+}
+
+/// clang's `RankDeductionFailure`: the display rank of a candidate whose
+/// template argument deduction failed (lower first).
+fn deduction_rank(c: &Candidate) -> u8 {
+    use crate::templ::deduce::Tdk;
+    match c.deduction.as_ref().map(|d| d.tdk) {
+        None | Some(Tdk::Success | Tdk::NonDependentConversionFailure) => 0,
+        Some(Tdk::Incomplete | Tdk::IncompletePack) => 1,
+        Some(Tdk::Underqualified | Tdk::Inconsistent) => 2,
+        Some(
+            Tdk::SubstitutionFailure
+            | Tdk::DeducedMismatch
+            | Tdk::ConstraintsNotSatisfied
+            | Tdk::NonDeducedMismatch
+            | Tdk::MiscellaneousDeductionFailure,
+        ) => 3,
+        Some(Tdk::InstantiationDepth) => 4,
+        Some(Tdk::InvalidExplicitArguments) => 5,
+        Some(Tdk::TooManyArguments | Tdk::TooFewArguments) => 6,
     }
 }

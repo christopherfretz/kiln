@@ -84,7 +84,7 @@ impl Sema<'_, '_> {
         None
     }
 
-    fn is_char_type(&self, t: QualType) -> bool {
+    pub(crate) fn is_char_type(&self, t: QualType) -> bool {
         use kiln_ast::types::BuiltinType as B;
         matches!(
             self.ast.types.builtin(self.ast.types.canonical(t).without_quals()),

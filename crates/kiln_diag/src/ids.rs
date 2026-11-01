@@ -1167,6 +1167,7 @@ diag_ids! {
     sema_call_too_many_args_at_most = Error (2) "too many arguments to function call, expected at most {0}, have {1}";
     sema_builtin_invalid_arg_type = Error (3) "{0:1st|2nd} argument must be {1:an unsigned integer|an 'int'} (was {2})";
     sema_builtin_fp_class_arg = Error (1) "floating point classification requires argument of floating point type (passed in {0})";
+    sema_builtin_passing_incompatible = Error (2) "passing {0} to parameter of incompatible type {1}";
     sema_builtin_ordered_compare = Error (2) "ordered compare requires two args of floating point type ({0} and {1})";
     sema_builtin_launder_invalid_arg = Error (1) "{0:non-pointer|function pointer|void pointer} argument to '__builtin_launder' is not allowed";
     sema_builtin_new_delete_not_usual = Error (1) "call to '{0:__builtin_operator_new|__builtin_operator_delete}' selects non-usual {0:allocation|deallocation} function";
@@ -1180,6 +1181,9 @@ diag_ids! {
     sema_ctad_explicit_copy_list = Error (2) "class template argument deduction for '{0}' selected an explicit {1:constructor|deduction guide} for copy-list-initialization";
     note_ctad_explicit_here = Note (1) "explicit {0:constructor|deduction guide} declared here";
     note_implicit_deduction_guide = Note (1) "implicit deduction guide declared as '{0}'";
+    sema_ctad_compound_type = Error (1) "cannot {0} deduced class template specialization type";
+    sema_ctad_non_deducible_template = Error (2) "{0} {1} requires template arguments; argument deduction only allowed for class templates or alias templates";
+    note_alias_not_deducible = Note (2) "cannot deduce template arguments for '{0}' from {1}";
     sema_ctad_not_allowed = Error (1) "cannot use deduced class template specialization type {0} here";
     sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
     sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";

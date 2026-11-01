@@ -250,6 +250,12 @@ pub struct Oven {
     pub(crate) funcs: Vec<Func>,
     pub(crate) func_map: FxHashMap<DeclId, u32>,
     pub(crate) thunks: FxHashMap<ExprId, u32>,
+    /// Thunks compiled inside a default argument use (the key's second
+    /// half, [`Oven::fold_immediate_in`]): their source-location builtins
+    /// take that use's values.
+    pub(crate) thunks_at: FxHashMap<(ExprId, ExprId), u32>,
+    /// The default argument use the next thunk is compiled in.
+    pub(crate) srcloc_root: Option<ExprId>,
     pub(crate) globals: Vec<Global>,
     pub(crate) global_map: FxHashMap<DeclId, u32>,
     /// Globals resolved to an unknown value because they had no
@@ -308,6 +314,8 @@ impl Oven {
             funcs: Vec::new(),
             func_map: FxHashMap::default(),
             thunks: FxHashMap::default(),
+            thunks_at: FxHashMap::default(),
+            srcloc_root: None,
             globals: Vec::new(),
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
@@ -387,6 +395,24 @@ impl Oven {
         self.eval_ctx(bridge, e, None, true, false, false).0.ok()
     }
 
+    /// Evaluates immediate invocation `e` ([expr.const]/16; manifestly
+    /// constant-evaluated, silent, not recorded) as it appears inside the
+    /// default argument used by `CXXDefaultArgExpr` `at`: its
+    /// source-location builtins take the values of that use
+    /// ([support.srcloc.cons]/2; clang rebuilds such a default argument at
+    /// each use and evaluates its invocations there).
+    pub fn fold_immediate_in(
+        &mut self,
+        bridge: &mut dyn SemaBridge,
+        e: ExprId,
+        at: Option<ExprId>,
+    ) -> Option<ConstValueId> {
+        let saved = std::mem::replace(&mut self.srcloc_root, at);
+        let r = self.eval_ctx(bridge, e, None, true, false, true).0.ok();
+        self.srcloc_root = saved;
+        r
+    }
+
     /// Folds the initializer `e` of variable `var` as a constant
     /// initializer ([basic.start.static]/2, manifestly constant-evaluated:
     /// `__builtin_is_constant_evaluated()` yields true); `None` if it is
@@ -441,6 +467,7 @@ impl Oven {
             + cap(&self.funcs)
             + map(&self.func_map)
             + map(&self.thunks)
+            + map(&self.thunks_at)
             + cap(&self.globals)
             + map(&self.global_map)
             + cap(&self.provisional)

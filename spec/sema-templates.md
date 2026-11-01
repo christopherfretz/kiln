@@ -27,7 +27,7 @@ deviation is listed in §1.5.
 | Declarations | class, function, variable and alias templates; member templates; concepts; abbreviated function templates; friend templates | `export` and modules reachability (M4) |
 | Specialization | implicit instantiation, partial and explicit specialization, explicit instantiation (declaration and definition) | — |
 | Deduction | calls, explicit args, defaults, address of overload set, conversion functions, `auto`/`decltype(auto)`, NTTP `auto`, partial ordering | deducing `this` (M4) |
-| CTAD | implicit guides from constructors, the copy guide, user-declared namespace-scope guides | aggregate CTAD (P1816), alias CTAD (P1814), class-scope guides of member templates, inherited-ctor CTAD (P2582) (all M4) |
+| CTAD | implicit guides from constructors and constructor templates, the copy guide, user-declared guides, aggregate CTAD (P1816), alias CTAD (P1814), guides of member templates of instantiated class templates, [over.match.list] phase 1 (WP-071b, WP-134) | inherited-ctor CTAD (P2582; clang 19 has no support) |
 | Packs | type, value and template packs; expansion in every context in §2.7; folds; `sizeof...`; pack indexing P2662 | structured-binding packs P1061 (clang 19 has no support, M4); variadic friends P2893 (M4); expansion statements P1306 (M6, with reflection) |
 | Concepts | normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto` | fold-expanded constraints P2963 (clang 19 has no support, M4); concept and variable-template template parameters P2841 (M5) |
 | Reflection | — | splices as template arguments (M6) |
@@ -1351,8 +1351,14 @@ the arguments. The result type is the guide's return type, after
 substitution. If several best guides tie, the [over.match.best]/2.10–12
 tie-breakers apply.
 
-**Landed (WP-071b):** see spec/sema.md §4.3.2 for what is implemented
-and what is deferred.
+For list-initialization, overload resolution is [over.match.list]:
+initializer-list guides first, with the whole list as the argument.
+Without user guides, an aggregate class template adds the aggregate
+deduction candidate (P1816). An alias template deduces through the
+transformed guides of the template its defining-type-id names (P1814).
+
+**Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
+implemented and what is deferred (P2582 inherited-constructor guides).
 
 The M3 exit headers need only the user-declared guides:
 `array(_Tp, _Up...)`, the `span` guides and the `basic_string_view`

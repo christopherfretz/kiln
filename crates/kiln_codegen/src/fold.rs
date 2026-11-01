@@ -24,6 +24,10 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 pub(crate) struct Folds {
     /// Expression → value, for every candidate that folded.
     pub expr: FxHashMap<ExprId, ConstValueId>,
+    /// The values of the immediate invocations inside default arguments,
+    /// per use: (invocation, the enclosing default argument use whose
+    /// source-location values apply, as [`crate::module`]'s `srcloc`).
+    pub imm: FxHashMap<(ExprId, Option<ExprId>), ConstValueId>,
 }
 
 impl Folds {
@@ -78,15 +82,16 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits) = {
+    let (cands, inits, imm) = {
         let mut c = Collect {
             ast,
             out: Vec::new(),
             inits: FxHashMap::default(),
+            imm: Vec::new(),
             defaults: FxHashSet::default(),
         };
         c.tu();
-        (c.out, c.inits)
+        (c.out, c.inits, c.imm)
     };
     let mut b = Bridge { ast, abi: target };
     let mut folds = Folds::default();
@@ -105,6 +110,15 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             folds.expr.insert(e, v);
         }
     }
+    for key @ (e, at) in imm {
+        if folds.imm.contains_key(&key) {
+            continue;
+        }
+        let op = b.ast.exprs.operand(e);
+        if let Some(v) = oven.fold_immediate_in(&mut b, op, at) {
+            folds.imm.insert(key, v);
+        }
+    }
     folds
 }
 
@@ -116,6 +130,9 @@ struct Collect<'a> {
     /// storage, `constexpr`, or usable in constant expressions as a
     /// `const` non-volatile integral or enumeration).
     inits: FxHashMap<ExprId, DeclId>,
+    /// Immediate invocations inside default arguments, with the use
+    /// they are evaluated in ([`Folds::imm`]).
+    imm: Vec<(ExprId, Option<ExprId>)>,
     /// Parameters whose default argument was already walked: a
     /// `CXXDefaultArgExpr` has no children, its expression is shared.
     defaults: FxHashSet<DeclId>,
@@ -145,6 +162,13 @@ impl Collect<'_> {
                     }
                 }
                 DeclKind::Var if !is_local(ast, d) => self.var(d, true),
+                // A default member initializer's immediate invocations
+                // are left unevaluated by sema, like a default argument's.
+                DeclKind::Field => {
+                    if let Some(init) = ast.decls.field(d).and_then(|f| f.init) {
+                        self.immediates(init, None, 0);
+                    }
+                }
                 _ => {}
             }
         }
@@ -310,7 +334,8 @@ impl Collect<'_> {
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.
             ExprKind::CXXNewExpr => self.out.extend(ast.exprs.new_extra(e).array_size),
             ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
-            // The default argument is emitted at each call that uses it.
+            // The default argument is emitted at each call that uses it;
+            // its immediate invocations are evaluated per use.
             ExprKind::CXXDefaultArgExpr => {
                 let p = ast.exprs.default_arg_param(e);
                 if self.defaults.insert(p)
@@ -318,6 +343,7 @@ impl Collect<'_> {
                 {
                     self.expr(d);
                 }
+                self.default_arg(e, None, 0);
             }
             ExprKind::ImplicitCastExpr
                 if ast.exprs.cast_kind(e) == CastKind::LValueToRValue
@@ -329,6 +355,44 @@ impl Collect<'_> {
         }
         for c in ast.exprs.children(e, &ast.lists) {
             self.expr(c);
+        }
+    }
+}
+
+impl Collect<'_> {
+    /// The immediate invocations of the default argument use `u` (nested
+    /// in the use `at`, if any): sema leaves them unevaluated in the
+    /// parameter's default argument (spec/sema.md §5.10), so the prepass
+    /// evaluates them per use, with that use's source-location values
+    /// (clang `BuildCXXDefaultArgExpr`'s rewritten argument).
+    fn default_arg(&mut self, u: ExprId, at: Option<ExprId>, depth: u32) {
+        let ast = self.ast;
+        let p = ast.exprs.default_arg_param(u);
+        let Some(d) = ast.decls.param(p).and_then(|x| x.default_arg) else { return };
+        if depth > 32 {
+            return;
+        }
+        let at = at.or_else(|| ast.exprs.source_loc_values(u).is_some().then_some(u));
+        self.immediates(d, at, depth);
+    }
+
+    /// The unevaluated immediate invocations in `root`, a default argument
+    /// or default member initializer (evaluated in the use `at`).
+    fn immediates(&mut self, root: ExprId, at: Option<ExprId>, depth: u32) {
+        let ast = self.ast;
+        let mut stack = vec![root];
+        while let Some(x) = stack.pop() {
+            match ast.exprs.get(x).kind() {
+                ExprKind::ConstantExpr if ast.exprs.constant_value(x).is_none() => {
+                    self.imm.push((x, at));
+                }
+                ExprKind::CXXDefaultArgExpr => self.default_arg(x, at, depth + 1),
+                ExprKind::CXXNoexceptExpr
+                | ExprKind::TypeTraitExpr
+                | ExprKind::ArrayTypeTraitExpr
+                | ExprKind::ExpressionTraitExpr => {}
+                _ => stack.extend(ast.exprs.children(x, &ast.lists)),
+            }
         }
     }
 }
