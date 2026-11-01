@@ -1785,6 +1785,14 @@ impl ExprArena {
         self.cold.source_loc.insert(e, v)
     }
 
+    /// Replaces the recorded source-location values of `e`: a function's
+    /// pretty name is final only once its return type is deduced (clang
+    /// computes `SourceLocExpr` values lazily, after the body). `false`
+    /// if none were recorded.
+    pub fn refine_source_loc_values(&mut self, e: ExprId, v: SourceLocValues) -> bool {
+        self.cold.source_loc.refine(e, v)
+    }
+
     /// The declaration context in which a `CXXDefaultInitExpr` /
     /// `CXXDefaultArgExpr` is used.
     pub fn used_context(&self, e: ExprId) -> DeclId {

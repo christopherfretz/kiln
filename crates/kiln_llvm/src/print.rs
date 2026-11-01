@@ -372,7 +372,9 @@ impl<'a> Printer<'a> {
         for f in &m.funcs {
             for &bb in &f.layout {
                 for &i in &f.blocks[bb.index()].insts {
-                    if let InstKind::Call(c) | InstKind::Invoke(c) = f.insts[i.index()].kind {
+                    if let InstKind::Call(c) | InstKind::Invoke(c) | InstKind::CallBr(c) =
+                        f.insts[i.index()].kind
+                    {
                         self.add_attr_slot(f.calls[c as usize].attrs.func);
                     }
                 }
@@ -1267,10 +1269,13 @@ impl<'a> Printer<'a> {
                 w.write_str(", ")?;
                 self.typed(w, fv)?;
             }
-            InstKind::Call(c) | InstKind::Invoke(c) => {
+            InstKind::Call(c) | InstKind::Invoke(c) | InstKind::CallBr(c) => {
                 let call = &f.calls[c as usize];
-                let is_invoke = matches!(inst.kind, InstKind::Invoke(_));
-                w.write_str(if is_invoke { "invoke" } else { "call" })?;
+                w.write_str(match inst.kind {
+                    InstKind::Invoke(_) => "invoke",
+                    InstKind::CallBr(_) => "callbr",
+                    _ => "call",
+                })?;
                 write_fmf(w, call.fmf)?;
                 if call.cc != CallConv::C {
                     w.write_char(' ')?;
@@ -1317,6 +1322,19 @@ impl<'a> Printer<'a> {
                     self.operand(w, Value::block(n))?;
                     w.write_str(" unwind label ")?;
                     self.operand(w, Value::block(u))?;
+                }
+                if let (InstKind::CallBr(_), Some(n)) = (inst.kind, call.normal) {
+                    w.write_str("\n          to label ")?;
+                    self.operand(w, Value::block(n))?;
+                    w.write_str(" [")?;
+                    for (i, &b) in call.indirect.iter().enumerate() {
+                        if i > 0 {
+                            w.write_str(", ")?;
+                        }
+                        w.write_str("label ")?;
+                        self.operand(w, Value::block(b))?;
+                    }
+                    w.write_char(']')?;
                 }
             }
             InstKind::LandingPad(p) => {
@@ -1654,7 +1672,7 @@ impl<'a> TypeFinder<'a> {
                 vals(t);
                 vals(fv);
             }
-            InstKind::Call(c) | InstKind::Invoke(c) => {
+            InstKind::Call(c) | InstKind::Invoke(c) | InstKind::CallBr(c) => {
                 let call = &f.calls[c as usize];
                 // Operand order: args, bundle operands, (invoke dests), callee.
                 f.ops(call.args).iter().for_each(|&v| vals(v));
@@ -1687,7 +1705,9 @@ impl<'a> TypeFinder<'a> {
         match inst.kind {
             InstKind::Gep { source, .. } => self.ty(source),
             InstKind::Alloca { allocated, .. } => self.ty(allocated),
-            InstKind::Call(c) | InstKind::Invoke(c) => self.attrs(&f.calls[c as usize].attrs),
+            InstKind::Call(c) | InstKind::Invoke(c) | InstKind::CallBr(c) => {
+                self.attrs(&f.calls[c as usize].attrs);
+            }
             _ => {}
         }
         let dbg = MdKindId(0);

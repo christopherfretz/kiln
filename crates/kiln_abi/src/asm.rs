@@ -95,10 +95,38 @@ impl ConstraintInfo {
     }
 }
 
+/// The target's `matchAsmCCConstraint`: the length of the flag-output
+/// constraint (`@cc<cond>`) that is all of `rest`, or 0.
+fn match_asm_cc(arch: Arch, rest: &[u8]) -> usize {
+    let Some(cond) = rest.strip_prefix(b"@cc") else { return 0 };
+    let conds: &[&[u8]] = match arch {
+        Arch::AArch64 => &[
+            b"eq", b"ne", b"hs", b"cs", b"cc", b"lo", b"mi", b"pl", b"vs", b"vc", b"hi", b"ls",
+            b"ge", b"lt", b"gt", b"le",
+        ],
+        Arch::X86_64 => &[
+            b"a", b"ae", b"b", b"be", b"c", b"e", b"z", b"g", b"ge", b"l", b"le", b"na", b"nae",
+            b"nb", b"nbe", b"nc", b"ne", b"nz", b"ng", b"nge", b"nl", b"nle", b"no", b"np", b"ns",
+            b"o", b"p", b"s",
+        ],
+    };
+    if conds.contains(&cond) { rest.len() } else { 0 }
+}
+
 /// `validateAsmConstraint` for the letter(s) at `c[*i..]`; may advance `i`
 /// over a multi-letter constraint.
 fn validate_target(arch: Arch, c: &[u8], i: &mut usize, info: &mut ConstraintInfo) -> bool {
     let at = |k: usize| c.get(*i + k).copied().unwrap_or(0);
+    if at(0) == b'@' {
+        // A condition-flag output (`=@cc<cond>`).
+        let len = match_asm_cc(arch, &c[*i..]);
+        if len == 0 {
+            return false;
+        }
+        *i += len - 1;
+        info.set(ALLOWS_REGISTER);
+        return true;
+    }
     match arch {
         Arch::AArch64 => match at(0) {
             b'w' | b'S' | b'z' | b'x' | b'y' => {
@@ -449,6 +477,18 @@ pub fn has_asm_variants(arch: Arch) -> bool {
 /// `convertConstraint` for the letter(s) at `c[*i..]`.
 fn convert_constraint(arch: Arch, c: &[u8], i: &mut usize, out: &mut String) {
     let ch = c[*i];
+    if ch == b'@' {
+        let len = match_asm_cc(arch, &c[*i..]);
+        if len == 0 {
+            out.push('@');
+        } else {
+            out.push('{');
+            out.push_str(&String::from_utf8_lossy(&c[*i..*i + len]));
+            out.push('}');
+            *i += len - 1;
+        }
+        return;
+    }
     match arch {
         Arch::AArch64 => {
             if ch == b'U' && *i + 2 < c.len() {
@@ -560,7 +600,8 @@ pub struct AsmOperandCounts<'a> {
     pub inputs: u32,
     /// `asm goto` labels.
     pub labels: u32,
-    /// The symbolic names of the outputs then inputs (`""` for none).
+    /// The symbolic names of the outputs, inputs then labels (`""` for
+    /// none).
     pub names: &'a [&'a str],
 }
 
@@ -583,7 +624,10 @@ fn named_operand(
         return Err((AsmStringError::UnknownName, *p as u32));
     };
     *p += len + 1;
-    Ok(n as u32)
+    // A label is numbered after the "+" operands' input halves too
+    // (clang's `getNamedOperand`, as LLVM numbers `callbr` operands).
+    let n = n as u32;
+    Ok(if n >= ops.outputs + ops.inputs { n + ops.plus } else { n })
 }
 
 /// A simple asm string (no operands): only `$` is escaped, as `$$`.

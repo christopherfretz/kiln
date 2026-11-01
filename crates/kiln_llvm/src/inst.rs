@@ -531,6 +531,7 @@ pub enum Opcode {
     Select,
     Call,
     Invoke,
+    CallBr,
     LandingPad,
     Resume,
     CatchSwitch,
@@ -554,6 +555,7 @@ impl Opcode {
         matches!(
             self,
             Opcode::Invoke
+                | Opcode::CallBr
                 | Opcode::Resume
                 | Opcode::CatchSwitch
                 | Opcode::CatchRet
@@ -687,6 +689,9 @@ pub(crate) enum InstKind {
     },
     Call(u32),
     Invoke(u32),
+    /// `callbr` (`asm goto`): `normal` is the fallthrough, `indirect` the
+    /// label destinations of its `CallData`.
+    CallBr(u32),
     LandingPad(u32),
     Resume {
         val: Value,
@@ -782,6 +787,7 @@ impl Inst {
             InstKind::Select { .. } => Opcode::Select,
             InstKind::Call(_) => Opcode::Call,
             InstKind::Invoke(_) => Opcode::Invoke,
+            InstKind::CallBr(_) => Opcode::CallBr,
             InstKind::LandingPad(_) => Opcode::LandingPad,
             InstKind::Resume { .. } => Opcode::Resume,
             InstKind::CatchSwitch { .. } => Opcode::CatchSwitch,
@@ -819,6 +825,8 @@ pub(crate) struct CallData {
     /// Invoke destinations.
     pub(crate) normal: Option<BlockId>,
     pub(crate) unwind: Option<BlockId>,
+    /// `callbr` indirect destinations.
+    pub(crate) indirect: Vec<BlockId>,
     pub(crate) bundles: Vec<OperandBundle>,
 }
 

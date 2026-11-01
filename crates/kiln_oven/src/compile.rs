@@ -243,7 +243,7 @@ pub(crate) fn is_local_var(ast: &kiln_ast::Ast, d: DeclId) -> bool {
         DeclKind::ParmVar => true,
         DeclKind::Var => {
             let Some(v) = ast.decls.var(d) else { return false };
-            v.spec.storage() == VarStorage::None
+            matches!(v.spec.storage(), VarStorage::None | VarStorage::Register)
                 && n.ctx().is_some_and(|c| ast.decls.get(c).kind().is_function())
         }
         _ => false,
@@ -311,7 +311,12 @@ impl Oven {
         e: ExprId,
         object: Option<DeclId>,
     ) -> u32 {
-        if let Some(&f) = self.thunks.get(&e)
+        let root = self.srcloc_root.take();
+        if let Some(at) = root {
+            if let Some(&f) = self.thunks_at.get(&(e, at)) {
+                return f;
+            }
+        } else if let Some(&f) = self.thunks.get(&e)
             && (object.is_none() || self.funcs[f as usize].decl.is_none())
         {
             return f;
@@ -329,6 +334,7 @@ impl Oven {
             this_ty: None,
         });
         let mut c = Compiler::new(self, b);
+        c.srcloc = root;
         let entry = c.here();
         let ty = c.ety(e);
         let glvalue = c.b.ast().exprs.get(e).value_category().is_glvalue();
@@ -384,7 +390,10 @@ impl Oven {
         f.state = FState::Ready;
         f.nregs = nregs;
         f.ret = ret;
-        self.thunks.insert(e, idx);
+        match root {
+            Some(at) => self.thunks_at.insert((e, at), idx),
+            None => self.thunks.insert(e, idx),
+        };
         idx
     }
 

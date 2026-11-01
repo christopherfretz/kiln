@@ -106,9 +106,48 @@ impl Oven {
                     bi::FINITE => !matches!(c, Class::Inf | Class::NaN),
                     bi::INF => c == Class::Inf,
                     bi::NAN => c == Class::NaN,
+                    bi::SUBNORMAL => c == Class::Subnormal,
+                    bi::ZERO => c == Class::Zero,
+                    bi::SIGNALING => softfloat::is_signaling(float_of(sub & 15), a),
                     _ => c == Class::Normal,
                 };
                 Ok(u128::from(r))
+            }
+            bi::FP_OP => {
+                let k = float_of(sub & 15);
+                let sign = softfloat::sign_bit(k);
+                let neg = |x: u128| x & sign != 0;
+                let zero = |x: u128| softfloat::classify(k, x) == Class::Zero;
+                let nan = |x: u128| softfloat::classify(k, x) == Class::NaN;
+                Ok(match sub >> 4 {
+                    bi::FABS => a & !sign,
+                    bi::COPYSIGN => a & !sign | b & sign,
+                    bi::FMAX => {
+                        let gt = softfloat::cmp(k, b, a) == Some(std::cmp::Ordering::Greater);
+                        if zero(a) && zero(b) {
+                            if neg(a) { b } else { a }
+                        } else if nan(a) || gt {
+                            b
+                        } else {
+                            a
+                        }
+                    }
+                    bi::FMIN => {
+                        let lt = softfloat::cmp(k, b, a) == Some(std::cmp::Ordering::Less);
+                        if zero(a) && zero(b) {
+                            if neg(b) { b } else { a }
+                        } else if nan(a) || lt {
+                            b
+                        } else {
+                            a
+                        }
+                    }
+                    _ => match softfloat::classify(k, a) {
+                        Class::Inf if neg(a) => u128::MAX,
+                        Class::Inf => 1,
+                        _ => 0,
+                    },
+                })
             }
             bi::STRLEN => self.bi_strlen(a as u64, OTy(t1)).map(u128::from),
             k @ (bi::MEMCMP | bi::MEMCHR) => {

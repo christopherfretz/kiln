@@ -22,8 +22,24 @@ impl Sema<'_, '_> {
     /// (clang's `ActOnGCCAsmStmt`). Errors in constraints, clobbers or
     /// the template are reported and still build the statement, as
     /// clang does; invalid operands yield `None`.
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[allow(clippy::too_many_arguments)]
     pub fn act_on_gcc_asm_stmt(
+        &mut self,
+        loc: Loc,
+        bits: u16,
+        string: AsmStr,
+        outputs: &[AsmOperand],
+        inputs: &[AsmOperand],
+        clobbers: &[AsmStr],
+        rparen: Loc,
+    ) -> Option<StmtId> {
+        self.act_on_gcc_asm_goto_stmt(loc, bits, string, outputs, inputs, clobbers, &[], rparen)
+    }
+
+    /// [`Self::act_on_gcc_asm_stmt`] with the `asm goto` labels (clang's
+    /// `ActOnGCCAsmStmt`; `labels` are `Label` declarations).
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    pub fn act_on_gcc_asm_goto_stmt(
         &mut self,
         loc: Loc,
         mut bits: u16,
@@ -31,6 +47,7 @@ impl Sema<'_, '_> {
         outputs: &[AsmOperand],
         inputs: &[AsmOperand],
         clobbers: &[AsmStr],
+        labels: &[(DeclId, Loc)],
         rparen: Loc,
     ) -> Option<StmtId> {
         if bits & asm_bits::BASIC != 0 {
@@ -41,7 +58,7 @@ impl Sema<'_, '_> {
         let mut ops: Vec<AsmOperand> = outputs.iter().chain(inputs).copied().collect();
         let nout = outputs.len();
         let build = |s: &mut Self, ops: &[AsmOperand]| -> Option<StmtId> {
-            Some(s.build_asm(loc, bits, string, ops, nout, clobbers, rparen))
+            Some(s.build_asm(loc, bits, string, ops, nout, clobbers, labels, rparen))
         };
         let mut out_infos = Vec::with_capacity(nout);
         for op in &ops[..nout] {
@@ -137,14 +154,20 @@ impl Sema<'_, '_> {
             }
         }
         // The template ([dcl.asm]/1; GNU operand references).
-        let names: Vec<String> = ops.iter().map(|o| self.asm_name(o)).collect();
+        let mut names: Vec<String> = ops.iter().map(|o| self.asm_name(o)).collect();
+        for &(l, _) in labels {
+            let n = self.ast.decls.get(l).name();
+            names.push(
+                n.as_ident().map_or_else(String::new, |s| self.ast.symbols().as_str(s).to_owned()),
+            );
+        }
         let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
         let plus = out_infos.iter().filter(|i| i.is_read_write()).count() as u32;
         let counts = AsmOperandCounts {
             outputs: nout as u32,
             plus,
             inputs: inputs.len() as u32,
-            labels: 0,
+            labels: labels.len() as u32,
             names: &name_refs,
         };
         let text = self.ast.strings.bytes(string.0).to_vec();
@@ -172,6 +195,10 @@ impl Sema<'_, '_> {
         for p in &pieces {
             let AsmPiece::Operand { no, modifier, percent, end } = *p else { continue };
             let mut idx = no;
+            // Labels are last; they have no constraint to check.
+            if bits & asm_bits::GOTO != 0 && idx >= total {
+                continue;
+            }
             if idx >= total {
                 let mut cnt = idx - total;
                 match out_infos.iter().position(|i| {
@@ -318,8 +345,11 @@ impl Sema<'_, '_> {
         by_name.sort_by(|a, b| a.0.cmp(b.0));
         if let Some(w) = by_name.windows(2).find(|w| w[0].0 == w[1].0) {
             let (name, first, second) = (w[0].0.to_owned(), w[0].1, w[1].1);
-            let b = self.begin_loc(ops[second].expr);
-            let fb = self.begin_loc(ops[first].expr);
+            // A label's location is its name in the label list.
+            let at = |s: &Self, k: usize| {
+                if k < ops.len() { s.begin_loc(ops[k].expr) } else { labels[k - ops.len()].1 }
+            };
+            let (b, fb) = (at(self, second), at(self, first));
             let n = self.diag(DiagId::note_duplicate_asm_operand_name, fb).arg(name.clone());
             let d = self.diag(DiagId::sema_duplicate_asm_operand_name, b).arg(name).with_note(n);
             self.emit(d);
@@ -344,10 +374,13 @@ impl Sema<'_, '_> {
         ops: &[AsmOperand],
         nout: usize,
         clobbers: &[AsmStr],
+        labels: &[(DeclId, Loc)],
         rparen: Loc,
     ) -> StmtId {
         let cl: Vec<StringLitId> = clobbers.iter().map(|c| c.0).collect();
         let clobbers = self.ast.lists.push(&cl);
+        let labels: Vec<DeclId> = labels.iter().map(|l| l.0).collect();
+        let labels = self.ast.lists.push(&labels);
         let srclocs = self.asm_srclocs(string);
         // Each operand ends a full-expression ([intro.execution]/5): its
         // potential odr-uses are resolved here (clang marks them `used`).
@@ -361,7 +394,7 @@ impl Sema<'_, '_> {
             num_outputs: nout as u32,
             num_inputs: (ops.len() - nout) as u32,
             clobbers,
-            labels: ListId::EMPTY,
+            labels,
             rparen,
             srclocs,
         };
