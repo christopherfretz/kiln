@@ -108,6 +108,7 @@ impl Parser<'_, '_> {
     /// A statement after its attribute-specifier-seq.
     fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
         let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
+        self.skip_extension_before_using();
         let loc = self.loc();
         match Self::punct_of(self.tok()) {
             Some(Punct::LBrace) => return Some(self.parse_compound(true).0),

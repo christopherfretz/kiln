@@ -113,6 +113,58 @@ impl Sema<'_, '_> {
             && self.this_class().is_some_and(|(_, c)| self.has_dependent_bases(c))
     }
 
+    /// The type of a dependent `this` that may still turn out to point to
+    /// a class derived from the class declaring member `d`
+    /// ([class.mfct.non.static]/2, [temp.dep.type]/2): the class of
+    /// `*this` is not (derived from) `d`'s class, but a base on the way is
+    /// dependent, so the relation is decided at instantiation (clang's
+    /// `IsProvablyNotDerivedFrom` is false and the access is
+    /// `IMA_Instance`). libc++ `basic_ostream<C, T>` calls
+    /// `ios_base::flags()` through its dependent base `basic_ios<C, T>`.
+    pub(crate) fn dependent_implicit_this(&self, d: DeclId) -> Option<QualType> {
+        self.declaring_class(d)?;
+        let (this_ty, c) = self.this_class()?;
+        let obj_ty = self.ast.types.pointee(this_ty)?;
+        if !self.ast.types.is_dependent(obj_ty) {
+            return None;
+        }
+        let mut seen = Vec::new();
+        let mut stack = vec![c];
+        while let Some(r) = stack.pop() {
+            let Some(def) = self.ast.definition(r) else { continue };
+            if seen.contains(&def) {
+                continue;
+            }
+            seen.push(def);
+            for b in self.ast.decls.bases(def, &self.ast.lists) {
+                if self.is_dependent_type(b.ty) {
+                    return Some(this_ty);
+                }
+                if let Some(br) = self.ast.types.as_record(b.ty) {
+                    stack.push(br);
+                }
+            }
+        }
+        None
+    }
+
+    /// `this->N::m` for a member `m` of a class that `*this` may derive
+    /// from only through a dependent base ([`Self::dependent_implicit_this`]):
+    /// a `CXXDependentScopeMemberExpr` on `this`, resolved at
+    /// instantiation like the explicit `this->N::m`.
+    pub(crate) fn dependent_implicit_member(
+        &mut self,
+        this_ty: QualType,
+        name: kiln_ast::names::DeclName,
+        nns: Option<kiln_ast::NnsId>,
+        loc: Loc,
+    ) -> ExprId {
+        self.note_this_use(loc);
+        let this = self.builder().this_expr(this_ty, true, loc);
+        let b = conv::decay_dependent(self, this);
+        self.builder().dependent_member(Some(b), true, name, false, nns, None, loc)
+    }
+
     /// An id-expression naming the non-static member `d`
     /// ([expr.prim.id.general]/3): `(*this).d` where `this` may be used
     /// and its class is (derived from) `d`'s class; otherwise a
@@ -139,6 +191,51 @@ impl Sema<'_, '_> {
             }
             return e;
         }
+        if let Some(this_ty) = self.dependent_implicit_this(d) {
+            let name = self.ast.decls.get(d).name();
+            let e = self.dependent_implicit_member(this_ty, name, nns, loc);
+            if qualified {
+                // `&N::m` still forms a pointer to member
+                // (`act_on_unary`).
+                self.member_refs
+                    .insert(e, MemberRef { decl: d, error: false, qualified, begin: None });
+            }
+            return e;
+        }
+        self.member_ref_without_object(d, loc, shadow, nns)
+    }
+
+    /// `&N::m` where [`Self::implicit_member_ref`] built `this->N::m` for
+    /// a dependent `this` ([`Self::dependent_implicit_member`]): the
+    /// operand is the qualified name itself ([expr.unary.op]/3), as clang
+    /// does not form an implicit member access for an address-of operand.
+    pub(crate) fn undo_dependent_implicit_member(&mut self, e: ExprId) -> ExprId {
+        let Some(r) = self.member_refs.get(&e).copied() else { return e };
+        if !r.qualified || self.ast.exprs.get(e).kind() != ExprKind::CXXDependentScopeMemberExpr {
+            return e;
+        }
+        self.member_refs.remove(&e);
+        let nns = self.ast.templates.expr_nns.get(e).copied();
+        let x = self.member_ref_without_object(r.decl, self.eloc(e), None, nns);
+        if let Some(b) = r.begin
+            && let Some(m) = self.member_refs.get_mut(&x)
+        {
+            m.begin = Some(b);
+        }
+        x
+    }
+
+    /// The `DeclRefExpr` of a non-static member named without an object:
+    /// only `&C::m` ([expr.unary.op]/3) or an unevaluated operand may use
+    /// it.
+    fn member_ref_without_object(
+        &mut self,
+        d: DeclId,
+        loc: Loc,
+        shadow: Option<DeclId>,
+        nns: Option<kiln_ast::NnsId>,
+    ) -> ExprId {
+        let qualified = nns.is_some();
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let ty = self.non_reference(declared);
         self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
