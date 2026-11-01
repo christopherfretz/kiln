@@ -135,7 +135,13 @@ impl Sema<'_, '_> {
             {
                 Selected::Unsupported
             }
-            OvlOutcome::Success(b) => Selected::Found(self.selected_ctor(&set, b)),
+            OvlOutcome::Success(b) => {
+                // The inheriting constructor of a usable base constructor
+                // can itself be deleted ([class.inhctor.init]/1; clang
+                // diagnoses it on use, `err_deleted_inherited_ctor_use`).
+                let m = self.selected_ctor(&set, b);
+                if self.is_deleted_fn(m) { Selected::Deleted(m) } else { Selected::Found(m) }
+            }
             OvlOutcome::Deleted(b) => Selected::Deleted(self.selected_ctor(&set, b)),
             OvlOutcome::NoViable | OvlOutcome::Ambiguous if skipped => Selected::Unsupported,
             OvlOutcome::NoViable => Selected::Missing,

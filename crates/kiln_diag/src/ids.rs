@@ -994,13 +994,14 @@ diag_ids! {
     sema_capture_not_variable = Error (1) "'{0}' in capture list does not name a variable";
     sema_capture_class_member = Error (1) "class member '{0}' cannot appear in capture list as it is not a variable";
     note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
-    note_deleted_subobject = Note (6) "{0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
-    note_deleted_uninit_field = Note (4) "default constructor of {0} is implicitly deleted because field {1} of {2:reference|const-qualified} type {3} would not be initialized";
+    note_deleted_subobject = Note (6) "{0:default constructor of|copy constructor of|move constructor of|copy assignment operator of|move assignment operator of|destructor of|constructor inherited by} {1} is implicitly deleted because {2:base class|field|variant field} {3} has {4:no|a deleted|multiple|an inaccessible|a non-trivial} {5}";
+    note_deleted_uninit_field = Note (5) "{0:default constructor of|constructor inherited by} {1} is implicitly deleted because field {2} of {3:reference|const-qualified} type {4} would not be initialized";
     note_deleted_rvalue_ref_field = Note (3) "copy constructor of {0} is implicitly deleted because field {1} is of rvalue reference type {2}";
     note_deleted_assign_field = Note (5) "{0:copy|move} assignment operator of {1} is implicitly deleted because field {2} is of {3:reference|const-qualified} type {4}";
     note_deleted_copy_user_declared_move = Note (3) "copy {0:constructor|assignment operator} is implicitly deleted because {1} has a user-declared move {2:constructor|assignment operator}";
-    note_deleted_all_const = Note (2) "default constructor of {0} is implicitly deleted because all {1:data members|data members of an anonymous union member} are const-qualified";
+    note_deleted_all_const = Note (3) "{0:default constructor of|constructor inherited by} {1} is implicitly deleted because all {2:data members|data members of an anonymous union member} are const-qualified";
     sema_call_implicitly_deleted_ctor = Error (2) "call to implicitly-deleted {0:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor} of {1}";
+    sema_deleted_inherited_ctor_use = Error (2) "constructor inherited by {0} from base class {1} is implicitly deleted";
     sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
     sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
     sema_use_deleted_function = Error (1) "attempt to use a deleted function{0}";
