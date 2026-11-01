@@ -147,7 +147,14 @@ Constructors:
   `AllowInlineNamespace`; WP-179). A qualified declaration (`int I::x
   = 1;`, `void N::f() {}`) and the template lookup of an explicit
   specialization (`current_scope_with_inline_dn`, [temp.expl.spec]/3)
-  do see them. Redeclaration lookup leaves out using-shadows
+  do see them. A qualified *variable* declarator whose lookup finds
+  more than one variable or function entity (`int Z::t;` with `t` in
+  both `Z` and an inline namespace of `Z`) is ambiguous:
+  `redefinition of 't' as different kind of symbol`, note `previous
+  definition is here` at the first-declared entity, and the new
+  declaration is invalid (`ambiguous_qualified_prev`, clang's
+  `MergeVarDecl` on an ambiguous `Previous`; WP-235, test
+  tests/conformance/namespace.def/inline-qualified-redefinition.cpp). Redeclaration lookup leaves out using-shadows
   (`current_scope_shadows` returns those, for §4.8's conflict checks). If the current scope is the outermost block of a
   control statement (a Block directly above a Control scope), it also
   searches the Control scope, so `if (int x = 0) { int x; }` is
