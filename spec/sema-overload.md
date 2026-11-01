@@ -880,8 +880,20 @@ Where the code differs from (or details) the design above:
   row of [over.ics.list], for a standard or user-defined sequence);
   `compare_ics` checks it after the /2 class and before /3.2, so
   `S({1, 2})` prefers `S(initializer_list<int>)` to
-  `S(const int (&)[2])` (clang). The array-bound tie-breaker of /3.1.2 is
-  not implemented.
+  `S(const int (&)[2])` (clang). The array-bound tie-breaker of /3.1.2
+  (WP-179) is `StandardConversion::list_array` (`ListArray`: element
+  type, number of elements initialized, unknown bound; clang's
+  `InitializerListContainerType`), set on the array row of
+  [over.ics.list] (an array of unknown bound counts one element per
+  initializer) and kept through a reference binding. Right after /3.1.1,
+  two sequences converting to arrays whose element types agree without
+  cv-qualifiers compare by element count (fewer is better), then the one
+  not converting to an array of unknown bound wins
+  (`tests/conformance/over.ics.rank/list-array-bound.cpp`). Binding a
+  reference to an array of unknown bound (`const int (&)[]`) to an
+  array of known bound is not implemented yet ([dcl.init.ref]/4 with
+  P0388's array conversions), so a call that selects such an overload
+  still fails after overload resolution.
 - **Casts.** `static_cast` / functional / C-style casts from a class to a
   non-class type run the direct-initialization's user-defined conversion
   (explicit conversion functions are candidates) with clang's
