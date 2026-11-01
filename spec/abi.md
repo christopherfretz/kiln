@@ -676,9 +676,12 @@ points, thunks and method indices are clang's.
   <unqualified-name> M` (a substitution candidate), or `<template-prefix>
   <template-args> M` for a variable template specialization (clang
   `mangleClosurePrefix`; WP-182: `_ZNK2vtIiEMUliE_clEi`). `decltype(auto)` is
-  `Dc`. `tests/codegen/lambda_names.cpp` checks it IR-exact (symbols
-  included) against clang; the `S2_` substitution in some closure
-  names inside templates is WP-117's.
+  `Dc`; an undeduced `auto` / `decltype(auto)` (`Da` / `Dc`) is not a
+  substitution candidate (clang `isTypeSubstitutable`; WP-203: a nested
+  generic lambda's return is `Da`, not a back-reference).
+  `tests/codegen/lambda_names.cpp` and
+  `tests/codegen/lambda_default_arg_template.cpp` check it IR-exact
+  (symbols included) against clang.
 
 ### 8.10 Landed (WP-131): local entities of template instantiations
 - **Linkage** (`fn_shares_local_linkage`): a local class, and hence its

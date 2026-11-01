@@ -1658,6 +1658,14 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::ArraySubscriptExpr, vk, deps, 0, ty, loc, base.raw(), idx.raw())
     }
 
+    /// Records the `]` of a built-in subscript `e` (its clang `getEndLoc`,
+    /// `RBracketLoc`), unless `e` is no `ArraySubscriptExpr` or has one.
+    pub fn set_subscript_end(&mut self, e: ExprId, rsquare: Loc) {
+        if self.ast.exprs.get(e).kind() == ExprKind::ArraySubscriptExpr {
+            let _ = self.ast.exprs.cold.end_loc.insert(e, rsquare);
+        }
+    }
+
     /// `v[i]` on a vector `v` (a GNU/clang extension): the element, of
     /// `v`'s value category; a glvalue designates a vector component
     /// (clang `OK_VectorComponent`).

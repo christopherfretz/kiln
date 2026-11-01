@@ -238,6 +238,9 @@ impl Cg<'_> {
     /// The constant of IR type `it` stored at byte `off` of `img`.
     fn image_const(&mut self, img: &Img, off: u64, it: &IrType, e: Option<ExprId>) -> R<Value> {
         let t = self.ir(it);
+        if let Some(v) = self.member_ptr_reloc(img, off, it, t)? {
+            return Ok(v);
+        }
         match it {
             IrType::Int(w) => {
                 let n = u64::from(*w).div_ceil(8);
@@ -286,20 +289,27 @@ impl Cg<'_> {
                 let e = e.map(|x| self.strip_init(x));
                 let is_string =
                     e.is_some_and(|x| self.ast.exprs.get(x).kind() == ExprKind::StringLiteral);
-                let inits: Vec<ExprId> = match e {
+                // clang `EmitArrayInitialization`: an array initialized from
+                // a list without explicit elements has only a filler, so
+                // its constant has no common element type
+                // (`EmitArrayConstant`); a value-initialized one is
+                // `EmitNullConstant`'s plain array.
+                let (inits, filler, no_elts) = match e {
                     Some(x)
                         if matches!(
                             self.ast.exprs.get(x).kind(),
                             ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
                         ) =>
                     {
-                        crate::expr::agg_init_parts(self.ast, x).0
+                        let (inits, filler, _) = crate::expr::agg_init_parts(self.ast, x);
+                        let none = inits.is_empty();
+                        (inits, filler, none)
                     }
-                    _ => Vec::new(),
+                    _ => (Vec::new(), None, false),
                 };
                 let mut elems = Vec::with_capacity(*n as usize);
                 for i in 0..*n {
-                    let sub = inits.get(i as usize).copied();
+                    let sub = inits.get(i as usize).copied().or(filler);
                     elems.push(self.image_const(img, off + i * es, et, sub)?);
                 }
                 if is_string {
@@ -307,61 +317,15 @@ impl Cg<'_> {
                     return self.m.const_array(elt, &elems).map_err(|e| ir_err(&e));
                 }
                 let elt = self.ir(et);
-                self.array_const(t, elt, &elems)
+                self.array_const(t, elt, &elems, !no_elts)
             }
             IrType::Record(d) => {
                 let rec = self.tys.record(*d).clone();
                 if rec.is_union {
                     return self.union_const(img, off, t, rec.size, e);
                 }
-                let offs = self.tys.struct_offsets(&rec.members, rec.packed);
-                let mut by_member: Vec<Option<DeclId>> = vec![None; rec.members.len()];
-                for (&f, &i) in &rec.field_index {
-                    if let Some(s) = by_member.get_mut(i as usize) {
-                        *s = Some(f);
-                    }
-                }
-                let e = e.map(|x| self.strip_init(x));
-                let inits: Vec<ExprId> = match e {
-                    Some(x)
-                        if matches!(
-                            self.ast.exprs.get(x).kind(),
-                            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
-                        ) =>
-                    {
-                        crate::expr::agg_init_parts(self.ast, x).0
-                    }
-                    _ => Vec::new(),
-                };
-                let fields: Vec<DeclId> = self
-                    .ast
-                    .decls
-                    .members(self.ast.first(*d))
-                    .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
-                    .collect();
-                // clang `ConstStructBuilder`: the field constants at their
-                // offsets; padding (and the byte of an empty class) is left
-                // to `ConstantAggregateBuilder::buildFrom`.
                 let mut elems: Vec<(u64, Value)> = Vec::with_capacity(rec.members.len());
-                for (i, m) in rec.members.iter().enumerate() {
-                    // A bit-field storage unit is rebuilt from its bytes
-                    // (the object representation already packs the
-                    // fields, in target bit order), with no initializer.
-                    let sub = by_member[i]
-                        .filter(|f| !rec.bitfields.contains_key(f))
-                        .and_then(|f| fields.iter().position(|&x| x == f))
-                        .and_then(|p| inits.get(p).copied());
-                    if by_member[i].is_none() {
-                        if matches!(m, IrType::Array(..) | IrType::Int(8)) {
-                            continue;
-                        }
-                        return err(
-                            None,
-                            "base-class subobjects in constants are not supported yet (M3)",
-                        );
-                    }
-                    elems.push((offs[i], self.image_const(img, off + offs[i], m, sub)?));
-                }
+                self.record_elems(img, off, 0, *d, false, e, &mut elems)?;
                 self.build_struct_const(t, rec.size, &elems)
             }
             IrType::Struct(ms, packed) => {
@@ -388,6 +352,111 @@ impl Cg<'_> {
             IrType::Void | IrType::ScalableVector(..) | IrType::TargetExt(_) => {
                 err(None, "scalable-vector and target-type constants are not supported yet (M3)")
             }
+        }
+    }
+
+    /// clang `ConstStructBuilder::Build(APValue)`: the field constants of
+    /// class `d` at byte `rel` of the object at `off`, its non-virtual
+    /// bases flattened in at their offsets (address order); padding (and
+    /// the byte of an empty class) is left to `build_struct_const`.
+    #[allow(clippy::too_many_arguments)]
+    fn record_elems(
+        &mut self,
+        img: &Img,
+        off: u64,
+        rel: u64,
+        d: DeclId,
+        as_base: bool,
+        e: Option<ExprId>,
+        out: &mut Vec<(u64, Value)>,
+    ) -> R<()> {
+        let ast = self.ast;
+        let first = ast.first(d);
+        let rec = self.tys.record(first).clone();
+        if rec.is_union && as_base {
+            return err(None, "union base-class constants are not supported yet (M3)");
+        }
+        let (members, packed) = match (&rec.base_members, as_base) {
+            (Some(b), true) => {
+                let lt = self.ir(&IrType::RecordBase(first));
+                (b.clone(), self.m.types.struct_is_packed(lt))
+            }
+            _ => (rec.members.clone(), rec.packed),
+        };
+        let offs = self.tys.struct_offsets(&members, packed);
+        let mut by_member: Vec<Option<DeclId>> = vec![None; members.len()];
+        for (&f, &i) in &rec.field_index {
+            if let Some(s) = by_member.get_mut(i as usize) {
+                *s = Some(f);
+            }
+        }
+        let mut by_base: Vec<Option<DeclId>> = vec![None; members.len()];
+        for (&b, &i) in &rec.base_index {
+            if let Some(s) = by_base.get_mut(i as usize) {
+                *s = Some(b);
+            }
+        }
+        let e = e.map(|x| self.strip_init(x));
+        let inits: Vec<ExprId> = match e {
+            Some(x)
+                if matches!(
+                    ast.exprs.get(x).kind(),
+                    ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+                ) =>
+            {
+                crate::expr::agg_init_parts(ast, x).0
+            }
+            _ => Vec::new(),
+        };
+        // An aggregate's list initializes its bases first ([dcl.init.aggr]
+        // /7).
+        let bases: Vec<DeclId> = ast.definition(d).map_or_else(Vec::new, |def| {
+            ast.decls
+                .bases(def, &ast.lists)
+                .filter_map(|b| ast.types.as_record(b.ty).map(|r| ast.first(r)))
+                .collect()
+        });
+        let fields: Vec<DeclId> = ast
+            .decls
+            .members(first)
+            .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
+        for (i, m) in members.iter().enumerate() {
+            let at = rel + offs[i];
+            if let Some(f) = by_member[i] {
+                // A bit-field storage unit is rebuilt from its bytes (the
+                // object representation already packs the fields, in
+                // target bit order), with no initializer.
+                let sub = Some(f)
+                    .filter(|f| !rec.bitfields.contains_key(f))
+                    .and_then(|f| fields.iter().position(|&x| x == f))
+                    .and_then(|p| inits.get(p + bases.len()).copied());
+                out.push((at, self.image_const(img, off + at, m, sub)?));
+            } else if let Some(b) = by_base[i] {
+                let sub = bases.iter().position(|&x| x == b).and_then(|p| inits.get(p).copied());
+                self.record_elems(img, off, at, b, true, sub, out)?;
+            } else if !matches!(m, IrType::Array(..) | IrType::Int(8)) {
+                return err(None, "polymorphic class constants are not supported yet (M3)");
+            }
+        }
+        Ok(())
+    }
+
+    /// A member pointer stored in an image: the Oven records it as a
+    /// relocation (a `MemberPtr` or member `Null` scalar) over its `i64`
+    /// (data) or `{ i64, i64 }` (function) storage, whose bytes are 0; a
+    /// null data member pointer is `-1` (Itanium).
+    fn member_ptr_reloc(&mut self, img: &Img, off: u64, it: &IrType, t: LTy) -> R<Option<Value>> {
+        if !matches!(it, IrType::Int(64) | IrType::Struct(..)) {
+            return Ok(None);
+        }
+        let Some(r) = img.reloc(off) else { return Ok(None) };
+        match self.ast.consts.get(r) {
+            ConstValue::Scalar(
+                s @ (Scalar::MemberPtr { .. }
+                | Scalar::Null { kind: NullKind::MemberData | NullKind::MemberFunction, .. }),
+            ) => self.scalar_const(s, t).map(Some),
+            _ => Ok(None),
         }
     }
 
@@ -509,8 +578,9 @@ impl Cg<'_> {
         }
     }
 
-    /// clang `EmitArrayConstant` over fully expanded elements.
-    fn array_const(&mut self, t: LTy, elt: LTy, elems: &[Value]) -> R<Value> {
+    /// clang `EmitArrayConstant` over fully expanded elements; `common`
+    /// is false when the value has no explicitly initialized elements.
+    fn array_const(&mut self, t: LTy, elt: LTy, elems: &[Value], common: bool) -> R<Value> {
         let bound = elems.len();
         let mut nz = bound;
         while nz > 0 && self.is_null_value(elems[nz - 1]) {
@@ -519,7 +589,7 @@ impl Cg<'_> {
         if nz == 0 {
             return Ok(self.m.const_zero(t));
         }
-        let common = elems.iter().all(|&v| self.m.const_type(v) == elt);
+        let common = common && elems.iter().all(|&v| self.m.const_type(v) == elt);
         let tz = bound - nz;
         if tz >= 8 {
             let mut out = Vec::new();

@@ -99,7 +99,10 @@ pub(crate) enum Saved {
 /// The operands of a [`Cleanup::IrregularPartialArray`].
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct IrregularPartialArray {
-    pub begin: Saved,
+    pub begin: V,
+    /// `begin` is a `cond-cleanup.save` slot holding the first element
+    /// (`saveValueInCond`).
+    pub saved: bool,
     pub end_slot: V,
     pub outer: LTy,
     pub depth: usize,
@@ -185,8 +188,8 @@ pub(crate) struct Scope {
     ext: bool,
     branch_afters: Vec<(Blk, u32)>,
     branches: Vec<Blk>,
-    /// `AuxillaryAllocas`: active-flag allocas erased, with their uses,
-    /// when the cleanup is popped without being emitted.
+    /// `AuxAllocas`: allocas (and their stores) dropped again when the
+    /// cleanup is popped without ever being emitted.
     pub aux: Vec<V>,
 }
 
@@ -371,6 +374,13 @@ impl Cg<'_> {
         self.push_scope(Kind::Cleanup(c), normal, eh);
     }
 
+    /// `AddAuxAllocas(AllocaTracker.Take())`: the allocas created since
+    /// `mark` belong to the cleanup on top of the stack.
+    pub(crate) fn add_aux_allocas(&mut self, mark: u32) {
+        let a = self.f.fir.allocas_from(mark);
+        self.f.cl.stack.last_mut().expect("cleanup scope").aux.extend(a);
+    }
+
     /// `pushFullExprCleanup`: outside a conditional branch a plain
     /// cleanup; inside one, its values are saved if they do not dominate
     /// the cleanup (`saveValueInCond`) and it runs only if its
@@ -463,10 +473,12 @@ impl Cg<'_> {
                 self.store(addr.v, slot, al, false);
                 Cleanup::SavedObject { slot, ty: addr.ty, align: addr.align, record, array: true }
             }
-            Cleanup::IrregularPartialArray(mut p) => {
-                if let Saved::Direct(CallArg::Scalar(v)) = p.begin {
-                    p.begin = self.save_ptr(v);
-                }
+            Cleanup::IrregularPartialArray(mut p) if !p.saved && self.needs_saving(p.begin) => {
+                let al = self.pref_align(LTy::PTR);
+                let slot = self.f.fir.alloca(LTy::PTR, al);
+                self.store(p.begin, slot, al, false);
+                p.begin = slot;
+                p.saved = true;
                 Cleanup::IrregularPartialArray(p)
             }
             Cleanup::NewDelete(mut nd) => {
@@ -791,7 +803,11 @@ impl Cg<'_> {
         let requires_normal = is_normal && (has_fixups || has_existing_branches || has_fallthrough);
         let cleanup = self.f.cl.stack[top - 1].cleanup().clone();
         let aux = std::mem::take(&mut self.f.cl.stack[top - 1].aux);
-        let mut emitted = false;
+        if !requires_normal && eh_entry.is_none() {
+            for &a in aux.iter().rev() {
+                self.f.fir.erase_with_users(a);
+            }
+        }
 
         if is_normal && has_prebranched && !requires_normal {
             let pre_dest = if fallthrough_is_branch_through {
@@ -815,9 +831,7 @@ impl Cg<'_> {
             self.destroy_optimistic_entry(top);
             self.f.cl.pop();
             self.emit_cleanup(&cleanup, flag, false);
-            emitted = true;
         } else {
-            emitted = true;
             self.emit_normal_cleanup_paths(
                 top,
                 &cleanup,
@@ -838,26 +852,11 @@ impl Cg<'_> {
             self.push_terminate();
             if eh_flag.is_some() || is_active {
                 self.emit_cleanup(&cleanup, eh_flag, true);
-                emitted = true;
             }
             self.br(next);
             self.pop_terminate();
             self.f.fir.set_cur(saved);
             self.simplify_cleanup_entry(eh_entry);
-        }
-        if !emitted {
-            self.erase_aux_allocas(&aux);
-        }
-    }
-
-    /// `~AuxillaryAllocas` of a cleanup never emitted: erases its flag
-    /// allocas and their uses.
-    fn erase_aux_allocas(&mut self, aux: &[V]) {
-        for &a in aux.iter().rev() {
-            for u in self.f.fir.users(a) {
-                self.f.fir.erase(u);
-            }
-            self.f.fir.erase(crate::fir::Fir::last_inst(a));
         }
     }
 
@@ -1069,9 +1068,10 @@ impl Cg<'_> {
                 }
             }
             Cleanup::IrregularPartialArray(ref p) => {
-                let IrregularPartialArray { begin, end_slot, outer, depth, elem, record } = **p;
-                let CallArg::Scalar(begin) = self.restore_saved(begin) else { return };
+                let IrregularPartialArray { begin, saved, end_slot, outer, depth, elem, record } =
+                    **p;
                 let al = self.pref_align(LTy::PTR);
+                let begin = if saved { self.load(LTy::PTR, begin, al, false) } else { begin };
                 let end = self.load(LTy::PTR, end_slot, al, false);
                 let (begin, end) = if depth > 0 {
                     let zero = self.i64c(0);

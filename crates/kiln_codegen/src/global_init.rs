@@ -560,7 +560,7 @@ impl Cg<'_> {
         self.gi.temps.insert(t, g);
         let value = match init {
             Some(k) => k,
-            None => self.m.const_zero(lt),
+            None => self.null_const(ty)?,
         };
         if let Err(e) = self.m.set_initializer(g, Some(value)) {
             return err(loc, format!("bad initializer: {e:?}"));

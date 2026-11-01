@@ -202,21 +202,15 @@ fn map_ranges(sm: &SourceManager, caret: Loc, ranges: &[Range]) -> Vec<Range> {
 }
 
 /// clang's `checkRangesForMacroArgExpansion`: whether the expansion note
-/// for macro location `l` adds nothing because every range lies in the
-/// same macro argument as `l`.
+/// for macro location `l` is dropped as adding nothing. clang compares
+/// the ranges *after* `mapDiagnosticRanges`, which yields spelling (file)
+/// locations that are never macro-argument expansions; so the note is
+/// dropped only for a diagnostic without valid ranges whose location `l`
+/// is a macro-argument expansion (e.g. `use of undeclared identifier` on
+/// a macro argument), and kept whenever a range is shown.
 fn ranges_in_same_arg(sm: &SourceManager, l: Loc, ranges: &[Range]) -> bool {
-    if map_ranges(sm, l, ranges).len() < ranges.len() {
-        return false;
-    }
-    let Some(e) = sm.expansion_info(l).filter(|e| e.kind == ExpansionKind::MacroArg) else {
-        return false;
-    };
-    let arg_start = e.expansion.lo;
-    let same = |loc: Loc| {
-        sm.expansion_info(loc)
-            .is_some_and(|x| x.kind == ExpansionKind::MacroArg && x.expansion.lo == arg_start)
-    };
-    ranges.iter().all(|r| same(r.span.lo) && same(r.span.hi))
+    ranges.iter().all(|r| !r.span.lo.is_valid())
+        && sm.expansion_info(l).is_some_and(|e| e.kind == ExpansionKind::MacroArg)
 }
 
 /// clang's `Lexer::getImmediateMacroNameForDiagnostics`: the name of the

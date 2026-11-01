@@ -49,6 +49,19 @@ struct Reach {
     found: Vec<ExprId>,
     /// An `if consteval` was seen.
     no_cfg: bool,
+    /// The expressions whose reachability is asked for.
+    wanted: HashSet<ExprId>,
+    /// The wanted expressions the walk met (in any pass).
+    visited: HashSet<ExprId>,
+    /// The wanted expressions met on a live path (in any pass).
+    reached: HashSet<ExprId>,
+    /// Every case label is reached (clang `FallthroughMapper::
+    /// fillReachableBlocks`).
+    cases_live: bool,
+    /// The (attributed) statements whose reachability is asked for.
+    stmts_wanted: HashSet<StmtId>,
+    /// The wanted statements met on a live path (in any pass).
+    stmts_reached: HashSet<StmtId>,
 }
 
 struct Jump {
@@ -80,6 +93,30 @@ impl Sema<'_, '_> {
             }
             if !r.changed {
                 return Some(r.found);
+            }
+        }
+    }
+
+    /// The expressions of `wanted` that are unreachable in `body` (clang
+    /// `IssueWarnings` filtering `PossiblyUnreachableDiags` through the
+    /// CFG); `None` when clang would build no CFG. An expression the walk
+    /// does not meet counts as reachable, as an unmapped statement does
+    /// in clang.
+    pub(crate) fn unreachable_exprs(
+        &mut self,
+        body: StmtId,
+        wanted: HashSet<ExprId>,
+    ) -> Option<HashSet<ExprId>> {
+        let mut r = Reach { wanted, ..Reach::default() };
+        loop {
+            r.changed = false;
+            r.found.clear();
+            self.reach_stmt(body, true, &mut r);
+            if r.no_cfg {
+                return None;
+            }
+            if !r.changed {
+                return Some(r.visited.difference(&r.reached).copied().collect());
             }
         }
     }
@@ -229,6 +266,29 @@ impl Sema<'_, '_> {
             .filter(|&d| self.kind_of(d) == DeclKind::EnumConstant)
     }
 
+    /// The attributed statements of `wanted` that are unreachable in
+    /// `body`, every case label counting as reached (clang
+    /// `FallthroughMapper::fillReachableBlocks`); `None` when clang would
+    /// build no CFG.
+    pub(crate) fn unreachable_attributed_stmts(
+        &mut self,
+        body: StmtId,
+        wanted: HashSet<StmtId>,
+    ) -> Option<HashSet<StmtId>> {
+        let mut r = Reach { stmts_wanted: wanted, cases_live: true, ..Reach::default() };
+        loop {
+            r.changed = false;
+            r.found.clear();
+            self.reach_stmt(body, true, &mut r);
+            if r.no_cfg {
+                return None;
+            }
+            if !r.changed {
+                return Some(r.stmts_wanted.difference(&r.stmts_reached).copied().collect());
+            }
+        }
+    }
+
     fn reach_stmt(&mut self, s: StmtId, mut live: bool, r: &mut Reach) -> bool {
         let n = *self.ast.stmts.get(s);
         match n.kind() {
@@ -243,7 +303,12 @@ impl Sema<'_, '_> {
                 let live = live || r.labels.contains(&l);
                 self.reach_stmt(self.ast.stmts.sub_stmt(s), live, r)
             }
-            StmtKind::AttributedStmt => self.reach_stmt(self.ast.stmts.sub_stmt(s), live, r),
+            StmtKind::AttributedStmt => {
+                if live && r.stmts_wanted.contains(&s) {
+                    r.stmts_reached.insert(s);
+                }
+                self.reach_stmt(self.ast.stmts.sub_stmt(s), live, r)
+            }
             StmtKind::GotoStmt => {
                 if live && r.labels.insert(self.ast.stmts.label_decl(s)) {
                     r.changed = true;
@@ -275,6 +340,7 @@ impl Sema<'_, '_> {
             StmtKind::SwitchStmt => self.reach_switch(s, live, r),
             StmtKind::CaseStmt => {
                 let d = *self.ast.stmts.case_data(s);
+                live |= r.cases_live;
                 if let Some(f) = r.switches.last() {
                     let (sl, value) = (f.live, f.value);
                     live = live || (sl && (value.is_none() || self.fold_int(d.lhs) == value));
@@ -282,6 +348,7 @@ impl Sema<'_, '_> {
                 self.reach_stmt(d.sub, live, r)
             }
             StmtKind::DefaultStmt => {
+                live |= r.cases_live;
                 if let Some(f) = r.switches.last() {
                     live = live || (f.live && !f.matched);
                 }
@@ -467,6 +534,12 @@ impl Sema<'_, '_> {
     }
 
     fn reach_expr(&mut self, e: ExprId, live: bool, r: &mut Reach) -> bool {
+        if r.wanted.contains(&e) {
+            r.visited.insert(e);
+            if live {
+                r.reached.insert(e);
+            }
+        }
         let kind = self.ast.exprs.get(e).kind();
         match kind {
             ExprKind::LambdaExpr => live,
