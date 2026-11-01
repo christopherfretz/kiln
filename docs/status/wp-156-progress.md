@@ -55,9 +55,20 @@ libc++ M3 gate before: 318 / 642 pass (54.4%).
    `ext.vector/substitution-diagnostics.cpp`.
 
 ## Not done (follow-ups)
+- Access checks on type names, and access replay for function template
+  specializations and lambdas (`class/access.rs` 177/773): a larger area
+  than this package, left for its own WP.
+- `g(1)` against a single non-template function: clang says "no matching
+  function for call", kiln says "no viable conversion".
 - Oven folding of vector values (`kiln_oven/src/ty.rs` is owned by WP-154),
   and constant folding of vector binops.
 - Vector `?:`, brace elision of vector members, `-Wpsabi`,
   `-Wtautological-compare` on vectors.
 - Return types lose typedef sugar in diagnostics (`'TX'` prints as `'X'`),
   and "no viable conversion from returned value" uses the generic text.
+
+## Gate (m3, after the merge of main bcd1fdf7)
+318/642 (54.4%) before, 355/642 (60.7%) after; no vector- or simd-related
+failure is left. Top clusters: link (41), "type constraint differs in
+template redeclaration" (28, WP-167 on main), "expected expression" (18),
+undeclared identifier (13 first), using-declarators packs (11).
