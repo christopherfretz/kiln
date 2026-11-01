@@ -1448,6 +1448,40 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   non-dependent expression shared by a template and its instantiation is
   checked once, at definition.
 
+### 5.13 Vector conditionals (`vector_ops.rs`, WP-173)
+The vector operators themselves are summarized in spec/types.md
+(`Vector`). `?:` follows clang 19:
+- **Vector condition** (`act_on_vector_conditional`, clang
+  `CheckVectorConditionalTypes`): a condition of vector type with an
+  integral element is decayed, not converted to `bool`, and selects lane
+  by lane.
+  - A `void` or `throw` arm is `GNU vector conditional operand cannot be
+    void|a throw expression`.
+  - Two vector arms must have the same type (`vector operands to the
+    vector conditional must be the same type`, with clang 19's stray
+    `}`), and must be ext vectors exactly when the condition is
+    (`cannot mix vectors and extended vectors in a vector conditional`).
+  - One vector arm: the scalar arm is converted as for a binary vector
+    operator (`CheckVectorOperands`, `bool` vectors allowed).
+  - Two scalar arms: the same type, or the usual arithmetic conversions.
+    An enumeration result is `enumeration type T is not allowed in a
+    vector conditional`. The result is a vector with the condition's lane
+    count and kind (ext or GNU), and both arms are splatted. A
+    non-arithmetic result is `incompatible operand types`, a deviation:
+    clang 19 builds a malformed vector or crashes.
+  - Then the result must have the condition's lane count (`vector
+    condition type T and result type U do not have the same number of
+    elements`) and lane size (`... do not have elements of the same
+    size`).
+  - Codegen: a GNU condition is `icmp ne 0` plus `select`. An ext
+    condition is the sign-bit mask blend (`icmp slt 0`, `sext`, `and`,
+    `or`, with float arms bitcast to the condition type), as clang
+    emits it for C++. A `bool` ext-vector condition is *M4*.
+- **Scalar condition with a vector arm** (`scalar_cond_vector_operands`):
+  converted to `bool` as usual, and the arms are converted as for a
+  binary vector operator without `bool` vectors. A `bool`-vector arm is
+  `invalid operands to binary expression`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -1461,6 +1495,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived
     class type is initialized from that element ([dcl.init.list]/3.2)
+  - vector members (WP-173, clang `CheckSubElementType`): a GNU vector
+    member cannot be initialized from a scalar, so a scalar starts a
+    brace-elided list of up to N elements (`elided_vector_init`). A
+    designator after its first item ends that list. A vector initializer
+    copy-initializes the member, and an ext vector member splats a scalar
+    instead. A vector item inside a vector's element list, braced or
+    elided, is `cannot initialize a vector element of type T with an
+    rvalue|lvalue of type V`. Deviation: clang 19 does not stop the list at
+    a designator, so `{1, 2, .z = 5}` is an error there (a `void`
+    "vector element"). Kiln does not diagnose the C99 mixture of
+    designated and positional items in either case.
   - a non-class `T` list-initialized from one class-type element (or
     `bool` from `nullptr`) is initialized from the element itself
     (`class_element_list_init`; clang's core-24034 rewrite in
