@@ -1315,6 +1315,32 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   object is `sema_illegal_initializer_type`, as clang.
 - **Not done:** `-Watomic-alignment` (the libcall-size warning).
 
+### 5.12 `__builtin_va_arg` (`builtins.rs`, WP-171)
+- **`act_on_va_arg(list, ty, ty_loc, loc, rparen)`** is clang's
+  `Sema::BuildVAArgExpr`. The operand initializes a
+  `__builtin_va_list &` (an AAPCS64 struct) or, for the x86-64 array
+  `va_list`, decays and must be `__va_list_tag *` (otherwise the
+  reference-binding / conversion error). The type must be complete
+  (`sema_va_arg_incomplete`, with the forward-declaration note),
+  non-abstract (`sema_va_arg_abstract`, with the pure-virtual notes) and
+  POD (`sema_va_arg_non_pod`, `-Wnon-pod-varargs`, an error by default;
+  a reference type is non-POD). A type that undergoes default argument
+  promotion (`va_arg_promotion`: `float`, or a type whose integral
+  promotion differs from it, an enum compared through its underlying
+  type, so `E : short` warns and `enum class` does not) is
+  `sema_va_arg_promotable` (`-Wvarargs`) through `diag_runtime_behavior`.
+  Dependent operands build a dependent `VAArgExpr`; substitution rebuilds
+  through `act_on_va_arg`.
+- **Runtime-behavior diagnostics** (`stmt.rs`, clang
+  `DiagRuntimeBehavior`): inside a function body they are queued on
+  `FnState::runtime_diags` and flushed in `end_function_body`; in an
+  unevaluated operand or an immediate context they are dropped; outside a
+  function (a namespace-scope initializer) they are emitted at once.
+  **Gaps:** clang filters queued diagnostics by CFG reachability
+  (`if (0) va_arg(ap, char)` is silent there, reported here), and a
+  non-dependent expression shared by a template and its instantiation is
+  checked once, at definition.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit

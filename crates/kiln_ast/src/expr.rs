@@ -1108,7 +1108,8 @@ pub struct ColdExprData {
     pub array_trait: ColdMap<ExprId, ArrayTraitExtra>,
     /// `TypeTraitExpr`: the location of the second type argument of a
     /// binary trait (clang reports `__is_base_of`'s incomplete derived
-    /// type there).
+    /// type there); `VAArgExpr`: the begin location of the written type
+    /// (clang's `TypeLoc::getBeginLoc`, where its checks report).
     pub trait_rhs_loc: ColdMap<ExprId, Loc>,
     /// The values of the source-location builtins at a use (§5.8): for a
     /// `SourceLocExpr` its own location and context, for a
@@ -1882,6 +1883,14 @@ impl ExprArena {
         n.has(ExprFlags::ARG_IS_TYPE).then(|| QualType::from_raw(n.a)).flatten()
     }
 
+    /// The `va_list` operand, the written type and the written type's
+    /// begin location of a `VAArgExpr`.
+    pub fn va_arg(&self, e: ExprId) -> (ExprId, QualType, Loc) {
+        let n = self.expect_kind(e, ExprKind::VAArgExpr);
+        let ty_loc = self.cold.trait_rhs_loc.get(e).copied().unwrap_or(n.loc);
+        (ExprId::new(n.a), QualType::from_raw(n.b).expect("VAArgExpr: written type"), ty_loc)
+    }
+
     /// The (unevaluated) operand of a `CXXNoexceptExpr`.
     pub fn noexcept_operand(&self, e: ExprId) -> ExprId {
         ExprId::new(self.expect_kind(e, ExprKind::CXXNoexceptExpr).a)
@@ -2213,6 +2222,7 @@ impl ExprArena {
             // `CXXDependentScopeMemberExpr` and `PackExpansionExpr` are
             // template expressions (spec/sema-templates.md §2.4).
             ExprKind::CXXNoexceptExpr
+            | ExprKind::VAArgExpr
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CompoundLiteralExpr

@@ -726,7 +726,7 @@ impl Cg<'_> {
 
     /// The pointer value of `e` and the alignment it is known to have
     /// (clang `EmitPointerWithAlignment`).
-    fn ptr_align(&mut self, e: ExprId) -> R<(V, u64)> {
+    pub(crate) fn ptr_align(&mut self, e: ExprId) -> R<(V, u64)> {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
         if n.kind() == ExprKind::ParenExpr {

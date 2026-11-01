@@ -68,6 +68,10 @@ pub struct FnState {
     /// The body has a `switch` (a goto or `asm goto` shows in `labels`):
     /// the jump-scope check runs (clang `NeedsScopeChecking`).
     pub(crate) has_switch: bool,
+    /// Runtime-behavior diagnostics of the body (clang
+    /// `FunctionScopeInfo::PossiblyUnreachableDiags`), emitted at its
+    /// end (`diag_runtime_behavior`).
+    pub(crate) runtime_diags: Vec<kiln_diag::Diag>,
 }
 
 impl FnState {
@@ -84,6 +88,7 @@ impl FnState {
             this_override: None,
             returns: Vec::new(),
             has_switch: false,
+            runtime_diags: Vec::new(),
         }
     }
 }
@@ -801,6 +806,13 @@ impl Sema<'_, '_> {
         if state.has_switch || !state.labels.is_empty() {
             self.check_jump_scopes(body);
         }
+        // The deferred runtime-behavior diagnostics, ahead of the flow
+        // warnings (clang `PopFunctionScopeInfo` / `IssueWarnings`); a
+        // template's too (clang flushes them unfiltered there), and an
+        // instantiation re-checks.
+        for msg in state.runtime_diags {
+            self.emit(msg);
+        }
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred
         // (`hasUncompilableErrorOccurred`), and in dependent contexts.
@@ -843,6 +855,23 @@ impl Sema<'_, '_> {
             }
         }
         self.check_throw_in_nothrow(state.decl, body);
+    }
+
+    /// A diagnostic about behavior at run time (clang
+    /// `DiagRuntimeBehavior`): dropped in an unevaluated operand or an
+    /// immediate function context, deferred to the end of the enclosing
+    /// function body, emitted at once outside a function. clang drops
+    /// the deferred ones whose statement is unreachable in the body's
+    /// CFG when no error occurred; kiln has no CFG and emits them all
+    /// (spec/sema-stmt.md).
+    pub(crate) fn diag_runtime_behavior(&mut self, msg: kiln_diag::Diag) {
+        if self.unevaluated > 0 || self.immediate > 0 {
+            return;
+        }
+        match self.func.as_mut() {
+            Some(st) => st.runtime_diags.push(msg),
+            None => self.emit(msg),
+        }
     }
 
     /// Whether function `f` is declared `[[noreturn]]`.

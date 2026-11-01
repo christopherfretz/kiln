@@ -142,6 +142,8 @@ diag_groups! {
     // WP-159
     MissingConstinit = "missing-constinit" [];
     Varargs = "varargs" [];
+    // WP-171
+    NonPodVarargs = "non-pod-varargs" [];
     // WP-067a
     DefaultedFunctionDeleted = "defaulted-function-deleted" [];
     ClassConversion = "class-conversion" [];

@@ -56,6 +56,7 @@ fn has_side_effects(ast: &Ast, e: ExprId) -> bool {
             ExprKind::CXXNewExpr
             | ExprKind::CXXDeleteExpr
             | ExprKind::AtomicExpr
+            | ExprKind::VAArgExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CoawaitExpr
             | ExprKind::CoyieldExpr => return true,

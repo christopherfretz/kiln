@@ -291,6 +291,13 @@ pub fn va_copy(m: &mut Module) -> FuncId {
     va(m, "llvm.va_copy", 2)
 }
 
+/// `ptr @llvm.ptrmask.p0.i64(ptr, i64)`.
+pub fn ptrmask(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.ptrmask", &[p, TypeId::I64]);
+    declare(m, &name, p, &[(p, &[]), (TypeId::I64, &[])], &[], Shape::Pure)
+}
+
 /// `ptr @llvm.stacksave.p0()`.
 pub fn stacksave(m: &mut Module) -> FuncId {
     let p = ptr(m);

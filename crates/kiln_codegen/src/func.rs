@@ -285,7 +285,7 @@ impl Cg<'_> {
         self.f.func = Some(f);
         self.f.is_main = is_main;
         self.f.sig = Some(sig.clone());
-        self.f.vector_width = sig.info.max_vector_width;
+        self.f.vector_width = self.def_vector_width(&sig.info);
         self.f.structor = structor;
         self.f.this_class = sig.this;
         self.set_def_linkage(f, d);
@@ -556,6 +556,36 @@ impl Cg<'_> {
                 || site
                 || callee.is_some_and(|c| self.nounwind.get(&c).copied().unwrap_or(false))
         })
+    }
+
+    /// The `"min-legal-vector-width"` a definition starts from (clang
+    /// `StartFunction`): the widest vector-typed IR parameter or return
+    /// type. Unlike a call's width, a vector nested in a struct return
+    /// does not count; a flattened struct argument counts per element.
+    fn def_vector_width(&mut self, info: &kiln_abi::call::CallInfo) -> u64 {
+        fn vec_bits(cg: &mut Cg<'_>, t: &IrType) -> u64 {
+            match t {
+                IrType::Vector(..) => cg.tys.size_align(t).0 * 8,
+                _ => 0,
+            }
+        }
+        let mut w = 0;
+        if let ArgKind::Direct { coerce, .. } = &info.ret.kind {
+            w = w.max(vec_bits(self, coerce));
+        }
+        for a in &info.args {
+            if let ArgKind::Direct { coerce, flatten, .. } = &a.kind {
+                match coerce {
+                    IrType::Struct(m, _) if *flatten => {
+                        for e in m {
+                            w = w.max(vec_bits(self, e));
+                        }
+                    }
+                    c => w = w.max(vec_bits(self, c)),
+                }
+            }
+        }
+        w
     }
 
     /// Whether `q` is evaluated as an aggregate (`hasAggregateEvaluationKind`).

@@ -163,6 +163,7 @@ no category).
 | `CallExpr` | `CallExpr 'type' [lvalue\|xvalue] [adl]` (`adl`: the callee was found by argument-dependent lookup, clang's `usesADL`; WP-122); children: callee, arguments |
 | `UnaryExprOrTypeTraitExpr` | `UnaryExprOrTypeTraitExpr 'type' sizeof\|alignof 'operand-type'` (or expression child) |
 | `CXXNoexceptExpr` | `CXXNoexceptExpr 'bool'`; one child, the unevaluated operand. The value is not printed (clang prints none) |
+| `VAArgExpr` | `VAArgExpr 'T'` (the written type; a prvalue); one child, the `va_list` operand |
 | `CXXStaticCastExpr`, `CXXDynamicCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr` | `Class 'type' [lvalue\|xvalue] static_cast<T> <Kind [(path)]>` (the written type, as `'type'` plus `&` for an lvalue and `&&` for an xvalue result) |
 | `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` |
 | cast paths | a derived-to-base or base-to-derived cast kind prints its path: `<DerivedToBase (A -> virtual V)>` (each base class, `virtual` on a virtual step), also on `ImplicitCastExpr` and `CStyleCastExpr` |

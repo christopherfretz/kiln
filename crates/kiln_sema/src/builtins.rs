@@ -747,6 +747,114 @@ impl Sema<'_, '_> {
         Some((vec![ap, args[1]], QualType::VOID))
     }
 
+    /// `__builtin_va_arg(list, T)` ([cstdarg.syn]/1, C 7.16.1.1; clang's
+    /// `BuildVAArgExpr`). The `va_list` operand: on a target whose
+    /// `va_list` is an array (x86-64) it decays (the usual unary
+    /// conversions) and must then have the decayed type, else `first
+    /// argument to 'va_arg' is of type 'T' and not 'va_list'`; on one
+    /// whose `va_list` is a class (`AArch64`) it is copy-initialized to a
+    /// `__builtin_va_list &` parameter (so a mismatch is a reference
+    /// binding error). A non-dependent `T` must be complete and not
+    /// abstract; a non-POD `T` (a reference included) is a
+    /// `-Wnon-pod-varargs` error that does not stop the expression; a
+    /// promotable `T` (an integer type of rank below `int`, an unscoped
+    /// enumeration whose promoted type is not its underlying type, or
+    /// `float`) gets the `-Wvarargs` undefined-behavior warning as a
+    /// runtime-behavior diagnostic (`diag_runtime_behavior`). Every check
+    /// reports at `ty_loc`, where `T` begins. The result is a prvalue of
+    /// `T`'s non-lvalue expression type (clang's `getNonLValueExprType`:
+    /// a reference's referent; cv dropped for a non-class non-array).
+    pub fn act_on_va_arg(
+        &mut self,
+        e: ExprId,
+        ty: QualType,
+        ty_loc: Loc,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        if self.is_err_expr(e) || self.is_error_type(ty) {
+            return self.recover_err(&[e], loc);
+        }
+        let Some(vl) = self.va_list_type else { return self.recover_err(&[e], loc) };
+        let mut list = e;
+        if !self.expr_is_type_dependent(e) {
+            if self.ast.types.is_array(vl) {
+                let orig = self.ety(e);
+                list = conv::usual_unary_conversions(self, e);
+                let want = conv::array_decayed(self, vl);
+                if self.ast.types.canonical(self.ety(list)) != self.ast.types.canonical(want) {
+                    let at = self.begin_loc(e);
+                    let msg = self.diag(DiagId::sema_va_arg_not_va_list, at).arg(self.ty_arg(orig));
+                    self.emit(msg);
+                    return self.recover_err(&[list], loc);
+                }
+            } else {
+                let pt = self.ast.types.lvalue_ref_to(vl);
+                list = match conv::implicit_convert(self, e, pt, ConvCtx::Argument) {
+                    Ok(x) => x,
+                    Err(err) => {
+                        let msg = err.diag(self, e);
+                        self.emit(msg);
+                        return self.recover_err(&[e], loc);
+                    }
+                };
+            }
+        }
+        if !self.ast.types.is_dependent(ty) {
+            if !self.require_complete(ty, ty_loc) {
+                let msg = self.diag(DiagId::sema_va_arg_incomplete, ty_loc).arg(self.ty_arg(ty));
+                self.emit(self.incomplete_note(msg, ty));
+                return self.recover_err(&[list], loc);
+            }
+            if let Some(c) = self.abstract_class(ty) {
+                let msg = self.diag(DiagId::sema_va_arg_abstract, ty_loc).arg(self.ty_arg(ty));
+                let msg = self.pure_virtual_notes(msg, c);
+                self.emit(msg);
+                return self.recover_err(&[list], loc);
+            }
+            if self.ast.types.is_reference(ty) || !self.is_pod_type(ty) {
+                let msg = self.diag(DiagId::sema_va_arg_not_pod, ty_loc).arg(self.ty_arg(ty));
+                self.emit(msg);
+            }
+            if let Some(p) = self.va_arg_promotion(ty) {
+                let msg = self
+                    .diag(DiagId::sema_va_arg_never_compatible, ty_loc)
+                    .arg(self.ty_arg(ty))
+                    .arg(self.ty_arg(p));
+                self.diag_runtime_behavior(msg);
+            }
+        }
+        let mut rty = self.non_reference(ty);
+        if !self.ast.types.is_reference(ty)
+            && self.ast.types.as_record(rty).is_none()
+            && !self.ast.types.is_array(rty)
+        {
+            rty = conv::strip_cv(self, rty);
+        }
+        self.builder().va_arg_expr(list, ty, rty, ty_loc, loc, rparen)
+    }
+
+    /// The type a variadic argument read as `t` was promoted to when `t`
+    /// is not that type (clang `BuildVAArgExpr`'s `PromoteType`): an
+    /// integral promotion ([conv.prom]) whose result is not `t` (for an
+    /// unscoped enumeration: not its underlying type), and `double` for
+    /// `float` ([expr.call]/13). clang's second test, a promoted type
+    /// differing from the underlying type only in signedness, never
+    /// holds for a standard promotable type, so it is not repeated.
+    fn va_arg_promotion(&mut self, t: QualType) -> Option<QualType> {
+        let canon = |s: &Self, q: QualType| s.ast.types.canonical(q).without_quals();
+        if canon(self, t) == QualType::FLOAT {
+            return Some(QualType::DOUBLE);
+        }
+        let p = conv::rank::promoted_type(self, t, None)?;
+        let under = if self.ast.types.as_enum(t).is_some() {
+            conv::rank::enum_data(self, t).and_then(|e| e.int_type).unwrap_or(t)
+        } else {
+            t
+        };
+        (canon(self, p) != canon(self, under)).then_some(p)
+    }
+
     /// `__builtin_operator_new` / `__builtin_operator_delete` (clang's
     /// `BuiltinOperatorNewDeleteOverloaded`): overload resolution among
     /// the global `operator new` / `operator delete` functions

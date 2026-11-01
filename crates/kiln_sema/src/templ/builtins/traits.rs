@@ -947,7 +947,7 @@ impl Sema<'_, '_> {
 
     /// C++11 POD types (clang `isCXX11PODType`): trivial and
     /// standard-layout.
-    fn is_pod_type(&self, q: QualType) -> bool {
+    pub(crate) fn is_pod_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;

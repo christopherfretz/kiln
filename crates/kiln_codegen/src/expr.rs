@@ -288,6 +288,7 @@ impl Cg<'_> {
             }
             ExprKind::StmtExpr => return self.emit_stmt_expr(e),
             ExprKind::AtomicExpr => return self.emit_atomic_expr(e, None),
+            ExprKind::VAArgExpr => return self.emit_va_arg(e, None),
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
             ExprKind::InitListExpr if !self.is_aggregate(q) => {
@@ -1771,6 +1772,11 @@ impl Cg<'_> {
         let q = ast.exprs.get(e).ty();
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
+                if ast.exprs.get(e).kind() == ExprKind::VAArgExpr {
+                    // An ignored slot: the `va_list` advances, nothing is
+                    // copied (clang `EmitAggFinalDestCopy`).
+                    return self.emit_va_arg(e, None).map(|_| ());
+                }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
             }
@@ -2235,6 +2241,7 @@ impl Cg<'_> {
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
             ExprKind::AtomicExpr => self.emit_atomic_expr(e, Some(dest)).map(|_| ()),
+            ExprKind::VAArgExpr => self.emit_va_arg(e, Some(dest)).map(|_| ()),
             ExprKind::CXXThrowExpr => self.emit_throw(e, true),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 self.emit_construct(e, dest, zeroed)
