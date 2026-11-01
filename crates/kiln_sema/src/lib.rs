@@ -232,6 +232,16 @@ pub struct Sema<'a, 'sm> {
     /// that is a function or array is diagnosed there (clang's
     /// `FunctionTypeLoc` begin; [dcl.fct]/11, WP-222, WP-241).
     pub(crate) type_spec_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// The namespace named by the qualifier of each friend function (or
+    /// function template pattern) declared with a qualified name in a
+    /// templated class (`friend void N::f(T);`): its instantiation is
+    /// declared with the same qualifier, so it redeclares `N::f`
+    /// ([dcl.meaning.general]/2.3, [temp.friend]/1; WP-273).
+    pub(crate) friend_qualifiers: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// A friend function template of a class template is being
+    /// instantiated (`friend_function_template`): a qualified one that
+    /// matches no template is not diagnosed (clang).
+    pub(crate) instantiating_friend_template: bool,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
@@ -522,6 +532,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
+            friend_qualifiers: kiln_source::fx::FxHashMap::default(),
+            instantiating_friend_template: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
             empty_loop_bodies: kiln_source::fx::FxHashMap::default(),

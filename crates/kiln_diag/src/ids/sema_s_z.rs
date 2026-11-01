@@ -159,6 +159,7 @@ sema_using_decl_can_not_refer_to_namespace = Error (0) "using declaration cannot
 sema_using_decl_conflict = Error (0) "target of using declaration conflicts with declaration already in scope";
 sema_using_decl_conflict_reverse = Error (0) "declaration conflicts with target of using declaration already in scope";
 sema_using_decl_constructor_not_in_direct_base = Error (2) "{0} is not a direct base of {1}, cannot inherit constructors";
+sema_using_decl_friend = Error (0) "cannot befriend target of using declaration";
 sema_using_decl_nested_name_specifier_is_not_class = Error (1) "using declaration in class refers into '{0}', which is not a class";
 sema_using_decl_not_base_class = Error (2) "using declaration refers into '{0}', which is not a base class of '{1}'";
 sema_using_decl_redeclaration = Error (0) "redeclaration of using declaration";
