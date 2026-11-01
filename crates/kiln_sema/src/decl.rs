@@ -91,6 +91,9 @@ pub enum AttrArg {
     Expr(ExprId),
     /// A type-id (`alignas(T)`).
     Type(QualType),
+    /// The leading identifier of an attribute whose first parameter is
+    /// one (`enum_extensibility(open)`; clang `attributeHasIdentifierArg`).
+    Ident(Symbol, Loc),
 }
 
 /// The state of an enumeration whose body is being processed.
@@ -3154,13 +3157,8 @@ impl Sema<'_, '_> {
         let c = self.act_on_constant_full_expr(c);
         let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
             Ok(v) => v,
-            Err(mut f) => {
-                let at = Self::fold_lone_invalid(&mut f, self.begin_loc(w));
-                let d = self.diag(DiagId::sema_expr_not_ice, at);
-                let d = Self::with_failure_notes(d, f);
-                self.emit(d);
-                return None;
-            }
+            // clang `VerifyBitField`: `AllowFold`.
+            Err(f) => self.fold_not_ice(c, f, self.begin_loc(w))?,
         };
         if v < 0 {
             let msg = match name {
@@ -4976,19 +4974,26 @@ impl Sema<'_, '_> {
             } else {
                 EvalContext::new(EvalKind::Other, at)
             };
-            match self.eval_int(c, ctx) {
-                Ok(v) => {
-                    let v = self.check_enumerator_range(v, build.fixed, ie);
-                    value = Some(v);
-                    let cv = self.int_const(cty, v);
-                    init_e = Some(self.builder().constant_expr(c, Some(cv)));
-                }
-                Err(mut f) => {
-                    let at = Self::fold_lone_invalid(&mut f, self.ast.exprs.get(ie).loc());
-                    let msg = self.diag(DiagId::sema_expr_not_ice, at);
+            let v = match self.eval_int(c, ctx) {
+                Ok(v) => Some(v),
+                // clang `CheckEnumConstant`: a converted constant
+                // expression `enumerator value is not a constant
+                // expression`; otherwise an integral constant expression
+                // that may be folded (`AllowFold`).
+                Err(mut f) if build.fixed.is_some() => {
+                    let at = Self::fold_lone_invalid(&mut f, at);
+                    let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("enumerator value");
                     let msg = Self::with_failure_notes(msg, f);
                     self.emit(msg);
+                    None
                 }
+                Err(f) => self.fold_not_ice(c, f, at),
+            };
+            if let Some(v) = v {
+                let v = self.check_enumerator_range(v, build.fixed, ie);
+                value = Some(v);
+                let cv = self.int_const(cty, v);
+                init_e = Some(self.builder().constant_expr(c, Some(cv)));
             }
         }
         (value, init_e)
@@ -6035,7 +6040,11 @@ impl Sema<'_, '_> {
             && !(clang_scope
                 && matches!(
                     n.as_str(),
-                    "using_if_exists" | "fallthrough" | "exclude_from_explicit_instantiation"
+                    "using_if_exists"
+                        | "fallthrough"
+                        | "exclude_from_explicit_instantiation"
+                        | "flag_enum"
+                        | "enum_extensibility"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
@@ -6059,6 +6068,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
+        if kind == AttrKind::ENUM_EXTENSIBILITY {
+            return self.enum_extensibility_attribute(syntax, args, loc);
         }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
@@ -6098,7 +6110,7 @@ impl Sema<'_, '_> {
                 }
                 a = e.raw();
             }
-            (_, Some(AttrArg::Type(_))) => {
+            (_, Some(AttrArg::Type(_) | AttrArg::Ident(..))) => {
                 self.error(DiagId::parse_expected_expression, loc);
                 return None;
             }
@@ -6117,6 +6129,55 @@ impl Sema<'_, '_> {
         Some(self.ast.attrs.push(node))
     }
 
+    /// `enum_extensibility(open|closed)` (clang
+    /// `handleEnumExtensibilityAttr`): exactly one argument, an identifier
+    /// naming a supported kind; `a` is 1 for `open`.
+    fn enum_extensibility_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let name = "'enum_extensibility'";
+        // An argument already diagnosed (`(open, closed)`: undeclared
+        // `closed`) drops the attribute silently.
+        if args.iter().any(|a| {
+            matches!(a, AttrArg::Expr(e) if self.ast.exprs.get(*e).deps().contains(kiln_ast::expr::ExprDeps::ERROR))
+        }) {
+            return None;
+        }
+        let id = match args {
+            [AttrArg::Ident(id, _)] => *id,
+            [AttrArg::Expr(_) | AttrArg::Type(_)] => {
+                let msg = self.diag(DiagId::sema_attribute_param_not_ident, loc).arg(name).arg("0");
+                self.emit(msg);
+                return None;
+            }
+            _ => {
+                let msg = self
+                    .diag(DiagId::parse_attribute_wrong_arg_count, loc)
+                    .arg("enum_extensibility")
+                    .arg("1");
+                self.emit(msg);
+                return None;
+            }
+        };
+        let a = match sym_str(self, id).as_str() {
+            "open" => 1,
+            "closed" => 0,
+            other => {
+                let msg = self
+                    .diag(DiagId::sema_attribute_arg_not_supported, loc)
+                    .arg(name)
+                    .arg(format!("'{other}'"));
+                self.emit(msg);
+                return None;
+            }
+        };
+        let node = AttrNode { kind: AttrKind::ENUM_EXTENSIBILITY, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
     /// GNU `abi_tag("t", ...)`: string literals, kept sorted and unique
     /// (clang `handleAbiTagAttr`) as one interned symbol in `a`, the tags
     /// separated by `,` (spec/abi.md §8.15). A tag-less `abi_tag` (only
@@ -6132,7 +6193,7 @@ impl Sema<'_, '_> {
         for arg in args {
             let lit = match arg {
                 AttrArg::Expr(e) => self.string_lit_of(*e),
-                AttrArg::Type(_) => None,
+                AttrArg::Type(_) | AttrArg::Ident(..) => None,
             };
             let Some(lit) = lit else {
                 let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
@@ -6232,6 +6293,9 @@ impl Sema<'_, '_> {
                 AttrKind::PACKED => (kind != DeclKind::Field && kind != DeclKind::CXXRecord)
                     .then_some("structs, unions, classes and fields"),
                 AttrKind::MALLOC if !kind.is_function() => Some("functions"),
+                AttrKind::FLAG_ENUM | AttrKind::ENUM_EXTENSIBILITY if kind != DeclKind::Enum => {
+                    Some("enums")
+                }
                 AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN if !kind.is_function() => {
                     Some("non-K&R-style functions")
                 }
@@ -6249,6 +6313,8 @@ impl Sema<'_, '_> {
                     AttrKind::MALLOC => "'malloc'",
                     AttrKind::ALLOC_SIZE => "'alloc_size'",
                     AttrKind::ALLOC_ALIGN => "'alloc_align'",
+                    AttrKind::FLAG_ENUM => "'flag_enum'",
+                    AttrKind::ENUM_EXTENSIBILITY => "'enum_extensibility'",
                     _ => "'alignas'",
                 };
                 let msg =
@@ -6487,6 +6553,8 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,
         ("hot", _, true) => AttrKind::HOT,
+        ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
+        ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,

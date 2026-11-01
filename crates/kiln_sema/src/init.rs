@@ -397,12 +397,18 @@ impl Sema<'_, '_> {
                 None
             }
             Ok(v) => Some(u64::try_from(v).unwrap_or(u64::MAX)),
-            Err(mut f) => {
-                let at = Self::fold_lone_invalid(&mut f, at);
-                let d = self.diag(DiagId::sema_expr_not_ice, at);
-                let d = Self::with_failure_notes(d, f);
-                self.emit(d);
-                None
+            // clang `CheckArrayDesignatorExpr`: `AllowFold`.
+            Err(f) => {
+                let v = self.fold_not_ice(c, f, at)?;
+                if v < 0 {
+                    let msg = self
+                        .diag(DiagId::sema_array_designator_negative, at)
+                        .arg(v.to_string())
+                        .range(self.expr_range(ie));
+                    self.emit(msg);
+                    return None;
+                }
+                Some(u64::try_from(v).unwrap_or(u64::MAX))
             }
         }
     }

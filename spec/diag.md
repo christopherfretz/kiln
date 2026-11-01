@@ -157,6 +157,53 @@ these that kiln has no members for MUST be accepted silently, so build
 flags tuned for clang (and the libc++ test suite) do not produce
 `-Wunknown-warning-option`.
 
+### 3.1 Umbrella groups (WP-230)
+
+An umbrella lists every subgroup kiln implements, in the order clang 19's
+`DiagnosticGroups.td` lists them; a clang subgroup kiln has no diagnostic
+for is left out rather than declared empty, so that the group table only
+holds groups that have members. Membership is checked against clang by
+probe (`clang++-19 -fsyntax-only -Wno-everything -W<umbrella>`), and the
+probes are recorded in the tests named below. There is no `-Wextra`
+umbrella yet.
+
+| Umbrella | Kiln's subgroups (clang order) | Tests |
+|---|---|---|
+| `all` | `most`, `switch`, `switch-bool`, `vla-cxx-extension` | `intro.compliance/wall-*.cpp`, `dcl.array/vla-gnu-mode-wall.cpp` |
+| `most` | `comment`, `multichar`, `range-loop-construct`, `reorder`, `return-type`, `trigraphs`, `uninitialized`, `unknown-pragmas`, `unused`, `overloaded-virtual` | `intro.compliance/wmost-members.cpp` |
+| `unused-value` | `unused-comparison`, `unused-result`, `unevaluated-expression` | `intro.compliance/wunused-value-unevaluated.cpp` |
+| `gnu` | `gnu-case-range`, `gnu-designator`, `vla-extension`, `gnu-folding-constant`, `gnu-imaginary-constant`, `gnu-include-next`, `gnu-line-marker`, `gnu-pointer-arith`, `gnu-string-literal-operator-template`, `gnu-zero-line-directive`, `gnu-zero-variadic-macro-arguments` | `ext.gnu.extension/wgnu-*.cpp` |
+
+`unevaluated-expression` is reached from `most` through `unused` ⊃
+`unused-value`, as in clang, so `-Wmost -Wno-unused-value` turns it off.
+`vla-cxx-extension` being in `all` matters in a GNU dialect only, where
+its diagnostic is an off-by-default Extension.
+
+Clang subgroups kiln does not have yet (add them, in place, when their
+diagnostics land):
+
+- `all`: `parentheses`, `misleading-indentation`, `packed-non-pod`.
+- `most`: `array-bounds`, `bool-operation`, `char-subscript`,
+  `delete-non-virtual-dtor`, `extern-c-compat`, `for-loop-analysis`,
+  `format`, `frame-address`, `implicit`, `infinite-recursion`,
+  `int-in-bool-context`, `mismatched-tags`, `missing-braces`, `move`,
+  `private-extern`, `self-assign`, `self-move`, `sizeof-array-argument`,
+  `sizeof-array-decay`, `string-plus-int`, `tautological-compare`,
+  `user-defined-warnings`, `volatile-register-var`; under `unused`:
+  `unused-argument`, `unused-function`, `unused-label`,
+  `unused-lambda-capture`, `unused-local-typedef`, `unused-private-field`;
+  under `uninitialized`: `sometimes-uninitialized`.
+- `gnu` (clang order): `gnu-alignof-expression`, `gnu-anonymous-struct`,
+  `gnu-auto-type`, `gnu-binary-literal`, `gnu-complex-integer`,
+  `gnu-compound-literal-initializer`, `gnu-conditional-omitted-operand`,
+  `gnu-empty-struct`, `gnu-flexible-array-initializer`,
+  `gnu-flexible-array-union-member`, `gnu-label-as-value`,
+  `gnu-null-pointer-arithmetic`, `gnu-offsetof-extensions`,
+  `redeclared-class-member`, `gnu-redeclared-enum`,
+  `gnu-statement-expression`, `gnu-union-cast`,
+  `gnu-variable-sized-type-not-at-end`, `zero-length-array`. The probe
+  shows `gnu-static-float-init` is not in clang 19's `gnu`.
+
 ## 4. Options
 
 `DiagOptions::parse_arg(arg) -> bool` consumes diagnostic options in
