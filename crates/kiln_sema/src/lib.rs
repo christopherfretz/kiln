@@ -33,6 +33,7 @@ mod gnu;
 mod impcast;
 mod implicit_fallthrough;
 pub mod init;
+mod init_dtor;
 mod jump_scope;
 pub mod lambda;
 pub mod literal;
@@ -133,6 +134,10 @@ pub struct Sema<'a, 'sm> {
     /// unevaluated depth of each and the calls with an incomplete class
     /// prvalue result it deferred ([dcl.type.decltype]/2).
     pub(crate) decltype_calls: Vec<(u32, Vec<deduce::DeferredCall>)>,
+    /// The `}` of the innermost braced aggregate list being checked: a
+    /// brace-elided sublist's element destructor checks are located
+    /// there (`init_dtor.rs`).
+    pub(crate) agg_list_end: Option<Loc>,
     /// Depth of immediate function contexts ([expr.const]/16) entered
     /// by `if consteval`.
     pub(crate) immediate: u32,
@@ -450,6 +455,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             func: None,
             unevaluated: 0,
             decltype_calls: Vec::new(),
+            agg_list_end: None,
             immediate: 0,
             constant_full_expr: 0,
             std: kiln_lex::Std::Cxx26,

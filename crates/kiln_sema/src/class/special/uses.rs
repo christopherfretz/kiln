@@ -208,7 +208,13 @@ impl Sema<'_, '_> {
             self.emit(msg);
             ok = false;
         }
-        if ok {
+        if ok && self.ast.types.is_array(ty) {
+            // Default-initializing the elements potentially invokes
+            // their destructor (clang's check for the construction of an
+            // array entity, "temporary of type" wording); the variable
+            // itself has none to finalize (WP-227).
+            let _ = self.check_temporary_dtor(class, elem, loc);
+        } else if ok {
             self.finalize_var_dtor(class, elem, loc);
         }
     }
@@ -232,6 +238,18 @@ impl Sema<'_, '_> {
         if cflags.contains(kiln_ast::decl::DeclFlags::INVALID)
             || cflags.contains(kiln_ast::decl::DeclFlags::DEPENDENT_CTX)
         {
+            return;
+        }
+        if self.ast.types.is_array(ty) {
+            // clang's `FinalizeVarWithDestructor` skips an array: the
+            // initialization already checked the element destructor
+            // ([dcl.init.aggr]/8, `init_dtor.rs`); it stays odr-used.
+            if let Selected::Found(m) =
+                self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
+                && !self.defn_bits(class).contains(DefinitionBits::TRIVIAL_DTOR)
+            {
+                self.mark_function_referenced(m, loc);
+            }
             return;
         }
         self.finalize_var_dtor(class, elem, loc);

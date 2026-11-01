@@ -3570,6 +3570,7 @@ impl Sema<'_, '_> {
         // long as it does (spec/sema-class.md §5.4).
         if !self.is_err_expr(e) {
             self.extend_temporaries(v, e);
+            self.check_dangling_pointer_var(v, e);
             // [class.dtor]/15 (spec/sema-class.md §4.8).
             let vty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
             self.check_var_destructor(v, vty, loc);
