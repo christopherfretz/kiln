@@ -19,29 +19,17 @@ pub struct SemaNames<'s> {
     ast: &'s Ast,
     /// Where unnamed tags' locations resolve (`(lambda at F:L:C)`).
     sources: Option<&'s kiln_source::SourceManager>,
-    /// Printing a declaration's own qualified name (clang
-    /// `printQualifiedName`), which keeps inline namespaces; a type's
-    /// scope (`AppendScope`) skips them.
-    decl_scope: bool,
 }
 
 impl<'s> SemaNames<'s> {
     /// Names for `sema`'s AST.
     pub fn new(sema: &'s Sema<'_, '_>) -> Self {
-        SemaNames { ast: &sema.ast, sources: Some(sema.diags.sm()), decl_scope: false }
+        SemaNames { ast: &sema.ast, sources: Some(sema.diags.sm()) }
     }
 
     /// Names for `ast` alone.
     pub fn of_ast(ast: &'s Ast) -> Self {
-        SemaNames { ast, sources: None, decl_scope: false }
-    }
-
-    /// These names for a declaration's own qualified name: inline
-    /// namespaces are kept.
-    #[must_use]
-    pub fn for_decls(mut self) -> Self {
-        self.decl_scope = true;
-        self
+        SemaNames { ast, sources: None }
     }
 
     fn simple(&self, d: DeclId) -> Option<String> {
@@ -69,21 +57,43 @@ impl<'s> SemaNames<'s> {
         }
     }
 
+    /// clang `NamespaceDecl::isRedundantInlineQualifierFor`: inline
+    /// namespace `ns` can be left out of a scope printed before
+    /// `name_in_scope` when the enclosing (non-transparent) context's
+    /// lookup table has as many entries for that name as `ns`'s own
+    /// (the inline namespace's names are entered in its parents too).
+    fn redundant_inline(&self, ns: DeclId, name_in_scope: kiln_ast::names::DeclName) -> bool {
+        if name_in_scope.is_empty()
+            || !self
+                .ast
+                .decls
+                .namespace(self.ast.first(ns))
+                .is_some_and(kiln_ast::decl::NamespaceData::is_inline)
+        {
+            return false;
+        }
+        let mut parent = self.ast.decls.get(ns).ctx();
+        while let Some(p) = parent
+            && matches!(self.ast.decls.get(p).kind(), DeclKind::LinkageSpec | DeclKind::Export)
+        {
+            parent = self.ast.decls.get(p).ctx();
+        }
+        let Some(parent) = parent else { return false };
+        self.ast.lookup_local(ns, name_in_scope).len()
+            == self.ast.lookup_local(parent, name_in_scope).len()
+    }
+
     fn write_scope(&self, d: DeclId, out: &mut String) {
         let mut chain = Vec::new();
+        let mut name_in_scope = self.ast.decls.get(d).name();
         let mut cur = self.ast.decls.get(d).ctx();
         while let Some(c) = cur {
             let n = self.ast.decls.get(c);
             match n.kind() {
-                DeclKind::Namespace
-                    if !self.decl_scope
-                        && self
-                            .ast
-                            .decls
-                            .namespace(self.ast.first(c))
-                            .is_some_and(kiln_ast::decl::NamespaceData::is_inline) => {}
+                DeclKind::Namespace if self.redundant_inline(c, name_in_scope) => {}
                 DeclKind::Namespace => {
                     chain.push(self.simple(c).unwrap_or_else(|| "(anonymous namespace)".into()));
+                    name_in_scope = n.name();
                 }
                 DeclKind::CXXRecord | DeclKind::Enum => {
                     let mut s = String::new();
@@ -92,6 +102,7 @@ impl<'s> SemaNames<'s> {
                         kiln_ast::types::write_arg_list(&self.ast.types, self, args, &mut s);
                     }
                     chain.push(s);
+                    name_in_scope = n.name();
                 }
                 _ => {}
             }
@@ -122,10 +133,16 @@ impl SemaNames<'_> {
     /// function as `f(int)`, a closure type as `(anonymous class)`.
     fn write_decl_scope(&self, d: DeclId, out: &mut String) {
         let mut chain = Vec::new();
+        let mut name_in_scope = self.ast.decls.get(d).name();
         let mut cur = self.ast.decls.get(d).ctx();
         while let Some(c) = cur {
             let n = self.ast.decls.get(c);
             let k = n.kind();
+            if k == DeclKind::Namespace && self.redundant_inline(c, name_in_scope) {
+                cur = n.ctx();
+                continue;
+            }
+            name_in_scope = n.name();
             if k.is_function() {
                 let mut s = String::new();
                 self.write_unscoped(c, &mut s);

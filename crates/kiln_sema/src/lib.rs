@@ -651,7 +651,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn qualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        names::SemaNames::new(self).for_decls().write_decl_name(d, true, &mut s);
+        names::SemaNames::new(self).write_decl_name(d, true, &mut s);
         s
     }
 
