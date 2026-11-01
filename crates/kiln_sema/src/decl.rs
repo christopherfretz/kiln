@@ -854,19 +854,24 @@ impl Sema<'_, '_> {
             return false;
         }
         if let Some(Chunk::Function { quals, ref_qual, rparen, .. }) = d.chunks.first() {
-            let q = if quals.contains(Quals::CONST) {
-                Some("const")
-            } else if quals.contains(Quals::VOLATILE) {
-                Some("volatile")
-            } else {
-                match ref_qual {
-                    RefQual::LValue => Some("&"),
-                    RefQual::RValue => Some("&&"),
-                    RefQual::None => None,
-                }
-            };
-            if let Some(q) = q {
-                let m = self.diag(DiagId::sema_explicit_object_param_qualifier, *rparen).arg(q);
+            // clang quotes the qualifiers (cv first) and points at the
+            // first one written.
+            let mut written: Vec<(Option<Loc>, &str)> = Vec::new();
+            if quals.contains(Quals::CONST) {
+                written.push((d.fn_qual_locs[0], "const"));
+            }
+            if quals.contains(Quals::VOLATILE) {
+                written.push((d.fn_qual_locs[1], "volatile"));
+            }
+            match ref_qual {
+                RefQual::LValue => written.push((d.fn_qual_locs[2], "&")),
+                RefQual::RValue => written.push((d.fn_qual_locs[2], "&&")),
+                RefQual::None => {}
+            }
+            if !written.is_empty() {
+                let q = written.iter().map(|&(_, q)| q).collect::<Vec<_>>().join(" ");
+                let at = written.iter().filter_map(|&(l, _)| l).min().unwrap_or(*rparen);
+                let m = self.diag(DiagId::sema_explicit_object_param_qualifier, at).arg(q);
                 self.emit(m);
             }
         }

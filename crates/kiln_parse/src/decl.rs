@@ -1766,6 +1766,9 @@ impl Parser<'_, '_> {
                         (Quals::VOLATILE, "volatile")
                     };
                     self.bump();
+                    if d.chunks.is_empty() {
+                        d.fn_qual_locs[usize::from(k == Kw::Volatile)].get_or_insert(loc);
+                    }
                     if quals.contains(q) {
                         let diag = self.s.diag(DiagId::parse_duplicate_decl_spec, loc).arg(sp);
                         self.emit(diag);
@@ -1790,6 +1793,9 @@ impl Parser<'_, '_> {
                     && (self.at(Punct::Amp) || self.at(Punct::AmpAmp)) =>
                 {
                     ref_qual = if self.at(Punct::Amp) { RefQual::LValue } else { RefQual::RValue };
+                    if d.chunks.is_empty() {
+                        d.fn_qual_locs[2] = Some(loc);
+                    }
                     self.bump();
                 }
                 _ if self.at(Punct::Arrow) && trailing.is_none() => {
