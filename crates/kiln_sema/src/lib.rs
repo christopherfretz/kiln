@@ -27,6 +27,7 @@ pub mod except;
 pub mod expr;
 mod forms;
 mod gnu;
+mod impcast;
 pub mod init;
 mod jump_scope;
 pub mod lambda;
@@ -64,7 +65,7 @@ use kiln_source::{Loc, Span};
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use decl::{NameClass, TagUse};
 pub use declspec::{
-    BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
+    BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
     ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 pub use gnu::{OffsetofComponent, StmtExprScope};
