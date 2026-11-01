@@ -231,9 +231,9 @@ impl Sema<'_, '_> {
                 let k = self.kind_of(self.ast.using_target(d).unwrap_or(d));
                 is_type_kind(k) || is_tag_kind(k)
             }) {
-                let msg = self
-                    .diag(DiagId::sema_using_typename_non_type, name_loc)
-                    .with_note(self.diag(DiagId::note_using_decl_target, self.ast.decls.get(t).loc()));
+                let msg = self.diag(DiagId::sema_using_typename_non_type, name_loc).with_note(
+                    self.diag(DiagId::note_using_decl_target, self.ast.decls.get(t).loc()),
+                );
                 self.emit(msg);
                 return None;
             }
