@@ -173,6 +173,18 @@ impl Sema<'_, '_> {
 
     /// A `RecoveryExpr` of type `ty` over `kids`.
     pub(crate) fn recover(&mut self, ty: QualType, kids: &[ExprId], loc: Loc) -> ExprId {
+        // clang `CreateRecoveryExpr`: a reference type is the referenced
+        // type, an lvalue (`T&`, a function) or an xvalue (`T&&`).
+        if ty != QualType::ERROR && self.ast.types.is_reference(ty) {
+            let lref = matches!(self.ast.types.canonical_view(ty), TypeView::LValueRef(_));
+            let r = self.non_reference(ty);
+            let vk = if lref || self.ast.types.is_function(r) {
+                ValueCategory::LValue
+            } else {
+                ValueCategory::XValue
+            };
+            return self.builder().recovery(Some(r), vk, kids, loc);
+        }
         self.builder().recovery(Some(ty), ValueCategory::PRValue, kids, loc)
     }
 

@@ -1608,6 +1608,7 @@ diag_ids! {
     note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
     note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
     sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
+    sema_bad_cxx_cast_rvalue = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from rvalue to reference type {1}";
 }
 
 impl DiagId {
