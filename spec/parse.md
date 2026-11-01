@@ -489,7 +489,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **GNU `__extension__`** before a `using` or `template` declaration at
   namespace, class or block scope is dropped (`skip_extension_before_using`;
   clang skips it in `ParseExternalDeclaration`): libc++ `__extension__
-  using`, libstdc++ `__extension__ template<>` (WP-237).
+  using`, libstdc++ `__extension__ template<>` (WP-237). At namespace
+  scope only, it is also dropped before an asm-declaration (libstdc++
+  `__extension__ asm(...)`, WP-271); in a class or block `asm` after it
+  is an error, as clang.
   `tests/conformance/ext.gnu.extension/`. Elsewhere it is a
   decl-specifier or the unary operator.
 - **GNU asm labels** (`parse_asm_label`, clang's

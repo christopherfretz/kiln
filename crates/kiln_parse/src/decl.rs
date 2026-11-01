@@ -119,11 +119,17 @@ impl Parser<'_, '_> {
     /// `ParseCompoundStatementBody`). Elsewhere it stays a decl-specifier
     /// or the unary operator.
     pub(crate) fn skip_extension_before_using(&mut self) {
+        self.skip_extension_before(&[Kw::Using, Kw::Template]);
+    }
+
+    /// Drops the `__extension__` keywords before a declaration starting
+    /// with one of `kws`.
+    fn skip_extension_before(&mut self, kws: &[Kw]) {
         let mut n = 0;
         while self.kw_of(self.peek(n)) == Some(Kw::Extension) {
             n += 1;
         }
-        if n > 0 && matches!(self.kw_of(self.peek(n)), Some(Kw::Using | Kw::Template)) {
+        if n > 0 && self.kw_of(self.peek(n)).is_some_and(|k| kws.contains(&k)) {
             for _ in 0..n {
                 self.bump();
             }
@@ -134,7 +140,9 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return;
         }
-        self.skip_extension_before_using();
+        // At namespace scope also before an asm-declaration (libstdc++
+        // `__extension__ asm(...)`); not in a class or block, as clang.
+        self.skip_extension_before(&[Kw::Using, Kw::Template, Kw::Asm]);
         let loc = self.loc();
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
