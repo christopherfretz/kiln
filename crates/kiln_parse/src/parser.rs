@@ -172,6 +172,25 @@ impl std::fmt::Debug for Parser<'_, '_> {
 }
 
 impl<'a, 'sm> Parser<'a, 'sm> {
+    /// Hands Sema the preprocessor's attribute-macro history (for the
+    /// `-Wimplicit-fallthrough` fix-it spelling) when it changed; called
+    /// before a function or lambda body is finished.
+    pub(crate) fn sync_attr_macros(&mut self) {
+        let src = self.src.get_mut();
+        let (generation, macros) = src.preprocessor().attr_macros();
+        self.s.sync_attr_macros(generation, || {
+            macros
+                .iter()
+                .map(|m| kiln_sema::AttrMacro {
+                    name: m.name.clone(),
+                    def: m.def,
+                    end: m.end,
+                    tokens: m.tokens.clone(),
+                })
+                .collect()
+        });
+    }
+
     /// A parser over `src`. `s`'s AST must use the preprocessor's
     /// interner.
     pub fn new(

@@ -851,11 +851,13 @@ impl Parser<'_, '_> {
                 None => (self.s.act_on_compound(&[], try_loc, try_loc), try_loc),
             };
             self.trace(|p| format!("finish_function_def({})", p.decl_name(f)));
+            self.sync_attr_macros();
             self.s.act_on_finish_function_def(f, body, end);
             return;
         }
         let (body, rbrace) = self.parse_compound(false);
         self.trace(|p| format!("finish_function_def({})", p.decl_name(f)));
+        self.sync_attr_macros();
         self.s.act_on_finish_function_def(f, body, rbrace);
     }
 

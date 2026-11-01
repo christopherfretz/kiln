@@ -407,6 +407,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     pub fn next_item(&mut self) -> PpItem;            // tokens and Markers
     pub fn is_embed_byte(&self, t: &Token) -> bool;
     pub fn macros(&self) -> &MacroTable;
+    pub fn attr_macros(&self) -> (u32, &[AttrMacro]); // WP-234, see below
     pub fn callbacks(&mut self) -> &mut dyn PpCallbacks;
     pub fn source_manager(&self) -> &'a SourceManager;
     pub fn interner(&self) -> &'a Interner;
@@ -423,6 +424,20 @@ pub struct PpOptions { std, trigraphs, dollar_in_identifiers, keep_comments,
 
 `Token::span` is the expansion location. The spelling and the macro
 backtrace are reachable through `SourceManager::expansion_info`.
+
+`attr_macros` (WP-234, `macros.rs`) is the history of the object-like
+macros whose replacement list starts `[ [`: per definition the name, the
+location that put it in effect (the name in `#define`, or the `#pragma
+pop_macro`), the location that ended it (`#undef`, a redefinition,
+`#pragma pop_macro`; invalid while in effect), and the replacement
+list's token spellings joined by single spaces (punctuators in their
+primary spelling). The `u32` is a generation that changes whenever the
+list does. It exists for Sema's `-Wimplicit-fallthrough` fix-it spelling
+(clang `Preprocessor::getLastMacroWithSpelling`, which walks the full
+macro history); the parser copies it into `Sema::sync_attr_macros`
+before finishing each function or lambda body. Recording costs one
+token-kind check per `#define` and nothing per `#undef` while the list is
+empty.
 
 ### Module and import directives
 

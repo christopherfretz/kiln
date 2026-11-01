@@ -488,24 +488,30 @@ Redeclaration and linkage rules:
       [-Wimplicit-fallthrough, off by default, not in -Wall/-Wextra] at
       the `case`/`default`. In an instantiation the instantiation note
       comes next. Then, when no predecessor is annotated and the label
-      is not spelled by a macro: `insert '[[fallthrough]];' to silence
-      this warning` (`'[[clang::fallthrough]];'` before C++17, from
-      `Sema::std`, set by the parser) unless the label's block holds
+      is not spelled by a macro: `insert '<spelling>;' to silence this
+      warning` unless the label's block holds
       only `break`, then `insert 'break;' to avoid fall-through`, each
-      with an insertion fix-it at the label.
+      with an insertion fix-it at the label. The spelling (WP-234, clang
+      `getFallthroughAttrSpelling`) is the name of the latest-defined
+      object-like macro in effect at the label whose replacement list is
+      `[[fallthrough]]` or `[[clang::fallthrough]]` (before C++17,
+      `Sema::std`, the clang spelling is tried first; from C++17 the
+      standard one), else `[[fallthrough]]` (`[[clang::fallthrough]]`
+      before C++17). The macro history comes from the preprocessor's
+      `attr_macros` (spec/pp.md), copied in by the parser through
+      `Sema::sync_attr_macros` before each function or lambda body is
+      finished; locations are ordered by their include chains, and a
+      macro from outside the main file's include tree (predefines, `-D`)
+      precedes everything.
     - An unreachable `[[fallthrough]];` that falls into a label (found by
       scanning the unreachable straight-line run backwards): `fallthrough
       annotation in unreachable code` [-Wunreachable-code-fallthrough, in
       -Wunreachable-code] at the attribute, before that label's warning;
       it counts as annotated. Not in an instantiation.
-    - Gaps: clang suggests a macro whose expansion is `[[fallthrough]]`
-      (`Preprocessor::getLastMacroWithSpelling`) instead of the
-      attribute; a label in a `do` or range-`for` body, or deeper in a
+    - Gaps: a label in a `do` or range-`for` body, or deeper in a
       branch, is not followed (Duff's device works because its labels
       follow statements in the `do` body); -Wimplicit-fallthrough-per-
-      function is not implemented; a -Werror-promoted warning counts as
-      an error and stops the analysis (clang's
-      `hasUncompilableErrorOccurred` ignores promoted warnings).
+      function is not implemented.
   - A `likely` after an `unlikely` (or the reverse) in the same
     sequence: `'unlikely' and 'likely' attributes are not compatible` at
     the second, with `note: conflicting attribute is here` at the first;

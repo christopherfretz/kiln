@@ -19,8 +19,28 @@ use kiln_ast::attr::AttrKind;
 use kiln_ast::stmt::StmtKind;
 use kiln_diag::{DiagId, FixIt};
 use kiln_lex::Std;
+use kiln_source::{Loc, SourceManager};
 
 use crate::Sema;
+
+/// One definition of an object-like macro whose replacement list starts
+/// `[ [`, as recorded by the preprocessor (`kiln_pp::AttrMacro`; the
+/// parser copies the history in with [`Sema::sync_attr_macros`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttrMacro {
+    /// The macro name.
+    pub name: Box<str>,
+    /// Where the definition took effect.
+    pub def: Loc,
+    /// Where it stopped being in effect; invalid while it is in effect.
+    pub end: Loc,
+    /// The replacement list's token spellings joined by single spaces.
+    pub tokens: Box<str>,
+}
+
+/// `[[fallthrough]]` and `[[clang::fallthrough]]` as token lists.
+const STD_TOKENS: &str = "[ [ fallthrough ] ]";
+const CLANG_TOKENS: &str = "[ [ clang :: fallthrough ] ]";
 
 /// What precedes a statement in the body: its parent and its index
 /// there (a compound statement's child), or `None` for the body.
@@ -105,14 +125,10 @@ impl Sema<'_, '_> {
             let mut d = self.diag(DiagId::sema_implicit_fallthrough, at);
             if into.annotated == 0 && !at.is_macro() {
                 if !self.ift_break_only(l, &parents) {
-                    let spelling = if self.std >= Std::Cxx17 {
-                        "[[fallthrough]]"
-                    } else {
-                        "[[clang::fallthrough]]"
-                    };
+                    let spelling = self.fallthrough_spelling(at);
                     let n = self
                         .diag(DiagId::note_insert_fallthrough_fixit, at)
-                        .arg(spelling)
+                        .arg(spelling.as_str())
                         .fixit(FixIt::insert(at, format!("{spelling}; ")));
                     d = d.with_note(n);
                 }
@@ -366,4 +382,82 @@ impl Sema<'_, '_> {
             .iter::<kiln_ast::AttrId>(self.ast.stmts.stmt_attrs(s))
             .any(|a| self.ast.attrs.get(a).kind == AttrKind::FALLTHROUGH)
     }
+}
+
+impl Sema<'_, '_> {
+    /// Copies the preprocessor's attribute-macro history (see
+    /// [`AttrMacro`]) if its generation `generation` differs from the copy's.
+    /// The parser calls this before finishing a function or lambda body.
+    pub fn sync_attr_macros(&mut self, generation: u32, macros: impl FnOnce() -> Vec<AttrMacro>) {
+        if self.attr_macros.0 != generation {
+            self.attr_macros = (generation, macros());
+        }
+    }
+
+    /// The spelling the fall-through note suggests at `at` (clang
+    /// `getFallthroughAttrSpelling`): the name of the latest object-like
+    /// macro in effect at `at` spelled `[[clang::fallthrough]]` (preferred
+    /// before C++17) or `[[fallthrough]]`, else the attribute itself.
+    fn fallthrough_spelling(&self, at: Loc) -> String {
+        let prefer_clang = self.std < Std::Cxx17;
+        let order: &[&str] =
+            if prefer_clang { &[CLANG_TOKENS, STD_TOKENS] } else { &[STD_TOKENS, CLANG_TOKENS] };
+        for tokens in order {
+            if let Some(name) = self.last_macro_with_spelling(at, tokens) {
+                return name.to_owned();
+            }
+        }
+        if prefer_clang { "[[clang::fallthrough]]" } else { "[[fallthrough]]" }.to_owned()
+    }
+
+    /// clang `Preprocessor::getLastMacroWithSpelling`: among the macros
+    /// spelled `tokens` whose definition is in effect at `at`, the one
+    /// defined last.
+    fn last_macro_with_spelling(&self, at: Loc, tokens: &str) -> Option<&str> {
+        let sm = self.diags.sm();
+        let mut best: Option<&AttrMacro> = None;
+        for m in &self.attr_macros.1 {
+            if *m.tokens != *tokens
+                || !before_in_tu(sm, m.def, at)
+                || (m.end.is_valid() && !before_in_tu(sm, at, m.end))
+            {
+                continue;
+            }
+            if best.is_none_or(|b| before_in_tu(sm, b.def, m.def)) {
+                best = Some(m);
+            }
+        }
+        best.map(|m| &*m.name)
+    }
+}
+
+/// True if `a` precedes `b` in the translation unit (clang
+/// `isBeforeInTranslationUnit`), comparing the two locations' include
+/// chains at their nearest common file. A location in a buffer outside
+/// the main file's include tree (the predefines, the command line)
+/// precedes everything.
+fn before_in_tu(sm: &SourceManager, a: Loc, b: Loc) -> bool {
+    let chain = |l: Loc| {
+        let mut v = Vec::new();
+        let mut l = sm.expansion_loc(l);
+        while let Some((f, off)) = sm.offset_of(l) {
+            v.push((f, off));
+            let inc = sm.include_loc(l);
+            if !inc.is_valid() || v.len() > 256 {
+                break;
+            }
+            l = sm.expansion_loc(inc);
+        }
+        v
+    };
+    let (ca, cb) = (chain(a), chain(b));
+    for (i, &(fa, oa)) in ca.iter().enumerate() {
+        if let Some(j) = cb.iter().position(|&(fb, _)| fb == fa) {
+            let ob = cb[j].1;
+            // At the same `#include`, the included file's text comes
+            // after the directive itself.
+            return oa < ob || (oa == ob && i < j);
+        }
+    }
+    true
 }
