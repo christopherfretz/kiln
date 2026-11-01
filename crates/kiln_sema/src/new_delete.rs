@@ -504,11 +504,14 @@ impl Sema<'_, '_> {
         }
         // The matching deallocation function, called if the
         // initialization throws ([expr.new]/28).
+        // clang treats any allocation function other than `(size_t)` as a
+        // placement one here, so an aligned `operator new` is matched by
+        // the unsized aligned `operator delete` (`isPlacementNew`).
         let op_delete = self.matching_operator_delete(
             elem,
             global,
             array_form,
-            placement.is_some(),
+            placement.is_some() || params.len() != 1 || variadic,
             &params,
             pass_align,
             tid.loc,
