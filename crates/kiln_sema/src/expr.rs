@@ -2304,20 +2304,23 @@ impl Sema<'_, '_> {
     }
 
     /// Pointer arithmetic needs a pointer to a complete object type
-    /// ([expr.add]/1); `void` and function pointees are GNU extensions.
+    /// ([expr.add]/1); a `void` or function pointee is an error in C++
+    /// (a GNU extension only in C: `sema_arith_void_pointer`).
     fn check_pointer_arith(&mut self, pt: QualType, both: bool, loc: Loc) -> bool {
         let Some(p) = self.pointee_sugared(pt) else { return true };
         let sel = if both { "1" } else { "0" };
         if self.ast.types.is_void(p) {
-            let msg = self.diag(DiagId::sema_arith_void_pointer, loc).arg(sel);
+            let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg(sel);
             self.emit(msg);
-            return true;
+            return false;
         }
         if self.ast.types.is_function(p) {
-            let msg =
-                self.diag(DiagId::sema_arith_function_pointer, loc).arg(sel).arg(self.ty_arg(p));
+            let msg = self
+                .diag(DiagId::sema_arith_function_pointer_cxx, loc)
+                .arg(sel)
+                .arg(self.ty_arg(p));
             self.emit(msg);
-            return true;
+            return false;
         }
         if !self.require_complete(p, loc) {
             let msg = self.diag(DiagId::sema_arith_incomplete_pointee, loc).arg(self.ty_arg(p));
