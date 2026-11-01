@@ -180,6 +180,10 @@ pub struct Sema<'a, 'sm> {
     /// known to be non-dependent ([temp.dep.candidate]), and ADL applies
     /// (spec/sema-overload.md §2.2).
     pub(crate) deferring_call_ref: bool,
+    /// Replaying a non-dependent class-scope using-declaration of a
+    /// pattern: clang walks the pattern's shadow list, which is newest
+    /// first, so the instantiation's shadows come in reverse (WP-159).
+    pub(crate) reverse_using_shadows: bool,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -383,6 +387,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
+            reverse_using_shadows: false,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             deferred_call_refs: Vec::new(),
