@@ -12,7 +12,7 @@ use crate::consts::{
     Scalar, Shape,
 };
 use crate::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
-use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind};
+use crate::expr::{CharKind, ExprFlags, ExprKind, TraitKind, ValueCategory};
 use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_unit};
@@ -768,7 +768,7 @@ impl<'a> AstNames<'a> {
             }
             ExprKind::CStyleCastExpr => {
                 out.push('(');
-                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                self.written_cast_type(n.ty(), n.value_category(), out);
                 out.push(')');
                 self.expr(exprs.operand(e), d, out);
             }
@@ -796,7 +796,7 @@ impl<'a> AstNames<'a> {
                     ExprKind::CXXDynamicCastExpr => "dynamic_cast<",
                     _ => "__builtin_bit_cast(",
                 });
-                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                self.written_cast_type(n.ty(), n.value_category(), out);
                 out.push_str(if k == ExprKind::BuiltinBitCastExpr { ", " } else { ">(" });
                 self.expr(exprs.operand(e), d, out);
                 out.push(')');
@@ -842,6 +842,25 @@ impl<'a> AstNames<'a> {
                 out.push_str(exprs.type_trait(e).spelling());
                 out.push('(');
                 self.expr(ExprId::new(n.a()), d, out);
+                out.push(')');
+            }
+            ExprKind::AtomicExpr => {
+                // clang's `StmtPrinter::VisitAtomicExpr`: the builtin's
+                // name and the operands in source order.
+                use crate::decl::builtin::atomic;
+                let op = exprs.atomic_op(e);
+                out.push_str(atomic::name(op));
+                out.push('(');
+                let subs: Vec<ExprId> = ast.lists.iter::<ExprId>(exprs.atomic_subs(e)).collect();
+                let order = atomic::form(op).map_or(&[][..], atomic::Form::arg_to_sub);
+                for (i, &k) in order.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    if let Some(&c) = subs.get(k) {
+                        self.expr(c, d, out);
+                    }
+                }
                 out.push(')');
             }
             ExprKind::CXXNoexceptExpr => {
@@ -1022,6 +1041,28 @@ impl<'a> AstNames<'a> {
 }
 
 impl AstNames<'_> {
+    /// An explicit cast's type as written (clang's `getTypeAsWritten`):
+    /// the expression's type `t` plus the reference its value category
+    /// implies, an lvalue cast naming `T &` and an xvalue cast `T &&`.
+    /// The interned reference node is preferred, so `int (&)[2]` prints
+    /// with its declarator parentheses (WP-145).
+    fn written_cast_type(&self, t: QualType, vk: ValueCategory, out: &mut String) {
+        let types = &self.ast.types;
+        let rvalue = match vk {
+            ValueCategory::PRValue => {
+                return write_type(types, self, t, self.expr_types, out);
+            }
+            ValueCategory::LValue => false,
+            ValueCategory::XValue => true,
+        };
+        if let Some(r) = types.find_reference_to(t, rvalue) {
+            write_type(types, self, r, self.expr_types, out);
+        } else {
+            write_type(types, self, t, self.expr_types, out);
+            out.push_str(if rvalue { " &&" } else { " &" });
+        }
+    }
+
     /// A return-type-requirement's type-constraint as written: the
     /// immediately-declared constraint `C<decltype((e)), args...>` printed
     /// as `C<args...>` (clang's `TypeConstraint::print`).

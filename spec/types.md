@@ -115,8 +115,8 @@ always sugar (S), or canonical exactly when dependent (S/C). Payload is
 `aux`/`data`/side record. "dep" marks kinds that only occur in templates.
 
 ### 5.1 Builtins (pre-interned at fixed ids, `TypeId::INT` etc.)
-Ids 1..=33 are created by `TypeContext::new(&TargetTypes)` in this order and
-are stable (serialization, `const` comparisons). 34..=63 are reserved.
+Ids 1..=47 are created by `TypeContext::new(&TargetTypes)` in this order and
+are stable (serialization, `const` comparisons). 48..=63 are reserved.
 
 | id | kind | prints | id | kind | prints |
 |---|---|---|---|---|---|
@@ -137,6 +137,25 @@ are stable (serialization, `const` comparisons). 34..=63 are reserved.
 | 15 | ULong | `unsigned long` | 32 | BuiltinFn | `<builtin fn type>` |
 | 16 | LongLong | `long long` | 33 | Error | `<error type>` (recovery; suppresses cascades) |
 | 17 | ULongLong | `unsigned long long` | | | |
+
+Ids 34..=47 are the AArch64 SVE ACLE builtins (WP-155), in this order:
+`__SVInt8_t`, `__SVInt16_t`, `__SVInt32_t`, `__SVInt64_t`, `__SVUint8_t`,
+`__SVUint16_t`, `__SVUint32_t`, `__SVUint64_t`, `__SVFloat16_t`,
+`__SVFloat32_t`, `__SVFloat64_t`, `__SVBfloat16_t`, `__SVBool_t`,
+`__SVCount_t` (`BuiltinType::is_sizeless`, `TypeContext::is_sizeless`).
+They exist in every context but are only *named* on AArch64 targets, where
+sema declares them as implicit TU typedefs (`kiln_sema/src/sve.rs`), as
+clang does. Like clang they are **complete but sizeless**: `size_align` is
+`(0, 0)`, `sizeof`/`alignof`, array elements, fields and non-local
+variables are errors; parameters, returns, pointers, references, template
+arguments and traits work (trivially copyable/trivial/POD and object, but
+not scalar, compound, standard-layout or literal). Because kiln has no
+target-feature flags (no `+sve`), any odr-use of a function or parameter
+whose type involves an SVE type, an automatic SVE variable, or a function
+definition with SVE types is diagnosed "cannot be used in a target without
+sve", exactly as clang without `-target-feature +sve`. Lowering is
+`<vscale x N x T>` (`__SVCount_t`: `target("aarch64.svcount")`); mangling is
+the vendor-extended `u<len><name>`, a substitution candidate.
 
 Builtins are one `TypeKind::Builtin` with the id as `data`, so "is
 builtin" is one compare and "which builtin" is the id. Sizes, alignments,
@@ -165,7 +184,7 @@ id each, no representation change.
 | `Record` | D | C | data = first `DeclId` of the class | one per class, shared by its redeclarations; a specialization of a class template is its own `Record` |
 | `Enum` | D | C | data = first `DeclId` of the enum | |
 | `Complex` | I | C | data = element QualType | GNU `_Complex` (*M4*) |
-| `Atomic` | I | C | data = value QualType | `_Atomic(T)`; libc++ `<atomic>` uses it via `__c11_atomic_*` (*M4*) |
+| `Atomic` | I | C | data = value QualType | `_Atomic(T)` (WP-154); size is `T`'s rounded up to a power of two when it is at most 16 bytes, alignment is that size (clang's `getTypeInfo` of `AtomicType`); libc++ `<atomic>` uses it via `__c11_atomic_*` |
 | `Vector` | I | C | aux = `VectorKind` (Generic, Neon, NeonPoly, Ext), pairs [element, count] | `vector_size`, `ext_vector_type` (libc++ `simd_utils.h`); built by sema (spec/sema.md §4.5); `sizeof`/`alignof` follow clang 19 `getTypeInfo` (an Ext vector of `bool` is N bits, then: at least 8 bits, rounded up to a power of two, alignment = size capped at the target's max vector alignment); operations on vector values are *M4* |
 | `DependentVector` dep | I | S/C | aux = kind, pairs [element, size ExprId / ProfileId] | the size operand as written: the element count for Ext, the byte size for Generic; substitution rebuilds through `Sema::build_vector_type` |
 | `ExtQual` | I | C | pairs [base TypeId, ext-qual word] | reserved: address spaces etc. (M7+) |
@@ -423,7 +442,7 @@ Layout is target knowledge and belongs to `kiln_abi`, which depends on
 `kiln_ast`; the AST only stores results.
 ```rust
 pub struct TargetTypes {   // filled by kiln_abi::target(triple); stored in TypeContext
-    pub size_align: [(u16 /*bytes*/, u16 /*align*/); 34], // per builtin id 1..=33 (0 unused)
+    pub size_align: [(u16 /*bytes*/, u16 /*align*/); 48], // per builtin id 1..=47 (0 unused)
     pub char_signed: bool, pub wchar_signed: bool, pub long_double: FloatFormat,
     pub size_t: TypeId, pub ptrdiff_t: TypeId, pub intptr_t: TypeId, pub pointer_bytes: u8,
 }

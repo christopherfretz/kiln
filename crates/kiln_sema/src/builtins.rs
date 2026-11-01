@@ -28,6 +28,8 @@ use kiln_source::symbol::Symbol;
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
 
+mod atomic;
+
 /// The implicit typedefs `__int128_t` and `__uint128_t` for `__int128`
 /// and `unsigned __int128` (clang's `Sema::Initialize`: declared in the
 /// translation unit when the target has a 128-bit integer type, i.e. on
@@ -227,6 +229,7 @@ impl Sema<'_, '_> {
         while let Some(&c) = s.first() {
             t = match c {
                 b'C' => self.ast.types.qualify(t, Quals::CONST),
+                b'D' => self.ast.types.qualify(t, Quals::VOLATILE),
                 b'*' => self.ast.types.pointer_to(t),
                 b'&' => self.ast.types.lvalue_ref_to(t),
                 _ => break,
@@ -263,6 +266,13 @@ impl Sema<'_, '_> {
         if braced {
             self.unsupported("a braced argument to a builtin function", loc);
             return self.recover_err(&kids, loc);
+        }
+        if builtin::atomic::is_op(id) {
+            // WP-154: an `AtomicExpr` (no call, no callee).
+            return match self.builtin_atomic_op(self.begin_loc(callee), id, args, rparen) {
+                Some(e) => e,
+                None => self.recover_err(&kids, loc),
+            };
         }
         let r = match id {
             builtin::CLZG | builtin::CTZG => self.builtin_count_zeros_generic(args, rparen),

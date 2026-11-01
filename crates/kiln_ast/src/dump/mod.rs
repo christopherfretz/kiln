@@ -736,6 +736,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
+            ExprKind::AtomicExpr => {
+                for c in exprs.children(e, lists) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
             _ => {}
         }
     }

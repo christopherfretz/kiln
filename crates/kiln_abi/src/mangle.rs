@@ -1359,7 +1359,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
         }
         let view = ast.types.canonical_view(q);
         match view {
-            TypeView::Builtin(b) => {
+            // A vendor extended type (`u <source-name>`) is substitutable.
+            TypeView::Builtin(b) if !b.is_sizeless() => {
                 self.out.push_str(builtin_code(b));
                 return;
             }
@@ -1443,6 +1444,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push_str("Dc");
             }
             TypeView::Auto { .. } => self.out.push_str("Da"),
+            TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
             _ => self.out.push_str("u7unknown"),
         }
     }
@@ -1534,6 +1536,20 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         B::Float128 => "g",
         B::Half => "Dh",
         B::NullPtr => "Dn",
+        B::SvInt8 => "u10__SVInt8_t",
+        B::SvInt16 => "u11__SVInt16_t",
+        B::SvInt32 => "u11__SVInt32_t",
+        B::SvInt64 => "u11__SVInt64_t",
+        B::SvUint8 => "u11__SVUint8_t",
+        B::SvUint16 => "u12__SVUint16_t",
+        B::SvUint32 => "u12__SVUint32_t",
+        B::SvUint64 => "u12__SVUint64_t",
+        B::SvFloat16 => "u13__SVFloat16_t",
+        B::SvFloat32 => "u13__SVFloat32_t",
+        B::SvFloat64 => "u13__SVFloat64_t",
+        B::SvBfloat16 => "u14__SVBfloat16_t",
+        B::SvBool => "u10__SVBool_t",
+        B::SvCount => "u11__SVCount_t",
         _ => "u7unknown",
     }
 }

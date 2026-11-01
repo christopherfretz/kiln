@@ -1089,6 +1089,24 @@ recomputed exactly as for non-template code (clang's
   `__end` variables.
 - **`return` in a deduced-return function** deduces from the first
   non-discarded `return` (§6.3).
+- **A failed statement invalidates the specialization** (clang 19's
+  `TransformCompoundStmt` `SubStmtInvalid` → `InstantiateFunctionDefinition`
+  `setInvalidDecl`; WP-145). When a statement of a function body fails to
+  substitute *and reported a new error while doing so*, the function
+  template specialization is marked `INVALID`. Consequences:
+  - a later `deduce_call` that forms the same specialization reports
+    `candidate template ignored: substitution failure [with ...]`
+    (`get_function_spec` returns `Err` for an invalid spec);
+  - a placeholder (`auto`) return type left undeduced by the failed body
+    deduces to the error type, not `void`, so no "cannot be used before
+    it is defined"/void cascade follows.
+  The exceptions match clang, which keeps the statement:
+  - a `DeclStmt` whose variable *initializer* failed (the variable is
+    invalid, the statement is not; `Substituter::init_failures`);
+  - errors inside a lambda body (the lambda's own body is invalid, the
+    enclosing function is not);
+  - a statement that only refers to an already-invalid entity (it fails
+    without a new error: clang builds a `RecoveryExpr`).
 - **Labels and `goto`** (WP-153). A `LabelStmt`, a `GotoStmt` and the
   labels of an `asm goto` are rebuilt by name (`act_on_label`,
   `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
@@ -1256,7 +1274,10 @@ result is `MiscellaneousDeductionFailure` (clang).
 - an overload set that contains a template;
 - a braced list (except as in §6.1);
 - a pack expansion that is not last;
-- a pack-index (P2662).
+- a pack-index (P2662);
+- `_Atomic(T)` (WP-154: clang 19 does not deduce through an `AtomicType`,
+  so `template<class T> void f(_Atomic(T)*)` called with an
+  `_Atomic(int)*` fails to deduce `T`).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
@@ -1989,6 +2010,7 @@ records it in `TABLE`.
 | bits | `__builtin_clz`/`l`/`ll`, `__builtin_ctz`/`l`/`ll`, `__builtin_popcount`/`l`/`ll`, `__builtin_clzg`†/`ctzg`†/`popcountg`† (type-generic, with an optional fallback argument), `__builtin_bswap16`/`32`/`64` | yes | `llvm.ctlz`/`cttz`/`ctpop`/`bswap` |
 | memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp`, `__builtin_strcmp`, `__builtin_strncmp`, `__builtin_strchr`, `__builtin_wcscmp`, `__builtin_wcsncmp`, `__builtin_wcschr`; `__builtin_strrchr`, `__builtin_strpbrk`, `__builtin_strstr` | yes (for trivially copyable element types); no for `strrchr`/`strpbrk`/`strstr` (clang 19) | libcall or `llvm.mem*` |
 | float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for `isfinite`/`isinf`/`isnan`/`isnormal`; no for `signbit` and the six comparisons (the clang 19 probe rejects them) | `fcmp` / `llvm.is.fpclass` |
+| atomics (WP-154) | `__c11_atomic_*`†, `__atomic_*`† (an `AtomicExpr`, spec/sema.md §5.11) | only `__atomic_always_lock_free`/`__atomic_is_lock_free`/`__c11_atomic_is_lock_free` (spec/oven.md) | `load atomic`/`store atomic`/`atomicrmw`/`cmpxchg`/`fence` (spec/codegen.md §7d) |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
@@ -2761,7 +2783,7 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
 `__has_builtin` answers false):
 | Stub | Owner |
 |---|---|
-| The 10 other overload-resolution traits (`__is_trivially_constructible`, `__is_trivially_assignable`, `__reference_*_from_temporary`, …) | WP-068a (`__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU; `__is_constructible` / `__is_nothrow_constructible` the three `__is_convertible` forms and `__is_nothrow_assignable` in WP-131) |
+| The 8 other overload-resolution traits (`__reference_*_from_temporary`, …) | WP-068a (`__is_trivially_constructible` / `__is_trivially_assignable` landed in WP-155: `init_check` `.ok && .trivial`, with clang 19's "no non-trivial call in the expression" rule; `__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU; `__is_constructible` / `__is_nothrow_constructible` the three `__is_convertible` forms and `__is_nothrow_assignable` in WP-131) |
 | `__is_layout_compatible`, `__is_pointer_interconvertible_base_of`, `__can_pass_in_regs`, `__is_bitwise_cloneable` | M4 (unassigned) |
 | `__is_trivially_relocatable` (`TRIVIALLY_RELOCATABLE` is never set) | unowned: S3C canPassInRegisters |
 | `__type_pack_element` and `__make_integer_seq` with pack arguments | WP-072 |
@@ -3555,6 +3577,32 @@ requires-clause scope.**
   `basic.scope.param/`, `dcl.meaning/qualified-declarator-scope-template.cpp`,
   `templates/deduce/temp.deduct.type-defaulted-args.cpp`, and the
   `ast/` goldens for each.
+
+**Landed (WP-155): out-of-line member classes, partial-specialization
+declarator scopes.**
+- *Out-of-line member classes and enums* ([temp.mem.class],
+  [temp.mem.enum]): `template<class T> struct A<T>::B { ... };` defines
+  the member class declared in the class template; it is a pattern for
+  `MemberOfSpecialization` (§4.6) and is instantiated when completeness
+  is needed. Members of a member class of a partial specialization, and
+  member class templates, are supported (`templ/mod.rs`, `decl.rs`
+  `act_on_tag`; the parser's `parse_tag_qualifier`).
+- *Constructors of partial specializations*: `X<T*>::X(` is a
+  constructor declarator. The parser no longer annotates the template
+  scope ahead (`annotate_template_scope`) when `at_special_declarator`
+  holds.
+- *Non-type arguments in a declarator scope*: a dependent template-id
+  keeps its written arguments (§3.4), so `template<int S> void
+  B<1, S>::g()` did not find the partial specialization `B<1, S>`
+  (registered with converted arguments). When entering a declarator
+  context, `entered_partial_by_converted_args` converts the arguments
+  with `check_template_args` and looks again (`find_partial`). Gap:
+  dependent template-ids elsewhere are still neither checked nor
+  converted (clang checks every template-id).
+- Tests: `tests/conformance/temp.mem.class/`, `temp.mem.enum/`,
+  `temp.spec.partial.member/out-of-line-ctors.cpp`,
+  `temp.spec.partial.member/non-type-arg-scope.cpp`,
+  `templates/builtins/builtin.is-trivially-constructible-assignable.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 

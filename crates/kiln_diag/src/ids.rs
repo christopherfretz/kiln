@@ -604,6 +604,7 @@ diag_ids! {
     sema_unexpected_typedef_ident = Error (1) "unexpected type name '{0}': expected expression";
     sema_unknown_typename = Error (1) "unknown type name '{0}'";
     sema_no_member = Error (2) "no member named '{0}' in {1}";
+    sema_not_tag_in_scope = Error (3) "no {0:struct|interface|union|class|enum} named '{1}' in {2}";
     sema_qualified_member_of_unrelated = Error (2) "{0} is not a member of class {1}";
     sema_ambiguous_reference = Error (1) "reference to '{0}' is ambiguous";
     note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";
@@ -791,6 +792,11 @@ diag_ids! {
     lex_literal_warning = Warning (1) "{0}";
     sema_incdec_invalid = Error (2) "cannot {0:increment|decrement} value of type {1}";
     sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplete type {1}";
+    sema_sizeof_sizeless = Error (2) "invalid application of '{0}' to sizeless type {1}";
+    sema_array_sizeless_element = Error (1) "array has sizeless element type {0}";
+    sema_field_sizeless = Error (1) "field has sizeless type {0}";
+    sema_nonlocal_sizeless = Error (1) "non-local variable with sizeless type {0}";
+    sema_sve_type_without_sve = Error (1) "SVE vector type {0} cannot be used in a target without sve";
     sema_sizeof_function = Extension [PointerArith] (1) "invalid application of '{0}' to a function type";
     sema_sizeof_function_expr = Error (1) "invalid application of '{0}' to a function type";
     sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
@@ -1474,6 +1480,18 @@ diag_ids! {
     // Predefined identifiers (WP-140)
     sema_predefined_identifier_outside_function = Warning [PredefinedIdentifierOutsideFunction] (0) "predefined identifier is only valid inside function";
     sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
+    // Atomic builtins (WP-154; clang's `BuildAtomicExpr`)
+    sema_atomic_builtin_must_be_pointer = Error (2) "address argument to atomic builtin must be a pointer {1:|to a non-zero-sized object }({0} invalid)";
+    sema_atomic_op_needs_atomic = Error (1) "address argument to atomic operation must be a pointer to _Atomic type ({0} invalid)";
+    sema_atomic_op_needs_non_const_atomic = Error (2) "address argument to atomic operation must be a pointer to non-{0:const|constant} _Atomic type ({1} invalid)";
+    sema_atomic_op_needs_non_const_pointer = Error (1) "address argument to atomic operation must be a pointer to non-const type ({0} invalid)";
+    sema_atomic_op_needs_trivial_copy = Error (1) "address argument to atomic operation must be a pointer to a trivially-copyable type ({0} invalid)";
+    sema_atomic_op_needs_atomic_int_ptr_or_fp = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer, pointer or supported floating point type ({1} invalid)";
+    sema_atomic_op_needs_atomic_int_or_fp = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer or supported floating point type ({1} invalid)";
+    sema_atomic_op_needs_atomic_int = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer ({1} invalid)";
+    sema_atomic_op_needs_atomic_int_or_ptr = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer or pointer ({1} invalid)";
+    sema_atomic_builtin_bit_int_prohibited = Error (0) "argument to atomic builtin of type '_BitInt' is not supported";
+    sema_atomic_op_invalid_memory_order = Warning [AtomicMemoryOrdering] (1) "{0:|success |failure }memory order argument to atomic operation is invalid";
 }
 
 impl DiagId {

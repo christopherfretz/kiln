@@ -105,7 +105,12 @@ impl Sema<'_, '_> {
             self.emit(d);
             return self.recover(QualType::BOOL, &[], loc);
         }
-        let value = if matches!(t, TypeTrait::IsConstructible | TypeTrait::IsNothrowConstructible) {
+        let value = if matches!(
+            t,
+            TypeTrait::IsConstructible
+                | TypeTrait::IsNothrowConstructible
+                | TypeTrait::IsTriviallyConstructible
+        ) {
             match self.eval_constructible(t, args, loc, rparen) {
                 Some(v) => v,
                 None => return self.recover(QualType::BOOL, &[], loc),
@@ -123,9 +128,18 @@ impl Sema<'_, '_> {
                 Some(v) => v,
                 None => return self.recover(QualType::BOOL, &[], loc),
             }
-        } else if matches!(t, TypeTrait::IsAssignable | TypeTrait::IsNothrowAssignable) {
-            let nothrow = t == TypeTrait::IsNothrowAssignable;
-            match self.eval_assignable(args[0], args[1], nothrow, loc) {
+        } else if matches!(
+            t,
+            TypeTrait::IsAssignable
+                | TypeTrait::IsNothrowAssignable
+                | TypeTrait::IsTriviallyAssignable
+        ) {
+            let check = match t {
+                TypeTrait::IsNothrowAssignable => InitCheck::Nothrow,
+                TypeTrait::IsTriviallyAssignable => InitCheck::Trivial,
+                _ => InitCheck::WellFormed,
+            };
+            match self.eval_assignable(args[0], args[1], check, loc) {
                 Some(v) => v,
                 None => return self.recover(QualType::BOOL, &[], loc),
             }
@@ -347,7 +361,7 @@ impl Sema<'_, '_> {
         &mut self,
         a: (QualType, Loc),
         b: (QualType, Loc),
-        nothrow: bool,
+        check: InitCheck,
         loc: Loc,
     ) -> Option<bool> {
         for (q, at) in [a, b] {
@@ -388,7 +402,7 @@ impl Sema<'_, '_> {
             let r = operand(s, b.0);
             let e = s.binary_operator(BinaryOp::Assign, l, r, None, loc);
             s.exit_unevaluated();
-            !(s.is_err_expr(e) || (nothrow && s.can_throw(e)))
+            !s.is_err_expr(e) && s.init_check_holds(check, e)
         });
         self.ctx = saved;
         Some(matches!(r, Some((true, Ok(())))))
@@ -454,7 +468,11 @@ impl Sema<'_, '_> {
             };
             s.builder().opaque_value_of(ty, vc, at)
         };
-        let nothrow = t == TypeTrait::IsNothrowConstructible;
+        let check = match t {
+            TypeTrait::IsNothrowConstructible => InitCheck::Nothrow,
+            TypeTrait::IsTriviallyConstructible => InitCheck::Trivial,
+            _ => InitCheck::WellFormed,
+        };
         let tu = self.ast.tu;
         let saved = std::mem::replace(&mut self.ctx, tu);
         let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
@@ -467,10 +485,81 @@ impl Sema<'_, '_> {
                 s.perform_init(ty, init, loc, false)
             };
             s.exit_unevaluated();
-            !(s.is_err_expr(e) || (nothrow && s.can_throw(e)))
+            !s.is_err_expr(e) && s.init_check_holds(check, e)
         });
         self.ctx = saved;
-        Some(matches!(r, Some((true, Ok(())))))
+        let ok = matches!(r, Some((true, Ok(()))));
+        // The temporary is destroyed: clang's `CXXBindTemporaryExpr` of a
+        // class with a non-trivial destructor is a non-trivial call.
+        if ok && check == InitCheck::Trivial && !self.ast.types.is_reference(ty) {
+            return Some(self.is_destructible(TypeTrait::IsTriviallyDestructible, ty));
+        }
+        Some(ok)
+    }
+
+    /// The extra requirement of the nothrow / trivially form of an
+    /// initialization or assignment trait on its well-formed operation `e`.
+    fn init_check_holds(&self, check: InitCheck, e: ExprId) -> bool {
+        match check {
+            InitCheck::WellFormed => true,
+            InitCheck::Nothrow => !self.can_throw(e),
+            InitCheck::Trivial => !self.has_nontrivial_call(e),
+        }
+    }
+
+    /// Whether evaluating `e` calls a function that is not a trivial
+    /// special member ([meta.unary.prop]/9 "known to call no operation
+    /// that is not trivial"; clang's `Expr::hasNonTrivialCall`): a call
+    /// of a non-trivial function (a user-provided or non-trivial special
+    /// member, a conversion function, any non-member function), the
+    /// construction by a non-trivial constructor, or a temporary with a
+    /// non-trivial destructor. Unevaluated operands are not entered.
+    pub(crate) fn has_nontrivial_call(&self, e: ExprId) -> bool {
+        let exprs = &self.ast.exprs;
+        let trivial = |d: DeclId| self.ast.decls.function(d).is_some_and(|f| f.spec.is_trivial());
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            let n = exprs.get(x);
+            match n.kind() {
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::TypeTraitExpr
+                | ExprKind::ArrayTypeTraitExpr
+                | ExprKind::ExpressionTraitExpr
+                | ExprKind::CXXTypeidExpr => continue,
+                ExprKind::CallExpr
+                | ExprKind::CXXOperatorCallExpr
+                | ExprKind::CXXMemberCallExpr => {
+                    let c = self.ignore_parens(exprs.callee(x));
+                    let c = if exprs.get(c).kind().is_cast() { exprs.operand(c) } else { c };
+                    let c = self.ignore_parens(c);
+                    let named =
+                        matches!(exprs.get(c).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr);
+                    if !named || !trivial(exprs.decl(c)) {
+                        return true;
+                    }
+                }
+                ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr
+                    if !trivial(exprs.constructor(x)) =>
+                {
+                    return true;
+                }
+                ExprKind::CXXBindTemporaryExpr
+                    if self
+                        .ast
+                        .types
+                        .as_record(n.ty())
+                        .and_then(|r| self.ast.definition(r))
+                        .and_then(|r| self.ast.destructor(r))
+                        .is_none_or(|d| !trivial(d)) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+            stack.extend(exprs.children(x, &self.ast.lists));
+        }
+        false
     }
 
     /// `__is_convertible(From, To)` / `__is_convertible_to` /
@@ -649,7 +738,8 @@ impl Sema<'_, '_> {
             T::IsFunction => tys.is_function(q),
             T::IsArithmetic => self.is_arithmetic_ext(q),
             T::IsFundamental => self.is_fundamental(q),
-            T::IsCompound => !self.is_fundamental(q),
+            // clang `isCompoundType`: the sizeless SVE builtins are neither.
+            T::IsCompound => !self.is_fundamental(q) && !self.ast.types.is_sizeless(q),
             T::IsObject => self.is_object_type(q),
             T::IsScalar => self.is_scalar_ext(q),
             T::IsConst => !tys.is_reference(q) && tys.effective_quals(q).is_const(),
@@ -815,7 +905,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {
@@ -838,7 +930,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {
@@ -858,7 +952,9 @@ impl Sema<'_, '_> {
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
-        if self.is_scalar_or_vector(e) {
+        // clang: the sizeless SVE builtins are trivial, but not
+        // standard-layout or literal.
+        if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
         match self.defined_record(e) {
@@ -1117,4 +1213,13 @@ impl Sema<'_, '_> {
         }
         Some(size)
     }
+}
+
+/// Which form of an initialization or assignment trait is evaluated
+/// (`__is_X`, `__is_nothrow_X`, `__is_trivially_X`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum InitCheck {
+    WellFormed,
+    Nothrow,
+    Trivial,
 }

@@ -368,8 +368,9 @@ impl Sema<'_, '_> {
     pub fn act_on_start_switch(&mut self, cond: ExprId, loc: Loc) -> ExprId {
         let ty0 = self.ast.exprs.get(cond).ty();
         let t = &self.ast.types;
-        let ok = t.is_integral(ty0)
-            || t.as_enum(ty0).is_some()
+        let tv = t.as_atomic(ty0).unwrap_or(ty0);
+        let ok = t.is_integral(tv)
+            || t.as_enum(tv).is_some()
             || t.builtin(ty0) == Some(BuiltinType::Error);
         // [temp.res.general]/6: a condition of dependent type is checked
         // (converted, promoted) when the template is instantiated; the
@@ -769,7 +770,15 @@ impl Sema<'_, '_> {
             && !st.deduced
         {
             let f = st.decl;
-            self.set_deduced_return(f, QualType::VOID);
+            // A specialization whose body failed to instantiate (a
+            // dropped `return`) deduces nothing (clang leaves the type
+            // undeduced): the error type, so uses are silent.
+            let ret = if self.ast.decls.get(f).has(DeclFlags::INVALID) {
+                QualType::ERROR
+            } else {
+                QualType::VOID
+            };
+            self.set_deduced_return(f, ret);
         }
         let Some(state) = self.func.take() else { return };
         for &r in &state.returns {

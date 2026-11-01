@@ -96,6 +96,17 @@ impl Oven {
                 Ok(u128::from(n))
             }
             bi::POPCOUNT => Ok(u128::from((a & mask(sub & 0xFF)).count_ones())),
+            bi::LOCK_FREE => {
+                // clang 19 `IntExprEvaluator::VisitBuiltinCallExpr`: a
+                // power-of-two size within the inline width is lock-free
+                // for an `_Atomic` (c11) or null object, a single byte,
+                // or an object aligned to the size.
+                let max = u128::from(sub & 0xFF);
+                let yes = a.is_power_of_two()
+                    && a <= max
+                    && (sub >> 8 & 1 != 0 || a == 1 || u128::from(t1) >= a);
+                if yes || sub >> 9 & 1 != 0 { Ok(u128::from(yes)) } else { Err(Fault::Invalid) }
+            }
             bi::BSWAP => {
                 let w = sub & 0xFF;
                 Ok((a & mask(w)).swap_bytes() >> (128 - w))

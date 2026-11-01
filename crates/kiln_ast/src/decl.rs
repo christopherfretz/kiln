@@ -1840,6 +1840,8 @@ macro_rules! payload_getter {
         #[allow(dead_code, reason = "not every payload has a late setter yet")]
         fn $mut_name(&mut self, d: DeclId) -> &mut $ty {
             let n = self.nodes[d.index() as usize];
+            // Invariant: Sema only mutates a payload of the decl's own class
+            // (two Sema bugs that broke this were fixed in WP-141).
             assert!(
                 n.kind.payload() == PayloadClass::$class && n.data != 0,
                 concat!("decl has no ", stringify!($class), " payload")
@@ -3042,7 +3044,7 @@ pub mod builtin {
         /// `b` bool, `c` char, `w` `wchar_t`, `s` short, `i` int, `f`
         /// float, `d` double, `z` `size_t`; prefixes `U` unsigned, `L`
         /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
-        /// `&` lvalue reference, `C` const.
+        /// `&` lvalue reference, `C` const, `D` volatile.
         pub sig: &'static str,
         /// [`attr`] bits.
         pub attrs: u8,
@@ -3344,14 +3346,274 @@ pub mod builtin {
         row(1322, "__builtin_tgammal", "LdLd", N),
     ];
 
+    // ---- WP-154: atomic builtins (a separate block; see `atomic`) ----
+
+    /// The atomic builtins ([atomics], C11 7.17, GCC `__atomic`): the
+    /// operations with custom type-checking (`v.`, rebuilt by sema as an
+    /// `AtomicExpr`), then the fences, flag operations and lock-freedom
+    /// queries, which are ordinary calls.
+    pub const ATOMIC: &[Info] = &[
+        row(atomic::C11_INIT, "__c11_atomic_init", "v.", T),
+        row(atomic::C11_LOAD, "__c11_atomic_load", "v.", T),
+        row(atomic::C11_STORE, "__c11_atomic_store", "v.", T),
+        row(atomic::C11_EXCHANGE, "__c11_atomic_exchange", "v.", T),
+        row(atomic::C11_CMPXCHG_STRONG, "__c11_atomic_compare_exchange_strong", "v.", T),
+        row(atomic::C11_CMPXCHG_WEAK, "__c11_atomic_compare_exchange_weak", "v.", T),
+        row(atomic::C11_FETCH_ADD, "__c11_atomic_fetch_add", "v.", T),
+        row(atomic::C11_FETCH_SUB, "__c11_atomic_fetch_sub", "v.", T),
+        row(atomic::C11_FETCH_AND, "__c11_atomic_fetch_and", "v.", T),
+        row(atomic::C11_FETCH_OR, "__c11_atomic_fetch_or", "v.", T),
+        row(atomic::C11_FETCH_XOR, "__c11_atomic_fetch_xor", "v.", T),
+        row(atomic::C11_FETCH_NAND, "__c11_atomic_fetch_nand", "v.", T),
+        row(atomic::C11_FETCH_MAX, "__c11_atomic_fetch_max", "v.", T),
+        row(atomic::C11_FETCH_MIN, "__c11_atomic_fetch_min", "v.", T),
+        row(atomic::LOAD, "__atomic_load", "v.", T),
+        row(atomic::LOAD_N, "__atomic_load_n", "v.", T),
+        row(atomic::STORE, "__atomic_store", "v.", T),
+        row(atomic::STORE_N, "__atomic_store_n", "v.", T),
+        row(atomic::EXCHANGE, "__atomic_exchange", "v.", T),
+        row(atomic::EXCHANGE_N, "__atomic_exchange_n", "v.", T),
+        row(atomic::CMPXCHG, "__atomic_compare_exchange", "v.", T),
+        row(atomic::CMPXCHG_N, "__atomic_compare_exchange_n", "v.", T),
+        row(atomic::FETCH_ADD, "__atomic_fetch_add", "v.", T),
+        row(atomic::FETCH_SUB, "__atomic_fetch_sub", "v.", T),
+        row(atomic::FETCH_AND, "__atomic_fetch_and", "v.", T),
+        row(atomic::FETCH_OR, "__atomic_fetch_or", "v.", T),
+        row(atomic::FETCH_XOR, "__atomic_fetch_xor", "v.", T),
+        row(atomic::FETCH_NAND, "__atomic_fetch_nand", "v.", T),
+        row(atomic::FETCH_MAX, "__atomic_fetch_max", "v.", T),
+        row(atomic::FETCH_MIN, "__atomic_fetch_min", "v.", T),
+        row(atomic::ADD_FETCH, "__atomic_add_fetch", "v.", T),
+        row(atomic::SUB_FETCH, "__atomic_sub_fetch", "v.", T),
+        row(atomic::AND_FETCH, "__atomic_and_fetch", "v.", T),
+        row(atomic::OR_FETCH, "__atomic_or_fetch", "v.", T),
+        row(atomic::XOR_FETCH, "__atomic_xor_fetch", "v.", T),
+        row(atomic::NAND_FETCH, "__atomic_nand_fetch", "v.", T),
+        row(atomic::MAX_FETCH, "__atomic_max_fetch", "v.", T),
+        row(atomic::MIN_FETCH, "__atomic_min_fetch", "v.", T),
+        row(atomic::C11_THREAD_FENCE, "__c11_atomic_thread_fence", "vi", N),
+        row(atomic::C11_SIGNAL_FENCE, "__c11_atomic_signal_fence", "vi", N),
+        row(atomic::C11_IS_LOCK_FREE, "__c11_atomic_is_lock_free", "bz", N),
+        row(atomic::TEST_AND_SET, "__atomic_test_and_set", "bvD*i", N),
+        row(atomic::CLEAR, "__atomic_clear", "vvD*i", N),
+        row(atomic::THREAD_FENCE, "__atomic_thread_fence", "vi", N),
+        row(atomic::SIGNAL_FENCE, "__atomic_signal_fence", "vi", N),
+        row(atomic::ALWAYS_LOCK_FREE, "__atomic_always_lock_free", "bzvCD*", N),
+        row(atomic::IS_LOCK_FREE, "__atomic_is_lock_free", "bzvCD*", N),
+    ];
+
+    /// The atomic builtins' ids (clang 19 `Builtin::ID`s) and the
+    /// classification of the `AtomicExpr` operations (clang's
+    /// `AtomicExpr::AtomicOp` and `Sema::BuildAtomicExpr`). Every
+    /// operation id is below 256: an `AtomicExpr` stores it in `aux`.
+    #[allow(missing_docs, reason = "the ids are named after the builtins")]
+    pub mod atomic {
+        pub const ADD_FETCH: u32 = 1;
+        pub const AND_FETCH: u32 = 2;
+        pub const CMPXCHG: u32 = 3;
+        pub const CMPXCHG_N: u32 = 4;
+        pub const EXCHANGE: u32 = 5;
+        pub const EXCHANGE_N: u32 = 6;
+        pub const FETCH_ADD: u32 = 7;
+        pub const FETCH_AND: u32 = 8;
+        pub const FETCH_MAX: u32 = 9;
+        pub const FETCH_MIN: u32 = 10;
+        pub const FETCH_NAND: u32 = 11;
+        pub const FETCH_OR: u32 = 12;
+        pub const FETCH_SUB: u32 = 13;
+        pub const FETCH_XOR: u32 = 14;
+        pub const LOAD: u32 = 15;
+        pub const LOAD_N: u32 = 16;
+        pub const MAX_FETCH: u32 = 17;
+        pub const MIN_FETCH: u32 = 18;
+        pub const NAND_FETCH: u32 = 19;
+        pub const OR_FETCH: u32 = 20;
+        pub const STORE: u32 = 21;
+        pub const STORE_N: u32 = 22;
+        pub const SUB_FETCH: u32 = 23;
+        pub const XOR_FETCH: u32 = 24;
+        pub const C11_CMPXCHG_STRONG: u32 = 25;
+        pub const C11_CMPXCHG_WEAK: u32 = 26;
+        pub const C11_EXCHANGE: u32 = 27;
+        pub const C11_FETCH_ADD: u32 = 28;
+        pub const C11_FETCH_AND: u32 = 29;
+        pub const C11_FETCH_MAX: u32 = 30;
+        pub const C11_FETCH_MIN: u32 = 31;
+        pub const C11_FETCH_NAND: u32 = 32;
+        pub const C11_FETCH_OR: u32 = 33;
+        pub const C11_FETCH_SUB: u32 = 34;
+        pub const C11_FETCH_XOR: u32 = 35;
+        pub const C11_INIT: u32 = 36;
+        pub const C11_LOAD: u32 = 37;
+        pub const C11_STORE: u32 = 38;
+        pub const ALWAYS_LOCK_FREE: u32 = 172;
+        pub const CLEAR: u32 = 173;
+        pub const IS_LOCK_FREE: u32 = 174;
+        pub const SIGNAL_FENCE: u32 = 175;
+        pub const TEST_AND_SET: u32 = 176;
+        pub const THREAD_FENCE: u32 = 177;
+        pub const C11_IS_LOCK_FREE: u32 = 234;
+        pub const C11_SIGNAL_FENCE: u32 = 235;
+        pub const C11_THREAD_FENCE: u32 = 236;
+
+        /// The argument shape of an operation (clang's `BuildAtomicExpr`
+        /// `Form`).
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Form {
+            Init,
+            /// `(ptr, order)`.
+            Load,
+            /// `__atomic_load(ptr, ret, order)`.
+            LoadCopy,
+            /// A store: `(ptr, val, order)`.
+            Copy,
+            /// A read-modify-write: `(ptr, val, order)`.
+            Arithmetic,
+            /// `(ptr, val, order)`, returning the old value.
+            Xchg,
+            /// `__atomic_exchange(ptr, val, ret, order)`.
+            GnuXchg,
+            /// `(ptr, expected, desired, success, failure)`.
+            C11CmpXchg,
+            /// `(ptr, expected, desired, weak, success, failure)`.
+            GnuCmpXchg,
+        }
+
+        impl Form {
+            /// The number of arguments (clang's `NumArgs`).
+            pub fn num_args(self) -> usize {
+                match self {
+                    Form::Init | Form::Load => 2,
+                    Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => 3,
+                    Form::GnuXchg => 4,
+                    Form::C11CmpXchg => 5,
+                    Form::GnuCmpXchg => 6,
+                }
+            }
+
+            /// The number of value operands (clang's `NumVals`).
+            pub fn num_vals(self) -> usize {
+                match self {
+                    Form::Load => 0,
+                    Form::Init | Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => 1,
+                    Form::GnuXchg | Form::C11CmpXchg => 2,
+                    Form::GnuCmpXchg => 3,
+                }
+            }
+
+            /// The number of operands of the `AtomicExpr` (clang's
+            /// `getNumSubExprs`): `ptr`, the orders, the values, `weak`.
+            pub fn num_sub_exprs(self) -> usize {
+                self.num_args()
+            }
+
+            /// For each argument in source order, the index of the
+            /// `AtomicExpr` operand it became (the inverse of clang's
+            /// `SubExprs` permutation).
+            pub fn arg_to_sub(self) -> &'static [usize] {
+                match self {
+                    Form::Init | Form::Load => &[0, 1],
+                    Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => &[0, 2, 1],
+                    Form::GnuXchg => &[0, 2, 3, 1],
+                    Form::C11CmpXchg => &[0, 2, 4, 1, 3],
+                    Form::GnuCmpXchg => &[0, 2, 4, 5, 1, 3],
+                }
+            }
+        }
+
+        /// The read-modify-write operation of an `Arithmetic` form.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Rmw {
+            Add,
+            Sub,
+            And,
+            Or,
+            Xor,
+            Nand,
+            Max,
+            Min,
+        }
+
+        /// Whether `id` is an `AtomicExpr` operation.
+        pub fn is_op(id: u32) -> bool {
+            (1..=38).contains(&id)
+        }
+
+        /// The form of operation `id`.
+        pub fn form(id: u32) -> Option<Form> {
+            Some(match id {
+                C11_INIT => Form::Init,
+                C11_LOAD | LOAD_N => Form::Load,
+                LOAD => Form::LoadCopy,
+                C11_STORE | STORE | STORE_N => Form::Copy,
+                C11_EXCHANGE | EXCHANGE_N => Form::Xchg,
+                EXCHANGE => Form::GnuXchg,
+                C11_CMPXCHG_STRONG | C11_CMPXCHG_WEAK => Form::C11CmpXchg,
+                CMPXCHG | CMPXCHG_N => Form::GnuCmpXchg,
+                _ if rmw(id).is_some() => Form::Arithmetic,
+                _ => return None,
+            })
+        }
+
+        /// The read-modify-write of operation `id`, and whether it yields
+        /// the new value (`__atomic_<op>_fetch`) rather than the old.
+        pub fn rmw(id: u32) -> Option<(Rmw, bool)> {
+            Some(match id {
+                C11_FETCH_ADD | FETCH_ADD => (Rmw::Add, false),
+                C11_FETCH_SUB | FETCH_SUB => (Rmw::Sub, false),
+                C11_FETCH_AND | FETCH_AND => (Rmw::And, false),
+                C11_FETCH_OR | FETCH_OR => (Rmw::Or, false),
+                C11_FETCH_XOR | FETCH_XOR => (Rmw::Xor, false),
+                C11_FETCH_NAND | FETCH_NAND => (Rmw::Nand, false),
+                C11_FETCH_MAX | FETCH_MAX => (Rmw::Max, false),
+                C11_FETCH_MIN | FETCH_MIN => (Rmw::Min, false),
+                ADD_FETCH => (Rmw::Add, true),
+                SUB_FETCH => (Rmw::Sub, true),
+                AND_FETCH => (Rmw::And, true),
+                OR_FETCH => (Rmw::Or, true),
+                XOR_FETCH => (Rmw::Xor, true),
+                NAND_FETCH => (Rmw::Nand, true),
+                MAX_FETCH => (Rmw::Max, true),
+                MIN_FETCH => (Rmw::Min, true),
+                _ => return None,
+            })
+        }
+
+        /// Whether operation `id` is a `__c11_atomic_*` one (its pointer
+        /// operand points to an `_Atomic` type).
+        pub fn is_c11(id: u32) -> bool {
+            (25..=38).contains(&id)
+        }
+
+        /// Whether operation `id` is a GNU `_n` form or a C11 form (values
+        /// passed by value; the other GNU forms pass them by address).
+        pub fn by_value(id: u32) -> bool {
+            !matches!(id, LOAD | STORE | EXCHANGE | CMPXCHG)
+        }
+
+        /// The clang spelling of operation `id` without its leading `__`
+        /// (the `AtomicExpr` dump does not print it; diagnostics may).
+        pub fn name(id: u32) -> &'static str {
+            super::info(id).map_or("", |i| i.name)
+        }
+
+        /// Whether `id` is a `__c11_atomic_compare_exchange_weak` (weak
+        /// by name; the GNU forms carry a `weak` operand).
+        pub fn is_c11_weak(id: u32) -> bool {
+            id == C11_CMPXCHG_WEAK
+        }
+    }
+
+    // ---- end WP-154 ----
+
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
-        ALL.iter().chain(INT_MEM).chain(LIBM).find(|e| e.name == name).map(|e| e.id)
+        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).find(|e| e.name == name).map(|e| e.id)
     }
 
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
-        ALL.iter().chain(INT_MEM).chain(LIBM).find(|e| e.id == id)
+        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).find(|e| e.id == id)
     }
 
     /// Whether builtin `id` is a [`LIBM`] function.

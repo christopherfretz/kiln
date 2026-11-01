@@ -561,6 +561,11 @@ impl<'a> Cg<'a> {
                 let e = self.ir(e);
                 self.m.types.vector(e, u32::try_from(*n).unwrap_or(u32::MAX))
             }
+            IrType::ScalableVector(e, n) => {
+                let e = self.ir(e);
+                self.m.types.scalable_vector(e, u32::try_from(*n).unwrap_or(u32::MAX))
+            }
+            IrType::TargetExt(name) => self.m.types.target_ext(name),
             IrType::Record(d) => self.record_ty(*d),
             IrType::RecordBase(d) => {
                 let first = self.ast.first(*d);
@@ -770,6 +775,15 @@ impl<'a> Cg<'a> {
 
     pub fn is_bool(&self, q: QualType) -> bool {
         matches!(self.ast.types.canonical_view(q), TypeView::Builtin(BuiltinType::Bool))
+    }
+
+    /// [`Cg::is_bool`], seeing through `_Atomic` (the memory form of an
+    /// `_Atomic(bool)` is `i8` too).
+    pub fn is_bool_value(&self, q: QualType) -> bool {
+        match self.ast.types.canonical_view(q) {
+            TypeView::Atomic(v) => self.is_bool(v),
+            _ => self.is_bool(q),
+        }
     }
 
     pub fn is_signed(&self, q: QualType) -> bool {

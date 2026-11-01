@@ -354,9 +354,10 @@ impl Cg<'_> {
             IrType::RecordBase(_) => {
                 err(None, "base-class subobjects in constants are not supported yet (M3)")
             }
-            IrType::Void | IrType::Vector(..) => {
-                err(None, "vector constants are not supported yet (M3)")
-            }
+            IrType::Void
+            | IrType::Vector(..)
+            | IrType::ScalableVector(..)
+            | IrType::TargetExt(_) => err(None, "vector constants are not supported yet (M3)"),
         }
     }
 

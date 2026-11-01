@@ -940,6 +940,15 @@ diagnostics and IR.
   Not yet: the composite type that needs a cv-union of both sides
   (`const int B::*` vs `volatile int D::*`; [expr.type]/4.6) and
   constant evaluation of the comparison (WP-076).
+- **Composite pointer type** ([expr.type]/4; `composite_pointer` in
+  `expr.rs`, used by `==`, `<`, `<=>` and `?:`): after the null,
+  same-type and one-way-conversion cases, `cv_combined_pointer` tries a
+  pointer to either side's unqualified pointee with the cv-qualifiers of
+  both (`void *` vs `const B *` is `const void *`; `B *` vs `const D *`
+  is `const B *`), taking the first that both operands reach by a
+  standard conversion (WP-155). Not yet: multi-level cv-combination
+  (`int **` vs `const int **` is `const int *const *`) and the member
+  pointer case above.
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -1282,6 +1291,29 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   tracked per specialization; an implicit constructor does not escalate
   through a member whose (non-NSDMI) default construction is a failed
   consteval constructor call.
+
+### 5.11 Atomics (`builtins/atomic.rs`, WP-154)
+- **Builtins.** `__c11_atomic_*` and `__atomic_*` calls (the ids in
+  `kiln_ast::decl::builtin::atomic`) become an `AtomicExpr`, as clang's
+  `Sema::BuildAtomicExpr`: the pointer operand is checked
+  (`sema_atomic_builtin_must_be_pointer`, `_op_needs_atomic` for the c11
+  forms, `_needs_non_const_atomic`/`_pointer`, incomplete types, `_BitInt`
+  prohibited), the value kind per op (int / int-or-fp / int-ptr-or-fp /
+  trivially copyable), value operands are converted to the value type (or
+  `ptrdiff_t` for pointer arithmetic, or pointers for the generic
+  `__atomic_load`/`store`/`exchange`/`compare_exchange` forms), orders to
+  `int`, and a constant order invalid for the op is
+  `-Watomic-memory-ordering` (`sema_atomic_op_invalid_memory_order`). The
+  result type is clang's (void, the value, or `bool`).
+- **Lvalues of `_Atomic(T)`.** Lvalue-to-rvalue conversion adds
+  `AtomicToNonAtomic`; assignment and initialization from `T` add
+  `NonAtomicToAtomic`. Operand checks of the arithmetic, shift, bitwise,
+  unary and `switch` conditions use the value type (`value_ty`). `++`/`--`
+  and compound assignment are allowed on a modifiable `_Atomic` lvalue
+  and yield an lvalue of `T` (`++`) or `_Atomic(T)` (compound assignment),
+  as clang 19's `decltype` shows. A braced list initializing an `_Atomic`
+  object is `sema_illegal_initializer_type`, as clang.
+- **Not done:** `-Watomic-alignment` (the libcall-size warning).
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

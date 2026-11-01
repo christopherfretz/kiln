@@ -70,6 +70,7 @@ struct Node {
     b: u32,
 }
 
+// Compile-time layout check (never a runtime panic).
 const _: () = assert!(size_of::<Node>() == 16);
 
 mod kind {

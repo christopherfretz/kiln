@@ -361,6 +361,23 @@ impl Types {
                 let n = if func { 2 } else { 1 };
                 self.simple(c, pbytes * n, pbytes as u32, TyKind::MemPtr { func })
             }
+            // `_Atomic(T)` holds a `T` (constant evaluation is
+            // single-threaded): the value's representation, with clang's
+            // size promotion (`kiln_abi`'s: a power of two up to 16 bytes,
+            // aligned to its size; both targets' MaxAtomicPromoteWidth is
+            // 128).
+            TypeView::Atomic(v) => {
+                let inner = self.intern(bridge, v);
+                let mut info = *self.info(inner);
+                info.q = c;
+                if info.size == 0 {
+                    info.size = 1;
+                } else if info.size <= 16 {
+                    info.size = info.size.next_power_of_two();
+                    info.align = info.size as u32;
+                }
+                self.push(info)
+            }
             // No value model yet (M4): only its size and alignment.
             TypeView::Vector { .. } => {
                 let (size, align) = bridge.opaque_size_align(c);
