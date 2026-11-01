@@ -269,7 +269,8 @@ impl<'a> Cg<'a> {
             let n = ast.decls.get(d);
             // A templated declaration ([temp.pre]/8: an out-of-line
             // member of a class template) is emitted only as instantiated.
-            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) || self.is_templated(d) {
+            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) || self.is_templated(d)
+            {
                 return Ok(());
             }
             match n.kind() {

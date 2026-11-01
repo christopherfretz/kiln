@@ -670,9 +670,11 @@ impl Sema<'_, '_> {
         // [temp.expl.spec]/7: an explicit specialization is never
         // instantiated from the pattern (its definition, if any, is the
         // user's, possibly in another translation unit).
-        let explicit = self.ast.spec_info(f).map(|(_, i)| i.kind).or_else(|| {
-            self.ast.member_spec_info(f).map(|(_, m)| m.kind)
-        });
+        let explicit = self
+            .ast
+            .spec_info(f)
+            .map(|(_, i)| i.kind)
+            .or_else(|| self.ast.member_spec_info(f).map(|(_, m)| m.kind));
         if explicit == Some(SpecKind::ExplicitSpecialization) {
             return;
         }

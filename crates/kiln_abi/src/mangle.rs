@@ -130,6 +130,9 @@ enum Sub {
     Template(DeclId),
     /// A (canonical, possibly qualified) type.
     Type(QualType),
+    /// A template template parameter `(depth, index)` used as the
+    /// template of a dependent specialization.
+    TemplateParm(u32, u32),
 }
 
 /// The constructor or destructor variant of a symbol ([abi:mangling]
@@ -1301,9 +1304,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 }
                 self.subs.push(key);
             }
-            TemplateName::TemplateTemplateParm { decl, .. } => {
-                let idx = ast.template_parm(decl).map_or(0, |p| u32::from(p.index));
-                self.template_param(idx);
+            TemplateName::TemplateTemplateParm { depth, index, .. }
+            | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
+                let key = Sub::TemplateParm(depth, index);
+                if !self.try_sub(key) {
+                    self.template_param(index);
+                    self.subs.push(key);
+                }
             }
             _ => self.out.push_str("u7unknown"),
         }
@@ -1899,6 +1906,43 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             TypeView::Auto { .. } => self.out.push_str("Da"),
             TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
+            TypeView::TemplateSpecialization { name, args, .. } => self.dependent_spec(name, args),
+            _ => self.out.push_str("u7unknown"),
+        }
+    }
+
+    /// A dependent template specialization type `T<args>` (clang
+    /// `mangleType(const TemplateSpecializationType *)`): the template's
+    /// unscoped (`St`-prefixed in `std`) or nested name and its arguments,
+    /// e.g. `St16initializer_listIT_E`, `N1N1WIT_EE`; a template template
+    /// parameter is `T_` followed by the arguments.
+    fn dependent_spec(&mut self, name: TemplateNameId, args: ArgListId) {
+        let ast = self.ast;
+        let name = ast.types.canonical_template_name(name);
+        match ast.types.template_name_view(name) {
+            TemplateName::Template(t) => {
+                let parent = self.parent(t);
+                let top =
+                    parent.is_none_or(|p| ast.decls.get(p).kind() == DeclKind::TranslationUnit);
+                if top || parent.is_some_and(|p| self.is_std(p)) {
+                    self.unscoped_template(t, !top);
+                    self.template_args(args);
+                } else {
+                    self.out.push('N');
+                    self.template_prefix(t, None, Structor::Complete);
+                    self.template_args(args);
+                    self.out.push('E');
+                }
+            }
+            TemplateName::TemplateTemplateParm { depth, index, .. }
+            | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
+                let key = Sub::TemplateParm(depth, index);
+                if !self.try_sub(key) {
+                    self.template_param(index);
+                    self.subs.push(key);
+                }
+                self.template_args(args);
+            }
             _ => self.out.push_str("u7unknown"),
         }
     }
