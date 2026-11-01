@@ -257,8 +257,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     _ => Tpr::True,
                 },
                 Kw::Decltype | Kw::Typeof | Kw::Atomic => {
+                    // Without `(`, `_Atomic` is the type qualifier: as `const`.
                     if self.punct_at(self.i + 1) != Some(Punct::LParen) {
-                        return Tpr::Error;
+                        return if k == Kw::Atomic { Tpr::True } else { Tpr::Error };
                     }
                     match self.skip_group(self.i + 1) {
                         Some(j)
@@ -352,6 +353,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     fn decl_specifier_is_type(&self) -> bool {
         match self.kw() {
             Some(Kw::Const | Kw::Volatile | Kw::Restrict) => false,
+            Some(Kw::Atomic) if self.punct_at(self.i + 1) != Some(Punct::LParen) => false,
             Some(k) => crate::decl::is_type_specifier_kw(k),
             None => {
                 self.p.transform_at(self.i).is_some()
@@ -371,6 +373,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             return Tpr::Ambiguous;
         }
         match self.kw() {
+            Some(Kw::Atomic) if self.punct_at(self.i + 1) != Some(Punct::LParen) => self.i += 1,
             Some(k @ (Kw::Decltype | Kw::Typeof | Kw::Atomic)) => {
                 self.i += 1;
                 if !self.at(Punct::LParen) || !self.skip_group_here() {
