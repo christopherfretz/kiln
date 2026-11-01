@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="kiln">
+  <title>kiln</title>
+  <defs>
+    <linearGradient id="kc-br" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef1f5"/><stop offset="1" stop-color="#9aa3af"/></linearGradient>
+    <radialGradient id="kc-halo" cx="128" cy="150" r="84" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7a1a" stop-opacity=".45"/><stop offset="1" stop-color="#ff7a1a" stop-opacity="0"/></radialGradient>
+    <linearGradient id="kc-outer" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ff9d22"/><stop offset=".55" stop-color="#ef4a12"/>
+      <stop offset="1" stop-color="#b3190b"/></linearGradient>
+    <linearGradient id="kc-core" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#fffbe9"/><stop offset=".5" stop-color="#ffe27c"/>
+      <stop offset="1" stop-color="#ffab2e"/></linearGradient>
+  </defs>
+  <!-- mark -->
+  <g id="kc-symbol">
+    <circle cx="128" cy="150" r="84" fill="url(#kc-halo)"/>
+    <!-- template angle brackets -->
+    <path id="kc-lt" d="M8,136L58,64H88L38,136L88,208H58Z" fill="url(#kc-br)"/>
+    <path id="kc-gt" d="M248,136L198,64H168L218,136L168,208H198Z" fill="url(#kc-br)"/>
+    <!-- the flame: red-orange envelope, white-hot core -->
+    <path id="kc-flame" d="M128,216C104,216 93,198 95,176C97,154 110,140 113,120C121,128 123,138 121,148C134,130 142,104 133,36C157,62 167,104 165,158C164,194 152,216 128,216Z" fill="url(#kc-outer)"/>
+    <path id="kc-core" d="M128,214C114,214 107,203 108,189C109,173 121,163 125,145C136,158 148,172 148,190C148,205 140,214 128,214Z" fill="url(#kc-core)"/>
+  </g>
+</svg>

@@ -1,0 +1,42 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct X definition
+| |-CXXConstructorDecl used X 'void ()'
+| `-CXXDestructorDecl used ~X 'void () noexcept'
+|-CXXRecordDecl referenced struct T definition
+| |-CXXConstructorDecl used T 'void (const X &)'
+| | `-ParmVarDecl 'const X &' cinit
+| |   `-ExprWithCleanups 'const X' lvalue
+| |     `-MaterializeTemporaryExpr 'const X' lvalue
+| |       `-ImplicitCastExpr 'const X' <NoOp>
+| |         `-CXXBindTemporaryExpr 'X' (CXXTemporary)
+| |           `-CXXTemporaryObjectExpr 'X' 'void ()'
+| `-CXXDestructorDecl used ~T 'void () noexcept'
+|-FunctionDecl used g 'void (const X &)'
+| `-ParmVarDecl 'const X &' cinit
+|   `-ExprWithCleanups 'const X' lvalue
+|     `-MaterializeTemporaryExpr 'const X' lvalue
+|       `-ImplicitCastExpr 'const X' <NoOp>
+|         `-CXXBindTemporaryExpr 'X' (CXXTemporary)
+|           `-CXXTemporaryObjectExpr 'X' 'void ()'
+|-FunctionDecl f1 'void ()'
+| `-CompoundStmt
+|   `-ExprWithCleanups 'void'
+|     `-CallExpr 'void'
+|       |-ImplicitCastExpr 'void (*)(const X &)' <FunctionToPointerDecay>
+|       | `-DeclRefExpr 'void (const X &)' lvalue Function 'g' 'void (const X &)'
+|       `-CXXDefaultArgExpr 'const X' lvalue
+|         `-MaterializeTemporaryExpr 'const X' lvalue
+|           `-ImplicitCastExpr 'const X' <NoOp>
+|             `-CXXBindTemporaryExpr 'X' (CXXTemporary)
+|               `-CXXTemporaryObjectExpr 'X' 'void ()'
+`-FunctionDecl f2 'void ()'
+  `-CompoundStmt
+    `-DeclStmt
+      `-VarDecl t 'T' callinit destroyed
+        `-ExprWithCleanups 'T'
+          `-CXXConstructExpr 'T' 'void (const X &)'
+            `-CXXDefaultArgExpr 'const X' lvalue
+              `-MaterializeTemporaryExpr 'const X' lvalue
+                `-ImplicitCastExpr 'const X' <NoOp>
+                  `-CXXBindTemporaryExpr 'X' (CXXTemporary)
+                    `-CXXTemporaryObjectExpr 'X' 'void ()'

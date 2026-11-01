@@ -1,0 +1,45 @@
+TranslationUnitDecl
+|-TypeAliasDecl referenced CA 'const int[2]'
+|-FunctionDecl f 'int ()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ExprWithCleanups 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-ArraySubscriptExpr 'const int' xvalue
+|           |-ImplicitCastExpr 'const int *' <ArrayToPointerDecay>
+|           | `-MaterializeTemporaryExpr 'CA':'const int[2]' xvalue
+|           |   `-CXXFunctionalCastExpr 'CA':'const int[2]' functional cast to CA <NoOp>
+|           |     `-InitListExpr 'CA':'const int[2]'
+|           |       |-IntegerLiteral 'int' 1
+|           |       `-IntegerLiteral 'int' 2
+|           `-IntegerLiteral 'int' 1
+|-CXXRecordDecl referenced struct D definition
+| `-CXXDestructorDecl used ~D 'void () noexcept'
+|-TypeAliasDecl referenced CD 'const D[2]'
+|-FunctionDecl g 'void ()'
+| `-CompoundStmt
+|   `-ExprWithCleanups 'void'
+|     `-CStyleCastExpr 'void' <ToVoid>
+|       `-CXXFunctionalCastExpr 'CD':'const D[2]' functional cast to CD <NoOp>
+|         `-CXXBindTemporaryExpr 'CD':'const D[2]' (CXXTemporary)
+|           `-InitListExpr 'CD':'const D[2]'
+|             `-array_filler: InitListExpr 'const D'
+|-FunctionDecl used constexpr h 'int ()' implicit-inline
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ExprWithCleanups 'int'
+|       `-ImplicitCastExpr 'int' <LValueToRValue>
+|         `-ArraySubscriptExpr 'const int' xvalue
+|           |-ImplicitCastExpr 'const int *' <ArrayToPointerDecay>
+|           | `-MaterializeTemporaryExpr 'CA':'const int[2]' xvalue
+|           |   `-CXXFunctionalCastExpr 'CA':'const int[2]' functional cast to CA <NoOp>
+|           |     `-InitListExpr 'CA':'const int[2]'
+|           |       |-IntegerLiteral 'int' 3
+|           |       `-IntegerLiteral 'int' 4
+|           `-IntegerLiteral 'int' 0
+`-StaticAssertDecl
+  `-BinaryOperator 'bool' '=='
+    |-CallExpr 'int'
+    | `-ImplicitCastExpr 'int (*)()' <FunctionToPointerDecay>
+    |   `-DeclRefExpr 'int ()' lvalue Function 'h' 'int ()'
+    `-IntegerLiteral 'int' 3
