@@ -167,8 +167,14 @@ impl SyntaxJob<'_> {
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
-        let (tu, _pp) =
+        let (tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        if verify.is_some() {
+            // The parser stops at a fatal error; clang's preprocessor lexes
+            // on to the end (its diagnostics suppressed), so every comment
+            // still reaches the verifier (spec/driver.md "-verify").
+            while !pp.next().is_eof() {}
+        }
         a.constexpr.write_report(&tu.oven, sm, engine);
         if !tu.inst_report.is_empty() {
             engine.flush();
