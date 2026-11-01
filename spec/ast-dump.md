@@ -530,10 +530,13 @@ address, the JSON names only the `LabelDecl` id, which the normalizer
 resolves through the `LabelStmt`), and `AttributedStmt` for
 `[[assume(e)]]`: its children are the `CXXAssumeAttr`s (each with the
 assumption as its child) then the statement. `asm goto` labels are not
-children of the `GCCAsmStmt`, as in clang's text dump. Other statement
-attributes are not yet kept (kiln drops them; the normalizer rejects
-their `Attr` kinds). `tests/conformance/ast/stmt.label/`,
-`tests/conformance/ast/dcl.attr.assume/`.
+children of the `GCCAsmStmt`, as in clang's text dump. **WP-182**
+keeps `[[likely]]`, `[[unlikely]]` and `[[fallthrough]]` too
+(`LikelyAttr`, `UnlikelyAttr`, `FallThroughAttr`, without children).
+Other statement attributes are not yet kept (kiln drops them; the
+normalizer rejects their `Attr` kinds). `tests/conformance/ast/stmt.label/`,
+`tests/conformance/ast/dcl.attr.assume/`,
+`tests/conformance/ast/dcl.attr.likelihood/`.
 
 ## 6. Differential testing against clang
 `cargo xtask clang-ast <file> [--compiler=] [--std=] [--implicit]

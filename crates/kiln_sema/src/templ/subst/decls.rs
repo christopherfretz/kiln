@@ -279,7 +279,12 @@ impl Substituter<'_, '_, '_> {
             return Ok(());
         };
         let style = data.spec.init_style();
-        if let Ok(i) = self.initializer(init, style) {
+        // A lambda in the initializer is numbered in `v`'s context
+        // (spec/sema-lambda.md; clang `TemplatedVariable`).
+        let saved = self.sema.lambda_mangle.var.replace(v);
+        let i = self.initializer(init, style);
+        self.sema.lambda_mangle.var = saved;
+        if let Ok(i) = i {
             match i {
                 Some(i) => self.sema.act_on_init(v, i),
                 None => self.sema.act_on_uninit(v),
@@ -541,6 +546,13 @@ impl Substituter<'_, '_, '_> {
             // Recovery declared something else (an invalid redeclaration).
             return Ok(r);
         }
+        // The pattern's attributes (`const`, `pure`, `[[noreturn]]`,
+        // `[[nodiscard]]`, ...), as clang `InitFunctionInstantiation` →
+        // `InstantiateAttrs` (WP-182). A friend may redeclare a function
+        // that has its own.
+        if friend.is_none() {
+            self.class_attrs(f, d);
+        }
         if lazy_exc {
             let first = self.sema.ast.first(f);
             self.sema.uninstantiated_exc.insert(first, d);
@@ -641,6 +653,9 @@ impl Substituter<'_, '_, '_> {
         let _ = self.sema.builder().set_params(spec, &ids);
         self.forget_pattern_params(pat);
         self.defer_default_args(pat, spec);
+        // The pattern's attributes (clang `InitFunctionInstantiation` →
+        // `InstantiateAttrs`; WP-182).
+        self.class_attrs(spec, pat);
         Ok(())
     }
 

@@ -1,0 +1,48 @@
+Dumping f:
+FunctionDecl f 'void (int)'
+|-ParmVarDecl used n 'int'
+`-CompoundStmt
+  |-DeclStmt
+  | `-VarDecl a 'S[2][3]' parenlistinit
+  |   `-CXXParenListInitExpr 'S[2][3]'
+  |     |-array_filler: CXXConstructExpr 'S[3]' 'void ()'
+  |     `-InitListExpr 'S[3]'
+  |       |-array_filler: CXXConstructExpr 'S' 'void ()' list
+  |       `-CXXFunctionalCastExpr 'S' functional cast to S <ConstructorConversion>
+  |         `-CXXConstructExpr 'S' 'void (int)'
+  |           `-IntegerLiteral 'int' 1
+  |-DeclStmt
+  | `-VarDecl b 'T[2][2]' parenlistinit
+  |   `-CXXParenListInitExpr 'T[2][2]'
+  |     |-array_filler: CXXConstructExpr 'T[2]' 'void () noexcept' zeroing
+  |     `-InitListExpr 'T[2]'
+  |       |-array_filler: InitListExpr 'T'
+  |       | `-ImplicitValueInitExpr 'int'
+  |       `-CXXFunctionalCastExpr 'T' functional cast to T <NoOp>
+  |         `-InitListExpr 'T'
+  |           `-IntegerLiteral 'int' 1
+  |-DeclStmt
+  | `-VarDecl c 'int[2][2]' parenlistinit
+  |   `-CXXParenListInitExpr 'int[2][2]'
+  |     |-array_filler: ImplicitValueInitExpr 'int[2]'
+  |     `-InitListExpr 'int[2]'
+  |       |-IntegerLiteral 'int' 1
+  |       `-IntegerLiteral 'int' 2
+  |-DeclStmt
+  | `-VarDecl d 'D' parenlistinit
+  |   `-CXXParenListInitExpr 'D'
+  |     |-IntegerLiteral 'int' 1
+  |     `-CXXConstructExpr 'S[2]' 'void ()'
+  `-CStyleCastExpr 'void' <ToVoid>
+    `-CXXNewExpr 'S (*)[2]' array Function 'operator new[]' 'void *(unsigned long)'
+      |-ImplicitCastExpr 'unsigned long' <IntegralCast>
+      | `-ImplicitCastExpr 'int' <LValueToRValue>
+      |   `-DeclRefExpr 'int' lvalue ParmVar 'n' 'int'
+      `-CXXParenListInitExpr 'S[1][2]'
+        |-array_filler: CXXConstructExpr 'S[2]' 'void ()'
+        `-InitListExpr 'S[2]'
+          |-array_filler: CXXConstructExpr 'S' 'void ()' list
+          `-CXXFunctionalCastExpr 'S' functional cast to S <ConstructorConversion>
+            `-CXXConstructExpr 'S' 'void (int)'
+              `-IntegerLiteral 'int' 4
+

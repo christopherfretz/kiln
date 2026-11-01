@@ -34,6 +34,21 @@ fn takes_expr_args(name: &str) -> bool {
     )
 }
 
+/// True for the standard attributes that take no argument list
+/// (clang `IsBuiltInOrStandardCXX11Attribute` with no arguments).
+fn forbids_args(name: &str) -> bool {
+    matches!(
+        name,
+        "carries_dependency"
+            | "fallthrough"
+            | "noreturn"
+            | "no_unique_address"
+            | "likely"
+            | "unlikely"
+            | "maybe_unused"
+    )
+}
+
 impl Parser<'_, '_> {
     /// True at `[[`.
     pub(crate) fn at_cxx11_attr(&self) -> bool {
@@ -187,8 +202,17 @@ impl Parser<'_, '_> {
                 name = n;
                 self.bump();
             }
-            let args = if scope.is_none() && self.s.ast.symbols().as_str(name) == "assume" {
+            let text = self.s.ast.symbols().as_str(name).to_owned();
+            let args = if scope.is_none() && text == "assume" {
                 self.parse_assume_arg(name)
+            } else if scope.is_none() && self.at(Punct::LParen) && forbids_args(&text) {
+                // clang `ParseCXX11AttributeArgs`: a standard attribute
+                // without arguments takes no argument list, even `()`.
+                let d =
+                    self.s.diag(DiagId::parse_attribute_forbids_arguments, self.loc()).arg(text);
+                self.emit(d);
+                self.parse_attr_args(name);
+                None
             } else {
                 self.parse_attr_args(name)
             };
@@ -200,7 +224,14 @@ impl Parser<'_, '_> {
             {
                 out.push(a);
             }
-            if !self.at(Punct::Comma) {
+            // clang `ParseCXX11AttributeSpecifierInternal`: anything but
+            // `]` after an attribute is "expected ','" (after the previous
+            // token), then skip to the `]` without consuming it.
+            if self.at(Punct::RSquare) || self.at_eof() {
+                break;
+            }
+            if self.expect(Punct::Comma).is_none() {
+                self.skip_until(&[Punct::RSquare], true, false);
                 break;
             }
         }

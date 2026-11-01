@@ -170,10 +170,17 @@ fn lib_attrs(b: u32, out: &mut Vec<Attr>) {
 /// attribute on some declaration of `d` gives its declaration and call
 /// sites (clang `ConstructAttributeList`: `nounwind willreturn` plus
 /// `memory(none)` / `memory(read)`); none for a builtin, whose
-/// [`lib_attrs`] already say so. Returns whether it added any. A GNU
+/// [`lib_attrs`] already say so. A return or argument passed by
+/// address (`sig`) adds `argmem: readwrite` (clang
+/// `AddPotentialArgAccess`). Returns whether it added any. A GNU
 /// `cold` / `hot` attribute adds `cold` / `hot` the same way (WP-172);
 /// it does not count toward the result.
-pub(crate) fn const_pure_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) -> bool {
+pub(crate) fn const_pure_attrs(
+    ast: &Ast,
+    d: DeclId,
+    sig: &crate::module::Sig,
+    out: &mut Vec<Attr>,
+) -> bool {
     if ast.decls.builtin_id(d).is_some() {
         return false;
     }
@@ -192,8 +199,12 @@ pub(crate) fn const_pure_attrs(ast: &Ast, d: DeclId, out: &mut Vec<Attr>) -> boo
     } else {
         return false;
     };
+    let mut effects = MemoryEffects::all(mem);
+    if sig.passes_indirect() {
+        effects.argmem = ModRef::ReadWrite;
+    }
     out.push(Attr::Flag(AttrKind::WillReturn));
-    out.push(Attr::Memory(MemoryEffects::all(mem)));
+    out.push(Attr::Memory(effects));
     true
 }
 

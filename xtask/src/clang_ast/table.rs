@@ -194,10 +194,14 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("LabelStmt", Keep),
     ("GotoStmt", Keep),
     ("IndirectGotoStmt", Unsupported(NOT_M2)),
-    // Only `[[assume]]` is kept on a statement (WP-160); another statement
-    // attribute is unsupported by its own kind.
+    // `[[assume]]` (WP-160), `[[likely]]`, `[[unlikely]]` and
+    // `[[fallthrough]]` (WP-182) are kept on a statement; another
+    // statement attribute is unsupported by its own kind.
     ("AttributedStmt", Keep),
     ("CXXAssumeAttr", Keep),
+    ("LikelyAttr", Keep),
+    ("UnlikelyAttr", Keep),
+    ("FallThroughAttr", Keep),
     ("CXXTryStmt", Keep),
     ("CXXCatchStmt", Keep),
     ("GCCAsmStmt", Keep),
@@ -460,7 +464,8 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "WhileStmt" => &["hasVar"],
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
         | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXForRangeStmt" | "CXXTryStmt"
-        | "CXXCatchStmt" | "GCCAsmStmt" | "AttributedStmt" | "CXXAssumeAttr" => &[],
+        | "CXXCatchStmt" | "GCCAsmStmt" | "AttributedStmt" | "CXXAssumeAttr" | "LikelyAttr"
+        | "UnlikelyAttr" | "FallThroughAttr" => &[],
         "LabelStmt" => &["name", "declId"],
         "GotoStmt" => &["targetLabelDeclId"],
         _ => return None,
@@ -599,6 +604,10 @@ pub const M2_KINDS: &[&str] = &[
     "GotoStmt",
     "AttributedStmt",
     "CXXAssumeAttr",
+    // Likelihood and fallthrough statement attributes (WP-182).
+    "LikelyAttr",
+    "UnlikelyAttr",
+    "FallThroughAttr",
     // Predefined identifiers (WP-140).
     "PredefinedExpr",
     "IntegerLiteral",

@@ -1590,6 +1590,21 @@ diag_ids! {
     sema_field_designator_unknown = Error (2) "field designator '{0}' does not refer to any field in type {1}";
     sema_field_designator_non_record = Error (1) "field designator cannot initialize a non-class type {0}";
     sema_array_designator_non_array = Error (1) "array designator cannot initialize non-array type {0}";
+    // [dcl.init.general]/16 (WP-182)
+    sema_list_init_in_parens = Error (2) "cannot initialize {0:non-class|reference} type {1} with a parenthesized initializer list";
+    // [dcl.attr.likelihood], [dcl.attr.fallthrough] (WP-182)
+    ext_cxx17_attr = Extension [Cxx17AttributeExtensions] (1) "use of the '{0}' attribute is a C++17 extension";
+    ext_cxx20_attr = Extension [Cxx20AttributeExtensions] (1) "use of the '{0}' attribute is a C++20 extension";
+    sema_attributes_not_compatible = Error (2) "'{0}' and '{1}' attributes are not compatible";
+    note_conflicting_attribute = Note (0) "conflicting attribute is here";
+    sema_likelihood_if_conflict = Warning [IgnoredAttributes] (1) "conflicting attributes '{0}' are ignored";
+    sema_fallthrough_outside_switch = Error (0) "fallthrough annotation is outside switch statement";
+    parse_attribute_forbids_arguments = Error (1) "attribute '{0}' cannot have an argument list";
+    // [expr.comma] -Wunused-value (WP-182)
+    sema_unused_comma_left_operand = Warning [UnusedValue] (0) "left operand of comma operator has no effect";
+    sema_unused_call = Warning [UnusedValue] (1) "ignoring return value of function declared with {0} attribute";
+    note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
+    note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
 }
 
 impl DiagId {

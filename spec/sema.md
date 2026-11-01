@@ -380,8 +380,50 @@ Redeclaration and linkage rules:
     dependent assumption, and codegen and the oven skip those.
   - A dependent assumption is converted and checked again on
     instantiation (`templ/subst/stmts.rs`).
-  - Not kept yet: `likely`/`unlikely`/`fallthrough` in the
-    `AttributedStmt`.
+- **`[[likely]]`, `[[unlikely]]`, `[[fallthrough]]`**
+  ([dcl.attr.likelihood], [dcl.attr.fallthrough]; WP-182, `stmt.rs`
+  `act_on_attributed_stmt`). They are kept in the same `AttributedStmt`
+  (clang `ProcessStmtAttributes`), in written order:
+  - On a declaration: `'likely' attribute cannot be applied to a
+    declaration` (each name).
+  - `fallthrough` on a statement that is not null: `'fallthrough'
+    attribute only applies to empty statements`; outside a switch of the
+    current function (a lambda body has its own): `fallthrough annotation
+    is outside switch statement` (clang `handleFallThroughAttr`, checked
+    in a template definition). Whether it directly precedes a case label
+    (`fallthrough annotation does not directly precede switch label`) is
+    clang's CFG analysis and is not checked.
+  - A `likely` after an `unlikely` (or the reverse) in the same
+    sequence: `'unlikely' and 'likely' attributes are not compatible` at
+    the second, with `note: conflicting attribute is here` at the first;
+    the second is dropped.
+  - `-pedantic` before C++17 (`fallthrough`) or C++20 (`likely`,
+    `unlikely`): `use of the 'x' attribute is a C++17/C++20 extension`
+    (`-Wc++17-attribute-extensions`, `-Wc++20-attribute-extensions`,
+    not under `-Wc++NN-extensions`). Under `[[clang::fallthrough]]`
+    the scope is not recorded, so the C++17 extension warns for it too
+    (clang does not).
+  - `act_on_if`: both branches `AttributedStmt`s with the same
+    likelihood warn `conflicting attributes 'likely' are ignored`
+    (`-Wignored-attributes`) at the then-branch attribute, with the
+    note at the else-branch one. As clang's `Diags.Report`, it goes
+    straight to the engine (`allow_duplicate`, no instantiation notes),
+    so each instantiation repeats it.
+  - Instantiation keeps these attributes unchanged
+    (`templ/subst/stmts.rs`); they are not checked again.
+  - The parser rejects an argument list on a standard attribute that
+    takes none (`carries_dependency`, `fallthrough`, `noreturn`,
+    `no_unique_address`, `likely`, `unlikely`, `maybe_unused`, even
+    `()`): `attribute 'likely' cannot have an argument list` at the `(`,
+    and drops the attribute (clang `ParseCXX11AttributeArgs`).
+  - Codegen ignores them: clang 19 consults likelihood only when
+    optimizing (no `!prof` weights or `llvm.expect` at `-O0`;
+    `tests/codegen/likelihood_attrs.cpp`). The oven evaluates an
+    `AttributedStmt` as its statement with one step, and a switch body
+    child that is an `AttributedStmt` directly on a `case`/`default`
+    label (`[[likely]] case 1:`) is a link in the label chain
+    (`attributed_label`), charging its step on the way in, as clang's
+    `EvaluateStmt`.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 
@@ -1260,6 +1302,28 @@ for them.
   class is `[[nodiscard]]` (`ignoring temporary created by a constructor
   declared with 'nodiscard' attribute[: msg]`, -Wunused-value). A braced
   or scalar functional cast warns `expression result unused`.
+  - `emit_unused` (WP-182) follows clang's order: a comparison is
+    `-Wunused-comparison` only when it is the unused expression itself
+    (`top_comparison`: not parenthesized, not a comma's right operand or
+    a conditional's arm, which are `expression result unused`); an `==`
+    / `!=` (built-in or overloaded) whose left operand is an lvalue (not
+    a materialized temporary) adds the note `use '=' to turn this
+    equality comparison into an assignment` / `use '|=' to turn this
+    inequality comparison into an or-assignment`. A call to a `pure` or
+    `const` function with a non-`void` result warns `ignoring return
+    value of function declared with pure|const attribute` [-Wunused-value]
+    at the call's start. Nothing but `nodiscard` is diagnosed for an
+    expression spelled in a macro body (clang `ShouldSuppress`).
+  - **Comma (WP-182)**: the left operand of a built-in comma is checked
+    the same way when the comma is built (clang `CheckCommaOperands`),
+    with the generic warning spelled `left operand of comma operator has
+    no effect` [-Wunused-value] (not in a SFINAE context). Nothing is
+    checked in an unevaluated operand or for a type-dependent operand
+    (it is checked on instantiation, with the instantiation note), and
+    an `[[assume(...)]]` argument is checked like any other expression.
+  - Unlike clang, the warnings are emitted at once, not deferred to the
+    end of the function and dropped when unreachable (`DiagIfReachable`),
+    and a macro-argument location gets no `expanded from macro` note.
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
@@ -1961,7 +2025,10 @@ it needs two things:
 
 That is an ABI-free, preprocessor-wide change with no effect on codegen.
 The `!srcloc` value only labels inline-asm backend diagnostics, so it is
-left for a pp/source WP.
+left for a pp/source WP. WP-182 re-evaluated this: kiln_source and
+kiln_pp still have no clang-compatible offset space (expansions are
+recorded per `ExpansionInfo`, not as a running offset), so the deferral
+stands.
 
 ### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
 `act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing
