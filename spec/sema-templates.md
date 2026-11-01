@@ -284,6 +284,7 @@ All of these are built by sema actions, which compute dependence as in
 | `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
+| unqualified `operator@(args)` / `operator T(args)` (an operator- or conversion-function-id as the callee) whose lookup finds nothing ([temp.dep.general]/2, [basic.lookup.argdep]/1) | an empty `UnresolvedLookupExpr` with `requires_adl`, as for an undeclared `f(args)` (`Sema::act_on_id_expression_dn` while `deferring_call_ref`); ADL at the call or at instantiation, and no candidate is clang's `use of undeclared 'operator@'` (`sema_undeclared_use`) |
 | `obj.f(args)` that names an overload set of members | `UnresolvedMemberExpr` |
 | `a op b` with a type-dependent operand | `CXXOperatorCallExpr` whose callee is an `UnresolvedLookupExpr` holding the operator functions found by unqualified lookup at definition ([temp.dep.candidate]); if none are found, a `BinaryOperator`/`UnaryOperator` of dependent type (clang) |
 | `typename T::type` | `DependentName` type (canonical keyword `typename`, types.md §18) |

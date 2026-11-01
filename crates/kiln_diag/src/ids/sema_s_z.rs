@@ -116,6 +116,7 @@ sema_udl_no_operator = Error (2) "no matching literal operator for call to {0} w
 sema_udl_no_operator_raw = Error (3) "no matching literal operator for call to {0} with argument of type {1} or {2}, and no matching literal operator template";
 sema_udl_no_operator_string = Error (3) "no matching literal operator for call to {0} with arguments of types {1} and {2}, and no matching literal operator template";
 sema_undeclared_label = Error (1) "use of undeclared label '{0}'";
+sema_undeclared_use = Error (1) "use of undeclared '{0}'";
 sema_undeclared_var_use = Error (1) "use of undeclared identifier '{0}'";
 // ----- WP-220 (-Wundefined-var-template; clang `InstantiateVariableDefinition`)
 sema_undefined_var_template = Warning [UndefinedVarTemplate] (1) "instantiation of variable '{0}' required here, but no definition is available";
