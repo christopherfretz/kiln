@@ -14,7 +14,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, VarStorage};
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{RecordLayout, TypeView};
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::Diag;
 use kiln_oven::{Oven, SemaBridge, Subobject, SubobjectId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -58,6 +58,13 @@ impl SemaBridge for Bridge<'_> {
         kiln_abi::ensure_layout(&mut *self.ast, record, self.abi)
     }
 
+    // A vector's size and alignment: the Oven lays out its lanes inside
+    // them (WP-173).
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32) {
+        let l = kiln_abi::type_size_align(self.ast, ty, self.abi);
+        (l.size, u32::try_from(l.align).unwrap_or(1))
+    }
+
     fn final_overrider(
         &mut self,
         most_derived: DeclId,
@@ -78,6 +85,12 @@ impl SemaBridge for Bridge<'_> {
     }
 
     fn diag(&mut self, _d: Diag) {}
+
+    fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
+        // The `_ZGR` global of a constant-initialized reference holds the
+        // value (write-once, as sema's bridge).
+        let _ = self.ast.decls.set_lifetime_extended_value(t, v);
+    }
 }
 
 /// Folds every candidate expression of the translation unit.

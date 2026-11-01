@@ -5,7 +5,9 @@ use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::BitFieldInfo;
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, VarStorage};
-use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCategory};
+use kiln_ast::expr::{
+    BinaryOp, CastKind, ExprFlags, ExprKind, StorageDuration, UnaryOp, ValueCategory,
+};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
@@ -24,6 +26,17 @@ use crate::module::{Cg, R, Sig, err, gval};
 pub(crate) enum Opaque {
     Rv(Option<V>),
     Lv(LV),
+}
+
+/// The callee of [`Cg::call_vals_to`] (clang `CGCallee`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Callee {
+    /// A function pointer already computed.
+    Value(V),
+    /// Virtual method `md` of the object at `this` (alignment `align`):
+    /// its vtable slot is loaded after the arguments are lowered
+    /// (clang `CGCallee::forVirtual`).
+    Virtual { md: DeclId, this: V, align: u64 },
 }
 
 /// An lvalue: an address, its source type and the bit-field access.
@@ -1220,6 +1233,11 @@ impl Cg<'_> {
 
     /// clang `VisitAbstractConditionalOperator`.
     fn emit_conditional(&mut self, c: ExprId, a: ExprId, b: ExprId) -> R<Option<V>> {
+        if let kiln_ast::types::TypeView::Vector { kind, .. } =
+            self.ast.types.canonical_view(self.ast.exprs.get(c).ty())
+        {
+            return self.emit_vector_conditional(c, a, b, kind).map(Some);
+        }
         if let Some(x) = self.fold_bool(c) {
             return self.emit_scalar_opt(if x { a } else { b });
         }
@@ -1254,6 +1272,78 @@ impl Cg<'_> {
             (x, None) => x,
             (None, y) => y,
         })
+    }
+
+    /// clang `VisitAbstractConditionalOperator` with a vector condition:
+    /// all three operands are evaluated; an ext vector condition selects
+    /// by each lane's sign bit through masks (`(f & ~m) | (t & m)`, float
+    /// lanes bit-cast to the condition's type), a GNU vector condition by
+    /// lane `!= 0` through a `select`.
+    fn emit_vector_conditional(
+        &mut self,
+        c: ExprId,
+        a: ExprId,
+        b: ExprId,
+        kind: kiln_ast::types::VectorKind,
+    ) -> R<V> {
+        let cv = self.emit_scalar(c)?;
+        let x = self.emit_scalar(a)?;
+        let y = self.emit_scalar(b)?;
+        let ct = self.f.fir.ty(&self.m, cv);
+        let zero = V::C(self.m.const_zero(ct));
+        if kind != kiln_ast::types::VectorKind::Ext {
+            let m = self.icmp(IntPredicate::Ne, cv, zero);
+            return Ok(self.select(m, x, y));
+        }
+        if self.m.types.vector_info(ct).is_some_and(|(et, _, _)| et == LTy::I1) {
+            return err(None, "conditionals on bool vectors are not supported yet (M4)");
+        }
+        let msb = self.icmp(IntPredicate::Slt, cv, zero);
+        let mask = self.cast(CastOp::SExt, msb, ct);
+        let ones = self.icn(ct, -1);
+        let inv = self.bin(BinOp::Xor, Flags::NONE, mask, ones);
+        let rt = self.f.fir.ty(&self.m, y);
+        let float = self.is_float_ty(rt);
+        let (xt, yt) = if float {
+            let yt = self.bitcast_fold(y, ct);
+            (self.bitcast_fold(x, ct), yt)
+        } else {
+            (x, y)
+        };
+        let lo = self.bin(BinOp::And, Flags::NONE, yt, inv);
+        let hi = self.bin(BinOp::And, Flags::NONE, xt, mask);
+        let r = self.bin(BinOp::Or, Flags::NONE, lo, hi);
+        Ok(if float { self.cast(CastOp::BitCast, r, rt) } else { r })
+    }
+
+    /// A bitcast of `v` to the integer vector type `to`, folded (as by
+    /// LLVM's `ConstantFolder`) when `v` is a constant float vector.
+    fn bitcast_fold(&mut self, v: V, to: LTy) -> V {
+        if let V::C(c) = v
+            && let Some((et, _, _)) = self.m.types.vector_info(to)
+        {
+            match self.m.const_of(c) {
+                Some(ConstData::Zero(_)) => return V::C(self.m.const_zero(to)),
+                Some(ConstData::Vector { elems, .. }) => {
+                    let bits: Option<Vec<u128>> = elems
+                        .iter()
+                        .map(|&x| match self.m.const_of(x) {
+                            Some(ConstData::Float { bits, .. }) => Some(*bits),
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(bits) = bits {
+                        let ints: Vec<Value> =
+                            bits.iter().map(|&b| self.m.const_int(et, b as i128)).collect();
+                        if let Ok(r) = self.m.const_vector(&ints) {
+                            return V::C(r);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.cast(CastOp::BitCast, v, to)
     }
 
     /// clang `EmitCompoundAssignLValue`: the lvalue and the stored value.
@@ -1552,7 +1642,15 @@ impl Cg<'_> {
                 let s =
                     if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
                 let sq = ast.exprs.get(s).ty();
-                let tmp = self.temp(sq);
+                // [class.temporary]/6: a temporary bound to a reference
+                // with static storage duration is a `_ZGR` global.
+                let static_tmp = n.kind() == ExprKind::MaterializeTemporaryExpr
+                    && ast.exprs.temporary_storage(e) == StorageDuration::Static;
+                let (tmp, needs_init) =
+                    if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
+                if !needs_init {
+                    return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
+                }
                 if self.is_aggregate(sq) {
                     // clang `EmitAnyExprToMem`: a materialized temporary is
                     // a `MayOverlap` slot, which only a constructor call or
@@ -1580,7 +1678,9 @@ impl Cg<'_> {
                     let v = self.emit_scalar(s)?;
                     self.store_scalar(v, tmp, sq);
                 }
-                if n.kind() == ExprKind::MaterializeTemporaryExpr {
+                if static_tmp {
+                    self.register_temporary_dtor(e, tmp)?;
+                } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
                     self.push_temporary_cleanup(e, tmp);
                 }
                 Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
@@ -1766,6 +1866,16 @@ impl Cg<'_> {
             return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None, vidx: None });
         }
         self.field_lvalue_init(base, field, q)
+    }
+
+    /// The lvalue an aggregate initializer stores to: a reference member's
+    /// own slot (to bind), any other field as `field_lvalue` (bit-fields).
+    fn init_field_lvalue(&mut self, base: Addr, field: DeclId, q: QualType) -> R<LV> {
+        if self.referee(q).is_some() {
+            self.field_lvalue_init(base, field, q)
+        } else {
+            self.field_lvalue(base, field, q)
+        }
     }
 
     /// The storage of field `field` of the object at `base` (a reference
@@ -1996,6 +2106,24 @@ impl Cg<'_> {
                     // copied (clang `EmitAggFinalDestCopy`).
                     return self.emit_va_arg(e, None).map(|_| ());
                 }
+                // clang `AggExprEmitter::withReturnValueSlot`: an ignored
+                // slot gives the call no address, so `EmitCall` makes its
+                // `sret`/coerce temporary after the arguments' `agg.tmp`s.
+                let mut c = e;
+                while ast.exprs.get(c).kind() == ExprKind::ParenExpr {
+                    c = ast.exprs.operand(c);
+                }
+                match ast.exprs.get(c).kind() {
+                    ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
+                        self.emit_call(c, None)?;
+                        return Ok(());
+                    }
+                    ExprKind::CXXMemberCallExpr => {
+                        self.emit_member_call(c, None)?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
             }
@@ -2110,7 +2238,13 @@ impl Cg<'_> {
             }
             noreturn = unreachable;
         }
-        let r = self.call_with(&sig, callee, fid, None, &args, dest, &extra)?;
+        let vals = self.emit_call_args(&sig, &args)?;
+        let mut ret_extra = Vec::new();
+        if let Some(d) = direct {
+            self.alloc_call_attrs(d, &vals, &mut extra, &mut ret_extra);
+        }
+        let r =
+            self.call_vals_ret(&sig, callee, fid, None, &vals, &args, dest, &extra, &ret_extra)?;
         if noreturn {
             self.finish_noreturn_call();
         }
@@ -2211,6 +2345,43 @@ impl Cg<'_> {
         dest: Option<Addr>,
         extra: &[Attr],
     ) -> R<Option<V>> {
+        self.call_vals_to(sig, Callee::Value(callee), fid, this, vals, args, dest, extra, &[])
+    }
+
+    /// [`Self::call_vals`] with extra return attributes `ret_extra`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_vals_ret(
+        &mut self,
+        sig: &Sig,
+        callee: V,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        vals: &[CallArg],
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+        ret_extra: &[Attr],
+    ) -> R<Option<V>> {
+        self.call_vals_to(sig, Callee::Value(callee), fid, this, vals, args, dest, extra, ret_extra)
+    }
+
+    /// [`Self::call_vals_ret`] with a callee that may be computed only after
+    /// the arguments are lowered (clang `EmitCall` step 2,
+    /// `prepareConcreteCallee`: a virtual call loads its vtable slot after
+    /// the argument coercions).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_vals_to(
+        &mut self,
+        sig: &Sig,
+        callee: Callee,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        vals: &[CallArg],
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+        ret_extra: &[Attr],
+    ) -> R<Option<V>> {
         self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
         let rq = sig.ret;
         let mut ir_args = Vec::new();
@@ -2246,6 +2417,10 @@ impl Cg<'_> {
             let loc = args.get(i).and_then(|&a| self.loc_of(a));
             self.call_arg(&kind, sig.params[i], v, &mut ir_args, loc)?;
         }
+        let callee = match callee {
+            Callee::Value(v) => v,
+            Callee::Virtual { md, this, align } => self.virtual_fn_ptr(md, None, this, align)?,
+        };
         let rty = match &sig.info.ret.kind {
             ArgKind::Direct { coerce, .. } | ArgKind::Extend { coerce, .. } => {
                 let c = coerce.clone();
@@ -2253,7 +2428,12 @@ impl Cg<'_> {
             }
             _ => LTy::VOID,
         };
-        let (ret, params) = self.sig_attrs(sig, vals.len(), false);
+        let (mut ret, params) = self.sig_attrs(sig, vals.len(), false);
+        if !ret_extra.is_empty() {
+            let mut ra = self.m.attrs_of(ret).to_vec();
+            ra.extend(ret_extra.iter().cloned());
+            ret = self.m.attr_set(&ra);
+        }
         let func = if sig.nothrow {
             let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
             fa.extend(extra.iter().cloned());
@@ -2597,6 +2777,27 @@ impl Cg<'_> {
                 self.ensure_insert_point();
                 self.agg_visit(r, dest, zeroed)
             }
+            // clang `AggExprEmitter::VisitAbstractConditionalOperator`: each
+            // arm initializes the destination in its own block.
+            ExprKind::ConditionalOperator => {
+                let [a, b] = ast.exprs.cond_arms(e);
+                let c = self.sub(e);
+                if let Some(x) = self.fold_bool(c) {
+                    return self.agg_visit(if x { a } else { b }, dest, zeroed);
+                }
+                let lb = self.f.fir.create_block();
+                let rb = self.f.fir.create_block();
+                let cont = self.f.fir.create_block();
+                let start = self.f.fir.cur();
+                self.branch_on_bool(c, lb, rb)?;
+                self.emit_block(lb, false);
+                self.cond_eval(start, |cg| cg.agg_visit(a, dest, zeroed))?;
+                self.br(cont);
+                self.emit_block(rb, false);
+                self.cond_eval(start, |cg| cg.agg_visit(b, dest, zeroed))?;
+                self.emit_block(cont, false);
+                Ok(())
+            }
             ExprKind::StringLiteral => {
                 // A literal initializing a (possibly longer) char array:
                 // copy from the literal's constant padded to the array.
@@ -2726,6 +2927,13 @@ impl Cg<'_> {
         if matches!(k, ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr) {
             return self.null_init_lvalue(lv, zeroed);
         }
+        if lv.bf.is_none() && self.referee(lv.q).is_some() {
+            // A reference member binds to its initializer's address
+            // (clang `EmitInitializationToLValue`, reference case).
+            let p = self.emit_ref_binding(e)?;
+            self.store(p, lv.addr.v, lv.addr.align, false);
+            return Ok(());
+        }
         if lv.bf.is_none() && self.ast.types.as_atomic(lv.q).is_some() {
             // clang `EmitAtomicInit` (WP-165).
             return self.atomic_init(e, lv);
@@ -2823,7 +3031,7 @@ impl Cg<'_> {
         if is_union {
             let Some(f) = union_field else { return Ok(()) };
             let fq = ast.decls.get(f).ty().expect("field type");
-            let lv = self.field_lvalue(base, f, fq)?;
+            let lv = self.init_field_lvalue(base, f, fq)?;
             return match inits.first() {
                 Some(&i) => self.init_to_lvalue(i, lv, zeroed),
                 None => self.null_init_lvalue(lv, zeroed),
@@ -2874,7 +3082,7 @@ impl Cg<'_> {
                 break;
             }
             let fq = ast.decls.get(f).ty().expect("field type");
-            let lv = self.field_lvalue(base, f, fq)?;
+            let lv = self.init_field_lvalue(base, f, fq)?;
             if k < inits.len() {
                 self.init_to_lvalue(inits[k], lv, zeroed)?;
                 k += 1;
@@ -3133,8 +3341,8 @@ impl Cg<'_> {
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
         match v.spec.storage() {
             VarStorage::Static => {
-                self.static_local(d)?;
-                return Ok(());
+                let g = self.static_local(d)?;
+                return self.static_local_init(d, g);
             }
             VarStorage::Extern => return Ok(()),
             _ => {}
@@ -3194,7 +3402,13 @@ impl Cg<'_> {
     }
 
     /// clang `EmitAutoVarInit` for variable `d` of type `q` at `addr`.
-    fn emit_var_init(&mut self, d: DeclId, q: QualType, addr: Addr, init: ExprId) -> R<()> {
+    pub(crate) fn emit_var_init(
+        &mut self,
+        d: DeclId,
+        q: QualType,
+        addr: Addr,
+        init: ExprId,
+    ) -> R<()> {
         let ast = self.ast;
         if self.referee(q).is_some() {
             // A reference binds the address of its initializer glvalue.

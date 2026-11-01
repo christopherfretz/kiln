@@ -37,6 +37,7 @@ impl Substituter<'_, '_, '_> {
     /// checks.
     fn chunk(&mut self, base: QualType, chunk: Chunk, loc: Loc) -> SubstResult<QualType> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, loc);
+        d.site = crate::declspec::DeclSite::Subst;
         d.name = self.declarator_name;
         d.chunks.push(chunk);
         let t = self.sema.type_for_declarator_at(base, loc, &d);
@@ -274,6 +275,9 @@ impl Substituter<'_, '_, '_> {
                     return Err(SubstFail);
                 }
                 self.sema.mark_type_referenced(d);
+                // [class.access]/4, [temp.deduct.general]/8: checked now,
+                // a substitution failure in a SFINAE context.
+                self.sema.check_found_access(&found, loc);
                 let t = self.decl_type(d);
                 // The keyword is kept as written (clang: `typename S::type`).
                 Ok(self.sema.ast.types.elaborated(keyword, Some(n), t))

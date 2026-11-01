@@ -1796,6 +1796,27 @@ impl Sema<'_, '_> {
         if self.undeduced_ctad(ty).is_none() {
             return Some(ty);
         }
+        // Only an initializing declaration deduces without an initializer:
+        // not an `extern` variable or a static data member (clang's
+        // `err_auto_var_requires_init` from `deduceVarTypeFromInitializer`).
+        let ext = self
+            .ast
+            .decls
+            .var(v)
+            .is_some_and(|x| x.spec.storage() == kiln_ast::decl::VarStorage::Extern);
+        let member = matches!(
+            self.ast.decls.get(v).ctx().map(|c| self.kind_of(c)),
+            Some(DeclKind::CXXRecord)
+        );
+        if ext || member {
+            let name = self.decl_name(v);
+            let msg =
+                self.diag(DiagId::sema_auto_var_requires_init, loc).arg(name).arg(self.ty_arg(ty));
+            self.emit(msg);
+            self.ast.decls.set_ty(v, QualType::ERROR);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return None;
+        }
         let t = self.deduce_ctad(ty, &[], &[], CtadInit::Direct, loc).unwrap_or(QualType::ERROR);
         self.ast.decls.set_ty(v, t);
         if self.is_error_type(t) {

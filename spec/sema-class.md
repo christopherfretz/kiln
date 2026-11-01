@@ -137,19 +137,48 @@ of type 'D'`). Private: `'x' is a private member of 'S'` + `declared private
 here` / `implicitly declared private here`.
 
 **Checked**: every name found by class member or qualified lookup into a class
-(for functions, the one selected by overload resolution); selected
+(for functions, the one selected by overload resolution), type names included
+([class.access]/4, WP-174): a type or template name the parser commits to
+(`A::Priv`, an unqualified class-scope name, `typename A::Priv`), each
+nested-name-specifier component (`A::Priv::X`), an elaborated reference
+(`struct A::Priv *`), a base-specifier (checked at once in the deriving class's
+context without its bases, as clang 19 does) and `T::type` after substitution
+(a SFINAE failure in a SFINAE context), a qualified member template name
+(`A::PT<int>`), a mem-initializer-id, and each member a member
+using-declarator names ([namespace.udecl]/19; named through an object of the
+current class, as clang's `BuildUsingDeclaration` does, so `using B::m;` of a
+protected member of a base is accessible). The parser's classification
+(`classify_name`) is side-effect free; `Sema::check_type_name_access` redoes
+the lookup for a class member to learn the naming class and using-shadow. An
+injected-class-name is a public member of its own class (`struct G : F2 {
+A::B b; }` with `F2 : private A`: `'A' is a private member of 'A'` + `constrained
+by private inheritance here` + `member is declared here`); selected
 constructors, destructors and conversion functions; subobject members used by
 implicit definitions (failure deletes the member, §4.2); derived-to-base
 conversions (§3.3); `operator delete` of virtual dtors. Overriding ignores
 access.
 
-**Delayed checks.** Checks raised while parsing decl-specifiers and the
-declarator queue in `Sema.delayed_access` and resolve when the declaration
-exists, in the [class.access]/7 context: for `S::B S::f(S::B)` the whole
-declaration including the return type is checked as a member of `S`; for a
-friend declaration, as the befriending class. In template patterns: at
-instantiation (WP-070); in SFINAE contexts: substitution failure (S3T). No
-result cache in M3 (Q6).
+**Delayed checks.** Checks raised while parsing the decl-specifiers and first
+declarator of a namespace- or block-scope simple-declaration (with the
+template head before it, `template<A::I> struct A::Q`) queue in
+`Sema.delayed_access` and resolve when the declaration exists, in the
+[class.access]/7 context (`access_context_of`): for `S::B S::f(S::B)` the whole
+declaration including the return type is checked as a member of `S`; a
+function or class is its own context (so a befriended `A::I g(A::I)` or
+`template<A::I> struct R` is accepted); a friend declaration is checked in the
+befriending class. Only checks made in the context the delay point opened in
+are queued: a class or function body (or lambda) inside the declaration checks
+at once (clang's `pushUndelayed`). Member declarations are not delayed
+(clang 19 rejects `friend A::I g(A::I);` in a class `A` does not befriend).
+The delay point of an explicit instantiation's or explicit specialization's
+declaration drops its checks instead ([temp.spec.general]/6,
+`exempt_next_delayed_access`); its function body, initializer, base-clause and
+member-specification are checked as usual. The template arguments of a
+class-head `X<args>` that declares or defines a specialization (partial or
+explicit) are dropped too ([temp.spec.partial.general]/10); a reference's join
+the enclosing delay point (`end_delayed_access_to_enclosing`). In
+template patterns: at instantiation (WP-070, §4.8 of sema-templates.md); in
+SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
 
 ### 2.5 `this` and the implicit object parameter
 - `CXXThisExpr`: prvalue `cv C*` (`cv` = `this_quals`; `C*` in an NSDMI).
@@ -734,6 +763,14 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   (`constexpr_var_virtual_base`); constructing one inside a constant
   evaluation traps in the Oven with clang's `CheckLiteralType` note
   "non-literal type 'X' cannot be used in a constant expression" (WP-146).
+  The literal-type check first requires a complete type, so it
+  instantiates a class template specialization (WP-170). A `constexpr`
+  (or `consteval`) non-static member function, constructor or destructor
+  defined in a class with virtual bases is clang
+  `CheckConstexprFunctionDefinition`'s "constexpr constructor/member
+  function not allowed in struct/class with virtual base class(es)" at
+  its definition, with the same notes, and is invalid; it is checked
+  outside instantiations only (`check_constexpr_virtual_base`, WP-170).
   A C-variadic base constructor is inlined at each call by codegen
   (codegen.md); a template-variadic one is inherited per specialization,
   as clang.
@@ -961,8 +998,8 @@ Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 | direct-init `T(args)` | [over.match.ctor]; same-class prvalue elides; C++20 paren aggregate init → `CXXParenListInitExpr` when no ctor is viable and `T` is an aggregate |
 | copy-init from `T`/derived | elision for prvalue `T`; else copy/move ctor (derived glvalue: `DerivedToBase` then ctor) |
 | copy-init from other type | user-defined conversion (S3O): `ConstructorConversion` around `CXXConstructExpr`, or `UserDefinedConversion` around the conversion call; `explicit` ctors excluded (`no viable conversion from 'int' to 'T4'` + candidate notes incl. `explicit constructor is not a candidate`) |
-| list-init, aggregate | `InitListExpr`: C++17 base elements first (each initialized from its element, brace elision applies), then fields; designated initializers name direct members only, bases are then initialized from `{}` |
-| list-init, non-aggregate | [over.match.list] two phases (initializer-list ctors, then all ctors); `CXXConstructExpr` with `list`; narrowing as M2; a nested braced-init-list element (`G g{{1, 2}}`) is a braced call argument converted by [over.ics.list] (WP-152); designators remain `sema_unsupported` |
+| list-init, aggregate | `InitListExpr`: C++17 base elements first (each initialized from its element, brace elision applies), then fields; designated initializers name direct members only, bases are then initialized from `{}`. A base element's outermost constructor call is `NonVirtualBase` (clang `EK_Base`; codegen calls C2) when it copies/moves a source of the base or a derived class (a same-class prvalue is materialized first, §5.5) or braced/value-initializes (or fills) a non-aggregate base (`as_base_subobject`); a converting constructor's temporary (`D{5, 6}`) stays `Complete`. Paren aggregate init does the same |
+| list-init, non-aggregate | a single undesignated element of `T` or a derived class first (DR1467 as clang applies it to every class): initialized from it as from `T x = e` (copy-list) or `T x(e)` (direct-list), so no initializer-list ctor is considered and a copy-list init never picks an explicit ctor; the elided prvalue carries no `InitListExpr` wrapper and the ctor no `list` flag (clang's `RewrapReferenceInitList` / `IsInitListCopy`, a dump-only deviation shared with the aggregate case). Otherwise [over.match.list] two phases (initializer-list ctors, then all ctors); `CXXConstructExpr` with `list`; narrowing as M2; a nested braced-init-list element (`G g{{1, 2}}`) is a braced call argument converted by [over.ics.list] (WP-152); designators remain `sema_unsupported` |
 | reference to class | derived-to-base glvalue binding, else temporary through conversion (`materialize_temporary`, §5.3) |
 
 ### 5.7 `std::initializer_list`
@@ -1809,8 +1846,9 @@ polymorphic classes) for `final_overrider`/vtable cache size.
 7. (WP-066b) `DeclRefExpr`/`MemberExpr` carry no nested-name-specifier;
    `(a.f)()` loses the parentheses when the call is rebuilt. Dumps that
    would show either differ.
-8. (WP-066b) Access of type names found by qualified lookup (`A::In`) is
-   not checked; `&B::m`'s [class.protected] rule and member-pointer
+8. (WP-066b, WP-174) A type name checked after substitution (`T::type`) is
+   reported at the location the substitution was given (the declarator,
+   or the use of an alias template) rather than at the name; `&B::m`'s [class.protected] rule and member-pointer
    base-to-derived conversion access are not re-checked; an unqualified
    `&f` naming a member function gets no `must explicitly qualify name of
    member function` diagnostic; calls through member pointers get no

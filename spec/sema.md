@@ -612,6 +612,22 @@ and returns the scope it names:
     a `vector_size` vector) gives a `DependentVector` (spec/types.md);
     after substitution it is diagnosed at the size operand (clang: at
     the attribute name).
+  - GNU `malloc` (function with a pointer result, else `'malloc'
+    attribute only applies to return values that are pointers`; on a
+    non-function `... only applies to functions`), `alloc_size(n[, m])`
+    and `alloc_align(n)` (`vector.rs::alloc_attribute`, checked in
+    `decl.rs::check_alloc_attr` as clang's `handleAllocSizeAttr` /
+    `AddAllocAlignAttr`): integer-constant one-based indices (`requires
+    parameter N to be an integer constant`; arity: `takes at least 1
+    argument` / `takes no more than 2 arguments` / `takes one argument`)
+    naming an integer parameter (`parameter N is out of bounds`, `argument
+    may only refer to a function parameter of integer type` at the
+    argument, a dependent parameter included; index 1 of an implicit
+    object member function: `is invalid for the implicit this
+    argument`); the result must be a pointer (`alloc_align`: or a
+    reference), else a `-Wignored-attributes` warning; on a non-function
+    `only applies to non-K&R-style functions`. Codegen: spec/codegen.md
+    "Allocation functions".
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -624,6 +640,9 @@ and returns the scope it names:
   | NODISCARD, DEPRECATED | `ExprId` of the string-literal message | — |
   | ASM_LABEL | raw `StringLitId` of the label (flags bit 1: inherited) | — |
   | BUILTIN | the builtin id (`kiln_ast::decl::builtin`; implicit, §5.4) | — |
+  | MALLOC | — | — |
+  | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
+  | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -1491,6 +1510,40 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   non-dependent expression shared by a template and its instantiation is
   checked once, at definition.
 
+### 5.13 Vector conditionals (`vector_ops.rs`, WP-173)
+The vector operators themselves are summarized in spec/types.md
+(`Vector`). `?:` follows clang 19:
+- **Vector condition** (`act_on_vector_conditional`, clang
+  `CheckVectorConditionalTypes`): a condition of vector type with an
+  integral element is decayed, not converted to `bool`, and selects lane
+  by lane.
+  - A `void` or `throw` arm is `GNU vector conditional operand cannot be
+    void|a throw expression`.
+  - Two vector arms must have the same type (`vector operands to the
+    vector conditional must be the same type`, with clang 19's stray
+    `}`), and must be ext vectors exactly when the condition is
+    (`cannot mix vectors and extended vectors in a vector conditional`).
+  - One vector arm: the scalar arm is converted as for a binary vector
+    operator (`CheckVectorOperands`, `bool` vectors allowed).
+  - Two scalar arms: the same type, or the usual arithmetic conversions.
+    An enumeration result is `enumeration type T is not allowed in a
+    vector conditional`. The result is a vector with the condition's lane
+    count and kind (ext or GNU), and both arms are splatted. A
+    non-arithmetic result is `incompatible operand types`, a deviation:
+    clang 19 builds a malformed vector or crashes.
+  - Then the result must have the condition's lane count (`vector
+    condition type T and result type U do not have the same number of
+    elements`) and lane size (`... do not have elements of the same
+    size`).
+  - Codegen: a GNU condition is `icmp ne 0` plus `select`. An ext
+    condition is the sign-bit mask blend (`icmp slt 0`, `sext`, `and`,
+    `or`, with float arms bitcast to the condition type), as clang
+    emits it for C++. A `bool` ext-vector condition is *M4*.
+- **Scalar condition with a vector arm** (`scalar_cond_vector_operands`):
+  converted to `bool` as usual, and the arms are converted as for a
+  binary vector operator without `bool` vectors. A `bool`-vector arm is
+  `invalid operands to binary expression`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -1504,6 +1557,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     unions (first member, or the designated one); an aggregate class
     whose list holds one undesignated element of the same or a derived
     class type is initialized from that element ([dcl.init.list]/3.2)
+  - vector members (WP-173, clang `CheckSubElementType`): a GNU vector
+    member cannot be initialized from a scalar, so a scalar starts a
+    brace-elided list of up to N elements (`elided_vector_init`). A
+    designator after its first item ends that list. A vector initializer
+    copy-initializes the member, and an ext vector member splats a scalar
+    instead. A vector item inside a vector's element list, braced or
+    elided, is `cannot initialize a vector element of type T with an
+    rvalue|lvalue of type V`. Deviation: clang 19 does not stop the list at
+    a designator, so `{1, 2, .z = 5}` is an error there (a `void`
+    "vector element"). Kiln does not diagnose the C99 mixture of
+    designated and positional items in either case.
   - a non-class `T` list-initialized from one class-type element (or
     `bool` from `nullptr`) is initialized from the element itself
     (`class_element_list_init`; clang's core-24034 rewrite in
@@ -1577,6 +1641,9 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   - `T()` (`act_on_value_init_cast`) value-initializes; `void()` is
     a `void` prvalue.
   - `T{...}` (`act_on_list_cast`) is direct-list-initialization.
+    For an enumeration with a fixed underlying type that includes
+    [dcl.init.list]/3.8 (`E{v}`: `v` converted to the underlying type,
+    narrowing rejected, then to `E`), as `E e{v};` does.
   - `T(a, b)` (`act_on_paren_list_cast`) is ill-formed for a scalar.
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have

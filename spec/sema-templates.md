@@ -623,6 +623,9 @@ pub struct TemplateTables {
     instantiated_from: HashMap<DeclId, DeclId>,  // sparse: Field, EnumConstant, ParmVar, Typedef, UsingShadow, locals
     member_map: HashMap<(DeclId /*spec*/, DeclId /*pattern member*/), DeclId>,
     param_objects: HashMap<(QualType, ConstValueId), DeclId>,
+    explicit_member_insts: HashMap<DeclId, Vec<DeclId>>,  // member explicit instantiation
+        // definitions (`template void X<int>::f();`), keyed by the decl they follow in their
+        // lexical context (the context itself when it was empty); codegen emits them there
 }
 pub struct TemplateInfo {                    // 24 B
     params: TemplateParamListId, pattern: DeclId,
@@ -768,8 +771,20 @@ Out-of-class partial specializations of a member template (WP-150):
 
 **An explicit instantiation definition** of a class ([temp.explicit]/10)
 instantiates the definitions of every member that is defined in the
-pattern and not yet explicitly specialized. Member templates are
-excluded.
+pattern and not yet explicitly specialized, including the out-of-line
+definitions of static data members (clang `InstantiateVariableDefinition`)
+and the members of member classes. Member templates are excluded. A
+member class that is not yet defined at that point gets the member
+specialization kind `ExplicitInstantiationDefinition` (so its vtable and
+RTTI are emitted `weak_odr`); one already defined keeps its implicit
+kind (clang `InstantiateClassMembers`; `instantiate_members_of`). A
+member explicit instantiation of a constructor or destructor
+(`template X<int>::X();`) reaches sema through the special-member
+declarator path and names the existing member (WP-170). An explicit
+instantiation may not be `inline` ("explicit instantiation cannot be
+'inline'"), nor `constexpr`/`consteval` when it names a function
+("explicit instantiation cannot be 'constexpr'"); both are diagnosed and
+the instantiation proceeds (clang `ActOnExplicitInstantiation`).
 
 **An explicit instantiation declaration** (`extern template`) does not
 stop sema from instantiating inline and `constexpr` members when they
@@ -879,9 +894,15 @@ Later uses of it are silent.
   re-run in each instantiation of it (a class at the end of its
   instantiation, a member function after its body; clang
   `PerformDependentDiagnostics`, WP-151); an error the instantiation
-  already reported is not repeated. Known gaps: function template
-  specializations and lambdas are not replayed, and access of type names
-  is not checked at all (spec/sema-class.md open issue 8).
+  already reported is not repeated. The innermost entity skips a
+  non-generic lambda's call operator and closure type (instantiated with
+  their enclosing function: a lambda in `X<char>::l` replays with `l`); a
+  function template specialization (`X<char>::m<int>`, a generic lambda's
+  `operator()<int>`) replays its pattern's checks after its body, and a
+  generic lambda rebuilt by substitution inherits its pattern's checks
+  (`Sema::copy_dependent_access`), so the error carries the
+  `in instantiation of function template specialization` note (WP-174).
+  Type names are checked as other names (spec/sema-class.md §2.4).
 - `template<class U> friend struct Y<U*>;` is "partial specialization
   cannot be declared as a friend" ([temp.friend]/9).
 
@@ -2202,6 +2223,15 @@ pub struct InstFrame {          // 20 B
 | `BuildingDeductionGuides` | inherit | while building implicit deduction guide first needed here |
 | `LambdaSubstitution` | inherit | while substituting into a lambda expression here |
 | `DeclaringSpecialMember`, `DefiningSynthesizedFunction`, `RewritingOperatorAsSpaceship` | — | owned by S3C/S3O; listed here so that they count toward depth and elision |
+
+A conversion function template specialization keeps the pattern's
+declaration name (`operator T`, which the mangling uses: `cvT_`), but
+every printed name of it (notes, `%0` above, constant-evaluation call
+notes, the AST dump) uses its target type substituted before any
+return type deduction, as clang's instantiated declaration name does:
+`'G::operator int<int>'`, `'operator auto (*)(int)<int>'` for a generic
+lambda (`ColdDeclData::conversion_spec_target`, read by
+`AstNames::write_name`; WP-170).
 
 The texts are taken from clang 19's `DiagnosticSemaKinds.td`. The goldens
 are authoritative: WP-070 checks each of them in `templates/diag/`.
@@ -3708,6 +3738,82 @@ declarator scopes.**
   `temp.spec.partial.member/out-of-line-ctors.cpp`,
   `temp.spec.partial.member/non-type-arg-scope.cpp`,
   `templates/builtins/builtin.is-trivially-constructible-assignable.cpp`.
+
+**Landed (WP-176): libc++ `<type_traits>` follow-ups.**
+- *Converted-constant narrowing* (§9.3): `sema_cce_narrowing_value` is
+  clang's `ext_cce_narrowing`, a `-Wc++11-narrowing` warning-as-error
+  that recovers with the converted value. `__type_pack_element<-1, T>`
+  therefore reports both the narrowing and the index out of bounds; with
+  `-Wno-c++11-narrowing` only the latter. noexcept specifiers and
+  template arguments recover the same way.
+- *Abominable function types*: `__decay` of a cv- or ref-qualified
+  function type is the type itself (clang `BuiltinDecay` defers to
+  `BuiltinAddPointer`). Forming a pointer or reference to one is
+  diagnosed, and in a substitution it is a SFINAE failure.
+- *Traits*: `__is_convertible(From, To)` is false when `To` is an
+  abstract class (`To test()` is ill-formed, clang
+  `CheckConvertibilityForTypeTraits`). A function lvalue binds directly
+  to `T&&` ([dcl.init.ref]/5.3.1).
+- *Pointer-to-member calls*: `.*`/`->*` on a member function checks the
+  ref-qualifier against the object's value category and the cv against
+  the object's ([expr.mptr.oper]/6). The call's noexcept-ness comes from
+  the member pointer's prototype (`member_call_can_throw`).
+- *Current instantiation in template arguments*: an out-of-line member's
+  return type rebuilds `typename A<T>::B` inside template arguments
+  (`rebuild_ci_type`, e.g. `pair<iterator, bool>`).
+- *Elaborated template template parameter*: `friend class TT<Args>;`
+  with `TT` a template template parameter names its specialization
+  (parser `parse_tag_specifier`).
+- *Designators in dependent lists*: a dependent braced-init-list keeps
+  its designators in `TemplState::init_designators` (keyed by the
+  `InitListExpr`, since the dependent node has no designator storage).
+  `subst` re-applies them, substituting `[i]` indices.
+- *`&L::m` in a local class of a template*: an implicit member reference
+  written `L::m` keeps its qualifier (`DeclRefExtra::qualifier`), and a
+  dependent `&L::m` drops its pending `member_refs` entry, so that
+  instantiation rebuilds a pointer to member, not `&this->m`.
+- *[expr.cond]/4 class unification* (clang `TryClassUnification`): when
+  the operands differ in type and either is a class, each is tried
+  against the other. The order is: /4.1–4.2, a glvalue target binding
+  directly; /4.3.1–4.3.2, same or derived class with at least the
+  target's cv (otherwise no conversion); /4.3.3, implicit conversion to
+  the other's prvalue type. If both directions succeed, the result is
+  `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
+  /6 overloaded-operator candidates are not tried.
+- *Calls returning `F&&`*: a call whose result type is an rvalue
+  reference to function is an lvalue ([expr.call]/14), so
+  `declval<Fn>()()` is callable and `decltype` of it is `F&`.
+- *Constructible traits make a temporary* (clang `InitializeTemporary`):
+  the initialization `__is_constructible` (and its nothrow and trivially
+  forms) checks is bound with `maybe_bind_temporary`. So a private or
+  deleted destructor makes the trait false, and a potentially-throwing
+  destructor makes the nothrow form false. `maybe_bind_temporary` now
+  checks a user-declared trivial destructor too (access, deletion)
+  without binding. A call that is a `decltype` operand defers that check
+  to `exit_decltype`, which exempts the top-level call.
+- *Partial ordering with packs*: `partial_at_least_as_specialized`
+  makes an undeduced pack parameter empty (`empty_undeduced_packs`, as
+  matching already did). Without this, `C<A>` and `C<A, B...>` were
+  ambiguous for `C<int>`.
+- *Matching prefilter and cv arrays*: `ArgShape::admits` compares an
+  array argument's effective (element) qualifiers, so `S<const F>`
+  matches `const int[10]` (libc++ `__copy_cv`, common_reference of
+  arrays).
+- Tests: `templates/builtins/temp.builtin.type-pack-element-narrowing.cpp`,
+  `templates/diag/temp.arg.nontype-narrowing-wno.cpp`,
+  `dcl.fct/abominable-compound.cpp`, `expr.mptr.oper/ref-qualified-call.cpp`,
+  `templates/builtins/builtin.decay-convertible-functions.cpp`,
+  `temp.friend/friend-template-template-param-specialization.cpp`,
+  `temp.mem/out-of-line-nested-typename-in-template-args.cpp`,
+  `dcl.init.aggr/designated-in-template.cpp`,
+  `dcl.init.aggr/reference-member.cpp`,
+  `except.spec/noexcept-pointer-to-member-call.cpp`,
+  `temp.inst/local-class-member-pointer.cpp`, `expr.cond/class-operand-*.cpp`,
+  `expr.call/function-rvalue-reference-result.cpp`,
+  `templates/builtins/builtin.is-constructible-temporary-dtor.cpp`,
+  `class.temporary/trivial-dtor-checked.cpp`,
+  `templates/order/temp.spec.partial.order-empty-pack.cpp`,
+  `templates/spec/temp.spec.partial.match-cv-array.cpp`.
 
 ### 11.3 Instantiation report and memory accounting
 

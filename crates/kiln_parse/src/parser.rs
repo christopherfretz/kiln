@@ -114,6 +114,10 @@ pub struct Parser<'a, 'sm> {
     /// token: the first component of a nested-name-specifier (WP-119,
     /// clang's `annot_decltype`). Cleared by every [`Parser::bump`].
     decltype_scope: Option<DecltypeScope>,
+    /// The access delay level a template head opened for the
+    /// declaration after it ([class.access]/7), taken by
+    /// `parse_simple_declaration`.
+    pub(crate) template_delay_level: Option<usize>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -194,6 +198,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
             decltype_scope: None,
+            template_delay_level: None,
         };
         p.handle_events(0);
         p
@@ -670,40 +675,6 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return;
         }
         self.eat(Punct::Semi);
-    }
-
-    /// The index of the first of `targets` at bracket depth 0, scanning
-    /// from the current token and stopping at an unbalanced closer, `{`,
-    /// `;` (unless a target) or end of file.
-    pub(crate) fn scan_for(&self, targets: &[Punct]) -> Option<(usize, Punct)> {
-        let mut depth = 0u32;
-        let mut i = self.pos;
-        loop {
-            let t = self.tok_at(i);
-            let p = match t.kind {
-                TokKind::Eof => return None,
-                TokKind::Punct(p) => p,
-                _ => {
-                    i += 1;
-                    continue;
-                }
-            };
-            if depth == 0 && targets.contains(&p) {
-                return Some((i, p));
-            }
-            match p {
-                Punct::LParen | Punct::LSquare => depth += 1,
-                Punct::RParen | Punct::RSquare => {
-                    if depth == 0 {
-                        return None;
-                    }
-                    depth -= 1;
-                }
-                Punct::LBrace | Punct::RBrace | Punct::Semi if depth == 0 => return None,
-                _ => {}
-            }
-            i += 1;
-        }
     }
 
     // -- names --------------------------------------------------------------------

@@ -102,8 +102,12 @@ impl Sema<'_, '_> {
     /// `f<int>`: how function template specialization `spec` (of `tmpl`
     /// with `args`) prints in an instantiation note.
     pub(crate) fn function_spec_name(&self, spec: DeclId, tmpl: DeclId, args: ArgListId) -> String {
-        let _ = spec;
-        self.spec_name(tmpl, args)
+        if self.kind_of(spec) != DeclKind::CXXConversion {
+            return self.spec_name(tmpl, args);
+        }
+        // A conversion function template specialization is named by its
+        // substituted target type, then its arguments (`operator int<int>`).
+        self.qualified_decl_name(spec)
     }
 
     /// clang's template argument binding string, `[with T = int, N = 3]`,
@@ -219,6 +223,7 @@ impl Sema<'_, '_> {
             }
             s.act_on_finish_function_def(f, b, rbrace);
         });
+        self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
     }
 }
@@ -761,7 +766,12 @@ impl Sema<'_, '_> {
 
     /// `[extern] template R C<args>::f(params);` for member `m` of a
     /// class template specialization ([temp.explicit]/3, §4.5).
-    fn act_on_explicit_member_inst(&mut self, m: DeclId, declaration: bool, name_loc: Loc) {
+    pub(crate) fn act_on_explicit_member_inst(
+        &mut self,
+        m: DeclId,
+        declaration: bool,
+        name_loc: Loc,
+    ) {
         let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) else { return };
         let name = self.qualified_decl_name(m);
         match (info.kind, declaration) {
@@ -815,6 +825,13 @@ impl Sema<'_, '_> {
             x.point_of_instantiation = name_loc;
         });
         if !declaration {
+            // [temp.explicit]/10: clang hands the definition to codegen
+            // where the explicit instantiation appears.
+            let lexical = self.ctx;
+            if let Some(list) = self.ast.decls.member_list(lexical) {
+                let after = list.last.unwrap_or(lexical);
+                self.ast.templates.add_explicit_member_inst(after, m);
+            }
             self.instantiate_function_definition(m, name_loc);
             if self.ast.definition(m).is_none() {
                 self.queue_instantiation(m, name_loc);

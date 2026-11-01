@@ -72,7 +72,16 @@ impl<'a> AstNames<'a> {
     /// `operator""_x`, `<deduction guide for S>`. Unnamed declarations
     /// append nothing.
     pub fn write_name(&self, d: DeclId, out: &mut String) {
-        self.write_decl_name_value(self.ast.decls.get(d).name(), out);
+        let n = self.ast.decls.get(d);
+        // A conversion function template specialization keeps the
+        // pattern's name (`operator T`, which the mangling needs); clang
+        // names it by its substituted target type (`operator int`).
+        if let Some(&q) = self.ast.decls.cold.conversion_spec_target.get(d) {
+            out.push_str("operator ");
+            write_type(&self.ast.types, self, q, PrintOptions::SUGARED, out);
+            return;
+        }
+        self.write_decl_name_value(n.name(), out);
     }
 
     /// Appends `name`.

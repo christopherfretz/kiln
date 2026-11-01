@@ -426,6 +426,18 @@ impl Substituter<'_, '_, '_> {
                 let o = self.expr(o)?;
                 Ok(self.sema.act_on_cast(style, ty, o, loc, end))
             }
+            ExprKind::CompoundLiteralExpr => {
+                // WP-180: clang's `TransformCompoundLiteralExpr` rebuilds
+                // through `BuildCompoundLiteralExpr` with the instantiated
+                // type and list.
+                let o = ex(self).compound_literal_init(e);
+                if self.sema.ast.exprs.get(o).kind() != ExprKind::InitListExpr {
+                    return self.unimplemented("substitution into this compound literal", loc);
+                }
+                let ty = self.ty(n.ty(), loc)?;
+                let l = self.init_list(o)?;
+                Ok(self.sema.act_on_compound_literal(ty, &l, loc))
+            }
             ExprKind::BuiltinBitCastExpr => {
                 // WP-074: `__builtin_bit_cast(T, e)` (a dependent one keeps
                 // `T` as its type and `e` unmaterialized).
@@ -628,6 +640,7 @@ impl Substituter<'_, '_, '_> {
         };
         let base = self.ty(x.allocated_ty, x.type_loc)?;
         let mut declarator = Declarator::new(DeclaratorContext::TypeName, x.type_loc);
+        declarator.site = crate::declspec::DeclSite::New;
         if n.has(ExprFlags::ARRAY_FORM) {
             let size = self.opt_expr(x.array_size)?;
             declarator.chunks.push(Chunk::Array { size, loc: x.type_loc });
@@ -1089,7 +1102,22 @@ impl Substituter<'_, '_, '_> {
         Ok(out)
     }
 
-    /// A braced-init-list of the pattern (designators: a gap).
+    /// The designators of a clause, `[i]` indices substituted.
+    fn designators(
+        &mut self,
+        d: &[crate::init::Designator],
+    ) -> SubstResult<Vec<crate::init::Designator>> {
+        use crate::init::Designator;
+        d.iter()
+            .map(|x| match *x {
+                Designator::Field(s, l) => Ok(Designator::Field(s, l)),
+                Designator::Index(i, l) => Ok(Designator::Index(self.expr(i)?, l)),
+            })
+            .collect()
+    }
+
+    /// A braced-init-list of the pattern, with the designators a
+    /// dependent list keeps beside it (`TemplState::init_designators`).
     pub(crate) fn init_list(&mut self, e: ExprId) -> SubstResult<InitList> {
         let n = *self.sema.ast.exprs.get(e);
         let l = self.sema.ast.exprs.init_list_inits(e);
@@ -1103,7 +1131,21 @@ impl Substituter<'_, '_, '_> {
         {
             items.pop();
         }
-        let out = self.init_items(&items)?;
+        let out = match self.sema.templ.init_designators.get(&e).cloned() {
+            // A designated dependent list: no clause of it is a pack
+            // expansion (`.x = p...` is ill-formed), so clause `i` keeps
+            // designator `i`.
+            Some(ds) if ds.len() == items.len() => {
+                let mut out = Vec::with_capacity(items.len());
+                for (&x, d) in items.iter().zip(&ds) {
+                    let mut it = self.init_value(x)?;
+                    it.designator = self.designators(d)?;
+                    out.push(it);
+                }
+                out
+            }
+            _ => self.init_items(&items)?,
+        };
         let rbrace = self.sema.ast.exprs.end_loc(e).unwrap_or(n.loc());
         // A default member initializer the semantic list used is used
         // again by the instantiation ([expr.const]/16).
@@ -1120,9 +1162,7 @@ impl Substituter<'_, '_, '_> {
     fn written_list(&mut self, l: &InitList) -> SubstResult<InitList> {
         let mut items = Vec::with_capacity(l.items.len());
         for it in &l.items {
-            if !it.designator.is_empty() {
-                return self.unimplemented("designated initializers in a template", l.lbrace);
-            }
+            let designator = self.designators(&it.designator)?;
             let value = match &it.value {
                 InitValue::Expr(e) if crate::templ::pack::expr_pattern(self.sema, *e).is_some() => {
                     for y in self.expand_exprs(&[*e])? {
@@ -1133,7 +1173,7 @@ impl Substituter<'_, '_, '_> {
                 InitValue::Expr(e) => InitValue::Expr(self.written_arg(*e)?),
                 InitValue::List(n) => InitValue::List(self.written_list(n)?),
             };
-            items.push(InitItem { designator: Vec::new(), value });
+            items.push(InitItem { designator, value });
         }
         Ok(InitList { items, lbrace: l.lbrace, rbrace: l.rbrace })
     }

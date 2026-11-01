@@ -130,6 +130,30 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        // [dcl.init.list]/3.1: a designated-initializer-list needs an
+        // aggregate class, before any constructor is considered (clang
+        // `FK_DesignatedInitForNonAggregate`, ahead of phase 1).
+        if l.items.iter().any(|i| !i.designator.is_empty()) {
+            return Some(self.designated_non_aggregate(ty, l, at));
+        }
+        if let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+            && designator.is_empty()
+            && !self.expr_is_type_dependent(*x)
+            && self.is_class_or_derived(*x, ty)
+        {
+            // [dcl.init.list]/3.2 as clang applies DR1467 to every class
+            // (not only aggregates, CWG2137): a single element of the class
+            // or a derived class initializes the object, copy-initialized
+            // for copy-list-initialization (explicit constructors are not
+            // candidates) and direct-initialized for direct-list; no
+            // initializer-list constructor is considered.
+            let ctx = if style == InitStyle::DirectList {
+                ConvCtx::DirectInitialization
+            } else {
+                ConvCtx::Initialization
+            };
+            return Some(self.init_from_expr(ty, *x, ctx, at));
+        }
         if !l.items.is_empty()
             && let Some(e) = self.std_initializer_list_init(ty, l, at)
         {
@@ -137,12 +161,6 @@ impl Sema<'_, '_> {
         }
         if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end) {
             return Some(e);
-        }
-        if let Some(item) = l.items.iter().find(|i| !i.designator.is_empty()) {
-            // todo(WP-067b follow-up): designators of a non-aggregate.
-            self.unsupported("this list-initialization of a class", item.value.loc(self));
-            let flat = Self::list_exprs(l);
-            return Some(self.recover(ty, &flat, l.lbrace));
         }
         let mut args = Vec::with_capacity(l.items.len());
         for item in &l.items {
@@ -163,6 +181,47 @@ impl Sema<'_, '_> {
         let mut site = ConstructSite::at(at);
         site.temp_end = temp_end;
         self.construct_class(ty, &args, style, site)
+    }
+
+    /// "initialization of non-aggregate type 'T' with a designated
+    /// initializer list" at the entity `at`, the list underlined
+    /// ([dcl.init.list]/3.1); the result is a recovery expression.
+    pub(crate) fn designated_non_aggregate(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        at: Loc,
+    ) -> ExprId {
+        let end = self.token_end(l.rbrace).unwrap_or(l.rbrace);
+        let msg = self
+            .diag(DiagId::sema_designated_init_non_aggregate, at)
+            .arg(self.ty_arg(ty))
+            .range(kiln_source::Span::new(l.lbrace, end));
+        self.emit(msg);
+        let flat = Self::list_exprs(l);
+        self.recover(ty, &flat, l.lbrace)
+    }
+
+    /// Whether the token before `at` is `=` (from the source text).
+    fn preceded_by_equal(&self, at: Loc) -> bool {
+        let sm = self.diags.sm();
+        let Some((file, pos)) = sm.offset_of(at) else { return false };
+        let text = sm.text(file).as_bytes();
+        let before = text.get(..pos as usize).unwrap_or_default();
+        before.iter().rev().find(|c| !c.is_ascii_whitespace()) == Some(&b'=')
+    }
+
+    /// The `.` of the field designator whose name is at `name`
+    /// (`name` itself when the source text has none).
+    fn period_before(&self, name: Loc) -> Loc {
+        let sm = self.diags.sm();
+        let Some((file, pos)) = sm.offset_of(name) else { return name };
+        let text = sm.text(file).as_bytes();
+        let before = text.get(..pos as usize).unwrap_or_default();
+        match before.iter().rposition(|c| !c.is_ascii_whitespace()) {
+            Some(i) if before[i] == b'.' => u32::try_from(i).map_or(name, |o| sm.loc(file, o)),
+            _ => name,
+        }
     }
 
     /// [over.match.list]/1.1 (phase 1): the initializer-list
@@ -682,7 +741,7 @@ impl Sema<'_, '_> {
                     let loc = self.begin_loc(a);
                     self.init_from_expr(ety, a, ConvCtx::Initialization, loc)
                 }
-                None if i < nb => self.paren_value_init(ety, at),
+                None if i < nb => self.as_base_subobject(|s| s.paren_value_init(ety, at)),
                 None => {
                     let f = fields[i - nb];
                     if self.field_has_nsdmi(f) {
@@ -768,23 +827,58 @@ impl Sema<'_, '_> {
                 .is_some_and(|(a, b)| self.ast.first(a) == self.ast.first(b))
     }
 
-    /// A base element initialized from the expression `e`: a prvalue of
-    /// the base class is materialized and moved from (clang does not
-    /// elide into a base subobject, which may overlap other members).
+    /// Whether `e` has the class type `ty` or a class derived from it.
+    fn is_class_or_derived(&self, e: ExprId, ty: QualType) -> bool {
+        self.ast.types.as_record(self.ety(e)).zip(self.ast.types.as_record(ty)).is_some_and(
+            |(a, b)| self.ast.first(a) == self.ast.first(b) || conv::is_derived_from(self, a, b),
+        )
+    }
+
+    /// Runs `f` with the outermost constructor call built for a base
+    /// subobject (clang `EK_Base`): the base-object variant is called
+    /// (Itanium C2; spec/sema-class.md §5.6). `f` must reach a
+    /// constructor of the base itself.
+    fn as_base_subobject<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.ctor_entity = Some((
+            crate::class::InitEntity::Base { inherited_virtual: false },
+            kiln_ast::expr::ConstructionKind::NonVirtualBase,
+        ));
+        let r = f(self);
+        self.ctor_entity = None;
+        r
+    }
+
+    /// Whether a braced or value-initialization of the base `bty` is by a
+    /// constructor of `bty` itself (not an aggregate initialization,
+    /// whose elements are complete objects).
+    fn base_inits_by_ctor(&self, bty: QualType) -> bool {
+        self.ast.types.as_record(bty).is_some() && !self.is_aggregate(bty)
+    }
+
+    /// A value-initialized or braced base element: a constructor call
+    /// builds the base subobject.
+    fn init_base_list(&mut self, bty: QualType, f: impl FnOnce(&mut Self) -> ExprId) -> ExprId {
+        if self.base_inits_by_ctor(bty) { self.as_base_subobject(f) } else { f(self) }
+    }
+
+    /// A base element initialized from the expression `e`. A source of
+    /// the base class or a class derived from it is copied or moved by
+    /// the base-object constructor; a prvalue of the base class is
+    /// materialized first (clang does not elide into a base subobject,
+    /// which may overlap other members). Anything else converts as a
+    /// complete object (a converting constructor's temporary).
     fn init_base_element(&mut self, bty: QualType, e: ExprId) -> ExprId {
         let ety = self.ety(e);
         let loc = self.begin_loc(e);
-        if self.is_prvalue_of_class(e, bty) {
-            let m = self.materialize_temporary(e, ety, false);
-            // The move constructs a base subobject (clang `EK_Base`): the
-            // base-object variant is called.
-            self.ctor_entity = Some((
-                crate::class::InitEntity::Base { inherited_virtual: false },
-                kiln_ast::expr::ConstructionKind::NonVirtualBase,
-            ));
-            let x =
-                self.construct_from_class(m, bty, ConvCtx::Initialization, loc, DeletedAs::Call);
-            self.ctor_entity = None;
+        if self.is_class_or_derived(e, bty) {
+            let m = if self.is_prvalue_of_class(e, bty) {
+                self.materialize_temporary(e, ety, false)
+            } else {
+                e
+            };
+            let x = self.as_base_subobject(|s| {
+                s.construct_from_class(m, bty, ConvCtx::Initialization, loc, DeletedAs::Call)
+            });
             if let Some(x) = x {
                 return x;
             }
@@ -887,17 +981,21 @@ impl Sema<'_, '_> {
         {
             return e;
         }
+        let designated = l.items.iter().any(|i| !i.designator.is_empty());
         if self.ast.types.is_reference(ty) {
             return self.reference_list_init(ty, l, entity, InitStyle::CopyList);
         }
         // Scalar ([dcl.init.list]/3.9-10).
         let at = entity.unwrap_or(l.lbrace);
+        if designated && !self.is_error_type(ty) {
+            return self.designated_non_aggregate(ty, l, at);
+        }
         if let Some(e) = self.class_element_list_init(ty, l, ConvCtx::Initialization, at, None) {
             return e;
         }
         let mut inits = Vec::new();
+        // (A designated list was rejected above.)
         match l.items.first() {
-            None => {}
             Some(InitItem { value: InitValue::Expr(e), designator }) if designator.is_empty() => {
                 self.check_narrowing(*e, ty, ty);
                 inits.push(self.convert_for_init(*e, ty, ConvCtx::Initialization));
@@ -913,9 +1011,7 @@ impl Sema<'_, '_> {
                 let list = self.ast.exprs.init_list_inits(e);
                 inits.extend(self.ast.lists.iter::<ExprId>(list));
             }
-            Some(item) => {
-                self.unsupported("a designator in a scalar initializer", item.value.loc(self));
-            }
+            _ => {}
         }
         if let Some(extra) = l.items.get(1) {
             let at = entity.unwrap_or_else(|| extra.value.loc(self));
@@ -951,28 +1047,88 @@ impl Sema<'_, '_> {
             inits.push(x);
             pos = 1;
         } else {
-            while pos < count && pos < l.items.len() {
-                let item = &l.items[pos];
-                if !item.designator.is_empty() {
-                    self.unsupported("a designator in a vector initializer", item.value.loc(self));
-                    return self.recover(ty, &[], l.lbrace);
-                }
-                let x = match &item.value {
-                    InitValue::Expr(e) => {
-                        self.check_narrowing(*e, elem, elem);
-                        self.convert_for_init(*e, elem, ConvCtx::Initialization)
-                    }
-                    InitValue::List(inner) => self.init_from_list(elem, inner),
-                };
-                inits.push(x);
-                pos += 1;
-            }
+            let Some(xs) = self.vector_elements(elem, count, &l.items, &mut pos, true) else {
+                return self.recover(ty, &[], l.lbrace);
+            };
+            inits = xs;
         }
         if let Some(extra) = l.items.get(pos) {
             let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
             self.emit(msg);
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
+    }
+
+    /// Up to `count` vector elements of type `elem` from `items[*pos..]`
+    /// (clang `CheckVectorType`), one item each. A designator is not
+    /// supported in a braced vector list (`None`, diagnosed) and ends a
+    /// brace-elided one after its first item.
+    fn vector_elements(
+        &mut self,
+        elem: QualType,
+        count: usize,
+        items: &[InitItem],
+        pos: &mut usize,
+        braced: bool,
+    ) -> Option<Vec<ExprId>> {
+        let mut inits = Vec::new();
+        while inits.len() < count && *pos < items.len() {
+            let item = &items[*pos];
+            // The designator of the item that started a brace-elided
+            // list names this vector, not one of its elements.
+            if !item.designator.is_empty() && (braced || !inits.is_empty()) {
+                if braced {
+                    self.unsupported("a designator in a vector initializer", item.value.loc(self));
+                    return None;
+                }
+                break;
+            }
+            let x = match &item.value {
+                InitValue::Expr(e) => self.vector_element(*e, elem),
+                InitValue::List(inner) => self.init_from_list(elem, inner),
+            };
+            inits.push(x);
+            *pos += 1;
+        }
+        Some(inits)
+    }
+
+    /// One vector element of type `elem` from `e` (clang
+    /// `CheckScalarType` with a vector-element entity): a vector operand
+    /// is "cannot initialize a vector element".
+    fn vector_element(&mut self, e: ExprId, elem: QualType) -> ExprId {
+        let et = self.ety(e);
+        if self.is_vector_type(et) && !self.expr_is_type_dependent(e) {
+            let lv = self.ast.exprs.get(e).value_category() == ValueCategory::LValue;
+            let at = self.begin_loc(e);
+            let msg = self
+                .diag(DiagId::sema_init_vector_element_failed, at)
+                .arg(self.ty_arg(elem))
+                .arg(if lv { "1" } else { "0" })
+                .arg(self.ty_arg(et));
+            self.emit(msg);
+            return self.recover(elem, &[e], at);
+        }
+        self.check_narrowing(e, elem, elem);
+        self.convert_for_init(e, elem, ConvCtx::Initialization)
+    }
+
+    /// A brace-elided GNU vector member ([dcl.init.aggr]/16; clang
+    /// `CheckImplicitInitList` of a vector): up to N scalar items.
+    fn elided_vector_init(
+        &mut self,
+        ty: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        at: Loc,
+    ) -> ExprId {
+        let top = self.ast.types.desugar_top(ty);
+        let (elem, count) = match self.ast.types.view(top.ty()) {
+            kiln_ast::types::TypeView::Vector { elem, count, .. } => (elem, count as usize),
+            _ => return self.recover(ty, &[], at),
+        };
+        let inits = self.vector_elements(elem, count, items, pos, false).unwrap_or_default();
+        self.builder().init_list(ty, &inits, None, None, at, at)
     }
 
     /// List-initialization of reference `ty` ([dcl.init.list]/3.9-10):
@@ -991,6 +1147,14 @@ impl Sema<'_, '_> {
         let ur = conv::strip_cv(self, r);
         let cr = self.ast.types.canonical(ur);
         let at = entity.unwrap_or(l.lbrace);
+        // A reference to an aggregate takes a designated list (as clang
+        // and GCC); otherwise the reference type is named.
+        if l.items.iter().any(|i| !i.designator.is_empty())
+            && !self.is_aggregate(ur)
+            && !self.is_error_type(ur)
+        {
+            return self.designated_non_aggregate(ty, l, at);
+        }
         let lref =
             matches!(self.ast.types.canonical_view(ty), kiln_ast::types::TypeView::LValueRef(_));
         let q = self.ast.types.effective_quals(r);
@@ -1036,7 +1200,7 @@ impl Sema<'_, '_> {
     /// `E e{v};` for an enumeration `E` with a fixed underlying type `U`
     /// and `v` implicitly convertible to `U` ([dcl.init.list]/3.8): `v`
     /// is converted to `U` (narrowing rejected), then to `E`.
-    fn fixed_enum_list_init(&mut self, ty: QualType, l: &InitList) -> Option<ExprId> {
+    pub(crate) fn fixed_enum_list_init(&mut self, ty: QualType, l: &InitList) -> Option<ExprId> {
         let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
             return None;
         };
@@ -1131,8 +1295,16 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         match &items[*pos].value {
             InitValue::List(sub) => {
+                // `.m{...}` (no `=`) is located at the designator, as
+                // clang; `.m = {...}` and `{...}` at the brace.
+                let entity = match items[*pos].designator.first() {
+                    Some(Designator::Field(_, d)) if !self.preceded_by_equal(sub.lbrace) => {
+                        Some(self.period_before(*d))
+                    }
+                    _ => None,
+                };
                 *pos += 1;
-                self.init_from_list(ty, sub)
+                self.init_from_list_at(ty, sub, entity)
             }
             InitValue::Expr(e) => {
                 let e = *e;
@@ -1150,10 +1322,22 @@ impl Sema<'_, '_> {
                                 && !conv::is_derived_from(self, x, r)
                         })
                         && !self.is_error_type(ety)
+                } else if let Some(p) = self.vector_parts(ty) {
+                    // A GNU vector is not initialized from a scalar (no
+                    // implicit splat), so brace elision is assumed; an
+                    // ext vector splats the scalar (clang
+                    // `CheckSubElementType`).
+                    !p.is_ext()
+                        && !self.is_vector_type(ety)
+                        && self.ast.types.as_record(ety).is_none()
+                        && !self.is_error_type(ety)
+                        && !self.expr_is_type_dependent(e)
                 } else {
                     false
                 };
-                if elide {
+                if elide && self.is_vector_type(ty) {
+                    self.elided_vector_init(ty, items, pos, at)
+                } else if elide {
                     self.check_aggregate(ty, items, pos, false, at, at)
                 } else {
                     *pos += 1;
@@ -1237,9 +1421,12 @@ impl Sema<'_, '_> {
                 self.ast.decls.get(fields[cur - nb]).ty().unwrap_or(QualType::ERROR)
             };
             let e = match items[*pos].value {
-                InitValue::Expr(x) if cur < nb && self.is_prvalue_of_class(x, ety) => {
+                InitValue::Expr(x) if cur < nb && self.is_class_or_derived(x, ety) => {
                     *pos += 1;
                     self.init_base_element(ety, x)
+                }
+                InitValue::List(_) if cur < nb => {
+                    self.init_base_list(ety, |s| s.init_element(ety, items, pos, lbrace))
                 }
                 _ => self.init_element(ety, items, pos, lbrace),
             };
@@ -1265,7 +1452,10 @@ impl Sema<'_, '_> {
             for (i, slot) in slots.into_iter().enumerate() {
                 let e = match slot {
                     Some(e) => e,
-                    None if i < nb => self.filler(bases[i], rbrace),
+                    None if i < nb => {
+                        let b = bases[i];
+                        self.init_base_list(b, |s| s.filler(b, rbrace))
+                    }
                     None => self.field_filler(fields[i - nb], rbrace),
                 };
                 inits.push(e);
