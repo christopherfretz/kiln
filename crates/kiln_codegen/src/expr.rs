@@ -2085,6 +2085,19 @@ impl Cg<'_> {
                     // copied (clang `EmitAggFinalDestCopy`).
                     return self.emit_va_arg(e, None).map(|_| ());
                 }
+                // An ignored slot: `EmitCall` makes the temporary itself,
+                // after the arguments.
+                match ast.exprs.get(e).kind() {
+                    ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
+                        self.emit_call(e, None)?;
+                        return Ok(());
+                    }
+                    ExprKind::CXXMemberCallExpr => {
+                        self.emit_member_call(e, None)?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
                 let tmp = self.temp(q);
                 return self.emit_agg(e, tmp, false);
             }
@@ -2396,6 +2409,11 @@ impl Cg<'_> {
             return Ok(None);
         }
         if rty == LTy::VOID {
+            if matches!(sig.info.ret.kind, ArgKind::Ignore) && self.is_aggregate(rq) {
+                // clang `EmitCall` -> `GetUndefRValue`: an ignored
+                // aggregate result still gets its (unused) temporary.
+                self.temp(rq);
+            }
             return Ok(None);
         }
         if self.is_aggregate(rq) {

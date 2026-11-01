@@ -156,7 +156,18 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
     direct call sites (clang `ConstructAttributeList`);
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
-    call initializes an aggregate, otherwise into a temporary.
+    call initializes an aggregate, otherwise into a temporary; an
+    ignored aggregate call makes that temporary itself, after the
+    arguments, and an empty-class (`Ignore`) result still gets an unused
+    temporary (clang `GetUndefRValue`; WP-172);
+  - an assignment operator call (`CXXOperatorCallExpr` with `=`, `+=`,
+    ... and a member callee) evaluates its right operand before the
+    object (clang `EvaluationOrder::ForceRightToLeft`): a trivial
+    copy/move assignment emits the source lvalue, then the object, then
+    the `memcpy` (nothing for an empty class); any other assignment
+    operator emits its argument, then the object, then names the callee.
+    `a.operator=(b)` keeps object-first order (WP-172;
+    `tests/codegen/assign_rhs_first.cpp`).
   - a call of a builtin (callee a `BuiltinFnToFnPtr` cast of a
     `kiln_ast::decl::builtin` function) is never a call of the builtin
     (`builtins.rs`, clang `EmitBuiltinExpr`; landed in WP-088):
@@ -421,12 +432,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 157 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 158 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
   `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
-  work packages' cases): 313/314 pairs exact; `DEVIATIONS` holds
+  work packages' cases): 315/316 pairs exact; `DEVIATIONS` holds
   `global_init_array_eh` on aarch64 (§7f).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
