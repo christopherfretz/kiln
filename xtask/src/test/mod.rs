@@ -13,7 +13,9 @@ mod report;
 mod runner;
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -204,12 +206,12 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     };
     let compiler_id = crate::util::identify(&compiler)?;
     let compiler_kind = compiler_id.kind;
-    let (oracle, oracle_kind) = if opts.no_oracle {
-        (None, CompilerKind::Other)
+    let (oracle, oracle_kind, oracle_clang) = if opts.no_oracle {
+        (None, CompilerKind::Other, None)
     } else {
-        let kind = detect_kind(&opts.oracle)
+        let id = crate::util::identify(&opts.oracle)
             .map_err(|e| format!("{e} (pass --no-oracle to skip oracle comparisons)"))?;
-        (Some(opts.oracle.clone()), kind)
+        (Some(opts.oracle.clone()), id.kind, id.clang_version())
     };
 
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -221,8 +223,10 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         root,
         compiler,
         compiler_kind,
+        compiler_clang: compiler_id.clang_version(),
         oracle,
         oracle_kind,
+        oracle_clang,
         update: opts.update,
         scratch,
         compile_timeout: Duration::from_secs(120),
@@ -298,6 +302,7 @@ fn run_all(cfg: &runner::Config, cases: &[discover::TestCase], jobs: usize) -> V
 }
 
 /// `--version` tells kiln (`kiln version ...`) from clang (`... clang version ...`).
+#[cfg(test)]
 fn detect_kind(compiler: &Path) -> Result<CompilerKind, String> {
     crate::util::identify(compiler).map(|id| id.kind)
 }

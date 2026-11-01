@@ -94,7 +94,6 @@ __builtin_wcslen 1 1
 __builtin_wcsncmp 1 1
 __builtin_wmemchr 1 1
 __builtin_wmemcmp 1 1
-__can_pass_in_regs 1 0
 __decay 1 0
 __has_nothrow_assign 1 0
 __has_nothrow_constructor 1 0
@@ -174,9 +173,6 @@ __is_volatile 1 0
 __make_integer_seq 1 0
 __make_signed 1 0
 __make_unsigned 1 0
-__reference_binds_to_temporary 1 0
-__reference_constructs_from_temporary 1 0
-__reference_converts_from_temporary 1 0
 __remove_all_extents 1 0
 __remove_const 1 0
 __remove_cv 1 0

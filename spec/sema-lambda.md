@@ -254,7 +254,7 @@ dependent body is deferred to the specialization.
 ## 6. Diagnostics
 
 All lambda diagnostics use clang's wording, location and notes (the ids
-added in `kiln_diag/src/ids.rs`: `parse_*lambda*`, `parse_expected_*capture*`,
+in `kiln_diag/src/ids/parse.rs` and `ids/sema_*.rs`: `parse_*lambda*`, `parse_expected_*capture*`,
 `sema_lambda_impcap`, `sema_capture_*`, `sema_this_capture`,
 `sema_deprecated_this_capture`, `sema_assign_captured_by_copy`,
 `sema_reference_to_local_in_enclosing`, `sema_falloff_nonvoid_lambda*`
