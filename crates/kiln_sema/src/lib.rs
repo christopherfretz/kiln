@@ -54,6 +54,7 @@ pub mod target;
 pub mod templ;
 mod try_stmt;
 mod type_diff;
+mod unused_file_scope;
 mod unused_var;
 pub mod using;
 mod vector;

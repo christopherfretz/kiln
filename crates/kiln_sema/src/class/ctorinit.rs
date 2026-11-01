@@ -1087,6 +1087,7 @@ impl Sema<'_, '_> {
     /// constructors ([class.base.init]/6).
     pub fn act_on_end_of_translation_unit(&mut self) {
         self.check_delegating_cycles();
+        self.diagnose_unused_file_scope_vars();
     }
 
     /// The end of the translation unit: clang `CheckDelegatingCtorCycles`
