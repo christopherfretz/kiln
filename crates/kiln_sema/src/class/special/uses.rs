@@ -18,9 +18,10 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use super::SpecialKind;
-use super::define::InitEntity;
+use super::define::{CtorCall, InitEntity};
 use super::deletion::Selected;
 use crate::Sema;
+use crate::class::{DeletedAs, DiagSites, InitStyle as CtorStyle};
 
 /// A call of a deleted non-member function by its unqualified name,
 /// diagnosed at the call unless the call stays dependent.
@@ -153,21 +154,37 @@ impl Sema<'_, '_> {
             return;
         }
         let mut ok = true;
-        if let Selected::Missing =
-            self.select_special(class, SpecialKind::DefaultCtor, Quals::NONE, Quals::NONE)
         {
-            self.unsupported("default-initialization without a default constructor", loc);
-            ok = false;
-        } else {
-            let e = self.construct_special(
-                ty,
-                class,
-                SpecialKind::DefaultCtor,
-                None,
-                ConstructionKind::Complete,
-                loc,
-                InitEntity::Var,
-            );
+            let e = if let Selected::Missing =
+                self.select_special(class, SpecialKind::DefaultCtor, Quals::NONE, Quals::NONE)
+            {
+                // No usable default constructor: clang's "no matching
+                // constructor for initialization" with the candidates of
+                // [over.match.ctor] for no arguments, kept in `ovl.failed`.
+                let sel = self.resolve_ctor(class, &[], CtorStyle::Direct);
+                let call = CtorCall::new(&[]);
+                let sites = DiagSites { access: loc, deleted: loc, deleted_as: DeletedAs::Call };
+                self.use_ctor(
+                    sel,
+                    ty,
+                    class,
+                    SpecialKind::DefaultCtor,
+                    call,
+                    loc,
+                    InitEntity::Var,
+                    sites,
+                )
+            } else {
+                self.construct_special(
+                    ty,
+                    class,
+                    SpecialKind::DefaultCtor,
+                    None,
+                    ConstructionKind::Complete,
+                    loc,
+                    InitEntity::Var,
+                )
+            };
             match e {
                 Some(e) => {
                     // A full-expression ([intro.execution]/5.4): its

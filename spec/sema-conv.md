@@ -243,9 +243,27 @@ the target:
 1. `1.0q` (`__float128`) is not supported: `kiln_lex`'s `FloatSuffix` has no `q`.
 2. An integer literal too large for any type is an error with no
    recovered value. clang recovers it as `unsigned long long` 0.
-3. Not implemented: `-Wconstant-conversion`, `-Wliteral-conversion`,
+3. Implicit-conversion warnings (`impcast.rs`, clang
+   `CheckImplicitConversion`) cover `-Wliteral-conversion` (floating
+   constants) and, since WP-217, `-Wconstant-conversion` (on by default,
+   `implicit conversion from 'int' to 'const signed char' changes value
+   from 300 to 44`): an integral constant whose value needs more bits
+   than the target (significant bits when negative, active bits
+   otherwise), or a non-negative signed value of exactly the target's
+   width that becomes negative unless spelled as a hex, octal or binary
+   literal. The target type prints with its qualifiers. Not for a `bool`
+   target, the same canonical type, dependent or error operands, an
+   unevaluated operand, an immediate or constant-evaluated context, or a
+   constant expression (`act_on_constant_full_expr`, which sets
+   `Sema::constant_full_expr` for array bounds, bit-field widths,
+   enumerators, `static_assert`, `alignas`, case values and template
+   arguments). Conditional arms are checked separately. The warning goes
+   through `diag_if_reachable`. An out-of-range constant assigned to a
+   bit-field is skipped (clang's -Wbitfield-constant-conversion is not
+   implemented). Not implemented: -Wbitfield-constant-conversion,
    `-Wnull-conversion`, `-Wimplicit-int-conversion` and the other
-   conversion warnings.
+   conversion warnings; non-dependent full-expressions are not
+   re-checked per instantiation.
 4. The deprecated conversion from a string literal to `char*` is rejected,
    as C++11 and later require. clang accepts it with a warning under
    `-Wwritable-strings`.

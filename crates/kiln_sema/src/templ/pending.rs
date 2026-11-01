@@ -139,7 +139,67 @@ impl Sema<'_, '_> {
             self.ast.templates.add_end_of_tu_def(p.decl);
         } else if is_var && self.inst.member_defs.contains(&p.decl) {
             self.undefined_explicit_inst(p.decl, p.poi);
+            self.undefined_var_template(p.decl, p.poi);
+        } else if self.is_var_spec(p.decl) && self.var_pattern_def(p.decl).is_none() {
+            self.undefined_var_template(p.decl, p.poi);
         }
+    }
+
+    /// Whether a class enclosing member `d` is explicitly instantiated
+    /// by a declaration (`extern template struct S<int>;`): clang
+    /// `InstantiateClassMembers` gives its static data members that kind
+    /// ([temp.explicit]/10), so their definitions are not required here.
+    fn in_explicit_inst_declaration(&self, d: DeclId) -> bool {
+        use kiln_ast::templates::SpecKind;
+        let mut c = self.ast.decls.get(d).ctx();
+        while let Some(x) =
+            c.filter(|&x| self.kind_of(x).payload() == kiln_ast::decl::PayloadClass::Record)
+        {
+            let first = self.ast.first(x);
+            let kind = self
+                .ast
+                .spec_info(first)
+                .map(|(_, s)| s.kind)
+                .or_else(|| self.ast.member_spec_info(first).map(|(_, m)| m.kind));
+            if kind == Some(SpecKind::ExplicitInstantiationDeclaration) {
+                return true;
+            }
+            c = self.ast.decls.get(x).ctx();
+        }
+        false
+    }
+
+    /// clang `InstantiateVariableDefinition` at the end of the TU: an
+    /// implicitly instantiated variable template specialization or static
+    /// data member odr-used without a definition anywhere in the TU is
+    /// `-Wundefined-var-template` at its point of instantiation, unless
+    /// an error was reported before or the pattern is in a system header
+    /// (§4.5).
+    fn undefined_var_template(&mut self, d: DeclId, poi: Loc) {
+        use kiln_ast::templates::SpecKind;
+        let (kind, pattern, name) = if let Some((_, s)) = self.ast.spec_info(d) {
+            let (kind, from, template, args) = (s.kind, s.from, s.template, s.args);
+            (kind, from, self.spec_decl_name(template, args))
+        } else if let Some((_, m)) = self.ast.member_spec_info(d) {
+            let (kind, from) = (m.kind, m.instantiated_from);
+            (kind, from, self.qualified_decl_name(d))
+        } else {
+            return;
+        };
+        let pattern_loc = self.ast.decls.get(self.ast.latest(pattern)).loc();
+        if kind != SpecKind::ImplicitInstantiation
+            || self.in_explicit_inst_declaration(d)
+            || self.inst.fatal
+            || self.has_errors()
+            || self.diags.sm().is_in_system_header(pattern_loc)
+        {
+            return;
+        }
+        let e = self.diag(kiln_diag::DiagId::sema_undefined_var_template, poi).arg(name.clone());
+        let fwd = self.diag(kiln_diag::DiagId::note_forward_template_decl, pattern_loc);
+        let hint = self.diag(kiln_diag::DiagId::note_inst_declaration_hint, poi).arg(name);
+        // Repeated per queued use, as clang (no deduplication).
+        self.emit(e.with_note(fwd).with_note(hint).allow_duplicate());
     }
 
     /// clang `InstantiateFunctionDefinition`/`InstantiateVariableDefinition`

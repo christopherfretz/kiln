@@ -32,6 +32,9 @@ impl Sema<'_, '_> {
     /// copies them, so is not checked), then a throw in a non-throwing
     /// function.
     pub(crate) fn late_analysis(&mut self, f: DeclId, body: StmtId, has_fallthrough: bool) {
+        // clang `DiagnoseSwitchLabelsFallthrough`: the unannotated
+        // fall-throughs, then the misplaced annotations.
+        self.check_implicit_fallthrough(body);
         if has_fallthrough {
             self.check_fallthrough_placement(body);
         }

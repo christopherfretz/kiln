@@ -165,6 +165,10 @@ Constructors:
     exception specification Sema built from the declarator (§4.7);
     `ExcSpec::None` when none was written (WP-058 added the field)
   - attributes, bit-width, `init_style`, and context
+  - `parens` and `after_comma` (spec/parse.md §4): applying the chunks
+    wraps the type in `Paren` sugar for each pair of parentheses around
+    exactly the chunks applied so far (`declarator_parens`; none around
+    the outermost type or a function or array type, spec/types.md)
 
 ### 4.2 Declarator to declaration
 `act_on_declarator` turns a `Declarator` into a declaration:
@@ -265,6 +269,36 @@ Redeclaration and linkage rules:
   (-Wextern-initializer) unless its base element type is const, it is
   `extern "C"`, or it is a template instantiation (clang
   `AddInitializerToDecl`). Explicit and partial specializations warn.
+
+- **Redundant parentheses** (`vexing.rs`, clang
+  `warnAboutRedundantParens`, WP-191): when the outermost declarator
+  operator is a pair of grouping parentheses (`T(x);`), a block-scope,
+  condition or for-init declarator of class or dependent type with only
+  a type specifier, a simple name that ordinary lookup finds, no
+  function, reference, member-pointer or unbounded array chunk, and no
+  preceding comma could be a function-style cast: "parentheses were
+  disambiguated as redundant parentheses around declaration of variable
+  named 'x'" [-Wvexing-parse] with clang's notes (`add a variable name
+  to declare a ...`, unless the class is complete with a trivial
+  destructor; `add enclosing parentheses to perform a function-style
+  cast`; `remove parentheses to silence this warning`). Otherwise the
+  off-by-default "redundant parentheses surrounding declarator"
+  [-Wredundant-parens], except for `A (::B)`. Not in an instantiation.
+- **Qualified declarator-ids** (`qualified_decl.rs`, clang
+  `diagnoseQualifiedDeclaration`, WP-191): a qualified name must be
+  declared in a scope that encloses its qualifier's: "definition or
+  redeclaration of 'a' cannot name the global scope" (`T(::a);`), "...
+  not allowed inside a function", "cannot define or redeclare 'a' here
+  because namespace 'N' does not enclose namespace 'M'", and for members
+  "non-friend class member 'f' cannot have a qualified name" / "extra
+  qualification on member 'f'". The declaration is then dropped, or (for
+  the recoverable ones) declared unqualified.
+- **Default-initialization without a default constructor**
+  (`check_class_default_init`, WP-191): a class variable with no
+  initializer whose default constructor is missing is resolved as
+  `T x()`'s overload set, so the error is "no matching constructor for
+  initialization of 'S'" with a note per candidate (clang
+  `InitializationSequence` with no arguments).
 
 ### 4.3 Functions
 - `act_on_start_function` and `act_on_finish_function` bracket a body.
@@ -431,8 +465,47 @@ Redeclaration and linkage rules:
     The errors come in clang's `SmallPtrSet<_, 8>` order: source order,
     each valid one erased (by its label's order) moving the last element
     into its hole; past 8, source order (clang's is by pointer).
-    -Wimplicit-fallthrough and -Wunreachable-code-fallthrough are not
-    implemented.
+  - **Unannotated fall-through (WP-217; `implicit_fallthrough.rs`,
+    clang `DiagnoseSwitchLabelsFallthrough` / `FallthroughMapper`)**,
+    run first in `late_analysis` (so after the queued runtime warnings
+    and before the placement errors), not in a template definition or
+    once an error occurred, but in each instantiation:
+    - kiln has no CFG. A label's predecessors are found structurally:
+      the statements before it in its block, walked back past empty
+      ones (`;`, `{}`, an empty label block, which clang's
+      `getLastStmt` counts as the predecessor itself), the branches of
+      an `if` ending there (plus the false edge of an `if` with no
+      else), and the condition of an `if`/`while`/`for` whose branch or
+      body the label starts. Reachability comes from `Sema::stmt_flow`
+      (`try_stmt/reach.rs`): the `Reach` walk recording each
+      statement's live-in and live-out with every case label reachable
+      (clang `fillReachableBlocks`). A switch dispatch, a label directly
+      before (`case 1: case 2:`, `L: case 2:`) and an unreachable
+      predecessor are good; a reachable `[[fallthrough]];` is
+      annotated; anything else is unannotated.
+    - At each label with an unannotated predecessor:
+      `unannotated fall-through between switch labels`
+      [-Wimplicit-fallthrough, off by default, not in -Wall/-Wextra] at
+      the `case`/`default`. In an instantiation the instantiation note
+      comes next. Then, when no predecessor is annotated and the label
+      is not spelled by a macro: `insert '[[fallthrough]];' to silence
+      this warning` (`'[[clang::fallthrough]];'` before C++17, from
+      `Sema::std`, set by the parser) unless the label's block holds
+      only `break`, then `insert 'break;' to avoid fall-through`, each
+      with an insertion fix-it at the label.
+    - An unreachable `[[fallthrough]];` that falls into a label (found by
+      scanning the unreachable straight-line run backwards): `fallthrough
+      annotation in unreachable code` [-Wunreachable-code-fallthrough, in
+      -Wunreachable-code] at the attribute, before that label's warning;
+      it counts as annotated. Not in an instantiation.
+    - Gaps: clang suggests a macro whose expansion is `[[fallthrough]]`
+      (`Preprocessor::getLastMacroWithSpelling`) instead of the
+      attribute; a label in a `do` or range-`for` body, or deeper in a
+      branch, is not followed (Duff's device works because its labels
+      follow statements in the `do` body); -Wimplicit-fallthrough-per-
+      function is not implemented; a -Werror-promoted warning counts as
+      an error and stops the analysis (clang's
+      `hasUncompilableErrorOccurred` ignores promoted warnings).
   - A `likely` after an `unlikely` (or the reverse) in the same
     sequence: `'unlikely' and 'likely' attributes are not compatible` at
     the second, with `note: conflicting attribute is here` at the first;
@@ -1403,6 +1476,15 @@ for them.
     value of function declared with pure|const attribute` [-Wunused-value]
     at the call's start. Nothing but `nodiscard` is diagnosed for an
     expression spelled in a macro body (clang `ShouldSuppress`).
+  - **In an instantiation (WP-217)**: clang rebuilds every expression
+    statement and for-increment (`TransformExprStmt` → `ActOnExprStmt`),
+    so the warning of a non-dependent one is reported again in each
+    instantiation, with its notes: `emit_unused` marks it
+    `allow_duplicate` (spec/diag.md §7.4) inside an instantiation. Not
+    the comma's left operand (checked once, as the comma is built). A
+    deprecated use is not re-diagnosed (the shared node is not rebuilt).
+    The warning's range is the whole expression where clang's is the
+    callee (a caret difference only).
   - **Comma (WP-182)**: the left operand of a built-in comma is checked
     the same way when the comma is built (clang `CheckCommaOperands`),
     with the generic warning spelled `left operand of comma operator has
@@ -1429,6 +1511,9 @@ for them.
     `lambda_mangle.var`); otherwise at once.
   - The warning carries the expression's range, so a macro-argument
     location gets clang's `expanded from macro` note (spec/diag.md §8.4).
+  - The run-time diagnostics of §5.15 use the same queue. kiln has no
+    constant-evaluated or discarded-statement context, where clang's
+    `DiagRuntimeBehavior` drops them too.
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **Unused variables (WP-203; clang `ShouldDiagnoseUnusedDecl` /
@@ -1456,10 +1541,43 @@ for them.
     created (`diagnose_unused_inst_var`, from `subst` `var_decl`, clang
     `TemplateDeclInstantiator::VisitVarDecl`) by the pattern's
     referenced flag, with the instantiation note.
-  - Gaps: -Wunused-but-set-variable, -Wunused-const-variable,
-    -Wunused-exception-parameter and decompositions are not diagnosed; a
-    type-dependent class-typed initializer is always skipped (clang
-    skips only when some constructor is non-trivial).
+  - Structured bindings (WP-217): a structured binding declaration is
+    diagnosed at its `[`, named `[a, b]`, when none of its bindings is
+    referenced or marked unused (and not all are placeholders), whatever
+    its storage or reference kind; one of dependent type is diagnosed as
+    it is instantiated.
+  - A class-typed variable with a type-dependent initializer (WP-217) is
+    diagnosed in the template definition unless its class declares a
+    non-trivial constructor or the initializer is an unresolved
+    construction with dependent arguments.
+  - `-Wunused-exception-parameter` (WP-217, clang
+    `warn_unused_exception_param`, off by default): a named exception
+    variable never referenced, when its handler scope is left; not a `_`,
+    `[[maybe_unused]]` (the parser takes attributes on the handler's
+    declaration) or one whose class has a non-trivial destructor (a
+    reference to one still counts).
+  - `-Wunused-but-set-variable` (WP-217, clang `DiagnoseUnusedButSetDecl`
+    / `RefsMinusAssignments`, in -Wunused): `variable 'x' set but not
+    used` for a local whose every reference is the target of a
+    discarded-value assignment, compound assignment or increment (an
+    expression statement, a comma's left operand, a for-increment, an
+    operand cast to void). `Sema::refs_minus_assign` counts references
+    minus such targets. Not for a reference, class, dependent,
+    `[[maybe_unused]]` or `_` variable, a parenthesized assignment, or a
+    compound assignment/increment of a volatile one; diagnosed with the
+    unused variables in location order.
+  - Namespace-scope variables (WP-217, `unused_file_scope.rs`, clang
+    `ShouldWarnIfUnusedFileScopedDecl`): at the end of the translation
+    unit, a variable with internal linkage declared in the main file and
+    never referenced is `unused variable 'x'` [-Wunused-variable], or
+    `unused variable 'x'` [-Wunused-const-variable, in -Wunused-variable]
+    when `const`, in declaration order and none once an error occurred;
+    not a variable template, a static data member, or one referenced but
+    not odr-used.
+  - Gaps: -Wunused-but-set-parameter; -Wunneeded-internal-declaration
+    and -Wunused-template for variables; static data members of class
+    templates; C++26 `_` placeholder redeclarations ("redefinition of
+    '_'").
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
   with `OffsetofComponent`s; clang's `BuildBuiltinOffsetOf`): a
   `size_t` prvalue `OffsetOfExpr`.
@@ -1487,9 +1605,18 @@ for them.
     error;
   - an incomplete type is diagnosed with the forward-declaration note.
 
-  Class and array literals (temporary materialization) and literals
-  at namespace scope (constant elements, `ConstantExpr` wrapping) are
-  reported as not supported yet.
+  - a class literal (WP-191) is list-initialized as a direct-list
+    initialization (`list_construct`, `InitStyle::DirectList`): a
+    class with constructors holds a `CXXTemporaryObjectExpr`, an
+    aggregate its `InitListExpr`; an abstract class is an error, and a
+    class with a non-trivial destructor wraps the literal in a
+    `CXXBindTemporaryExpr`;
+  - a dependent literal holds the list as written (an `InitListExpr`
+    of type `void`) until instantiation.
+
+  Array literals of a dependent type and literals at namespace scope
+  (constant elements, `ConstantExpr` wrapping) are reported as not
+  supported yet.
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
@@ -1559,6 +1686,16 @@ and aggregate element types.
   without destructors), aligned when over-aligned. Class element types
   with a non-trivial destructor are unsupported (WP-067b / WP-076);
   class-scope `operator delete` is `todo(WP-068b)`.
+- The element class's destructor ([expr.delete]/6, and for `new T[n]`
+  [expr.new]/27) is selected (`mark_element_dtor_referenced`, skipped
+  for an invalid or dependent class): a deleted one (such as a union's
+  with a non-trivial variant member, [class.union.general]/3) is
+  `attempt to use a deleted function` with the deletion notes and the
+  expression fails; an inaccessible one is `calling a private destructor
+  of class 'P'` at the operand (`sema_access_dtor`). For `new T[n]`
+  both are at the allocated type, the access error worded as for a
+  temporary (`temporary of type 'P' has private destructor`), as clang's
+  `ActOnCXXDelete` / `BuildCXXNew` do.
 - Gaps: `-fno-sized-deallocation` only removes the macro (Sema always
   selects the sized form, clang's C++14+ default); `-Wmismatched-new-delete`
   is not reported; a non-constant bound in a parenthesized type-id is a
@@ -1816,6 +1953,114 @@ and `DiagnoseMisalignedMembers`:
   - An anonymous union or struct member as the culprit prints as `''`.
     clang prints `C::(anonymous union at ...)`.
 - Test: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`.
+
+### 5.15 `-Wnull-dereference` (`null_deref.rs`, WP-191)
+The two syntactic `*null` checks of clang 19
+(`CheckForNullPointerDereference`). The pattern is a `*p` found under the
+expression with parentheses, casts, full-expressions and materialized
+temporaries ignored, where `p` (also with those ignored) is a null
+pointer constant: a zero integer literal, a `std::nullptr_t` value or
+`__null` (`(1 - 1)` is not one).
+- **Indirection** (`check_null_indirection`): run from
+  `conv::lvalue_to_rvalue` (clang `DefaultLvalueConversion`) and on the
+  left operand of a builtin simple or compound assignment (clang
+  `CheckAssignmentOperands`; not for `++`/`--`). The operand must have
+  pointer type and the dereference must not be volatile. The warning
+  "indirection of non-volatile null pointer will be deleted, not trap"
+  [-Wnull-dereference] carries the operand's range and the note
+  "consider using __builtin_trap() or qualifying pointer with
+  'volatile'", both at the `*`.
+- **Reference binding** (`check_null_reference_binding`): run where
+  `conv::bind_reference` binds a glvalue directly (clang
+  `SK_BindReference`): "binding dereferenced null pointer to reference
+  has undefined behavior" [-Wnull-dereference], volatile or not. A
+  binding through a converted temporary (`const long &r = *(int *)0`)
+  loads instead and gets the indirection warning.
+- Both go through `diag_if_reachable` and are dropped in an unevaluated
+  operand or an immediate function context (§5.1 reachability). Member
+  access, subscripts, `&*`, `(void)` and discarded operands load nothing
+  and are not diagnosed.
+- **Deviations:** a non-dependent `*null` in a template is reported at
+  the definition only, because instantiation shares non-dependent
+  subtrees; clang re-diagnoses it in each instantiation. A dependent
+  one (`*(T *)0`) is reported per instantiation, as clang does. kiln
+  does not parse `__null` yet.
+- Tests: `tests/conformance/expr.unary.op/null-dereference-indirection.cpp`,
+  `tests/conformance/dcl.init.ref/null-dereference-binding.cpp`.
+### 5.16 GNU `_Complex` (`complex.rs`, `conv/`, WP-211)
+clang 19's C99/GNU complex support in C++:
+- **Types.** `_Complex` combines with `float`, `double`, `long double`
+  and the integer types (`char` through `long long`, signed or unsigned).
+  Plain `_Complex` is `_Complex double` with a warning. Any other base
+  (`bool`, `void`, `wchar_t`, `char8_t`, `char16_t`, `char32_t`,
+  `__int128`, `auto`, `__bf16`, a typedef name, spelled `'type-name'`) is
+  `sema_invalid_complex_spec`, and the declaration continues with the base
+  type (so `_Complex void v;` also reports the incomplete type).
+  `-pedantic` warns `'_Complex' is a C99 extension` on each keyword
+  (parser, `-Wc99-extensions`).
+- **Traits** (clang): `__is_arithmetic`, `__is_fundamental`,
+  `__is_scalar` and `__is_aggregate` are true for every complex type;
+  `__is_floating_point` is true for a complex floating type;
+  `__is_integral`, `__is_signed` and `__is_unsigned` are false.
+- **Standard conversions** (`conv/scs.rs`): complex promotion
+  (`_Complex float` to `_Complex double`, Promotion rank), complex
+  conversion, and complex-real conversion in either direction (a rank
+  worse than Conversion), plus complex-to-`bool`. The cast kinds are
+  clang's `*RealToComplex`, `*ComplexCast`, `*ComplexToReal`,
+  `*ComplexToBoolean`, `IntegralComplexToFloatingComplex` and back.
+  Sugar on the target type is kept in the cast type.
+- **Usual arithmetic conversions** (`conv/arith.rs`, clang
+  `handleComplexConversion`): a real floating operand keeps its realness
+  and only its precision is promoted. An integer operand of a complex
+  floating type, and a real operand of a complex integer type, become
+  complex. Two complex integer types take the elements' common integer
+  type without promotion (`_Complex unsigned char + _Complex unsigned
+  char` stays `_Complex unsigned char`). A compound assignment's left
+  operand is not converted.
+- **Operators.** Complex operands allow unary `+ - ~` (`~` is the
+  conjugate), `!`, binary `+ - * /`, `==`/`!=`, `&&`/`||`/`?:` conditions,
+  assignment and compound assignment. `<`/`>` and `%` are invalid
+  operands. `++`/`--` are allowed; under `-pedantic` they give
+  `'++' on an object of complex type is a C2y extension`
+  (`-Wc2y-extensions`) at the operator.
+- **`__real e` / `__imag e`** (clang `CheckRealImagOperand`): the element
+  type of a complex operand, or a real arithmetic operand's own type.
+  `__real` keeps the operand's value category. `__imag` does for a
+  complex operand, and is a zero prvalue otherwise.
+- **`__builtin_complex(re, im)`**: two operands of the same real floating
+  type `T` give `_Complex T`. Other operand types are diagnosed as clang
+  does.
+- **List initialization** (clang `CheckComplexType`): `{re, im}`
+  initializes the parts, each converted as a list element with narrowing
+  checked. A third clause is excess. One clause initializes from a
+  scalar.
+- **GNU imaginary constants.** The lexer sets `imaginary` for an
+  `i`/`j` suffix (spec/lex.md). `act_on_{integer,float}_literal` builds
+  the plain literal wrapped in an `ImaginaryLiteral` of `_Complex T`, and
+  emits `sema_imaginary_constant` ("imaginary constants are a GNU
+  extension", `-Wgnu-imaginary-constant`, off by default) at the literal.
+  When the suffix is also a valid ud-suffix (`1i`, `1.0if`, `1il`), literal
+  operator lookup runs first. If no cooked, raw or template form exists,
+  sema falls back to the imaginary constant without a diagnostic (clang
+  `LookupLiteralOperator` with `DiagnoseMissing = false`). The `<complex>`
+  operators therefore still win where they are visible.
+- **`-Wuser-defined-literals` tail.** "no literal will invoke this
+  operator" is omitted for any valid ud-suffix: the numeric library
+  suffixes and `sv`, using clang's `StringLiteralParser::isValidUDSuffix`.
+  Sema has no `-std`, so the C++20 set is used.
+- Tests: `tests/conformance/ext.complex/` (`types`, `constexpr`,
+  `diagnostics`, `pedantic`, `imaginary`).
+
+### 5.17 Value-dependent static member calls and dependent-base members (WP-211)
+- A call to a static member function of the current instantiation is
+  value-dependent ([temp.dep.constexpr]/2.3). An `if constexpr` on it in a
+  member initializer is deferred to instantiation, as libc++
+  `mdspan`'s `__rank_` needs
+  (`tests/conformance/temp.dep.constexpr/static-member-function-current-instantiation.cpp`).
+- An overloaded `B::f` named through a dependent base that is not `B`
+  is called without an object argument. It is diagnosed with clang's
+  `diagnoseInstanceReference` wording ("call to non-static member
+  function without an object argument").
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
@@ -2367,6 +2612,36 @@ Tests: `tests/conformance/dcl.fct.def.general/predefined-*.cpp`,
 Gap: a function with a deduced return type prints `auto` where clang
 evaluates the source-location name after deduction.
 
+### 7.9 `-Wempty-body` (`empty_body.rs`, WP-191)
+clang 19's `DiagnoseEmptyStmtBody` / `DiagnoseEmptyLoopBody`. The body is
+a null statement whose `;` is spelled on the presumed line of the
+statement's `)` (for `switch`, of the condition's end). The warning
+("if statement has empty body", "switch statement has empty body",
+"range-based for loop has empty body", "for loop has empty body",
+"while loop has empty body" [-Wempty-body]) and the note "put the
+semicolon on a separate line to silence this warning" are both at the
+`;`.
+- The parser calls `check_empty_body` for an `if` without `else` (not
+  `if consteval`; `if constexpr` counts) and a range-based `for`, and
+  `check_empty_switch_body` for a `switch`, when the statement is built.
+- A `for` or `while` is recorded (`note_loop_body`, in
+  `Sema::empty_loop_bodies`). When its enclosing compound statement is
+  finished, `check_empty_loop_bodies` warns if the next statement of
+  that block is a compound statement or begins in a later presumed
+  column than the loop. `do ; while (c);` never warns.
+- A `;` preceded by a macro that expanded to nothing (`if (c) EMPTY;`)
+  does not warn. clang reads `NullStmt::hasLeadingEmptyMacro`, a
+  preprocessor token flag. kiln reads the source instead: anything other
+  than whitespace and comments between the `)` and the `;`. A `;` that
+  comes from a macro is spelled on another line and does not warn.
+- Nothing is diagnosed in a template instantiation; a template definition
+  warns once.
+- **Deviation:** a block-scope declaration with leading attributes
+  (`[[maybe_unused]] int q;`) begins at its decl-specifiers in kiln, so
+  a loop before it may warn where clang (which begins at the `[[`) does
+  not.
+- Test: `tests/conformance/stmt.pre/empty-body-warning.cpp`.
+
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
 Sema does no constant evaluation of its own: every constant it needs
@@ -2463,7 +2738,8 @@ unscoped enumeration is reported (spec/oven.md "Integration").
   - `dynamic_cast` and polymorphic `typeid`
   - class and array temporaries (§6.1) and compound literals (§5.8)
   - `-Wconstant-conversion` and `-Wliteral-conversion` alongside
-    narrowing errors in list-initialization
+    narrowing errors in list-initialization (outside braced lists they
+    landed: spec/sema-conv.md §9)
   - statement expressions: `-Wgnu-statement-expression`, jumps into
     one, and class-glvalue results
 - **Constant evaluation** (what the Oven supports in M2 is in

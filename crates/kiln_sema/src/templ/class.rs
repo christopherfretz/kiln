@@ -659,6 +659,13 @@ impl Sema<'_, '_> {
         self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &outer));
         self.replay_dependent_access(def, spec);
         self.pop_inst_frame();
+        // clang `InstantiateClass` returns the specialization's
+        // invalidity: the use that instantiated it fails quietly (`A<int>
+        // a;` is an invalid variable); later uses find it complete.
+        if self.ast.decls.get(spec).has(DeclFlags::INVALID) {
+            self.inst.undefined_diagnosed.set(Some(spec));
+            return false;
+        }
         self.ast.definition(spec).is_some()
     }
 
@@ -844,7 +851,18 @@ impl Sema<'_, '_> {
         if !deferred && !self.inst.member_defs.contains(&v) {
             if self.is_var_spec(v) && self.var_pattern_def(v).is_none() {
                 let used = self.unevaluated == 0;
-                self.inst.undefined_var_uses.entry(v).or_insert((loc, used)).1 |= used;
+                let poi = self.inst.undefined_var_uses.entry(v).or_insert((loc, used));
+                poi.1 |= used;
+                let poi = poi.0;
+                // clang `DoMarkVarDeclReferenced`: every odr-use of a
+                // specialization that cannot be constant queues it at its
+                // first reference (clang's FIXME: it cannot tell whether
+                // the definition was requested already), so a definition
+                // still missing at the end of the TU is reported once
+                // per use (-Wundefined-var-template, §4.5).
+                if used && !self.might_be_constant_var(v) && self.is_implicit_var_spec(v) {
+                    self.inst.pending.push_back(super::pending::PendingInst { decl: v, poi });
+                }
             }
             return;
         }
@@ -859,6 +877,12 @@ impl Sema<'_, '_> {
         } else {
             self.queue_instantiation(v, loc);
         }
+    }
+
+    /// Whether variable template specialization `v` is implicitly
+    /// instantiated (not explicitly specialized or instantiated).
+    fn is_implicit_var_spec(&self, v: DeclId) -> bool {
+        self.ast.spec_info(v).is_some_and(|(_, s)| s.kind == SpecKind::ImplicitInstantiation)
     }
 
     /// clang's `mightBeUsableInConstantExpressions`: `constexpr`, or a
@@ -1088,12 +1112,15 @@ impl Substituter<'_, '_, '_> {
     /// The base-specifiers of pattern definition `def`, substituted
     /// ([temp.inst]/3: the base-clause is instantiated with the class;
     /// [temp.variadic]/5: a pack expansion gives one base per element).
-    fn class_bases(&mut self, def: DeclId) -> Vec<BaseSpecInfo> {
+    /// The flag is set when a base failed to substitute (clang
+    /// `InstantiateClass`: the specialization is then invalid).
+    fn class_bases(&mut self, def: DeclId) -> (Vec<BaseSpecInfo>, bool) {
         // Base classes ([temp.inst]/3: the base-clause is instantiated
         // with the class).
         let bases: Vec<kiln_ast::decl::BaseSpec> =
             self.sema.ast.decls.bases(def, &self.sema.ast.lists).copied().collect();
         let mut specs = Vec::with_capacity(bases.len());
+        let mut failed = false;
         for b in bases {
             if b.pack_expansion {
                 // [temp.variadic]/5: one base per element.
@@ -1103,7 +1130,10 @@ impl Substituter<'_, '_, '_> {
                         let _ = self.unimplemented::<()>("base pack expansion", b.loc);
                         continue;
                     }
-                    Err(_) => continue,
+                    Err(_) => {
+                        failed = true;
+                        continue;
+                    }
                 };
                 for ty in tys {
                     specs.push(BaseSpecInfo {
@@ -1117,18 +1147,19 @@ impl Substituter<'_, '_, '_> {
                 }
                 continue;
             }
-            if let Ok(ty) = self.ty(b.ty, b.loc) {
-                specs.push(BaseSpecInfo {
+            match self.ty(b.ty, b.loc) {
+                Ok(ty) => specs.push(BaseSpecInfo {
                     ty,
                     loc: b.loc,
                     is_virtual: b.is_virtual,
                     access: b.access,
                     pack_expansion: false,
                     attrs: Vec::new(),
-                });
+                }),
+                Err(_) => failed = true,
             }
         }
-        specs
+        (specs, failed)
     }
 
     /// Defines `spec` from pattern definition `def` (bases, members,
@@ -1161,13 +1192,21 @@ impl Substituter<'_, '_, '_> {
         self.class_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
-        let specs = sub.class_bases(def);
+        let (specs, mut invalid) = sub.class_bases(def);
         sub.sema.act_on_base_specifiers(spec, &specs);
         let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
         let mut nsdmis = Vec::new();
+        // clang `InstantiateClass`: a base that fails to substitute, an
+        // invalid data member of the pattern, or one that instantiates
+        // invalid makes the specialization invalid (its default member
+        // initializers are not instantiated).
         for m in members {
             let n = *sub.sema.ast.decls.get(m);
             if n.flags().contains(DeclFlags::IMPLICIT) {
+                continue;
+            }
+            if n.has(DeclFlags::INVALID) && matches!(n.kind(), DeclKind::Field | DeclKind::Var) {
+                invalid = true;
                 continue;
             }
             // A friend function defined in the class is a member of the
@@ -1197,7 +1236,10 @@ impl Substituter<'_, '_, '_> {
             } else {
                 sub.member(m)
             };
+            let data = matches!(n.kind(), DeclKind::Field | DeclKind::Var);
+            invalid |= data && r.is_err();
             if let Ok(Some(x)) = r {
+                invalid |= data && sub.sema.ast.decls.get(x).has(DeclFlags::INVALID);
                 sub.member_link(x, m);
                 if let Some(l) = local.as_deref_mut() {
                     sub.collect_local_method(spec, x, m, l);
@@ -1210,9 +1252,12 @@ impl Substituter<'_, '_, '_> {
             }
         }
         sub.sema.act_on_finish_record_definition(spec, anonymous);
+        if invalid {
+            sub.sema.ast.decls.set_flags(spec, DeclFlags::INVALID);
+        }
         // Default member initializers: in the complete-class context
         // (clang instantiates them when a constructor uses them; a gap).
-        if !nsdmis.is_empty() {
+        if !nsdmis.is_empty() && !invalid {
             sub.sema.act_on_start_delayed_class(spec);
             for (field, init) in nsdmis {
                 if sub.sema.kind_of(field) != DeclKind::Field {
@@ -1224,13 +1269,16 @@ impl Substituter<'_, '_, '_> {
                 } else {
                     sub.expr(init).map(Initializer::Expr)
                 };
-                match i {
-                    Ok(i) => sub.sema.act_on_field_init(field, i),
-                    Err(SubstFail) => {
-                        if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
-                            sub.sema.nsdmi_this.pop();
-                        }
+                if let Ok(i) = i {
+                    sub.sema.act_on_field_init(field, i);
+                } else {
+                    if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
+                        sub.sema.nsdmi_this.pop();
                     }
+                    // clang `InstantiateInClassInitializer`: the field
+                    // is invalid, so a constructor using the
+                    // initializer is quiet ([class.base.init]/9.1).
+                    sub.sema.ast.decls.set_flags(field, DeclFlags::INVALID);
                 }
             }
             sub.sema.act_on_finish_delayed_class(spec);

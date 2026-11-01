@@ -7,6 +7,7 @@
 // C++-linkage, block-scope or mismatched declaration is not recognized,
 // and neither is a `FILE` function declared before the `FILE` typedef.
 //@ expect: compile-ok
+//@ args: --target=aarch64-unknown-linux-gnu
 //@ strict-diags
 extern "C" int vfprintf(struct _IO_FILE *, const char *, __builtin_va_list);
 typedef struct _IO_FILE FILE;

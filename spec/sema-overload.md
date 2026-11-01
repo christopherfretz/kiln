@@ -1035,7 +1035,11 @@ Where the code differs from (or details) the design above:
   `better()` reads them, because it cannot deduce through `&self`.
 - Candidate notes print `candidate function [with T = int]` and
   `candidate function template not viable` (CWG1391) as clang's `FnDesc`
-  does (`diag.rs::spec_desc`).
+  does (`diag.rs::spec_desc`): the failing parameter is non-dependent in
+  the template, or made non-dependent by the explicit template arguments
+  (`deduce_spec` records the latter as `Candidate::explicit_nondep`, one
+  bit per parameter below 64), so it was checked before the
+  specialization was formed.
 - Not yet:
   - `ics.rs` (conversion function templates);
   - `arrow.rs` (`operator->` templates);

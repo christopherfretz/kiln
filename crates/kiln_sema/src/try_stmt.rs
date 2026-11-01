@@ -91,6 +91,12 @@ impl Sema<'_, '_> {
         let spec = VarSpec::new().with_exception_var(true);
         let v = self.builder().var(h, ty, spec, None);
         self.handler_type_locs.insert(v, type_loc);
+        let mut attrs = ds.attrs.clone();
+        attrs.extend(d.attrs.iter().copied());
+        if !attrs.is_empty() {
+            self.check_decl_attrs(v, &attrs);
+            let _ = self.builder().attach_attrs(v, &attrs);
+        }
         if !invalid {
             self.check_abstract_var(v);
         }

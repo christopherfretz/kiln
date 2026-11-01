@@ -1,18 +1,19 @@
 //@ expect: run
+//@ requires: target-aarch64
 //@ args: -latomic
 //@ strict-diags
-//@ diag: 23:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 23:3 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (16  bytes)"
 //@ diag: 24:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
 //@ diag: 24:3 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (16  bytes)"
-//@ diag: 26:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (3 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 27:9 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 27:9 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (16  bytes)"
-//@ diag: 30:9 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
-//@ diag: 30:9 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (16  bytes)"
+//@ diag: 25:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
+//@ diag: 25:3 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (16  bytes)"
+//@ diag: 27:3 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (3 bytes) exceeds the actual alignment (1 bytes)"
+//@ diag: 28:9 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
+//@ diag: 28:9 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (16  bytes)"
+//@ diag: 31:9 warning "misaligned atomic operation may incur significant performance penalty; the expected alignment (32 bytes) exceeds the actual alignment (1 bytes)"
+//@ diag: 31:9 warning "large atomic operation may incur significant performance penalty; the access size (32 bytes) exceeds the max lock-free size (16  bytes)"
 //@ stdout: x y z
 // WP-165: clang's -Watomic-alignment, reported by codegen for the atomic
-// builtins (on aarch64, whose max inline atomic width is 16 bytes);
+// builtins (the text has aarch64's 16-byte max inline atomic width);
 // __c11_atomic_init and _Atomic lvalue accesses report nothing.
 extern "C" int printf(const char *, ...);
 struct B { char c[32]; };

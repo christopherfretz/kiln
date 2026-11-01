@@ -296,9 +296,10 @@ pub fn encode_string(&CodeUnits, Encoding) -> String; // a literal spelling with
 pub fn classify_number(spelling: &str, Std) -> Number;
 pub struct Number<'s> { class: NumberClass<'s>, diags, has_error }
 pub enum NumberClass<'s> { Integer(IntegerLiteral<'s>), Floating(FloatLiteral<'s>), Invalid }
-pub struct IntegerLiteral<'s> { radix: Radix, digits: Cow<'s, str>, suffix: IntSuffix, ud_suffix }
+pub struct IntegerLiteral<'s> { radix: Radix, digits: Cow<'s, str>, suffix: IntSuffix, ud_suffix, imaginary: bool }
 //   value() -> Option<u128>  (the #if value; None = IntegerTooLarge)
-pub struct FloatLiteral<'s> { radix, int_digits, frac_digits, exponent: i64, suffix: FloatSuffix, ud_suffix }
+pub struct FloatLiteral<'s> { radix, int_digits, frac_digits, exponent: i64, suffix: FloatSuffix, ud_suffix, imaginary: bool }
+pub fn is_valid_ud_suffix(s: &str, Std) -> bool;  // clang NumericLiteralParser::isValidUDSuffix
 //   parse_f64() / parse_f32(): correctly rounded (ties to even), inf on overflow
 pub enum Radix { Binary, Octal, Decimal, Hex }  pub struct IntSuffix { unsigned, size: IntSize }
 pub enum IntSize { None, Long, LongLong, Size }
@@ -334,6 +335,13 @@ variants are additions to a `#[non_exhaustive]` enum.
 - ud-suffix ([lex.ext]): split off and returned as spelled; numbers
   accept `_x` (not `__x`) and from C++14 the standard-library suffixes
   (`h min s ms us ns il i if`, C++20 `d y`) as clang's `isValidUDSuffix`.
+- GNU imaginary constants (WP-211; clang `NumericLiteralParser`): one
+  `i`/`I`/`j`/`J` among the standard suffixes sets `imaginary` (`2.0i`,
+  `1.5fi`, `7ui`, `3LLJ`); a second one is an invalid suffix. When the
+  whole suffix is also a valid ud-suffix (`1i`, `1il`, `1.0if`) it is
+  kept in `ud_suffix` beside the flag and the standard suffix pieces
+  stay set, so sema can fall back from a failed literal operator lookup.
+  `#if` rejects imaginary literals (`pp_illegal_floating_literal`).
 - pp-numbers: binary (C++14; earlier `BinaryLiteralExtension`), octal,
   decimal, hex; hex floats (C++17; `HexFloatExtension`); digit separators
   (C++14; `DigitSeparatorPosition`); integer suffixes `u`, `l`, `ll`, `z`

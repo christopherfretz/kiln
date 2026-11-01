@@ -80,11 +80,12 @@ directives are also ERRORs.
 | `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
 | `inst-report: <golden.json>` | kiln-specific: the compile's template instantiation report must equal the golden, timings masked. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
+| `requires: target-<arch>` | Run only when the compiler's default target has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR); otherwise **SKIP** with the reason `requires target-<arch>; the default target is <host>`. The default target is taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228). |
 | `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `requires`, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -539,6 +540,7 @@ The outcomes are evaluated in this order:
 
 1. The file cannot be read, or its directives are invalid: **ERROR**.
 2. A `skip` marker applies: **SKIP**.
+   So does an unmet `requires: target-<arch>`.
 3. The test is kiln-specific and the compiler is not kiln: **SKIP**.
 4. The test runs. A process that runs out of memory under the cap is
    **KILLED** ("Resource limits"), and a broken test (missing `stdout-file`
