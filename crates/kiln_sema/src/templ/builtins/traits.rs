@@ -7,7 +7,8 @@
 //! [`Sema::build_type_trait`]. The evaluators follow clang 19's
 //! `EvaluateUnaryTypeTrait` / `EvaluateBinaryTypeTrait`, including its
 //! extensions (complex types count as arithmetic and scalar, a
-//! zero-length array is not an array).
+//! zero-length array is not an array). The traits clang 20-22 added
+//! follow clang 22.1 (`cxx26`).
 
 use kiln_ast::decl::{Access, DefinitionBits};
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, TypeTrait, ValueCategory};
@@ -23,6 +24,7 @@ use crate::conv::rank::builtin_signed;
 use crate::target;
 use crate::templ::stack::FrameKind;
 
+mod cxx26;
 mod special;
 
 impl Sema<'_, '_> {
@@ -331,6 +333,7 @@ impl Sema<'_, '_> {
     fn eval_binary_trait(&mut self, t: TypeTrait, a: QualType, b: QualType, rhs_loc: Loc) -> bool {
         match t {
             TypeTrait::IsSame | TypeTrait::IsSameAs => self.ast.types.same_type(a, b),
+            TypeTrait::IsVirtualBaseOf => self.is_virtual_base_of(a, b, rhs_loc),
             TypeTrait::IsBaseOf => {
                 let (Some(base), Some(derived)) =
                     (self.ast.types.as_record(a), self.ast.types.as_record(b))
@@ -813,6 +816,8 @@ impl Sema<'_, '_> {
             T::IsTriviallyEqualityComparable => self.trivially_equality_comparable(q, loc),
             T::CanPassInRegs => self.can_pass_in_regs_trait(q, loc),
             T::IsBitwiseCloneable => self.is_bitwise_cloneable(q, 0),
+            T::IsImplicitLifetime => self.is_implicit_lifetime(q),
+            T::IsCppTriviallyRelocatable => self.is_cxx_trivially_relocatable(q, 0),
             T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
                 self.is_destructible(t, q)
             }

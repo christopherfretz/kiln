@@ -165,35 +165,10 @@ impl Sema<'_, '_> {
     /// ([`Sema::can_throw`]) and `nounwind` in IR, as in clang; no
     /// `BuiltinAttr` is attached, so a call stays an ordinary call.
     pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
-        if self.kind_of(f) != DeclKind::Function || self.ast.prev(f).is_some() {
+        if self.ast.prev(f).is_some() {
             return;
         }
-        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
-            let r = self.ast.redecl_context(c);
-            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
-        });
-        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
-            return;
-        }
-        let Some(name) = self.ast.decls.get(f).name().as_ident() else { return };
-        let Some(info) = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied() else {
-            return;
-        };
-        let Some(ty) = self.ast.decls.get(f).ty() else { return };
-        let (ret, params, variadic) = self.builtin_signature(info.sig);
-        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
-            return;
-        }
-        let want = self.ast.types.function(
-            ret,
-            &params,
-            FuncInfo::new().with_variadic(variadic),
-            ExcSpec::None,
-        );
-        let have = self.with_exc_spec(ty, ExcSpec::None);
-        if !self.ast.types.same_type(want, have) {
-            return;
-        }
+        let Some(info) = self.lib_builtin_info(f) else { return };
         let loc = self.ast.decls.get(f).loc();
         for (bit, kind) in [
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
@@ -205,6 +180,42 @@ impl Sema<'_, '_> {
                 attrs.push(self.ast.attrs.push(n));
             }
         }
+    }
+
+    /// The [`builtin::LIB`] row declaration `f` is recognized as (clang's
+    /// library-builtin recognition in `ActOnFunctionDeclarator`, which
+    /// gives it a builtin id): a `Function` in a namespace-scope context
+    /// with C language linkage, named in the table and with the row's type
+    /// ignoring the exception specification.
+    pub(crate) fn lib_builtin_info(&mut self, f: DeclId) -> Option<builtin::Info> {
+        if self.kind_of(f) != DeclKind::Function {
+            return None;
+        }
+        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
+            let r = self.ast.redecl_context(c);
+            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
+        });
+        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
+            return None;
+        }
+        let name = self.ast.decls.get(f).name().as_ident()?;
+        let info = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied()?;
+        let ty = self.ast.decls.get(f).ty()?;
+        let (ret, params, variadic) = self.builtin_signature(info.sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return None;
+        }
+        let want = self.ast.types.function(
+            ret,
+            &params,
+            FuncInfo::new().with_variadic(variadic),
+            ExcSpec::None,
+        );
+        let have = self.with_exc_spec(ty, ExcSpec::None);
+        if !self.ast.types.same_type(want, have) {
+            return None;
+        }
+        Some(info)
     }
 
     /// Declares the builtin function `name` (first used at `loc`) if it
@@ -1075,7 +1086,7 @@ impl Sema<'_, '_> {
     /// `operator new` (`delete`) `f`: `(std::size_t` (`void*`), then
     /// optionally a `std::size_t` size (deallocation only), a
     /// `std::align_val_t` and a `const std::nothrow_t&`, in that order.
-    fn is_replaceable_global_alloc(&self, f: DeclId, delete: bool) -> bool {
+    pub(crate) fn is_replaceable_global_alloc(&self, f: DeclId, delete: bool) -> bool {
         let Some((ps, variadic)) = self.fn_params(f) else { return false };
         if variadic || ps.is_empty() {
             return false;

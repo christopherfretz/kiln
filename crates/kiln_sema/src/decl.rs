@@ -2463,6 +2463,10 @@ impl Sema<'_, '_> {
         };
         let dname = d.fn_decl_name(name);
         let fname = match d.op_name {
+            // clang's `DeclarationName` printing: `operator new`.
+            Some(op) if op.spelling().starts_with(char::is_alphabetic) => {
+                format!("operator {}", op.spelling())
+            }
             Some(op) => format!("operator{}", op.spelling()),
             None => self.decl_name_str(dname),
         };
@@ -2531,6 +2535,27 @@ impl Sema<'_, '_> {
             let (t, p) = self.act_on_global_new_delete_decl(op, ty);
             ty = t;
             prev_ok = p;
+            if let Some(p) = p {
+                let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                if !self.ast.types.same_type(pty, ty) && self.written_exc_spec(ty) == ExcSpec::None
+                {
+                    let delete =
+                        matches!(op, OverloadedOperator::Delete | OverloadedOperator::ArrayDelete);
+                    let replaceable = self.is_replaceable_global_alloc(p, delete);
+                    let (t, err) = self.merge_missing_exc_spec(
+                        p,
+                        pty,
+                        ty,
+                        (d.name_loc(), &fname, crate::except::missing_exc_spec_fixit_loc(d)),
+                        replaceable,
+                    );
+                    ty = t;
+                    if err {
+                        prev_ok = None;
+                        invalid_redecl = true;
+                    }
+                }
+            }
         } else if friend && d.qualifier.is_some() && (prev.is_none() || method && !matches_member) {
             let msg = self
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
@@ -2591,7 +2616,25 @@ impl Sema<'_, '_> {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
                 let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
-                if self.ast.types.same_type(pty, ty) {
+                // [except.spec]/5: a redeclaration without a specification.
+                let mut missing_err = false;
+                if !self.ast.types.same_type(pty, ty)
+                    && self.written_exc_spec(ty) == ExcSpec::None
+                    && self.same_ignoring_exc_spec(pty, ty)
+                {
+                    let (t, err) = self.merge_missing_exc_spec(
+                        p,
+                        pty,
+                        ty,
+                        (d.name_loc(), &fname, crate::except::missing_exc_spec_fixit_loc(d)),
+                        false,
+                    );
+                    ty = t;
+                    missing_err = err;
+                }
+                if missing_err {
+                    invalid_redecl = true;
+                } else if self.ast.types.same_type(pty, ty) {
                     prev_ok = Some(p);
                     // [dcl.spec.auto.general]/13: the redeclaration has
                     // the deduced return type.
@@ -2630,15 +2673,7 @@ impl Sema<'_, '_> {
                 } else if self.same_ignoring_exc_spec(pty, ty) {
                     // [except.spec]/5: every declaration of a function with
                     // a non-throwing specification has one, and only those.
-                    let msg = match self.written_exc_spec(ty) {
-                        ExcSpec::None => {
-                            let spelled = self.exc_spec_spelling(self.written_exc_spec(pty));
-                            self.diag(DiagId::sema_missing_exception_spec, d.name_loc())
-                                .arg(fname.clone())
-                                .arg(spelled)
-                        }
-                        _ => self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc()),
-                    };
+                    let msg = self.diag(DiagId::sema_exception_spec_mismatch, d.name_loc());
                     let msg = self.note_prev(msg, p, false);
                     self.emit(msg);
                     invalid_redecl = true;

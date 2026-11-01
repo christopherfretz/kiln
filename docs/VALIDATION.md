@@ -242,6 +242,18 @@ and `xtask libcxx --tag` picks a libc++ test checkout
 docs/status/wp-184-oracle-switch.md land, the corpus is baselined on 19 and
 `KILN_ORACLE=22` runs report FAILs (never mapping-table ERRORs). Contract:
 spec/harness.md "Oracle toolchain".
+
+**Clang compatibility level.** kiln reproduces one clang release's
+predefined macros and `__has_builtin`/`__has_feature`/`__has_extension`/
+`__has_attribute`/`__has_cpp_attribute` answers, chosen by
+`-fclang-compat=<major>`: 19 (the default) or 22 (spec/pp.md "clang
+compatibility level"; WP-263). The test runner passes the oracle's major
+version, so `KILN_ORACLE=22` (or `--oracle clang++-22`) compares kiln at
+level 22 with clang 22 and headers take the same `#if` branches under both. The
+`__cpp_*` feature-test macros are not part of the level: they follow what
+kiln implements (docs/status/cxx-features.md). Builtins that only clang 22
+has are tested by `skip(clang)` tests that were checked by hand against
+clang++-22.
 - `-E`: token-wise comparison after both outputs are re-lexed with
   `kiln_lex`. Identifiers and literals compare by spelling, punctuators by
   kind (a digraph equals its primary spelling), and whitespace is ignored.

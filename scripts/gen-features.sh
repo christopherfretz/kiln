@@ -1,63 +1,78 @@
 #!/usr/bin/env bash
-# Regenerate crates/kiln_pp/src/features_table.rs from the clang 19 oracle.
+# Regenerate crates/kiln_pp/src/features_table.rs from the clang 19 and
+# clang 22 oracles.
 #
 # The table answers kiln_pp's FeatureQueries hooks (`__has_feature`,
 # `__has_extension`, `__has_builtin`, `__has_constexpr_builtin`,
 # `__has_attribute`, `__has_cpp_attribute`, `__has_declspec_attribute`,
-# `__is_identifier`) exactly as `clang++-19 -E` answers them, for
+# `__is_identifier`) exactly as `clang++-19 -E` answers them, and, under
+# `-fclang-compat=22` (spec/pp.md "clang compatibility level"), exactly as
+# `clang++-22 -E` does, for
 #   targets  aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu
 #            (default CPU: -march/-mcpu/-m<feature> are not modeled),
 #   stds     c++98 c++11 c++14 c++17 c++20 c++23 c++26,
 #   flags    the driver options in FLAGS below, each recorded as an overlay
 #            on the base (no-flag) answers.
 #
-# Method: (1) candidate names are every identifier-shaped string in
+# Method: (1) candidate names are every identifier-shaped string in either
 # libclang-cpp (which holds every builtin, attribute, feature and keyword
 # spelling clang knows) plus every operand of a `__has_*` query in the libc++,
 # glibc and clang builtin headers; (2) discovery: each candidate is queried
-# with every hook, under every target x std with no flags and every target
-# with each flag set at c++98 and c++26, to find the names that are ever
-# non-zero (ever a keyword for `__is_identifier`); (3) those names are queried
-# under every target x std x flag set, and the base table plus one overlay
-# per flag set is emitted; (4) the emitted model is checked to reproduce every
-# probe. `-undef` keeps predefined macros from expanding the operands of the
-# hooks that expand them (`__has_*attribute`), so names are recorded as
-# written. `__x__` spellings of features/attributes and `__gnu__`/`_Clang`
-# scopes are not stored: features.rs normalizes them as clang does (checked
-# here).
+# with every hook by both clangs, under every target x std with no flags and
+# every target with each flag set at c++98 and c++26, to find the names that
+# are ever non-zero (ever a keyword for `__is_identifier`); (3) those names
+# are queried under every clang x target x std x flag set, and the clang 19
+# base table plus one overlay per flag set is emitted, followed by the clang
+# 22 deltas: the base answers that differ from clang 19's and, per flag, the
+# answers the clang 22 base plus the clang 19 overlay get wrong; (4) the
+# emitted model is checked to reproduce every probe of both clangs. `-undef`
+# keeps predefined macros from expanding the operands of the hooks that
+# expand them (`__has_*attribute`), so names are recorded as written. `__x__`
+# spellings of features/attributes and `__gnu__`/`_Clang` scopes are not
+# stored: features.rs normalizes them as clang does (checked here).
 #
-# Idempotent (byte-identical output for the same clang). Runtime: about six
-# minutes and 300 MB peak RSS at JOBS=2 (parallel clang processes).
+# Idempotent (byte-identical output for the same clangs). Runtime: about
+# fifteen minutes and 300 MB peak RSS at JOBS=2 (parallel clang processes).
 #
-# Usage: scripts/gen-features.sh            (uses clang++-19 on PATH)
-#        CLANGXX=/path/to/clang++-19 JOBS=4 scripts/gen-features.sh
+# Usage: scripts/gen-features.sh            (clang++-19 and clang++-22 on PATH)
+#        CLANGXX=/path/to/clang++-19 CLANGXX22=/path/to/clang++-22 JOBS=4 scripts/gen-features.sh
 set -euo pipefail
 export LC_ALL=C
 
 WS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLANGXX="${CLANGXX:-clang++-19}"
+CLANGXX22="${CLANGXX22:-clang++-22}"
 JOBS="${JOBS:-2}"
 OUT="$WS/crates/kiln_pp/src/features_table.rs"
 
-major="$(echo __clang_major__ | "$CLANGXX" -E -P -x c++ - | tr -d '[:space:]')"
-if [[ "$major" != 19 ]]; then
-  echo "gen-features: expected clang 19, $CLANGXX reports __clang_major__=$major" >&2
-  exit 1
-fi
-version="$(echo '__clang_version__' | "$CLANGXX" -E -P -x c++ - | tr -d '"' | awk '{print $1}')"
-LLVM_ROOT="$(cd "$(dirname "$(readlink -f "$(command -v "$CLANGXX")")")/.." && pwd)"
-LIBCLANG="$(ls "$LLVM_ROOT"/lib/libclang-cpp.so.19* 2>/dev/null | head -n1 || true)"
-[[ -n "$LIBCLANG" && -f "$LIBCLANG" ]] || { echo "gen-features: no libclang-cpp.so.19* in $LLVM_ROOT/lib" >&2; exit 1; }
-RESDIR="$("$CLANGXX" -print-resource-dir)"
-HEADER_DIRS=("$LLVM_ROOT/include/c++/v1" /usr/include "$RESDIR/include")
+ORACLES=()
+HEADER_DIRS=(/usr/include)
+for spec in "19 $CLANGXX" "22 $CLANGXX22"; do
+  want="${spec%% *}" cxx="${spec#* }"
+  major="$(echo __clang_major__ | "$cxx" -E -P -x c++ - | tr -d '[:space:]')"
+  if [[ "$major" != "$want" ]]; then
+    echo "gen-features: expected clang $want, $cxx reports __clang_major__=$major" >&2
+    exit 1
+  fi
+  version="$(echo '__clang_version__' | "$cxx" -E -P -x c++ - | tr -d '"' | awk '{print $1}')"
+  root="$(cd "$(dirname "$(readlink -f "$(command -v "$cxx")")")/.." && pwd)"
+  lib="$(ls "$root"/lib/libclang-cpp.so."$want"* 2>/dev/null | head -n1 || true)"
+  [[ -n "$lib" && -f "$lib" ]] || { echo "gen-features: no libclang-cpp.so.$want* in $root/lib" >&2; exit 1; }
+  ORACLES+=("$cxx" "$version" "$lib")
+  [[ -d "$root/include/c++/v1" ]] && HEADER_DIRS+=("$root/include/c++/v1")
+  HEADER_DIRS+=("$("$cxx" -print-resource-dir)/include")
+done
 
-python3 - "$CLANGXX" "$version" "$LIBCLANG" "$OUT" "$JOBS" "${HEADER_DIRS[@]}" <<'PY'
+python3 - "$OUT" "$JOBS" "${ORACLES[@]}" "${HEADER_DIRS[@]}" <<'PY'
 import os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
-clang, version, libclang, out_path, jobs = sys.argv[1:6]
-header_dirs = sys.argv[6:]
+out_path, jobs = sys.argv[1:3]
+# (clang++, version, libclang-cpp) for clang 19 (index 0) and clang 22 (1).
+ORACLES = [tuple(sys.argv[3:6]), tuple(sys.argv[6:9])]
+header_dirs = sys.argv[9:]
 jobs = int(jobs)
+version = ORACLES[0][1]
 
 TARGETS = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
 STDS = ["c++98", "c++11", "c++14", "c++17", "c++20", "c++23", "c++26"]
@@ -135,7 +150,7 @@ KINDS = [
 ]
 SCOPES = ["clang", "gnu", "msvc", "gsl", "omp", "riscv"]
 
-def args_for(t, s, flag):
+def args_for(o, t, s, flag):
     std = STDS[s]
     extra = []
     if flag is not None:
@@ -144,18 +159,20 @@ def args_for(t, s, flag):
             std = std.replace("c++", "gnu++")
         else:
             extra = fa
-    return [clang, "--target=" + TARGETS[t], "-std=" + std, "-E", "-P", "-undef",
+    return [ORACLES[o][0], "--target=" + TARGETS[t], "-std=" + std, "-E", "-P", "-undef",
             "-ferror-limit=0", "-fno-color-diagnostics", *extra, "-x", "c++", "-"]
 
-def supported(t, flag):
-    r = subprocess.run(args_for(t, len(STDS) - 1, flag), input="x\n", capture_output=True, text=True)
+def supported(o, t, flag):
+    r = subprocess.run(args_for(o, t, len(STDS) - 1, flag), input="x\n", capture_output=True, text=True)
     return r.returncode == 0
 
 # ---- candidates ------------------------------------------------------------
-data = open(libclang, "rb").read()
-cands = set(m.decode() for m in re.findall(
-    rb"(?<![A-Za-z0-9_$])[A-Za-z_][A-Za-z0-9_]{1,79}(?![A-Za-z0-9_$])", data))
-del data
+cands = set()
+for _, _, libclang in ORACLES:
+    data = open(libclang, "rb").read()
+    cands |= set(m.decode() for m in re.findall(
+        rb"(?<![A-Za-z0-9_$])[A-Za-z_][A-Za-z0-9_]{1,79}(?![A-Za-z0-9_$])", data))
+    del data
 QRE = re.compile(r"__has_(?:builtin|feature|extension|attribute|cpp_attribute|declspec_attribute|"
                  r"constexpr_builtin)\s*\(\s*(?:(\w+)\s*::\s*)?(\w+)")
 for d in header_dirs:
@@ -175,7 +192,7 @@ EXPANDING = {"Attribute", "DeclspecAttribute", "CppAttribute"}
 
 CHUNK = 100_000  # queries per clang run (bounds clang's memory use)
 
-def probe(t, s, flag, qs, nonzero_only=False):
+def probe(o, t, s, flag, qs, nonzero_only=False):
     """{(kind, key): value} for the [(kind, key)] queries (zero answers
     omitted if `nonzero_only`); keys whose line drew a diagnostic map to
     None."""
@@ -183,7 +200,7 @@ def probe(t, s, flag, qs, nonzero_only=False):
     for base_i in range(0, len(qs), CHUNK):
         part = qs[base_i:base_i + CHUNK]
         src = "".join("L%d %s\n" % (i, TMPL[k].format(key)) for i, (k, key) in enumerate(part))
-        r = subprocess.run(args_for(t, s, flag), input=src, capture_output=True, text=True)
+        r = subprocess.run(args_for(o, t, s, flag), input=src, capture_output=True, text=True)
         bad = set(int(m) for m in re.findall(r"^<stdin>:(\d+):", r.stderr, re.M))
         got = {}
         for line in r.stdout.split("\n"):
@@ -207,19 +224,22 @@ def norm(kind, v):
     return (1 - v) if kind == "Keyword" else v
 
 # ---- discovery ---------------------------------------------------------------
-sup = {(t, f): supported(t, f) for t in range(len(TARGETS)) for f in range(len(FLAGS))}
-disc_cfgs = [(t, s, None) for t in range(len(TARGETS)) for s in range(len(STDS))]
-disc_cfgs += [(t, s, f) for t in range(len(TARGETS)) for f in range(len(FLAGS)) if sup[(t, f)]
-              for s in (0, len(STDS) - 1)]
+NORACLE = len(ORACLES)
+sup = {(o, t, f): supported(o, t, f)
+       for o in range(NORACLE) for t in range(len(TARGETS)) for f in range(len(FLAGS))}
+disc_cfgs = [(o, t, s, None) for o in range(NORACLE) for t in range(len(TARGETS))
+             for s in range(len(STDS))]
+disc_cfgs += [(o, t, s, f) for o in range(NORACLE) for t in range(len(TARGETS))
+              for f in range(len(FLAGS)) if sup[(o, t, f)] for s in (0, len(STDS) - 1)]
 # Builtin macros (`__has_include`, `__building_module`, `__LINE__`, ...) and
 # special forms are expanded/handled by kiln_pp itself before any hook sees
 # them, and a function-like one without its `(` would swallow the rest of a
 # probe: they are queried only through the non-expanding hooks (clang's
 # `__has_builtin(__is_target_arch)` is 1, for example).
 def macros(c):
-    t, s, f = c
+    o, t, s, f = c
     src = "".join("#ifdef %s\nM%d\n#endif\n" % (n, i) for i, n in enumerate(cands))
-    r = subprocess.run(args_for(t, s, f), input=src, capture_output=True, text=True)
+    r = subprocess.run(args_for(o, t, s, f), input=src, capture_output=True, text=True)
     return {cands[int(m)] for m in re.findall(r"^M(\d+)$", r.stdout, re.M)}
 special = {"_Pragma", "__pragma", "__VA_OPT__", "__VA_ARGS__", "defined"}
 with ThreadPoolExecutor(jobs) as ex:
@@ -289,8 +309,8 @@ for k, v in dunder_check.items():
 
 # ---- full probe --------------------------------------------------------------
 fq = [(k, key) for k, _ in KINDS for key in kind_filter[k]]
-cfgs = [(t, s, f) for t in range(len(TARGETS)) for s in range(len(STDS))
-        for f in [None] + list(range(len(FLAGS))) if f is None or sup[(t, f)]]
+cfgs = [(o, t, s, f) for o in range(NORACLE) for t in range(len(TARGETS)) for s in range(len(STDS))
+        for f in [None] + list(range(len(FLAGS))) if f is None or sup[(o, t, f)]]
 with ThreadPoolExecutor(jobs) as ex:
     results = dict(zip(cfgs, ex.map(lambda c: probe(*c, fq), cfgs)))
 
@@ -303,11 +323,11 @@ for c, res in results.items():
             if res[(k, strip_dunder(key))] != v:
                 sys.exit("gen-features: %s(%s) != %s(%s) in %s" % (k, key, k, strip_dunder(key), c))
 
-def answers(f):
-    """{(kind, key): {cfg_bit: value}} under flag f (None: base)."""
+def answers(o, f):
+    """{(kind, key): {cfg_bit: value}} of oracle o under flag f (None: base)."""
     a = {}
-    for (t, s, ff), res in results.items():
-        if ff != f:
+    for (oo, t, s, ff), res in results.items():
+        if oo != o or ff != f:
             continue
         for (k, key), v in res.items():
             if k in dunder_check and key in dunder_check[k]:
@@ -315,65 +335,104 @@ def answers(f):
             a.setdefault((k, key), {})[cfg_bit(t, s)] = norm(k, v)
     return a
 
-base = answers(None)
-entries = []  # (kind, key, value, mask)
-for (k, key), per in sorted(base.items()):
+def group(per, keep):
+    """[(value, mask)] of the {cfg_bit: value} map's bits that `keep`."""
     byv = {}
     for b, v in per.items():
-        if v:
+        if keep(b, v):
             byv[v] = byv.get(v, 0) | b
-    for v, m in sorted(byv.items()):
+    return sorted(byv.items())
+
+base = answers(0, None)
+entries = []  # (kind, key, value, mask)
+for (k, key), per in sorted(base.items()):
+    for v, m in group(per, lambda b, v: v):
         entries.append((k, key, v, m))
 
 overlays = []  # (flag, kind, key, value, mask)
 flag_masks = {}
 for f in range(len(FLAGS)):
     fm = 0
-    for t in range(len(TARGETS)):
-        if sup[(t, f)]:
-            for s in range(len(STDS)):
-                fm |= cfg_bit(t, s)
+    for o in range(NORACLE):
+        for t in range(len(TARGETS)):
+            if sup[(o, t, f)]:
+                for s in range(len(STDS)):
+                    fm |= cfg_bit(t, s)
     flag_masks[f] = fm
-    fa = answers(f)
+    fa = answers(0, f)
     for (k, key), per in sorted(fa.items()):
-        byv = {}
-        for b, v in per.items():
-            if base[(k, key)][b] != v:
-                byv[v] = byv.get(v, 0) | b
-        for v, m in sorted(byv.items()):
+        for v, m in group(per, lambda b, v: base[(k, key)][b] != v):
             overlays.append((f, k, key, v, m))
 
+# clang 22: the base answers that differ from clang 19's, then per flag the
+# answers that the clang 22 base with the clang 19 overlay applied gets wrong.
+base22 = answers(1, None)
+compat22 = []  # (kind, key, value, mask)
+for (k, key), per in sorted(base22.items()):
+    for v, m in group(per, lambda b, v: base[(k, key)][b] != v):
+        compat22.append((k, key, v, m))
+overlays19_by = {}
+for ov in overlays:
+    overlays19_by.setdefault((ov[0], ov[1], ov[2]), []).append(ov)
+def before22(f, k, key, b):
+    v = base22[(k, key)][b]
+    for (_, _, _, ov, om) in overlays19_by.get((f, k, key), ()):
+        if om & b:
+            v = ov
+    return v
+compat22_overlays = []  # (flag, kind, key, value, mask)
+for f in range(len(FLAGS)):
+    fa = answers(1, f)
+    for (k, key), per in sorted(fa.items()):
+        for v, m in group(per, lambda b, v: before22(f, k, key, b) != v):
+            compat22_overlays.append((f, k, key, v, m))
+
 # ---- check the model reproduces every probe ---------------------------------
-def model(k, key, b, f):
+def by_key(rows, ki):
+    d = {}
+    for r in rows:
+        d.setdefault((r[ki], r[ki + 1]), []).append(r)
+    return d
+entries_by, overlays_by = by_key(entries, 0), by_key(overlays, 1)
+compat22_by, compat22_overlays_by = by_key(compat22, 0), by_key(compat22_overlays, 1)
+def model(o, k, key, b, f):
     v = 0
-    for (ek, ekey, ev, em) in entries_by.get((k, key), ()):
+    for (_, _, ev, em) in entries_by.get((k, key), ()):
         if em & b:
             v = ev
+    if o == 1:
+        for (_, _, ev, em) in compat22_by.get((k, key), ()):
+            if em & b:
+                v = ev
     if f is not None:
-        for (of, ok, okey, ov, om) in overlays_by.get((k, key), ()):
+        for (of, _, _, ov, om) in overlays_by.get((k, key), ()):
             if of == f and om & b:
                 v = ov
+        if o == 1:
+            for (of, _, _, ov, om) in compat22_overlays_by.get((k, key), ()):
+                if of == f and om & b:
+                    v = ov
     return v
-entries_by, overlays_by = {}, {}
-for e in entries:
-    entries_by.setdefault((e[0], e[1]), []).append(e)
-for o in overlays:
-    overlays_by.setdefault((o[1], o[2]), []).append(o)
-for (t, s, f), res in results.items():
+for (o, t, s, f), res in results.items():
     for (k, key), v in res.items():
         if k in dunder_check and key in dunder_check[k]:
             continue
-        if model(k, key, cfg_bit(t, s), f) != norm(k, v):
-            sys.exit("gen-features: model mismatch %s %s %s" % (k, key, (t, s, f)))
+        if model(o, k, key, cfg_bit(t, s), f) != norm(k, v):
+            sys.exit("gen-features: model mismatch %s %s %s" % (k, key, (o, t, s, f)))
 
-used_flags = sorted({o[0] for o in overlays})
+used_flags = sorted({ov[0] for ov in overlays} | {ov[0] for ov in compat22_overlays})
 
 # ---- __FLT_EVAL_METHOD__ -----------------------------------------------------
 flt = []
 for t in range(len(TARGETS)):
-    r = subprocess.run(args_for(t, len(STDS) - 1, None), input="__FLT_EVAL_METHOD__\n",
-                       capture_output=True, text=True, check=True)
-    flt.append(int(r.stdout.split()[0]))
+    vals = set()
+    for o in range(NORACLE):
+        r = subprocess.run(args_for(o, t, len(STDS) - 1, None), input="__FLT_EVAL_METHOD__\n",
+                           capture_output=True, text=True, check=True)
+        vals.add(int(r.stdout.split()[0]))
+    if len(vals) != 1:
+        sys.exit("gen-features: __FLT_EVAL_METHOD__ differs between the clangs on %s" % TARGETS[t])
+    flt.append(vals.pop())
 
 # ---- emit --------------------------------------------------------------------
 def rs(s):
@@ -391,16 +450,19 @@ def num(v):
 
 o = []
 w = o.append
-w("// @generated by scripts/gen-features.sh from clang %s. Do not edit." % version)
+w("// @generated by scripts/gen-features.sh from clang %s and clang %s. Do not edit."
+  % (version, ORACLES[1][1]))
 w("//")
 w("// Configurations: bit `target * %d + std` of a mask, targets %s," % (len(STDS), ", ".join(TARGETS)))
 w("// stds %s. Overlays apply on top of the base entries when their" % " ".join(STDS))
-w("// flag is set. Entries are sorted by key (overlays by flag, then key).")
+w("// flag is set. Entries are sorted by key (overlays by flag, then key). Under")
+w("// `-fclang-compat=22` the COMPAT22 deltas apply after the base entries and the")
+w("// COMPAT22_OVERLAYS after each flag's overlays.")
 w("")
-w("use super::{Entry, Kind, Overlay};")
+w("use super::{Delta, Entry, Kind, Overlay};")
 w("")
 w("/// Driver options that change the answer of at least one feature query")
-w("/// (clang %s; flags that change none are not listed)." % version)
+w("/// (clang %s or %s; flags that change none are not listed)." % (version, ORACLES[1][1]))
 w("#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]")
 w("#[non_exhaustive]")
 w("pub enum FeatureFlag {")
@@ -416,7 +478,7 @@ for f in used_flags:
     w("        FeatureFlag::%s," % FLAGS[f][0])
 w("    ];")
 w("")
-w("    /// The driver options clang %s was probed with for this flag." % version)
+w("    /// The driver options the clangs were probed with for this flag.")
 w("    pub fn options(self) -> &'static [&'static str] {")
 w("        match self {")
 for f in used_flags:
@@ -452,12 +514,28 @@ w("pub(super) static OVERLAYS: &[Overlay] = &[")
 for f, k, key, v, m in sorted(overlays, key=lambda x: (used_flags.index(x[0]), kinds.index(x[1]), x[2], x[3])):
     w("    Overlay(FeatureFlag::%s, Kind::%s, %s, %s, 0x%04x)," % (FLAGS[f][0], k, rs(key), num(v), m))
 w("];")
+w("")
+w("/// clang %s base answers that differ from clang %s's: (kind, key, value," % (ORACLES[1][1], version))
+w("/// configuration mask), sorted by kind, then key.")
+w("pub(super) static COMPAT22: &[Delta] = &[")
+for k, key, v, m in sorted(compat22, key=lambda x: (kinds.index(x[0]), x[1], x[2])):
+    w("    Delta(Kind::%s, %s, %s, 0x%04x)," % (k, rs(key), num(v), m))
+w("];")
+w("")
+w("/// clang %s flag overlays, applied after the clang %s ones: (flag, kind, key," % (ORACLES[1][1], version))
+w("/// value, configuration mask).")
+w("pub(super) static COMPAT22_OVERLAYS: &[Overlay] = &[")
+for f, k, key, v, m in sorted(compat22_overlays, key=lambda x: (used_flags.index(x[0]), kinds.index(x[1]), x[2], x[3])):
+    w("    Overlay(FeatureFlag::%s, Kind::%s, %s, %s, 0x%04x)," % (FLAGS[f][0], k, rs(key), num(v), m))
+w("];")
 open(out_path, "w").write("\n".join(o) + "\n")
 
-print("gen-features: %d candidates, %d configs probed; %s; %d overlays over %d flags; FLT_EVAL_METHOD %s"
+print("gen-features: %d candidates, %d configs probed; %s; %d overlays over %d flags; "
+      "%d clang 22 deltas, %d clang 22 overlays; FLT_EVAL_METHOD %s"
       % (len(cands), len(results),
          ", ".join("%s %d" % (k, sum(1 for e in entries if e[0] == k)) for k in kinds),
-         len(overlays), len(used_flags), flt), file=sys.stderr)
+         len(overlays), len(used_flags), len(compat22), len(compat22_overlays), flt),
+      file=sys.stderr)
 unused = [FLAGS[f][0] for f in range(len(FLAGS)) if f not in used_flags]
 print("gen-features: flags with no effect: %s" % " ".join(unused), file=sys.stderr)
 PY

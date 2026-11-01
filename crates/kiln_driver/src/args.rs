@@ -3,7 +3,7 @@
 //! `unknown argument` error, never silently ignored.
 
 use kiln_codegen::ComplexRange;
-use kiln_pp::{CmdMacro, DirGroup, OptLevel, PicModel};
+use kiln_pp::{ClangCompat, CmdMacro, DirGroup, OptLevel, PicModel};
 
 use crate::toolchain::StdLib;
 
@@ -193,6 +193,9 @@ pub struct PredefArgs {
     /// and the kiln reflection intrinsics. Default off; `__cpp_reflection`
     /// is not defined either way.
     pub reflection: bool,
+    /// `-fclang-compat=<major>`: whose predefined macros and feature-query
+    /// answers kiln reproduces (spec/pp.md "clang compatibility level").
+    pub clang_compat: ClangCompat,
 }
 
 /// What to do.
@@ -644,6 +647,15 @@ impl Args {
 
     /// Flags that change predefined macros.
     fn predef_flag(&mut self, arg: &str) -> bool {
+        if let Some(v) = arg.strip_prefix("-fclang-compat=") {
+            match v.parse().ok().and_then(ClangCompat::from_major) {
+                Some(c) => self.predef.clang_compat = c,
+                None => self
+                    .errors
+                    .push(ArgError::UnsupportedValue("-fclang-compat=".to_owned(), v.to_owned())),
+            }
+            return true;
+        }
         if arg == "-ffast-math" {
             // clang 19 renders `-complex-range=basic`; `-fno-fast-math`
             // leaves the range alone.
@@ -804,6 +816,20 @@ mod tests {
 
     fn parse(s: &str) -> Args {
         Args::parse(&s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn clang_compat_level() {
+        assert_eq!(parse("t.cpp").predef.clang_compat, ClangCompat::Clang19);
+        let a = parse("-fclang-compat=22 t.cpp");
+        assert_eq!(a.predef.clang_compat, ClangCompat::Clang22);
+        assert_eq!(a.errors, []);
+        assert_eq!(
+            parse("-fclang-compat=22 -fclang-compat=19 t.cpp").predef.clang_compat,
+            ClangCompat::Clang19
+        );
+        let bad = parse("-fclang-compat=20 t.cpp");
+        assert_eq!(bad.errors, [ArgError::UnsupportedValue("-fclang-compat=".into(), "20".into())]);
     }
 
     #[test]
