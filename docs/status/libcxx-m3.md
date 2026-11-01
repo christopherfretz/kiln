@@ -24,6 +24,8 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Reading
 
+**WP-182** (branch merged with main `b33ef558`): 445/585 (76.1%), unchanged from that base.
+
 **Overall: 443/585 (75.7%)** on the WP-178 branch merged with main `e238afa8`, up from 423 on
 main (420 after WP-169, 415 after WP-166, 405 on WP-164, 364 at WP-167; 332 before WP-154, 319
 after WP-146, 254 after WP-141, 20 at the WP-081 baseline). Before the merge (main `81c84b7f`,
@@ -74,7 +76,7 @@ Per directory, WP-164 → WP-169 → main `e238afa8` → WP-178:
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `8a6aac25` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `48e25660` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -83,8 +85,8 @@ Per directory, WP-164 → WP-169 → main `e238afa8` → WP-178:
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 549.3 s |
-| peak RSS | 85 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
+| wall time | 704.5 s |
+| peak RSS | 84 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
