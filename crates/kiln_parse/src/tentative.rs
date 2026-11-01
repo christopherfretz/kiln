@@ -8,7 +8,7 @@
 //! `TentativelyDeclaredIdentifiers`).
 
 use kiln_ast::DeclId;
-use kiln_lex::{Punct, TokKind};
+use kiln_lex::{Punct, Std, TokKind};
 use kiln_sema::NameClass;
 use kiln_source::symbol::Symbol;
 
@@ -604,8 +604,8 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 }
                 self.i += 1;
                 self.function_declarator(may_have_trailing_return)
-            } else if self.at(Punct::LSquare) && !self.at_cxx11_attr() {
-                if self.skip_group_here() { Tpr::Ambiguous } else { Tpr::Error }
+            } else if self.at(Punct::LSquare) {
+                self.bracket_declarator()
             } else if self.kw() == Some(Kw::Requires) {
                 Tpr::True
             } else {
@@ -616,6 +616,35 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
             }
         }
         Tpr::Ambiguous
+    }
+
+    /// `[ constant-expression? ]` after a declarator (clang's
+    /// `TryParseBracketDeclarator`), also at a `[[`: a constant-expression
+    /// cannot begin with `{` and holds no top-level `,`, while a
+    /// subscript's operand can (`T(a)[{1}]`, `T(a)[1, 2]` are
+    /// expressions). So `T(n) [[maybe_unused]];` is a declaration, whose
+    /// misplaced attribute the declaration parser reports.
+    fn bracket_declarator(&mut self) -> Tpr {
+        let mut i = self.i + 1;
+        if self.punct_at(i) == Some(Punct::LBrace) {
+            return Tpr::False;
+        }
+        loop {
+            match self.punct_at(i) {
+                Some(Punct::RSquare) => {
+                    self.i = i + 1;
+                    return Tpr::Ambiguous;
+                }
+                Some(Punct::Comma) => return Tpr::False,
+                Some(Punct::LParen | Punct::LSquare | Punct::LBrace) => match self.skip_group(i) {
+                    Some(j) => i = j,
+                    None => return Tpr::Error,
+                },
+                Some(Punct::Semi | Punct::RParen | Punct::RBrace) => return Tpr::Error,
+                _ if self.p.tok_at(i).kind == TokKind::Eof => return Tpr::Error,
+                _ => i += 1,
+            }
+        }
     }
 
     /// Skips `operator @` (an operator-function-id or conversion name).
@@ -989,7 +1018,11 @@ impl Parser<'_, '_> {
             Tpr::False => return false,
             Tpr::Ambiguous => {}
         }
-        s.at(Punct::Equal) || s.at_cxx11_attr() || matches!(s.kw(), Some(Kw::Asm | Kw::Attribute))
+        // C++11 [stmt.pre]/1: a braced-init-list initializes it too.
+        s.at(Punct::Equal)
+            || (s.p.std >= Std::Cxx11 && s.at(Punct::LBrace))
+            || s.at_cxx11_attr()
+            || matches!(s.kw(), Some(Kw::Asm | Kw::Attribute))
     }
 
     /// [dcl.ambig.res]/2-3: whether a type-id starts at the current token

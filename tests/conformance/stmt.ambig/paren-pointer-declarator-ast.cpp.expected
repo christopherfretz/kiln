@@ -1,0 +1,9 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct T definition
+| `-CXXConstructorDecl T 'void ()'
+`-FunctionDecl s11 'void ()'
+  `-CompoundStmt
+    `-DeclStmt
+      `-VarDecl g 'T (*)' callinit
+        `-ImplicitCastExpr 'T (*)' <NullToPointer>
+          `-CXXNullPtrLiteralExpr 'std::nullptr_t'

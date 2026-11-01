@@ -1,0 +1,19 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct T definition
+| |-CXXConstructorDecl T 'void ()'
+| `-CXXConstructorDecl T 'void (int)'
+|   `-ParmVarDecl 'int'
+|-TypedefDecl referenced U 'int'
+|-FunctionDecl g1 'void (T)'
+| `-ParmVarDecl a 'T'
+|-FunctionDecl s13 'void ()'
+| `-CompoundStmt
+|   `-DeclStmt
+|     `-FunctionDecl g2 'void (T)'
+|       `-ParmVarDecl a 'T'
+|-FunctionDecl g3 'void (T (*)(U))'
+| `-ParmVarDecl 'T (*)(U)'
+|-FunctionDecl g4 'void (T (*)(U))'
+| `-ParmVarDecl 'T (*)(U)'
+`-FunctionDecl g5 'void (T)'
+  `-ParmVarDecl b 'T'

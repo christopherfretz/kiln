@@ -118,8 +118,8 @@ clang's `Parser` over `Preprocessor::Lex`.
 ### 2.1 The lookahead window
 - `TokenSource` holds the tokens from a little behind the parser's
   position to the furthest token looked at. Lookahead is by absolute
-  index (`tok_at(i)`), so arbitrary-distance scans such as `scan_for`
-  and `at_constructor_declaration` work unchanged; the window grows to
+  index (`tok_at(i)`), so arbitrary-distance scans such as
+  `condition_has_init_statement` and `at_constructor_declaration` work unchanged; the window grows to
   cover them.
 - `bump` releases consumed tokens. The source keeps `KEEP_BEHIND` = 8
   tokens behind the position (the parser reads back at most one, for
@@ -319,7 +319,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - **Name scanning:**
   - `scan_name(i)` classifies a possibly qualified name starting at
     token `i` without consuming it.
-  - `scan_for(targets)` finds the first target punctuator at depth 0.
+  - `condition_has_init_statement` (stmt.rs) finds whether a `;`
+    precedes the `)` of an `if`/`switch` condition, skipping nested
+    brackets and braces (clang's `SkipUntil(r_paren, semi)`), so an
+    init-statement may hold braces (`if (int n{1}; n)`).
   - `parse_nested_name` consumes `A::B::`.
 
 ## 4. Declarations (`decl.rs`)
@@ -728,16 +731,48 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
 ## 6. Statements and attributes
 
 ### 6.1 Statements (`stmt.rs`)
-- **Declaration or expression** ([stmt.ambig]):
-  `is_declaration_statement` uses keywords, attributes and `scan_name`.
-  Each case below counts as a declaration:
+- **Declaration or expression** ([stmt.ambig], [dcl.ambig.res]):
+  `is_cxx_declaration_statement` (§2.1) decides, as clang's
+  `isCXXDeclarationStatement` does. A `[` after a declarator is clang's
+  `TryParseBracketDeclarator`: `[{` or a top-level `,` before the `]`
+  means an expression; `[[` is a declarator suffix (the attributes are
+  then `an attribute list cannot appear here` after a parenthesized
+  declarator, `discard_prohibited_cxx11_attrs`). A condition is a
+  declaration when the declarator is followed by `=`, `{`, `[[`, `asm`
+  or `__attribute__`. `condition_has_init_statement` looks for a `;` at
+  the top level of the parentheses, skipping balanced groups, so
+  `if (int n{1}; n)` has an init-statement.
 
-  | Name class | Followed by |
-  |---|---|
-  | type name | an identifier, `*`, `&`, `&&`, `;`, `(*`, `(&`, or a decl-specifier keyword |
-  | undeclared name | an identifier |
+  Audit against clang 19 (WP-180). `T` is a class, `U` a template type
+  parameter, `a` a variable, `I` a typedef; tests are under
+  `tests/conformance/stmt.ambig/` and `tests/conformance/dcl.ambig.res/`.
 
-  `T(x);` is not disambiguated yet: tentative parsing is M3.
+  | Form | clang 19 | kiln |
+  |---|---|---|
+  | `T x(T(a)), y;` | `x` a function with parameter `a`, `-Wvexing-parse` | same |
+  | `T(a)->f();` | expression (cast) | same |
+  | `T(*p)(int);` | declaration of `p`, `T*` from `int` | same |
+  | `T(e)[3];` | declaration of an array | same |
+  | `T(e) = 1;` | declaration | same |
+  | `T(e), b;` / `T(e), y = 2;` | declarations | same |
+  | `T(a)++;`, `T(a, 5) << c;`, `T(a)->m = 7;` | expressions | same |
+  | `int(a)++;` | expression; `assignment to cast is illegal, lvalue casts are not supported` | same (fixed in WP-180) |
+  | `T(f) = {1};` | declaration | same |
+  | `T(*g)(nullptr);` | declaration, type sugar `T (*)` | declaration, `T *` (no ParenType sugar) |
+  | `T(n) [[maybe_unused]];` | declaration; `an attribute list cannot appear here` | same (fixed in WP-180) |
+  | `T(a);`, `T(a)(b);`, `U(a);` with `a` declared | declaration; `-Wvexing-parse` redundant-parentheses warning | declaration, no warning |
+  | `void g(T(a));` / `void g(T(I));` | parameter `a` / parameter `T (*)(I)` | same |
+  | `sizeof(T(a))`, `sizeof(T(a).m)` | expressions | same |
+  | `sizeof(T())`, `sizeof(T(*)())` | type-ids (the first a function type: error) | same |
+  | `typeid(T(a))` / `typeid(T())`, `typeid(T(I))` | expression / type-ids | same |
+  | `for (T(e); ;)` | declaration | same |
+  | `if (T(e) = 1)` / `if (T(a).m)` | declaration / expression | same |
+  | `if (T(n){1})`, `while (T(n){1})` | declaration with a braced initializer | same (fixed in WP-180) |
+  | `if (int n{1}; n)`, `switch (int m{2}; m)` | init-statement | same (fixed in WP-180) |
+  | `(T()){}` | `illegal initializer type 'T ()'` | same (fixed in WP-180) |
+  | `U(e);`, `U(*p)(int);`, `U(f), g = 1;`, `U(h)[2];` | declarations | same |
+  | `(U)a`, `(U(a))`, `U(a) + 1`, `U(a)->m` | expressions | same |
+  | `typename U::type(e);` / `U::type(a);` | declaration / call | same |
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed
