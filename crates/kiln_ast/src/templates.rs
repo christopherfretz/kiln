@@ -606,12 +606,11 @@ impl Ast {
             .and_then(|p| self.decls.get(p).name().as_ident())
             .map(|s| self.symbols().as_str(s))
             .filter(|s| !s.is_empty());
-        match name {
-            Some(n) => out.push_str(n),
-            None => {
-                out.push_str("type-parameter-");
-                out.push_str(&index.to_string());
-            }
+        if let Some(n) = name {
+            out.push_str(n);
+        } else {
+            out.push_str("type-parameter-");
+            out.push_str(&index.to_string());
         }
     }
 

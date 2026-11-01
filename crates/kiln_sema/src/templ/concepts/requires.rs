@@ -44,20 +44,18 @@ impl Substituter<'_, '_, '_> {
         Some((r, failed))
     }
 
-    /// Substitutes into requires-expression `e` and evaluates it.
-    pub(crate) fn requires_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
-        let Some(rq) = self.sema.ast.requires_of(e).copied() else { return Err(SubstFail) };
-        let items: Vec<Requirement> = self.sema.ast.templates.requirements(&rq).to_vec();
-        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(rq.params).collect();
-        let at = self.sema.ast.exprs.get(e).loc();
-        let rbrace = self.sema.ast.exprs.cold.end_loc.get(e).copied().unwrap_or(at);
-        let mut recs = Vec::new();
+    /// Substitutes the parameters `params` of a requires-expression with
+    /// body `body`, recording a failure in `recs`: the new parameters and
+    /// whether every one substituted.
+    fn requires_params(
+        &mut self,
+        body: DeclId,
+        params: &[DeclId],
+        recs: &mut Vec<SatRecord>,
+    ) -> (Vec<DeclId>, bool) {
         let mut new_params = Vec::with_capacity(params.len());
         let mut ok = true;
-        // The requirements are unevaluated operands
-        // ([expr.prim.req.general]/2), as in `act_on_requires_expr_start`.
-        self.sema.enter_unevaluated();
-        for &p in &params {
+        for &p in params {
             let n = *self.sema.ast.decls.get(p);
             let ty = n.ty().unwrap_or(QualType::ERROR);
             let pack = self
@@ -73,7 +71,7 @@ impl Substituter<'_, '_, '_> {
                 // element, or still a pack when its expansion names a
                 // retained level (§7.2, `requires(T... t, U... u)` in a
                 // member template with only `T` known).
-                let r = self.sfinae(rq.body, n.loc(), |s| {
+                let r = self.sfinae(body, n.loc(), |s| {
                     s.expand_pattern(|s| s.element_ty(pat, n.loc())).ok()
                 });
                 match r {
@@ -81,8 +79,7 @@ impl Substituter<'_, '_, '_> {
                         let mut decls = Vec::with_capacity(v.len());
                         for t in v {
                             let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
-                            let np =
-                                self.sema.builder().param(rq.body, n.name(), n.loc(), t, idx, 0);
+                            let np = self.sema.builder().param(body, n.name(), n.loc(), t, idx, 0);
                             decls.push(np);
                             new_params.push(np);
                         }
@@ -94,7 +91,7 @@ impl Substituter<'_, '_, '_> {
                         let t = self.sema.ast.types.pack_expansion(x, None);
                         let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
                         let np = self.sema.builder().param(
-                            rq.body,
+                            body,
                             n.name(),
                             n.loc(),
                             t,
@@ -122,11 +119,11 @@ impl Substituter<'_, '_, '_> {
                     }
                 }
             }
-            let r = self.sfinae(rq.body, n.loc(), |s| s.ty(ty, n.loc()).ok());
+            let r = self.sfinae(body, n.loc(), |s| s.ty(ty, n.loc()).ok());
             match r {
                 Some((Some(t), Ok(()))) => {
                     let idx = u16::try_from(new_params.len()).unwrap_or(u16::MAX);
-                    let np = self.sema.builder().param(rq.body, n.name(), n.loc(), t, idx, 0);
+                    let np = self.sema.builder().param(body, n.name(), n.loc(), t, idx, 0);
                     self.locals.insert(p, DeclOrPack::Decl(np));
                     new_params.push(np);
                 }
@@ -142,6 +139,21 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         }
+        (new_params, ok)
+    }
+
+    /// Substitutes into requires-expression `e` and evaluates it.
+    pub(crate) fn requires_expr(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        let Some(rq) = self.sema.ast.requires_of(e).copied() else { return Err(SubstFail) };
+        let items: Vec<Requirement> = self.sema.ast.templates.requirements(&rq).to_vec();
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(rq.params).collect();
+        let at = self.sema.ast.exprs.get(e).loc();
+        let rbrace = self.sema.ast.exprs.cold.end_loc.get(e).copied().unwrap_or(at);
+        let mut recs = Vec::new();
+        // The requirements are unevaluated operands
+        // ([expr.prim.req.general]/2), as in `act_on_requires_expr_start`.
+        self.sema.enter_unevaluated();
+        let (new_params, mut ok) = self.requires_params(rq.body, &params, &mut recs);
         // A requirement left dependent (it names a retained level, §7.2)
         // is not checked: the requires-expression stays dependent with
         // the substituted requirements (clang's `TransformRequiresExpr`).
@@ -149,12 +161,11 @@ impl Substituter<'_, '_, '_> {
         let mut new_reqs = Vec::with_capacity(items.len());
         if ok {
             for r in items {
-                match self.requirement(rq.body, r, at, &mut recs, &mut dependent) {
-                    Some(r) => new_reqs.push(r),
-                    None => {
-                        ok = false;
-                        break;
-                    }
+                if let Some(r) = self.requirement(rq.body, r, at, &mut recs, &mut dependent) {
+                    new_reqs.push(r);
+                } else {
+                    ok = false;
+                    break;
                 }
             }
         }

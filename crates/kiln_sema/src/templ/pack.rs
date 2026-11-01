@@ -125,7 +125,14 @@ impl Substituter<'_, '_, '_> {
                 first.outer || matches!((first.depth, second.depth), (Some(a), Some(b)) if a < b);
             let second_outer =
                 second.outer || matches!((first.depth, second.depth), (Some(a), Some(b)) if b < a);
-            let d = if first_outer != second_outer {
+            let d = if first_outer == second_outer {
+                self.sema
+                    .diag(DiagId::sema_pack_length_mismatch, at)
+                    .arg(first.name)
+                    .arg(second.name)
+                    .arg(len)
+                    .arg(n)
+            } else {
                 let (named, outer, inner) =
                     if first_outer { (second.name, len, n) } else { (first.name, n, len) };
                 self.sema
@@ -133,13 +140,6 @@ impl Substituter<'_, '_, '_> {
                     .arg(named)
                     .arg(outer)
                     .arg(inner)
-            } else {
-                self.sema
-                    .diag(DiagId::sema_pack_length_mismatch, at)
-                    .arg(first.name)
-                    .arg(second.name)
-                    .arg(len)
-                    .arg(n)
             };
             self.sema.emit(d);
             return Err(SubstFail);
