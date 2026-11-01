@@ -250,7 +250,17 @@ pub fn lvalue_to_rvalue(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     } else {
         CastKind::LValueToRValue
     };
-    raw_cast(s, ck, e, to, ValueCategory::PRValue, None)
+    let atomic = types.as_atomic(t);
+    let r = raw_cast(s, ck, e, to, ValueCategory::PRValue, None);
+    // clang's `DefaultLvalueConversion`: the load of an `_Atomic(T)` is
+    // then converted to the unqualified `T` (C11 6.3.2.1p2).
+    match atomic {
+        Some(v) => {
+            let v = strip_cv(s, v);
+            raw_cast(s, CastKind::AtomicToNonAtomic, r, v, ValueCategory::PRValue, None)
+        }
+        None => r,
+    }
 }
 
 /// The array-to-pointer ([conv.array]) and function-to-pointer
