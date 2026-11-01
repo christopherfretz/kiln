@@ -444,9 +444,8 @@ impl Sema<'_, '_> {
             // `InitListChecker::CheckListElementTypes`), diagnosed at the
             // `{`; a dependent one waits for instantiation.
             if !self.is_dependent_type(ty) {
-                let msg = self
-                    .diag(DiagId::sema_illegal_initializer_type, l.lbrace)
-                    .arg(self.ty_arg(ty));
+                let msg =
+                    self.diag(DiagId::sema_illegal_initializer_type, l.lbrace).arg(self.ty_arg(ty));
                 self.emit(msg);
                 return self.recover(ty, &flat, lparen);
             }
