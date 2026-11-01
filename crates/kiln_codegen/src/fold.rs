@@ -244,6 +244,16 @@ impl Collect<'_> {
             }
             StmtKind::DefaultStmt => self.stmt(ast.stmts.default_sub(s)),
             StmtKind::LabelStmt | StmtKind::AttributedStmt => {
+                if n.kind() == StmtKind::AttributedStmt {
+                    for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
+                        let node = *ast.attrs.get(a);
+                        if node.kind == kiln_ast::attr::AttrKind::ASSUME
+                            && let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a)
+                        {
+                            self.expr(e);
+                        }
+                    }
+                }
                 if n.b() != 0 {
                     self.stmt(StmtId::new(n.b()));
                 }

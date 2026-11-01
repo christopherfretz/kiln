@@ -754,7 +754,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
+    pub(crate) fn find_attr(&self, d: DeclId, kind: AttrKind) -> Option<AttrId> {
         let mut cur = Some(d);
         let mut n = 0;
         while let Some(x) = cur {
@@ -3698,6 +3698,10 @@ impl Sema<'_, '_> {
                 loc,
                 temp_end: None,
                 rparen: None,
+                // clang `InitializationKind::CreateFunctionalCast` /
+                // `CreateCast`: the `)`. A C-style cast's range ends at its
+                // operand's last token, which kiln does not record.
+                agg_end: (style != CastStyle::CStyle).then_some(rparen),
                 sites: crate::class::DiagSites {
                     access: loc,
                     deleted: loc,

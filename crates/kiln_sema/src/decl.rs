@@ -5166,6 +5166,7 @@ impl Sema<'_, '_> {
             ("deprecated", _, _) => AttrKind::DEPRECATED,
             ("noreturn", _, _) => AttrKind::NORETURN,
             ("fallthrough", _, _) => AttrKind::FALLTHROUGH,
+            ("assume", true, _) => AttrKind::ASSUME,
             ("likely", true, _) => AttrKind::LIKELY,
             ("unlikely", true, _) => AttrKind::UNLIKELY,
             ("no_unique_address", true, _) => AttrKind::NO_UNIQUE_ADDRESS,
@@ -5197,14 +5198,16 @@ impl Sema<'_, '_> {
             return self.vector_attribute(kind, syntax, &raw, args, loc);
         }
         let takes = match kind {
-            AttrKind::NODISCARD | AttrKind::DEPRECATED => 1,
+            AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
             AttrKind::ALIGNED => {
                 usize::from(syntax != AttrSyntax::Keyword)
                     + usize::from(syntax == AttrSyntax::Keyword)
             }
             _ => 0,
         };
-        if args.len() > takes {
+        // [dcl.attr.assume]/1: exactly one argument (clang's
+        // `ActOnCXXAssumeAttr`).
+        if args.len() > takes || (kind == AttrKind::ASSUME && args.is_empty()) {
             let msg = self
                 .diag(DiagId::parse_attribute_wrong_arg_count, loc)
                 .arg(n.clone())
@@ -5219,6 +5222,9 @@ impl Sema<'_, '_> {
                 a = e.raw();
             }
             (AttrKind::ALIGNED, Some(AttrArg::Type(t))) => b = t.to_raw(),
+            // The assumption as written; converted by
+            // `act_on_attributed_stmt` once its statement is known.
+            (AttrKind::ASSUME, Some(AttrArg::Expr(e))) => a = e.raw(),
             (AttrKind::NODISCARD | AttrKind::DEPRECATED, Some(AttrArg::Expr(e))) => {
                 if self.string_lit_of(*e).is_none() {
                     let msg = self
@@ -5292,6 +5298,12 @@ impl Sema<'_, '_> {
         let kind = self.ast.decls.get(d).kind();
         for &a in attrs {
             let node = *self.ast.attrs.get(a);
+            if node.kind == AttrKind::ASSUME {
+                // [dcl.attr.assume]/1: a statement attribute.
+                let msg = self.diag(DiagId::sema_stmt_attribute_on_decl, node.loc).arg("assume");
+                self.emit(msg);
+                continue;
+            }
             let bad = match node.kind {
                 AttrKind::NODISCARD => {
                     // Every function kind, constructors included

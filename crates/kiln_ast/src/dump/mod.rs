@@ -321,6 +321,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             StmtKind::CaseStmt => push(Some(stmts.case_data(s).sub), todo),
             StmtKind::DefaultStmt => push(Some(stmts.default_sub(s)), todo),
+            StmtKind::LabelStmt | StmtKind::AttributedStmt => push(Some(stmts.sub_stmt(s)), todo),
             StmtKind::WhileStmt | StmtKind::ForStmt => {
                 let l = *stmts.loop_data(s);
                 push(l.init, todo);
@@ -457,11 +458,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             Node::Arg(a) => self.arg_children(a, kids),
             Node::Req(e, i) => self.req_children(e, i, kids),
-            Node::Attr(_)
-            | Node::Base(..)
-            | Node::Overrides(_)
-            | Node::Fixed(_)
-            | Node::SpecRef(_) => {}
+            Node::Attr(a) => {
+                // `CXXAssumeAttr`: the assumption.
+                let n = self.ast.attrs.get(a);
+                if n.kind == AttrKind::ASSUME
+                    && let Some(e) = ExprId::from_raw(n.a)
+                {
+                    kids.push((Node::Expr(e), None));
+                }
+            }
+            Node::Base(..) | Node::Overrides(_) | Node::Fixed(_) | Node::SpecRef(_) => {}
         }
         // A nested immediate invocation has no wrapper in clang.
         for (k, _) in kids.iter_mut() {
@@ -749,6 +755,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per statement kind")]
     fn stmt_children(&self, s: StmtId, kids: &mut Vec<(Node, Option<&'static str>)>) {
         let stmts = &self.ast.stmts;
         let lists = &self.ast.lists;
@@ -803,6 +810,13 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 stmt(Some(c.sub), kids);
             }
             StmtKind::DefaultStmt => stmt(Some(stmts.default_sub(s)), kids),
+            StmtKind::LabelStmt => stmt(Some(stmts.sub_stmt(s)), kids),
+            StmtKind::AttributedStmt => {
+                for a in lists.iter::<AttrId>(stmts.stmt_attrs(s)) {
+                    kids.push((Node::Attr(a), None));
+                }
+                stmt(Some(stmts.sub_stmt(s)), kids);
+            }
             StmtKind::WhileStmt | StmtKind::ForStmt => {
                 let l = *stmts.loop_data(s);
                 stmt(l.init, kids);
@@ -1818,6 +1832,14 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             StmtKind::CXXForRangeStmt => {
                 self.flags(&[(stmts.range_for_data(s).init.is_some(), " has_init")]);
+            }
+            StmtKind::LabelStmt | StmtKind::GotoStmt => {
+                // clang prints the label's name (and, for a `GotoStmt`, the
+                // label's address).
+                let d = stmts.label_decl(s);
+                self.line.push_str(" '");
+                self.names.write_name(d, &mut self.line);
+                self.line.push('\'');
             }
             StmtKind::ReturnStmt => {
                 if let Some(v) = stmts.return_nrvo(s) {

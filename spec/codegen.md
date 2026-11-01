@@ -286,6 +286,13 @@ array cookies).
   overriders may return — and are followed by `unreachable` and a dummy
   block (`noreturn_call`, `finish_noreturn_call`).
 
+- `[[assume(e)]]` (WP-160): when there is an insertion point, each
+  assumption that is not `ASSUME_IGNORED` is emitted as a scalar and
+  passed to `llvm.assume`, in source order and before the (null)
+  sub-statement (`emit_assumptions`; `tests/codegen/assume_attr.cpp`).
+  Not yet: call-site attributes (`memory(none)`/`memory(read)`) on calls
+  to `const`/`pure` functions, which clang emits.
+
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
 - `-S -emit-llvm` writes a `.ll` file; `-c -emit-llvm` pipes it to

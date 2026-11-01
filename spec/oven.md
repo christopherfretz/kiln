@@ -1279,6 +1279,14 @@ evaluates.
 child: the same static string object as the literal
 (`tests/conformance/dcl.fct.def.general/predefined-constexpr.cpp`).
 
+**Landed (WP-160): `[[assume(e)]]`.** Each assumption that sema did not
+mark `ASSUME_IGNORED` is evaluated when reached, inside its own
+temporaries scope. If it is false, evaluation fails with clang's
+`assumption evaluated to false` note at the assumption's expression
+location ([dcl.attr.assume]/1, [expr.const]/5.8). An assumption that has
+possible side effects is never evaluated, as in clang's `EvaluateStmt`
+(`tests/conformance/expr.const/assume-false.cpp`).
+
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:
 - `expr_const.rs`: one test per [expr.const]/5 bullet reachable in M2 with

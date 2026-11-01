@@ -834,6 +834,8 @@ diag_ids! {
     sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
     sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
     sema_excess_initializers = Error (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
+    sema_init_reference_member_uninitialized = Error (1) "reference member of type {0} uninitialized";
+    note_uninit_reference_member = Note (0) "uninitialized reference member is here";
     sema_builtin_func_cast_more_than_one_arg = Error (0) "function-style cast to a builtin type can only take one argument";
     sema_reference_bind_to_init_list = Error (1) "reference to type {0} cannot bind to an initializer list";
     sema_array_init_not_init_list = Error (1) "array initializer must be an initializer list{0:| or string literal| or wide string literal}";
@@ -1297,6 +1299,12 @@ diag_ids! {
     // WP-087
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
+    // [dcl.attr.assume] (WP-160)
+    sema_assume_side_effects = Warning [Assume] (0) "assumption is ignored because it contains (potential) side-effects";
+    parse_assume_attr_expects_cond_expr = Error (1) "use of this expression in an '{0}' attribute requires parentheses";
+    sema_attribute_wrong_stmt_type = Error (2) "'{0}' attribute only applies to {1}";
+    sema_stmt_attribute_on_decl = Error (1) "'{0}' attribute cannot be applied to a declaration";
+    ext_cxx23_attr = Extension [Cxx23AttributeExtensions] (1) "use of the '{0}' attribute is a C++23 extension";
     sema_auto_non_deduced_not_alone = Error (1) "{0:function with deduced return type|declaration with trailing return type} must be the only declaration in its group";
     note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflicting {0:types|values|templates} for parameter '{1}' ({2} vs. {3})";
     note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";

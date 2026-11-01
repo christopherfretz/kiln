@@ -1,5 +1,6 @@
 //! Statements ([stmt]; spec/parse.md §6).
 
+use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::InitStyle;
 use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
@@ -80,11 +81,25 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return None;
         }
-        let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         if self.at_cxx11_attr() {
+            let start = self.loc();
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
+            // Statement attributes are applied once the statement is
+            // parsed (clang's `ProcessStmtAttributes`); only `[[assume]]`
+            // is kept so far (spec/parse.md §6).
+            if attrs.iter().any(|&a| self.s.ast.attrs.get(a).kind == AttrKind::ASSUME) {
+                let sub = self.parse_statement_after_attrs()?;
+                let pre23 = self.std < Std::Cxx23;
+                return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, pre23));
+            }
         }
+        self.parse_statement_after_attrs()
+    }
+
+    /// A statement after its attribute-specifier-seq.
+    fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
+        let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         let loc = self.loc();
         match Self::punct_of(self.tok()) {
             Some(Punct::LBrace) => return Some(self.parse_compound(true).0),

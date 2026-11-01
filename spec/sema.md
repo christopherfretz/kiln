@@ -325,6 +325,35 @@ Redeclaration and linkage rules:
   `expression with side effects has no effect in an unevaluated
   context`, at clang's expression location. Not in instantiations, not
   for type- or value-dependent operands, not for macro locations.
+- **`[[assume(e)]]`** ([dcl.attr.assume]; WP-160, `stmt.rs`
+  `act_on_attributed_stmt`). Clang's order is followed for each attribute:
+  - On a declaration: `'assume' attribute cannot be applied to a
+    declaration`.
+  - On a statement that is not null: `'assume' attribute only applies to
+    empty statements`.
+  - Otherwise, `build_cxx_assume_expr` contextually converts the
+    assumption to `bool` and makes it a full-expression. It warns
+    `assumption is ignored because it contains (potential) side-effects`
+    (`-Wassume`, at the expression's begin location) when
+    `side_effects.rs` `has_possible_side_effects` holds. That predicate is
+    clang's `HasSideEffects(IncludePossibleEffects=true)`: a call to a
+    function that is not `const`/`pure`, a volatile read, a `dynamic_cast`
+    to a reference, a non-trivial construction, a temporary with a
+    destructor, `new`/`delete`/`throw`, assignment, increment or
+    decrement, any dependent or unresolved node, and, through
+    default-argument, default-member-initializer and lambda-capture
+    initializers, whatever they contain.
+  - Before C++23, `-pedantic` adds `use of the 'assume' attribute is a C++23
+    extension` (`-Wc++23-attribute-extensions`, which is not under
+    `-Wc++23-extensions`).
+  - The result is an `AttributedStmt` with one `ASSUME` attribute per
+    assumption kept: `a` is the expression and `b` is clang's
+    `getExprLoc`. `AttrNode::ASSUME_IGNORED` marks a side-effecting or
+    dependent assumption, and codegen and the oven skip those.
+  - A dependent assumption is converted and checked again on
+    instantiation (`templ/subst/stmts.rs`).
+  - Not kept yet: `likely`/`unlikely`/`fallthrough` in the
+    `AttributedStmt`.
 - Braced initializers (`auto x = {1}`, `std::initializer_list`) are
   §10.
 
@@ -1507,7 +1536,11 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   unambiguous derived class of, an earlier one gets `-Wexceptions`
   `exception of type T will be caught by earlier handler` with the note
   `for type U` (clang `CheckCXXTryBlock`, references and pointers
-  compared by their pointee).
+  compared by their pointee). Exact duplicates use clang's
+  `CatchHandlerType` key (WP-160): the top-level cv-qualifiers are dropped
+  first, then a reference or pointer is stripped and the pointee keeps its
+  cv-qualifiers. So `int` then `const int &` is not a duplicate, while
+  `const int` then `int &` is. The public-base search ignores cv.
 - `push_try_scope` marks the scope a try barrier (`Scope::try_barrier`)
   for the implicit move of thrown locals (§5.5).
 - Function-try-blocks: `check_function_try_block` (from
@@ -1628,6 +1661,22 @@ variables (`register int r asm("x0")`) as operands and their clobber
 conflict check, the C++17 "asm in constexpr function" extension warning;
 `!srcloc` values in headers and macro expansions do not match clang's
 encoding.
+
+**Deferred (WP-160 item 4): macro `!srcloc` parity.** For a string from a
+macro expansion, clang emits `2^31 + offset`, where the offset is into
+clang's unified source-location space. That space holds, in order: entry 0
+(2 bytes), the main file (size + 1), the predefines buffer (20928 bytes on
+aarch64 for C++26, which is the `-dM` text plus 4213 bytes of other
+builtins), and then one entry of length + 1 per macro expansion. Matching
+it needs two things:
+- kiln_source keeping a clang-compatible offset counter across files.
+- The same sequence of expansion entries as clang: argument
+  pre-expansion runs, the 4060-byte scratch buffer, expansions inside
+  `#if`, and included files.
+
+That is an ABI-free, preprocessor-wide change with no effect on codegen.
+The `!srcloc` value only labels inline-asm backend diagnostics, so it is
+left for a pp/source WP.
 
 ### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
 `act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing

@@ -132,6 +132,7 @@ diag_groups! {
     Cxx17Extensions = "c++17-extensions" [];
     Cxx20Extensions = "c++20-extensions" [];
     Cxx23Extensions = "c++23-extensions" [];
+    Cxx23AttributeExtensions = "c++23-attribute-extensions" [];
     // WP-064
     VexingParse = "vexing-parse" [];
     BracedScalarInit = "braced-scalar-init" [];
@@ -155,6 +156,8 @@ diag_groups! {
     DeprecatedBuiltins = "deprecated-builtins" [];
     // WP-087
     UnevaluatedExpression = "unevaluated-expression" [];
+    // WP-160
+    Assume = "assume" [];
     InvalidPartialSpecialization = "invalid-partial-specialization" [];
     UnusablePartialSpecialization = "unusable-partial-specialization" [];
     InstantiationAfterSpecialization = "instantiation-after-specialization" [];
