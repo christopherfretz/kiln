@@ -54,7 +54,7 @@ use std::time::Instant;
 pub use kiln_ast::class::{Subobject, SubobjectId};
 use kiln_ast::consts::ConstStore;
 use kiln_ast::types::RecordLayout;
-use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
+use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, ReflectionId, StmtId};
 use kiln_diag::Diag;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
@@ -184,6 +184,51 @@ impl EvalContext {
     }
 }
 
+/// A reflection intrinsic the Oven evaluates natively (spec/oven.md
+/// "Reflection runtime"; WP-267 spike, `-freflection`): a call of a
+/// function the bridge recognizes by its declaration
+/// ([`SemaBridge::meta_intrinsic`]) compiles to `Op::Builtin` (`bi::META`)
+/// and runs through the `reflect_*`/`define_member` bridge methods. Every
+/// one is impure: a call that reached one is never memoized.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MetaOp {
+    /// `std::meta::type_of(r)`: the type of the entity `r` reflects.
+    TypeOf,
+    /// `std::meta::name_of(r)`: its name, as a `const char *` into a
+    /// frozen string literal object (the spike's stand-in for
+    /// `std::string_view`).
+    NameOf,
+    /// `std::meta::__kiln_members_count(r)`: the number of members of the
+    /// class `r` reflects (completing it on demand).
+    MembersCount,
+    /// `std::meta::__kiln_member_at(r, i)`: its `i`th member, in
+    /// declaration order.
+    MemberAt,
+    /// `__kiln_define_member(cls, type, name)`: adds a non-static data
+    /// member to the class under definition (the spike's experiment).
+    DefineMember,
+}
+
+impl MetaOp {
+    const ALL: [MetaOp; 5] = [
+        MetaOp::TypeOf,
+        MetaOp::NameOf,
+        MetaOp::MembersCount,
+        MetaOp::MemberAt,
+        MetaOp::DefineMember,
+    ];
+
+    /// The op's code in the instruction's `sub` field.
+    pub(crate) fn code(self) -> u32 {
+        self as u32
+    }
+
+    /// The op of `code`.
+    pub(crate) fn from_code(code: u32) -> Option<MetaOp> {
+        Self::ALL.get(code as usize).copied()
+    }
+}
+
 /// What the Oven needs from sema. The Oven never holds a borrow of the
 /// AST across calls: sema may mutate it (instantiation on demand,
 /// interning constants) between and during evaluations.
@@ -234,6 +279,74 @@ pub trait SemaBridge {
     /// temporary from later evaluations then see an external object.
     fn set_temporary_value(&mut self, t: DeclId, v: ConstValueId) {
         let _ = (t, v);
+    }
+
+    // Reflection (WP-267 spike, `-freflection`; spec/oven.md "Reflection
+    // runtime"). A failure is the notes explaining it (the first is the
+    // reason, reported at its location); no notes is a silent failure.
+    // The defaults (a bridge without reflection) recognize nothing.
+
+    /// The reflection intrinsic `f` is, if any (consulted when a direct
+    /// call of `f` is compiled).
+    fn meta_intrinsic(&self, f: DeclId) -> Option<MetaOp> {
+        let _ = f;
+        None
+    }
+
+    /// `type_of(r)` for the call at `loc`.
+    ///
+    /// # Errors
+    /// If `r` does not reflect an entity with a type.
+    fn reflect_type_of(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, Vec<Note>> {
+        let _ = (r, loc);
+        Err(Vec::new())
+    }
+
+    /// `name_of(r)`: the frozen `const char *` value pointing to a string
+    /// literal object holding the name.
+    ///
+    /// # Errors
+    /// If `r` reflects nothing with a name.
+    fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, Vec<Note>> {
+        let _ = (r, loc);
+        Err(Vec::new())
+    }
+
+    /// The members of the class `r` reflects, in declaration order,
+    /// completing it first if it is an implicitly instantiable
+    /// specialization (with `oven` lent back to sema, as `ensure_body`).
+    ///
+    /// # Errors
+    /// If `r` does not reflect a complete class type.
+    fn reflect_members(
+        &mut self,
+        r: ReflectionId,
+        loc: Loc,
+        oven: &mut Oven,
+    ) -> Result<Vec<ReflectionId>, Vec<Note>> {
+        let _ = (r, loc, oven);
+        Err(Vec::new())
+    }
+
+    /// Adds the non-static data member `name` of type `ty` to the class
+    /// `cls` (which must be the class under definition) and returns its
+    /// reflection: the AST MUTATES while this evaluation runs. Only in a
+    /// manifestly constant-evaluated context (never in a speculative
+    /// fold). `oven` is lent back to sema for nested evaluations.
+    ///
+    /// # Errors
+    /// If the context does not permit it, an operand is not what is
+    /// required, or `name` is already a member.
+    fn define_member(
+        &mut self,
+        cls: ReflectionId,
+        ty: ReflectionId,
+        name: &str,
+        loc: Loc,
+        oven: &mut Oven,
+    ) -> Result<ReflectionId, Vec<Note>> {
+        let _ = (cls, ty, name, loc, oven);
+        Err(Vec::new())
     }
 }
 

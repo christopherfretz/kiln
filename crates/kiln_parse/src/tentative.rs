@@ -286,8 +286,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     }
                 }
                 Kw::Typename => {
-                    let Some(end) =
-                        self.p.splice_end(self.i + 1).or_else(|| self.p.scan_name(self.i + 1).map(|n| n.0))
+                    let Some(end) = self
+                        .p
+                        .splice_end(self.i + 1)
+                        .or_else(|| self.p.scan_name(self.i + 1).map(|n| n.0))
                     else {
                         return Tpr::Error;
                     };

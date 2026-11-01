@@ -28,3 +28,20 @@ struct member_list {
 // being parsed). Returns the reflection of the new member.
 consteval std::meta::info __kiln_define_member(std::meta::info cls, std::meta::info type,
                                                const char* name);
+
+namespace std::meta {
+// members_of(R) as a fixed-capacity array-like whose size is a constant.
+template <info R>
+consteval member_list<__kiln_members_count(R)> members_of() {
+  member_list<__kiln_members_count(R)> l{};
+  for (unsigned long i = 0; i < __kiln_members_count(R); ++i) l.items[i] = __kiln_member_at(R, i);
+  return l;
+}
+
+consteval bool name_is(info r, const char* s) {
+  const char* n = name_of(r);
+  for (; *n && *n == *s; ++n, ++s) {
+  }
+  return *n == *s;
+}
+}  // namespace std::meta

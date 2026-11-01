@@ -2931,7 +2931,10 @@ impl Sema<'_, '_> {
         // [expr.eq]/7 (P2996): two `std::meta::info` operands compare
         // equal when they reflect the same entity; nothing converts.
         if self.is_meta_info(lt) || self.is_meta_info(rt) {
-            if self.is_meta_info(lt) && self.is_meta_info(rt) && matches!(op, BinaryOp::EQ | BinaryOp::NE) {
+            if self.is_meta_info(lt)
+                && self.is_meta_info(rt)
+                && matches!(op, BinaryOp::EQ | BinaryOp::NE)
+            {
                 return self.builder().binary(op, l2, r2, QualType::BOOL, loc);
             }
             return self.invalid_operands(l, r, loc);

@@ -1569,7 +1569,7 @@ impl Sema<'_, '_> {
 
     /// The `const char *` value pointing to the string literal object
     /// holding `s` (one object per content).
-    fn srcloc_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
+    pub(crate) fn srcloc_string(&mut self, s: &str) -> Option<kiln_ast::ConstValueId> {
         let lit =
             self.ast.strings.intern(kiln_ast::strings::StringEncoding::Ordinary, s.as_bytes());
         let origin = if let Some(&e) = self.srcloc.strings.get(&lit) {

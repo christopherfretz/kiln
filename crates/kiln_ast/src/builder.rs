@@ -2172,7 +2172,8 @@ impl<'a> AstBuilder<'a> {
             };
             self.ast.reflections.intern(canon).index()
         };
-        let e = self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);
+        let e =
+            self.simple(ExprKind::CXXReflectExpr, ValueCategory::PRValue, deps, aux, ty, loc, a, b);
         self.ast.exprs.cold.end_loc.insert(e, end).expect("fresh expression");
         e
     }
