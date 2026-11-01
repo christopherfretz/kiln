@@ -837,6 +837,12 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     declaration
   - the class-head and enum-head, for the tag (`act_on_tag_attrs`)
   - before a statement, for the statement (`fallthrough`, `likely`)
+  - before a declaration statement in a block, when none of them is a
+    statement attribute, for the declaration (WP-203): `parse_statement`
+    hands them on through `Parser::stmt_attrs` / `lead_decl_attrs` and
+    `parse_decl_specifiers` takes them into the `DeclSpec` (clang's
+    `ParseSimpleDeclaration` with `DeclSpecAttrs`), so `[[maybe_unused]]
+    int x;` marks `x`.
 - **`[[assume(e)]]` (WP-160):** `parse_assume_arg` parses a
   conditional-expression. If the next token is not `)`, it reparses the
   full expression, reports `use of this expression in an 'assume'

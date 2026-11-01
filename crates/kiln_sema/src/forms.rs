@@ -77,7 +77,8 @@ impl Sema<'_, '_> {
             }
             let msg = self
                 .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
-                .arg(self.decl_name(d));
+                .arg(self.decl_name(d))
+                .range(self.expr_range(callee));
             let ics = self.list_arg_ics(to, l);
             let detail = self.bad_conversion_detail(&ics, Some(i));
             let fl = self.ast.decls.get(d).loc();
@@ -347,7 +348,9 @@ impl Sema<'_, '_> {
         }
         let to = conv::strip_cv(self, ty);
         // `E{v}` for a fixed-underlying-type enumeration is
-        // direct-list-initialization too ([dcl.init.list]/3.8).
+        // direct-list-initialization too ([dcl.init.list]/3.8). The
+        // initialized entity is a temporary: "a value".
+        let entity = self.init_entity.replace("3");
         let init = match self.fixed_enum_list_init(to, l) {
             Some(e) => e,
             None => {
@@ -358,6 +361,7 @@ impl Sema<'_, '_> {
                 }
             }
         };
+        self.init_entity = entity;
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], loc);
         }

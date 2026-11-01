@@ -2401,8 +2401,9 @@ initialization by a C-style cast `(S)x` that is the operand's last token
 (a call's or a parenthesized operand's `)`, a `}`), else the end of the
 last operand of an implicit node, cast, prefix/binary operator or
 conditional, else the node's own location (a name, literal, member name,
-postfix operator). A built-in subscript records no `]`, so `(S)a[i]`
-takes the `[` (clang: the `]`). The Oven and codegen read them from
+postfix operator). A built-in subscript records its `]` as its end
+location (`set_subscript_end`, from the parser and from substitution's
+pattern; WP-203), so `(S)a[i]` takes the `]`. The Oven and codegen read them from
 the outermost such default argument or member initializer in scope, and
 the codegen prepass evaluates the immediate invocations of such a member
 initializer per use (`fold_immediate_in`). Substitution drops the trailing

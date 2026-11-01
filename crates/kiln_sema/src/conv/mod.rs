@@ -110,7 +110,11 @@ impl ConvError {
 
     /// The diagnostic, with its caret at `loc`.
     pub fn diag_at(&self, s: &Sema<'_, '_>, loc: Loc) -> kiln_diag::Diag {
-        let d = self.args.iter().fold(s.diag(self.id, loc), kiln_diag::Diag::arg);
+        let entity = s.init_entity.filter(|_| self.id == DiagId::sema_init_conversion_failed);
+        let d = self.args.iter().enumerate().fold(s.diag(self.id, loc), |d, (i, a)| match entity {
+            Some(sel) if i == 0 && a == "0" => d.arg(sel),
+            _ => d.arg(a.as_str()),
+        });
         self.notes.iter().cloned().fold(d, kiln_diag::Diag::with_note)
     }
 }
