@@ -2002,7 +2002,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 };
                 if let Some(head) = named {
                     self.line.push_str(head);
-                    self.written_cast_type(n.ty(), n.value_category());
+                    match exprs.cast_written_type(e) {
+                        Some(w) => write_type(
+                            &self.ast.types,
+                            &self.names,
+                            w,
+                            PrintOptions::SUGARED,
+                            &mut self.line,
+                        ),
+                        None => self.written_cast_type(n.ty(), n.value_category()),
+                    }
                     if k != ExprKind::CXXFunctionalCastExpr {
                         self.line.push('>');
                     }

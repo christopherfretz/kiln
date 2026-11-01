@@ -2747,6 +2747,13 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// Records the type as written `ty` of named or functional cast `e`
+    /// ([`crate::expr::ColdExprData::cast_written`]); a second record for
+    /// the same cast is ignored.
+    pub fn set_cast_written_type(&mut self, e: ExprId, ty: QualType) {
+        let _ = self.ast.exprs.cold.cast_written.insert(e, ty);
+    }
+
     /// `dynamic_cast<T>(v)` ([expr.dynamic.cast]); `ck` is `Dynamic`, or
     /// `DerivedToBase` / `NoOp` for the statically resolved forms;
     /// `rparen` is the closing `)`.

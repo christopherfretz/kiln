@@ -1164,6 +1164,11 @@ pub struct ColdExprData {
     /// The initialized member of a union's `CXXParenListInitExpr`
     /// (clang `getInitializedFieldInUnion`).
     pub union_field: ColdMap<ExprId, DeclId>,
+    /// The type as written of a named cast or functional cast, when the
+    /// dump cannot rebuild it from the node (clang `getTypeAsWritten`): a
+    /// non-class `CI{1}` / `static_cast<CI>(x)` whose prvalue drops the
+    /// qualifiers and sugar of `CI`, a reference named by an alias.
+    pub cast_written: ColdMap<ExprId, QualType>,
 }
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
@@ -1286,6 +1291,7 @@ impl Default for ColdExprData {
             trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
             source_loc: ColdMap::new("source_loc"),
             union_field: ColdMap::new("union_field"),
+            cast_written: ColdMap::new("cast_written"),
         }
     }
 }
@@ -1469,6 +1475,13 @@ impl ExprArena {
         let n = self.get(e);
         assert!(n.kind.is_cast(), "expected a cast, found {:?}", n.kind);
         CastKind::from_u8(n.aux).expect("valid cast kind")
+    }
+
+    /// The type as written of a named or functional cast, when it is not
+    /// the node's type (plus `&`/`&&` for a glvalue); see
+    /// [`ColdExprData::cast_written`].
+    pub fn cast_written_type(&self, e: ExprId) -> Option<QualType> {
+        self.cold.cast_written.get(e).copied()
     }
 
     /// The base path (`ListId` of base-spec indices) of a derived-to-base /
@@ -2455,6 +2468,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.trait_rhs_loc.mem_row().prefixed("cold"));
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));
         r.push(self.cold.union_field.mem_row().prefixed("cold"));
+        r.push(self.cold.cast_written.mem_row().prefixed("cold"));
         r
     }
 }

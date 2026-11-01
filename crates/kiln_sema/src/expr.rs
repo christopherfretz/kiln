@@ -4276,8 +4276,52 @@ impl Sema<'_, '_> {
     /// [expr.static.cast], [expr.reinterpret.cast], [expr.const.cast],
     /// [expr.type.conv]). `loc` is the cast's start, `rparen` its closing
     /// `)`.
-    #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cast]/4")]
     pub fn act_on_cast(
+        &mut self,
+        style: CastStyle,
+        ty: QualType,
+        e: ExprId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let r = self.build_explicit_cast(style, ty, e, loc, rparen);
+        self.note_cast_written_type(r, ty);
+        r
+    }
+
+    /// Records the type as written `ty` of explicit cast `r` when the
+    /// dump cannot rebuild it from the node (clang prints
+    /// `getTypeAsWritten` for named and functional casts): the prvalue of
+    /// a non-class cast drops the qualifiers and sugar of `CI` in `CI{1}`
+    /// and `static_cast<CI>(x)`; a reference named by an alias.
+    pub(crate) fn note_cast_written_type(&mut self, r: ExprId, ty: QualType) {
+        let n = *self.ast.exprs.get(r);
+        if !matches!(
+            n.kind(),
+            ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
+                | ExprKind::CXXDynamicCastExpr
+        ) || self.is_error_type(ty)
+        {
+            return;
+        }
+        // `const R` for a reference alias `R` is `R` ([dcl.ref]/1).
+        let ty = if self.ast.types.is_reference(ty) { ty.without_quals() } else { ty };
+        let rebuilt = match (self.ast.types.view(ty.ty()), n.value_category()) {
+            (TypeView::LValueRef(p), ValueCategory::LValue)
+            | (TypeView::RValueRef(p), ValueCategory::XValue) => p == n.ty(),
+            (_, ValueCategory::PRValue) => ty == n.ty(),
+            _ => false,
+        };
+        if !rebuilt {
+            self.builder().set_cast_written_type(r, ty);
+        }
+    }
+
+    #[allow(clippy::too_many_lines, reason = "one step per paragraph of [expr.cast]/4")]
+    fn build_explicit_cast(
         &mut self,
         style: CastStyle,
         ty: QualType,
@@ -4378,8 +4422,10 @@ impl Sema<'_, '_> {
                     deleted_as: crate::class::DeletedAs::Cast(d),
                 },
             };
-            let to = conv::strip_cv(self, ty);
-            if let Some(x) = self.construct_class(to, &[e], crate::class::InitStyle::Direct, site) {
+            // The temporary has the written type, qualifiers and sugar
+            // included ([expr.type.conv]/1, clang: `CV(1)` constructs a
+            // `'CV':'const V'`).
+            if let Some(x) = self.construct_class(ty, &[e], crate::class::InitStyle::Direct, site) {
                 if self.is_err_expr(x) {
                     return x;
                 }
