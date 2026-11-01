@@ -218,8 +218,7 @@ panic and never silently wrong IR.
 ### 3.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
 `EmitNewArrayInitializer`, `EmitCXXDeleteExpr` and `EmitDeleteCall` at
-`-O0`, for element types without constructors or destructors (so no
-array cookies).
+`-O0`; constructor loops, destructors and array cookies per §7b/§7g.
 - **Allocation functions.** `alloc_fn` classifies a global `operator
   new`/`new[]`/`delete`/`delete[]` as clang does
   (`isReplaceableGlobalAllocationFunction`: `size_t` or `void*` first,
@@ -559,8 +558,7 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
 - A `CXXDefaultInitExpr` is emitted with the enclosing `this`.
 - Sema does not yet synthesize calls to non-trivial `operator=` for
   classes, so codegen sees only trivial assignments.
-- Class `new[]`/`delete[]` with array cookies is not covered by the
-  corpus.
+- Class `new[]`/`delete[]` with array cookies: see §7g (WP-118).
 - The comment in `templates/builtins/builtin.bit-cast-run.cpp` defers
   class-template member calls. That test has no `xfail` and passes.
 
@@ -613,7 +611,7 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   the complete-object symbol is a `weak_odr` alias (clang
   `getCodegenToUse` -> `COMDAT`). Static locals of such functions stay
   `linkonce_odr`. Linkage table, emission order and the remaining cases
-  (WP-113): §7g.
+  (WP-113): §7h.
   The initializer is
   `{ [N x ptr] ... }`, one array per primary/secondary group, with
   offset-to-top, RTTI, then the slots. Pure slots are
@@ -858,19 +856,12 @@ off and sema rejects `try`/`throw`).
   `except.ctor/run-unwind-destroy`, `expr.new/run-delete-on-throw`.
 
 **Left (WP-100), each a `CodegenError` or noted:**
-- Array cookies: `new[]` / `delete[]` of a class with a non-trivial
-  destructor or a class-scope sized `operator delete[]` is a
-  `CodegenError` (was silently miscompiled); zero-initializing array
-  new with constructors is a `CodegenError`.
-- Aligned new picks the sized aligned delete (`_ZdlPvmSt11align_val_t`)
-  for its cleanup; clang the unsized one (sema's selection).
 - Lifetime-extended temporaries: their EH cleanups are not deferred
   (clang `pushCleanupAfterFullExprWithActiveFlag`), and a lifetime-
   extended temporary in a conditional branch is unsupported.
 - A conditional temporary or braced array at a computed address
-  (needs saving across the branch) is a `CodegenError`.
-- A `noexcept(false)` destructor's array destroy has no partial-array
-  EH cleanup inside the normal destroy loop.
+  (needs saving across the branch) is a `CodegenError` (a regular
+  partial-array cleanup is saved since WP-118).
 - A delegating constructor's EH cleanup in a base variant with virtual
   bases passes the VTT incorrectly.
 - D0 calls D1 and then the deallocation function directly; clang runs
@@ -878,10 +869,6 @@ off and sema rejects `try`/`throw`).
   differs only when D1 can throw (a `noexcept(false)` destructor, which
   sema rejects until WP-112 lands member exception specifications).
 - A conditional `new` with a class-type placement argument.
-- Static locals with dynamic initialization (`__cxa_guard_*`, its EH
-  abort) are M3.
-- The LLVM name of an anonymous union member type is
-  `%"union.U::anon"` (clang `%union.anon`).
 
 ## 7c. Landed (WP-140): GNU inline asm (`asm.rs`)
 `emit_asm` is clang's `CodeGenFunction::EmitAsmStmt`: outputs become
@@ -1073,6 +1060,12 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   the Oven folded it (the fold bridge now records
   `set_temporary_value`), else initialized in the variable's init
   function with its destructor registered via `__cxa_atexit`.
+- **Backing arrays (WP-117).** A `_ZGR` temporary is `constant` only
+  when it is a constant-initialized `const` array with no destructor:
+  the backing array of a namespace-scope `std::initializer_list`. A scalar
+  or class temporary is materialized without cv-qualifiers, so it stays
+  `global` (clang `GetAddrOfGlobalTemporary`).
+  `tests/codegen/init_list_global.cpp`.
 - Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
   `tests/conformance/basic.start.dynamic/order-run.cpp`,
   `tests/conformance/stmt.dcl/static-local-run.cpp`.
@@ -1081,7 +1074,62 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   references and of reads of `const` class objects that clang permits
   ([basic.start.static]/3).
 
-## 7g. Landed (WP-113): explicit instantiation linkage and order
+## 7g. Landed (WP-118): WP-100 follow-ups
+- **Constructor loops.** Sema gives `new K[2][3]` / `new K[n][3]()` a
+  `CXXConstructExpr` of the array type (`new_class_default` looks at the
+  base element), and a mem-initializer `arr()` of an array of classes
+  with a user-declared constructor one too (`ctorinit.rs`), so codegen
+  runs the per-element constructor loop (with its partial-array EH
+  cleanup) rather than nothing or a memset. `emit_agg` no longer
+  memsets a braced array (`K y[2][3]{}`) whose base element class has a
+  user-declared constructor (clang `CheckAggExprForMemSetUse`).
+  Zeroing array new of a class with a non-trivial implicit constructor
+  memsets each non-empty element before its constructor call
+  (`EmitCXXAggrConstructorCall` with `zeroInitialize`).
+- **Array cookies** (Itanium ABI 2.7, clang `ItaniumCXXABI::
+  InitializeArrayCookie`/`ReadArrayCookie`). Needed when the element
+  class has a non-trivial destructor or a class-scope usual
+  `operator delete[]` takes the size, never for the reserved placement
+  form. Size `max(8, alignof(elem))`; the `i64` count is stored in its
+  last 8 bytes and the elements follow it. `EmitCXXNewAllocSize` adds it
+  with `llvm.uadd.with.overflow` (constant-folded for a constant bound)
+  and the initializer gets the size without it; the allocation is
+  treated as at least 8-aligned. `delete[]` reads the count back,
+  pushes the deallocation as a normal-and-EH `ArrayDelete` cleanup
+  (`CallArrayDelete`), destroys the elements in reverse with a
+  zero-length check and a partial-array EH cleanup around each
+  destructor call (`emitArrayDestroy` with `useEHCleanup`), and passes a
+  sized deallocation function `esize * n + cookie`. Sema now picks the
+  global sized `operator delete[]` for a `delete[]` whose element type
+  has a non-trivial destructor (clang `CanProvideSize`) and marks the
+  element destructor of an array new referenced. A regular partial-array
+  cleanup pushed inside a conditional branch (nothrow `new[]`) saves its
+  ends (`SavedPartialArray`).
+- **Throwing destructors in array destroy loops.** The normal-path
+  destroy of a local array, of an array member (`DestroyField`) and of a
+  static array (`__cxx_global_array_dtor`) pushes a partial-array EH
+  cleanup around each destructor call (clang `isForNormalCleanup() &&
+  useEHCleanupForArray`); the EH-path destroy does not. It only
+  materializes when the destructor can throw. On aarch64 the static-array
+  helper keeps the loop-canonicalization deviation above.
+- **Aligned new cleanup.** Sema's `isPlacementNew` test counts any
+  operator new other than `(size_t)`, so the cleanup of an aligned
+  `new` calls the unsized aligned delete (`_ZdlPvSt11align_val_t`),
+  as clang does.
+- **Already done elsewhere:** `unreachable` after a user `[[noreturn]]`
+  call; static-local guards (WP-178, §7f); the anonymous union member
+  type is `%union.anon` (`anon_union_names.cpp`).
+- **Corpus:** `tests/codegen/new_array_ctor_loops.cpp`,
+  `tests/codegen/new_array_cookie.cpp`, `tests/codegen/eh_new_aligned.cpp`,
+  `tests/codegen/anon_union_names.cpp`,
+  `tests/codegen/eh_array_destroy_throwing.cpp` (exact on both triples);
+  `run` tests `expr.new/run-array-cookie`,
+  `except.ctor/run-array-dtor-throws`.
+- **Deviation (mangling, follow-up):** a namespace-scope anonymous union
+  variable (`static union { int ga; };`) mangles as `_ZLUt_`; clang
+  uses the first named member, `_Z2ga` (Itanium 5.1.2).
+
+## 7h. Landed (WP-113): explicit instantiation linkage and order
 Linkage follows clang 19's `GetGVALinkageForFunction` /
 `GetGVALinkageForVariable` (`-O0`, ELF). "Under" means the entity's own
 kind, else that of the innermost explicitly instantiated or specialized
@@ -1122,9 +1170,8 @@ Where the definitions are emitted (clang hands them to
   definition is seen (for a variable template, after a non-defining
   `extern` declaration; sema `instantiate_late_var_spec` rebinds the
   specialization to the defining redeclaration): instantiated at the end
-  of the TU
-  and emitted after the last top-level declaration, in explicit
-  instantiation order, before the key-function vtables and the deferred
+  of the TU and emitted after the last top-level declaration, in
+  explicit instantiation order, before the key-function vtables and the deferred
   definitions (clang `PerformPendingInstantiations`;
   `TemplateTables::late_explicit_insts`, `Cg::emit_late_explicit_insts`).
   Members of an explicitly instantiated class that are defined after the
@@ -1136,9 +1183,10 @@ Where the definitions are emitted (clang hands them to
   them (sema `instantiate_members_of` and codegen `emit_class_members`
   skip `SpecKind::ExplicitSpecialization`, clang
   `InstantiateClassMembers`). An out-of-line `template<>` redeclaration
-  of a static data member or structor of an implicit specialization sets
-  that kind (`Sema::mark_member_explicit_spec`), with or without an
-  explicit instantiation.
+  of a static data member (`Sema::act_on_explicit_member_var_spec`,
+  WP-117) or structor (`Sema::mark_member_explicit_spec`) of an implicit
+  specialization sets that kind, with or without an explicit
+  instantiation.
 
 Tests: `tests/codegen/explicit_instantiation*.cpp`,
 `tests/codegen/structor_rauw_order.cpp` (IR parity on both triples).

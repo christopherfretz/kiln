@@ -2697,7 +2697,7 @@ impl Cg<'_> {
             ExprKind::CXXMemberCallExpr if self.is_glvalue(e) => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::CXXMemberCallExpr => {
@@ -2725,7 +2725,7 @@ impl Cg<'_> {
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr if self.is_glvalue(e) => {
                 let lv = self.emit_lvalue(e)?;
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr => {
@@ -2766,7 +2766,7 @@ impl Cg<'_> {
                     }
                     let size = self.size_align(q).0;
                     let vol = self.is_volatile(q) || self.is_volatile(lv.q);
-                    self.memcpy(dest, lv.addr.v, lv.addr.align, size, vol);
+                    self.agg_copy(q, dest, lv.addr, size, vol);
                     Ok(())
                 } else {
                     self.agg_visit(s, dest, zeroed)
@@ -2782,7 +2782,7 @@ impl Cg<'_> {
                     return Ok(());
                 }
                 let size = self.size_align(q).0;
-                self.memcpy(dest, lv.addr.v, lv.addr.align, size, false);
+                self.agg_copy(q, dest, lv.addr, size, false);
                 Ok(())
             }
             ExprKind::BinaryOperator if ast.exprs.binary_op(e) == BinaryOp::Comma => {

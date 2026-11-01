@@ -26,7 +26,7 @@ declarations; implicit-then-explicit re-emission as `weak_odr`.
       nothing emitted.
 - [x] G6 explicit instantiation definition of a function template defined
       later in the TU: clang emits it at the end of the TU.
-- [x] spec/codegen.md §7g + GVA linkage table; spec/llvm.md §2.4.
+- [x] spec/codegen.md §7h + GVA linkage table; spec/llvm.md §2.4.
 
 Tests: `tests/codegen/explicit_instantiation_spec.cpp` (G2),
 `explicit_instantiation_order.cpp` (G1, G5, G6, G8: late-defined
