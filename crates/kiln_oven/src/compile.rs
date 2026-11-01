@@ -4429,8 +4429,7 @@ fn is_reference_decl(ast: &kiln_ast::Ast, d: DeclId) -> bool {
 /// The expression a `CXXDefaultArgExpr` stands for: its parameter's
 /// default argument, evaluated afresh at each call ([dcl.fct.default]/9).
 fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
-    let p = ast.exprs.default_arg_param(e);
-    ast.decls.param(p).and_then(|x| x.default_arg)
+    ast.default_arg_expr(e)
 }
 
 impl Compiler<'_> {

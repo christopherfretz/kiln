@@ -1097,6 +1097,13 @@ impl Cg<'_> {
         let lv =
             LV { addr: Addr { v: phi, ty: ity, align: elem_align }, q: iq, bf: None, vidx: None };
         self.init_to_lvalue(init, lv, false)?;
+        // clang leaves the list's partial-array cleanup in the loop body,
+        // after the first element's initializer.
+        if let Some(p) = partial.take() {
+            let d = Fir::last_inst(p.dominator);
+            self.deactivate_cleanup_block(p.depth, d);
+            self.f.fir.erase(d);
+        }
         let one = self.icn(LTy::I32, 1);
         let next = self.gep(elem_ty, phi, vec![one], true);
         let at_end = self.icmp(IntPredicate::Eq, next, end);
