@@ -688,6 +688,15 @@ Constructor: no return type (`constructor cannot have a return type`), not
 `static`/`virtual`/cv-/ref-qualified, copy ctor by reference (`copy constructor
 must pass its first argument by reference`), `explicit` / `explicit(bool)`
 (cold map). A non-explicit constructor is converting ([class.conv.ctor]).
+The operand of `explicit(expr)` is a contextually converted constant
+expression of type `bool` ([dcl.fct.spec]/4; `Sema::resolve_explicit`, the
+`Sema::bool_cce` shared with the *noexcept-specifier*, WP-275): a class type
+converts through a constexpr conversion function; a type with no conversion,
+a disallowed conversion, a narrowing and a non-constant operand get clang's
+converted-constant-expression errors at the operand (`explicit specifier
+argument ...`), after which the declaration is not explicit. A value-dependent
+operand waits for instantiation; an instantiated member whose operand is then
+invalid is dropped (clang `InstantiateExplicitSpecifier`).
 Destructor: name matches the class, no parameters (`destructor cannot have any
 parameters`), no return type; implicitly `noexcept` unless a subobject's isn't
 ([except.spec]/9). Conversion function ([class.conv.fct]): no return type

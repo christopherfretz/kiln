@@ -997,7 +997,9 @@ specification as written (`TypeNames` prints ` noexcept`,
 - **`noexcept`** is `ExcSpec::BasicNoexcept`.
 - **`act_on_noexcept_spec(e, loc, start)`** ([except.spec]/2): `e` is
   a contextually converted constant expression of type `bool`
-  ([expr.const]/12), evaluated with `EvalContext::converted(start)`.
+  ([expr.const]/12), evaluated with `EvalContext::converted(start)`
+  (`Sema::bool_cce`, shared with `explicit(expr)`, spec/sema-class.md
+  §4.7).
   The result is `NoexceptExpr { expr: ConstantExpr(e'), value }`.
   Diagnostics point at `start`, the operand's first token, and follow
   clang 19:
@@ -1009,7 +1011,10 @@ specification as written (`TypeNames` prints ` noexcept`,
     constant expression (pointers, `std::nullptr_t`, floating point):
     `conversion from 'T' to 'bool' is not allowed in a converted
     constant expression`, with `T` as written (`int *const`);
-  - a class or scoped-enumeration type: `value of type 'T' is not
+  - a class type converts through its conversion functions (the
+    contextual conversion of [conv.general]/4, WP-275), so
+    `noexcept(bool_constant<true>())` is `noexcept(true)`; a class type
+    without one, or a scoped-enumeration type: `value of type 'T' is not
     implicitly convertible to 'bool'`;
   - a non-constant operand: `noexcept specifier argument is not a
     constant expression`, plus the Oven's notes.

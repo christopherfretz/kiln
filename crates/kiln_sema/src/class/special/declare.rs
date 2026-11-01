@@ -6,7 +6,6 @@
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnSpec};
 use kiln_ast::names::{DeclName, OverloadedOperator};
-use kiln_ast::types::BuiltinType;
 use kiln_ast::types::{ExcSpec, FuncInfo, RefQual};
 use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_diag::DiagId;
@@ -116,23 +115,37 @@ impl Sema<'_, '_> {
             })
     }
 
-    /// The value of `explicit(expr)` ([dcl.fct.spec]/3: a contextually
-    /// converted constant expression of type `bool`): `None` when it is
-    /// value-dependent or not a constant.
+    /// The value of `explicit(expr)` ([dcl.fct.spec]/4), as
+    /// [`Sema::resolve_explicit`]: `None` when it is value-dependent.
+    /// After an error the declaration is not explicit (clang leaves the
+    /// declaration without follow-on diagnostics).
     pub(crate) fn explicit_value(&mut self, e: kiln_ast::ExprId) -> Option<bool> {
+        match self.resolve_explicit(e) {
+            Ok(v) => v.map(|(_, v)| v),
+            Err(()) => Some(false),
+        }
+    }
+
+    /// Resolves `explicit(expr)` ([dcl.fct.spec]/4: a contextually
+    /// converted constant expression of type `bool`, [`Sema::bool_cce`];
+    /// clang `tryResolveExplicitSpecifier`): `Ok(None)` when it is
+    /// value-dependent, else the converted `ConstantExpr` and its value.
+    ///
+    /// # Errors
+    /// `Err` after an error was reported at the operand.
+    pub(crate) fn resolve_explicit(
+        &mut self,
+        e: kiln_ast::ExprId,
+    ) -> Result<Option<(kiln_ast::ExprId, bool)>, ()> {
         let x = self.ast.exprs.get(e);
         if x.is_value_dependent() || x.is_type_dependent() {
-            return None;
+            return Ok(None);
         }
-        let ty = x.ty();
-        if self.ast.types.builtin(ty) != Some(BuiltinType::Bool) {
-            // todo(WP-068a): converted constant expressions of other
-            // types.
-            self.unsupported("'explicit' with a non-bool expression", self.begin_loc(e));
-            return None;
+        if self.is_err_expr(e) {
+            return Err(());
         }
-        let r = crate::conv::lvalue_to_rvalue(self, e);
-        self.fold_int(r).map(|v| v != 0)
+        let at = self.begin_loc(e);
+        self.bool_cce(e, at, "explicit specifier argument").map(Some).ok_or(())
     }
 
     /// A constructor, destructor, conversion-function or member

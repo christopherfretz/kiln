@@ -24,8 +24,10 @@ enum BoolCce {
     /// A conversion a converted constant expression may not contain
     /// (floating-integral, boolean conversions from pointers, ...).
     NotAllowed,
-    /// No implicit conversion to `bool` exists: class types (until
-    /// conversion functions, M3) and scoped enumerations.
+    /// A class type: the contextual conversion through its conversion
+    /// functions ([conv.general]/4).
+    Class,
+    /// No implicit conversion to `bool` exists: scoped enumerations.
     NotConvertible,
     /// The error type: already diagnosed; the conversion recovers.
     Other,
@@ -48,11 +50,31 @@ impl Sema<'_, '_> {
             let p = self.dependent_profile(e);
             return ExcSpec::NoexceptExpr { expr: e, value: NoexceptValue::Dependent(p) };
         }
-        let at = start;
+        match self.bool_cce(e, start, "noexcept specifier argument") {
+            Some((ce, value)) => {
+                let value = if value { NoexceptValue::True } else { NoexceptValue::False };
+                ExcSpec::NoexceptExpr { expr: ce, value }
+            }
+            None => self.invalid_noexcept_spec(loc),
+        }
+    }
+
+    /// A contextually converted constant expression of type `bool`
+    /// ([expr.const]/12; clang `CheckConvertedConstantExpression` with
+    /// `CCEK_Noexcept` / `CCEK_ExplicitBool`): the operand of a
+    /// *noexcept-specifier* ([except.spec]/2) or an *explicit-specifier*
+    /// ([dcl.fct.spec]/4). `e` is not value-dependent; `at` is where the
+    /// diagnostics point and `what` names the operand in them. A class
+    /// type converts through its conversion functions (the contextual
+    /// conversion of [conv.general]/4), an integral or unscoped
+    /// enumeration type unless narrowing. Returns the `ConstantExpr`
+    /// holding the converted operand and its value, or `None` after an
+    /// error was reported.
+    pub(crate) fn bool_cce(&mut self, e: ExprId, at: Loc, what: &str) -> Option<(ExprId, bool)> {
         // Diagnostics name the operand's type as written (clang prints
         // `int *const`, not the converted `int *`).
         let written = self.ast.exprs.get(e).ty();
-        let c = conv::lvalue_to_rvalue(self, e);
+        let mut c = conv::lvalue_to_rvalue(self, e);
         let ty = conv::strip_cv(self, self.ast.exprs.get(c).ty());
         match self.bool_cce_kind(ty) {
             BoolCce::Integral => {
@@ -62,12 +84,26 @@ impl Sema<'_, '_> {
                 {
                     let d = self
                         .diag(DiagId::sema_cce_narrowing_value, at)
-                        .arg("noexcept specifier argument")
+                        .arg(what)
                         .arg(v.to_string())
                         .arg(self.ty_arg(QualType::BOOL));
                     // A `-Wc++11-narrowing` error by default; clang goes
                     // on with the converted value.
                     self.emit(d);
+                }
+            }
+            BoolCce::Class => {
+                // Not the lvalue conversion: a conversion function takes
+                // the object as it is.
+                if let Ok(x) = conv::contextually_convert_to_bool(self, e) {
+                    c = x;
+                } else {
+                    let d = self
+                        .diag(DiagId::sema_cce_not_implicitly_convertible, at)
+                        .arg(self.ty_arg(written))
+                        .arg(self.ty_arg(QualType::BOOL));
+                    self.emit(d);
+                    return None;
                 }
             }
             BoolCce::NotAllowed => {
@@ -76,7 +112,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(written))
                     .arg(self.ty_arg(QualType::BOOL));
                 self.emit(d);
-                return self.invalid_noexcept_spec(loc);
+                return None;
             }
             BoolCce::NotConvertible => {
                 let d = self
@@ -84,7 +120,7 @@ impl Sema<'_, '_> {
                     .arg(self.ty_arg(written))
                     .arg(self.ty_arg(QualType::BOOL));
                 self.emit(d);
-                return self.invalid_noexcept_spec(loc);
+                return None;
             }
             BoolCce::Bool | BoolCce::Other => {}
         }
@@ -92,7 +128,7 @@ impl Sema<'_, '_> {
             Ok(c) => c,
             Err(err) => {
                 self.emit_conv_error(err, at);
-                return self.invalid_noexcept_spec(loc);
+                return None;
             }
         };
         let c = self.act_on_full_expr(c);
@@ -100,15 +136,13 @@ impl Sema<'_, '_> {
             Ok(v) => {
                 let value = self.const_truth(v).unwrap_or(false);
                 let cv = self.int_const(QualType::BOOL, i128::from(value));
-                let ce = self.builder().constant_expr(c, Some(cv));
-                let value = if value { NoexceptValue::True } else { NoexceptValue::False };
-                ExcSpec::NoexceptExpr { expr: ce, value }
+                Some((self.builder().constant_expr(c, Some(cv)), value))
             }
             Err(f) => {
-                let d = self.diag(DiagId::sema_expr_not_cce, at).arg("noexcept specifier argument");
+                let d = self.diag(DiagId::sema_expr_not_cce, at).arg(what);
                 let d = Self::with_failure_notes(d, f);
                 self.emit(d);
-                self.invalid_noexcept_spec(loc)
+                None
             }
         }
     }
@@ -136,7 +170,7 @@ impl Sema<'_, '_> {
             };
         }
         if t.as_record(ty).is_some() {
-            return BoolCce::NotConvertible;
+            return BoolCce::Class;
         }
         if self.is_error_type(ty) {
             return BoolCce::Other;

@@ -575,11 +575,16 @@ impl Substituter<'_, '_, '_> {
         if ds.explicit.is_some()
             && let Some(&e) = self.sema.ast.decls.cold.explicit_expr.get(d)
         {
-            match self.expr(e) {
-                Ok(e) => ds.explicit_expr = Some(e),
-                Err(e) => {
+            // Resolved here once it no longer depends on anything: an
+            // invalid one drops the member ([temp.inst]/3, clang
+            // `InstantiateExplicitSpecifier`), the declaration then sees
+            // the converted constant.
+            match self.expr(e).map(|e| (e, self.sema.resolve_explicit(e))) {
+                Ok((e, Ok(None))) => ds.explicit_expr = Some(e),
+                Ok((_, Ok(Some((c, _))))) => ds.explicit_expr = Some(c),
+                Ok((_, Err(()))) | Err(_) => {
                     self.forget_pattern_params(d);
-                    return Err(e);
+                    return Err(SubstFail);
                 }
             }
         }
@@ -798,19 +803,16 @@ impl Substituter<'_, '_, '_> {
             return Ok(());
         }
         let e = self.expr(e)?;
-        match self.sema.explicit_value(e) {
-            Some(true) => {}
-            Some(false) => {
+        match self.sema.resolve_explicit(e) {
+            Ok(Some((_, true))) => {}
+            Ok(Some((_, false))) => {
                 let s = self.sema.fn_spec(spec).with_explicit(false);
                 self.sema.ast.decls.respecify_function(spec, s);
             }
-            None => {
-                let x = self.sema.ast.exprs.get(e);
-                if !x.is_value_dependent() && !x.is_type_dependent() {
-                    return Err(SubstFail);
-                }
+            Ok(None) => {
                 let _ = self.sema.ast.decls.cold.explicit_expr.insert(spec, e);
             }
+            Err(()) => return Err(SubstFail),
         }
         Ok(())
     }
