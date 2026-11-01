@@ -1386,7 +1386,7 @@ impl Sema<'_, '_> {
         opts: IcsOptions,
     ) {
         let Some(pattern) = self.templated_function(ft) else { return };
-        if self.fn_spec(pattern).is_explicit() && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+        if self.nondependently_explicit(pattern) && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
             // clang `AddTemplateConversionCandidate`: noted as "not a
             // candidate" (a reference binding skips it).
             if !matches!(set.kind, SetKind::ConvToRef { .. }) {

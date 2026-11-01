@@ -104,6 +104,18 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Whether function `f` is explicit without a value-dependent
+    /// `explicit(expr)` (clang `isNonDependentlyExplicit`): a template
+    /// whose explicit-specifier depends on its parameters is resolved
+    /// per specialization (§6.1 step 4).
+    pub(crate) fn nondependently_explicit(&self, f: DeclId) -> bool {
+        self.fn_spec(f).is_explicit()
+            && self.ast.decls.cold.explicit_expr.get(f).is_none_or(|&e| {
+                let x = self.ast.exprs.get(e);
+                !x.is_value_dependent() && !x.is_type_dependent()
+            })
+    }
+
     /// The value of `explicit(expr)` ([dcl.fct.spec]/3: a contextually
     /// converted constant expression of type `bool`): `None` when it is
     /// value-dependent or not a constant.
