@@ -220,7 +220,8 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
 /// The default checkout of `tag`: `.toolchain/libcxx-<tag>` of this
 /// checkout, else of the main checkout when this is a worktree (where the
 /// fetch script puts it); for [`TESTS_TAG`] also the pre-tag location
-/// `.toolchain/llvm-project`. The first that exists, else the first.
+/// `.toolchain/llvm-project`. The first that exists, else the fetch
+/// script's target.
 fn default_checkout(root: &Path, tag: &str) -> PathBuf {
     let mut names = vec![format!("libcxx-{tag}")];
     if tag == TESTS_TAG {
@@ -234,7 +235,11 @@ fn default_checkout(root: &Path, tag: &str) -> PathBuf {
         .iter()
         .flat_map(|n| bases.iter().map(move |b| b.join(".toolchain").join(n)))
         .collect();
-    candidates.iter().find(|c| c.is_dir()).unwrap_or(&candidates[0]).clone()
+    // None yet: where the fetch script puts it (the main checkout's).
+    candidates.into_iter().find(|c| c.is_dir()).unwrap_or_else(|| {
+        let base = bases.last().map_or(root, PathBuf::as_path);
+        base.join(".toolchain").join(format!("libcxx-{tag}"))
+    })
 }
 
 /// The main checkout when `root` is a worktree of it: the common git dir's
@@ -261,6 +266,7 @@ fn main_checkout(root: &Path) -> Option<PathBuf> {
         Some(wt) => common.join(wt),
         None => common.join(".."),
     };
+    let main = std::fs::canonicalize(&main).unwrap_or(main);
     main.join("xtask").is_dir().then_some(main)
 }
 
