@@ -1006,6 +1006,28 @@ complete: a static member, a member pointer, or a later member call
 instantiate their members as usual
 (`tests/conformance/temp.inst/invalid-specialization-members.cpp`).
 
+As clang's `TemplateDeclInstantiator`, a field, a member typedef or
+alias, or an enumeration whose type (underlying type) fails to
+substitute is still declared, `INVALID` (a field or typedef of the error
+type, an enumeration of underlying type `int` with its enumerators), so
+lookup finds it and its uses are silent (`member_ref_without_object`
+builds nothing for an invalid declaration); a static data member or a
+member function whose type fails is not declared, and naming it is "no
+member named". Any member instantiated invalid makes the specialization
+invalid, not only a data member. The other uses that clang checks with
+`RequireCompleteType` fail the same quiet way when the instantiation
+fails at them (`instantiation_fails`): a field of that type (also a
+member class, whose instantiation now reports failure like a
+specialization's) is invalid, and a base-specifier naming it is dropped
+(class/members.rs), so the derived class does not find its members; a
+using-declaration whose qualifier names an invalid class is not
+diagnosed as "not a base class". A decl-specifier whose qualifier fails
+so (`X<A>::type v;`) spans the scanned name and the declaration goes on
+with an invalid type; a base-specifier `X<A>::B` is clang's "expected
+class name" at `B`
+(`temp.inst/invalid-specialization-invalid-members.cpp`,
+`temp.inst/invalid-specialization-base.cpp`).
+
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
   required the definition, as clang records it. It is used only in

@@ -841,8 +841,19 @@ impl Parser<'_, '_> {
         let start = self.pos();
         let loc = self.name_begin();
         if self.at_template_type_name_checked(ctx, loc) {
+            let scanned = self.scan_name_at(start).and_then(|(end, split, ..)| (!split).then_some(end));
             let ty = self.parse_template_type_name(ctx);
             if ty.is_none() {
+                // An invalid qualifier (`X<A>::type` where the
+                // instantiation of `X<A>` fails here) still spans the
+                // scanned name: the declaration goes on with an invalid
+                // type (clang's invalid `CXXScopeSpec`), not a syntax
+                // error.
+                if let Some(end) = scanned {
+                    while self.pos() < end {
+                        self.bump();
+                    }
+                }
                 ds.invalid = true;
             }
             if let Err(e) =

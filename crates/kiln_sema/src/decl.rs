@@ -3109,7 +3109,15 @@ impl Sema<'_, '_> {
             }
             kw.is_some()
         };
-        let ty = if invalid && self.placeholder_keyword(ty).is_some() {
+        // clang `CheckFieldDecl`'s `RequireCompleteType`: a field of a
+        // class template specialization whose instantiation fails is
+        // invalid, quietly (and so is its class, §4.3 of
+        // sema-templates.md).
+        let failed_spec = !invalid
+            && !self.ast.types.is_reference(ty)
+            && self.instantiation_fails(self.bounded_array_element(ty), d.name_loc());
+        let invalid = invalid || failed_spec;
+        let ty = if failed_spec || (invalid && self.placeholder_keyword(ty).is_some()) {
             QualType::ERROR
         } else if !invalid && self.ast.types.is_sizeless(ty) {
             let msg = self.diag(DiagId::sema_field_sizeless, d.name_loc()).arg(self.ty_arg(ty));
@@ -3138,6 +3146,9 @@ impl Sema<'_, '_> {
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
         let f = self.builder().field(h, ty, width, flags);
+        if failed_spec {
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        }
         // The decl-specifiers' start (clang's `FieldDecl::getBeginLoc`;
         // the Oven's `__builtin_bit_cast` notes point there).
         if ds.loc.is_valid() && ds.loc != d.name_loc() {

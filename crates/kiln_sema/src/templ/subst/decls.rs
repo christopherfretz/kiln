@@ -984,9 +984,19 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn field_decl(&mut self, d: DeclId) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
-        let ty = self.named_decl_ty(d, t, loc)?;
+        // clang `VisitFieldDecl`: a field whose type fails to substitute
+        // is still declared, invalid, so lookup finds it and its uses are
+        // silent; the specialization is invalid ([temp.inst]/3, §4.3).
+        let ty = self.named_decl_ty(d, t, loc);
+        let failed = ty.is_err();
+        let ty = ty.unwrap_or(QualType::ERROR);
         let ds = self.pattern_declspec(d, ty);
         let mut dr = self.pattern_declarator(d, DeclaratorContext::Member)?;
+        if failed {
+            let f = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
+            self.sema.ast.decls.set_flags(f, DeclFlags::INVALID);
+            return Ok(f);
+        }
         let fd: Option<FieldData> = self.sema.ast.decls.field(d).copied();
         if let Some(w) = fd.and_then(|x| x.bit_width) {
             dr.bit_width = Some(self.expr(w)?);
@@ -1031,15 +1041,26 @@ impl Substituter<'_, '_, '_> {
         let outer = self.type_begin.replace(begin);
         let ty = self.with_written_scope(scope, |s| s.ty(u, loc));
         self.type_begin = outer;
-        let ty = ty?;
+        // clang `VisitTypedefNameDecl`: a member typedef whose type fails
+        // to substitute is still declared, invalid (lookup finds it, its
+        // uses are silent, the specialization is invalid).
+        let failed = ty.is_err() && ctx == DeclaratorContext::Member;
+        let ty = if failed { QualType::ERROR } else { ty? };
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
-            return Ok(self.sema.act_on_alias_decl(name, loc, ty, &[], Loc::INVALID));
+            let a = self.sema.act_on_alias_decl(name, loc, ty, &[], Loc::INVALID);
+            if failed {
+                self.sema.ast.decls.set_flags(a, DeclFlags::INVALID);
+            }
+            return Ok(a);
         }
         let mut ds = self.pattern_declspec(d, ty);
         ds.storage = Some((StorageSpec::Typedef, loc));
         let dr = self.pattern_declarator(d, ctx)?;
         let td = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
+        if failed {
+            self.sema.ast.decls.set_flags(td, DeclFlags::INVALID);
+        }
         self.copy_begin_loc(d, td, ty);
         Ok(td)
     }
@@ -1073,11 +1094,17 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.decls.get(d);
         let loc = n.loc();
         let Some(data) = self.sema.ast.decls.enumeration(d).copied() else { return Err(SubstFail) };
+        // clang `VisitEnumDecl`: an underlying type that fails to
+        // substitute leaves an invalid enumeration of underlying type
+        // `int`, whose enumerators are still declared.
+        let mut failed = false;
         let fixed = if data.is_fixed() {
-            match data.int_type {
-                Some(t) => Some(self.ty(t, loc)?),
-                None => None,
-            }
+            data.int_type.map(|t| {
+                self.ty(t, loc).unwrap_or_else(|_| {
+                    failed = true;
+                    QualType::INT
+                })
+            })
         } else {
             None
         };
@@ -1098,6 +1125,9 @@ impl Substituter<'_, '_, '_> {
         };
         let kw = kiln_ast::types::TagKeyword::Enum;
         let e = self.sema.act_on_tag(kw, name, None, use_, scoped, fixed, loc);
+        if failed {
+            self.sema.ast.decls.set_flags(e, DeclFlags::INVALID);
+        }
         if let Some(src) = src {
             self.enum_definition(e, src)?;
         }

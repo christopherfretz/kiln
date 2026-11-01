@@ -733,7 +733,9 @@ impl Sema<'_, '_> {
         self.in_inst_context(parent, |s| s.instantiate_class_body(r, def, &args, &outer));
         self.replay_dependent_access(def, r);
         self.pop_inst_frame();
-        self.ast.definition(r).is_some()
+        // As for a specialization: an instantiation that failed leaves
+        // the class complete but invalid ([`Sema::instantiation_fails`]).
+        self.ast.definition(r).is_some() && !self.ast.decls.get(r).has(DeclFlags::INVALID)
     }
 
     /// The definition of member `r`'s pattern `pattern`: for an
@@ -1294,7 +1296,10 @@ impl Substituter<'_, '_, '_> {
             let data = matches!(n.kind(), DeclKind::Field | DeclKind::Var);
             invalid |= data && r.is_err();
             if let Ok(Some(x)) = r {
-                invalid |= data && sub.sema.ast.decls.get(x).has(DeclFlags::INVALID);
+                // clang `InstantiateClass`: any member instantiated
+                // invalid (a field, typedef or enumeration whose type
+                // fails) makes the specialization invalid.
+                invalid |= sub.sema.ast.decls.get(x).has(DeclFlags::INVALID);
                 sub.member_link(x, m);
                 if let Some(l) = local.as_deref_mut() {
                     sub.collect_local_method(spec, x, m, l);
