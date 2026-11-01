@@ -6,7 +6,8 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{
-    BinaryOp, CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, TypeidOperand, ValueCategory,
+    BinaryOp, CastKind, CharKind, ExprDeps, ExprFlags, ExprKind, Radix, TypeidOperand,
+    ValueCategory,
 };
 use kiln_ast::ids::RawId;
 use kiln_ast::names::{DeclName, DeclNameView};

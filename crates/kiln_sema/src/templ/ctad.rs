@@ -186,20 +186,26 @@ impl Sema<'_, '_> {
 
     /// True if `d`, named without template arguments outside its own
     /// definition, is a placeholder for a deduced class type
-    /// ([dcl.type.class.deduct]/1): a class template or (P1814) an
-    /// alias template.
+    /// ([dcl.type.class.deduct]/1): a class template, (P1814) an alias
+    /// template, or a template template parameter (deduced once its
+    /// argument is known; clang's `ClassifyName` makes the same
+    /// dependent `DeducedTemplateSpecializationType`).
     pub fn is_ctad_template(&self, d: DeclId) -> bool {
         match self.kind_of(d) {
             DeclKind::ClassTemplate => !self.names_injected_class(d),
-            DeclKind::TypeAliasTemplate => true,
+            DeclKind::TypeAliasTemplate | DeclKind::TemplateTemplateParm => true,
             _ => false,
         }
     }
 
-    /// True if a class or alias template name `d` alone is a type: its
-    /// injected-class-name or a CTAD placeholder.
+    /// True if a class or alias template name (or template template
+    /// parameter) `d` alone is a type: its injected-class-name or a CTAD
+    /// placeholder.
     pub fn names_class_type(&self, d: DeclId) -> bool {
-        matches!(self.kind_of(d), DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate)
+        matches!(
+            self.kind_of(d),
+            DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate | DeclKind::TemplateTemplateParm
+        )
     }
 
     /// The undeduced placeholder `X` / `nns::X` for class template `d`

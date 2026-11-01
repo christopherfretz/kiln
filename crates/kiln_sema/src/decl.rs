@@ -4344,9 +4344,8 @@ impl Sema<'_, '_> {
         self.templ.cur = None;
         let Some((t, p)) = t.and_then(|t| self.pattern_of(t).map(|p| (t, p))) else {
             let msg = if let Some(&other) = found.first() {
-                let msg = self
-                    .diag(DiagId::sema_redefinition_different_kind, nloc)
-                    .arg(sym_str(self, n));
+                let msg =
+                    self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
                 self.note_prev(msg, other, true)
             } else {
                 self.diag(DiagId::sema_friend_def_no_match, nloc)
