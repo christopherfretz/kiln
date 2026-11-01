@@ -53,8 +53,19 @@ impl Cg<'_> {
                 let t = self.lty(ty);
                 self.scalar_const(s, t)
             }
+            // A vector value (scalar in IR, an aggregate image in the
+            // Oven): its `<N x T>` constant (clang `emitAbstract`).
+            ConstValue::Aggregate(_) if self.is_vector_ty(ty) => {
+                self.const_value(c, ty, None, true)
+            }
             ConstValue::Aggregate(_) => err(None, "aggregate constant in scalar context"),
         }
+    }
+
+    /// True if `ty` is a vector type laid out as an IR vector (not a
+    /// `bool` ext vector, whose value form is `<N x i1>`).
+    fn is_vector_ty(&mut self, ty: QualType) -> bool {
+        matches!(self.tys.convert_mem(ty), IrType::Vector(..))
     }
 
     /// A scalar constant of IR type `t`.
@@ -275,9 +286,13 @@ impl Cg<'_> {
                 let is_string =
                     e.is_some_and(|x| self.ast.exprs.get(x).kind() == ExprKind::StringLiteral);
                 let inits: Vec<ExprId> = match e {
-                    Some(x) if self.ast.exprs.get(x).kind() == ExprKind::InitListExpr => {
-                        let l = self.ast.exprs.init_list_inits(x);
-                        self.ast.lists.get(l).iter().map(|&i| ExprId::new(i)).collect()
+                    Some(x)
+                        if matches!(
+                            self.ast.exprs.get(x).kind(),
+                            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+                        ) =>
+                    {
+                        crate::expr::agg_init_parts(self.ast, x).0
                     }
                     _ => Vec::new(),
                 };
@@ -310,9 +325,13 @@ impl Cg<'_> {
                 }
                 let e = e.map(|x| self.strip_init(x));
                 let inits: Vec<ExprId> = match e {
-                    Some(x) if self.ast.exprs.get(x).kind() == ExprKind::InitListExpr => {
-                        let l = self.ast.exprs.init_list_inits(x);
-                        self.ast.lists.get(l).iter().map(|&i| ExprId::new(i)).collect()
+                    Some(x)
+                        if matches!(
+                            self.ast.exprs.get(x).kind(),
+                            ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+                        ) =>
+                    {
+                        crate::expr::agg_init_parts(self.ast, x).0
                     }
                     _ => Vec::new(),
                 };
@@ -354,10 +373,19 @@ impl Cg<'_> {
             IrType::RecordBase(_) => {
                 err(None, "base-class subobjects in constants are not supported yet (M3)")
             }
-            IrType::Void
-            | IrType::Vector(..)
-            | IrType::ScalableVector(..)
-            | IrType::TargetExt(_) => err(None, "vector constants are not supported yet (M3)"),
+            // clang `ConstExprEmitter`/`APValue::Vector`: one constant per
+            // lane, lane `i` at byte `i * sizeof(elem)` of the image.
+            IrType::Vector(et, n) => {
+                let (es, _) = self.tys.size_align(et);
+                let mut elems = Vec::with_capacity(*n as usize);
+                for i in 0..*n {
+                    elems.push(self.image_const(img, off + i * es, et, None)?);
+                }
+                self.m.const_vector(&elems).map_err(|e| ir_err(&e))
+            }
+            IrType::Void | IrType::ScalableVector(..) | IrType::TargetExt(_) => {
+                err(None, "scalable-vector and target-type constants are not supported yet (M3)")
+            }
         }
     }
 
@@ -447,18 +475,20 @@ impl Cg<'_> {
         e: Option<ExprId>,
     ) -> R<Value> {
         let e = e.map(|x| self.strip_init(x));
-        let ile = e.filter(|&x| self.ast.exprs.get(x).kind() == ExprKind::InitListExpr);
-        let active = ile.and_then(|x| self.ast.exprs.init_list(x).union_field);
+        let ile = e.filter(|&x| {
+            matches!(
+                self.ast.exprs.get(x).kind(),
+                ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
+            )
+        });
+        let active = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).2);
         let Some(f) = active else {
             if (0..size).all(|i| img.byte(off + i) == 0) && img.relocs.is_empty() {
                 return Ok(self.m.const_zero(t));
             }
             return err(None, "union constant without an active member");
         };
-        let sub = ile.and_then(|x| {
-            let l = self.ast.exprs.init_list_inits(x);
-            self.ast.lists.get(l).first().map(|&i| ExprId::new(i))
-        });
+        let sub = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).0.first().copied());
         let fq = self.ast.decls.get(f).ty().expect("field type");
         let fit = self.tys.convert(fq);
         let c = self.image_const(img, off, &fit, sub)?;

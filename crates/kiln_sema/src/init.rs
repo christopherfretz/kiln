@@ -156,20 +156,26 @@ impl Sema<'_, '_> {
         if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end) {
             return Some(e);
         }
+        if let Some(item) = l.items.iter().find(|i| !i.designator.is_empty()) {
+            // todo(WP-067b follow-up): designators of a non-aggregate.
+            self.unsupported("this list-initialization of a class", item.value.loc(self));
+            let flat = Self::list_exprs(l);
+            return Some(self.recover(ty, &flat, l.lbrace));
+        }
         let mut args = Vec::with_capacity(l.items.len());
         for item in &l.items {
-            match item.value {
-                InitValue::Expr(e) if item.designator.is_empty() => args.push(e),
-                _ => {
-                    // todo(WP-067b follow-up): nested braced arguments
-                    // ([over.ics.list]) and designators of a non-aggregate.
-                    self.unsupported("this list-initialization of a class", item.value.loc(self));
-                    let flat = Self::list_exprs(l);
-                    return Some(self.recover(ty, &flat, l.lbrace));
-                }
+            match &item.value {
+                InitValue::Expr(e) => args.push(*e),
+                // A nested braced-init-list is an argument converted by
+                // [over.ics.list] (WP-152): the call-argument placeholder,
+                // as for `T x({...})`.
+                InitValue::List(n) => args.push(self.act_on_braced_arg(n.clone())),
             }
         }
         if args.iter().any(|&a| self.expr_is_type_dependent(a)) {
+            for &a in &args {
+                let _ = self.take_braced_arg(a);
+            }
             return None;
         }
         let mut site = ConstructSite::at(at);
@@ -357,6 +363,17 @@ impl Sema<'_, '_> {
                     return e;
                 }
                 let style = if direct_list { InitStyle::DirectList } else { InitStyle::CopyList };
+                let ctx = if direct_list {
+                    ConvCtx::DirectInitialization
+                } else {
+                    ConvCtx::Initialization
+                };
+                if let Some(e) = self.class_element_list_init(ty, &l, ctx, loc, None) {
+                    return e;
+                }
+                if self.ast.types.is_reference(ty) {
+                    return self.reference_list_init(ty, &l, Some(loc), style);
+                }
                 if let Some(e) = self.list_construct(ty, &l, style, loc, None) {
                     return e;
                 }
@@ -385,6 +402,9 @@ impl Sema<'_, '_> {
                 .arg(which);
             self.emit(msg);
             return e;
+        }
+        if let Some(x) = self.atomic_class_init(ty, e, ctx, at) {
+            return x;
         }
         if let Some(x) = self.construct_from_class(e, ty, ctx, at, DeletedAs::Call) {
             return x;
@@ -418,6 +438,30 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Initialization of `_Atomic(T)`, `T` a class, from `e` of class
+    /// type `T` or derived from `T` (clang `InitializeFrom`
+    /// `NeedAtomicConversion`): `T` is initialized from `e`, then
+    /// converted by `NonAtomicToAtomic` (WP-165).
+    fn atomic_class_init(
+        &mut self,
+        ty: QualType,
+        e: ExprId,
+        ctx: ConvCtx,
+        at: Loc,
+    ) -> Option<ExprId> {
+        let v = self.ast.types.as_atomic(ty)?;
+        let vr = self.ast.types.as_record(v)?;
+        let er = self.ast.types.as_record(self.ety(e))?;
+        if !self.derived_inclusive(er, vr) {
+            return None;
+        }
+        let v = conv::strip_cv(self, v);
+        let x = self.init_from_expr(v, e, ctx, at);
+        let to = conv::strip_cv(self, ty);
+        let ck = kiln_ast::expr::CastKind::NonAtomicToAtomic;
+        Some(conv::cast_to(self, ck, x, to, None))
+    }
+
     /// `char s[N] = "..."` ([dcl.init.string]).
     fn check_string_init(&mut self, ty: QualType, s: ExprId, e: ExprId) -> ExprId {
         let sty = self.ast.exprs.get(s).ty();
@@ -444,12 +488,89 @@ impl Sema<'_, '_> {
         e
     }
 
+    /// [dcl.init.list]/3.9 for a single class-type element of a non-class
+    /// `ty` (or `nullptr` for `bool`): clang initializes from the element
+    /// itself (`TryListInitialization`'s core-24034 rewrite), so a direct
+    /// list may use an explicit conversion function, a failure is reported
+    /// at the entity `at` (with the "passing argument" note `param`) and not
+    /// as a braced scalar, and the user conversion's second standard
+    /// conversion must not narrow. `None` if the rule does not apply.
+    pub(crate) fn class_element_list_init(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        ctx: ConvCtx,
+        at: Loc,
+        param: Option<kiln_diag::Diag>,
+    ) -> Option<ExprId> {
+        use kiln_ast::types::BuiltinType;
+        let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
+            return None;
+        };
+        let e = *e;
+        if !designator.is_empty()
+            || self.ast.types.as_record(ty).is_some()
+            // `_Atomic(T)` from a `T` of class type is `atomic_class_init`
+            // (WP-165), not a conversion function call.
+            || self.ast.types.as_atomic(ty).is_some()
+            || self.ast.types.is_reference(ty)
+            || self.ast.types.is_array(ty)
+            || self.ast.types.is_dependent(ty)
+            || self.is_error_type(ty)
+            || self.expr_is_type_dependent(e)
+        {
+            return None;
+        }
+        let ety = self.ety(e);
+        let nullptr_bool = self.ast.types.builtin(ety) == Some(BuiltinType::NullPtr)
+            && self.ast.types.builtin(conv::strip_cv(self, ty)) == Some(BuiltinType::Bool);
+        if self.ast.types.as_record(ety).is_none() && !nullptr_bool {
+            return None;
+        }
+        let r = if nullptr_bool {
+            conv::implicit_convert(self, e, ty, ctx)
+        } else {
+            conv::user_conversion(self, e, ty, ctx, at)
+        };
+        let x = match r {
+            Ok(x) => {
+                if !nullptr_bool {
+                    let inner = self.ignore_paren_imp_casts(x);
+                    self.check_narrowing(inner, ty, ty);
+                }
+                x
+            }
+            Err(err) => {
+                let mut d = err.diag_at(self, at);
+                if let Some(n) = param {
+                    d = d.with_note(n);
+                }
+                self.emit(d);
+                let loc = self.ast.exprs.get(e).loc();
+                self.recover(ty, &[e], loc)
+            }
+        };
+        Some(self.builder().init_list(ty, &[x], None, None, l.lbrace, l.rbrace))
+    }
+
     /// List-initialization of a parameter (`f({1})`, `int x = {1}` as a
     /// default argument) or a return value (`return {1};`): a single
     /// braced scalar warns `-Wbraced-scalar-init` ([dcl.init.list]/3.9).
-    pub(crate) fn init_list_entity(&mut self, ty: QualType, l: &InitList, entity: Loc) -> ExprId {
+    /// `ctx` is the entity's conversion context and `param` the
+    /// "passing argument" note of a failure.
+    pub(crate) fn init_list_entity(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        entity: Loc,
+        ctx: ConvCtx,
+        param: Option<kiln_diag::Diag>,
+    ) -> ExprId {
         if self.is_error_type(ty) {
             return self.perform_init(ty, Initializer::List(l.clone()), entity, false);
+        }
+        if let Some(e) = self.class_element_list_init(ty, l, ctx, entity, param) {
+            return e;
         }
         // Scalars only: a class (aggregate or not, complete or not yet
         // instantiated) takes its braces.
@@ -531,13 +652,19 @@ impl Sema<'_, '_> {
             }
             let n = bound.unwrap_or(args.len() as u64);
             let filler = if n > args.len() as u64 {
-                if self.ast.types.as_record(self.base_element(elem)).is_some() {
-                    // todo(WP-067b follow-up): value-initialized class
-                    // elements of a parenthesized array initialization.
+                if self.ast.types.as_record(elem).is_some() {
+                    // Value-initialized class elements: clang's filler is
+                    // the default construction (`zeroing` unless the
+                    // constructor is user-provided).
+                    Some(self.paren_value_init(elem, at))
+                } else if self.ast.types.as_record(self.base_element(elem)).is_some() {
+                    // todo(WP-067b follow-up): value-initialized arrays of
+                    // classes inside a parenthesized array initialization.
                     self.unsupported("parenthesized initialization of an array of classes", at);
                     return self.recover(ty, args, at);
+                } else {
+                    Some(self.builder().implicit_value_init(elem))
                 }
-                Some(self.builder().implicit_value_init(elem))
             } else {
                 None
             };
@@ -550,10 +677,7 @@ impl Sema<'_, '_> {
         };
         let def = self.ast.definition(r).unwrap_or(r);
         if self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union) {
-            // todo(WP-067b follow-up): the builder records no active member
-            // of a `CXXParenListInitExpr`.
-            self.unsupported("parenthesized initialization of a union", at);
-            return self.recover(ty, args, at);
+            return self.paren_union_init(ty, def, args, at, rparen);
         }
         let bases = self.init_bases(def);
         let fields = self.init_fields(def);
@@ -582,9 +706,7 @@ impl Sema<'_, '_> {
                     if self.field_has_nsdmi(f) {
                         self.field_filler(f, rparen)
                     } else if self.ast.types.is_reference(ety) {
-                        // todo(WP-067b follow-up): clang's
-                        // `err_init_reference_member_uninitialized`.
-                        self.unsupported("an uninitialized reference member", at);
+                        self.uninit_reference_member(f, ety, rparen);
                         return self.recover(ty, args, at);
                     } else {
                         self.paren_value_init(ety, at)
@@ -597,6 +719,47 @@ impl Sema<'_, '_> {
             return self.recover(ty, args, at);
         }
         self.builder().paren_list_init(ty, &inits, None, at, rparen)
+    }
+
+    /// Parenthesized aggregate initialization of the union `ty` (definition
+    /// `def`): the single argument copy-initializes the first member
+    /// ([dcl.init.general]/16.6.2.2); a second argument is excess.
+    fn paren_union_init(
+        &mut self,
+        ty: QualType,
+        def: DeclId,
+        args: &[ExprId],
+        at: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let fields = self.init_fields(def);
+        let (Some(&f), Some(&a)) = (fields.first(), args.first()) else {
+            return self.recover(ty, args, at);
+        };
+        if args.len() > 1 {
+            let msg = self.diag(DiagId::sema_excess_initializers, at).arg("3");
+            self.emit(msg);
+            return self.recover(ty, args, at);
+        }
+        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        let loc = self.begin_loc(a);
+        let init = self.init_from_expr(fty, a, ConvCtx::Initialization, loc);
+        if self.is_err_expr(init) {
+            return self.recover(ty, args, at);
+        }
+        self.builder().paren_list_init_union(ty, init, f, at, rparen)
+    }
+
+    /// clang's `err_init_reference_member_uninitialized`: the reference
+    /// member `f` of type `ty` takes no argument of a parenthesized
+    /// aggregate initialization ([dcl.init.general]/16.6.2.3).
+    fn uninit_reference_member(&mut self, f: DeclId, ty: QualType, at: Loc) {
+        let t = self.ty_arg(ty);
+        let floc = self.ast.decls.get(f).loc();
+        let note = self.diag(DiagId::note_uninit_reference_member, floc);
+        let msg =
+            self.diag(DiagId::sema_init_reference_member_uninitialized, at).arg(t).with_note(note);
+        self.emit(msg);
     }
 
     /// A value-initialized element of a parenthesized aggregate
@@ -724,8 +887,16 @@ impl Sema<'_, '_> {
         l: &InitList,
         entity: Option<Loc>,
     ) -> ExprId {
-        // `_Atomic(T)` takes no braces (clang `InitListChecker`).
+        // `_Atomic(T)` takes no braces (clang `InitListChecker`), but a
+        // single element of class type initializes it (WP-165).
         if self.ast.types.as_atomic(ty).is_some() {
+            if let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+                && designator.is_empty()
+                && self.ast.types.as_record(self.ety(*x)).is_some()
+            {
+                let at = entity.unwrap_or(l.lbrace);
+                return self.init_from_expr(ty, *x, ConvCtx::Initialization, at);
+            }
             let msg =
                 self.diag(DiagId::sema_illegal_initializer_type, l.lbrace).arg(self.ty_arg(ty));
             self.emit(msg);
@@ -770,9 +941,13 @@ impl Sema<'_, '_> {
             return e;
         }
         if self.ast.types.is_reference(ty) {
-            return self.reference_list_init(ty, l, entity);
+            return self.reference_list_init(ty, l, entity, InitStyle::CopyList);
         }
         // Scalar ([dcl.init.list]/3.9-10).
+        let at = entity.unwrap_or(l.lbrace);
+        if let Some(e) = self.class_element_list_init(ty, l, ConvCtx::Initialization, at, None) {
+            return e;
+        }
         let mut inits = Vec::new();
         match l.items.first() {
             None => {}
@@ -829,22 +1004,10 @@ impl Sema<'_, '_> {
             inits.push(x);
             pos = 1;
         } else {
-            while pos < count && pos < l.items.len() {
-                let item = &l.items[pos];
-                if !item.designator.is_empty() {
-                    self.unsupported("a designator in a vector initializer", item.value.loc(self));
-                    return self.recover(ty, &[], l.lbrace);
-                }
-                let x = match &item.value {
-                    InitValue::Expr(e) => {
-                        self.check_narrowing(*e, elem, elem);
-                        self.convert_for_init(*e, elem, ConvCtx::Initialization)
-                    }
-                    InitValue::List(inner) => self.init_from_list(elem, inner),
-                };
-                inits.push(x);
-                pos += 1;
-            }
+            let Some(xs) = self.vector_elements(elem, count, &l.items, &mut pos, true) else {
+                return self.recover(ty, &[], l.lbrace);
+            };
+            inits = xs;
         }
         if let Some(extra) = l.items.get(pos) {
             let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
@@ -853,12 +1016,90 @@ impl Sema<'_, '_> {
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
     }
 
+    /// Up to `count` vector elements of type `elem` from `items[*pos..]`
+    /// (clang `CheckVectorType`), one item each. A designator is not
+    /// supported in a braced vector list (`None`, diagnosed) and ends a
+    /// brace-elided one after its first item.
+    fn vector_elements(
+        &mut self,
+        elem: QualType,
+        count: usize,
+        items: &[InitItem],
+        pos: &mut usize,
+        braced: bool,
+    ) -> Option<Vec<ExprId>> {
+        let mut inits = Vec::new();
+        while inits.len() < count && *pos < items.len() {
+            let item = &items[*pos];
+            // The designator of the item that started a brace-elided
+            // list names this vector, not one of its elements.
+            if !item.designator.is_empty() && (braced || !inits.is_empty()) {
+                if braced {
+                    self.unsupported("a designator in a vector initializer", item.value.loc(self));
+                    return None;
+                }
+                break;
+            }
+            let x = match &item.value {
+                InitValue::Expr(e) => self.vector_element(*e, elem),
+                InitValue::List(inner) => self.init_from_list(elem, inner),
+            };
+            inits.push(x);
+            *pos += 1;
+        }
+        Some(inits)
+    }
+
+    /// One vector element of type `elem` from `e` (clang
+    /// `CheckScalarType` with a vector-element entity): a vector operand
+    /// is "cannot initialize a vector element".
+    fn vector_element(&mut self, e: ExprId, elem: QualType) -> ExprId {
+        let et = self.ety(e);
+        if self.is_vector_type(et) && !self.expr_is_type_dependent(e) {
+            let lv = self.ast.exprs.get(e).value_category() == ValueCategory::LValue;
+            let at = self.begin_loc(e);
+            let msg = self
+                .diag(DiagId::sema_init_vector_element_failed, at)
+                .arg(self.ty_arg(elem))
+                .arg(if lv { "1" } else { "0" })
+                .arg(self.ty_arg(et));
+            self.emit(msg);
+            return self.recover(elem, &[e], at);
+        }
+        self.check_narrowing(e, elem, elem);
+        self.convert_for_init(e, elem, ConvCtx::Initialization)
+    }
+
+    /// A brace-elided GNU vector member ([dcl.init.aggr]/16; clang
+    /// `CheckImplicitInitList` of a vector): up to N scalar items.
+    fn elided_vector_init(
+        &mut self,
+        ty: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        at: Loc,
+    ) -> ExprId {
+        let top = self.ast.types.desugar_top(ty);
+        let (elem, count) = match self.ast.types.view(top.ty()) {
+            kiln_ast::types::TypeView::Vector { elem, count, .. } => (elem, count as usize),
+            _ => return self.recover(ty, &[], at),
+        };
+        let inits = self.vector_elements(elem, count, items, pos, false).unwrap_or_default();
+        self.builder().init_list(ty, &inits, None, None, at, at)
+    }
+
     /// List-initialization of reference `ty` ([dcl.init.list]/3.9-10):
     /// a single element the referee is reference-related to initializes
     /// the reference directly; otherwise a prvalue of the referenced type
     /// is copy-list-initialized and the reference binds to it (a
     /// non-const lvalue reference cannot).
-    fn reference_list_init(&mut self, ty: QualType, l: &InitList, entity: Option<Loc>) -> ExprId {
+    fn reference_list_init(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        entity: Option<Loc>,
+        style: InitStyle,
+    ) -> ExprId {
         let r = self.pointee_sugared(ty).unwrap_or(QualType::ERROR);
         let ur = conv::strip_cv(self, r);
         let cr = self.ast.types.canonical(ur);
@@ -892,7 +1133,16 @@ impl Sema<'_, '_> {
             let flat = Self::list_exprs(l);
             return self.recover(ty, &flat, l.lbrace);
         }
-        let tmp = self.init_from_list_at(r, l, entity);
+        // The temporary is list-initialized as the reference is
+        // ([dcl.init.list]/3.10: copy- or direct-), and a failed
+        // constructor call names the reference type.
+        self.ctor_diag_ty = Some(ty);
+        let tmp = self.list_construct(r, l, style, at, None);
+        self.ctor_diag_ty = None;
+        let tmp = match tmp {
+            Some(t) => t,
+            None => self.init_from_list_at(r, l, entity),
+        };
         self.init_from_expr(ty, tmp, ConvCtx::Initialization, at)
     }
 
@@ -1013,10 +1263,22 @@ impl Sema<'_, '_> {
                                 && !conv::is_derived_from(self, x, r)
                         })
                         && !self.is_error_type(ety)
+                } else if let Some(p) = self.vector_parts(ty) {
+                    // A GNU vector is not initialized from a scalar (no
+                    // implicit splat), so brace elision is assumed; an
+                    // ext vector splats the scalar (clang
+                    // `CheckSubElementType`).
+                    !p.is_ext()
+                        && !self.is_vector_type(ety)
+                        && self.ast.types.as_record(ety).is_none()
+                        && !self.is_error_type(ety)
+                        && !self.expr_is_type_dependent(e)
                 } else {
                     false
                 };
-                if elide {
+                if elide && self.is_vector_type(ty) {
+                    self.elided_vector_init(ty, items, pos, at)
+                } else if elide {
                     self.check_aggregate(ty, items, pos, false, at, at)
                 } else {
                     *pos += 1;

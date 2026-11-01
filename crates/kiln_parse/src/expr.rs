@@ -386,17 +386,19 @@ impl Parser<'_, '_> {
                 self.unsupported("the GNU address-of-label operator", loc);
                 return None;
             }
-            if let Some((open, is_type)) = self.open_paren_template_scope() {
-                if is_type {
+            if let Some((open, is_type, ambiguous)) = self.open_paren_template_scope() {
+                if is_type && (!ambiguous || self.ambiguous_paren_is_cast(self.pos())) {
                     return self.parse_c_style_cast_rest(open);
                 }
                 let e = self.with_greater_op(true, |p| p.parse_paren_rest(open))?;
                 return self.parse_postfix_suffix(e);
             }
-            if p == Punct::LParen
-                && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
-            {
-                return self.parse_c_style_cast();
+            if p == Punct::LParen {
+                let (is_type, ambiguous) =
+                    self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens);
+                if is_type && (!ambiguous || self.ambiguous_paren_is_cast(self.pos() + 1)) {
+                    return self.parse_c_style_cast();
+                }
             }
         }
         if let Some(crate::keywords::BuiltinKw::Trait(t)) = self.builtin_kw_at(self.pos()) {
@@ -441,6 +443,124 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_stmt_expr(scope, body, lparen, rparen))
     }
 
+    /// [expr.cast], [dcl.ambig.res]/2: the parentheses whose contents
+    /// start at token `inner` hold an ambiguous type-id (`(T())`, `(T(*)())`); clang's
+    /// `ParseCXXAmbiguousParenExpression` decides on the tokens after the
+    /// `)`. A `{` makes it a compound literal and a token that starts a
+    /// cast-expression makes it a cast (`(T())x`, `(T())*x`); anything
+    /// else (`(T());`, `(T())/x`, `(T())()`) makes it a parenthesized
+    /// expression.
+    fn ambiguous_paren_is_cast(&self, inner: usize) -> bool {
+        let mut i = inner;
+        let after = loop {
+            match self.tok_at(i).kind {
+                TokKind::Eof => return true,
+                TokKind::Punct(Punct::RParen) => break i + 1,
+                TokKind::Punct(Punct::LParen | Punct::LSquare | Punct::LBrace) => {
+                    let Some(j) = self.skip_balanced(i) else { return true };
+                    i = j;
+                }
+                _ => i += 1,
+            }
+        };
+        let t = self.tok_at(after);
+        match t.kind {
+            TokKind::Punct(Punct::LBrace) => true,
+            TokKind::Punct(Punct::LParen) => {
+                self.tok_at(after + 1).kind != TokKind::Punct(Punct::RParen)
+            }
+            _ => self.starts_cast_expr(t),
+        }
+    }
+
+    /// Whether `t` can begin a cast-expression: the tokens clang's
+    /// `ParseCastExpression` accepts without setting `NotCastExpr`.
+    fn starts_cast_expr(&self, t: Token) -> bool {
+        match t.kind {
+            TokKind::PpNumber
+            | TokKind::CharLit(_)
+            | TokKind::StringLit(_)
+            | TokKind::RawStringLit(_) => true,
+            TokKind::Punct(p) => matches!(
+                p,
+                Punct::LParen
+                    | Punct::LSquare
+                    | Punct::PlusPlus
+                    | Punct::MinusMinus
+                    | Punct::Amp
+                    | Punct::AmpAmp
+                    | Punct::Star
+                    | Punct::Plus
+                    | Punct::Minus
+                    | Punct::Exclaim
+                    | Punct::Tilde
+                    | Punct::ColonColon
+                    | Punct::CaretCaret
+                    | Punct::SpliceOpen
+            ),
+            TokKind::Identifier(_) => match self.kw_of(t) {
+                None => true,
+                Some(k) => matches!(
+                    k,
+                    Kw::Alignof
+                        | Kw::GnuAlignof
+                        | Kw::DataSizeof
+                        | Kw::Auto
+                        | Kw::Bool
+                        | Kw::Char
+                        | Kw::Char8
+                        | Kw::Char16
+                        | Kw::Char32
+                        | Kw::ConstCast
+                        | Kw::CoAwait
+                        | Kw::Decltype
+                        | Kw::Delete
+                        | Kw::Double
+                        | Kw::DynamicCast
+                        | Kw::False
+                        | Kw::Float
+                        | Kw::Float128
+                        | Kw::Int
+                        | Kw::Int128
+                        | Kw::Long
+                        | Kw::New
+                        | Kw::Noexcept
+                        | Kw::Nullptr
+                        | Kw::Operator
+                        | Kw::ReinterpretCast
+                        | Kw::Requires
+                        | Kw::Short
+                        | Kw::Signed
+                        | Kw::Sizeof
+                        | Kw::StaticCast
+                        | Kw::This
+                        | Kw::True
+                        | Kw::Typeid
+                        | Kw::Typename
+                        | Kw::Typeof
+                        | Kw::Unsigned
+                        | Kw::Void
+                        | Kw::WChar
+                        | Kw::Extension
+                        | Kw::BuiltinOffsetof
+                        | Kw::BuiltinBitCast
+                        | Kw::BuiltinVaArg
+                        | Kw::BuiltinConvertVector
+                        | Kw::BuiltinFile
+                        | Kw::BuiltinFileName
+                        | Kw::BuiltinFunction
+                        | Kw::Func
+                        | Kw::FunctionName
+                        | Kw::PrettyFunction
+                        | Kw::BuiltinLine
+                        | Kw::BuiltinColumn
+                        | Kw::BuiltinSourceLocation
+                ),
+            },
+            _ => false,
+        }
+    }
+
     /// `( type-id ) cast-expression`.
     fn parse_c_style_cast(&mut self) -> PExpr {
         let open = self.bump().span.lo;
@@ -450,15 +570,16 @@ impl Parser<'_, '_> {
     /// At a `(` followed by a qualified name whose class template
     /// specialization qualifier the lookahead cannot resolve
     /// ([`Parser::template_scope_end`]): consumes the `(`, parses the
-    /// qualifier ahead, and says whether a type-id follows. `None` (and
+    /// qualifier ahead, and says whether a type-id follows (and whether that was ambiguous, [`Parser::is_cxx_type_id_at`]). `None` (and
     /// nothing consumed) at any other token.
-    fn open_paren_template_scope(&mut self) -> Option<(Loc, bool)> {
+    fn open_paren_template_scope(&mut self) -> Option<(Loc, bool, bool)> {
         if !self.at(Punct::LParen) || self.template_scope_end(self.pos() + 1).is_none() {
             return None;
         }
         let open = self.bump().span.lo;
         self.annotate_template_scope();
-        Some((open, self.is_cxx_type_id_at(self.pos(), TypeIdContext::InParens).0))
+        let (is_type, ambiguous) = self.is_cxx_type_id_at(self.pos(), TypeIdContext::InParens);
+        Some((open, is_type, ambiguous))
     }
 
     /// [`Parser::parse_c_style_cast`] after the `(` at `open`.
@@ -509,7 +630,7 @@ impl Parser<'_, '_> {
         self.s.enter_unevaluated();
         let scoped = self.open_paren_template_scope();
         self.s.exit_unevaluated();
-        if let Some((open, is_type)) = scoped {
+        if let Some((open, is_type, _)) = scoped {
             if is_type {
                 let Some(ty) = self.parse_type_id() else {
                     self.skip_until(&[Punct::RParen], false, true);
@@ -683,6 +804,39 @@ impl Parser<'_, '_> {
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         let (ty, e) = (ty?, e?);
         ok.then(|| self.s.act_on_builtin_bit_cast(ty, e, loc, rparen))
+    }
+
+    /// `__builtin_va_arg ( assignment-expression , type-id )` ([cstdarg.syn],
+    /// C 7.16.1.1; clang `ParseBuiltinPrimaryExpression`).
+    fn parse_builtin_va_arg(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_va_arg'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let e = self.parse_assignment_expr();
+        if self.expect(Punct::Comma).is_none() {
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        // The type's checks report where clang's `TypeLoc` begins: past
+        // leading cv-qualifiers (a `QualifiedTypeLoc` has no location of
+        // its own).
+        let mut n = 0;
+        while matches!(self.kw_of(self.peek(n)), Some(Kw::Const | Kw::Volatile)) {
+            n += 1;
+        }
+        let ty_loc = self.peek(n).span.lo;
+        let ty = self.parse_type_id();
+        let ok = self.at(Punct::RParen);
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let (e, ty) = (e?, ty?);
+        ok.then(|| self.s.act_on_va_arg(e, ty, ty_loc, loc, rparen))
     }
 
     /// `__builtin_convertvector ( assignment-expression , type-id )`
@@ -1090,6 +1244,7 @@ impl Parser<'_, '_> {
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
+                Kw::BuiltinVaArg => self.parse_builtin_va_arg(),
                 Kw::BuiltinConvertVector => self.parse_builtin_convert_vector(),
                 Kw::Func | Kw::FunctionName | Kw::PrettyFunction => {
                     self.bump();

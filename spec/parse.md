@@ -379,7 +379,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - A `(` after the declarator-id is a parameter list or a direct
     initializer by `is_cxx_function_declarator` (only where a direct
     initializer may follow; in member context it always starts a
-    parameter list, since a member has no direct-initializer); when the choice was
+    parameter list, since a member has no direct-initializer). It is a
+    parameter list only if its contents parse as a
+    parameter-declaration-clause: `T f(T a)`, `T f(T(a))`, `T f(T(*a))`
+    and `T f(T())` declare functions, while `T x((a))`, `T x((T()))`,
+    `T x((T(a)))` and `T x(T() + T())` declare variables (a
+    parameter-declaration cannot begin with `(`, and no declarator is
+    followed by `+`); the initializer's expression is then parsed as
+    below (an ambiguous parenthesized type-id); when the choice was
     ambiguous the function chunk records it and Sema warns
     `-Wvexing-parse` (`parentheses were disambiguated as a function
     declaration` / `empty parentheses interpreted as a function
@@ -399,11 +406,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (sema.md §4.3); a member's exception specification and trailing
     return type are bracketed by `act_on_start_this_scope` /
     `act_on_end_this_scope`.
+    An unnamed parameter (and an abstract `for`-range or condition
+    declarator) is located where its name would be (`set_abstract_loc`,
+    clang `ParseDirectDeclarator`): the first array bound, else the token
+    after the declarator.
   - `-> type-id` after the exception specification is a trailing
     return type (`Chunk::Function::trailing`), required with a
     leading `auto` and diagnosed otherwise by Sema.
   - `decltype ( expression )` and `decltype(auto)` are type specifiers;
     the operand is unevaluated.
+    A concept name followed by `auto` or `decltype ( auto` begins a
+    declaration in the statement disambiguator (`tentative.rs`), so
+    `std::same_as<X> decltype(auto) r = e;` in a block is a constrained
+    placeholder declaration (WP-169).
   - `_Atomic ( type-id )` (a clang extension in C++, C11 6.7.2.4) is a
     type specifier, built by `Sema::act_on_atomic_type` (array, function,
     reference, atomic and qualified operands are
@@ -609,6 +624,23 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     type-id. `( type-id ) { ... }` is a compound literal instead
     (`act_on_compound_literal`), followed by postfix operators as in
     clang's `ParseCompoundLiteralExpression`.
+  - When that type-id was *ambiguous* (the second flag: the abstract
+    declarator could also be an expression, `(T())`, `(T(*)())`), the
+    tokens after the matching `)` decide ([dcl.ambig.res]/2,
+    [expr.cast]; clang's `ParseCXXAmbiguousParenExpression`,
+    `ambiguous_paren_is_cast`): a `{` makes it a compound literal, `(`
+    `)` makes it an expression, and any other token is a cast exactly
+    when it can begin a cast-expression (`starts_cast_expr`, the tokens
+    clang's `ParseCastExpression` accepts without `NotCastExpr`:
+    literals, identifiers and the keywords that start a primary or
+    unary expression or a functional cast, `(`, `[`, `::`, `^^`, `[:`,
+    and the unary operators `++ -- & && * + - ! ~`). So `(T())x` and
+    `(T())*x` are casts, while `(T());`, `(T())/x`, `(T())()` and the
+    direct-initializer `T x((T()))` (libc++ `count_new.h`'s
+    `MemCounter counter((MemCounter::MemCounterCtorArg_()))`) are
+    parenthesized expressions. Unlike clang, kiln decides by looking
+    ahead without parsing the operand first; the only difference is
+    that the cast's type is built before its operand.
   - `throw [assignment-expression]` (the operand is optional before
     `)`, `]`, `}`, `;`, `,` and `:`) and `typeid ( type-id |
     expression )`, disambiguated with `is_cxx_type_id`; the operand of
@@ -640,6 +672,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
       `expected ','`, `expected identifier` (skip past `)`), a missing
       `]` (reported, parsing continues) and a missing `)` (reported;
       the expression fails).
+    - `__builtin_va_arg ( assignment-expression , type-id )` (WP-171) goes
+      to `act_on_va_arg` with the type's begin location and the `)`.
+      Errors as clang: `expected '(' after '__builtin_va_arg'`,
+      `expected ','`, a missing `)`.
 - **The GNU `x ?: y`** goes to `act_on_binary_conditional`; the middle
   operand of an ordinary `?:` is a full expression.
 - **Missing closers** (`expect_closing`) are reported at the current
@@ -761,6 +797,13 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     declaration
   - the class-head and enum-head, for the tag (`act_on_tag_attrs`)
   - before a statement, for the statement (`fallthrough`, `likely`)
+- **`[[assume(e)]]` (WP-160):** `parse_assume_arg` parses a
+  conditional-expression. If the next token is not `)`, it reparses the
+  full expression, reports `use of this expression in an 'assume'
+  attribute requires parentheses` at its expression location, and drops
+  the attribute. A statement whose leading `[[...]]` holds an `assume`
+  goes through `act_on_attributed_stmt` after the sub-statement is parsed,
+  passing whether the standard is before C++23 (sema has no standard).
 
 ## 7. Driver (`kiln -fsyntax-only [-fdump-ast]`)
 - The driver builds the preprocessor exactly as `-E` does

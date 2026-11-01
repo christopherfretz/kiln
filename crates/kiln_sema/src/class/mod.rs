@@ -293,7 +293,8 @@ impl Sema<'_, '_> {
     pub fn act_on_param_default_list(&mut self, p: DeclId, l: &crate::init::InitList) {
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let loc = self.ast.decls.get(p).loc();
-        let e = self.init_list_entity(pty, l, loc);
+        let note = Some(self.param_decl_note(p));
+        let e = self.init_list_entity(pty, l, loc, crate::conv::ConvCtx::Argument, note);
         self.note_default_init_full_expr();
         let e = self.act_on_full_expr(e);
         let _ = self.ast.decls.set_default_arg(p, e);

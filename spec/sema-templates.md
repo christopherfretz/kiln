@@ -368,6 +368,13 @@ type parameter named `auto:N`, as in clang's dump.
   function had no template-head) and the next index.
 - It goes into the function's template parameter list. The list is
   created on the first such parameter if it does not exist yet.
+- In an out-of-line member definition the explicit heads that match the
+  qualifier's class-template levels (`match_template_lists_to_scope`)
+  belong to the classes, so the first invented parameter creates the
+  member's own list (or extends an explicit member head):
+  `template<class T> void A<T>::f(C auto)` is a template of depth 1.
+  `act_on_finish_template_decl` pops such invented heads (WP-169,
+  `temp.mem/out-of-line-abbreviated.cpp`).
 - `C auto` attaches the type-constraint `C<auto:N>`.
 - Generic lambdas use the same routine (WP-075).
 
@@ -1131,8 +1138,20 @@ recomputed exactly as for non-template code (clang's
   labels of an `asm goto` are rebuilt by name (`act_on_label`,
   `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
   `LabelDecl`s and the jump-scope checker (spec/sema.md §7.4) runs on it.
-  Not yet: `CXXTryStmt` (needs the handler's exception declaration
-  substituted through `act_on_exception_decl`).
+- **Try-blocks** (WP-160, clang `TransformCXXTryStmt`/`TransformCXXCatchStmt`).
+  The compound statement is substituted in a try scope. Each handler gets
+  its control scope, and its exception declaration is declared again from
+  the substituted type through `act_on_exception_decl`. That repeats the
+  decay, the incomplete-type and abstract-type checks and the
+  copy-initialization from the exception object, and maps the pattern
+  variable to the new one. `act_on_try` then checks the handler order on
+  the instantiated types; -Wexceptions is `allow_duplicate`, so it prints
+  once per instantiation as in clang. A pattern handler whose declaration
+  is invalid fails the statement. Function-try-blocks take the same path
+  (`body` of a non-compound body).
+- **`[[assume]]`** (WP-160): an `AttributedStmt`'s assumptions are
+  substituted, converted and checked again (`build_cxx_assume_expr`,
+  -Wassume at instantiation).
 
 ### 5.6 Declarations
 
@@ -1255,14 +1274,16 @@ retained, since the AST is append-only. They are metered as
    - check that the deduced A is compatible ([temp.deduct.call]/4:
      equal, more cv-qualified, qualification-convertible, or a derived
      class). Failure is `DeducedMismatch`. kiln records, for each
-     non-pack parameter with a deducible template parameter (probed by
+     parameter with a deducible template parameter (probed by
      deducing P from itself, clang's `hasDeducibleTemplateParameters`)
      and an argument that is not a braced list or overload set, the
      pair (P, adjusted A); after substitution it compares the
      specialization's parameter type with A (`original_arg_mismatch`,
-     WP-161). The note prints the reference/pointer-stripped deduced
-     type, as clang does. Clang's template type diffing (`'pr<[...],
-     char>'`) is not implemented, so specializations print in full.
+     WP-161). Each element of the trailing function parameter pack is
+     such a pair with the pattern as P, except the explicit elements
+     of a pack the pattern alone names (§6.4). The note prints the
+     reference/pointer-stripped deduced type, as clang does, as a
+     template type diff pair (`'pr<[...], char>'`, `Sema::ty_diff`).
    - check the associated constraints (§8). The order is clang 19's,
      *after* the function type substitution (Q12, CWG2369).
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
@@ -1359,7 +1380,22 @@ immediate context: errors are hard.
   deduction. It is the trailing function parameter pack's prefix only
   when that pack's pattern (`U`, `U&&`, `U*`) expands this first pack.
   Otherwise the prefix is empty, so a pack deduced earlier from
-  `tys<Tf...>` does not shorten `Up...`.
+  `tys<Tf...>` does not shorten `Up...`. When the pattern also names
+  other packs (`pair<T, U>...` with `T` explicit), those are deduced
+  from every element and the explicit pack is not extended: it keeps
+  its explicit elements, and a mismatch in an explicit element fails
+  deduction (clang 19, observed). If the pattern names only the
+  explicit pack, elements before its explicit length are not deduced.
+- **Non-trailing function parameter packs** ([temp.deduct.type]/5.7)
+  are a non-deduced context and take no call argument. After the
+  explicit arguments are substituted, one whose packs are all given
+  is expanded to its explicit elements; it still counts as one
+  parameter in the too-many-arguments check (clang retains the
+  expansion). An undeduced pack is then empty, and the arity is
+  checked on the specialization (`candidate function [with T = <>]
+  not viable: requires 1 argument, …`). A parameter pack never counts
+  towards the minimum argument count (`fn_min_args`, clang
+  `getMinRequiredArguments`), wherever it is.
 - **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
   A value-dependent `explicit(expr)` (kept in `decls.cold.explicit_expr`)
   is substituted together with the signature when a specialization is
@@ -1923,6 +1959,11 @@ used in type trait expression". Each "complete" check calls
 
 ### 9.1 Type predicates (`TypeTraitExpr`, `bool` prvalue, unevaluated operands)
 
+The clang `ALIAS` keywords `__is_same_as` and `__is_literal_type` build
+a `TypeTraitExpr` of the aliased trait (`__is_same`, `__is_literal`),
+which diagnostics and dumps print (WP-171); `__is_convertible_to` is a
+trait of its own.
+
 | Builtin | True iff | Query |
 |---|---|---|
 | `__is_same(T,U)` | the canonical types are equal (cv included) | `tc.canonical` |
@@ -2068,6 +2109,7 @@ records it in `TABLE`.
 | memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp`, `__builtin_strcmp`, `__builtin_strncmp`, `__builtin_strchr`, `__builtin_wcscmp`, `__builtin_wcsncmp`, `__builtin_wcschr`; `__builtin_strrchr`, `__builtin_strpbrk`, `__builtin_strstr` | yes (for trivially copyable element types); no for `strrchr`/`strpbrk`/`strstr` (clang 19) | libcall or `llvm.mem*` |
 | float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for `isfinite`/`isinf`/`isnan`/`isnormal`; no for `signbit` and the six comparisons (the clang 19 probe rejects them) | `fcmp` / `llvm.is.fpclass` |
 | atomics (WP-154) | `__c11_atomic_*`†, `__atomic_*`† (an `AtomicExpr`, spec/sema.md §5.11) | only `__atomic_always_lock_free`/`__atomic_is_lock_free`/`__c11_atomic_is_lock_free` (spec/oven.md) | `load atomic`/`store atomic`/`atomicrmw`/`cmpxchg`/`fence` (spec/codegen.md §7d) |
+| coroutines (WP-171) | `__builtin_coro_resume`/`destroy`/`done`/`promise`/`noop`/`size`/`align`/`frame`/`free`/`id`/`alloc`/`begin`/`end`/`suspend` (`builtin::CORO`, clang 19's types and `noexcept`; an `I` signature argument must be an integer constant expression, `sema_constant_integer_arg_type` at the call, through `check_builtin_ice_args`) | no (the generic note) | not implemented (a codegen error) |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
@@ -2150,7 +2192,7 @@ pub struct InstFrame {          // 20 B
 
 | `FrameKind` | SFINAE | Note (clang 19 text; `%0` is printed with the template args) |
 |---|---|---|
-| `ClassInstantiation` | hard | in instantiation of template class '%0' requested here |
+| `ClassInstantiation` | hard | in instantiation of template class '%0' requested here (`%0` is the specialization's own type, canonical and scoped: `'ns::S<unsigned long>'`) |
 | `FunctionInstantiation` | hard | in instantiation of function template specialization '%0' requested here |
 | `MemberFunctionInstantiation` | hard | in instantiation of member function '%0' requested here |
 | `StaticDataMemberInstantiation` | hard | in instantiation of static data member '%0' requested here |
@@ -2313,6 +2355,14 @@ ambiguity errors.
   `T = <int, char>`.
 - Specialization names print with the as-written args, omitting any arg
   equal to its default (types.md §18).
+- `NonDeducedMismatch` names the mismatched part of the parameter type as
+  written, at any depth through references, pointers and array elements
+  (`'S<T>'` for `S<T> (&)[3]`), never the canonical `type-parameter-0-0`.
+  For a reference parameter, P's top-level cv is intersected with A's
+  first, an array's cv being its element's (clang's
+  `TDF_ParamWithReferenceType`): `const S<T>&` against `const char[3]` is
+  `'const S<T>'`, `volatile S<T>&` is `'S<T>'` (WP-152). The same rule
+  makes `const T&` from `const char[3]` deduce `T = char[3]`.
 
 ### 10.5 Other template diagnostics (texts from clang 19; goldens are authoritative)
 
@@ -3131,8 +3181,8 @@ explicit specialization errors remain. The blockers are:
   expression`, with the evaluation notes) in [0.0, 1.0] (`probability
   argument to __builtin_expect_with_probability is outside the range
   [0.0, 1.0]`); checked after `convert_call_args`
-  (`check_expect_probability`). Not yet: `-Wassume` (needs clang's
-  possible-effects flavour of `HasSideEffects`).
+  (`check_expect_probability`). `-Wassume` landed in WP-160 (spec/sema.md
+  §3, `[[assume]]`).
 - `kiln_ast`: `ExprKind::SourceLocExpr`, `SourceLocKind`,
   `SourceLocValues` and `exprs.cold.source_loc` (spec/ast.md §5.8);
   `kiln_parse` parses the six keywords.
@@ -3395,8 +3445,6 @@ explicit specialization errors remain. The blockers are:
   - Partially substituted pack expansions (`tl<tl<Ts, Us>...>` with
     only `Ts` known) need clang's `SubstTemplateTypeParmPackType`:
     unimplemented ("partially substituted pack expansion").
-  - `using Ts::operator()...;`: the parser rejects a pack in a
-    using-declarator.
   - Lambda init-capture packs: WP-075. Fold-expanded constraints: Q17.
   - Pre-existing, seen while testing: `int a[] = {sizeof(Ts)...};`
     reports "sizeof incomplete type" (a reference to an incomplete

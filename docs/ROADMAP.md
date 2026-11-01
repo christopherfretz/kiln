@@ -74,18 +74,41 @@ record layout matching clang (checked by layout-dump differential tests).
   `<bit>`, `<limits>`, `<initializer_list>` from libc++ compile and their
   libc++ tests pass.
 
-## M4 — The rest of the language
+## M4 — Complete C++23, and C++26 as shipped by clang 22
 Namespaces/ADL corner cases, exceptions, RTTI, coroutines, modules (at least header units and `import std;` consumption),
 `consteval`, `constinit`, structured bindings,
 three-way comparison, deducing this, attributes, `thread_local`,
 static initialization order, inline variables.
-- Exit: `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
-  `<tuple>`, `<algorithm>`, `<ranges>`, `<format>` compile; their libc++
-  tests pass.
+- **Feature completeness is the exit, not a header list.** `docs/status/cxx-features.md`
+  holds one row per C++23 language feature (P0847 deducing `this`, P1938
+  `if consteval`, P1169 static `operator()`, P2128 multidimensional `operator[]`,
+  P0849 `auto(x)`, P1774 `[[assume]]`, P2334 `#elifdef`/`#elifndef`, P2437 `#warning`,
+  P1467 extended floating-point types, P2718 range-for lifetime extension,
+  P2448/P2242/P2280 constexpr relaxations, P2582 CTAD from inherited constructors,
+  P2360 labels at the end of blocks, P2324 `size_t` literals, P2290 delimited escapes,
+  P2071 named universal character escapes, P2295 UTF-8 source, P2362 wide multichar
+  literals, P2156 duplicate attributes, P2266 simpler implicit move, P2468 equality
+  operator rewrites, P2493 `__cpp_*` macros, DR-level items) and per non-reflection
+  C++26 feature that clang 22 implements (P2662 pack indexing, P2169 placeholder
+  `_`, P2573 `= delete("reason")`, P2741 `static_assert` user messages, P2893
+  variadic friends, P2747 `constexpr` placement new, P3068 `constexpr` exceptions,
+  P2738 `constexpr` `void*` casts, P1967 `#embed`, P0963/P1061 structured bindings
+  in conditions and with packs, P2795 erroneous behavior, P2786 trivial relocation,
+  P2300-adjacent library hooks, expansion statements where clang ships them).
+  Each row names its corpus/libc++ tests; status is `done`/`partial`/`todo`.
+- **Oracle switch (WP-184):** at M3 exit the differential oracle, libc++ headers and
+  libc++ test checkout move from clang/llvm 19 to clang/llvm 22 (both are in the
+  sandbox). The M3 gate is frozen on 19 so its numbers stay comparable; M4+ gates run
+  on 22 in `-std=c++26`.
+- Exit: every C++23 row is `done`; every clang-22 C++26 row is `done` or has a
+  written reason; `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
+  `<tuple>`, `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,
+  `<print>`, `<flat_map>` from libc++ 22 compile and their libc++ tests pass.
 
 ## M5 — libc++ test suite
-Run the full libc++ lit suite with kiln as `%{cxx}` against the
-clang-built libc++ runtime. Track pass rate in `docs/status/libcxx.md`.
+Run the full libc++ 22 lit suite in `-std=c++26` with kiln as `%{cxx}` against the
+clang-built libc++ runtime. This is also the end-to-end proof of the C++23/26
+library surface (M4's feature table covers the language). Track pass rate in `docs/status/libcxx.md`.
 - Exit: 100% of tests pass or are triaged as `UNSUPPORTED`/`XFAIL` with a
   written reason that is not "kiln bug".
 - Stretch: build libc++ itself with kiln and run the suite against it.
@@ -98,6 +121,16 @@ token injection makes it into the IS. Reference compiler: **GCC 16.1.0**
 only as an advisory oracle for AST/diagnostic spot checks — see BACKLOG
 WP-102). Reflection tests default to `oracle: none` with goldens written
 from the P2996 text.
+- **Standard libraries.** `<meta>` is mostly compiler-intrinsic glue, so the
+  library picks the intrinsic surface: kiln keeps ONE reflection core in the
+  Oven (`std::meta::info` as a native value, splices, annotations,
+  `define_aggregate`) behind two thin intrinsic shims, the p2996 fork's
+  `__metafunction(...)` for its `<experimental/meta>` (to get off the ground and
+  run the fork's tests and mirrorbind early) and GCC 16.1's for libstdc++'s
+  production `<meta>`. The same reflection programs run through both headers as
+  a differential check. A kiln-owned `<meta>` is a fallback only. The maturity
+  bar for the compiler is consuming BOTH libc++ (M4/M5 gates) and libstdc++
+  (consumption track from M4, WP-188; mirrorbind under GCC uses it).
 - Exit: mirrorbind (`git@github.com:christopherfretz/mirrorbind.git`) builds
   and its tests pass; its compile time and peak memory with kiln are recorded
   against GCC 16.1 (whose constexpr memory growth is the problem kiln exists

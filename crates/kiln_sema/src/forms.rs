@@ -10,8 +10,8 @@ use kiln_diag::DiagId;
 use kiln_source::Loc;
 
 use crate::Sema;
-use crate::conv;
-use crate::init::{InitList, InitValue};
+use crate::conv::{self, ConvCtx};
+use crate::init::{InitItem, InitList, InitValue};
 
 impl Sema<'_, '_> {
     /// The top-level expressions of `l` (nested lists and designators
@@ -52,11 +52,23 @@ impl Sema<'_, '_> {
         callee: ExprId,
         l: &InitList,
         pt: QualType,
+        (i, param): (usize, Option<DeclId>),
     ) -> Option<ExprId> {
         let to = if self.ast.types.is_reference(pt) { pt } else { conv::strip_cv(self, pt) };
         if let Some(d) = named
             && !self.list_viable(to, l)
         {
+            // [over.ics.list]/10: a single element for a non-class
+            // parameter is the element's own conversion sequence.
+            if let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+                && designator.is_empty()
+                && self.ast.types.as_record(self.ety(*x)).is_some()
+                && self.ast.types.as_record(to).is_none()
+                && !self.ast.types.is_reference(to)
+            {
+                self.bad_argument(d, callee, *x, pt, i);
+                return None;
+            }
             let msg = self
                 .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
                 .arg(self.decl_name(d));
@@ -66,7 +78,8 @@ impl Sema<'_, '_> {
             self.emit(msg.with_note(note));
             return None;
         }
-        Some(self.init_list_entity(to, l, l.lbrace))
+        let note = param.map(|p| self.param_decl_note(p));
+        Some(self.init_list_entity(to, l, l.lbrace, ConvCtx::Argument, note))
     }
 
     /// Whether list-initialization of `ty` from `l` is a viable implicit
@@ -154,7 +167,7 @@ impl Sema<'_, '_> {
             let e = self.act_on_full_expr(e);
             return self.builder().return_stmt(Some(e), None, loc);
         }
-        let e = self.init_list_entity(ret, l, l.lbrace);
+        let e = self.init_list_entity(ret, l, l.lbrace, ConvCtx::Return, None);
         let e = self.act_on_full_expr(e);
         self.builder().return_stmt(Some(e), None, loc)
     }
@@ -291,7 +304,13 @@ impl Sema<'_, '_> {
         // direct-list-initialization too ([dcl.init.list]/3.8).
         let init = match self.fixed_enum_list_init(to, l) {
             Some(e) => e,
-            None => self.init_from_list_at(to, l, Some(loc)),
+            None => {
+                match self.class_element_list_init(to, l, ConvCtx::DirectInitialization, loc, None)
+                {
+                    Some(e) => e,
+                    None => self.init_from_list_at(to, l, Some(loc)),
+                }
+            }
         };
         if self.is_err_expr(init) {
             return self.recover(ty, &[init], loc);

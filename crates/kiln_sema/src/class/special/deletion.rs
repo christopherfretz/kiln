@@ -75,11 +75,19 @@ struct Walk {
 }
 
 impl Sema<'_, '_> {
-    /// `d` as clang prints a declaration argument: `'name'` (unqualified).
+    /// `d` as clang prints a declaration argument: `'name'` (unqualified;
+    /// a class or variable template specialization with its arguments,
+    /// clang `getNameForDiagnostic`).
     pub(crate) fn decl_arg(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        crate::names::SemaNames::new(self).write_decl_name(d, false, &mut s);
+        let names = crate::names::SemaNames::new(self);
+        names.write_decl_name(d, false, &mut s);
+        if matches!(self.kind_of(d), DeclKind::CXXRecord | DeclKind::Var)
+            && let Some((_, info)) = self.ast.spec_info(d)
+        {
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, info.print_args, &mut s);
+        }
         format!("'{s}'")
     }
 

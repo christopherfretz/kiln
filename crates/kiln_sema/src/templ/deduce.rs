@@ -300,66 +300,95 @@ impl Sema<'_, '_> {
         d: &mut DeducedArgs,
         f: impl FnMut(&mut Self, usize, &mut DeducedArgs) -> Tdk,
     ) -> Tdk {
-        self.deduce_pack_elements_from(0, n, d, f)
+        self.deduce_pack_elements_from(None, n, d, f)
     }
 
-    /// The length of the explicitly given pack among `params`, if any
-    /// ([temp.arg.explicit]/9).
-    pub(crate) fn explicit_pack_len(&self, params: &[DeclId], d: &DeducedArgs) -> usize {
+    /// The index and length of the explicitly given pack among `params`,
+    /// if any ([temp.arg.explicit]/9).
+    pub(crate) fn explicit_pack(&self, params: &[DeclId], d: &DeducedArgs) -> Option<(u16, usize)> {
         params
             .iter()
             .enumerate()
             .filter(|&(_, &p)| self.ast.template_parm(p).is_some_and(|x| x.pack))
             .find_map(|(i, _)| match d.args.get(i).map(TemplateArg::view) {
-                Some(ArgView::Pack(l)) => Some(self.ast.types.args(l).len()),
+                Some(ArgView::Pack(l)) => {
+                    Some((u16::try_from(i).ok()?, self.ast.types.args(l).len()))
+                }
                 _ => None,
             })
-            .unwrap_or(0)
     }
 
-    /// [`Self::deduce_pack_elements`] where elements `0..skip` were given
-    /// explicitly: only `skip..n` are deduced, appended to the given
-    /// prefix of each pack.
+    /// [`Self::deduce_pack_elements`] where pack `explicit = (index, m)`
+    /// was given `m` elements explicitly ([temp.arg.explicit]/9). If the
+    /// pattern expands only that pack, elements `0..m` are fixed and
+    /// `m..n` extend it (a failure in a fixed element is ignored). If it
+    /// expands other packs too, they are deduced from all `n` elements
+    /// and the explicit pack keeps its given elements (clang: the
+    /// partially substituted pack is not extended then).
     pub(crate) fn deduce_pack_elements_from(
         &mut self,
-        skip: usize,
+        explicit: Option<(u16, usize)>,
         n: usize,
         d: &mut DeducedArgs,
         mut f: impl FnMut(&mut Self, usize, &mut DeducedArgs) -> Tdk,
     ) -> Tdk {
         let saved = d.pack_cur.take();
-        let mut per: Vec<(u16, Vec<TemplateArg>)> = Vec::new();
-        let skip = skip.min(n);
+        let (ep, m) = explicit.map_or((None, 0), |(i, m)| (Some(i), m.min(n)));
+        // Each pack's deductions, by element index.
+        let mut per: Vec<(u16, Vec<(usize, TemplateArg)>)> = Vec::new();
+        let mut fixed_fail: Option<(Tdk, DeductionInfo)> = None;
         let saved_elem = d.pack_elem;
-        for i in skip..n {
+        for i in 0..n {
             d.pack_cur = Some(Vec::new());
             d.pack_elem = Some(i);
             let r = f(self, i, d);
             d.pack_elem = saved_elem;
             let cur = d.pack_cur.take().unwrap_or_default();
             if r != Tdk::Success {
+                if i < m {
+                    if fixed_fail.is_none() {
+                        fixed_fail = Some((r, d.info));
+                    }
+                    continue;
+                }
                 d.pack_cur = saved;
                 return r;
             }
             for (idx, a) in cur {
                 if let Some(x) = per.iter_mut().find(|x| x.0 == idx) {
-                    x.1.push(a);
+                    x.1.push((i, a));
                 } else {
                     let mut v = Vec::with_capacity(n);
-                    if let Some(ArgView::Pack(l)) = d.args.get(idx as usize).map(TemplateArg::view)
-                    {
-                        v.extend(self.ast.types.args(l).iter().take(skip));
-                    }
-                    v.push(a);
+                    v.push((i, a));
                     per.push((idx, v));
                 }
             }
         }
         d.pack_cur = saved;
+        let multi = ep.is_some() && per.iter().any(|x| Some(x.0) != ep);
+        if multi && let Some((r, info)) = fixed_fail {
+            d.info = info;
+            return r;
+        }
         for (idx, v) in per {
-            if v.len() != n {
+            let v: Vec<TemplateArg> = if Some(idx) != ep {
+                if v.len() != n {
+                    continue;
+                }
+                v.into_iter().map(|x| x.1).collect()
+            } else if multi {
                 continue;
-            }
+            } else {
+                let mut w = Vec::with_capacity(n);
+                if let Some(ArgView::Pack(l)) = d.args.get(idx as usize).map(TemplateArg::view) {
+                    w.extend(self.ast.types.args(l).iter().take(m));
+                }
+                w.extend(v.into_iter().filter(|x| x.0 >= m).map(|x| x.1));
+                if w.len() != n {
+                    continue;
+                }
+                w
+            };
             let l = self.ast.types.arg_list(&v);
             let r = self.record_pack(idx, TemplateArg::pack(l), d);
             if r != Tdk::Success {
@@ -701,7 +730,11 @@ impl Sema<'_, '_> {
             if depth != u32::from(d.depth) {
                 return Tdk::Success;
             }
-            let (pq, aq) = (p.quals_bits(), a.quals_bits());
+            // An array carries its element's qualifiers (clang's
+            // canonical array type is qualified).
+            let a_array = t.is_array(a);
+            let aq = if a_array { t.effective_quals(a).bits() } else { a.quals_bits() };
+            let pq = p.quals_bits();
             if !flags.contains(TdfFlags::IGNORE_QUALIFIERS) {
                 // The argument must carry at least the parameter's
                 // qualifiers; a function or reference type carries none.
@@ -716,7 +749,16 @@ impl Sema<'_, '_> {
                     return Tdk::Underqualified;
                 }
             }
-            let deduced = QualType::new(a.ty(), aq & !pq);
+            let deduced = if a_array && pq == 0 {
+                a
+            } else if a_array {
+                // `const T&` from `const char[3]`: `T = char[3]`.
+                let t = &mut self.ast.types;
+                let u = t.unqualified(a);
+                t.qualify(u, kiln_ast::types::Quals::from_bits(aq & !pq))
+            } else {
+                QualType::new(a.ty(), aq & !pq)
+            };
             return self.record_deduction(
                 u16::try_from(index).unwrap_or(u16::MAX),
                 pack,
@@ -838,8 +880,12 @@ impl Sema<'_, '_> {
             }
             TypeView::TemplateSpecialization { name, args, .. } => {
                 let r = self.deduce_template_id(name, args, a, d, next);
+                // A mismatch inside the arguments keeps its own `P`/`A`
+                // (clang reports the innermost pair); only an `A` that is
+                // no template-id at all reports the whole types.
+                let not_id = r == Tdk::NonDeducedMismatch && d.info.first.is_none();
                 if r == Tdk::Success || !flags.contains(TdfFlags::DERIVED_CLASS) {
-                    if r == Tdk::NonDeducedMismatch {
+                    if not_id {
                         return mismatch(d);
                     }
                     return r;
@@ -848,7 +894,7 @@ impl Sema<'_, '_> {
                 // `DeduceTemplateSpecArguments`).
                 match self.deduce_from_bases(name, args, a, d, next) {
                     Some(b) => b,
-                    None if r == Tdk::NonDeducedMismatch => mismatch(d),
+                    None if not_id => mismatch(d),
                     None => r,
                 }
             }
@@ -1036,6 +1082,8 @@ impl Sema<'_, '_> {
         level: u32,
     ) -> Tdk {
         let Some((atmpl, aname, aargs)) = self.template_id_of(a) else {
+            // The caller reports `P`/`A` themselves.
+            d.info.first = None;
             return Tdk::NonDeducedMismatch;
         };
         let aname = match aname {
@@ -1051,7 +1099,13 @@ impl Sema<'_, '_> {
         if ps.len() < as_.len() {
             self.complete_dependent_args(name, &mut ps);
         }
-        self.deduce_arg_list(&ps, &as_, true, d, level, Loc::INVALID)
+        let r = self.deduce_arg_list(&ps, &as_, true, d, level, Loc::INVALID);
+        if r == Tdk::NonDeducedMismatch {
+            // clang deduces against `P`'s canonical arguments, so an inner
+            // `P` prints canonically (`pr<type-parameter-0-0, int>`).
+            d.info.first = d.info.first.map(|x| self.ast.types.canonical_arg(x));
+        }
+        r
     }
 
     /// The arguments of a dependent class template-id `P` completed with
@@ -1187,11 +1241,12 @@ impl Sema<'_, '_> {
             }
             Tdk::NonDeducedMismatch => {
                 let (p, a) = (d.info.first?, d.info.second?);
-                Some(
-                    self.diag(DiagId::note_deduction_non_deduced_mismatch, loc)
-                        .arg(self.arg_str(p))
-                        .arg(self.arg_str(a)),
-                )
+                // `%diff{$ against $|types}`: two types are template-diffed.
+                let (p, a) = match (p.view(), a.view()) {
+                    (ArgView::Type(pt), ArgView::Type(at)) => self.ty_diff(pt, at),
+                    _ => (format!("'{}'", self.arg_str(p)), format!("'{}'", self.arg_str(a))),
+                };
+                Some(self.diag(DiagId::note_deduction_non_deduced_mismatch, loc).arg(p).arg(a))
             }
             _ => None,
         }

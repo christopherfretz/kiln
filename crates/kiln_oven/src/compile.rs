@@ -32,6 +32,7 @@ mod lambda;
 mod mptr;
 mod new_delete;
 mod rtti;
+mod vector;
 
 pub(crate) use builtins::designator_type;
 pub(crate) use new_delete::is_std_named;
@@ -882,10 +883,11 @@ impl<'a> Compiler<'a> {
             // expression that `containsErrors()`).
             return self.trap(e, "");
         }
-        if k == ExprKind::AtomicExpr {
-            // clang 19 never constant-evaluates an atomic builtin: the
-            // generic note at the call (the lock-free queries are folded in
-            // `compile/builtins.rs` before they reach here).
+        if matches!(k, ExprKind::AtomicExpr | ExprKind::VAArgExpr) {
+            // clang 19 never constant-evaluates an atomic builtin or a
+            // `__builtin_va_arg`: the generic note at the expression (the
+            // lock-free queries are folded in `compile/builtins.rs` before
+            // they reach here).
             return self.throw_invalid(e);
         }
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
@@ -990,6 +992,17 @@ impl Scan<'_> {
             StmtKind::CaseStmt => self.stmt(ast.stmts.case_data(s).sub),
             StmtKind::DefaultStmt => self.stmt(ast.stmts.default_sub(s)),
             StmtKind::LabelStmt => self.stmt(StmtId::new(n.b())),
+            StmtKind::AttributedStmt => {
+                for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
+                    let node = *ast.attrs.get(a);
+                    if node.kind == kiln_ast::attr::AttrKind::ASSUME
+                        && let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a)
+                    {
+                        self.expr(e, false);
+                    }
+                }
+                self.stmt(ast.stmts.sub_stmt(s));
+            }
             StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::ForStmt => {
                 let d = *ast.stmts.loop_data(s);
                 d.init.into_iter().for_each(|x| self.stmt(x));
@@ -1051,6 +1064,10 @@ impl Scan<'_> {
     fn expr(&mut self, e: ExprId, ok: bool) {
         let ast = self.ast;
         let n = *ast.exprs.get(e);
+        if matches!(ast.types.canonical_view(n.ty()), TypeView::Vector { .. }) {
+            // A vector operation may materialize its operands (WP-173).
+            self.temps = true;
+        }
         match n.kind() {
             ExprKind::DeclRefExpr => {
                 let d = ast.exprs.decl(e);
@@ -1559,13 +1576,40 @@ impl Compiler<'_> {
             // a core constant expression), so no handler is ever entered
             // (clang `EvaluateStmt`, one step for the try itself).
             StmtKind::CXXTryStmt => self.stmt(ast.stmts.try_block(s)),
-            // The payload of an attributed statement is not yet defined by
-            // kiln_ast (spec/ast.md §6; no builder exists).
+            // [dcl.attr.assume]/1, [expr.const]/5.8: an assumption that
+            // would evaluate to false is not a core constant expression;
+            // one with possible side effects is ignored (clang
+            // `EvaluateStmt`, `note_constexpr_assumption_failed` at the
+            // assumption's `getExprLoc`).
             StmtKind::AttributedStmt => {
-                self.trap_loc(
-                    n.loc(),
-                    format!("kiln: constant evaluation of {:?} is not supported yet", n.kind()),
-                );
+                let nodes: Vec<kiln_ast::attr::AttrNode> = ast
+                    .lists
+                    .iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s))
+                    .map(|a| *ast.attrs.get(a))
+                    .collect();
+                let sub = ast.stmts.sub_stmt(s);
+                for node in nodes {
+                    if node.kind != kiln_ast::attr::AttrKind::ASSUME
+                        || node.flags & kiln_ast::attr::AttrNode::ASSUME_IGNORED != 0
+                    {
+                        continue;
+                    }
+                    let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a) else {
+                        continue;
+                    };
+                    let r = if self.has_temps {
+                        self.open_scope(&[], true);
+                        let r = self.rv(e);
+                        self.close_scope();
+                        r
+                    } else {
+                        self.rv(e)
+                    };
+                    let ok = self.jmp_if(r, true);
+                    self.trap_loc(Loc::from_raw(node.b), "assumption evaluated to false".into());
+                    self.patch_here(ok);
+                }
+                self.stmt(sub);
             }
             k => {
                 self.trap_loc(
@@ -2987,6 +3031,16 @@ impl Compiler<'_> {
                 let r = self.rv(op);
                 self.convert(r, from, ty, dst, e);
             }
+            CastKind::BitCast if self.lanes(ty).is_some() || self.is_vector_expr(op) => {
+                if self.lanes(ty).is_some() {
+                    self.vec_bitcast(e, dst, None);
+                } else {
+                    // clang 19 folds no bit cast of a vector to a scalar
+                    // (spec/oven.md "Vectors").
+                    let loc = self.begin(e);
+                    self.trap_loc(loc, "subexpression not valid in a constant expression".into());
+                }
+            }
             CastKind::BitCast => {
                 let from = self.ety(op);
                 let (fk, tk) = (self.kind(from), self.kind(ty));
@@ -3202,6 +3256,23 @@ impl Compiler<'_> {
                 Place::Mem(r)
             }
             ExprKind::MemberExpr => self.member(e, acc),
+            ExprKind::ArraySubscriptExpr
+                if {
+                    let [a, b] = self.ast().exprs.operands(e);
+                    self.is_vector_expr(a) || self.is_vector_expr(b)
+                } =>
+            {
+                // clang 19 does not evaluate a vector lane access: the
+                // generic note at the base (spec/oven.md "Vectors").
+                let loc = self.begin(e);
+                self.trap_loc(loc, "subexpression not valid in a constant expression".into());
+                Place::Mem(self.reg())
+            }
+            ExprKind::ExtVectorElementExpr => {
+                // Nor an ext vector element access, silently.
+                self.trap(e, "");
+                Place::Mem(self.reg())
+            }
             ExprKind::ArraySubscriptExpr => {
                 let ast = self.ast();
                 let [a, b] = ast.exprs.operands(e);
@@ -3481,6 +3552,9 @@ impl Compiler<'_> {
     fn assign(&mut self, e: ExprId) -> Place {
         let [a, b] = self.ast().exprs.operands(e);
         let ty = self.ety(a);
+        if self.lanes(ty).is_some() {
+            return self.vec_assign(e, ty);
+        }
         if self.o.types.is_aggregate(ty) {
             let src = self.lv_mem(b, Access::Read);
             let dstp = self.lv_mem(a, Access::Write);
@@ -3502,6 +3576,10 @@ impl Compiler<'_> {
         let x = *ast.exprs.compound_assign(e);
         let op = ast.exprs.binary_op(e);
         let lhs = ExprId::new(n.a());
+        let lty = self.ety(lhs);
+        if self.lanes(lty).is_some() {
+            return self.vec_compound_assign(e, lty);
+        }
         let r = self.rv_copy(x.rhs);
         let place = self.lv_rmw(lhs, e);
         let ty = self.ety(lhs);
@@ -3577,6 +3655,10 @@ impl Compiler<'_> {
                 self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
                 return;
             }
+            ExprKind::CompoundLiteralExpr if self.o.types.is_aggregate(ty) => {
+                let init = self.ast().exprs.compound_literal_init(e);
+                return self.init_inner(init, p, ty);
+            }
             // Default-initialization by a trivial constructor performs no
             // initialization ([dcl.init.general]/7.1): the object stays
             // indeterminate.
@@ -3623,7 +3705,8 @@ impl Compiler<'_> {
                 let inits: Vec<ExprId> =
                     ast.lists.iter::<ExprId>(ast.exprs.paren_list_inits(e)).collect();
                 let filler = ast.exprs.paren_list_filler(e);
-                self.init_aggr(e, &inits, filler, None, p, ty);
+                let union_field = ast.exprs.paren_list_union_field(e);
+                self.init_aggr(e, &inits, filler, union_field, p, ty);
                 return;
             }
             _ => {}
@@ -3633,6 +3716,9 @@ impl Compiler<'_> {
             let r = self.reg();
             self.bit_cast(e, r, Some(p));
             return;
+        }
+        if self.vec_op(e) && self.lanes(ty).is_some() {
+            return self.vec_init(e, p, ty);
         }
         if !self.o.types.is_aggregate(ty) {
             let r = self.rv(e);
@@ -3933,6 +4019,11 @@ impl Compiler<'_> {
         let m = self.next;
         let n = self.node(e);
         let ty = self.ety(e);
+        if self.vec_op(e) && self.lanes(ty).is_some() {
+            let _ = self.vec_regs(e);
+            self.next = m;
+            return;
+        }
         match n.kind() {
             ExprKind::CXXThrowExpr => self.throw_invalid(e),
             ExprKind::StmtExpr => self.stmt_expr(e, None),

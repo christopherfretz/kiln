@@ -176,6 +176,11 @@ impl Substituter<'_, '_, '_> {
         let dr = self.pattern_declarator(d, ctx)?;
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
         self.locals.insert(d, DeclOrPack::Decl(v));
+        // A constrained placeholder's diagnostics point at its
+        // type-constraint, as in the pattern.
+        if let Some(&l) = self.sema.inst.concepts.placeholder_locs.get(&d) {
+            self.sema.inst.concepts.placeholder_locs.insert(v, l);
+        }
         self.var_init(d, v)?;
         Ok(v)
     }
@@ -779,6 +784,17 @@ impl Substituter<'_, '_, '_> {
         };
         let e = match self.sema.ast.exprs.get(def).kind() {
             kiln_ast::expr::ExprKind::CXXDefaultArgExpr => return,
+            // A deduction guide's placeholder ([`Sema::guide_default_placeholder`]):
+            // another placeholder, of the substituted type.
+            kiln_ast::expr::ExprKind::OpaqueValueExpr
+                if self.sema.ast.exprs.opaque_source(def).is_none() =>
+            {
+                let ty = self.sema.ast.decls.get(b).ty().unwrap_or(QualType::ERROR);
+                let loc = self.sema.ast.exprs.get(def).loc();
+                let ph = self.sema.guide_default_placeholder(ty, loc);
+                let _ = self.sema.ast.decls.set_default_arg(b, ph);
+                return;
+            }
             // `= {...}` with a dependent type or element: the list
             // as written, list-initializing the substituted type.
             kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {

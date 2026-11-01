@@ -56,14 +56,20 @@ impl DeductionFailure {
 }
 
 impl Sema<'_, '_> {
-    /// The elements of the trailing function parameter pack with
-    /// pattern `pat` given explicitly ([temp.arg.explicit]/9): only the
+    /// The explicitly given pack (index, length) that the trailing
+    /// function parameter pack with pattern `pat` expands
+    /// ([temp.arg.explicit]/9): only the
     /// first template parameter pack takes explicit arguments (it takes
     /// the rest of them), so none when the pattern (`U`, `U&&`, `U*`)
     /// expands another pack (`f<int>(tys<int>, 'a')` for
     /// `template<class... T, class... U> f(tys<T...>, U...)`). A pattern
     /// of another shape is taken to expand the first pack.
-    fn trailing_pack_skip(&self, pat: QualType, params: &[DeclId], d: &DeducedArgs) -> usize {
+    fn trailing_pack_skip(
+        &self,
+        pat: QualType,
+        params: &[DeclId],
+        d: &DeducedArgs,
+    ) -> Option<(u16, usize)> {
         let types = &self.ast.types;
         let mut q = types.canonical(pat);
         while let Some(p) = types.pointee(q) {
@@ -74,9 +80,9 @@ impl Sema<'_, '_> {
             && depth == u32::from(d.depth)
             && first.is_some_and(|f| f != index as usize)
         {
-            return 0;
+            return None;
         }
-        self.explicit_pack_len(params, d)
+        self.explicit_pack(params, d)
     }
 
     /// The function parameter packs whose pattern also expands the
@@ -242,6 +248,8 @@ impl Sema<'_, '_> {
         // [temp.deduct.funcaddr]: P is the function type, with the
         // explicit arguments substituted below.
         let mut pfn = self.ast.decls.get(templated).ty().unwrap_or(QualType::ERROR);
+        // Expanded non-trailing function parameter packs.
+        let mut retained = 0usize;
         let written: Vec<TemplateArg> =
             explicit.map(|l| self.ast.types.args(l).to_vec()).unwrap_or_default();
         if !written.is_empty() {
@@ -302,22 +310,36 @@ impl Sema<'_, '_> {
                 let mut sub = Substituter::new(s, &levels);
                 // A function parameter pack keeps its pattern: the
                 // explicitly given prefix may be extended by deduction.
-                let v = tys
-                    .iter()
-                    .map(|&t| {
-                        if crate::templ::pack::type_pattern(sub.sema, t).is_some() {
-                            Ok(t)
-                        } else {
-                            sub.ty(t, loc)
+                // A non-trailing one is a non-deduced context
+                // ([temp.deduct.type]/5.7): its explicit elements are
+                // all of it (clang keeps the expansion, unexpanded, in
+                // the parameter count).
+                let mut v = Vec::with_capacity(tys.len());
+                let mut kept = 0usize;
+                for (j, &t) in tys.iter().enumerate() {
+                    let Some(pat) = crate::templ::pack::type_pattern(sub.sema, t) else {
+                        v.push(sub.ty(t, loc)?);
+                        continue;
+                    };
+                    if j + 1 == tys.len() {
+                        v.push(t);
+                        continue;
+                    }
+                    match sub.expand_pattern_at(None, |sub| sub.ty(pat, loc))? {
+                        crate::templ::pack::Expansion::Elements(e) => {
+                            v.extend(e);
+                            kept += 1;
                         }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                        crate::templ::pack::Expansion::Unexpanded(_) => v.push(t),
+                    }
+                }
                 let f = if whole { Some(sub.ty(pfn, loc)?) } else { None };
-                Ok::<_, crate::templ::subst::SubstFail>((v, f))
+                Ok::<_, crate::templ::subst::SubstFail>((v, f, kept))
             });
             match r {
                 None => return Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-                Some((Ok((t, f)), Ok(()))) => {
+                Some((Ok((t, f, kept)), Ok(()))) => {
+                    retained = kept;
                     if let Some(f) =
                         self.check_partial_pack_lengths(ft, &d, &levels, &tys, shown, loc)
                     {
@@ -340,7 +362,7 @@ impl Sema<'_, '_> {
         // is not deduced from).
         let nargs = args.len();
         let fn_pack = ptys.last().and_then(|&t| crate::templ::pack::type_pattern(self, t));
-        if call.is_some() && nargs > ptys.len() && !variadic && fn_pack.is_none() {
+        if call.is_some() && nargs > ptys.len() + retained && !variadic && fn_pack.is_none() {
             return Err(DeductionFailure::new(Tdk::TooManyArguments, d));
         }
         if call.is_some() && nargs < self.fn_min_args(templated) {
@@ -376,13 +398,21 @@ impl Sema<'_, '_> {
         // pack is fixed before any deduction: a pack deduced from an
         // earlier parameter (`tys<Tf...>`) is not a prefix of the
         // trailing function parameter pack.
-        let skip = fn_pack.map_or(0, |pat| self.trailing_pack_skip(pat, &params, &d));
+        let skip = fn_pack.and_then(|pat| self.trailing_pack_skip(pat, &params, &d));
         // [temp.deduct.call]/4: the (argument index, P, adjusted A) of
         // each deduced-from argument, checked against the deduced A.
         let mut originals: Vec<(usize, QualType, QualType)> = Vec::new();
+        let mut pi = 0;
         for (i, a) in args.iter().enumerate() {
-            let Some(&p) = ptys.get(i) else { break };
-            if i + 1 == ptys.len()
+            // [temp.deduct.type]/5.7: a non-trailing function parameter
+            // pack is a non-deduced context and takes no argument.
+            while pi + 1 < ptys.len() && crate::templ::pack::type_pattern(self, ptys[pi]).is_some()
+            {
+                pi += 1;
+            }
+            let Some(&p) = ptys.get(pi) else { break };
+            pi += 1;
+            if pi == ptys.len()
                 && let Some(pat) = fn_pack
             {
                 // [temp.deduct.call]/1: the trailing function parameter
@@ -396,6 +426,19 @@ impl Sema<'_, '_> {
                     self.resugar_mismatch(pat, &mut d);
                     return Err(DeductionFailure::new(r, d));
                 }
+                if self.has_deducible_params(pat, &d, true) {
+                    // The explicit elements of a pack the pattern alone
+                    // names are not deduced, so not checked.
+                    let fixed = match skip {
+                        Some((ep, m)) if self.pattern_packs(pat, &d).iter().all(|&x| x == ep) => m,
+                        _ => 0,
+                    };
+                    for (k, a) in rest.iter().enumerate().skip(fixed) {
+                        if self.is_original_arg(a) {
+                            originals.push((i + k, pat, self.adjusted_call_arg(pat, a, d.depth)));
+                        }
+                    }
+                }
                 break;
             }
             if !self.is_dependent_type(p) {
@@ -406,11 +449,7 @@ impl Sema<'_, '_> {
                 self.resugar_mismatch(p, &mut d);
                 return Err(DeductionFailure::new(r, d));
             }
-            if a.list.is_none()
-                && a.ty != QualType::OVERLOAD
-                && self.has_deducible_params(p, &d)
-                && a.expr.is_none_or(|e| matches!(self.overload_set_arg(e), OverloadArg::NotASet))
-            {
+            if self.has_deducible_params(p, &d, false) && self.is_original_arg(a) {
                 originals.push((i, p, self.adjusted_call_arg(p, a, d.depth)));
             }
         }
@@ -525,10 +564,31 @@ impl Sema<'_, '_> {
     /// context (clang's `hasDeducibleTemplateParameters`): only such a
     /// parameter's argument is an original call argument checked by
     /// [temp.deduct.call]/4. Probed by deducing `p` from itself.
-    fn has_deducible_params(&mut self, p: QualType, d: &DeducedArgs) -> bool {
+    fn has_deducible_params(&mut self, p: QualType, d: &DeducedArgs, pattern: bool) -> bool {
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
+        // The packs a pack expansion's pattern names, element-wise.
+        if pattern {
+            probe.pack_cur = Some(Vec::new());
+        }
         self.deduce(p, p, TdfFlags::NONE, &mut probe);
         probe.args.iter().any(|a| !matches!(a.view(), ArgView::Null))
+            || probe.pack_cur.is_some_and(|c| !c.is_empty())
+    }
+
+    /// The template parameter packs pack expansion pattern `p` names.
+    fn pattern_packs(&mut self, p: QualType, d: &DeducedArgs) -> Vec<u16> {
+        let mut probe = DeducedArgs::new(d.depth, d.args.len());
+        probe.pack_cur = Some(Vec::new());
+        self.deduce(p, p, TdfFlags::NONE, &mut probe);
+        probe.pack_cur.unwrap_or_default().into_iter().map(|x| x.0).collect()
+    }
+
+    /// Whether call argument `a` is checked against its deduced `A`
+    /// ([temp.deduct.call]/4): not a braced list or an overload set.
+    fn is_original_arg(&self, a: &ArgInfo) -> bool {
+        a.list.is_none()
+            && a.ty != QualType::OVERLOAD
+            && a.expr.is_none_or(|e| matches!(self.overload_set_arg(e), OverloadArg::NotASet))
     }
 
     /// The argument type `A` of `a` adjusted for deduction against
@@ -802,7 +862,10 @@ impl Sema<'_, '_> {
         }
         if flags.contains(TdfFlags::PARAM_WITH_REFERENCE_TYPE) {
             // clang: P's top-level cv is intersected with A's.
-            p = QualType::new(p.ty(), p.quals_bits() & at.quals_bits());
+            // clang: P's top-level cv is intersected with A's (an
+            // array's are its element's).
+            let aq = t.effective_quals(at).bits();
+            p = QualType::new(p.ty(), p.quals_bits() & aq);
         }
         if matches!(t.canonical_view(at), TypeView::Pointer(_) | TypeView::MemberPointer { .. }) {
             flags = flags.union(TdfFlags::IGNORE_QUALIFIERS);
@@ -811,22 +874,36 @@ impl Sema<'_, '_> {
         self.deduce(p, at, flags, d)
     }
 
-    /// A mismatch at the top of parameter type `p` is noted with `p` as
-    /// written (`T *`, not the canonical `type-parameter-0-0 *`).
+    /// A mismatch in parameter type `p` is noted with the mismatched part
+    /// as written (`T *`, not the canonical `type-parameter-0-0 *`): `p`,
+    /// or what it refers or points to or the element of an array, at any
+    /// depth (`S<T>` in `S<T> (&)[3]`).
     fn resugar_mismatch(&mut self, p: QualType, d: &mut DeducedArgs) {
         let t = &mut self.ast.types;
         let Some(first) = d.info.first else { return };
         let ArgView::Type(fq) = first.view() else { return };
-        let inner = match t.view(p.ty()) {
-            TypeView::LValueRef(x) | TypeView::RValueRef(x) => x,
-            _ => p,
-        };
-        let bare = t.unqualified(inner);
-        for cand in [inner, bare] {
-            if t.canonical(cand) == t.canonical(fq) {
-                d.info.first = Some(TemplateArg::ty(cand));
-                return;
+        let want = t.canonical(fq);
+        let mut cur = p;
+        for _ in 0..64 {
+            let bare = t.unqualified(cur);
+            for cand in [cur, bare] {
+                if t.canonical(cand) == want {
+                    d.info.first = Some(TemplateArg::ty(cand));
+                    return;
+                }
             }
+            cur = match t.view(cur.ty()) {
+                TypeView::LValueRef(x) | TypeView::RValueRef(x) | TypeView::Pointer(x) => x,
+                TypeView::ConstantArray(a) => a.elem,
+                TypeView::IncompleteArray(e) => e,
+                _ => {
+                    let next = t.desugar_once(cur);
+                    if next == cur {
+                        return;
+                    }
+                    next
+                }
+            };
         }
     }
 
@@ -934,13 +1011,21 @@ impl Sema<'_, '_> {
             Tdk::DeducedMismatch => {
                 let with = f.args.map(|l| format!(" {}", self.template_args_desc(ft, l)));
                 let ty = |x: Option<TemplateArg>| match x.map(|a| a.view()) {
-                    Some(ArgView::Type(q)) => self.ty_arg(q),
-                    _ => String::new(),
+                    Some(ArgView::Type(q)) => Some(q),
+                    _ => None,
+                };
+                // A `%diff` pair in clang.
+                let (da, aa) = match (ty(f.deduced.info.first), ty(f.deduced.info.second)) {
+                    (Some(x), Some(y)) => self.ty_diff(x, y),
+                    (x, y) => (
+                        x.map(|q| self.ty_arg(q)).unwrap_or_default(),
+                        y.map(|q| self.ty_arg(q)).unwrap_or_default(),
+                    ),
                 };
                 self.diag(DiagId::note_ovl_candidate_deduced_mismatch, loc)
-                    .arg(ty(f.deduced.info.first))
+                    .arg(da)
                     .arg(ordinal(u32::from(f.deduced.info.param.unwrap_or(0)) + 1))
-                    .arg(ty(f.deduced.info.second))
+                    .arg(aa)
                     .arg(with.unwrap_or_default())
             }
             Tdk::InvalidExplicitArguments => {

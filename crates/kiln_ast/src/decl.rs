@@ -2937,6 +2937,40 @@ pub mod builtin {
     /// noexcept` (signature `vAA`).
     pub const VA_COPY: u32 = 1365;
 
+    // WP-171: the coroutine builtins ([`CORO`]; clang `CoroLangBuiltin`s).
+    /// `void __builtin_coro_resume(void *)` (signature `vv*`).
+    pub const CORO_RESUME: u32 = 373;
+    /// `void __builtin_coro_destroy(void *)` (signature `vv*`).
+    pub const CORO_DESTROY: u32 = 365;
+    /// `bool __builtin_coro_done(void *) noexcept` (signature `bv*`).
+    pub const CORO_DONE: u32 = 366;
+    /// `void *__builtin_coro_promise(void *, int, bool) noexcept`
+    /// (signature `v*v*IiIb`: the alignment and direction are integer
+    /// constant expressions).
+    pub const CORO_PROMISE: u32 = 372;
+    /// `void *__builtin_coro_noop() noexcept` (signature `v*`).
+    pub const CORO_NOOP: u32 = 371;
+    /// `size_t __builtin_coro_size() noexcept` (signature `z`).
+    pub const CORO_SIZE: u32 = 374;
+    /// `size_t __builtin_coro_align() noexcept` (signature `z`).
+    pub const CORO_ALIGN: u32 = 362;
+    /// `void *__builtin_coro_frame() noexcept` (signature `v*`).
+    pub const CORO_FRAME: u32 = 368;
+    /// `void *__builtin_coro_free(void *) noexcept` (signature `v*v*`).
+    pub const CORO_FREE: u32 = 369;
+    /// `void *__builtin_coro_id(int, void *, void *, void *) noexcept`
+    /// (signature `v*Iiv*v*v*`).
+    pub const CORO_ID: u32 = 370;
+    /// `bool __builtin_coro_alloc() noexcept` (signature `b`).
+    pub const CORO_ALLOC: u32 = 363;
+    /// `void *__builtin_coro_begin(void *) noexcept` (signature `v*v*`).
+    pub const CORO_BEGIN: u32 = 364;
+    /// `bool __builtin_coro_end(void *, bool) noexcept` (signature
+    /// `bv*Ib`).
+    pub const CORO_END: u32 = 367;
+    /// `char __builtin_coro_suspend(bool) noexcept` (signature `cIb`).
+    pub const CORO_SUSPEND: u32 = 375;
+
     // WP-156: the vector reductions (clang `Builtins.td` signature `v.`,
     // custom type-checking: the call has the vector's element type).
     /// `__builtin_reduce_add`.
@@ -3090,7 +3124,10 @@ pub mod builtin {
         /// long (`LL` long long, `Ld` long double); suffixes `*` pointer,
         /// `&` lvalue reference, `C` const, `D` volatile; `A` is a
         /// `__builtin_va_list` parameter (a reference to it, or the decayed
-        /// pointer when it is an array).
+        /// pointer when it is an array), `a` a `__builtin_va_list` (decayed
+        /// when it is an array), `P` the `FILE` type ([`LIB`] only). An `I`
+        /// prefix marks an argument that must be an integer constant
+        /// expression.
         pub sig: &'static str,
         /// [`attr`] bits.
         pub attrs: u8,
@@ -3226,6 +3263,264 @@ pub mod builtin {
         row(REDUCE_OR, "__builtin_reduce_or", "v.", N | C | T),
         row(REDUCE_XOR, "__builtin_reduce_xor", "v.", N | C | T),
     ];
+
+    /// WP-171: the coroutine builtins the libc++ headers name (clang 19
+    /// `Builtins.td` `CoroLangBuiltin`s). Sema type-checks calls; codegen
+    /// and the Oven do not implement them.
+    pub const CORO: &[Info] = &[
+        row(CORO_RESUME, "__builtin_coro_resume", "vv*", 0),
+        row(CORO_DESTROY, "__builtin_coro_destroy", "vv*", 0),
+        row(CORO_DONE, "__builtin_coro_done", "bv*", N),
+        row(CORO_PROMISE, "__builtin_coro_promise", "v*v*IiIb", N),
+        row(CORO_NOOP, "__builtin_coro_noop", "v*", N),
+        row(CORO_SIZE, "__builtin_coro_size", "z", N),
+        row(CORO_ALIGN, "__builtin_coro_align", "z", N),
+        row(CORO_FRAME, "__builtin_coro_frame", "v*", N),
+        row(CORO_FREE, "__builtin_coro_free", "v*v*", N),
+        row(CORO_ID, "__builtin_coro_id", "v*Iiv*v*v*", N),
+        row(CORO_ALLOC, "__builtin_coro_alloc", "b", N),
+        row(CORO_BEGIN, "__builtin_coro_begin", "v*v*", N),
+        row(CORO_END, "__builtin_coro_end", "bv*Ib", N),
+        row(CORO_SUSPEND, "__builtin_coro_suspend", "cIb", N),
+    ];
+
+    /// WP-171: the C library functions clang 19 recognizes as library
+    /// builtins and gives implicit attributes (`Builtins.td` `LibBuiltin`
+    /// rows with the `NoThrow` / `Const` / `Pure` attributes; ids are
+    /// clang's `Builtin::ID`). A recognition table only: these names are
+    /// not lazily declared and a call is an ordinary call. The first
+    /// file-scope declaration with C language linkage whose type matches
+    /// the signature ignoring the exception specification gets the
+    /// attributes (clang `ActOnFunctionDeclarator` +
+    /// `AddKnownFunctionAttributes`). `P` is the type the file-scope
+    /// `FILE` typedef names. clang's library builtins without any of these
+    /// attributes (`malloc`, `printf`, `strtol`, ...) are left out.
+    pub const LIB: &[Info] = &[
+        row(93, "abs", "ii", N | C),
+        row(95, "labs", "LiLi", N | C),
+        row(97, "llabs", "LLiLLi", N | C),
+        row(866, "memcpy", "v*v*vC*z", N),
+        row(868, "memmove", "v*v*vC*z", N),
+        row(1143, "strcpy", "c*c*cC*", N),
+        row(1154, "strncpy", "c*c*cC*z", N),
+        row(1141, "strcmp", "icC*cC*", N),
+        row(1152, "strncmp", "icC*cC*z", N),
+        row(1137, "strcat", "c*c*cC*", N),
+        row(1150, "strncat", "c*c*cC*z", N),
+        row(863, "memchr", "v*vC*iz", N),
+        row(1139, "strchr", "c*cC*i", N),
+        row(1179, "strpbrk", "c*cC*cC*", N),
+        row(1181, "strrchr", "c*cC*i", N),
+        row(1156, "strspn", "zcC*cC*", N),
+        row(1158, "strstr", "c*cC*cC*", N),
+        row(870, "memset", "v*v*iz", N),
+        row(1148, "strlen", "zcC*", N),
+        row(544, "fprintf", "iP*cC*.", N),
+        row(1114, "snprintf", "ic*zcC*.", N),
+        row(1058, "sprintf", "ic*cC*.", N),
+        row(1357, "vprintf", "icC*a", N),
+        row(1372, "vfprintf", "iP*cC*a", N),
+        row(1376, "vsnprintf", "ic*zcC*a", N),
+        row(1374, "vsprintf", "ic*cC*a", N),
+        row(1387, "wcschr", "w*wC*w", N | P),
+        row(1389, "wcscmp", "iwC*wC*", N | P),
+        row(1391, "wcslen", "zwC*", N | P),
+        row(1393, "wcsncmp", "iwC*wC*z", N | P),
+        row(1378, "wmemchr", "w*wC*wz", N),
+        row(1380, "wmemcmp", "iwC*wC*z", N),
+        row(1382, "wmemcpy", "w*w*wC*z", N),
+        row(1384, "wmemmove", "w*w*wC*z", N),
+        row(717, "isalnum", "ii", N | P),
+        row(719, "isalpha", "ii", N | P),
+        row(720, "isblank", "ii", N | P),
+        row(721, "iscntrl", "ii", N | P),
+        row(723, "isdigit", "ii", N | P),
+        row(726, "isgraph", "ii", N | P),
+        row(734, "islower", "ii", N | P),
+        row(737, "isprint", "ii", N | P),
+        row(738, "ispunct", "ii", N | P),
+        row(740, "isspace", "ii", N | P),
+        row(743, "isupper", "ii", N | P),
+        row(744, "isxdigit", "ii", N | P),
+        row(1328, "tolower", "ii", N | P),
+        row(1330, "toupper", "ii", N | P),
+        row(101, "acos", "dd", N),
+        row(109, "acosh", "dd", N),
+        row(136, "asin", "dd", N),
+        row(144, "asinh", "dd", N),
+        row(153, "atan", "dd", N),
+        row(168, "atanh", "dd", N),
+        row(294, "cbrt", "dd", N | C),
+        row(313, "ceil", "dd", N | C),
+        row(379, "cos", "dd", N),
+        row(387, "cosh", "dd", N),
+        row(490, "erf", "dd", N),
+        row(497, "erfc", "dd", N),
+        row(510, "exp", "dd", N),
+        row(516, "exp2", "dd", N),
+        row(533, "expm1", "dd", N),
+        row(551, "fabs", "dd", N | C),
+        row(570, "floor", "dd", N | C),
+        row(768, "lgamma", "dd", N),
+        row(789, "log", "dd", N),
+        row(810, "log10", "dd", N),
+        row(795, "log1p", "dd", N),
+        row(802, "log2", "dd", N),
+        row(820, "logb", "dd", N),
+        row(906, "nearbyint", "dd", N | C),
+        row(1019, "rint", "dd", N | C),
+        row(1043, "round", "dd", N | C),
+        row(1095, "sin", "dd", N),
+        row(1103, "sinh", "dd", N),
+        row(1118, "sqrt", "dd", N),
+        row(1303, "tan", "dd", N),
+        row(1311, "tanh", "dd", N),
+        row(1321, "tgamma", "dd", N),
+        row(1335, "trunc", "dd", N | C),
+        row(159, "atan2", "ddd", N),
+        row(357, "copysign", "ddd", N | C),
+        row(560, "fdim", "ddd", N),
+        row(586, "fmax", "ddd", N | C),
+        row(594, "fmin", "ddd", N | C),
+        row(602, "fmod", "ddd", N),
+        row(659, "hypot", "ddd", N),
+        row(913, "nextafter", "ddd", N),
+        row(968, "pow", "ddd", N),
+        row(1001, "remainder", "ddd", N),
+        row(578, "fma", "dddd", N | C),
+        row(616, "frexp", "ddi*", N),
+        row(760, "ldexp", "ddi", N),
+        row(881, "modf", "ddd*", N),
+        row(893, "nan", "dcC*", N | P),
+        row(667, "ilogb", "id", N),
+        row(828, "lrint", "Lid", N),
+        row(775, "llrint", "LLid", N),
+        row(837, "lround", "Lid", N),
+        row(781, "llround", "LLid", N),
+        row(920, "nexttoward", "ddLd", N),
+        row(1008, "remquo", "dddi*", N),
+        row(1075, "scalbn", "ddi", N),
+        row(1069, "scalbln", "ddLi", N),
+        row(99, "acosf", "ff", N),
+        row(107, "acoshf", "ff", N),
+        row(134, "asinf", "ff", N),
+        row(142, "asinhf", "ff", N),
+        row(151, "atanf", "ff", N),
+        row(166, "atanhf", "ff", N),
+        row(292, "cbrtf", "ff", N | C),
+        row(311, "ceilf", "ff", N | C),
+        row(377, "cosf", "ff", N),
+        row(385, "coshf", "ff", N),
+        row(488, "erff", "ff", N),
+        row(495, "erfcf", "ff", N),
+        row(508, "expf", "ff", N),
+        row(514, "exp2f", "ff", N),
+        row(531, "expm1f", "ff", N),
+        row(549, "fabsf", "ff", N | C),
+        row(568, "floorf", "ff", N | C),
+        row(766, "lgammaf", "ff", N),
+        row(787, "logf", "ff", N),
+        row(808, "log10f", "ff", N),
+        row(793, "log1pf", "ff", N),
+        row(800, "log2f", "ff", N),
+        row(818, "logbf", "ff", N),
+        row(904, "nearbyintf", "ff", N | C),
+        row(1017, "rintf", "ff", N | C),
+        row(1041, "roundf", "ff", N | C),
+        row(1093, "sinf", "ff", N),
+        row(1101, "sinhf", "ff", N),
+        row(1116, "sqrtf", "ff", N),
+        row(1301, "tanf", "ff", N),
+        row(1309, "tanhf", "ff", N),
+        row(1319, "tgammaf", "ff", N),
+        row(1333, "truncf", "ff", N | C),
+        row(157, "atan2f", "fff", N),
+        row(355, "copysignf", "fff", N | C),
+        row(558, "fdimf", "fff", N),
+        row(584, "fmaxf", "fff", N | C),
+        row(592, "fminf", "fff", N | C),
+        row(600, "fmodf", "fff", N),
+        row(657, "hypotf", "fff", N),
+        row(911, "nextafterf", "fff", N),
+        row(966, "powf", "fff", N),
+        row(999, "remainderf", "fff", N),
+        row(576, "fmaf", "ffff", N | C),
+        row(614, "frexpf", "ffi*", N),
+        row(758, "ldexpf", "ffi", N),
+        row(879, "modff", "fff*", N),
+        row(891, "nanf", "fcC*", N | P),
+        row(665, "ilogbf", "if", N),
+        row(826, "lrintf", "Lif", N),
+        row(773, "llrintf", "LLif", N),
+        row(835, "lroundf", "Lif", N),
+        row(779, "llroundf", "LLif", N),
+        row(918, "nexttowardf", "ffLd", N),
+        row(1006, "remquof", "fffi*", N),
+        row(1073, "scalbnf", "ffi", N),
+        row(1067, "scalblnf", "ffLi", N),
+        row(103, "acosl", "LdLd", N),
+        row(111, "acoshl", "LdLd", N),
+        row(138, "asinl", "LdLd", N),
+        row(146, "asinhl", "LdLd", N),
+        row(155, "atanl", "LdLd", N),
+        row(170, "atanhl", "LdLd", N),
+        row(296, "cbrtl", "LdLd", N | C),
+        row(315, "ceill", "LdLd", N | C),
+        row(381, "cosl", "LdLd", N),
+        row(389, "coshl", "LdLd", N),
+        row(492, "erfl", "LdLd", N),
+        row(499, "erfcl", "LdLd", N),
+        row(512, "expl", "LdLd", N),
+        row(518, "exp2l", "LdLd", N),
+        row(535, "expm1l", "LdLd", N),
+        row(553, "fabsl", "LdLd", N | C),
+        row(572, "floorl", "LdLd", N | C),
+        row(770, "lgammal", "LdLd", N),
+        row(791, "logl", "LdLd", N),
+        row(812, "log10l", "LdLd", N),
+        row(797, "log1pl", "LdLd", N),
+        row(804, "log2l", "LdLd", N),
+        row(822, "logbl", "LdLd", N),
+        row(908, "nearbyintl", "LdLd", N | C),
+        row(1021, "rintl", "LdLd", N | C),
+        row(1045, "roundl", "LdLd", N | C),
+        row(1097, "sinl", "LdLd", N),
+        row(1105, "sinhl", "LdLd", N),
+        row(1120, "sqrtl", "LdLd", N),
+        row(1305, "tanl", "LdLd", N),
+        row(1313, "tanhl", "LdLd", N),
+        row(1323, "tgammal", "LdLd", N),
+        row(1337, "truncl", "LdLd", N | C),
+        row(161, "atan2l", "LdLdLd", N),
+        row(359, "copysignl", "LdLdLd", N | C),
+        row(562, "fdiml", "LdLdLd", N),
+        row(588, "fmaxl", "LdLdLd", N | C),
+        row(596, "fminl", "LdLdLd", N | C),
+        row(604, "fmodl", "LdLdLd", N),
+        row(661, "hypotl", "LdLdLd", N),
+        row(915, "nextafterl", "LdLdLd", N),
+        row(970, "powl", "LdLdLd", N),
+        row(1003, "remainderl", "LdLdLd", N),
+        row(580, "fmal", "LdLdLdLd", N | C),
+        row(618, "frexpl", "LdLdi*", N),
+        row(762, "ldexpl", "LdLdi", N),
+        row(883, "modfl", "LdLdLd*", N),
+        row(895, "nanl", "LdcC*", N | P),
+        row(669, "ilogbl", "iLd", N),
+        row(830, "lrintl", "LiLd", N),
+        row(777, "llrintl", "LLiLd", N),
+        row(839, "lroundl", "LiLd", N),
+        row(783, "llroundl", "LLiLd", N),
+        row(922, "nexttowardl", "LdLdLd", N),
+        row(1010, "remquol", "LdLdLdi*", N),
+        row(1077, "scalbnl", "LdLdi", N),
+        row(1071, "scalblnl", "LdLdLi", N),
+    ];
+
+    /// The [`LIB`] row of the C library function spelled `name`.
+    pub fn lib_by_name(name: &str) -> Option<&'static Info> {
+        LIB.iter().find(|e| e.name == name)
+    }
 
     /// WP-150: the remaining GCC integer builtins (`ffs`, `parity`,
     /// `clrsb`, `bitreverse`, `rotate*`) and memory builtins. All but
@@ -3665,12 +3960,47 @@ pub mod builtin {
 
     /// The builtin function spelled `name`, if kiln declares one.
     pub fn by_name(name: &str) -> Option<u32> {
-        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).find(|e| e.name == name).map(|e| e.id)
+        ALL.iter()
+            .chain(INT_MEM)
+            .chain(LIBM)
+            .chain(ATOMIC)
+            .chain(CORO)
+            .find(|e| e.name == name)
+            .map(|e| e.id)
     }
 
     /// The table row of builtin `id`.
     pub fn info(id: u32) -> Option<&'static Info> {
-        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).find(|e| e.id == id)
+        ALL.iter().chain(INT_MEM).chain(LIBM).chain(ATOMIC).chain(CORO).find(|e| e.id == id)
+    }
+
+    /// The parameters of builtin `id` that must be integer constant
+    /// expressions (an `I` prefix in its signature), as a bit mask by
+    /// parameter index (clang `ASTContext::GetBuiltinType`'s
+    /// `IntegerConstantArgs`).
+    pub fn ice_params(id: u32) -> u32 {
+        let Some(e) = info(id) else { return 0 };
+        let (mut mask, mut idx, mut ice) = (0u32, 0i32, false);
+        for &c in e.sig.as_bytes() {
+            match c {
+                b'I' => ice = true,
+                b'U' | b'L' | b'C' | b'D' | b'*' | b'&' => {}
+                b'.' => break,
+                _ => {
+                    if ice && idx > 0 {
+                        mask |= 1 << (idx - 1);
+                    }
+                    ice = false;
+                    idx += 1;
+                }
+            }
+        }
+        mask
+    }
+
+    /// Whether builtin `id` is a [`CORO`] builtin.
+    pub fn is_coro(id: u32) -> bool {
+        CORO.iter().any(|e| e.id == id)
     }
 
     /// Whether builtin `id` is a [`LIBM`] function.

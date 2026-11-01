@@ -326,6 +326,13 @@ pub fn write_template_arg(
 pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<String> {
     let written = print_type(ctx, names, q, PrintOptions::SUGARED);
     let canon = print_type(ctx, names, q, PrintOptions::CANONICAL);
+    // clang's `Desugar` keeps template type parameters by name (`'pr<T, I>'
+    // (aka 'pr<T, int>')`); the canonical printer cannot, so a dependent
+    // type whose canonical form names `type-parameter-D-I` gets no `aka`
+    // rather than a wrong one.
+    if canon.contains("type-parameter-") && !written.contains("type-parameter-") {
+        return None;
+    }
     (canon != written && without_exc_specs(&canon) != without_exc_specs(&written)).then_some(canon)
 }
 

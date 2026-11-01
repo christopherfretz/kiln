@@ -185,7 +185,7 @@ id each, no representation change.
 | `Enum` | D | C | data = first `DeclId` of the enum | |
 | `Complex` | I | C | data = element QualType | GNU `_Complex` (*M4*) |
 | `Atomic` | I | C | data = value QualType | `_Atomic(T)` (WP-154); size is `T`'s rounded up to a power of two when it is at most 16 bytes, alignment is that size (clang's `getTypeInfo` of `AtomicType`); libc++ `<atomic>` uses it via `__c11_atomic_*` |
-| `Vector` | I | C | aux = `VectorKind` (Generic, Neon, NeonPoly, Ext), pairs [element, count] | `vector_size`, `ext_vector_type` (libc++ `simd_utils.h`); built by sema (spec/sema.md §4.5); `sizeof`/`alignof` follow clang 19 `getTypeInfo` (an Ext vector of `bool` is N bits, then: at least 8 bits, rounded up to a power of two, alignment = size capped at the target's max vector alignment); operations (WP-156, `kiln_sema/src/vector_ops.rs`): arithmetic, bitwise, shift and logical operators with scalar splats, comparisons yielding the signed integer vector of the same size (clang `GetSignedVectorType`), subscripts (an element lvalue that cannot be bound or have its address taken), list-initialization, lax casts between vectors and integers of the same total size (never between an integer and an Ext vector), `__builtin_convertvector` and `__builtin_reduce_*`; codegen and the AArch64/x86-64 calling conventions follow clang 19 (`kiln_abi/src/call.rs`); constant evaluation of vector values in the Oven, vector `?:` and brace elision of vector members are *M4* |
+| `Vector` | I | C | aux = `VectorKind` (Generic, Neon, NeonPoly, Ext), pairs [element, count] | `vector_size`, `ext_vector_type` (libc++ `simd_utils.h`); built by sema (spec/sema.md §4.5); `sizeof`/`alignof` follow clang 19 `getTypeInfo` (an Ext vector of `bool` is N bits, then: at least 8 bits, rounded up to a power of two, alignment = size capped at the target's max vector alignment); operations (WP-156, `kiln_sema/src/vector_ops.rs`): arithmetic, bitwise, shift and logical operators with scalar splats, comparisons yielding the signed integer vector of the same size (clang `GetSignedVectorType`), subscripts (an element lvalue that cannot be bound or have its address taken), list-initialization, lax casts between vectors and integers of the same total size (never between an integer and an Ext vector), `__builtin_convertvector` and `__builtin_reduce_*`; codegen and the AArch64/x86-64 calling conventions follow clang 19 (`kiln_abi/src/call.rs`); vector `?:` (GNU element-wise and scalar-condition forms) and brace elision of GNU vector members (WP-173; spec/sema.md §4.5), constant evaluation of vector values in the Oven (WP-173; spec/oven.md "Vectors"); `__builtin_shufflevector`, ext-vector element access (`.x`, `.xy`) and `bool` ext-vector conditions are *M4* |
 | `DependentVector` dep | I | S/C | aux = kind, pairs [element, size ExprId / ProfileId] | the size operand as written: the element count for Ext, the byte size for Generic; substitution rebuilds through `Sema::build_vector_type` |
 | `ExtQual` | I | C | pairs [base TypeId, ext-qual word] | reserved: address spaces etc. (M7+) |
 
@@ -521,7 +521,16 @@ where `inner` is the declarator text so far (empty at the top):
 Diagnostics print `'T'` and add ` (aka 'U')` when `U`, the printed
 canonical type (`full_scope`), differs textually from `T` (clang's
 `desugarForDiagnostic`; deviations, if any, are recorded in spec/diag.md
-§11). Representative goldens (each a unit test, checked against clang 19):
+§11). A dependent type whose canonical form would name
+`type-parameter-D-I` gets no `aka` (clang's `Desugar` keeps the
+parameter's name, which the canonical printer cannot). A pair of class
+template specializations in a `%diff` argument prints the template diff
+instead (spec/diag.md §6.1). An implicitly instantiated class template
+specialization (the `Record` behind the sugar) prints its canonical
+arguments without trailing defaults, as clang prints a
+`ClassTemplateSpecializationDecl`: `pr<int, typename id<int>::type>`
+is `'pr<int, typename id<int>::type>' (aka 'pr<int, int>')`, and an
+instantiation note names `'X<int>'` for `X<I>`. Representative goldens (each a unit test, checked against clang 19):
 
 | type | prints |
 |---|---|
@@ -631,9 +640,12 @@ stores ids.
   Comparison category types are made by sema, not written, and clang
   prints them as `'std::strong_ordering'`. kiln gives them `Elaborated`
   sugar with the enclosing non-inline namespaces as the qualifier
-  (`scoped_class_type`, WP-082). A diagnostic's `aka` still shows the
-  inline namespace (`'std::S' (aka 'std::__1::S')`), whereas clang
-  suppresses inline namespaces there (printer follow-up).
+  (`scoped_class_type`, WP-082). A type's scope skips inline
+  namespaces as clang's `AppendScope` does (`SemaNames::write_scope`;
+  clang's redundancy lookup is not done), so the canonical `aka` is
+  `'std::S'` too and is dropped. A declaration's own qualified name
+  (`qualified_decl_name`, clang `printQualifiedName`) keeps them
+  (`SemaNames::for_decls`).
 - **R5 A thread-safe `&self` interner (sharded locks, as
   `kiln_lex::Interner`).** Sema is single-threaded per TU (spec/ast.md
   §13 Q8); parallelism is across TUs. A lock per type construction costs

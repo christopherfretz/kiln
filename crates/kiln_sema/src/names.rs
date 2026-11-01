@@ -19,17 +19,29 @@ pub struct SemaNames<'s> {
     ast: &'s Ast,
     /// Where unnamed tags' locations resolve (`(lambda at F:L:C)`).
     sources: Option<&'s kiln_source::SourceManager>,
+    /// Printing a declaration's own qualified name (clang
+    /// `printQualifiedName`), which keeps inline namespaces; a type's
+    /// scope (`AppendScope`) skips them.
+    decl_scope: bool,
 }
 
 impl<'s> SemaNames<'s> {
     /// Names for `sema`'s AST.
     pub fn new(sema: &'s Sema<'_, '_>) -> Self {
-        SemaNames { ast: &sema.ast, sources: Some(sema.diags.sm()) }
+        SemaNames { ast: &sema.ast, sources: Some(sema.diags.sm()), decl_scope: false }
     }
 
     /// Names for `ast` alone.
     pub fn of_ast(ast: &'s Ast) -> Self {
-        SemaNames { ast, sources: None }
+        SemaNames { ast, sources: None, decl_scope: false }
+    }
+
+    /// These names for a declaration's own qualified name: inline
+    /// namespaces are kept.
+    #[must_use]
+    pub fn for_decls(mut self) -> Self {
+        self.decl_scope = true;
+        self
     }
 
     fn simple(&self, d: DeclId) -> Option<String> {
@@ -64,6 +76,13 @@ impl<'s> SemaNames<'s> {
         while let Some(c) = cur {
             let n = self.ast.decls.get(c);
             match n.kind() {
+                DeclKind::Namespace
+                    if !self.decl_scope
+                        && self
+                            .ast
+                            .decls
+                            .namespace(self.ast.first(c))
+                            .is_some_and(kiln_ast::decl::NamespaceData::is_inline) => {}
                 DeclKind::Namespace => {
                     chain.push(self.simple(c).unwrap_or_else(|| "(anonymous namespace)".into()));
                 }

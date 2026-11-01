@@ -13,6 +13,7 @@ use kiln_lex::{Punct, TokKind};
 use kiln_sema::decl::AttrArg;
 use kiln_source::symbol::Symbol;
 
+use crate::expr::prec;
 use crate::keywords::Kw;
 use crate::parser::Parser;
 
@@ -161,7 +162,11 @@ impl Parser<'_, '_> {
                 name = n;
                 self.bump();
             }
-            let args = self.parse_attr_args(name);
+            let args = if scope.is_none() && self.s.ast.symbols().as_str(name) == "assume" {
+                self.parse_assume_arg(name)
+            } else {
+                self.parse_attr_args(name)
+            };
             if let Some(l) = self.eat(Punct::Ellipsis) {
                 self.unsupported("attribute pack expansions", l);
             }
@@ -246,6 +251,33 @@ impl Parser<'_, '_> {
         }
         self.expect_closing(Punct::RParen, Punct::LParen, open);
         ok.then_some(args)
+    }
+
+    /// The argument of `[[assume(conditional-expression)]]`
+    /// ([dcl.attr.assume]/1; clang's `ParseCXXAssumeAttributeArg`). An
+    /// expression that is not a conditional-expression (a comma or an
+    /// assignment at the top) is diagnosed at its operator and the
+    /// attribute is dropped (`None`). The expression is converted to
+    /// `bool` by `Sema::act_on_attributed_stmt` once the statement is known.
+    fn parse_assume_arg(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
+        let Some(open) = self.eat(Punct::LParen) else { return Some(Vec::new()) };
+        let Some(c) = self.parse_cast_expr().and_then(|l| self.parse_rhs_from(l, prec::COND))
+        else {
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        };
+        if !self.at(Punct::RParen) && !self.at(Punct::RSquare) {
+            if let Some(full) = self.parse_rhs_from(c, prec::COMMA) {
+                let loc = self.s.expr_loc(full);
+                let text = self.s.ast.symbols().as_str(name).to_owned();
+                let d = self.s.diag(DiagId::parse_assume_attr_expects_cond_expr, loc).arg(text);
+                self.emit(d);
+            }
+            self.skip_until(&[Punct::RParen], false, true);
+            return None;
+        }
+        self.expect_closing(Punct::RParen, Punct::LParen, open);
+        Some(vec![AttrArg::Expr(c)])
     }
 
     /// `alignas ( type-id )` / `alignas ( constant-expression )` ([dcl.align]).

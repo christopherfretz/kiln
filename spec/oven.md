@@ -161,6 +161,27 @@ the evaluator's flattened type table.
   ([basic.start.static]/2): manifestly constant-evaluated, but silent and
   not recorded, like `try_fold`. Codegen uses it for the initializers it
   emits as constants (spec/codegen.md).
+- `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
+  `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
+  `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
+  that has an initializer (or a known value) but is not usable in constant
+  expressions (a `const double`, a `const _Atomic(int)`, a `const` class,
+  array or pointer) is read as if it were (`VarInfo::lax`), except one
+  whose type contains a `mutable` member (the Oven has no "read of mutable
+  member" check yet, so such variables are excluded wholesale). Lax mode
+  applies only to an outermost evaluation (nested in a bridge callback it
+  is plain `try_fold`). Variables resolved under lax mode are recorded in
+  `lax_globals` and reset to unresolved when the next outermost
+  evaluation runs in the other mode, and lax-mode calls are never
+  memoized, so a lax read never leaks into a strict evaluation. Codegen
+  uses it for its non-initializer fold candidates; sema uses it
+  (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
+  (spec/sema.md §4.2).
+- Freezing a pointer or reference into a constant rejects a pointer to an
+  object of automatic storage duration (a static allocation whose origin
+  is a local variable read as a global): "pointer to '…' is not a
+  constant expression" (or "reference to …" when the frozen type is a
+  reference; clang `note_constexpr_non_global`), with "declared here".
 
 ### Manifestly constant-evaluated context — normative (WP-063)
 `__builtin_is_constant_evaluated()` ([expr.const]/20, [meta.const.eval])
@@ -295,6 +316,11 @@ literal is one instruction and one step, not an interpreted loop.
   `always_lock_free` is false and `is_lock_free` is not a constant.
   `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops. Every other
   `AtomicExpr` is not a constant (clang's generic note).
+- **`__builtin_va_arg` (WP-171):** a `VAArgExpr` is never a constant: the
+  generic "subexpression not valid in a constant expression" note at the
+  expression (clang has no `VisitVAArgExpr`), as for `va_start`/`va_end`/
+  `va_copy`. It counts as a side effect for `__builtin_constant_p`-style
+  folding (`has_side_effects`).
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
   constant expression", as clang 19): `__builtin_signbit`, the six
   ordered comparisons, the math functions; `__builtin_unreachable` when
@@ -1059,6 +1085,42 @@ cs[2]` member); `ensure_body` defines implicit virtual destructors.
   constructed reports the lifetime note where clang reports CWG1517
   (`no_dynamic` keys on the running constructor's object and class).
 
+### Vectors — Landed (WP-173)
+GNU `vector_size` and clang `ext_vector_type` values are stored as an
+array of their lanes (`TyKind::Array`, `Types::is_vector`). The array is
+padded to the vector's own size and alignment, so an `ext_vector_type(3)`
+occupies 4 lanes and the 4th is indeterminate. A vector of `bool` (bits)
+stays `Opaque`: it has no value model yet. The operations are in
+`compile/vector.rs`. The accept/reject boundary is clang 19's
+`VectorExprEvaluator`:
+- **Folded:** arithmetic, bitwise, shift and comparison operators, lane
+  by lane, with scalars splatted. A comparison yields -1/0 lanes, but a
+  true lane of vector `&&`/`||` folds to **1**. This is a clang 19 quirk:
+  at run time the lane is -1. Also folded:
+  - unary `+ - ~ !`;
+  - casts between vectors and lax casts to and from scalars of the same
+    size, as bit reinterpretations through `compile/bitcast.rs`;
+  - `__builtin_convertvector`, lane by lane;
+  - compound assignment;
+  - `?:` with a scalar condition;
+  - `__builtin_bit_cast` to and from vectors;
+  - multi-element compound literals and list-initialization, including
+    brace-elided members.
+- **Diagnosed per lane:** signed overflow, division by zero and shift
+  counts carry the usual notes, with the vector type in the operand text
+  (`notes.rs` `vector_suffix`). An uninitialized vector read is
+  diagnosed.
+- **Rejected with "subexpression not valid in a constant expression"**
+  at the expression's begin, as clang 19 does: a subscript `v[i]`,
+  `__builtin_reduce_*`, and a bit cast from a vector to a scalar of a
+  different class.
+- **Rejected without a note** (clang 19 fails silently): a `?:` with a
+  vector condition, and ext-vector element access `.x`.
+- clang 20+ folds subscripts, reductions and vector-condition `?:`. The
+  boundary moves with the oracle at the clang 22 switch (M3 to M4).
+- Codegen emits folded vector values as `<N x T>` constants
+  (`kiln_codegen/src/consts.rs`).
+
 ### Reflection runtime (M6)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's entity tables;
   it is a scalar in memory (8 bytes) with shadow kind `Reflection`.
@@ -1079,7 +1141,7 @@ pub trait SemaBridge {
     fn ast(&self) -> &Ast;                                        // re-borrowed per use, never held
     fn ensure_body(&mut self, f: DeclId, oven: &mut Oven) -> Option<StmtId>; // instantiates / defines implicit members if needed; may evaluate (nested)
     fn ensure_layout(&mut self, record: DeclId) -> &RecordLayout; // via kiln_abi
-    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32);  // via kiln_abi: size/align of a type with no value model (vector types, WP-151); default (0, 1)
+    fn opaque_size_align(&mut self, ty: QualType) -> (u64, u32);  // via kiln_abi: size/align of a vector type, whose lanes the Oven lays out inside it (WP-151, WP-173); default (0, 1), so every bridge that folds vectors (sema's, codegen's prepass) must implement it
     fn final_overrider(&mut self, most_derived: DeclId, at: SubobjectId, method: DeclId)
         -> Option<(DeclId, SubobjectId)>;                         // spec/sema-class.md §3.5
     fn subobjects(&mut self, record: DeclId) -> &[Subobject];     // indexed by SubobjectId
@@ -1094,6 +1156,7 @@ impl Oven {
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn is_constant_initialized(&mut self, bridge: &mut dyn SemaBridge, var: DeclId) -> bool;
     pub fn fold_constant_init(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) -> Option<ConstValueId>;
+    pub fn fold_rvalue(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn stats(&self) -> &EvalStats;
     pub fn footprint(&self) -> usize;
     pub fn disassemble(&self) -> String;                          // debugging aid
@@ -1278,6 +1341,14 @@ evaluates.
 **Landed (WP-140): `PredefinedExpr`.** An lvalue of its `StringLiteral`
 child: the same static string object as the literal
 (`tests/conformance/dcl.fct.def.general/predefined-constexpr.cpp`).
+
+**Landed (WP-160): `[[assume(e)]]`.** Each assumption that sema did not
+mark `ASSUME_IGNORED` is evaluated when reached, inside its own
+temporaries scope. If it is false, evaluation fails with clang's
+`assumption evaluated to false` note at the assumption's expression
+location ([dcl.attr.assume]/1, [expr.const]/5.8). An assumption that has
+possible side effects is never evaluated, as in clang's `EvaluateStmt`
+(`tests/conformance/expr.const/assume-false.cpp`).
 
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:

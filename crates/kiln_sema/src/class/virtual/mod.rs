@@ -18,8 +18,8 @@ mod graph;
 mod used;
 
 use kiln_ast::decl::{DeclFlags, FnSpec, FnStorage};
-use kiln_ast::names::DeclName;
-use kiln_ast::types::{ExcSpec, FuncProto, Quals, TypeFlags, TypeView};
+use kiln_ast::names::{DeclName, DeclNameKind};
+use kiln_ast::types::{ExcSpec, FuncProto, NoexceptValue, Quals, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ListId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -28,6 +28,7 @@ use kiln_source::fx::FxHashSet;
 use crate::Sema;
 use crate::conv::bases::{self, BaseSearch};
 use crate::declspec::{DeclSpec, Declarator};
+use crate::type_diff::DiffArgs as _;
 
 pub(crate) use abstract_::AbstractUse;
 pub(crate) use graph::ensure_virtuals;
@@ -394,8 +395,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_override_return_differs, at)
                 .arg(nm)
-                .arg(self.ty_arg(nr))
-                .arg(self.ty_arg(or))
+                .diff_args(self, nr, or)
                 .with_note(self.overridden_note(o));
             self.emit(msg);
             return false;
@@ -424,8 +424,7 @@ impl Sema<'_, '_> {
                     let msg = self
                         .diag(DiagId::sema_covariant_return_not_derived, at)
                         .arg(nm)
-                        .arg(self.ty_arg(nr))
-                        .arg(self.ty_arg(or))
+                        .diff_args(self, nr, or)
                         .with_note(self.overridden_note(o));
                     self.emit(msg);
                     return false;
@@ -457,8 +456,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_covariant_return_quals, at)
                 .arg(nm)
-                .arg(self.ty_arg(nr))
-                .arg(self.ty_arg(or))
+                .diff_args(self, nr, or)
                 .with_note(self.overridden_note(o));
             self.emit(msg);
             return false;
@@ -468,8 +466,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_covariant_return_more_qualified, at)
                 .arg(nm)
-                .arg(self.ty_arg(nr))
-                .arg(self.ty_arg(or))
+                .diff_args(self, nr, or)
                 .with_note(self.overridden_note(o));
             self.emit(msg);
             return false;
@@ -690,25 +687,58 @@ impl Sema<'_, '_> {
     /// `exception specification of overriding function is more lax than
     /// base version` ([except.spec]/8): a potentially-throwing overrider
     /// of a non-throwing virtual function. Checked once the class's
-    /// complete-class contexts (and so `noexcept(expr)`) are parsed.
+    /// complete-class contexts (and so `noexcept(expr)`) are parsed,
+    /// which is where clang's delayed checks run
+    /// (`CheckOverridingFunctionExceptionSpec`,
+    /// `CheckExceptionSpecSubset`): a destructor of a dependent class is
+    /// not checked (its implicit specification exists only in the
+    /// instantiations); otherwise both specifications are resolved (the
+    /// base's first: implicit, defaulted and uninstantiated ones are
+    /// computed now), and a value-dependent one passes (the
+    /// instantiation checks it). No check without exceptions.
     pub(crate) fn check_override_exc_spec(&mut self, m: DeclId) {
-        let mty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
-        let Some(mp) = self.ast.types.proto(mty) else { return };
-        let mexc = self.ast.types.exc_spec(mp);
-        if mexc.is_nothrow() || matches!(mexc, ExcSpec::Deferred(_)) {
+        if !self.exceptions || self.unparsed_exc.contains(&m) {
+            return;
+        }
+        let md = self.ast.decls.get(m);
+        let mloc = md.loc();
+        if md.name().kind() == DeclNameKind::Destructor
+            && (md.has(DeclFlags::DEPENDENT_CTX)
+                || md.ctx().is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)))
+        {
             return;
         }
         let os: Vec<DeclId> = overridden(&self.ast, m).collect();
         for o in os {
-            let oty = self.ast.decls.get(o).ty().unwrap_or(QualType::ERROR);
-            let Some(op) = self.ast.types.proto(oty) else { continue };
-            if self.ast.types.exc_spec(op).is_nothrow() {
+            let oloc = self.ast.decls.get(o).loc();
+            self.resolve_exception_spec(o, oloc);
+            self.resolve_exception_spec(m, mloc);
+            let (Some(oexc), Some(mexc)) = (self.resolved_exc(o), self.resolved_exc(m)) else {
+                continue;
+            };
+            if mexc.is_nothrow() {
+                return;
+            }
+            if oexc.is_nothrow() {
                 let msg = self
-                    .diag(DiagId::sema_override_exception_spec, self.ast.decls.get(m).loc())
+                    .diag(DiagId::sema_override_exception_spec, mloc)
                     .with_note(self.overridden_note(o));
                 self.emit(msg);
                 return;
             }
+        }
+    }
+
+    /// The exception specification of function `f` when it is known and
+    /// not value-dependent (clang `EST_DependentNoexcept`).
+    fn resolved_exc(&self, f: DeclId) -> Option<ExcSpec> {
+        let ty = self.ast.decls.get(f).ty()?;
+        let p = self.ast.types.proto(ty)?;
+        match self.ast.types.exc_spec(p) {
+            ExcSpec::Deferred(_)
+            | ExcSpec::DependentNoexcept(_)
+            | ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. } => None,
+            e => Some(e),
         }
     }
 }

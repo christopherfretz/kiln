@@ -12,6 +12,7 @@ use kiln_source::Loc;
 use super::CmpUsage;
 use crate::Sema;
 use crate::overload::oper::rewritten_of;
+use crate::type_diff::DiffArgs as _;
 
 /// The kind of a defaulted comparison (clang `DefaultedComparisonKind`);
 /// the discriminant is the `{0:equality|three-way|equality|relational}`
@@ -276,8 +277,7 @@ impl Sema<'_, '_> {
                     let d = self
                         .diag(DiagId::sema_defaulted_cmp_param_mismatch, floc)
                         .arg(k.index())
-                        .arg(self.ty_arg(kt))
-                        .arg(self.ty_arg(pty));
+                        .diff_args(self, kt, pty);
                     self.emit(d);
                     return true;
                 }
