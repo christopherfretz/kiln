@@ -265,8 +265,11 @@ the target:
    through `diag_if_reachable`. An out-of-range constant assigned to a
    bit-field is skipped (clang's -Wbitfield-constant-conversion is not
    implemented). Not implemented: -Wbitfield-constant-conversion,
-   `-Wnull-conversion`, `-Wimplicit-int-conversion` and the other
-   conversion warnings; non-dependent full-expressions are not
+   `-Wnull-conversion` (it waits on `__null`, which glibc's and the
+   resource headers' `NULL` expands to and kiln does not parse yet; its
+   check belongs in `impcast.rs` `check_conversion`, keyed on a
+   `GNUNullExpr`/`nullptr_t` source converted to a non-pointer),
+   `-Wimplicit-int-conversion` and the other conversion warnings; non-dependent full-expressions are not
    re-checked per instantiation.
 4. The deprecated conversion from a string literal to `char*` is rejected,
    as C++11 and later require. clang accepts it with a warning under
