@@ -237,15 +237,15 @@ impl Sema<'_, '_> {
     /// `_Complex T` for the type `base` named by the other specifiers of
     /// `ds` (clang `DeclSpec::Finish`: a real floating or integer type).
     fn complex_of_declspec(&mut self, ds: &DeclSpec, base: QualType, cloc: Loc) -> QualType {
-        let ok = match ds.base {
+        let ok = matches!(
+            ds.base,
             TypeSpecKind::None
-            | TypeSpecKind::Int
-            | TypeSpecKind::Char
-            | TypeSpecKind::Float
-            | TypeSpecKind::Double
-            | TypeSpecKind::Float128 => true,
-            _ => false,
-        };
+                | TypeSpecKind::Int
+                | TypeSpecKind::Char
+                | TypeSpecKind::Float
+                | TypeSpecKind::Double
+                | TypeSpecKind::Float128
+        );
         if !ok {
             if !ds.invalid && !self.is_error_type(base) {
                 // clang `DeclSpec::getSpecifierName(TST_typename)`.

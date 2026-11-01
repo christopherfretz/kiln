@@ -513,15 +513,15 @@ impl Cg<'_> {
         let im = self.bin(BinOp::FAdd, fl, ad, bc);
         let cont = self.f.fir.create_block();
         let inan = self.f.fir.create_block();
-        let libb = self.f.fir.create_block();
+        let lib_blk = self.f.fir.create_block();
         let orig = self.f.fir.cur().expect("insert point");
         let rnan = self.fcmp(FloatPredicate::Uno, re, re);
         self.unlikely_br(rnan, inan, cont)?;
         self.emit_block(inan, false);
         let inan_b = self.f.fir.cur().expect("insert point");
         let inanv = self.fcmp(FloatPredicate::Uno, im, im);
-        self.unlikely_br(inanv, libb, cont)?;
-        self.emit_block(libb, false);
+        self.unlikely_br(inanv, lib_blk, cont)?;
+        self.emit_block(lib_blk, false);
         let name = match self.m.types.float_width(t) {
             Some(16) => "__mulhc3",
             Some(32) => "__mulsc3",
@@ -530,13 +530,17 @@ impl Cg<'_> {
             _ => "__multc3",
         };
         let (lr, li) = self.cx_libcall(name, [a, b, c, d], o.ty)?;
-        let lib_b = self.f.fir.cur().expect("insert point");
+        let lib_end = self.f.fir.cur().expect("insert point");
         self.br(cont);
         self.emit_block(cont, false);
-        let rp =
-            self.f.fir.push(Op::Phi { ty: t, inc: vec![(re, orig), (re, inan_b), (lr, lib_b)] }, t);
-        let ip =
-            self.f.fir.push(Op::Phi { ty: t, inc: vec![(im, orig), (im, inan_b), (li, lib_b)] }, t);
+        let rp = self
+            .f
+            .fir
+            .push(Op::Phi { ty: t, inc: vec![(re, orig), (re, inan_b), (lr, lib_end)] }, t);
+        let ip = self
+            .f
+            .fir
+            .push(Op::Phi { ty: t, inc: vec![(im, orig), (im, inan_b), (li, lib_end)] }, t);
         Ok((rp, ip))
     }
 

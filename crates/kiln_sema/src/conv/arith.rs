@@ -74,6 +74,38 @@ fn compound_lhs_type(s: &Sema<'_, '_>, l: ExprId, lt: QualType) -> QualType {
     promoted_type(s, lt, bit_field_width(s, l)).unwrap_or(lt)
 }
 
+/// The enumeration operand errors of the usual arithmetic conversions
+/// (C++20 [expr.arith.conv]/1.2–1.3, clang's wording): an unscoped
+/// enumeration with a floating type, or two different enumerations.
+fn check_enum_operands(
+    s: &Sema<'_, '_>,
+    lt0: QualType,
+    rt0: QualType,
+    kind: ArithConvKind,
+) -> Result<(), ConvError> {
+    let ca = kind == ArithConvKind::CompoundAssign;
+    let (le, re) = (is_unscoped_enum(s, lt0), is_unscoped_enum(s, rt0));
+    let (lf, rf) = (s.ast.types.is_floating(lt0), s.ast.types.is_floating(rt0));
+    if (!ca && le && rf) || (re && lf) {
+        return Err(ConvError::new(
+            DiagId::sema_arith_enum_float,
+            vec![
+                kind.select().into(),
+                if le { "1" } else { "0" }.into(),
+                s.ty_arg(lt0),
+                s.ty_arg(rt0),
+            ],
+        ));
+    }
+    if !ca && le && re && !s.ast.types.same_unqualified(lt0, rt0) {
+        return Err(ConvError::new(
+            DiagId::sema_arith_enum_enum,
+            vec![kind.select().into(), s.ty_arg(lt0), s.ty_arg(rt0)],
+        ));
+    }
+    Ok(())
+}
+
 /// The usual arithmetic conversions ([expr.arith.conv]) on the operands
 /// `l` and `r` of an operator of kind `kind`: the usual unary
 /// conversions, then conversion to the common type, which is returned
@@ -111,25 +143,7 @@ pub fn usual_arithmetic_conversions_kind(
         return Ok((l, r, QualType::ERROR));
     }
     let ca = kind == ArithConvKind::CompoundAssign;
-    let (le, re) = (is_unscoped_enum(s, lt0), is_unscoped_enum(s, rt0));
-    let (lf, rf) = (s.ast.types.is_floating(lt0), s.ast.types.is_floating(rt0));
-    if (!ca && le && rf) || (re && lf) {
-        return Err(ConvError::new(
-            DiagId::sema_arith_enum_float,
-            vec![
-                kind.select().into(),
-                if le { "1" } else { "0" }.into(),
-                s.ty_arg(lt0),
-                s.ty_arg(rt0),
-            ],
-        ));
-    }
-    if !ca && le && re && !s.ast.types.same_unqualified(lt0, rt0) {
-        return Err(ConvError::new(
-            DiagId::sema_arith_enum_enum,
-            vec![kind.select().into(), s.ty_arg(lt0), s.ty_arg(rt0)],
-        ));
-    }
+    check_enum_operands(s, lt0, rt0, kind)?;
     let l = if ca { l } else { usual_unary_conversions(s, l) };
     let r = usual_unary_conversions(s, r);
     let (lt, rt) = (super::strip_cv(s, ty(s, l)), super::strip_cv(s, ty(s, r)));
@@ -256,15 +270,15 @@ fn complex_conversions(
         let common = int_common(s, le, re);
         let ct = s.ast.types.complex(common);
         let conv = |s: &mut Sema<'_, '_>, e: ExprId, t: QualType, complex: bool| {
-            let e = if !s.ast.types.same_unqualified(t, common) {
+            let e = if s.ast.types.same_unqualified(t, common) {
+                e
+            } else {
                 let (ck, to) = if complex {
                     (CastKind::IntegralComplexCast, ct)
                 } else {
                     (CastKind::IntegralCast, common)
                 };
                 cast_to(s, ck, e, to, None)
-            } else {
-                e
             };
             if complex { e } else { cast_to(s, CastKind::IntegralRealToComplex, e, ct, None) }
         };

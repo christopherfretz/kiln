@@ -384,10 +384,7 @@ fn standard_conversion_non_atomic(
     } else if vk.is_glvalue() && !types.is_void(from) {
         // C11 6.3.2.1p2: the value of an `_Atomic(T)` lvalue is a `T`
         // (clang's `DefaultLvalueConversion` adds `AtomicToNonAtomic`).
-        let cur = match types.as_atomic(from) {
-            Some(v) => v,
-            None => from,
-        };
+        let cur = types.as_atomic(from).unwrap_or(from);
         (FirstStep::LValueToRValue, strip_cv(s, cur))
     } else {
         (FirstStep::Identity, from)
@@ -406,11 +403,7 @@ fn standard_conversion_non_atomic(
     };
     // A bit-field width only matters before the lvalue transformation
     // drops it; it stays attached to the value.
-    let bw = if first == FirstStep::LValueToRValue || first == FirstStep::Identity {
-        bit_field
-    } else {
-        None
-    };
+    let bw = bit_field.filter(|_| matches!(first, FirstStep::LValueToRValue | FirstStep::Identity));
     let types = &s.ast.types;
     let (second, conv) = if types.same_unqualified(cur, to) {
         (SecondStep::Identity, cur)
