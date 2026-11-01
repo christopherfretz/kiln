@@ -1871,7 +1871,10 @@ it needs two things:
 
 That is an ABI-free, preprocessor-wide change with no effect on codegen.
 The `!srcloc` value only labels inline-asm backend diagnostics, so it is
-left for a pp/source WP.
+left for a pp/source WP. WP-182 re-evaluated this: kiln_source and
+kiln_pp still have no clang-compatible offset space (expansions are
+recorded per `ExpansionInfo`, not as a running offset), so the deferral
+stands.
 
 ### 7.8 Landed (WP-140): predefined identifiers (`predefined.rs`)
 `act_on_predefined_expr` is clang's `BuildPredefinedExpr`: the enclosing
