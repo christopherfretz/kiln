@@ -3554,6 +3554,7 @@ impl Sema<'_, '_> {
         // A variable names itself, even when declared inside the
         // initializer of another entity (a lambda body).
         let entity = self.init_entity.take();
+        let braced = matches!(init, Initializer::List(_));
         let e = self.perform_init(ty, init, loc, direct);
         self.init_entity = entity;
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
@@ -3583,11 +3584,39 @@ impl Sema<'_, '_> {
         {
             self.ast.decls.set_ty(v, ety);
         }
+        // So does a reference to one bound to a braced list's temporary
+        // (P0388R4; clang `InitializationSequence::Perform` updates the
+        // declared type: `const int (&h)[] = {1, 2}` is a `const int
+        // (&)[2]`, while `const int (&r)[] = arr` keeps its type).
+        if braced && let Some(t) = self.ref_to_bound_array(ty, ety) {
+            self.ast.decls.set_ty(v, t);
+        }
         if spec.is_constexpr() {
             self.check_constexpr_init(v, e);
         } else if !spec.is_inline() && self.is_in_class_static(self.init_written_in(v)) {
             self.check_in_class_static_init(v, e);
         }
+    }
+
+    /// `ty` with its referenced array of unknown bound replaced by `ety`,
+    /// the bound array type of the temporary the reference binds, if `ty`
+    /// is such a reference.
+    fn ref_to_bound_array(&mut self, ty: QualType, ety: QualType) -> Option<QualType> {
+        let t = &self.ast.types;
+        let rvalue = match t.canonical_view(ty) {
+            TypeView::LValueRef(p) if matches!(t.canonical_view(p), TypeView::IncompleteArray(_)) => {
+                false
+            }
+            TypeView::RValueRef(p) if matches!(t.canonical_view(p), TypeView::IncompleteArray(_)) => {
+                true
+            }
+            _ => return None,
+        };
+        if !t.is_array(ety) || t.array_size(ety).is_none() {
+            return None;
+        }
+        let t = &mut self.ast.types;
+        Some(if rvalue { t.rvalue_ref_to(ety) } else { t.lvalue_ref_to(ety) })
     }
 
     /// The declaration whose initializer `v` carries: an instantiated

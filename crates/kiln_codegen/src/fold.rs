@@ -503,7 +503,11 @@ impl Collect<'_> {
 }
 
 /// Whether `e` (through parentheses and no-op casts) names a variable of const,
-/// non-volatile type (clang `checkVarTypeForConstantEmission`).
+/// non-volatile type, or a reference to one (clang
+/// `checkVarTypeForConstantEmission`: a reference whose referent type is
+/// const-emittable is `CEK_AsValueOrReference`, so `tryEmitAsConstant`
+/// folds its value when the referent is constant; `const int& a = {}` at
+/// namespace scope reads as `0`, WP-233).
 pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
     // Through parentheses and no-op casts (the xvalue of an implicitly
     // movable `return x;`): clang's `VisitCastExpr` visits a `CK_NoOp`
@@ -524,7 +528,11 @@ pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
     if ast.decls.get(d).kind() != DeclKind::Var {
         return false;
     }
-    let Some(ty) = ast.decls.get(d).ty() else { return false };
+    let Some(mut ty) = ast.decls.get(d).ty() else { return false };
+    if ast.types.is_reference(ty) {
+        let Some(p) = ast.types.pointee(ty) else { return false };
+        ty = p;
+    }
     let q = ast.types.effective_quals(ty);
     q.is_const() && !q.is_volatile()
 }
