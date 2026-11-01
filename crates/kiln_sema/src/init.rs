@@ -988,6 +988,10 @@ impl Sema<'_, '_> {
             if pos < l.items.len() {
                 self.excess(ty, &l.items[pos]);
             }
+            if self.in_template() && l.items.iter().any(|i| !i.designator.is_empty()) {
+                // Instantiation rebuilds a designated list as written.
+                self.note_syntactic_list(e, l);
+            }
             return e;
         }
         if self.is_vector_type(ty) {
