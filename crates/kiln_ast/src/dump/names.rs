@@ -924,6 +924,13 @@ impl<'a> AstNames<'a> {
                             self.expr(index, d, out);
                             out.push(']');
                         }
+                        crate::expr::Designator::Range { first, last, .. } => {
+                            out.push('[');
+                            self.expr(first, d, out);
+                            out.push_str(" ... ");
+                            self.expr(last, d, out);
+                            out.push(']');
+                        }
                     }
                 }
                 let init = exprs.designated_init(e);

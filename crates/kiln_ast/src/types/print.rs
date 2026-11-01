@@ -356,7 +356,35 @@ pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<Stri
     if canon.contains("type-parameter-") && !written.contains("type-parameter-") {
         return None;
     }
+    // clang's `desugarForDiagnostic` steps through an `ElaboratedType`
+    // without asking for an `aka`: `'struct S'` is not `'struct S' (aka
+    // 'S')`.
+    if without_tag_keywords(&written) == canon {
+        return None;
+    }
     (canon != written && without_exc_specs(&canon) != without_exc_specs(&written)).then_some(canon)
+}
+
+/// `s` with the elaborated-type keywords `struct `, `class `, `union `
+/// and `enum ` removed where they begin a word.
+fn without_tag_keywords(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    'outer: while !rest.is_empty() {
+        let at_word = out.chars().next_back().is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+        if at_word {
+            for k in ["struct ", "class ", "union ", "enum "] {
+                if let Some(r) = rest.strip_prefix(k) {
+                    rest = r;
+                    continue 'outer;
+                }
+            }
+        }
+        let Some(c) = rest.chars().next() else { break };
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 /// `s` with every printed exception specification (` noexcept`,
