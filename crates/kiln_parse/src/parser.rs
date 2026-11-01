@@ -118,6 +118,13 @@ pub struct Parser<'a, 'sm> {
     /// declaration after it ([class.access]/7), taken by
     /// `parse_simple_declaration`.
     pub(crate) template_delay_level: Option<usize>,
+    /// The leading attribute-specifier-seq of a statement, parsed before
+    /// it is known to be a declaration: the declaration's decl-specifiers
+    /// take it ([dcl.pre]/5, [dcl.attr.grammar]/5).
+    pub(crate) stmt_attrs: Vec<kiln_ast::AttrId>,
+    /// The attributes `parse_decl_specifiers` starts its seq with (a
+    /// declaration statement's leading ones).
+    pub(crate) lead_decl_attrs: Vec<kiln_ast::AttrId>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -199,6 +206,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             halt: Cell::new(None),
             decltype_scope: None,
             template_delay_level: None,
+            stmt_attrs: Vec::new(),
+            lead_decl_attrs: Vec::new(),
         };
         p.handle_events(0);
         p

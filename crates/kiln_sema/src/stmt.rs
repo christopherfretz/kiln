@@ -103,15 +103,21 @@ impl Sema<'_, '_> {
     /// Enters a scope of `kind` (block scopes for compound statements and
     /// the implicit scopes of selection/iteration statements).
     pub fn push_scope(&mut self, kind: ScopeKind) {
-        self.scopes.push(Scope::new(kind, None));
+        let mut s = Scope::new(kind, None);
+        s.errors = self.diags.error_count();
+        self.scopes.push(s);
     }
 
-    /// Leaves the innermost scope.
+    /// Leaves the innermost scope. A function scope's unused variables
+    /// were diagnosed at the end of its body.
     pub fn pop_scope(&mut self) {
         if self.scopes.len() > 1
             && let Some(s) = self.scopes.pop()
         {
             self.apply_nrvo(&s);
+            if s.kind != ScopeKind::Function {
+                self.diagnose_unused_locals(&s);
+            }
         }
     }
 
@@ -939,7 +945,9 @@ impl Sema<'_, '_> {
     }
 
     /// Ends the body: undefined labels and fall-off-the-end checks.
-    pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) {
+    /// Leaves the function-body scope ahead of the body's end checks:
+    /// marks its NRVO candidate and diagnoses its unused variables.
+    fn leave_function_scope(&mut self) {
         // The function scope's own NRVO candidate is marked before the
         // returns are re-checked (clang exits the body scope first).
         if let Some(s) = self.scopes.last_mut()
@@ -952,6 +960,22 @@ impl Sema<'_, '_> {
                 self.builder().set_nrvo(v);
             }
         }
+        // clang leaves the body scope (`ActOnPopScope`: the unused
+        // variables) before `ActOnFinishFunctionBody`.
+        if let Some(s) = self.scopes.last()
+            && s.kind == ScopeKind::Function
+        {
+            let s = std::mem::replace(
+                self.scopes.last_mut().expect("function scope"),
+                Scope::new(ScopeKind::Function, None),
+            );
+            self.diagnose_unused_locals(&s);
+            *self.scopes.last_mut().expect("function scope") = s;
+        }
+    }
+
+    pub(crate) fn end_function_body(&mut self, body: StmtId, rbrace: Loc) {
+        self.leave_function_scope();
         // No return statement: the placeholder deduces `void`
         // ([dcl.spec.auto.general]/10); a templated function's when it
         // is instantiated (clang skips a dependent context).

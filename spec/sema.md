@@ -1376,6 +1376,35 @@ for them.
     location gets clang's `expanded from macro` note (spec/diag.md §8.4).
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
+- **Unused variables (WP-203; clang `ShouldDiagnoseUnusedDecl` /
+  `DiagnoseUnusedDecl`)**: `unused variable 'x'` [-Wunused-variable, in
+  -Wunused and so -Wall; off by default] at the variable's location.
+  - When a block scope is popped (`pop_scope`; the function-body scope
+    from `end_function_body`, before the queued runtime warnings, as
+    clang leaves the body scope before `ActOnFinishFunctionBody`), its
+    unreferenced local variables are diagnosed sorted by location
+    (`unused_var.rs`, `diagnose_unused_locals`), unless an error was
+    reported since the scope was entered (`Scope::errors`, clang
+    `hasUnrecoverableErrorOccurred`) or the scope belongs to an
+    instantiation.
+  - Not diagnosed: an invalid or unnamed variable; one referenced or
+    used (`sizeof(x)` counts); one marked `[[maybe_unused]]` /
+    `__attribute__((unused))`, or whose typedef or class is; a `_`
+    placeholder with automatic storage; a variable outside a function,
+    `extern` or a handler's exception variable; one of dependent or
+    incomplete type; one whose (array element) class has a non-trivial
+    destructor, or is initialized by a non-trivial constructor call that
+    is not a constant initialization, or by a type-dependent
+    initializer. A reference lifetime-extending a temporary is judged by
+    the temporary's type.
+  - A variable of dependent type is diagnosed as its instantiation is
+    created (`diagnose_unused_inst_var`, from `subst` `var_decl`, clang
+    `TemplateDeclInstantiator::VisitVarDecl`) by the pattern's
+    referenced flag, with the instantiation note.
+  - Gaps: -Wunused-but-set-variable, -Wunused-const-variable,
+    -Wunused-exception-parameter and decompositions are not diagnosed; a
+    type-dependent class-typed initializer is always skipped (clang
+    skips only when some constructor is non-trivial).
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
   with `OffsetofComponent`s; clang's `BuildBuiltinOffsetOf`): a
   `size_t` prvalue `OffsetOfExpr`.

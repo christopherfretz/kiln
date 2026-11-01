@@ -101,12 +101,15 @@ impl Parser<'_, '_> {
                 let sub = self.parse_statement_after_attrs()?;
                 return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, self.std));
             }
+            // Otherwise they appertain to a declaration's entities.
+            self.stmt_attrs = attrs;
         }
         self.parse_statement_after_attrs()
     }
 
     /// A statement after its attribute-specifier-seq.
     fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
+        let lead_attrs = std::mem::take(&mut self.stmt_attrs);
         let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         let loc = self.loc();
         match Self::punct_of(self.tok()) {
@@ -193,6 +196,7 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_label_stmt(l, sub, loc));
         }
         if self.is_cxx_declaration_statement(false) {
+            self.lead_decl_attrs = lead_attrs;
             let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);
             if decls.is_empty() {
                 return None;

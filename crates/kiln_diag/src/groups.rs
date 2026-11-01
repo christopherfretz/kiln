@@ -44,7 +44,7 @@ macro_rules! diag_groups {
 
 diag_groups! {
     All = "all" [Most];
-    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized, RangeLoopConstruct];
+    Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized, RangeLoopConstruct, Unused];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
     BackslashNewlineEscape = "backslash-newline-escape" [];
@@ -77,7 +77,7 @@ diag_groups! {
     VecElemSize = "vec-elem-size" [];
     EnumConstexprConversion = "enum-constexpr-conversion" [];
     ConstantEvaluated = "constant-evaluated" [];
-    Unused = "unused" [UnusedValue];
+    Unused = "unused" [UnusedValue, UnusedVariable];
     UnusedValue = "unused-value" [UnusedComparison, UnusedResult];
     UnusedComparison = "unused-comparison" [];
     UnusedResult = "unused-result" [];
@@ -209,6 +209,7 @@ diag_groups! {
     Cxx17AttributeExtensions = "c++17-attribute-extensions" [];
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
     AddressOfPackedMember = "address-of-packed-member" [];
+    UnusedVariable = "unused-variable" [];
 }
 
 impl Group {

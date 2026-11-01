@@ -476,7 +476,9 @@ impl Sema<'_, '_> {
             top.explicit_constexpr = explicit_constexpr;
         }
         self.fn_saved.push(crate::class::SavedFn { func: self.func.take(), pushed: 0 });
-        self.scopes.push(Scope::new(ScopeKind::Function, None));
+        let mut fs = Scope::new(ScopeKind::Function, None);
+        fs.errors = self.diags.error_count();
+        self.scopes.push(fs);
         self.ctx = f;
         let params: Vec<DeclId> = self
             .ast
