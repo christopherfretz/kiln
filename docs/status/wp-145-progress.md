@@ -94,7 +94,8 @@ that could violate them.
   so it runs in `stress`, not `ci`.
 - **libc++ verify/compile.fail sweep** (687 `*.verify.cpp` and
   `*.compile.fail.cpp` under `libcxx/test`, `-fsyntax-only
-  -ferror-limit=0`): VSWEEP_RESULT
+  -ferror-limit=0`, each under `ulimit -v 8 GiB` and `timeout 120`):
+  no run crashed, hung or exited other than 0 or 1.
 
 ## Other items
 
