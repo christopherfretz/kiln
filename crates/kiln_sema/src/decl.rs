@@ -560,7 +560,8 @@ impl Sema<'_, '_> {
         spec_loc: Loc,
         d: &Declarator,
     ) -> QualType {
-        let mut ty = base;
+        // [dcl.type.class.deduct]/2.
+        let mut ty = self.ctad_declarator_check(base, spec_loc, d);
         let name = self.declarator_name(d);
         let mut prev_ref = false;
         for chunk in d.chunks.iter().rev() {
@@ -1466,6 +1467,7 @@ impl Sema<'_, '_> {
         // decl-specifier type (clang `processTypeAttrs(TAL_DeclSpec)`),
         // so `__attribute__((vector_size(8))) short f();` returns a vector.
         let base = self.apply_declspec_vector_attrs(base, ds);
+        let base = self.ctad_decl_spec_check(ds, base, d);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {
@@ -3410,6 +3412,12 @@ impl Sema<'_, '_> {
         // An in-class static data member declaration is not a definition
         // ([class.static.data]/3): its type may be incomplete.
         if self.is_in_class_static(v) && !self.is_var_definition(v) {
+            // But it cannot deduce a class type without an initializer.
+            if let Some(ty) = vn.ty()
+                && self.is_ctad_placeholder(ty)
+            {
+                let _ = self.ctad_uninit(v, ty, vn.loc());
+            }
             return;
         }
         // [depr.static.constexpr]: a redundant out-of-class redeclaration

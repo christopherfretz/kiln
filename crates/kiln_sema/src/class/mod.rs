@@ -257,6 +257,7 @@ impl Sema<'_, '_> {
         d: Option<&Declarator>,
         friend_loc: Loc,
     ) -> Option<DeclId> {
+        let base = self.ctad_friend_check(ds, base, d);
         self.declare_friend(ds, base, d, friend_loc)
     }
 
