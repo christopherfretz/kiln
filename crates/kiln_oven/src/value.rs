@@ -5,7 +5,7 @@
 use kiln_ast::consts::{
     ByteImage, ByteRange, ConstValue, IntBits, NullKind, PtrBase, Reloc, Scalar, UnionMember,
 };
-use kiln_ast::decl::{DeclKind, DefinitionBits, VarEvalState};
+use kiln_ast::decl::{DeclKind, VarEvalState};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StringLitId};
@@ -78,6 +78,11 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
         }
         return info;
     }
+    // A parameter outside its call: never usable, whatever its type (its
+    // value is the caller's; a default argument is not an initializer).
+    if ast.decls.get(d).kind() == DeclKind::ParmVar {
+        return info;
+    }
     let mut constexpr = false;
     for r in ast.redecls_of(d) {
         if let Some(v) = ast.decls.var(r) {
@@ -99,23 +104,8 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     info.lax = !info.usable
         && q.is_const()
         && !q.is_volatile()
-        && (info.init.is_some() || matches!(info.state, VarEvalState::Value(_)))
-        && !has_mutable_fields(ast, info.ty);
+        && (info.init.is_some() || matches!(info.state, VarEvalState::Value(_)));
     info
-}
-
-/// Whether `q` (or its array element type) is a class with a `mutable`
-/// member, directly or in a subobject: such an object may change after
-/// its initialization, so a lax fold does not read it.
-fn has_mutable_fields(ast: &Ast, q: QualType) -> bool {
-    let mut t = q;
-    while let Some(e) = ast.types.element(t) {
-        t = e;
-    }
-    ast.types.as_record(t).is_some_and(|r| {
-        let def = ast.definition(r).unwrap_or(r);
-        ast.decls.record(def).is_some_and(|x| x.defn.contains(DefinitionBits::HAS_MUTABLE_FIELDS))
-    })
 }
 
 /// Why a value cannot be frozen.
@@ -787,7 +777,7 @@ impl Oven {
         let value = l.and_then(|l| l.value);
         let ty = self.types.intern(b, q);
         let size = self.types.size(ty);
-        let hu = if self.types.info(ty).has_union { flags::HAS_UNION } else { 0 };
+        let hu = self.static_flags(ty);
         let p = match value {
             Some(cv) if usable => {
                 let p = self.mem.alloc_static(ty, size, flags::CONST | hu, Origin::Let(t));
@@ -817,7 +807,7 @@ impl Oven {
         if !(info.usable || info.lax && self.run.lax) {
             return self.external(ty, d);
         }
-        let hu = if self.types.info(ty).has_union { flags::HAS_UNION } else { 0 };
+        let hu = self.static_flags(ty);
         match info.state {
             VarEvalState::Value(cv) => {
                 let size = self.types.size(ty);
@@ -832,7 +822,7 @@ impl Oven {
                 self.mem.alloc_static(
                     ty,
                     size,
-                    flags::CONST | flags::RESOLVING | hu,
+                    flags::CONST | flags::RESOLVING | (hu & flags::HAS_UNION),
                     Origin::Global(d),
                 )
             }
@@ -883,7 +873,7 @@ impl Oven {
                 self.globals[g as usize].slot = 0;
                 let a = self.mem.alloc_of_mut(Ptr::decode(p));
                 if let Ok(cv) = r {
-                    a.flags &= !flags::RESOLVING;
+                    a.flags = a.flags & !flags::RESOLVING | hu;
                     self.thaw_into(b, cv, p, top);
                 } else {
                     a.flags = flags::EXTERNAL | flags::CONST;
@@ -896,6 +886,15 @@ impl Oven {
 
     // ---- thawing ------------------------------------------------------------
 
+    /// The type flags of a static object of type `ty` thawed from a value
+    /// (its lifetime began outside the evaluation): unions, and `mutable`
+    /// members whose reads are diagnosed ([expr.const]/5.9).
+    fn static_flags(&self, ty: OTy) -> u8 {
+        let info = self.types.info(ty);
+        (if info.has_union { flags::HAS_UNION } else { 0 })
+            | if info.has_mutable { flags::MUTABLE_OUTSIDE } else { 0 }
+    }
+
     /// The static object holding stored constant `cv`.
     fn thaw(&mut self, b: &mut dyn SemaBridge, cv: ConstValueId, top: u32) -> u64 {
         if let Some(&p) = self.thawed.get(&cv) {
@@ -904,7 +903,7 @@ impl Oven {
         let q = b.consts().ty(cv);
         let ty = self.types.intern(b, q);
         let size = self.types.size(ty);
-        let hu = if self.types.info(ty).has_union { flags::HAS_UNION } else { 0 };
+        let hu = self.static_flags(ty);
         let p = self.mem.alloc_static(ty, size, flags::CONST | hu, Origin::Const(cv));
         self.thawed.insert(cv, p);
         self.thaw_into(b, cv, p, top);

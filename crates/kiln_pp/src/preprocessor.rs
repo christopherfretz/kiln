@@ -899,6 +899,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                 off += 1;
             }
             let resume = base.with_offset(off);
+            self.diags.pragma_file_exit(resume);
             self.file_change(FileChange::Exit { file, exited, resume, system, extern_c });
         }
         false

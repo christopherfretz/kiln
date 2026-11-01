@@ -235,6 +235,11 @@ reference-init texts apply instead (WP-161): no usable constructor is
 (`sema_reference_bind_failed`), an ambiguous one is "conversion from
 'int' to 'const F' is ambiguous" at the initializer, and a deleted one is
 "attempt to use a deleted function" (`DeletedAs::Use`).
+A `return` operand copy-initializing a class with no viable converting
+constructor is clang's "no viable conversion from returned value of type
+'int' to function return type 'S'" (`sema_no_viable_conversion_return`)
+whatever the operand's type, a non-class or `_Atomic(T)` one included
+(`construct_converted` passes `DeletedAs::Return`; WP-183).
 
 ### 2.7 [over.best.ics]/4 restrictions
 `IcsOptions::SUPPRESS_UDC`, passed by the nested resolution, forbids

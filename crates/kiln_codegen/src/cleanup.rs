@@ -75,6 +75,9 @@ pub(crate) enum Cleanup {
     /// Releases a static-storage guard variable whose initialization threw
     /// (`CallGuardAbort`, [stmt.dcl]/3).
     GuardAbort { guard: V },
+    /// Restores the stack pointer saved in `slot` before the scope's
+    /// first variable length array (`CallStackRestore`, WP-183).
+    StackRestore { slot: V },
 }
 
 /// A value a cleanup uses: directly, or reloaded from the
@@ -1030,6 +1033,7 @@ impl Cg<'_> {
                 }
             }
             Cleanup::GuardAbort { guard } => self.emit_guard_abort(guard),
+            Cleanup::StackRestore { slot } => self.emit_stack_restore(slot),
         }
     }
 

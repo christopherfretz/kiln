@@ -255,6 +255,7 @@ impl Sema<'_, '_> {
     ) -> Option<ExprId> {
         let deleted_as = match deleted_as {
             DeletedAs::Param(n) => DeletedAs::Conversion(Some(n)),
+            DeletedAs::Call if ctx == ConvCtx::Return => DeletedAs::Return,
             DeletedAs::Call => DeletedAs::Conversion(None),
             x => x,
         };
