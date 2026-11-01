@@ -116,7 +116,8 @@ impl Sema<'_, '_> {
             (int_width(self, to).unwrap_or(64), int_signed(self, to))
         };
         // A negative zero converts inexactly (`APFloat::convertToInteger`).
-        let int = soft::to_int(kind, bits).map(|(neg, mag, exact)| (neg, mag, exact && !(neg && mag == 0)));
+        let int = soft::to_int(kind, bits)
+            .map(|(neg, mag, exact)| (neg, mag, exact && !(neg && mag == 0)));
         let fits = int.is_some_and(|(neg, mag, _)| representable(neg, mag, w, signed));
         if fits && int.is_some_and(|(_, _, exact)| exact) {
             return;
@@ -131,12 +132,20 @@ impl Sema<'_, '_> {
         } else {
             let value = soft::apfloat_diag_string(kind, bits);
             let result = if is_bool {
-                if soft::is_zero_value(kind, bits) { "false".to_string() } else { "true".to_string() }
+                if soft::is_zero_value(kind, bits) {
+                    "false".to_string()
+                } else {
+                    "true".to_string()
+                }
             } else {
                 let (neg, mag, _) = int.unwrap_or((false, 0, false));
                 if neg && mag != 0 { format!("-{mag}") } else { mag.to_string() }
             };
-            self.diag(DiagId::sema_literal_conversion, at).arg(from).arg(target).arg(value).arg(result)
+            self.diag(DiagId::sema_literal_conversion, at)
+                .arg(from)
+                .arg(target)
+                .arg(value)
+                .arg(result)
         };
         let d = d.range(range).range(ctx);
         self.emit(d);

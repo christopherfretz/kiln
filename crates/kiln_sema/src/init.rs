@@ -168,7 +168,12 @@ impl Sema<'_, '_> {
     /// "initialization of non-aggregate type 'T' with a designated
     /// initializer list" at the entity `at`, the list underlined
     /// ([dcl.init.list]/3.1); the result is a recovery expression.
-    pub(crate) fn designated_non_aggregate(&mut self, ty: QualType, l: &InitList, at: Loc) -> ExprId {
+    pub(crate) fn designated_non_aggregate(
+        &mut self,
+        ty: QualType,
+        l: &InitList,
+        at: Loc,
+    ) -> ExprId {
         let end = self.token_end(l.rbrace).unwrap_or(l.rbrace);
         let msg = self
             .diag(DiagId::sema_designated_init_non_aggregate, at)

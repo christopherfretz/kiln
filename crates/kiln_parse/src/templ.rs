@@ -621,9 +621,9 @@ impl Parser<'_, '_> {
         let a = if ctad_name && let Some(t) = self.at_template_name_arg() {
             t
         } else if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
-            TemplateArg::ty(self.with_greater_op(false, |p| {
-                p.parse_type_id_into(None, DeclSite::TemplateArg)
-            })?)
+            TemplateArg::ty(
+                self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TemplateArg))?,
+            )
         } else if let Some(t) = self.at_template_name_arg() {
             t
         } else {
