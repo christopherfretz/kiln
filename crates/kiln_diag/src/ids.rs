@@ -1626,6 +1626,14 @@ diag_ids! {
     sema_enum_template = Error (0) "enumeration cannot be a template";
     sema_no_declarators_error = Error (0) "declaration does not declare anything";
     sema_explicit_inst_undefined_var_template = Error (1) "explicit instantiation of undefined variable template '{0}'";
+    sema_unused_but_set_variable = WarningOff [UnusedButSetVariable] (1) "variable {0} set but not used";
+    sema_unused_exception_param = WarningOff [UnusedExceptionParameter] (1) "unused exception parameter {0}";
+    sema_unused_const_variable = WarningOff [UnusedConstVariable] (1) "unused variable {0}";
+    sema_constant_conversion = Warning [ConstantConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
+    sema_implicit_fallthrough = WarningOff [ImplicitFallthrough] (0) "unannotated fall-through between switch labels";
+    note_insert_fallthrough_fixit = Note (1) "insert '{0};' to silence this warning";
+    note_insert_break_fixit = Note (0) "insert 'break;' to avoid fall-through";
+    sema_unreachable_fallthrough_attr = WarningOff [UnreachableCodeFallthrough] (0) "fallthrough annotation in unreachable code";
 }
 
 impl DiagId {

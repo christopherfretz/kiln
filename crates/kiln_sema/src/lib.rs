@@ -172,6 +172,11 @@ pub struct Sema<'a, 'sm> {
     /// decomposition declared in a template, which instantiation
     /// deduces anew (the pattern's own may be deduced, spec/sema.md).
     pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
+    /// clang `RefsMinusAssignments`: per local variable, its references
+    /// minus those that are the target of a discarded assignment, and
+    /// whether it is a condition variable (clang `isCXXCondDecl`)
+    /// (`-Wunused-but-set-variable`, [`Self::diagnose_unused_locals`]).
+    pub(crate) refs_minus_assign: std::collections::HashMap<DeclId, (i32, bool)>,
     /// The declared (placeholder) return type of each function whose
     /// return type was deduced, by first declaration: redeclarations are
     /// matched against it ([dcl.spec.auto.general]/13).
@@ -428,6 +433,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declarator_records: Vec::new(),
             unowned_params: std::collections::HashSet::new(),
             decomp_written: std::collections::HashMap::new(),
+            refs_minus_assign: std::collections::HashMap::new(),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             constinit_locs: kiln_source::fx::FxHashMap::default(),

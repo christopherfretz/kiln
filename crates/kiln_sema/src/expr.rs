@@ -1657,6 +1657,7 @@ impl Sema<'_, '_> {
         }
         if n.kind() == DeclKind::Var {
             self.note_var_referenced(d, loc);
+            self.count_var_ref(d);
         }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
@@ -2412,6 +2413,7 @@ impl Sema<'_, '_> {
             _ if op.is_compound_assignment() => self.compound_assign(op, l, r, loc),
             BinaryOp::Comma => {
                 self.diagnose_comma_lhs(l);
+                self.discard_assignment_ref(l);
                 let ty = self.ety(r);
                 let res = self.builder().binary(op, l, r, ty, loc);
                 self.mark_bitfield_if(res, r);
@@ -4250,6 +4252,7 @@ impl Sema<'_, '_> {
                 if self.check_builtin_fn_use(e) {
                     return self.recover(ty, &[e], loc);
                 }
+                self.discard_assignment_ref(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             return self.bad_cast(style, e, ty, loc);

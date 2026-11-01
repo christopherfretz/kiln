@@ -250,6 +250,7 @@ impl Sema<'_, '_> {
         if !self.check_builtin_fn_use(e) && !self.check_overload_use(e) {
             self.diagnose_unused(e);
         }
+        self.discard_assignment_ref(e);
         let e = self.act_on_full_expr(e);
         self.builder().expr_stmt(e)
     }
@@ -443,7 +444,11 @@ impl Sema<'_, '_> {
     /// A condition declaration ([stmt.pre]/4): the variable `v` (already
     /// initialized) yields the condition value, a reference to `v`.
     pub fn act_on_condition_var(&mut self, v: DeclId, loc: Loc) -> (Option<DeclId>, ExprId) {
-        (Some(v), self.build_decl_ref(v, loc))
+        let r = self.build_decl_ref(v, loc);
+        if let Some(c) = self.refs_minus_assign.get_mut(&v) {
+            c.1 = true;
+        }
+        (Some(v), r)
     }
 
     /// The condition of `if constexpr` ([stmt.if]/2): contextually
@@ -573,6 +578,7 @@ impl Sema<'_, '_> {
     ) -> StmtId {
         let inc = inc.map(|e| {
             self.diagnose_unused(e);
+            self.discard_assignment_ref(e);
             self.act_on_full_expr(e)
         });
         let data = LoopData { init, cond_var, cond, inc, body: Some(body) };
