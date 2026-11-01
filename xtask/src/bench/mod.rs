@@ -41,7 +41,8 @@ options:
   --record                 write the measurements as the new baselines; with
                            --compare-with, also merge the ratio table into
                            docs/status/perf.md
-  --compare-with <path>    also measure this compiler (e.g. clang++-19) and print
+  --compare-with <path>    also measure this compiler (e.g. clang++-19, the default
+                           KILN_ORACLE's) and print
                            the time and memory ratios
   --filter <substr>        only entries whose id (<group>/<name>) contains <substr>
   --runs <N>               runs per entry (default: 5; the fastest and slowest are

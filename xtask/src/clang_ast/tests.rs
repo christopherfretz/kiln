@@ -192,6 +192,50 @@ fn unmapped_input_is_an_error_naming_it() {
     assert!(norm("{").unwrap_err().contains("clang's JSON dump"));
 }
 
+/// clang 22's `TemplateInstantiationPattern` (the pattern an instantiated
+/// declaration came from) is ignored on every declaration kind clang 22
+/// emits it for (WP-262; spec/harness.md "Oracle toolchain").
+#[test]
+fn clang22_template_instantiation_pattern_is_ignored() {
+    let key = "TemplateInstantiationPattern";
+    for k in [
+        "ClassTemplateSpecializationDecl",
+        "CXXRecordDecl",
+        "CXXMethodDecl",
+        "CXXConstructorDecl",
+        "EnumDecl",
+        "VarDecl",
+        "FunctionDecl",
+    ] {
+        table::check_keys(k, ["id", "kind", key].iter()).unwrap_or_else(|e| panic!("{k}: {e}"));
+    }
+    // Declarations only: an expression with it is still an error.
+    let e = table::check_keys("DeclRefExpr", [key].iter()).unwrap_err();
+    assert!(e.contains(key), "{e}");
+    // End to end: the dump is the same with and without it.
+    let var = |extra: &str| {
+        tu(&format!(
+            r#"{{"id":"0x2","kind":"VarDecl",{LOC},"range":{{}},"name":"v","type":{{"qualType":"int"}}{extra}}}"#
+        ))
+    };
+    let plain = norm(&var("")).unwrap();
+    assert_eq!(plain, "TranslationUnitDecl\n`-VarDecl v 'int'\n");
+    assert_eq!(norm(&var(r#","TemplateInstantiationPattern":"0x9""#)).unwrap(), plain);
+}
+
+/// clang 22's `hasExplicitParameters` on `LambdaExpr` (whether the lambda
+/// spells a parameter list) is ignored; the parameters are the call
+/// operator's (WP-262; spec/harness.md "Oracle toolchain").
+#[test]
+fn clang22_lambda_has_explicit_parameters_is_ignored() {
+    let key = "hasExplicitParameters";
+    table::check_keys("LambdaExpr", ["id", "kind", "type", "valueCategory", key].iter()).unwrap();
+    for k in ["CallExpr", "CXXRecordDecl", "CXXMethodDecl"] {
+        let e = table::check_keys(k, [key].iter()).unwrap_err();
+        assert!(e.contains(&format!("`{k}` attribute `{key}`")), "{e}");
+    }
+}
+
 #[test]
 fn mapping_table_covers_m2() {
     for k in M2_KINDS.iter().chain(CLASS_KINDS).chain(TEMPLATE_KINDS) {

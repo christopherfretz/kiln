@@ -13,7 +13,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Stress | `tests/stress/` | Deep nesting, huge packs, the stack guard, runaway-allocation regressions, under `mem<=N` budgets |
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
-| libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
+| libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/status/cxx-features.md`, checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every C++23/C++26 paper marked `done` has passing tests and clang 22's `__cpp_*` value |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
@@ -230,6 +230,18 @@ the local run is still the merge gate (docs/AGENTS.md rule 3).
 ## Differential testing against clang
 
 `clang-19` is the oracle for everything that is not a kiln-specific feature.
+
+The oracle release is selected by `KILN_ORACLE` (`19`, the default and the
+release the M3 gate and its numbers stay on, or `22` for the M4+ switch,
+WP-184). It names `clang++-N`, `opt-N`, `llc-N`, `FileCheck-N` and
+`/usr/lib/llvm-N` in one place (`xtask/src/oracle.rs`); `xtask test` and
+`ci` use `clang++-N` as the oracle and self-check compiler and run kiln++
+with `KILN_LLVM_DIR=/usr/lib/llvm-N`, `ir_vs_clang` runs `clang++-N`/`opt-N`,
+and `xtask libcxx --tag` picks a libc++ test checkout
+(`.toolchain/libcxx-<tag>`, one per release). Until steps B–E of
+docs/status/wp-184-oracle-switch.md land, the corpus is baselined on 19 and
+`KILN_ORACLE=22` runs report FAILs (never mapping-table ERRORs). Contract:
+spec/harness.md "Oracle toolchain".
 - `-E`: token-wise comparison after both outputs are re-lexed with
   `kiln_lex`. Identifiers and literals compare by spelling, punctuators by
   kind (a digraph equals its primary spelling), and whitespace is ignored.
