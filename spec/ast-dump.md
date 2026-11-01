@@ -156,7 +156,7 @@ no category).
 | `CXXPseudoDestructorExpr` | `CXXPseudoDestructorExpr '<bound member function type>'`; one child, the object expression (`p->~T` on a scalar or dependent object, WP-121). The destroyed type is not printed (clang prints none) |
 | `ImplicitCastExpr` | `ImplicitCastExpr 'type' [lvalue\|xvalue] <Kind> [part_of_explicit_cast]` |
 | `CStyleCastExpr` | `CStyleCastExpr 'type' [lvalue\|xvalue] <Kind>` |
-| `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` (`T` is the type as written, the expression's sugared type) |
+| `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` (`T` is the type as written, alias and cv kept: `CI{1}` with `using CI = const int;` prints `'int' functional cast to CI`) |
 | `UnaryOperator` | `UnaryOperator 'type' [lvalue [bitfield]] prefix\|postfix 'op' [cannot overflow]` |
 | `BinaryOperator` | `BinaryOperator 'type' [lvalue [bitfield]] 'op'` |
 | `CompoundAssignOperator` | `CompoundAssignOperator 'type' lvalue [bitfield] 'op' ComputeLHSTy='T' ComputeResultTy='T'` |
@@ -165,8 +165,8 @@ no category).
 | `UnaryExprOrTypeTraitExpr` | `UnaryExprOrTypeTraitExpr 'type' sizeof\|alignof 'operand-type'` (or expression child) |
 | `CXXNoexceptExpr` | `CXXNoexceptExpr 'bool'`; one child, the unevaluated operand. The value is not printed (clang prints none) |
 | `VAArgExpr` | `VAArgExpr 'T'` (the written type; a prvalue); one child, the `va_list` operand |
-| `CXXStaticCastExpr`, `CXXDynamicCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr` | `Class 'type' [lvalue\|xvalue] static_cast<T> <Kind [(path)]>` (the written type, as `'type'` plus `&` for an lvalue and `&&` for an xvalue result) |
-| `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` |
+| `CXXStaticCastExpr`, `CXXDynamicCastExpr`, `CXXConstCastExpr`, `CXXReinterpretCastExpr` | `Class 'type' [lvalue\|xvalue] static_cast<T> <Kind [(path)]>` (`T` is the type as written: `static_cast<R>(x)` with `using R = int&;` prints `'int' lvalue static_cast<R>`. kiln rebuilds it from `'type'` plus `&`/`&&` by value category, and sema stores it on the node (a cold map, WP-223) only when that rebuild would differ) |
+| `CXXFunctionalCastExpr` | `CXXFunctionalCastExpr 'type' [lvalue\|xvalue] functional cast to T <Kind>` (`T` as above) |
 | cast paths | a derived-to-base or base-to-derived cast kind prints its path: `<DerivedToBase (A -> virtual V)>` (each base class, `virtual` on a virtual step), also on `ImplicitCastExpr` and `CStyleCastExpr` |
 | `CXXConstructExpr`, `CXXTemporaryObjectExpr` | `Class 'type' 'ctor-type' [list] [std::initializer_list] [zeroing] [immediate-escalating]`; children: the arguments |
 | `CXXMemberCallExpr` | `CXXMemberCallExpr 'type' [lvalue\|xvalue]`; children: the `MemberExpr` callee, the arguments |
@@ -577,19 +577,21 @@ contract:
 - **Side channel.** The JSON lacks the `value:` of a constexpr variable,
   a member function's `trivial`, `noexcept-unevaluated`, `friend` /
   `friend_undeclared` words, its `Overrides:` line and the exact text of
-  a `delete("msg")` message, so when one is present the tool also runs
+  a `delete("msg")` message, and the type as written of a named or
+  functional cast (clang prints it with the C printing policy, so the
+  tool respells `_Bool` as `bool` and `(void)` as `()`, and drops a
+  `struct`/`class`/`union`/`enum` keyword the expression's JSON type
+  does not have), so when one is present the tool also runs
   `clang -Xclang -ast-dump` and pairs that dump's function lines
   (`FunctionDecl`, `CXXMethodDecl`, `CXXConstructorDecl`,
   `CXXDestructorDecl`, `CXXConversionDecl`) and `VarDecl` lines with the
   JSON's in pre-order, checking each pair by class and name; a
-  misalignment is an error. The same pairing cross-checks the derived
+  misalignment is an error. Its named and functional cast lines are
+  paired the same way, by class. The same pairing cross-checks the derived
   `constexpr`, `consteval` and `implicit-inline` function flags. A word
   the dump does not model (`noexcept-uninstantiated`, `ineligible`,
   `not_selected`) is an error.
-- **Reconstructed fields.** clang's JSON has no written type for a named
-  cast: the tool prints the cast's type plus `&`/`&&` by value category
-  (clang's text prints the type as written, `static_cast<R>` through a
-  typedef `R`). A base `CXXCtorInitializer` prints the canonical base
+- **Reconstructed fields.** A base `CXXCtorInitializer` prints the canonical base
   type. clang's `elidable` construct flag and a `destroyed` bind flag are
   errors (C++17 guaranteed elision leaves no elidable constructs in the
   supported subset). A befriended class that redeclares an earlier

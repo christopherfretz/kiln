@@ -1636,8 +1636,7 @@ Remaining (each traps with a `kiln:` note today):
   the other WP-212 deviations listed under "Transient allocation".
 - `delete` through `void*`, and P2747 placement new (see above).
 - Front-end gaps that keep some forms from reaching the Oven (not
-  Oven work): qualified destructor names (`p->T::~T()`),
-  class-specific `operator new`,
+  Oven work): class-specific `operator new`,
   `delete[] (expr)` (parsed as a lambda) and
   `new char[n]{"hi"}`.
 - Volatile objects: reads are diagnosed ([expr.const]/5.9) only where the

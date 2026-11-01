@@ -143,6 +143,12 @@ return; member pointers → class and pointee; enum → innermost enclosing
 namespace (+ class if a member); class → itself, all bases, their innermost
 enclosing namespaces; template specializations add their template
 arguments' entities; an overload-set (ULE) argument adds every candidate's.
+An associated class that is an undefined class template specialization (or
+member class of one) is instantiated first, silently, from the call's
+location, and the set recomputed until nothing new is instantiated (clang
+`addAssociatedClassesAndNamespaces` calls `isCompleteType`): its hidden
+friends and bases then take part ([temp.inst]/3; WP-223,
+`basic.lookup.argdep/instantiates-associated-class.cpp`).
 **Lookup** searches each associated namespace's table directly, ignoring
 using-directives, including inline namespaces both ways (`inline_children`
 and the enclosing namespace), and finds friend functions declared in

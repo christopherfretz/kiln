@@ -60,7 +60,8 @@ impl Sema<'_, '_> {
             .map(|(i, &d)| (d, extra.as_ref().and_then(|x| x.found.get(i).copied()).unwrap_or(d)))
             .collect();
         if adl {
-            self.adl_lookup_dn(name, args, &mut cands);
+            let at = self.begin_loc(callee);
+            self.adl_lookup_dn(name, args, at, &mut cands);
         }
         cands.retain(|&(d, _)| !self.ast.decls.get(d).has(DeclFlags::INVALID));
         let at = self.begin_loc(callee);

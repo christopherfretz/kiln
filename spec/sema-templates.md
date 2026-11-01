@@ -3202,8 +3202,19 @@ first instead of emitting them (§5.7).
 *Gaps* (each reports a diagnostic or is a known divergence):
 - No TypeLocs: an error inside a written type points at the
   declarator, not the type.
-- Default member initializers are instantiated with the class. clang
-  instantiates them when used, with its own notes.
+- ~~Default member initializers are instantiated with the class~~
+  *Resolved (WP-223):* `Substituter::class_body_with` records each
+  field's pattern initializer in `inst.deferred_nsdmis` (the class's
+  arguments and context pairs in `inst.nsdmi_ctx`) and marks the field
+  as having one (`special.nsdmi`). `Sema::instantiate_nsdmi` instantiates
+  it at its first use ([temp.inst]/3, clang
+  `InstantiateInClassInitializer`): `default_member_init` (a constructor
+  or an aggregate initialization) and the implicit default constructor's
+  exception specification. It pushes the
+  `DefaultMemberInitializerInstantiation` frame; a failure makes the field
+  invalid, so later uses are quiet. A local class's or an anonymous
+  member's initializers are still instantiated with the class. Tests:
+  `temp.inst/lazy-default-member-init{,-errors}.cpp`.
 - ~~A qualified `DeclRefExpr` prints without its qualifier~~ *Resolved
   (WP-086):* `act_on_id_expression` records the nested-name-specifier in
   `DeclRefExtra.qualifier` and the qualifier's first token as the begin

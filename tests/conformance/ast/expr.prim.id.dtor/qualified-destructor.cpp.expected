@@ -1,0 +1,58 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct W definition
+| `-CXXDestructorDecl used ~W 'void () noexcept'
+|-CXXRecordDecl referenced struct U definition
+| `-FieldDecl referenced w 'W'
+|-CXXRecordDecl referenced struct B definition
+| `-CXXDestructorDecl used ~B 'void () noexcept' virtual
+|-CXXRecordDecl referenced struct D definition
+| |-public 'B'
+| `-CXXDestructorDecl used ~D 'void () noexcept'
+|   `-Overrides: [ B::~B 'void () noexcept' ]
+|-TypedefDecl referenced I 'int'
+|-CXXRecordDecl struct C definition
+| `-TypedefDecl referenced J 'int'
+|-FunctionDecl f 'void (U &, D *, int *, W *)'
+| |-ParmVarDecl used u 'U &'
+| |-ParmVarDecl used d 'D *'
+| |-ParmVarDecl used p 'int *'
+| |-ParmVarDecl used w 'W *'
+| `-CompoundStmt
+|   |-CXXMemberCallExpr 'void'
+|   | `-MemberExpr '<bound member function type>' .~W
+|   |   `-MemberExpr 'W' lvalue .w
+|   |     `-DeclRefExpr 'U' lvalue ParmVar 'u' 'U &'
+|   |-CXXMemberCallExpr 'void'
+|   | `-MemberExpr '<bound member function type>' ->~B
+|   |   `-ImplicitCastExpr 'B *' <UncheckedDerivedToBase (B)>
+|   |     `-ImplicitCastExpr 'D *' <LValueToRValue>
+|   |       `-DeclRefExpr 'D *' lvalue ParmVar 'd' 'D *'
+|   |-CXXMemberCallExpr 'void'
+|   | `-MemberExpr '<bound member function type>' ->~D
+|   |   `-ImplicitCastExpr 'D *' <LValueToRValue>
+|   |     `-DeclRefExpr 'D *' lvalue ParmVar 'd' 'D *'
+|   |-CXXMemberCallExpr 'void'
+|   | `-MemberExpr '<bound member function type>' ->~W
+|   |   `-ImplicitCastExpr 'W *' <LValueToRValue>
+|   |     `-DeclRefExpr 'W *' lvalue ParmVar 'w' 'W *'
+|   |-CallExpr 'void'
+|   | `-CXXPseudoDestructorExpr '<bound member function type>'
+|   |   `-ImplicitCastExpr 'int *' <LValueToRValue>
+|   |     `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+|   |-CallExpr 'void'
+|   | `-CXXPseudoDestructorExpr '<bound member function type>'
+|   |   `-ImplicitCastExpr 'int *' <LValueToRValue>
+|   |     `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+|   `-CallExpr 'void'
+|     `-CXXPseudoDestructorExpr '<bound member function type>'
+|       `-ImplicitCastExpr 'int *' <LValueToRValue>
+|         `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+`-FunctionTemplateDecl g
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl g 'void (T *)'
+    |-ParmVarDecl referenced t 'T *'
+    `-CompoundStmt
+      `-CallExpr 'void'
+        `-CXXPseudoDestructorExpr '<bound member function type>'
+          `-ImplicitCastExpr 'T *' <LValueToRValue>
+            `-DeclRefExpr 'T *' lvalue ParmVar 't' 'T *'
