@@ -133,6 +133,15 @@ pub fn classify_va_arg(t: &mut IrTypes<'_>, q: QualType) -> VaArgInfo {
     }
 }
 
+/// The `getPrimitiveSizeInBits` of a vector IR type (`<3 x i32>` is 96);
+/// zero for any other type.
+pub fn vector_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
+    match ty {
+        IrType::Vector(..) => ir_bits(t, ty),
+        _ => 0,
+    }
+}
+
 fn vector_width(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
     match ty {
         // `getPrimitiveSizeInBits`: `<3 x i32>` is 96.

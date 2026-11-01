@@ -572,10 +572,7 @@ impl Cg<'_> {
     /// does not count; a flattened struct argument counts per element.
     fn def_vector_width(&mut self, info: &kiln_abi::call::CallInfo) -> u64 {
         fn vec_bits(cg: &mut Cg<'_>, t: &IrType) -> u64 {
-            match t {
-                IrType::Vector(..) => cg.tys.size_align(t).0 * 8,
-                _ => 0,
-            }
+            kiln_abi::call::vector_bits(&mut cg.tys, t)
         }
         let mut w = 0;
         if let ArgKind::Direct { coerce, .. } = &info.ret.kind {
