@@ -10,8 +10,10 @@
 //!   `&&`/`||` decided by one known side) prunes the other edge: `if`,
 //!   loops, `?:` and the right operand of `&&`/`||`;
 //! - a switch on a constant reaches only the matching case (else the
-//!   default); with no default, the code after a switch over an
-//!   enumeration whose enumerators all have cases is unreachable;
+//!   default); the default edge of a switch over an enumeration whose
+//!   enumerators all have cases is unreachable (clang
+//!   `isAllEnumCasesCovered`), so with no default the code after it is
+//!   unreachable;
 //! - a handler is reachable only from a reachable throw-expression in its
 //!   try-block (or in a nested try-block without a catch-all): calls get
 //!   no exception edges;
@@ -19,6 +21,12 @@
 //!   are found by iterating to a fixed point;
 //! - an `if consteval` anywhere in the body: clang builds no CFG and
 //!   checks nothing.
+//!
+//! The same walk, in fall-off mode (`fall_off_kind`), classifies the
+//! live predecessors of the exit as clang `CheckFallThrough` does: a
+//! `return`, a throw leaving the body (fake edge), a `noreturn` call or a
+//! dispatch without a catch-all leaving the body (abnormal edge), and the
+//! end of the body (plain edge).
 
 use std::collections::HashSet;
 
@@ -32,6 +40,7 @@ use crate::stmt::Falloff;
 
 /// The state of one walk.
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts of one walk")]
 struct Reach {
     /// Labels a live `goto` reaches (grows across passes).
     labels: HashSet<DeclId>,

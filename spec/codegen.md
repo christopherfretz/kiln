@@ -743,7 +743,11 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   (a named non-reference variable or a temporary), and for qualified
   calls (`p->B::f()`).
 - **Deleting destructors** (D0): the body calls D1 then the sized
-  `operator delete` (or the class's own). An abstract class's D0 is
+  `operator delete` (or the class's own), the deallocation as a
+  normal-and-EH `Cleanup::DtorDelete` around the D1 call (clang
+  `EnterDtorCleanups` / `CallDtorDelete`, WP-219), so it also runs when
+  a `noexcept(false)` destructor throws (`eh_deleting_dtor`,
+  `expr.delete/run-deleting-dtor-throws`). An abstract class's D0 is
   `llvm.trap` + `unreachable`. `delete p` of a polymorphic class with a
   virtual destructor calls D0 through the vtable; otherwise D1 then
   `operator delete`. `::delete p` of such a class: see WP-108 below.
@@ -962,11 +966,8 @@ off and sema rejects `try`/`throw`).
   `run` tests: `except.handle/run-throw-catch`,
   `except.ctor/run-unwind-destroy`, `expr.new/run-delete-on-throw`.
 
-**Left (WP-100), each a `CodegenError` or noted:**
-- D0 calls D1 and then the deallocation function directly; clang runs
-  the deallocation as a normal-and-EH `CallDtorDelete` cleanup, which
-  differs only when D1 can throw (a `noexcept(false)` destructor, which
-  sema rejects until WP-112 lands member exception specifications).
+(The D0 `CallDtorDelete` cleanup, left here by WP-100, landed with
+WP-219; see "Deleting destructors" above.)
 
 (Lifetime-extended temporaries, conditional temporaries at a computed
 address, the delegating constructor's VTT and conditional `new` with a
