@@ -80,6 +80,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// Variable initializers that failed to substitute (the variable is
     /// invalid, its declaration statement is not: clang keeps it).
     pub(crate) init_failures: u32,
+    /// Block-scope dependent using-declarations of the pattern whose
+    /// instantiation failed (diagnosed): their uses are invalid without
+    /// another diagnostic (clang's invalid `UsingDecl`).
+    pub(crate) failed_usings: Vec<DeclId>,
     /// The explicitly specified pack deduction may still extend
     /// ([temp.arg.explicit]/9; clang's partially substituted pack), by
     /// (depth, index): its length is a lower bound, checked against the
@@ -123,6 +127,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             lambda_bodies: 0,
             stmt_failed: false,
             init_failures: 0,
+            failed_usings: Vec::new(),
             partial_pack: None,
             written_locs: true,
             written_scope: None,

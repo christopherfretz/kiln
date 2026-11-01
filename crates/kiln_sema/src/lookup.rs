@@ -6,13 +6,13 @@
 //! plus the namespaces nominated by `using namespace` in that scope.
 //! Qualified lookup searches one context's table.
 
-use kiln_ast::DeclId;
 use kiln_ast::decl::DeclKind;
 /// Lookup-table entry flags (owned by spec/sema-overload.md §2.3): a hidden
 /// friend's entry is `ADL_ONLY`, invisible to ordinary and qualified
 /// lookup ([namespace.memdef]/3) but seen by redeclaration lookup and ADL.
 pub use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::DeclName;
+use kiln_ast::{DeclId, QualType};
 use kiln_source::symbol::Symbol;
 
 use crate::Sema;
@@ -193,7 +193,37 @@ impl Sema<'_, '_> {
         };
         if kind == LookupKind::Ordinary && out.decls.iter().any(|&d| !is_tag_kind(self.kind_of(d)))
         {
-            keep(&mut out, &|d| !is_tag_kind(self.kind_of(d)));
+            // [basic.scope.hiding]/2 as clang applies it
+            // (`LookupResult::resolveKind`): a unique tag is hidden by a
+            // name declared in the same scope; a tag of another scope (a
+            // namespace nominated by a different using-directive) makes
+            // the lookup ambiguous instead ([basic.lookup.general]/1).
+            let tags: Vec<usize> =
+                (0..out.decls.len()).filter(|&i| is_tag_kind(self.kind_of(out.decls[i]))).collect();
+            let hide = match tags[..] {
+                [t] => {
+                    let other = if t == 0 { out.decls.len() - 1 } else { 0 };
+                    // clang's `getContextForScopeMatching`: the context
+                    // the declaration (or using-declaration) is in, past
+                    // transparent contexts.
+                    let scope_of = |raw: DeclId| {
+                        let mut c = self.ast.decls.get(raw).ctx()?;
+                        for _ in 0..64 {
+                            if !self.ast.is_transparent(c) {
+                                break;
+                            }
+                            c = self.ast.decls.get(c).ctx()?;
+                        }
+                        Some(self.ast.first(c))
+                    };
+                    scope_of(out.found[t]) == scope_of(out.found[other])
+                }
+                // Distinct tags are of distinct scopes: ambiguous.
+                _ => false,
+            };
+            if hide {
+                keep(&mut out, &|d| !is_tag_kind(self.kind_of(d)));
+            }
         }
         let unresolved = |d: DeclId| self.kind_of(d) == DeclKind::UnresolvedUsingIfExists;
         if out.decls.iter().any(|&d| !unresolved(d)) {
@@ -531,13 +561,25 @@ impl Sema<'_, '_> {
         let mut it = leaves.into_iter();
         let (found, path, _) = it.next()?;
         let mut acc = ClassHit { found, paths: vec![path], mixed: false };
-        let firsts = |f: &Found| -> Vec<DeclId> {
-            let mut v: Vec<DeclId> = f.decls.iter().map(|&d| self.ast.first(d)).collect();
-            v.sort_unstable();
+        // [class.member.lookup]/3: a type declaration stands for the type
+        // it designates (clang `HasSameDeclarations`), so typedefs of one
+        // type found in different bases name the same member.
+        let keys = |f: &Found| -> Vec<Result<QualType, DeclId>> {
+            let mut v = Vec::new();
+            for &d in &f.decls {
+                let k = self.designated_type(self.ast.strip_shadow(d)).ok_or(self.ast.first(d));
+                if !v.contains(&k) {
+                    v.push(k);
+                }
+            }
             v
         };
+        let same = |a: &Found, b: &Found| {
+            let (x, y) = (keys(a), keys(b));
+            x.len() == y.len() && x.iter().all(|k| y.contains(k))
+        };
         for (sub, path, _) in it {
-            if acc.mixed || firsts(&acc.found) != firsts(&sub) {
+            if acc.mixed || !same(&acc.found, &sub) {
                 acc.mixed = true;
                 for (j, &d) in sub.decls.iter().enumerate() {
                     let f = self.ast.first(d);
@@ -656,9 +698,34 @@ impl Sema<'_, '_> {
                 let mut msg =
                     self.diag(kiln_diag::DiagId::sema_ambiguous_member_types, loc).arg(text);
                 for &d in decls {
+                    // A type is printed (clang: a typedef-name's
+                    // underlying type, else the declared type).
                     let loc = self.ast.decls.get(d).loc();
-                    msg = msg
-                        .with_note(self.diag(kiln_diag::DiagId::note_ambiguous_member_found, loc));
+                    let k = self.kind_of(d);
+                    let note = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias) {
+                        let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+                        let ty = match self.ast.types.view(ty.ty()) {
+                            kiln_ast::types::TypeView::Typedef { underlying, .. } => underlying,
+                            _ => ty,
+                        };
+                        self.diag(kiln_diag::DiagId::note_ambiguous_member_type_found, loc)
+                            .arg(self.ty_arg(ty))
+                    } else if is_type_kind(k) {
+                        // clang prints the class's type with its scope
+                        // (`getTypeDeclType`), without an `aka`.
+                        let names = crate::names::SemaNames::new(self);
+                        let ty = kiln_ast::types::print_type(
+                            &self.ast.types,
+                            &names,
+                            self.tag_type(d),
+                            kiln_ast::types::PrintOptions::CANONICAL,
+                        );
+                        self.diag(kiln_diag::DiagId::note_ambiguous_member_type_found, loc)
+                            .arg(format!("'{ty}'"))
+                    } else {
+                        self.diag(kiln_diag::DiagId::note_ambiguous_member_found, loc)
+                    };
+                    msg = msg.with_note(note);
                 }
                 self.emit(msg);
             }
