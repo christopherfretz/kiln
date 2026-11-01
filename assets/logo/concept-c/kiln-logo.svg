@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 662 256" width="662" height="256" role="img" aria-label="kiln">
+  <title>kiln</title>
+  <defs>
+    <linearGradient id="kc-br" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a3f48"/><stop offset="1" stop-color="#16181d"/></linearGradient>
+    <radialGradient id="kc-halo" cx="128" cy="150" r="84" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7a1a" stop-opacity=".16"/><stop offset="1" stop-color="#ff7a1a" stop-opacity="0"/></radialGradient>
+    <linearGradient id="kc-outer" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ff9d22"/><stop offset=".55" stop-color="#ef4a12"/>
+      <stop offset="1" stop-color="#b3190b"/></linearGradient>
+    <linearGradient id="kc-core" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#fffbe9"/><stop offset=".5" stop-color="#ffe27c"/>
+      <stop offset="1" stop-color="#ffab2e"/></linearGradient>
+    <linearGradient id="kc-tittle" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ffd23f"/><stop offset=".55" stop-color="#ff7a1a"/><stop offset="1" stop-color="#e0340e"/></linearGradient>
+  </defs>
+  <!-- mark -->
+  <g id="kc-symbol">
+    <circle cx="128" cy="150" r="84" fill="url(#kc-halo)"/>
+    <!-- template angle brackets -->
+    <path id="kc-lt" d="M8,136L58,64H88L38,136L88,208H58Z" fill="url(#kc-br)"/>
+    <path id="kc-gt" d="M248,136L198,64H168L218,136L168,208H198Z" fill="url(#kc-br)"/>
+    <!-- the flame: red-orange envelope, white-hot core -->
+    <path id="kc-flame" d="M128,216C104,216 93,198 95,176C97,154 110,140 113,120C121,128 123,138 121,148C134,130 142,104 133,36C157,62 167,104 165,158C164,194 152,216 128,216Z" fill="url(#kc-outer)"/>
+    <path id="kc-core" d="M128,214C114,214 107,203 108,189C109,173 121,163 125,145C136,158 148,172 148,190C148,205 140,214 128,214Z" fill="url(#kc-core)"/>
+  </g>
+  <!-- wordmark: outlined geometric letterforms, x-height 100u, scale 1.0278 -->
+  <g id="kc-wordmark" transform="translate(288,202) scale(1.0278)">
+    <g id="kc-k"><path d="M0,-144H28V0H0ZM28,-70L58,-100H98L28,-30ZM40,-82L122,0H82L40,-42Z" fill="#1c1e24"/></g>
+    <g id="kc-i" transform="translate(137,0)"><path d="M0,-100H28V0H0Z" fill="#1c1e24"/><path d="M14,-114C3,-114 -3,-122 0,-132C2,-138 6,-141 7,-148C11,-143 13,-137 12,-131C17,-137 20,-146 18,-158C28,-150 32,-138 29,-126C27,-118 21,-114 14,-114Z" fill="url(#kc-tittle)"/></g>
+    <path id="kc-l" transform="translate(189,0)" d="M0,-144H28V0H0Z" fill="#1c1e24"/>
+    <path id="kc-n" transform="translate(241,0)" d="M0,0V-100H28V0ZM28,-50A22,22 0 0 1 72,-50V0H100V-50A50,50 0 0 0 28,-94.9Z" fill="#1c1e24"/>
+  </g>
+</svg>

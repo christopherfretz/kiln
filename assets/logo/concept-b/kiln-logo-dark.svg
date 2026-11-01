@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 646 256" width="646" height="256" role="img" aria-label="kiln">
+  <title>kiln</title>
+  <defs>
+    <linearGradient id="kb-tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2f37"/><stop offset="1" stop-color="#121418"/></linearGradient>
+    <radialGradient id="kb-ember" cx="128" cy="250" r="170" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff5a12" stop-opacity=".45"/><stop offset="1" stop-color="#ff5a12" stop-opacity="0"/></radialGradient>
+    <linearGradient id="kb-stem" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f3f5f8"/><stop offset=".65" stop-color="#aab2bd"/><stop offset="1" stop-color="#e8b388"/></linearGradient>
+    <radialGradient id="kb-hot" cx="104" cy="128" r="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fffbe9"/><stop offset=".22" stop-color="#ffe17a"/>
+      <stop offset=".5" stop-color="#ff8a1f"/><stop offset=".8" stop-color="#e2380f"/>
+      <stop offset="1" stop-color="#a5160a"/></radialGradient>
+    <filter id="kb-blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+    <linearGradient id="kb-tittle" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ffd23f"/><stop offset=".55" stop-color="#ff7a1a"/><stop offset="1" stop-color="#e0340e"/></linearGradient>
+    <linearGradient id="kb-chev" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffd23f"/><stop offset=".5" stop-color="#ff7a1a"/><stop offset="1" stop-color="#d9310f"/></linearGradient>
+  </defs>
+  <!-- mark -->
+  <g id="kb-monogram">
+    <!-- tile with an ember glow rising from the floor -->
+    <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#kb-tile)"/>
+    <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#kb-ember)"/>
+    <rect x="13.5" y="13.5" width="229" height="229" rx="52.5" fill="none" stroke="#4b525d" stroke-width="3"/>
+    <!-- cold steel stem -->
+    <rect x="56" y="54" width="38" height="148" rx="4" fill="url(#kb-stem)"/>
+    <!-- the white-hot angle bracket: soft glow, then the bracket itself -->
+    <path d="M102,128L160,54H202L144,128L202,202H160Z" fill="#ff6a14" opacity=".75" filter="url(#kb-blur)"/>
+    <path id="kb-chevron" d="M102,128L160,54H202L144,128L202,202H160Z" fill="url(#kb-hot)"/>
+    <!-- lit leading edge and a few rising sparks (vanish harmlessly at favicon size) -->
+    <path d="M102,128L160,54H166L108,128Z" fill="#fff6d8" opacity=".55"/>
+    <g fill="#ffc64a"><circle cx="212" cy="44" r="3.5"/><circle cx="198" cy="32" r="2.5" opacity=".8"/><circle cx="222" cy="64" r="2" opacity=".7"/></g>
+  </g>
+  <!-- wordmark: outlined geometric letterforms, x-height 100u, scale 1.0278 -->
+  <g id="kb-wordmark" transform="translate(288,202) scale(1.0278)">
+    <g id="kb-k"><path d="M0,-144H28V0H0Z" fill="#f4efe6"/><path d="M33,-50L63,-100H99L69,-50L99,0H63Z" fill="url(#kb-chev)"/></g>
+    <g id="kb-i" transform="translate(121,0)"><path d="M0,-100H28V0H0Z" fill="#f4efe6"/><path d="M14,-114C3,-114 -3,-122 0,-132C2,-138 6,-141 7,-148C11,-143 13,-137 12,-131C17,-137 20,-146 18,-158C28,-150 32,-138 29,-126C27,-118 21,-114 14,-114Z" fill="url(#kb-tittle)"/></g>
+    <path id="kb-l" transform="translate(173,0)" d="M0,-144H28V0H0Z" fill="#f4efe6"/>
+    <path id="kb-n" transform="translate(225,0)" d="M0,0V-100H28V0ZM28,-50A22,22 0 0 1 72,-50V0H100V-50A50,50 0 0 0 28,-94.9Z" fill="#f4efe6"/>
+  </g>
+</svg>
