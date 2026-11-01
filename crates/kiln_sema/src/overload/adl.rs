@@ -6,6 +6,7 @@ use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{ArgView, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
+use kiln_source::Loc;
 
 use crate::Sema;
 
@@ -209,15 +210,48 @@ impl Sema<'_, '_> {
     /// including hidden friends of the associated classes, that `out`
     /// does not already hold (compared by first declaration). Appends
     /// `(decl, found)` pairs to `out`.
+    ///
+    /// Each associated class that is an undefined class template
+    /// specialization is instantiated first, from `loc` (clang
+    /// `addAssociatedClassesAndNamespaces` calls `isCompleteType`): its
+    /// hidden friends ([temp.inst]/3) and bases are then associated.
     pub(crate) fn adl_lookup_dn(
-        &self,
+        &mut self,
         name: DeclName,
         args: &[ExprId],
+        loc: Loc,
         out: &mut Vec<(DeclId, DeclId)>,
     ) {
         let mut assoc = AssocSet::default();
         for &a in args {
             self.assoc_arg(a, &mut assoc);
+        }
+        // Instantiating a class can associate more (its bases); bounded.
+        for _ in 0..MAX_DEPTH {
+            let pending: Vec<DeclId> = assoc
+                .classes
+                .iter()
+                .copied()
+                .filter(|&c| {
+                    (self.ast.spec_info(c).is_some() || self.ast.instantiated_from(c).is_some())
+                        && self.ast.definition(c).is_none()
+                        && !self.ast.decls.get(c).has(kiln_ast::decl::DeclFlags::INVALID)
+                })
+                .collect();
+            if pending.is_empty() || self.inst.fatal {
+                break;
+            }
+            let mut grew = false;
+            for c in pending {
+                grew |= self.instantiate_class(c, loc, false) && self.ast.definition(c).is_some();
+            }
+            if !grew {
+                break;
+            }
+            assoc = AssocSet::default();
+            for &a in args {
+                self.assoc_arg(a, &mut assoc);
+            }
         }
         for &ns in &assoc.namespaces {
             let r = self.ast.lookup_local(ns, name);
