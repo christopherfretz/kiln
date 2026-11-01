@@ -2785,6 +2785,12 @@ impl Sema<'_, '_> {
         else {
             return self.recover_err(&kids, loc);
         };
+        if named.and_then(|d| self.ast.decls.builtin_id(d))
+            == Some(kiln_ast::decl::builtin::EXPECT_WITH_PROBABILITY)
+            && !self.check_expect_probability(conv_args[2])
+        {
+            return self.recover_err(&kids, loc);
+        }
         let at = self.begin_loc(callee);
         let (ty, vk) = self.call_result_of(proto.ret(), loc, named, at);
         let call = self.builder().call(f, &conv_args, ty, vk, loc, rparen, ExprFlags::NONE);

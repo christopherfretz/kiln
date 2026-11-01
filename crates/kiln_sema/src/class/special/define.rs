@@ -643,7 +643,9 @@ impl Sema<'_, '_> {
             }
             _ => (conv::strip_cv(self, fty), ValueCategory::PRValue),
         };
-        Some(self.builder().default_init(field, ctor, ty, vk, loc))
+        let e = self.builder().default_init(field, ctor, ty, vk, loc);
+        self.note_default_init_use(e, field, loc, ctor);
+        Some(e)
     }
 
     /// A reference to the first parameter of the special member being

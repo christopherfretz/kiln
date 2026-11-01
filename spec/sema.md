@@ -1370,7 +1370,25 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
 - `goto` to an undeclared label is reported at the end of the function
   (`use of undeclared label 'x'`).
 - A redefinition is an error, with a note.
-- Jumps past initializations are not checked yet (M3, [stmt.dcl]/3).
+- **Landed (WP-153): jump-scope checking** (`jump_scope.rs`, clang
+  `JumpScopeChecker`), run at the end of every function body with a
+  label, `switch` or `asm goto` (in templates, at instantiation).
+  Protected scopes: a variable whose initialization a jump would bypass
+  ([stmt.dcl]/3: non-trivial default init, any initializer, a VLA or a
+  non-trivial destructor), try blocks and handlers ([except.handle]/2),
+  each arm of a constexpr/consteval `if` ([stmt.if]/2), GNU statement
+  expressions and lifetime-extended temporaries with a destructor. A
+  `goto` or `case` entering one is `cannot jump from this goto statement
+  to its label` / `cannot jump from switch statement to this case label`
+  with one `jump bypasses …` note per scope entered; an `asm goto` may
+  neither enter nor leave a scope with a destructor (`cannot jump from
+  this asm goto statement to one of its possible targets`, the
+  `possible target of asm goto statement` note and `jump exits …`
+  notes). Leaving scopes through `goto` is fine; codegen runs their
+  cleanups (spec/codegen.md).
+- `[[noreturn]]`: the fall-off analysis (§4.3) treats a call as not
+  returning when any redeclaration of the callee is `[[noreturn]]`,
+  including member calls.
 
 ### 7.5 Landed (WP-100): try-blocks (`try_stmt.rs`)
 - `act_on_exception_decl` ([except.handle]/1-3): an rvalue-reference

@@ -104,7 +104,11 @@ panic and never silently wrong IR.
       the `g` forms with a fallback use true and `select (x == 0)`;
       popcount is `llvm.ctpop`, bswap `llvm.bswap`;
     - isfinite/isinf/isnan/isnormal are `llvm.is.fpclass` (tests 504,
-      516, 3, 264) zero-extended; signbit bitcasts to an integer of the
+      516, 3, 264) zero-extended; `__builtin_isfpclass(x, m)` is
+      `llvm.is.fpclass` with the folded mask `m` (not emitted; the fold
+      prepass collects it); `__builtin_expect_with_probability` at -O0 is
+      its first operand (the expected value emitted, the probability
+      not); signbit bitcasts to an integer of the
       float's width and tests `slt 0`; the isgreater family is one
       `fcmp` (`ogt oge olt ole one uno`) zero-extended;
     - memcpy/memmove are `llvm.memcpy`/`llvm.memmove` (`i64` length,
@@ -140,8 +144,9 @@ panic and never silently wrong IR.
     holding the frozen `__impl` object (clang
     `GetAddrOfUnnamedGlobalConstantDecl`), one per frozen value
     (`ModuleGen::const_object`), its initializer, and so its strings,
-    emitted first. Inside a `CXXDefaultArgExpr` (and nested default
-    arguments) the outermost use's recorded values are taken
+    emitted first. Inside a `CXXDefaultArgExpr` or a
+    `CXXDefaultInitExpr` (and nested ones) the outermost use's recorded
+    values are taken
     (`enter_default_arg`), so each call site gets its own location.
   - a conversion to bool of a `zext` from `i1` is the `i1`, and the
     `zext` is erased when unused (clang `EmitIntToBoolConversion`);
@@ -267,6 +272,19 @@ array cookies).
   condition and an empty body clears `mustprogress` on the function and
   gets no loop metadata.
 - Case ranges (GNU) are an error.
+- A goto (forward, backward, out of nested scopes, loops and try blocks)
+  branches through the cleanups of every scope it leaves (`cleanup.rs`
+  branch fixups). A local default-initialized by a trivial constructor
+  still pushes its destructor cleanup whenever there is an insertion
+  point (clang `EmitAutoVarCleanups`). Sema rejects jumps into a
+  protected scope, so codegen never sees one (WP-153).
+- `noreturn` (WP-153): a function some declaration of which carries
+  `[[noreturn]]` / `__attribute__((noreturn))`, or whose type is
+  `noreturn`, gets the `noreturn` function attribute on its declaration
+  and definition. Its calls get the `noreturn` call-site attribute —
+  except a `[[noreturn]]` (C++11 spelling) virtual function's, whose
+  overriders may return — and are followed by `unreachable` and a dummy
+  block (`noreturn_call`, `finish_noreturn_call`).
 
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:
@@ -757,8 +775,6 @@ off and sema rejects `try`/`throw`).
   differs only when D1 can throw (a `noexcept(false)` destructor, which
   sema rejects until WP-112 lands member exception specifications).
 - A conditional `new` with a class-type placement argument.
-- Calls of user `[[noreturn]]` functions are not followed by
-  `unreachable`.
 - Static locals with dynamic initialization (`__cxa_guard_*`, its EH
   abort) are M3.
 - The LLVM name of an anonymous union member type is

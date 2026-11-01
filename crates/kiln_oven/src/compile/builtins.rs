@@ -273,6 +273,17 @@ impl Compiler<'_> {
                 };
                 op(self, bi::FP_CLASS, float_code(fk) | class << 4, [a, dst, dst], [0, 0], begin);
             }
+            // clang: the mask (an integer constant) first, then the value.
+            id::ISFPCLASS => {
+                let (x, m) = (arg(0)?, arg(1)?);
+                let Some(fk) = self.float_kind(x) else {
+                    self.trap_loc(begin, INVALID.into());
+                    return Some(self.finish_builtin(dst));
+                };
+                let b = self.rv(m);
+                let a = self.rv(x);
+                op(self, bi::FP_CLASS, float_code(fk) | bi::MASK << 4, [a, b, dst], [0, 0], begin);
+            }
             id::FPCLASSIFY => {
                 // clang: the operand, then only the argument its class
                 // selects (nan, infinite, normal, subnormal, zero).
@@ -350,7 +361,7 @@ impl Compiler<'_> {
             id::LAUNDER => self.rv_into(arg(0)?, dst),
             // clang: the value of the first operand (the expected value is
             // not evaluated).
-            id::EXPECT => self.rv_into(arg(0)?, dst),
+            id::EXPECT | id::EXPECT_WITH_PROBABILITY => self.rv_into(arg(0)?, dst),
             // clang: the assumption is not evaluated.
             id::ASSUME => self.konst(dst, 0),
             id::OPERATOR_NEW => self.trap_loc(begin, UNTYPED_NEW.into()),
