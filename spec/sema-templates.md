@@ -1547,6 +1547,13 @@ and keeps the typedef as sugar, without instantiating the class
 (`Substituter::class_not_instantiated`). clang's guide transform clones
 the typedef instead.
 
+A template template parameter named alone (`C(args)`, `C{args}`,
+`C x(args);`) is a placeholder for a deduced class type as in clang
+(`is_ctad_template`, `names_class_type`): a dependent
+`DeducedTemplateSpecialization` whose template name substitution replaces
+with the argument's template, after which the placeholder is deduced as
+above (libc++ `ranges::to`; WP-198).
+
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
 implemented and what is deferred (P2582 inherited-constructor guides).
 
@@ -3788,6 +3795,13 @@ requires-clause scope.**
   are supported.
 - *Friend templates* ([temp.friend]): `template<class U> friend class X;`
   (`act_on_friend_class_template`, `Sema.friend_class_template`),
+  a qualified `template<class U> friend class N::X;` /
+  `template<bool> friend class A<T>::B;` befriending the class template
+  qualified lookup finds, without declaring anything
+  (`act_on_qualified_friend_class_template`; a member template is found
+  again in the instantiated class; another kind of entity is
+  `sema_redefinition_different_kind`, nothing found in a namespace
+  `sema_friend_def_no_match`),
   `template<class U> friend R f(U);` (`friend_function_template`), and
   friend specializations `friend R f<>(...)` / `friend R N::g<T>(...)`
   (`Declarator::friend`, `friend_spec_template`,

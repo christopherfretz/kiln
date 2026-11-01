@@ -302,6 +302,9 @@ pub struct Module {
     pub types: TypeTable,
     pub(crate) consts: ConstTable,
     pub(crate) funcs: Vec<Function>,
+    /// The print order of `funcs`: creation order unless
+    /// [`Module::move_function_to_end`] moved one.
+    pub(crate) func_order: Vec<FuncId>,
     pub(crate) globals: Vec<GlobalVar>,
     pub(crate) aliases: Vec<Alias>,
     pub(crate) comdats: Vec<Comdat>,
@@ -330,6 +333,7 @@ impl Module {
             types: TypeTable::new(),
             consts: ConstTable::default(),
             funcs: Vec::new(),
+            func_order: Vec::new(),
             globals: Vec::new(),
             aliases: Vec::new(),
             comdats: Vec::new(),
@@ -395,6 +399,7 @@ impl Module {
         let id = FuncId(self.funcs.len() as u32);
         self.register_global_name(&name, Value::func(id));
         self.funcs.push(Function::new(name, fn_ty, ret, &params, varargs));
+        self.func_order.push(id);
         Ok(id)
     }
 
@@ -424,9 +429,26 @@ impl Module {
         &mut self.funcs[f.index()]
     }
 
-    /// Functions in creation (print) order.
+    /// Functions in print order: creation order, except that
+    /// [`Module::move_function_to_end`] moves a function.
     pub fn functions(&self) -> impl Iterator<Item = (FuncId, &Function)> {
-        self.funcs.iter().enumerate().map(|(i, f)| (FuncId(i as u32), f))
+        self.func_order.iter().map(|&f| (f, &self.funcs[f.index()]))
+    }
+
+    /// Move function `f` to the end of the print order, as LLVM's
+    /// `Function::removeFromParent` + `insertAfter` of the last function
+    /// does (clang `applyReplacements` moves a replacing structor to the
+    /// position of the declaration it replaces). Ids are unchanged.
+    pub fn move_function_to_end(&mut self, f: FuncId) {
+        if let Some(i) = self.func_order.iter().position(|&x| x == f) {
+            let _ = self.func_order.remove(i);
+            self.func_order.push(f);
+        }
+    }
+
+    /// The functions in print order.
+    pub(crate) fn ordered_funcs(&self) -> impl Iterator<Item = &Function> {
+        self.func_order.iter().map(|&f| &self.funcs[f.index()])
     }
 
     /// Run [`crate::verify_function`] over every function, naming the
@@ -436,7 +458,7 @@ impl Module {
     ///
     /// The first violation, in function order.
     pub fn verify(&self) -> IrResult<()> {
-        for f in &self.funcs {
+        for f in self.ordered_funcs() {
             crate::verify::verify_function(f).map_err(|e| {
                 IrError::new(e.kind, format!("in function @{}: {}", f.name(), e.message))
             })?;

@@ -88,6 +88,18 @@ impl Sema<'_, '_> {
 
     /// Instantiates one queued definition and records it for codegen.
     fn instantiate_pending(&mut self, p: PendingInst) {
+        if self.ast.templates.is_late_explicit_inst(self.ast.first(p.decl)) {
+            // Explicitly instantiated before its template was defined:
+            // codegen defines these itself (`emit_late_explicit_insts`).
+            if self.is_var_spec(p.decl) {
+                self.instantiate_late_var_spec(p.decl, p.poi);
+            } else if self.kind_of(p.decl) == kiln_ast::decl::DeclKind::Var {
+                self.instantiate_static_member_def(p.decl, p.poi);
+            } else {
+                self.instantiate_function_definition(p.decl, p.poi);
+            }
+            return;
+        }
         let had = self.ast.definition(p.decl).is_some();
         let is_var = self.kind_of(p.decl) == kiln_ast::decl::DeclKind::Var;
         let redecls = self.ast.redecls_of(p.decl).count();
