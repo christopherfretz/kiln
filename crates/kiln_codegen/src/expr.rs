@@ -367,8 +367,12 @@ impl Cg<'_> {
                 if let Some(&x) = ast.lists.get(ast.exprs.init_list_inits(e)).first() {
                     return self.emit_scalar_opt(ExprId::new(x));
                 }
-                let t = self.lty(q);
-                V::C(self.m.const_zero(t))
+                if !self.zero_init(q) {
+                    V::C(self.null_const(q)?)
+                } else {
+                    let t = self.lty(q);
+                    V::C(self.m.const_zero(t))
+                }
             }
             // clang `ScalarExprEmitter::VisitArraySubscriptExpr`: a vector
             // subscript is the vector's value and `extractelement`.

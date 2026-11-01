@@ -540,9 +540,6 @@ impl Cg<'_> {
             asm = asm.wrapping_mul(a.size);
             base = a.elem;
         }
-        if matches!(t.canonical_view(base), TypeView::MemberPointer { .. }) {
-            return err(loc, "new of a member pointer is not supported yet");
-        }
         // The array cookie (`GetArrayCookieSize`); none for the reserved
         // placement form (Itanium `requiresArrayCookie`).
         let cookie = if is_array
