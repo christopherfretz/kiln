@@ -15,6 +15,7 @@ note_ambiguous_atomic_constraints = Note (0) "similar constraint expressions not
 note_ambiguous_atomic_constraints_similar_expression = Note (0) "similar constraint expression here";
 note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";
 note_ambiguous_member_found = Note (0) "member found by ambiguous name lookup";
+note_ambiguous_member_type_found = Note (1) "member type {0} found by ambiguous name lookup";
 note_ambiguous_type_conversion = Note (2) "because of ambiguity in conversion of {0} to {1}";
 note_asm_input_duplicate_first = Note (1) "constraint '{0}' is already present here";
 note_asm_missing_constraint_modifier = Note (1) "use constraint modifier \"{0}\"";

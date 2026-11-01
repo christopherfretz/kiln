@@ -655,7 +655,10 @@ fn bind_reference(
     let r_un = unqual(s, referee);
     // Reference-related: same type, or `referee` a base of `from`
     // ([dcl.init.ref]/4).
-    let same = s.ast.types.same_type(f_un, r_un);
+    // A `T[N]` glvalue binds a `T (&)[]` (P0388R4); clang treats the
+    // pair as unrelated when the binding would drop qualifiers.
+    let same =
+        s.ast.types.same_type(f_un, r_un) || (rq.contains(fq) && s.unknown_bound_of(r_un, f_un));
     let base = match (s.ast.types.as_record(f_un), s.ast.types.as_record(r_un)) {
         (Some(d), Some(b)) if !same => find_base(s, d, b),
         _ => BaseSearch::NotDerived,
@@ -771,6 +774,17 @@ fn bind_reference(
             };
             let (to_str, from_str) = strs(s);
             return Err(ConvError::new(id, vec![sel.into(), to_str, from_str]));
+        }
+        if s.ast.types.is_array(r_un) {
+            // No temporary of array type is copy-initialized from an
+            // unrelated array ([dcl.init.ref]/5.4.2; clang
+            // `FK_ReferenceInitFailed`, which says "rvalue" for an xvalue).
+            let sel = if vk == ValueCategory::LValue { "1" } else { "0" };
+            let (to_str, from_str) = strs(s);
+            return Err(ConvError::new(
+                DiagId::sema_reference_bind_failed,
+                vec![to_str, sel.into(), from_str],
+            ));
         }
         return Err(unsupported("binding a reference to a temporary"));
     }

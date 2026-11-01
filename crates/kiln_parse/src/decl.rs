@@ -859,6 +859,9 @@ impl Parser<'_, '_> {
                 while self.pos() < end {
                     self.bump();
                 }
+                // An ambiguous name recovers as the type `d` classified
+                // as ([basic.lookup.general]/1, clang's `getTypeName`).
+                self.s.diagnose_ambiguous_name(name, None, loc);
                 self.s.mark_type_referenced(d);
                 self.s.check_type_name_access(name, None, d, loc);
                 let kind = self.s.ast.decls.get(d).kind();
