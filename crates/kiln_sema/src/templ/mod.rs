@@ -722,16 +722,68 @@ impl Sema<'_, '_> {
             .collect();
         let n = lists.iter().map(Vec::len).max().unwrap_or(0);
         for i in 0..n {
-            let own = |q: &DeclId| self.ast.templates.defaults.get(*q).copied();
-            let Some(a) = lists.iter().find_map(|l| l.get(i).and_then(own)) else { continue };
+            // Inherited ones too: a redeclaration that created no decl
+            // ([`Sema::inherit_redeclared_defaults`]).
+            let any = |q: &DeclId| self.template_default(*q);
+            let Some(a) = lists.iter().find_map(|l| l.get(i).and_then(any)) else { continue };
             for l in &lists {
                 if let Some(&q) = l.get(i)
-                    && self.ast.templates.defaults.get(q).is_none()
+                    && self.template_default(q).is_none()
                 {
                     self.inherited_defaults.insert(q, a);
                 }
             }
         }
+    }
+
+    /// Records the default arguments of a class template redeclaration
+    /// that creates no decl (`template <class T = int> class X;` after
+    /// `template <class T> class X;`) for every declaration of template
+    /// `t` whose parameter at that position has none ([temp.param]/12).
+    pub(crate) fn inherit_redeclared_defaults(&mut self, t: DeclId, list: TemplateParamListId) {
+        let Some(p) = self.pattern_of(t) else { return };
+        let new: Vec<DeclId> =
+            self.ast.lists.iter::<DeclId>(self.ast.templates.param_list(list).params).collect();
+        let lists: Vec<Vec<DeclId>> = self
+            .ast
+            .redecls_of(p)
+            .filter_map(|x| self.ast.described_template(x))
+            .map(|x| self.template_params(x))
+            .collect();
+        for (i, &q) in new.iter().enumerate() {
+            let Some(a) = self.ast.templates.defaults.get(q).copied() else { continue };
+            for l in &lists {
+                if let Some(&o) = l.get(i)
+                    && self.template_default(o).is_none()
+                {
+                    self.inherited_defaults.insert(o, a);
+                }
+            }
+        }
+    }
+
+    /// The declaration of template `t` whose parameters stand for the
+    /// template: its definition's, else the first one that is not a
+    /// friend declaration, else the first. A friend redeclaration nested
+    /// in a class template has deeper parameters (libc++
+    /// `template <class _CharT, class _Traits, class _Alloc> friend class
+    /// basic_string;` in `__wrap_iter`, which may come first), and can have
+    /// no default arguments ([temp.param]/12).
+    pub(crate) fn head_template(&self, t: DeclId) -> DeclId {
+        let first = self.ast.first(t);
+        let Some(p) = self.pattern_of(t) else { return first };
+        if let Some(d) = self.ast.definition(p).and_then(|d| self.ast.described_template(d)) {
+            return d;
+        }
+        let mut head = first;
+        for x in self.ast.redecls_of(p) {
+            if self.ast.decls.get(x).misc().friend() == kiln_ast::decl::FriendKind::None
+                && let Some(d) = self.ast.described_template(x)
+            {
+                head = d;
+            }
+        }
+        head
     }
 
     /// The template decl `d` (a template, or the pattern of one) is part

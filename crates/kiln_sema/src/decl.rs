@@ -3324,6 +3324,7 @@ impl Sema<'_, '_> {
             && self.check_template_heads_match(list, old)
         {
             self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
+            self.inherit_redeclared_defaults(t, list);
         }
     }
 

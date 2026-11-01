@@ -194,12 +194,13 @@ impl Sema<'_, '_> {
         written: usize,
         loc: Loc,
     ) -> ArgListId {
-        let params = self.template_params(tmpl);
+        let head = self.head_template(tmpl);
+        let params = self.template_params(head);
         let elems: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
         if elems.len() != params.len() {
             return args;
         }
-        let depth = self.template_param_depth(tmpl);
+        let depth = self.template_param_depth(head);
         let mut n = elems.len();
         while n > 0 {
             let p = params[n - 1];
@@ -444,7 +445,7 @@ impl Sema<'_, '_> {
                 c = self.ast.decls.get(x).ctx();
             }
         }
-        Self::outer_levels(tmpl, self.template_param_depth(tmpl))
+        Self::outer_levels(tmpl, self.template_param_depth(self.head_template(tmpl)))
     }
 
     /// The context of instantiated member template `tmpl` whose
