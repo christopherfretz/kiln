@@ -36,6 +36,7 @@ pub mod lookup;
 pub mod names;
 pub mod new_delete;
 mod oven_bridge;
+mod packed;
 pub mod overload;
 mod predefined;
 mod range_for;
@@ -127,6 +128,9 @@ pub struct Sema<'a, 'sm> {
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
     pub(crate) pending_odr: Vec<ExprId>,
+    /// `&m` of members a `packed` attribute may misalign, reported at the
+    /// end of the full-expression (`-Waddress-of-packed-member`).
+    pub(crate) misaligned: Vec<packed::Misaligned>,
     /// Immediate invocations and references to immediate functions of
     /// the current full-expression, and why escalated functions are
     /// immediate (spec/sema.md §5.10).
@@ -389,6 +393,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             decltype_calls: Vec::new(),
             immediate: 0,
             pending_odr: Vec::new(),
+            misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
             defining: Vec::new(),
             enums: Vec::new(),

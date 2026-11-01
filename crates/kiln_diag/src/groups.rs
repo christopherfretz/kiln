@@ -196,6 +196,7 @@ diag_groups! {
     PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
     // ----- WP-154 (atomic builtins)
     AtomicMemoryOrdering = "atomic-memory-ordering" [];
+    AddressOfPackedMember = "address-of-packed-member" [];
 }
 
 impl Group {

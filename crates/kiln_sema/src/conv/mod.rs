@@ -969,6 +969,12 @@ pub fn implicit_convert(
     if s.ast.types.is_dependent(from) || s.ast.types.is_dependent(to) {
         return Ok(e);
     }
+    // clang's `InitializationSequence::Perform` drops a misaligned `&m`
+    // converted to a type that tolerates it (`-Waddress-of-packed-member`);
+    // a simple assignment does not (`CheckSingleAssignmentConstraints`).
+    if !s.misaligned.is_empty() && ctx != ConvCtx::Assignment {
+        s.discard_misaligned_member_address(to, e);
+    }
     if s.check_builtin_fn_use(e) {
         let loc = s.eloc(e);
         return Ok(s.recover_err(&[e], loc));

@@ -1520,6 +1520,47 @@ The vector operators themselves are summarized in spec/types.md
   binary vector operator without `bool` vectors. A `bool`-vector arm is
   `invalid operands to binary expression`.
 
+### 5.14 `-Waddress-of-packed-member` (`packed.rs`, WP-183)
+
+clang's `RefersToMemberWithReducedAlignment`, `DiscardMisalignedMemberAddress`
+and `DiagnoseMisalignedMembers`:
+
+- **Candidates.** `&m` (parentheses stripped) of a `MemberExpr` chain
+  `a.b.c` is recorded when all of these hold:
+  - every link names a non-static data member (not an indirect field);
+  - some link is packed, either the member or its class;
+  - the top base, with parentheses and implicit casts stripped, is a
+    `DeclRefExpr` or `this`;
+  - the member's type is aligned to more than 1 byte;
+  - the summed field offsets are not a multiple of that alignment, or
+    the outermost class's alignment is lower.
+
+  For `.` on a non-reference variable, the outermost class's alignment
+  is raised to the variable's own alignment (type or `alignas`). The
+  culprit is the innermost member that is packed or is in a packed
+  class. Its alignment is the smaller of its type's and its class's.
+- **Discard.** A conversion of the recorded `&m` drops it when the
+  target is an integer, a dependent type, or a pointer to an incomplete
+  type or to a type aligned no more than the culprit:
+  - every cast node in the full-expression (implicit and explicit);
+  - `implicit_convert` in any context except simple assignment (clang's
+    `InitializationSequence::Perform` step, even for an identity
+    conversion);
+  - both operands of a pointer-pointer comparison.
+
+  A conditional operator's arms, a pointer arithmetic operand, `(void)`
+  and the right side of `=` do not discard.
+- **Report.** At the end of the full-expression (`act_on_full_expr`), at
+  the `MemberExpr`'s begin location: `taking address of packed member
+  'm' of class or structure 'C' may result in an unaligned pointer
+  value`. An anonymous class is named by its typedef.
+- **Deviations:**
+  - A non-dependent `&m` in a template is reported once, at the
+    definition. clang repeats it in every instantiation.
+  - An anonymous union or struct member as the culprit prints as `''`.
+    clang prints `C::(anonymous union at ...)`.
+- Test: `tests/conformance/expr.unary.op/address-of-packed-member.cpp`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit

@@ -348,7 +348,7 @@ impl Sema<'_, '_> {
     }
 
     /// The bit offset of non-static data member `f` in its class.
-    fn field_bit_offset(&mut self, f: DeclId) -> u64 {
+    pub(crate) fn field_bit_offset(&mut self, f: DeclId) -> u64 {
         let Some(parent) = self.ast.decls.get(f).ctx() else { return 0 };
         let def = self.ast.definition(parent).unwrap_or(parent);
         let Some(i) = self

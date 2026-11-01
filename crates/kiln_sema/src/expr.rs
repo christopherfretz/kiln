@@ -386,6 +386,9 @@ impl Sema<'_, '_> {
         // [intro.execution]/5: the temporaries of the full-expression are
         // destroyed at its end (spec/sema-class.md §5.3).
         let e = self.finish_cleanups(e);
+        if !self.misaligned.is_empty() {
+            self.diagnose_misaligned_members(e);
+        }
         if self.pending_odr.is_empty() {
             return e;
         }
@@ -1817,6 +1820,7 @@ impl Sema<'_, '_> {
         let Some(t) = self.check_addressable(e, loc) else {
             return self.recover_err(&[e], loc);
         };
+        self.check_address_of_packed_member(e);
         let ty = self.ast.types.pointer_to(t);
         self.builder().unary(UnaryOp::AddrOf, e, ty, loc, ExprFlags::CANNOT_OVERFLOW)
     }
@@ -2369,6 +2373,15 @@ impl Sema<'_, '_> {
         let l2 = conv::decay(self, l);
         let r2 = conv::decay(self, r);
         let (lt, rt) = (self.ety(l2), self.ety(r2));
+        if !self.misaligned.is_empty()
+            && self.ast.types.is_pointer(lt)
+            && self.ast.types.is_pointer(rt)
+        {
+            // clang converts both pointer operands to their composite
+            // pointer type as initializations (`-Waddress-of-packed-member`).
+            self.discard_misaligned_member_address(lt, l2);
+            self.discard_misaligned_member_address(rt, r2);
+        }
         if self.is_member_pointer(lt) || self.is_member_pointer(rt) {
             return self.member_pointer_comparison(op, l2, r2, loc);
         }
