@@ -1613,6 +1613,7 @@ diag_ids! {
     sema_vla_no_init = Error (0) "variable-sized object may not be initialized";
     sema_vla_cxx_extension_gnu = Extension [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
     sema_address_of_packed_member = Warning [AddressOfPackedMember] (2) "taking address of packed member {0} of class or structure {1} may result in an unaligned pointer value";
+    sema_unused_voidptr = Warning [UnusedValue] (0) "expression result unused; should this cast be to 'void'?";
 }
 
 impl DiagId {

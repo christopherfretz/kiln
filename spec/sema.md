@@ -709,8 +709,19 @@ and returns the scope it names:
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
     discarded call, or a discarded by-value result of such a type,
-    warns.
-  - `deprecated` warns on use.
+    warns. The callee is clang's `getReferencedDeclOfCallee` (WP-203):
+    a name or member access (`m.f()`, `p->f()`, `m.operator-(1)`, a
+    static member through an object), under parens, implicit casts and
+    substituted template parameters, through `.*`/`->*` (the right
+    operand) and unary `*`/`&`/`+`. A call without one never warns. The
+    result type's attribute wins over the callee's (clang
+    `getUnusedResultAttr`); a call returning a reference has no by-value
+    result. Not for a `void` call. Reported at the callee's start.
+  - `deprecated` warns on use: a name, and a member named by a member
+    access or an implicit `this->` (clang `DiagnoseUseOfDecl` in
+    `BuildMemberReferenceExpr`, WP-203). Unlike clang, a non-dependent
+    use in a template is not diagnosed again at instantiation (nor is
+    a non-dependent discarded nodiscard call).
   - `maybe_unused` suppresses unused warnings.
   - `alignas` is validated as a power of two and fed into layout.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
@@ -1320,7 +1331,11 @@ for them.
   cleanups; a constructor call warns only when the constructor or its
   class is `[[nodiscard]]` (`ignoring temporary created by a constructor
   declared with 'nodiscard' attribute[: msg]`, -Wunused-value). A braced
-  or scalar functional cast warns `expression result unused`.
+  or scalar functional cast warns `expression result unused`. A C-style
+  cast written `(void*)` (exactly, not through a typedef) warns
+  `expression result unused; should this cast be to 'void'?`
+  (-Wunused-value, clang `warn_unused_voidptr`) with only the fix-it
+  removing the `*` as its range (WP-203).
   - `emit_unused` (WP-182) follows clang's order: a comparison is
     `-Wunused-comparison` only when it is the unused expression itself
     (`top_comparison`: not parenthesized, not a comma's right operand or
