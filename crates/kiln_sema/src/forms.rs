@@ -340,13 +340,14 @@ impl Sema<'_, '_> {
                 ExprFlags::NONE,
             );
         }
-        if self.ast.types.is_array(to)
+        // A prvalue array keeps its cv-qualifiers ([expr.type]/2).
+        if self.ast.types.is_array(ty)
             && !matches!(
-                self.ast.types.canonical_view(to),
+                self.ast.types.canonical_view(ty),
                 kiln_ast::types::TypeView::VariableArray { .. }
             )
         {
-            return self.array_list_cast(to, l, loc);
+            return self.array_list_cast(ty, l, loc);
         }
         if let Some(what) = self
             .temporary_unsupported(ty)
