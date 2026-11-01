@@ -1,10 +1,10 @@
 // [expr.const], [dcl.init.general]/16.6.2.2 (P0960): the oven evaluates
 // parenthesized aggregate initialization of classes, unions (the first
 // member becomes active), arrays (value-initialized tail, class elements
-// default-constructed) and array new-expressions. Diagnostics match
-// clang 19; clang 19 crashes evaluating `newed` (a runtime-bound
-// `new int[n](4, 5)`), which GCC 14 accepts.
+// default-constructed) and array new. Diagnostics match clang 19, which
+// crashes on `newed` (`new int[n](4, 5)`, runtime bound; GCC 14 accepts).
 //@ expect: compile-fail
+//@ skip(clang): clang 19 crashes evaluating the runtime-bound array new in `newed`
 //@ strict-diags
 //@ diag: 34:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 32:46 note "read of member 'f' of union with active member 'i' is not allowed in a constant expression"
