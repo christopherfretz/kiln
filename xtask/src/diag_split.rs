@@ -723,6 +723,23 @@ fn replay(
                     .map_err(|e| format!("cannot write {}: {e}", table.legacy()))?;
                 warnings.push(format!("reset {} to MERGE_HEAD's version", table.legacy()));
             }
+            // A conflicted area file: take theirs; the replay below re-adds yours.
+            let dir = std::fs::read_dir(root.join(table.dir()))
+                .map_err(|e| format!("cannot list {}: {e}", table.dir()))?;
+            for entry in dir.filter_map(Result::ok) {
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let rel = format!("{}/{name}", table.dir());
+                let text = read(root, &rel)?;
+                if !text.lines().any(|l| l.starts_with("<<<<<<<") || l.starts_with(">>>>>>>")) {
+                    continue;
+                }
+                let theirs = git(root, &["show", &format!("MERGE_HEAD:{rel}")]).unwrap_or_default();
+                std::fs::write(root.join(&rel), theirs)
+                    .map_err(|e| format!("cannot write {rel}: {e}"))?;
+                warnings.push(format!("reset {rel} to MERGE_HEAD's version"));
+            }
         }
         (base, "HEAD".to_owned())
     };
