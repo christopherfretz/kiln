@@ -10,6 +10,7 @@
 mod regex;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use kiln_source::{FileId, Loc, SourceManager, Span};
 
@@ -117,7 +118,7 @@ enum Matcher {
 /// One `expected-*` directive.
 #[derive(Debug)]
 struct Directive {
-    directive_loc: Loc,
+    written_at: Loc,
     /// Where the diagnostic is expected; invalid for `@*` / `@*:*`.
     diag_loc: Loc,
     any_file_and_line: bool,
@@ -143,7 +144,7 @@ impl Directive {
 struct Unattached {
     level: VerifyLevel,
     regex: bool,
-    directive_loc: Loc,
+    written_at: Loc,
     content_loc: Loc,
     text: String,
     min: u32,
@@ -257,6 +258,7 @@ impl<'a> Verifier<'a> {
     }
 
     /// clang `ParseDirective`; returns whether a directive was found.
+    #[allow(clippy::too_many_lines, reason = "one pass mirroring clang's ParseDirective")]
     fn parse_directives(&mut self, s: &str, pos: Loc, engine: &DiagEngine<'_>) -> bool {
         let at = |ph: &Helper<'_>| Span::empty(pos.with_offset(ph.c as u32));
         // Markers first.
@@ -351,9 +353,7 @@ impl<'a> Verifier<'a> {
             let mut marker = None;
             let mut any_file_and_line = false;
             let mut any_line = false;
-            if !ph.next(b"@") {
-                expected = pos;
-            } else {
+            if ph.next(b"@") {
                 ph.advance();
                 let plus = ph.next(b"+");
                 if plus || ph.next(b"-") {
@@ -414,6 +414,8 @@ impl<'a> Verifier<'a> {
                     continue;
                 }
                 ph.advance();
+            } else {
+                expected = pos;
             }
 
             ph.skip_whitespace();
@@ -486,7 +488,7 @@ impl<'a> Verifier<'a> {
                 cpos += f + 2;
             }
             if text.is_empty() {
-                text = content.to_owned();
+                content.clone_into(&mut text);
             }
             if regex && !text.contains("{{") {
                 Diag::new(DiagId::diag_verify_missing_regex, Span::empty(content_loc))
@@ -495,7 +497,7 @@ impl<'a> Verifier<'a> {
                     .emit(engine);
                 return false;
             }
-            let ud = Unattached { level, regex, directive_loc: pos, content_loc, text, min, max };
+            let ud = Unattached { level, regex, written_at: pos, content_loc, text, min, max };
             match marker {
                 None => self.attach(&ud, expected, any_file_and_line, any_line, engine),
                 Some(m) => self.add_directive_at_marker(m, ud, engine),
@@ -547,7 +549,7 @@ impl<'a> Verifier<'a> {
             Matcher::Substring
         };
         self.lists[ud.level.index()].push(Directive {
-            directive_loc: ud.directive_loc,
+            written_at: ud.written_at,
             diag_loc,
             any_file_and_line,
             any_line,
@@ -567,7 +569,7 @@ impl<'a> Verifier<'a> {
         let mut m = Marker { def: pos, redef: Loc::INVALID, use_: Loc::INVALID };
         for ud in self.deferred.remove(&name).unwrap_or_default() {
             if !m.use_.is_valid() {
-                m.use_ = ud.directive_loc;
+                m.use_ = ud.written_at;
             }
             self.attach(&ud, pos, false, false, engine);
         }
@@ -577,7 +579,7 @@ impl<'a> Verifier<'a> {
     fn add_directive_at_marker(&mut self, name: String, ud: Unattached, engine: &DiagEngine<'_>) {
         if let Some(m) = self.markers.get_mut(&name) {
             if !m.use_.is_valid() {
-                m.use_ = ud.directive_loc;
+                m.use_ = ud.written_at;
             }
             let def = m.def;
             self.attach(&ud, def, false, false, engine);
@@ -608,7 +610,7 @@ impl Verifier<'_> {
         }
         for (name, uds) in std::mem::take(&mut self.deferred) {
             if let Some(ud) = uds.first() {
-                Diag::new(DiagId::diag_verify_no_such_marker, Span::empty(ud.directive_loc))
+                Diag::new(DiagId::diag_verify_no_such_marker, Span::empty(ud.written_at))
                     .arg(&name)
                     .allow_duplicate()
                     .emit(engine);
@@ -620,6 +622,12 @@ impl Verifier<'_> {
     /// translation unit reported, notes included, in emission order)
     /// against the directives.
     pub fn check(&self, diags: &[Diagnostic]) -> VerifyReport {
+        fn flatten<'d>(d: &'d Diagnostic, seen: &mut [Vec<(Loc, &'d str)>; 4]) {
+            seen[VerifyLevel::of(d.level).index()].push((d.span.lo, d.message.as_str()));
+            for n in &d.notes {
+                flatten(n, seen);
+            }
+        }
         let mut report = VerifyReport::default();
         let prefix = self.opts.first_prefix();
         if self.status == Status::NoDirectives {
@@ -627,12 +635,6 @@ impl Verifier<'_> {
             report.problems += 1;
         }
         let mut seen: [Vec<(Loc, &str)>; 4] = Default::default();
-        fn flatten<'d>(d: &'d Diagnostic, seen: &mut [Vec<(Loc, &'d str)>; 4]) {
-            seen[VerifyLevel::of(d.level).index()].push((d.span.lo, d.message.as_str()));
-            for n in &d.notes {
-                flatten(n, seen);
-            }
-        }
         for d in diags {
             flatten(d, &mut seen);
         }
@@ -681,19 +683,16 @@ impl Verifier<'_> {
                             || self.is_from_same_file(d.diag_loc, loc))
                         && d.matches(msg)
                 });
-                match found {
-                    Some(k) => {
-                        right.remove(k);
+                if let Some(k) = found {
+                    right.remove(k);
+                } else {
+                    // The cap departs from clang only for absurd counts
+                    // (`expected-error 4000000000 {{x}}`), which would
+                    // otherwise exhaust memory.
+                    if i >= d.min || left_only.len() >= MAX_LISTED {
+                        break;
                     }
-                    None => {
-                        // The cap departs from clang only for absurd
-                        // counts (`expected-error 4000000000 {{x}}`),
-                        // which would otherwise exhaust memory.
-                        if i >= d.min || left_only.len() >= MAX_LISTED {
-                            break;
-                        }
-                        left_only.push(d);
-                    }
+                    left_only.push(d);
                 }
                 i += 1;
             }
@@ -748,14 +747,15 @@ impl Verifier<'_> {
         if d.any_line {
             out.push_str(" Line *");
         } else {
-            out.push_str(&format!(" Line {}", self.presumed_line(d.diag_loc)));
+            let _ = write!(out, " Line {}", self.presumed_line(d.diag_loc));
         }
-        if d.directive_loc != d.diag_loc {
-            out.push_str(&format!(
+        if d.written_at != d.diag_loc {
+            let _ = write!(
+                out,
                 " (directive at {}:{})",
-                self.file_name(d.directive_loc),
-                self.presumed_line(d.directive_loc)
-            ));
+                self.file_name(d.written_at),
+                self.presumed_line(d.written_at)
+            );
         }
         out.push_str(": ");
         out.push_str(&d.text);
@@ -765,9 +765,7 @@ impl Verifier<'_> {
     /// clang `PrintUnexpected`, one entry.
     fn seen_line(&self, loc: Loc, msg: &str) -> String {
         let mut out = String::new();
-        if !loc.is_valid() {
-            out.push_str("\n  (frontend)");
-        } else {
+        if loc.is_valid() {
             out.push_str("\n ");
             if !self.sm.is_macro_loc(loc)
                 && let Some(f) = self.file_entry(loc)
@@ -775,7 +773,9 @@ impl Verifier<'_> {
                 out.push_str(" File ");
                 out.push_str(self.sm.file_name(f));
             }
-            out.push_str(&format!(" Line {}", self.presumed_line(loc)));
+            let _ = write!(out, " Line {}", self.presumed_line(loc));
+        } else {
+            out.push_str("\n  (frontend)");
         }
         out.push_str(": ");
         out.push_str(msg);

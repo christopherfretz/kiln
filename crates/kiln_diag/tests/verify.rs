@@ -66,7 +66,7 @@ impl Case {
         let sm = &self.sm;
         let sink = MemorySink::new();
         let engine =
-            DiagEngine::new(sm, &DiagOptions::from_args(&["-ferror-limit=0"]), sink.clone());
+            DiagEngine::new(sm, &DiagOptions::from_args(["-ferror-limit=0"]), sink.clone());
         let header = self.header;
         let lookup = Box::new(move |_: &SourceManager, _: Loc, name: &str| {
             (name == "h.h").then_some(header).flatten()
@@ -80,7 +80,7 @@ impl Case {
         emit(&engine, sm, self.main);
         v.finish(&engine);
         let report = v.check(&sink.take());
-        let dopts = DiagOptions::from_args(&["-fno-caret-diagnostics"]);
+        let dopts = DiagOptions::from_args(["-fno-caret-diagnostics"]);
         let buf = SharedBuffer::new();
         let out = DiagEngine::new(sm, &dopts, TextSink::new(buf.clone(), &dopts));
         report.emit(&out);

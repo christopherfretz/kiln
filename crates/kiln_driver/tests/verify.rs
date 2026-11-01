@@ -1,6 +1,6 @@
 //! End-to-end tests of `-verify` (WP-143, spec/driver.md "-verify",
 //! spec/diag.md §11): the report text and exit status against
-//! clang 19's VerifyDiagnosticConsumer, pinned here and, when
+//! clang 19's `VerifyDiagnosticConsumer`, pinned here and, when
 //! `clang++-19` is installed, compared live.
 #![forbid(unsafe_code)]
 
@@ -9,10 +9,10 @@ use std::process::Command;
 
 const CLANG: &str = "clang++-19";
 
-const H_H: &str = r#"int hh = q1;
+const H_H: &str = r"int hh = q1;
 #define BAD undeclared_m
 int hh2 = q2; // expected-error {{undeclared identifier 'q2'}}
-"#;
+";
 
 const F1: &str = r#"#include "h.h" // expected-error@h.h:1 {{undeclared identifier 'q1'}}
 int a = BAD; // expected-error {{undeclared_m}}
@@ -36,18 +36,18 @@ void h() { g("x"); } // foo-error {{no matching function}}
 #warning hello // foo-warning {{hello}}
 "#;
 
-const F3: &str = r#"int x = y; // expected-error {{undeclared}} expected-note {{nothing}}
+const F3: &str = r"int x = y; // expected-error {{undeclared}} expected-note {{nothing}}
 struct S { int m; };
 int z = S().n; // expected-error-re {{no member named '{{[a-z]}}' in '{{(struct )?}}S'}}
 // expected-warning@*:* {{anywhere}}
 // expected-error@* {{any line}}
-"#;
+";
 
-const MATCHED: &str = r#"int x = y; // expected-error {{use of undeclared identifier 'y'}}
+const MATCHED: &str = r"int x = y; // expected-error {{use of undeclared identifier 'y'}}
 #warning w
 // expected-warning@-1 {{w}}
 static_assert(false); // expected-error {{static assertion failed}}
-"#;
+";
 
 /// A fatal error stops the parse; the directives after it are still read.
 const FATAL: &str = r#"#include "nope.h" // expected-error {{not found}}
@@ -55,11 +55,11 @@ int a = q; // expected-error {{undeclared}}
 "#;
 
 /// The error limit stops the diagnostics, not the comment scan.
-const LIMIT: &str = r#"int v0 = q0; // expected-error {{undeclared}}
+const LIMIT: &str = r"int v0 = q0; // expected-error {{undeclared}}
 int v1 = q1; // expected-error {{undeclared}}
 int v2 = q2; // expected-error {{undeclared}}
 int v3 = q3; // expected-error {{undeclared}}
-"#;
+";
 
 fn setup(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("kiln-verify-{tag}-{}", std::process::id()));

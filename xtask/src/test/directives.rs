@@ -801,6 +801,26 @@ impl Parser {
         list.push(Marker { compiler, reason: reason.to_owned() });
     }
 
+    /// Validates `verify` against `expect` and `diag:`; returns whether
+    /// the test is a `verify` test.
+    fn check_verify(&mut self, expect: Expect) -> bool {
+        if self.verify_line == 0 {
+            return false;
+        }
+        if expect != Expect::CompileOk {
+            let line = self.verify_line;
+            self.err(
+                line,
+                "`verify` only applies to `compile-ok` tests (the outcome is the -verify check)",
+            );
+        }
+        if self.diag_line != 0 {
+            let line = self.diag_line;
+            self.err(line, "`diag:` and `strict-diags` do not apply to `verify` tests (use expected-* comments)");
+        }
+        true
+    }
+
     fn finish(mut self) -> Result<TestSpec, Vec<DirectiveError>> {
         let expect = self.expect.unwrap_or(Expect::CompileOk);
         if expect != Expect::Run {
@@ -818,18 +838,7 @@ impl Parser {
                 self.err(line, format!("`{key}` only applies to `expect: ast`"));
             }
         }
-        let verify = self.verify_line != 0;
-        if verify && expect != Expect::CompileOk {
-            let line = self.verify_line;
-            self.err(
-                line,
-                "`verify` only applies to `compile-ok` tests (the outcome is the -verify check)",
-            );
-        }
-        if verify && self.diag_line != 0 {
-            let line = self.diag_line;
-            self.err(line, "`diag:` and `strict-diags` do not apply to `verify` tests (use expected-* comments)");
-        }
+        let verify = self.check_verify(expect);
         if self.oracle.is_some()
             && !verify
             && !matches!(expect, Expect::Run | Expect::Pp | Expect::Ast)

@@ -212,7 +212,7 @@ mod tests {
                 "verify: warning seen but not expected: odd: thing",
             ]
         );
-        assert!(verify_keys("t.cpp:1:2: error: boom\n").is_empty());
+        assert_eq!(verify_keys("t.cpp:1:2: error: boom\n"), Vec::new());
     }
 
     #[test]

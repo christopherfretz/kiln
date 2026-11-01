@@ -119,10 +119,10 @@ impl SyntaxJob<'_> {
         result
     }
 
-    fn parse<'sm, 'e>(
+    fn parse<'sm>(
         &self,
         sm: &'sm SourceManager,
-        engine: &'e DiagEngine<'sm>,
+        engine: &DiagEngine<'sm>,
         interner: &'sm Arc<Interner>,
         inputs: PpInputs,
         verify: Option<&Rc<RefCell<Verifier<'sm>>>>,
