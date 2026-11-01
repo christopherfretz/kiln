@@ -300,66 +300,95 @@ impl Sema<'_, '_> {
         d: &mut DeducedArgs,
         f: impl FnMut(&mut Self, usize, &mut DeducedArgs) -> Tdk,
     ) -> Tdk {
-        self.deduce_pack_elements_from(0, n, d, f)
+        self.deduce_pack_elements_from(None, n, d, f)
     }
 
-    /// The length of the explicitly given pack among `params`, if any
-    /// ([temp.arg.explicit]/9).
-    pub(crate) fn explicit_pack_len(&self, params: &[DeclId], d: &DeducedArgs) -> usize {
+    /// The index and length of the explicitly given pack among `params`,
+    /// if any ([temp.arg.explicit]/9).
+    pub(crate) fn explicit_pack(&self, params: &[DeclId], d: &DeducedArgs) -> Option<(u16, usize)> {
         params
             .iter()
             .enumerate()
             .filter(|&(_, &p)| self.ast.template_parm(p).is_some_and(|x| x.pack))
             .find_map(|(i, _)| match d.args.get(i).map(TemplateArg::view) {
-                Some(ArgView::Pack(l)) => Some(self.ast.types.args(l).len()),
+                Some(ArgView::Pack(l)) => {
+                    Some((u16::try_from(i).ok()?, self.ast.types.args(l).len()))
+                }
                 _ => None,
             })
-            .unwrap_or(0)
     }
 
-    /// [`Self::deduce_pack_elements`] where elements `0..skip` were given
-    /// explicitly: only `skip..n` are deduced, appended to the given
-    /// prefix of each pack.
+    /// [`Self::deduce_pack_elements`] where pack `explicit = (index, m)`
+    /// was given `m` elements explicitly ([temp.arg.explicit]/9). If the
+    /// pattern expands only that pack, elements `0..m` are fixed and
+    /// `m..n` extend it (a failure in a fixed element is ignored). If it
+    /// expands other packs too, they are deduced from all `n` elements
+    /// and the explicit pack keeps its given elements (clang: the
+    /// partially substituted pack is not extended then).
     pub(crate) fn deduce_pack_elements_from(
         &mut self,
-        skip: usize,
+        explicit: Option<(u16, usize)>,
         n: usize,
         d: &mut DeducedArgs,
         mut f: impl FnMut(&mut Self, usize, &mut DeducedArgs) -> Tdk,
     ) -> Tdk {
         let saved = d.pack_cur.take();
-        let mut per: Vec<(u16, Vec<TemplateArg>)> = Vec::new();
-        let skip = skip.min(n);
+        let (ep, m) = explicit.map_or((None, 0), |(i, m)| (Some(i), m.min(n)));
+        // Each pack's deductions, by element index.
+        let mut per: Vec<(u16, Vec<(usize, TemplateArg)>)> = Vec::new();
+        let mut fixed_fail: Option<(Tdk, DeductionInfo)> = None;
         let saved_elem = d.pack_elem;
-        for i in skip..n {
+        for i in 0..n {
             d.pack_cur = Some(Vec::new());
             d.pack_elem = Some(i);
             let r = f(self, i, d);
             d.pack_elem = saved_elem;
             let cur = d.pack_cur.take().unwrap_or_default();
             if r != Tdk::Success {
+                if i < m {
+                    if fixed_fail.is_none() {
+                        fixed_fail = Some((r, d.info));
+                    }
+                    continue;
+                }
                 d.pack_cur = saved;
                 return r;
             }
             for (idx, a) in cur {
                 if let Some(x) = per.iter_mut().find(|x| x.0 == idx) {
-                    x.1.push(a);
+                    x.1.push((i, a));
                 } else {
                     let mut v = Vec::with_capacity(n);
-                    if let Some(ArgView::Pack(l)) = d.args.get(idx as usize).map(TemplateArg::view)
-                    {
-                        v.extend(self.ast.types.args(l).iter().take(skip));
-                    }
-                    v.push(a);
+                    v.push((i, a));
                     per.push((idx, v));
                 }
             }
         }
         d.pack_cur = saved;
+        let multi = ep.is_some() && per.iter().any(|x| Some(x.0) != ep);
+        if multi && let Some((r, info)) = fixed_fail {
+            d.info = info;
+            return r;
+        }
         for (idx, v) in per {
-            if v.len() != n {
+            let v: Vec<TemplateArg> = if Some(idx) != ep {
+                if v.len() != n {
+                    continue;
+                }
+                v.into_iter().map(|x| x.1).collect()
+            } else if multi {
                 continue;
-            }
+            } else {
+                let mut w = Vec::with_capacity(n);
+                if let Some(ArgView::Pack(l)) = d.args.get(idx as usize).map(TemplateArg::view) {
+                    w.extend(self.ast.types.args(l).iter().take(m));
+                }
+                w.extend(v.into_iter().filter(|x| x.0 >= m).map(|x| x.1));
+                if w.len() != n {
+                    continue;
+                }
+                w
+            };
             let l = self.ast.types.arg_list(&v);
             let r = self.record_pack(idx, TemplateArg::pack(l), d);
             if r != Tdk::Success {

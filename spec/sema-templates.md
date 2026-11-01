@@ -1240,14 +1240,16 @@ retained, since the AST is append-only. They are metered as
    - check that the deduced A is compatible ([temp.deduct.call]/4:
      equal, more cv-qualified, qualification-convertible, or a derived
      class). Failure is `DeducedMismatch`. kiln records, for each
-     non-pack parameter with a deducible template parameter (probed by
+     parameter with a deducible template parameter (probed by
      deducing P from itself, clang's `hasDeducibleTemplateParameters`)
      and an argument that is not a braced list or overload set, the
      pair (P, adjusted A); after substitution it compares the
      specialization's parameter type with A (`original_arg_mismatch`,
-     WP-161). The note prints the reference/pointer-stripped deduced
-     type, as clang does. Clang's template type diffing (`'pr<[...],
-     char>'`) is not implemented, so specializations print in full.
+     WP-161). Each element of the trailing function parameter pack is
+     such a pair with the pattern as P, except the explicit elements
+     of a pack the pattern alone names (§6.4). The note prints the
+     reference/pointer-stripped deduced type, as clang does, as a
+     template type diff pair (`'pr<[...], char>'`, `Sema::ty_diff`).
    - check the associated constraints (§8). The order is clang 19's,
      *after* the function type substitution (Q12, CWG2369).
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
@@ -1344,7 +1346,22 @@ immediate context: errors are hard.
   deduction. It is the trailing function parameter pack's prefix only
   when that pack's pattern (`U`, `U&&`, `U*`) expands this first pack.
   Otherwise the prefix is empty, so a pack deduced earlier from
-  `tys<Tf...>` does not shorten `Up...`.
+  `tys<Tf...>` does not shorten `Up...`. When the pattern also names
+  other packs (`pair<T, U>...` with `T` explicit), those are deduced
+  from every element and the explicit pack is not extended: it keeps
+  its explicit elements, and a mismatch in an explicit element fails
+  deduction (clang 19, observed). If the pattern names only the
+  explicit pack, elements before its explicit length are not deduced.
+- **Non-trailing function parameter packs** ([temp.deduct.type]/5.7)
+  are a non-deduced context and take no call argument. After the
+  explicit arguments are substituted, one whose packs are all given
+  is expanded to its explicit elements; it still counts as one
+  parameter in the too-many-arguments check (clang retains the
+  expansion). An undeduced pack is then empty, and the arity is
+  checked on the specialization (`candidate function [with T = <>]
+  not viable: requires 1 argument, …`). A parameter pack never counts
+  towards the minimum argument count (`fn_min_args`, clang
+  `getMinRequiredArguments`), wherever it is.
 - **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
   A value-dependent `explicit(expr)` (kept in `decls.cold.explicit_expr`)
   is substituted together with the signature when a specialization is
