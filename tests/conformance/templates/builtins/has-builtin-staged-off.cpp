@@ -29,12 +29,6 @@
 #if __has_builtin(__is_pointer_interconvertible_base_of)
 #error __is_pointer_interconvertible_base_of
 #endif
-#if __has_builtin(__is_trivially_assignable)
-#error __is_trivially_assignable
-#endif
-#if __has_builtin(__is_trivially_constructible)
-#error __is_trivially_constructible
-#endif
 #if __has_builtin(__is_trivially_equality_comparable)
 #error __is_trivially_equality_comparable
 #endif
