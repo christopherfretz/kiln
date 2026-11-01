@@ -252,6 +252,16 @@ pub struct InstState {
     /// Inline static data members of specializations whose initializer
     /// is not instantiated yet ([temp.inst]/4: on first reference).
     pub(crate) deferred_inits: kiln_source::fx::FxHashSet<DeclId>,
+    /// Fields of class template specializations whose default member
+    /// initializer is not instantiated yet, with the class and the
+    /// pattern initializer ([temp.inst]/3: when a constructor or an
+    /// aggregate initialization uses it; clang
+    /// `InstantiateInClassInitializer`).
+    pub(crate) deferred_nsdmis: kiln_source::fx::FxHashMap<DeclId, (DeclId, ExprId)>,
+    /// The substitution state of each class owning a
+    /// `deferred_nsdmis` field: its arguments and context pairs.
+    pub(crate) nsdmi_ctx:
+        kiln_source::fx::FxHashMap<DeclId, (args::MultiLevelArgs, Vec<(DeclId, DeclId)>)>,
     /// Non-inline static data members of specializations whose
     /// definition (the pattern's out-of-line one, [class.static.data]/3)
     /// is not instantiated yet ([temp.inst]/4: when odr-used or needed
