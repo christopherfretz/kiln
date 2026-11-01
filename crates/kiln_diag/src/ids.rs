@@ -1181,6 +1181,9 @@ diag_ids! {
     sema_ctad_explicit_copy_list = Error (2) "class template argument deduction for '{0}' selected an explicit {1:constructor|deduction guide} for copy-list-initialization";
     note_ctad_explicit_here = Note (1) "explicit {0:constructor|deduction guide} declared here";
     note_implicit_deduction_guide = Note (1) "implicit deduction guide declared as '{0}'";
+    sema_ctad_compound_type = Error (1) "cannot {0} deduced class template specialization type";
+    sema_ctad_non_deducible_template = Error (2) "{0} {1} requires template arguments; argument deduction only allowed for class templates or alias templates";
+    note_alias_not_deducible = Note (2) "cannot deduce template arguments for '{0}' from {1}";
     sema_ctad_not_allowed = Error (1) "cannot use deduced class template specialization type {0} here";
     sema_auto_var_init_multiple_expressions = Error (2) "initializer for variable '{0}' with type {1} contains multiple expressions";
     sema_auto_var_init_no_expression = Error (2) "initializer for variable '{0}' with type {1} is empty";
@@ -1256,6 +1259,7 @@ diag_ids! {
     sema_explicit_spec_non_template = Error (1) "explicit specialization of non-template {0}";
     note_explicit_spec_template_declared = Note (0) "explicitly specialized declaration is here";
     sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
+    sema_partial_spec_friend = Error (0) "partial specialization cannot be declared as a friend";
     sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
     sema_partial_spec_redecl_scope = Error (2) "class template partial specialization of '{0}' not in a namespace enclosing '{1}'";
     sema_explicit_inst_after_spec_ignored = Warning [InstantiationAfterSpecialization] (1) "explicit instantiation of '{0}' that occurs after an explicit specialization has no effect";

@@ -623,7 +623,16 @@ impl Parser<'_, '_> {
                 self.s.act_on_start_delayed_default_arg(p);
             }
             if self.at(Punct::LBrace) {
-                self.unsupported("braced default arguments", self.loc());
+                // `= { ... }` ([dcl.fct.default]/1: an initializer-clause).
+                if let Ok(l) = self.parse_init_list() {
+                    if !self.at_eof() {
+                        self.error_here(DiagId::parse_default_arg_unparsed);
+                    }
+                    if let Some(&p) = params.get(i) {
+                        self.trace(|_| format!("default_arg({i})"));
+                        self.s.act_on_param_default_list(p, &l);
+                    }
+                }
             } else if let Some(e) = self.parse_assignment_expr() {
                 if !self.at_eof() {
                     self.error_here(DiagId::parse_default_arg_unparsed);

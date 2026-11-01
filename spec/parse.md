@@ -561,7 +561,8 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   1. **Method:** `act_on_start_delayed_method(f)`, then each default
      argument (`act_on_param_default_arg(p, e)`; leftover tokens are
      `unexpected end of default argument expression`; a braced default
-     argument is unsupported) and the *noexcept-specifier*
+     argument is parsed as an *initializer-list* and goes to
+     `act_on_param_default_list(p, list)`, WP-136) and the *noexcept-specifier*
      (`act_on_exception_spec(f, spec)`; leftovers are `unexpected end of
      exception specification`), then `act_on_finish_delayed_method(f)`.
   2. **Nsdmi:** `act_on_start_field_init(field)`, the initializer, then

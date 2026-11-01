@@ -414,7 +414,32 @@ impl Sema<'_, '_> {
         });
         match r {
             None => Err(DeductionFailure::new(Tdk::InstantiationDepth, d)),
-            Some((Ok(spec), Ok(()))) => Ok(spec),
+            Some((Ok(spec), Ok(()))) => {
+                // [over.match.class.deduct]/3: a guide formed for an alias
+                // template is constrained on the alias template's
+                // arguments being deducible from its return type.
+                if let Some(&(alias, rhs)) = self.templ.ctad_alias.get(&ft) {
+                    let ty = self.ast.decls.get(spec).ty().unwrap_or(QualType::ERROR);
+                    let ret = self
+                        .ast
+                        .types
+                        .proto(ty)
+                        .map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+                    if !self.alias_deducible(alias, rhs, ret) {
+                        let at = self.ast.decls.get(ft).loc();
+                        let n = self.decl_name_str(self.ast.decls.get(alias).name());
+                        let why = self
+                            .diag(DiagId::note_alias_not_deducible, at)
+                            .arg(n)
+                            .arg(self.ty_arg(ret));
+                        let mut f = DeductionFailure::new(Tdk::ConstraintsNotSatisfied, d);
+                        f.args = (!self.ast.types.args(sugared).is_empty()).then_some(sugared);
+                        f.diag = Some(why);
+                        return Err(f);
+                    }
+                }
+                Ok(spec)
+            }
             Some((_, failed)) => {
                 let mut diag = failed.err().flatten();
                 if let Some(spec) = self.ast.templates.find_spec(ft, canonical) {
@@ -488,16 +513,29 @@ impl Sema<'_, '_> {
                 TypeView::LValueRef(x) | TypeView::RValueRef(x) => t.canonical(x),
                 _ => p,
             };
-            let Some(elem) = self.initializer_list_param(inner) else {
-                // A non-deduced context.
-                return Tdk::Success;
-            };
             let items: Vec<crate::init::InitValue> = self
                 .ovl
                 .lists
                 .get(li as usize)
                 .map(|l| l.items.iter().map(|x| x.value.clone()).collect())
                 .unwrap_or_default();
+            // `P'[N]` with a non-empty list: each element deduces `P'`,
+            // and the list's length deduces `N` (WP-134: the aggregate
+            // deduction candidate's `T(&&)[N]` parameters).
+            let t = &self.ast.types;
+            let array = match t.canonical_view(inner) {
+                TypeView::ConstantArray(pa) if !items.is_empty() => Some((pa.elem, None)),
+                TypeView::DependentSizedArray { elem, size } if !items.is_empty() => {
+                    Some((elem, Some(size)))
+                }
+                _ => None,
+            };
+            let Some(elem) = array.map(|x| x.0).or_else(|| self.initializer_list_param(inner))
+            else {
+                // A non-deduced context.
+                return Tdk::Success;
+            };
+            let n = u64::try_from(items.len()).unwrap_or(u64::MAX);
             for v in items {
                 let crate::init::InitValue::Expr(e) = v else { continue };
                 let info = self.arg_info(e);
@@ -505,6 +543,9 @@ impl Sema<'_, '_> {
                 if r != Tdk::Success {
                     return r;
                 }
+            }
+            if let Some((_, Some(size))) = array {
+                return self.deduce_array_bound(size, Some(Ok(n)), d);
             }
             return Tdk::Success;
         }
@@ -610,7 +651,7 @@ impl Sema<'_, '_> {
     }
 
     /// `E` when `p` is `std::initializer_list<E>` (dependent or not).
-    fn initializer_list_param(&mut self, p: QualType) -> Option<QualType> {
+    pub(crate) fn initializer_list_param(&mut self, p: QualType) -> Option<QualType> {
         if let TypeView::TemplateSpecialization { name, args, .. } =
             self.ast.types.canonical_view(p)
         {
@@ -669,9 +710,11 @@ impl Sema<'_, '_> {
                 let d = self
                     .diag(DiagId::note_ovl_candidate_unsatisfied_constraints, loc)
                     .arg(with.unwrap_or_default());
-                match f.sat {
-                    Some(id) => self.with_sat_notes(d, id),
-                    None => d,
+                match (f.sat, &f.diag) {
+                    (Some(id), _) => self.with_sat_notes(d, id),
+                    // An alias template guide's deducibility constraint.
+                    (None, Some(why)) => d.with_note(why.clone()),
+                    (None, None) => d,
                 }
             }
             Tdk::SubstitutionFailure => {

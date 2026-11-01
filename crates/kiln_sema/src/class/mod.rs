@@ -279,6 +279,21 @@ impl Sema<'_, '_> {
         self.attach_default_arg(p, e);
     }
 
+    /// The braced default argument `= { ... }` of parameter `p`
+    /// ([dcl.fct.default]/1, [dcl.init.list]): copy-list-initializes
+    /// the parameter's type, as one parsed in place does. Called by the
+    /// parser for a replayed member function default argument, and by
+    /// instantiation for a pattern's dependent braced default argument
+    /// (WP-136). Write-once, like [`Sema::act_on_param_default_arg`].
+    pub fn act_on_param_default_list(&mut self, p: DeclId, l: &crate::init::InitList) {
+        let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+        let loc = self.ast.decls.get(p).loc();
+        let e = self.init_list_entity(pty, l, loc);
+        self.note_default_init_full_expr();
+        let e = self.act_on_full_expr(e);
+        let _ = self.ast.decls.set_default_arg(p, e);
+    }
+
     /// The replayed *noexcept-specifier* of member function `f`, whose
     /// type held `ExcSpec::Deferred(f)` and which sat in `unparsed_exc`
     /// (spec/sema-class.md §2.7; WP-066b). `spec` comes from

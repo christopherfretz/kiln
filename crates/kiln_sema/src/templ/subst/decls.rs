@@ -125,8 +125,16 @@ impl Substituter<'_, '_, '_> {
                     dr.special = Some((SpecialName::LiteralOperator(s), loc));
                 }
             }
+            // A member class template's guide ([temp.deduct.guide]/3):
+            // for the member template of the instantiated class (WP-134).
             DeclNameKind::DeductionGuide => {
-                return self.unimplemented("deduction guides in class templates", loc);
+                let kiln_ast::names::DeclNameView::DeductionGuide(t) =
+                    self.sema.ast.names.view(name)
+                else {
+                    return Err(SubstFail);
+                };
+                let t = self.find_instantiated_decl(t, loc)?;
+                dr.special = Some((SpecialName::DeductionGuide(t), loc));
             }
         }
         Ok(dr)
@@ -711,6 +719,14 @@ impl Substituter<'_, '_, '_> {
             };
             let e = match self.sema.ast.exprs.get(def).kind() {
                 kiln_ast::expr::ExprKind::CXXDefaultArgExpr => continue,
+                // `= {...}` with a dependent type or element: the list
+                // as written, list-initializing the substituted type.
+                kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
+                    if let Ok(l) = self.init_list(def) {
+                        self.sema.act_on_param_default_list(b, &l);
+                    }
+                    continue;
+                }
                 _ => self.expr(def),
             };
             if let Ok(e) = e {

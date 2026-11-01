@@ -243,7 +243,9 @@ outermost class's `}` the parser replays in clang's order
 (`ParseLexedMethodDeclarations`, `ParseLexedMemberInitializers`,
 `ParseLexedMethodDefs`), each phase over the class and its nested classes in
 declaration order:
-1. default arguments → `act_on_param_default_arg(p, e)` (write-once),
+1. default arguments → `act_on_param_default_arg(p, e)` (write-once; a
+   braced one → `act_on_param_default_list(p, list)`, which
+   list-initializes the parameter's type),
    noexcept-specifiers → `act_on_exception_spec(f, spec)`;
 2. NSDMIs → `act_on_field_init(field, init)` (`this` usable; own
    full-expression, §5.3);
@@ -1136,6 +1138,7 @@ fn act_on_friend(&mut self, ds: &DeclSpec, base: QualType, d: Option<&Declarator
 fn act_on_defaulted(&mut self, f: DeclId, loc: Loc);
 fn act_on_deleted(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>);
 fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId);
+fn act_on_param_default_list(&mut self, p: DeclId, l: &InitList);
 fn act_on_exception_spec(&mut self, f: DeclId, spec: ExcSpec);
 fn act_on_field_init(&mut self, field: DeclId, init: Initializer);
 fn act_on_mem_initializers(&mut self, ctor: DeclId, inits: &[MemInitInfo], colon_loc: Loc);

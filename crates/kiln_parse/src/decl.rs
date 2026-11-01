@@ -325,6 +325,7 @@ impl Parser<'_, '_> {
                 return Vec::new();
             };
             let d = self.s.act_on_alias_decl(name, nl, ty, &attrs);
+            self.s.note_alias_decl_loc(d, loc);
             self.expect_semi_after("alias declaration");
             return vec![d];
         }

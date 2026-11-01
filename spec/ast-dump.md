@@ -391,6 +391,15 @@ sketch above (WP-071/072).
 - `TemplateTemplateParmDecl depth D index I [...] [<name>]`. The
   children are the inner parameters (at depth D+1), then the default
   as a `TemplateArgument template` line.
+- `CXXDeductionGuideDecl [used] <deduction guide for N> 'auto (<params>)
+  -> <ret>'` (WP-134), a user-declared guide, as a function line with
+  `ParmVarDecl` children; a template guide is the pattern of its
+  `FunctionTemplateDecl <deduction guide for N>`. `explicit` is not
+  printed (clang prints none). `used` marks the guide CTAD selected.
+  Implicit guides ([over.match.class.deduct]/1) are not printed (clang
+  marks theirs `implicit`). The variable a qualified placeholder
+  declares keeps the qualifier on the deduced type (`N::S s(1)`:
+  `'N::S<int>'`, clang's `ElaboratedType` around the deduced type).
 - `ConceptDecl <name>`, with the constraint-expression as its child.
 - `ConceptSpecializationExpr 'bool'`. The children are the written
   arguments as `TemplateArgument` lines.
@@ -581,8 +590,9 @@ between kiln and the tool is a real difference. Known-divergent constructs
 are rejected in the table, never patched in goldens by hand.
 
 Rejected by the table:
-- Function template specializations, variadic specializations,
-  `CXXDeductionGuideDecl`, and a `TemplateArgument` outside the
+- Function template specializations (so a template deduction guide
+  that deduction succeeded on), variadic specializations, and a
+  `TemplateArgument` outside the
   template nodes that print theirs: WP-071/072. Class and variable
   template specializations (implicit, explicit and partial), their
   reference lines and `SubstNonTypeTemplateParmExpr` are compared (§5;

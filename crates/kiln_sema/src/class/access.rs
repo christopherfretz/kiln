@@ -157,7 +157,21 @@ impl Sema<'_, '_> {
                             })
                         })
                 }
-                _ => ec.records.iter().any(|&r| same_class(self, r, f)),
+                // Likewise a befriended class template specialization
+                // (`friend struct X<int>;`, or `X<T>` once its class is
+                // instantiated, [temp.friend]) when the context is the
+                // pattern or a partial specialization of that template.
+                _ => {
+                    ec.records.iter().any(|&r| same_class(self, r, f))
+                        || self.ast.spec_info(f).is_some_and(|(_, s)| {
+                            let t = Some(self.ast.first(s.template));
+                            ec.records.iter().any(|&r| {
+                                (self.ast.described_template(self.ast.first(r)).is_some()
+                                    || self.ast.partial_spec_info(r).is_some())
+                                    && self.friend_template_of(r) == t
+                            })
+                        })
+                }
             }
         })
     }
