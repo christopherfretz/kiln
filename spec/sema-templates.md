@@ -662,7 +662,12 @@ the running `Substituter` instead.
 2. Probe `specializations[(first(tmpl), canonical)]`. On a hit, return
    that decl.
 3. On a miss, create a `ClassTemplateSpecialization` decl with
-   `SpecInfo{kind: Undeclared, args: sugared}` and insert it.
+   `SpecInfo{kind: Undeclared, args: canonical}` and insert it. The
+   implicit specialization's arguments are canonical (clang's
+   `ClassTemplateSpecializationDecl`), so its members see `unsigned long`,
+   not the alias `sz` it was first named with; the written spelling stays
+   on the `TemplateSpecialization` sugar
+   (`tests/conformance/temp.inst/canonical-arguments-in-instantiation.cpp`).
    - No instantiation happens. The type `X<int>` is
      `TemplateSpecialization(sugar) → Record(spec)`.
    - This is clang's `CheckTemplateIdType`.
@@ -795,6 +800,36 @@ are used. It only tells codegen not to emit them (WP-080).
 2. Find the member `f` through `member_map`.
 3. Set its `MemberSpecInfo.kind = ExplicitSpecialization` and attach the
    new definition.
+
+**Member templates of an implicit instantiation** ([temp.expl.spec]/16),
+such as `template<> template<class U> struct A<int>::B {...}` (also
+partial specializations `A<int>::B<U*>`, and function and variable
+member templates):
+1. The parser sees `template<>` immediately followed by `template <`
+   and brackets the inner declaration with
+   `act_member_template_spec_start/end`. While `TemplState.member_spec`
+   is set, the outer empty head does not count as a member-spec header.
+2. The qualified lookup into `A<int>` finds the member template that
+   `Substituter::member_template` redeclared there. The new declaration
+   becomes a redeclaration of it, even when it is only a declaration
+   (`template<> template<class U> struct A<int>::B;`).
+3. `specialize_member_template` removes the `instantiated_from` link of
+   the first declaration. `inst_template` and the pattern selection then
+   stop at this declaration, like clang's `setMemberSpecialization`, so
+   `A<int>::B<X>` instantiates the new definition.
+4. If the name is not found in `A<int>`, the error is "out-of-line
+   definition of 'N' does not match any declaration in 'A<int>'". This
+   is the same text used for templated qualified tags in general (the
+   scope is printed with written template parameter names, for example
+   'A<T>').
+5. "implicit instantiation of undefined template" notes "template is
+   declared here" at the latest redeclaration of the pattern when no
+   partial specialization matched, as clang does.
+
+Not done: when the inner head does not match the member template's head
+(for example, different parameter count), clang drops the declaration.
+kiln still links it as a redeclaration, so later uses get cascading
+errors.
 
 ### 4.6 `instantiate_class(spec, poi)` and member-wise laziness
 
@@ -2603,6 +2638,15 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   parameters. A class-template forward redeclaration creates no new
   decl, so chained default checks are partial.
 - A template template parameter's inner list is not order-checked.
+- `TT<args>` for a template template parameter `TT` checks only the arity
+  against `TT`'s own list (`check_ttp_arity`: "too few/many template
+  arguments for template template parameter 'TT'", note at `TT`); a pack
+  parameter or a pack-expansion argument skips it, and argument kinds are
+  not checked. Matching a template template argument's parameter list
+  against the parameter's ([temp.arg.template]/3-4, clang's "template
+  template argument has different template parameters") is not
+  implemented: `Q<P>` with a mismatched `P` is accepted
+  (`tests/conformance/temp.names/ttp-specialization-arity.cpp`).
 - P0846 (ADL for an unknown name followed by `<`) is not implemented.
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is

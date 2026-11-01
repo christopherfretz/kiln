@@ -642,6 +642,23 @@ and returns the scope it names:
     implicit `UsingDirectiveDecl` ([namespace.unnamed]).
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
 - **`extern "C"`/`"C++"`** creates a `LinkageSpecDecl`.
+  - Without braces (`extern "C" int x;`) the parser calls
+    `act_on_linkage_spec_braceless`, which sets
+    `ScopeData::LINKAGE_BRACELESS` in the payload's `aux`.
+    `Decls::is_single_line_linkage(d)` is true for the declaration it
+    directly contains.
+  - [dcl.link]/8: that declaration is treated as if it had `extern`
+    when deciding whether it is a definition (`is_var_definition`, the
+    redefinition checks in `act_on_var`, codegen's `emit_global_var`).
+    The storage class itself stays `None`, so the AST dump shows no
+    `extern`, as in clang. `extern "C" int x; extern "C" int x = 1;`
+    is a declaration followed by its definition.
+- **Redefinition through an initializer** (clang
+  `AddInitializerToDecl`): a namespace-scope variable that was a
+  declaration before its initializer (`extern`, or a single-line
+  linkage specification) gets "redefinition of 'x'" with "previous
+  definition is here" if an earlier redeclaration is a definition. The
+  variable becomes invalid and the initializer is dropped.
 - **`static_assert`** ([dcl.pre]/10) requires a converted constant
   expression of type `bool`.
   - On failure it reports
@@ -1542,8 +1559,18 @@ The vector operators themselves are summarized in spec/types.md
   (direct for `T& r{..}`, copy for `T& r = {..}`, a call argument or
   a `return`). A failed constructor call for that temporary names the
   reference type (`no matching constructor for initialization of
-  'const E &'`), via `ctor_diag_ty`, which `use_ctor` takes on entry
-  so nested constructions cannot see it.
+  'const E &'`, and `call to deleted constructor of 'const J &'`), via
+  `ctor_diag_ty`, which `use_ctor` takes on entry so nested
+  constructions cannot see it. While an aggregate (class or array)
+  temporary is list-initialized, the first `excess elements` error in
+  it takes clang's `in initialization of temporary of type 'const H'
+  created to list-initialize this reference` note at the reference
+  (`ref_temp_note`, clang's `diagnoseListInit`); a scalar temporary
+  (`const int& r = {1, 2};`) gets no note. Too many elements for a
+  scalar report at the initialization's location: the declarator, the
+  `{` of a scalar member's nested list (`H h = {1, {2, 3}};`), and the
+  `{` of a default member initializer
+  (`tests/conformance/dcl.init.list/{reference-temporary-errors,scalar-excess-locations}.cpp`).
 - **Results** are attached with `act_on_init`. `act_on_uninit` handles
   default-initialization: const objects without an initializer are an
   error, and incomplete types are diagnosed.
@@ -1707,8 +1734,10 @@ The vector operators themselves are summarized in spec/types.md
   in templates: a `throw` that can escape a non-throwing function is
   `-Wexceptions` `'f' has a non-throwing exception specification but
   can still throw` with `function declared non-throwing here` (or the
-  destructor/deallocator note); a `[[noreturn]]` function that can fall
-  off is `-Winvalid-noreturn`.
+  destructor/deallocator note); in an instantiated function template
+  specialization the name carries its arguments, unqualified (`'k<int>'`,
+  `except.spec/throw-in-nothrow-specialization.cpp`); a `[[noreturn]]`
+  function that can fall off is `-Winvalid-noreturn`.
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element

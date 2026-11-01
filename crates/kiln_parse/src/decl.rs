@@ -255,6 +255,7 @@ impl Parser<'_, '_> {
             }
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         } else {
+            self.s.act_on_linkage_spec_braceless(ls);
             self.parse_external_declaration();
         }
         self.s.act_on_finish_linkage_spec(ls);

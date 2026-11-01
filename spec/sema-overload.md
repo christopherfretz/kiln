@@ -360,7 +360,11 @@ Wording: "cannot convert initializer list argument to 'int'". Every failure
 of a braced argument is `Bad(InitList)` naming the parameter type (for a
 reference, the cv-qualified referenced type: `'const G'` for the implicit
 copy constructor), as clang's `TryListConversion` fails with the list as the
-source (WP-152).
+source (WP-152). A non-const (or volatile) lvalue reference whose temporary
+would list-initialize is instead `Bad(LvalueRequired)` ("expects an lvalue
+for 1st argument"); a single-element candidate call reports the same detail
+(`forms.rs` `braced_argument`;
+`tests/conformance/over.ics.list/reference-parameter-notes.cpp`).
 
 ### 3.4 Comparing ICSs (`compare_ics`, [over.ics.rank])
 (1) /2: `Standard` < `UserDefined` = `Ambiguous` < `Ellipsis`. (2) /3.1
@@ -693,6 +697,11 @@ was used). Type sugar (`'Z':'N::Z'`) is the printer's job (ast-dump.md).
 | `sema_explicit_ctor_copy_list_init`, `sema_member_call_without_object`, `sema_circular_arrow` | §2.6, §2.3, §6.4 |
 | `warn_ambiguous_reversed_operator` [ambiguous-reversed-operator] + 2 notes | §5.3 |
 | notes | `note_ovl_candidate` "candidate {kind}{tmpl}" with `_not_viable` ("… not viable: {detail}"), `_deleted` ("candidate function has been explicitly deleted"), `_explicit`, `_type_mismatch`; `note_ovl_builtin_candidate` "built-in candidate {0}"; `note_ovl_surrogate` "conversion candidate of type '{0}'"; `note_ambiguous_conversion_of`; `note_possible_target` "possible target for call"; `note_explicit_ctor_here`; `note_arrow_produces`; `note_rewriting_operator_as_spaceship` |
+
+The name in "call to deleted function '{0}'" (and the other call
+diagnostics) is the name as looked up, without qualifier or template
+arguments (clang `ULE->getName()`): `show<int>(2)` and `ns::r(1)` print
+'show' and 'r', not the selected specialization.
 
 `{kind}` (clang `note_ovl_candidate` select): "function", "function (with
 reversed parameter order)", "constructor", "constructor (the implicit

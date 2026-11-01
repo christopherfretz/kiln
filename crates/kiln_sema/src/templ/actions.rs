@@ -419,6 +419,34 @@ impl Sema<'_, '_> {
         self.ast.types.template_name_of(self.ast.first(d))
     }
 
+    /// The arity of `TT<args>` for a template template parameter `TT`
+    /// (clang's `CheckTemplateArgumentList` on the parameter's own list:
+    /// "too few/many template arguments for template template parameter
+    /// 'TT'"). Arguments that are pack expansions are matched later.
+    fn check_ttp_arity(&mut self, ttp: DeclId, args: &[TemplateArg], l: Loc) -> Result<(), ()> {
+        if args.iter().any(|&a| self.is_pack_expansion_arg(a)) {
+            return Ok(());
+        }
+        let Some(list) = self.ast.template_parm(ttp).and_then(|x| x.params) else {
+            return Ok(());
+        };
+        let l2 = *self.ast.templates.param_list(list);
+        let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(l2.params).collect();
+        let is_pack = |s: &Self, p: DeclId| s.ast.template_parm(p).is_some_and(|x| x.pack);
+        if params.iter().any(|&p| is_pack(self, p)) {
+            return Ok(());
+        }
+        let too_many = args.len() > params.len();
+        let too_few = params
+            .get(args.len()..)
+            .is_some_and(|rest| rest.iter().any(|&p| self.template_default(p).is_none()));
+        if too_many || too_few {
+            self.diag_template_arity(ttp, too_many, l);
+            return Err(());
+        }
+        Ok(())
+    }
+
     /// `name < args >` ([temp.names]): what the template-id names, by the
     /// kind of the template. Dependent specializations are built as
     /// written; non-dependent class and alias template specializations
@@ -439,6 +467,11 @@ impl Sema<'_, '_> {
             | self.ast.types.template_name_flags(name))
         .intersects(TypeFlags::DEPENDENT_INSTANTIATION);
         let Some(d) = self.ast.types.template_decl(name) else {
+            if let TemplateName::TemplateTemplateParm { decl, .. } =
+                self.ast.types.template_name_view(name)
+            {
+                self.check_ttp_arity(decl, args, l)?;
+            }
             return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
                 // `TT<args>` for a template template parameter `TT`.
                 TemplateName::TemplateTemplateParm { .. }
@@ -461,6 +494,9 @@ impl Sema<'_, '_> {
             }
             DeclKind::ClassTemplate | DeclKind::TemplateTemplateParm => {
                 let ttp = self.kind_of(d) == DeclKind::TemplateTemplateParm;
+                if ttp {
+                    self.check_ttp_arity(d, args, l)?;
+                }
                 if !dep_args && !ttp {
                     let locs = std::mem::take(&mut self.templ.arg_locs);
                     let t = self.class_template_type(name, d, args, &locs, l)?;

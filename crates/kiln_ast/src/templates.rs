@@ -476,6 +476,15 @@ impl TemplateTables {
         let _ = self.instantiated_from.insert(inst, pattern);
     }
 
+    /// Forgets the pattern recorded for `inst`: a member template of a
+    /// class template specialization that was itself specialized
+    /// (`template<> template<class U> struct A<int>::B {...}`,
+    /// [temp.expl.spec]/16) is no longer instantiated from the member
+    /// template of the class template's pattern.
+    pub fn clear_instantiated_from(&mut self, inst: DeclId) {
+        let _ = self.instantiated_from.remove(&inst);
+    }
+
     /// The pattern recorded by [`TemplateTables::set_instantiated_from`].
     pub fn instantiated_from_map(&self, inst: DeclId) -> Option<DeclId> {
         self.instantiated_from.get(&inst).copied()

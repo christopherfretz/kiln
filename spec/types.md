@@ -640,12 +640,19 @@ stores ids.
   Comparison category types are made by sema, not written, and clang
   prints them as `'std::strong_ordering'`. kiln gives them `Elaborated`
   sugar with the enclosing non-inline namespaces as the qualifier
-  (`scoped_class_type`, WP-082). A type's scope skips inline
-  namespaces as clang's `AppendScope` does (`SemaNames::write_scope`;
-  clang's redundancy lookup is not done), so the canonical `aka` is
-  `'std::S'` too and is dropped. A declaration's own qualified name
-  (`qualified_decl_name`, clang `printQualifiedName`) keeps them
-  (`SemaNames::for_decls`).
+  (`scoped_class_type`, WP-082). A type's scope and a
+  declaration's own qualified name (`qualified_decl_name`) skip an
+  inline namespace only when it is redundant for the name printed after
+  it, as clang's `AppendScope` and `printNestedNameSpecifier` do
+  (`SemaNames::redundant_inline`, clang
+  `isRedundantInlineQualifierFor`): the enclosing non-transparent
+  context's lookup table (`Ast::lookup_local`, where an inline
+  namespace's names are also entered) has as many entries for that name
+  as the inline namespace's own. The name starts as the declaration's
+  and becomes each printed scope's name; an empty name (anonymous
+  namespace, unnamed tag) never drops one. So `'std::S'` (the canonical
+  `aka` is the same and is dropped), but `'c::d::X'` when `c::e::X`
+  also exists.
 - **R5 A thread-safe `&self` interner (sharded locks, as
   `kiln_lex::Interner`).** Sema is single-threaded per TU (spec/ast.md
   §13 Q8); parallelism is across TUs. A lock per type construction costs

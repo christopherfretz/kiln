@@ -605,6 +605,16 @@ impl Sema<'_, '_> {
         Ics::Standard(s)
     }
 
+    /// True for a reference that binds no temporary: an lvalue
+    /// reference to non-const or volatile.
+    fn nonconst_lref(&self, to: QualType) -> bool {
+        matches!(self.ast.types.canonical_view(to), TypeView::LValueRef(_))
+            && self.ast.types.pointee(to).is_some_and(|r| {
+                let q = self.ast.types.effective_quals(r);
+                !q.is_const() || q.is_volatile()
+            })
+    }
+
     /// The ICS of braced-init-list argument `i` (in `self.ovl.lists`).
     fn list_ics_at(&mut self, i: u32, to: QualType, opts: IcsOptions) -> Ics {
         let Some(slot) = self.ovl.lists.get_mut(i as usize) else {
@@ -615,8 +625,13 @@ impl Sema<'_, '_> {
         let r = self.list_ics(&l, to, opts);
         self.ovl.lists[i as usize] = l;
         // clang's `TryListConversion` fails with the list itself as the
-        // source: "cannot convert initializer list argument to 'T'".
+        // source: "cannot convert initializer list argument to 'T'" (a
+        // non-const lvalue reference whose temporary would initialize
+        // keeps "expects an lvalue").
         match r {
+            Ics::Bad(b) if b.kind == BadKind::LvalueRequired && self.nonconst_lref(to) => {
+                Ics::Bad(b)
+            }
             Ics::Bad(b) if b.kind != BadKind::InitList => {
                 Ics::bad(BadKind::InitList, QualType::VOID, b.to)
             }
@@ -644,9 +659,18 @@ impl Sema<'_, '_> {
                     && designator.is_empty()
                 {
                     let a = self.arg_info(*e);
-                    return self.try_implicit_conversion(&a, to, opts);
+                    let x = self.try_implicit_conversion(&a, to, opts);
+                    if !x.is_bad() {
+                        return x;
+                    }
                 }
-                return Ics::bad(BadKind::InitList, void_from, to);
+                // clang's `TryListConversion`: the temporary would be
+                // list-initialized, then fails to bind ("expects an
+                // lvalue"); otherwise the list does not convert to `T`.
+                return match self.list_ics(l, inner, opts) {
+                    Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, r),
+                    _ => Ics::bad(BadKind::LvalueRequired, void_from, to),
+                };
             }
             let rb = if lref {
                 RefBinding::IS_REF.with(RefBinding::LVALUE_REF).with(RefBinding::BINDS_RVALUE)
