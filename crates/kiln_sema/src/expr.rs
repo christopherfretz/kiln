@@ -700,7 +700,8 @@ impl Sema<'_, '_> {
             }
             ExprKind::CXXBindTemporaryExpr
             | ExprKind::MaterializeTemporaryExpr
-            | ExprKind::ExprWithCleanups => self.unused_warning(self.ast.exprs.operand(x)),
+            | ExprKind::ExprWithCleanups
+            | ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
             ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
                 // A temporary of a nodiscard class, or made by a nodiscard
                 // constructor ([dcl.attr.nodiscard]/4, clang
@@ -717,7 +718,6 @@ impl Sema<'_, '_> {
                     None => (DiagId::sema_unused_constructor, loc, vec![name]),
                 })
             }
-            ExprKind::ImplicitCastExpr => self.unused_warning(self.ast.exprs.operand(x)),
             ExprKind::StmtExpr => self.unused_stmt_expr(x, loc),
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
@@ -816,9 +816,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The replaceable global allocation functions are visible to lookup
+    /// without `<new>` ([basic.stc.dynamic.general]/2): declares them
+    /// before an unqualified or `::`-qualified lookup of their names.
+    fn declare_global_new_delete_for(&mut self, name: DeclName, qualifier: Option<DeclId>) {
+        use kiln_ast::names::OverloadedOperator as O;
+        if qualifier.is_none_or(|q| q == self.ast.tu)
+            && matches!(name.as_operator(), Some(O::New | O::ArrayNew | O::Delete | O::ArrayDelete))
+        {
+            self.declare_global_new_delete();
+        }
+    }
+
     /// [`Sema::act_on_id_expression`] for any unqualified-id: an
     /// identifier, an operator-function-id or a conversion-function-id
     /// ([expr.prim.id.unqual]/1; WP-121).
+    #[allow(clippy::too_many_lines)]
     pub fn act_on_id_expression_dn(
         &mut self,
         name: DeclName,
@@ -828,21 +841,7 @@ impl Sema<'_, '_> {
         let nns = qualifier.map(|q| q.nns);
         let begin = qualifier.map(|q| q.loc);
         let qualifier = qualifier.map(|q| q.ctx);
-        if qualifier.is_none_or(|q| q == self.ast.tu)
-            && matches!(
-                name.as_operator(),
-                Some(
-                    kiln_ast::names::OverloadedOperator::New
-                        | kiln_ast::names::OverloadedOperator::ArrayNew
-                        | kiln_ast::names::OverloadedOperator::Delete
-                        | kiln_ast::names::OverloadedOperator::ArrayDelete
-                )
-            )
-        {
-            // The replaceable global allocation functions are visible to
-            // lookup without `<new>` ([basic.stc.dynamic.general]/2).
-            self.declare_global_new_delete();
-        }
+        self.declare_global_new_delete_for(name, qualifier);
         let found = match qualifier {
             Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
             None => self.lookup_name_dn(name, LookupKind::Ordinary),
