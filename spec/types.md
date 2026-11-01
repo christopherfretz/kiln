@@ -217,6 +217,7 @@ Reserved depths (spec/sema-templates.md Q15, 2026-10-28): `AUTO_DEPTH = 0x7FFD` 
 | `DeducedTemplateSpecialization` | I | S or C | pairs [TemplateNameId, deduced or 0] | CTAD placeholder |
 | `Attributed` | I | S | aux = attribute kind, pairs [modified, equivalent] | type attributes (nullability, `noderef`, calling conventions); canonical = canonical(equivalent) |
 | `Splice` dep | O | S or S/C | pairs [operand ExprId, designated QualType or 0] | P2996 `typename [: r :]` (*M6*); canonical = designated type, or a dependent node keyed by the operand's profile |
+| `UnresolvedUsing` dep | D | C | data = `UnresolvedUsingTypename` `DeclId` | clang's `UnresolvedUsingType` (WP-179): the member type `x` of a dependent `using typename B<T>::x;`, one canonical node per declaration; prints as the declaration's name (scoped when desugared). The declaration's `ty` wraps it in keyword-less `Elaborated` sugar, as clang's type for the name as written |
 
 Not represented (out of scope, rejected): `FunctionNoProto` (C only),
 Objective-C, OpenCL pipes/samplers, matrices, HLSL, `BTFTagAttributed`,
@@ -640,19 +641,21 @@ stores ids.
   Comparison category types are made by sema, not written, and clang
   prints them as `'std::strong_ordering'`. kiln gives them `Elaborated`
   sugar with the enclosing non-inline namespaces as the qualifier
-  (`scoped_class_type`, WP-082). A type's scope skips inline
-  namespaces as clang's `AppendScope` does (`SemaNames::write_scope`;
-  clang's redundancy lookup is not done), so the canonical `aka` is
-  `'std::S'` too and is dropped. A declaration's own qualified name
-  (`qualified_decl_name`, clang `printQualifiedName`,
-  `SemaNames::for_decls`) does clang's redundancy check
-  (`NamespaceDecl::isRedundantInlineQualifierFor`): an inline namespace
-  is dropped when looking the next component's name up in the
-  enclosing namespace finds as many declarations as in the inline one
-  (`std::Ptr<…>::g`, not `std::__1::Ptr<…>::g`), and a class
-  specialization in that scope prints its canonical arguments scoped
-  (`write_arg_list_scoped`: `std::Ptr<int *, std::alloc<int>>::g`)
-  (WP-172).
+  (`scoped_class_type`, WP-082). A type's scope and a
+  declaration's own qualified name (`qualified_decl_name`) skip an
+  inline namespace only when it is redundant for the name printed after
+  it, as clang's `AppendScope` and `printNestedNameSpecifier` do
+  (`SemaNames::redundant_inline`, clang
+  `isRedundantInlineQualifierFor`): the enclosing non-transparent
+  context's lookup table (`Ast::lookup_local`, where an inline
+  namespace's names are also entered) has as many entries for that name
+  as the inline namespace's own. The name starts as the declaration's
+  and becomes each printed scope's name; an empty name (anonymous
+  namespace, unnamed tag) never drops one. So `'std::S'` (the canonical
+  `aka` is the same and is dropped), but `'c::d::X'` when `c::e::X`
+  also exists. A class specialization in a printed scope shows its
+  canonical arguments with their own scope (`write_arg_list_scoped`:
+  `'std::Ptr<int *, std::alloc<int>>::g'`, not `alloc<int>`; WP-172).
 - **R5 A thread-safe `&self` interner (sharded locks, as
   `kiln_lex::Interner`).** Sema is single-threaded per TU (spec/ast.md
   §13 Q8); parallelism is across TUs. A lock per type construction costs

@@ -674,6 +674,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::CXXRewrittenBinaryOperator | ExprKind::PredefinedExpr => push(n.a()),
+            ExprKind::DesignatedInitExpr => {
+                push(n.a());
+                for c in exprs.designated_indices(e) {
+                    push(c.raw());
+                }
+            }
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
                 push(n.a());
                 for c in lists.iter::<ExprId>(exprs.call_args(e)) {
@@ -1288,11 +1294,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | DeclKind::UsingShadow
             | DeclKind::ConstructorUsingShadow
             | DeclKind::UnresolvedUsingValue
+            | DeclKind::UnresolvedUsingTypename
             | DeclKind::UsingEnum
             | DeclKind::UsingDirective => self.using_fields(d, n.kind()),
             DeclKind::LinkageSpec => {
-                let lang = decls.scope(d).map_or(0, |s| s.aux);
-                self.line.push_str(if lang == LinkageLang::C as u32 { " C" } else { " C++" });
+                let lang = decls.scope(d).and_then(crate::decl::ScopeData::linkage_lang);
+                self.line.push_str(if lang == Some(LinkageLang::C) { " C" } else { " C++" });
             }
             DeclKind::Friend => {
                 if let FriendTarget::Type { ty, .. } = decls.friend_target(d) {
@@ -1659,6 +1666,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 return;
             }
             DeclKind::NamespaceAlias => self.name(d),
+            DeclKind::UnresolvedUsingTypename => {
+                self.line.push(' ');
+                self.names.write_name(d, &mut self.line);
+                return;
+            }
             // clang's JSON `name` is the unqualified member name (a
             // constructor's is its canonical class type).
             DeclKind::UnresolvedUsingValue => {

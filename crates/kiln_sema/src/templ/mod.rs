@@ -142,6 +142,11 @@ pub struct TemplState {
     /// and `template` locations): the next class template-id declared
     /// is explicitly instantiated ([temp.explicit]).
     pub(crate) explicit_inst: Option<(Option<Loc>, Loc)>,
+    /// The `template<>` of `template<> template<class U> struct
+    /// A<int>::B ...` ([temp.expl.spec]/16): the declaration under the
+    /// inner head specializes member template `B` of the implicitly
+    /// instantiated `A<int>`, which the outer `template<>` matched.
+    pub(crate) member_spec: Option<Loc>,
     /// The instantiation-stack depth at which `explicit_spec` /
     /// `explicit_inst` was set: a declarator met while a class named in
     /// the declaration's qualifier is instantiated is not the explicit
@@ -777,6 +782,7 @@ impl Sema<'_, '_> {
     fn checks_member_spec_headers(&self) -> bool {
         self.templ.explicit_spec.is_none()
             && self.templ.explicit_inst.is_none()
+            && self.templ.member_spec.is_none()
             && matches!(self.kind_of(self.ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
     }
 

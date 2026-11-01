@@ -10,7 +10,7 @@
 //! [`Sema::temporaries_bound_by`] and extended in place
 //! (`ExprArena::extend_temporary`, spec/sema-class.md §8.2).
 
-use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, TlsKind, VarStorage};
+use kiln_ast::decl::{DeclFlags, DeclKind, Defaulted, DefinitionBits, TlsKind, VarStorage};
 use kiln_ast::expr::{
     BinaryOp, CastKind, ExprDeps, ExprFlags, ExprKind, StorageDuration, ValueCategory,
 };
@@ -76,16 +76,51 @@ impl Sema<'_, '_> {
         if flags.contains(DeclFlags::INVALID) || flags.contains(DeclFlags::DEPENDENT_CTX) {
             return e;
         }
-        if self.defn_bits(class).contains(kiln_ast::decl::DefinitionBits::TRIVIAL_DTOR) {
+        // clang checks the destructor's access and deletion even when it
+        // is trivial (then it binds nothing); an implicit trivial
+        // destructor passes both.
+        let bits = self.defn_bits(class);
+        let trivial = bits.contains(DefinitionBits::TRIVIAL_DTOR);
+        if trivial
+            && !bits.contains(DefinitionBits::USER_DECLARED_DTOR)
+            && !bits.contains(DefinitionBits::DEFAULTED_DTOR_DELETED)
+        {
             return e;
         }
+        // [dcl.type.decltype]/2: a call operand of `decltype` makes no
+        // temporary; `exit_decltype` checks the destructor of every such
+        // call but the operand itself (clang `DelayedDecltypeBinds`).
+        if matches!(
+            n.kind(),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+        ) && self.decltype_calls.last().is_some_and(|x| x.0 == self.unevaluated)
+        {
+            return e;
+        }
+        let loc = self.begin_loc(e);
+        let Some(dtor) = self.check_temporary_dtor(class, n.ty(), loc) else { return e };
+        if trivial {
+            return e;
+        }
+        self.cleanup.needs = true;
+        self.cleanup.side_effects = true;
+        self.builder().bind_temporary(e, dtor)
+    }
+
+    /// The destructor checks of a temporary of class `class` (type `ty`)
+    /// at `loc`: accessible, not deleted, odr-used. The destructor, if
+    /// one is selected.
+    pub(crate) fn check_temporary_dtor(
+        &mut self,
+        class: DeclId,
+        ty: QualType,
+        loc: Loc,
+    ) -> Option<DeclId> {
         let (super::special::Selected::Found(dtor) | super::special::Selected::Deleted(dtor)) =
             self.select_special(class, SpecialKind::Dtor, Quals::NONE, Quals::NONE)
         else {
-            return e;
+            return None;
         };
-        let loc = self.begin_loc(e);
-        let ty = n.ty();
         let msg = self.special_member_access(dtor, class, |s, prot| {
             s.diag(DiagId::sema_temp_dtor_access, loc).arg(s.ty_arg(ty)).arg(u8::from(prot))
         });
@@ -94,9 +129,7 @@ impl Sema<'_, '_> {
         }
         self.mark_function_referenced(dtor, loc);
         self.diagnose_deleted_use(dtor, loc);
-        self.cleanup.needs = true;
-        self.cleanup.side_effects = true;
-        self.builder().bind_temporary(e, dtor)
+        Some(dtor)
     }
 
     /// clang `MarkFunctionReferenced` for a use of function `f` at `loc`

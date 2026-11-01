@@ -236,7 +236,7 @@ impl Sema<'_, '_> {
         Ok(ConvertedArgs { sugared, canonical })
     }
 
-    fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
+    pub(crate) fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
         let name = self.qualified_decl_name(tmpl);
         let at = self
             .pattern_of(tmpl)
@@ -429,8 +429,9 @@ impl Sema<'_, '_> {
                 .arg("non-type template argument")
                 .arg(raw.to_string())
                 .arg(self.ty_arg(pty));
+            // clang `ext_cce_narrowing` (a `-Wc++11-narrowing` error by
+            // default) recovers with the converted value.
             self.emit(d);
-            return Err(());
         }
         let c = match conv::implicit_convert(self, c, pty, ConvCtx::Initialization) {
             Ok(c) => c,

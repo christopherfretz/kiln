@@ -902,6 +902,11 @@ impl Parser<'_, '_> {
             return (None, false);
         };
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+        // [class.access]/4: a mem-initializer-id naming a type (a base,
+        // through a typedef or its injected-class-name) is access-checked.
+        if let NameClass::Type(_, d) = self.s.classify_name(name, q) {
+            self.s.check_type_name_access(name, q, d, loc);
+        }
         let id = match q {
             // `Bs(args)...` names a pack: resolve the type now so that
             // instantiation can expand it ([temp.variadic]/5).
@@ -1866,6 +1871,7 @@ impl Parser<'_, '_> {
             self.s.error(DiagId::parse_expected_class_name, id_loc);
             return None;
         };
+        self.s.check_type_name_access(name, q, d, id_loc);
         let ty = self.named_type(ty, d);
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
         Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs })

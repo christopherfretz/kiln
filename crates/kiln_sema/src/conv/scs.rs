@@ -158,6 +158,22 @@ pub struct StandardConversion {
     /// A list-initialization sequence converting to
     /// `std::initializer_list<X>` ([over.ics.rank]/3.1.1).
     pub std_init_list: bool,
+    /// A list-initialization sequence converting to an array
+    /// ([over.ics.rank]/3.1.2; clang's `InitializerListContainerType`).
+    pub list_array: Option<ListArray>,
+}
+
+/// The array a list-initialization sequence converts to: its element
+/// type, the number of elements it initializes (an array of unknown bound
+/// gets one per initializer) and whether the bound was unknown.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ListArray {
+    /// The element type.
+    pub elem: QualType,
+    /// The number of elements.
+    pub len: u64,
+    /// The target was an array of unknown bound.
+    pub unbounded: bool,
 }
 
 impl StandardConversion {
@@ -188,6 +204,7 @@ impl StandardConversion {
             fixed_enum: FixedEnumPromotion::None,
             rb,
             std_init_list: false,
+            list_array: None,
         }
     }
 }
@@ -372,6 +389,7 @@ fn standard_conversion_non_atomic(
         fixed_enum: FixedEnumPromotion::None,
         rb: RefBinding::NONE,
         std_init_list: false,
+        list_array: None,
     };
     // A bit-field width only matters before the lvalue transformation
     // drops it; it stays attached to the value.

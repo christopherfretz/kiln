@@ -53,6 +53,23 @@ pub enum Designator {
     Index(ExprId, Loc),
 }
 
+impl Designator {
+    /// The location of the designator (the name of `.name`, the `[`).
+    pub fn loc(&self) -> Loc {
+        match *self {
+            Designator::Field(_, l) | Designator::Index(_, l) => l,
+        }
+    }
+
+    /// The AST form (a `DesignatedInitExpr` designator).
+    pub fn to_ast(&self) -> kiln_ast::expr::Designator {
+        match *self {
+            Designator::Field(name, loc) => kiln_ast::expr::Designator::Field { name, loc },
+            Designator::Index(index, loc) => kiln_ast::expr::Designator::Index { index, loc },
+        }
+    }
+}
+
 /// An initializer-clause.
 #[derive(Clone, Debug)]
 pub enum InitValue {
@@ -200,6 +217,77 @@ impl Sema<'_, '_> {
         self.emit(msg);
         let flat = Self::list_exprs(l);
         self.recover(ty, &flat, l.lbrace)
+    }
+
+    /// The C++ checks on the designators of a braced-init-list as
+    /// written (clang `ActOnInitList`): `-Wc99-designator` for nested
+    /// designators, array designators and a mix of designated and
+    /// non-designated clauses, each at most once per list. Run once,
+    /// when the list is parsed (not again at instantiation).
+    pub fn act_on_init_list_syntax(&mut self, l: &InitList) {
+        let Some(first) = l.items.first() else { return };
+        // A designated pack expansion `.m = e...` is a
+        // `PackExpansionExpr`, not a `DesignatedInitExpr`, to these
+        // checks (clang `ActOnInitList`).
+        let heads: Vec<Option<Designator>> = l
+            .items
+            .iter()
+            .map(|item| match item.value {
+                InitValue::Expr(e) if crate::templ::pack::expr_pattern(self, e).is_some() => None,
+                _ => item.designator.first().copied(),
+            })
+            .collect();
+        let first_designator = heads[0];
+        let (mut nested, mut array, mut mixed) = (false, false, false);
+        for (item, head) in l.items.iter().zip(&heads) {
+            if let Some(d) = head {
+                if !nested && item.designator.len() > 1 {
+                    nested = true;
+                    let msg =
+                        self.diag(DiagId::sema_designated_init_nested, self.designator_begin(d));
+                    self.emit(msg);
+                }
+                for d in &item.designator {
+                    if let Designator::Index(_, at) = *d
+                        && !array
+                    {
+                        array = true;
+                        let msg = self.diag(DiagId::sema_designated_init_array, at);
+                        self.emit(msg);
+                    }
+                }
+                if !mixed && first_designator.is_none() {
+                    mixed = true;
+                    let msg =
+                        self.diag(DiagId::sema_designated_init_mixed, self.designator_begin(d));
+                    let note =
+                        self.diag(DiagId::note_designated_init_mixed, self.item_begin(first));
+                    self.emit(msg.with_note(note));
+                }
+            } else if !mixed && let Some(d) = first_designator.as_ref() {
+                mixed = true;
+                let msg = self.diag(DiagId::sema_designated_init_mixed, self.designator_begin(d));
+                let note = self.diag(DiagId::note_designated_init_mixed, self.item_begin(item));
+                self.emit(msg.with_note(note));
+            }
+        }
+    }
+
+    /// Where a designator begins: the `.` of `.name`, the `[` of `[i]`.
+    fn designator_begin(&self, d: &Designator) -> Loc {
+        match *d {
+            Designator::Field(_, at) => self.period_before(at),
+            Designator::Index(_, at) => at,
+        }
+    }
+
+    /// Where an initializer-clause begins (its first designator if any).
+    fn item_begin(&self, item: &InitItem) -> Loc {
+        match (item.designator.first(), &item.value) {
+            (Some(d), _) => self.designator_begin(d),
+            (None, InitValue::List(l)) => l.lbrace,
+            (None, InitValue::Expr(e)) => self.begin_loc(*e),
+        }
     }
 
     /// Whether the token before `at` is `=` (from the source text).
@@ -920,8 +1008,9 @@ impl Sema<'_, '_> {
     /// List-initialization of an entity at `entity` (its name, or the
     /// start of the expression for temporaries, return values and
     /// assignments): too many elements for a scalar are reported there
-    /// (clang's `FK_TooManyInitsForScalar`); nested lists report at the
-    /// excess element.
+    /// (clang's `FK_TooManyInitsForScalar`; a scalar member's nested list
+    /// passes its `{`); nested aggregate lists report at the excess
+    /// element.
     pub(crate) fn init_from_list_at(
         &mut self,
         ty: QualType,
@@ -971,6 +1060,10 @@ impl Sema<'_, '_> {
             if pos < l.items.len() {
                 self.excess(ty, &l.items[pos]);
             }
+            if self.in_template() && l.items.iter().any(|i| !i.designator.is_empty()) {
+                // Instantiation rebuilds a designated list as written.
+                self.note_syntactic_list(e, l);
+            }
             return e;
         }
         if self.is_vector_type(ty) {
@@ -1016,7 +1109,7 @@ impl Sema<'_, '_> {
         if let Some(extra) = l.items.get(1) {
             let at = entity.unwrap_or_else(|| extra.value.loc(self));
             let msg = self.diag(DiagId::sema_excess_initializers, at).arg("2");
-            self.emit(msg);
+            self.emit(self.ref_temp_noted(msg));
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
     }
@@ -1054,7 +1147,7 @@ impl Sema<'_, '_> {
         }
         if let Some(extra) = l.items.get(pos) {
             let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
-            self.emit(msg);
+            self.emit(self.ref_temp_noted(msg));
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
     }
@@ -1190,9 +1283,16 @@ impl Sema<'_, '_> {
         self.ctor_diag_ty = Some(ty);
         let tmp = self.list_construct(r, l, style, at, None);
         self.ctor_diag_ty = None;
-        let tmp = match tmp {
-            Some(t) => t,
-            None => self.init_from_list_at(r, l, entity),
+        let tmp = if let Some(t) = tmp {
+            t
+        } else {
+            // An aggregate temporary with too many elements gets
+            // clang's `diagnoseListInit` reference note.
+            let agg = self.ast.types.is_array(r) || self.ast.types.as_record(r).is_some();
+            let saved = self.ref_temp_note.replace(agg.then_some((r, at)));
+            let t = self.init_from_list_at(r, l, entity);
+            self.ref_temp_note.set(saved);
+            t
         };
         self.init_from_expr(ty, tmp, ConvCtx::Initialization, at)
     }
@@ -1281,7 +1381,21 @@ impl Sema<'_, '_> {
             "4"
         };
         let msg = self.diag(DiagId::sema_excess_initializers, item.value.loc(self)).arg(which);
-        self.emit(msg);
+        self.emit(self.ref_temp_noted(msg));
+    }
+
+    /// Adds the `in initialization of temporary ... created to
+    /// list-initialize this reference` note while a reference's
+    /// aggregate temporary is list-initialized (once).
+    fn ref_temp_noted(&self, d: kiln_diag::Diag) -> kiln_diag::Diag {
+        match self.ref_temp_note.take() {
+            Some((t, at)) => {
+                let n =
+                    self.diag(DiagId::note_reference_temporary_list_init, at).arg(self.ty_arg(t));
+                d.with_note(n)
+            }
+            None => d,
+        }
     }
 
     /// One element of an aggregate: a nested list, a brace-elided
@@ -1304,7 +1418,13 @@ impl Sema<'_, '_> {
                     _ => None,
                 };
                 *pos += 1;
-                self.init_from_list_at(ty, sub, entity)
+                // A scalar member's nested list reports too many
+                // elements at its `{` (clang's `FK_TooManyInitsForScalar`
+                // for the member entity, whose location is the list),
+                // unless a `.m{...}` designator located it.
+                let scalar = self.is_scalar(ty);
+                let at = entity.or(scalar.then_some(sub.lbrace));
+                self.init_from_list_at(ty, sub, at)
             }
             InitValue::Expr(e) => {
                 let e = *e;
@@ -1361,10 +1481,39 @@ impl Sema<'_, '_> {
         lbrace: Loc,
         rbrace: Loc,
     ) -> ExprId {
+        let sub = Sub { braced, entry: None, prior: None };
+        self.check_aggregate_in(ty, items, pos, sub, lbrace, rbrace)
+    }
+
+    /// [`Sema::check_aggregate`] entering the (sub)aggregate as `sub`
+    /// says: a designator path descends into a subobject, where the
+    /// following non-designated clauses continue (clang
+    /// `CheckDesignatedInitializer`).
+    #[allow(clippy::too_many_lines)]
+    fn check_aggregate_in(
+        &mut self,
+        ty: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        sub: Sub,
+        lbrace: Loc,
+        rbrace: Loc,
+    ) -> ExprId {
         if self.ast.types.is_array(ty) {
-            return self.check_array(ty, items, pos, braced, lbrace, rbrace);
+            return self.check_array(ty, items, pos, sub, lbrace, rbrace);
         }
-        let Some(r) = self.ast.types.as_record(ty) else {
+        let record = self.ast.types.as_record(ty);
+        if let Some(k) = sub.entry
+            && record.is_none_or(|_| !self.is_aggregate(ty))
+        {
+            match record {
+                Some(_) => self.unsupported("a designator into a non-aggregate member", lbrace),
+                None => self.designator_mismatch(ty, &items[*pos].designator[k]),
+            }
+            *pos += 1;
+            return self.recover(ty, &[], lbrace);
+        }
+        let Some(r) = record else {
             return self.recover(ty, &[], lbrace);
         };
         let fields = self.init_fields(r);
@@ -1376,65 +1525,139 @@ impl Sema<'_, '_> {
         let nb = bases.len();
         let total = nb + fields.len();
         let mut slots: Vec<Option<ExprId>> = vec![None; total];
-        let mut cur = 0usize;
+        // Whether a slot was initialized by a clause (not a filler).
+        let mut explicit = vec![false; total];
         let mut union_field = None;
+        if let Some(p) = self.prior_list(sub.prior) {
+            let inits: Vec<ExprId> =
+                self.ast.lists.iter(self.ast.exprs.init_list_inits(p)).collect();
+            let uf = self.ast.exprs.init_list(p).union_field;
+            if union {
+                if let (Some(f), Some(&e)) = (uf, inits.first())
+                    && let Some(i) = fields.iter().position(|&x| x == f)
+                {
+                    slots[i] = Some(e);
+                    explicit[i] = !self.is_filler_expr(e);
+                    union_field = Some(f);
+                }
+            } else if inits.len() == total {
+                for (i, &e) in inits.iter().enumerate() {
+                    slots[i] = Some(e);
+                    explicit[i] = !self.is_filler_expr(e);
+                }
+            }
+        }
+        let mut entry = sub.entry;
+        let mut cur = 0usize;
         while *pos < items.len() {
             let item = &items[*pos];
-            if let Some(d) = item.designator.first() {
-                if !braced {
-                    break;
-                }
-                let Designator::Field(name, dloc) = *d else {
-                    self.unsupported("array designator for a class", item.value.loc(self));
-                    *pos += 1;
-                    continue;
+            let k = match entry.take() {
+                Some(k) => Some(k),
+                None if item.designator.is_empty() => None,
+                None if !sub.braced => break,
+                None => Some(0),
+            };
+            let mut descend = None;
+            if let Some(k) = k {
+                let (name, dloc) = match item.designator[k] {
+                    Designator::Field(n, l) => (n, l),
+                    ref d @ Designator::Index(..) => {
+                        self.designator_mismatch(ty, d);
+                        *pos += 1;
+                        continue;
+                    }
                 };
-                if item.designator.len() > 1 {
-                    self.unsupported("nested designators", dloc);
-                    *pos += 1;
-                    continue;
-                }
-                let Some(idx) = fields
-                    .iter()
-                    .position(|&f| self.ast.decls.get(f).name().as_ident() == Some(name))
-                else {
+                let Some((idx, direct)) = self.designated_field(&fields, name) else {
                     let msg = self
-                        .diag(DiagId::sema_no_member, dloc)
+                        .diag(DiagId::sema_field_designator_unknown, dloc)
                         .arg(self.ast.symbols().as_str(name).to_string())
                         .arg(self.ty_arg(ty));
                     self.emit(msg);
                     *pos += 1;
                     continue;
                 };
+                // A member of an anonymous struct or union is designated
+                // through it (clang's implicit designator for an
+                // `IndirectFieldDecl`).
+                if !direct {
+                    descend = Some(k);
+                } else if k + 1 < item.designator.len() {
+                    descend = Some(k + 1);
+                }
+                // [dcl.init.aggr]/3.1: designators in declaration order
+                // (clang `ext_designated_init_reordered`, checked for the
+                // designators of the list itself).
+                if sub.braced && cur > nb && cur - nb - 1 > idx {
+                    let prev = fields[cur - nb - 1];
+                    let msg = self
+                        .diag(DiagId::sema_designated_init_reordered, self.value_begin(item))
+                        .arg(self.field_arg(fields[idx]))
+                        .arg(self.field_arg(prev));
+                    let msg = match slots[cur - 1].filter(|_| explicit[cur - 1]) {
+                        Some(p) => msg.with_note(
+                            self.diag(DiagId::note_previous_field_init, self.begin_loc(p))
+                                .arg(self.field_arg(prev)),
+                        ),
+                        None => msg,
+                    };
+                    self.emit(msg);
+                }
                 cur = nb + idx;
             }
             if cur >= total || (union && union_field.is_some() && item.designator.is_empty()) {
-                if braced {
+                if sub.braced {
                     self.excess(ty, item);
                     *pos = items.len();
                 }
                 break;
+            }
+            if union
+                && let Some(g) = union_field
+                && g != fields[cur]
+            {
+                // Another member of the union was initialized.
+                if let Some(old) = slots.iter().zip(&explicit).find_map(|(s, &x)| s.filter(|_| x)) {
+                    let msg = self
+                        .diag(DiagId::sema_initializer_union_overrides, self.item_begin(item))
+                        .arg("0");
+                    let note = self.diag(DiagId::note_init_previous, self.begin_loc(old));
+                    self.emit(msg.with_note(note));
+                }
+                slots = vec![None; total];
+                explicit = vec![false; total];
+                union_field = None;
             }
             let ety = if cur < nb {
                 bases[cur]
             } else {
                 self.ast.decls.get(fields[cur - nb]).ty().unwrap_or(QualType::ERROR)
             };
-            let e = match items[*pos].value {
-                InitValue::Expr(x) if cur < nb && self.is_class_or_derived(x, ety) => {
-                    *pos += 1;
-                    self.init_base_element(ety, x)
+            let e = if let Some(k2) = descend {
+                let prior = self.descend_prior(slots[cur], explicit[cur], item);
+                let at = self.designator_begin(&item.designator[0]);
+                let s = Sub { braced: false, entry: Some(k2), prior };
+                self.check_aggregate_in(ety, items, pos, s, at, at)
+            } else {
+                if explicit[cur]
+                    && let Some(old) = slots[cur]
+                {
+                    self.override_warning(item, old);
                 }
-                InitValue::List(_) if cur < nb => {
-                    self.init_base_list(ety, |s| s.init_element(ety, items, pos, lbrace))
+                match items[*pos].value {
+                    InitValue::Expr(x) if cur < nb && self.is_class_or_derived(x, ety) => {
+                        *pos += 1;
+                        self.init_base_element(ety, x)
+                    }
+                    InitValue::List(_) if cur < nb => {
+                        self.init_base_list(ety, |s| s.init_element(ety, items, pos, lbrace))
+                    }
+                    _ => self.init_element(ety, items, pos, lbrace),
                 }
-                _ => self.init_element(ety, items, pos, lbrace),
             };
             slots[cur] = Some(e);
+            explicit[cur] = true;
             if union {
                 union_field = Some(fields[cur]);
-                slots = vec![None; total];
-                slots[cur] = Some(e);
             }
             cur += 1;
         }
@@ -1464,38 +1687,50 @@ impl Sema<'_, '_> {
         self.builder().init_list(ty, &inits, None, union_field, lbrace, rbrace)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn check_array(
         &mut self,
         ty: QualType,
         items: &[InitItem],
         pos: &mut usize,
-        braced: bool,
+        sub: Sub,
         lbrace: Loc,
         rbrace: Loc,
     ) -> ExprId {
         let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
         let bound = self.ast.types.array_size(ty);
         let mut slots: Vec<Option<ExprId>> = Vec::new();
+        let mut explicit: Vec<bool> = Vec::new();
+        if let Some(p) = self.prior_list(sub.prior) {
+            for e in
+                self.ast.lists.iter::<ExprId>(self.ast.exprs.init_list_inits(p)).collect::<Vec<_>>()
+            {
+                slots.push(Some(e));
+                explicit.push(!self.is_filler_expr(e));
+            }
+        }
+        let mut entry = sub.entry;
         let mut cur: u64 = 0;
         while *pos < items.len() {
             let item = &items[*pos];
-            if let Some(d) = item.designator.first() {
-                if !braced {
-                    break;
-                }
-                let Designator::Index(ie, dloc) = *d else {
-                    let msg = self
-                        .diag(DiagId::sema_no_member, item.value.loc(self))
-                        .arg("field")
-                        .arg(self.ty_arg(ty));
-                    self.emit(msg);
-                    *pos += 1;
-                    continue;
+            let k = match entry.take() {
+                Some(k) => Some(k),
+                None if item.designator.is_empty() => None,
+                None if !sub.braced => break,
+                None => Some(0),
+            };
+            let mut descend = None;
+            if let Some(k) = k {
+                let (ie, dloc) = match item.designator[k] {
+                    Designator::Index(ie, l) => (ie, l),
+                    ref d @ Designator::Field(..) => {
+                        self.designator_mismatch(ty, d);
+                        *pos += 1;
+                        continue;
+                    }
                 };
-                if item.designator.len() > 1 {
-                    self.unsupported("nested designators", dloc);
-                    *pos += 1;
-                    continue;
+                if k + 1 < item.designator.len() {
+                    descend = Some(k + 1);
                 }
                 let c = conv::lvalue_to_rvalue(self, ie);
                 let c = self.act_on_full_expr(c);
@@ -1518,22 +1753,39 @@ impl Sema<'_, '_> {
                 }
             }
             if bound.is_some_and(|b| cur >= b) {
-                if braced {
+                if sub.braced {
                     self.excess(ty, item);
                     *pos = items.len();
                 }
                 break;
             }
-            let e = self.init_element(elem, items, pos, lbrace);
             let i = usize::try_from(cur).unwrap_or(usize::MAX);
             if slots.len() <= i {
                 slots.resize(i + 1, None);
+                explicit.resize(i + 1, false);
             }
+            let e = if let Some(k2) = descend {
+                let prior = self.descend_prior(slots[i], explicit[i], item);
+                let at = self.designator_begin(&item.designator[0]);
+                let s = Sub { braced: false, entry: Some(k2), prior };
+                self.check_aggregate_in(elem, items, pos, s, at, at)
+            } else {
+                if explicit[i]
+                    && let Some(old) = slots[i]
+                {
+                    self.override_warning(item, old);
+                }
+                self.init_element(elem, items, pos, lbrace)
+            };
             slots[i] = Some(e);
+            explicit[i] = true;
             cur += 1;
         }
         let n = bound.unwrap_or(slots.len() as u64);
         let mut inits = Vec::with_capacity(slots.len());
+        // A hole left by array designators also gives the list a filler
+        // (clang `FillInEmptyInitializations`).
+        let hole = slots.iter().any(Option::is_none);
         for slot in slots {
             let e = match slot {
                 Some(e) => e,
@@ -1541,7 +1793,8 @@ impl Sema<'_, '_> {
             };
             inits.push(e);
         }
-        let filler = if (inits.len() as u64) < n { Some(self.filler(elem, rbrace)) } else { None };
+        let filler =
+            if hole || (inits.len() as u64) < n { Some(self.filler(elem, rbrace)) } else { None };
         let lty = if bound.is_none() {
             let complete = self.ast.types.constant_array(elem, n, None);
             let q = self.ast.types.effective_quals(ty);
@@ -1551,4 +1804,129 @@ impl Sema<'_, '_> {
         };
         self.builder().init_list(lty, &inits, filler, None, lbrace, rbrace)
     }
+
+    /// "field designator cannot initialize a non-class type" /
+    /// "array designator cannot initialize non-array type" for the
+    /// designator `d` applied to `ty`.
+    fn designator_mismatch(&mut self, ty: QualType, d: &Designator) {
+        if self.is_error_type(ty) {
+            return;
+        }
+        let (id, at) = match *d {
+            Designator::Field(_, l) => {
+                (DiagId::sema_field_designator_non_record, self.period_before(l))
+            }
+            Designator::Index(_, l) => (DiagId::sema_array_designator_non_array, l),
+        };
+        let msg = self.diag(id, at).arg(self.ty_arg(ty));
+        self.emit(msg);
+    }
+
+    /// The field of `fields` the designator `.name` designates: its index
+    /// and whether it is the field itself (false: an anonymous struct or
+    /// union member containing it).
+    fn designated_field(&self, fields: &[DeclId], name: Symbol) -> Option<(usize, bool)> {
+        if let Some(i) =
+            fields.iter().position(|&f| self.ast.decls.get(f).name().as_ident() == Some(name))
+        {
+            return Some((i, true));
+        }
+        fields
+            .iter()
+            .position(|&f| self.is_anonymous_member(f) && self.anonymous_contains(f, name))
+            .map(|i| (i, false))
+    }
+
+    /// Whether anonymous member `f` has a member `name` (directly or in
+    /// a nested anonymous member).
+    fn anonymous_contains(&self, f: DeclId, name: Symbol) -> bool {
+        let Some(r) = self.ast.decls.get(f).ty().and_then(|t| self.ast.types.as_record(t)) else {
+            return false;
+        };
+        self.init_fields(r).into_iter().any(|g| {
+            self.ast.decls.get(g).name().as_ident() == Some(name)
+                || (self.is_anonymous_member(g) && self.anonymous_contains(g, name))
+        })
+    }
+
+    /// A field as a diagnostic argument (an anonymous member by type).
+    fn field_arg(&self, f: DeclId) -> String {
+        if self.ast.decls.get(f).name().is_empty() {
+            // clang names an anonymous member by its type, without `aka`.
+            let names = crate::names::SemaNames::new(self);
+            let t = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+            let s = kiln_ast::types::print_type(
+                &self.ast.types,
+                &names,
+                t,
+                kiln_ast::types::PrintOptions::SUGARED,
+            );
+            format!("'{s}'")
+        } else {
+            self.decl_arg(f)
+        }
+    }
+
+    /// Where the initializer of a clause begins (after its designators).
+    fn value_begin(&self, item: &InitItem) -> Loc {
+        match &item.value {
+            InitValue::List(l) => l.lbrace,
+            InitValue::Expr(e) => self.begin_loc(*e),
+        }
+    }
+
+    /// A filler a later designator may replace silently.
+    fn is_filler_expr(&self, e: ExprId) -> bool {
+        matches!(
+            self.ast.exprs.get(e).kind(),
+            ExprKind::ImplicitValueInitExpr | ExprKind::CXXDefaultInitExpr
+        )
+    }
+
+    /// `prior` if it is an initializer list (a subaggregate to merge into).
+    fn prior_list(&self, prior: Option<ExprId>) -> Option<ExprId> {
+        prior.filter(|&p| self.ast.exprs.get(p).kind() == ExprKind::InitListExpr)
+    }
+
+    /// The prior initializer a designator path descending into a slot
+    /// merges into. A subobject initialized by an expression would need
+    /// clang's `DesignatedInitUpdateExpr`.
+    fn descend_prior(
+        &self,
+        slot: Option<ExprId>,
+        explicit: bool,
+        item: &InitItem,
+    ) -> Option<ExprId> {
+        let old = slot?;
+        if explicit && self.ast.exprs.get(old).kind() != ExprKind::InitListExpr {
+            self.unsupported(
+                "a designator into a subobject initialized by an expression",
+                self.value_begin(item),
+            );
+            return None;
+        }
+        Some(old)
+    }
+
+    /// "initializer overrides prior initialization of this subobject"
+    /// ([dcl.init.aggr]/3.1 forbids it; clang `ext_initializer_overrides`).
+    fn override_warning(&mut self, item: &InitItem, old: ExprId) {
+        let msg = self.diag(DiagId::sema_initializer_overrides, self.value_begin(item)).arg("1");
+        let note = self.diag(DiagId::note_init_previous, self.begin_loc(old));
+        self.emit(msg.with_note(note));
+    }
+}
+
+/// How [`Sema::check_aggregate_in`] enters a (sub)aggregate.
+#[derive(Clone, Copy)]
+struct Sub {
+    /// Whether the subaggregate has its own braces; under brace elision
+    /// or a designator path a designated clause ends it.
+    braced: bool,
+    /// The designator of the current clause that applies within this
+    /// subaggregate (a designator path entering it).
+    entry: Option<usize>,
+    /// The subaggregate's initializer so far, when a designator path
+    /// re-enters it: its elements are kept.
+    prior: Option<ExprId>,
 }

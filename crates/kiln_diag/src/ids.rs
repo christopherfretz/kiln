@@ -631,7 +631,7 @@ diag_ids! {
     sema_enum_fixed_redecl_unfixed = Error (0) "enumeration previously declared with fixed underlying type";
     sema_enum_unfixed_redecl_fixed = Error (0) "enumeration previously declared with nonfixed underlying type";
     sema_enum_invalid_underlying = Error (1) "non-integral type {0} is an invalid underlying type";
-    sema_cce_narrowing_value = Error (3) "{0} evaluates to {1}, which cannot be narrowed to type {2}";
+    sema_cce_narrowing_value = WarningError [Cxx11Narrowing] (3) "{0} evaluates to {1}, which cannot be narrowed to type {2}";
     sema_enumerator_too_large = Error (2) "enumerator value {0} is not representable in the underlying type {1}";
     sema_enumerator_wrapped = Error (0) "enumerator value is not representable in any integral type";
     sema_no_declarators = ExtWarn [MissingDeclarations] (0) "declaration does not declare anything";
@@ -1562,6 +1562,10 @@ diag_ids! {
     sema_literal_conversion = Warning [LiteralConversion] (4) "implicit conversion from {0} to {1} changes value from {2} to {3}";
     sema_literal_conversion_out_of_range = Warning [LiteralConversion] (2) "implicit conversion of out of range value from {0} to {1} is undefined";
     sema_designated_init_non_aggregate = Error (1) "initialization of non-aggregate type {0} with a designated initializer list";
+    sema_compound_qualified_function_type = Error (4) "{0:pointer|reference} to function type {1:|{2} }cannot have '{3}' qualifier";
+    sema_ptrmem_value_classify = Error (2) "pointer-to-member function type {0} can only be called on an {1:rvalue|lvalue}";
+    sema_ptrmem_call_drops_quals = Error (3) "call to pointer to member function of type {0} drops '{1}' qualifier{2:|s}";
+    sema_conditional_ambiguous = Error (2) "conditional expression is ambiguous; {0} can be converted to {1} and vice versa";
     // clang `CheckVectorConditionalTypes` (WP-173); the stray `}` in
     // `..._mismatched` is clang 19's (a `%diff` typo in the .td file).
     sema_conditional_vector_has_void = Error (1) "GNU vector conditional operand cannot be {0:void|a throw expression}";
@@ -1573,6 +1577,19 @@ diag_ids! {
     sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
     parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
     sema_lvalue_cast_not_supported = Error (0) "assignment to cast is illegal, lvalue casts are not supported";
+    note_reference_temporary_list_init = Note (1) "in initialization of temporary of type {0} created to list-initialize this reference";
+    // ----- WP-192 (designated initializers; clang `SemaInit.cpp`)
+    sema_designated_init_reordered = ExtWarn [ReorderInitList] (2) "ISO C++ requires field designators to be specified in declaration order; field {1} will be initialized after field {0}";
+    note_previous_field_init = Note (1) "previous initialization for field {0} is here";
+    sema_designated_init_mixed = ExtWarn [C99Designator] (0) "mixture of designated and non-designated initializers in the same initializer list is a C99 extension";
+    note_designated_init_mixed = Note (0) "first non-designated initializer is here";
+    sema_designated_init_nested = ExtWarn [C99Designator] (0) "nested designators are a C99 extension";
+    sema_designated_init_array = ExtWarn [C99Designator] (0) "array designators are a C99 extension";
+    sema_initializer_overrides = ExtWarn [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
+    sema_initializer_union_overrides = WarningError [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
+    sema_field_designator_unknown = Error (2) "field designator '{0}' does not refer to any field in type {1}";
+    sema_field_designator_non_record = Error (1) "field designator cannot initialize a non-class type {0}";
+    sema_array_designator_non_array = Error (1) "array designator cannot initialize non-array type {0}";
 }
 
 impl DiagId {

@@ -127,6 +127,25 @@ impl Sema<'_, '_> {
             self.unsupported("an operator name in a block-scope using-declarator", name_loc);
             return None;
         }
+        if let Some(n) = name.as_ident()
+            && self.in_local_scope()
+            && (self.is_dependent_ctx(q.ctx)
+                || self
+                    .ast
+                    .types
+                    .nns_flags(q.nns)
+                    .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION))
+        {
+            // A dependent qualifier in a function template (`using
+            // E<T>::A;`, an enumerator, [namespace.udecl]/8): clang's
+            // `UnresolvedUsingValueDecl`, a local name whose uses are
+            // dependent; the instantiation redoes the declarator
+            // (`subst/stmts.rs` `local_using_decl`).
+            let h = DeclHead::new(self.ctx, name, name_loc);
+            let d = self.builder().unresolved_using_value(h, q.nns, false);
+            self.push_local(n, d);
+            return Some(d);
+        }
         let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
         // [namespace.udecl]/8: at namespace or block scope a
         // using-declarator may name a class member only if it is an
@@ -190,10 +209,9 @@ impl Sema<'_, '_> {
     /// One using-declarator `using typename qual name;`
     /// ([namespace.udecl]/1, [temp.res.general]/5): the name is a type.
     /// In a class with a dependent qualifier (`using typename
-    /// B<T>::type;`) the member is an alias of the dependent type
-    /// `typename B<T>::type` (clang's `UnresolvedUsingTypenameDecl` with
-    /// its `UnresolvedUsingType`), resolved when the class is
-    /// instantiated. Otherwise the declarator is an ordinary one whose
+    /// B<T>::type;`) the member is an `UnresolvedUsingTypename` naming
+    /// its own dependent `UnresolvedUsing` type (as clang), redone when
+    /// the class is instantiated. Otherwise the declarator is an ordinary one whose
     /// target must be a type. Returns the declaration, or `None` after an
     /// error.
     pub fn act_on_using_typename_declarator(
@@ -205,7 +223,7 @@ impl Sema<'_, '_> {
         if_exists: bool,
         ellipsis: Option<Loc>,
     ) -> Option<DeclId> {
-        if let (Some(q), Some(n), None) = (qual, name.as_ident(), ellipsis)
+        if let (Some(q), Some(_), None) = (qual, name.as_ident(), ellipsis)
             && self.member_spec_class().is_some()
             && (self.is_dependent_ctx(q.ctx)
                 || self
@@ -215,10 +233,9 @@ impl Sema<'_, '_> {
                     .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
                     && self.kind_of(q.ctx) != DeclKind::CXXRecord)
         {
-            let ty = self.act_dependent_name(q.nns, n, None, kiln_ast::types::TagKeyword::Typename);
-            let d = self.act_on_alias_decl(n, name_loc, ty, &[]);
-            self.using_typename.insert(d);
-            return Some(d);
+            let access = self.current_member_access();
+            let h = DeclHead::new(self.ctx, name, name_loc).access(access);
+            return Some(self.builder().unresolved_using_typename(h, q.nns));
         }
         if let Some(q) = qual
             && !self.is_dependent_ctx(q.ctx)
@@ -427,6 +444,34 @@ impl Sema<'_, '_> {
     /// that may name a member of a dependent base): an
     /// `UnresolvedUsingValue` member, entered in lookup so uses of the
     /// name are dependent; instantiation redoes the declarator.
+    /// A class-scope using-declarator whose substituted qualifier is
+    /// still dependent (a local class of a generic lambda in a template
+    /// specialization): it stays unresolved in the class being defined.
+    pub(crate) fn still_dependent_class_using(
+        &mut self,
+        nns: NnsId,
+        name: DeclName,
+        name_loc: Loc,
+        inheriting: bool,
+    ) -> Option<DeclId> {
+        let class = self.member_spec_class()?;
+        let q = Qualifier { ctx: class, nns, loc: name_loc };
+        Some(self.dependent_class_using(class, q, name, name_loc, inheriting))
+    }
+
+    /// `using typename N::name;` whose substituted qualifier is still
+    /// dependent: an `UnresolvedUsingTypename` in the class being defined.
+    pub(crate) fn still_dependent_using_typename(
+        &mut self,
+        nns: NnsId,
+        name: DeclName,
+        name_loc: Loc,
+    ) -> DeclId {
+        let access = self.current_member_access();
+        let h = DeclHead::new(self.ctx, name, name_loc).access(access);
+        self.builder().unresolved_using_typename(h, nns)
+    }
+
     fn dependent_class_using(
         &mut self,
         class: DeclId,

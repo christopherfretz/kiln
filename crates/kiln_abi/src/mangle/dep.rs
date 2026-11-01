@@ -1,5 +1,5 @@
 //! Dependent signature types and template-argument expressions
-//! (spec/abi.md §8.13): what a function template's signature needs when
+//! (spec/abi.md §8.14): what a function template's signature needs when
 //! its return or parameter types name members of dependent types
 //! (`typename rr<T>::type`), dependent template specializations and
 //! value-dependent template arguments (`en<is_i<T>::value, int>`).
@@ -232,7 +232,7 @@ impl Mangler<'_, '_> {
     /// A value-dependent template argument (clang `mangleExpression` with
     /// `AsTemplateArg`): a primary expression as is, anything else
     /// wrapped in `X ... E`. Unsupported forms fall back to `XLi0EE`
-    /// (spec/abi.md §8.13).
+    /// (spec/abi.md §8.14).
     pub(super) fn template_arg_expr(&mut self, e: Option<ExprId>) {
         let (len, subs) = (self.out.len(), self.subs.len());
         if let Some(e) = e {
@@ -470,8 +470,7 @@ impl Mangler<'_, '_> {
                 if !lead(self, prefix) {
                     return false;
                 }
-                let DeclNameView::Identifier(s) = ast.names.view(ast.decls.get(ns).name())
-                else {
+                let DeclNameView::Identifier(s) = ast.names.view(ast.decls.get(ns).name()) else {
                     return false;
                 };
                 self.symbol(s);

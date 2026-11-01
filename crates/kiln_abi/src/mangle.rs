@@ -161,7 +161,10 @@ pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
         let n = ast.decls.get(ctx);
         match n.kind() {
             DeclKind::LinkageSpec => {
-                return ast.decls.scope(ctx).is_some_and(|s| s.aux == LinkageLang::C as u32);
+                return ast
+                    .decls
+                    .scope(ctx)
+                    .is_some_and(|s| s.linkage_lang() == Some(LinkageLang::C));
             }
             DeclKind::TranslationUnit => return false,
             // Class members and local entities never have C language
@@ -506,7 +509,7 @@ pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
 /// definition contributes only that definition's tags: clang 19 takes the
 /// instantiated member's attributes from the pattern definition, so an
 /// out-of-line definition that does not repeat the tag drops it
-/// (spec/abi.md §8.13).
+/// (spec/abi.md §8.14).
 fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
     let mut work = vec![(d, false)];
     let mut steps = 0;
@@ -515,13 +518,12 @@ fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
         if steps > 16 {
             break;
         }
-        let def_only = member
-            && is_function_kind(ast.decls.get(cur).kind())
-            && ast.definition(cur).is_some();
+        let def_only =
+            member && is_function_kind(ast.decls.get(cur).kind()) && ast.definition(cur).is_some();
         let tag_of = |r: DeclId| {
-            crate::layout::props::attrs(ast, r).find(|a| a.kind == AttrKind::ABI_TAG).map(|a| {
-                ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(a.a))
-            })
+            crate::layout::props::attrs(ast, r)
+                .find(|a| a.kind == AttrKind::ABI_TAG)
+                .map(|a| ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(a.a)))
         };
         if def_only {
             if let Some(t) = ast.definition(cur).and_then(tag_of) {
@@ -1541,7 +1543,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
             TypeView::Auto { .. } => self.out.push_str("Da"),
             TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
             TypeView::TemplateSpecialization { name, args, .. } => self.dependent_tst(name, args),
-            TypeView::DependentName { keyword, nns, name } => self.dependent_name(keyword, nns, name),
+            TypeView::DependentName { keyword, nns, name } => {
+                self.dependent_name(keyword, nns, name)
+            }
             TypeView::DependentTemplateSpecialization { nns, name, args, .. } => {
                 self.dependent_template_spec(nns, name, args);
             }

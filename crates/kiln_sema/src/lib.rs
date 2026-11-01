@@ -211,8 +211,13 @@ pub struct Sema<'a, 'sm> {
     /// Access checks delayed until their declaration exists
     /// (spec/sema-class.md §2.4).
     pub(crate) delayed_access: Vec<class::AccessCheck>,
-    /// `delayed_access.len()` at each open delay point, innermost last.
-    pub(crate) delayed_access_depth: Vec<usize>,
+    /// `delayed_access.len()`, the context and whether the checks are
+    /// dropped ([temp.spec.general]/6) at each open delay point,
+    /// innermost last.
+    pub(crate) delayed_access_depth: Vec<(usize, DeclId, bool)>,
+    /// The next delay point drops its checks (the declaration of an
+    /// explicit instantiation or specialization; [`Sema::exempt_next_delayed_access`]).
+    pub(crate) exempt_next_delay: bool,
     /// Access checks in a class template pattern (or partial
     /// specialization) that passed only because the class may instantiate
     /// to a befriended specialization, keyed by the pattern's first
@@ -261,6 +266,10 @@ pub struct Sema<'a, 'sm> {
     /// the reference a list-initialized temporary binds to (`'const E &'`,
     /// clang's entity type). Set around that construction only.
     pub(crate) ctor_diag_ty: Option<QualType>,
+    /// The aggregate temporary (and the reference's location) being
+    /// list-initialized for a reference: the first `excess elements`
+    /// error inside it takes clang's reference note (spec/sema.md).
+    pub(crate) ref_temp_note: std::cell::Cell<Option<(QualType, Loc)>>,
     /// The mem-initializers of the constructor definition being parsed
     /// (spec/sema-class.md §4.9).
     pub(crate) mem_inits: class::MemInitState,
@@ -311,10 +320,6 @@ pub struct Sema<'a, 'sm> {
     /// [temp.friend]/1.3), keyed by their `FriendDecl`: matched against
     /// their templates per specialization.
     pub(crate) friend_specs: kiln_source::fx::FxHashMap<DeclId, class::friend::FriendSpec>,
-    /// The member aliases standing for a dependent `using typename
-    /// B<T>::name;` ([`Sema::act_on_using_typename_declarator`]): an
-    /// instantiation redoes the using-declarator.
-    pub(crate) using_typename: kiln_source::fx::FxHashSet<DeclId>,
     pub(crate) inherited_defaults: kiln_source::fx::FxHashMap<DeclId, kiln_ast::types::TemplateArg>,
     /// The inheriting constructors declared, by (derived class, base
     /// constructor) (WP-114, clang `findInheritingConstructor`'s lookup).
@@ -379,7 +384,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             rtti: true,
             range_lifetime_extension: false,
             pack: (0, Vec::new()),
-            scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
+            scopes: vec![scope::Scope {
+                first_decl: 0,
+                ..scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))
+            }],
             ctx: tu,
             func: None,
             unevaluated: 0,
@@ -412,6 +420,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             special: class::SpecialState::default(),
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
+            exempt_next_delay: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),
@@ -426,6 +435,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,
+            ref_temp_note: std::cell::Cell::new(None),
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             diag_capture: std::cell::RefCell::new(None),
@@ -441,7 +451,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
-            using_typename: kiln_source::fx::FxHashSet::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
             templ: templ::TemplState::default(),
@@ -652,7 +661,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn qualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        names::SemaNames::new(self).for_decls().write_decl_name(d, true, &mut s);
+        names::SemaNames::new(self).write_decl_name(d, true, &mut s);
         s
     }
 

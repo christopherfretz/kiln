@@ -18,7 +18,7 @@ mod ctorinit;
 pub(crate) mod friend;
 pub(crate) mod inhctor;
 mod member_expr;
-mod members;
+pub(crate) mod members;
 mod special;
 mod temporary;
 mod r#virtual;
@@ -335,7 +335,9 @@ impl Sema<'_, '_> {
         let fty = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
         let loc = match &init {
             Initializer::Expr(e) => self.begin_loc(*e),
-            _ => self.ast.decls.get(field).loc(),
+            // clang's in-class initializer kind is at the initializer.
+            Initializer::List(l) => l.lbrace,
+            Initializer::Paren(..) => self.ast.decls.get(field).loc(),
         };
         let direct = !matches!(init, Initializer::Expr(_));
         if self.is_error_type(fty) {

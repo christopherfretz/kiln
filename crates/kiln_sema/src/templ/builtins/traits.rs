@@ -491,6 +491,11 @@ impl Sema<'_, '_> {
                 let init = crate::init::Initializer::Paren(ops, loc, rparen);
                 s.perform_init(ty, init, loc, false)
             };
+            // clang initializes `InitializedEntity::InitializeTemporary`:
+            // a class temporary is bound (`MaybeBindToTemporary`), so its
+            // destructor must be accessible and not deleted, and counts
+            // for the nothrow form.
+            let e = if s.is_err_expr(e) { e } else { s.maybe_bind_temporary(e) };
             s.exit_unevaluated();
             !s.is_err_expr(e) && s.init_check_holds(check, e)
         });
@@ -604,6 +609,11 @@ impl Sema<'_, '_> {
             let msg = self.incomplete_note(msg, q);
             self.emit(msg);
             return None;
+        }
+        // clang `CheckConvertibilityForTypeTraits`: `To test()` needs a
+        // non-abstract return type ([class.abstract]/3).
+        if self.abstract_class(to.0).is_some() {
+            return Some(false);
         }
         let (fty, vc) = match self.ast.types.canonical_view(from.0) {
             TypeView::LValueRef(p) => (p, ValueCategory::LValue),

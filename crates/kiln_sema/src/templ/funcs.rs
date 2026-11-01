@@ -223,6 +223,7 @@ impl Sema<'_, '_> {
             }
             s.act_on_finish_function_def(f, b, rbrace);
         });
+        self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
     }
 }
@@ -332,7 +333,12 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<SpecMatch> {
         let explicit = d.spec_id.as_ref().map(|s| self.ast.types.arg_list(&s.args));
-        let found = self.prev_candidates_dn(name, d.qualifier);
+        // An explicit specialization may name a template of an inline
+        // namespace ([temp.expl.spec]/3).
+        let found = match d.qualifier {
+            None => self.current_scope_with_inline_dn(name),
+            Some(_) => self.prev_candidates_dn(name, d.qualifier),
+        };
         let templates = self.function_templates_in(&found);
         self.match_function_spec_in(&templates, explicit, name, ty, inst, loc)
     }

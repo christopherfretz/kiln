@@ -223,7 +223,14 @@ impl ArgShape {
             ArgShape::Exact(x) => x == a,
             ArgShape::Type { kind, quals } => {
                 let ArgView::Type(q) = a.view() else { return false };
-                q.quals_bits() & quals == quals && kind.is_none_or(|k| types.kind(q.ty()) == k)
+                // An array carries its element's qualifiers
+                // ([basic.type.qualifier]/3): `S<const F>` admits `const int[10]`.
+                let qb = if q.quals_bits() & quals == quals {
+                    q.quals_bits()
+                } else {
+                    types.effective_quals(q).bits()
+                };
+                qb & quals == quals && kind.is_none_or(|k| types.kind(q.ty()) == k)
             }
         }
     }
@@ -486,6 +493,15 @@ impl TemplateTables {
     /// [`TemplLink`] (fields, enumerators, parameters, typedefs, locals).
     pub fn set_instantiated_from(&mut self, inst: DeclId, pattern: DeclId) {
         let _ = self.instantiated_from.insert(inst, pattern);
+    }
+
+    /// Forgets the pattern recorded for `inst`: a member template of a
+    /// class template specialization that was itself specialized
+    /// (`template<> template<class U> struct A<int>::B {...}`,
+    /// [temp.expl.spec]/16) is no longer instantiated from the member
+    /// template of the class template's pattern.
+    pub fn clear_instantiated_from(&mut self, inst: DeclId) {
+        let _ = self.instantiated_from.remove(&inst);
     }
 
     /// The pattern recorded by [`TemplateTables::set_instantiated_from`].

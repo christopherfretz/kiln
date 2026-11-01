@@ -261,10 +261,12 @@ impl Sema<'_, '_> {
             OvlOutcome::Success(b) => return Some(b),
             OvlOutcome::Deleted(b) => {
                 let d = set.cand(b).func();
+                // clang names the lookup name (`ULE->getName()`), not the
+                // selected specialization: 'show', not 'show<int>'.
                 let (id, name) = if member {
                     (DiagId::sema_ovl_deleted_member_call, text)
                 } else {
-                    (DiagId::sema_call_deleted_function, self.decl_arg(d))
+                    (DiagId::sema_call_deleted_function, format!("'{text}'"))
                 };
                 let msg = self.diag(id, at).arg(name).arg(self.delete_message_suffix(d));
                 let msg = self.with_ovl_notes(msg, set, false);

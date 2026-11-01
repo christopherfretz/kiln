@@ -143,7 +143,14 @@ impl Sema<'_, '_> {
                 )
             }
             BadKind::InitList => {
-                format!("cannot convert initializer list argument to {}", self.ty_arg(b.to))
+                // A reference parameter names the referenced type (clang
+                // reports the temporary's list-initialization failure).
+                let to = if self.ast.types.is_reference(b.to) {
+                    self.pointee_sugared(b.to).unwrap_or(b.to)
+                } else {
+                    b.to
+                };
+                format!("cannot convert initializer list argument to {}", self.ty_arg(to))
             }
         }
     }

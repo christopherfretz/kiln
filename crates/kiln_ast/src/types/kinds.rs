@@ -366,11 +366,15 @@ pub enum TypeKind {
     Attributed,
     /// P2996 `typename [: r :]` (M6).
     Splice,
+    /// The type a dependent `using typename B<T>::x;` member names
+    /// (clang's `UnresolvedUsingType`): canonical and dependent, one per
+    /// `UnresolvedUsingTypename` declaration (WP-179).
+    UnresolvedUsing,
 }
 
 impl TypeKind {
     /// Number of kinds.
-    pub const COUNT: usize = TypeKind::Splice as usize + 1;
+    pub const COUNT: usize = TypeKind::UnresolvedUsing as usize + 1;
 
     const ALL: [TypeKind; TypeKind::COUNT] = [
         TypeKind::Invalid,
@@ -415,6 +419,7 @@ impl TypeKind {
         TypeKind::DeducedTemplateSpecialization,
         TypeKind::Attributed,
         TypeKind::Splice,
+        TypeKind::UnresolvedUsing,
     ];
 
     /// The kind with discriminant `v` (`Invalid` for out-of-range values).

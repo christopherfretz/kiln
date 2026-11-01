@@ -117,19 +117,7 @@ impl Sema<'_, '_> {
         let mut d = DeducedArgs::new(list.depth, n);
         let mut ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success;
         if ok && p.has_pack {
-            // A pack deduced from no elements is empty ([temp.deduct.type]/9).
-            for i in 0..n {
-                let pack = self
-                    .ast
-                    .lists
-                    .at::<DeclId>(list.params, i)
-                    .and_then(|x| self.ast.template_parm(x))
-                    .is_some_and(|x| x.pack);
-                if pack && matches!(d.args.get(i).map(TemplateArg::view), Some(ArgView::Null)) {
-                    let l = self.ast.types.arg_list(&[]);
-                    d.args[i] = TemplateArg::pack(l);
-                }
-            }
+            self.empty_undeduced_packs(list.params, &mut d);
         }
         ok &= d.first_undeduced().is_none();
         let r = if ok {
@@ -277,6 +265,23 @@ impl Sema<'_, '_> {
         Err(())
     }
 
+    /// A pack parameter of `params` deduced from no elements is empty
+    /// ([temp.deduct.type]/9).
+    fn empty_undeduced_packs(&mut self, params: kiln_ast::ids::ListId, d: &mut DeducedArgs) {
+        for i in 0..self.ast.lists.len(params) {
+            let pack = self
+                .ast
+                .lists
+                .at::<DeclId>(params, i)
+                .and_then(|x| self.ast.template_parm(x))
+                .is_some_and(|x| x.pack);
+            if pack && matches!(d.args.get(i).map(TemplateArg::view), Some(ArgView::Null)) {
+                let l = self.ast.types.arg_list(&[]);
+                d.args[i] = TemplateArg::pack(l);
+            }
+        }
+    }
+
     /// Whether partial specialization row `a` is more specialized than
     /// row `b` ([temp.spec.partial.order]/1, [temp.func.order]/5).
     fn partial_more_specialized(&mut self, a: u32, b: u32, loc: Loc) -> bool {
@@ -322,8 +327,13 @@ impl Sema<'_, '_> {
         let as_: Vec<TemplateArg> = self.ast.types.args(pa.canonical).to_vec();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(lb.depth, self.ast.lists.len(lb.params));
-        let ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success
-            && d.first_undeduced().is_none();
+        let ok = self.deduce_args(&ps, &as_, true, &mut d, loc) == Tdk::Success;
+        if ok && pb.has_pack {
+            // [temp.deduct.partial]: `C<A, B...>` deduces from `C<A'>`
+            // with `B` empty, as in matching.
+            self.empty_undeduced_packs(lb.params, &mut d);
+        }
+        let ok = ok && d.first_undeduced().is_none();
         let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
         let r = ok && !failed;
         let _ = self.templ.partial_order.insert((a, b), r);

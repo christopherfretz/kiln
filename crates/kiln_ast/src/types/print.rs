@@ -237,8 +237,9 @@ pub fn write_declarator(
         q = desugar_top_for_print(ctx, q);
         let (t, _) = split(ctx, q);
         // clang prints a bare RecordType (what desugaring an
-        // ElaboratedType leaves) with its scope.
-        if matches!(ctx.kind(t), TypeKind::Record | TypeKind::Enum) {
+        // ElaboratedType leaves) with its scope; likewise an
+        // `UnresolvedUsingType` (WP-179).
+        if matches!(ctx.kind(t), TypeKind::Record | TypeKind::Enum | TypeKind::UnresolvedUsing) {
             scope = true;
         }
     }
@@ -695,6 +696,10 @@ impl Printer<'_> {
                 if self.c_policy {
                     self.push("enum ");
                 }
+                self.decl(d, self.scope);
+                self.space_before_ph();
+            }
+            TypeView::UnresolvedUsing(d) => {
                 self.decl(d, self.scope);
                 self.space_before_ph();
             }

@@ -173,7 +173,7 @@ diag_groups! {
     DeprecatedRedundantConstexprStaticDef = "deprecated-redundant-constexpr-static-def" [];
     ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
     ReturnStackAddress = "return-stack-address" [];
-    Reorder = "reorder" [ReorderCtor];
+    Reorder = "reorder" [ReorderCtor, ReorderInitList];
     ReorderCtor = "reorder-ctor" [];
     Uninitialized = "uninitialized" [StaticSelfInit];
     StaticSelfInit = "static-self-init" [];
@@ -199,6 +199,12 @@ diag_groups! {
     // ----- WP-177 (implicit conversion warnings)
     LiteralConversion = "literal-conversion" [];
     Conversion = "conversion" [LiteralConversion];
+    // ----- WP-192 (designated initializers)
+    ReorderInitList = "reorder-init-list" [];
+    C99Designator = "c99-designator" [];
+    C99Extensions = "c99-extensions" [C99Designator];
+    InitializerOverrides = "initializer-overrides" [];
+    OverrideInit = "override-init" [InitializerOverrides];
 }
 
 impl Group {

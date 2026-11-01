@@ -50,7 +50,7 @@ pub use rank::{
     is_integral_or_unscoped_enum, is_scoped_enum, is_unscoped_enum, promoted_type,
 };
 pub use scs::{
-    ConvRank, FirstStep, FixedEnumPromotion, IcsCompare, RefBinding, SecondStep,
+    ConvRank, FirstStep, FixedEnumPromotion, IcsCompare, ListArray, RefBinding, SecondStep,
     StandardConversion, ThirdStep, compare_standard_conversions, standard_conversion,
     standard_conversion_from,
 };
@@ -663,10 +663,11 @@ fn bind_reference(
     let strs = |s: &Sema<'_, '_>| s.ty_diff(to_ty, from);
     // A non-const (or volatile) lvalue reference: binds no temporary.
     let plain_lref = !rvalue_ref && (!rq.contains(Quals::CONST) || rq.contains(Quals::VOLATILE));
-    // [dcl.init.ref]/5.1 binds an lvalue; /5.3.1 binds an xvalue to an
-    // rvalue reference or a const lvalue reference directly.
+    // [dcl.init.ref]/5.1 binds an lvalue; /5.3.1 binds an xvalue (or a
+    // function lvalue) to an rvalue reference or a const lvalue
+    // reference directly.
     let bind_ok_category = match vk {
-        ValueCategory::LValue => !rvalue_ref,
+        ValueCategory::LValue => !rvalue_ref || s.ast.types.is_function(r_un),
         ValueCategory::XValue => !plain_lref,
         ValueCategory::PRValue => false,
     };
