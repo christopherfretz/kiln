@@ -642,6 +642,7 @@ diag_ids! {
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
     sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
     sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
+    sema_constexpr_virtual_base = Error (3) "constexpr {0:member function|constructor} not allowed in {1:struct|interface|class} with virtual base {2:class|classes}";
     sema_constinit_local = Error (0) "local variable cannot be declared 'constinit'";
     sema_constinit_non_constant = Error (0) "variable does not have a constant initializer";
     sema_missing_constinit = Warning [MissingConstinit] (1) "'constinit' specifier missing on initializing declaration of '{0}'";
@@ -724,6 +725,13 @@ diag_ids! {
     sema_convertvector_incompatible_vector = Error (0) "first two arguments to __builtin_convertvector must have the same number of elements";
     sema_builtin_arg_must_be = Error (3) "{0:1st|2nd|3rd|4th|5th} argument must be a {1} (was {2})";
     sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
+    sema_attribute_pointers_only = Warning [IgnoredAttributes] (1) "{0} attribute only applies to return values that are pointers";
+    sema_attribute_pointers_refs_only = Warning [IgnoredAttributes] (1) "{0} attribute only applies to return values that are pointers or references";
+    sema_alloc_size_arg_count = Error (1) "'alloc_size' attribute takes {0:at least 1 argument|no more than 2 arguments}";
+    sema_attribute_param_not_ice = Error (2) "{0} attribute requires parameter {1} to be an integer constant";
+    sema_attribute_param_out_of_bounds = Error (2) "{0} attribute parameter {1} is out of bounds";
+    sema_attribute_param_integers_only = Error (1) "{0} attribute argument may only refer to a function parameter of integer type";
+    sema_attribute_implicit_this_arg = Error (1) "{0} attribute is invalid for the implicit this argument";
     sema_static_assert_failed = Error (0) "static assertion failed";
     sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";
     sema_static_assert_requirement_failed = Error (1) "static assertion failed due to requirement '{0}'";
@@ -1345,6 +1353,8 @@ diag_ids! {
     sema_explicit_inst_not_known = Error (1) "explicit instantiation of '{0}' does not refer to a function template, variable template, member function, member class, or static data member";
     sema_explicit_inst_nontemplate_type = Error (1) "explicit instantiation of non-templated type '{0}'";
     sema_explicit_inst_requires_name = Error (0) "explicit instantiation declaration requires a name";
+    sema_explicit_inst_inline = Error (0) "explicit instantiation cannot be 'inline'";
+    sema_explicit_inst_constexpr = Error (0) "explicit instantiation cannot be 'constexpr'";
     sema_explicit_spec_non_template = Error (1) "explicit specialization of non-template {0}";
     note_explicit_spec_template_declared = Note (0) "explicitly specialized declaration is here";
     sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
@@ -1555,6 +1565,8 @@ diag_ids! {
     sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
     sema_conditional_vector_element_size = Error (2) "vector condition type {0} and result type {1} do not have elements of the same size";
     sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
+    parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
+    sema_lvalue_cast_not_supported = Error (0) "assignment to cast is illegal, lvalue casts are not supported";
     note_reference_temporary_list_init = Note (1) "in initialization of temporary of type {0} created to list-initialize this reference";
 }
 

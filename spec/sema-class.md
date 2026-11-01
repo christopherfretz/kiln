@@ -734,6 +734,14 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   (`constexpr_var_virtual_base`); constructing one inside a constant
   evaluation traps in the Oven with clang's `CheckLiteralType` note
   "non-literal type 'X' cannot be used in a constant expression" (WP-146).
+  The literal-type check first requires a complete type, so it
+  instantiates a class template specialization (WP-170). A `constexpr`
+  (or `consteval`) non-static member function, constructor or destructor
+  defined in a class with virtual bases is clang
+  `CheckConstexprFunctionDefinition`'s "constexpr constructor/member
+  function not allowed in struct/class with virtual base class(es)" at
+  its definition, with the same notes, and is invalid; it is checked
+  outside instantiations only (`check_constexpr_virtual_base`, WP-170).
   A C-variadic base constructor is inlined at each call by codegen
   (codegen.md); a template-variadic one is inherited per specialization,
   as clang.
@@ -961,8 +969,8 @@ Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 | direct-init `T(args)` | [over.match.ctor]; same-class prvalue elides; C++20 paren aggregate init → `CXXParenListInitExpr` when no ctor is viable and `T` is an aggregate |
 | copy-init from `T`/derived | elision for prvalue `T`; else copy/move ctor (derived glvalue: `DerivedToBase` then ctor) |
 | copy-init from other type | user-defined conversion (S3O): `ConstructorConversion` around `CXXConstructExpr`, or `UserDefinedConversion` around the conversion call; `explicit` ctors excluded (`no viable conversion from 'int' to 'T4'` + candidate notes incl. `explicit constructor is not a candidate`) |
-| list-init, aggregate | `InitListExpr`: C++17 base elements first (each initialized from its element, brace elision applies), then fields; designated initializers name direct members only, bases are then initialized from `{}` |
-| list-init, non-aggregate | [over.match.list] two phases (initializer-list ctors, then all ctors); `CXXConstructExpr` with `list`; narrowing as M2; a nested braced-init-list element (`G g{{1, 2}}`) is a braced call argument converted by [over.ics.list] (WP-152); designators remain `sema_unsupported` |
+| list-init, aggregate | `InitListExpr`: C++17 base elements first (each initialized from its element, brace elision applies), then fields; designated initializers name direct members only, bases are then initialized from `{}`. A base element's outermost constructor call is `NonVirtualBase` (clang `EK_Base`; codegen calls C2) when it copies/moves a source of the base or a derived class (a same-class prvalue is materialized first, §5.5) or braced/value-initializes (or fills) a non-aggregate base (`as_base_subobject`); a converting constructor's temporary (`D{5, 6}`) stays `Complete`. Paren aggregate init does the same |
+| list-init, non-aggregate | a single undesignated element of `T` or a derived class first (DR1467 as clang applies it to every class): initialized from it as from `T x = e` (copy-list) or `T x(e)` (direct-list), so no initializer-list ctor is considered and a copy-list init never picks an explicit ctor; the elided prvalue carries no `InitListExpr` wrapper and the ctor no `list` flag (clang's `RewrapReferenceInitList` / `IsInitListCopy`, a dump-only deviation shared with the aggregate case). Otherwise [over.match.list] two phases (initializer-list ctors, then all ctors); `CXXConstructExpr` with `list`; narrowing as M2; a nested braced-init-list element (`G g{{1, 2}}`) is a braced call argument converted by [over.ics.list] (WP-152); designators remain `sema_unsupported` |
 | reference to class | derived-to-base glvalue binding, else temporary through conversion (`materialize_temporary`, §5.3) |
 
 ### 5.7 `std::initializer_list`

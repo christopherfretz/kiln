@@ -1411,6 +1411,7 @@ impl Parser<'_, '_> {
             self.parse_declarator(d);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
             d.grouping = had_grouping;
+            self.discard_prohibited_cxx11_attrs();
         } else if self.at_kw(Kw::Operator)
             && d.ctx != DeclaratorContext::TypeName
             && matches!(self.kw_of(self.peek(1)), Some(Kw::New | Kw::Delete))

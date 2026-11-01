@@ -5,7 +5,9 @@ use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::BitFieldInfo;
 use kiln_abi::mangle;
 use kiln_ast::decl::{DeclKind, VarStorage};
-use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp, ValueCategory};
+use kiln_ast::expr::{
+    BinaryOp, CastKind, ExprFlags, ExprKind, StorageDuration, UnaryOp, ValueCategory,
+};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_llvm::{
@@ -1629,7 +1631,15 @@ impl Cg<'_> {
                 let s =
                     if n.kind() == ExprKind::MaterializeTemporaryExpr { self.sub(e) } else { e };
                 let sq = ast.exprs.get(s).ty();
-                let tmp = self.temp(sq);
+                // [class.temporary]/6: a temporary bound to a reference
+                // with static storage duration is a `_ZGR` global.
+                let static_tmp = n.kind() == ExprKind::MaterializeTemporaryExpr
+                    && ast.exprs.temporary_storage(e) == StorageDuration::Static;
+                let (tmp, needs_init) =
+                    if static_tmp { self.static_temporary(e, sq)? } else { (self.temp(sq), true) };
+                if !needs_init {
+                    return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None });
+                }
                 if self.is_aggregate(sq) {
                     // clang `EmitAnyExprToMem`: a materialized temporary is
                     // a `MayOverlap` slot, which only a constructor call or
@@ -1657,7 +1667,9 @@ impl Cg<'_> {
                     let v = self.emit_scalar(s)?;
                     self.store_scalar(v, tmp, sq);
                 }
-                if n.kind() == ExprKind::MaterializeTemporaryExpr {
+                if static_tmp {
+                    self.register_temporary_dtor(e, tmp)?;
+                } else if n.kind() == ExprKind::MaterializeTemporaryExpr {
                     self.push_temporary_cleanup(e, tmp);
                 }
                 Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
@@ -2187,7 +2199,13 @@ impl Cg<'_> {
             }
             noreturn = unreachable;
         }
-        let r = self.call_with(&sig, callee, fid, None, &args, dest, &extra)?;
+        let vals = self.emit_call_args(&sig, &args)?;
+        let mut ret_extra = Vec::new();
+        if let Some(d) = direct {
+            self.alloc_call_attrs(d, &vals, &mut extra, &mut ret_extra);
+        }
+        let r =
+            self.call_vals_ret(&sig, callee, fid, None, &vals, &args, dest, &extra, &ret_extra)?;
         if noreturn {
             self.finish_noreturn_call();
         }
@@ -2288,6 +2306,23 @@ impl Cg<'_> {
         dest: Option<Addr>,
         extra: &[Attr],
     ) -> R<Option<V>> {
+        self.call_vals_ret(sig, callee, fid, this, vals, args, dest, extra, &[])
+    }
+
+    /// [`Self::call_vals`] with extra return attributes `ret_extra`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn call_vals_ret(
+        &mut self,
+        sig: &Sig,
+        callee: V,
+        fid: Option<FuncId>,
+        this: Option<V>,
+        vals: &[CallArg],
+        args: &[ExprId],
+        dest: Option<Addr>,
+        extra: &[Attr],
+        ret_extra: &[Attr],
+    ) -> R<Option<V>> {
         self.f.vector_width = self.f.vector_width.max(sig.info.max_vector_width);
         let rq = sig.ret;
         let mut ir_args = Vec::new();
@@ -2330,7 +2365,12 @@ impl Cg<'_> {
             }
             _ => LTy::VOID,
         };
-        let (ret, params) = self.sig_attrs(sig, vals.len(), false);
+        let (mut ret, params) = self.sig_attrs(sig, vals.len(), false);
+        if !ret_extra.is_empty() {
+            let mut ra = self.m.attrs_of(ret).to_vec();
+            ra.extend(ret_extra.iter().cloned());
+            ret = self.m.attr_set(&ra);
+        }
         let func = if sig.nothrow {
             let mut fa = vec![Attr::Flag(AttrKind::NoUnwind)];
             fa.extend(extra.iter().cloned());
@@ -3210,8 +3250,8 @@ impl Cg<'_> {
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
         match v.spec.storage() {
             VarStorage::Static => {
-                self.static_local(d)?;
-                return Ok(());
+                let g = self.static_local(d)?;
+                return self.static_local_init(d, g);
             }
             VarStorage::Extern => return Ok(()),
             _ => {}
@@ -3271,7 +3311,13 @@ impl Cg<'_> {
     }
 
     /// clang `EmitAutoVarInit` for variable `d` of type `q` at `addr`.
-    fn emit_var_init(&mut self, d: DeclId, q: QualType, addr: Addr, init: ExprId) -> R<()> {
+    pub(crate) fn emit_var_init(
+        &mut self,
+        d: DeclId,
+        q: QualType,
+        addr: Addr,
+        init: ExprId,
+    ) -> R<()> {
         let ast = self.ast;
         if self.referee(q).is_some() {
             // A reference binds the address of its initializer glvalue.

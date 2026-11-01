@@ -697,8 +697,31 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXConstructor
                 | DeclKind::CXXDestructor
                 | DeclKind::CXXConversion => self.instantiate_function_definition(m, loc),
-                DeclKind::Var => self.instantiate_static_member_init(m, loc),
-                DeclKind::CXXRecord if self.instantiate_class(m, loc, false) => {
+                DeclKind::Var => {
+                    // In-class initializer, else the out-of-line
+                    // definition (clang `InstantiateVariableDefinition`).
+                    self.instantiate_static_member_init(m, loc);
+                    self.instantiate_static_member_def(m, loc);
+                }
+                DeclKind::CXXRecord => {
+                    // A member class the explicit instantiation defines is
+                    // itself explicitly instantiated (clang
+                    // `InstantiateClassMembers` sets its kind; one already
+                    // defined stays implicit: its vtable is not required).
+                    let fresh = self.ast.definition(m).is_none();
+                    if !self.instantiate_class(m, loc, false) {
+                        continue;
+                    }
+                    if fresh && let Some((i, _)) = self.ast.member_spec_info(self.ast.first(m)) {
+                        self.ast.templates.update_member_spec(i, |x| {
+                            if matches!(
+                                x.kind,
+                                SpecKind::Undeclared | SpecKind::ImplicitInstantiation
+                            ) {
+                                x.kind = SpecKind::ExplicitInstantiationDefinition;
+                            }
+                        });
+                    }
                     self.instantiate_members_of(m, loc, depth + 1);
                 }
                 _ => {}
