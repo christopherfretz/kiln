@@ -17,6 +17,8 @@ use kiln_ast::names::{DeclNameView, OverloadedOperator};
 use kiln_ast::types::{ArgView, BuiltinType, RefQual, TemplateName, TypeView};
 use kiln_source::fx::FxHashMap;
 
+mod dep;
+
 /// The ids of unnamed classes that have no mangling number (`$_N`; clang
 /// `getAnonymousStructId`), handed out in first-mangle order: per function
 /// for a class whose context is a function, else from one module-wide
@@ -131,6 +133,12 @@ enum Sub {
     Template(DeclId),
     /// A (canonical, possibly qualified) type.
     Type(QualType),
+    /// A canonical identifier nested-name-specifier (`T::type::`).
+    Nns(kiln_ast::ids::NnsId),
+    /// A dependent template name `nns::template name` (canonical `nns`).
+    DepTemplate(kiln_ast::ids::NnsId, kiln_source::symbol::Symbol),
+    /// A template template parameter `(depth, index)` used as a prefix.
+    TemplateTemplateParm(u32, u32),
 }
 
 /// The constructor or destructor variant of a symbol ([abi:mangling]
@@ -1253,9 +1261,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 }
                 self.out.push('E');
             }
-            ArgView::Null | ArgView::Expr { .. } | ArgView::Profile(_) => {
-                self.out.push_str("XLi0EE");
-            }
+            ArgView::Expr { expr, .. } => self.template_arg_expr(Some(expr)),
+            ArgView::Profile(p) => self.template_arg_expr(self.ast.types.profile_expr(p)),
+            ArgView::Null => self.out.push_str("XLi0EE"),
         }
     }
 
@@ -1532,6 +1540,19 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             TypeView::Auto { .. } => self.out.push_str("Da"),
             TypeView::Builtin(b) => self.out.push_str(builtin_code(b)),
+            TypeView::TemplateSpecialization { name, args, .. } => self.dependent_tst(name, args),
+            TypeView::DependentName { keyword, nns, name } => self.dependent_name(keyword, nns, name),
+            TypeView::DependentTemplateSpecialization { nns, name, args, .. } => {
+                self.dependent_template_spec(nns, name, args);
+            }
+            // A dependent transform: `u <vendor builtin name> I <base> E`.
+            TypeView::UnaryTransform { kind, base, .. } => {
+                self.out.push('u');
+                self.source_name(kind.spelling());
+                self.out.push('I');
+                self.ty(base);
+                self.out.push('E');
+            }
             _ => self.out.push_str("u7unknown"),
         }
     }

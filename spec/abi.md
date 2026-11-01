@@ -736,6 +736,34 @@ each, after the unqualified name (identifiers, `C2`/`D2`, operator codes),
 and a tagged namespace-scope variable is mangled (`_Z1vB1x`) rather than
 emitted under its plain name.
 
+**Dependent signature types** (`mangle/dep.rs`, clang `CXXNameMangler`):
+a dependent template specialization is the unscoped template name plus
+arguments at namespace scope or directly in `std`, else
+`N <template-prefix> <args> E`; a template template parameter is `T_`
+(candidate `Sub::TemplateTemplateParm`). `typename P::id` is
+`[Ts|Tu|Te] N <prefix(P)> <id> E` and `P::template id<A>` is
+`N <prefix(P)> <id> <args> E`, where the prefix of a nested-name-specifier
+is nothing for `::`, the namespace prefix, the template prefix plus
+arguments of a specialization (the specialization the candidate) or the
+type, and for an identifier level `<prefix> <id>` (a candidate, clang
+≥ 15); a dependent template name `P::template id` is itself a candidate.
+A dependent unary transform is `u <spelling> I <base> E`
+(`u20__remove_reference_tIT_E`). A value-dependent template argument
+(an `Expr` or `Profile` argument, the profile's first expression) follows
+`mangleExpression`: literals unwrapped (`Li1E`, `Lb1E`, `LDnE`), anything
+else in `X ... E`; parentheses, implicit casts, `ConstantExpr` and
+substituted parameters are transparent; a parameter reference is `T_`;
+`DependentScopeDeclRefExpr` is an unresolved name (`sr` levels of the
+qualifier as written, a template parameter or `decltype` level an
+unresolved type with no closing `E`, a specialization level its source
+name and arguments, else `E` after the levels); unary/binary operator,
+`qu`, `st`/`sz`, `at`/`az` and `cv`/`sc`/`cc`/`rc`/`dc` encodings. An
+unsupported expression (calls, member access, non-dependent `sizeof`
+whose value would be needed, ...) still mangles as `XLi0EE`. The
+template-parameter-declaration prefixes `Tn`/`Tp` of clang ≥ 19 are left
+to WP-117, so a non-type parameter whose type is dependent
+(`enable_if_t<...> = 0`) is not yet clang's spelling.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.
