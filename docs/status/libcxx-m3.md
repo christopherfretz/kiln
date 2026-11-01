@@ -13,8 +13,8 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Setup
 
-- kiln: debug build of the WP-202 branch (commit in the generated "Run" table below), with main
-  `c2fae060` (WP-183, WP-172 merged) merged in.
+- kiln: debug build of the WP-207 branch (commit in the generated "Run" table below), with main
+  `f6eed8fa` (WP-183, WP-172, WP-202 merged) merged in.
 - Tests and headers: libc++ `llvmorg-19.1.7`. The tests come from the sparse checkout. The headers,
   `libc++.so`, `libc++experimental.a` and `libc++abi` come from the clang 19 packages in the
   container.
@@ -24,7 +24,29 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Reading
 
-**Overall: 497/585 (85.0%)** on the WP-202 branch (main `c2fae060`), up from 487. WP-202 sweeps
+**Overall: 515/585 (88.0%)** on the WP-207 branch (main `f6eed8fa`), up from 497 on main.
+WP-207 (follow-ups from WP-198) fixes the root causes behind the clusters that WP-198 exposed:
+
+| cluster (main → WP-207, first / any) | main | WP-207 | root cause |
+|---|---:|---:|---|
+| `static assertion failed` (`test_iterators.h:1396`) | 6 / 7 | 0 / 0 | a dependent unqualified call re-looked up its name from the instantiating scope; constraint satisfaction runs outside the instantiation context, so `swap(...)` in `ranges::__swap` found `std::swap`, not the deleted poison pill ([temp.dep.candidate]/1) |
+| `tuple_element index out of range` | 3 / 3 | 0 / 0 | same |
+| `call to deleted function call operator` (`ranges::begin`) | 1 / 1 | 0 / 0 | same (`begin(__t)` found the `ranges::begin` object) |
+| `static assertion expression is not an integral constant expression` | 8 / 27 | 1 / 16 | Oven: static data members through `.`/`->`, function lvalues (`static_cast<F&&>(f)` in `__invoke`), the union active-member check on bit-fields (libc++ short string `__is_long_`), trivial `operator=` activating a union member |
+| `no matching function for call to '…'` (`size`) | 3 / 13 | 0 / 5 | `const T (&)[N]` deduction against a less-qualified array ([temp.deduct.call]/4.1) |
+| `no matching constructor` / `no viable conversion` (span of volatile) | 3 / 6 | 0 / 0 | an array is not a qualification level of its own ([conv.qual]/3) |
+| `constexpr if condition is not a constant expression` | 3 / 3 | 1 / 1 | the constraint order fix (head constraints before the requires-clause) and the Oven fixes |
+
+Of the 13 tests whose first error was cluster #1 before WP-198's follow-ups, 6 pass (array, span
+and string.view `range_concept_conformance`, span `iterator_sentinel` and `range`,
+`ranges.version`). The other 7 now stop at errors other packages own: the 3 pairs tests at
+`member initializer 'subrange' does not name...` (WP-200) and the 4 string.view
+`from_iterator_sentinel`/`from_range`/deduction tests at `called object type '<overloaded
+function type>'` (WP-201). These are why those two clusters grew (9 → 12 and 8 → 12 first). The
+one remaining integral-constant first error, `span.elem/at.pass.cpp`, needs `std::allocator` in
+constant evaluation (`std::vector`; spec/oven.md "Transient allocation", still deferred).
+By directory, main → WP-207: string.view 68 → 73, span 21 → 34; the rest are unchanged.
+Before WP-207: 497/585 on the WP-202 branch (main `c2fae060`), up from 487. WP-202 sweeps
 four codegen/sema "not supported yet" messages, which were the first failure in 10 tests: a
 non-constant `std::align_val_t` allocation argument (4: `llvm.assume` align bundle), `cast
 BaseToDerived` (4), compound literals of an array temporary (1: `std::to_array`), and implicit
@@ -72,16 +94,15 @@ Per directory, WP-169 → main `e238afa8` → WP-178 → WP-176:
 
 1. `call to non-static member function without an object argument` (13 first), in
    support.limits (`numeric_limits` members).
-2. `no member named '…' in '…'` (11 first). The example is `operator=` in
+2. `member initializer '…' does not name a non-static data member or base class` (12 first), in
+   mem.res and the pairs `pair_like` tests (WP-200).
+3. `called object type '…' is not a function or function pointer` (12 first), string.view
+   (WP-201).
+4. `no member named '…' in '…'` (11 first). The example is `operator=` in
    `ArchetypeBases::TrivialValueBase<>`.
-3. `static assertion expression is not an integral constant expression` (8 first, 29 any), mostly
-   the span tests.
-4. `member initializer '…' does not name a non-static data member or base class` (8 first), in
-   mem.res.
-5. `called object type '…' is not a function or function pointer` (8 first, 12 any).
-6. `static assertion failed` (6 first), `test_iterators.h:1396`
-   (`indirectly_writable<ProxyIterator<int*>, Proxy<int>>`), in span and string.view.
-7. `static_cast from '…' to '…' is not allowed` (6 first), in mem.res.
+5. `static_cast from '…' to '…' is not allowed` (6 first), in mem.res.
+6. `invalid operands to binary expression` (4 first, 7 any), bit-mask enum operators in
+   support.limits (WP-199).
 
 **Caveats.**
 - The driver only checks that a `.compile.fail.cpp` test fails to compile without a crash, not
@@ -96,7 +117,7 @@ Per directory, WP-169 → main `e238afa8` → WP-178 → WP-176:
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `bb3f89ed` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `929d2270` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -105,7 +126,7 @@ Per directory, WP-169 → main `e238afa8` → WP-178 → WP-176:
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 364.1 s |
+| wall time | 446.2 s |
 | peak RSS | 84 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
@@ -117,12 +138,12 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 | `std/utilities/meta` | 155 | 148 | 0 | 0 | 0 | 7 (6) | 0 | 0 | 0 | 100.0% |
 | `std/utilities/utility` | 168 | 110 | 35 | 0 | 0 | 23 (19) | 0 | 0 | 0 | 75.9% |
 | `std/containers/sequences/array` | 47 | 36 | 1 | 0 | 0 | 10 (10) | 0 | 0 | 0 | 97.3% |
-| `std/strings/string.view` | 93 | 68 | 20 | 0 | 0 | 5 (5) | 0 | 0 | 0 | 77.3% |
-| `std/containers/views/views.span` | 45 | 21 | 14 | 0 | 0 | 10 (9) | 0 | 0 | 0 | 60.0% |
+| `std/strings/string.view` | 93 | 73 | 15 | 0 | 0 | 5 (5) | 0 | 0 | 0 | 83.0% |
+| `std/containers/views/views.span` | 45 | 34 | 1 | 0 | 0 | 10 (9) | 0 | 0 | 0 | 97.1% |
 | `std/numerics/bit` | 17 | 14 | 1 | 0 | 0 | 2 (2) | 0 | 0 | 0 | 93.3% |
 | `std/language.support/support.limits` | 112 | 95 | 17 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 84.8% |
 | `std/language.support/support.initlist` | 5 | 5 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
-| **total** | 642 | 497 | 88 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 85.0% |
+| **total** | 642 | 515 | 70 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 88.0% |
 
 ### Failures by stage
 
@@ -131,8 +152,8 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 | `std/utilities/meta` | 0 | 0 | 0 | 0 |
 | `std/utilities/utility` | 34 | 1 | 0 | 0 |
 | `std/containers/sequences/array` | 1 | 0 | 0 | 0 |
-| `std/strings/string.view` | 20 | 0 | 0 | 0 |
-| `std/containers/views/views.span` | 14 | 0 | 0 | 0 |
+| `std/strings/string.view` | 15 | 0 | 0 | 0 |
+| `std/containers/views/views.span` | 1 | 0 | 0 | 0 |
 | `std/numerics/bit` | 1 | 0 | 0 | 0 |
 | `std/language.support/support.limits` | 17 | 0 | 0 | 0 |
 | `std/language.support/support.initlist` | 0 | 0 | 0 | 0 |
@@ -144,58 +165,47 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | directory | clusters |
 |---|---|
 | `std/utilities/meta` | — |
-| `std/utilities/utility` | `compile: no member named '…' in '…'` (11); `compile: member initializer '…' does not name a non-static data member or base class` (9); `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` (6) |
+| `std/utilities/utility` | `compile: member initializer '…' does not name a non-static data member or base class` (12); `compile: no member named '…' in '…'` (11); `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` (6) |
 | `std/containers/sequences/array` | `compile: no viable conversion from '…' to '…'` (1) |
-| `std/strings/string.view` | `compile: called object type '…' is not a function or function pointer` (8); `compile: static assertion expression is not an integral constant expression` (5); `compile: static assertion failed` (4) |
-| `std/containers/views/views.span` | `compile: static assertion expression is not an integral constant expression` (3); `compile: no matching function for call to '…'` (3); `compile: no matching constructor for initialization of '…'` (3) |
+| `std/strings/string.view` | `compile: called object type '…' is not a function or function pointer` (12); `compile: call to non-static member function without an object argument` (2); `compile: static assertion failed due to requirement '…': streaming operator declaration not present` (1) |
+| `std/containers/views/views.span` | `compile: static assertion expression is not an integral constant expression` (1) |
 | `std/numerics/bit` | `compile: static assertion failed due to requirement '…'` (1) |
-| `std/language.support/support.limits` | `compile: call to non-static member function without an object argument` (10); `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` (3); `compile: invalid operands to binary expression ('…' (aka '…') and '…')` (1) |
+| `std/language.support/support.limits` | `compile: call to non-static member function without an object argument` (10); `compile: invalid operands to binary expression ('…' (aka '…') and '…')` (4); `compile: constexpr if condition is not a constant expression` (1) |
 | `std/language.support/support.initlist` | — |
 
 ### Error clusters
 
-38 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 38:
+27 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 27:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
 | 1 | 13 | 14 | `compile: call to non-static member function without an object argument` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `call to non-static member function without an object argument` |
-| 2 | 11 | 11 | `compile: no member named '…' in '…'` | `std/utilities/utility/pairs/pairs.pair/assign_const_pair_U_V.pass.cpp` | `no member named 'operator=' in 'ArchetypeBases::TrivialValueBase<>'` |
-| 3 | 9 | 13 | `compile: member initializer '…' does not name a non-static data member or base class` | `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_pair.pass.cpp` | `member initializer 'pair' does not name a non-static data member or base class` |
-| 4 | 8 | 27 | `compile: static assertion expression is not an integral constant expression` | `std/containers/views/views.span/span.cons/copy.pass.cpp` | `static assertion expression is not an integral constant expression` |
-| 5 | 8 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/comparison.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
-| 6 | 6 | 7 | `compile: static assertion failed` | `std/containers/views/views.span/span.cons/iterator_sentinel.pass.cpp` | `static assertion failed` |
-| 7 | 6 | 7 | `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` | `std/utilities/utility/mem.res/mem.res.aliases/header_list_synop.pass.cpp` | `static_cast from '__base_pointer' (aka 'std::__list_node_base<int, void *> *') to '__node_pointer' (aka 'std::__list_node<int, void *> *') is not allowed` |
-| 8 | 3 | 13 | `compile: no matching function for call to '…'` | `std/containers/views/views.span/span.cons/assign.pass.cpp` | `no matching function for call to 'size'` |
-| 9 | 3 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` |
-| 10 | 3 | 3 | `compile: constexpr if condition is not a constant expression` | `std/containers/views/views.span/span.objectrep/as_bytes.pass.cpp` | `constexpr if condition is not a constant expression` |
-| 11 | 3 | 3 | `compile: no matching constructor for initialization of '…'` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `no matching constructor for initialization of 'std::span<const int>'` |
-| 12 | 3 | 3 | `compile: static assertion failed due to requirement '…': tuple_element index out of range` | `std/utilities/utility/pairs/pairs.pair/assign.pair_like_rv.pass.cpp` | `static assertion failed due to requirement '1UL < 1UL': tuple_element index out of range` |
-| 13 | 2 | 6 | `compile: static assertion failed due to requirement '…'` | `std/numerics/bit/bit.cast/bit_cast.compile.pass.cpp` | `static assertion failed due to requirement '!...'` |
-| 14 | 2 | 3 | `compile: no viable conversion from '…' to '…'` | `std/containers/sequences/array/array.overview/nttp.equivalence.compile.pass.cpp` | `no viable conversion from 'std::array<int, 3>' to 'std::array'` |
-| 15 | 2 | 2 | `compile: braced-init-list operands of a functional cast is not supported yet` | `std/utilities/utility/pairs/pairs.pair/ctor.brace-init.pass.cpp` | `braced-init-list operands of a functional cast is not supported yet` |
-| 16 | 1 | 7 | `compile: invalid operands to binary expression ('…' (aka '…') and '…')` | `std/language.support/support.limits/support.limits.general/charconv.version.compile.pass.cpp` | `invalid operands to binary expression ('chars_format' (aka 'std::chars_format') and 'chars_format')` |
-| 17 | 1 | 1 | `compile: call to deleted function call operator in type '…' (aka '…')` | `std/containers/views/views.span/range_concept_conformance.compile.pass.cpp` | `call to deleted function call operator in type 'const __begin::__fn' (aka 'const std::ranges::__begin::__fn')` |
-| 18 | 1 | 1 | `compile: expected unqualified-id` | `std/language.support/support.limits/support.limits.general/random.version.compile.pass.cpp` | `expected unqualified-id` |
-| 19 | 1 | 1 | `compile: redefinition of '…'` | `std/language.support/support.limits/support.limits.general/expected.version.compile.pass.cpp` | `redefinition of 'operator=='` |
-| 20 | 1 | 1 | `compile: static assertion failed due to requirement '…': streaming operator declaration not present` | `std/strings/string.view/string.view.io/stream_insert_decl_present.compile.pass.cpp` | `static assertion failed due to requirement 'HasDecl<std::string_view>::value': streaming operator declaration not present` |
-| 21 | 1 | 1 | `link: linker command failed with exit code N (use -v to see invocation)` | `std/utilities/utility/mem.res/mem.res.global/null_memory_resource.pass.cpp` | `linker command failed with exit code 1 (use -v to see invocation)` |
-| 22 | 0 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = wchar_t]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = wchar…` |
-| 23 | 0 | 6 | `compile: pack expansion does not contain any unexpanded parameter packs` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `pack expansion does not contain any unexpanded parameter packs` |
-| 24 | 0 | 3 | `compile: a parameter pack may not be accessed at an out of bounds index` | `std/utilities/utility/pairs/pairs.pair/assign.pair_like_rv.pass.cpp` | `a parameter pack may not be accessed at an out of bounds index` |
-| 25 | 0 | 3 | `compile: a type specifier is required for all declarations` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `a type specifier is required for all declarations` |
-| 26 | 0 | 3 | `compile: expected '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected '>'` |
-| 27 | 0 | 3 | `compile: expected '…' at end of declaration list` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected ';' at end of declaration list` |
-| 28 | 0 | 3 | `compile: expected parameter declarator` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected parameter declarator` |
-| 29 | 0 | 3 | `compile: no type named '…' in '…'` | `std/utilities/utility/pairs/pairs.pair/assign.pair_like_rv.pass.cpp` | `no type named 'type' in 'std::tuple_element<1, std::__tuple_types<int>>'` |
-| 30 | 0 | 3 | `compile: non-static data member cannot be constexpr; did you intend to make it static?` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `non-static data member cannot be constexpr; did you intend to make it static?` |
-| 31 | 0 | 3 | `compile: static assertion failed due to requirement '…':` | `std/utilities/utility/pairs/pairs.pair/ctor.brace-init.pass.cpp` | `static assertion failed due to requirement '!can_construct_with_brace_init(0)':` |
-| 32 | 0 | 3 | `compile: use of undeclared identifier '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `use of undeclared identifier '_Complex'` |
-| 33 | 0 | 2 | `compile: no matching constructor for initialization of '…' (aka '…')` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `no matching constructor for initialization of 'std::span<const std::string>' (aka 'std::span<const std::basic_string<char>>')` |
-| 34 | 0 | 1 | `compile: expected a type` | `std/language.support/support.limits/support.limits.general/random.version.compile.pass.cpp` | `expected a type` |
-| 35 | 0 | 1 | `compile: invalid operands to binary expression ('…' and '…' (aka '…'))` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `invalid operands to binary expression ('int' and '__flags' (aka 'std::__format_spec::__flags'))` |
-| 36 | 0 | 1 | `compile: no matching function for call to object of type '…' (aka '…')` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `no matching function for call to object of type 'const __lower_bound::__fn' (aka 'const std::ranges::__lower_bound::__fn')` |
-| 37 | 0 | 1 | `compile: no viable conversion from '…' (aka '…') to '…' (aka '…')` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `no viable conversion from 'std::string[2]' (aka 'std::basic_string<char>[2]') to 'std::span<const std::string>' (aka 'std::span<const std::basic_string<char>>')` |
-| 38 | 0 | 1 | `compile: unknown type name '…'` | `std/language.support/support.limits/support.limits.general/random.version.compile.pass.cpp` | `unknown type name '__calc_type'` |
+| 2 | 12 | 13 | `compile: member initializer '…' does not name a non-static data member or base class` | `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_pair.pass.cpp` | `member initializer 'pair' does not name a non-static data member or base class` |
+| 3 | 12 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/comparison.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
+| 4 | 11 | 11 | `compile: no member named '…' in '…'` | `std/utilities/utility/pairs/pairs.pair/assign_const_pair_U_V.pass.cpp` | `no member named 'operator=' in 'ArchetypeBases::TrivialValueBase<>'` |
+| 5 | 6 | 7 | `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` | `std/utilities/utility/mem.res/mem.res.aliases/header_list_synop.pass.cpp` | `static_cast from '__base_pointer' (aka 'std::__list_node_base<int, void *> *') to '__node_pointer' (aka 'std::__list_node<int, void *> *') is not allowed` |
+| 6 | 4 | 7 | `compile: invalid operands to binary expression ('…' (aka '…') and '…')` | `std/language.support/support.limits/support.limits.general/charconv.version.compile.pass.cpp` | `invalid operands to binary expression ('chars_format' (aka 'std::chars_format') and 'chars_format')` |
+| 7 | 2 | 2 | `compile: braced-init-list operands of a functional cast is not supported yet` | `std/utilities/utility/pairs/pairs.pair/ctor.brace-init.pass.cpp` | `braced-init-list operands of a functional cast is not supported yet` |
+| 8 | 2 | 2 | `compile: no viable conversion from '…' to '…'` | `std/containers/sequences/array/array.overview/nttp.equivalence.compile.pass.cpp` | `no viable conversion from 'std::array<int, 3>' to 'std::array'` |
+| 9 | 2 | 2 | `compile: static assertion failed due to requirement '…'` | `std/numerics/bit/bit.cast/bit_cast.compile.pass.cpp` | `static assertion failed due to requirement '!...'` |
+| 10 | 1 | 16 | `compile: static assertion expression is not an integral constant expression` | `std/containers/views/views.span/span.elem/at.pass.cpp` | `static assertion expression is not an integral constant expression` |
+| 11 | 1 | 1 | `compile: constexpr if condition is not a constant expression` | `std/language.support/support.limits/support.limits.general/mdspan.version.compile.pass.cpp` | `constexpr if condition is not a constant expression` |
+| 12 | 1 | 1 | `compile: expected unqualified-id` | `std/language.support/support.limits/support.limits.general/random.version.compile.pass.cpp` | `expected unqualified-id` |
+| 13 | 1 | 1 | `compile: redefinition of '…'` | `std/language.support/support.limits/support.limits.general/expected.version.compile.pass.cpp` | `redefinition of 'operator=='` |
+| 14 | 1 | 1 | `compile: static assertion failed due to requirement '…': streaming operator declaration not present` | `std/strings/string.view/string.view.io/stream_insert_decl_present.compile.pass.cpp` | `static assertion failed due to requirement 'HasDecl<std::string_view>::value': streaming operator declaration not present` |
+| 15 | 1 | 1 | `link: linker command failed with exit code N (use -v to see invocation)` | `std/utilities/utility/mem.res/mem.res.global/null_memory_resource.pass.cpp` | `linker command failed with exit code 1 (use -v to see invocation)` |
+| 16 | 0 | 6 | `compile: pack expansion does not contain any unexpanded parameter packs` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `pack expansion does not contain any unexpanded parameter packs` |
+| 17 | 0 | 5 | `compile: no matching function for call to '…'` | `std/language.support/support.limits/support.limits.general/fstream.version.compile.pass.cpp` | `no matching function for call to 'print'` |
+| 18 | 0 | 3 | `compile: a type specifier is required for all declarations` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `a type specifier is required for all declarations` |
+| 19 | 0 | 3 | `compile: expected '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected '>'` |
+| 20 | 0 | 3 | `compile: expected '…' at end of declaration list` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected ';' at end of declaration list` |
+| 21 | 0 | 3 | `compile: expected parameter declarator` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected parameter declarator` |
+| 22 | 0 | 3 | `compile: non-static data member cannot be constexpr; did you intend to make it static?` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `non-static data member cannot be constexpr; did you intend to make it static?` |
+| 23 | 0 | 3 | `compile: static assertion failed due to requirement '…':` | `std/utilities/utility/pairs/pairs.pair/ctor.brace-init.pass.cpp` | `static assertion failed due to requirement '!can_construct_with_brace_init(0)':` |
+| 24 | 0 | 3 | `compile: use of undeclared identifier '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `use of undeclared identifier '_Complex'` |
+| 25 | 0 | 1 | `compile: expected a type` | `std/language.support/support.limits/support.limits.general/random.version.compile.pass.cpp` | `expected a type` |
+| 26 | 0 | 1 | `compile: invalid operands to binary expression ('…' and '…' (aka '…'))` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `invalid operands to binary expression ('int' and '__flags' (aka 'std::__format_spec::__flags'))` |
+| 27 | 0 | 1 | `compile: unknown type name '…'` | `std/language.support/support.limits/support.limits.general/random.version.compile.pass.cpp` | `unknown type name '__calc_type'` |
 
 ### Crashes
 
