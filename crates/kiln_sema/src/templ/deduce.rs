@@ -697,7 +697,11 @@ impl Sema<'_, '_> {
             if depth != u32::from(d.depth) {
                 return Tdk::Success;
             }
-            let (pq, aq) = (p.quals_bits(), a.quals_bits());
+            // An array carries its element's qualifiers (clang's
+            // canonical array type is qualified).
+            let a_array = t.is_array(a);
+            let aq = if a_array { t.effective_quals(a).bits() } else { a.quals_bits() };
+            let pq = p.quals_bits();
             if !flags.contains(TdfFlags::IGNORE_QUALIFIERS) {
                 // The argument must carry at least the parameter's
                 // qualifiers; a function or reference type carries none.
@@ -712,7 +716,16 @@ impl Sema<'_, '_> {
                     return Tdk::Underqualified;
                 }
             }
-            let deduced = QualType::new(a.ty(), aq & !pq);
+            let deduced = if a_array && pq == 0 {
+                a
+            } else if a_array {
+                // `const T&` from `const char[3]`: `T = char[3]`.
+                let t = &mut self.ast.types;
+                let u = t.unqualified(a);
+                t.qualify(u, kiln_ast::types::Quals::from_bits(aq & !pq))
+            } else {
+                QualType::new(a.ty(), aq & !pq)
+            };
             return self.record_deduction(
                 u16::try_from(index).unwrap_or(u16::MAX),
                 pack,

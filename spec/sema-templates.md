@@ -2262,6 +2262,14 @@ ambiguity errors.
   `T = <int, char>`.
 - Specialization names print with the as-written args, omitting any arg
   equal to its default (types.md §18).
+- `NonDeducedMismatch` names the mismatched part of the parameter type as
+  written, at any depth through references, pointers and array elements
+  (`'S<T>'` for `S<T> (&)[3]`), never the canonical `type-parameter-0-0`.
+  For a reference parameter, P's top-level cv is intersected with A's
+  first, an array's cv being its element's (clang's
+  `TDF_ParamWithReferenceType`): `const S<T>&` against `const char[3]` is
+  `'const S<T>'`, `volatile S<T>&` is `'S<T>'` (WP-152). The same rule
+  makes `const T&` from `const char[3]` deduce `T = char[3]`.
 
 ### 10.5 Other template diagnostics (texts from clang 19; goldens are authoritative)
 
