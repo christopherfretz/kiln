@@ -351,8 +351,10 @@ impl Substituter<'_, '_, '_> {
                     let np = self.sema.builder().prototype_param(ctx, n.name(), loc, ty, idx, 0);
                     self.sema.unowned_params.insert(np);
                     decls.push(np);
+                    // The elements share the pack's name (carried by
+                    // `np`); it is not a redefinition ([temp.variadic]/5).
                     out.push(ParamInfo {
-                        name,
+                        name: None,
                         ty,
                         loc,
                         attrs: Vec::new(),
