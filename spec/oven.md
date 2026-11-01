@@ -150,6 +150,18 @@ the evaluator's flattened type table.
   member the pointer was formed through: the union's recorded active
   member when it holds the pointee at that offset, else the first member
   that does (WP-213).
+- Argument values print as clang's `APValue::printPretty` (WP-241): a
+  class or array as a brace list of its bases and members, an array cut
+  off after 10 elements with `...`, a member pointer as `&C::m` (`0` when
+  null), a pointer to a temporary or to a lifetime-extended object as
+  that object's expression (clang names a temporary by its
+  `MaterializeTemporaryExpr`). A failure inside the inline trivial copy
+  or move (`Op::Copy` aux bit 4) is reported inside the frame clang
+  creates for the trivial constructor or assignment: the fault at the
+  source argument, then "in call to 'T(t)'" (or "'t.operator=(s)'"), for
+  memory faults, uninitialized subobjects and mutable reads alike
+  (`tests/conformance/expr.const/call-note-argument-values.cpp`,
+  `call-note-constructor.cpp`, `call-note-temporary-arguments.cpp`).
 - `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
   frame limit; 0 shows every frame.
 - `try_fold`, `is_constant_initialized` and `fold_constant_init` never
@@ -238,8 +250,8 @@ the evaluator's flattened type table.
   any in a union; clang `diagnoseMutableFields`). The object being
   initialized (`RESOLVING`), its lifetime-extended temporaries, and
   frame and heap objects never carry the flag, so their mutable members
-  are read and written freely. Deviations: clang also notes "in call to
-  'S(s)'" for the trivial copy constructor; clang rejects every such read
+  are read and written freely. The read carries the trivial copy's "in
+  call to 'S(s)'" frame (WP-241). Deviations: clang rejects every such read
   before C++14 and during constant destruction, kiln does not.
 
 ### Manifestly constant-evaluated context — normative (WP-063)
@@ -864,14 +876,14 @@ re-begins the lifetime of the whole union in tracked storage
 *Deviations from clang 19.* A union whose own lifetime ended (`v.~V();
 v.b = 2;`) accepts the member assignment, which clang rejects. A class
 whose subobjects' lifetimes all ended one by one is diagnosed at its
-implicit destruction as if destroyed itself. Copying a destroyed object
-with a trivial copy constructor reports the read without clang's "in call
-to 'T(t)'" frame note. An explicit call of a virtual destructor ends only the lifetime of
+implicit destruction as if destroyed itself. An explicit call of a virtual destructor ends only the lifetime of
 the static type's bytes. A placement new of the wrong type names the
 most-derived type at the offset as the "from" type, where clang names the
-designated subobject's type. "in call to" notes print some
-arguments differently (`decltype(...)` and `{temporary}` where clang
-prints the value).
+designated subobject's type. "in call to" notes print every
+element of a partly initialized array where clang prints the initialized
+ones and its filler, a character as `'\x{3}'` where clang prints `'\x03'`,
+and a floating literal in kiln's dump spelling (`3e0` where clang prints
+`3.F`).
 
 *Note locations.* A call-site note locates the callee at its begin, as
 clang's `getBeginLoc`: a qualified name (`::operator new(n)`,

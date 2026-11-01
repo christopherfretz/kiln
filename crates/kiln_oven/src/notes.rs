@@ -297,8 +297,16 @@ impl Oven {
             }
             Fault::Mutable { ak: k, field } => {
                 extra.push(Note::new(ast.decls.get(field).loc(), "declared here"));
+                // A trivial copy's read carries its call frame, as for
+                // `Fault::Mem` (clang `handleTrivialCopy` runs in a frame).
+                let mut loc = site.loc;
+                if let Some((src, whole)) = self.trivial_copy_src(pc) {
+                    let (at, call) = self.trivial_copy_frame(ast, site, src, whole);
+                    frame = Some(call);
+                    loc = at;
+                }
                 (
-                    site.loc,
+                    loc,
                     format!(
                         "{} mutable member '{}' is not allowed in a constant expression",
                         ak::verb(k),
