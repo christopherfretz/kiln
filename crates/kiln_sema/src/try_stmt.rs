@@ -42,6 +42,7 @@ impl Sema<'_, '_> {
         d: &Declarator,
     ) -> Option<DeclId> {
         let type_loc = ds.type_loc.unwrap_or(ds.loc);
+        let base = self.ctad_catch_check(base, type_loc);
         let mut ty = self.type_for_declarator_at(base, type_loc, d);
         let loc = d.name_loc();
         let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);

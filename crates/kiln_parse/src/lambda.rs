@@ -4,6 +4,7 @@
 use kiln_ast::lambda::{CaptureDefault, CaptureKind};
 use kiln_diag::DiagId;
 use kiln_lex::Punct;
+use kiln_sema::DeclSite;
 use kiln_sema::DeclaratorContext;
 use kiln_sema::declspec::{Chunk, Declarator};
 use kiln_sema::lambda::{LambdaCaptureSpec, LambdaIntroducer, LambdaSpecifiers};
@@ -53,7 +54,7 @@ impl Parser<'_, '_> {
         if let Some(l) = self.eat(Punct::LParen) {
             specs.explicit_params = true;
             open = l;
-            (params, variadic) = self.parse_param_clause(&mut d, false);
+            (params, variadic) = self.parse_param_clause(&mut d, false, DeclSite::LambdaParam);
             rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         }
         // clang `ParseLambdaExpressionAfterIntroducer`: GNU and `__declspec`
@@ -77,7 +78,7 @@ impl Parser<'_, '_> {
         }
         let mut trailing = None;
         if let Some(arrow) = self.eat(Punct::Arrow) {
-            let ty = self.parse_type_id().unwrap_or(kiln_ast::QualType::ERROR);
+            let ty = self.parse_type_id_no_ctad().unwrap_or(kiln_ast::QualType::ERROR);
             trailing = Some((ty, arrow));
         }
         if specs.explicit_params && self.eat_kw(Kw::Requires).is_some() {

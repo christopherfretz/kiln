@@ -268,6 +268,11 @@ impl Sema<'_, '_> {
     ) -> Result<TemplateArg, ()> {
         match (self.kind_of(p), a.view()) {
             (DeclKind::TemplateTypeParm, ArgView::Type(t)) => Ok(TemplateArg::ty(t)),
+            (DeclKind::TemplateTypeParm, ArgView::Template(name))
+                if self.template_arg_missing_args(name, at) =>
+            {
+                Err(())
+            }
             (DeclKind::TemplateTypeParm, _) => {
                 let d = self.diag(DiagId::sema_template_arg_must_be_type, at);
                 let d = self.note_param_here(d, p);

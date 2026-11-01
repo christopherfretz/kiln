@@ -116,7 +116,19 @@ impl Sema<'_, '_> {
         let mut found: Vec<DeclId> = self.ast.constructors(c).iter().collect();
         found.extend(self.ctor_shadows(c));
         let mut params = Vec::new();
-        found.retain(|&f| {
+        found.retain(|&fd| {
+            // Through an inherited constructor's shadow, and to a
+            // constructor template's pattern (clang checks the templated
+            // declaration).
+            let mut f = fd;
+            if self.kind_of(f) == DeclKind::ConstructorUsingShadow {
+                let Some(t) = self.ast.using_target(f) else { return true };
+                f = t;
+            }
+            if self.kind_of(f) == DeclKind::FunctionTemplate {
+                let Some(p) = self.pattern_of(f) else { return true };
+                f = p;
+            }
             if self.kind_of(f) != DeclKind::CXXConstructor {
                 return true;
             }

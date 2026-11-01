@@ -497,12 +497,142 @@ pub(crate) fn format_e6(kind: FloatKind, bits: u128) -> String {
     format!("{sign}0.000000e+00")
 }
 
+/// The `n` (at most 37) most significant decimal digits of the finite
+/// nonzero value of encoding `bits`, rounded half up as
+/// `llvm::APFloat::toString` rounds: `(neg, digits, k)` with the value
+/// about `0.d1d2... * 10^(k + 1)`, i.e. `k` is the power of ten of the
+/// first digit.
+fn sig_digits(kind: FloatKind, bits: u128, n: u32) -> Option<(bool, Vec<u8>, i64)> {
+    let Decoded::Finite { neg, mant, exp } = decode(kind, bits) else { return None };
+    if mant == 0 {
+        return None;
+    }
+    let lo = 10u128.pow(n - 1);
+    let hi = lo * 10;
+    let lead = exp + 127 - i64::from(mant.leading_zeros());
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, reason = "estimate")]
+    let mut k = ((lead as f64) * std::f64::consts::LOG10_2).floor() as i64;
+    for _ in 0..4 {
+        let mut num = Big::from_u128(mant);
+        let mut den = Big::from_u128(1);
+        let t = i64::from(n) - 1 - k;
+        #[allow(clippy::cast_sign_loss, reason = "sign checked")]
+        if t >= 0 {
+            num.mul_pow10(t as u64);
+        } else {
+            den.mul_pow10((-t) as u64);
+        }
+        #[allow(clippy::cast_sign_loss, reason = "sign checked")]
+        let (num, den) =
+            if exp >= 0 { (num.shl(exp as u64), den) } else { (num, den.shl((-exp) as u64)) };
+        let (mut q, half, _) = num.div_bounded(&den, 128);
+        if q < lo {
+            k -= 1;
+            continue;
+        }
+        if q >= hi {
+            k += 1;
+            continue;
+        }
+        if half != Ordering::Less {
+            q += 1;
+        }
+        if q == hi {
+            q = lo;
+            k += 1;
+        }
+        return Some((neg, q.to_string().into_bytes(), k));
+    }
+    None
+}
+
+/// The sign bit of `kind`'s encoding.
+pub(crate) fn sign_bit(kind: FloatKind) -> u128 {
+    1u128 << (total_bits(kind) - 1)
+}
+
+/// True for a (positive or negative) zero.
+pub(crate) fn is_zero_value(kind: FloatKind, bits: u128) -> bool {
+    matches!(decode(kind, bits), Decoded::Finite { mant: 0, .. })
+}
+
+/// `llvm::APFloat::toString(Str, FormatPrecision)` with its default
+/// padding (3) and zero truncation, for the precision clang's
+/// `DiagnoseFloatingImpCast` passes (`(p * 59).div_ceil(196)` digits for a
+/// `p`-bit significand): `1.5`, `123456789.5`, `1.5E+15`, `1.0E-5`.
+pub(crate) fn apfloat_diag_string(kind: FloatKind, bits: u128) -> String {
+    let p = params(kind).0;
+    let prec = (p * 59).div_ceil(196);
+    let Some((neg, mut digits, k)) = sig_digits(kind, bits, prec.min(37)) else {
+        return match decode(kind, bits) {
+            Decoded::NaN => "NaN".into(),
+            Decoded::Inf { neg } => if neg { "-Inf" } else { "+Inf" }.into(),
+            Decoded::Finite { neg, .. } => if neg { "-0" } else { "0" }.into(),
+        };
+    };
+    while digits.len() > 1 && digits.last() == Some(&b'0') {
+        digits.pop();
+    }
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation, reason = "<= 37")]
+    let nd = digits.len() as i64;
+    // The power of ten of the last digit.
+    let exp = k - (nd - 1);
+    let scientific = if exp >= 0 { exp > 3 || nd + exp > i64::from(prec) } else { k < 0 && -k > 3 };
+    let mut out = String::new();
+    if neg {
+        out.push('-');
+    }
+    let ds = |r: std::ops::Range<usize>| String::from_utf8_lossy(&digits[r]).into_owned();
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "sign checked")]
+    if scientific {
+        out.push_str(&ds(0..1));
+        out.push('.');
+        if nd == 1 {
+            out.push('0');
+        } else {
+            out.push_str(&ds(1..nd as usize));
+        }
+        out.push('E');
+        out.push(if k >= 0 { '+' } else { '-' });
+        out.push_str(&k.unsigned_abs().to_string());
+    } else if exp >= 0 {
+        out.push_str(&ds(0..nd as usize));
+        out.extend(std::iter::repeat_n('0', exp as usize));
+    } else if k >= 0 {
+        let whole = (k + 1) as usize;
+        out.push_str(&ds(0..whole));
+        out.push('.');
+        out.push_str(&ds(whole..nd as usize));
+    } else {
+        out.push_str("0.");
+        out.extend(std::iter::repeat_n('0', (-k - 1) as usize));
+        out.push_str(&ds(0..nd as usize));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn dbl(v: f64) -> u128 {
         u128::from(v.to_bits())
+    }
+
+    #[test]
+    fn apfloat_diag_strings() {
+        let d = |v: f64| apfloat_diag_string(FloatKind::Double, dbl(v));
+        assert_eq!(d(1.5), "1.5");
+        assert_eq!(d(-1.5), "-1.5");
+        assert_eq!(d(65.25), "65.25");
+        assert_eq!(d(123_456_789.5), "123456789.5");
+        assert_eq!(d(0.1), "0.1");
+        assert_eq!(d(0.001_5), "0.0015");
+        assert_eq!(d(0.000_15), "1.5E-4");
+        assert_eq!(d(1.5e15), "1.5E+15");
+        assert_eq!(d(1500.5), "1500.5");
+        assert_eq!(d(1e20), "1.0E+20");
+        assert_eq!(apfloat_diag_string(FloatKind::Single, u128::from(1.1f32.to_bits())), "1.1");
     }
 
     #[test]
