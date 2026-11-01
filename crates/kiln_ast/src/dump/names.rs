@@ -628,6 +628,11 @@ impl<'a> AstNames<'a> {
                 self.expr(exprs.operand(e), d, out);
                 out.push_str(if n.has(ExprFlags::ARROW) { "->" } else { "." });
                 self.write_name(exprs.decl(e), out);
+                // clang `VisitMemberExpr`: explicit template arguments as
+                // written (`s.get<0>`).
+                if let Some(l) = exprs.decl_ref_extra(e).and_then(|x| x.template_args) {
+                    write_arg_list(&ast.types, self, l, out);
+                }
             }
             ExprKind::UnaryOperator => {
                 let op = exprs.unary_op(e);

@@ -437,6 +437,9 @@ impl Sema<'_, '_> {
     /// on its own, as clang's `getTemplateInstantiationPattern`), else
     /// `tmpl`.
     pub(crate) fn inst_template(&self, tmpl: DeclId) -> DeclId {
+        if self.inst.member_template_specs.contains(&self.ast.first(tmpl)) {
+            return tmpl;
+        }
         self.ast
             .templates
             .instantiated_from_map(tmpl)
@@ -677,7 +680,9 @@ impl Sema<'_, '_> {
         // constructor instantiated here) must not clobber the enclosing
         // constructor's mem-initializer state.
         let outer = std::mem::take(&mut self.mem_inits);
+        let (body_errors, errors) = (self.inst.body_errors, self.diags.error_count());
         self.instantiate_function_definition_inner(f, poi);
+        self.inst.body_errors = body_errors + self.diags.error_count().saturating_sub(errors);
         self.mem_inits = outer;
     }
 

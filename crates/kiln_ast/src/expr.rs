@@ -1504,6 +1504,34 @@ impl ExprArena {
         Ok(())
     }
 
+    /// Records the explicit template arguments `targs` written on the
+    /// member access `e` (`b.f<int>`, clang's `hasExplicitTemplateArgs`),
+    /// known only once the call resolved the member template. Write-once.
+    ///
+    /// # Panics
+    /// If `e` is not a `MemberExpr`.
+    pub fn set_member_template_args(
+        &mut self,
+        e: ExprId,
+        targs: ArgListId,
+    ) -> Result<(), AlreadySet> {
+        let kind = self.nodes[e.index() as usize].kind;
+        assert!(kind == ExprKind::MemberExpr, "expected MemberExpr, found {kind:?}");
+        match self.cold.member_extra.get(e).copied() {
+            Some(x) if x.template_args.is_some() => {
+                Err(AlreadySet { slot: "MemberExpr.template_args", existing: 0 })
+            }
+            Some(x) => {
+                self.cold.member_extra.refine(e, DeclRefExtra { template_args: Some(targs), ..x });
+                Ok(())
+            }
+            None => self.cold.member_extra.insert(
+                e,
+                DeclRefExtra { qualifier: None, template_args: Some(targs), found_decl: None },
+            ),
+        }
+    }
+
     /// Marks the call `e` (`CallExpr` or `CXXOperatorCallExpr`) as calling
     /// a function found only by argument-dependent lookup (clang's
     /// `UsesADL`, dumped `adl`).

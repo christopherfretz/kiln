@@ -571,7 +571,19 @@ impl Cg<'_> {
         );
         let comdat = weak.then(|| self.m.comdat(&name, ComdatKind::Any));
         let align = self.size_align(ty).1;
+        // Constant storage (clang `isConstantStorage` with `ExcludeCtor`
+        // on the materialized initializer's type): a constant-initialized
+        // const array with no destructor, e.g. the `const E[N]` backing
+        // array of a namespace-scope `std::initializer_list`
+        // ([dcl.init.list]/5). A scalar or class prvalue is materialized
+        // cv-unqualified (the `const` of `const int& r = 5` is a no-op
+        // conversion clang skips), so its `_ZGR` stays writable.
+        let constant = init.is_some()
+            && self.array_elem(ty).is_some()
+            && ast.types.effective_quals(ty).is_const()
+            && self.destructed_class(ty).is_none();
         let gv = self.m.global_mut(g);
+        gv.is_constant = constant;
         gv.linkage = lin;
         gv.align = Some(align);
         gv.comdat = comdat;

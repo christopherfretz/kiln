@@ -90,6 +90,7 @@ impl Parser<'_, '_> {
             self.bump();
             // `template<> template<> R C<args>::f<args>(...)`: a member
             // template of a class template specialization.
+            let mut empty_heads = 1u16;
             while self.at_kw(Kw::Template)
                 && self.peek_is(1, Punct::Less)
                 && self.peek_is(2, Punct::Greater)
@@ -97,6 +98,7 @@ impl Parser<'_, '_> {
                 self.bump();
                 self.bump();
                 self.bump();
+                empty_heads += 1;
             }
             if self.at_kw(Kw::Template)
                 && self.peek_is(1, Punct::Less)
@@ -107,7 +109,11 @@ impl Parser<'_, '_> {
                 // ([temp.expl.spec]/16): declared as an out-of-line
                 // member template of the specialization, whose
                 // redeclaration gives its specializations their pattern.
+                // The `template<>` heads match the qualifier's implicitly
+                // instantiated classes ([temp.expl.spec]/17).
+                self.s.act_member_template_spec_prefix(empty_heads);
                 self.parse_template_declaration(ctx);
+                self.s.act_member_template_spec_prefix(0);
                 return;
             }
             if self.at_partial_specialization()

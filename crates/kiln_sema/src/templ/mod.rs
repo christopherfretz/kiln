@@ -138,6 +138,14 @@ pub struct TemplState {
     /// `template<>` was just parsed: the next class template-id declared
     /// is an explicit specialization ([temp.expl.spec]; WP-070b).
     pub(crate) explicit_spec: Option<Loc>,
+    /// `template<>` heads the parser dropped before a member template's
+    /// own head (`template<> template<class U> int A<long>::g(U)`), each
+    /// matching one implicitly instantiated class of the qualifier
+    /// ([`Sema::act_member_template_spec_prefix`]).
+    pub(crate) empty_prefix: u16,
+    /// A `template<>` of [`TemplState::empty_prefix`] was matched: the
+    /// member template being redeclared is member-specialized.
+    pub(crate) empty_prefix_taken: bool,
     /// `[extern] template` without `<` was just parsed (the `extern`
     /// and `template` locations): the next class template-id declared
     /// is explicitly instantiated ([temp.explicit]).
@@ -220,6 +228,19 @@ pub struct InstState {
     pub(crate) pending: std::collections::VecDeque<pending::PendingInst>,
     /// One entry per active SFINAE context: the errors it captured (§5.7).
     pub(crate) sfinae: std::cell::RefCell<Vec<stack::SfinaeState>>,
+    /// Errors reported by function definition instantiations so far
+    /// (nested ones counted once): a statement whose substitution only
+    /// triggered a failing instantiation of another body is not itself
+    /// in error (clang: that body is invalid; a call naming it is a
+    /// `RecoveryExpr`).
+    pub(crate) body_errors: u32,
+    /// Member templates of implicit class template specializations
+    /// redeclared after `template<>` (`template<> template<class U> int
+    /// A<long>::g(U)`, [temp.expl.spec]/17; first declarations): their
+    /// specializations are instantiated from that redeclaration's
+    /// definition, not the class template's pattern (clang's
+    /// `isMemberSpecialization` stopping `getTemplateInstantiationPattern`).
+    pub(crate) member_template_specs: kiln_source::fx::FxHashSet<DeclId>,
     /// Alias template specializations already substituted (§4.6).
     pub(crate) alias_cache: kiln_source::fx::FxHashMap<(DeclId, ArgListId), QualType>,
     /// The instantiation report (§11.3).
@@ -686,6 +707,10 @@ impl Sema<'_, '_> {
                         let _ = self.check_template_heads_match(list, expected);
                     }
                 }
+                ScopeSlot::Empty(_) if self.templ.empty_prefix > 0 => {
+                    self.templ.empty_prefix -= 1;
+                    self.templ.empty_prefix_taken = true;
+                }
                 ScopeSlot::Empty(class) if check_empty => {
                     let Some(&i) = it.peek() else { break };
                     if self.templ.heads[i].invented {
@@ -874,6 +899,12 @@ impl Sema<'_, '_> {
             self.check_template_param_list(kind, list, prev);
         }
         let t = self.builder().template_decl(kind, pattern, list, prev);
+        if self.templ.empty_prefix_taken
+            && let Some(p) = prev
+        {
+            let p = self.ast.first(p);
+            self.inst.member_template_specs.insert(p);
+        }
         if prev.is_some() {
             self.merge_template_defaults(t);
         }

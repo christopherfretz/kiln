@@ -70,6 +70,15 @@ impl Sema<'_, '_> {
         self.templ.explicit_spec = None;
     }
 
+    /// `template<> template<params> ... C<args>::m`: the `n` leading
+    /// `template<>` heads (dropped by the parser) match the implicitly
+    /// instantiated classes of the qualifier ([temp.expl.spec]/17);
+    /// `0` once the declaration ends.
+    pub fn act_member_template_spec_prefix(&mut self, n: u16) {
+        self.templ.empty_prefix = n;
+        self.templ.empty_prefix_taken = false;
+    }
+
     /// `[extern] template` without `<` was parsed: the class template-id
     /// declared next is explicitly instantiated ([temp.explicit]/2).
     /// Paired with [`Sema::act_explicit_inst_end`].
