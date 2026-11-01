@@ -1280,7 +1280,12 @@ impl Sema<'_, '_> {
         } else {
             first
         };
-        let class = self.implicit_object_class(first)?;
+        let Some(class) = self.implicit_object_class(first) else {
+            // A base on the way to the members' class is dependent: the
+            // call is resolved at instantiation.
+            let this_ty = self.dependent_implicit_this(first)?;
+            return Some(self.dependent_implicit_member(this_ty, name, nns, loc));
+        };
         let (this_ty, _) = self.this_class()?;
         let mut decls = Vec::with_capacity(valid.len());
         let mut via = Vec::with_capacity(valid.len());
@@ -1930,6 +1935,7 @@ impl Sema<'_, '_> {
         if self.is_err_expr(e) {
             return self.recover_err(&[e], loc);
         }
+        let e = if op == UnaryOp::AddrOf { self.undo_dependent_implicit_member(e) } else { e };
         let t0 = self.ety(e);
         if self.is_dependent_overloadable(t0) {
             // `&C::m` of a member of dependent type: formed at

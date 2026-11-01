@@ -102,8 +102,8 @@ pub struct EnumBuild {
     last: Option<i128>,
     enumerators: Vec<(DeclId, i128)>,
     /// The type of each enumerator before the closing brace
-    /// ([dcl.enum]/5), for an enumeration without a fixed underlying
-    /// type: a reference to an enumerator inside the body has it.
+    /// ([dcl.enum]/5): a reference to an enumerator inside the body has
+    /// it.
     pre_types: Vec<(DeclId, QualType)>,
 }
 
@@ -4490,8 +4490,8 @@ impl Sema<'_, '_> {
         self.ctx = e;
     }
 
-    /// The type of enumerator `d` while its enumeration (without a fixed
-    /// underlying type) is being defined ([dcl.enum]/5), if it is.
+    /// The type of enumerator `d` while its enumeration is being defined
+    /// ([dcl.enum]/5), if it is.
     pub(crate) fn enumerator_pre_brace_type(&self, d: DeclId) -> Option<QualType> {
         self.enums.iter().rev().find_map(|b| b.pre_types.iter().find(|x| x.0 == d).map(|x| x.1))
     }
@@ -4642,13 +4642,15 @@ impl Sema<'_, '_> {
         });
         let cv = self.int_const(vty, v);
         let _ = self.ast.decls.set_enumerator_value(d, cv);
-        // [dcl.enum]/5 (clang `CheckEnumConstant`): without a fixed
-        // underlying type, an enumerator has the type of its initializing
-        // value until the closing brace; without an initializer, that of
-        // the previous enumerator if the incremented value fits, else `int`
-        // for the first one or a type wide enough.
-        let pre = if build.fixed.is_some() {
-            None
+        // [dcl.enum]/5 (clang `CheckEnumConstant`): until the closing
+        // brace an enumerator has the fixed underlying type, if there is
+        // one (`enum class E { a = 1, b = a | 2 }` uses the built-in `|`
+        // of `int`); otherwise the type of its initializing value, or
+        // without an initializer that of the previous enumerator if the
+        // incremented value fits, else `int` for the first one or a type
+        // wide enough.
+        let pre = if let Some(f) = build.fixed {
+            Some(self.ast.types.unqualified(f))
         } else if let Some(ie) = init_e {
             Some(self.ast.types.unqualified(self.ast.exprs.get(ie).ty()))
         } else {
