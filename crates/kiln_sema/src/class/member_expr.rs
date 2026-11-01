@@ -725,6 +725,9 @@ impl Sema<'_, '_> {
                 let Some((pointee, _)) = conv::scs::member_pointer_parts(self, rt) else {
                     return Some(self.recover_err(&kids, loc));
                 };
+                let lhs = kids2.first().copied().unwrap_or(x);
+                let arrow = self.ast.exprs.binary_op(x) == BinaryOp::PtrMemI;
+                self.check_ptrmem_call_quals(lhs, pointee, arrow, loc);
                 (callee, None, pointee)
             }
             _ => return None,
@@ -970,7 +973,8 @@ impl Sema<'_, '_> {
         if self.is_err_expr(l3) {
             return self.recover_err(&[l3, r2], loc);
         }
-        if self.ast.types.is_function(pointee) {
+        if let Some(p) = self.ast.types.proto(pointee).copied() {
+            self.check_ptrmem_ref_qual(p.info(), arrow, l3, r, loc);
             return self.builder().ptr_mem(
                 op,
                 l3,
@@ -988,6 +992,66 @@ impl Sema<'_, '_> {
             ValueCategory::XValue
         };
         self.builder().ptr_mem(op, l3, r2, ty, vk, loc)
+    }
+
+    /// [expr.mptr.oper]/6 via [over.match.funcs]: the object of a call
+    /// through a pointer to member function is no more cv-qualified than
+    /// the function (clang's `err_pointer_to_member_call_drops_quals`, at
+    /// the call's `(`; the call is still built).
+    fn check_ptrmem_call_quals(&mut self, obj: ExprId, fn_ty: QualType, arrow: bool, lparen: Loc) {
+        let Some(p) = self.ast.types.proto(fn_ty).copied() else { return };
+        let ot = self.ety(obj);
+        let ot = if arrow { self.pointee_sugared(ot).unwrap_or(ot) } else { ot };
+        let oq = self.ast.types.effective_quals(ot) & CV;
+        let diff = oq - (p.info().this_quals() & CV);
+        if diff.is_empty() {
+            return;
+        }
+        let s = crate::class::members::method_quals_spelling(diff, RefQual::None);
+        let many = u8::from(s.contains(' '));
+        let msg = self
+            .diag(DiagId::sema_ptrmem_call_drops_quals, lparen)
+            .arg(self.ty_arg(fn_ty))
+            .arg(s)
+            .arg(many);
+        self.emit(msg);
+    }
+
+    /// [expr.mptr.oper]/6: a `&&`-qualified member function is called
+    /// only on an rvalue object, a `&`-qualified one only on an lvalue
+    /// (C++20 also allows `const &` on an rvalue). clang diagnoses and
+    /// keeps the expression (a SFINAE error in a substitution).
+    fn check_ptrmem_ref_qual(
+        &mut self,
+        info: kiln_ast::types::FuncInfo,
+        arrow: bool,
+        obj: ExprId,
+        r: ExprId,
+        loc: Loc,
+    ) {
+        use kiln_ast::types::RefQual;
+        let lvalue = self.ast.exprs.get(obj).value_category() == ValueCategory::LValue;
+        let which = match info.ref_qual() {
+            RefQual::None => return,
+            RefQual::LValue => {
+                let q = info.this_quals() & CV;
+                if arrow || lvalue || q == Quals::CONST {
+                    return;
+                }
+                1u8
+            }
+            RefQual::RValue => {
+                if !arrow && !lvalue {
+                    return;
+                }
+                0u8
+            }
+        };
+        let msg = self
+            .diag(DiagId::sema_ptrmem_value_classify, loc)
+            .arg(self.ty_arg(self.ety(r)))
+            .arg(which);
+        self.emit(msg);
     }
 
     fn ptrmem_lhs_error(

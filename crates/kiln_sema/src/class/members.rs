@@ -94,33 +94,7 @@ impl Sema<'_, '_> {
         if q.is_empty() && r == RefQual::None {
             return ty;
         }
-        let mut s = String::new();
-        if q.contains(Quals::CONST) {
-            s.push_str("const");
-        }
-        if q.contains(Quals::VOLATILE) {
-            if !s.is_empty() {
-                s.push(' ');
-            }
-            s.push_str("volatile");
-        }
-        if q.contains(Quals::RESTRICT) {
-            if !s.is_empty() {
-                s.push(' ');
-            }
-            s.push_str("restrict");
-        }
-        let rs = match r {
-            RefQual::None => "",
-            RefQual::LValue => "&",
-            RefQual::RValue => "&&",
-        };
-        if !rs.is_empty() {
-            if !s.is_empty() {
-                s.push(' ');
-            }
-            s.push_str(rs);
-        }
+        let s = method_quals_spelling(q, r);
         // The qualifiers follow the parameter list's `)` (their own
         // locations are not in the declarator).
         let loc = d
@@ -916,4 +890,37 @@ impl Sema<'_, '_> {
         }
         false
     }
+}
+
+/// A function type's cv-qualifiers and ref-qualifier as clang spells them
+/// in diagnostics (`getFunctionQualifiersAsString`): `const volatile &&`.
+pub(crate) fn method_quals_spelling(q: Quals, r: RefQual) -> String {
+    let mut s = String::new();
+    if q.contains(Quals::CONST) {
+        s.push_str("const");
+    }
+    if q.contains(Quals::VOLATILE) {
+        if !s.is_empty() {
+            s.push(' ');
+        }
+        s.push_str("volatile");
+    }
+    if q.contains(Quals::RESTRICT) {
+        if !s.is_empty() {
+            s.push(' ');
+        }
+        s.push_str("restrict");
+    }
+    let rs = match r {
+        RefQual::None => "",
+        RefQual::LValue => "&",
+        RefQual::RValue => "&&",
+    };
+    if !rs.is_empty() {
+        if !s.is_empty() {
+            s.push(' ');
+        }
+        s.push_str(rs);
+    }
+    s
 }

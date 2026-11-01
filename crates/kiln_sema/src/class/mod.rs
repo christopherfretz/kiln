@@ -18,7 +18,7 @@ mod ctorinit;
 pub(crate) mod friend;
 pub(crate) mod inhctor;
 mod member_expr;
-mod members;
+pub(crate) mod members;
 mod special;
 mod temporary;
 mod r#virtual;
