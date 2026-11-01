@@ -17,11 +17,11 @@ absolute numbers.
 
 ### `-std=c++26`
 
-**c++26: 30 of 109 headers ok with kiln (79 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.78 s / p95 4.75 s, peak RSS p50 19 MiB / p95 42 MiB; clang++-19 wall p50 0.10 s / p95 0.58 s, peak RSS p50 93 MiB / p95 143 MiB**
+**c++26: 39 of 109 headers ok with kiln (70 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.59 s / p95 4.14 s, peak RSS p50 19 MiB / p95 42 MiB; clang++-19 wall p50 0.08 s / p95 0.52 s, peak RSS p50 93 MiB / p95 143 MiB**
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `d3fed4a7` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `cbcb2e52` |
 | reference | `Debian clang version 19.1.7 (3+b1)` |
 | libstdc++ | `_GLIBCXX_RELEASE` 14, `__GLIBCXX__` 20250315 (`/usr/include/c++/14`) |
 | headers | extension-less files directly in the include directory; not compiled: subdirectories (`backward/`, `bits/`, `debug/`, `decimal/`, `experimental/`, `ext/`, `parallel/`, `pstl/`, `tr1/`, `tr2/`) and `.h`/`.tcc` files |
@@ -29,7 +29,7 @@ absolute numbers.
 | flags (both compilers) | `-std=c++26 -stdlib=libstdc++ -fsyntax-only -ferror-limit=0 t.cpp` (`t.cpp`: `#include <h>`) |
 | limits | 8192 MiB address space per compile (kiln: plus its stack reservation); timeout 120 s; -j 2 |
 | RSS source | `gnu-time` |
-| wall time | 116.2 s |
+| wall time | 77.6 s |
 
 #### Headers (`-std=c++26`)
 
@@ -37,152 +37,152 @@ absolute numbers.
 
 | header | kiln | errors | first error | clang++-19 | kiln wall | kiln RSS | clang wall | clang RSS |
 |---|---|---:|---|---|---:|---:|---:|---:|
-| `<algorithm>` | fail | 156 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.02 s | 21 MiB | 0.12 s | 97 MiB |
-| `<any>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.17 s | 16 MiB | 0.04 s | 84 MiB |
-| `<array>` | fail | 49 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.44 s | 18 MiB | 0.07 s | 89 MiB |
-| `<atomic>` | fail | 9 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.41 s | 19 MiB | 0.12 s | 89 MiB |
-| `<barrier>` | fail | 275 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.51 s | 37 MiB | 0.50 s | 136 MiB |
-| `<bit>` | fail | 10 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.17 s | 16 MiB | 0.04 s | 84 MiB |
-| `<bitset>` | fail | 180 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.35 s | 25 MiB | 0.17 s | 105 MiB |
-| `<cassert>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 78 MiB |
-| `<ccomplex>` | fail | 333 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 4.06 s | 42 MiB | 0.51 s | 140 MiB |
-| `<cctype>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.03 s | 79 MiB |
-| `<cerrno>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.03 s | 78 MiB |
-| `<cfenv>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.03 s | 79 MiB |
-| `<cfloat>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
-| `<charconv>` | fail | 10 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.23 s | 17 MiB | 0.05 s | 86 MiB |
-| `<chrono>` | fail | 291 | `type_traits:788:3: error: expected unqualified-id` | ok | 5.11 s | 43 MiB | 0.59 s | 150 MiB |
-| `<cinttypes>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.04 s | 79 MiB |
-| `<ciso646>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.03 s | 78 MiB |
-| `<climits>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.04 s | 78 MiB |
-| `<clocale>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.03 s | 79 MiB |
-| `<cmath>` | fail | 51 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.98 s | 24 MiB | 0.15 s | 96 MiB |
-| `<codecvt>` | fail | 185 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.71 s | 28 MiB | 0.21 s | 110 MiB |
-| `<compare>` | fail | 27 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.17 s | 16 MiB | 0.03 s | 84 MiB |
-| `<complex>` | fail | 333 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 4.07 s | 42 MiB | 0.56 s | 140 MiB |
-| `<concepts>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.16 s | 15 MiB | 0.03 s | 83 MiB |
-| `<condition_variable>` | fail | 286 | `type_traits:788:3: error: expected unqualified-id` | ok | 4.40 s | 39 MiB | 0.59 s | 143 MiB |
-| `<coroutine>` | fail | 28 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.19 s | 16 MiB | 0.04 s | 85 MiB |
-| `<csetjmp>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.03 s | 79 MiB |
-| `<csignal>` | ok |  |  | ok | 0.10 s | 15 MiB | 0.03 s | 81 MiB |
-| `<cstdalign>` | ok |  |  | ok | 0.05 s | 13 MiB | 0.03 s | 78 MiB |
-| `<cstdarg>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.04 s | 78 MiB |
-| `<cstdbool>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 78 MiB |
-| `<cstddef>` | ok |  |  | ok | 0.09 s | 13 MiB | 0.03 s | 81 MiB |
-| `<cstdint>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 79 MiB |
-| `<cstdio>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cstdlib>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.03 s | 81 MiB |
-| `<cstring>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.03 s | 79 MiB |
-| `<ctgmath>` | fail | 333 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 4.02 s | 42 MiB | 0.50 s | 140 MiB |
-| `<ctime>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 79 MiB |
+| `<algorithm>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.98 s | 20 MiB | 0.12 s | 97 MiB |
+| `<any>` | ok |  |  | ok | 0.16 s | 16 MiB | 0.04 s | 84 MiB |
+| `<array>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.42 s | 18 MiB | 0.06 s | 89 MiB |
+| `<atomic>` | fail | 2 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.42 s | 18 MiB | 0.06 s | 89 MiB |
+| `<barrier>` | fail | 159 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 3.48 s | 36 MiB | 0.45 s | 136 MiB |
+| `<bit>` | ok |  |  | ok | 0.16 s | 15 MiB | 0.03 s | 84 MiB |
+| `<bitset>` | fail | 79 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.34 s | 24 MiB | 0.17 s | 105 MiB |
+| `<cassert>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
+| `<ccomplex>` | fail | 160 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 4.04 s | 42 MiB | 0.50 s | 140 MiB |
+| `<cctype>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<cerrno>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
+| `<cfenv>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<cfloat>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 76 MiB |
+| `<charconv>` | ok |  |  | ok | 0.24 s | 17 MiB | 0.04 s | 85 MiB |
+| `<chrono>` | fail | 174 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 5.05 s | 45 MiB | 0.62 s | 150 MiB |
+| `<cinttypes>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 79 MiB |
+| `<ciso646>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 78 MiB |
+| `<climits>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 76 MiB |
+| `<clocale>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 77 MiB |
+| `<cmath>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.00 s | 24 MiB | 0.13 s | 96 MiB |
+| `<codecvt>` | fail | 83 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.71 s | 28 MiB | 0.20 s | 110 MiB |
+| `<compare>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.17 s | 16 MiB | 0.03 s | 84 MiB |
+| `<complex>` | fail | 160 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.94 s | 42 MiB | 0.50 s | 140 MiB |
+| `<concepts>` | ok |  |  | ok | 0.13 s | 15 MiB | 0.03 s | 83 MiB |
+| `<condition_variable>` | fail | 169 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 4.18 s | 40 MiB | 0.55 s | 143 MiB |
+| `<coroutine>` | fail | 23 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.18 s | 16 MiB | 0.03 s | 85 MiB |
+| `<csetjmp>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 79 MiB |
+| `<csignal>` | ok |  |  | ok | 0.08 s | 14 MiB | 0.02 s | 81 MiB |
+| `<cstdalign>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
+| `<cstdarg>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
+| `<cstdbool>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
+| `<cstddef>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 81 MiB |
+| `<cstdint>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 79 MiB |
+| `<cstdio>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 80 MiB |
+| `<cstdlib>` | ok |  |  | ok | 0.07 s | 13 MiB | 0.02 s | 81 MiB |
+| `<cstring>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 79 MiB |
+| `<ctgmath>` | fail | 160 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.99 s | 42 MiB | 0.51 s | 140 MiB |
+| `<ctime>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
 | `<cuchar>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cwchar>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 77 MiB |
+| `<cwchar>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 80 MiB |
 | `<cwctype>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 79 MiB |
-| `<deque>` | fail | 157 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.82 s | 20 MiB | 0.10 s | 94 MiB |
-| `<exception>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.17 s | 15 MiB | 0.06 s | 83 MiB |
-| `<execution>` | fail | 305 | `type_traits:788:3: error: expected unqualified-id` | ok | 5.37 s | 46 MiB | 0.64 s | 154 MiB |
-| `<expected>` | fail | 20 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.36 s | 16 MiB | 0.05 s | 86 MiB |
-| `<filesystem>` | fail | 286 | `type_traits:788:3: error: expected unqualified-id` | ok | 4.45 s | 39 MiB | 0.56 s | 143 MiB |
-| `<format>` | fail | 272 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.24 s | 34 MiB | 0.45 s | 132 MiB |
-| `<forward_list>` | fail | 157 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.80 s | 20 MiB | 0.10 s | 94 MiB |
-| `<fstream>` | fail | 288 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.54 s | 36 MiB | 0.48 s | 135 MiB |
-| `<functional>` | fail | 168 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.35 s | 24 MiB | 0.17 s | 103 MiB |
-| `<future>` | fail | 310 | `type_traits:788:3: error: expected unqualified-id` | ok | 5.29 s | 44 MiB | 0.69 s | 149 MiB |
-| `<generator>` | fail | 358 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.62 s | 32 MiB | 0.37 s | 130 MiB |
-| `<initializer_list>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.03 s | 79 MiB |
-| `<iomanip>` | fail | 276 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 3.53 s | 36 MiB | 0.53 s | 134 MiB |
-| `<ios>` | fail | 203 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.01 s | 29 MiB | 0.24 s | 112 MiB |
-| `<iosfwd>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 81 MiB |
-| `<iostream>` | fail | 276 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.42 s | 35 MiB | 0.43 s | 133 MiB |
-| `<istream>` | fail | 275 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.37 s | 34 MiB | 0.41 s | 133 MiB |
-| `<iterator>` | fail | 185 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.74 s | 28 MiB | 0.21 s | 111 MiB |
-| `<latch>` | fail | 9 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.30 s | 18 MiB | 0.05 s | 88 MiB |
-| `<limits>` | fail | 2 | `limits:1658:3: error: expected unqualified-id` | ok | 0.07 s | 14 MiB | 0.02 s | 81 MiB |
-| `<list>` | fail | 159 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.71 s | 19 MiB | 0.09 s | 93 MiB |
-| `<locale>` | fail | 226 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 2.00 s | 29 MiB | 0.23 s | 113 MiB |
-| `<map>` | fail | 162 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.81 s | 20 MiB | 0.10 s | 95 MiB |
-| `<memory>` | fail | 283 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.41 s | 37 MiB | 0.45 s | 137 MiB |
-| `<memory_resource>` | fail | 163 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.10 s | 24 MiB | 0.14 s | 102 MiB |
-| `<mutex>` | fail | 160 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.78 s | 21 MiB | 0.10 s | 96 MiB |
-| `<new>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 81 MiB |
-| `<numbers>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.12 s | 15 MiB | 0.03 s | 83 MiB |
-| `<numeric>` | fail | 32 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.32 s | 17 MiB | 0.05 s | 87 MiB |
-| `<optional>` | fail | 42 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.41 s | 16 MiB | 0.05 s | 87 MiB |
-| `<ostream>` | fail | 274 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.10 s | 35 MiB | 0.45 s | 133 MiB |
-| `<print>` | fail | 273 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.01 s | 35 MiB | 0.43 s | 132 MiB |
-| `<queue>` | fail | 157 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.61 s | 21 MiB | 0.24 s | 98 MiB |
-| `<random>` | fail | 279 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 3.07 s | 32 MiB | 0.46 s | 119 MiB |
-| `<ranges>` | fail | 354 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.82 s | 31 MiB | 0.37 s | 130 MiB |
-| `<ratio>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.24 s | 15 MiB | 0.06 s | 83 MiB |
-| `<regex>` | fail | 301 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 5.48 s | 41 MiB | 0.81 s | 147 MiB |
-| `<scoped_allocator>` | fail | 154 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.84 s | 19 MiB | 0.14 s | 91 MiB |
-| `<semaphore>` | fail | 33 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.99 s | 21 MiB | 0.21 s | 93 MiB |
-| `<set>` | fail | 162 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.18 s | 20 MiB | 0.29 s | 94 MiB |
-| `<shared_mutex>` | fail | 34 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.68 s | 18 MiB | 0.12 s | 89 MiB |
-| `<source_location>` | ok |  |  | ok | 0.09 s | 14 MiB | 0.06 s | 80 MiB |
-| `<span>` | fail | 156 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.72 s | 19 MiB | 0.10 s | 90 MiB |
-| `<spanstream>` | fail | 276 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.96 s | 36 MiB | 0.56 s | 133 MiB |
-| `<sstream>` | fail | 276 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.79 s | 36 MiB | 0.54 s | 134 MiB |
-| `<stack>` | fail | 157 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.08 s | 20 MiB | 0.17 s | 95 MiB |
-| `<stacktrace>` | fail | 278 | `type_traits:788:3: error: expected unqualified-id` | ok | 4.53 s | 37 MiB | 0.58 s | 135 MiB |
-| `<stdexcept>` | fail | 178 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.64 s | 25 MiB | 0.24 s | 105 MiB |
-| `<stdfloat>` | ok |  |  | ok | 0.07 s | 13 MiB | 0.05 s | 78 MiB |
-| `<stop_token>` | fail | 278 | `type_traits:788:3: error: expected unqualified-id` | ok | 4.81 s | 40 MiB | 0.58 s | 140 MiB |
-| `<streambuf>` | fail | 185 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 2.14 s | 29 MiB | 0.27 s | 110 MiB |
-| `<string>` | fail | 178 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.53 s | 24 MiB | 0.21 s | 104 MiB |
-| `<string_view>` | fail | 156 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.78 s | 20 MiB | 0.12 s | 95 MiB |
-| `<syncstream>` | fail | 277 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.78 s | 36 MiB | 0.55 s | 135 MiB |
-| `<system_error>` | fail | 179 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.61 s | 25 MiB | 0.23 s | 105 MiB |
-| `<text_encoding>` | fail | 157 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.23 s | 24 MiB | 0.18 s | 101 MiB |
-| `<thread>` | fail | 280 | `type_traits:788:3: error: expected unqualified-id` | ok | 4.75 s | 39 MiB | 0.57 s | 141 MiB |
-| `<tuple>` | fail | 153 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.61 s | 18 MiB | 0.10 s | 90 MiB |
-| `<type_traits>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.14 s | 15 MiB | 0.05 s | 83 MiB |
-| `<typeindex>` | fail | 27 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.21 s | 16 MiB | 0.05 s | 84 MiB |
-| `<typeinfo>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.04 s | 80 MiB |
-| `<unordered_map>` | fail | 159 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.07 s | 22 MiB | 0.13 s | 98 MiB |
-| `<unordered_set>` | fail | 158 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.03 s | 22 MiB | 0.17 s | 97 MiB |
-| `<utility>` | fail | 29 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.28 s | 16 MiB | 0.04 s | 86 MiB |
-| `<valarray>` | fail | 174 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.93 s | 28 MiB | 0.18 s | 108 MiB |
-| `<variant>` | fail | 47 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.38 s | 17 MiB | 0.06 s | 88 MiB |
-| `<vector>` | fail | 157 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.90 s | 20 MiB | 0.13 s | 97 MiB |
-| `<version>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
+| `<deque>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.84 s | 20 MiB | 0.11 s | 94 MiB |
+| `<exception>` | ok |  |  | ok | 0.15 s | 15 MiB | 0.04 s | 84 MiB |
+| `<execution>` | fail | 187 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 4.94 s | 44 MiB | 0.60 s | 153 MiB |
+| `<expected>` | fail | 1 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.27 s | 16 MiB | 0.04 s | 86 MiB |
+| `<filesystem>` | fail | 169 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 4.22 s | 39 MiB | 0.52 s | 143 MiB |
+| `<format>` | fail | 156 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.12 s | 34 MiB | 0.42 s | 131 MiB |
+| `<forward_list>` | fail | 58 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.76 s | 20 MiB | 0.09 s | 94 MiB |
+| `<fstream>` | fail | 172 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.40 s | 36 MiB | 0.45 s | 134 MiB |
+| `<functional>` | fail | 69 | `bits/stl_function.h:571:13: error: use of undeclared identifier 'operator>'` | ok | 1.28 s | 24 MiB | 0.16 s | 103 MiB |
+| `<future>` | fail | 193 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 5.01 s | 43 MiB | 0.57 s | 149 MiB |
+| `<generator>` | fail | 220 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.43 s | 32 MiB | 0.32 s | 130 MiB |
+| `<initializer_list>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
+| `<iomanip>` | fail | 160 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 3.39 s | 35 MiB | 0.49 s | 134 MiB |
+| `<ios>` | fail | 101 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.96 s | 29 MiB | 0.23 s | 112 MiB |
+| `<iosfwd>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.02 s | 79 MiB |
+| `<iostream>` | fail | 160 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.23 s | 35 MiB | 0.40 s | 133 MiB |
+| `<istream>` | fail | 159 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.17 s | 35 MiB | 0.40 s | 133 MiB |
+| `<iterator>` | fail | 83 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 1.79 s | 28 MiB | 0.20 s | 111 MiB |
+| `<latch>` | fail | 2 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.36 s | 18 MiB | 0.06 s | 88 MiB |
+| `<limits>` | ok |  |  | ok | 0.08 s | 14 MiB | 0.02 s | 81 MiB |
+| `<list>` | fail | 60 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.71 s | 19 MiB | 0.09 s | 93 MiB |
+| `<locale>` | fail | 124 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 2.02 s | 30 MiB | 0.24 s | 113 MiB |
+| `<map>` | fail | 63 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.81 s | 21 MiB | 0.10 s | 95 MiB |
+| `<memory>` | fail | 166 | `bits/allocator.h:191:10: error: use of undeclared identifier '__builtin_mul_overflow'` | ok | 3.78 s | 37 MiB | 0.48 s | 137 MiB |
+| `<memory_resource>` | fail | 61 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.11 s | 24 MiB | 0.14 s | 102 MiB |
+| `<mutex>` | fail | 62 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.78 s | 22 MiB | 0.10 s | 96 MiB |
+| `<new>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 81 MiB |
+| `<numbers>` | ok |  |  | ok | 0.11 s | 16 MiB | 0.03 s | 83 MiB |
+| `<numeric>` | fail | 5 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.34 s | 17 MiB | 0.06 s | 86 MiB |
+| `<optional>` | fail | 23 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.33 s | 17 MiB | 0.05 s | 87 MiB |
+| `<ostream>` | fail | 158 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.15 s | 35 MiB | 0.41 s | 133 MiB |
+| `<print>` | fail | 157 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.93 s | 36 MiB | 0.39 s | 132 MiB |
+| `<queue>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.93 s | 21 MiB | 0.12 s | 98 MiB |
+| `<random>` | fail | 175 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.21 s | 32 MiB | 0.27 s | 119 MiB |
+| `<ranges>` | fail | 216 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.26 s | 31 MiB | 0.30 s | 129 MiB |
+| `<ratio>` | ok |  |  | ok | 0.14 s | 16 MiB | 0.03 s | 83 MiB |
+| `<regex>` | fail | 184 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 4.14 s | 41 MiB | 0.52 s | 146 MiB |
+| `<scoped_allocator>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.56 s | 19 MiB | 0.08 s | 91 MiB |
+| `<semaphore>` | fail | 24 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.61 s | 21 MiB | 0.08 s | 93 MiB |
+| `<set>` | fail | 63 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.79 s | 21 MiB | 0.09 s | 95 MiB |
+| `<shared_mutex>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.41 s | 19 MiB | 0.06 s | 90 MiB |
+| `<source_location>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
+| `<span>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.51 s | 19 MiB | 0.07 s | 90 MiB |
+| `<spanstream>` | fail | 160 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.14 s | 35 MiB | 0.41 s | 134 MiB |
+| `<sstream>` | fail | 160 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.15 s | 37 MiB | 0.41 s | 134 MiB |
+| `<stack>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.82 s | 19 MiB | 0.10 s | 94 MiB |
+| `<stacktrace>` | fail | 162 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.29 s | 36 MiB | 0.42 s | 135 MiB |
+| `<stdexcept>` | fail | 77 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.22 s | 25 MiB | 0.16 s | 105 MiB |
+| `<stdfloat>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 78 MiB |
+| `<stop_token>` | fail | 162 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 3.90 s | 39 MiB | 0.46 s | 141 MiB |
+| `<streambuf>` | fail | 83 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.65 s | 29 MiB | 0.20 s | 110 MiB |
+| `<string>` | fail | 77 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.21 s | 24 MiB | 0.16 s | 105 MiB |
+| `<string_view>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.59 s | 20 MiB | 0.10 s | 94 MiB |
+| `<syncstream>` | fail | 161 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.23 s | 36 MiB | 0.44 s | 134 MiB |
+| `<system_error>` | fail | 78 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.28 s | 25 MiB | 0.18 s | 105 MiB |
+| `<text_encoding>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.99 s | 24 MiB | 0.14 s | 101 MiB |
+| `<thread>` | fail | 164 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 4.04 s | 40 MiB | 0.47 s | 141 MiB |
+| `<tuple>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.51 s | 19 MiB | 0.07 s | 90 MiB |
+| `<type_traits>` | ok |  |  | ok | 0.10 s | 15 MiB | 0.03 s | 83 MiB |
+| `<typeindex>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.16 s | 16 MiB | 0.04 s | 84 MiB |
+| `<typeinfo>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
+| `<unordered_map>` | fail | 60 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.93 s | 22 MiB | 0.11 s | 98 MiB |
+| `<unordered_set>` | fail | 59 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.94 s | 21 MiB | 0.12 s | 97 MiB |
+| `<utility>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.23 s | 16 MiB | 0.04 s | 86 MiB |
+| `<valarray>` | fail | 73 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.82 s | 28 MiB | 0.20 s | 108 MiB |
+| `<variant>` | fail | 26 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.35 s | 17 MiB | 0.06 s | 88 MiB |
+| `<vector>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.83 s | 21 MiB | 0.12 s | 97 MiB |
+| `<version>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 78 MiB |
 
 #### Error clusters (`-std=c++26`, generated)
 
-53 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 30; the hand-written triage is in "Clusters" below.
+45 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 30; the hand-written triage is in "Clusters" below.
 
 | # | first | any | cluster | headers (first) |
 |---:|---:|---:|---|---|
-| 1 | 75 | 79 | `expected unqualified-id` | `<algorithm>` `<any>` `<array>` `<atomic>` `<barrier>` `<bit>` `<bitset>` `<ccomplex>` `<charconv>` `<chrono>` `<cmath>` `<compare>` `<complex>` `<concepts>` `<condition_variable>` `<coroutine>` `<ctgmath>` `<deque>` `<exception>` `<execution>` `<expected>` `<filesystem>` `<format>` `<forward_list>` `<fstream>` `<functional>` `<future>` `<generator>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<latch>` `<limits>` `<list>` `<map>` `<memory>` `<memory_resource>` `<mutex>` `<numbers>` `<numeric>` `<optional>` `<ostream>` `<print>` `<queue>` `<random>` `<ranges>` `<ratio>` `<regex>` `<scoped_allocator>` `<semaphore>` `<set>` `<shared_mutex>` `<span>` `<spanstream>` `<sstream>` `<stack>` `<stacktrace>` `<stdexcept>` `<stop_token>` `<string>` `<string_view>` `<syncstream>` `<system_error>` `<text_encoding>` `<thread>` `<tuple>` `<type_traits>` `<typeindex>` `<unordered_map>` `<unordered_set>` `<utility>` `<valarray>` `<variant>` `<vector>` |
+| 1 | 67 | 70 | `use of undeclared identifier '…'` | `<algorithm>` `<array>` `<atomic>` `<barrier>` `<bitset>` `<ccomplex>` `<chrono>` `<cmath>` `<compare>` `<complex>` `<condition_variable>` `<coroutine>` `<ctgmath>` `<deque>` `<execution>` `<expected>` `<filesystem>` `<format>` `<forward_list>` `<fstream>` `<functional>` `<future>` `<generator>` `<iomanip>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<latch>` `<list>` `<map>` `<memory>` `<memory_resource>` `<mutex>` `<numeric>` `<optional>` `<ostream>` `<print>` `<queue>` `<random>` `<ranges>` `<regex>` `<scoped_allocator>` `<semaphore>` `<set>` `<shared_mutex>` `<span>` `<spanstream>` `<sstream>` `<stack>` `<stacktrace>` `<stdexcept>` `<stop_token>` `<string>` `<string_view>` `<syncstream>` `<system_error>` `<text_encoding>` `<thread>` `<tuple>` `<typeindex>` `<unordered_map>` `<unordered_set>` `<utility>` `<valarray>` `<variant>` `<vector>` |
 | 2 | 3 | 36 | `'…' is not supported yet` | `<codecvt>` `<locale>` `<streambuf>` |
-| 3 | 1 | 78 | `use of undeclared identifier '…'` | `<iomanip>` |
-| 4 | 0 | 78 | `expected '…' after alias declaration` | (e.g. `<algorithm>`) |
-| 5 | 0 | 78 | `unexpected type name '…': expected expression` | (e.g. `<algorithm>`) |
-| 6 | 0 | 66 | `'…' cannot be the name of a variable or data member` | (e.g. `<algorithm>`) |
-| 7 | 0 | 66 | `data member '…' cannot be a member template` | (e.g. `<algorithm>`) |
-| 8 | 0 | 66 | `expected '…' at end of declaration list` | (e.g. `<algorithm>`) |
-| 9 | 0 | 62 | `expected '…' for function-style cast or type construction` | (e.g. `<algorithm>`) |
-| 10 | 0 | 62 | `expected expression` | (e.g. `<algorithm>`) |
-| 11 | 0 | 62 | `no member named '…' in namespace '…'` | (e.g. `<algorithm>`) |
-| 12 | 0 | 58 | `friends can only be classes or functions` | (e.g. `<algorithm>`) |
-| 13 | 0 | 58 | `no member named '…' in the global namespace` | (e.g. `<algorithm>`) |
-| 14 | 0 | 56 | `constexpr variable '…' must be initialized by a constant expression` | (e.g. `<algorithm>`) |
-| 15 | 0 | 56 | `in-class initializer for static data member is not a constant expression` | (e.g. `<algorithm>`) |
-| 16 | 0 | 56 | `static assertion failed due to requirement '…': invalid specialization` | (e.g. `<algorithm>`) |
-| 17 | 0 | 38 | `no matching function for call to '…'` | (e.g. `<barrier>`) |
-| 18 | 0 | 34 | `call to '…' is ambiguous` | (e.g. `<barrier>`) |
-| 19 | 0 | 32 | `type '…' does not provide a call operator` | (e.g. `<barrier>`) |
-| 20 | 0 | 31 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | (e.g. `<barrier>`) |
-| 21 | 0 | 29 | `'…' with a non-bool expression is not supported yet` | (e.g. `<barrier>`) |
-| 22 | 0 | 27 | `expected '…'` | (e.g. `<barrier>`) |
-| 23 | 0 | 27 | `friend declaration of '…' does not match any declaration in namespace '…'` | (e.g. `<barrier>`) |
-| 24 | 0 | 25 | `'…' is a protected member of '…' (aka '…')` | (e.g. `<barrier>`) |
-| 25 | 0 | 24 | `calling a private constructor of class '…' (aka '…')` | (e.g. `<barrier>`) |
-| 26 | 0 | 24 | `constraints not satisfied for class template '…' [with _It = iterator, _Sent = iterator, _Kind = N]` | (e.g. `<barrier>`) |
-| 27 | 0 | 24 | `kiln: not yet implemented: an atomic constraint that stays value-dependent after substitution` | (e.g. `<barrier>`) |
-| 28 | 0 | 24 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<barrier>`) |
-| 29 | 0 | 24 | `no matching function for call to object of type '…' (aka '…')` | (e.g. `<barrier>`) |
-| 30 | 0 | 24 | `no viable conversion from '…' (aka '…') to '…' (aka '…')` | (e.g. `<barrier>`) |
+| 3 | 0 | 66 | `'…' cannot be the name of a variable or data member` | (e.g. `<algorithm>`) |
+| 4 | 0 | 66 | `data member '…' cannot be a member template` | (e.g. `<algorithm>`) |
+| 5 | 0 | 66 | `expected '…' at end of declaration list` | (e.g. `<algorithm>`) |
+| 6 | 0 | 58 | `friends can only be classes or functions` | (e.g. `<algorithm>`) |
+| 7 | 0 | 56 | `constexpr variable '…' must be initialized by a constant expression` | (e.g. `<algorithm>`) |
+| 8 | 0 | 56 | `in-class initializer for static data member is not a constant expression` | (e.g. `<algorithm>`) |
+| 9 | 0 | 36 | `no matching function for call to '…'` | (e.g. `<barrier>`) |
+| 10 | 0 | 34 | `call to '…' is ambiguous` | (e.g. `<barrier>`) |
+| 11 | 0 | 32 | `type '…' does not provide a call operator` | (e.g. `<barrier>`) |
+| 12 | 0 | 31 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | (e.g. `<barrier>`) |
+| 13 | 0 | 29 | `'…' with a non-bool expression is not supported yet` | (e.g. `<barrier>`) |
+| 14 | 0 | 27 | `expected '…'` | (e.g. `<barrier>`) |
+| 15 | 0 | 27 | `friend declaration of '…' does not match any declaration in namespace '…'` | (e.g. `<barrier>`) |
+| 16 | 0 | 25 | `'…' is a protected member of '…' (aka '…')` | (e.g. `<barrier>`) |
+| 17 | 0 | 24 | `calling a private constructor of class '…' (aka '…')` | (e.g. `<barrier>`) |
+| 18 | 0 | 24 | `constraints not satisfied for class template '…' [with _It = iterator, _Sent = iterator, _Kind = N]` | (e.g. `<barrier>`) |
+| 19 | 0 | 24 | `kiln: not yet implemented: an atomic constraint that stays value-dependent after substitution` | (e.g. `<barrier>`) |
+| 20 | 0 | 24 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<barrier>`) |
+| 21 | 0 | 24 | `no matching function for call to object of type '…' (aka '…')` | (e.g. `<barrier>`) |
+| 22 | 0 | 24 | `no viable conversion from '…' (aka '…') to '…' (aka '…')` | (e.g. `<barrier>`) |
+| 23 | 0 | 24 | `static assertion failed due to requirement '…'` | (e.g. `<barrier>`) |
+| 24 | 0 | 23 | `no viable conversion from returned value of type '…' (aka '…') to function return type '…' (aka '…')` | (e.g. `<barrier>`) |
+| 25 | 0 | 7 | `redefinition of '…' as different kind of symbol` | (e.g. `<chrono>`) |
+| 26 | 0 | 6 | `out-of-line definition of '…' does not match any declaration in '…'` | (e.g. `<generator>`) |
+| 27 | 0 | 4 | `no type named '…' in '…'` | (e.g. `<filesystem>`) |
+| 28 | 0 | 3 | `expected a type` | (e.g. `<execution>`) |
+| 29 | 0 | 2 | `call to deleted constructor of '…' (aka '…')` | (e.g. `<condition_variable>`) |
+| 30 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
 
 <!-- libstdcxx:c++26:end -->
 
@@ -191,11 +191,11 @@ absolute numbers.
 
 ### `-std=c++20`
 
-**c++20: 35 of 109 headers ok with kiln (74 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.51 s / p95 2.74 s, peak RSS p50 18 MiB / p95 32 MiB; clang++-19 wall p50 0.08 s / p95 0.33 s, peak RSS p50 89 MiB / p95 119 MiB**
+**c++20: 44 of 109 headers ok with kiln (65 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.43 s / p95 2.63 s, peak RSS p50 18 MiB / p95 32 MiB; clang++-19 wall p50 0.07 s / p95 0.30 s, peak RSS p50 90 MiB / p95 119 MiB**
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `d3fed4a7` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `cbcb2e52` |
 | reference | `Debian clang version 19.1.7 (3+b1)` |
 | libstdc++ | `_GLIBCXX_RELEASE` 14, `__GLIBCXX__` 20250315 (`/usr/include/c++/14`) |
 | headers | extension-less files directly in the include directory; not compiled: subdirectories (`backward/`, `bits/`, `debug/`, `decimal/`, `experimental/`, `ext/`, `parallel/`, `pstl/`, `tr1/`, `tr2/`) and `.h`/`.tcc` files |
@@ -203,7 +203,7 @@ absolute numbers.
 | flags (both compilers) | `-std=c++20 -stdlib=libstdc++ -fsyntax-only -ferror-limit=0 t.cpp` (`t.cpp`: `#include <h>`) |
 | limits | 8192 MiB address space per compile (kiln: plus its stack reservation); timeout 120 s; -j 2 |
 | RSS source | `gnu-time` |
-| wall time | 55.0 s |
+| wall time | 50.1 s |
 
 #### Headers (`-std=c++20`)
 
@@ -211,152 +211,152 @@ absolute numbers.
 
 | header | kiln | errors | first error | clang++-19 | kiln wall | kiln RSS | clang wall | clang RSS |
 |---|---|---:|---|---|---:|---:|---:|---:|
-| `<algorithm>` | fail | 156 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.85 s | 19 MiB | 0.10 s | 93 MiB |
-| `<any>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.16 s | 16 MiB | 0.04 s | 84 MiB |
-| `<array>` | fail | 49 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.40 s | 18 MiB | 0.06 s | 89 MiB |
-| `<atomic>` | fail | 9 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.41 s | 17 MiB | 0.06 s | 89 MiB |
-| `<barrier>` | fail | 206 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.79 s | 27 MiB | 0.22 s | 110 MiB |
-| `<bit>` | fail | 10 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.17 s | 16 MiB | 0.03 s | 84 MiB |
-| `<bitset>` | fail | 183 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.18 s | 23 MiB | 0.16 s | 103 MiB |
-| `<cassert>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
-| `<ccomplex>` | fail | 266 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 2.33 s | 31 MiB | 0.28 s | 115 MiB |
-| `<cctype>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cerrno>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
-| `<cfenv>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
-| `<cfloat>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
-| `<charconv>` | fail | 10 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.23 s | 16 MiB | 0.04 s | 85 MiB |
-| `<chrono>` | fail | 289 | `type_traits:788:3: error: expected unqualified-id` | ok | 4.45 s | 40 MiB | 0.58 s | 147 MiB |
-| `<cinttypes>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 79 MiB |
-| `<ciso646>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 76 MiB |
-| `<climits>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
-| `<clocale>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 79 MiB |
-| `<cmath>` | fail | 51 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.95 s | 24 MiB | 0.12 s | 95 MiB |
-| `<codecvt>` | fail | 187 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.25 s | 24 MiB | 0.16 s | 105 MiB |
-| `<compare>` | fail | 27 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.17 s | 15 MiB | 0.04 s | 84 MiB |
-| `<complex>` | fail | 266 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 2.32 s | 31 MiB | 0.27 s | 116 MiB |
-| `<concepts>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.13 s | 15 MiB | 0.04 s | 83 MiB |
-| `<condition_variable>` | fail | 219 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.49 s | 30 MiB | 0.29 s | 118 MiB |
-| `<coroutine>` | fail | 28 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.17 s | 16 MiB | 0.04 s | 85 MiB |
-| `<csetjmp>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
-| `<csignal>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.02 s | 81 MiB |
-| `<cstdalign>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 78 MiB |
-| `<cstdarg>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 78 MiB |
-| `<cstdbool>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
-| `<cstddef>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 81 MiB |
-| `<cstdint>` | ok |  |  | ok | 0.05 s | 13 MiB | 0.02 s | 77 MiB |
-| `<cstdio>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cstdlib>` | ok |  |  | ok | 0.08 s | 13 MiB | 0.03 s | 80 MiB |
+| `<algorithm>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.95 s | 20 MiB | 0.11 s | 95 MiB |
+| `<any>` | ok |  |  | ok | 0.22 s | 16 MiB | 0.06 s | 84 MiB |
+| `<array>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.42 s | 17 MiB | 0.08 s | 89 MiB |
+| `<atomic>` | fail | 2 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.43 s | 17 MiB | 0.06 s | 89 MiB |
+| `<barrier>` | fail | 105 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 1.79 s | 27 MiB | 0.21 s | 110 MiB |
+| `<bit>` | ok |  |  | ok | 0.15 s | 16 MiB | 0.03 s | 84 MiB |
+| `<bitset>` | fail | 82 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.21 s | 24 MiB | 0.16 s | 103 MiB |
+| `<cassert>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 79 MiB |
+| `<ccomplex>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.36 s | 32 MiB | 0.26 s | 115 MiB |
+| `<cctype>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
+| `<cerrno>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.02 s | 79 MiB |
+| `<cfenv>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 79 MiB |
+| `<cfloat>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 78 MiB |
+| `<charconv>` | ok |  |  | ok | 0.23 s | 16 MiB | 0.05 s | 85 MiB |
+| `<chrono>` | fail | 172 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 4.49 s | 43 MiB | 0.59 s | 147 MiB |
+| `<cinttypes>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<ciso646>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
+| `<climits>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<clocale>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<cmath>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.93 s | 24 MiB | 0.11 s | 96 MiB |
+| `<codecvt>` | fail | 86 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.23 s | 24 MiB | 0.20 s | 104 MiB |
+| `<compare>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.17 s | 16 MiB | 0.03 s | 84 MiB |
+| `<complex>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.21 s | 32 MiB | 0.24 s | 116 MiB |
+| `<concepts>` | ok |  |  | ok | 0.12 s | 15 MiB | 0.03 s | 83 MiB |
+| `<condition_variable>` | fail | 115 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.36 s | 30 MiB | 0.28 s | 118 MiB |
+| `<coroutine>` | fail | 23 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.16 s | 16 MiB | 0.03 s | 85 MiB |
+| `<csetjmp>` | ok |  |  | ok | 0.02 s | 14 MiB | 0.04 s | 79 MiB |
+| `<csignal>` | ok |  |  | ok | 0.08 s | 15 MiB | 0.02 s | 81 MiB |
+| `<cstdalign>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 78 MiB |
+| `<cstdarg>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
+| `<cstdbool>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 78 MiB |
+| `<cstddef>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 81 MiB |
+| `<cstdint>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 79 MiB |
+| `<cstdio>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
+| `<cstdlib>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.02 s | 81 MiB |
 | `<cstring>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
-| `<ctgmath>` | fail | 266 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 2.29 s | 32 MiB | 0.27 s | 115 MiB |
-| `<ctime>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cuchar>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cwchar>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 80 MiB |
-| `<cwctype>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 79 MiB |
-| `<deque>` | fail | 157 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.78 s | 20 MiB | 0.10 s | 94 MiB |
-| `<exception>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.14 s | 15 MiB | 0.03 s | 84 MiB |
-| `<execution>` | fail | 224 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.14 s | 36 MiB | 0.37 s | 129 MiB |
-| `<expected>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
-| `<filesystem>` | fail | 243 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.66 s | 31 MiB | 0.31 s | 119 MiB |
-| `<format>` | fail | 271 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.74 s | 32 MiB | 0.54 s | 129 MiB |
-| `<forward_list>` | fail | 157 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.71 s | 20 MiB | 0.10 s | 93 MiB |
-| `<fstream>` | fail | 221 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.76 s | 27 MiB | 0.22 s | 109 MiB |
-| `<functional>` | fail | 167 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.24 s | 23 MiB | 0.17 s | 102 MiB |
-| `<future>` | fail | 243 | `type_traits:788:3: error: expected unqualified-id` | ok | 3.21 s | 33 MiB | 0.33 s | 124 MiB |
-| `<generator>` | fail | 278 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.63 s | 26 MiB | 0.23 s | 119 MiB |
-| `<initializer_list>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 80 MiB |
-| `<iomanip>` | fail | 231 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 1.91 s | 27 MiB | 0.27 s | 110 MiB |
-| `<ios>` | fail | 205 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.51 s | 25 MiB | 0.19 s | 107 MiB |
-| `<iosfwd>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.02 s | 81 MiB |
-| `<iostream>` | fail | 207 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.53 s | 26 MiB | 0.19 s | 108 MiB |
-| `<istream>` | fail | 206 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.53 s | 26 MiB | 0.19 s | 108 MiB |
-| `<iterator>` | fail | 187 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.33 s | 24 MiB | 0.18 s | 106 MiB |
-| `<latch>` | fail | 9 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.32 s | 18 MiB | 0.05 s | 86 MiB |
-| `<limits>` | fail | 2 | `limits:1658:3: error: expected unqualified-id` | ok | 0.08 s | 15 MiB | 0.03 s | 81 MiB |
-| `<list>` | fail | 159 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.67 s | 20 MiB | 0.09 s | 92 MiB |
-| `<locale>` | fail | 228 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.77 s | 26 MiB | 0.23 s | 108 MiB |
-| `<map>` | fail | 162 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.85 s | 20 MiB | 0.11 s | 94 MiB |
-| `<memory>` | fail | 208 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.12 s | 27 MiB | 0.34 s | 111 MiB |
-| `<memory_resource>` | fail | 163 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.24 s | 23 MiB | 0.25 s | 100 MiB |
-| `<mutex>` | fail | 160 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.96 s | 19 MiB | 0.13 s | 94 MiB |
-| `<new>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.05 s | 80 MiB |
-| `<numbers>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.13 s | 15 MiB | 0.04 s | 83 MiB |
-| `<numeric>` | fail | 31 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.34 s | 17 MiB | 0.05 s | 87 MiB |
-| `<optional>` | fail | 42 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.39 s | 15 MiB | 0.08 s | 87 MiB |
-| `<ostream>` | fail | 205 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.84 s | 24 MiB | 0.22 s | 107 MiB |
-| `<print>` | ok |  |  | ok | 0.05 s | 14 MiB | 0.03 s | 79 MiB |
-| `<queue>` | fail | 157 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.02 s | 21 MiB | 0.15 s | 97 MiB |
-| `<random>` | fail | 281 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 2.49 s | 31 MiB | 0.32 s | 117 MiB |
-| `<ranges>` | fail | 278 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.85 s | 26 MiB | 0.31 s | 119 MiB |
-| `<ratio>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.19 s | 14 MiB | 0.05 s | 83 MiB |
-| `<regex>` | fail | 256 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 3.28 s | 32 MiB | 0.40 s | 122 MiB |
-| `<scoped_allocator>` | fail | 154 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.62 s | 19 MiB | 0.09 s | 91 MiB |
-| `<semaphore>` | fail | 33 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.72 s | 21 MiB | 0.10 s | 93 MiB |
-| `<set>` | fail | 162 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.88 s | 20 MiB | 0.11 s | 94 MiB |
-| `<shared_mutex>` | fail | 34 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.51 s | 18 MiB | 0.07 s | 89 MiB |
-| `<source_location>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 79 MiB |
-| `<span>` | fail | 156 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.65 s | 17 MiB | 0.10 s | 90 MiB |
-| `<spanstream>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.03 s | 79 MiB |
-| `<sstream>` | fail | 207 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.01 s | 25 MiB | 0.24 s | 108 MiB |
-| `<stack>` | fail | 157 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.98 s | 20 MiB | 0.12 s | 94 MiB |
-| `<stacktrace>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.03 s | 79 MiB |
-| `<stdexcept>` | fail | 181 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.46 s | 21 MiB | 0.25 s | 103 MiB |
-| `<stdfloat>` | ok |  |  | ok | 0.05 s | 11 MiB | 0.06 s | 73 MiB |
-| `<stop_token>` | fail | 211 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.82 s | 29 MiB | 0.32 s | 116 MiB |
-| `<streambuf>` | fail | 187 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.56 s | 24 MiB | 0.20 s | 105 MiB |
-| `<string>` | fail | 181 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.32 s | 21 MiB | 0.18 s | 103 MiB |
-| `<string_view>` | fail | 156 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.65 s | 19 MiB | 0.10 s | 94 MiB |
-| `<syncstream>` | fail | 208 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.84 s | 25 MiB | 0.25 s | 108 MiB |
-| `<system_error>` | fail | 182 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.32 s | 23 MiB | 0.19 s | 104 MiB |
-| `<text_encoding>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.03 s | 78 MiB |
-| `<thread>` | fail | 213 | `type_traits:788:3: error: expected unqualified-id` | ok | 2.69 s | 29 MiB | 0.29 s | 116 MiB |
-| `<tuple>` | fail | 153 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.55 s | 18 MiB | 0.08 s | 89 MiB |
-| `<type_traits>` | fail | 5 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.15 s | 15 MiB | 0.04 s | 82 MiB |
-| `<typeindex>` | fail | 27 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.21 s | 15 MiB | 0.08 s | 83 MiB |
-| `<typeinfo>` | ok |  |  | ok | 0.06 s | 14 MiB | 0.04 s | 80 MiB |
-| `<unordered_map>` | fail | 159 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.04 s | 21 MiB | 0.13 s | 96 MiB |
-| `<unordered_set>` | fail | 158 | `type_traits:788:3: error: expected unqualified-id` | ok | 1.06 s | 20 MiB | 0.19 s | 96 MiB |
-| `<utility>` | fail | 29 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.25 s | 15 MiB | 0.08 s | 85 MiB |
-| `<valarray>` | fail | 174 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 1.95 s | 27 MiB | 0.19 s | 105 MiB |
-| `<variant>` | fail | 47 | `type_traits:788:3: error: expected unqualified-id` | ok | 0.41 s | 17 MiB | 0.07 s | 87 MiB |
-| `<vector>` | fail | 157 | `ext/numeric_traits.h:130:3: error: expected unqualified-id` | ok | 0.88 s | 20 MiB | 0.15 s | 96 MiB |
-| `<version>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.03 s | 79 MiB |
+| `<ctgmath>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.28 s | 32 MiB | 0.28 s | 116 MiB |
+| `<ctime>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 80 MiB |
+| `<cuchar>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
+| `<cwchar>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 80 MiB |
+| `<cwctype>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<deque>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.72 s | 20 MiB | 0.09 s | 94 MiB |
+| `<exception>` | ok |  |  | ok | 0.16 s | 16 MiB | 0.03 s | 84 MiB |
+| `<execution>` | fail | 120 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 3.27 s | 37 MiB | 0.35 s | 130 MiB |
+| `<expected>` | ok |  |  | ok | 0.06 s | 13 MiB | 0.04 s | 79 MiB |
+| `<filesystem>` | fail | 139 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.63 s | 31 MiB | 0.29 s | 119 MiB |
+| `<format>` | fail | 155 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.67 s | 32 MiB | 0.41 s | 130 MiB |
+| `<forward_list>` | fail | 58 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.72 s | 20 MiB | 0.12 s | 93 MiB |
+| `<fstream>` | fail | 120 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.72 s | 26 MiB | 0.22 s | 109 MiB |
+| `<functional>` | fail | 68 | `bits/stl_function.h:571:13: error: use of undeclared identifier 'operator>'` | ok | 1.20 s | 22 MiB | 0.15 s | 101 MiB |
+| `<future>` | fail | 139 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 3.02 s | 33 MiB | 0.30 s | 123 MiB |
+| `<generator>` | fail | 151 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.50 s | 26 MiB | 0.22 s | 119 MiB |
+| `<initializer_list>` | ok |  |  | ok | 0.02 s | 13 MiB | 0.02 s | 80 MiB |
+| `<iomanip>` | fail | 130 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 1.74 s | 27 MiB | 0.21 s | 110 MiB |
+| `<ios>` | fail | 104 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.48 s | 25 MiB | 0.18 s | 107 MiB |
+| `<iosfwd>` | ok |  |  | ok | 0.04 s | 14 MiB | 0.02 s | 81 MiB |
+| `<iostream>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.49 s | 25 MiB | 0.18 s | 108 MiB |
+| `<istream>` | fail | 105 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.51 s | 25 MiB | 0.19 s | 108 MiB |
+| `<iterator>` | fail | 86 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 1.27 s | 24 MiB | 0.17 s | 105 MiB |
+| `<latch>` | fail | 2 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.31 s | 18 MiB | 0.05 s | 88 MiB |
+| `<limits>` | ok |  |  | ok | 0.07 s | 14 MiB | 0.02 s | 81 MiB |
+| `<list>` | fail | 60 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.64 s | 19 MiB | 0.08 s | 92 MiB |
+| `<locale>` | fail | 127 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.54 s | 26 MiB | 0.20 s | 108 MiB |
+| `<map>` | fail | 63 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.74 s | 20 MiB | 0.09 s | 94 MiB |
+| `<memory>` | fail | 106 | `bits/allocator.h:191:10: error: use of undeclared identifier '__builtin_mul_overflow'` | ok | 1.88 s | 28 MiB | 0.23 s | 112 MiB |
+| `<memory_resource>` | fail | 61 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.04 s | 23 MiB | 0.14 s | 101 MiB |
+| `<mutex>` | fail | 62 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.78 s | 20 MiB | 0.09 s | 95 MiB |
+| `<new>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
+| `<numbers>` | ok |  |  | ok | 0.11 s | 15 MiB | 0.03 s | 83 MiB |
+| `<numeric>` | fail | 5 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.30 s | 17 MiB | 0.05 s | 87 MiB |
+| `<optional>` | fail | 23 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.30 s | 16 MiB | 0.05 s | 87 MiB |
+| `<ostream>` | fail | 104 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.43 s | 25 MiB | 0.18 s | 107 MiB |
+| `<print>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<queue>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.86 s | 21 MiB | 0.11 s | 97 MiB |
+| `<random>` | fail | 178 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.05 s | 31 MiB | 0.25 s | 117 MiB |
+| `<ranges>` | fail | 151 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.50 s | 26 MiB | 0.22 s | 119 MiB |
+| `<ratio>` | ok |  |  | ok | 0.14 s | 16 MiB | 0.03 s | 83 MiB |
+| `<regex>` | fail | 154 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.77 s | 32 MiB | 0.32 s | 124 MiB |
+| `<scoped_allocator>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.50 s | 19 MiB | 0.07 s | 91 MiB |
+| `<semaphore>` | fail | 24 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 0.61 s | 21 MiB | 0.08 s | 93 MiB |
+| `<set>` | fail | 63 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.73 s | 20 MiB | 0.09 s | 94 MiB |
+| `<shared_mutex>` | fail | 25 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.41 s | 19 MiB | 0.06 s | 90 MiB |
+| `<source_location>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
+| `<span>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.51 s | 18 MiB | 0.07 s | 90 MiB |
+| `<spanstream>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<sstream>` | fail | 106 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.56 s | 26 MiB | 0.20 s | 108 MiB |
+| `<stack>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.74 s | 20 MiB | 0.09 s | 94 MiB |
+| `<stacktrace>` | ok |  |  | ok | 0.03 s | 13 MiB | 0.02 s | 79 MiB |
+| `<stdexcept>` | fail | 80 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.10 s | 23 MiB | 0.14 s | 103 MiB |
+| `<stdfloat>` | ok |  |  | ok | 0.01 s | 12 MiB | 0.02 s | 74 MiB |
+| `<stop_token>` | fail | 108 | `bits/gthr-default.h:676:48: error: use of undeclared identifier '__null'` | ok | 2.38 s | 30 MiB | 0.31 s | 116 MiB |
+| `<streambuf>` | fail | 86 | `bits/c++locale.h:52:14: error: '__typeof' is not supported yet` | ok | 1.33 s | 25 MiB | 0.19 s | 105 MiB |
+| `<string>` | fail | 80 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.28 s | 23 MiB | 0.18 s | 103 MiB |
+| `<string_view>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.64 s | 20 MiB | 0.10 s | 94 MiB |
+| `<syncstream>` | fail | 107 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.77 s | 26 MiB | 0.20 s | 109 MiB |
+| `<system_error>` | fail | 81 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.24 s | 24 MiB | 0.17 s | 104 MiB |
+| `<text_encoding>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 79 MiB |
+| `<thread>` | fail | 110 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 2.29 s | 30 MiB | 0.27 s | 116 MiB |
+| `<tuple>` | fail | 57 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.46 s | 18 MiB | 0.07 s | 90 MiB |
+| `<type_traits>` | ok |  |  | ok | 0.11 s | 15 MiB | 0.03 s | 83 MiB |
+| `<typeindex>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.17 s | 16 MiB | 0.04 s | 84 MiB |
+| `<typeinfo>` | ok |  |  | ok | 0.03 s | 14 MiB | 0.02 s | 80 MiB |
+| `<unordered_map>` | fail | 60 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.89 s | 22 MiB | 0.10 s | 97 MiB |
+| `<unordered_set>` | fail | 59 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.98 s | 21 MiB | 0.12 s | 96 MiB |
+| `<utility>` | fail | 22 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.21 s | 16 MiB | 0.04 s | 85 MiB |
+| `<valarray>` | fail | 73 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 1.80 s | 28 MiB | 0.18 s | 106 MiB |
+| `<variant>` | fail | 26 | `bits/ranges_cmp.h:72:10: error: use of undeclared identifier 'operator<'` | ok | 0.38 s | 17 MiB | 0.06 s | 88 MiB |
+| `<vector>` | fail | 58 | `compare:535:6: error: use of undeclared identifier 'operator<=>'` | ok | 0.84 s | 20 MiB | 0.12 s | 96 MiB |
+| `<version>` | ok |  |  | ok | 0.04 s | 13 MiB | 0.02 s | 79 MiB |
 
 #### Error clusters (`-std=c++20`, generated)
 
-45 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 30; the hand-written triage is in "Clusters" below.
+38 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 30; the hand-written triage is in "Clusters" below.
 
 | # | first | any | cluster | headers (first) |
 |---:|---:|---:|---|---|
-| 1 | 70 | 74 | `expected unqualified-id` | `<algorithm>` `<any>` `<array>` `<atomic>` `<barrier>` `<bit>` `<bitset>` `<ccomplex>` `<charconv>` `<chrono>` `<cmath>` `<compare>` `<complex>` `<concepts>` `<condition_variable>` `<coroutine>` `<ctgmath>` `<deque>` `<exception>` `<execution>` `<filesystem>` `<format>` `<forward_list>` `<fstream>` `<functional>` `<future>` `<generator>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<latch>` `<limits>` `<list>` `<map>` `<memory>` `<memory_resource>` `<mutex>` `<numbers>` `<numeric>` `<optional>` `<ostream>` `<queue>` `<random>` `<ranges>` `<ratio>` `<regex>` `<scoped_allocator>` `<semaphore>` `<set>` `<shared_mutex>` `<span>` `<sstream>` `<stack>` `<stdexcept>` `<stop_token>` `<string>` `<string_view>` `<syncstream>` `<system_error>` `<thread>` `<tuple>` `<type_traits>` `<typeindex>` `<unordered_map>` `<unordered_set>` `<utility>` `<valarray>` `<variant>` `<vector>` |
+| 1 | 62 | 65 | `use of undeclared identifier '…'` | `<algorithm>` `<array>` `<atomic>` `<barrier>` `<bitset>` `<ccomplex>` `<chrono>` `<cmath>` `<compare>` `<complex>` `<condition_variable>` `<coroutine>` `<ctgmath>` `<deque>` `<execution>` `<filesystem>` `<format>` `<forward_list>` `<fstream>` `<functional>` `<future>` `<generator>` `<iomanip>` `<ios>` `<iostream>` `<istream>` `<iterator>` `<latch>` `<list>` `<map>` `<memory>` `<memory_resource>` `<mutex>` `<numeric>` `<optional>` `<ostream>` `<queue>` `<random>` `<ranges>` `<regex>` `<scoped_allocator>` `<semaphore>` `<set>` `<shared_mutex>` `<span>` `<sstream>` `<stack>` `<stdexcept>` `<stop_token>` `<string>` `<string_view>` `<syncstream>` `<system_error>` `<thread>` `<tuple>` `<typeindex>` `<unordered_map>` `<unordered_set>` `<utility>` `<valarray>` `<variant>` `<vector>` |
 | 2 | 3 | 33 | `'…' is not supported yet` | `<codecvt>` `<locale>` `<streambuf>` |
-| 3 | 1 | 73 | `use of undeclared identifier '…'` | `<iomanip>` |
-| 4 | 0 | 73 | `expected '…' after alias declaration` | (e.g. `<algorithm>`) |
-| 5 | 0 | 73 | `unexpected type name '…': expected expression` | (e.g. `<algorithm>`) |
-| 6 | 0 | 62 | `'…' cannot be the name of a variable or data member` | (e.g. `<algorithm>`) |
-| 7 | 0 | 62 | `data member '…' cannot be a member template` | (e.g. `<algorithm>`) |
-| 8 | 0 | 62 | `expected '…' at end of declaration list` | (e.g. `<algorithm>`) |
-| 9 | 0 | 57 | `expected '…' for function-style cast or type construction` | (e.g. `<algorithm>`) |
-| 10 | 0 | 57 | `expected expression` | (e.g. `<algorithm>`) |
-| 11 | 0 | 57 | `no member named '…' in namespace '…'` | (e.g. `<algorithm>`) |
-| 12 | 0 | 54 | `friends can only be classes or functions` | (e.g. `<algorithm>`) |
-| 13 | 0 | 54 | `no member named '…' in the global namespace` | (e.g. `<algorithm>`) |
-| 14 | 0 | 52 | `constexpr variable '…' must be initialized by a constant expression` | (e.g. `<algorithm>`) |
-| 15 | 0 | 52 | `in-class initializer for static data member is not a constant expression` | (e.g. `<algorithm>`) |
-| 16 | 0 | 52 | `static assertion failed due to requirement '…': invalid specialization` | (e.g. `<algorithm>`) |
-| 17 | 0 | 34 | `no matching function for call to '…'` | (e.g. `<barrier>`) |
-| 18 | 0 | 31 | `call to '…' is ambiguous` | (e.g. `<barrier>`) |
-| 19 | 0 | 29 | `type '…' does not provide a call operator` | (e.g. `<barrier>`) |
-| 20 | 0 | 28 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | (e.g. `<barrier>`) |
-| 21 | 0 | 10 | `'…' with a non-bool expression is not supported yet` | (e.g. `<chrono>`) |
-| 22 | 0 | 8 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<chrono>`) |
-| 23 | 0 | 7 | `redefinition of '…' as different kind of symbol` | (e.g. `<chrono>`) |
-| 24 | 0 | 6 | `'…' is a protected member of '…' (aka '…')` | (e.g. `<chrono>`) |
-| 25 | 0 | 4 | `friend declaration of '…' does not match any declaration in namespace '…'` | (e.g. `<chrono>`) |
-| 26 | 0 | 4 | `kiln: not yet implemented: an atomic constraint that stays value-dependent after substitution` | (e.g. `<chrono>`) |
-| 27 | 0 | 4 | `no type named '…' in '…'` | (e.g. `<filesystem>`) |
-| 28 | 0 | 4 | `out-of-line definition of '…' does not match any declaration in '…'` | (e.g. `<map>`) |
-| 29 | 0 | 3 | `expected '…'` | (e.g. `<chrono>`) |
-| 30 | 0 | 2 | `call to deleted constructor of '…' (aka '…')` | (e.g. `<condition_variable>`) |
+| 3 | 0 | 62 | `'…' cannot be the name of a variable or data member` | (e.g. `<algorithm>`) |
+| 4 | 0 | 62 | `data member '…' cannot be a member template` | (e.g. `<algorithm>`) |
+| 5 | 0 | 62 | `expected '…' at end of declaration list` | (e.g. `<algorithm>`) |
+| 6 | 0 | 54 | `friends can only be classes or functions` | (e.g. `<algorithm>`) |
+| 7 | 0 | 52 | `constexpr variable '…' must be initialized by a constant expression` | (e.g. `<algorithm>`) |
+| 8 | 0 | 52 | `in-class initializer for static data member is not a constant expression` | (e.g. `<algorithm>`) |
+| 9 | 0 | 33 | `no matching function for call to '…'` | (e.g. `<barrier>`) |
+| 10 | 0 | 31 | `call to '…' is ambiguous` | (e.g. `<barrier>`) |
+| 11 | 0 | 29 | `type '…' does not provide a call operator` | (e.g. `<barrier>`) |
+| 12 | 0 | 28 | `explicit instantiation of '…' does not refer to a function template, variable template, member function, member class, or static data member` | (e.g. `<barrier>`) |
+| 13 | 0 | 10 | `'…' with a non-bool expression is not supported yet` | (e.g. `<chrono>`) |
+| 14 | 0 | 8 | `no matching constructor for initialization of '…' (aka '…')` | (e.g. `<chrono>`) |
+| 15 | 0 | 7 | `redefinition of '…' as different kind of symbol` | (e.g. `<chrono>`) |
+| 16 | 0 | 6 | `'…' is a protected member of '…' (aka '…')` | (e.g. `<chrono>`) |
+| 17 | 0 | 4 | `friend declaration of '…' does not match any declaration in namespace '…'` | (e.g. `<chrono>`) |
+| 18 | 0 | 4 | `kiln: not yet implemented: an atomic constraint that stays value-dependent after substitution` | (e.g. `<chrono>`) |
+| 19 | 0 | 4 | `no type named '…' in '…'` | (e.g. `<filesystem>`) |
+| 20 | 0 | 4 | `out-of-line definition of '…' does not match any declaration in '…'` | (e.g. `<map>`) |
+| 21 | 0 | 3 | `expected '…'` | (e.g. `<chrono>`) |
+| 22 | 0 | 2 | `call to deleted constructor of '…' (aka '…')` | (e.g. `<condition_variable>`) |
+| 23 | 0 | 2 | `calling a private constructor of class '…' (aka '…')` | (e.g. `<chrono>`) |
+| 24 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
+| 25 | 0 | 2 | `constraints not satisfied for class template '…' [with _It = iterator, _Sent = iterator, _Kind = N]` | (e.g. `<chrono>`) |
+| 26 | 0 | 2 | `destructor type '…' (aka '…') in object destruction expression does not match the type '…' (aka '…') of the object being destroyed` | (e.g. `<condition_variable>`) |
+| 27 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
+| 28 | 0 | 2 | `no matching function for call to object of type '…' (aka '…')` | (e.g. `<chrono>`) |
+| 29 | 0 | 2 | `no viable conversion from '…' (aka '…') to '…' (aka '…')` | (e.g. `<chrono>`) |
+| 30 | 0 | 2 | `pack expansions of braced lists is not supported yet` | (e.g. `<future>`) |
 
 <!-- libstdcxx:c++20:end -->
 
@@ -365,8 +365,8 @@ absolute numbers.
 Triage of the c++26 run. The c++20 run has the same failures; its five extra
 passes are `<expected>`, `<print>`, `<spanstream>`, `<stacktrace>` and
 `<text_encoding>`, which are empty below C++23. Method: every
-header was compiled with `-ferror-limit=0`. Clusters A-C hide nearly
-everything behind them, so the header was compiled a second time with
+header was compiled with `-ferror-limit=0`. Clusters C and B (and the
+`__extension__` forms) hide much of what follows them, so the header was compiled a second time with
 `-D__extension__= -D__null=0L -D__typeof=decltype` to see what comes next.
 Each error was then mapped to a root cause; recognisable cascades (for
 example a member dropped by D and then not found) count against their cause.
@@ -378,41 +378,35 @@ visible yet. Every repro is `xfail(kiln)` and passes under clang++-19.
 
 | # | Cluster | Blocks | +N (cum) | Repro (`tests/conformance/…`) |
 |---|---------|-------:|---------:|-------------------------------|
-| A | `__extension__` before a template declaration | 79 | +9 (9) | `ext.gnu.extension/libstdcxx-extension-template.cpp` |
-| E | unqualified dependent call to an operator-function-id | 68 | +2 (11) | `temp.dep.candidate/libstdcxx-dependent-operator-call.cpp` |
-| D | attribute-specifier after a declarator-id | 66 | +7 (18) | `dcl.attr/libstdcxx-attr-after-declarator-id.cpp` |
-| G | `__int128` in-class static initializer not constant | 56 | +5 (23) | `class.static.data/libstdcxx-int128-in-class-init.cpp` |
-| F | GNU builtins (`__builtin_mul_overflow`, `alloca`, `vsnprintf`, complex) | 49 | +6 (29) | `ext.gnu.builtins/libstdcxx-gnu-builtins.cpp` |
-| C | `__null` | 37 | +3 (32) | `ext.gnu.null/libstdcxx-null.cpp` |
-| H | alias-template redeclaration not equivalent (`swap` ambiguous) | 34 | +2 (34) | `temp.over.link/libstdcxx-alias-equivalent-redecl.cpp` |
-| J | `explicit(expr)` with a class-type expression | 29 | +2 (36) | `dcl.fct.spec/libstdcxx-explicit-contextual-bool.cpp` |
-| S | out-of-line member with a current-instantiation qualified return type | 3 | +2 (38) | `temp.mem/libstdcxx-out-of-line-current-inst-return.cpp` |
-| N | constrained partial specializations of member class templates | 27 | +1 (39) | `temp.spec.partial.member/libstdcxx-constrained-member-partial-spec.cpp` |
-| U | deduction from a pointer to a noexcept function (`__stoa`) | 36 | +0 (39) | `temp.deduct.call/libstdcxx-deduce-noexcept-fnptr.cpp` |
-| B | `__typeof` | 36 | +3 (42) | `ext.gnu.typeof/libstdcxx-typeof.cpp` |
-| I | explicit instantiation omitting the template's `throw()` | 31 | +4 (46) | `temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp` |
-| L | protected static member through a dependent base | 25 | +1 (47) | `class.protected/libstdcxx-protected-static-dependent-base.cpp` |
-| K | qualified friend function template in a class template | 27 | +0 (47) | `temp.friend/libstdcxx-qualified-friend-in-class-template.cpp` |
-| M | `this->member_template<…>` not parsed as a template | 27 | +1 (48) | `temp.names/libstdcxx-this-member-template.cpp` |
-| P | `_Float16` | 24 | +0 (48) | `basic.extended.fp/libstdcxx-float16.cpp` |
-| O | pseudo-destructor call on a scalar treated as potentially-throwing | 24 | +14 (62) | `expr.prim.id.dtor/libstdcxx-pseudo-destructor-noexcept.cpp` |
-| R | hidden friend vs using-declaration (`swap` redefinition) | 7 | +2 (64) | `namespace.udecl/libstdcxx-hidden-friend-vs-using.cpp` |
-| Q | copy-init of a local class in a member template | 7 | +1 (65) | `class.local/libstdcxx-local-class-copy.cpp` |
-| T | out-of-line member of a constrained partial specialization | 2 | +0 (65) | `temp.mem.class/libstdcxx-constrained-partial-spec-member-def.cpp` |
+| E | unqualified dependent call to an operator-function-id | 68 | +2 (2) | `temp.dep.candidate/libstdcxx-dependent-operator-call.cpp` |
+| D | attribute-specifier after a declarator-id | 66 | +7 (9) | `dcl.attr/libstdcxx-attr-after-declarator-id.cpp` |
+| G | `__int128` in-class static initializer not constant | 56 | +5 (14) | `class.static.data/libstdcxx-int128-in-class-init.cpp` |
+| F | GNU builtins (`__builtin_mul_overflow`, `alloca`, `vsnprintf`) | 49 | +6 (20) | `ext.gnu.builtins/libstdcxx-gnu-builtins.cpp` |
+| C | `__null` | 37 | +3 (23) | `ext.gnu.null/libstdcxx-null.cpp` |
+| H | alias-template redeclaration not equivalent (`swap` ambiguous) | 34 | +2 (25) | `temp.over.link/libstdcxx-alias-equivalent-redecl.cpp` |
+| J | `explicit(expr)` with a class-type expression | 29 | +2 (27) | `dcl.fct.spec/libstdcxx-explicit-contextual-bool.cpp` |
+| S | out-of-line member with a current-instantiation qualified return type | 3 | +2 (29) | `temp.mem/libstdcxx-out-of-line-current-inst-return.cpp` |
+| N | constrained partial specializations of member class templates | 27 | +1 (30) | `temp.spec.partial.member/libstdcxx-constrained-member-partial-spec.cpp` |
+| B | `__typeof` | 36 | +0 (30) | `ext.gnu.typeof/libstdcxx-typeof.cpp` |
+| U | deduction from a pointer to a noexcept function (`__stoa`) | 36 | +3 (33) | `temp.deduct.call/libstdcxx-deduce-noexcept-fnptr.cpp` |
+| I | explicit instantiation omitting the template's `throw()` | 31 | +4 (37) | `temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp` |
+| L | protected static member through a dependent base | 25 | +1 (38) | `class.protected/libstdcxx-protected-static-dependent-base.cpp` |
+| M | `this->member_template<…>` not parsed as a template | 27 | +0 (38) | `temp.names/libstdcxx-this-member-template.cpp` |
+| K | qualified friend function template in a class template | 27 | +1 (39) | `temp.friend/libstdcxx-qualified-friend-in-class-template.cpp` |
+| P | `_Float16` | 24 | +0 (39) | `basic.extended.fp/libstdcxx-float16.cpp` |
+| O | pseudo-destructor call on a scalar treated as potentially-throwing | 24 | +13 (52) | `expr.prim.id.dtor/libstdcxx-pseudo-destructor-noexcept.cpp` |
+| R | hidden friend vs using-declaration (`swap` redefinition) | 7 | +2 (54) | `namespace.udecl/libstdcxx-hidden-friend-vs-using.cpp` |
+| Q | copy-init of a local class in a member template | 7 | +1 (55) | `class.local/libstdcxx-local-class-copy.cpp` |
+| A | `__extension__` before an asm-declaration | 1 | +1 (56) | `ext.gnu.extension/libstdcxx-extension-asm.cpp` |
+| T | out-of-line member of a constrained partial specialization | 2 | +0 (56) | `temp.mem.class/libstdcxx-constrained-partial-spec-member-def.cpp` |
 
-With every listed cluster fixed, 30 + 65 = 95 of 109 headers would be clean.
+With every listed cluster fixed, 39 + 56 = 95 of 109 headers would be clean.
 The other 14 (bitset condition_variable execution filesystem functional future
 generator memory mutex random ranges regex stacktrace valarray) also need
 the long tail below.
 
 ### Per-cluster detail
 
-- **A — `__extension__` template.** Diagnostic: `expected unqualified-id` at
-  type_traits:788, ext/numeric_traits.h:130, limits:1658 (from
-  `_GLIBCXX_INT_N_TRAITS` and the `__int128` specializations). The only
-  error for 9 headers (type_traits, limits, concepts, ...). WP: accept
-  `__extension__` before any declaration (explicit specialization, alias,
-  variable and member templates) in the parser's GNU-extension path.
 - **E — dependent `operator<=>(a, b)`.** `use of undeclared identifier
   'operator<=>'` at compare:535 (also `operator<` ranges_cmp.h:72,
   `operator>` stl_function.h:571). WP: treat an unqualified
@@ -436,7 +430,8 @@ the long tail below.
   basic_string.h `__to_xstring`), `__builtin_cabs`/`csqrt`/`cexp`/... with
   f/l variants (complex, ccomplex, ctgmath). WP: add these builtins to the
   builtin table with sema + Oven support for `__builtin_*_overflow`, and
-  lowering to llvm intrinsics/libcalls.
+  lowering to llvm intrinsics/libcalls. (The C99 complex builtins
+  `__builtin_cabs`/`csqrt`/... that <complex> needed landed in WP-237.)
 - **C — `__null`.** `use of undeclared identifier '__null'` at
   gthr-default.h:676. WP: `__null` as a null pointer constant of type
   `long` (LP64) / `int`, with the clang `-Wnull-arithmetic` note optional.
@@ -497,7 +492,7 @@ the long tail below.
   `contiguous_iterator<const char*>` fails and `span`, `format`,
   `basic_string_view` ranges and `subrange` cascade (`does not satisfy
   'destructible'`). WP: a pseudo-destructor call is non-throwing
-  ([expr.unary.noexcept]); this one fix makes 14 more headers clean once
+  ([expr.unary.noexcept]); this one fix makes 13 more headers clean once
   P is fixed.
 - **R — hidden friend vs using.** `redefinition of 'swap' as different kind
   of symbol` at stop_token:95 against `using __exception_ptr::swap;`
@@ -508,6 +503,11 @@ the long tail below.
   '_Iter'` at shared_ptr_base.h:789. WP: implicit special members of a
   local class declared in a member function template of a class template
   (instantiated with the enclosing function).
+- **A — `__extension__` asm-declaration.** `expected unqualified-id` at
+  iostream:82 (`__extension__ __asm (".globl ...")`). WP-237 made
+  `__extension__` work before templates (it had been the first error of 79
+  headers); the asm-declaration form remains. WP: accept `__extension__`
+  before an asm-declaration (a one-line parser change).
 - **T — out-of-line member of a constrained partial spec.** `requires
   clause differs in template redeclaration` at ranges:6380
   (`chunk_view<_Vp>::_Iterator`). WP: match the template-head and
