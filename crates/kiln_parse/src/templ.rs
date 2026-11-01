@@ -146,7 +146,11 @@ impl Parser<'_, '_> {
         if ctx == DeclaratorContext::Member {
             self.parse_member_declaration();
         } else {
+            // [temp.spec.general]/6: its decl-specifiers and declarator
+            // are not access checked.
+            self.s.exempt_next_delayed_access(true);
             self.parse_simple_declaration(DeclaratorContext::File, true);
+            self.s.exempt_next_delayed_access(false);
         }
     }
 

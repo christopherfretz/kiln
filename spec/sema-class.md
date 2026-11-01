@@ -169,7 +169,14 @@ function or class is its own context (so a befriended `A::I g(A::I)` or
 befriending class. Only checks made in the context the delay point opened in
 are queued: a class or function body (or lambda) inside the declaration checks
 at once (clang's `pushUndelayed`). Member declarations are not delayed
-(clang 19 rejects `friend A::I g(A::I);` in a class `A` does not befriend). In
+(clang 19 rejects `friend A::I g(A::I);` in a class `A` does not befriend).
+The delay point of an explicit instantiation's or explicit specialization's
+declaration drops its checks instead ([temp.spec.general]/6,
+`exempt_next_delayed_access`); its function body, initializer, base-clause and
+member-specification are checked as usual. The template arguments of a
+class-head `X<args>` that declares or defines a specialization (partial or
+explicit) are dropped too ([temp.spec.partial.general]/10); a reference's join
+the enclosing delay point (`end_delayed_access_to_enclosing`). In
 template patterns: at instantiation (WP-070, §4.8 of sema-templates.md); in
 SFINAE contexts: substitution failure (S3T). No result cache in M3 (Q6).
 

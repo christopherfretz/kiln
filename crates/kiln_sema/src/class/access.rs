@@ -384,7 +384,7 @@ impl Sema<'_, '_> {
         // Delayed only while still in the declaration's own context: a
         // class or function body (or lambda) inside the delayed region is
         // its own context (clang's `pushUndelayed`).
-        if self.delayed_access_depth.last().is_some_and(|&(_, ctx)| ctx == self.ctx) {
+        if self.delayed_access_depth.last().is_some_and(|&(_, ctx, _)| ctx == self.ctx) {
             self.delayed_access.push(check);
             return true;
         }
@@ -988,7 +988,19 @@ impl Sema<'_, '_> {
     /// to ([class.access]/7, spec/sema-class.md §2.4). For the parser,
     /// around a member declaration's decl-specifiers and declarator.
     pub fn begin_delayed_access(&mut self) {
-        self.delayed_access_depth.push((self.delayed_access.len(), self.ctx));
+        let exempt = std::mem::take(&mut self.exempt_next_delay);
+        self.delayed_access_depth.push((self.delayed_access.len(), self.ctx, exempt));
+    }
+
+    /// Makes the next delay point drop its checks instead of running
+    /// them: the names in the decl-specifiers and declarator of an
+    /// explicit instantiation or explicit specialization are not access
+    /// checked ([temp.spec.general]/6; clang's `SuppressAccessChecks`).
+    /// Its function body, initializer, base-clause and
+    /// member-specification are checked as usual. `false` withdraws an
+    /// unused request.
+    pub fn exempt_next_delayed_access(&mut self, exempt: bool) {
+        self.exempt_next_delay = exempt;
     }
 
     /// The number of open delay points, for
@@ -1006,14 +1018,33 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Closes the delay points opened above `level` without running
+    /// their checks: `drop` discards them (the template arguments of a
+    /// partial or explicit specialization's class-head; [temp.spec.general]/6,
+    /// [temp.spec.partial.general]/10); otherwise they join the enclosing
+    /// delay point (clang's `redelay`), or run now if there is none.
+    pub fn end_delayed_access_to_enclosing(&mut self, level: usize, drop: bool) {
+        let mut start = None;
+        while self.delayed_access_depth.len() > level {
+            start = self.delayed_access_depth.pop().map(|(s, _, _)| s);
+        }
+        let Some(start) = start else { return };
+        if drop {
+            self.delayed_access.truncate(start.min(self.delayed_access.len()));
+        } else if self.delayed_access_depth.is_empty() {
+            self.delayed_access_depth.push((start, self.ctx, false));
+            self.end_delayed_access(None);
+        }
+    }
+
     /// Closes the innermost delay point, running its checks in the
     /// context of `decl` (the declaration they belong to; `None` runs
     /// them in the current context).
     pub fn end_delayed_access(&mut self, decl: Option<DeclId>) {
-        let Some((start, _)) = self.delayed_access_depth.pop() else { return };
+        let Some((start, _, exempt)) = self.delayed_access_depth.pop() else { return };
         let start = start.min(self.delayed_access.len());
         let checks: Vec<AccessCheck> = self.delayed_access.drain(start..).collect();
-        if checks.is_empty() {
+        if checks.is_empty() || exempt {
             return;
         }
         let saved = self.ctx;

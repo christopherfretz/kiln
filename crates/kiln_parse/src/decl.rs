@@ -1072,13 +1072,24 @@ impl Parser<'_, '_> {
         ctx: DeclaratorContext,
     ) {
         let _ = ctx;
-        let Some((args, l_angle, r_angle)) = self.parse_template_arg_list() else {
+        // The template arguments of a partial or explicit specialization's
+        // class-head are not access checked ([temp.spec.partial.general]/10,
+        // [temp.spec.general]/6); a reference's join the declaration's.
+        let level = self.s.delayed_access_level();
+        self.s.begin_delayed_access();
+        let parsed = self.parse_template_arg_list().map(|a| {
+            let final_loc = self.parse_class_virt_specifiers();
+            (a, final_loc, self.tag_use(ds, true, final_loc))
+        });
+        let declares = parsed
+            .as_ref()
+            .is_some_and(|p| matches!(p.2, TagUse::Definition | TagUse::Declaration));
+        self.s.end_delayed_access_to_enclosing(level, declares);
+        let Some(((args, l_angle, r_angle), final_loc, use_)) = parsed else {
             ds.invalid = true;
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
         };
-        let final_loc = self.parse_class_virt_specifiers();
-        let use_ = self.tag_use(ds, true, final_loc);
         let r = self.s.act_on_class_template_id_tag(
             keyword,
             tmpl,

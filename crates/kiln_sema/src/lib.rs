@@ -210,9 +210,13 @@ pub struct Sema<'a, 'sm> {
     /// Access checks delayed until their declaration exists
     /// (spec/sema-class.md §2.4).
     pub(crate) delayed_access: Vec<class::AccessCheck>,
-    /// `delayed_access.len()` and the context at each open delay point,
+    /// `delayed_access.len()`, the context and whether the checks are
+    /// dropped ([temp.spec.general]/6) at each open delay point,
     /// innermost last.
-    pub(crate) delayed_access_depth: Vec<(usize, DeclId)>,
+    pub(crate) delayed_access_depth: Vec<(usize, DeclId, bool)>,
+    /// The next delay point drops its checks (the declaration of an
+    /// explicit instantiation or specialization; [`Sema::exempt_next_delayed_access`]).
+    pub(crate) exempt_next_delay: bool,
     /// Access checks in a class template pattern (or partial
     /// specialization) that passed only because the class may instantiate
     /// to a befriended specialization, keyed by the pattern's first
@@ -412,6 +416,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             special: class::SpecialState::default(),
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
+            exempt_next_delay: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),
