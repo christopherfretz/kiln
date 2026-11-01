@@ -294,8 +294,12 @@ declaration ([dcl.meaning.general]/2). Tests: `expr.eq/`,
 The parser (WP-065) saves the tokens of member function bodies (with
 ctor-initializers), default arguments, *noexcept-specifier*s, NSDMIs and
 contract assertions. Until replay: parameters carry `ParamData` flag
-`DEFAULT_ARG_PENDING`, methods have `ExcSpec::Deferred(self)` and sit in
-`Sema.unparsed_exc`, fields have NSDMI style bits but `init == None`. After the
+`DEFAULT_ARG_PENDING` (and sit in `Sema.unparsed_default_args` with the
+argument's location: a call that uses one gives `use of default argument
+to function 'f' that is declared later in class 'S'` + `default argument
+declared here`, clang `CheckCXXDefaultArgExpr`; WP-269), methods and
+unqualified friends have `ExcSpec::Deferred(self)` and sit in
+`Sema.unparsed_exc` (sema.md §4.7), fields have NSDMI style bits but `init == None`. After the
 outermost class's `}` the parser replays in clang's order
 (`ParseLexedMethodDeclarations`, `ParseLexedMemberInitializers`,
 `ParseLexedMethodDefs`), each phase over the class and its nested classes in
@@ -1365,7 +1369,9 @@ against `-complete` block by block, in order (abi.md §8.4).
 | `cleanup: CleanupState` | §5.3 |
 | `extend_collector: Option<Vec<ExprId>>` | §5.4 P2718 |
 | `unparsed_exc: FxHashSet<DeclId>` | §2.7 |
-| `uninstantiated_exc: FxHashMap<DeclId, DeclId>` (WP-112) | members of specializations whose dependent `noexcept(expr)` is instantiated when needed: first decl → pattern (sema.md §4.7) |
+| `uninstantiated_exc: FxHashMap<DeclId, DeclId>` (WP-112) | members, friends and function template specializations whose dependent `noexcept(expr)` is instantiated when needed: first decl → pattern (sema.md §4.7) |
+| `delayed_exc_equiv: Vec<(DeclId, DeclId)>` (WP-269) | redeclarations whose spec was unknown when declared, paired with the previous declaration (sema.md §4.7) |
+| `unparsed_default_args: FxHashMap<DeclId, Loc>` (WP-269) | §2.7 |
 | `special: SpecialState` (WP-067a) | pending `= default` checks, pending deleted uses, lazily found deleted implicit members, the definition bits of classes at `}`, fields with an NSDMI (§4) |
 | `FnState.this_ty`, `this_override` | §2.5 |
 | `Scope.nrvo` | §5.5 |
