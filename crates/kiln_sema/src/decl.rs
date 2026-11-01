@@ -3852,6 +3852,7 @@ impl Sema<'_, '_> {
             if let Some(p) = prev {
                 if use_ == TagUse::Reference {
                     self.mark_type_referenced(p);
+                    self.check_name_access_as(n, qualifier, p, nloc, LookupKind::Tag);
                     return p;
                 }
                 if use_ == TagUse::Definition {
@@ -4907,20 +4908,25 @@ impl Sema<'_, '_> {
         })
     }
 
-    /// What an identifier names here (for parser decisions,
-    /// [basic.lookup.unqual]); `qualifier` is the context named by a
-    /// preceding nested-name-specifier.
-    pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
-        // A typedef qualifier names its class or enumeration, as in
-        // `nested_name_from_found` ([basic.lookup.qual.general]/1).
-        let qualifier = qualifier.map(|q| match self.kind_of(q) {
+    /// The context a qualifier `q` given to [`Sema::classify_name`] is
+    /// looked up in: a typedef qualifier names its class or enumeration,
+    /// as in `nested_name_from_found` ([basic.lookup.qual.general]/1).
+    pub(crate) fn type_name_qualifier(&self, q: DeclId) -> DeclId {
+        match self.kind_of(q) {
             DeclKind::Typedef | DeclKind::TypeAlias if !self.is_dependent_ctx(q) => {
                 let ty = self.ast.decls.get(q).ty().unwrap_or(QualType::ERROR);
                 let r = self.ast.types.as_record(ty).or_else(|| self.ast.types.as_enum(ty));
                 r.map_or(q, |r| self.ast.definition(r).unwrap_or(r))
             }
             _ => q,
-        });
+        }
+    }
+
+    /// What an identifier names here (for parser decisions,
+    /// [basic.lookup.unqual]); `qualifier` is the context named by a
+    /// preceding nested-name-specifier.
+    pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        let qualifier = qualifier.map(|q| self.type_name_qualifier(q));
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::ClassTemplate
         {
@@ -5094,6 +5100,11 @@ impl Sema<'_, '_> {
                 None
             }
         };
+        // [class.access]/4: a class member named before `::` is
+        // access-checked like any other name.
+        if ctx.is_some() {
+            self.check_found_access(found, loc);
+        }
         ctx.map(|c| (c, d))
     }
 

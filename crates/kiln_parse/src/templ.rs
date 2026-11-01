@@ -110,6 +110,14 @@ impl Parser<'_, '_> {
             self.skip_unsupported_declaration();
             return;
         }
+        // [class.access]/7: the names in a namespace-scope template head
+        // are checked in the context of the declared entity
+        // (`template<A::I> struct A::Q`), closed by the declaration.
+        let level = self.s.delayed_access_level();
+        let delays = ctx != DeclaratorContext::Member && self.template_delay_level.is_none();
+        if delays {
+            self.s.begin_delayed_access();
+        }
         let l_angle = self.bump().span.lo;
         self.s.act_on_template_params_start(loc, l_angle);
         let r_angle = self.parse_template_param_list_tail();
@@ -121,7 +129,14 @@ impl Parser<'_, '_> {
         };
         let head = self.s.act_template_head(requires, r_angle);
         self.trace(|_| "template_head".to_owned());
+        if delays {
+            self.template_delay_level = Some(level);
+        }
         self.parse_templated_declaration(ctx, head, loc);
+        if delays {
+            self.template_delay_level = None;
+            self.s.end_delayed_access_to(level, None);
+        }
         self.s.act_on_finish_template_decl();
     }
 
@@ -806,6 +821,7 @@ impl Parser<'_, '_> {
             return None;
         };
         self.s.mark_type_referenced(d);
+        self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
         let kind = self.s.ast.decls.get(d).kind();
         let named = if kiln_sema::lookup::is_tag_kind(kind) { self.s.tag_type(d) } else { t };
         // The qualifier as written is sugar: `'S::P':'int *'`.

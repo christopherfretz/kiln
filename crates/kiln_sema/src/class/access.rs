@@ -10,9 +10,11 @@ use kiln_ast::decl::{Access, DeclKind, FriendKind};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
+use kiln_source::symbol::Symbol;
 
 use super::AccessCheck;
 use crate::Sema;
+use crate::lookup::LookupKind;
 use crate::conv::bases::{BasePath, base_paths, is_derived_from, same_class};
 
 /// Restrictiveness: public < protected < private < none (clang's
@@ -368,17 +370,123 @@ impl Sema<'_, '_> {
     ) -> bool {
         // A public member named in its own class is accessible; through a
         // base its access is that along the path ([class.access.base]/1).
-        let decl_access = self.ast.decls.get(found).misc().access();
-        let own_class = self.declaring_class(found).is_some_and(|c| same_class(self, c, naming));
+        let (decl_access, own_class) = match self.injected_class(found, naming) {
+            Some(c) => (Access::Public, same_class(self, c, naming)),
+            None => (
+                self.ast.decls.get(found).misc().access(),
+                self.declaring_class(found).is_some_and(|c| same_class(self, c, naming)),
+            ),
+        };
         if decl_access == Access::None || decl_access == Access::Public && own_class {
             return true;
         }
         let check = AccessCheck { member: found, naming_class: naming, object_class: object, loc };
-        if !self.delayed_access_depth.is_empty() {
+        // Delayed only while still in the declaration's own context: a
+        // class or function body (or lambda) inside the delayed region is
+        // its own context (clang's `pushUndelayed`).
+        if self.delayed_access_depth.last().is_some_and(|&(_, ctx)| ctx == self.ctx) {
             self.delayed_access.push(check);
             return true;
         }
         self.run_access_check(check)
+    }
+
+    /// The access check of a name lookup `found` found by class member
+    /// lookup ([class.access]/4: every name, including type names,
+    /// nested-name-specifier components and template names), at `loc`.
+    /// Nothing for a name not found in a class.
+    pub(crate) fn check_found_access(&mut self, found: &crate::lookup::Found, loc: Loc) -> bool {
+        let Some(naming) = found.naming else { return true };
+        let Some(&via) = found.found.first().or(found.decls.first()) else { return true };
+        self.check_member_access(via, naming, None, loc)
+    }
+
+    /// The access check of a type or template name `name` that
+    /// [`Sema::classify_name`] classified as declaration `d` (after the
+    /// nested-name-specifier naming `qualifier`, if any), when the parser
+    /// commits to it ([class.access]/4; spec/sema-class.md §2.4). The
+    /// lookup is redone only for a class member: it gives the naming
+    /// class and the using-shadow the name was found through.
+    pub fn check_type_name_access(
+        &mut self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        d: DeclId,
+        loc: Loc,
+    ) {
+        self.check_name_access_as(name, qualifier, d, loc, LookupKind::Ordinary);
+    }
+
+    /// [`Sema::check_type_name_access`] for a name `d` found by a lookup
+    /// of kind `kind` (`Tag` for an elaborated-type-specifier).
+    pub(crate) fn check_name_access_as(
+        &mut self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        d: DeclId,
+        loc: Loc,
+        kind: LookupKind,
+    ) {
+        // A non-member is checked only as an injected-class-name found
+        // in a class scope (through a base).
+        if self.declaring_class(d).is_none()
+            && (self.kind_of(d) != DeclKind::CXXRecord || !self.in_class_scope(qualifier))
+        {
+            return;
+        }
+        let found = match qualifier {
+            Some(q) => {
+                let q = self.type_name_qualifier(q);
+                if self.is_dependent_ctx(q) {
+                    return;
+                }
+                self.lookup_qualified(q, name, kind)
+            }
+            None => self.lookup_name(name, kind),
+        };
+        if found.decls.first().is_some_and(|&x| self.ast.first(x) == self.ast.first(d)) {
+            self.check_found_access(&found, loc);
+        }
+    }
+
+    /// The class whose injected-class-name `found` is, when it was found
+    /// by a lookup in (a class derived from) `naming`: a public member of
+    /// that class ([class.pre]/2), not of the class enclosing it.
+    fn injected_class(&self, found: DeclId, naming: DeclId) -> Option<DeclId> {
+        if self.kind_of(found) != DeclKind::CXXRecord {
+            return None;
+        }
+        let def = self.ast.definition(found)?;
+        let naming = self.ast.definition(naming).unwrap_or(naming);
+        self.derived_inclusive(naming, def).then_some(def)
+    }
+
+    /// Whether a lookup qualified by `qualifier` (or unqualified, from
+    /// the current context) searches a class scope.
+    fn in_class_scope(&self, qualifier: Option<DeclId>) -> bool {
+        if let Some(q) = qualifier {
+            return self.kind_of(self.type_name_qualifier(q)) == DeclKind::CXXRecord;
+        }
+        let mut cur = Some(self.ctx);
+        for _ in 0..256 {
+            let Some(c) = cur else { return false };
+            if self.kind_of(c) == DeclKind::CXXRecord {
+                return true;
+            }
+            cur = self.ast.decls.get(c).ctx();
+        }
+        false
+    }
+
+    fn injected_target(&self, found: DeclId, naming: DeclId) -> Option<Target> {
+        let declaring = self.injected_class(found, naming)?;
+        Some(Target {
+            member: Some(found),
+            decl_access: Access::Public,
+            declaring,
+            instance_member: false,
+            object: None,
+        })
     }
 
     fn member_target(&self, found: DeclId, object: Option<DeclId>) -> Option<Target> {
@@ -415,7 +523,10 @@ impl Sema<'_, '_> {
     }
 
     fn run_access_check(&mut self, c: AccessCheck) -> bool {
-        let Some(t) = self.member_target(c.member, c.object_class) else { return true };
+        let t = self.injected_target(c.member, c.naming_class);
+        let Some(t) = t.or_else(|| self.member_target(c.member, c.object_class)) else {
+            return true;
+        };
         let naming = self.ast.definition(c.naming_class).unwrap_or(c.naming_class);
         let ec = self.effective_context();
         let unpriv = self.unprivileged_access(naming, t.declaring, t.decl_access);
@@ -795,14 +906,29 @@ impl Sema<'_, '_> {
     /// to ([class.access]/7, spec/sema-class.md §2.4). For the parser,
     /// around a member declaration's decl-specifiers and declarator.
     pub fn begin_delayed_access(&mut self) {
-        self.delayed_access_depth.push(self.delayed_access.len());
+        self.delayed_access_depth.push((self.delayed_access.len(), self.ctx));
+    }
+
+    /// The number of open delay points, for
+    /// [`Sema::end_delayed_access_to`].
+    pub fn delayed_access_level(&self) -> usize {
+        self.delayed_access_depth.len()
+    }
+
+    /// Closes the delay points opened above `level` (none if they were
+    /// already closed), running their checks as
+    /// [`Sema::end_delayed_access`] does.
+    pub fn end_delayed_access_to(&mut self, level: usize, decl: Option<DeclId>) {
+        while self.delayed_access_depth.len() > level {
+            self.end_delayed_access(decl);
+        }
     }
 
     /// Closes the innermost delay point, running its checks in the
     /// context of `decl` (the declaration they belong to; `None` runs
     /// them in the current context).
     pub fn end_delayed_access(&mut self, decl: Option<DeclId>) {
-        let Some(start) = self.delayed_access_depth.pop() else { return };
+        let Some((start, _)) = self.delayed_access_depth.pop() else { return };
         let start = start.min(self.delayed_access.len());
         let checks: Vec<AccessCheck> = self.delayed_access.drain(start..).collect();
         if checks.is_empty() {
@@ -829,8 +955,13 @@ impl Sema<'_, '_> {
         if n.kind() == DeclKind::Friend {
             return n.ctx().unwrap_or(self.ctx);
         }
-        if n.kind().is_function() {
+        if n.kind().is_function() || n.kind() == DeclKind::CXXRecord {
             return d;
+        }
+        if kiln_ast::templates::is_template_kind(n.kind())
+            && let Some(p) = self.pattern_of(d)
+        {
+            return self.access_context_of(p);
         }
         n.ctx().unwrap_or(self.ctx)
     }

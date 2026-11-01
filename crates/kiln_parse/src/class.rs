@@ -1864,6 +1864,7 @@ impl Parser<'_, '_> {
             self.s.error(DiagId::parse_expected_class_name, id_loc);
             return None;
         };
+        self.s.check_type_name_access(name, q, d, id_loc);
         let ty = self.named_type(ty, d);
         let pack_expansion = self.eat(Punct::Ellipsis).is_some();
         Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs })

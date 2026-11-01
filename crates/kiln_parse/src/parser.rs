@@ -114,6 +114,10 @@ pub struct Parser<'a, 'sm> {
     /// token: the first component of a nested-name-specifier (WP-119,
     /// clang's `annot_decltype`). Cleared by every [`Parser::bump`].
     decltype_scope: Option<DecltypeScope>,
+    /// The access delay level a template head opened for the
+    /// declaration after it ([class.access]/7), taken by
+    /// `parse_simple_declaration`.
+    pub(crate) template_delay_level: Option<usize>,
 }
 
 /// A `decltype(e)` parsed ahead as a nested-name-specifier
@@ -194,6 +198,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
             decltype_scope: None,
+            template_delay_level: None,
         };
         p.handle_events(0);
         p
