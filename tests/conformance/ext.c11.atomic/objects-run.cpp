@@ -3,6 +3,9 @@
 // type, float/double/long double/__int128/bool/pointer objects, the bare
 // qualifier and _Atomic members.
 //@ expect: run
+// -latomic: x86-64 has no 16-byte atomic RMW instructions, so those
+// operations are libatomic calls there (WP-228).
+//@ args: -latomic
 //@ stdout: 5 7 7 5
 //@ stdout: 9
 //@ stdout: -4
