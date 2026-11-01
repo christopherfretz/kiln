@@ -168,7 +168,8 @@ diag_groups! {
     ReturnStackAddress = "return-stack-address" [];
     Reorder = "reorder" [ReorderCtor];
     ReorderCtor = "reorder-ctor" [];
-    Uninitialized = "uninitialized" [];
+    Uninitialized = "uninitialized" [StaticSelfInit];
+    StaticSelfInit = "static-self-init" [];
     DelegatingCtorCycles = "delegating-ctor-cycles" [];
     CallToPureVirtualFromCtorDtor = "call-to-pure-virtual-from-ctor-dtor" [];
     Dangling = "dangling" [DanglingField, ReturnStackAddress];

@@ -3056,10 +3056,7 @@ impl Sema<'_, '_> {
             }
         }
         if self.contains_undeduced_auto(ty) {
-            ty = match self.deduce_var_auto(v, ty, &init, loc, direct) {
-                Some(t) => t,
-                None => QualType::ERROR,
-            };
+            ty = self.deduce_var_auto(v, ty, &init, loc, direct).unwrap_or(QualType::ERROR);
             self.ast.decls.set_ty(v, ty);
             // `auto x = {...};` deduced `std::initializer_list<U>`; the
             // list initializes it below ([dcl.init.list]/3.6, WP-106).
@@ -3112,6 +3109,7 @@ impl Sema<'_, '_> {
             let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);
             self.ast.decls.mark_var(v, style);
         }
+        self.check_self_reference(v, e, direct);
         self.note_var_init_full_expr(v);
         let e = self.act_on_full_expr(e);
         let _ = self.builder().set_var_init(v, e);

@@ -1415,6 +1415,27 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   initializer of a `constexpr` variable, and of a const integral
   variable, which is usable in constant expressions. The value is
   stored (§8.3).
+- **Self-reference** (`self_ref.rs`, WP-171; clang `CheckSelfReference`):
+  after the initialization is performed, `act_on_init` walks the
+  converted initializer of a variable without automatic storage
+  duration, or of class or reference type, for uses of the variable
+  itself ([basic.life]/7). A use warns
+  `variable {0} is uninitialized when used within its own
+  initialization` (namespace scope, or class type),
+  `reference {0} is not yet bound to a value ...` (references, any use)
+  or `static variable {0} is suspiciously used ...` (static locals,
+  `-Wstatic-self-init`, inside `-Wuninitialized`), through
+  `diag_runtime_behavior`. As in clang: a value use is an
+  lvalue-to-rvalue conversion, increment/decrement, compound-assignment
+  operand, overloaded-operator argument, copy-constructor argument,
+  `std::move` argument, or a non-static member function call on the
+  variable; `T a = a;` with non-class `T` and copy-initialization is
+  the silencing idiom; a member read in an aggregate initializer list
+  is fine once that member is initialized; unevaluated operands,
+  `constexpr` variables, static data members of non-class type and
+  variables in a linkage specification (clang checks the declaration
+  context) are not diagnosed. Other locals are left to a CFG
+  uninitialized-values analysis kiln does not have.
 
 ### 6.1 Braced lists in expressions and explicit type conversions (`forms.rs`)
 - **Call arguments** `f({...})` ([expr.call]/7):

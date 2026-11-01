@@ -1388,6 +1388,9 @@ diag_ids! {
     sema_init_not_class = Error (1) "constructor initializer {0} does not name a class";
     sema_ref_uninit_use = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used here";
     sema_base_uninit_use = Warning [Uninitialized] (2) "base class {0} is uninitialized when used here to access {1}";
+    sema_uninit_self_reference_in_init = Warning [Uninitialized] (1) "variable {0} is uninitialized when used within its own initialization";
+    sema_uninit_self_reference_in_reference_init = Warning [Uninitialized] (1) "reference {0} is not yet bound to a value when used within its own initialization";
+    sema_static_self_reference_in_init = Warning [StaticSelfInit] (1) "static variable {0} is suspiciously used within its own initialization";
     note_uninit_in_ctor = Note (1) "during field initialization in {0:this|the implicit default} constructor";
     sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";
     note_reorder_ctor = Note (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";

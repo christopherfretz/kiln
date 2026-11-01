@@ -57,13 +57,7 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> ExprId {
-        // clang `TypeTraits.def` `ALIAS`es: the keyword names the aliased
-        // trait, which is what diagnostics and dumps spell.
-        let t = match t {
-            TypeTrait::IsSameAs => TypeTrait::IsSame,
-            TypeTrait::IsLiteralType => TypeTrait::IsLiteral,
-            _ => t,
-        };
+        let t = alias_target(t);
         let tys: Vec<QualType> = args.iter().map(|a| a.0).collect();
         if tys.iter().any(|&q| self.ast.types.flags(q.ty()).intersects(TypeFlags::CONTAINS_ERROR))
             || tys.contains(&QualType::ERROR)
@@ -1246,4 +1240,14 @@ enum InitCheck {
     WellFormed,
     Nothrow,
     Trivial,
+}
+
+/// clang `TypeTraits.def` `ALIAS`es: the keyword names the aliased trait,
+/// which is what diagnostics and dumps spell.
+fn alias_target(t: TypeTrait) -> TypeTrait {
+    match t {
+        TypeTrait::IsSameAs => TypeTrait::IsSame,
+        TypeTrait::IsLiteralType => TypeTrait::IsLiteral,
+        _ => t,
+    }
 }
