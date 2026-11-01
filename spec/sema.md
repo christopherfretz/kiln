@@ -773,6 +773,31 @@ specification as written (`TypeNames` prints ` noexcept`,
     at instantiation, a target that is not a type reports `'typename'
     keyword used on a non-type` at the name, with the `target of using
     declaration` note (clang's `err_using_typename_non_type`).
+  - Dependent using-declarators in templates (WP-179):
+    - A class member `using B<T>::m;` is an `UnresolvedUsingValue`
+      member (spec/sema-class.md). An unqualified use of `m` in the
+      class (`act_on_id_expression_dn`) is a baseless
+      `CXXDependentScopeMemberExpr`, also when the class's own
+      overloads of `m` join the set (no ambiguity, and the pattern's
+      own `f(char)` is not a redefinition of the unresolved `f`,
+      `overload/redecl.rs`). The instantiation (`subst/exprs.rs`
+      `implicit_dependent_member`) looks the name up again from the
+      instantiation context: an implicit member access or a static
+      member reference.
+    - An `UnresolvedUsingTypename` is a dependent context, so
+      `type::value` and `typename type::vt` nest through it.
+    - At block scope in a template, a declarator with a dependent
+      qualifier (`using E<T>::A;`, [namespace.udecl]/8: an enumerator)
+      is a local `UnresolvedUsingValue`; its uses are dependent, and
+      the instantiation redoes the declarator (`subst/stmts.rs`
+      `local_using_decl`), so a non-enumerator target is diagnosed
+      then.
+    - A qualifier that is still dependent after substitution (a
+      generic lambda in a function template specialization, or a
+      local class in one) leaves the declarator unresolved, rebuilt
+      with the substituted qualifier, until the inner specialization
+      (`still_dependent_class_using`,
+      `still_dependent_using_typename`).
 - **Conflicts** ([namespace.udecl]/11, [basic.scope.scope]/4), as in
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:

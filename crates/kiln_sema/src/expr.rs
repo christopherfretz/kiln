@@ -886,6 +886,14 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[], loc);
         };
+        if found.decls.len() > 1
+            && found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::UnresolvedUsingValue)
+        {
+            // A dependent using-declarator beside the class's own
+            // overloads (`using T::f; int f(char);`): one overload set,
+            // resolved at instantiation, like a lone one (below).
+            return self.builder().dependent_member(None, true, name, false, nns, None, loc);
+        }
         let mut d = d;
         let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
         if any_tmpl

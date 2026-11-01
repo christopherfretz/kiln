@@ -1164,7 +1164,8 @@ impl Substituter<'_, '_, '_> {
         let mut last = None;
         for nns in nnss {
             if self.nns_still_dependent(nns) {
-                return self.unimplemented("dependent using-declarations in templates", loc);
+                last = self.sema.still_dependent_class_using(nns, name, loc, inheriting).or(last);
+                continue;
             }
             let ctx = self.nns_context(nns, loc)?;
             let q = crate::using::Qualifier { ctx, nns, loc };
@@ -1185,7 +1186,11 @@ impl Substituter<'_, '_, '_> {
         let Some(name) = self.sema.ast.decls.get(m).name().as_ident() else { return Ok(None) };
         let nns = self.nns(pnns, loc)?;
         if self.nns_still_dependent(nns) {
-            return self.unimplemented("dependent using-declarations in templates", loc);
+            return Ok(Some(self.sema.still_dependent_using_typename(
+                nns,
+                DeclName::ident(name),
+                loc,
+            )));
         }
         let ctx = self.nns_context(nns, loc)?;
         let q = crate::using::Qualifier { ctx, nns, loc };

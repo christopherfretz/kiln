@@ -5110,6 +5110,7 @@ impl Sema<'_, '_> {
                 None
             }
             DeclKind::Typedef | DeclKind::TypeAlias if self.is_dependent_ctx(d) => Some(d),
+            DeclKind::UnresolvedUsingTypename => Some(d),
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 self.mark_type_referenced(d);
                 let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
