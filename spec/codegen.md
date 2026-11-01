@@ -58,7 +58,12 @@ panic and never silently wrong IR.
   an implicitly moved `return x;`). A read of a `mutable` member is not
   folded (the Oven's "read of mutable member" check, spec/oven.md); the
   variable's other members are.
-  Validation: `tests/codegen/const_fold_lax.cpp`.
+  A reference variable whose referee type is `const` non-volatile folds
+  the same way (clang `checkVarTypeForConstantEmission`:
+  `CEK_AsValueOrReference`), so `a + b` for `const int& a = {}; const int
+  b = 5;` is a constant (WP-233).
+  Validation: `tests/codegen/const_fold_lax.cpp`,
+  `tests/codegen/ref_const_fold.cpp`.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
   memory form (bool is `i8`) and a scalar form (bool is `i1`), plus string
@@ -525,11 +530,14 @@ The normative description is spec/driver.md "Code generation". In short:
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
 ### Deviations
-- **Constant-initialized reference variables are not folded.** clang
-  emits a use of a reference that is usable in constant expressions as a
-  direct use of its referee (`load i32, ptr @g`); kiln loads the
-  reference's slot. The Oven does not fold reference initializers yet,
-  so `fold.rs` has nothing to substitute. No corpus case covers it.
+- **Uses of constant-initialized reference variables as lvalues.** A
+  read through a reference to a `const` referee folds (above), but clang
+  also emits a non-odr-use of a reference usable in constant expressions
+  as a direct use of its referee's address (`EmitDeclRefLValue` for
+  `NOUR_Constant`: `e.y`, `h[0]` with a non-constant index); kiln loads
+  the reference's slot (a dead `load ptr @e`). Sema does not yet mark a
+  reference bound to a static class or array temporary as a constant
+  non-odr-use (`is_static_lvalue` is syntactic). No corpus case covers it.
 - **Namespace-scope and static reference variables** are emitted as
   clang does (a constant initializer when the referee is a constant
   address, else dynamic initialization, §7e); only their uses differ, as
