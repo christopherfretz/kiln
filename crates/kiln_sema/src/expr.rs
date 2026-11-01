@@ -693,9 +693,18 @@ impl Sema<'_, '_> {
         if !Self::is_nodiscard_warning(id) && self.in_macro_body(e) {
             return;
         }
-        let mut d = args.into_iter().fold(self.diag(id, loc), Diag::arg);
+        // The expression's range (clang `<< R1 << R2` / `getSourceRange`):
+        // a diagnostic with a range keeps its "expanded from macro" notes
+        // for a macro argument.
+        let end = self.expr_end_loc(e);
+        let range = kiln_source::Span::new(self.begin_loc(e), self.token_end(end).unwrap_or(end));
+        let mut d = args.into_iter().fold(self.diag(id, loc), Diag::arg).range(range);
         if let Some(n) = note {
-            d = d.with_note(self.diag(n, loc));
+            // The fix-it's range (clang `FixItHint::CreateReplacement` of
+            // the operator) keeps the note's macro-argument backtrace too.
+            let text = if n == DiagId::note_equality_comparison_to_assign { "=" } else { "|=" };
+            let op = kiln_source::Span::new(loc, loc.with_offset(2));
+            d = d.with_note(self.diag(n, loc).fixit(kiln_diag::FixIt::replace(op, text)));
         }
         self.emit(d);
     }
