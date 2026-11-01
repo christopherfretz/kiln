@@ -80,6 +80,14 @@ impl AttrKind {
     /// GNU `hot` on a function (clang `HotAttr`): the declaration and its
     /// direct call sites are `hot` (WP-172).
     pub const HOT: AttrKind = AttrKind(101);
+    /// `flag_enum` / `clang::flag_enum` on an enumeration (clang
+    /// `FlagEnumAttr`): its values are bit flags, so a `case` label made
+    /// of its single-bit enumerators' bits is in the enumeration (WP-230).
+    pub const FLAG_ENUM: AttrKind = AttrKind(102);
+    /// `enum_extensibility(open|closed)` on an enumeration (clang
+    /// `EnumExtensibilityAttr`): `a` is 1 for `open` (values outside the
+    /// enumerators are expected), 0 for `closed` (WP-230).
+    pub const ENUM_EXTENSIBILITY: AttrKind = AttrKind(103);
 }
 
 /// Attribute syntax.

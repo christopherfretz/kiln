@@ -792,6 +792,18 @@ and returns the scope it names:
     reference), else a `-Wignored-attributes` warning; on a non-function
     `only applies to non-K&R-style functions`. Codegen: spec/codegen.md
     "Allocation functions".
+  - `flag_enum` and `enum_extensibility(open|closed)` (GNU syntax or
+    `clang::`, `AttrKind::FLAG_ENUM` / `ENUM_EXTENSIBILITY`, WP-230), on
+    enumerations (else `'x' attribute only applies to enums`
+    [-Wignored-attributes]). `flag_enum` takes no arguments;
+    `enum_extensibility` takes exactly one, an identifier (the parser
+    passes a leading identifier as `AttrArg::Ident`, clang
+    `attributeHasIdentifierArg`): `takes one argument`, `requires
+    parameter 0 to be an identifier`, and for another identifier
+    `'enum_extensibility' attribute argument not supported: 'x'`
+    [-Wignored-attributes]; an argument already in error drops it
+    silently. They change only the switch checks (§7 Statements). Not
+    yet: -Wflag-enum (an enumerator out of range of the flags).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -807,6 +819,7 @@ and returns the scope it names:
   | MALLOC | — | — |
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
+  | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -2346,13 +2359,18 @@ clang 19's C99/GNU complex support in C++:
        before promotion) continues;
     5. a case value, then each range's `lo` and `hi`, that is no
        enumerator's value: `case value not in enumerated type 'E'`
-       [-Wswitch]; a condition naming a const variable of static or
-       thread storage duration of the same enumeration is exempt;
+       [-Wswitch]; a label naming a const variable of static or
+       thread storage duration of the same enumeration is exempt, and so
+       is every value of an `enum_extensibility(open)` enumeration; for a
+       `flag_enum` one "an enumerator's value" means any value whose bits
+       are all bits of its positive single-bit enumerators (clang
+       `ShouldDiagnoseSwitchCaseNotInEnum`, `IsValueInFlagEnum`);
     6. enumerators sorted by value (first of equal values kept),
        deprecated, `[[maybe_unused]]` and unused ones skipped, not
        covered by a case or range: none and a `default` is `default
        label in switch which covers all enumeration values`
-       [-Wcovered-switch-default, off]; otherwise `enumeration value 'A'
+       [-Wcovered-switch-default, off] for a closed non-flag enumeration
+       (clang `isClosedNonFlag`); otherwise `enumeration value 'A'
        not handled in switch` (two: `values 'A' and 'B'`, three: `'A',
        'B', and 'C'`, more: `N enumeration values not handled in switch:
        'A', 'B', 'C'...`) [-Wswitch] without a `default`, or the same with

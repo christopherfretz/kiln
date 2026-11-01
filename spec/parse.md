@@ -858,6 +858,12 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   goes through `act_on_attributed_stmt` after the sub-statement is parsed,
   passing the language standard (sema has none of its own). So does one
   holding `likely`, `unlikely` or `fallthrough` (WP-182; spec/sema.md).
+- **Identifier argument (WP-230):** for `enum_extensibility` (clang
+  `attributeHasIdentifierArg`) a leading identifier is passed as
+  `AttrArg::Ident(name, loc)`; any further arguments, or a first one that
+  is not an identifier, parse as expressions. `flag_enum` and
+  `enum_extensibility` parse their arguments (so Sema can count them);
+  other attributes outside `takes_expr_args` skip theirs.
 - **No argument list (WP-182):** a standard attribute that takes no
   arguments (`carries_dependency`, `fallthrough`, `noreturn`,
   `no_unique_address`, `likely`, `unlikely`, `maybe_unused`), written
