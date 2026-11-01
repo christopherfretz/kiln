@@ -193,6 +193,14 @@ impl Cg<'_> {
             ExprKind::TypeTraitExpr | ExprKind::ExpressionTraitExpr => {
                 V::C(self.m.const_bool(ast.exprs.type_trait_value(e)))
             }
+            // spec/sema-templates.md §8.3, §8.5: Sema checked satisfaction;
+            // a concept-id or requires-expression is a prvalue constant.
+            ExprKind::ConceptSpecializationExpr | ExprKind::RequiresExpr => {
+                match ast.exprs.satisfied(e) {
+                    Some(v) => V::C(self.m.const_bool(v)),
+                    None => return err(self.loc_of(e), "unchecked constraint expression"),
+                }
+            }
             ExprKind::ArrayTypeTraitExpr => {
                 let t = self.lty(q);
                 V::C(self.m.const_int(t, i128::from(ast.exprs.array_trait(e).value)))

@@ -707,6 +707,14 @@ impl Substituter<'_, '_, '_> {
             };
             let e = match self.sema.ast.exprs.get(def).kind() {
                 kiln_ast::expr::ExprKind::CXXDefaultArgExpr => continue,
+                // `= {...}` with a dependent type or element: the list
+                // as written, list-initializing the substituted type.
+                kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
+                    if let Ok(l) = self.init_list(def) {
+                        self.sema.act_on_param_default_list(b, &l);
+                    }
+                    continue;
+                }
                 _ => self.expr(def),
             };
             if let Ok(e) = e {
