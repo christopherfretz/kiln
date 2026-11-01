@@ -868,8 +868,12 @@ impl Sema<'_, '_> {
                     let t = &self.ast.types;
                     if t.is_array(ty) || t.is_function(ty) {
                         let which = if t.is_array(ty) { "0" } else { "1" };
+                        // clang: a trailing return type is checked where
+                        // the `auto` placeholder is written, otherwise at
+                        // the function declarator's '('.
+                        let at = if trailing.is_some() { spec_loc } else { *loc };
                         let msg = self
-                            .diag(DiagId::sema_func_returning_array_function, *loc)
+                            .diag(DiagId::sema_func_returning_array_function, at)
                             .arg(which)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
