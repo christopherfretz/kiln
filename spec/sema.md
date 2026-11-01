@@ -330,7 +330,10 @@ Redeclaration and linkage rules:
   destructor; `add enclosing parentheses to perform a function-style
   cast`; `remove parentheses to silence this warning`). Otherwise the
   off-by-default "redundant parentheses surrounding declarator"
-  [-Wredundant-parens], except for `A (::B)`. Not in an instantiation.
+  [-Wredundant-parens], except when the declarator-id's
+  nested-name-specifier begins with the global `::` (`A (::B)`,
+  `A (::N::B)`: `Declarator::global_qualifier`, set by the parser; clang
+  walks the specifier's prefixes for `Global`). Not in an instantiation.
   Parameter declarators, exception declarations and the abstract
   declarators of type-ids (`sizeof(int (*))`, `W<int (*)>`, a template
   parameter) cannot be expressions and only get -Wredundant-parens
@@ -345,7 +348,19 @@ Redeclaration and linkage rules:
   because namespace 'N' does not enclose namespace 'M'", and for members
   "non-friend class member 'f' cannot have a qualified name" / "extra
   qualification on member 'f'". The declaration is then dropped, or (for
-  the recoverable ones) declared unqualified.
+  the recoverable ones) declared unqualified. Every declarator-id form
+  is checked (WP-235): identifiers, operator-function-ids, conversion-
+  function-ids (`operator long`), literal-operator-ids (`operator""_y`),
+  constructor and destructor names; the scopes print unqualified (`'M'
+  does not enclose namespace 'C'`). In a class, a qualified conversion
+  function or literal operator is left to the other checks (clang
+  rejects both while parsing). A function template explicit
+  specialization outside a namespace enclosing its template is "function
+  template specialization of 'h' not in a namespace enclosing 'N'" with
+  "explicitly specialized declaration is here" (`check_spec_scope`).
+  Test: `tests/conformance/dcl.meaning/qualified-declarator-special-names.cpp`.
+  **Deviation:** a class template specialization scope prints without its
+  arguments (`'TT'`, clang `'TT<int>'`).
 - **Default-initialization without a default constructor**
   (`check_class_default_init`, WP-191): a class variable with no
   initializer whose default constructor is missing is resolved as

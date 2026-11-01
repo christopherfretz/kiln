@@ -241,6 +241,18 @@ impl Sema<'_, '_> {
         {
             return true;
         }
+        if self.kind_of(tmpl) == DeclKind::FunctionTemplate {
+            let id = DiagId::sema_function_spec_not_in_enclosing_ns;
+            let note = self
+                .diag(DiagId::note_explicit_spec_template_declared, self.ast.decls.get(tmpl).loc());
+            let d = self
+                .diag(id, loc)
+                .arg(self.decl_name(tmpl))
+                .arg(self.decl_name(tctx))
+                .with_note(note);
+            self.emit(d);
+            return false;
+        }
         let var = self.kind_of(tmpl) == DeclKind::VarTemplate;
         let id = match (partial, var) {
             (true, false) => DiagId::sema_partial_spec_redecl_scope,

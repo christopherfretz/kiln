@@ -81,6 +81,7 @@ sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";
 sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";
+sema_function_spec_not_in_enclosing_ns = Error (2) "function template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_gnu_array_range = Extension [GnuDesignator] (0) "use of GNU array range extension";
 sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
 sema_hidden_overloaded_virtual = WarningOff [OverloadedVirtual] (2) "'{0}' hides overloaded virtual {1:function|functions}";

@@ -39,11 +39,13 @@ pub(crate) enum QualifiedDecl {
 
 impl Sema<'_, '_> {
     /// clang's `diagnoseQualifiedDeclaration` for a non-friend declarator
-    /// whose identifier is qualified: what to do with the declaration. A template-id declarator or a templated
-    /// declaration (`has_head`) is checked elsewhere (clang's
-    /// `CheckTemplateSpecializationScope`), and only an identifier is
-    /// checked (an operator-function-id, conversion-function-id or
-    /// constructor name with a wrong scope is not diagnosed here).
+    /// whose declarator-id is qualified: what to do with the declaration.
+    /// Every declarator-id is checked: an identifier, an
+    /// operator-function-id, a conversion-function-id, a
+    /// literal-operator-id, a constructor or destructor name (WP-235). A
+    /// template-id declarator or a templated declaration (`has_head`) is
+    /// checked elsewhere (clang's `CheckTemplateSpecializationScope`,
+    /// [`Sema::check_spec_scope`]).
     pub(crate) fn diagnose_qualified_declaration(
         &mut self,
         ds: &DeclSpec,
@@ -75,22 +77,33 @@ impl Sema<'_, '_> {
             let Some((n, loc)) = self.qualified_declarator_name(d) else {
                 return QualifiedDecl::Keep;
             };
+            let conversion =
+                matches!(d.special, Some((crate::declspec::SpecialName::Conversion(_), _)));
+            if is_record(cur_kind)
+                && (conversion
+                    || d.lit_suffix.is_some()
+                    || matches!(
+                        d.special,
+                        Some((crate::declspec::SpecialName::LiteralOperator(_), _))
+                    ))
+            {
+                // `struct X { X::operator int(); };` is clang's access
+                // declaration parse, and a member literal operator is
+                // rejected on its own; not diagnosed here.
+                return QualifiedDecl::Keep;
+            }
             if is_record(cur_kind) {
                 let m = self.diag(DiagId::sema_member_extra_qualification, loc).arg(&n);
                 self.emit(m);
                 return QualifiedDecl::Unqualify;
             }
-            if d.special.is_none() && d.op_name.is_none() {
-                let m = self.diag(DiagId::sema_namespace_member_extra_qualification, loc).arg(&n);
-                self.emit(m);
-            }
+            let m = self.diag(DiagId::sema_namespace_member_extra_qualification, loc).arg(&n);
+            self.emit(m);
             return QualifiedDecl::Keep;
         }
-        let Some((name, loc)) = d.name else { return QualifiedDecl::Keep };
-        if d.special.is_some() || d.op_name.is_some() {
+        let Some((n, loc)) = self.qualified_declarator_name(d) else {
             return QualifiedDecl::Keep;
-        }
-        let n = sym_str(self, name);
+        };
         if !self.encloses(cur, dc) {
             if d.spec_id.is_some() || has_head {
                 return QualifiedDecl::Keep;
@@ -127,10 +140,11 @@ impl Sema<'_, '_> {
         QualifiedDecl::Keep
     }
 
-    /// The declarator-id of `d` as clang prints it in "extra
-    /// qualification on member", and where it is: an identifier, a
-    /// constructor or destructor name, or an operator-function-id (a
-    /// conversion-function-id is not checked).
+    /// The declarator-id of `d` as clang prints it in the qualified
+    /// declaration diagnostics, and where it is: an identifier, a
+    /// constructor or destructor name, an operator-function-id, a
+    /// conversion-function-id (`operator long`) or a literal-operator-id
+    /// (`operator""_x`). Not a deduction-guide.
     fn qualified_declarator_name(&self, d: &Declarator) -> Option<(String, kiln_source::Loc)> {
         use crate::declspec::SpecialName;
         use kiln_ast::names::DeclName;
@@ -142,20 +156,29 @@ impl Sema<'_, '_> {
             Some((SpecialName::Operator(op), loc)) => {
                 Some((self.decl_name_str(DeclName::operator(op)), loc))
             }
-            Some(_) => None,
+            Some((SpecialName::Conversion(t), loc)) => {
+                Some((format!("operator {}", self.ty_str(t)), loc))
+            }
+            Some((SpecialName::LiteralOperator(x), loc)) => {
+                Some((self.decl_name_str(DeclName::literal_operator(x)), loc))
+            }
+            Some((SpecialName::DeductionGuide(_), _)) => None,
             None => {
                 let (name, loc) = d.name?;
-                match d.op_name {
-                    Some(op) => Some((self.decl_name_str(DeclName::operator(op)), loc)),
-                    None if d.lit_suffix.is_some() => None,
-                    None => Some((sym_str(self, name), loc)),
+                match (d.op_name, d.lit_suffix) {
+                    (Some(op), _) => Some((self.decl_name_str(DeclName::operator(op)), loc)),
+                    (None, Some(x)) => {
+                        Some((self.decl_name_str(DeclName::literal_operator(x)), loc))
+                    }
+                    (None, None) => Some((sym_str(self, name), loc)),
                 }
             }
         }
     }
 
-    /// A namespace as clang prints a `NamedDecl` argument (qualified).
+    /// A scope as clang prints a `NamedDecl` argument here: unqualified,
+    /// with a specialization's template arguments (`B`, `TT<int>`).
     fn scope_name(&self, d: DeclId) -> String {
-        self.qualified_decl_name(d)
+        self.unqualified_decl_name(d)
     }
 }

@@ -24,8 +24,8 @@ use crate::class::ClassBuild;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
-    Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
-    StorageSpec, TypeSpecKind, Width,
+    Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign,
+    SpecialName, StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};

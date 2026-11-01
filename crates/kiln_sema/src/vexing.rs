@@ -5,7 +5,7 @@
 //! cast of an existing `x` (spec/sema.md §4.2).
 
 use kiln_ast::QualType;
-use kiln_ast::decl::{DeclKind, DefinitionBits};
+use kiln_ast::decl::DefinitionBits;
 use kiln_diag::DiagId;
 
 use crate::Sema;
@@ -42,7 +42,9 @@ impl Sema<'_, '_> {
         let Some((ds, base)) = spec.filter(|_| {
             matches!(
                 d.ctx,
-                DeclaratorContext::Block | DeclaratorContext::Condition | DeclaratorContext::ForInit
+                DeclaratorContext::Block
+                    | DeclaratorContext::Condition
+                    | DeclaratorContext::ForInit
             )
         }) else {
             self.warn_plain_redundant_parens(d, lparen);
@@ -126,9 +128,10 @@ impl Sema<'_, '_> {
                         | Chunk::MemberPointer { .. }
                 )
             });
-        if starts_with_declarator_id
-            && d.qualifier.is_some_and(|q| self.kind_of(q) == DeclKind::TranslationUnit)
-        {
+        // clang walks the declarator-id's nested-name-specifier for a
+        // global `::` prefix (`A (::B)`, `A (::N::B)`), not the context it
+        // names (WP-235).
+        if starts_with_declarator_id && d.global_qualifier {
             return;
         }
         let w = self.diag(DiagId::sema_redundant_parens_around_declarator, lparen);
