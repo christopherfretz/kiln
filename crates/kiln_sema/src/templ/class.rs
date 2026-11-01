@@ -875,9 +875,7 @@ impl Sema<'_, '_> {
     /// Whether variable template specialization `v` is implicitly
     /// instantiated (not explicitly specialized or instantiated).
     fn is_implicit_var_spec(&self, v: DeclId) -> bool {
-        self.ast.spec_info(v).is_some_and(|(_, s)| {
-            s.kind == SpecKind::ImplicitInstantiation
-        })
+        self.ast.spec_info(v).is_some_and(|(_, s)| s.kind == SpecKind::ImplicitInstantiation)
     }
 
     /// clang's `mightBeUsableInConstantExpressions`: `constexpr`, or a

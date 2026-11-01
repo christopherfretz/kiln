@@ -2164,6 +2164,16 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let td = self.builder().typedef(h, kind, underlying, prev_ok);
+        // The decl-specifiers' start: an instantiation finds the type's
+        // dependent names from there (§5.8), as in `typedef int
+        // (*f)(typename T::type);`.
+        if !alias
+            && ds.loc.is_valid()
+            && ds.loc != d.name_loc()
+            && self.is_dependent_type(underlying)
+        {
+            let _ = self.ast.decls.cold.begin_loc.insert(td, ds.loc);
+        }
         if invalid {
             self.ast.decls.set_flags(td, DeclFlags::INVALID);
         }
@@ -2563,6 +2573,11 @@ impl Sema<'_, '_> {
         }
         let f = self.builder().function(h, fkind, ty, spec, prev_ok);
         self.finish_virtual_decl(f, &virt);
+        if let Some(Chunk::Function { trailing: Some((t, arrow)), .. }) = d.chunks.first()
+            && self.is_dependent_type(*t)
+        {
+            let _ = self.templ.trailing_arrow.insert(f, *arrow);
+        }
         // A pure virtual function's notes point at its decl-specifiers
         // (clang `getBeginLoc`, §4.11), as does the `->` note on an
         // `operator->` result ([over.ref]).
@@ -3219,6 +3234,10 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
+        // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
+        if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_dependent_type(ty) {
+            let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
+        }
         self.lambda_mangle.var = Some(v);
         if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
             // The constrained placeholder's diagnostics point here.

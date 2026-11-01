@@ -1533,26 +1533,38 @@ formed it:
   - The scope applies only while the anchor matches. A type substituted
     at another anchor (a default argument, an initializer) falls back to
     the nearest occurrence.
+  - Under an *after* scope, a dependent type substituted again takes
+    its next occurrence (`Substituter::written_used`, WP-220), so `T::type
+    (*m)(T::type)` reports both access errors where clang does. Types are
+    substituted in written order (a leading return type, then the
+    parameters). Nested-name-specifiers do not advance: one occurrence
+    looks them up more than once.
 - The rule each declaration uses (`subst/decls.rs`):
-  - A parameter, field or variable whose decl-specifiers' start is
-    recorded (`decls.cold.begin_loc`) uses *after* that start. This finds
-    `int (*p)(T::type)`'s own occurrence, which is written after `p`.
-    Otherwise it uses *before* the declarator-id, or before where an
+  - A parameter, field, variable, static data member or typedef whose
+    decl-specifiers' start is recorded (`decls.cold.begin_loc`) uses
+    *after* that start. This finds `int (*p)(T::type)`'s own occurrence,
+    which is written after `p`. Variables, static data members and
+    typedefs record it only when their type is dependent (WP-220), and
+    an instantiation keeps it while its type is still dependent.
+    Otherwise the rule is *before* the declarator-id, or before where an
     unnamed parameter's name would be.
   - A leading return type uses *before* the function's name.
-  - A typedef uses *before* its name. An alias-declaration uses *after*
-    its name.
-  - A trailing return type, and a conversion function's type, use
-    *after* the last parameter's location.
+  - An alias-declaration uses *after* its name.
+  - A trailing return type uses *after* its `->`
+    (`TemplState.trailing_arrow`, recorded when the trailing type is
+    dependent; WP-220), so `auto f(int (*p)(T::type)) -> T::type` finds
+    its own occurrence. A conversion function's type, and a trailing
+    return type with no recorded `->`, use *after* the last parameter's
+    location.
 - Order. A leading return type is substituted before the parameters, so
   the first error reported is the first one written, as in clang's
   `TransformFunctionProtoType`. A trailing return type is substituted
   after them. The parameters still enter scope before the exception
   specification.
-- Known gaps. A typedef or variable whose declarator writes the type
-  again after the name (`typedef int (*f)(T::type)`) has no recorded
-  begin, so it can pick an earlier occurrence. So can a trailing return
-  type after a parameter of function-pointer type.
+- Known gap. clang reports an error once per declarator: in `typedef
+  T::type g, (*h)(T::type);` both `g` and `h` fail at the first `T::type`
+  and clang reports it twice. Kiln's diagnostic engine drops the
+  identical second report (same id, location and context).
 - Dependent names inside expressions (`T::x` in a default argument,
   `sizeof(typename T::type)`) are not affected. The expression keeps its
   own location, so these are exact without the table. A partially
