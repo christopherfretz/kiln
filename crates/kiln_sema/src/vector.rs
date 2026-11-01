@@ -44,8 +44,7 @@ impl Sema<'_, '_> {
                 return None;
             }
             _ => {
-                let msg =
-                    self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n).arg("1");
+                let msg = self.diag(DiagId::parse_attribute_wrong_arg_count, loc).arg(n).arg("1");
                 self.emit(msg);
                 return None;
             }
@@ -124,9 +123,8 @@ impl Sema<'_, '_> {
             };
             let already = matches!(t.canonical_view(elem), TypeView::Vector { .. });
             if !ok || already {
-                let msg = self
-                    .diag(DiagId::sema_vector_invalid_element_type, loc)
-                    .arg(self.ty_arg(elem));
+                let msg =
+                    self.diag(DiagId::sema_vector_invalid_element_type, loc).arg(self.ty_arg(elem));
                 self.emit(msg);
                 return QualType::ERROR;
             }

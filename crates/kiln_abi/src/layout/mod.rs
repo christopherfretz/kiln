@@ -297,7 +297,10 @@ impl<'a> Layouter<'a> {
                 // clang `getTypeInfo`: an ext_vector of `bool` packs one
                 // bit per element (`isExtVectorBoolType`).
                 let bool_ext = kind == VectorKind::Ext
-                    && matches!(ast.types.canonical_view(elem), TypeView::Builtin(BuiltinType::Bool));
+                    && matches!(
+                        ast.types.canonical_view(elem),
+                        TypeView::Builtin(BuiltinType::Bool)
+                    );
                 let e = self.type_info(elem);
                 let bits = if bool_ext { 1 } else { e.width };
                 let mut width = bits.saturating_mul(u64::from(count)).max(8);
