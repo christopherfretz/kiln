@@ -517,11 +517,13 @@ impl Sema<'_, '_> {
                 let note = self
                     .diag(DiagId::note_instantiation_required_here, info.point_of_instantiation)
                     .arg(explicit);
+                // clang: `Context.getTypeDeclType(PrevDecl)`, fully scoped
+                // (`N::X<short>::M<int>`).
                 let t = self.tag_type(spec);
                 let d = self
                     .diag(DiagId::sema_spec_after_instantiation, name_loc)
                     .range(range)
-                    .arg(self.ty_str(t))
+                    .arg(self.decl_ty_str(t))
                     .with_note(note);
                 self.emit(d);
                 return Err(());

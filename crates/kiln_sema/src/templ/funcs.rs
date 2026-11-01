@@ -471,9 +471,15 @@ impl Sema<'_, '_> {
             let note = self
                 .diag(DiagId::note_instantiation_required_here, info.point_of_instantiation)
                 .arg(explicit);
+            // clang: the specialization `NamedDecl`, unqualified with its
+            // arguments (`f<int>`, also for a member of `N::X<short>`).
+            let mut name = self.decl_name(info.template);
+            let names = crate::names::SemaNames::new(self);
+            let canon = self.ast.types.canonical_args(info.print_args);
+            kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut name);
             let e = self
                 .diag(DiagId::sema_spec_after_instantiation, name_loc)
-                .arg(self.spec_decl_name(info.template, info.print_args))
+                .arg(name)
                 .with_note(note);
             self.emit(e);
             return None;
