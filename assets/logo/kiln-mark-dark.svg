@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 646.03 256" width="646.03" height="256" role="img" aria-label="kiln">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="kiln">
   <title>kiln</title>
   <defs>
     <linearGradient id="kb3-tile" x1="0" y1="0" x2="0" y2="1">
@@ -18,8 +18,6 @@
       <stop offset="0" stop-color="#fff1b8"/><stop offset="1" stop-color="#ffab2e"/></linearGradient>
     <filter id="kb3-blur" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
     <radialGradient id="kb3-hub" cx="128" cy="222" r="140" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ff5a12" stop-opacity=".5"/><stop offset="1" stop-color="#ff5a12" stop-opacity="0"/></radialGradient>
-    <linearGradient id="kb3-tittle" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ffd23f"/><stop offset=".55" stop-color="#ff7a1a"/><stop offset="1" stop-color="#e0340e"/></linearGradient>
-    <linearGradient id="kb3-chev" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffd23f"/><stop offset=".5" stop-color="#ff7a1a"/><stop offset="1" stop-color="#d9310f"/></linearGradient>
   </defs>
   <g id="kb3-mark">
     <!-- 16-tooth steel gear ring framing a charcoal hub (a nod to Rust, not its logo) -->
@@ -28,7 +26,7 @@
     <circle cx="128" cy="128" r="90" fill="url(#kb3-hub)"/>
     <circle cx="128" cy="128" r="98" fill="none" stroke="#2a2e35" stroke-opacity=".55" stroke-width="2"/>
     <circle cx="128" cy="128" r="89" fill="none" stroke="#0e0f12" stroke-width="3"/>
-    <g id="kb3-K" transform="translate(128,110) scale(0.7) translate(-129,-128)">
+    <g id="kb3-K" transform="translate(128,122) scale(0.7) translate(-129,-128)">
       <!-- cold steel stem + white-hot template bracket: K = | + < -->
       <rect x="56" y="54" width="38" height="148" rx="4" fill="url(#kb3-stem)"/>
       <path d="M102,128L160,54H202L144,128L202,202H160Z" fill="#ff6a14" opacity=".75" filter="url(#kb3-blur)"/>
@@ -39,12 +37,5 @@
     <path d="M88.8,194H167.2L178.2,212L167.2,230H88.8L77.8,212Z" fill="#15171b" stroke="url(#kb3-steel)" stroke-width="3.5" stroke-linejoin="round"/>
     <circle cx="91.8" cy="212" r="3" fill="url(#kb3-steel)"/><circle cx="164.2" cy="212" r="3" fill="url(#kb3-steel)"/>
     <g transform="translate(102.8,203) scale(1.8)"><g fill="none" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><g stroke="#ffc64a"><path transform="translate(0,0)" d="M8.83,1.79A5,5 0 1 0 8.83,8.21"/><path transform="translate(11.6,0)" d="M0,5H7M3.5,1.5V8.5"/><path transform="translate(21,0)" d="M0,5H7M3.5,1.5V8.5"/></g></g></g>
-  </g>
-  <!-- wordmark: outlined letterforms, ascender = mark stem band -->
-  <g id="kb3-wordmark" transform="translate(288,202) scale(1.0278)">
-    <g id="kb3-k"><path d="M0,-144H28V0H0Z" fill="#f4efe6"/><path d="M33,-50L63,-100H99L69,-50L99,0H63Z" fill="url(#kb3-chev)"/></g>
-    <g id="kb3-i" transform="translate(121,0)"><path d="M0,-100H28V0H0Z" fill="#f4efe6"/><path d="M14,-114C3,-114 -3,-122 0,-132C2,-138 6,-141 7,-148C11,-143 13,-137 12,-131C17,-137 20,-146 18,-158C28,-150 32,-138 29,-126C27,-118 21,-114 14,-114Z" fill="url(#kb3-tittle)"/></g>
-    <path id="kb3-l" transform="translate(173,0)" d="M0,-144H28V0H0Z" fill="#f4efe6"/>
-    <path id="kb3-n" transform="translate(225,0)" d="M0,0V-100H28V0ZM28,-50A22,22 0 0 1 72,-50V0H100V-50A50,50 0 0 0 28,-94.9Z" fill="#f4efe6"/>
   </g>
 </svg>

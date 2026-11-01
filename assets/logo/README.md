@@ -1,14 +1,33 @@
 # kiln logo
 
-Three concept directions, each as a mark + wordmark lockup (`kiln-logo*.svg`)
-and a square mark (`kiln-mark*.svg`, 256x256 viewBox, favicon-safe at 32 px).
-Every file has a `-dark` twin tuned for dark backgrounds (GitHub dark is
-`#0d1117`). All files are hand-written, self-contained SVG: no fonts, no
-`<text>`, no rasters, no external references, no scripts. The wordmark is
-drawn as outlined geometric letterforms (x-height 100 u, ascender 144 u,
-stem 28 u) whose ascender spans exactly the mark's stem band.
+**The kiln logo is B3** (concept B with a gear frame and a C++ plate). Its
+canonical files live here at the top level:
 
-**Recommended: concept B.**
+| File | Use |
+| --- | --- |
+| `kiln-logo.svg` / `kiln-logo-dark.svg` | mark + wordmark lockup |
+| `kiln-banner.svg` / `kiln-banner-dark.svg` | lockup + tagline "C++26 COMPILER FRONTEND IN RUST" (README header) |
+| `kiln-mark.svg` / `kiln-mark-dark.svg` | square mark with the C++ plate (avatars, 64 px and up) |
+| `kiln-favicon.svg` / `kiln-favicon-dark.svg` | square mark without the plate (favicon, 16-48 px) |
+| `kiln-social.svg` | 1280x640 repository social card (dark) |
+
+The mark: a 16-tooth steel gear ring (a nod to Rust, deliberately not its
+logo: no R, no rivets, different tooth count and shape) frames a charcoal
+hub; inside, a K made of a cold steel stem and a white-hot C++ template
+bracket (**K = `|` + `<`**); a charcoal plate reading `C++` is bolted
+across the lower rim. With the plate present the K is optically centred
+between the hub's top and the plate rather than in the full circle; the
+plate-free favicon centres it in the circle.
+
+All files are hand-written, self-contained SVG: no fonts, no `<text>`, no
+rasters, no external references, no scripts. The wordmark is outlined
+geometric letterforms (x-height 100 u, ascender 144 u, stem 28 u) whose
+ascender spans the mark's stem band; the tagline is stroked monoline caps.
+Each `-dark` file is tuned for dark backgrounds (GitHub dark is `#0d1117`).
+
+The exploration that led here is kept below: three first-round concepts
+(`concept-a/`, `concept-b/`, `concept-c/`) and the concept B variants
+(`concept-b/variants/b1`, `b2`, `b4`; B3 is the top-level set).
 
 ## Concept A: the kiln arch (`concept-a/`)
 
@@ -20,7 +39,7 @@ literally and rewards a close look, which suits a README banner, but its
 detail is illustration-grade: at 32 px the K and brackets dissolve and only
 the glowing arched silhouette remains.
 
-## Concept B: the hot bracket K (`concept-b/`, recommended)
+## Concept B: the hot bracket K (`concept-b/`, chosen)
 
 The K is split into its two strokes: a cold steel stem and a white-hot
 angle bracket. **K = `|` + `<`**: the C++ template bracket, the thing that
@@ -54,17 +73,19 @@ trapezoid teeth, a plain bore, no R and no rivets.
 - **B2, C++ plate:** the original tile with a chamfered charcoal base plate
   reading `C++` in glowing amber (drawn as stroked paths); the wordmark's `i`
   carries a small hot gear instead of a flame.
-- **B3, gear frame + C++ plate (recommended):** B1's gear with B2's plate
-  bolted across its lower rim, echoing the original inspiration image's
-  kiln-with-gear-and-badge while staying geometric.
+- **B3, gear frame + C++ plate (chosen; files at the top level):** B1's
+  gear with B2's plate bolted across its lower rim, echoing the original inspiration
+  image's kiln-with-gear-and-badge while staying geometric.
 - **B4, K++:** the original tile with two hot `+` marks set in the
   bracket's mouth, so the mark reads `K++`; gear tittle in the wordmark.
 
-Each variant directory holds `kiln-mark`, `kiln-logo` and `kiln-banner`
-(lockup with the tagline "C++26 COMPILER FRONTEND IN RUST" in stroked
-monoline caps), each with a `-dark` twin, plus `kiln-social.svg` (1280x640).
-B2 and B3 add `kiln-favicon[-dark].svg`: the plate is unreadable at 32 px,
-so the favicon drops it (B3's favicon is the B1 gear mark).
+Each variant has `kiln-mark`, `kiln-logo` and `kiln-banner` (lockup with
+the tagline "C++26 COMPILER FRONTEND IN RUST" in stroked monoline caps),
+each with a `-dark` twin, plus `kiln-social.svg` (1280x640); B3's set is
+the top-level files. B2 and B3 add `kiln-favicon[-dark].svg`: the plate is
+unreadable at 32 px, so the favicon drops it (B3's favicon is the B1 gear
+mark). In the final B3 the K was lowered from the circle's centre so it sits
+optically centred between the hub top and the plate.
 
 ## Palette
 
@@ -83,25 +104,27 @@ so the favicon drops it (B3's favicon is the B1 gear mark).
 
 ## Usage
 
-- **README header:** `concept-b/kiln-logo.svg` with `kiln-logo-dark.svg`
-  swapped in via `<picture>` + `prefers-color-scheme` (see the repository
-  `README.md`). Display at 360-480 px wide.
-- **Favicon / avatar / small icon:** `concept-b/kiln-mark.svg` (the tile
-  works on any background; `-dark` only lightens the rim).
-- **Social preview:** render `concept-b/kiln-social.svg` to PNG and upload it
-  under *Settings → Social preview* (GitHub does not accept SVG there).
-- Keep clear space of at least the tile's corner radius around the mark; do
-  not recolour the fire gradients or set the wordmark in a font.
+- **README header:** `kiln-banner.svg`, with `kiln-banner-dark.svg` swapped
+  in via `<picture>` + `prefers-color-scheme` (see the repository
+  `README.md`). Display at about 480 px wide. Use `kiln-logo*.svg` where the
+  tagline would repeat nearby text.
+- **Favicon / small icon (under 64 px):** `kiln-favicon.svg`; the C++ plate
+  is unreadable that small.
+- **Avatar / app icon (64 px and up):** `kiln-mark.svg`.
+- **Social preview:** render `kiln-social.svg` to PNG and upload it under
+  *Settings → Social preview* (GitHub does not accept SVG there).
+- Keep clear space of at least one gear tooth around the mark; do not
+  recolour the fire gradients or set the wordmark in a font.
 
 ## Rendering PNGs
 
 With `rsvg-convert` (Debian: `apt-get install librsvg2-bin`):
 
 ```sh
-rsvg-convert -w 1024 -b white   concept-b/kiln-logo.svg      -o kiln-logo.png
-rsvg-convert -w 1024 -b '#0d1117' concept-b/kiln-logo-dark.svg -o kiln-logo-dark.png
-rsvg-convert -w 32  concept-b/kiln-mark.svg -o favicon-32.png
-rsvg-convert concept-b/kiln-social.svg -o kiln-social.png   # 1280x640
+rsvg-convert -w 1024 -b white     kiln-banner.svg      -o kiln-banner.png
+rsvg-convert -w 1024 -b '#0d1117' kiln-banner-dark.svg -o kiln-banner-dark.png
+rsvg-convert -w 32 kiln-favicon.svg -o favicon-32.png
+rsvg-convert kiln-social.svg -o kiln-social.png   # 1280x640
 ```
 
 Omit `-b` for a transparent background.

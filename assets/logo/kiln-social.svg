@@ -31,7 +31,7 @@
     <circle cx="128" cy="128" r="90" fill="url(#kb3-hub)"/>
     <circle cx="128" cy="128" r="98" fill="none" stroke="#2a2e35" stroke-opacity=".55" stroke-width="2"/>
     <circle cx="128" cy="128" r="89" fill="none" stroke="#0e0f12" stroke-width="3"/>
-    <g id="kb3-K" transform="translate(128,110) scale(0.7) translate(-129,-128)">
+    <g id="kb3-K" transform="translate(128,122) scale(0.7) translate(-129,-128)">
       <!-- cold steel stem + white-hot template bracket: K = | + < -->
       <rect x="56" y="54" width="38" height="148" rx="4" fill="url(#kb3-stem)"/>
       <path d="M102,128L160,54H202L144,128L202,202H160Z" fill="#ff6a14" opacity=".75" filter="url(#kb3-blur)"/>
