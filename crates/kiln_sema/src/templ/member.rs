@@ -226,7 +226,10 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes template parameter list `list` of a member template:
     /// new parameters at their retained depth, mapped from the old ones
     /// in [`Substituter::locals`]; defaults substituted now.
-    fn param_list(&mut self, list: TemplateParamListId) -> SubstResult<TemplateParamListId> {
+    pub(crate) fn param_list(
+        &mut self,
+        list: TemplateParamListId,
+    ) -> SubstResult<TemplateParamListId> {
         let l = *self.sema.ast.templates.param_list(list);
         let depth = self.args.retained_depth(l.depth);
         let old: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l.params).collect();

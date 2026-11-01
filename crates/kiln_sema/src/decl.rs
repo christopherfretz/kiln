@@ -3535,7 +3535,10 @@ impl Sema<'_, '_> {
     fn check_redeclared_class_head(&mut self, p: DeclId) {
         if let Some(list) = self.templ.cur.take()
             && let Some(t) = self.ast.described_template(p)
-            && let Some(old) = self.ast.template_info(t).map(|i| i.params)
+            && let Some(old) = self
+                .head_comparable_decl(t)
+                .and_then(|c| self.ast.template_info(c))
+                .map(|i| i.params)
             && self.check_template_heads_match(list, old)
         {
             self.check_template_param_list(DeclKind::ClassTemplate, list, Some(t));
