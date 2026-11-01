@@ -30,6 +30,7 @@ fn takes_expr_args(name: &str) -> bool {
             | "vector_size"
             | "alloc_size"
             | "alloc_align"
+            | "abi_tag"
     )
 }
 

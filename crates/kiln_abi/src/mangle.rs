@@ -9,6 +9,7 @@
 //! spec/abi.md §"Mangling".
 
 use kiln_ast::Ast;
+use kiln_ast::attr::AttrKind;
 use kiln_ast::consts::{ConstValue, PtrBase, Scalar};
 use kiln_ast::decl::{DeclKind, FnStorage, LinkageLang, NamespaceData, TemplLinkKind, VarStorage};
 use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
@@ -441,6 +442,7 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
         // A variable template specialization is `_Z1vIiE`.
         DeclKind::Var => {
             in_global_ns(ast, d)
+                && abi_tags(ast, d).is_none()
                 && !is_local(ast, d)
                 && !has_internal_linkage(ast, d)
                 && ast.spec_info(ast.first(d)).is_none()
@@ -487,6 +489,53 @@ pub fn enclosing_function(ast: &Ast, d: DeclId) -> Option<DeclId> {
 pub fn asm_label(ast: &Ast, d: DeclId) -> Option<String> {
     let l = ast.decls.cold.asm_label.get(ast.first(d))?;
     Some(String::from_utf8_lossy(ast.strings.bytes(*l)).into_owned())
+}
+
+/// The `abi_tag` tags of `d` (sorted, unique, `,`-separated), from any
+/// redeclaration or, for an instantiation, its pattern (clang instantiates
+/// `AbiTagAttr` and clones it onto redeclarations). Once the walk crosses
+/// a class-template member instantiation, a function pattern with a
+/// definition contributes only that definition's tags: clang 19 takes the
+/// instantiated member's attributes from the pattern definition, so an
+/// out-of-line definition that does not repeat the tag drops it
+/// (spec/abi.md §8.13).
+fn abi_tags(ast: &Ast, d: DeclId) -> Option<&str> {
+    let mut work = vec![(d, false)];
+    let mut steps = 0;
+    while let Some((cur, member)) = work.pop() {
+        steps += 1;
+        if steps > 16 {
+            break;
+        }
+        let def_only = member
+            && is_function_kind(ast.decls.get(cur).kind())
+            && ast.definition(cur).is_some();
+        let tag_of = |r: DeclId| {
+            crate::layout::props::attrs(ast, r).find(|a| a.kind == AttrKind::ABI_TAG).map(|a| {
+                ast.symbols().as_str(kiln_source::symbol::Symbol::from_index(a.a))
+            })
+        };
+        if def_only {
+            if let Some(t) = ast.definition(cur).and_then(tag_of) {
+                return Some(t);
+            }
+        } else if let Some(t) = ast.redecls_of(cur).find_map(tag_of) {
+            return Some(t);
+        }
+        let f = ast.first(cur);
+        if let Some(p) = ast.template_info(f).and_then(|i| i.pattern) {
+            work.push((p, member));
+        }
+        if let Some((_, s)) = ast.spec_info(f)
+            && let Some(p) = ast.template_info(s.template).and_then(|i| i.pattern)
+        {
+            work.push((p, member));
+        }
+        if let Some(p) = ast.instantiated_from(f) {
+            work.push((p, true));
+        }
+    }
+    None
 }
 
 /// The linkage name of a function, variable or static data member (a
@@ -1014,6 +1063,17 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// <unqualified-name>: operator, constructor, destructor, conversion
     /// or literal-operator names, else the <source-name>.
     fn unqualified(&mut self, d: DeclId, v: Structor) {
+        self.unqualified_untagged(d, v);
+        // <abi-tags> follow the unqualified name (clang `writeAbiTags`).
+        if let Some(tags) = abi_tags(self.ast, d) {
+            for t in tags.split(',') {
+                self.out.push('B');
+                self.source_name(t);
+            }
+        }
+    }
+
+    fn unqualified_untagged(&mut self, d: DeclId, v: Structor) {
         let ast = self.ast;
         let n = ast.decls.get(d);
         match ast.names.view(n.name()) {

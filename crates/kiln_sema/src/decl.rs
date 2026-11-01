@@ -5315,6 +5315,9 @@ impl Sema<'_, '_> {
         {
             return r;
         }
+        if kind == AttrKind::ABI_TAG {
+            return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
             AttrKind::ALIGNED => {
@@ -5364,6 +5367,41 @@ impl Sema<'_, '_> {
             return None;
         }
         let node = AttrNode { kind, syntax, flags: 0, loc, a, b };
+        Some(self.ast.attrs.push(node))
+    }
+
+    /// GNU `abi_tag("t", ...)`: string literals, kept sorted and unique
+    /// (clang `handleAbiTagAttr`) as one interned symbol in `a`, the tags
+    /// separated by `,` (spec/abi.md §8.13). A tag-less `abi_tag` (only
+    /// meaningful on an inline namespace) is dropped.
+    fn abi_tag_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        n: &str,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let mut tags: Vec<String> = Vec::new();
+        for arg in args {
+            let lit = match arg {
+                AttrArg::Expr(e) => self.string_lit_of(*e),
+                AttrArg::Type(_) => None,
+            };
+            let Some(lit) = lit else {
+                let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
+                self.emit(msg);
+                return None;
+            };
+            let id = self.ast.exprs.string_lit(lit);
+            tags.push(String::from_utf8_lossy(self.ast.strings.bytes(id)).into_owned());
+        }
+        if tags.is_empty() {
+            return None;
+        }
+        tags.sort();
+        tags.dedup();
+        let a = self.intern(&tags.join(",")).index();
+        let node = AttrNode { kind: AttrKind::ABI_TAG, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
     }
 
@@ -5690,6 +5728,7 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
         ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
+        ("abi_tag", _, true) => AttrKind::ABI_TAG,
         ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
         _ => return None,
     })

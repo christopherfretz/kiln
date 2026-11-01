@@ -719,6 +719,23 @@ needed_sse }`: on aarch64 the parameter classification (`aarch64_arg`;
 the register counts are unused), on x86_64 `x86_arg(q, 0)` with its
 GPR/SSE counts (both zero means the argument is read from memory).
 
+### 8.13 Landed (WP-172): abi tags and dependent signature types
+**abi_tag.** `[[gnu::abi_tag("a","b")]]` / `__attribute__((abi_tag(...)))`
+is an `AttrKind::ABI_TAG` node whose `a` is the interned symbol of the
+sorted, de-duplicated tags joined by `,` (a non-string argument is
+`parse_attribute_requires_string`; an empty list attaches nothing).
+`mangle::abi_tags(ast, d)` finds the tags of a declaration: any redecl
+carrying the attribute, else the template pattern (`template_info`,
+`spec_info` of the primary) or the instantiation source
+(`instantiated_from`). For an instantiated *function* member of a class
+template clang 19 looks only at the pattern's definition when one exists
+(an out-of-line `template<class T> int Y<T>::f(){}` without a repeated
+tag mangles untagged); static data members and member templates of
+non-templates keep the declaration's tag. Tags mangle as `B<source-name>`
+each, after the unqualified name (identifiers, `C2`/`D2`, operator codes),
+and a tagged namespace-scope variable is mangled (`_Z1vB1x`) rather than
+emitted under its plain name.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.
