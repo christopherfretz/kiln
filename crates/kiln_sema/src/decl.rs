@@ -3409,7 +3409,11 @@ impl Sema<'_, '_> {
         if self.reject_incomplete_array_init(v, ty, loc, &init) {
             return;
         }
+        // A variable names itself, even when declared inside the
+        // initializer of another entity (a lambda body).
+        let entity = self.init_entity.take();
         let e = self.perform_init(ty, init, loc, direct);
+        self.init_entity = entity;
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
             // P0960 (clang's `parenlistinit`).
             let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);

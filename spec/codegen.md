@@ -499,14 +499,14 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines after it (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 200 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 208 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
   `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
-  work packages' cases): 398/400 pairs exact; `DEVIATIONS` holds
-  `global_init_array_eh` and `eh_array_destroy_throwing_global` on
-  aarch64 (§7f).
+  work packages' cases): 413/416 pairs exact; `DEVIATIONS` holds
+  `global_init_array_eh`, `eh_array_destroy_throwing_global` and
+  `array_temporary_global` on aarch64 (§7f, §7m).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
   are compiled, linked and run by kiln and by clang, and their stdout and
@@ -1525,6 +1525,42 @@ triples), `eh_array_destroy_throwing_global.cpp` (x86_64 exact);
 `stmt.switch/run-gnu-case-range`; diagnostics
 `stmt.switch/gnu-case-range`,
 `except.terminate/throw-in-noexcept-reach-unevaluated`.
+
+## 7m. Landed (WP-216): WP-190 deferred items
+- **Array temporaries** (`A{...}` with `using A = T[n]`, and braced
+  lists bound to a reference to array): the element-wise destroy of a
+  bound array temporary is an `ArrayDtor` full-expression cleanup (clang
+  `EmitCXXTemporary` → `pushDestroy` of the array type). A
+  lifetime-extended array temporary at namespace scope registers a
+  `__cxx_global_array_dtor` helper with `__cxa_atexit`
+  (`register_temporary_dtor`, clang `generateDestroyHelper`); its aarch64
+  loop shape is the §7f deviation (`array_temporary_global`). The Oven
+  treats a lifetime-extended array of const elements as usable in
+  constant expressions (`resolve_let`).
+- **Default-argument temporaries:** the default argument is emitted
+  without its definition's `ExprWithCleanups`, so its temporaries join
+  the caller's full-expression (spec/sema.md §5.10).
+- **`new T[n]{...}` generic loop:** the list's irregular partial-array
+  cleanup is deactivated in the loop body after the first element's
+  initializer (clang `EmitNewArrayInitializer`). clang's
+  `pushRegularPartialArrayCleanup` for a non-list `new T[n](...)` /
+  `new T[n]` loop is reachable only for an element initializer that is
+  neither a `CXXConstructExpr` nor a memsettable value-initialization
+  (in practice ObjC ARC types): sema always builds a `CXXConstructExpr`
+  for a C++ class element, whose `construct_array_n` loop already pushes
+  `Cleanup::PartialArray`.
+- **Thunks of explicit instantiations:** a `weak_odr` thunk gets its own
+  comdat (clang `setThunkLinkage`), not the `D5` comdat of its
+  destructor. Base destructors of an explicitly instantiated class run in
+  reverse declaration order and are emitted in clang's order.
+
+Tests: `tests/codegen/array_temporary.cpp`, `array_temporary_global.cpp`
+(x86_64 exact), `default_arg_temporary.cpp`,
+`explicit_instantiation_base_dtors.cpp`; `run` tests
+`class.temporary/run-array-temporary`,
+`dcl.fct.default/run-default-arg-temporary`; constexpr tests
+`class.temporary/constexpr-array`,
+`dcl.fct.default/constexpr-default-arg-temporary`.
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

@@ -595,7 +595,10 @@ impl Sema<'_, '_> {
         let conv = if self.is_error_type(ty) {
             init
         } else {
-            self.perform_init(ty, Initializer::Expr(init), loc, false)
+            // clang `InitializedEntity::InitializeLambdaCapture`.
+            self.with_init_entity(crate::init::entity::CAPTURE, |s| {
+                s.perform_init(ty, Initializer::Expr(init), loc, false)
+            })
         };
         let index = self.ast.exprs.lambdas.get(id).captures.len();
         let c = LambdaCapture {

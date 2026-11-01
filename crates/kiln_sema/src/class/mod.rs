@@ -356,7 +356,9 @@ impl Sema<'_, '_> {
             let e = self.act_on_full_expr(e);
             let _ = self.ast.decls.set_field_init(field, e);
         } else {
-            let e = self.perform_init(fty, init, loc, direct);
+            let e = self.with_init_entity(crate::init::entity::MEMBER, |s| {
+                s.perform_init(fty, init, loc, direct)
+            });
             self.note_default_init_full_expr();
             let e = self.act_on_full_expr(e);
             let _ = self.ast.decls.set_field_init(field, e);

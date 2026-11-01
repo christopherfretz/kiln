@@ -340,6 +340,15 @@ impl Sema<'_, '_> {
                 ExprFlags::NONE,
             );
         }
+        // A prvalue array keeps its cv-qualifiers ([expr.type]/2).
+        if self.ast.types.is_array(ty)
+            && !matches!(
+                self.ast.types.canonical_view(ty),
+                kiln_ast::types::TypeView::VariableArray { .. }
+            )
+        {
+            return self.array_list_cast(ty, l, loc);
+        }
         if let Some(what) = self
             .temporary_unsupported(ty)
             .or_else(|| self.ast.types.is_void(ty).then_some("a void temporary"))
@@ -352,7 +361,7 @@ impl Sema<'_, '_> {
         // `E{v}` for a fixed-underlying-type enumeration is
         // direct-list-initialization too ([dcl.init.list]/3.8). The
         // initialized entity is a temporary: "a value".
-        let entity = self.init_entity.replace("3");
+        let entity = self.init_entity.replace(crate::init::entity::VALUE);
         let init = match self.fixed_enum_list_init(to, l) {
             Some(e) => e,
             None => {
@@ -513,6 +522,30 @@ impl Sema<'_, '_> {
             n.ty(),
             n.value_category(),
             loc,
+        )
+    }
+
+    /// `A{ ... }` for an array type `A` ([expr.type.conv]/2): the
+    /// aggregate-initialized array temporary (an array of unknown bound
+    /// takes the bound of the list, [dcl.init.aggr]/4), bound to its
+    /// element destructor, then a no-op functional cast (clang
+    /// `BuildCXXTypeConstructExpr` with an `InitListExpr`).
+    fn array_list_cast(&mut self, to: QualType, l: &InitList, loc: Loc) -> ExprId {
+        let init = self.init_from_list_at(to, l, Some(loc));
+        if self.is_err_expr(init) {
+            return self.recover(to, &[init], loc);
+        }
+        let ty = self.ast.exprs.get(init).ty();
+        let init = self.maybe_bind_temporary(init);
+        self.builder().functional_cast(
+            CastKind::NoOp,
+            init,
+            ty,
+            ValueCategory::PRValue,
+            None,
+            loc,
+            l.rbrace,
+            ExprFlags::NONE,
         )
     }
 
