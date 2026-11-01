@@ -960,7 +960,12 @@ impl Sema<'_, '_> {
                     }),
                     None => self.init_base_element(ety, a),
                 },
-                Some(&a) => self.paren_element_init(ety, a, entity::MEMBER),
+                Some(&a) => {
+                    let e = self.paren_element_init(ety, a, entity::MEMBER);
+                    let el = self.begin_loc(e);
+                    self.check_bit_field_init(fields[i - nb], e, el);
+                    e
+                }
                 None if i < nb => self.as_base_subobject(|s| s.paren_value_init(ety, at)),
                 None => {
                     let f = fields[i - nb];
@@ -1036,6 +1041,8 @@ impl Sema<'_, '_> {
         if self.is_err_expr(init) {
             return self.recover(ty, args, at);
         }
+        let el = self.begin_loc(init);
+        self.check_bit_field_init(f, init, el);
         self.builder().paren_list_init_union(ty, init, f, at, rparen)
     }
 
@@ -1830,7 +1837,13 @@ impl Sema<'_, '_> {
                     }),
                     _ => {
                         let k = if cur < nb { entity::BASE } else { entity::MEMBER };
-                        self.with_init_entity(k, |s| s.init_element(ety, items, pos, lbrace))
+                        let e =
+                            self.with_init_entity(k, |s| s.init_element(ety, items, pos, lbrace));
+                        if cur >= nb {
+                            let at = self.begin_loc(e);
+                            self.check_bit_field_init(fields[cur - nb], e, at);
+                        }
+                        e
                     }
                 }
             };

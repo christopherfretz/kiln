@@ -5,7 +5,9 @@
 All = "all" [Most, Switch, SwitchBool];
 Asm = "asm" [AsmOperandWidths];
 Attributes = "attributes" [UnknownAttributes, IgnoredAttributes];
+BitfieldConstantConversion = "bitfield-constant-conversion" [SingleBitBitfieldConstantConversion];
 C99Extensions = "c99-extensions" [C99Designator];
+ConstantConversion = "constant-conversion" [BitfieldConstantConversion];
 Conversion = "conversion" [LiteralConversion, ConstantConversion];
 Cxx11Extensions = "c++11-extensions" [Cxx11LongLong];
 Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];

@@ -15,6 +15,7 @@
 )]
 
 mod asm;
+mod bitfield_constant;
 mod builtins;
 pub mod class;
 mod complex;

@@ -2752,6 +2752,45 @@ instantiation repeats them, as clang does).
 - Tests: `tests/conformance/stmt.for/for-loop-analysis.cpp`,
   `stmt.for/loop-analysis.cpp`.
 
+### 7.12 `-Wbitfield-constant-conversion` (`bitfield_constant.rs`, WP-234)
+clang 19's `AnalyzeBitFieldAssignment`. An integral or enumeration
+constant (implicit casts and parentheses stripped, folded) stored into a
+bit-field of width N that cannot hold it reports `implicit truncation
+from T to bit-field changes value from V to W` [-Wbitfield-constant-
+conversion, on by default; a subgroup of -Wconstant-conversion], where T
+is the constant's type and W the value of its low N bits read with the
+bit-field's signedness ([conv.integral]/3). Storing 1 into a one-bit
+wide signed bit-field reports `... to a one-bit wide bit-field ...`
+[-Wsingle-bit-bitfield-constant-conversion, a subgroup].
+- Nothing is reported for a `bool` bit-field, a dependent or invalid
+  bit-field, a value-dependent or non-constant value, or a value of
+  128 or more bits.
+- The value needs the width of its type, except that a negated or
+  complemented constant (`-5`, `~0u`), or any unsigned constant written
+  that way, needs only its significant bits (`APInt::getSignificantBits`
+  of the bit pattern), so `u2 = -1` and `u4 = ~0u` are silent.
+- **Sites.** A simple assignment `b = v` (not a compound one), at the
+  operator, from the implicit-conversion walk of the full-expression
+  (`impcast.rs`); when it is reported the conversions of `v` are not
+  analyzed further. The initialization of a bit-field member (clang
+  `CheckBitFieldInitialization`): aggregate initialization (including
+  designated and brace-elided elements, `new T{...}`) and parenthesized
+  aggregate initialization, at the element; a mem-initializer, at the
+  member name; a default member initializer, at the initializer (the
+  `{` of a braced one). A braced scalar initializer `{v}` is reported at
+  `v` with `v`'s type and again at the initialization's location with
+  the bit-field's declared type (clang checks the element and then the
+  `InitListExpr`; the significant-bits rule does not apply to the
+  second).
+- Each template instantiation is checked again (`allow_duplicate`).
+- **Gaps.** A default member initializer of a class template
+  specialization is instantiated with the class rather than at its
+  first use, so its warnings carry `in instantiation of template class`
+  instead of clang's default-member-initializer notes. The enumeration
+  checks of `AnalyzeBitFieldAssignment` for a non-constant value
+  (`-Wbitfield-enum-conversion`) and `-Wsigned-enum-bitfield` are not
+  implemented.
+
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
 Sema does no constant evaluation of its own: every constant it needs

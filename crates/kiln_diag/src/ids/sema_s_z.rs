@@ -7,6 +7,7 @@ sema_shift_negative = Warning [ShiftCountNegative] (0) "shift count is negative"
 // [expr.typeid]/3 (WP-219)
 sema_side_effects_typeid = Warning [PotentiallyEvaluatedExpression] (0) "expression with side effects will be evaluated despite being used as an operand to 'typeid'";
 sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";
+sema_single_bit_bitfield_constant_conversion = Warning [SingleBitBitfieldConstantConversion] (3) "implicit truncation from {0} to a one-bit wide bit-field changes value from {1} to {2}";
 sema_size_t_literal_too_large = Error (1) "{0:signed |}'size_t' literal is out of range of possible {0:signed |}'size_t' values";
 sema_sizeof_bitfield = Error (1) "invalid application of '{0}' to bit-field";
 sema_sizeof_function = Extension [PointerArith] (1) "invalid application of '{0}' to a function type";
