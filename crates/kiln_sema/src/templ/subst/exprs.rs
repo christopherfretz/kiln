@@ -474,10 +474,13 @@ impl Substituter<'_, '_, '_> {
                     let il = InitList { items: out, lbrace: loc, rbrace: end };
                     return Ok(self.sema.act_on_list_cast(ty, &il, loc));
                 }
-                let args = self.expr_list(l)?;
+                // `T(a, {b})`: a braced operand is a placeholder again.
+                let args = self.call_arg_list(l)?;
                 Ok(match args.as_slice() {
                     [] => self.sema.act_on_value_init_cast(ty, loc, end),
-                    [a] => self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end),
+                    [a] if !self.sema.is_braced_arg(*a) => {
+                        self.sema.act_on_cast(CastStyle::Functional, ty, *a, loc, end)
+                    }
                     _ => self.sema.act_on_paren_list_cast(ty, &args, loc, end),
                 })
             }
