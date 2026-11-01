@@ -1721,6 +1721,8 @@ impl Sema<'_, '_> {
         }
         if n.kind() == DeclKind::Var {
             self.note_var_referenced(d, loc);
+        }
+        if matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar) {
             self.count_var_ref(d);
         }
         self.diagnose_deprecated(d, loc);
@@ -4123,6 +4125,9 @@ impl Sema<'_, '_> {
         // defined is complete enough: its members declared so far are
         // found (a trailing return type naming `this->m`, [class.mem]/7).
         let first = self.ast.first(rec);
+        if self.instantiation_fails(obj_ty, op_loc) {
+            return self.recover_err(&[base], loc);
+        }
         let complete = self.defining.iter().any(|&d| self.ast.first(d) == first)
             || self.require_complete(obj_ty, op_loc);
         let Some(def) = self.ast.definition(rec).filter(|_| complete) else {

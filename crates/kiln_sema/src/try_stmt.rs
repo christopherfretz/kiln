@@ -12,7 +12,7 @@ use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
-mod reach;
+pub(crate) mod reach;
 
 use crate::Sema;
 use crate::conv::bases::{BaseSearch, find_base};

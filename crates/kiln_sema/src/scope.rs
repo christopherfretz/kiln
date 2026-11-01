@@ -68,7 +68,8 @@ pub struct Scope {
     /// definition of the namespace (clang's `Scope::isDeclScope`, which
     /// orders the names of an ambiguous lookup). `u32::MAX` for none.
     pub first_decl: u32,
-    /// The error count when the scope was entered: an error inside it
+    /// The unrecoverable error count when the scope was entered: an error
+    /// (not a warning promoted by `-Werror`) inside it
     /// suppresses its unused-declaration warnings (clang
     /// `Scope::hasUnrecoverableErrorOccurred`).
     pub errors: u32,

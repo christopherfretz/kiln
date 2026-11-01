@@ -121,7 +121,7 @@ impl Sema<'_, '_> {
     /// the implicit scopes of selection/iteration statements).
     pub fn push_scope(&mut self, kind: ScopeKind) {
         let mut s = Scope::new(kind, None);
-        s.errors = self.diags.error_count();
+        s.errors = self.diags.unrecoverable_error_count();
         self.scopes.push(s);
     }
 
@@ -653,6 +653,7 @@ impl Sema<'_, '_> {
             self.discard_assignment_ref(e);
             self.act_on_full_expr(e)
         });
+        self.check_for_loop_analysis(cond_var, cond, inc, body);
         let data = LoopData { init, cond_var, cond, inc, body: Some(body) };
         self.builder().for_stmt(data, loc)
     }
@@ -1212,7 +1213,7 @@ impl Sema<'_, '_> {
         if self.in_template() && !self.is_named_function_template(state.decl) {
             state.runtime_diags.retain(|(_, anchor)| anchor.is_none());
         }
-        let dead = if self.diags.error_count() > 0 || self.in_template() {
+        let dead = if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             None
         } else {
             let wanted: HashSet<ExprId> =
@@ -1229,8 +1230,9 @@ impl Sema<'_, '_> {
         }
         let ret = state.ret;
         // clang skips its analysis-based warnings once an error occurred
-        // (`hasUncompilableErrorOccurred`), and in dependent contexts.
-        if self.diags.error_count() > 0 || self.in_template() {
+        // (`hasUncompilableErrorOccurred`: not a warning promoted by
+        // `-Werror`), and in dependent contexts.
+        if self.diags.uncompilable_error_count() > 0 || self.in_template() {
             return;
         }
         if self.decl_is_noreturn(state.decl) {

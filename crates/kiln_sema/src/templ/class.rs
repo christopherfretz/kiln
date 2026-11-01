@@ -418,6 +418,24 @@ impl Sema<'_, '_> {
         self.is_complete(q)
     }
 
+    /// Whether this use of `q` instantiates a class template
+    /// specialization whose instantiation fails ([temp.inst]/2, diagnosed
+    /// then). clang's `RequireCompleteType` returns the instantiation's
+    /// invalidity, so the use that instantiated it fails quietly (`A<int>
+    /// a;` is an invalid variable, `p->g()` builds no call and so does not
+    /// instantiate `g`); later uses find the class complete.
+    pub(crate) fn instantiation_fails(&mut self, q: QualType, loc: Loc) -> bool {
+        let Some(r) = self.undefined_spec(q) else { return false };
+        if self.instantiate_class(r, loc, true)
+            || !self.ast.decls.get(r).has(DeclFlags::INVALID)
+            || self.ast.definition(r).is_none()
+        {
+            return false;
+        }
+        self.inst.undefined_diagnosed.set(None);
+        true
+    }
+
     /// As [`Sema::require_complete`], but an undefined template is not
     /// diagnosed (the caller reports the incomplete type).
     pub fn require_complete_silent(&mut self, q: QualType, loc: Loc) -> bool {
@@ -888,7 +906,7 @@ impl Sema<'_, '_> {
     /// clang's `mightBeUsableInConstantExpressions`: `constexpr`, or a
     /// `const` non-volatile integral, enumeration or reference variable
     /// ([expr.const]/4, before its initializer is known).
-    fn might_be_constant_var(&self, v: DeclId) -> bool {
+    pub(crate) fn might_be_constant_var(&self, v: DeclId) -> bool {
         if self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr()) {
             return true;
         }
@@ -1268,7 +1286,10 @@ impl Substituter<'_, '_, '_> {
             {
                 Ok(Some(sub.local_class(m, local.as_deref_mut())))
             } else {
-                sub.member(m)
+                let salt = std::mem::replace(&mut sub.sema.inst.stack.member_salt, m.index());
+                let r = sub.member(m);
+                sub.sema.inst.stack.member_salt = salt;
+                r
             };
             let data = matches!(n.kind(), DeclKind::Field | DeclKind::Var);
             invalid |= data && r.is_err();

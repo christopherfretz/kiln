@@ -401,8 +401,15 @@ impl Sema<'_, '_> {
             AccessCheck { member: found, naming_class: naming, object_class: object, loc, repeat };
         // Delayed only while still in the declaration's own context: a
         // class or function body (or lambda) inside the delayed region is
-        // its own context (clang's `pushUndelayed`).
-        if self.delayed_access_depth.last().is_some_and(|&(_, ctx, _)| ctx == self.ctx) {
+        // its own context (clang's `pushUndelayed`). So is a SFINAE
+        // substitution the declaration triggers (deduction for an explicit
+        // instantiation, a default template argument): its checks are
+        // made now, in the template's context, as substitution failures
+        // ([temp.spec.general]/6 exempts only the names written,
+        // [temp.deduct.general]/8).
+        if !self.inst.stack.is_sfinae()
+            && self.delayed_access_depth.last().is_some_and(|&(_, ctx, _)| ctx == self.ctx)
+        {
             self.delayed_access.push(check);
             return true;
         }

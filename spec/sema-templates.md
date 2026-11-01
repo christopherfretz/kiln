@@ -994,8 +994,16 @@ The specialization is then still completed with its implicit special
 members (`ensure_implicit` exempts invalid specializations), its default
 member initializers are not instantiated, and the use that required the
 definition fails without a further "incomplete type" error
-(`undefined_diagnosed`). Gap: member functions of such a specialization
-are still instantiated on use (`a.g()` after `A<int> a;`).
+(`undefined_diagnosed`). `instantiation_fails` is that quiet failure
+for the uses clang checks with `RequireCompleteType`: a variable
+definition (default-initialized or with an initializer) or a function
+parameter of the specialization's type is invalid, so its later uses
+raise nothing and instantiate nothing (`a.g()` after `A<int> a;`), and a
+member access that instantiated the class builds no expression, so the
+member function it names is not instantiated. Later uses find the class
+complete: a static member, a member pointer, or a later member call
+instantiate their members as usual
+(`tests/conformance/temp.inst/invalid-specialization-members.cpp`).
 
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
@@ -1583,10 +1591,10 @@ formed it:
   `TransformFunctionProtoType`. A trailing return type is substituted
   after them. The parameters still enter scope before the exception
   specification.
-- Known gap. clang reports an error once per declarator: in `typedef
-  T::type g, (*h)(T::type);` both `g` and `h` fail at the first `T::type`
-  and clang reports it twice. Kiln's diagnostic engine drops the
-  identical second report (same id, location and context).
+- Once per declarator. In `typedef T::type g, (*h)(T::type);` both `g`
+  and `h` fail at the first `T::type`, and clang reports it twice. Kiln
+  does too: the member being substituted salts the dedup context
+  (§10.2, `member_salt`).
 - Dependent names inside expressions (`T::x` in a default argument) are
   not affected. The expression keeps its own location, so these are
   exact without the table. A type operand of `sizeof`, `alignof` or
@@ -2721,7 +2729,13 @@ toward `-ftemplate-depth`. They are clang's `NonInstantiationEntries`.
 `InstantiationStack::context_key()`, a hash of every frame's `(kind,
 entity, args, poi)` (0 only for an empty stack). The same error in two
 instantiations (`S<int>`, `S<long>`) prints twice, each with its notes;
-see spec/diag.md §7.4 for the full rule (WP-087).
+see spec/diag.md §7.4 for the full rule (WP-087). While a class
+instantiation substitutes one pattern member, its `DeclId` is mixed into
+the key too (`InstantiationStack::member_salt`): clang substitutes each
+declarator of `typedef typename T::type g, (*h)(typename T::type);` (or
+`T::type a, b;`) separately, so an error in the shared decl-specifier
+prints once per declarator, the context notes only with the first
+(tests/conformance/temp.inst/shared-decl-specifier-per-declarator.cpp).
 
 **Elision.** `-ftemplate-backtrace-limit=N` defaults to 10; 0 means no
 limit. With F frames and F > N > 0:
@@ -3083,10 +3097,16 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   template parameters than its corresponding template template parameter`
   at the argument with the arity / kind / pack / non-type-type note and
   `template parameter is declared here`
-  (`tests/conformance/temp.arg.template/`). Gap: a non-type parameter
-  whose type depends on an outer parameter (`template<class T,
-  template<T> class P>`) is compared unsubstituted, so `DP<int, IP>` with
-  `template<int*> class IP` is accepted where clang rejects it.
+  (`tests/conformance/temp.arg.template/`). A non-type parameter of P
+  whose type depends on an earlier parameter of the enclosing template
+  (`template<class T, template<T> class P>`) is compared with the prior
+  arguments substituted (`prior_levels`), as clang substitutes them into
+  P before matching; A's parameters are never substituted, and the roles
+  swap with the substitution in the nested recursion
+  (`dependent-nttp-type.cpp`). Gap: a mismatch found while instantiating
+  a member (`DP<V, IP>` in `Outer<int>`) is reported at the template-id,
+  not at the argument, since substituted types keep no argument
+  locations.
 - P0846 (ADL for an unknown name followed by `<`) is not implemented.
 - A `DependentScopeDeclRefExpr` does not record the `template` keyword.
 - A parameter named in its own declarator's trailing return type is

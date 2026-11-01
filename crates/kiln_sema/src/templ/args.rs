@@ -305,8 +305,11 @@ impl Sema<'_, '_> {
                         | DeclKind::TemplateTemplateParm,
                     ) => {
                         let d = self.ast.types.template_decl(n);
-                        if d.is_some_and(|d| !self.check_template_template_arg(p, d, at)) {
-                            return Err(());
+                        if let Some(d) = d {
+                            let args = self.prior_levels(tmpl, depth, prior);
+                            if !self.check_template_template_arg(p, d, at, &args) {
+                                return Err(());
+                            }
                         }
                         Ok(a)
                     }
