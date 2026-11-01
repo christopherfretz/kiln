@@ -1347,6 +1347,11 @@ impl Sema<'_, '_> {
         d: &Declarator,
     ) -> Option<DeclId> {
         self.finish_invented_head();
+        if ds.friend.is_none()
+            && let Some(nloc) = d.name.map(|n| n.1).or(d.special.map(|s| s.1))
+        {
+            self.check_member_spec_header(d.qualifier, nloc, ds.loc);
+        }
         let head = self.take_template_head(d.qualifier);
         if !d.dropped
             && ds.friend.is_none()
@@ -3379,6 +3384,15 @@ impl Sema<'_, '_> {
                 .filter(|&d| self.kind_of(d) == DeclKind::ClassTemplate)
                 .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
                 .collect(),
+            // `template<class T> template<class U> struct A<T>::B { ... }`:
+            // the member template's latest pattern ([temp.mem.class]).
+            (Some(q), _) if templ => self
+                .lookup_qualified(q, n, LookupKind::All)
+                .decls
+                .into_iter()
+                .filter(|&d| self.kind_of(d) == DeclKind::ClassTemplate)
+                .filter_map(|d| self.pattern_of(d).map(|p| self.ast.latest(p)))
+                .collect(),
             (Some(q), _) => self.lookup_qualified(q, n, LookupKind::Tag).decls,
             (None, TagUse::Reference) if !opaque_enum => self.lookup_name(n, LookupKind::Tag).decls,
             (None, _) => self
@@ -3387,6 +3401,48 @@ impl Sema<'_, '_> {
                 .filter(|&d| is_tag_kind(self.ast.decls.get(d).kind()))
                 .collect(),
         }
+    }
+
+    /// A qualified tag name `A::X` that names no tag of `A`: another kind
+    /// of member redefined (`struct A<T>::D` for a member template `D`),
+    /// else clang's `err_not_tag_in_scope`.
+    fn diag_qualified_tag_not_found(
+        &mut self,
+        keyword: TagKeyword,
+        n: Symbol,
+        nloc: Loc,
+        q: DeclId,
+        use_: TagUse,
+    ) {
+        if use_ == TagUse::Definition
+            && let Some(&other) = self.lookup_qualified(q, n, LookupKind::All).decls.first()
+        {
+            let other = self.ast.first(self.pattern_of(other).unwrap_or(other));
+            let msg =
+                self.diag(DiagId::sema_redefinition_different_kind, nloc).arg(sym_str(self, n));
+            let msg = self.note_prev(msg, other, true);
+            self.emit(msg);
+            return;
+        }
+        let kind = match keyword {
+            TagKeyword::Union => 2u8,
+            TagKeyword::Class => 3,
+            TagKeyword::Enum => 4,
+            _ => 0,
+        };
+        let scope = match self.kind_of(q) {
+            DeclKind::CXXRecord => {
+                let t = self.this_class_type(q);
+                format!("'{}'", self.ty_str(t))
+            }
+            _ => format!("'{}'", self.decl_name(q)),
+        };
+        let msg = self
+            .diag(DiagId::sema_not_tag_in_scope, nloc)
+            .arg(kind)
+            .arg(sym_str(self, n))
+            .arg(scope);
+        self.emit(msg);
     }
 
     /// The template head of a class template redeclaration that creates
@@ -3432,9 +3488,20 @@ impl Sema<'_, '_> {
                 self.emit(msg);
             }
         }
+        if use_ == TagUse::Definition
+            && let Some((_, nloc)) = name
+        {
+            self.check_member_spec_header(qualifier, nloc, loc);
+        }
         let head = if !is_enum && matches!(use_, TagUse::Definition | TagUse::Declaration) {
             self.take_template_head(qualifier)
         } else {
+            if is_enum && qualifier.is_some() && use_ == TagUse::Definition {
+                // `template<class T> enum class A<T>::E { ... }`: the heads
+                // belong to the qualifier's class templates ([temp.mem.enum]).
+                let _ = self.take_template_head(qualifier);
+                self.templ.cur = None;
+            }
             None
         };
         let mut prev = None;
@@ -3481,12 +3548,8 @@ impl Sema<'_, '_> {
                     self.check_redeclared_class_head(p);
                     return p;
                 }
-            } else if qualifier.is_some() {
-                let msg = self
-                    .diag(DiagId::sema_no_member, nloc)
-                    .arg(sym_str(self, n))
-                    .arg(format!("'{}'", self.decl_name(qualifier.unwrap_or(self.ast.tu))));
-                self.emit(msg);
+            } else if let Some(q) = qualifier {
+                self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_);
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
@@ -4656,7 +4719,15 @@ impl Sema<'_, '_> {
             DeclKind::NamespaceAlias => Some(self.ast.resolve_alias(d)),
             // A class named only as a qualifier is not marked referenced
             // (clang's `isReferenced`).
-            DeclKind::CXXRecord | DeclKind::Enum => Some(self.ast.definition(d).unwrap_or(d)),
+            DeclKind::CXXRecord | DeclKind::Enum => {
+                // [expr.prim.id.qual]/1, [temp.inst]/3: a member class of
+                // a class template specialization named before `::` is
+                // instantiated (`O<int>::M::N`).
+                if self.ast.definition(d).is_none() && self.ast.instantiated_from(d).is_some() {
+                    let _ = self.instantiate_class(d, loc, true);
+                }
+                Some(self.ast.definition(d).unwrap_or(d))
+            }
             DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm => Some(d),
             DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
                 let what = if self.kind_of(d) == DeclKind::ClassTemplate {

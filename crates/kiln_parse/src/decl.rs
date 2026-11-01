@@ -914,10 +914,24 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let mut qualifier = None;
+        // `N::C`, or `X<A>::C` (the out-of-line definition of a member
+        // class of a class template, [temp.mem.class]); the scope is
+        // entered as clang's `ParseClassSpecifier` does.
+        let template_id_qual = || {
+            self.ident().is_some()
+                && self.peek_is(1, Punct::Less)
+                && matches!(self.skip_template_args(self.pos() + 1),
+                    Some((close, false)) if self.tok_at(close + 1).kind
+                        == TokKind::Punct(Punct::ColonColon))
+        };
         if self.at(Punct::ColonColon)
             || (self.ident().is_some() && self.peek_is(1, Punct::ColonColon))
+            || template_id_qual()
         {
-            match self.parse_nested_name() {
+            let saved = self.s.set_entering_context(true);
+            let q = self.parse_nested_name();
+            self.s.set_entering_context(saved);
+            match q {
                 Ok(q) => qualifier = q,
                 Err(()) => ds.invalid = true,
             }
@@ -963,11 +977,15 @@ impl Parser<'_, '_> {
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs);
         if use_ == TagUse::Definition {
+            // `struct A::B { ... }`: names in the body are looked up in
+            // `A` too ([basic.lookup.unqual]/2, [class.nest]/3).
+            let entered = qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
             if keyword == TagKeyword::Enum {
                 self.parse_enum_body(d);
             } else {
                 self.parse_record_body(d, final_loc);
             }
+            self.s.act_on_exit_declarator_scope(entered);
         }
         ds.tag = Some(d);
         ds.tag_declares = use_ != TagUse::Reference;
