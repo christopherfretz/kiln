@@ -284,7 +284,29 @@ impl Sema<'_, '_> {
     /// through [`Sema::act_on_param_default_init`]. WP-066b (temporaries in
     /// defaults: WP-067b).
     pub fn act_on_param_default_arg(&mut self, p: DeclId, e: ExprId) {
+        self.unparsed_default_args.remove(&p);
         self.attach_default_arg(p, e);
+    }
+
+    /// A call at `callee` to `f` that uses the default argument of `p`
+    /// before its complete-class context was parsed ([class.mem.general]/7;
+    /// clang `CheckCXXDefaultArgExpr`): "use of default argument to
+    /// function ... that is declared later in class ...", noted at the
+    /// argument. Returns true then.
+    pub(crate) fn diagnose_unparsed_default_arg(&mut self, f: DeclId, p: DeclId, callee: ExprId) -> bool {
+        let Some(&at) = self.unparsed_default_args.get(&p) else { return false };
+        if self.ast.decls.param(p).is_none_or(|x| x.default_arg.is_some()) {
+            return false;
+        }
+        let class = self.ast.decls.get(f).ctx().map(|c| self.decl_arg(c)).unwrap_or_default();
+        let note = self.diag(DiagId::note_default_arg_declared_here, at);
+        let fname = self.decl_arg(f);
+        let msg = self
+            .diag(DiagId::sema_default_arg_declared_later, self.begin_loc(callee))
+            .arg(fname)
+            .arg(class);
+        self.emit(msg.with_note(note));
+        true
     }
 
     /// The braced default argument `= { ... }` of parameter `p`
@@ -294,6 +316,7 @@ impl Sema<'_, '_> {
     /// instantiation for a pattern's dependent braced default argument
     /// (WP-136). Write-once, like [`Sema::act_on_param_default_arg`].
     pub fn act_on_param_default_list(&mut self, p: DeclId, l: &crate::init::InitList) {
+        self.unparsed_default_args.remove(&p);
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let loc = self.ast.decls.get(p).loc();
         let note = Some(self.param_decl_note(p));

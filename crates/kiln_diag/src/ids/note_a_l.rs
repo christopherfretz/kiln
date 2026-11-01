@@ -51,6 +51,7 @@ note_deduced_conflicting = Note (4) "candidate template ignored: deduced conflic
 note_deduction_incomplete = Note (1) "candidate template ignored: couldn't infer template argument '{0}'";
 note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match {0} against {1}";
 note_deduction_underqualified = Note (3) "candidate template ignored: cannot deduce a type for '{0}' that would make '{1}' equal '{2}'";
+note_default_arg_declared_here = Note (0) "default argument declared here";
 note_default_arg_instantiation_here = Note (1) "in instantiation of default argument for '{0}' required here";
 note_default_function_arg_instantiation_here = Note (1) "in instantiation of default function argument expression for '{0}' required here";
 note_default_member_init_not_yet_parsed = Note (0) "default member initializer declared here";

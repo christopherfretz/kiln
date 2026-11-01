@@ -1876,7 +1876,8 @@ impl Parser<'_, '_> {
                     // replayed after the class (spec/parse.md §2.4).
                     let eq = self.loc();
                     let toks = self.capture_default_arg();
-                    p.default_arg = DefaultArg::Unparsed(eq);
+                    let arg = toks.second_loc(eq);
+                    p.default_arg = DefaultArg::Unparsed(eq, arg);
                     self.late_fn.default_args.push((params.len(), toks));
                 } else {
                     self.parse_default_argument(&mut p);

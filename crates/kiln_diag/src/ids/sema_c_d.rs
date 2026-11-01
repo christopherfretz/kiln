@@ -130,6 +130,7 @@ sema_decomp_decl_type = Error (1) "decomposition declaration cannot be declared 
 sema_decomp_decl_unbindable_type = Error (2) "cannot decompose {0:union|non-class, non-array} type {1}";
 sema_decomp_decl_wrong_number_bindings = Error (3) "type {0} decomposes into {1}, but {2} provided";
 sema_decrement_bool = Error (0) "cannot decrement expression of type bool";
+sema_default_arg_declared_later = Error (2) "use of default argument to function {0} that is declared later in class {1}";
 sema_default_arg_in_partial_spec = Error (0) "default template argument in a class template partial specialization";
 sema_default_arg_redefinition = Error (0) "redefinition of default argument";
 sema_default_init_const = Error (1) "default initialization of an object of const type {0}";

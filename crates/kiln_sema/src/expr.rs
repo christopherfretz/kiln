@@ -3771,6 +3771,9 @@ impl Sema<'_, '_> {
         // instantiated now.
         if let Some(c) = named {
             for &p in pdecls.iter().take(n).skip(have) {
+                if self.diagnose_unparsed_default_arg(c.decl, p, callee) {
+                    return None;
+                }
                 if self.inst.lazy_defaults.contains_key(&p)
                     && !self.instantiate_lazy_default(c.decl, p, self.begin_loc(callee))
                 {

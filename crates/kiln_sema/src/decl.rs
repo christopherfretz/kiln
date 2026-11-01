@@ -1163,7 +1163,7 @@ impl Sema<'_, '_> {
         }
         match first.default_arg {
             DefaultArg::None => {}
-            DefaultArg::Unparsed(l) => self.error(DiagId::sema_explicit_object_param_default, l),
+            DefaultArg::Unparsed(l, _) => self.error(DiagId::sema_explicit_object_param_default, l),
             DefaultArg::Parsed(e) => {
                 let l = self.eloc(e);
                 self.error(DiagId::sema_explicit_object_param_default, l);
@@ -2960,7 +2960,10 @@ impl Sema<'_, '_> {
             match p.default_arg {
                 // Replayed in the complete-class context through
                 // `act_on_param_default_arg` (spec/sema-class.md §2.7).
-                DefaultArg::Unparsed(_) => self.ast.decls.mark_default_arg_pending(pd),
+                DefaultArg::Unparsed(_, at) => {
+                    self.ast.decls.mark_default_arg_pending(pd);
+                    self.unparsed_default_args.insert(pd, at);
+                }
                 // A default parsed in place was converted by
                 // `act_on_param_default_init`; `defaults` also holds the
                 // inherited ones ([dcl.fct.default]/4).
@@ -2993,7 +2996,7 @@ impl Sema<'_, '_> {
             .iter()
             .map(|p| match p.default_arg {
                 DefaultArg::Parsed(e) => Some(e),
-                DefaultArg::None | DefaultArg::Unparsed(_) => None,
+                DefaultArg::None | DefaultArg::Unparsed(..) => None,
             })
             .collect();
         let mut redefined = false;
