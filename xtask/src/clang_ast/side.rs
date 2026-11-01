@@ -2,7 +2,8 @@
 //! compile, for what the JSON dump omits — the `value:` child of constexpr
 //! variables and the `destroyed` word of variables and parameters; a
 //! function's `trivial`, `noexcept-unevaluated` and friend
-//! words and its `Overrides:` child — and to cross-check the function
+//! words and its `Overrides:` child; a class template specialization's
+//! template template and enumeration arguments — and to cross-check the function
 //! flags the normalizer derives from the JSON (`constexpr`, `consteval`,
 //! `implicit-inline`).
 //!
@@ -63,6 +64,11 @@ pub struct TextDecl {
     /// A method's `Overrides: [ ... ]` child, addresses removed
     /// (`Overrides: [ B::f 'int ()' ]`).
     pub overrides: Option<String>,
+    /// A class template (partial) specialization's `TemplateArgument`
+    /// children, without the class word (`template 'q::F'`, `integral
+    /// 'K::b'`): the JSON omits a template template argument's name and
+    /// an enumeration argument's enumerator.
+    pub args: Vec<String>,
 }
 
 impl TextDecl {
@@ -203,7 +209,19 @@ pub fn parse(text: &str) -> Result<Vec<TextDecl>, String> {
             // declarations) are not part of the declaration order.
             i = j;
         }
-        decls.push(TextDecl { class, line, value, overrides });
+        let mut args = Vec::new();
+        if is_record(class) {
+            // Its direct `TemplateArgument` children; the scan does not
+            // advance `i`, so nested declarations are still collected.
+            for &(d, c) in lines[i..].iter().take_while(|(d, _)| *d > depth) {
+                if d == depth + 1
+                    && let Some(a) = c.strip_prefix("TemplateArgument ")
+                {
+                    args.push(a.to_owned());
+                }
+            }
+        }
+        decls.push(TextDecl { class, line, value, overrides, args });
     }
     Ok(decls)
 }

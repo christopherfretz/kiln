@@ -1,0 +1,28 @@
+Dumping n::PA:
+TemplateTypeParmDecl referenced class depth 0 index 0 PA
+
+Dumping n::PV:
+TemplateTypeParmDecl class depth 0 index 0 PV
+
+Dumping n::PC:
+TemplateTypeParmDecl class depth 0 index 0 PC
+
+Dumping PF:
+TemplateTypeParmDecl referenced class depth 0 index 0 PF
+
+Dumping Pp:
+ParmVarDecl Pp 'PF'
+
+Dumping Pl:
+VarDecl referenced Pl 'int' cinit
+`-IntegerLiteral 'int' 0
+
+Dumping n::SS::PK:
+TemplateTypeParmDecl class depth 0 index 0 PK
+
+Dumping PM:
+TemplateTypeParmDecl class depth 1 index 0 PM
+
+Dumping n::SS::Pd:
+FieldDecl Pd 'int'
+
