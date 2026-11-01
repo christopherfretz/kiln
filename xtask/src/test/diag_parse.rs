@@ -453,7 +453,8 @@ dir:with:colons/x.cpp:7:1: fatal error: 'nope.h' file not found
     fn clang_dup_groups_count_twice_under_clang_only() {
         let once = "t.cpp:2:1: error: undef\nt.cpp:1:2: note: here\n";
         let twice = format!("{once}{once}");
-        let mut dirs = vec![d(2, Some(1), Severity::Error, "undef"), d(1, Some(2), Severity::Note, "")];
+        let mut dirs =
+            vec![d(2, Some(1), Severity::Error, "undef"), d(1, Some(2), Severity::Note, "")];
         dirs[0].clang_dup = true;
         let clang = expand_clang_dups(&dirs, true);
         let kiln = expand_clang_dups(&dirs, false);

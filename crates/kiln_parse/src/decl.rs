@@ -843,7 +843,8 @@ impl Parser<'_, '_> {
         let start = self.pos();
         let loc = self.name_begin();
         if self.at_template_type_name_checked(ctx, loc) {
-            let scanned = self.scan_name_at(start).and_then(|(end, split, ..)| (!split).then_some(end));
+            let scanned =
+                self.scan_name_at(start).and_then(|(end, split, ..)| (!split).then_some(end));
             let ty = self.parse_template_type_name(ctx);
             if ty.is_none() {
                 // An invalid qualifier (`X<A>::type` where the
