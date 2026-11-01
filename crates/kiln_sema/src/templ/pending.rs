@@ -143,18 +143,16 @@ impl Sema<'_, '_> {
         if kind != SpecKind::ExplicitInstantiationDefinition || self.inst.fatal {
             return;
         }
-        let e = match template {
-            Some(t) => self
-                .diag(kiln_diag::DiagId::sema_explicit_inst_undefined_func_template, poi)
-                .arg(self.decl_name(t)),
-            None => {
-                let Some(class) = self.ast.decls.get(d).ctx() else { return };
-                let var = self.kind_of(d) == kiln_ast::decl::DeclKind::Var;
-                self.diag(kiln_diag::DiagId::sema_explicit_inst_undefined_member, poi)
-                    .arg(if var { 2u8 } else { 1u8 })
-                    .arg(self.decl_name(d))
-                    .arg(self.decl_ty_str(self.tag_type(class)))
-            }
+        let e = if let Some(t) = template {
+            self.diag(kiln_diag::DiagId::sema_explicit_inst_undefined_func_template, poi)
+                .arg(self.decl_name(t))
+        } else {
+            let Some(class) = self.ast.decls.get(d).ctx() else { return };
+            let var = self.kind_of(d) == kiln_ast::decl::DeclKind::Var;
+            self.diag(kiln_diag::DiagId::sema_explicit_inst_undefined_member, poi)
+                .arg(if var { 2u8 } else { 1u8 })
+                .arg(self.decl_name(d))
+                .arg(self.decl_ty_str(self.tag_type(class)))
         };
         let note = self.diag(
             kiln_diag::DiagId::note_explicit_instantiation_here,
