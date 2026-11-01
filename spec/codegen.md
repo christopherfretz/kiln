@@ -300,7 +300,15 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
   made active by an assignment in a constructor body or by a trivial copy
   assignment (libc++'s `std::string` constructors) is emitted, as clang
   emits its `APValue` (WP-212). An image with no recorded member is
-  `zeroinitializer` when all its bytes are zero, else an error. A record with bit-fields
+  `zeroinitializer` when all its bytes are zero, else an error. When a
+  global's definition has a different IR type from the declaration an
+  earlier use created (a union, or a record holding one, initialized
+  through a member other than its largest), `emit_var_def` retypes that
+  declaration to the initializer's type and moves it to the end of the
+  global list (`kiln_llvm` `retype_global_to_end`), as clang
+  `GetOrCreateLLVMGlobal` does; a static local is retyped in place
+  (`AddInitializerToStaticVarDecl`). Retyping a global that already has
+  an initializer is an error (WP-213). A record with bit-fields
   is built like any other, each bit-field storage unit read from the
   image's bytes as its IR type (the Oven's object representation already
   packs the fields in target bit order; WP-207). Base classes are still

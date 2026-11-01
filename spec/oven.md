@@ -134,6 +134,14 @@ the evaluator's flattened type table.
   expression (clang's call-site location), not at the `CallExpr`'s own
   location (its parenthesis). Arguments bound to reference parameters print
   as the referred-to object (`bad(a[1], 0)`), as clang prints them.
+  A member call prints its object before the callee name (clang
+  `describeCall`): a `CXXMemberCallExpr` its implicit object expression as
+  written, a member `CXXOperatorCallExpr` its first operand as written
+  (`u.s.data[0].operator=(e)`, `*p.operator+=(0)`), anything else the
+  `this` pointer's designator. A designator through a union names the
+  member the pointer was formed through: the union's recorded active
+  member when it holds the pointee at that offset, else the first member
+  that does (WP-213).
 - `-fconstexpr-backtrace-limit=N` (`Oven::set_backtrace_limit`) sets the
   frame limit; 0 shows every frame.
 - `try_fold`, `is_constant_initialized` and `fold_constant_init` never
