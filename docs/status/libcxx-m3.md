@@ -35,7 +35,7 @@ WP-207 (follow-ups from WP-198) fixes the root causes behind the clusters that W
 | `static assertion expression is not an integral constant expression` | 8 / 27 | 1 / 16 | Oven: static data members through `.`/`->`, function lvalues (`static_cast<F&&>(f)` in `__invoke`), the union active-member check on bit-fields (libc++ short string `__is_long_`), trivial `operator=` activating a union member |
 | `no matching function for call to '…'` (`size`) | 3 / 13 | 0 / 5 | `const T (&)[N]` deduction against a less-qualified array ([temp.deduct.call]/4.1) |
 | `no matching constructor` / `no viable conversion` (span of volatile) | 3 / 6 | 0 / 0 | an array is not a qualification level of its own ([conv.qual]/3) |
-| `constexpr if condition is not a constant expression` | 3 / 3 | 1 / 1 | the constraint order fix (head constraints before the requires-clause) and the Oven fixes |
+| `constexpr if condition is not a constant expression` | 3 / 3 | 1 / 1 | follows from the fixes above (span `as_bytes` tests; not reduced separately) |
 
 Of the 13 tests whose first error was cluster #1 before WP-198's follow-ups, 6 pass (array, span
 and string.view `range_concept_conformance`, span `iterator_sentinel` and `range`,
