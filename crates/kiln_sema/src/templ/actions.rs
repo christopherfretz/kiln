@@ -249,7 +249,16 @@ impl Sema<'_, '_> {
         let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty()) else {
             return None;
         };
-        let info = self.ast.template_info(tmpl).copied()?;
+        // The parameters of the defining (else the first) declaration: a
+        // friend redeclaration nested in a class template has deeper
+        // parameters (libc++ `template <class _Up> friend class weak_ptr;`
+        // inside `weak_ptr`).
+        let own_decl = self
+            .pattern_of(tmpl)
+            .and_then(|p| self.ast.definition(p))
+            .and_then(|d| self.ast.described_template(d))
+            .unwrap_or_else(|| self.ast.first(tmpl));
+        let info = self.ast.template_info(own_decl).copied()?;
         let list = *self.ast.templates.param_list(info.params);
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
         let written = self.ast.types.args(args).to_vec();
