@@ -12,6 +12,8 @@ use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
+mod reach;
+
 use crate::Sema;
 use crate::conv::bases::{BaseSearch, find_base};
 use crate::conv::{self, ConvCtx};
@@ -354,8 +356,8 @@ impl Sema<'_, '_> {
     /// throw-expression in the body of a function with a non-throwing
     /// exception specification ([except.spec]/5) that no enclosing handler
     /// of the function catches ([except.handle]/3) — `std::terminate` is
-    /// called ([except.terminate]). A structural approximation of clang's
-    /// CFG walk: every throw counts as reachable.
+    /// called ([except.terminate]). Only the throws reachable in the body
+    /// count (`reach.rs`, clang's CFG walk).
     pub(crate) fn check_throw_in_nothrow(&mut self, f: DeclId, body: StmtId) {
         let t = &self.ast.types;
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
@@ -366,6 +368,10 @@ impl Sema<'_, '_> {
         let mut found = Vec::new();
         let mut handlers = Vec::new();
         self.escaping_throws(body, &mut handlers, &mut found);
+        if found.is_empty() {
+            return;
+        }
+        let Some(mut found) = self.reachable_escaping_throws(body) else { return };
         if found.is_empty() {
             return;
         }
@@ -404,17 +410,14 @@ impl Sema<'_, '_> {
         let n = st.get(s);
         let mut exprs: Vec<ExprId> = Vec::new();
         let mut subs: Vec<StmtId> = Vec::new();
-        match n.kind() {
-            StmtKind::CXXTryStmt => {
-                handlers.push(s);
-                self.escaping_throws(st.try_block(s), handlers, out);
-                handlers.pop();
-                for h in self.ast.lists.iter::<StmtId>(st.try_handlers(s)) {
-                    self.escaping_throws(st.catch_block(h), handlers, out);
-                }
-                return;
+        if n.kind() == StmtKind::CXXTryStmt {
+            handlers.push(s);
+            self.escaping_throws(st.try_block(s), handlers, out);
+            handlers.pop();
+            for h in self.ast.lists.iter::<StmtId>(st.try_handlers(s)) {
+                self.escaping_throws(st.catch_block(h), handlers, out);
             }
-            _ => {}
+            return;
         }
         self.stmt_parts(s, &mut exprs, &mut subs);
         for e in exprs {
