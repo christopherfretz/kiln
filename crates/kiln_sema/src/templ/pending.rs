@@ -97,6 +97,9 @@ impl Sema<'_, '_> {
                 self.instantiate_static_member_def(p.decl, p.poi);
             } else {
                 self.instantiate_function_definition(p.decl, p.poi);
+                if self.ast.definition(p.decl).is_none() {
+                    self.undefined_explicit_inst(p.decl, p.poi);
+                }
             }
             return;
         }
@@ -119,6 +122,44 @@ impl Sema<'_, '_> {
         };
         if defined {
             self.ast.templates.add_end_of_tu_def(p.decl);
+        } else if is_var && self.inst.member_defs.contains(&p.decl) {
+            self.undefined_explicit_inst(p.decl, p.poi);
         }
+    }
+
+    /// clang `InstantiateFunctionDefinition`/`InstantiateVariableDefinition`
+    /// with `DefinitionRequired` ([temp.explicit]/5): an explicit
+    /// instantiation definition whose pattern is still undefined at the
+    /// end of the TU is an error at its point of instantiation.
+    fn undefined_explicit_inst(&mut self, d: DeclId, poi: Loc) {
+        use kiln_ast::templates::SpecKind;
+        let (kind, pattern, template) = if let Some((_, s)) = self.ast.spec_info(d) {
+            (s.kind, self.ast.instantiated_from(d).unwrap_or(s.from), Some(s.template))
+        } else if let Some((_, m)) = self.ast.member_spec_info(d) {
+            (m.kind, m.instantiated_from, None)
+        } else {
+            return;
+        };
+        if kind != SpecKind::ExplicitInstantiationDefinition || self.inst.fatal {
+            return;
+        }
+        let e = match template {
+            Some(t) => self
+                .diag(kiln_diag::DiagId::sema_explicit_inst_undefined_func_template, poi)
+                .arg(self.decl_name(t)),
+            None => {
+                let Some(class) = self.ast.decls.get(d).ctx() else { return };
+                let var = self.kind_of(d) == kiln_ast::decl::DeclKind::Var;
+                self.diag(kiln_diag::DiagId::sema_explicit_inst_undefined_member, poi)
+                    .arg(if var { 2u8 } else { 1u8 })
+                    .arg(self.decl_name(d))
+                    .arg(self.decl_ty_str(self.tag_type(class)))
+            }
+        };
+        let note = self.diag(
+            kiln_diag::DiagId::note_explicit_instantiation_here,
+            self.ast.decls.get(pattern).loc(),
+        );
+        self.emit(e.with_note(note));
     }
 }
