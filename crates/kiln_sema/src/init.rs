@@ -4,7 +4,7 @@
 use kiln_ast::decl::{DeclKind, DefinitionBits, FieldData, TagKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
@@ -270,8 +270,11 @@ impl Sema<'_, '_> {
             if let Some(d) = head {
                 if !nested && item.designator.len() > 1 {
                     nested = true;
-                    let msg =
-                        self.diag(DiagId::sema_designated_init_nested, self.designator_begin(d));
+                    let last = item.designator.last().unwrap_or(d);
+                    let range = Span::new(self.designator_begin(d), self.designator_end(last));
+                    let msg = self
+                        .diag(DiagId::sema_designated_init_nested, self.designator_begin(d))
+                        .range(range);
                     self.emit(msg);
                 }
                 for d in &item.designator {
@@ -279,21 +282,32 @@ impl Sema<'_, '_> {
                         && !array
                     {
                         array = true;
-                        let msg = self.diag(DiagId::sema_designated_init_array, at);
+                        let range = Span::new(at, self.designator_end(d));
+                        let msg = self.diag(DiagId::sema_designated_init_array, at).range(range);
                         self.emit(msg);
                     }
                 }
                 if !mixed && first_designator.is_none() {
                     mixed = true;
-                    let msg =
-                        self.diag(DiagId::sema_designated_init_mixed, self.designator_begin(d));
+                    let msg = self
+                        .diag(DiagId::sema_designated_init_mixed, self.designator_begin(d))
+                        .range(Span::new(self.item_begin(item), self.value_end(item)));
                     let note =
                         self.diag(DiagId::note_designated_init_mixed, self.item_begin(first));
                     self.emit(msg.with_note(note));
                 }
             } else if !mixed && let Some(d) = first_designator.as_ref() {
                 mixed = true;
+                let range = l
+                    .items
+                    .iter()
+                    .find(|i| !i.designator.is_empty())
+                    .map(|i| Span::new(self.item_begin(i), self.value_end(i)));
                 let msg = self.diag(DiagId::sema_designated_init_mixed, self.designator_begin(d));
+                let msg = match range {
+                    Some(r) => msg.range(r),
+                    None => msg,
+                };
                 let note = self.diag(DiagId::note_designated_init_mixed, self.item_begin(item));
                 self.emit(msg.with_note(note));
             }
@@ -398,6 +412,24 @@ impl Sema<'_, '_> {
         match *d {
             Designator::Field(_, at) => self.period_before(at),
             Designator::Index(_, at) | Designator::Range(_, _, at, _) => at,
+        }
+    }
+
+    /// The end of designator `d`: past its name, or its `]`.
+    fn designator_end(&self, d: &Designator) -> Loc {
+        let last = match *d {
+            Designator::Field(_, at) => return self.token_end(at).unwrap_or(at),
+            Designator::Index(e, _) | Designator::Range(_, e, _, _) => self.expr_range(e).hi,
+        };
+        let sm = self.diags.sm();
+        let Some((file, pos)) = sm.offset_of(last) else { return last };
+        let text = sm.text(file).as_bytes();
+        let after = text.get(pos as usize..).unwrap_or_default();
+        match after.iter().position(|c| !c.is_ascii_whitespace()) {
+            Some(i) if after[i] == b']' => {
+                u32::try_from(pos as usize + i + 1).map_or(last, |o| sm.loc(file, o))
+            }
+            _ => last,
         }
     }
 
@@ -768,7 +800,7 @@ impl Sema<'_, '_> {
         l: &InitList,
         ctx: ConvCtx,
         at: Loc,
-        param: Option<kiln_diag::Diag>,
+        param: Option<Diag>,
     ) -> Option<ExprId> {
         use kiln_ast::types::BuiltinType;
         let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
@@ -831,7 +863,7 @@ impl Sema<'_, '_> {
         l: &InitList,
         entity: Loc,
         ctx: ConvCtx,
-        param: Option<kiln_diag::Diag>,
+        param: Option<Diag>,
     ) -> ExprId {
         if self.is_error_type(ty) {
             return self.perform_init(ty, Initializer::List(l.clone()), entity, false);
@@ -1216,7 +1248,15 @@ impl Sema<'_, '_> {
                 return self.recover(ty, &[], l.lbrace);
             }
             let mut pos = 0;
+            let designated = self.in_template() && l.items.iter().any(|i| !i.designator.is_empty());
+            let outer = if designated { self.designator_pending.replace(Vec::new()) } else { None };
             let e = self.check_aggregate(ty, &l.items, &mut pos, true, l.lbrace, l.rbrace);
+            if designated {
+                let held = std::mem::replace(&mut self.designator_pending, outer);
+                if let Some(held) = held.filter(|h| !h.is_empty()) {
+                    self.designator_rewarn.insert(e, held);
+                }
+            }
             if pos < l.items.len() {
                 self.excess(ty, &l.items[pos]);
             }
@@ -1554,7 +1594,7 @@ impl Sema<'_, '_> {
     /// Adds the `in initialization of temporary ... created to
     /// list-initialize this reference` note while a reference's
     /// aggregate temporary is list-initialized (once).
-    fn ref_temp_noted(&self, d: kiln_diag::Diag) -> kiln_diag::Diag {
+    fn ref_temp_noted(&self, d: Diag) -> Diag {
         match self.ref_temp_note.take() {
             Some((t, at)) => {
                 let n =
@@ -1768,6 +1808,7 @@ impl Sema<'_, '_> {
                     let prev = fields[cur - nb - 1];
                     let msg = self
                         .diag(DiagId::sema_designated_init_reordered, self.value_begin(item))
+                        .range(Span::new(self.item_begin(item), self.value_end(item)))
                         .arg(self.field_arg(fields[idx]))
                         .arg(self.field_arg(prev));
                     let msg = match slots[cur - 1].filter(|_| explicit[cur - 1]) {
@@ -1777,7 +1818,7 @@ impl Sema<'_, '_> {
                         ),
                         None => msg,
                     };
-                    self.emit(msg);
+                    self.emit_designator_warning(msg);
                 }
                 cur = nb + idx;
             }
@@ -1798,7 +1839,7 @@ impl Sema<'_, '_> {
                         .diag(DiagId::sema_initializer_union_overrides, self.item_begin(item))
                         .arg("0");
                     let note = self.diag(DiagId::note_init_previous, self.begin_loc(old));
-                    self.emit(msg.with_note(note));
+                    self.emit_designator_warning(msg.with_note(note));
                 }
                 slots = vec![None; total];
                 explicit = vec![false; total];
@@ -2248,7 +2289,7 @@ impl Sema<'_, '_> {
         let msg = msg.range(Span::new(at, self.value_end(item)));
         let note =
             self.diag(DiagId::note_init_previous, self.begin_loc(old)).range(self.expr_range(old));
-        self.emit(msg.with_note(note));
+        self.emit_designator_warning(msg.with_note(note));
     }
 
     /// clang `QualType::isDestructedType` for a class: a class, or an
@@ -2281,7 +2322,47 @@ impl Sema<'_, '_> {
             DiagId::note_init_previous
         };
         let note = self.diag(id, self.begin_loc(old)).range(self.expr_range(old));
-        self.emit(msg.with_note(note));
+        self.emit_designator_warning(msg.with_note(note));
+    }
+
+    /// Emits a reorder or override diagnostic of a designated list,
+    /// keeping a copy when the list is checked in a template definition
+    /// (`designator_rewarn`): clang re-checks the list at each
+    /// instantiation and so issues these again, but not the
+    /// `-Wc99-designator` ones, which the parser issues.
+    fn emit_designator_warning(&mut self, d: Diag) {
+        if let Some(p) = self.designator_pending.as_mut() {
+            p.push(d.clone());
+        }
+        // A list rebuilt by an instantiation warns again there, as the
+        // definition's check did (no deduplication against it).
+        let d = if self.inst.stack.is_empty() { d } else { d.allow_duplicate() };
+        self.emit(d);
+    }
+
+    /// Issues again, at an instantiation sharing the non-dependent `e`,
+    /// the designator warnings of the lists in it that were checked in
+    /// the template definition (clang's rebuilt lists).
+    pub(crate) fn reissue_designator_warnings(&mut self, e: ExprId) {
+        if self.designator_rewarn.is_empty() || self.in_template() {
+            return;
+        }
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            let kind = self.ast.exprs.get(x).kind();
+            if kind == ExprKind::LambdaExpr {
+                continue;
+            }
+            if kind == ExprKind::InitListExpr
+                && let Some(ds) = self.designator_rewarn.get(&x)
+            {
+                for d in ds.clone() {
+                    self.emit(d.allow_duplicate());
+                }
+            }
+            let kids = self.ast.exprs.children(x, &self.ast.lists);
+            stack.extend(kids.into_iter().rev());
+        }
     }
 }
 
