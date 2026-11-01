@@ -157,7 +157,19 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         parm: Option<DeclId>,
         loc: Loc,
     ) -> SubstResult<TemplateArg> {
-        self.pack_element(a, |s| parm.map_or_else(String::new, |d| s.sema.decl_name(d)), loc)
+        use crate::templ::pack::PackName;
+        self.pack_element(
+            a,
+            |s| match parm {
+                Some(d) => PackName {
+                    name: s.sema.decl_name(d),
+                    depth: s.sema.ast.template_parm(d).map(|i| i.depth),
+                    outer: false,
+                },
+                None => PackName::default(),
+            },
+            loc,
+        )
     }
 
     /// Substitutes into one template argument (§5.3).
@@ -426,7 +438,15 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                 DeclOrPack::Decl(x) => Ok(x),
                 DeclOrPack::Pack(l) => {
                     let n = u32::try_from(self.sema.ast.lists.len(l)).unwrap_or(u32::MAX);
-                    let i = self.pack_reached(n, |s| s.sema.decl_name(d), loc)?;
+                    let i = self.pack_reached(
+                        n,
+                        |s| crate::templ::pack::PackName {
+                            name: s.sema.decl_name(d),
+                            depth: None,
+                            outer: false,
+                        },
+                        loc,
+                    )?;
                     self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)
                 }
             };

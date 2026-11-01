@@ -320,7 +320,7 @@ impl Substituter<'_, '_, '_> {
                 // A function parameter pack ([temp.variadic]/2): one
                 // parameter per element (§7.1).
                 let loc = n.loc();
-                let tys = match self.expand_pattern(|s| s.ty(pat, loc))? {
+                let tys = match self.expand_pattern(|s| s.element_ty(pat, loc))? {
                     crate::templ::pack::Expansion::Elements(v) => v,
                     crate::templ::pack::Expansion::Unexpanded(x) => {
                         // Still a pack: a parameter pack of a template

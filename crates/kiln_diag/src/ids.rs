@@ -1164,6 +1164,7 @@ diag_ids! {
     sema_pack_index_out_of_bounds = Error (0) "a parameter pack may not be accessed at an out of bounds index";
     // WP-072: packs (spec/sema-templates.md §7, §10.5)
     sema_pack_length_mismatch = Error (4) "pack expansion contains parameter packs '{0}' and '{1}' that have different lengths ({2} vs. {3})";
+    sema_pack_length_mismatch_outer = Error (3) "pack expansion contains parameter pack '{0}' that has a different length ({1} vs. {2}) from outer parameter packs";
     sema_fold_empty = Error (1) "unary fold expression has empty expansion for operator '{0}' with no fallback value";
     sema_pack_index_invalid = Error (3) "invalid index {0} for pack {1} of size {2}";
     sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";

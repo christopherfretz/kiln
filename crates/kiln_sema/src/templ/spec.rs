@@ -422,7 +422,7 @@ impl Sema<'_, '_> {
             }
             s.push_str(&self.decl_name(p));
             s.push_str(" = ");
-            s.push_str(&self.arg_str(a));
+            s.push_str(&self.binding_arg_str(a));
         }
         s.push(']');
         s

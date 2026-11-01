@@ -488,9 +488,10 @@ impl Substituter<'_, '_, '_> {
             ExprKind::CXXFoldExpr => self.fold(e, loc, end),
             ExprKind::SizeOfPackExpr => self.size_of_pack(e, loc, end),
             ExprKind::PackIndexingExpr => self.pack_indexing_expr(e, loc, end),
-            ExprKind::PackExpansionExpr
-            | ExprKind::SubstNonTypeTemplateParmPackExpr
-            | ExprKind::FunctionParmPackExpr => self.unimplemented("pack expansion", loc),
+            ExprKind::SubstNonTypeTemplateParmPackExpr => self.subst_nttp_pack(e, loc),
+            ExprKind::PackExpansionExpr | ExprKind::FunctionParmPackExpr => {
+                self.unimplemented("pack expansion", loc)
+            }
             ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
             ExprKind::RequiresExpr => self.requires_expr(e, loc),
             ExprKind::LambdaExpr => self.lambda_expr(e, loc),
@@ -834,6 +835,30 @@ impl Substituter<'_, '_, '_> {
     fn nttp_ref(&mut self, e: ExprId, p: DeclId, loc: Loc) -> SubstResult<ExprId> {
         let Some(info) = self.sema.ast.template_parm(p).copied() else { return Err(SubstFail) };
         let a = match self.lookup(info.depth, info.index) {
+            // Rebuilding a partially substituted expansion (§7.2): the
+            // pack stays, naming its arguments.
+            ArgLookup::Arg(a)
+                if self.pack.keep
+                    && self.pack_index.is_none()
+                    && matches!(a.view(), ArgView::Pack(_)) =>
+            {
+                let ArgView::Pack(l) = a.view() else { return Err(SubstFail) };
+                let ty = self
+                    .sema
+                    .ast
+                    .types
+                    .args(l)
+                    .iter()
+                    .find_map(|x| match x.view() {
+                        ArgView::Value { ty, .. } => Some(ty),
+                        ArgView::Expr { expr, .. } => Some(self.sema.ast.exprs.get(expr).ty()),
+                        _ => None,
+                    })
+                    .or_else(|| self.sema.ast.decls.get(p).ty())
+                    .ok_or(SubstFail)?;
+                let shown = self.shown_nttp(info.depth, info.index).unwrap_or(p);
+                return Ok(self.sema.ast.builder().subst_nttp_pack_expr(shown, l, ty, loc));
+            }
             ArgLookup::Arg(a) => self.element(a, Some(p), loc)?,
             ArgLookup::Retain(d) if d == info.depth => return Ok(e),
             // A parameter of a member template redeclared one level
@@ -847,23 +872,52 @@ impl Substituter<'_, '_, '_> {
             }
             ArgLookup::Missing => return Err(SubstFail),
         };
+        let shown = self.shown_nttp(info.depth, info.index).unwrap_or(p);
+        self.nttp_replacement(a, shown, loc)
+    }
+
+    /// The parameter of the level's template (an instantiated member
+    /// template's own parameter, as clang) for `(depth, index)`.
+    fn shown_nttp(&self, depth: u16, index: u16) -> Option<DeclId> {
+        self.assoc(depth)
+            .and_then(|a| self.sema.ast.template_info(a).copied())
+            .and_then(|i| {
+                let l = *self.sema.ast.templates.param_list(i.params);
+                self.sema.ast.lists.iter::<DeclId>(l.params).nth(usize::from(index))
+            })
+            .filter(|&x| self.sema.kind_of(x) == DeclKind::NonTypeTemplateParm)
+    }
+
+    /// The argument `a` of the non-type parameter `shown`, wrapped in
+    /// `SubstNonTypeTemplateParmExpr`.
+    fn nttp_replacement(
+        &mut self,
+        a: kiln_ast::types::TemplateArg,
+        shown: DeclId,
+        loc: Loc,
+    ) -> SubstResult<ExprId> {
         let r = match a.view() {
             ArgView::Value { ty, value } => self.value_literal(ty, value, loc)?,
             ArgView::Expr { expr, .. } => expr,
             _ => return self.unimplemented("non-type template argument of this kind", loc),
         };
-        // The parameter of the level's template (an instantiated member
-        // template's own parameter, as clang).
-        let shown = self
-            .assoc(info.depth)
-            .and_then(|a| self.sema.ast.template_info(a).copied())
-            .and_then(|i| {
-                let l = *self.sema.ast.templates.param_list(i.params);
-                self.sema.ast.lists.iter::<DeclId>(l.params).nth(usize::from(info.index))
-            })
-            .filter(|&x| self.sema.kind_of(x) == DeclKind::NonTypeTemplateParm)
-            .unwrap_or(p);
         Ok(self.sema.ast.builder().subst_nttp_expr(shown, r, loc))
+    }
+
+    /// A non-type parameter pack substituted earlier while its expansion
+    /// stayed dependent (§7.2): its element for the current index, or
+    /// itself while another partial expansion is rebuilt.
+    fn subst_nttp_pack(&mut self, e: ExprId, loc: Loc) -> SubstResult<ExprId> {
+        if self.pack.keep && self.pack_index.is_none() {
+            return Ok(e);
+        }
+        let p = self.sema.ast.exprs.subst_pack_parameter(e);
+        let l = self.sema.ast.exprs.subst_pack_args(e);
+        let n = u32::try_from(self.sema.ast.types.args(l).len()).unwrap_or(u32::MAX);
+        // Unnamed: an outer pack in the length-mismatch diagnostic.
+        let i = self.pack_reached(n, |_| crate::templ::pack::PackName::outer(), loc)?;
+        let a = self.sema.ast.types.args(l)[i as usize];
+        self.nttp_replacement(a, p, loc)
     }
 
     /// The literal for a non-type template argument value
