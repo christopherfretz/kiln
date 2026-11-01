@@ -578,7 +578,11 @@ impl Cg<'_> {
         // A post-increment of `_Atomic(bool)` yields its old byte in memory
         // form (`i8`, `atomic_incdec`); clang 19 branches on it as is
         // (invalid IR), kiln truncates it (spec/codegen.md, WP-183).
-        Ok(if self.f.fir.ty(&self.m, v) == LTy::I8 { self.cast(CastOp::Trunc, v, LTy::I1) } else { v })
+        Ok(if self.f.fir.ty(&self.m, v) == LTy::I8 {
+            self.cast(CastOp::Trunc, v, LTy::I1)
+        } else {
+            v
+        })
     }
 
     fn zext_or_same(&mut self, v: V, to: LTy) -> V {

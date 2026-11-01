@@ -37,8 +37,8 @@ pub mod lookup;
 pub mod names;
 pub mod new_delete;
 mod oven_bridge;
-mod packed;
 pub mod overload;
+mod packed;
 mod predefined;
 mod range_for;
 mod rtti;
@@ -528,7 +528,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return;
         }
         if !self.trailing_notes.borrow().is_empty()
-            && d.id().is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
+            && d.id()
+                .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
         {
             for n in self.trailing_notes.take() {
                 d = d.with_note(n);

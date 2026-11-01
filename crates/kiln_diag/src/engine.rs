@@ -11,10 +11,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard};
 use kiln_source::{Loc, SourceManager, Span};
 
 use crate::diag::{Diag, Diagnostic, Level};
+use crate::groups::Flavor;
 use crate::ids::DiagId;
 use crate::json::JsonSink;
 use crate::options::{DiagOptions, Format};
-use crate::groups::Flavor;
 use crate::policy::{Policy, Severity};
 use crate::pragma::Pragmas;
 use crate::text::TextSink;
@@ -172,8 +172,7 @@ impl<'sm> DiagEngine<'sm> {
     /// Whether `id` located at `loc` would be emitted: enabled
     /// ([`Self::is_enabled`]) and not suppressed in a system header (§5.4).
     pub fn is_enabled_at(&self, id: DiagId, loc: Loc) -> bool {
-        self.severity_at(id, loc) != Severity::Ignored
-            && !self.suppressed_in_system_header(id, loc)
+        self.severity_at(id, loc) != Severity::Ignored && !self.suppressed_in_system_header(id, loc)
     }
 
     /// clang's system-header rule (the tail of `getDiagnosticSeverity`):
