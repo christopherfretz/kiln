@@ -1509,6 +1509,9 @@ impl Sema<'_, '_> {
         }
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &attrs);
+        }
+        self.add_known_function_attrs(decl, &mut attrs);
+        if !attrs.is_empty() {
             let _ = self.builder().attach_attrs(decl, &attrs);
         }
         Some(decl)

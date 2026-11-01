@@ -478,7 +478,13 @@ impl Cg<'_> {
         }
 
         // Attributes.
-        let nothrow_def = sig.nothrow || !self.opts.exceptions || self.no_throw_calls();
+        let mut extra = Vec::new();
+        let const_pure = crate::builtins::const_pure_attrs(self.ast, d, &mut extra);
+        let nothrow_def = sig.nothrow
+            || const_pure
+            || self.ast.has_nothrow_attr(d)
+            || !self.opts.exceptions
+            || self.no_throw_calls();
         let noreturn = self.ast.is_noreturn_fn(d);
         let fa = self.def_fn_attrs(crate::module::DefFnAttrs {
             is_main,
@@ -486,6 +492,7 @@ impl Cg<'_> {
             mustprogress: self.f.mustprogress,
             vector_width: self.f.vector_width,
             noreturn,
+            extra,
         });
         let (mut ret, mut params) = self.sig_attrs(&sig, sig.params.len(), true);
         if thunk.is_some() {

@@ -1019,6 +1019,24 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
 - **Evaluation:** the Oven answers `true` in a manifestly
   constant-evaluated context and `false` otherwise (spec/oven.md);
   codegen emits `i1 false` (spec/codegen.md).
+- **Library functions** (WP-171, clang `ActOnFunctionDeclarator`'s
+  library-builtin recognition + `AddKnownFunctionAttributes`,
+  `add_known_function_attrs`): the first declaration of a function
+  named in `builtin::LIB` (clang 19's library builtins carrying
+  `NoThrow` / `Const` / `Pure`: `<string.h>`, `<stdio.h>` `*printf`,
+  `<ctype.h>`, `<wchar.h>`, `<math.h>` d/f/l), declared in a namespace
+  scope context (TU or namespace, through linkage specs) with C
+  language linkage and with the row's type ignoring the exception
+  specification, gets implicit `NoThrow` and `Const`/`Pure` attributes
+  (after its written ones). Sig letter `a` is `__builtin_va_list`
+  (decayed when an array), `P` the type of the TU-scope `FILE`
+  typedef (none yet: not recognized). Redeclarations inherit them
+  (`Ast::has_nothrow_attr` reads the chain). A `NoThrow` callee makes
+  a call non-throwing (`can_throw`, so `noexcept(strlen(s))` is
+  true). No `Builtin` attribute is attached, so the call stays an
+  ordinary call: clang's lowering of recognized `memcpy`/`fabs`/`abs`
+  calls to intrinsics and its implicit `format` / `alloc_size`
+  attributes (`-Wformat*`) are not modelled.
 ### 5.5 `throw` (`except.rs`)
 `act_on_throw(operand, loc)` ([expr.throw]) builds a `void`
 `CXXThrowExpr`:

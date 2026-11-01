@@ -1875,8 +1875,14 @@ impl Cg<'_> {
             let fty = ast.types.pointee(pq).expect("function pointer");
             (p, fty, false, None)
         };
-        let sig = self.call_sig(fty, extern_c, &arg_tys);
+        let mut sig = self.call_sig(fty, extern_c, &arg_tys);
         let mut extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
+        // A callee with a `NoThrowAttr` (a recognized C library function)
+        // or a `const` / `pure` attribute.
+        if let Some(d) = direct {
+            let const_pure = crate::builtins::const_pure_attrs(ast, d, &mut extra);
+            sig.nothrow |= const_pure || ast.has_nothrow_attr(d);
+        }
         let mut noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
         if !noreturn {
             let (site, unreachable) = self.noreturn_call(direct, fty);

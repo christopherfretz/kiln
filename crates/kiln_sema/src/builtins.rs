@@ -19,7 +19,7 @@ use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::TargetTypes;
 use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals};
 use kiln_ast::types::{Nns, TagKeyword};
-use kiln_ast::{Ast, DeclHead, DeclId, ExprId, QualType};
+use kiln_ast::{Ast, AttrId, DeclHead, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
@@ -132,6 +132,81 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The parameter type a `Builtins.td` `a` spells: `__builtin_va_list`,
+    /// decayed when the target's `va_list` is an array (clang
+    /// `GetBuiltinType` decays array parameters).
+    fn builtin_va_list_value(&mut self) -> QualType {
+        let Some(t) = self.va_list_type else { return QualType::ERROR };
+        if self.ast.types.is_array(t) { conv::array_decayed(self, t) } else { t }
+    }
+
+    /// The type a `Builtins.td` `P` spells (clang `ASTContext::getFILEType`):
+    /// the type a translation-unit-scope typedef named `FILE` names, or
+    /// the error type when there is none (clang `GE_Missing_stdio`).
+    fn file_type(&mut self) -> QualType {
+        let name = self.intern("FILE");
+        let found = self.lookup_in(self.ast.tu, name, LookupKind::Ordinary);
+        found
+            .decls
+            .iter()
+            .find(|&&d| matches!(self.kind_of(d), DeclKind::Typedef | DeclKind::TypeAlias))
+            .and_then(|&d| self.ast.decls.get(d).ty())
+            .unwrap_or(QualType::ERROR)
+    }
+
+    /// clang's library-builtin recognition (`ActOnFunctionDeclarator`)
+    /// and `AddKnownFunctionAttributes` (spec/sema.md §5.4): the first
+    /// declaration of a [`builtin::LIB`] function, in a namespace-scope
+    /// context with C language linkage and with the row's type ignoring
+    /// the exception specification, gets clang's implicit `NoThrowAttr`,
+    /// `ConstAttr` / `PureAttr`, appended to `attrs`. Redeclarations
+    /// inherit them (the attributes are read across the redeclaration
+    /// chain). `NoThrowAttr` makes a call non-throwing for `noexcept`
+    /// ([`Sema::can_throw`]) and `nounwind` in IR, as in clang; no
+    /// `BuiltinAttr` is attached, so a call stays an ordinary call.
+    pub(crate) fn add_known_function_attrs(&mut self, f: DeclId, attrs: &mut Vec<AttrId>) {
+        if self.kind_of(f) != DeclKind::Function || self.ast.prev(f).is_some() {
+            return;
+        }
+        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
+            let r = self.ast.redecl_context(c);
+            matches!(self.kind_of(r), DeclKind::TranslationUnit | DeclKind::Namespace)
+        });
+        if !file_ctx || !kiln_abi::mangle::is_extern_c(&self.ast, f) {
+            return;
+        }
+        let Some(name) = self.ast.decls.get(f).name().as_ident() else { return };
+        let Some(info) = builtin::lib_by_name(self.ast.symbols().as_str(name)).copied() else {
+            return;
+        };
+        let Some(ty) = self.ast.decls.get(f).ty() else { return };
+        let (ret, params, variadic) = self.builtin_signature(info.sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return;
+        }
+        let want = self.ast.types.function(
+            ret,
+            &params,
+            FuncInfo::new().with_variadic(variadic),
+            ExcSpec::None,
+        );
+        let have = self.with_exc_spec(ty, ExcSpec::None);
+        if !self.ast.types.same_type(want, have) {
+            return;
+        }
+        let loc = self.ast.decls.get(f).loc();
+        for (bit, kind) in [
+            (builtin::attr::NOTHROW, AttrKind::NOTHROW),
+            (builtin::attr::CONST, AttrKind::CONST),
+            (builtin::attr::PURE, AttrKind::PURE),
+        ] {
+            if info.attrs & bit != 0 {
+                let n = AttrNode { kind, syntax: AttrSyntax::Gnu, flags: 1, loc, a: 0, b: 0 };
+                attrs.push(self.ast.attrs.push(n));
+            }
+        }
+    }
+
     /// Declares the builtin function `name` (first used at `loc`) if it
     /// is one kiln knows, from its [`builtin::Info`] row: the type its
     /// `Builtins.td` signature spells (`noexcept` for the `NoThrow` ones,
@@ -241,6 +316,8 @@ impl Sema<'_, '_> {
             (b'd', ..) => QualType::LONGDOUBLE,
             (b'z', ..) => self.size_type(),
             (b'A', ..) => self.builtin_va_list_param(),
+            (b'a', ..) => self.builtin_va_list_value(),
+            (b'P', ..) => self.file_type(),
             _ => QualType::VOID,
         };
         while let Some(&c) = s.first() {

@@ -85,7 +85,14 @@ panic and never silently wrong IR.
     `lshr`/`and` (unsigned); stores mask, clear and `or` into the unit;
   - `++`/`--` on bool, integers, floats and pointers, including bit-fields.
 - Calls:
-  - a call site gets `nounwind` only when the callee's prototype is nothrow;
+  - a call site gets `nounwind` only when the callee's prototype is
+    nothrow, or the direct callee has a `NoThrow` attribute (a
+    recognized C library function, spec/sema.md §5.4) or a `const` /
+    `pure` attribute; the declaration and a definition get it too;
+  - a written or implicit `const` / `pure` attribute (not on a builtin,
+    whose row decides) adds `willreturn memory(none)` /
+    `willreturn memory(read)` to the declaration, the definition and
+    direct call sites (clang `ConstructAttributeList`);
   - a variadic call prints its function type;
   - an indirect (sret) return writes into the destination slot when the
     call initializes an aggregate, otherwise into a temporary.
