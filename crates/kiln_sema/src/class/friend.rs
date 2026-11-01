@@ -4,7 +4,7 @@ use kiln_ast::DeclId;
 use kiln_ast::QualType;
 use kiln_ast::decl::{DeclKind, FriendTarget};
 use kiln_ast::names::DeclName;
-use kiln_ast::types::TemplateArg;
+use kiln_ast::types::{TemplateArg, TypeView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -58,7 +58,15 @@ impl Sema<'_, '_> {
             let loc = ds.type_loc.unwrap_or(friend_loc);
             let target = FriendTarget::Type { ty: base, owned_tag: owned };
             let fd = self.builder().friend(record, loc, target);
-            if let Some(c) = self.ast.types.as_record(base) {
+            // `friend class X<T>;` naming the current instantiation
+            // befriends the pattern too ([temp.dep.type]/1): its own
+            // members are checked against it before instantiation.
+            let rec = self
+                .ast
+                .types
+                .as_record(base)
+                .or_else(|| self.friend_current_instantiation(base));
+            if let Some(c) = rec {
                 let c = self.ast.first(c);
                 self.push_friend(c);
             }
@@ -223,6 +231,24 @@ impl Sema<'_, '_> {
             e = e.with_note(n);
         }
         self.emit(e);
+    }
+
+    /// The pattern a dependent `X<P...>` befriended in a class names when
+    /// it is the current instantiation ([temp.dep.type]/1.2).
+    fn friend_current_instantiation(&self, ty: QualType) -> Option<DeclId> {
+        let mut q = ty;
+        for _ in 0..16 {
+            if let TypeView::TemplateSpecialization { name, .. } = self.ast.types.view(q.ty()) {
+                let tmpl = self.ast.types.template_decl(name)?;
+                return self.current_instantiation(tmpl, q);
+            }
+            let n = self.ast.types.desugar_once(q);
+            if n == q {
+                return None;
+            }
+            q = n;
+        }
+        None
     }
 
     pub(crate) fn push_friend(&mut self, d: DeclId) {
