@@ -130,6 +130,24 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        if let [InitItem { value: InitValue::Expr(x), designator }] = l.items.as_slice()
+            && designator.is_empty()
+            && !self.expr_is_type_dependent(*x)
+            && self.is_class_or_derived(*x, ty)
+        {
+            // [dcl.init.list]/3.2 as clang applies DR1467 to every class
+            // (not only aggregates, CWG2137): a single element of the class
+            // or a derived class initializes the object, copy-initialized
+            // for copy-list-initialization (explicit constructors are not
+            // candidates) and direct-initialized for direct-list; no
+            // initializer-list constructor is considered.
+            let ctx = if style == InitStyle::DirectList {
+                ConvCtx::DirectInitialization
+            } else {
+                ConvCtx::Initialization
+            };
+            return Some(self.init_from_expr(ty, *x, ctx, at));
+        }
         if !l.items.is_empty()
             && let Some(e) = self.std_initializer_list_init(ty, l, at)
         {
