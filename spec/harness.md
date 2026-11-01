@@ -83,7 +83,7 @@ directives are also ERRORs.
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
 | `requires: clang>=X[.Y[.Z]]` | Run only when every clang the test runs is at least version `X.Y.Z` (missing components are 0). The clangs the test runs are the compiler under test when its kind is clang, and the oracle when its kind is clang and the test compares with it (`oracle` in effect, or `layout`/`vtables`, and an oracle configured). The version is the `X.Y.Z` after `clang version ` in the `--version` line; a clang whose version cannot be read never meets the requirement. Otherwise **SKIP** with the reason `requires clang>=X.Y.Z; the compiler is clang <version>` (or `the oracle is ...`; `... names no clang version` when it cannot be read). With no clang involved (kiln without an oracle, or a non-clang oracle) the requirement is met. For tests that a known defect of an older clang breaks (docs/VALIDATION.md, known oracle defects; WP-239). |
-| `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. |
+| `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. The oracle is a clang, so `skip(clang)` also implies `oracle: none`: a `run`, `pp` or `verify` test clang cannot compile is not compared with the oracle when kiln runs it (its own expectations, `stdout`/`exit`, `.expected` or `expected-*` comments, are the reference), and `oracle: clang` with `skip(clang)` is an error. `layout` and `vtables` tests keep the oracle (it is their only reference). |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
@@ -599,6 +599,8 @@ removed at the end of the run.
 
 The libc++ suite driver (`cargo xtask libcxx`) is not part of `ci`. It is a
 separate manual or periodic gate, and its contract is `spec/libcxx.md`.
+`cargo xtask features` ("Feature table") is not part of `ci` either: it is a
+manual / M4-gate check.
 
 `cargo xtask ci [--quick]` is the merge gate (`docs/AGENTS.md` rule 3). It
 runs, stopping at the first failing step:
@@ -665,6 +667,52 @@ from `tests/conformance/stress/`, with
 `tests/stress/dump-friend-template-cycle.cpp`, the AST dumper cycle of
 2026-10-31, under `mem<=512`); and the E0463 retry (WP-124).
 
+## Feature table
+
+`docs/status/cxx-features.md` is the M4 language-feature checklist
+(`docs/ROADMAP.md` M4), and `cargo xtask features` checks it. The command
+is a manual / M4-gate check and is not part of `ci`: a table edit, or a
+corpus change that breaks a `done` row, would otherwise fail unrelated
+merges.
+
+Format. A feature table is a Markdown table whose header row's first cell
+is `Paper`. The file may hold several (C++23, C++26, DR-level). The header
+cells must start with, in order, `Paper`, `Feature`, `` `__cpp_*` macro ``,
+`Status`, `Corpus tests` and `Notes`. A `|---` separator follows, then one
+row per paper, up to the first line that does not start with `|`. A `|`
+inside a backtick span, or written `\|`, does not split cells.
+
+| Cell | Form |
+|---|---|
+| Paper | `P<n>R<rev>`, unique across the file |
+| Feature | free text |
+| Macro | `—` (or `-`): the paper has no macro of its own; else `` `__cpp_name` KILN / CLANG22 ``, each value either a number with an optional `L` suffix or `—` for undefined. KILN is `kiln++ -std=c++26 -dM -E`, CLANG22 is `clang++-22 -std=c++26 -dM -E -x c++ /dev/null` |
+| Status | `done` (kiln passes tests covering the core forms), `partial` (some pass, or some are `xfail(kiln)`), `todo` (nothing covers it, or kiln fails) |
+| Corpus tests | backticked paths relative to `tests/`, separated by `<br>` |
+| Notes | free text: clang 19 values that differ, why a test is `xfail`, written reasons for C++26 rows clang 22 lacks |
+
+A paper with no other test gets a probe at
+`tests/conformance/<std-section>/<paper>-probe.cpp` (`strict-diags`,
+`xfail(kiln)` with a reason while kiln fails, `xfail(clang)` naming the clang
+versions that lack the feature).
+
+`cargo xtask features [--compiler <kiln++>] [--table <path>]` builds kiln
+unless `--compiler` is given, then checks:
+
+- (a) every `done` row names at least one test, and every test any row
+  names exists;
+- (b) every test of a `done` row passes (`PASS`, not `XFAIL`) under kiln. All
+  of them go through one `xtask test` runner invocation (`test::execute`, as
+  `ci` uses it), with the default oracle and limits;
+- (c) on a `done` row with a macro, kiln's `-dM -E` value equals the table's
+  CLANG22 value. On every row with a macro, the KILN value must be what kiln
+  defines today, so that column cannot go stale.
+
+It prints `N rows: D done, P partial, T todo`, then one `FAIL  <paper>
+(<feature>, line <n>): <problems>` line per failing row. Exit status: 0 for
+all rows clean; 1 for a failing row; 2 for a usage, table parse or
+infrastructure error. Parse errors name their line.
+
 ## Tests backing this spec
 
 - `xtask/src/test/{directives,diag_parse,compare,pp_tokens,report}.rs` and
@@ -727,6 +775,10 @@ from `tests/conformance/stress/`, with
     emit, a compile error);
   - `xtask/fixtures/oracle/` (oracle disagreement, run with `--oracle
     clang++-22`; skipped if that compiler is absent);
+  - `xtask/fixtures/skip-clang/` (`skip(clang)` implies `oracle: none`:
+    under `fixtures/fake-kiln/kiln` the oracle is not run for a
+    `skip(clang)` run test and is for its control; under clang it is a
+    SKIP);
   - `--filter`;
   - `--update` (pp and ast goldens).
 - `kiln_abi::dump_blocks` unit tests: block splitting, builtin records,
@@ -737,6 +789,12 @@ from `tests/conformance/stress/`, with
 - `xtask/src/clang_ast/tests.rs`: the clang-ast normalizer (the mapping
   table covers M2, unknown kinds and keys are errors, the spec example,
   values, strings, the side channel), over `xtask/fixtures/ast/normalize/`.
+
+- `xtask/src/features.rs` tests: the feature-table parser over
+  `xtask/fixtures/features/{good,bad}.md` (cells, macro forms, code-span
+  pipes, line-numbered errors), the static checks (a) and (c), and a check
+  that `docs/status/cxx-features.md` itself parses and names only existing
+  tests.
 
 ## Open questions
 

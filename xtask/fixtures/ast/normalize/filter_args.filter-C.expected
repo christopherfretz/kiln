@@ -1,0 +1,35 @@
+Dumping X::C:
+CXXRecordDecl struct C definition
+`-FieldDecl x 'int'
+
+Dumping X<type-parameter-0-0 *>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl p 'int'
+
+Dumping X<int, false, long>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl j 'int'
+
+Dumping D::C:
+CXXRecordDecl struct C definition
+`-FieldDecl m 'TT<T>'
+
+Dumping D<E, int>::C:
+CXXRecordDecl struct C definition
+`-FieldDecl e 'int'
+
+Dumping D<q::F, int>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl f 'int'
+
+Dumping G::C:
+CXXRecordDecl struct C definition
+
+Dumping G<K::b>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl g 'int'
+
+Dumping G<7>::C:
+CXXRecordDecl parent struct C definition
+`-FieldDecl h 'int'
+

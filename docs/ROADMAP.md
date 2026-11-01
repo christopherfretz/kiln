@@ -89,7 +89,7 @@ static initialization order, inline variables.
   P0849 `auto(x)`, P1774 `[[assume]]`, P2334 `#elifdef`/`#elifndef`, P2437 `#warning`,
   P1467 extended floating-point types, P2718 range-for lifetime extension,
   P2448/P2242/P2280 constexpr relaxations, P2582 CTAD from inherited constructors,
-  P2360 labels at the end of blocks, P2324 `size_t` literals, P2290 delimited escapes,
+  P2324 labels at the end of blocks, P0330 `size_t` literals, P2360 alias declarations in init-statements, P2290 delimited escapes,
   P2071 named universal character escapes, P2295 UTF-8 source, P2362 wide multichar
   literals, P2156 duplicate attributes, P2266 simpler implicit move, P2468 equality
   operator rewrites, P2493 `__cpp_*` macros, DR-level items) and per non-reflection
@@ -100,6 +100,7 @@ static initialization order, inline variables.
   in conditions and with packs, P2795 erroneous behavior, P2786 trivial relocation,
   P2300-adjacent library hooks, expansion statements where clang ships them).
   Each row names its corpus/libc++ tests; status is `done`/`partial`/`todo`.
+  Seeded by WP-185; `cargo xtask features` checks it (done rows have passing tests and clang 22's macro value).
 - **Oracle switch (WP-184):** at M3 exit the differential oracle, libc++ headers and
   libc++ test checkout move from clang/llvm 19 to clang/llvm 22 (both are in the
   sandbox). The M3 gate is frozen on 19 so its numbers stay comparable; M4+ gates run

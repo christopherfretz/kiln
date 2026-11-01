@@ -168,6 +168,9 @@ struct Item {
 #[derive(Clone, Copy)]
 enum Search {
     Decl(DeclId),
+    /// A template parameter of the template whose pattern (or partial
+    /// specialization) is the second id: clang's parameter context.
+    Parm(DeclId, DeclId),
     Stmt(StmtId),
 }
 
@@ -233,24 +236,40 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         let mut qual = String::new();
         while let Some(s) = todo.pop() {
             let mark = todo.len();
+            let (s, owner) = match s {
+                Search::Parm(d, o) => (Search::Decl(d), Some(o)),
+                s => (s, None),
+            };
             match s {
                 Search::Decl(d) => {
                     let n = self.ast.decls.get(d);
                     let kind = n.kind();
+                    let explicit_inst = self.ast.spec_info(d).is_some_and(|(_, i)| {
+                        matches!(
+                            i.kind,
+                            SpecKind::ExplicitInstantiationDefinition
+                                | SpecKind::ExplicitInstantiationDeclaration
+                        )
+                    });
+                    // clang does not add an explicitly instantiated
+                    // function to its context: it is not searched.
+                    if explicit_inst && kind.is_function() {
+                        continue;
+                    }
                     if d != self.ast.tu {
                         let kind_ok = f.kind.is_none_or(|k| k == kind);
                         let mut name_ok = true;
                         if let Some(sub) = &f.name {
                             qual.clear();
                             if !self.names.is_unnamed(d) {
-                                self.names.write_qualified_name(d, &mut qual);
+                                self.names.write_filter_name(d, owner, &mut qual);
                             }
                             name_ok = !qual.is_empty() && qual.contains(sub.as_str());
                         }
                         if kind_ok && name_ok {
                             if f.name.is_none() {
                                 qual.clear();
-                                self.names.write_qualified_name(d, &mut qual);
+                                self.names.write_filter_name(d, owner, &mut qual);
                             }
                             writeln!(self.out, "Dumping {qual}:")?;
                             self.dump_tree(Node::Decl(d))?;
@@ -267,7 +286,36 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                                 todo.push(Search::Stmt(b));
                             }
                         }
+                    } else if crate::templates::is_template_kind(kind) {
+                        // clang's filter is a `RecursiveASTVisitor` that
+                        // does not visit template instantiations: a
+                        // template's parameters and pattern are searched,
+                        // its specializations are not (an explicit one is
+                        // searched where it is declared).
+                        if let Some(info) = self.ast.template_info(d) {
+                            let list = self.ast.templates.param_list(info.params);
+                            let owner = info.pattern.unwrap_or(d);
+                            for p in self.ast.lists.iter::<DeclId>(list.params) {
+                                if self.shown(d, p) {
+                                    todo.push(Search::Parm(p, owner));
+                                }
+                            }
+                            if let Some(p) = info.pattern {
+                                todo.push(Search::Decl(p));
+                            }
+                        }
+                    } else if explicit_inst {
+                        // The members of an explicit instantiation are
+                        // instantiations: not searched.
                     } else if self.ast.decls.member_list(d).is_some() {
+                        if let Some((_, pi)) = self.ast.partial_spec_info(d) {
+                            let list = self.ast.templates.param_list(pi.params);
+                            for p in self.ast.lists.iter::<DeclId>(list.params) {
+                                if self.shown(d, p) {
+                                    todo.push(Search::Parm(p, d));
+                                }
+                            }
+                        }
                         for m in self.ast.members(d) {
                             if self.shown(d, m) {
                                 todo.push(Search::Decl(m));
@@ -276,6 +324,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     }
                 }
                 Search::Stmt(s) => self.search_stmt(s, &mut todo),
+                Search::Parm(..) => {}
             }
             todo[mark..].reverse();
         }

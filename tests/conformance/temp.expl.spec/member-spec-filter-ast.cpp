@@ -1,6 +1,5 @@
 //@ expect: ast
 //@ ast-filter: N
-//@ xfail(kiln): the dump filter names a specialization context without its arguments (`n::X::N`), skips a template's pattern and visits an explicit instantiation's members (kiln_ast dump_filtered)
 // [temp.expl.spec]/1, [temp.explicit]: a member of an implicit
 // specialization explicitly specialized is named by the specialization,
 // as is a member of an explicit (partial) specialization; the members of
