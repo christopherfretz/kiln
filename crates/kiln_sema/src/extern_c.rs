@@ -12,8 +12,8 @@
 //! and a C-linkage entity of the same name in another namespace conflict
 //! ([dcl.link]/7, clang's `checkGlobalOrExternCConflict`).
 
-use kiln_ast::decl::DeclKind;
 use kiln_ast::DeclId;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::names::DeclName;
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -32,9 +32,11 @@ impl Sema<'_, '_> {
             let Some(x) = c else { return false };
             match self.kind_of(x) {
                 DeclKind::LinkageSpec => {
-                    return self.ast.decls.scope(x).is_some_and(|s| {
-                        s.linkage_lang() == Some(kiln_ast::decl::LinkageLang::C)
-                    });
+                    return self
+                        .ast
+                        .decls
+                        .scope(x)
+                        .is_some_and(|s| s.linkage_lang() == Some(kiln_ast::decl::LinkageLang::C));
                 }
                 DeclKind::Namespace => {}
                 _ => return false,

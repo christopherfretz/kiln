@@ -821,18 +821,26 @@ impl Parser<'_, '_> {
     /// A type-name in a decl-specifier-seq (`T`, `N::T`), or an unknown
     /// identifier that can only be one. Returns false (consuming nothing)
     /// if the tokens are not a type name.
+    /// [`Parser::at_template_type_name`], diagnosing `X<int>` with `X`
+    /// naming class templates of two namespaces (an inline namespace's and
+    /// its parent's): ambiguous ([basic.lookup.general]/1), recovering
+    /// with the first.
+    fn at_template_type_name_checked(&mut self, ctx: DeclaratorContext, loc: Loc) -> bool {
+        if !self.at_template_type_name(ctx) {
+            return false;
+        }
+        if let Some(name) = self.ident()
+            && self.peek_is(1, Punct::Less)
+        {
+            self.s.diagnose_ambiguous_name(name, None, loc);
+        }
+        true
+    }
+
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
-        if self.at_template_type_name(ctx) {
-            // `X<int>` with `X` naming class templates of two namespaces
-            // (an inline namespace's and its parent's): ambiguous
-            // ([basic.lookup.general]/1), recovering with the first.
-            if let Some(name) = self.ident()
-                && self.peek_is(1, Punct::Less)
-            {
-                self.s.diagnose_ambiguous_name(name, None, loc);
-            }
+        if self.at_template_type_name_checked(ctx, loc) {
             let ty = self.parse_template_type_name(ctx);
             if ty.is_none() {
                 ds.invalid = true;

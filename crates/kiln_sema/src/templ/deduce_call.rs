@@ -515,7 +515,7 @@ impl Sema<'_, '_> {
                             with.push(a);
                             self.ast.types.arg_list(&with)
                         }
-                        Err(_) => shown,
+                        Err(()) => shown,
                     };
                     let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                     f.args = Some(shown);

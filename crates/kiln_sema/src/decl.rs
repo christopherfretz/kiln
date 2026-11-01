@@ -3608,8 +3608,7 @@ impl Sema<'_, '_> {
         // clang `AddInitializerToDecl`'s `RequireCompleteType`: a class
         // template specialization failing to instantiate here leaves the
         // variable invalid, quietly.
-        if !self.ast.types.is_reference(ty) && self.instantiation_fails(ty, loc) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        if self.invalid_by_failed_spec(v, ty, loc) {
             self.discard_initializer(&init);
             return;
         }
@@ -4074,20 +4073,7 @@ impl Sema<'_, '_> {
         if spec.storage() == VarStorage::Extern {
             return;
         }
-        // clang checks (and names) the element type of a bounded array.
-        let elem = self.bounded_array_element(ty);
-        if self.instantiation_fails(elem, self.ast.decls.get(v).loc()) {
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
-            return;
-        }
-        if !self.require_complete(elem, self.ast.decls.get(v).loc()) {
-            let msg = if self.ast.types.is_void(elem) {
-                self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(elem))
-            } else {
-                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(elem))
-            };
-            self.emit(self.incomplete_note(msg, elem));
-            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        if self.uninit_incomplete(v, ty, loc) {
             return;
         }
         let quals = self.ast.types.effective_quals(ty);
@@ -4194,10 +4180,7 @@ impl Sema<'_, '_> {
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
             // clang `CheckParmsForFunctionDef`: a parameter whose class
             // template specialization fails to instantiate is invalid.
-            if !self.ast.types.is_reference(pty)
-                && self.instantiation_fails(pty, self.ast.decls.get(p).loc())
-            {
-                self.ast.decls.set_flags(p, DeclFlags::INVALID);
+            if self.invalid_by_failed_spec(p, pty, self.ast.decls.get(p).loc()) {
                 continue;
             }
             if !self.require_complete(pty, self.ast.decls.get(p).loc())
@@ -4546,6 +4529,39 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// An uninitialized definition of `v` whose type `ty` (for a bounded
+    /// array, its element type, which clang checks and names) is
+    /// incomplete or fails to instantiate: reported, and `v` is invalid.
+    fn uninit_incomplete(&mut self, v: DeclId, ty: QualType, loc: Loc) -> bool {
+        let elem = self.bounded_array_element(ty);
+        let vloc = self.ast.decls.get(v).loc();
+        if self.invalid_by_failed_spec(v, elem, vloc) {
+            return true;
+        }
+        if self.require_complete(elem, vloc) {
+            return false;
+        }
+        let msg = if self.ast.types.is_void(elem) {
+            self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(elem))
+        } else {
+            self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(elem))
+        };
+        self.emit(self.incomplete_note(msg, elem));
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        true
+    }
+
+    /// A variable or parameter `d` of (non-reference) type `ty` whose class
+    /// template specialization fails to instantiate at `loc` is marked
+    /// invalid, quietly (clang's `RequireCompleteType` recovery).
+    fn invalid_by_failed_spec(&mut self, d: DeclId, ty: QualType, loc: Loc) -> bool {
+        if self.ast.types.is_reference(ty) || !self.instantiation_fails(ty, loc) {
+            return false;
+        }
+        self.ast.decls.set_flags(d, DeclFlags::INVALID);
+        true
+    }
+
     /// `struct N::X;` outside an explicit specialization or instantiation
     /// ([dcl.type.elab]/1, [dcl.enum]/1: a standalone class or opaque enum
     /// declaration cannot be qualified); clang's
@@ -4591,7 +4607,8 @@ impl Sema<'_, '_> {
                 self.check_template_param_shadow(n, nloc);
             }
             let opaque_enum = is_enum && fixed.is_some();
-            let found = self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc);
+            let found =
+                self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc);
             if let Some(&p) = found.last() {
                 if self.tag_matches(p, keyword) {
                     prev = Some(p);

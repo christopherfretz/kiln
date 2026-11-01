@@ -228,10 +228,9 @@ impl Sema<'_, '_> {
                         .arg(kind.index())
                         .arg(self.ty_arg(self.tag_type(class)))
                 }
-                SynthKind::ExceptionSpec => {
-                    self.diag(DiagId::note_exception_spec_evaluation_here, c.loc)
-                        .arg(self.qualified_decl_name(c.member))
-                }
+                SynthKind::ExceptionSpec => self
+                    .diag(DiagId::note_exception_spec_evaluation_here, c.loc)
+                    .arg(self.qualified_decl_name(c.member)),
                 SynthKind::Comparison(_) | SynthKind::Inheriting => {
                     let SynthKind::Comparison(k) = c.kind else { unreachable!("filtered") };
                     let class = self.cmp_class(c.member).unwrap_or(self.ast.tu);

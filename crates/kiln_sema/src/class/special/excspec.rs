@@ -182,7 +182,8 @@ impl Sema<'_, '_> {
     /// one exception-specification context note at the use `at`. The
     /// fields become invalid, so the constructor's definition skips them
     /// quietly (no cascade from the definition or its constant
-    /// evaluation). Reported before the bases are visited.
+    /// evaluation). Reported before the bases are visited. A specialization's
+    /// initializer awaiting lazy instantiation was parsed in its pattern.
     fn exc_spec_needs_unparsed_inits(&mut self, f: DeclId, class: DeclId, at: Loc) {
         use super::define::{SynthContext, SynthKind};
         let unparsed: Vec<DeclId> = self
@@ -192,6 +193,7 @@ impl Sema<'_, '_> {
                 !self.ast.decls.get(fld).has(DeclFlags::INVALID)
                     && self.field_has_nsdmi(fld)
                     && self.ast.decls.field(fld).and_then(|x| x.init).is_none()
+                    && !self.inst.deferred_nsdmis.contains_key(&fld)
             })
             .collect();
         if unparsed.is_empty() {
