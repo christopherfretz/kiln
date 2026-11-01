@@ -25,7 +25,8 @@ carrying the GENERATED banner) are removed. See spec/harness.md.
 options:
   --std <std>       -std= of the generated tests (default c++26); other than
                     c++26, the category directories get a `.<std>` suffix
-  --libcxx <dir>    libc++ header directory (default /usr/lib/llvm-19/include/c++/v1)
+  --libcxx <dir>    libc++ header directory (default /usr/lib/llvm-N/include/c++/v1,
+                    N from KILN_ORACLE: 19 or 22, default 19)
   --sysroot <dir>   C library header directory (default /usr/include)
   --out <dir>       output directory (default <repo>/tests/differential/pp)
   --check           change nothing; exit 1 if the corpus is not up to date
@@ -77,7 +78,7 @@ const NO_CRASH_OUT: &str = "tests/header-guard";
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Options>, String> {
     let mut o = Options {
         std: DEFAULT_STD.to_owned(),
-        libcxx: PathBuf::from("/usr/lib/llvm-19/include/c++/v1"),
+        libcxx: crate::oracle::Oracle::from_env()?.libcxx_include(),
         sysroot: PathBuf::from("/usr/include"),
         out: None,
         check: false,

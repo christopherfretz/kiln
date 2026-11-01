@@ -31,8 +31,11 @@ Runs libc++'s test suite (llvmorg-19.1.7 `libcxx/test`) with kiln. <dir>s are
 relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
 
   --gate m3              the M3 gate directories (spec/libcxx.md \"Gates\")
-  --libcxx-tests <dir>   the llvm-project checkout (default:
-                         .toolchain/llvm-project; scripts/fetch-libcxx-tests.sh)
+  --tag <llvmorg-X.Y.Z>  the release whose checkout to use (default: $KILN_LIBCXX_TAG,
+                         else llvmorg-19.1.7)
+  --libcxx-tests <dir>   the llvm-project checkout (default: .toolchain/libcxx-<tag>,
+                         `scripts/fetch-libcxx-tests.sh <tag>`; for llvmorg-19.1.7
+                         also the older .toolchain/llvm-project)
   --compiler <path>      kiln++ binary (default: cargo build -p kiln_driver)
   --filter <substring>   only tests whose path contains <substring>
   --list                 list the selected tests and their pre-run verdict
@@ -44,6 +47,12 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
   --keep                 keep the scratch directories
   --no-fail              exit 0 even on FAIL, XPASS, KILLED, TIMEOUT or ERROR
   -v, --verbose          print every result and failure details
+
+environment:
+  KILN_LIBCXX_TAG        the default --tag
+  KILN_ORACLE            19 (default) or 22: kiln++ runs with
+                         KILN_LLVM_DIR=/usr/lib/llvm-N, whose libc++ headers must match
+                         the tests' tag (spec/harness.md \"Oracle toolchain\")
 ";
 
 /// The directories of the M3 gate, relative to `libcxx/test`.
@@ -58,13 +67,34 @@ pub const GATE_M3: &[&str] = &[
     "std/language.support/support.initlist",
 ];
 
-/// The release whose tests the driver targets.
+/// The release whose tests the driver targets by default.
 pub const TESTS_TAG: &str = "llvmorg-19.1.7";
+
+/// The environment variable naming the default `--tag`.
+pub const TAG_ENV: &str = "KILN_LIBCXX_TAG";
+
+/// Checks an llvm-project release tag (`llvmorg-<version>`), which also
+/// names a directory (`.toolchain/libcxx-<tag>`).
+fn check_tag(tag: &str) -> Result<(), String> {
+    let ok = tag.strip_prefix("llvmorg-").is_some_and(|v| {
+        !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    });
+    if ok { Ok(()) } else { Err(format!("bad libc++ tests tag `{tag}` (want llvmorg-<version>)")) }
+}
+
+/// The tag to use: `--tag`, else `$KILN_LIBCXX_TAG`, else [`TESTS_TAG`].
+fn resolve_tag(flag: Option<&str>, env: Option<&str>) -> Result<String, String> {
+    let tag = flag.or(env.filter(|v| !v.is_empty())).unwrap_or(TESTS_TAG);
+    check_tag(tag)?;
+    Ok(tag.to_owned())
+}
 
 #[derive(Clone, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct Options {
     pub tests: Option<PathBuf>,
+    /// `--tag`; `None` is `$KILN_LIBCXX_TAG`, else [`TESTS_TAG`].
+    pub tag: Option<String>,
     pub compiler: Option<PathBuf>,
     pub gate: Option<String>,
     pub dirs: Vec<String>,
@@ -83,6 +113,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             tests: None,
+            tag: None,
             compiler: None,
             gate: None,
             dirs: Vec::new(),
@@ -115,6 +146,11 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
         };
         match flag.as_str() {
             "-h" | "--help" => return Ok(None),
+            "--tag" => {
+                let t = value("--tag")?;
+                check_tag(&t)?;
+                o.tag = Some(t);
+            }
             "--libcxx-tests" => o.tests = Some(PathBuf::from(value("--libcxx-tests")?)),
             "--compiler" => o.compiler = Some(PathBuf::from(value("--compiler")?)),
             "--gate" => {
@@ -181,14 +217,34 @@ pub fn main(args: impl IntoIterator<Item = String>) -> ExitCode {
     }
 }
 
-/// The default checkout: `.toolchain/llvm-project` of this checkout, else of
-/// the main checkout when this is a worktree (where the fetch script puts
-/// it).
-fn default_checkout(root: &Path) -> PathBuf {
-    let local = root.join(".toolchain").join("llvm-project");
-    if local.is_dir() {
-        return local;
+/// The default checkout of `tag`: `.toolchain/libcxx-<tag>` of this
+/// checkout, else of the main checkout when this is a worktree (where the
+/// fetch script puts it); for [`TESTS_TAG`] also the pre-tag location
+/// `.toolchain/llvm-project`. The first that exists, else the fetch
+/// script's target.
+fn default_checkout(root: &Path, tag: &str) -> PathBuf {
+    let mut names = vec![format!("libcxx-{tag}")];
+    if tag == TESTS_TAG {
+        names.push("llvm-project".to_owned());
     }
+    let mut bases = vec![root.to_path_buf()];
+    if let Some(main) = main_checkout(root) {
+        bases.push(main);
+    }
+    let candidates: Vec<PathBuf> = names
+        .iter()
+        .flat_map(|n| bases.iter().map(move |b| b.join(".toolchain").join(n)))
+        .collect();
+    // None yet: where the fetch script puts it (the main checkout's).
+    candidates.into_iter().find(|c| c.is_dir()).unwrap_or_else(|| {
+        let base = bases.last().map_or(root, PathBuf::as_path);
+        base.join(".toolchain").join(format!("libcxx-{tag}"))
+    })
+}
+
+/// The main checkout when `root` is a worktree of it: the common git dir's
+/// `core.worktree` (kiln as a submodule), else the common dir's parent.
+fn main_checkout(root: &Path) -> Option<PathBuf> {
     let git = |args: &[&str]| {
         Command::new("git")
             .arg("-C")
@@ -200,10 +256,7 @@ fn default_checkout(root: &Path) -> PathBuf {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
             .filter(|s| !s.is_empty())
     };
-    let Some(common) = git(&["rev-parse", "--path-format=absolute", "--git-common-dir"]) else {
-        return local;
-    };
-    let common = PathBuf::from(common);
+    let common = PathBuf::from(git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?);
     let main = match git(&[
         "config",
         "--file",
@@ -213,8 +266,8 @@ fn default_checkout(root: &Path) -> PathBuf {
         Some(wt) => common.join(wt),
         None => common.join(".."),
     };
-    let candidate = main.join(".toolchain").join("llvm-project");
-    if main.join("xtask").is_dir() && candidate.is_dir() { candidate } else { local }
+    let main = std::fs::canonicalize(&main).unwrap_or(main);
+    main.join("xtask").is_dir().then_some(main)
 }
 
 /// All tests under `dirs` (relative to `test_root`), sorted, with `/`
@@ -303,12 +356,23 @@ fn load_local_cfgs(test_root: &Path, tests: &[(PathBuf, String)]) -> HashMap<Pat
 fn execute(opts: &Options) -> Result<bool, String> {
     let start = Instant::now();
     let root = repo_root();
-    let checkout = opts.tests.clone().unwrap_or_else(|| default_checkout(&root));
+    let toolchain = crate::oracle::Oracle::from_env()?;
+    let tag = resolve_tag(opts.tag.as_deref(), std::env::var(TAG_ENV).ok().as_deref())?;
+    let checkout = opts.tests.clone().unwrap_or_else(|| default_checkout(&root, &tag));
     let test_root = checkout.join("libcxx").join("test");
     if !test_root.join("support").join("test_macros.h").is_file() {
         return Err(format!(
-            "libc++ tests not found at {}; run scripts/fetch-libcxx-tests.sh",
+            "libc++ tests not found at {}; run scripts/fetch-libcxx-tests.sh {tag}",
             checkout.display()
+        ));
+    }
+    if !opts.list && !toolchain.libcxx_include().is_dir() {
+        return Err(format!(
+            "no libc++ headers at {} (KILN_ORACLE={}); install libc++-{}-dev or pick \
+             another KILN_ORACLE",
+            toolchain.libcxx_include().display(),
+            toolchain.version,
+            toolchain.version
         ));
     }
     let roots: Vec<String> = if opts.dirs.is_empty() || opts.gate.is_some() {
@@ -360,6 +424,8 @@ fn execute(opts: &Options) -> Result<bool, String> {
     let cfg = Config {
         kiln: kiln.clone(),
         checkout: checkout.clone(),
+        tag,
+        llvm_dir: toolchain.llvm_dir(),
         resource_dir: root.join("resource"),
         features: features.clone(),
         compile_timeout: COMPILE_TIMEOUT,
@@ -473,6 +539,9 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     let kiln_version =
         crate::util::identify(&cfg.kiln).map_or_else(|_| "unknown".to_owned(), |id| id.version);
     let mut command = "cargo xtask libcxx".to_owned();
+    if cfg.tag != TESTS_TAG {
+        let _ = write!(command, " --tag {}", cfg.tag);
+    }
     if opts.gate.is_some() || opts.dirs.is_empty() {
         command.push_str(" --gate m3");
     }
@@ -496,8 +565,8 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
         kiln_version,
         kiln_commit: git(root, &["rev-parse", "--short", "HEAD"]),
         tests_tag: match git(&cfg.checkout, &["describe", "--tags", "--always"]) {
-            t if t == TESTS_TAG => t,
-            t => format!("{t} (expected {TESTS_TAG})"),
+            t if t == cfg.tag => t,
+            t => format!("{t} (expected {})", cfg.tag),
         },
         libcpp_version: libcpp_version(cfg),
         target: features::TARGET.to_owned(),
@@ -529,7 +598,11 @@ fn libcpp_version(cfg: &Config) -> String {
         return "unknown".to_owned();
     }
     let mut cmd = Command::new(&cfg.kiln);
-    cmd.args(cfg.base_compile_flags()).args(["-E", "-dM"]).arg(&src).env("TMPDIR", &dir);
+    cmd.args(cfg.base_compile_flags())
+        .args(["-E", "-dM"])
+        .arg(&src)
+        .env("TMPDIR", &dir)
+        .env("KILN_LLVM_DIR", &cfg.llvm_dir);
     let out = process::run(&mut process::limited(&cmd, cfg.mem), COMPILE_TIMEOUT);
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_dir(&dir);
@@ -614,6 +687,50 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(local_cfgs(&cache, &root, &tests[0].0).len(), 0);
         assert_eq!(local_cfgs(&cache, &root, &tests[2].0).len(), 1);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// `--tag`/`KILN_LIBCXX_TAG` pick the checkout (spec/libcxx.md "Setup").
+    #[test]
+    fn tag_selection() {
+        assert_eq!(
+            parse(&["--tag", "llvmorg-22.1.8"]).unwrap().unwrap().tag.as_deref(),
+            Some("llvmorg-22.1.8")
+        );
+        assert_eq!(parse(&[]).unwrap().unwrap().tag, None);
+        for bad in ["22.1.8", "llvmorg-", "llvmorg-../x", "llvmorg-1 2"] {
+            assert!(parse(&["--tag", bad]).is_err(), "{bad}");
+        }
+        assert_eq!(resolve_tag(None, None).unwrap(), TESTS_TAG);
+        assert_eq!(resolve_tag(None, Some("")).unwrap(), TESTS_TAG);
+        assert_eq!(resolve_tag(None, Some("llvmorg-22.1.8")).unwrap(), "llvmorg-22.1.8");
+        assert_eq!(
+            resolve_tag(Some("llvmorg-20.1.0"), Some("llvmorg-22.1.8")).unwrap(),
+            "llvmorg-20.1.0"
+        );
+        assert!(resolve_tag(None, Some("banana")).is_err());
+    }
+
+    /// Two tags' checkouts coexist under `.toolchain/libcxx-<tag>`; the
+    /// default tag also finds the pre-tag `.toolchain/llvm-project`.
+    #[test]
+    fn checkouts_coexist() {
+        let base = std::env::temp_dir().join(format!("kiln-libcxx-tags-{}", std::process::id()));
+        let tc = base.join(".toolchain");
+        std::fs::create_dir_all(&tc).unwrap();
+        let t22 = "llvmorg-22.1.8";
+        // Nothing fetched: the tagged path (the fetch script's target).
+        assert_eq!(default_checkout(&base, t22), tc.join(format!("libcxx-{t22}")));
+        assert_eq!(default_checkout(&base, TESTS_TAG), tc.join(format!("libcxx-{TESTS_TAG}")));
+        // The legacy location serves the default tag only.
+        std::fs::create_dir_all(tc.join("llvm-project")).unwrap();
+        assert_eq!(default_checkout(&base, TESTS_TAG), tc.join("llvm-project"));
+        assert_eq!(default_checkout(&base, t22), tc.join(format!("libcxx-{t22}")));
+        // Tagged checkouts win, side by side.
+        std::fs::create_dir_all(tc.join(format!("libcxx-{TESTS_TAG}"))).unwrap();
+        std::fs::create_dir_all(tc.join(format!("libcxx-{t22}"))).unwrap();
+        assert_eq!(default_checkout(&base, TESTS_TAG), tc.join(format!("libcxx-{TESTS_TAG}")));
+        assert_eq!(default_checkout(&base, t22), tc.join(format!("libcxx-{t22}")));
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

@@ -262,7 +262,11 @@ pub fn lookup(kind: &str) -> Result<Disposition, String> {
 
 /// JSON keys present on every node (or handled before the kind's printer).
 const COMMON_KEYS: &[&str] = &["id", "kind", "loc", "range", "inner"];
-/// Keys of every declaration.
+/// Keys of every declaration. `TemplateInstantiationPattern` (clang 22+):
+/// the id of the declaration an instantiated one was made from (class
+/// template specializations and the members, nested classes, enums and
+/// static data members of instantiations); ignored, kiln has no field for it
+/// (WP-262, spec/harness.md "Oracle toolchain").
 const DECL_KEYS: &[&str] = &[
     "isImplicit",
     "isUsed",
@@ -271,6 +275,7 @@ const DECL_KEYS: &[&str] = &[
     "previousDecl",
     "parentDeclContextId",
     "mangledName",
+    "TemplateInstantiationPattern",
 ];
 /// Keys of every expression.
 const EXPR_KEYS: &[&str] = &["type", "valueCategory"];
@@ -412,8 +417,11 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "StmtExpr"
         | "CompoundLiteralExpr"
         | "BinaryConditionalOperator"
-        | "OffsetOfExpr"
-        | "LambdaExpr" => &[],
+        | "OffsetOfExpr" => &[],
+        // `hasExplicitParameters` (clang 22+): whether the lambda spells a
+        // parameter list; ignored, the parameters are the call operator's
+        // (WP-262, spec/harness.md "Oracle toolchain").
+        "LambdaExpr" => &["hasExplicitParameters"],
         "CXXThisExpr" => &["implicit"],
         "CXXDefaultInitExpr" => &["hasRewrittenInit"],
         // `temp` and `dtor` (the temporary's destructor) are not printed.

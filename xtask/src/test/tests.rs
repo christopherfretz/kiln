@@ -42,7 +42,7 @@ fn cli_parsing() {
         o,
         Options {
             compiler: Some("clang++-19".into()),
-            oracle: "clang++".into(),
+            oracle: Some("clang++".into()),
             no_oracle: true,
             filter: Some("lex".into()),
             update: true,
@@ -412,7 +412,7 @@ fn oracle_mismatches_are_detected() {
         return;
     }
     let mut o = clang_opts(&[repo_root().join("xtask/fixtures/oracle")]);
-    o.oracle = "clang++-22".into();
+    o.oracle = Some("clang++-22".into());
     let results = execute(&o).unwrap();
     check_fixture_statuses(&results, 6);
 }

@@ -3,12 +3,17 @@
 //! Every `tests/codegen/*.cpp` is compiled in-process by the kiln driver,
 //! as `kiln++` (`kiln_driver::run`), with
 //! `-S -emit-llvm -O0 -std=c++26 --target=<triple>` for each triple in
-//! [`TRIPLES`], and by `clang++-19` with the same flags. Both outputs go
-//! through `opt-19 -S -passes=verify` and [`normalize`] (as in `lower.rs`)
+//! [`TRIPLES`], and by `clang++-N` with the same flags. Both outputs go
+//! through `opt-N -S -passes=verify` and [`normalize`] (as in `lower.rs`)
 //! and must be byte-identical, unless the (case, triple) pair is listed in
 //! [`DEVIATIONS`] (spec/codegen.md "Deviations"), in which case kiln's IR
-//! must still verify. Without `opt-19` / `clang++-19` the comparison is
+//! must still verify. Without `opt-N` / `clang++-N` the comparison is
 //! skipped.
+//!
+//! N is the oracle release, `KILN_ORACLE` (`19`, the default, or `22`;
+//! spec/harness.md "Oracle toolchain"), read here directly since a test
+//! crate cannot use xtask's `oracle` module. The corpus and [`DEVIATIONS`]
+//! are baselined on 19; under 22 most cases differ until WP-184 step E.
 //!
 //! `KILN_CASE=<name>` (the file stem) runs one case and prints both IR
 //! texts for each triple. A `//@ args: <opts>` line in a case adds
@@ -113,8 +118,27 @@ fn pipe(prog: &str, args: &[&str], input: &str) -> Option<Result<String, String>
     }
 }
 
+/// The oracle release: `KILN_ORACLE`, `19` when unset or empty.
+fn oracle_version() -> &'static str {
+    match std::env::var("KILN_ORACLE").as_deref().map(str::trim) {
+        Err(_) | Ok("" | "19") => "19",
+        Ok("22") => "22",
+        Ok(v) => panic!("KILN_ORACLE=`{v}` is not a known oracle release (accepted: 19 or 22)"),
+    }
+}
+
+/// `opt-N` of the oracle release.
+fn opt_tool() -> String {
+    format!("opt-{}", oracle_version())
+}
+
+/// `clang++-N` of the oracle release.
+fn clang_tool() -> String {
+    format!("clang++-{}", oracle_version())
+}
+
 fn opt(ir: &str) -> Option<Result<String, String>> {
-    pipe("opt-19", &["-S", "-passes=verify", "-o", "-"], ir)
+    pipe(&opt_tool(), &["-S", "-passes=verify", "-o", "-"], ir)
 }
 
 fn clang_ir(file: &Path, triple: &str) -> Option<Result<String, String>> {
@@ -125,7 +149,7 @@ fn clang_ir(file: &Path, triple: &str) -> Option<Result<String, String>> {
     args.extend(pinned_flags(triple));
     args.extend(extra.iter().map(String::as_str));
     args.push(path.as_str());
-    pipe("clang++-19", &args, "")
+    pipe(&clang_tool(), &args, "")
 }
 
 /// Drops the `ModuleID` comment, `source_filename`, the `llvm.ident`
@@ -176,11 +200,13 @@ enum Outcome {
 fn run_case(name: &str, file: &Path, triple: &str) -> Result<Outcome, String> {
     let ir = kiln_ir(file, triple)?;
     let Some(v) = opt(&ir) else { return Ok(Outcome::Skipped) };
-    let ours = v.map_err(|e| format!("opt-19 rejects kiln IR:\n{e}\n{ir}"))?;
+    let (opt_name, clang_name) = (opt_tool(), clang_tool());
+    let ours = v.map_err(|e| format!("{opt_name} rejects kiln IR:\n{e}\n{ir}"))?;
     let Some(c) = clang_ir(file, triple) else { return Ok(Outcome::Skipped) };
-    let c = c.map_err(|e| format!("clang++-19 failed: {e}"))?;
-    let theirs =
-        opt(&c).expect("opt-19 present").map_err(|e| format!("opt-19 rejects clang IR: {e}"))?;
+    let c = c.map_err(|e| format!("{clang_name} failed: {e}"))?;
+    let theirs = opt(&c)
+        .unwrap_or_else(|| panic!("{opt_name} present"))
+        .map_err(|e| format!("{opt_name} rejects clang IR: {e}"))?;
     let (a, b) = (normalize(&ours), normalize(&theirs));
     if std::env::var("KILN_CASE").is_ok_and(|c| c == name) {
         eprintln!("==== kiln ({triple}) ====\n{a}\n==== clang ({triple}) ====\n{b}");
@@ -228,7 +254,12 @@ fn ir_matches_clang() {
             }
         }
     }
-    eprintln!("ir_vs_clang: {exact}/{total} exact, {skipped} skipped (no opt-19/clang++-19)");
+    eprintln!(
+        "ir_vs_clang: {exact}/{total} exact, {skipped} skipped (no {}/{}), oracle {}",
+        opt_tool(),
+        clang_tool(),
+        oracle_version()
+    );
     for d in &deviations {
         eprintln!("  {d}");
     }

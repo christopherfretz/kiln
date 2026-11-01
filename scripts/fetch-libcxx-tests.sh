@@ -3,15 +3,32 @@
 # the installed libc++ headers, for `cargo xtask libcxx` (spec/libcxx.md).
 #
 # Shallow, blob-filtered, sparse checkout into <main checkout>/.toolchain/
-# llvm-project (gitignored, so it survives container restarts and never
-# enters the repo). Idempotent: a checkout already at the tag is left alone.
-# Prints the checkout path on success.
+# libcxx-<tag> (gitignored, so it survives container restarts and never
+# enters the repo), so checkouts of different releases coexist (the M3 gate
+# stays on 19 while the clang 22 oracle uses 22; spec/harness.md "Oracle
+# toolchain"). Idempotent: a checkout already at the tag is left alone. For
+# the default tag, a checkout at the older location .toolchain/llvm-project
+# is used as is. Prints the checkout path on success; `cargo xtask libcxx
+# --tag <tag>` finds it.
 #
-# Usage: scripts/fetch-libcxx-tests.sh [<dir>]
-#   LLVM_TAG (default llvmorg-19.1.7) and LLVM_REPO override the source.
+# Usage: scripts/fetch-libcxx-tests.sh [<tag>] [<dir>]
+#   <tag> is an llvmorg-* release tag (default: $LLVM_TAG, else
+#   llvmorg-19.1.7); a first argument not starting with llvmorg- is <dir>.
+#   LLVM_REPO overrides the source.
 set -euo pipefail
 
-TAG="${LLVM_TAG:-llvmorg-19.1.7}"
+DEFAULT_TAG="llvmorg-19.1.7"
+TAG="${LLVM_TAG:-$DEFAULT_TAG}"
+case "${1:-}" in
+  llvmorg-*) TAG="$1"; shift;;
+esac
+case "$TAG" in
+  llvmorg-?*) ;;
+  *) echo "fetch-libcxx-tests: bad tag '$TAG' (want llvmorg-<version>)" >&2; exit 2;;
+esac
+case "$TAG" in
+  */*|*..*) echo "fetch-libcxx-tests: bad tag '$TAG'" >&2; exit 2;;
+esac
 REPO="${LLVM_REPO:-https://github.com/llvm/llvm-project.git}"
 
 ws="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,20 +45,27 @@ else
 fi
 main="$(cd "$main" 2>/dev/null && pwd || echo "$ws")"
 [ -d "$main/xtask" ] || main="$ws"
-dir="${1:-$main/.toolchain/llvm-project}"
+dir="${1:-$main/.toolchain/libcxx-$TAG}"
 
+# have_tag <dir>: <dir> is a complete checkout at $TAG.
 have_tag() {
-  [ -d "$dir/.git" ] || return 1
-  [ -d "$dir/libcxx/test/std" ] || return 1
-  [ -f "$dir/libcxx/utils/libcxx/test/format.py" ] || return 1
+  local d="$1"
+  [ -d "$d/.git" ] || return 1
+  [ -d "$d/libcxx/test/std" ] || return 1
+  [ -f "$d/libcxx/utils/libcxx/test/format.py" ] || return 1
   local head want
-  head="$(git -C "$dir" rev-parse HEAD 2>/dev/null)" || return 1
-  want="$(git -C "$dir" rev-parse "refs/tags/$TAG^{commit}" 2>/dev/null)" || return 1
+  head="$(git -C "$d" rev-parse HEAD 2>/dev/null)" || return 1
+  want="$(git -C "$d" rev-parse "refs/tags/$TAG^{commit}" 2>/dev/null)" || return 1
   [ "$head" = "$want" ]
 }
 
-if have_tag; then
+if have_tag "$dir"; then
   echo "$dir"
+  exit 0
+fi
+legacy="$main/.toolchain/llvm-project"
+if [ -z "${1:-}" ] && [ "$TAG" = "$DEFAULT_TAG" ] && have_tag "$legacy"; then
+  echo "$legacy"
   exit 0
 fi
 
