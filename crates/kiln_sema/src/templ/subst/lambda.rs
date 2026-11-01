@@ -125,6 +125,13 @@ impl Substituter<'_, '_, '_> {
         let b = self.body(body);
         self.lambda_bodies -= 1;
         self.forget_pattern_params(call_op);
+        if self.probe_done() {
+            // The body reached the pack a probe looks for (the statement
+            // failed and was recovered): the probe fails here instead of
+            // completing a lambda with a truncated body.
+            self.sema.act_on_lambda_error(lambda);
+            return Err(SubstFail);
+        }
         Ok(self.sema.act_on_lambda_end(lambda, b, rbrace))
     }
 

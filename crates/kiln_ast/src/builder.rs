@@ -2472,8 +2472,20 @@ impl<'a> AstBuilder<'a> {
     /// A `LambdaExpr` ([expr.prim.lambda], §5): a prvalue of the closure
     /// type `ty` over the side record `id` (its capture initializers are
     /// the children); `loc` is the `[`, `end` the `}` of the body.
-    pub fn lambda_expr(&mut self, id: LambdaId, ty: QualType, loc: Loc, end: Loc) -> ExprId {
+    /// `packs`: the body contains an unexpanded parameter pack of an
+    /// enclosing template ([temp.variadic]/5).
+    pub fn lambda_expr(
+        &mut self,
+        id: LambdaId,
+        ty: QualType,
+        packs: bool,
+        loc: Loc,
+        end: Loc,
+    ) -> ExprId {
         let mut deps = self.type_deps(ty);
+        if packs {
+            deps |= ExprDeps::UNEXPANDED_PACK;
+        }
         if let Some(l) = self.ast.exprs.lambdas.get(id).inits {
             let inits: Vec<ExprId> = self.ast.lists.iter::<ExprId>(l).collect();
             for e in inits {

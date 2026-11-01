@@ -516,7 +516,12 @@ fn pointer_conversion(
     }
     if let (Some(d), Some(b)) =
         (s.ast.types.as_record(from_pointee), s.ast.types.as_record(to_pointee))
-        && find_base(s, d, b).is_derived()
+        && {
+            // clang `IsDerivedFrom`: the derived class is completed first,
+            // instantiating a class template specialization ([temp.inst]/2).
+            let _ = s.require_complete_silent(from_pointee, kiln_source::Loc::INVALID);
+            find_base(s, d, b).is_derived()
+        }
     {
         return Some(similarly_qualified_pointer(s, from_pointee, to));
     }

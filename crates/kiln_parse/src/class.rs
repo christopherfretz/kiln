@@ -1024,6 +1024,7 @@ impl Parser<'_, '_> {
     /// declarations, access specifiers, `static_assert`, `using`,
     /// templates): parses one and returns true, or returns false.
     fn parse_member_declaration_leader(&mut self) -> bool {
+        self.skip_extension_before_using();
         let loc = self.loc();
         match (Self::punct_of(self.tok()), self.kw()) {
             (Some(Punct::Semi), _) => {
