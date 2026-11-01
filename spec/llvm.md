@@ -74,7 +74,14 @@ prints as `thread_local`, others as `thread_local(localdynamic)` etc.),
 attachments with `add_global_metadata`. `set_initializer` checks the
 initializer's type. A global without initializer prints as a declaration
 (`external global`). Names are uniqued (`x`, `x.1`, ...); an empty name
-gives an unnamed global printed `@0`, `@1`, ... in creation order.
+gives an unnamed global printed `@0`, `@1`, ... in print order.
+Globals print in creation order; `set_global_value_type(g, ty)` retypes
+one in place (clearing its initializer), and `retype_global_to_end(g, ty)`
+retypes it and moves it to the end of the list (clang
+`GetOrCreateLLVMGlobal` replacing a declaration whose type differs: the
+new global is appended and the old one RAUW'd; ids are unchanged, and
+with opaque pointers every use stays valid). The type list (§3), comdats
+and metadata follow the print order (`Module::global_order`).
 
 ### 2.4 Functions
 `add_function(name, fn_ty) -> FuncId` creates a declaration; it becomes a

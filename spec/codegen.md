@@ -306,7 +306,15 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
   made active by an assignment in a constructor body or by a trivial copy
   assignment (libc++'s `std::string` constructors) is emitted, as clang
   emits its `APValue` (WP-212). An image with no recorded member is
-  `zeroinitializer` when all its bytes are zero, else an error. A record with bit-fields
+  `zeroinitializer` when all its bytes are zero, else an error. When a
+  global's definition has a different IR type from the declaration an
+  earlier use created (a union, or a record holding one, initialized
+  through a member other than its largest), `emit_var_def` retypes that
+  declaration to the initializer's type and moves it to the end of the
+  global list (`kiln_llvm` `retype_global_to_end`), as clang
+  `GetOrCreateLLVMGlobal` does; a static local is retyped in place
+  (`AddInitializerToStaticVarDecl`). Retyping a global that already has
+  an initializer is an error (WP-213). A record with bit-fields
   is built like any other, each bit-field storage unit read from the
   image's bytes as its IR type (the Oven's object representation already
   packs the fields in target bit order; WP-207). Base classes are still
@@ -479,13 +487,14 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 184 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 200 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
   `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
-  work packages' cases): 367/368 pairs exact; `DEVIATIONS` holds
-  `global_init_array_eh` on aarch64 (§7f).
+  work packages' cases): 398/400 pairs exact; `DEVIATIONS` holds
+  `global_init_array_eh` and `eh_array_destroy_throwing_global` on
+  aarch64 (§7f).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
   are compiled, linked and run by kiln and by clang, and their stdout and

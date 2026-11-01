@@ -328,7 +328,7 @@ impl<'a> Printer<'a> {
             attr_order: Vec::new(),
             md_slot: vec![NO_SLOT; m.md.len()],
             md_order: Vec::new(),
-            global_slot: Vec::with_capacity(m.globals.len()),
+            global_slot: vec![NO_SLOT; m.globals.len()],
             alias_slot: Vec::with_capacity(m.aliases.len()),
             func_slot: vec![NO_SLOT; m.funcs.len()],
             cur: None,
@@ -343,8 +343,8 @@ impl<'a> Printer<'a> {
                 NO_SLOT
             }
         };
-        for g in &m.globals {
-            p.global_slot.push(next(g.name.is_empty()));
+        for &g in &m.global_order {
+            p.global_slot[g.index()] = next(m.globals[g.index()].name.is_empty());
         }
         for a in &m.aliases {
             p.alias_slot.push(next(a.name.is_empty()));
@@ -401,7 +401,7 @@ impl<'a> Printer<'a> {
     fn number_metadata(&mut self) {
         let m = self.m;
         let mut stack = Vec::new();
-        for g in &m.globals {
+        for g in m.ordered_globals() {
             for &(_, md) in &g.md {
                 self.add_md_slot(md, &mut stack);
             }
@@ -786,8 +786,8 @@ impl<'a> Printer<'a> {
         if !m.globals.is_empty() {
             w.write_char('\n')?;
         }
-        for i in 0..m.globals.len() {
-            self.global(w, i)?;
+        for g in &m.global_order {
+            self.global(w, g.index())?;
             w.write_char('\n')?;
         }
         if !m.aliases.is_empty() {
@@ -870,7 +870,7 @@ impl<'a> Printer<'a> {
         let used = m
             .ordered_funcs()
             .filter_map(|f| f.comdat)
-            .chain(m.globals.iter().filter_map(|g| g.comdat));
+            .chain(m.ordered_globals().filter_map(|g| g.comdat));
         for c in used {
             if !seen[c.index()] {
                 seen[c.index()] = true;
@@ -1577,7 +1577,7 @@ impl<'a> TypeFinder<'a> {
             out: Vec::new(),
             work: Vec::new(),
         };
-        for g in &m.globals {
+        for g in m.ordered_globals() {
             t.ty(g.value_type);
             if let Some(i) = g.init {
                 t.value(i);
