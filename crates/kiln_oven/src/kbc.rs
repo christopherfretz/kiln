@@ -266,6 +266,10 @@ pub(crate) mod bi {
     /// pointer type `t2`, thawed: the value of a source-location builtin
     /// (spec/oven.md, Builtins).
     pub const THAW_PTR: u32 = 10;
+    /// A sign-bit or comparison operation on the floats `a` and `b`;
+    /// sub = float kind | `FABS`..`ISINF_SIGN` << 4 (clang 19's
+    /// `FloatExprEvaluator::VisitCallExpr`).
+    pub const FP_OP: u32 = 11;
 
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
@@ -289,6 +293,18 @@ pub(crate) mod bi {
     pub const INF: u32 = 1;
     pub const NAN: u32 = 2;
     pub const NORMAL: u32 = 3;
+    pub const SUBNORMAL: u32 = 4;
+    pub const ZERO: u32 = 5;
+    pub const SIGNALING: u32 = 6;
+
+    /// Operations of `FP_OP`: `|a|`; `a` with the sign of `b`; `fmax`
+    /// and `fmin` (a NaN operand yields the other; `-0 < +0`); the
+    /// `isinf_sign` of `a` (an `int`).
+    pub const FABS: u32 = 0;
+    pub const COPYSIGN: u32 = 1;
+    pub const FMAX: u32 = 2;
+    pub const FMIN: u32 = 3;
+    pub const ISINF_SIGN: u32 = 4;
 }
 
 /// The aux of `New`.

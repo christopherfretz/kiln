@@ -3169,6 +3169,7 @@ impl Sema<'_, '_> {
     pub fn act_on_finish_function_def(&mut self, f: DeclId, body: StmtId, rbrace: Loc) {
         self.check_function_try_block(f, body);
         self.end_function_body(body, rbrace);
+        self.finish_source_locs(f);
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
         }

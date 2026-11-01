@@ -424,6 +424,18 @@ pub(crate) fn classify(kind: FloatKind, a: u128) -> Class {
     if f.explicit && field & int_bit == 0 { Class::NaN } else { Class::Normal }
 }
 
+/// The sign bit of the format of `kind`.
+pub(crate) fn sign_bit(kind: FloatKind) -> u128 {
+    1u128 << (Fmt::of(kind).total() - 1)
+}
+
+/// Whether `a` is a signaling NaN (`APFloat::isSignaling`: a NaN whose
+/// quiet bit is clear).
+pub(crate) fn is_signaling(kind: FloatKind, a: u128) -> bool {
+    let f = Fmt::of(kind);
+    classify(kind, a) == Class::NaN && a & (1u128 << (f.p - 2)) == 0
+}
+
 /// Positive infinity.
 pub(crate) fn inf(kind: FloatKind) -> u128 {
     pack_inf(Fmt::of(kind), false)

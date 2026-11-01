@@ -167,7 +167,7 @@ impl Cg<'_> {
                 };
                 return self.emit_scalar_opt(init);
             }
-            ExprKind::ConstantExpr => match ast.exprs.constant_value(e) {
+            ExprKind::ConstantExpr => match self.immediate_value(e) {
                 Some(c) if !ast.types.is_void(q) => V::C(self.const_scalar_value(c, q)?),
                 _ => return self.emit_scalar_opt(ast.exprs.operand(e)),
             },
@@ -1805,7 +1805,17 @@ impl Cg<'_> {
         };
         let sig = self.call_sig(fty, extern_c, &arg_tys);
         let extra: Vec<Attr> = lib.map(|(_, x)| x).unwrap_or_default();
-        self.call_with(&sig, callee, fid, None, &args, dest, &extra)
+        let noreturn = extra.contains(&Attr::Flag(AttrKind::NoReturn));
+        let r = self.call_with(&sig, callee, fid, None, &args, dest, &extra)?;
+        if noreturn {
+            // clang `EmitCall` of a `noreturn` library builtin
+            // (`__builtin_abort`): `unreachable`, then a dummy block.
+            self.f.fir.push(Op::Unreachable, LTy::VOID);
+            self.f.fir.set_cur(None);
+            let cont = self.f.fir.create_block();
+            self.emit_block(cont, false);
+        }
+        Ok(r)
     }
 
     /// clang `EmitCallArgs` + `EmitCall`: evaluates `args` and calls
@@ -2074,10 +2084,10 @@ impl Cg<'_> {
         let n = *ast.exprs.get(e);
         let q = n.ty();
         match n.kind() {
-            ExprKind::ConstantExpr if ast.exprs.constant_value(e).is_some() => {
+            ExprKind::ConstantExpr if self.immediate_value(e).is_some() => {
                 // clang `AggExprEmitter::VisitConstantExpr`: the value of
                 // an immediate invocation, stored by `CreateCoercedStore`.
-                let c = ast.exprs.constant_value(e).expect("guarded");
+                let c = self.immediate_value(e).expect("guarded");
                 let k = self.const_value(c, q, Some(e), true)?;
                 self.coerced_store_const(k, dest, self.is_volatile(q));
                 Ok(())

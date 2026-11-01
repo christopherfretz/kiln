@@ -371,6 +371,16 @@ pub fn fabs(m: &mut Module, ty: TypeId) -> FuncId {
     unary(m, "llvm.fabs", ty)
 }
 
+/// `T @llvm.<op>.T(T, ...)` with `arity` operands of floating-point type
+/// `T`: the elementwise floating-point intrinsics (`llvm.copysign`,
+/// `llvm.maxnum`, `llvm.ceil`, `llvm.fma`, ...). `base` is the full
+/// unmangled name, e.g. `"llvm.copysign"`.
+pub fn fp_op(m: &mut Module, base: &str, ty: TypeId, arity: usize) -> FuncId {
+    let name = overloaded_name(m, base, &[ty]);
+    let params: Vec<(TypeId, &[Attr])> = (0..arity).map(|_| (ty, &[][..])).collect();
+    declare(m, &name, ty, &params, &[], Shape::Pure)
+}
+
 /// `i1 @llvm.is.fpclass.T(T, i32 immarg test)` for a floating-point `T`.
 pub fn is_fpclass(m: &mut Module, ty: TypeId) -> FuncId {
     let name = overloaded_name(m, "llvm.is.fpclass", &[ty]);

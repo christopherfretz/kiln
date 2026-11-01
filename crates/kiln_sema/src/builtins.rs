@@ -156,12 +156,14 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_params(f, &pds);
         }
         let mut attrs = vec![self.ast.attrs.push(implicit(AttrKind::BUILTIN, Loc::INVALID, id))];
+        let early = has(builtin::attr::CONST_EARLY);
         for (bit, kind) in [
+            (builtin::attr::CONST_EARLY, AttrKind::CONST),
             (builtin::attr::NOTHROW, AttrKind::NOTHROW),
             (builtin::attr::CONST, AttrKind::CONST),
             (builtin::attr::PURE, AttrKind::PURE),
         ] {
-            if has(bit) {
+            if has(bit) && !(early && bit == builtin::attr::CONST) {
                 attrs.push(self.ast.attrs.push(implicit(kind, loc, 0)));
             }
         }
@@ -268,7 +270,12 @@ impl Sema<'_, '_> {
             | builtin::ISINF
             | builtin::ISNAN
             | builtin::ISNORMAL
-            | builtin::SIGNBIT => self.builtin_fp_classification(args, rparen),
+            | builtin::SIGNBIT
+            | builtin::ISINF_SIGN
+            | builtin::ISSUBNORMAL
+            | builtin::ISZERO
+            | builtin::ISSIGNALING => self.builtin_fp_classification(args, rparen),
+            builtin::FPCLASSIFY => self.builtin_fpclassify(args, rparen),
             builtin::ISGREATER
             | builtin::ISGREATEREQUAL
             | builtin::ISLESS
@@ -411,6 +418,40 @@ impl Sema<'_, '_> {
             return None;
         }
         Some((vec![a], QualType::INT))
+    }
+
+    /// `__builtin_fpclassify(nan, inf, normal, subnormal, zero, x)`
+    /// (clang's `BuiltinFPClassification` with six arguments; C23
+    /// 7.12.3.1): the five values are converted to `int` as arguments,
+    /// `x` must be real floating.
+    fn builtin_fpclassify(
+        &mut self,
+        args: &[ExprId],
+        rparen: Loc,
+    ) -> Option<(Vec<ExprId>, QualType)> {
+        if !self.builtin_arg_count(args, 6, rparen) {
+            return None;
+        }
+        let mut out = Vec::with_capacity(6);
+        for &a in &args[..5] {
+            match conv::implicit_convert(self, a, QualType::INT, ConvCtx::Argument) {
+                Ok(x) => out.push(x),
+                Err(_) => {
+                    // clang `PerformImplicitConversion(.., AA_Passing)`:
+                    // `DiagnoseAssignmentResult`'s incompatible case.
+                    let t = self.ety(a);
+                    let msg = self
+                        .diag(DiagId::sema_builtin_passing_incompatible, self.begin_loc(a))
+                        .arg(self.ty_arg(t))
+                        .arg(self.ty_arg(QualType::INT));
+                    self.emit(msg);
+                    return None;
+                }
+            }
+        }
+        let (mut x, _) = self.builtin_fp_classification(&args[5..], rparen)?;
+        out.append(&mut x);
+        Some((out, QualType::INT))
     }
 
     /// `__builtin_isgreater` & co. (clang's `BuiltinUnorderedCompare`;
@@ -922,6 +963,11 @@ pub(crate) struct SrcLocCache {
     /// transitively through the default arguments of the calls in it
     /// (bit `1 << kind`; computed once per parameter).
     param_kinds: kiln_source::fx::FxHashMap<DeclId, u8>,
+    /// Uses whose `__builtin_source_location()` value holds the pretty
+    /// name of a function whose return type is not deduced yet: (use,
+    /// function), refined at the end of that function's body
+    /// ([`Sema::finish_source_locs`]).
+    deferred: Vec<(ExprId, DeclId)>,
 }
 
 /// The bit of `SourceLocKind::SourceLocStruct` in a kinds mask.
@@ -1077,6 +1123,38 @@ impl Sema<'_, '_> {
             location,
         };
         let _ = self.ast.exprs.set_source_loc_values(e, v);
+        if v.location.is_some()
+            && self
+                .func
+                .as_ref()
+                .is_some_and(|f| f.decl == ctx && f.auto_ret.is_some() && !f.deduced)
+        {
+            self.srcloc.deferred.push((e, ctx));
+        }
+    }
+
+    /// The return type of `f` is deduced (or its body ends): the
+    /// source-location objects built in it before then take the pretty
+    /// name with the deduced type (clang computes a `SourceLocExpr`'s value
+    /// when it is evaluated: `const char *f()` for `auto f()` from codegen
+    /// or from an immediate invocation in the deducing `return`). A
+    /// constant evaluated before then keeps the name it saw.
+    pub(crate) fn finish_source_locs(&mut self, f: DeclId) {
+        if self.srcloc.deferred.is_empty() {
+            return;
+        }
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.srcloc.deferred).into_iter().partition(|&(_, c)| c == f);
+        self.srcloc.deferred = rest;
+        let (_, pretty) = self.predefined_function_names(f);
+        let Some(pretty_p) = self.srcloc_string(&pretty) else { return };
+        for (e, _) in mine {
+            let Some(mut v) = self.ast.exprs.source_loc_values(e).copied() else { continue };
+            v.location = self.source_location_object(v.file, pretty_p, v.line, v.column);
+            if v.location.is_some() {
+                self.ast.exprs.refine_source_loc_values(e, v);
+            }
+        }
     }
 
     /// The `const char *` value pointing to the string literal object
@@ -1207,10 +1285,41 @@ impl Sema<'_, '_> {
         if kinds != 0 {
             let ctx = self.ctx;
             self.record_source_loc(e, call_begin, ctx, kinds & SRC_LOC_STRUCT_BIT != 0);
+            // An immediate invocation in the argument is evaluated where
+            // the call is built (clang's rewritten default argument), so
+            // it sees the function name as it is now.
+            if self.default_arg_has_immediate(param, 0) {
+                self.srcloc.deferred.retain(|&(x, _)| x != e);
+            }
             if kinds & (SRC_LOC_STRUCT_BIT | 1 << SourceLocKind::Function as u8) != 0 {
                 self.mark_function_name_dependent(e, ctx);
             }
         }
+    }
+
+    /// Whether `param`'s default argument holds an immediate invocation
+    /// (a `ConstantExpr`), through nested default arguments.
+    fn default_arg_has_immediate(&self, param: DeclId, depth: u32) -> bool {
+        let Some(init) = self.ast.decls.param(param).and_then(|p| p.default_arg) else {
+            return false;
+        };
+        if depth > 32 {
+            return false;
+        }
+        let mut stack = vec![init];
+        while let Some(x) = stack.pop() {
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::ConstantExpr => return true,
+                ExprKind::CXXDefaultArgExpr => {
+                    let p = self.ast.exprs.default_arg_param(x);
+                    if self.default_arg_has_immediate(p, depth + 1) {
+                        return true;
+                    }
+                }
+                _ => stack.extend(self.ast.exprs.children(x, &self.ast.lists)),
+            }
+        }
+        false
     }
 
     /// In a dependent context the function name a source-location value
