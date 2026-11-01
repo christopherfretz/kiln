@@ -681,6 +681,20 @@ impl Sema<'_, '_> {
         Some((p, self.non_reference(ty)))
     }
 
+    /// The end of an implicit mem-initializer `init`, a full-expression
+    /// ([intro.execution]/5.4): its immediate invocations are evaluated,
+    /// escalating the defaulted constructor being defined (clang's
+    /// `SynthesizedFunctionScope` context, [expr.const]/18), and its
+    /// temporaries destroyed.
+    /// `field` names the member it initializes.
+    fn finish_implicit_init(&mut self, init: ExprId, field: Option<DeclId>) -> ExprId {
+        if let Some(f) = field {
+            self.note_member_init_full_expr(f, false);
+        }
+        self.finish_immediate_invocations(init);
+        self.finish_cleanups(init)
+    }
+
     /// clang `BuildImplicitBaseInitializer` for the base-specifier `spec`
     /// (path index `idx`) of the constructor being defined.
     fn implicit_base_init(
@@ -733,7 +747,7 @@ impl Sema<'_, '_> {
                 self.construct_special(spec.ty, bclass, k, Some(arg), ck, loc, entity)?
             }
         };
-        let init = self.finish_cleanups(init);
+        let init = self.finish_implicit_init(init, None);
         Some(CtorInit {
             target: spec.ty.ty().index(),
             kind: if is_virtual { CtorInitKind::VirtualBase } else { CtorInitKind::Base },
@@ -767,7 +781,7 @@ impl Sema<'_, '_> {
                 mem = self.cast_for_moving(mem);
             }
             let init = self.init_subobject_from(fty, mem, InitEntity::Field(field), loc)?;
-            return Ok(Some(self.finish_cleanups(init)));
+            return Ok(Some(self.finish_implicit_init(init, Some(field))));
         }
         let elem = self.base_element(fty);
         if let Some(r) = self.ast.types.as_record(elem) {
@@ -783,7 +797,7 @@ impl Sema<'_, '_> {
                     InitEntity::Field(field),
                 )
                 .ok_or(())?;
-            return Ok(Some(self.finish_cleanups(init)));
+            return Ok(Some(self.finish_implicit_init(init, Some(field))));
         }
         let parent_union = self.ast.decls.get(field).ctx().is_some_and(|p| self.is_union(p));
         if !parent_union {

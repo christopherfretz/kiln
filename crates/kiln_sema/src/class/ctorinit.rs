@@ -364,6 +364,7 @@ impl Sema<'_, '_> {
             self.check_dangling_temporary(BindingSite::Member(field), e);
         }
         self.check_dangling_field(field, fty, e);
+        self.note_member_init_full_expr(field, true);
         let e = self.act_on_full_expr(e);
         CtorInit {
             target: m.index(),
