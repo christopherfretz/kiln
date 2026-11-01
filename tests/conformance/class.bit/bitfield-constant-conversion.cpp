@@ -33,7 +33,7 @@
 //@ diag: 130:7 warning "implicit truncation from 'int' to a one-bit wide bit-field changes value from 1 to -1"
 //@ diag: 132:7 warning "implicit truncation from 'E' to bit-field changes value from 9 to 1"
 //@ diag: 133:8 warning "implicit truncation from 'SE' to bit-field changes value from 7 to 3"
-//@ diag: 134:7 warning "implicit truncation from 'char' to bit-field changes value from 200 to 0"
+//@ diag: 134:7 warning "implicit truncation from 'unsigned char' to bit-field changes value from 200 to 0"
 //@ diag: 135:7 warning "implicit truncation from 'char' to bit-field changes value from 120 to 0"
 //@ diag: 136:7 warning "implicit truncation from 'int' to bit-field changes value from 300 to 12"
 //@ diag: 137:9 warning "implicit truncation from 'unsigned long long' to bit-field changes value from 2199023255552 to 0"
@@ -104,7 +104,7 @@ struct S {
   S(char) : u{~0u} {}
 };
 struct P { int a : 2; int b : 2; };
-struct B : P { char c : 4; unsigned long long big : 40; };
+struct B : P { unsigned char c : 4; unsigned long long big : 40; };
 union U { int x : 3; unsigned y : 2; };
 struct H { int a : 2; P p; };
 struct Q { C8 c : 4; int z : 4; };
@@ -131,7 +131,7 @@ void assign(S &s, B &b, U &u, P &p) {
   s.d = -1;
   s.e = E9;
   s.se = SE::A;
-  s.a = (char)200;
+  s.a = (unsigned char)200;
   s.a = 'x';
   b.c = 300;
   b.big = 1ull << 41;
@@ -175,3 +175,6 @@ void init() {
   t<10>(s);
   (void)n;
 }
+
+// Plain `char` is signed on x86_64 and unsigned on AArch64, so the char-typed
+// cases above use `unsigned char` to keep the reported values target-neutral.

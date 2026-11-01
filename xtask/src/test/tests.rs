@@ -497,6 +497,31 @@ fn ast_fixtures_with_a_fake_kiln() {
     }
 }
 
+/// `skip(clang)` implies `oracle: none` (spec/harness.md, directives): with
+/// kiln under test the oracle (a clang) is not run for such a test, and
+/// under clang the test is a SKIP.
+#[test]
+fn skip_clang_drops_the_oracle() {
+    if !have_clang() {
+        return;
+    }
+    let root = repo_root();
+    let mut o = clang_opts(&[root.join("xtask/fixtures/skip-clang")]);
+    o.compiler = Some(root.join("xtask/fixtures/fake-kiln/kiln"));
+    let results = execute(&o).unwrap();
+    let all = report(&results);
+    let by_name = |n: &str| results.iter().find(|r| r.name.ends_with(n)).unwrap();
+    let logged = |n: &str, what: &str| by_name(n).log.iter().any(|l| l.contains(what));
+    for n in ["run-skip-clang.cpp", "run-oracle.cpp"] {
+        assert_eq!(by_name(n).status, Status::Pass, "{all}");
+    }
+    assert!(!logged("run-skip-clang.cpp", "clang++-19"), "{all}");
+    assert!(logged("run-oracle.cpp", "clang++-19"), "{all}");
+    let results = execute(&clang_opts(&[root.join("xtask/fixtures/skip-clang")])).unwrap();
+    let r = results.iter().find(|r| r.name.ends_with("run-skip-clang.cpp")).unwrap();
+    assert_eq!(r.status, Status::Skip);
+}
+
 /// `expect: layout` / `expect: vtables` with kiln (a fake that prints canned
 /// dumps) as the compiler under test, compared with clang's dumps; without
 /// an oracle there is no reference, so every test is a SKIP.

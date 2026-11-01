@@ -83,7 +83,7 @@ directives are also ERRORs.
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
 | `requires: clang>=X[.Y[.Z]]` | Run only when every clang the test runs is at least version `X.Y.Z` (missing components are 0). The clangs the test runs are the compiler under test when its kind is clang, and the oracle when its kind is clang and the test compares with it (`oracle` in effect, or `layout`/`vtables`, and an oracle configured). The version is the `X.Y.Z` after `clang version ` in the `--version` line; a clang whose version cannot be read never meets the requirement. Otherwise **SKIP** with the reason `requires clang>=X.Y.Z; the compiler is clang <version>` (or `the oracle is ...`; `... names no clang version` when it cannot be read). With no clang involved (kiln without an oracle, or a non-clang oracle) the requirement is met. For tests that a known defect of an older clang breaks (docs/VALIDATION.md, known oracle defects; WP-239). |
-| `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. |
+| `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. The oracle is a clang, so `skip(clang)` also implies `oracle: none`: a `run`, `pp` or `verify` test clang cannot compile is not compared with the oracle when kiln runs it (its own expectations, `stdout`/`exit`, `.expected` or `expected-*` comments, are the reference), and `oracle: clang` with `skip(clang)` is an error. `layout` and `vtables` tests keep the oracle (it is their only reference). |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
@@ -730,6 +730,10 @@ from `tests/conformance/stress/`, with
     emit, a compile error);
   - `xtask/fixtures/oracle/` (oracle disagreement, run with `--oracle
     clang++-22`; skipped if that compiler is absent);
+  - `xtask/fixtures/skip-clang/` (`skip(clang)` implies `oracle: none`:
+    under `fixtures/fake-kiln/kiln` the oracle is not run for a
+    `skip(clang)` run test and is for its control; under clang it is a
+    SKIP);
   - `--filter`;
   - `--update` (pp and ast goldens).
 - `kiln_abi::dump_blocks` unit tests: block splitting, builtin records,

@@ -95,6 +95,43 @@ fn filter_names_specialization_contexts() {
     let f = DumpOptions { filter: Some("sx".into()), ..DumpOptions::default() };
     let r = run_fixture("spec_ctx", &f).0.unwrap();
     assert!(r.starts_with("Dumping n::S::sx:\n"), "{r}");
+    // [temp.param]: a class template's parameter is named by its class, a
+    // function template's is unqualified (clang's filter, as kiln's).
+    for (f, head) in [("B", "Dumping n::X::B:\n"), ("U", "Dumping U:\n")] {
+        let o = DumpOptions { filter: Some(f.into()), ..DumpOptions::default() };
+        let r = run_fixture("spec_ctx", &o).0.unwrap();
+        assert!(r.starts_with(head) && r.matches("Dumping ").count() == 1, "{r}");
+    }
+}
+
+#[test]
+fn filter_names_contexts_by_side_channel_arguments() {
+    // [temp.arg.template], [temp.arg.nontype], [temp.param]/14: the JSON
+    // omits a template template argument's name and an enumeration
+    // argument's enumerator, which come from the text dump (`D<q::F,
+    // int>`, `G<K::b>`; a value naming no enumerator prints without its
+    // cast, `G<7>`); a partial specialization drops a trailing argument
+    // equal to a default naming an earlier parameter (`X<T *>`, not
+    // `X<T *, false, T *>`), and keeps one that differs (`X<int, false,
+    // long>`).
+    let f = DumpOptions { filter: Some("C".into()), ..DumpOptions::default() };
+    let (r, calls) = run_fixture("filter_args", &f);
+    let r = r.unwrap();
+    assert_eq!(r, fixture("filter_args.filter-C.expected"));
+    assert_eq!(calls, 1, "the text dump is fetched once");
+    // Without the text dump's argument lines the names are an error, not
+    // a guess.
+    let json = fixture("filter_args.json");
+    let side: String = fixture("filter_args.txt")
+        .lines()
+        .filter(|l| {
+            !l.contains("TemplateArgument template") && !l.contains("TemplateArgument integral")
+        })
+        .flat_map(|l| [l, "\n"])
+        .collect();
+    let mut text = || Ok(side.clone());
+    let e = normalize(&json, "filter_args.cpp", &f, &mut text).unwrap_err();
+    assert!(e.contains("cannot print a"), "{e}");
 }
 
 #[test]
@@ -264,6 +301,27 @@ TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
     // A name before the type is not a trailing word.
     assert!(d[3].names("trivial") && !d[3].has_trailing_flag("trivial"));
     assert!(d[3].has_flag("friend_undeclared") && !d[3].has_flag("friend"));
+}
+
+#[test]
+fn side_channel_specialization_arguments() {
+    // A specialization's direct `TemplateArgument` children, not a nested
+    // specialization's or a parameter default's; nested declarations
+    // still align.
+    let text = "\
+TranslationUnitDecl 0x1 <<invalid sloc>> <invalid sloc>
+`-ClassTemplateSpecializationDecl 0x2 <t.cpp:1:1, col:9> col:8 struct D definition explicit_specialization
+  |-DefinitionData standard_layout
+  |-TemplateArgument template 'q::F'
+  | `-ClassTemplateDecl 0x3 <col:3> col:3 F
+  |-TemplateArgument integral 'K::b'
+  `-ClassTemplateSpecializationDecl 0x4 <col:3> col:3 struct E definition implicit_instantiation
+    `-TemplateArgument type 'int'
+";
+    let d = side::parse(text).unwrap();
+    assert_eq!(d.len(), 2);
+    assert_eq!(d[0].args, ["template 'q::F'", "integral 'K::b'"]);
+    assert_eq!(d[1].args, ["type 'int'"]);
 }
 
 fn types() -> Types {
