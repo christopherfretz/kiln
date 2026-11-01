@@ -379,7 +379,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - A `(` after the declarator-id is a parameter list or a direct
     initializer by `is_cxx_function_declarator` (only where a direct
     initializer may follow; in member context it always starts a
-    parameter list, since a member has no direct-initializer); when the choice was
+    parameter list, since a member has no direct-initializer). It is a
+    parameter list only if its contents parse as a
+    parameter-declaration-clause: `T f(T a)`, `T f(T(a))`, `T f(T(*a))`
+    and `T f(T())` declare functions, while `T x((a))`, `T x((T()))`,
+    `T x((T(a)))` and `T x(T() + T())` declare variables (a
+    parameter-declaration cannot begin with `(`, and no declarator is
+    followed by `+`); the initializer's expression is then parsed as
+    below (an ambiguous parenthesized type-id); when the choice was
     ambiguous the function chunk records it and Sema warns
     `-Wvexing-parse` (`parentheses were disambiguated as a function
     declaration` / `empty parentheses interpreted as a function
@@ -404,6 +411,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     leading `auto` and diagnosed otherwise by Sema.
   - `decltype ( expression )` and `decltype(auto)` are type specifiers;
     the operand is unevaluated.
+    A concept name followed by `auto` or `decltype ( auto` begins a
+    declaration in the statement disambiguator (`tentative.rs`), so
+    `std::same_as<X> decltype(auto) r = e;` in a block is a constrained
+    placeholder declaration (WP-169).
   - `_Atomic ( type-id )` (a clang extension in C++, C11 6.7.2.4) is a
     type specifier, built by `Sema::act_on_atomic_type` (array, function,
     reference, atomic and qualified operands are
@@ -609,6 +620,23 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     type-id. `( type-id ) { ... }` is a compound literal instead
     (`act_on_compound_literal`), followed by postfix operators as in
     clang's `ParseCompoundLiteralExpression`.
+  - When that type-id was *ambiguous* (the second flag: the abstract
+    declarator could also be an expression, `(T())`, `(T(*)())`), the
+    tokens after the matching `)` decide ([dcl.ambig.res]/2,
+    [expr.cast]; clang's `ParseCXXAmbiguousParenExpression`,
+    `ambiguous_paren_is_cast`): a `{` makes it a compound literal, `(`
+    `)` makes it an expression, and any other token is a cast exactly
+    when it can begin a cast-expression (`starts_cast_expr`, the tokens
+    clang's `ParseCastExpression` accepts without `NotCastExpr`:
+    literals, identifiers and the keywords that start a primary or
+    unary expression or a functional cast, `(`, `[`, `::`, `^^`, `[:`,
+    and the unary operators `++ -- & && * + - ! ~`). So `(T())x` and
+    `(T())*x` are casts, while `(T());`, `(T())/x`, `(T())()` and the
+    direct-initializer `T x((T()))` (libc++ `count_new.h`'s
+    `MemCounter counter((MemCounter::MemCounterCtorArg_()))`) are
+    parenthesized expressions. Unlike clang, kiln decides by looking
+    ahead without parsing the operand first; the only difference is
+    that the cast's type is built before its operand.
   - `throw [assignment-expression]` (the operand is optional before
     `)`, `]`, `}`, `;`, `,` and `:`) and `typeid ( type-id |
     expression )`, disambiguated with `is_cxx_type_id`; the operand of

@@ -23,6 +23,8 @@ use crate::conv::rank::builtin_signed;
 use crate::target;
 use crate::templ::stack::FrameKind;
 
+mod special;
+
 impl Sema<'_, '_> {
     /// `__trait(T, ...)` as parsed at `loc` (the keyword) up to `rparen`:
     /// clang's `ActOnTypeTrait`. Warns about the deprecated `__has_*`
@@ -126,7 +128,11 @@ impl Sema<'_, '_> {
             if !self.check_trait_completeness(t, tys[0], loc) {
                 return self.recover(QualType::BOOL, &[], loc);
             }
-            self.eval_unary_trait(t, tys[0])
+            self.eval_unary_trait(t, tys[0], loc)
+        } else if t == TypeTrait::IsLayoutCompatible {
+            self.eval_layout_compatible(args[0], args[1])
+        } else if t == TypeTrait::IsPointerInterconvertibleBaseOf {
+            self.eval_pointer_interconvertible_base(args[0], args[1])
         } else if matches!(
             t,
             TypeTrait::IsConvertible | TypeTrait::IsConvertibleTo | TypeTrait::IsNothrowConvertible
@@ -708,7 +714,7 @@ impl Sema<'_, '_> {
 
     /// clang's `EvaluateUnaryTypeTrait`.
     #[allow(clippy::too_many_lines, reason = "one arm per trait")]
-    fn eval_unary_trait(&mut self, t: TypeTrait, q: QualType) -> bool {
+    fn eval_unary_trait(&mut self, t: TypeTrait, q: QualType, loc: Loc) -> bool {
         use TypeTrait as T;
         let tys = &self.ast.types;
         let view = tys.canonical_view(q);
@@ -786,6 +792,13 @@ impl Sema<'_, '_> {
             T::IsLiteral | T::IsLiteralType => self.trait_literal(q),
             T::IsTriviallyRelocatable => self.is_trivially_relocatable(q),
             T::HasUniqueObjectRepresentations => self.has_unique_object_reps(q),
+            T::HasNothrowAssign
+            | T::HasNothrowMoveAssign
+            | T::HasNothrowCopy
+            | T::HasNothrowConstructor => self.has_nothrow(t, q, loc),
+            T::IsTriviallyEqualityComparable => self.trivially_equality_comparable(q, loc),
+            T::CanPassInRegs => self.can_pass_in_regs_trait(q, loc),
+            T::IsBitwiseCloneable => self.is_bitwise_cloneable(q, 0),
             T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
                 self.is_destructible(t, q)
             }
@@ -845,8 +858,8 @@ impl Sema<'_, '_> {
                     _ => false,
                 }
             }
-            // Binary, n-ary, array and expression traits, and the
-            // unimplemented rows, never reach here.
+            // Binary, n-ary, array and expression traits never reach
+            // here.
             _ => false,
         }
     }
@@ -1023,9 +1036,11 @@ impl Sema<'_, '_> {
             return false;
         }
         if let Some(r) = self.defined_record(e) {
-            return self.bits_of(r).contains(DefinitionBits::TRIVIALLY_RELOCATABLE);
+            return self.can_pass_in_registers(r);
         }
-        self.is_trivially_copyable_type(e)
+        // clang: any other complete object type of C++ (none is destructed
+        // or non-trivial to move primitively).
+        true
     }
 
     /// [meta.unary.prop] `is_destructible` and its trivially / nothrow
@@ -1095,12 +1110,13 @@ impl Sema<'_, '_> {
         if !self.is_trivially_copyable_type(e) {
             return false;
         }
-        self.unique_reps_tc(e)
+        self.unique_reps_tc(e, true)
     }
 
-    /// [`Sema::has_unique_object_reps`] of a non-array, trivially
-    /// copyable type.
-    fn unique_reps_tc(&self, q: QualType) -> bool {
+    /// [`Sema::has_unique_object_reps`] of a non-array type (trivially
+    /// copyable, or not checked when `tc` is false: clang's
+    /// `CheckIfTriviallyCopyable`).
+    fn unique_reps_tc(&self, q: QualType, tc: bool) -> bool {
         let tys = &self.ast.types;
         match tys.canonical_view(q) {
             TypeView::Builtin(b) if b.is_integral() => true,
@@ -1110,21 +1126,22 @@ impl Sema<'_, '_> {
             }
             TypeView::Record(r) => {
                 if self.is_union(r) {
-                    self.union_unique_reps(r, q)
+                    self.union_unique_reps(r, q, tc)
                 } else {
                     let size = self.size_bits(q);
-                    self.struct_unique_bits(r).is_some_and(|b| Some(b) == size)
+                    self.struct_unique_bits(r, tc).is_some_and(|b| Some(b) == size)
                 }
             }
             _ => false,
         }
     }
 
-    fn unique_reps(&self, q: QualType) -> bool {
+    /// clang's `hasUniqueObjectRepresentations(q, tc)`.
+    fn unique_reps(&self, q: QualType, tc: bool) -> bool {
         if self.ast.types.is_array(q) {
-            return self.unique_reps(self.base_element(q));
+            return self.unique_reps(self.base_element(q), tc);
         }
-        self.is_trivially_copyable_type(q) && self.unique_reps_tc(q)
+        (!tc || self.is_trivially_copyable_type(q)) && self.unique_reps_tc(q, tc)
     }
 
     fn size_bits(&self, q: QualType) -> Option<u64> {
@@ -1140,20 +1157,20 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `unionHasUniqueObjectRepresentations`.
-    fn union_unique_reps(&self, r: DeclId, q: QualType) -> bool {
+    fn union_unique_reps(&self, r: DeclId, q: QualType, tc: bool) -> bool {
         let Some(us) = self.size_bits(q) else { return false };
         let fields = self.fields_of(r);
         !fields.is_empty()
             && fields.iter().all(|&f| {
                 let ft = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-                self.unique_reps(ft) && self.size_bits(ft) == Some(us)
+                self.unique_reps(ft, tc) && self.size_bits(ft) == Some(us)
             })
     }
 
     /// clang's `structHasUniqueObjectRepresentations`: the number of
     /// value bits of class `r` when its bases and fields are laid out
     /// contiguously, else `None`.
-    fn struct_unique_bits(&self, r: DeclId) -> Option<u64> {
+    fn struct_unique_bits(&self, r: DeclId, tc: bool) -> Option<u64> {
         let def = self.class_def(r);
         let bits = self.bits_of(def);
         if bits.contains(DefinitionBits::POLYMORPHIC)
@@ -1166,7 +1183,7 @@ impl Sema<'_, '_> {
         let mut bases: Vec<(DeclId, u64)> = layout.bases.to_vec();
         bases.sort_by_key(|b| b.1);
         for (b, off) in bases {
-            let size = self.struct_unique_bits(b)?;
+            let size = self.struct_unique_bits(b, tc)?;
             if size != 0 {
                 if off.saturating_mul(8) != cur {
                     return None;
@@ -1175,7 +1192,7 @@ impl Sema<'_, '_> {
             }
         }
         for (i, f) in self.fields_of(def).into_iter().enumerate() {
-            let size = self.field_unique_bits(f)?;
+            let size = self.field_unique_bits(f, tc)?;
             if size != 0 {
                 if layout.fields.get(i).copied() != Some(cur) {
                     return None;
@@ -1187,17 +1204,17 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `getSubobjectSizeInBits` for a field.
-    fn field_unique_bits(&self, f: DeclId) -> Option<u64> {
+    fn field_unique_bits(&self, f: DeclId, tc: bool) -> Option<u64> {
         let ft = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let tys = &self.ast.types;
         if let Some(r) = tys.as_record(ft)
             && !self.is_union(r)
             && !tys.is_array(ft)
         {
-            return self.struct_unique_bits(r);
+            return self.struct_unique_bits(r, tc);
         }
         let bit_int = matches!(tys.canonical_view(ft), TypeView::BitInt { .. });
-        if !tys.is_reference(ft) && !bit_int && !self.unique_reps(ft) {
+        if !tys.is_reference(ft) && !bit_int && !self.unique_reps(ft, tc) {
             return None;
         }
         let size = self.size_bits(ft)?;
@@ -1215,7 +1232,7 @@ impl Sema<'_, '_> {
             }
             return Some(w);
         }
-        if bit_int && !self.unique_reps(ft) {
+        if bit_int && !self.unique_reps(ft, tc) {
             return None;
         }
         Some(size)

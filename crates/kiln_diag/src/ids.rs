@@ -509,6 +509,7 @@ diag_ids! {
     sema_using_decl_conflict = Error (0) "target of using declaration conflicts with declaration already in scope";
     sema_using_decl_conflict_reverse = Error (0) "declaration conflicts with target of using declaration already in scope";
     note_using_decl_target = Note (0) "target of using declaration";
+    sema_using_typename_non_type = Error (0) "'typename' keyword used on a non-type";
     note_using_decl_conflict = Note (0) "conflicting declaration";
     note_using_decl = Note (0) "using declaration";
     sema_use_of_empty_using_if_exists = Error (0) "reference to unresolved using declaration";
@@ -703,10 +704,22 @@ diag_ids! {
     sema_alignment_too_big = Error (1) "requested alignment must be {0} bytes or smaller";
     sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";
     sema_vector_zero_size = Error (0) "zero vector size";
+    sema_zero_array_size_sfinae = Error (0) "zero-length arrays are not permitted in C++";
     sema_vector_size_too_large = Error (0) "vector size too large";
     sema_vector_size_not_multiple = Error (0) "vector size not an integral multiple of component size";
     sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";
     sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
+    sema_vector_not_convertible = Error (2) "cannot convert between vector values of different size ({0} and {1})";
+    sema_vector_not_convertible_non_scalar = Error (2) "cannot convert between vector and non-scalar values ({0} and {1})";
+    sema_vector_implicit_truncation = Error (3) "cannot convert between {0:scalar|vector} type {1} and vector type {2} as implicit conversion would cause truncation";
+    sema_vector_lengths_not_equal = Error (2) "vector operands do not have the same number of elements ({0} and {1})";
+    sema_vector_element_sizes_not_equal = WarningError [VecElemSize] (2) "vector operands do not have the same elements sizes ({0} and {1})";
+    sema_expect_int = Error (1) "used type {0} where integer is required";
+    sema_three_way_vector_comparison = Error (0) "three-way comparison between vectors is not supported";
+    sema_convertvector_non_vector = Error (0) "first argument to __builtin_convertvector must be a vector";
+    sema_convertvector_non_vector_type = Error (0) "second argument to __builtin_convertvector must be of vector type";
+    sema_convertvector_incompatible_vector = Error (0) "first two arguments to __builtin_convertvector must have the same number of elements";
+    sema_builtin_arg_must_be = Error (3) "{0:1st|2nd|3rd|4th|5th} argument must be a {1} (was {2})";
     sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
     sema_static_assert_failed = Error (0) "static assertion failed";
     sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";
@@ -768,10 +781,12 @@ diag_ids! {
     sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer types ({0} and {1})";
     sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
     sema_arith_incomplete_pointee = Error (1) "arithmetic on a pointer to an incomplete type {0}";
+    sema_subscript_incomplete_type = Error (1) "subscript of pointer to incomplete type {0}";
     sema_arith_void_pointer = Extension [PointerArith] (1) "arithmetic on{0: a pointer| pointers} to void is a GNU extension";
     sema_arith_function_pointer = Extension [PointerArith] (2) "arithmetic on{0: a pointer| pointers} to the function type {1} is a GNU extension";
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
     sema_addrof_bitfield = Error (0) "address of bit-field requested";
+    sema_addrof_vector_element = Error (0) "address of vector element requested";
     sema_incdec_bool = Error (1) "ISO C++17 does not allow {0:incrementing|decrementing} expression of type bool";
     sema_incdec_enum = Error (2) "cannot {0:increment|decrement} expression of enum type {1}";
     sema_ovl_no_viable_function_in_call = Error (1) "no matching function for call to '{0}'";
@@ -817,6 +832,9 @@ diag_ids! {
     sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
     sema_sizeof_bitfield = Error (1) "invalid application of '{0}' to bit-field";
     sema_bad_cxx_cast = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} is not allowed";
+    sema_bad_cxx_cast_vector_to_scalar_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to scalar {2} of different size";
+    sema_bad_cxx_cast_scalar_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from scalar {1} to vector {2} of different size";
+    sema_bad_cxx_cast_vector_to_vector_different_size = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from vector {1} to vector {2} of different size";
     sema_bad_cast_qualifiers_away = Error (3) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from {1} to {2} casts away qualifiers";
     sema_bad_const_cast_dest = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} to {1}, which is not a reference, pointer-to-object, or pointer-to-data-member";
     sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
@@ -1201,6 +1219,7 @@ diag_ids! {
     sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
     sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
     sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";
+    sema_builtin_pass_in_regs_non_class = Error (1) "argument {0} is not an unqualified class type";
     sema_dimension_expr_not_const = Error (0) "dimension expression does not evaluate to a constant unsigned int";
     sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only compatible with non-bool integers and enum types, but was given {1}";
     sema_only_enums_have_underlying = Error (0) "only enumeration types have underlying types";
@@ -1279,6 +1298,7 @@ diag_ids! {
     note_in_binding_decl_init = Note (1) "in implicit initialization of binding declaration '{0}'";
     sema_binding_in_own_initializer = Error (1) "binding '{0}' cannot appear in the initializer of its own decomposition declaration";
     sema_reference_bind_to_bitfield = Error (2) "{0:non-const|volatile} reference cannot bind to bit-field{1}";
+    sema_reference_bind_to_vector_element = Error (1) "{0:non-const|volatile} reference cannot bind to vector element";
     // WP-087
     sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
     sema_side_effects_unevaluated_context = Warning [UnevaluatedExpression] (0) "expression with side effects has no effect in an unevaluated context";

@@ -348,6 +348,15 @@ fn unary(m: &mut Module, base: &str, ty: TypeId) -> FuncId {
     declare(m, &name, ty, &[(ty, &[])], &[], Shape::Pure)
 }
 
+/// `E @llvm.vector.reduce.<op>.V(V)` for a vector type `V` of element
+/// type `E` (`op`: `add`, `mul`, `and`, `or`, `xor`, `smax`, `smin`,
+/// `umax`, `umin`, `fmax`, `fmin`).
+pub fn vector_reduce(m: &mut Module, op: &str, vty: TypeId) -> FuncId {
+    let et = m.types.vector_info(vty).map_or(vty, |x| x.0);
+    let name = overloaded_name(m, &format!("llvm.vector.reduce.{op}"), &[vty]);
+    declare(m, &name, et, &[(vty, &[])], &[], Shape::Pure)
+}
+
 /// `T @llvm.abs.T(T, i1 immarg is_int_min_poison)`.
 pub fn abs(m: &mut Module, ty: TypeId) -> FuncId {
     unary_flag(m, "llvm.abs", ty)

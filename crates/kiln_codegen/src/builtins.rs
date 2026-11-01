@@ -280,6 +280,46 @@ impl Cg<'_> {
                     }
                 }
             }
+            // WP-156: clang `emitBuiltinWithOneOverloadedType` of
+            // `llvm.vector.reduce.*` (min/max by element signedness).
+            id::REDUCE_ADD
+            | id::REDUCE_MUL
+            | id::REDUCE_AND
+            | id::REDUCE_OR
+            | id::REDUCE_XOR
+            | id::REDUCE_MIN
+            | id::REDUCE_MAX => {
+                let x = self.emit_scalar(a0)?;
+                let ty = self.f.fir.ty(&self.m, x);
+                let aq = ast.exprs.get(a0).ty();
+                let eq = self.scalar_of(aq);
+                let max = b == id::REDUCE_MAX;
+                let op = match b {
+                    id::REDUCE_ADD => "add",
+                    id::REDUCE_MUL => "mul",
+                    id::REDUCE_AND => "and",
+                    id::REDUCE_OR => "or",
+                    id::REDUCE_XOR => "xor",
+                    _ if ast.types.is_floating(eq) => {
+                        if max {
+                            "fmax"
+                        } else {
+                            "fmin"
+                        }
+                    }
+                    _ if self.is_signed(eq) && !self.is_bool(eq) => {
+                        if max {
+                            "smax"
+                        } else {
+                            "smin"
+                        }
+                    }
+                    _ if max => "umax",
+                    _ => "umin",
+                };
+                let f = kiln_llvm::intrinsics::vector_reduce(&mut self.m, op, ty);
+                self.intrinsic_call(f, vec![x])
+            }
             id::POPCOUNT | id::POPCOUNTL | id::POPCOUNTLL | id::POPCOUNTG => {
                 let x = self.emit_scalar(a0)?;
                 let ty = self.f.fir.ty(&self.m, x);

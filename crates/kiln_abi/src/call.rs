@@ -135,7 +135,8 @@ pub fn classify_va_arg(t: &mut IrTypes<'_>, q: QualType) -> VaArgInfo {
 
 fn vector_width(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
     match ty {
-        IrType::Vector(..) => t.size_align(ty).0 * 8,
+        // `getPrimitiveSizeInBits`: `<3 x i32>` is 96.
+        IrType::Vector(..) => ir_bits(t, ty),
         IrType::Struct(m, _) => m.clone().iter().map(|e| vector_width(t, e)).max().unwrap_or(0),
         _ => 0,
     }
@@ -254,6 +255,7 @@ fn ir_bits(t: &mut IrTypes<'_>, ty: &IrType) -> u64 {
     match ty {
         IrType::Int(n) => u64::from(*n),
         IrType::X86Fp80 => 80,
+        IrType::Vector(e, n) => ir_bits(t, &e.clone()) * *n,
         _ => t.size_align(ty).0 * 8,
     }
 }
@@ -266,7 +268,31 @@ fn aarch64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType]) -> CallInfo {
     CallInfo { ret: arg(r), args: a, max_vector_width: 0 }
 }
 
+/// clang `AArch64ABIInfo::isIllegalVectorType` + `coerceIllegalVector`:
+/// a vector whose element count is not a power of two, or whose size is
+/// neither 64 bits nor 128 bits with several elements, goes as `i32`,
+/// `<2 x i32>`, `<4 x i32>` or indirectly.
+fn aarch64_illegal_vector(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
+    let TypeView::Vector { count, .. } = view(t, q) else {
+        return None;
+    };
+    let size = type_bits(t, q);
+    if count.is_power_of_two() && (size == 64 || (size == 128 && count != 1)) {
+        return None;
+    }
+    let i32v = |n| IrType::Vector(Box::new(IrType::Int(32)), n);
+    Some(match size {
+        0..=32 => direct(IrType::Int(32)),
+        64 => direct(i32v(2)),
+        128 => direct(i32v(4)),
+        _ => ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align },
+    })
+}
+
 fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
+    if let Some(k) = aarch64_illegal_vector(t, q) {
+        return k;
+    }
     if !is_aggregate(t, q) {
         let q = strip_enum(t, q);
         if let TypeView::BitInt { width, .. } = view(t, q)
@@ -314,6 +340,10 @@ fn aarch64_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     }
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
+    }
+    // Large vector types are returned via memory.
+    if matches!(view(t, q), TypeView::Vector { .. }) && type_bits(t, q) > 128 {
+        return ArgKind::Indirect { byval: true, align: t.layouter().type_layout(q).align };
     }
     if !is_aggregate(t, q) {
         let q = strip_enum(t, q);
@@ -617,6 +647,28 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 hi = lo;
             }
         }
+        // clang `X86_64ABIInfo::classify` for vectors (no AVX: the native
+        // vector size is 128 bits).
+        TypeView::Vector { elem, .. } => {
+            let size = type_bits(t, q);
+            if matches!(size, 1 | 8 | 16 | 32) {
+                set_cur!(Integer);
+                if off / 64 != (off + size - 1) / 64 {
+                    hi = lo;
+                }
+            } else if size == 64 {
+                if matches!(view(t, elem), TypeView::Builtin(BuiltinType::Double)) {
+                    return (lo, hi);
+                }
+                set_cur!(Sse);
+                if off != 0 && off != 64 {
+                    hi = lo;
+                }
+            } else if size == 128 {
+                lo = Sse;
+                hi = SseUp;
+            }
+        }
         TypeView::ConstantArray(a) => {
             let size = type_bits(t, q);
             if size > 512 {
@@ -734,7 +786,12 @@ fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
     }
-    if !is_aggregate(t, q) && !matches!(view(t, q), TypeView::BitInt { .. }) {
+    // clang `IsIllegalVectorType`: at most 64 or over 128 bits (no AVX).
+    let illegal_vector = matches!(view(t, q), TypeView::Vector { .. }) && {
+        let s = type_bits(t, q);
+        s <= 64 || s > 128
+    };
+    if !is_aggregate(t, q) && !illegal_vector && !matches!(view(t, q), TypeView::BitInt { .. }) {
         let q = strip_enum(t, q);
         return if is_promotable(t, q) { extend(t, q) } else { direct(t.convert(q)) };
     }

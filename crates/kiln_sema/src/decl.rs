@@ -232,6 +232,17 @@ impl Sema<'_, '_> {
         matches!(self.ast.types.view(self.ast.types.canonical(q).ty()), TypeView::Auto { .. })
     }
 
+    /// The base element type of `q` if it is an array of known bound,
+    /// else `q` (clang's `getBaseElementType` in the variable and field
+    /// completeness checks).
+    pub(crate) fn bounded_array_element(&self, q: QualType) -> QualType {
+        if matches!(self.ast.types.canonical_view(q), TypeView::ConstantArray(_)) {
+            self.base_element(q)
+        } else {
+            q
+        }
+    }
+
     /// True if `q` is a complete object type here (a class is incomplete
     /// until its closing brace).
     pub fn is_complete(&self, q: QualType) -> bool {
@@ -651,7 +662,11 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                         return QualType::ERROR;
                     }
-                    if !self.require_complete(ty, spec_loc) {
+                    // [dcl.array]/1, /3 (clang `BuildArrayType`): in C++
+                    // only an array of unknown bound is rejected here; an
+                    // incomplete class element is checked where the array
+                    // type must be complete ([basic.types.general]/6).
+                    if matches!(t.canonical_view(ty), TypeView::IncompleteArray(_)) {
                         let msg = self
                             .diag(DiagId::sema_array_incomplete_type, *loc)
                             .arg(self.ty_arg(ty));
@@ -676,6 +691,15 @@ impl Sema<'_, '_> {
                             self.ast.types.dependent_sized_array(ty, *e, p)
                         }
                         Some(e) => match self.array_bound(*e, d) {
+                            // clang `BuildArrayType`: a zero-length array is
+                            // a GNU extension, but an error in a SFINAE
+                            // context (`err_typecheck_zero_array_size`), so
+                            // `int[0]` never matches `T[N]`.
+                            Some(0) if self.inst.stack.is_sfinae() => {
+                                let l = self.begin_loc(*e);
+                                self.error(DiagId::sema_zero_array_size_sfinae, l);
+                                return QualType::ERROR;
+                            }
                             Some(n) => self.ast.types.constant_array(ty, n, None),
                             None => return QualType::ERROR,
                         },
@@ -794,6 +818,7 @@ impl Sema<'_, '_> {
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
         let base = self.type_from_declspec(ds);
+        let base = self.apply_declspec_vector_attrs(base, ds);
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if let Some((s, loc)) = ds.storage
             && s != StorageSpec::Register
@@ -808,7 +833,7 @@ impl Sema<'_, '_> {
             let m = self.diag(DiagId::sema_param_constexpr_spec, l).arg(which);
             self.emit(m);
         }
-        let mut attrs = ds.attrs.clone();
+        let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
         if self.ast.types.is_array(ty) {
@@ -943,20 +968,8 @@ impl Sema<'_, '_> {
                 }
             }
             Initializer::Expr(e) => {
-                if self.is_err_expr(e) {
-                    e
-                } else {
-                    match conv::implicit_convert(self, e, p.ty, ConvCtx::Argument) {
-                        Ok(x) => x,
-                        Err(err) => {
-                            let d = err.diag_at(self, p.loc);
-                            let d = self.with_param_note(d, p);
-                            self.emit(d);
-                            let loc = self.ast.exprs.get(e).loc();
-                            self.recover(p.ty, &[e], loc)
-                        }
-                    }
-                }
+                let note = self.with_param_note_only(p);
+                self.convert_default_arg(e, p.ty, p.loc, note)
             }
             Initializer::Paren(v, l, _) => self.recover(p.ty, &v, l),
         };
@@ -1002,13 +1015,59 @@ impl Sema<'_, '_> {
 
     /// Attaches clang's "passing argument to parameter 'p' here" note.
     pub(crate) fn with_param_note(&self, d: kiln_diag::Diag, p: &ParamInfo) -> kiln_diag::Diag {
-        let note = match p.name {
+        d.with_note(self.with_param_note_only(p))
+    }
+
+    /// clang's "passing argument to parameter 'p' here" note for the
+    /// parameter being declared.
+    fn with_param_note_only(&self, p: &ParamInfo) -> kiln_diag::Diag {
+        match p.name {
             None => self.diag(DiagId::note_parameter_here, p.loc),
             Some((n, _)) => self
                 .diag(DiagId::note_parameter_named_here, p.loc)
                 .arg(self.ast.symbols().as_str(n).to_string()),
-        };
-        d.with_note(note)
+        }
+    }
+
+    /// Copy-initializes a parameter of type `pty` declared at `ploc` from
+    /// its default argument `e` ([dcl.fct.default]/5). As clang does
+    /// (`InitializationKind::CreateCopy(Param->getLocation(), ..)`), a
+    /// failure is reported at the parameter with the "passing argument to
+    /// parameter here" note `note`.
+    pub(crate) fn convert_default_arg(
+        &mut self,
+        e: ExprId,
+        pty: QualType,
+        ploc: Loc,
+        note: kiln_diag::Diag,
+    ) -> ExprId {
+        if self.is_err_expr(e) {
+            return e;
+        }
+        let to = if self.ast.types.is_reference(pty) { pty } else { conv::strip_cv(self, pty) };
+        if self.ast.types.as_record(to).is_some()
+            && !self.ast.types.is_dependent(to)
+            && !self.expr_is_type_dependent(e)
+        {
+            let why = crate::class::DeletedAs::Param(note.clone());
+            let built = if self.ast.types.as_record(self.ety(e)).is_some() {
+                self.construct_from_class(e, to, ConvCtx::Argument, ploc, why)
+            } else {
+                self.convert_to_class(e, to, ConvCtx::Argument, ploc, why)
+            };
+            if let Some(x) = built {
+                return x;
+            }
+        }
+        match conv::implicit_convert(self, e, pty, ConvCtx::Argument) {
+            Ok(x) => x,
+            Err(err) => {
+                let d = err.diag_at(self, ploc).with_note(note);
+                self.emit(d);
+                let loc = self.ast.exprs.get(e).loc();
+                self.recover(pty, &[e], loc)
+            }
+        }
     }
 
     /// clang's "passing argument to parameter 'p' here" note (the name is
@@ -1401,6 +1460,10 @@ impl Sema<'_, '_> {
             self.templ.cur = None;
             return None;
         }
+        // GNU vector attributes among the decl-specifiers apply to the
+        // decl-specifier type (clang `processTypeAttrs(TAL_DeclSpec)`),
+        // so `__attribute__((vector_size(8))) short f();` returns a vector.
+        let base = self.apply_declspec_vector_attrs(base, ds);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {
@@ -1449,7 +1512,7 @@ impl Sema<'_, '_> {
         if d.qualifier.is_none() {
             self.check_template_param_shadow(name, name_loc);
         }
-        let mut attrs = ds.attrs.clone();
+        let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
         if let Some(op) = d.op_name
             && (ds.is_typedef() || !self.ast.types.is_function(ty))
@@ -2042,8 +2105,17 @@ impl Sema<'_, '_> {
         let prev = if global_new_delete {
             None
         } else if friend && d.qualifier.is_none() {
-            // Redeclaration lookup in the namespace sees hidden friends.
-            let found: Vec<DeclId> = self.ast.lookup_local(ctx, dname).iter().collect();
+            // Redeclaration lookup in the namespace sees hidden friends,
+            // but not the members of its inline namespaces: those are in
+            // other scopes ([dcl.meaning.general]/2.3, [namespace.memdef]/3;
+            // clang's `FilterLookupForScope` without `AllowInlineNamespace`).
+            let found: Vec<DeclId> = self
+                .ast
+                .lookup_local(ctx, dname)
+                .iter_with_inline()
+                .filter(|&(_, via_inline)| !via_inline)
+                .map(|(d, _)| d)
+                .collect();
             self.pick_prev_function(&found, new_fn)
         } else if method {
             let found = self.prev_candidates_dn(dname, d.qualifier);
@@ -2638,10 +2710,12 @@ impl Sema<'_, '_> {
             QualType::ERROR
         } else if !invalid
             && !self.ast.types.is_reference(ty)
-            && !self.require_complete(ty, d.name_loc())
+            && !self.require_complete(self.bounded_array_element(ty), d.name_loc())
         {
-            let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(ty));
-            self.emit(self.incomplete_note(msg, ty));
+            // clang checks (and names) the element type of a bounded array.
+            let elem = self.bounded_array_element(ty);
+            let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(elem));
+            self.emit(self.incomplete_note(msg, elem));
             // clang marks the field invalid: initialization never
             // descends into it (a field of the class's own type would
             // recurse forever).
@@ -2911,6 +2985,35 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// clang `AddInitializerToDecl`: a bounded array of an incomplete
+    /// element (now formable, [dcl.array]/1) is diagnosed under the full
+    /// variable type at the variable's name; the variable becomes invalid.
+    fn reject_incomplete_array_init(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        loc: Loc,
+        init: &Initializer,
+    ) -> bool {
+        if !matches!(self.ast.types.canonical_view(ty), TypeView::ConstantArray(_))
+            || self.ast.types.is_dependent(ty)
+            || self.require_complete(self.bounded_array_element(ty), loc)
+        {
+            return false;
+        }
+        let msg = self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty));
+        self.emit(self.incomplete_note(msg, self.bounded_array_element(ty)));
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.discard_initializer(init);
+        true
+    }
+
+    /// A dependent initializer, kept as written until instantiation.
+    fn set_dependent_var_init(&mut self, v: DeclId, e: ExprId) {
+        let e = self.act_on_full_expr(e);
+        let _ = self.builder().set_var_init(v, e);
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -2985,8 +3088,7 @@ impl Sema<'_, '_> {
             // Initialized at instantiation ([temp.dep.expr]); clang keeps
             // the list as written with type `void` (and `int[]` unbounded).
             let e = self.dependent_init_list(l);
-            let e = self.act_on_full_expr(e);
-            let _ = self.builder().set_var_init(v, e);
+            self.set_dependent_var_init(v, e);
             return;
         }
         if let Initializer::Paren(es, l, r) = &init
@@ -2998,8 +3100,10 @@ impl Sema<'_, '_> {
             // instantiation, kept as a `ParenListExpr` (clang
             // `ActOnParenListExpr` / `AddInitializerToDecl`).
             let e = self.builder().paren_list(es, *l, *r);
-            let e = self.act_on_full_expr(e);
-            let _ = self.builder().set_var_init(v, e);
+            self.set_dependent_var_init(v, e);
+            return;
+        }
+        if self.reject_incomplete_array_init(v, ty, loc, &init) {
             return;
         }
         let e = self.perform_init(ty, init, loc, direct);
@@ -3349,13 +3453,15 @@ impl Sema<'_, '_> {
         if spec.storage() == VarStorage::Extern {
             return;
         }
-        if !self.require_complete(ty, self.ast.decls.get(v).loc()) {
-            let msg = if self.ast.types.is_void(ty) {
-                self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(ty))
+        // clang checks (and names) the element type of a bounded array.
+        let elem = self.bounded_array_element(ty);
+        if !self.require_complete(elem, self.ast.decls.get(v).loc()) {
+            let msg = if self.ast.types.is_void(elem) {
+                self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(elem))
             } else {
-                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(ty))
+                self.diag(DiagId::sema_typecheck_decl_incomplete_type, loc).arg(self.ty_arg(elem))
             };
-            self.emit(self.incomplete_note(msg, ty));
+            self.emit(self.incomplete_note(msg, elem));
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return;
         }

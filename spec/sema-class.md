@@ -92,7 +92,7 @@ public.
 | member function | `CXXMethod` | in-class definition implicitly inline; `static` → `FnStorage::Static`; cv/ref-qualifiers into `FuncProto.this_quals`/`ref_qual` (types.md §5.4); `virtual`, `= 0`, `override`, `final` (§3.4) |
 | constructor / destructor / conversion | `CXXConstructor` / `CXXDestructor` / `CXXConversion` | `DeclName` tag 2/3/4 keyed by the canonical class `TypeId` / target `QualType` (ast.md §3) |
 | nested class / enum / typedef / alias | M2 kinds, ctx = class | access applies to the name; nested class is a member ([class.access.nest]) |
-| friend | `Friend` (payload: friend decl or type) | §2.4; a friend function first declared in a class is a member of the innermost enclosing namespace, hidden from ordinary lookup ([namespace.memdef]/3, [class.friend]/7): it is entered in that namespace's lookup table with `LookupFlags::ADL_ONLY` (sema-overload.md §2.2, decision 7), which ordinary lookup skips and ADL (WP-068a) finds; no side table. A later namespace-scope redeclaration is entered without the flag and is visible to ordinary lookup |
+| friend | `Friend` (payload: friend decl or type) | §2.4; a friend function first declared in a class is a member of the innermost enclosing namespace, hidden from ordinary lookup ([namespace.memdef]/3, [class.friend]/7): it is entered in that namespace's lookup table with `LookupFlags::ADL_ONLY` (sema-overload.md §2.2, decision 7), which ordinary lookup skips and ADL (WP-068a) finds; no side table. A later namespace-scope redeclaration is entered without the flag and is visible to ordinary lookup. A friend's redeclaration lookup in that namespace sees hidden friends but not the members of its inline namespaces (clang's `FilterLookupForScope` without `AllowInlineNamespace`), so a hidden friend `iter_move` does not clash with an inline-namespace CPO object of that name (WP-169) |
 | access-specifier | `AccessSpec` | changes `ClassBuild.access`; kept for the dump |
 | `using` member | WP-062 (`Using`, `UsingShadow`) | shadow access = the using-declaration's; inheriting constructors §4.10 |
 | member template | WP-070 | |
@@ -962,7 +962,7 @@ Templates collect again when the range is substituted (`templ/subst/stmts.rs`
 | copy-init from `T`/derived | elision for prvalue `T`; else copy/move ctor (derived glvalue: `DerivedToBase` then ctor) |
 | copy-init from other type | user-defined conversion (S3O): `ConstructorConversion` around `CXXConstructExpr`, or `UserDefinedConversion` around the conversion call; `explicit` ctors excluded (`no viable conversion from 'int' to 'T4'` + candidate notes incl. `explicit constructor is not a candidate`) |
 | list-init, aggregate | `InitListExpr`: C++17 base elements first (each initialized from its element, brace elision applies), then fields; designated initializers name direct members only, bases are then initialized from `{}` |
-| list-init, non-aggregate | [over.match.list] two phases (initializer-list ctors, then all ctors); `CXXConstructExpr` with `list`; narrowing as M2 |
+| list-init, non-aggregate | [over.match.list] two phases (initializer-list ctors, then all ctors); `CXXConstructExpr` with `list`; narrowing as M2; a nested braced-init-list element (`G g{{1, 2}}`) is a braced call argument converted by [over.ics.list] (WP-152); designators remain `sema_unsupported` |
 | reference to class | derived-to-base glvalue binding, else temporary through conversion (`materialize_temporary`, §5.3) |
 
 ### 5.7 `std::initializer_list`

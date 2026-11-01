@@ -801,6 +801,13 @@ impl<'a> AstNames<'a> {
                 self.expr(exprs.operand(e), d, out);
                 out.push(')');
             }
+            ExprKind::ConvertVectorExpr => {
+                out.push_str("__builtin_convertvector(");
+                self.expr(exprs.operand(e), d, out);
+                out.push_str(", ");
+                write_type(&ast.types, self, n.ty(), self.expr_types, out);
+                out.push(')');
+            }
             ExprKind::UnaryExprOrTypeTraitExpr => {
                 let kind = exprs.trait_kind(e);
                 out.push_str(kind.spelling());

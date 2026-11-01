@@ -2556,6 +2556,16 @@ impl DeclArena {
         set_once(&mut self.param_mut(p).default_arg, arg, "ParamData.default_arg", RawId::raw)
     }
 
+    /// Takes back the default argument of a parameter of a class template
+    /// member specialization whose instantiation at a use failed
+    /// ([temp.inst]/12): as clang keeps the uninstantiated argument, the
+    /// next use instantiates (and reports) it again.
+    pub fn reset_failed_default_arg(&mut self, p: DeclId) {
+        let d = self.param_mut(p);
+        d.default_arg = None;
+        d.flags |= ParamData::DEFAULT_ARG_PENDING;
+    }
+
     /// Marks a parameter's default argument as pending late parsing
     /// ([`ParamData::DEFAULT_ARG_PENDING`]; set before the class is
     /// complete, cleared implicitly by reading `default_arg` once set).
@@ -2954,6 +2964,23 @@ pub mod builtin {
     /// `char __builtin_coro_suspend(bool) noexcept` (signature `cIb`).
     pub const CORO_SUSPEND: u32 = 375;
 
+    // WP-156: the vector reductions (clang `Builtins.td` signature `v.`,
+    // custom type-checking: the call has the vector's element type).
+    /// `__builtin_reduce_add`.
+    pub const REDUCE_ADD: u32 = 991;
+    /// `__builtin_reduce_and`.
+    pub const REDUCE_AND: u32 = 992;
+    /// `__builtin_reduce_max`.
+    pub const REDUCE_MAX: u32 = 993;
+    /// `__builtin_reduce_min`.
+    pub const REDUCE_MIN: u32 = 994;
+    /// `__builtin_reduce_mul`.
+    pub const REDUCE_MUL: u32 = 995;
+    /// `__builtin_reduce_or`.
+    pub const REDUCE_OR: u32 = 996;
+    /// `__builtin_reduce_xor`.
+    pub const REDUCE_XOR: u32 = 997;
+
     /// `__builtin_fabs` (clang `Builtins.td` signature `dd`).
     pub const FABS: u32 = 550;
     /// `__builtin_fabsf` (clang `Builtins.td` signature `ff`).
@@ -3220,6 +3247,14 @@ pub mod builtin {
         row(VA_START, "__builtin_va_start", "vA.", N | T),
         row(VA_END, "__builtin_va_end", "vA", N),
         row(VA_COPY, "__builtin_va_copy", "vAA", N),
+        // WP-156: the vector reductions.
+        row(REDUCE_ADD, "__builtin_reduce_add", "v.", N | C | T),
+        row(REDUCE_AND, "__builtin_reduce_and", "v.", N | C | T),
+        row(REDUCE_MAX, "__builtin_reduce_max", "v.", N | C | T),
+        row(REDUCE_MIN, "__builtin_reduce_min", "v.", N | C | T),
+        row(REDUCE_MUL, "__builtin_reduce_mul", "v.", N | C | T),
+        row(REDUCE_OR, "__builtin_reduce_or", "v.", N | C | T),
+        row(REDUCE_XOR, "__builtin_reduce_xor", "v.", N | C | T),
     ];
 
     /// WP-171: the coroutine builtins the libc++ headers name (clang 19

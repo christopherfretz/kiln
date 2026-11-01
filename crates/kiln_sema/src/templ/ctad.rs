@@ -86,9 +86,12 @@ fn ctad_guide_head(
         let t = s.sema.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let t = if let TypeView::PackExpansion { pattern, .. } = s.sema.ast.types.view(t.ty()) {
             // A function parameter pack stays one (its pack is the
-            // re-depthed template parameter pack).
+            // re-depthed template parameter pack, or for a member
+            // template's constructor, the member's own pack mapped to
+            // a one-element expansion of its new pack).
             match s.expand_pattern(|s| s.ty(pattern, loc))? {
                 Expansion::Unexpanded(x) => s.sema.ast.types.pack_expansion(x, None),
+                Expansion::Elements(es) if es.len() == 1 => s.sema.strip_expansion_ty(es[0]),
                 Expansion::Elements(_) => return Err(SubstFail),
             }
         } else {
@@ -329,7 +332,7 @@ impl Sema<'_, '_> {
                             .is_some_and(|p| self.kind_of(p) == DeclKind::CXXConstructor) =>
                     {
                         any_ctor = true;
-                        let g = self.ctor_template_guide(ctx, name, injected, info.params, m);
+                        let g = self.ctor_template_guide(ctx, name, injected, info.params, m, None);
                         out.extend(g);
                     }
                     _ => {}
@@ -371,9 +374,9 @@ impl Sema<'_, '_> {
     /// definition of the member template that `tmpl` (a member template
     /// of a class template specialization) was instantiated from: their
     /// parameter types with the enclosing specialization's arguments and
-    /// `tmpl`'s own parameters substituted. Constructor templates of such
-    /// a member are not yet guides. Also whether `od` declares a
-    /// constructor.
+    /// `tmpl`'s own parameters substituted; and the guides of its
+    /// constructor templates ([`Sema::ctor_template_guide`]). Also
+    /// whether `od` declares a constructor.
     fn member_ctor_guides(
         &mut self,
         ctx: DeclId,
@@ -412,6 +415,7 @@ impl Sema<'_, '_> {
                         .is_some_and(|p| self.kind_of(p) == DeclKind::CXXConstructor) =>
                 {
                     any_ctor = true;
+                    out.extend(self.ctor_template_guide(ctx, name, ret, params, m, Some(&levels)));
                     continue;
                 }
                 _ => continue,
@@ -506,6 +510,12 @@ impl Sema<'_, '_> {
     /// template's, re-depthed to the class template's level and
     /// renumbered after it; its associated constraints are the class
     /// template's and the constructor template's.
+    ///
+    /// `member`: for a member template of a class template
+    /// specialization ([`Sema::member_ctor_guides`]), the levels that
+    /// substitute the enclosing arguments and map the original member's
+    /// parameters to `class_params`; `ft` is then the original member's
+    /// constructor template.
     fn ctor_template_guide(
         &mut self,
         ctx: DeclId,
@@ -513,28 +523,43 @@ impl Sema<'_, '_> {
         ret: QualType,
         class_params: TemplateParamListId,
         ft: DeclId,
+        member: Option<&MultiLevelArgs>,
     ) -> Option<DeclId> {
         let ctor = self.pattern_of(ft)?;
         let finfo = self.ast.template_info(ft).copied()?;
         let cl = *self.ast.templates.param_list(class_params);
         let fl = *self.ast.templates.param_list(finfo.params);
-        if fl.depth != cl.depth + 1 {
-            return None;
-        }
         let class_ps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(cl.params).collect();
         let n = u16::try_from(class_ps.len()).ok()?;
-        // The outer levels and the constructor template's stay; the class
-        // template's level is "substituted" by undeduced (null) arguments,
-        // which keep its parameters, so the constructor template's level
-        // becomes the class template's ([`MultiLevelArgs::retained_depth`]).
-        let mut levels = MultiLevelArgs::new();
-        for _ in 0..cl.depth {
+        let levels = if let Some(member) = member {
+            // The constructor template's level stays, renumbered to the
+            // depth of `class_params` (every level outside it is
+            // substituted or retained by `member`).
+            if usize::from(fl.depth) != member.depth() {
+                return None;
+            }
+            let mut levels = member.clone();
             levels.push(ArgListId::EMPTY, ft, LevelMode::Retain);
-        }
-        let nulls = vec![TemplateArg::NULL; class_ps.len()];
-        let nulls = self.ast.types.arg_list(&nulls);
-        levels.push(nulls, ft, LevelMode::Substitute);
-        levels.push(ArgListId::EMPTY, ft, LevelMode::Retain);
+            levels
+        } else {
+            if fl.depth != cl.depth + 1 {
+                return None;
+            }
+            // The outer levels and the constructor template's stay; the
+            // class template's level is "substituted" by undeduced (null)
+            // arguments, which keep its parameters, so the constructor
+            // template's level becomes the class template's
+            // ([`MultiLevelArgs::retained_depth`]).
+            let mut levels = MultiLevelArgs::new();
+            for _ in 0..cl.depth {
+                levels.push(ArgListId::EMPTY, ft, LevelMode::Retain);
+            }
+            let nulls = vec![TemplateArg::NULL; class_ps.len()];
+            let nulls = self.ast.types.arg_list(&nulls);
+            levels.push(nulls, ft, LevelMode::Substitute);
+            levels.push(ArgListId::EMPTY, ft, LevelMode::Retain);
+            levels
+        };
         let fd = self.ast.decls.function(ctor)?;
         let cparams: Vec<DeclId> = self.ast.lists.iter::<DeclId>(fd.params).collect();
         let cty = self.ast.decls.get(ctor).ty().unwrap_or(QualType::ERROR);
@@ -629,22 +654,34 @@ impl Sema<'_, '_> {
             };
             let idx = u16::try_from(i).unwrap_or(u16::MAX);
             let np = self.builder().param(f, pname, ploc, ty, idx, flags);
-            match data {
-                Some(d) if d.default_arg.is_some() => {
-                    if let Some(e) = d.default_arg {
-                        let _ = self.ast.decls.set_default_arg(np, e);
-                    }
-                }
-                Some(d) if d.flags & ParamData::DEFAULT_ARG_PENDING != 0 => {
-                    self.ast.decls.mark_default_arg_pending(np);
-                }
-                _ => {}
+            // A constructor parameter's default argument makes the guide's
+            // parameter have one too, but its value is never used by
+            // deduction: the guide gets a placeholder of the parameter's
+            // type, not the constructor's expression (which names the
+            // constructor's, not the guide's, template parameters; clang's
+            // `transformFunctionTypeParam` builds the same `OpaqueValueExpr`).
+            if let Some(d) = data
+                && (d.default_arg.is_some() || d.flags & ParamData::DEFAULT_ARG_PENDING != 0)
+            {
+                let ph = self.guide_default_placeholder(ty, ploc);
+                let _ = self.ast.decls.set_default_arg(np, ph);
             }
             ids.push(np);
         }
         let _ = self.builder().set_params(f, &ids);
         self.ast.templates.dependent_depth = saved;
         f
+    }
+
+    /// The default argument of a guide parameter of type `ty`: a
+    /// source-less `OpaqueValueExpr` (printed `<null expr>`).
+    pub(crate) fn guide_default_placeholder(&mut self, ty: QualType, loc: Loc) -> ExprId {
+        let vc = if self.ast.types.is_reference(ty) {
+            kiln_ast::expr::ValueCategory::LValue
+        } else {
+            kiln_ast::expr::ValueCategory::PRValue
+        };
+        self.builder().opaque_value_of(ty, vc, loc)
     }
 
     /// The copy deduction candidate `template<P...> C(C<P...>) -> C<P...>`.

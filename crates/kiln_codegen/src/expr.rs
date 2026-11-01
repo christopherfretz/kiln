@@ -32,6 +32,8 @@ pub(crate) struct LV {
     pub addr: Addr,
     pub q: QualType,
     pub bf: Option<BitFieldInfo>,
+    /// An element of the vector at `addr` (clang `LValue::MakeVectorElt`).
+    pub vidx: Option<V>,
 }
 
 fn low_mask(bits: u32) -> u128 {
@@ -69,11 +71,19 @@ impl Cg<'_> {
     }
 
     pub(crate) fn icn(&mut self, ty: LTy, v: i128) -> V {
+        if let Some((et, n, _)) = self.m.types.vector_info(ty) {
+            let c = self.m.const_int(et, v);
+            return V::C(self.m.const_vector(&vec![c; n as usize]).expect("int vector"));
+        }
         V::C(self.m.const_int(ty, v))
     }
 
     /// A floating constant `x` (±1.0 and 0.0 only) of type `ty`.
     pub(crate) fn fconst(&mut self, ty: LTy, x: f64) -> V {
+        if let Some((et, n, _)) = self.m.types.vector_info(ty) {
+            let V::C(c) = self.fconst(et, x) else { unreachable!("constant") };
+            return V::C(self.m.const_vector(&vec![c; n as usize]).expect("float vector"));
+        }
         let bits: u128 = match self.m.types.float_width(ty) {
             Some(32) => u128::from((x as f32).to_bits()),
             Some(64) => u128::from(x.to_bits()),
@@ -99,7 +109,24 @@ impl Cg<'_> {
     }
 
     pub(crate) fn is_float_ty(&self, t: LTy) -> bool {
-        self.m.types.float_width(t).is_some()
+        self.m.types.is_float_or_float_vector(t)
+    }
+
+    /// The element type of a vector type, else `q` itself.
+    pub(crate) fn scalar_of(&self, q: QualType) -> QualType {
+        self.vec_of(q).map_or(q, |x| x.0)
+    }
+
+    /// clang `EmitCompare` on vectors: the `<N x i1>` result sign-extended
+    /// to the result type unless that is an `ext_vector_type` of `bool`.
+    fn vec_cmp_result(&mut self, c: V, q: QualType) -> V {
+        match self.vec_of(q) {
+            Some((elem, _)) if !self.is_bool(elem) => {
+                let t = self.lty(q);
+                self.cast(CastOp::SExt, c, t)
+            }
+            _ => c,
+        }
     }
 
     /// Folded integer value of `e` (clang `ConstantFoldsToSimpleInteger`).
@@ -291,12 +318,51 @@ impl Cg<'_> {
             ExprKind::VAArgExpr => return self.emit_va_arg(e, None),
             // A scalar initializer list (clang `VisitInitListExpr`): its
             // single element, or zero.
+            // clang `VisitInitListExpr` on a vector: `insertelement` of
+            // each element into `poison` (i32 indices), then zeros.
+            ExprKind::InitListExpr if self.vec_of(q).is_some() => {
+                let inits: Vec<u32> = ast.lists.get(ast.exprs.init_list_inits(e)).to_vec();
+                let t = self.lty(q);
+                if inits.is_empty() {
+                    return Ok(Some(V::C(self.m.const_zero(t))));
+                }
+                let (et, n, _) = self.m.types.vector_info(t).expect("vector");
+                let mut v = V::C(self.m.const_poison(t));
+                let mut cur = 0u32;
+                for x in inits {
+                    let x = self.emit_scalar(ExprId::new(x))?;
+                    let idx = self.icn(LTy::I32, i128::from(cur));
+                    v = self.insert_elt(v, x, idx);
+                    cur += 1;
+                }
+                while cur < n {
+                    let idx = self.icn(LTy::I32, i128::from(cur));
+                    let z = V::C(self.m.const_zero(et));
+                    v = self.insert_elt(v, z, idx);
+                    cur += 1;
+                }
+                v
+            }
             ExprKind::InitListExpr if !self.is_aggregate(q) => {
                 if let Some(&x) = ast.lists.get(ast.exprs.init_list_inits(e)).first() {
                     return self.emit_scalar_opt(ExprId::new(x));
                 }
                 let t = self.lty(q);
                 V::C(self.m.const_zero(t))
+            }
+            // clang `ScalarExprEmitter::VisitArraySubscriptExpr`: a vector
+            // subscript is the vector's value and `extractelement`.
+            ExprKind::ArraySubscriptExpr if self.vec_subscript(e).is_some() => {
+                let (base, idx) = self.vec_subscript(e).expect("checked");
+                let v = self.emit_scalar(base)?;
+                let i = self.emit_scalar(idx)?;
+                self.extract_elt(v, i)
+            }
+            ExprKind::ConvertVectorExpr => {
+                let src = ast.exprs.operand(e);
+                let v = self.emit_scalar(src)?;
+                let sq = ast.exprs.get(src).ty();
+                self.convert_vector(v, sq, q)
             }
             ExprKind::DeclRefExpr
             | ExprKind::MemberExpr
@@ -313,6 +379,10 @@ impl Cg<'_> {
 
     /// clang `EmitLoadOfLValue` for scalars.
     pub(crate) fn load_lv(&mut self, lv: LV) -> V {
+        if let Some(idx) = lv.vidx {
+            let vec = self.vec_elt_load(lv);
+            return self.extract_elt(vec, idx);
+        }
         let Some(bf) = lv.bf else {
             if let Some(vq) = self.ast.types.as_atomic(lv.q) {
                 return self.atomic_load_lv(lv, vq);
@@ -350,6 +420,20 @@ impl Cg<'_> {
     /// clang `EmitStoreThroughLValue`; with `want`, also the value of the
     /// bit-field after the store.
     pub(crate) fn store_lv(&mut self, v: V, lv: LV, want: bool) -> V {
+        // clang `EmitStoreThroughLValue` of a vector element: read,
+        // `insertelement`, write (a `bool` vector through `<P x i1>`).
+        if let Some(idx) = lv.vidx {
+            let vec = self.vec_elt_load(lv);
+            let ins = self.insert_elt(vec, v, idx);
+            let raw = if self.m.types.int_width(lv.addr.ty).is_some() {
+                self.cast(CastOp::BitCast, ins, lv.addr.ty)
+            } else {
+                ins
+            };
+            let vol = self.is_volatile(lv.q);
+            self.store(raw, lv.addr.v, lv.addr.align, vol);
+            return v;
+        }
         let Some(bf) = lv.bf else {
             if let Some(vq) = self.ast.types.as_atomic(lv.q) {
                 self.atomic_store_lv(v, lv, vq);
@@ -512,6 +596,19 @@ impl Cg<'_> {
             }
             // clang `ScalarExprEmitter::VisitCastExpr`: a user-defined or
             // constructor conversion is its (call) operand.
+            // A vector bitcast reinterprets the value (clang `CK_BitCast`
+            // `CreateBitCast`).
+            CastKind::BitCast if self.vec_of(q).is_some() || self.vec_of(sq).is_some() => {
+                let v = self.emit_scalar(s)?;
+                let t = self.lty(q);
+                self.cast(CastOp::BitCast, v, t)
+            }
+            // clang `CK_VectorSplat`: `CreateVectorSplat`.
+            CastKind::VectorSplat => {
+                let v = self.emit_scalar(s)?;
+                let n = self.vec_of(q).map_or(1, |x| x.1);
+                self.splat(v, n)
+            }
             CastKind::NoOp
             | CastKind::BitCast
             | CastKind::LValueBitCast
@@ -648,6 +745,18 @@ impl Cg<'_> {
                 let m = self.icn(t, -1);
                 Ok(self.bin(BinOp::Xor, Flags::NONE, v, m))
             }
+            // clang `VisitUnaryLNot` on a vector: a comparison with zero.
+            UnaryOp::LNot if self.vec_of(q).is_some() => {
+                let v = self.emit_scalar(s)?;
+                let t = self.f.fir.ty(&self.m, v);
+                let z = V::C(self.m.const_zero(t));
+                let c = if self.is_float_ty(t) {
+                    self.fcmp(FloatPredicate::Oeq, v, z)
+                } else {
+                    self.icmp(IntPredicate::Eq, v, z)
+                };
+                Ok(self.vec_cmp_result(c, q))
+            }
             UnaryOp::LNot => {
                 let b = self.eval_bool(s)?;
                 let t = V::C(self.m.const_bool(true));
@@ -773,8 +882,10 @@ impl Cg<'_> {
         let rp = ast.types.is_pointer(rq);
         let lt = self.f.fir.ty(&self.m, l);
         let float = self.is_float_ty(lt);
-        let signed = self.is_signed(q);
-        let nsw = if signed { Flags::NSW } else { Flags::NONE };
+        // clang `hasSignedIntegerRepresentation`: a vector's elements;
+        // `nsw` only for scalars (`isSignedIntegerOrEnumerationType`).
+        let signed = self.is_signed(self.scalar_of(q));
+        let nsw = if self.is_signed(q) { Flags::NSW } else { Flags::NONE };
         Ok(match op {
             BinaryOp::Add | BinaryOp::Sub if lp && rp => {
                 let a = self.cast(CastOp::PtrToInt, l, LTy::I64);
@@ -881,9 +992,10 @@ impl Cg<'_> {
                         BinaryOp::EQ => FloatPredicate::Oeq,
                         _ => FloatPredicate::Une,
                     };
-                    self.fcmp(p, l, r)
+                    let c = self.fcmp(p, l, r);
+                    self.vec_cmp_result(c, q)
                 } else {
-                    let s = !lp && self.is_signed(lq);
+                    let s = !lp && self.is_signed(self.scalar_of(lq));
                     let p = match (op, s) {
                         (BinaryOp::LT, true) => IntPredicate::Slt,
                         (BinaryOp::LT, false) => IntPredicate::Ult,
@@ -896,7 +1008,8 @@ impl Cg<'_> {
                         (BinaryOp::EQ, _) => IntPredicate::Eq,
                         _ => IntPredicate::Ne,
                     };
-                    self.icmp(p, l, r)
+                    let c = self.icmp(p, l, r);
+                    self.vec_cmp_result(c, q)
                 }
             }
             op => return err(self.loc_of(e), format!("binary {op:?} is not supported yet")),
@@ -1189,6 +1302,7 @@ impl Cg<'_> {
                     addr: Addr { v: V::C(Value::func(f)), ty: LTy::PTR, align: 1 },
                     q,
                     bf: None,
+                    vidx: None,
                 })
             }
             // clang `EmitDeclRefLValue`: a structured binding is its
@@ -1225,7 +1339,7 @@ impl Cg<'_> {
                     return Ok(self.ref_lvalue(p, q));
                 }
                 if let Some(&a) = self.f.locals.get(&d) {
-                    return Ok(LV { addr: a, q, bf: None });
+                    return Ok(LV { addr: a, q, bf: None, vidx: None });
                 }
                 let ty = self.mty(q);
                 let st = ast.decls.var(d).map(|v| v.spec.storage());
@@ -1238,14 +1352,14 @@ impl Cg<'_> {
                 };
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 let align = self.global_align(dq);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             DeclKind::TemplateParamObject => {
                 let g = self.param_object_global(d)?;
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 let ty = self.mty(dq);
                 let align = self.global_align(dq);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             k => err(self.loc_of(e), format!("reference to {k:?} is not supported yet")),
         }
@@ -1274,7 +1388,7 @@ impl Cg<'_> {
     pub(crate) fn ref_lvalue(&mut self, p: V, q: QualType) -> LV {
         let ty = if self.ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
         let (_, align) = self.pointee_layout(q);
-        LV { addr: Addr { v: p, ty, align }, q, bf: None }
+        LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None }
     }
 
     /// clang `EmitLValue`.
@@ -1342,13 +1456,13 @@ impl Cg<'_> {
                 };
                 let ty = self.m.global(g).value_type();
                 let align = self.m.global(g).align.unwrap_or(1);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             ExprKind::StringLiteral => {
                 let g = self.lit_global(ast.exprs.string_lit(e));
                 let ty = self.m.global(g).value_type();
                 let align = self.m.global(g).align.unwrap_or(1);
-                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None })
+                Ok(LV { addr: Addr { v: V::C(gval(g)), ty, align }, q, bf: None, vidx: None })
             }
             ExprKind::MemberExpr => self.member_lvalue(e),
             ExprKind::ArraySubscriptExpr => self.subscript_lvalue(e),
@@ -1357,7 +1471,7 @@ impl Cg<'_> {
                     let p = self.emit_scalar(ast.exprs.operand(e))?;
                     let ty = if ast.types.is_function(q) { LTy::PTR } else { self.mty(q) };
                     let align = self.natural_align(q);
-                    Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None })
+                    Ok(LV { addr: Addr { v: p, ty, align }, q, bf: None, vidx: None })
                 }
                 op @ (UnaryOp::PreInc | UnaryOp::PreDec) => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
@@ -1453,7 +1567,7 @@ impl Cg<'_> {
                 if n.kind() == ExprKind::MaterializeTemporaryExpr {
                     self.push_temporary_cleanup(e, tmp);
                 }
-                Ok(LV { addr: tmp, q: sq, bf: None })
+                Ok(LV { addr: tmp, q: sq, bf: None, vidx: None })
             }
             k if k.is_cast() => match ast.exprs.cast_kind(e) {
                 CastKind::NoOp
@@ -1476,7 +1590,7 @@ impl Cg<'_> {
                     let (vb, off) = self.base_path(e, derived)?;
                     let (v, align) = self.base_address(lv.addr, derived, vb, off, false)?;
                     let ty = self.mty(q);
-                    Ok(LV { addr: Addr { v, ty, align }, q, bf: None })
+                    Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
                 }
                 CastKind::Dynamic => {
                     let lv = self.emit_lvalue(ast.exprs.operand(e))?;
@@ -1500,7 +1614,7 @@ impl Cg<'_> {
                 let dq = ast.exprs.get(dead).ty();
                 let ty = self.mty(dq);
                 let v = V::C(self.m.const_undef(LTy::PTR));
-                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None });
+                return Ok(LV { addr: Addr { v, ty, align: 1 }, q: dq, bf: None, vidx: None });
             }
             return self.emit_lvalue(live);
         }
@@ -1531,7 +1645,12 @@ impl Cg<'_> {
             .fir
             .push(Op::Phi { ty: LTy::PTR, inc: vec![(x.addr.v, lb), (y.addr.v, rb)] }, LTy::PTR);
         let align = x.addr.align.min(y.addr.align);
-        Ok(LV { addr: Addr { v: p, ty: x.addr.ty, align }, q: ast.exprs.get(e).ty(), bf: None })
+        Ok(LV {
+            addr: Addr { v: p, ty: x.addr.ty, align },
+            q: ast.exprs.get(e).ty(),
+            bf: None,
+            vidx: None,
+        })
     }
 
     /// `e` through parentheses, if it is a throw-expression.
@@ -1618,7 +1737,7 @@ impl Cg<'_> {
                 align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
             }
             let st = self.m.types.int(bf.storage_size);
-            return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf) });
+            return Ok(LV { addr: Addr { v, ty: st, align }, q, bf: Some(bf), vidx: None });
         }
         let fq = ast.decls.get(field).ty().unwrap_or(q);
         if let Some(referee) = self.referee(fq) {
@@ -1628,7 +1747,7 @@ impl Cg<'_> {
             let p = self.load(LTy::PTR, slot.addr.v, slot.addr.align, false);
             let (_, align) = self.pointee_layout(referee);
             let ty = self.mty(referee);
-            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None });
+            return Ok(LV { addr: Addr { v: p, ty, align }, q: referee, bf: None, vidx: None });
         }
         self.field_lvalue_init(base, field, q)
     }
@@ -1645,7 +1764,12 @@ impl Cg<'_> {
         };
         let ty = self.mty(q);
         if is_union {
-            return Ok(LV { addr: Addr { v: base.v, ty, align: base.align }, q, bf: None });
+            return Ok(LV {
+                addr: Addr { v: base.v, ty, align: base.align },
+                q,
+                bf: None,
+                vidx: None,
+            });
         }
         let Some(i) = idx else {
             // An empty field with no IR element (clang addresses it by
@@ -1653,11 +1777,11 @@ impl Cg<'_> {
             let off = self.field_byte_offset(field)?;
             let v = if off == 0 { base.v } else { self.byte_offset(base.v, off) };
             let align = min_align(base.align, off);
-            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None });
+            return Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None });
         };
         let v = self.struct_gep(rty, base.v, i);
         let align = min_align(base.align, self.elem_offset(rty, u64::from(i)));
-        Ok(LV { addr: Addr { v, ty, align }, q, bf: None })
+        Ok(LV { addr: Addr { v, ty, align }, q, bf: None, vidx: None })
     }
 
     /// The array operand of a simple array-to-pointer decay.
@@ -1672,10 +1796,89 @@ impl Cg<'_> {
         None
     }
 
+    /// clang `ScalarExprEmitter::VisitConvertVectorExpr`.
+    fn convert_vector(&mut self, v: V, sq: QualType, q: QualType) -> V {
+        let st = self.f.fir.ty(&self.m, v);
+        let dt = self.lty(q);
+        if st == dt {
+            return v;
+        }
+        let (Some((se, _)), Some((de, _))) = (self.vec_of(sq), self.vec_of(q)) else {
+            return v;
+        };
+        let set = self.m.types.vector_info(st).map_or(st, |x| x.0);
+        let det = self.m.types.vector_info(dt).map_or(dt, |x| x.0);
+        let s_int = self.m.types.int_width(set);
+        let d_int = self.m.types.int_width(det);
+        if self.is_bool(de) {
+            let z = V::C(self.m.const_zero(st));
+            return if s_int.is_some() {
+                self.icmp(IntPredicate::Ne, v, z)
+            } else {
+                self.fcmp(FloatPredicate::Une, v, z)
+            };
+        }
+        let op = match (s_int, d_int) {
+            (Some(sw), Some(dw)) => {
+                let signed = self.is_signed(se) && !self.is_bool(se);
+                match sw.cmp(&dw) {
+                    std::cmp::Ordering::Equal => return v,
+                    std::cmp::Ordering::Greater => CastOp::Trunc,
+                    std::cmp::Ordering::Less if signed => CastOp::SExt,
+                    std::cmp::Ordering::Less => CastOp::ZExt,
+                }
+            }
+            (Some(_), None) if self.is_signed(se) && !self.is_bool(se) => CastOp::SIToFP,
+            (Some(_), None) => CastOp::UIToFP,
+            (None, Some(_)) if self.is_signed(de) => CastOp::FPToSI,
+            (None, Some(_)) => CastOp::FPToUI,
+            (None, None) => {
+                let sw = self.m.types.float_width(set).unwrap_or(0);
+                let dw = self.m.types.float_width(det).unwrap_or(0);
+                if dw < sw { CastOp::FPTrunc } else { CastOp::FPExt }
+            }
+        };
+        self.cast(op, v, dt)
+    }
+
+    /// `(vector, index)` operands of a vector subscript.
+    fn vec_subscript(&self, e: ExprId) -> Option<(ExprId, ExprId)> {
+        let ast = self.ast;
+        let [l, r] = ast.exprs.operands(e);
+        if self.vec_of(ast.exprs.get(l).ty()).is_some() {
+            Some((l, r))
+        } else if self.vec_of(ast.exprs.get(r).ty()).is_some() {
+            Some((r, l))
+        } else {
+            None
+        }
+    }
+
+    /// The vector holding the element `lv` (a `bool` vector's `iP`
+    /// storage as `<P x i1>`).
+    fn vec_elt_load(&mut self, lv: LV) -> V {
+        let vol = self.is_volatile(lv.q);
+        let raw = self.load(lv.addr.ty, lv.addr.v, lv.addr.align, vol);
+        match self.m.types.int_width(lv.addr.ty) {
+            Some(p) => {
+                let vt = self.m.types.vector(LTy::I1, p);
+                self.cast(CastOp::BitCast, raw, vt)
+            }
+            None => raw,
+        }
+    }
+
     /// clang `EmitArraySubscriptExpr`.
     fn subscript_lvalue(&mut self, e: ExprId) -> R<LV> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
+        // `LValue::MakeVectorElt`: the vector's address and the
+        // unpromoted index.
+        if let Some((base, idx)) = self.vec_subscript(e) {
+            let blv = self.emit_lvalue(base)?;
+            let i = self.emit_scalar(idx)?;
+            return Ok(LV { addr: blv.addr, q, bf: None, vidx: Some(i) });
+        }
         let [l, r] = ast.exprs.operands(e);
         let swapped =
             !ast.types.is_pointer(ast.exprs.get(l).ty()) && self.simple_decay_operand(l).is_none();
@@ -1713,7 +1916,7 @@ impl Cg<'_> {
             None => min_align(addr.align, esz),
         };
         let v = self.gep(addr.ty, addr.v, indices, true);
-        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None })
+        Ok(LV { addr: Addr { v, ty: ety, align }, q, bf: None, vidx: None })
     }
 
     // ---- statement expressions -----------------------------------------
@@ -2047,7 +2250,16 @@ impl Cg<'_> {
         let opts = CallOpts { attrs: AttrList { func, ret, params }, ..CallOpts::default() };
         let r = self.emit_call_op(sig.fn_ty, callee, ir_args, opts, rty, fid, sig.nothrow);
         if let Some(a) = sret_addr {
-            let _ = a;
+            // clang `convertTempToRValue`: a scalar returned indirectly
+            // (a vector wider than the registers) is loaded back.
+            if !self.is_aggregate(rq)
+                && !matches!(
+                    self.ast.types.canonical_view(rq),
+                    kiln_ast::types::TypeView::Complex(_)
+                )
+            {
+                return Ok(Some(self.load_scalar(a, rq)));
+            }
             return Ok(None);
         }
         if rty == LTy::VOID {
@@ -2691,7 +2903,7 @@ impl Cg<'_> {
         }
         self.f.array_index.push(phi);
         let sc = self.begin_scope(false);
-        let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None };
+        let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
         let r = if inner {
             self.array_init_loop(sub, lv.addr, Some(outer))
         } else {
@@ -2790,7 +3002,8 @@ impl Cg<'_> {
                 }
                 el
             };
-            let lv = LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None };
+            let lv =
+                LV { addr: Addr { v: el, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
             self.init_to_lvalue(init, lv, zeroed)?;
         }
         let filler = ast.exprs.init_list(e).array_filler;
@@ -2813,7 +3026,8 @@ impl Cg<'_> {
             let body = self.f.fir.create_block();
             self.emit_block(body, false);
             let cur = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(el, entry)] }, LTy::PTR);
-            let lv = LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None };
+            let lv =
+                LV { addr: Addr { v: cur, ty: ety, align: ealign }, q: eq, bf: None, vidx: None };
             // [class.temporary]/5: the temporaries of each element's
             // initialization are destroyed before the next one starts.
             let sc = self.begin_scope(false);

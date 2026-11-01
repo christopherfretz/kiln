@@ -377,8 +377,16 @@ and returns the scope it names:
     definition (a hypothetical `X()` when there is none). An implicit
     guide is a detached `FunctionTemplate` over the class template's
     own parameter list (`AstContext::detached_template_decl`) with
-    return type `X<T…>`, the constructor's parameters (names and default
-    arguments) and trailing requires-clause;
+    return type `X<T…>`, the constructor's parameters (names) and
+    trailing requires-clause. A parameter with a default argument gets
+    a source-less `OpaqueValueExpr` of its type as the guide's default
+    (`guide_default_placeholder`, WP-152; clang's
+    `transformFunctionTypeParam`, printed `<null expr>`): the guide has
+    the constructor's arity but its default arguments are never
+    substituted or evaluated (the constructor's expression names the
+    constructor's template parameters, not the guide's). Substituting a
+    guide specialization's declaration (`Substituter::default_args`)
+    gives it another placeholder of the substituted type;
   - one guide per constructor template (`ctor_template_guide`, WP-134):
     the class parameters followed by the constructor template's,
     re-depthed one level shallower and renumbered after them
@@ -405,7 +413,16 @@ and returns the scope it names:
   `base_levels(tmpl)` plus the redeclared template's own parameters as
   arguments. Its member deduction guides are redeclared with it: the
   Substituter maps a `DeductionGuide(t)` name to the instantiated `t`.
-  Constructor templates of such a member give no guide yet.
+  Each constructor template of the original member gives a guide
+  (WP-152, `ctor_template_guide` with the member levels): the
+  redeclared template's parameters followed by the constructor
+  template's, retained at the redeclared template's depth.
+  The member is named as a placeholder through an alias of the
+  specialization (`using O = Outer<int>; O::In`) or through the
+  template-id itself (`Outer<int>::In`, WP-152): the lookahead finds
+  `In` in `Outer`'s primary pattern, so `parse_ctad_placeholder`
+  classifies the name again in the context the parsed
+  nested-name-specifier names and takes the instantiated member.
 - **Alias templates (P1814, WP-134).** For `A<…>` naming an alias
   template whose defining-type-id is a simple-template-id `C<…>`, each
   guide `g` of `C` is transformed (`build_alias_guide`): `g`'s return
@@ -519,7 +536,11 @@ and returns the scope it names:
     type, never attached. `ext_vector_type` applies only to a typedef or
     alias-declaration (`'ext_vector_type' attribute only applies to
     typedefs`); `vector_size` also to the type of a variable, field or
-    parameter (on a function declaration: unsupported). The element
+    parameter. Among the decl-specifiers they modify the decl-specifier
+    type (so a function can return a vector); after a declarator, the
+    whole declared type (on a function, pointer or array declarator:
+    an invalid element type, after which the type is left unchanged,
+    as clang). The element
     type must be integral or floating (`vector_size`: a non-`bool`
     builtin), else `invalid vector element type 'T'`; N must be an
     integral constant (`ext_vector_type attribute requires an integer
@@ -677,6 +698,19 @@ specification as written (`TypeNames` prints ` noexcept`,
     the qualifier, and one `UsingShadow` per declaration found is entered
     in the current scope (a local scope's `locals`, or the context's
     table).
+  - `using typename q::x;` ([namespace.udecl]/1, /12;
+    `act_on_using_typename_declarator`, WP-169): with a dependent
+    qualifier in a class member specification, the declarator is kept
+    as a member alias `x` of the dependent type `typename q::x`
+    (recorded in `Sema::using_typename`); at instantiation
+    (`templ/class.rs` `member_using_typename`) it is redone as an
+    ordinary using-declarator, and references to the alias in
+    instantiated members resolve to the type of its shadow's target
+    (`subst/types.rs` `decl_type`). With a non-dependent qualifier, or
+    at instantiation, a target that is not a type reports `'typename'
+    keyword used on a non-type` at the name, with the `target of using
+    declaration` note (clang's `err_using_typename_non_type`). Kiln has
+    no `UnresolvedUsingTypename` node; the dump shows the alias.
 - **Conflicts** ([namespace.udecl]/11, [basic.scope.scope]/4), as in
   clang's `CheckUsingShadowDecl`. Two distinct entities of one name in
   one scope:

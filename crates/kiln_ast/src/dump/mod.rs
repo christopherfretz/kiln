@@ -594,6 +594,22 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
     }
 
+    /// The closure type, the capture initializers, the body (clang's
+    /// `ASTNodeTraverser::VisitLambdaExpr`).
+    fn lambda_children(&self, e: ExprId, kids: &mut Vec<(Node, Option<&'static str>)>) {
+        let exprs = &self.ast.exprs;
+        let l = exprs.lambda(e);
+        if self.shown(l.closure, l.closure) {
+            kids.push((Node::Decl(l.closure), None));
+        }
+        for c in exprs.children(e, &self.ast.lists) {
+            kids.push((Node::Expr(c), None));
+        }
+        if let Some(b) = l.body {
+            kids.push((self.stmt_node(b), None));
+        }
+    }
+
     fn expr_children(&self, e: ExprId, kids: &mut Vec<(Node, Option<&'static str>)>) {
         let exprs = &self.ast.exprs;
         let lists = &self.ast.lists;
@@ -616,6 +632,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::ExpressionTraitExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXPseudoDestructorExpr
+            | ExprKind::ConvertVectorExpr
             | ExprKind::CompoundLiteralExpr => push(n.a()),
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 // The parameter prints first (clang), then the replacement.
@@ -681,20 +698,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::StmtExpr => kids.push((self.stmt_node(exprs.stmt_expr_body(e)), None)),
-            ExprKind::LambdaExpr => {
-                // The closure type, the capture initializers, the body
-                // (clang's `ASTNodeTraverser::VisitLambdaExpr`).
-                let l = exprs.lambda(e);
-                if self.shown(l.closure, l.closure) {
-                    kids.push((Node::Decl(l.closure), None));
-                }
-                for c in exprs.children(e, lists) {
-                    kids.push((Node::Expr(c), None));
-                }
-                if let Some(b) = l.body {
-                    kids.push((self.stmt_node(b), None));
-                }
-            }
+            ExprKind::LambdaExpr => self.lambda_children(e, kids),
             k if is_template_expr(k) => self.template_expr_children(e, kids),
             _ => self.class_expr_children(e, kids),
         }

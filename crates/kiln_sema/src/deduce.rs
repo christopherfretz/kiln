@@ -376,11 +376,17 @@ impl Sema<'_, '_> {
         };
         if !done {
             if !self.is_error_type(deduced) && !self.ast.types.is_dependent(deduced) {
-                let at = self
-                    .inst
-                    .concepts
-                    .placeholder_locs
+                // An instantiation's diagnostic points at its pattern's
+                // type-constraint.
+                let pattern = self.ast.instantiated_from(fdecl).or_else(|| {
+                    let (_, s) = self.ast.spec_info(fdecl)?;
+                    let from = s.from;
+                    self.pattern_of(from)
+                });
+                let locs = &self.inst.concepts.placeholder_locs;
+                let at = locs
                     .get(&fdecl)
+                    .or_else(|| pattern.and_then(|p| locs.get(&p)))
                     .copied()
                     .unwrap_or(self.ast.decls.get(fdecl).loc());
                 let _ = self.check_placeholder_constraint(declared, deduced, at);

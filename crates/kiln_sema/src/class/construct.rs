@@ -144,16 +144,8 @@ impl Sema<'_, '_> {
         let class = conv::bases::complete_class(self, class)?;
         let (entity, ck) = self.take_ctor_entity();
         let loc = site.loc;
-        if style.is_list()
-            && self.has_init_list_ctor(class)
-            && self.init_list_phase1_viable(class, args)
-        {
-            // todo(WP-067b follow-up): building the initializer_list
-            // object for an initializer-list constructor
-            // ([dcl.init.list]/3.7, [over.match.list]/1.1; phase 2 below).
-            self.unsupported("initialization by an initializer-list constructor", loc);
-            return Some(self.recover(ty, args, loc));
-        }
+        // [over.match.list]/1.1 (phase 1) was done by the caller
+        // (`init_list_ctor_init`); this is phase 2.
         let actual = matches!(
             (entity, ck),
             (InitEntity::Base { .. }, _) | (_, ConstructionKind::Delegating)
@@ -308,7 +300,11 @@ impl Sema<'_, '_> {
         let ctor = self.ast.exprs.constructor(c);
         let zeroing = !self.is_user_provided(ctor);
         let info = ConstructInfo { zeroing, ..ConstructInfo::COMPLETE };
-        let t = self.builder().temporary_object(ty, ctor, &[], info, ExprFlags::NONE, loc, rparen);
+        // The default constructor's default arguments, if any.
+        let args: Vec<ExprId> =
+            self.ast.lists.iter::<ExprId>(self.ast.exprs.construct_args(c)).collect();
+        let t =
+            self.builder().temporary_object(ty, ctor, &args, info, ExprFlags::NONE, loc, rparen);
         let t = self.check_immediate_invocation(t, ctor, None);
         Some(self.maybe_bind_temporary(t))
     }

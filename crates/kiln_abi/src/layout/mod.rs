@@ -364,6 +364,14 @@ pub fn type_size_align(ast: &Ast, q: QualType, target: &Target) -> TypeLayout {
     Layouter::new(ast, target).type_layout(q)
 }
 
+/// The largest alignment, in bits, that `alignas` /
+/// `__attribute__((aligned))` requests for declaration `d` on any of its
+/// declarations (clang `Decl::getMaxAlignment`); 0 if none.
+pub fn decl_max_align(ast: &Ast, d: DeclId, target: &Target) -> u64 {
+    let mut lay = Layouter::new(ast, target);
+    max_align_attr(ast, d, target, &mut |q| lay.type_info(q).align)
+}
+
 /// The layout of `count` elements of `elem` ([dcl.array]/1: contiguous,
 /// with the element's size as stride).
 pub fn array_layout(ast: &Ast, elem: QualType, count: u64, target: &Target) -> TypeLayout {
