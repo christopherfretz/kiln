@@ -913,10 +913,10 @@ impl Memory {
             return Err(MemFault::Subobject);
         }
         if let Some(t) = pointee {
-            let whole = if kind != DynKind::New {
-                matches!(types.kind(a.ty), TyKind::Array { elem, .. } if elem == t)
-            } else {
+            let whole = if kind == DynKind::New {
                 a.ty == t
+            } else {
+                matches!(types.kind(a.ty), TyKind::Array { elem, .. } if elem == t)
             };
             if !whole {
                 return Err(MemFault::Subobject);
@@ -1603,13 +1603,19 @@ mod tests {
         assert!(m.check(p, 8, false).is_ok());
         free(&mut m, p);
         assert_eq!(m.check(p, 8, false).err(), Some(MemFault::Dead(Origin::Heap(e, 0))));
-        assert_eq!(m.heap_free(p, DynKind::New, None, &Types::default()), Err(MemFault::DoubleDelete));
+        assert_eq!(
+            m.heap_free(p, DynKind::New, None, &Types::default()),
+            Err(MemFault::DoubleDelete)
+        );
         // The slot is reused with a new generation: the old pointer is stale.
         let q = heap(&mut m, 16);
         assert_eq!(Ptr::decode(q).slot, Ptr::decode(p).slot);
         assert_ne!(q, p);
         assert_eq!(m.check(p, 8, false).err(), Some(MemFault::Stale));
-        assert_eq!(m.heap_free(p, DynKind::New, None, &Types::default()), Err(MemFault::DoubleDelete));
+        assert_eq!(
+            m.heap_free(p, DynKind::New, None, &Types::default()),
+            Err(MemFault::DoubleDelete)
+        );
         assert!(m.check(q, 16, true).is_ok());
     }
 

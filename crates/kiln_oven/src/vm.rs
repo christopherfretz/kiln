@@ -864,7 +864,7 @@ impl Oven {
                         if aux & new_aux::STD != 0 {
                             // A byte count ([allocator.members]/5).
                             let es = u128::from(self.types.size(elem).max(1));
-                            if v % es != 0 {
+                            if !v.is_multiple_of(es) {
                                 fail!(Fault::NewBadSize { bytes: v, elem });
                             }
                             v /= es;
