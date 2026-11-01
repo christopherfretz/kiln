@@ -153,6 +153,17 @@ the evaluator's flattened type table.
   member the pointer was formed through: the union's recorded active
   member when it holds the pointee at that offset, else the first member
   that does (WP-213).
+- A closure call prints as clang's (WP-237;
+  `tests/conformance/expr.prim.lambda/constexpr-call-notes.cpp`): the
+  object expression, then `operator()` with a generic lambda's arguments
+  (`f.operator()(0)`, `gl.operator()<int>(0)`); a static call operator has
+  no object (`operator()(0)`); the static invoker of a conversion to a
+  function pointer prints its first argument as the object
+  (`(0->operator()()`). **Deviations:** an immediately invoked lambda
+  prints `....operator()(0)` where clang pretty-prints the whole
+  `LambdaExpr` (body included; kiln has no statement printer), and a
+  closure type in a note's template arguments prints `(lambda)` where
+  clang adds ` at F:L:C` (the Oven's notes have no source manager).
 - A float in a note's message (`value V is outside the range of
   representable values of type 'T'`) is spelled as clang's
   `OptionalDiagnostic << APFloat`: `APFloat::toString` with
