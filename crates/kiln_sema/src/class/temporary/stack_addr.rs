@@ -182,7 +182,10 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        self.emit(msg);
+        // clang re-runs `checkExprLifetime` on the return rebuilt in each
+        // instantiation, so a non-dependent return warns in the definition
+        // and once per instantiation (WP-231).
+        self.emit(msg.per_instantiation());
     }
 
     /// Whether `d` is a parameter or a variable with automatic storage

@@ -273,6 +273,8 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) diag_pushes: u32,
     /// Scratch buffers holding `#embed` byte spellings.
     pub(crate) embed_bufs: HashSet<FileId>,
+    /// clang's `CommentHandler` ([`Preprocessor::set_comment_handler`]).
+    pub(crate) comment_handler: Option<Box<dyn FnMut(Span) + 'd>>,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -343,6 +345,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             quiet_lex: false,
             diag_pushes: 0,
             embed_bufs: HashSet::new(),
+            comment_handler: None,
         };
         pp.define_builtins();
         pp
@@ -363,6 +366,22 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// Installs the feature-query hook (default: [`NoFeatures`]).
     pub fn set_feature_queries(&mut self, f: Box<dyn FeatureQueries + 'd>) {
         self.features = f;
+    }
+
+    /// Installs a comment handler (clang `Preprocessor::addCommentHandler`,
+    /// the hook `-verify` reads its directives through): it is called with
+    /// the span of every comment the preprocessor lexes in normal mode, in
+    /// source order, including comments on directive lines and in
+    /// included files, but not comments in skipped conditional groups or
+    /// in the discarded text of `#error` / `#warning` (clang lexes those
+    /// raw). Applies to files already entered.
+    pub fn set_comment_handler(&mut self, h: Box<dyn FnMut(Span) + 'd>) {
+        self.comment_handler = Some(h);
+        for f in &mut self.frames {
+            if let Frame::File(f) = f {
+                f.lx.set_record_comments(true);
+            }
+        }
     }
 
     /// Installs observer callbacks (default: [`NoCallbacks`]).
@@ -461,7 +480,10 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                     .emit(self.diags);
             }
         }
-        let lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
+        let mut lx = Lexer::new(self.sm, self.interner, file, base, self.lex_opts);
+        if self.comment_handler.is_some() {
+            lx.set_record_comments(true);
+        }
         self.frames.push(Frame::File(Box::new(FileFrame {
             lx,
             file,
@@ -581,6 +603,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         } else {
             crate::profile::count!(raw_tokens);
             let t = f.lx.next();
+            let comments = if f.lx.has_comments() { f.lx.take_comments() } else { Vec::new() };
             if !f.lx.diagnostics().is_empty() {
                 let ds = f.lx.take_diagnostics();
                 if !self.quiet_lex {
@@ -589,6 +612,14 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                             self.emit(diag);
                         }
                     }
+                }
+            }
+            if !comments.is_empty()
+                && !self.quiet_lex
+                && let Some(h) = &mut self.comment_handler
+            {
+                for c in comments {
+                    h(c);
                 }
             }
             t

@@ -878,9 +878,10 @@ impl Parser<'_, '_> {
                 true,
             );
         }
-        let Ok(q) = self.parse_nested_name() else {
+        let Ok(qual) = self.parse_nested_name_nns() else {
             return (None, false);
         };
+        let q = qual.map(|q| q.ctx);
         let loc = self.loc();
         if self.at_kw(Kw::Decltype) {
             self.unsupported("'decltype'", loc);
@@ -929,6 +930,12 @@ impl Parser<'_, '_> {
             Some(q) => {
                 if let NameClass::Type(ty, d) = self.s.classify_name(name, Some(q)) {
                     MemInitId::Type(self.named_type(ty, d))
+                } else if let Some(ty) = qual.and_then(|qual| {
+                    self.s.act_unknown_specialization_type(qual, name, TagKeyword::None, loc)
+                }) {
+                    // `T::B(1)`, or `D::B(1)` reaching a dependent base:
+                    // a type resolved at instantiation ([class.base.init]/2).
+                    MemInitId::Type(ty)
                 } else {
                     self.unsupported("qualified member initializers", loc);
                     return (None, true);

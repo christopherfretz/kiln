@@ -62,6 +62,38 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The type `q::name` names when qualified lookup did not find a type
+    /// in `q` and `q` can name an unknown specialization ([temp.dep.type]/6,
+    /// clang `CheckTypenameType` / `isDependentScopeSpecifier`): a
+    /// dependent marker (`T::B`), or the current instantiation with a
+    /// dependent base (`D::B`, clang `hasAnyDependentBases`), whose
+    /// specifier is rebuilt on its injected-class-name type so that
+    /// instantiation looks `name` up in the specialization. A
+    /// `DependentNameType` with keyword `kw`; `None` otherwise. Used for a
+    /// qualified mem-initializer-id ([class.base.init]/2) and a
+    /// `typename`-specifier ([temp.res.general]/5).
+    pub fn act_unknown_specialization_type(
+        &mut self,
+        q: crate::using::Qualifier,
+        name: Symbol,
+        kw: TagKeyword,
+        loc: Loc,
+    ) -> Option<QualType> {
+        let nns = if self.is_dependent_ctx(q.ctx) {
+            q.nns
+        } else if self.kind_of(q.ctx) == DeclKind::CXXRecord && self.has_dependent_bases(q.ctx) {
+            let prefix = match self.ast.types.nns_view(q.nns) {
+                Nns::Type { prefix, .. } => prefix,
+                _ => None,
+            };
+            let ty = self.this_class_type(q.ctx);
+            self.ast.types.nns(Nns::Type { prefix, ty, template_kw: false })
+        } else {
+            return None;
+        };
+        Some(self.act_dependent_name_at(nns, name, None, kw, loc))
+    }
+
     /// True if `t` is a dependent type ([temp.dep.type]/7).
     pub fn is_dependent_type(&self, t: QualType) -> bool {
         self.ast.types.flags(t.ty()).intersects(TypeFlags::DEPENDENT_INSTANTIATION)

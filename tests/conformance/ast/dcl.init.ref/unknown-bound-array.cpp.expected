@@ -8,7 +8,7 @@ TranslationUnitDecl
 |   `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
 |-VarDecl rr 'int (&&)[]' cinit
 | `-ImplicitCastExpr 'int[]' xvalue <NoOp>
-|   `-CXXStaticCastExpr 'int[3]' xvalue static_cast<int[3] &&> <NoOp>
+|   `-CXXStaticCastExpr 'int[3]' xvalue static_cast<int (&&)[3]> <NoOp>
 |     `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
 |-FunctionDecl used f 'void (int (&)[])'
 | `-ParmVarDecl 'int (&)[]'

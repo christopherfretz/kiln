@@ -1169,7 +1169,10 @@ impl<'a, 'sm> Parser<'a, 'sm> {
 
     /// [`Parser::parse_nested_name_nns`], stopping before the `::` at
     /// token index `limit` (left unconsumed) when there is one.
-    fn parse_nested_name_upto(&mut self, limit: Option<usize>) -> Result<Option<Qualifier>, ()> {
+    pub(crate) fn parse_nested_name_upto(
+        &mut self,
+        limit: Option<usize>,
+    ) -> Result<Option<Qualifier>, ()> {
         let mut start = self.loc();
         let mut qual: Option<(DeclId, NnsId)> = None;
         if self.decltype_scope_end(self.pos).is_some() {

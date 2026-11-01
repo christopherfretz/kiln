@@ -70,6 +70,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (clang's diagnostics name it: "'a' declared as an array with a
     /// negative size").
     pub(crate) declarator_name: Option<(Symbol, Loc)>,
+    /// The start of the declarator's type (the declaration's
+    /// decl-specifiers, clang's `FunctionTypeLoc` begin): where a
+    /// substituted function type returning an array or function is
+    /// diagnosed ([dcl.fct]/11). Cleared inside function parameters.
+    pub(crate) type_begin: Option<Loc>,
     /// How many lambda bodies are being rebuilt (a shared expression in
     /// one still captures `this`).
     pub(crate) lambda_bodies: u32,
@@ -124,6 +129,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             entity: None,
             pairs: Vec::new(),
             declarator_name: None,
+            type_begin: None,
             lambda_bodies: 0,
             stmt_failed: false,
             init_failures: 0,

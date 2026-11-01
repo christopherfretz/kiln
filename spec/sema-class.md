@@ -723,6 +723,22 @@ initializer 'y' does not name a non-static data member or base class`,
 'B'`), `an initializer for a delegating constructor must appear alone`,
 `initializing multiple members of union`.
 
+**In a template** (WP-223; clang `BuildMemInitializer` in a dependent
+context). The list is kept as written and substituted per instantiation, but
+an unqualified id is checked when the definition is parsed: it must name a
+field of the class or a type found by that lookup (member typedef,
+injected-class-name, a type in an enclosing scope, a template parameter). A
+dependent base is not searched ([temp.dep.general]/3), so `B(1)` for base
+`B<T>` gets the `does not name` error at the definition, and the
+constructor's instantiations add no implicit initializers. A qualified id
+whose qualifier can name an unknown specialization (`T::Self(2)`, or the
+current instantiation with a dependent base, `D::B(1)` / `D<T>::B(1)`) is a
+`DependentNameType` (`Sema::act_unknown_specialization_type`). It is looked
+up in the instantiation (`no type named 'Foo' in 'D7<int>'`). The same
+function makes `typename D::X` dependent for such a qualifier
+([temp.res.general]/5). A qualified id naming no type in a non-dependent
+qualifier is still `qualified member initializers` unsupported.
+
 **Completion** (clang `SetCtorInitializers`): stored in initialization order
 ([class.base.init]/13): virtual bases (inheritance-graph order, complete-object
 ctor only), direct bases, fields. An unwritten subobject gets
@@ -830,7 +846,11 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   the base whose constructor is ultimately inherited, clang
   `InheritedConstructorInfo`), every other subobject as a defaulted default
   constructor would. The exception specification is clang's
-  `ComputeInheritingCtorExceptionSpec`.
+  `ComputeInheritingCtorExceptionSpec`. An inherited constexpr
+  constructor or constructor template that is not a copy or move
+  constructor counts as a constexpr constructor of the derived class for
+  the literal-type test ([basic.types.general]/10.5.2, clang `addedMember`
+  on a `ConstructorUsingShadowDecl`; `inherited_constexpr_ctor`, WP-241).
 - **Virtual bases** ([basic.types.general]/10). A class with a virtual
   base is not a literal type: a `constexpr` variable of it (or of an
   array of it) is clang's `RequireLiteralType` error "constexpr variable
@@ -1049,9 +1069,10 @@ through a local reference is `returning reference to local temporary
 object` (reference return) or `returning address of local temporary
 object`, with the same notes. Reference parameters, statics,
 `->` access, captured variables named inside a lambda and aggregate
-(non-lambda) prvalues are not followed. Kiln's per-`(id, span)`
-deduplication (diag.md §7.4) drops clang's repeat of a non-dependent
-return's warning in each instantiation.
+(non-lambda) prvalues are not followed. The warning is
+`per_instantiation` (diag.md §7.4): as in clang, a non-dependent return
+warns in the template definition and once more in each instantiation
+(WP-231).
 
 **Dangling local pointers (WP-227, clang `LK_Extended` on a pointer
 variable).** `check_dangling_pointer_var(v, init)` (`stack_addr.rs`) runs
@@ -1737,7 +1758,26 @@ access, out-of-line declarator scope.**
   (instantiation). The destructor `MemberExpr` is located at the `~` (clang's
   name start), so a deleted destructor's use is diagnosed there; when
   rebuilt at instantiation it is at the destroyed type, as clang (WP-193).
-  A qualified destructor name (`p->D::~D()`) is not parsed yet.
+  Qualified destructor names (WP-223, [basic.lookup.qual.general]/4):
+  `act_on_member_destructor_q(base, qual, first, name, ..)`. On a class
+  object (`x.N::~Q`; `first` is `None`, `qual` the whole
+  nested-name-specifier) `Q` is looked up in `N`, then in the object's
+  class, then here, and the destructor of the class it names is accessed
+  as a qualified member of `N` through `member_access` (so `N` must be
+  the object's class or a base, the call is not virtual, and the errors
+  are clang's "no member named '~X' in 'W'" / "'X::~X' is not a member of
+  class 'W'"). On a scalar or dependent object
+  (`may_be_pseudo_destructor`) the parser splits `p->S::F::~Q` into the
+  prefix `S`, the first type-name `F` and `Q`; both are looked up in `S`
+  if present, else here, and each must denote the object type
+  (`sema_pseudo_dtor_not_type`, `sema_pseudo_dtor_type_mismatch`, second
+  name first, as clang). A qualified dependent form is a
+  `CXXPseudoDestructorExpr` whose qualified bit
+  (`Builder::pseudo_destructor_q`, `Ast::pseudo_destructor_qualified`)
+  makes `rebuild_member_destructor(.., qualified, ..)` name a class
+  type's destructor as a qualified member of that class (non-virtual,
+  and a base class's destructor is allowed: `this->B::~B()`). A
+  qualified destructor template-id (`p->N::~X<T>()`) is a gap.
   A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
@@ -1770,11 +1810,13 @@ access, out-of-line declarator scope.**
   (`sema_dtor_type_mismatch`, `note_dtor_type_found`,
   `sema_dtor_name_undeclared`, `sema_pseudo_dtor_*`) and
   `sema_qualified_member_of_unrelated`, with clang 19's text.
-- *Gaps*: qualified destructor names (`p->N::~T()`); dependent
+- *Gaps*: qualified destructor template-ids (`p->N::~X<T>()`); a
+  pseudo-destructor qualifier in a dependent scope; dependent
   `operator T()` printing in dumps; the "member has the same name as its
   class" error.
 - Tests: `tests/conformance/expr.ref/`, `dcl.meaning/`,
-  `ast/expr.ref/`, `class.member.lookup/ambiguous.cpp` (flipped).
+  `ast/expr.ref/`, `class.member.lookup/ambiguous.cpp` (flipped);
+  `expr.prim.id.dtor/`, `ast/expr.prim.id.dtor/` (WP-223).
 
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with

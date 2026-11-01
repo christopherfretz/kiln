@@ -640,6 +640,7 @@ impl Sema<'_, '_> {
         ctor: DeclId,
         loc: Loc,
     ) -> Option<ExprId> {
+        self.instantiate_nsdmi(field, loc);
         if self.ast.decls.get(field).has(DeclFlags::INVALID) {
             return None;
         }

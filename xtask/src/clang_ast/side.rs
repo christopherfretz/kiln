@@ -207,3 +207,116 @@ pub fn parse(text: &str) -> Result<Vec<TextDecl>, String> {
     }
     Ok(decls)
 }
+
+/// The named and functional cast classes, whose text-dump line carries
+/// the type as written (`static_cast<CI>`, `functional cast to CI`),
+/// which the JSON lacks (it has only the expression's type).
+pub const CAST_CLASSES: &[&str] = &[
+    "CXXStaticCastExpr",
+    "CXXDynamicCastExpr",
+    "CXXConstCastExpr",
+    "CXXReinterpretCastExpr",
+    "CXXFunctionalCastExpr",
+];
+
+/// The text the cast's written type follows on its line.
+fn cast_head(class: &str) -> &'static str {
+    match class {
+        "CXXStaticCastExpr" => " static_cast<",
+        "CXXDynamicCastExpr" => " dynamic_cast<",
+        "CXXConstCastExpr" => " const_cast<",
+        "CXXReinterpretCastExpr" => " reinterpret_cast<",
+        _ => " functional cast to ",
+    }
+}
+
+/// The written type of a named or functional cast line (without its
+/// class): the text between [`cast_head`] (the first one outside the
+/// quoted types) and the cast kind (` <Kind>`, a named cast's `>` before
+/// it).
+fn cast_written(class: &str, content: &str) -> Option<String> {
+    let head = cast_head(class);
+    let mut from = 0;
+    let start = loop {
+        let i = from + content[from..].find(head)?;
+        if content[..i].matches('\'').count().is_multiple_of(2) {
+            break i + head.len();
+        }
+        from = i + 1;
+    };
+    let end = if head.ends_with('<') { "> <" } else { " <" };
+    let stop = start + content[start..].rfind(end)?;
+    Some(cplusplus_spelling(&content[start..stop]))
+}
+
+/// `ty` with C++'s spelling of `bool` and of an empty parameter list:
+/// clang prints a cast's written type with the default (C) printing
+/// policy, so `bool` comes out `_Bool` and `void ()` `void (void)`.
+fn cplusplus_spelling(ty: &str) -> String {
+    respell_bool(ty).replace("(void)", "()")
+}
+
+fn respell_bool(ty: &str) -> String {
+    let mut out = String::with_capacity(ty.len());
+    let mut rest = ty;
+    while let Some(i) = rest.find("_Bool") {
+        let before = rest[..i].chars().next_back();
+        let after = rest[i + 5..].chars().next();
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        out.push_str(&rest[..i]);
+        out.push_str(if word(before) || word(after) { "_Bool" } else { "bool" });
+        rest = &rest[i + 5..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The named and functional cast lines of `text`, in pre-order: (class,
+/// type as written).
+pub fn casts(text: &str) -> Result<Vec<(&'static str, String)>, String> {
+    let mut out = Vec::new();
+    for l in text.lines().filter(|l| !l.is_empty()) {
+        let (_, content) = split(l)?;
+        let Some(class) = CAST_CLASSES
+            .iter()
+            .copied()
+            .find(|c| content.strip_prefix(c).is_some_and(|r| r.starts_with(' ')))
+        else {
+            continue;
+        };
+        let content = strip_addresses(content);
+        let w = cast_written(class, &content)
+            .ok_or_else(|| format!("clang-ast: no written type in cast line `{content}`"))?;
+        out.push((class, w));
+    }
+    Ok(out)
+}
+
+/// Written type `w` (C policy) without the tag keyword clang's C policy
+/// prints before a class or enumeration that was not written elaborated
+/// (an instantiation's substituted `T` prints `struct V`): a keyword is
+/// kept only where the expression's JSON type `qual` has it too.
+pub fn cplusplus_tags(w: &str, qual: &str) -> String {
+    let mut out = String::with_capacity(w.len());
+    let mut rest = w;
+    'scan: while !rest.is_empty() {
+        let at_word = out.chars().next_back().is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+        if at_word {
+            for kw in ["struct ", "class ", "union ", "enum "] {
+                if let Some(tail) = rest.strip_prefix(kw) {
+                    let n = tail
+                        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+                        .unwrap_or(tail.len());
+                    if !qual.contains(&format!("{kw}{}", &tail[..n])) {
+                        rest = tail;
+                        continue 'scan;
+                    }
+                }
+            }
+        }
+        let c = rest.chars().next().unwrap_or(' ');
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
