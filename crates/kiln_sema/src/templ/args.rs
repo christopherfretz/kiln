@@ -236,7 +236,7 @@ impl Sema<'_, '_> {
         Ok(ConvertedArgs { sugared, canonical })
     }
 
-    fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
+    pub(crate) fn diag_template_arity(&self, tmpl: DeclId, too_many: bool, loc: Loc) {
         let name = self.qualified_decl_name(tmpl);
         let at = self
             .pattern_of(tmpl)

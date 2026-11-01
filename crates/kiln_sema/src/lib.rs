@@ -266,6 +266,10 @@ pub struct Sema<'a, 'sm> {
     /// the reference a list-initialized temporary binds to (`'const E &'`,
     /// clang's entity type). Set around that construction only.
     pub(crate) ctor_diag_ty: Option<QualType>,
+    /// The aggregate temporary (and the reference's location) being
+    /// list-initialized for a reference: the first `excess elements`
+    /// error inside it takes clang's reference note (spec/sema.md).
+    pub(crate) ref_temp_note: std::cell::Cell<Option<(QualType, Loc)>>,
     /// The mem-initializers of the constructor definition being parsed
     /// (spec/sema-class.md §4.9).
     pub(crate) mem_inits: class::MemInitState,
@@ -432,6 +436,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delegating: Vec::new(),
             ctor_entity: None,
             ctor_diag_ty: None,
+            ref_temp_note: std::cell::Cell::new(None),
             mem_inits: class::MemInitState::default(),
             extend_collector: None,
             diag_capture: std::cell::RefCell::new(None),
@@ -658,7 +663,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     pub fn qualified_decl_name(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        names::SemaNames::new(self).for_decls().write_decl_name(d, true, &mut s);
+        names::SemaNames::new(self).write_decl_name(d, true, &mut s);
         s
     }
 

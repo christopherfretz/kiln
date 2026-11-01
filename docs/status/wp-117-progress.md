@@ -71,14 +71,16 @@
   templates/nttp/temp.param-placeholder-deduction.cpp.
 - mangle_vs_clang: 725 clang symbols/triple.
 
-- Deliverable 3: `template<> template<class U> int A<long>::g(U)` (parser
-  passes the empty-head count; `take_template_head` consumes them;
-  `inst_template` instantiates from the member-specialized redeclaration).
-  Errors in a nested instantiated body no longer invalidate the caller
-  (`InstState::body_errors`); a direct call of an invalid function
-  recovers silently (clang RecoveryExpr). The ExplicitSpecialization early
-  return and invalid-on-failed-body parts were already on main by the time
-  this landed; the tests below cover them.
+- Deliverable 3: an explicit specialization is never instantiated from the
+  pattern (an early return in `instantiate_function_definition`). A member
+  body that fails to instantiate marks the member invalid. Errors in a
+  nested instantiated body no longer invalidate the caller
+  (`InstState::body_errors`). A direct call of an invalid function recovers
+  without a follow-on error (clang RecoveryExpr).
+  `template<> template<class U> int A<long>::g(U)` was first done here with
+  an empty-head counter. WP-181 landed the same feature on main
+  (`act_member_template_spec_start` / `specialize_member_template`), so the
+  merge keeps main's version and drops this branch's. The tests pass on it.
 - Deliverable 4: `_ZGR` backing arrays of namespace-scope initializer_lists
   are `constant` (other materialized temporaries stay `global`). Constructor
   templates with `std::initializer_list<T>` parameters work, and their

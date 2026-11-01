@@ -70,13 +70,37 @@ impl Sema<'_, '_> {
         self.templ.explicit_spec = None;
     }
 
-    /// `template<> template<params> ... C<args>::m`: the `n` leading
-    /// `template<>` heads (dropped by the parser) match the implicitly
-    /// instantiated classes of the qualifier ([temp.expl.spec]/17);
-    /// `0` once the declaration ends.
-    pub fn act_member_template_spec_prefix(&mut self, n: u16) {
-        self.templ.empty_prefix = n;
-        self.templ.empty_prefix_taken = 0;
+    /// `template<>` followed by a non-empty template head was parsed
+    /// (`template<> template<class U> struct A<int>::B {...}`,
+    /// [temp.expl.spec]/16): the template declared next specializes a
+    /// member template of an implicitly instantiated class. Paired with
+    /// [`Sema::act_member_template_spec_end`].
+    pub fn act_member_template_spec_start(&mut self, loc: Loc) {
+        self.templ.member_spec = Some(loc);
+    }
+
+    /// The declaration after `template<> template<...>` ended.
+    pub fn act_member_template_spec_end(&mut self) {
+        self.templ.member_spec = None;
+    }
+
+    /// `t` redeclares, after `template<> template<...>`, a member
+    /// template of an implicitly instantiated class
+    /// ([temp.expl.spec]/16): the member template is specialized, so its
+    /// specializations are instantiated from this declaration's
+    /// definition with its own arguments only (clang's
+    /// `setMemberSpecialization`; `getTemplateInstantiationPattern`
+    /// stops there).
+    pub(crate) fn specialize_member_template(&mut self, t: DeclId) {
+        let first = self.ast.first(t);
+        if self
+            .ast
+            .templates
+            .instantiated_from_map(first)
+            .is_some_and(|x| kiln_ast::templates::is_template_kind(self.kind_of(x)))
+        {
+            self.ast.templates.clear_instantiated_from(first);
+        }
     }
 
     /// `[extern] template` without `<` was parsed: the class template-id

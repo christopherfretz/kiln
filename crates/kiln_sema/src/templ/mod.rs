@@ -138,18 +138,15 @@ pub struct TemplState {
     /// `template<>` was just parsed: the next class template-id declared
     /// is an explicit specialization ([temp.expl.spec]; WP-070b).
     pub(crate) explicit_spec: Option<Loc>,
-    /// `template<>` heads the parser dropped before a member template's
-    /// own head (`template<> template<class U> int A<long>::g(U)`), each
-    /// matching one implicitly instantiated class of the qualifier
-    /// ([`Sema::act_member_template_spec_prefix`]).
-    pub(crate) empty_prefix: u16,
-    /// How many `template<>`s of [`TemplState::empty_prefix`] were matched;
-    /// nonzero: the member template being redeclared is member-specialized.
-    pub(crate) empty_prefix_taken: u16,
     /// `[extern] template` without `<` was just parsed (the `extern`
     /// and `template` locations): the next class template-id declared
     /// is explicitly instantiated ([temp.explicit]).
     pub(crate) explicit_inst: Option<(Option<Loc>, Loc)>,
+    /// The `template<>` of `template<> template<class U> struct
+    /// A<int>::B ...` ([temp.expl.spec]/16): the declaration under the
+    /// inner head specializes member template `B` of the implicitly
+    /// instantiated `A<int>`, which the outer `template<>` matched.
+    pub(crate) member_spec: Option<Loc>,
     /// The instantiation-stack depth at which `explicit_spec` /
     /// `explicit_inst` was set: a declarator met while a class named in
     /// the declaration's qualifier is instantiated is not the explicit
@@ -234,13 +231,6 @@ pub struct InstState {
     /// in error (clang: that body is invalid; a call naming it is a
     /// `RecoveryExpr`).
     pub(crate) body_errors: u32,
-    /// Member templates of implicit class template specializations
-    /// redeclared after `template<>` (`template<> template<class U> int
-    /// A<long>::g(U)`, [temp.expl.spec]/17; first declarations): their
-    /// specializations are instantiated from that redeclaration's
-    /// definition, not the class template's pattern (clang's
-    /// `isMemberSpecialization` stopping `getTemplateInstantiationPattern`).
-    pub(crate) member_template_specs: kiln_source::fx::FxHashSet<DeclId>,
     /// Alias template specializations already substituted (§4.6).
     pub(crate) alias_cache: kiln_source::fx::FxHashMap<(DeclId, ArgListId), QualType>,
     /// The instantiation report (§11.3).
@@ -707,10 +697,6 @@ impl Sema<'_, '_> {
                         let _ = self.check_template_heads_match(list, expected);
                     }
                 }
-                ScopeSlot::Empty(_) if self.templ.empty_prefix > 0 => {
-                    self.templ.empty_prefix -= 1;
-                    self.templ.empty_prefix_taken += 1;
-                }
                 ScopeSlot::Empty(class) if check_empty => {
                     let Some(&i) = it.peek() else { break };
                     if self.templ.heads[i].invented {
@@ -800,6 +786,7 @@ impl Sema<'_, '_> {
     fn checks_member_spec_headers(&self) -> bool {
         self.templ.explicit_spec.is_none()
             && self.templ.explicit_inst.is_none()
+            && self.templ.member_spec.is_none()
             && matches!(self.kind_of(self.ctx), DeclKind::Namespace | DeclKind::TranslationUnit)
     }
 
@@ -899,12 +886,6 @@ impl Sema<'_, '_> {
             self.check_template_param_list(kind, list, prev);
         }
         let t = self.builder().template_decl(kind, pattern, list, prev);
-        if self.templ.empty_prefix_taken > 0
-            && let Some(p) = prev
-        {
-            let p = self.ast.first(p);
-            self.inst.member_template_specs.insert(p);
-        }
         if prev.is_some() {
             self.merge_template_defaults(t);
         }

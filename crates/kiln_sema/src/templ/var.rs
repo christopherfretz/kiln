@@ -100,7 +100,18 @@ impl Sema<'_, '_> {
         // it is listed with the instantiated one.
         let (pattern, listed) = match matched {
             Ok(Some(m)) => (Some(m.partial), Some(m.partial)),
-            Ok(None) => (self.pattern_of(self.inst_template(tmpl)), self.pattern_of(tmpl)),
+            Ok(None) => {
+                // The redeclaration with the initializer (one after
+                // `template<> template<class U>` defines a specialized
+                // member template, [temp.expl.spec]/16).
+                let p = self.pattern_of(self.inst_template(tmpl)).map(|p| {
+                    self.ast
+                        .redecls_of(p)
+                        .find(|&x| self.ast.decls.var(x).is_some_and(|v| v.init.is_some()))
+                        .unwrap_or(p)
+                });
+                (p, self.pattern_of(tmpl))
+            }
             Err(()) => (None, None),
         };
         let pspec = pattern.and_then(|p| self.ast.decls.var(p)).map(|x| x.spec).unwrap_or_default();

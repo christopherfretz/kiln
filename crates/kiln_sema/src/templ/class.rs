@@ -176,7 +176,7 @@ impl Sema<'_, '_> {
             .and_then(|i| i.pattern)
             .and_then(|p| self.ast.decls.record(p))
             .map_or(TagKind::Struct, |r| r.tag);
-        let spec = self.builder().class_spec(tmpl, conv.sugared, conv.canonical, tag);
+        let spec = self.builder().class_spec(tmpl, conv.canonical, conv.canonical, tag);
         let print = self.suppress_default_args(tmpl, conv.canonical, written.len(), loc);
         if let Some((i, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(i, |s| s.print_args = print);
@@ -437,9 +437,6 @@ impl Sema<'_, '_> {
     /// on its own, as clang's `getTemplateInstantiationPattern`), else
     /// `tmpl`.
     pub(crate) fn inst_template(&self, tmpl: DeclId) -> DeclId {
-        if self.inst.member_template_specs.contains(&self.ast.first(tmpl)) {
-            return tmpl;
-        }
         self.ast
             .templates
             .instantiated_from_map(tmpl)
@@ -572,7 +569,11 @@ impl Sema<'_, '_> {
             }
             if diagnose {
                 let t = self.tag_type(spec);
-                let at = if matched.is_some() { pattern } else { tmpl };
+                // clang notes the latest declaration (one after
+                // `template<> template<...>` is a new decl,
+                // [temp.expl.spec]/16; kiln adds none for a plain
+                // redeclaration).
+                let at = if matched.is_some() { pattern } else { self.ast.latest(pattern) };
                 let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(at).loc());
                 let d = self
                     .diag(DiagId::sema_template_implicit_instantiate_undefined, poi)
