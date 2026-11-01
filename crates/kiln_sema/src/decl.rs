@@ -24,7 +24,7 @@ use crate::class::ClassBuild;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
+    Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, Sign, SpecialName,
     StorageSpec, TypeSpecKind, Width,
 };
 use crate::init::{InitValue, Initializer};
@@ -675,6 +675,11 @@ impl Sema<'_, '_> {
         spec_loc: Loc,
         d: &Declarator,
     ) -> QualType {
+        // A type-id's redundant parentheses (a new-type-id's are checked
+        // by `act_on_new`, before its bounds are split off).
+        if d.ctx == DeclaratorContext::TypeName && d.site != DeclSite::New {
+            self.warn_redundant_parens(None, d);
+        }
         // [dcl.type.class.deduct]/2.
         let mut ty = self.ctad_declarator_check(base, spec_loc, d);
         let name = self.declarator_name(d);
@@ -1055,6 +1060,7 @@ impl Sema<'_, '_> {
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
         let base = self.type_from_declspec(ds);
         let base = self.apply_declspec_vector_attrs(base, ds);
+        self.warn_redundant_parens(None, d);
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if let Some((s, loc)) = ds.storage
             && s != StorageSpec::Register
@@ -1771,7 +1777,7 @@ impl Sema<'_, '_> {
         // so `__attribute__((vector_size(8))) short f();` returns a vector.
         let base = self.apply_declspec_vector_attrs(base, ds);
         let base = self.ctad_decl_spec_check(ds, base, d);
-        self.warn_redundant_parens(ds, base, d);
+        self.warn_redundant_parens(Some((ds, base)), d);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {

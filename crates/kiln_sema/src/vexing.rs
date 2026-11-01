@@ -10,15 +10,23 @@ use kiln_diag::DiagId;
 
 use crate::Sema;
 use crate::decl::sym_str;
-use crate::declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext};
+use crate::declspec::{Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext};
 use crate::lookup::LookupKind;
 
 impl Sema<'_, '_> {
     /// clang's `warnAboutRedundantParens`, called when the outermost
     /// declarator operator of `d` (the first one applied to the
     /// decl-specifier type `base`) is a pair of grouping parentheses.
-    pub(crate) fn warn_redundant_parens(&mut self, ds: &DeclSpec, base: QualType, d: &Declarator) {
-        if !self.inst.stack.is_empty() {
+    /// `spec` is the decl-specifier-seq and its type for a declarator that
+    /// could be an expression (clang's `isExpressionContext`); `None` for a
+    /// parameter, exception declaration or type-id (WP-235), which can only
+    /// get `-Wredundant-parens`.
+    pub(crate) fn warn_redundant_parens(
+        &mut self,
+        spec: Option<(&DeclSpec, QualType)>,
+        d: &Declarator,
+    ) {
+        if !self.inst.stack.is_empty() || d.site == DeclSite::Subst {
             return;
         }
         // The parentheses that close last among those around every chunk
@@ -27,12 +35,22 @@ impl Sema<'_, '_> {
             return;
         };
         let (_, lparen, _) = d.parens[pi];
+        // In a new-type-id, function chunks require parentheses.
+        if d.site == DeclSite::New && d.chunks.iter().any(|c| matches!(c, Chunk::Function { .. })) {
+            return;
+        }
+        let Some((ds, base)) = spec.filter(|_| {
+            matches!(
+                d.ctx,
+                DeclaratorContext::Block | DeclaratorContext::Condition | DeclaratorContext::ForInit
+            )
+        }) else {
+            self.warn_plain_redundant_parens(d, lparen);
+            return;
+        };
         let t = &self.ast.types;
         let simple_name = d.special.is_none() && d.op_name.is_none();
-        let mut could_be_temporary = matches!(
-            d.ctx,
-            DeclaratorContext::Block | DeclaratorContext::Condition | DeclaratorContext::ForInit
-        ) && !d.invalid
+        let mut could_be_temporary = !d.invalid
             && !ds.invalid
             && simple_name
             && d.name.is_some()
@@ -47,23 +65,18 @@ impl Sema<'_, '_> {
             && ds.atomic_qual.is_none()
             && (t.as_record(base).is_some() || t.is_dependent(base))
             && !d.after_comma;
-        let mut starts_with_declarator_id = true;
-        if d.parens.len() > 1 {
-            starts_with_declarator_id = false;
-        }
         for c in &d.chunks {
             match c {
-                Chunk::Pointer { .. } => starts_with_declarator_id = false,
+                Chunk::Pointer { .. } => {}
                 Chunk::Array { size, .. } => {
                     if size.is_none() {
                         could_be_temporary = false;
                     }
                 }
-                Chunk::Function { .. } => could_be_temporary = false,
-                Chunk::LRef { .. } | Chunk::RRef { .. } | Chunk::MemberPointer { .. } => {
-                    could_be_temporary = false;
-                    starts_with_declarator_id = false;
-                }
+                Chunk::Function { .. }
+                | Chunk::LRef { .. }
+                | Chunk::RRef { .. }
+                | Chunk::MemberPointer { .. } => could_be_temporary = false,
             }
         }
         let name = d.name.map(|n| n.0);
@@ -74,14 +87,7 @@ impl Sema<'_, '_> {
             could_be_temporary = false;
         }
         if !could_be_temporary {
-            // `A (::B)`: the parentheses change the meaning.
-            if starts_with_declarator_id
-                && d.qualifier.is_some_and(|q| self.kind_of(q) == DeclKind::TranslationUnit)
-            {
-                return;
-            }
-            let w = self.diag(DiagId::sema_redundant_parens_around_declarator, lparen);
-            self.emit(w);
+            self.warn_plain_redundant_parens(d, lparen);
             return;
         }
         let Some(n) = name else { return };
@@ -103,6 +109,29 @@ impl Sema<'_, '_> {
         w = w
             .with_note(self.diag(DiagId::note_function_style_cast_add_parentheses, ds.loc))
             .with_note(self.diag(DiagId::note_remove_parens_for_variable_declaration, lparen));
+        self.emit(w);
+    }
+
+    /// The off-by-default "redundant parentheses surrounding declarator"
+    /// [-Wredundant-parens] at the outermost grouping `(` of `d`, except
+    /// for `A (::B)`, where the parentheses change the meaning.
+    fn warn_plain_redundant_parens(&mut self, d: &Declarator, lparen: kiln_source::Loc) {
+        let starts_with_declarator_id = d.parens.len() == 1
+            && d.chunks.iter().all(|c| {
+                !matches!(
+                    c,
+                    Chunk::Pointer { .. }
+                        | Chunk::LRef { .. }
+                        | Chunk::RRef { .. }
+                        | Chunk::MemberPointer { .. }
+                )
+            });
+        if starts_with_declarator_id
+            && d.qualifier.is_some_and(|q| self.kind_of(q) == DeclKind::TranslationUnit)
+        {
+            return;
+        }
+        let w = self.diag(DiagId::sema_redundant_parens_around_declarator, lparen);
         self.emit(w);
     }
 }

@@ -297,6 +297,12 @@ Redeclaration and linkage rules:
   cast`; `remove parentheses to silence this warning`). Otherwise the
   off-by-default "redundant parentheses surrounding declarator"
   [-Wredundant-parens], except for `A (::B)`. Not in an instantiation.
+  Parameter declarators, exception declarations and the abstract
+  declarators of type-ids (`sizeof(int (*))`, `W<int (*)>`, a template
+  parameter) cannot be expressions and only get -Wredundant-parens
+  (WP-235); a parenthesized new-type-id whose declarator has a function
+  chunk does not warn (its parentheses are required). Test:
+  `tests/conformance/dcl.ambig.res/redundant-parens-abstract.cpp`.
 - **Qualified declarator-ids** (`qualified_decl.rs`, clang
   `diagnoseQualifiedDeclaration`, WP-191): a qualified name must be
   declared in a scope that encloses its qualifier's: "definition or

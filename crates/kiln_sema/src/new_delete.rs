@@ -260,6 +260,7 @@ impl Sema<'_, '_> {
             NewInit::None => {}
         }
         let mut d = tid.declarator;
+        self.warn_redundant_parens(None, &d);
         // The noptr-new-declarator: the leading array chunks (innermost
         // first, so in written order).
         let n_arrays = d.chunks.iter().take_while(|c| matches!(c, Chunk::Array { .. })).count();
