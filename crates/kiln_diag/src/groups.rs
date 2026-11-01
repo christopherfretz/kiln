@@ -211,6 +211,7 @@ diag_groups! {
     Cxx20AttributeExtensions = "c++20-attribute-extensions" [];
     AddressOfPackedMember = "address-of-packed-member" [];
     UnusedVariable = "unused-variable" [];
+    RedundantParens = "redundant-parens" [];
 }
 
 impl Group {

@@ -1626,6 +1626,11 @@ diag_ids! {
     sema_enum_template = Error (0) "enumeration cannot be a template";
     sema_no_declarators_error = Error (0) "declaration does not declare anything";
     sema_explicit_inst_undefined_var_template = Error (1) "explicit instantiation of undefined variable template '{0}'";
+    sema_parens_disambiguated_as_variable = Warning [VexingParse] (1) "parentheses were disambiguated as redundant parentheses around declaration of variable named '{0}'";
+    sema_redundant_parens_around_declarator = WarningOff [RedundantParens] (0) "redundant parentheses surrounding declarator";
+    note_raii_guard_add_name = Note (2) "add a variable name to declare a {0} initialized with '{1}'";
+    note_function_style_cast_add_parentheses = Note (0) "add enclosing parentheses to perform a function-style cast";
+    note_remove_parens_for_variable_declaration = Note (0) "remove parentheses to silence this warning";
 }
 
 impl DiagId {

@@ -155,6 +155,10 @@ pub struct PrintOptions {
     /// with no policy uses: `_Bool`, `nullptr_t`, and tag types with
     /// their keyword (`struct S`, `enum E`).
     pub c_policy: bool,
+    /// Print `ParenType` sugar as its inner type (no grouping
+    /// parentheses): clang's `desugarForDiagnostic` looks through it
+    /// without counting it for an `aka` (WP-191).
+    pub no_parens: bool,
 }
 
 impl PrintOptions {
@@ -165,6 +169,7 @@ impl PrintOptions {
         full_scope: false,
         suppress_tag: false,
         c_policy: false,
+        no_parens: false,
     };
     /// The canonical type with every name scoped (the `aka` string).
     pub const CANONICAL: PrintOptions = PrintOptions {
@@ -173,6 +178,7 @@ impl PrintOptions {
         full_scope: true,
         suppress_tag: false,
         c_policy: false,
+        no_parens: false,
     };
     /// The top-level-desugared type (the AST dump's second string).
     pub const DESUGARED: PrintOptions = PrintOptions {
@@ -181,6 +187,7 @@ impl PrintOptions {
         full_scope: false,
         suppress_tag: false,
         c_policy: false,
+        no_parens: false,
     };
     /// The canonical type as clang's policy-less `QualType::getAsString()`
     /// prints it (built-in candidate notes).
@@ -190,6 +197,7 @@ impl PrintOptions {
         full_scope: true,
         suppress_tag: false,
         c_policy: true,
+        no_parens: false,
     };
 }
 
@@ -251,6 +259,7 @@ pub fn write_declarator(
         scope,
         suppress_tag: opts.suppress_tag,
         c_policy: opts.c_policy,
+        no_parens: opts.no_parens,
         inside_cc_attr: false,
         depth: 0,
     };
@@ -269,6 +278,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         scope: false,
         suppress_tag: false,
         c_policy: false,
+        no_parens: false,
         inside_cc_attr: false,
         depth: 0,
     };
@@ -309,6 +319,7 @@ fn arg_list_with_scope(
         scope,
         suppress_tag: false,
         c_policy: false,
+        no_parens: false,
         inside_cc_attr: false,
         depth: 0,
     };
@@ -332,6 +343,7 @@ pub fn write_template_arg(
         scope: false,
         suppress_tag: false,
         c_policy: false,
+        no_parens: false,
         inside_cc_attr: false,
         depth: 0,
     };
@@ -355,6 +367,14 @@ pub fn aka(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -> Option<Stri
     // rather than a wrong one.
     if canon.contains("type-parameter-") && !written.contains("type-parameter-") {
         return None;
+    }
+    // clang's `desugarForDiagnostic` looks through `ParenType` without
+    // counting it for an `aka`: `'int (*)'`, not `'int (*)' (aka 'int *')`.
+    if canon != written && written.contains('(') {
+        let np = PrintOptions { no_parens: true, ..PrintOptions::SUGARED };
+        if print_type(ctx, names, q, np) == canon {
+            return None;
+        }
     }
     (canon != written && without_exc_specs(&canon) != without_exc_specs(&written)).then_some(canon)
 }
@@ -468,6 +488,8 @@ struct Printer<'a> {
     suppress_tag: bool,
     /// [`PrintOptions::c_policy`].
     c_policy: bool,
+    /// [`PrintOptions::no_parens`].
+    no_parens: bool,
     /// clang's `InsideCCAttribute`.
     inside_cc_attr: bool,
     depth: u32,
@@ -709,7 +731,10 @@ impl Printer<'_> {
             // prints its own).
             TypeView::Paren(inner) => {
                 self.before(inner);
-                if !self.empty_ph && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function {
+                if !self.empty_ph
+                    && !self.no_parens
+                    && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function
+                {
                     self.push("(");
                 }
             }
@@ -988,7 +1013,10 @@ impl Printer<'_> {
             }
             TypeView::Function(_) => self.function_after(t),
             TypeView::Paren(inner) => {
-                if !self.empty_ph && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function {
+                if !self.empty_ph
+                    && !self.no_parens
+                    && self.ctx.kind(split(self.ctx, inner).0) != TypeKind::Function
+                {
                     self.push(")");
                 }
                 self.after(inner);
