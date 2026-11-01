@@ -1065,6 +1065,14 @@ for them.
     The result is always a prvalue.
   - An unused statement expression warns as clang's
     `isUnusedResultAWarning` does.
+- **Unused results** (`unused_warning`, clang `isUnusedResultAWarning`
+  / `DiagnoseUnusedExprResult`; WP-158): a functional, C-style or
+  `static_cast` constructor conversion (`X(1);`) is checked through its
+  operand, looking through temporary binding, materialization and
+  cleanups; a constructor call warns only when the constructor or its
+  class is `[[nodiscard]]` (`ignoring temporary created by a constructor
+  declared with 'nodiscard' attribute[: msg]`, -Wunused-value). A braced
+  or scalar functional cast warns `expression result unused`.
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **`__builtin_offsetof(T, designator)`** (`act_on_builtin_offsetof`
@@ -1103,8 +1111,10 @@ clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
 and aggregate element types.
 - **Implicit global operators** ([basic.stc.dynamic.general]/2):
   `declare_global_new_delete` runs once, the first time a new- or
-  delete-expression or a declaration of a global `operator new`/`delete`
-  needs it (clang's `DeclareGlobalNewDelete`). It declares, as implicit
+  delete-expression, a declaration of a global `operator new`/`delete`,
+  or an unqualified or `::`-qualified id-expression naming one
+  (`::operator new(n)`, WP-158) needs it (clang's
+  `DeclareGlobalNewDelete`). It declares, as implicit
   TU-scope functions in clang's order, `operator new`/`new[]` taking
   `(size_t)` and `(size_t, std::align_val_t)`, and `operator
   delete`/`delete[]` taking `(void*)`, `(void*, align_val_t)`,
