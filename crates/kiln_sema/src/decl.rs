@@ -3039,16 +3039,9 @@ impl Sema<'_, '_> {
         false
     }
 
-    fn act_on_field(
-        &mut self,
-        ds: &DeclSpec,
-        ty: QualType,
-        d: &Declarator,
-        invalid: bool,
-    ) -> DeclId {
-        let ctx = self.ctx;
-        let name = d.name.map(|n| n.0);
-        let nm = name.map(|n| sym_str(self, n));
+    /// The decl-specifiers of a non-static data member: `mutable`
+    /// ([dcl.stc]/9) gives `FieldData::MUTABLE`; the others are errors.
+    fn field_spec_flags(&mut self, ds: &DeclSpec, ty: QualType) -> u32 {
         let mut flags = 0;
         if let Some((s, loc)) = ds.storage {
             match s {
@@ -3076,6 +3069,20 @@ impl Sema<'_, '_> {
         if let Some(loc) = ds.consteval {
             self.error(DiagId::sema_consteval_wrong_decl_kind, loc);
         }
+        flags
+    }
+
+    fn act_on_field(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        invalid: bool,
+    ) -> DeclId {
+        let ctx = self.ctx;
+        let name = d.name.map(|n| n.0);
+        let nm = name.map(|n| sym_str(self, n));
+        let mut flags = self.field_spec_flags(ds, ty);
         if let Some(style) = d.init_style {
             // A default member initializer ([class.mem.general]/11),
             // replayed after the class is complete.

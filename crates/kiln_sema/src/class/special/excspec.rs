@@ -14,6 +14,7 @@ use kiln_ast::types::{ExcSpec, NoexceptValue, Quals};
 use kiln_ast::{DeclId, QualType};
 use kiln_source::Loc;
 
+use super::define::{SynthContext, SynthKind};
 use super::{Selected, SpecialKind};
 use crate::Sema;
 
@@ -69,7 +70,6 @@ impl Sema<'_, '_> {
         // clang `EvaluateImplicitExceptionSpec`: under an
         // exception-specification context at the use (a nested one at the
         // subobject that calls it).
-        use super::define::{SynthContext, SynthKind};
         let inst_depth = self.inst.stack.len();
         self.synth.push(SynthContext {
             member: first,
