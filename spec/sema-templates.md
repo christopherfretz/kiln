@@ -1144,6 +1144,19 @@ recomputed exactly as for non-template code (clang's
 - **`ConceptSpecializationExpr`, `RequiresExpr`.** §8.
 - **Lambdas** get a new closure class per instantiation (WP-075).
 - **`SizeOfPackExpr`, folds, expansions.** §7.
+- **Braced lists** (`Substituter::init_list`, WP-192). A dependent list
+  is rebuilt clause by clause and re-run through the initialization
+  action. A semantic list that has a written form (`syntactic_list`,
+  spec/ast.md §5.6) is rebuilt from that form, as clang's
+  `TransformInitListExpr` uses the syntactic form. A
+  `DesignatedInitExpr` gives its designators back, with array indices
+  substituted. A `PackExpansionExpr` of a `DesignatedInitExpr` expands to
+  one designated clause per element. Designated lists in default member
+  initializers, default arguments (`T t = {.y = 2}`, kept dependent when
+  the parameter type is), NTTP arguments and requirements are handled
+  the same way. An unknown field in a requirement is a substitution
+  failure. The aggregate checks of spec/sema.md §6 run on the
+  instantiated type.
 
 ### 5.5 Statements
 
@@ -1210,6 +1223,9 @@ recomputed exactly as for non-template code (clang's
   defined with the outermost local class. Member function bodies are
   defined after it is complete, in the re-entered class scopes, as the
   parser replays them. Local enumerations are substituted the same way.
+  An anonymous struct or union member of a local class is instantiated as
+  in a class template (`unnamed_member_class`), which declares its member
+  object and injects its members' names (WP-192).
 - **Member templates** are created as in §4.6.
 - **`static_assert`** is evaluated with the substituted condition.
 - **`using` declarations** with packs give a `UsingPack` decl.
@@ -1503,6 +1519,16 @@ initializer-list guides first, with the whole list as the argument.
 Without user guides, an aggregate class template adds the aggregate
 deduction candidate (P1816). An alias template deduces through the
 transformed guides of the template its defining-type-id names (P1814).
+When a non-list argument has already been diagnosed (a `RecoveryExpr` or
+an error type, such as a variable whose own deduction failed), nothing is
+deduced and no further error is emitted. clang likewise deduces nothing
+from an initializer that contains errors (WP-192).
+An implicit guide's parameter types may name member typedefs of the class
+template (libc++ `vector(initializer_list<value_type>)`). Substituting
+the guide's arguments into such a typedef substitutes its underlying type
+and keeps the typedef as sugar, without instantiating the class
+(`Substituter::class_not_instantiated`). clang's guide transform clones
+the typedef instead.
 
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
 implemented and what is deferred (P2582 inherited-constructor guides).

@@ -1036,6 +1036,13 @@ impl Sema<'_, '_> {
             return;
         }
         let e = match init {
+            // Initialized at instantiation ([temp.dep.expr]), the list
+            // kept as written (WP-192: a designated list needs it).
+            Initializer::List(l)
+                if self.ast.types.is_dependent(p.ty) || self.init_list_type_dependent(&l) =>
+            {
+                self.dependent_init_list(&l)
+            }
             Initializer::List(mut l) => {
                 let scalar = !self.ast.types.is_array(p.ty)
                     && self.ast.types.as_record(p.ty).is_none()

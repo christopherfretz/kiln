@@ -1002,23 +1002,77 @@ impl Sema<'_, '_> {
                 crate::init::InitValue::Expr(e) => *e,
                 crate::init::InitValue::List(n) => self.dependent_init_list(n),
             };
+            let e = if it.designator.is_empty() {
+                e
+            } else {
+                // A designated clause is a `DesignatedInitExpr` (clang
+                // `ActOnDesignatedInitializer`), rebuilt at instantiation.
+                let ds: Vec<kiln_ast::expr::Designator> =
+                    it.designator.iter().map(|d| self.designator_ast(d)).collect();
+                let loc = it.designator[0].loc();
+                // A designated pack expansion `.x = u...` is the
+                // expansion of the designated clause (clang parses the
+                // `...` after the whole designation).
+                match crate::templ::pack::expr_pattern(self, e) {
+                    Some(pat) => {
+                        let ellipsis = self.ast.exprs.get(e).loc();
+                        let d = self.builder().designated_init(&ds, pat, loc);
+                        self.builder().pack_expansion_expr(d, ellipsis)
+                    }
+                    None => self.builder().designated_init(&ds, e, loc),
+                }
+            };
             inits.push(e);
         }
-        let e = self.builder().init_list(QualType::VOID, &inits, None, None, l.lbrace, l.rbrace);
-        // Designators are kept beside the list and re-applied when it is
-        // substituted ([dcl.init.aggr]/3.1 is checked at instantiation).
-        if l.items.iter().any(|it| !it.designator.is_empty()) {
-            let d = l.items.iter().map(|it| it.designator.clone()).collect();
-            self.templ.init_designators.insert(e, d);
-        }
-        e
+        self.builder().init_list(QualType::VOID, &inits, None, None, l.lbrace, l.rbrace)
     }
 
-    /// True if any initializer of `l` (recursively) is type-dependent.
+    /// The AST form of designator `d`: a value-dependent array index
+    /// stays as written; a constant one is wrapped in its
+    /// `ConstantExpr` (clang `CheckArrayDesignatorExpr`).
+    fn designator_ast(&mut self, d: &crate::init::Designator) -> kiln_ast::expr::Designator {
+        let crate::init::Designator::Index(e, loc) = *d else { return d.to_ast() };
+        if self.expr_is_value_dependent(e) || self.is_err_expr(e) {
+            return d.to_ast();
+        }
+        let c = crate::conv::lvalue_to_rvalue(self, e);
+        let ctx = kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, loc);
+        let index = match self.eval_int(c, ctx) {
+            Ok(v) => {
+                let ty = self.ast.exprs.get(c).ty();
+                let cv = self.int_const(ty, v);
+                self.builder().constant_expr(c, Some(cv))
+            }
+            Err(_) => e,
+        };
+        kiln_ast::expr::Designator::Index { index, loc }
+    }
+
+    /// Records the written form of the semantic list `sem` built from
+    /// the designated list `l` in a template pattern, for its
+    /// instantiation to rebuild from (§5.6 of spec/ast.md; clang keeps
+    /// the syntactic form of every list).
+    pub(crate) fn note_syntactic_list(&mut self, sem: ExprId, l: &crate::init::InitList) {
+        if self.ast.exprs.get(sem).kind() != ExprKind::InitListExpr
+            || self.ast.exprs.syntactic_list(sem).is_some()
+        {
+            return;
+        }
+        let w = self.dependent_init_list(l);
+        self.ast.exprs.set_syntactic_list(sem, w);
+    }
+
+    /// True if any initializer of `l` (recursively) is type-dependent,
+    /// or an array designator's index is value-dependent (the element it
+    /// names is known only at instantiation).
     pub(crate) fn init_list_type_dependent(&self, l: &crate::init::InitList) -> bool {
-        l.items.iter().any(|it| match &it.value {
-            crate::init::InitValue::Expr(e) => self.expr_is_type_dependent(*e),
-            crate::init::InitValue::List(n) => self.init_list_type_dependent(n),
+        l.items.iter().any(|it| {
+            it.designator.iter().any(|d| {
+                matches!(*d, crate::init::Designator::Index(e, _) if self.expr_is_value_dependent(e))
+            }) || match &it.value {
+                crate::init::InitValue::Expr(e) => self.expr_is_type_dependent(*e),
+                crate::init::InitValue::List(n) => self.init_list_type_dependent(n),
+            }
         })
     }
 

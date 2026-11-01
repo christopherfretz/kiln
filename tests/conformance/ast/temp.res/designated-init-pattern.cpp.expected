@@ -1,0 +1,74 @@
+Dumping f1:
+FunctionTemplateDecl f1
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+`-FunctionDecl f1 'T (int)'
+  |-ParmVarDecl referenced v 'int'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXUnresolvedConstructExpr 'T' list
+        `-InitListExpr 'void'
+          |-DesignatedInitExpr 'void' lvalue
+          | `-DeclRefExpr 'int' lvalue ParmVar 'v' 'int'
+          `-DesignatedInitExpr 'void'
+            `-IntegerLiteral 'int' 2
+
+Dumping f2:
+FunctionTemplateDecl f2
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+`-FunctionDecl f2 'T (T)'
+  |-ParmVarDecl referenced v 'T'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-InitListExpr 'void'
+        |-DesignatedInitExpr 'void' lvalue
+        | `-DeclRefExpr 'T' lvalue ParmVar 'v' 'T'
+        `-DesignatedInitExpr 'void'
+          `-IntegerLiteral 'int' 1
+
+Dumping f3:
+FunctionTemplateDecl f3
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+`-FunctionDecl f3 'int (T)'
+  |-ParmVarDecl referenced v 'T'
+  `-CompoundStmt
+    |-DeclStmt
+    | `-VarDecl referenced a 'int[3]' cinit
+    |   `-InitListExpr 'void'
+    |     `-DesignatedInitExpr 'void' lvalue
+    |       |-DeclRefExpr 'T' lvalue ParmVar 'v' 'T'
+    |       `-ConstantExpr 'int' value=1
+    |         `-IntegerLiteral 'int' 1
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-ArraySubscriptExpr 'int' lvalue
+          |-ImplicitCastExpr 'int *' <ArrayToPointerDecay>
+          | `-DeclRefExpr 'int[3]' lvalue Var 'a' 'int[3]'
+          `-IntegerLiteral 'int' 1
+
+Dumping f4:
+FunctionTemplateDecl f4
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-TemplateTypeParmDecl referenced class depth 0 index 1 ... U
+`-FunctionDecl f4 'T (U...)'
+  |-ParmVarDecl referenced u 'U...' pack
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXUnresolvedConstructExpr 'T' list
+        `-InitListExpr 'void'
+          `-PackExpansionExpr '<dependent type>' lvalue
+            `-DesignatedInitExpr 'void' lvalue
+              `-DeclRefExpr 'U' lvalue ParmVar 'u' 'U...'
+
+Dumping f5:
+FunctionTemplateDecl f5
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+`-FunctionDecl f5 'Pt (T)'
+  |-ParmVarDecl 'T'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXFunctionalCastExpr 'Pt' functional cast to Pt <NoOp>
+        `-InitListExpr 'Pt'
+          |-ImplicitValueInitExpr 'int'
+          |-IntegerLiteral 'int' 1
+          `-IntegerLiteral 'int' 2
+

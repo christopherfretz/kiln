@@ -797,7 +797,12 @@ impl Substituter<'_, '_, '_> {
             }
             // `= {...}` with a dependent type or element: the list
             // as written, list-initializing the substituted type.
-            kiln_ast::expr::ExprKind::InitListExpr if self.needs_rebuild(def) => {
+            // (A `void` list was kept as written for a dependent
+            // parameter type, even with non-dependent elements.)
+            kiln_ast::expr::ExprKind::InitListExpr
+                if self.needs_rebuild(def)
+                    || self.sema.ast.exprs.get(def).ty() == QualType::VOID =>
+            {
                 if let Ok(l) = self.init_list(def) {
                     self.sema.act_on_param_default_list(b, &l);
                 }

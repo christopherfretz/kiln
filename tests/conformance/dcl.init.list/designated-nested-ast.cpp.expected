@@ -1,0 +1,89 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct Pt definition
+| |-FieldDecl x 'int'
+| |-FieldDecl y 'int'
+| `-FieldDecl z 'int'
+|-CXXRecordDecl referenced struct Q definition
+| |-FieldDecl p 'Pt'
+| `-FieldDecl w 'int'
+|-CXXRecordDecl referenced struct V definition
+| |-FieldDecl m 'int'
+| |-CXXRecordDecl struct definition
+| | |-FieldDecl k 'int'
+| | `-FieldDecl n 'int'
+| `-FieldDecl r 'int'
+|-CXXRecordDecl referenced union U definition
+| |-FieldDecl i 'int'
+| `-FieldDecl f 'float'
+|-CXXRecordDecl referenced struct A definition
+| `-FieldDecl k 'int'
+|-CXXRecordDecl referenced struct H definition
+| |-CXXRecordDecl union definition
+| | |-FieldDecl a 'A'
+| | `-FieldDecl b 'int'
+| `-FieldDecl w 'int'
+|-CXXRecordDecl referenced struct W definition
+| |-FieldDecl u 'U'
+| `-FieldDecl a 'int[3]'
+|-VarDecl q1 'Q' cinit
+| `-InitListExpr 'Q'
+|   |-InitListExpr 'Pt'
+|   | |-ImplicitValueInitExpr 'int'
+|   | |-IntegerLiteral 'int' 1
+|   | `-IntegerLiteral 'int' 2
+|   `-ImplicitValueInitExpr 'int'
+|-VarDecl q2 'Q' cinit
+| `-InitListExpr 'Q'
+|   |-InitListExpr 'Pt'
+|   | |-ImplicitValueInitExpr 'int'
+|   | |-IntegerLiteral 'int' 1
+|   | `-IntegerLiteral 'int' 7
+|   `-IntegerLiteral 'int' 8
+|-VarDecl q3 'Q' cinit
+| `-InitListExpr 'Q'
+|   |-InitListExpr 'Pt'
+|   | |-IntegerLiteral 'int' 2
+|   | |-IntegerLiteral 'int' 1
+|   | `-ImplicitValueInitExpr 'int'
+|   `-ImplicitValueInitExpr 'int'
+|-VarDecl v1 'V' cinit
+| `-InitListExpr 'V'
+|   |-ImplicitValueInitExpr 'int'
+|   |-InitListExpr 'V::(anonymous struct at tests/conformance/dcl.init.list/designated-nested-ast.cpp:9:19)'
+|   | |-IntegerLiteral 'int' 1
+|   | `-IntegerLiteral 'int' 2
+|   `-IntegerLiteral 'int' 3
+|-VarDecl v2 'V' cinit
+| `-InitListExpr 'V'
+|   |-ImplicitValueInitExpr 'int'
+|   |-InitListExpr 'V::(anonymous struct at tests/conformance/dcl.init.list/designated-nested-ast.cpp:9:19)'
+|   | |-ImplicitValueInitExpr 'int'
+|   | `-IntegerLiteral 'int' 1
+|   `-IntegerLiteral 'int' 3
+|-VarDecl h1 'H' cinit
+| `-InitListExpr 'H'
+|   |-InitListExpr 'H::(anonymous union at tests/conformance/dcl.init.list/designated-nested-ast.cpp:12:12)' field=a
+|   | `-CXXFunctionalCastExpr 'A' functional cast to A <NoOp>
+|   |   `-InitListExpr 'A'
+|   |     `-IntegerLiteral 'int' 1
+|   `-IntegerLiteral 'int' 2
+|-VarDecl h2 'H' cinit
+| `-InitListExpr 'H'
+|   |-InitListExpr 'H::(anonymous union at tests/conformance/dcl.init.list/designated-nested-ast.cpp:12:12)' field=b
+|   | `-IntegerLiteral 'int' 2
+|   `-ImplicitValueInitExpr 'int'
+|-VarDecl w1 'W' cinit
+| `-InitListExpr 'W'
+|   |-InitListExpr 'U' field=f
+|   | `-FloatingLiteral 'float' 1e0
+|   `-InitListExpr 'int[3]'
+|     |-array_filler: ImplicitValueInitExpr 'int'
+|     |-ImplicitValueInitExpr 'int'
+|     `-IntegerLiteral 'int' 2
+`-VarDecl ar 'int[4]' cinit
+  `-InitListExpr 'int[4]'
+    |-array_filler: ImplicitValueInitExpr 'int'
+    |-IntegerLiteral 'int' 3
+    |-ImplicitValueInitExpr 'int'
+    |-IntegerLiteral 'int' 1
+    `-IntegerLiteral 'int' 5

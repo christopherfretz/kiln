@@ -1429,6 +1429,7 @@ impl<'a> Printer<'a, '_> {
             | "ParenExpr"
             | "ArraySubscriptExpr"
             | "ImplicitValueInitExpr"
+            | "DesignatedInitExpr"
             | "ExprWithCleanups"
             | "CXXStdInitializerListExpr"
             | "CXXDefaultArgExpr"

@@ -449,11 +449,24 @@ needed later). Values of non-constant-context folding (`try_fold`) are
 ### 5.6 Syntactic forms not kept
 - `InitListExpr` keeps only the **semantic** form (one initializer per
   element/field in order; `array_filler` for the tail; union active field).
-  Designators as written are in a cold side table `designators: ExprId ->
-  ListId` for diagnostics and the printer. (clang keeps both forms: ~2× for
-  large initializers; §13 Q7.)
+  (clang keeps both forms: ~2× for large initializers; §13 Q7.)
+- Templates are the exception (WP-192). A braced list in a dependent
+  context is an `InitListExpr` of type `void` holding the clauses as
+  written. A designated clause is a `DesignatedInitExpr` (type `void`,
+  value category of its initializer, located at its first designator)
+  whose designators are in the cold map `designators: ExprId ->
+  [Designator]`. A `Designator` is `Field { name, loc }` (loc = the
+  name) or `Index { index, loc }` (loc = the `[`; a constant index is
+  wrapped in its `ConstantExpr`, a value-dependent one is kept as
+  written). `.m = e...` is a `PackExpansionExpr` of the
+  `DesignatedInitExpr`, as in clang. A non-dependent designated list in
+  a template pattern is analyzed at once, and its written form (the same
+  `void` list) is kept in the cold map `syntactic_list: ExprId -> ExprId`
+  of the semantic list. Instantiation rebuilds from that written form,
+  as clang's `TransformInitListExpr` does from the syntactic form.
+  Outside templates no `DesignatedInitExpr` is built.
 - `ParenExpr` is kept (it changes `decltype` and [temp.over.link]).
-- No `DesignatedInitExpr`, no `CXXRewrittenBinaryOperator` syntactic form
+- No `CXXRewrittenBinaryOperator` syntactic form
   beyond its one child (the semantic call), no `TypoExpr` (typo correction
   is resolved before the node is built).
 
@@ -987,8 +1000,9 @@ file.
    for M2–M6 and measure in M7; the escape hatch is a per-function
    "body arena" that can be dropped after codegen, which the id design
    allows without changing node types.
-7. **Semantic-only `InitListExpr`** (§5.6). *Recommend* yes; designators
-   side table covers diagnostics.
+7. **Semantic-only `InitListExpr`** (§5.6). *Recommend* yes. Designator
+   diagnostics are emitted while the list is checked; template patterns
+   keep the written form (§5.6).
 8. **Single-threaded sema per TU.** *Recommend* yes; parallelism is across
    TUs and inside the Oven's own budgeted evaluation, not inside sema.
 9. **TU-local ids and modules.** *Recommend* defer: M4 imports re-intern

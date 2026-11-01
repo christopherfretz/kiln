@@ -895,6 +895,26 @@ impl<'a> AstNames<'a> {
             ExprKind::InitListExpr => {
                 self.expr_list(exprs.init_list_inits(e), '{', '}', d, out);
             }
+            ExprKind::DesignatedInitExpr => {
+                for x in exprs.designators(e) {
+                    match *x {
+                        crate::expr::Designator::Field { name, .. } => {
+                            out.push('.');
+                            out.push_str(ast.symbols().as_str(name));
+                        }
+                        crate::expr::Designator::Index { index, .. } => {
+                            out.push('[');
+                            self.expr(index, d, out);
+                            out.push(']');
+                        }
+                    }
+                }
+                let init = exprs.designated_init(e);
+                if exprs.get(init).kind() != ExprKind::InitListExpr {
+                    out.push_str(" = ");
+                }
+                self.expr(init, d, out);
+            }
             ExprKind::PackExpansionExpr => {
                 self.expr(exprs.operand(e), d, out);
                 out.push_str("...");
