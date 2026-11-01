@@ -246,6 +246,17 @@ impl Oven {
                     ),
                 )
             }
+            Fault::Mutable { ak: k, field } => {
+                extra.push(Note::new(ast.decls.get(field).loc(), "declared here"));
+                (
+                    site.loc,
+                    format!(
+                        "{} mutable member '{}' is not allowed in a constant expression",
+                        ak::verb(k),
+                        name_of(ast, field)
+                    ),
+                )
+            }
             Fault::VoidCast { from, to } => (
                 site.loc,
                 format!(
