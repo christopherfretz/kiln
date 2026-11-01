@@ -2485,13 +2485,10 @@ impl Sema<'_, '_> {
         // the namespace template's, and the match may depend on the class's
         // arguments ([temp.friend]/1, [temp.over.link]/6). A name that finds
         // nothing is diagnosed now (clang `ActOnFunctionDeclarator`).
-        let templated_friend = friend
-            && d.qualifier.is_some()
-            && !method
-            && self.in_templated_class(Some(lexical));
-        let deferred_friend = templated_friend
-            && (self.templ.cur.is_some() || self.ast.types.is_dependent(ty))
-            && {
+        let templated_friend =
+            friend && d.qualifier.is_some() && !method && self.in_templated_class(Some(lexical));
+        let deferred_friend =
+            templated_friend && (self.templ.cur.is_some() || self.ast.types.is_dependent(ty)) && {
                 let found = self.prev_candidates_dn(dname, d.qualifier);
                 !found.is_empty()
                     && found.iter().all(|&x| {
@@ -2511,10 +2508,13 @@ impl Sema<'_, '_> {
                     .ast
                     .lookup_local(ctx, dname)
                     .iter_with_inline()
-                    .filter(|&(x, via_inline)| !via_inline && self.kind_of(x) == DeclKind::UsingShadow)
+                    .filter(|&(x, via_inline)| {
+                        !via_inline && self.kind_of(x) == DeclKind::UsingShadow
+                    })
                     .map(|(x, _)| x)
                     .collect();
-                invalid_redecl |= self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
+                invalid_redecl |=
+                    self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
             }
             None
         } else if friend && d.qualifier.is_none() {
@@ -2541,7 +2541,8 @@ impl Sema<'_, '_> {
             found.retain(|&x| self.kind_of(x) != DeclKind::UsingShadow);
             let prev = self.pick_prev_function(&found, new_fn);
             if prev.is_none() {
-                invalid_redecl |= self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
+                invalid_redecl |=
+                    self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
             }
             prev
         } else if method {
@@ -2586,7 +2587,9 @@ impl Sema<'_, '_> {
             let (t, p) = self.act_on_global_new_delete_decl(op, ty);
             ty = t;
             prev_ok = p;
-        } else if friend && d.qualifier.is_some() && !quiet_friend
+        } else if friend
+            && d.qualifier.is_some()
+            && !quiet_friend
             && (prev.is_none() || method && !matches_member)
         {
             let msg = self
@@ -4360,7 +4363,9 @@ impl Sema<'_, '_> {
             if corresponds {
                 let msg = self
                     .diag(DiagId::sema_using_decl_friend, loc)
-                    .with_note(self.diag(DiagId::note_using_decl_target, self.ast.decls.get(t).loc()))
+                    .with_note(
+                        self.diag(DiagId::note_using_decl_target, self.ast.decls.get(t).loc()),
+                    )
                     .with_note(self.diag(DiagId::note_using_decl, self.ast.decls.get(s).loc()));
                 self.emit(msg);
                 return true;
