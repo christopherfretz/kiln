@@ -191,6 +191,7 @@ impl CodegenJob<'_> {
                 exceptions: a.predef.exceptions.unwrap_or(true),
                 ident: ident(),
                 outline_atomics: a.outline_atomics.unwrap_or(true),
+                complex_range: a.complex_range(),
             };
             let (r, warnings) = emit_with_diags(&mut tu.ast, &mut tu.oven, &target, &opts);
             for w in warnings {

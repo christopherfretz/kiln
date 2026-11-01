@@ -475,6 +475,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `union { int a; };`) goes to `act_on_decl_spec_only`.
   - That call returns the implicit object of an anonymous union, if
     any, which then joins the `DeclStmt`.
+- **GNU `__extension__`** before a `using` or `template` declaration at
+  namespace, class or block scope is dropped (`skip_extension_before_using`;
+  clang skips it in `ParseExternalDeclaration`): libc++ `__extension__
+  using`, libstdc++ `__extension__ template<>` (WP-237).
+  `tests/conformance/ext.gnu.extension/`. Elsewhere it is a
+  decl-specifier or the unary operator.
 - **GNU asm labels** (`parse_asm_label`, clang's
   `ParseSimpleAsm(ForAsmLabel)`): `asm`/`__asm`/`__asm__` `(`
   string-literal... `)` after a declarator, before its attributes and

@@ -153,6 +153,29 @@ the evaluator's flattened type table.
   member the pointer was formed through: the union's recorded active
   member when it holds the pointee at that offset, else the first member
   that does (WP-213).
+- A closure call prints as clang's (WP-237;
+  `tests/conformance/expr.prim.lambda/constexpr-call-notes.cpp`): the
+  object expression, then `operator()` with a generic lambda's arguments
+  (`f.operator()(0)`, `gl.operator()<int>(0)`); a static call operator has
+  no object (`operator()(0)`); the static invoker of a conversion to a
+  function pointer prints its first argument as the object
+  (`(0->operator()()`). **Deviations:** an immediately invoked lambda
+  prints `....operator()(0)` where clang pretty-prints the whole
+  `LambdaExpr` (body included; kiln has no statement printer), and a
+  closure type in a note's template arguments prints `(lambda)` where
+  clang adds ` at F:L:C` (the Oven's notes have no source manager).
+- A float in a note's message (`value V is outside the range of
+  representable values of type 'T'`) is spelled as clang's
+  `OptionalDiagnostic << APFloat`: `APFloat::toString` with
+  `ceil(p * log10 2)` significant digits (`(p * 59 + 195) / 196` for a
+  `p`-bit significand: 3 for `__bf16`, 4 `_Float16`, 8 `float`, 16
+  `double`, 20 x87 and 35 binary128 `long double`), taken from the exact
+  decimal value and rounded half up on the first dropped digit; plain
+  notation unless that would pad more than three zeros or imply more
+  digits than that precision, else `D.DDDE+X` (`1.0E+300`, `128.1`,
+  `9.999999999999999E+22`, `6.55E+4`); `+Inf`, `-Inf`, `NaN`, `0`, `-0`
+  (WP-237; `fltstr.rs`). A float argument in an "in call to" note is
+  clang's `%e` (`f(1.000000e+10)`).
 - Argument values print as clang's `APValue::printPretty` (WP-241): a
   class or array as a brace list of its bases and members, an array cut
   off after 10 elements with `...`, a member pointer as `&C::m` (`0` when

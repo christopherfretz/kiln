@@ -2,6 +2,7 @@
 //! `NumericLiteralParser` so diagnostics match.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use super::{Diags, LitDiag};
 use crate::diag::LexDiagKind;
@@ -422,11 +423,6 @@ impl<'s> Parser<'s> {
 /// GNU `q`/`w` and MS `i64` suffixes, fixed-point and `_BitInt` suffixes
 /// are not supported. A ud-suffix's universal-character-names are not
 /// expanded.
-#[allow(
-    clippy::too_many_lines,
-    clippy::many_single_char_names,
-    reason = "one pass mirroring clang's parser"
-)]
 pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
     let mut p = Parser { s: spelling, b: spelling.as_bytes(), std, diags: Diags::default() };
     let b = p.b;
@@ -434,237 +430,64 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
         let has_error = p.diags.error;
         Number { class: NumberClass::Invalid, diags: p.diags.list, has_error }
     };
-    let mut radix = Radix::Decimal;
-    let mut saw_period = false;
-    let mut saw_exponent = false;
-    let mut int_range = 0..0;
-    let mut frac_range = 0..0;
-    let mut exponent = 0i64;
-    let mut i;
-    if b.first() == Some(&b'0')
+    let body = if b.first() == Some(&b'0')
         && matches!(b.get(1), Some(b'x' | b'X'))
         && b.get(2).is_some_and(|&c| c.is_ascii_hexdigit() || c == b'.')
     {
-        radix = Radix::Hex;
-        let start = 2;
-        i = p.skip(start, 16);
-        int_range = start..i;
-        let mut has_sig = p.has_digits(start, i);
-        if b.get(i) == Some(&b'.') {
-            i += 1;
-            saw_period = true;
-            let fstart = i;
-            i = p.skip(i, 16);
-            frac_range = fstart..i;
-            if p.has_digits(fstart, i) {
-                has_sig = true;
-                if !p.check_sep(fstart, false) {
-                    return invalid(p);
-                }
-            }
-        }
-        if !has_sig {
-            p.diags.push(LexDiagKind::HexFloatNoSignificand, 0, i);
-            return invalid(p);
-        }
-        if matches!(b.get(i), Some(b'p' | b'P')) {
-            if !p.check_sep(i, true) {
-                return invalid(p);
-            }
-            saw_exponent = true;
-            let Some((e, end)) = p.exponent(i, 2) else {
-                return invalid(p);
-            };
-            exponent = e;
-            if std < Std::Cxx17 {
-                p.diags.push(LexDiagKind::HexFloatExtension, 0, end);
-            }
-            i = end;
-        } else if saw_period {
-            p.diags.push(LexDiagKind::HexFloatNoExponent, 0, i);
-            return invalid(p);
-        }
+        p.hex_body()
     } else if b.first() == Some(&b'0')
         && matches!(b.get(1), Some(b'b' | b'B'))
         && matches!(b.get(2), Some(b'0' | b'1'))
     {
-        radix = Radix::Binary;
-        if std < Std::Cxx14 {
-            p.diags.push(LexDiagKind::BinaryLiteralExtension, 0, 2);
-        }
-        i = p.skip(2, 2);
-        int_range = 2..i;
-        if p.bad_digit(i, 2) {
-            return invalid(p);
-        }
+        p.binary_body()
     } else {
-        let start = 0;
-        if b.first() == Some(&b'0') {
-            radix = Radix::Octal;
-            i = p.skip(1, 8);
-            if b.get(i).is_some_and(u8::is_ascii_digit) {
-                let end_dec = p.skip(i, 10);
-                if matches!(b.get(end_dec), Some(b'.' | b'e' | b'E')) {
-                    i = end_dec;
-                    radix = Radix::Decimal;
-                }
-            }
-        } else {
-            i = p.skip(0, 10);
-        }
-        int_range = start..i;
-        let r = if radix == Radix::Octal { 8 } else { 10 };
-        if p.bad_digit(i, r) {
-            return invalid(p);
-        }
-        if b.get(i) == Some(&b'.') {
-            if !p.check_sep(i, true) {
-                return invalid(p);
-            }
-            i += 1;
-            radix = Radix::Decimal;
-            saw_period = true;
-            if !p.check_sep(i, false) {
-                return invalid(p);
-            }
-            let fstart = i;
-            i = p.skip(i, 10);
-            frac_range = fstart..i;
-        }
-        if matches!(b.get(i), Some(b'e' | b'E')) {
-            if !p.check_sep(i, true) {
-                return invalid(p);
-            }
-            radix = Radix::Decimal;
-            saw_exponent = true;
-            let Some((e, end)) = p.exponent(i, 10) else {
-                return invalid(p);
-            };
-            exponent = e;
-            i = end;
-        }
-    }
-    let floating = saw_period || saw_exponent;
+        p.decimal_body()
+    };
+    let Some(body) = body else {
+        return invalid(p);
+    };
+    let floating = body.saw_period || body.saw_exponent;
     // Suffix.
-    let suffix_begin = i;
-    if !p.check_sep(i, true) {
+    let suffix_begin = body.end;
+    if !p.check_sep(suffix_begin, true) {
         return invalid(p);
     }
-    let mut unsigned = false;
-    let mut size = IntSize::None;
-    let mut fsuffix = FloatSuffix::None;
-    let mut has_size = false;
-    let mut imaginary = false;
-    let cxx23 = std >= Std::Cxx23;
-    while let Some(&c) = b.get(i) {
-        let rest = &b[i..];
-        let ok = match c {
-            b'f' | b'F' if floating && !has_size => {
-                has_size = true;
-                let (s, n) = match &rest[1..] {
-                    [b'1', b'6', ..] => (FloatSuffix::F16, 3),
-                    [b'3', b'2', ..] if cxx23 => (FloatSuffix::F32, 3),
-                    [b'6', b'4', ..] if cxx23 => (FloatSuffix::F64, 3),
-                    [b'1', b'2', b'8', ..] if cxx23 => (FloatSuffix::F128, 4),
-                    _ => (FloatSuffix::F, 1),
-                };
-                fsuffix = s;
-                i += n;
-                true
-            }
-            b'b' | b'B' if floating && !has_size && cxx23 => {
-                let upper = c == b'B';
-                let want: &[u8] = if upper { b"BF16" } else { b"bf16" };
-                if rest.starts_with(want) {
-                    has_size = true;
-                    fsuffix = FloatSuffix::BF16;
-                    i += 4;
-                    true
-                } else {
-                    false
-                }
-            }
-            b'u' | b'U' if !floating && !unsigned => {
-                unsigned = true;
-                i += 1;
-                true
-            }
-            b'l' | b'L' if !has_size => {
-                has_size = true;
-                if rest.get(1) == Some(&c) {
-                    if floating {
-                        false
-                    } else {
-                        size = IntSize::LongLong;
-                        i += 2;
-                        true
-                    }
-                } else {
-                    if floating {
-                        fsuffix = FloatSuffix::L;
-                    } else {
-                        size = IntSize::Long;
-                    }
-                    i += 1;
-                    true
-                }
-            }
-            b'z' | b'Z' if !floating && !has_size => {
-                has_size = true;
-                size = IntSize::Size;
-                i += 1;
-                true
-            }
-            // GNU imaginary constants (once).
-            b'i' | b'I' | b'j' | b'J' if !imaginary => {
-                imaginary = true;
-                i += 1;
-                true
-            }
-            _ => false,
-        };
-        if !ok {
-            break;
-        }
-    }
+    let mut sx = p.suffixes(suffix_begin, floating);
     let mut ud_suffix = None;
     let suffix = &spelling[suffix_begin..];
-    if imaginary && is_valid_ud_suffix(suffix, std) {
+    if sx.imaginary && is_valid_ud_suffix(suffix, std) {
         // clang: `1i`, `1.0if`, `1il` (and the integer `1if`) keep the
         // parsed suffix pieces and are also ud-suffixed (lookup failure
         // falls back to the imaginary literal).
         ud_suffix = Some(suffix);
-    } else if i < b.len() {
+    } else if sx.end < b.len() {
         if is_valid_ud_suffix(suffix, std) {
             ud_suffix = Some(suffix);
-            unsigned = false;
-            size = IntSize::None;
-            fsuffix = FloatSuffix::None;
-            imaginary = false;
+            sx = Suffixes { end: sx.end, ..Suffixes::default() };
         } else {
             p.diags.push(LexDiagKind::InvalidSuffix { floating }, suffix_begin, b.len());
             return invalid(p);
         }
-    } else if size == IntSize::Size && std < Std::Cxx23 {
+    } else if sx.size == IntSize::Size && std < Std::Cxx23 {
         p.diags.push(LexDiagKind::SizeSuffixExtension, suffix_begin, b.len());
     }
     let class = if floating {
         NumberClass::Floating(FloatLiteral {
-            radix,
-            int_digits: digits(&spelling[int_range]),
-            frac_digits: digits(&spelling[frac_range]),
-            exponent,
-            suffix: fsuffix,
+            radix: body.radix,
+            int_digits: digits(&spelling[body.int_range]),
+            frac_digits: digits(&spelling[body.frac_range]),
+            exponent: body.exponent,
+            suffix: sx.fsuffix,
             ud_suffix,
-            imaginary,
+            imaginary: sx.imaginary,
         })
     } else {
         NumberClass::Integer(IntegerLiteral {
-            radix,
-            digits: digits(&spelling[int_range]),
-            suffix: IntSuffix { unsigned, size },
+            radix: body.radix,
+            digits: digits(&spelling[body.int_range]),
+            suffix: IntSuffix { unsigned: sx.unsigned, size: sx.size },
             ud_suffix,
-            imaginary,
+            imaginary: sx.imaginary,
         })
     };
     let has_error = p.diags.error;
@@ -672,4 +495,247 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
         return invalid(p);
     }
     Number { class, diags: p.diags.list, has_error }
+}
+
+/// The digits of a pp-number before its suffix: the radix, the integer
+/// and fraction digit ranges (separators included), the exponent value
+/// and where the suffix begins.
+#[derive(Debug)]
+struct Body {
+    radix: Radix,
+    saw_period: bool,
+    saw_exponent: bool,
+    int_range: Range<usize>,
+    frac_range: Range<usize>,
+    exponent: i64,
+    end: usize,
+}
+
+/// The standard suffix pieces of a pp-number and where they end.
+#[derive(Debug, Default)]
+struct Suffixes {
+    unsigned: bool,
+    size: IntSize,
+    fsuffix: FloatSuffix,
+    imaginary: bool,
+    end: usize,
+}
+
+impl Parser<'_> {
+    /// `0x` digits, an optional `.` fraction and the `p` exponent
+    /// ([lex.fcon] hexadecimal-floating-point-literal); `None` after an
+    /// error.
+    fn hex_body(&mut self) -> Option<Body> {
+        let b = self.b;
+        let start = 2;
+        let mut i = self.skip(start, 16);
+        let mut body = Body {
+            radix: Radix::Hex,
+            saw_period: false,
+            saw_exponent: false,
+            int_range: start..i,
+            frac_range: 0..0,
+            exponent: 0,
+            end: 0,
+        };
+        let mut has_sig = self.has_digits(start, i);
+        if b.get(i) == Some(&b'.') {
+            i += 1;
+            body.saw_period = true;
+            let fstart = i;
+            i = self.skip(i, 16);
+            body.frac_range = fstart..i;
+            if self.has_digits(fstart, i) {
+                has_sig = true;
+                if !self.check_sep(fstart, false) {
+                    return None;
+                }
+            }
+        }
+        if !has_sig {
+            self.diags.push(LexDiagKind::HexFloatNoSignificand, 0, i);
+            return None;
+        }
+        if matches!(b.get(i), Some(b'p' | b'P')) {
+            if !self.check_sep(i, true) {
+                return None;
+            }
+            body.saw_exponent = true;
+            let (e, end) = self.exponent(i, 2)?;
+            body.exponent = e;
+            if self.std < Std::Cxx17 {
+                self.diags.push(LexDiagKind::HexFloatExtension, 0, end);
+            }
+            i = end;
+        } else if body.saw_period {
+            self.diags.push(LexDiagKind::HexFloatNoExponent, 0, i);
+            return None;
+        }
+        body.end = i;
+        Some(body)
+    }
+
+    /// `0b` digits ([lex.icon] binary-literal); `None` after an error.
+    fn binary_body(&mut self) -> Option<Body> {
+        if self.std < Std::Cxx14 {
+            self.diags.push(LexDiagKind::BinaryLiteralExtension, 0, 2);
+        }
+        let i = self.skip(2, 2);
+        if self.bad_digit(i, 2) {
+            return None;
+        }
+        Some(Body {
+            radix: Radix::Binary,
+            saw_period: false,
+            saw_exponent: false,
+            int_range: 2..i,
+            frac_range: 0..0,
+            exponent: 0,
+            end: i,
+        })
+    }
+
+    /// Octal or decimal digits, an optional `.` fraction and `e`
+    /// exponent (a leading-`0` spelling with a fraction or exponent is
+    /// decimal); `None` after an error.
+    fn decimal_body(&mut self) -> Option<Body> {
+        let b = self.b;
+        let mut radix = Radix::Decimal;
+        let mut i;
+        if b.first() == Some(&b'0') {
+            radix = Radix::Octal;
+            i = self.skip(1, 8);
+            if b.get(i).is_some_and(u8::is_ascii_digit) {
+                let end_dec = self.skip(i, 10);
+                if matches!(b.get(end_dec), Some(b'.' | b'e' | b'E')) {
+                    i = end_dec;
+                    radix = Radix::Decimal;
+                }
+            }
+        } else {
+            i = self.skip(0, 10);
+        }
+        let mut body = Body {
+            radix,
+            saw_period: false,
+            saw_exponent: false,
+            int_range: 0..i,
+            frac_range: 0..0,
+            exponent: 0,
+            end: 0,
+        };
+        let r = if radix == Radix::Octal { 8 } else { 10 };
+        if self.bad_digit(i, r) {
+            return None;
+        }
+        if b.get(i) == Some(&b'.') {
+            if !self.check_sep(i, true) {
+                return None;
+            }
+            i += 1;
+            body.radix = Radix::Decimal;
+            body.saw_period = true;
+            if !self.check_sep(i, false) {
+                return None;
+            }
+            let fstart = i;
+            i = self.skip(i, 10);
+            body.frac_range = fstart..i;
+        }
+        if matches!(b.get(i), Some(b'e' | b'E')) {
+            if !self.check_sep(i, true) {
+                return None;
+            }
+            body.radix = Radix::Decimal;
+            body.saw_exponent = true;
+            let (e, end) = self.exponent(i, 10)?;
+            body.exponent = e;
+            i = end;
+        }
+        body.end = i;
+        Some(body)
+    }
+
+    /// The standard suffix pieces from `i` (clang's `NumericLiteralParser`
+    /// suffix loop): `u`, `l`/`ll`, `z`, `f`/`f16`/`f32`/`f64`/`f128`,
+    /// `bf16` and the GNU imaginary `i`/`j`, each at most once.
+    fn suffixes(&self, mut i: usize, floating: bool) -> Suffixes {
+        let b = self.b;
+        let mut sx = Suffixes::default();
+        let mut has_size = false;
+        let cxx23 = self.std >= Std::Cxx23;
+        while let Some(&c) = b.get(i) {
+            let rest = &b[i..];
+            let ok = match c {
+                b'f' | b'F' if floating && !has_size => {
+                    has_size = true;
+                    let (s, n) = match &rest[1..] {
+                        [b'1', b'6', ..] => (FloatSuffix::F16, 3),
+                        [b'3', b'2', ..] if cxx23 => (FloatSuffix::F32, 3),
+                        [b'6', b'4', ..] if cxx23 => (FloatSuffix::F64, 3),
+                        [b'1', b'2', b'8', ..] if cxx23 => (FloatSuffix::F128, 4),
+                        _ => (FloatSuffix::F, 1),
+                    };
+                    sx.fsuffix = s;
+                    i += n;
+                    true
+                }
+                b'b' | b'B' if floating && !has_size && cxx23 => {
+                    let upper = c == b'B';
+                    let want: &[u8] = if upper { b"BF16" } else { b"bf16" };
+                    if rest.starts_with(want) {
+                        has_size = true;
+                        sx.fsuffix = FloatSuffix::BF16;
+                        i += 4;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                b'u' | b'U' if !floating && !sx.unsigned => {
+                    sx.unsigned = true;
+                    i += 1;
+                    true
+                }
+                b'l' | b'L' if !has_size => {
+                    has_size = true;
+                    if rest.get(1) == Some(&c) {
+                        if floating {
+                            false
+                        } else {
+                            sx.size = IntSize::LongLong;
+                            i += 2;
+                            true
+                        }
+                    } else {
+                        if floating {
+                            sx.fsuffix = FloatSuffix::L;
+                        } else {
+                            sx.size = IntSize::Long;
+                        }
+                        i += 1;
+                        true
+                    }
+                }
+                b'z' | b'Z' if !floating && !has_size => {
+                    has_size = true;
+                    sx.size = IntSize::Size;
+                    i += 1;
+                    true
+                }
+                // GNU imaginary constants (once).
+                b'i' | b'I' | b'j' | b'J' if !sx.imaginary => {
+                    sx.imaginary = true;
+                    i += 1;
+                    true
+                }
+                _ => false,
+            };
+            if !ok {
+                break;
+            }
+        }
+        sx.end = i;
+        sx
+    }
 }
