@@ -272,9 +272,9 @@ Redeclaration and linkage rules:
   - redefinition
   - incomplete parameter and return types (with a forward-declaration
     note)
-  - falling off the end of a non-`void` function (a structural
-    analysis, `falls_off`). This warning is suppressed when the
-    function had errors.
+  - falling off the end of a non-`void` function (`falls_off`, the
+    clang CheckFallThrough port in `try_stmt/reach.rs`, §7.5). This
+    warning is suppressed when the function had errors.
 - `main` must return `int` ([basic.start.main]/2). Falling off the end
   of `main` returns 0, so it never warns.
 - **Default arguments** (`act_on_param_default_init`,
@@ -1194,6 +1194,12 @@ diagnostics and IR.
     from rvalue to reference type`).
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold.
+- **Pointer arithmetic on `void` or a function type** ([expr.add]/1;
+  `check_pointer_arith`, WP-219): `+`, `-`, `++`, `--` and compound
+  assignment on a pointer to `void` or to a function type is an error in
+  C++ (`arithmetic on a pointer to void`, `arithmetic on pointers to the
+  function type 'void ()'` for two pointer operands), not the GNU C
+  extension (`-Wgnu-pointer-arith`, kept for C).
 - **Member-pointer equality** ([expr.eq]/4, clang's
   `CheckCompareOperands`, WP-085): when either operand of a comparison
   is a member pointer:
@@ -1341,10 +1347,15 @@ an lvalue of type `const std::type_info`.
 - References and top-level cv are ignored; a cv-qualified expression
   operand gets a `NoOp` cast to its unqualified type, as in clang.
 - A class type must be complete.
-- The operand is always unevaluated: M2 has no polymorphic classes, so
-  the node (`typeid_expr`, sema-class.md §5.1) is built with
-  `potentially_evaluated` false. The Oven and codegen do not evaluate
-  `typeid` yet.
+- A glvalue of polymorphic class type is potentially evaluated
+  (`typeid_expr`, sema-class.md §5.1); other operands are unevaluated.
+- `-Wpotentially-evaluated-expression` (WP-219, `side_effects.rs`
+  `check_typeid_side_effects`; in `-Wunevaluated-expression`): a
+  potentially evaluated operand with possible side effects (as for
+  `-Wunevaluated-expression`, but calls count) warns `expression with
+  side effects will be evaluated despite being used as an operand to
+  'typeid'` at clang's expression location. Not in instantiations, not
+  for instantiation-dependent operands.
 
 ### 5.7 `dynamic_cast`
 Parsed; `act_on_cast` reports `dynamic_cast` as not supported
@@ -2068,6 +2079,40 @@ and `DiagnoseMisalignedMembers`:
     that range's `hi`, both as `duplicate case value` at the range with
     a `previous case defined here` note. Template instantiation goes
     through the same entry points.
+  - `-Wswitch-bool` (`check_switch_bool`, before promotion): a
+    condition clang's `isKnownToHaveBooleanValue` accepts (a `bool`,
+    `!`, a comparison, `&&`/`||`, a bitwise or `?:` of such, an
+    assignment/comma whose result is such) warns `switch condition has
+    boolean value` at the `switch` keyword.
+  - Enumeration and constant checks (`switch_enum.rs`
+    `check_switch_cases`, WP-219), in clang `ActOnFinishSwitchStmt`
+    order, after `check_case_ranges`; skipped for a dependent or invalid
+    condition:
+    1. no `default`: `-Wswitch-default` (off by default) `'switch'
+       missing 'default' label`;
+    2. nothing more if the case list is broken (an unfolded label, a
+       duplicate value, an overlapping range);
+    3. no `default` and a constant condition: `no case matching constant
+       switch condition 'N'` (no group) when no case or range holds it;
+       nothing more either way;
+    4. only a complete enumeration with enumerators (the condition
+       before promotion) continues;
+    5. a case value, then each range's `lo` and `hi`, that is no
+       enumerator's value: `case value not in enumerated type 'E'`
+       [-Wswitch]; a condition naming a const variable of static or
+       thread storage duration of the same enumeration is exempt;
+    6. enumerators sorted by value (first of equal values kept),
+       deprecated, `[[maybe_unused]]` and unused ones skipped, not
+       covered by a case or range: none and a `default` is `default
+       label in switch which covers all enumeration values`
+       [-Wcovered-switch-default, off]; otherwise `enumeration value 'A'
+       not handled in switch` (two: `values 'A' and 'B'`, three: `'A',
+       'B', and 'C'`, more: `N enumeration values not handled in switch:
+       'A', 'B', 'C'...`) [-Wswitch] without a `default`, or the same with
+       `not explicitly handled` [-Wswitch-enum, off] with one, at the
+       condition's expression location.
+    Like clang these repeat in every instantiation (emitted with
+    `allow_duplicate`).
 - **Jumps:**
   - `break` and `continue` outside a loop or switch are errors.
   - `return`:
@@ -2163,8 +2208,18 @@ and `DiagnoseMisalignedMembers`:
   toward enumeration coverage (WP-205). Not modeled: implicit
   destructors marked `noreturn`; indirect `goto` needs no model because
   kiln does not parse `&&label` / `goto *p`. The fall-off analysis
-  behind -Wreturn-type / -Winvalid-noreturn (`falls_off`) still ignores
-  enumeration coverage and constant switches.
+  behind -Wreturn-type / -Winvalid-noreturn (`falls_off` →
+  `fall_off_kind`, WP-219) is the same walk run to a fixed point,
+  classifying the live predecessors of the exit as in clang
+  CheckFallThrough: a live `return`/`co_return`; a throw with no
+  enclosing try (fake edge); a live `noreturn` call (abnormal edge); a
+  live try dispatch with no catch-all and no enclosing try (abnormal
+  edge; a dispatch with no predecessor, i.e. no throw and no nested try
+  without catch-all in its block, counts as live, as clang's CFG
+  rescans it); and the end of the body (plain edge). No plain edge is
+  `Never`; a plain edge plus any other is `Maybe` (`... in all control
+  paths`); a plain edge alone is `Always`. A function with `if
+  consteval` is `Never`.
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element

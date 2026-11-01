@@ -84,11 +84,11 @@ fn warning_flag_matrix() {
 fn unknown_options() {
     let (sm, _) = source("p.c", "");
     let run = |args: &[&str]| text(&sm, args, |_| {});
-    // Deviation: suggestions come from kiln's groups only. clang 19 ties
-    // among its larger table here and suggests nothing.
+    // clang 19 ties among its table here and suggests nothing; kiln's
+    // groups tie too (most/gnu/...).
     assert_eq!(
         run(&["-Wbogus"]),
-        "warning: unknown warning option '-Wbogus'; did you mean '-Wmost'? [-Wunknown-warning-option]\n1 warning generated.\n"
+        "warning: unknown warning option '-Wbogus' [-Wunknown-warning-option]\n1 warning generated.\n"
     );
     assert_eq!(
         run(&["-Wno-macro-redefine"]),
@@ -100,7 +100,7 @@ fn unknown_options() {
     );
     assert_eq!(
         run(&["-Werror=bogus"]),
-        "warning: unknown warning option '-Werror=bogus'; did you mean '-Werror=most'? [-Wunknown-warning-option]\n1 warning generated.\n"
+        "warning: unknown warning option '-Werror=bogus' [-Wunknown-warning-option]\n1 warning generated.\n"
     );
     assert_eq!(
         run(&["-Rbogus"]),
