@@ -437,8 +437,9 @@ impl Sema<'_, '_> {
             return Ok(());
         }
         let too_many = args.len() > params.len();
-        let too_few =
-            params.get(args.len()..).is_some_and(|rest| rest.iter().any(|&p| self.template_default(p).is_none()));
+        let too_few = params
+            .get(args.len()..)
+            .is_some_and(|rest| rest.iter().any(|&p| self.template_default(p).is_none()));
         if too_many || too_few {
             self.diag_template_arity(ttp, too_many, l);
             return Err(());

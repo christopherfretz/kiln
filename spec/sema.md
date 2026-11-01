@@ -1712,8 +1712,10 @@ The vector operators themselves are summarized in spec/types.md
   in templates: a `throw` that can escape a non-throwing function is
   `-Wexceptions` `'f' has a non-throwing exception specification but
   can still throw` with `function declared non-throwing here` (or the
-  destructor/deallocator note); a `[[noreturn]]` function that can fall
-  off is `-Winvalid-noreturn`.
+  destructor/deallocator note); in an instantiated function template
+  specialization the name carries its arguments, unqualified (`'k<int>'`,
+  `except.spec/throw-in-nothrow-specialization.cpp`); a `[[noreturn]]`
+  function that can fall off is `-Winvalid-noreturn`.
 - Initialization (one condition in `init.rs`, flagged): brace elision
   ([dcl.init.aggr]/16) only descends into an aggregate element; a class
   with a user-provided constructor is copy-initialized from the element
