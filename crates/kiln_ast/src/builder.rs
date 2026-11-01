@@ -1360,6 +1360,20 @@ impl<'a> AstBuilder<'a> {
         }
         match n.kind() {
             DeclKind::NonTypeTemplateParm => deps |= ExprDeps::VALUE_INST,
+            // [temp.dep.constexpr]/2.3: a static member function that is
+            // a dependent member of the current instantiation (clang's
+            // `computeDependence` for `DeclRefExpr`): `if constexpr
+            // (rank() > 0)` in a member of `extents` waits for
+            // instantiation, where `rank()` reads `__rank_`.
+            DeclKind::CXXMethod
+                if self.ast.decls.function(d).is_some_and(|f| {
+                    f.spec.storage() == crate::decl::FnStorage::Static
+                }) && n
+                    .ctx()
+                    .is_some_and(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)) =>
+            {
+                deps |= ExprDeps::VALUE_INST;
+            }
             DeclKind::Var => {
                 if let Some(v) = self.ast.decls.var(d) {
                     let potentially_constant =
