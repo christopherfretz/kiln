@@ -931,8 +931,7 @@ Later uses of it are silent.
   namespace-scope declarations; if one of them, or an earlier
   instantiation, already has a body, the instantiated definition
   reports "redefinition of 'g'" with the instantiation note and
-  "previous definition is here" (libc++ `swap` friends of
-  `__compressed_pair`-like templates next to namespace `swap`).
+  "previous definition is here".
 - A friend template, or a friend specialization (`friend void f<>(T)`),
   is substituted and then matched against the namespace-scope templates
   when it is instantiated.
