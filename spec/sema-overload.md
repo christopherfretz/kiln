@@ -264,7 +264,10 @@ notes "requires N argument(s), but M was/were provided" (`min == max`),
 
 ### 3.2 Object parameter ([over.match.funcs]/4–5)
 The implicit object parameter is `cv X&` (no ref-qualifier or `&`) or `cv
-X&&` (`&&`), `X` the naming class, `cv` from `FuncInfo::this_quals`. The
+X&&` (`&&`), `X` the naming class, `cv` from `FuncInfo::this_quals`; a
+member found through a using-declaration (a `UsingShadow`) takes the
+using-declaration's class as `X` ([over.match.funcs.general]/4, clang's
+`ActingContext`; `object_ics_found`, WP-146). The
 object argument is an lvalue for `x.f`, `p->f`, implicit `this`; a prvalue
 for `S().f()`. `object_ics(obj_ty, obj_vk, method)` binds directly — no UDC,
 no temporary (/5); a method without ref-qualifier lets an rvalue bind to

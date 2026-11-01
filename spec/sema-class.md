@@ -667,8 +667,12 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   ([namespace.udecl]/19). A copy/move constructor of a base whose first
   parameter's referred type is reference-related to the argument's class
   is not viable when the argument is (derived from) that base
-  (`CandidateFailure::InhCtorSlice`, [over.match.funcs.general]/8; no note
-  for copy/move constructors, as clang). In `better_viable`, a constructor
+  (`CandidateFailure::InhCtorSlice`, [over.match.funcs.general]/8; checked
+  before arity and conversions as clang, so it overrides those failures;
+  no note for non-template copy/move constructors, as clang
+  `isCopyOrMoveConstructor`). `has_init_list_ctor` and the
+  [over.match.list] phase-1 candidates see inherited initializer-list
+  constructors (`ctors_and_inherited`, WP-146). In `better_viable`, a constructor
   of the derived class beats an inherited one when neither is otherwise
   better (/2.7; clang does not check the same-parameter-types condition and
   neither does kiln).
@@ -680,23 +684,45 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   `constexpr` when the base constructor is and a defaulted default
   constructor of the class could be; deleted when the base constructor is
   or when a defaulted default constructor would be ([class.inhctor.init]/1,
-  [class.default.ctor]/2). Defined on first odr-use
+  [class.default.ctor]/2; clang `ShouldDeleteSpecialMember` with an
+  `InheritedConstructorInfo`: the inherited bases through their inherited
+  constructors, every other subobject's default constructor and
+  destructor for deletion and access, uninitialized reference and const
+  members; WP-146). A use is clang's "constructor inherited by 'D' from
+  base class 'B' is implicitly deleted" with the "constructor inherited
+  by 'D' is implicitly deleted because ..." note; selection reports it as
+  deleted (`__is_constructible` is false). A second `using B::B;` naming
+  the same base in one class is "redeclaration of using declaration"
+  with "previous using declaration" and no shadows
+  (`previous_inheriting_using`, WP-146). Defined on first odr-use
   (`define_inheriting_ctor`): `CXXInheritedCtorInitExpr` for each inherited
   base (`inherited_bases`: the nominated base and, through virtual bases,
   the base whose constructor is ultimately inherited, clang
   `InheritedConstructorInfo`), every other subobject as a defaulted default
   constructor would. The exception specification is clang's
   `ComputeInheritingCtorExceptionSpec`.
-- **Gaps.** Only the default-constructibility of the remaining subobjects
-  is checked for deletion (other deleted-subobject cases are clang's
-  `ShouldDeleteSpecialMember` on the inheriting constructor); a variadic
-  base constructor is inherited like any other (clang inlines the
-  inheriting constructor at each call instead, codegen.md); a repeated
-  `using B::B;` in the same class is not diagnosed; `has_init_list_ctor`
-  does not look through shadows; [over.match.funcs]/4 (the implied object
-  argument of an inherited constructor) is not modelled separately; no
-  "non-literal type" note for a constexpr inheriting constructor of a class
-  with virtual bases.
+- **Virtual bases** ([basic.types.general]/10). A class with a virtual
+  base is not a literal type: a `constexpr` variable of it (or of an
+  array of it) is clang's `RequireLiteralType` error "constexpr variable
+  cannot have non-literal type" with "struct/class with virtual base
+  class(es) is not a literal type" at the class and "virtual base class
+  declared here" per virtual base, in `virtual_bases` order
+  (`constexpr_var_virtual_base`); constructing one inside a constant
+  evaluation traps in the Oven with clang's `CheckLiteralType` note
+  "non-literal type 'X' cannot be used in a constant expression" (WP-146).
+  A C-variadic base constructor is inlined at each call by codegen
+  (codegen.md); a template-variadic one is inherited per specialization,
+  as clang.
+- **Gaps.** The constexpr-variable check runs with the initializer check,
+  so after initializer errors (clang: at the declaration); it covers only
+  virtual bases (other non-literal classes keep the "non-constexpr
+  constructor" note), and `constinit` keeps the inherited-constructor
+  note. For an array aggregate in a constant evaluation kiln names the
+  element type, clang the array (`'M[2]'`). In an instantiated class the
+  shadows are in declaration order; clang lists those replayed from a
+  non-dependent pattern using-declaration in reverse (dump and candidate
+  order only). Shadow hiding by the implicit constructors matches clang
+  (both declare them at `}` for a class with inherited constructors).
 
 ### 4.11 During construction and destruction ([class.cdtor])
 Sema warns on a direct call of a pure virtual function from a ctor/dtor of its
@@ -1357,7 +1383,8 @@ Constructors, destructors, conversion functions, `= default` and
   "attempt to use"); deferred and late exception specifications of
   implicit members; the pre-C++23 `constexpr` rules; the operator delete
   of a virtual destructor ([class.dtor]/16); the `constexpr`-with-virtual-
-  base diagnostic; `explicit` on friends and parameters (WP-068b);
+  base diagnostic (WP-146: constexpr variables and constant evaluation,
+§4.10); `explicit` on friends and parameters (WP-068b);
   injected-class-names in the implicit AST dump (xfail
   `ast/class.implicit/eager.cpp`).
 

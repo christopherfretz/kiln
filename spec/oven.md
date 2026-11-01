@@ -999,12 +999,15 @@ arrays of class type are list-initialized (`Holder h{}` with a `C
 cs[2]` member); `ensure_body` defines implicit virtual destructors.
 
 **Left for later (owners).**
-- Virtual bases: objects with virtual bases cannot be constructed
-  (`VIRTUAL_UNSUPPORTED` traps on a `VirtualBase` ctor-init and a class
-  cast through a virtual base; an inheriting constructor through a virtual
-  base is never constexpr-suitable, so its trap is clang's
-  `constructor inherited from base class 'V' cannot be used in a constant
-  expression` note), so dispatch,
+- Virtual bases: a class with a virtual base is not a literal type
+  ([basic.types.general]/10), so constructing one is never a constant
+  expression: `construct` traps first with clang's `CheckLiteralType` note
+  `non-literal type 'X' cannot be used in a constant expression`, also
+  for an inheriting constructor through a virtual base (WP-146; the
+  evaluated variable itself is rejected by sema, sema-class.md §4.10).
+  The remaining `VIRTUAL_UNSUPPORTED` traps (a `VirtualBase` ctor-init, a
+  class cast through a virtual base) are therefore unreachable from
+  valid code, so dispatch,
   `dynamic_cast` and `typeid` never meet one; the subobject list marks
   virtual subobjects and phase 2 treats one as `Fault::Invalid`. Owner:
   a follow-up WP (object layout of virtual bases in `ty.rs`).
