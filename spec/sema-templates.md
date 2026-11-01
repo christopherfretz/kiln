@@ -600,8 +600,10 @@ Inside a member of a class whose definition has a dependent base, an
 id-expression that names a non-static member (or an overload set or
 member template containing one) of a class not known to be a base of
 `*this` is an implicit `this->Q::name`. It is built as a dependent member
-access (`dependent_member` with no base, implicit `this`) and resolved at
-instantiation (`Sema::member_via_dependent_base`; clang `IMA_Dependent`).
+access on an implicit `this` object (`Sema::dependent_implicit_member`)
+and resolved at instantiation (`Sema::member_via_dependent_base`; clang
+`IMA_Dependent`); when `Q` turns out not to be a base, the error is
+`'Q::name' is not a member of class 'D<O>'`.
 libc++ `basic_ostream::operator<<(int)` calls `ios_base::flags()` through
 the virtual base `basic_ios<C>` (WP-201).
 
