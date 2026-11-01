@@ -517,6 +517,38 @@ Ignored, when the system-header rule drops it, or when it is a duplicate
 once-per-depth instantiation-context notes only to a diagnostic that
 will print, so a dropped duplicate does not consume them.
 
+#### 7.4.1 Duplicates clang prints (WP-238)
+
+clang has no deduplication, so wherever it runs one check twice on one
+construct it prints the same diagnostic (and notes) twice at one
+location. kiln follows clang in two ways:
+
+- Where the repetition is observable behaviour clang users rely on,
+  each use of the construct reports again, sema reproduces it with
+  `allow_duplicate`; the corpus then lists the group once per print,
+  as clang does. Known: an access error inside an alias template
+  reported at the alias's `using` once per use (sema-templates.md §4.10,
+  class/access.rs `AccessCheck::repeat`,
+  `tests/conformance/class.access/type-names-alias-template.cpp`);
+  the unused-result warnings of an expression statement clang rebuilds
+  (above); the other `allow_duplicate` callers in kiln_sema each mirror
+  a check clang re-runs.
+- Where clang repeats only because its implementation runs one check
+  twice, kiln prints once (the `(id, span, context)` key). Tests encode
+  the second print with the `dup(clang)` suffix of the primary `diag:`
+  directive (spec/harness.md "Directives"): the group is expected twice
+  from clang and once from kiln, so strict tests stay exact under both.
+  Known: "implicit instantiation of undefined template" for a
+  declarator's type named through a qualifier into an undefined
+  specialization (`U<int>::In x;`, at namespace and class scope; clang
+  completes the qualifier for the nested-name-specifier and again for the
+  declaration,
+  `tests/conformance/temp.inst/undefined-template-qualifier-dup.cpp`).
+  New cases are added to this list with their test.
+
+`-verify` has no such suffix: clang `expected-*` counts there are
+clang's (D14).
+
 ### 7.5 Summary
 
 `summary()` is `None` with no warnings and no errors, else clang's
@@ -883,7 +915,7 @@ those diagnostics were errors.
 | D11 | JSON is kiln's own schema (with `option`, `fixits`, severity `fatal`), not clang's SARIF. | Built for the test harness. |
 | D12 | `pedantic` contains exactly the groupless extensions. | clang's `-Wpedantic` also has named subgroups kiln does not have yet. |
 | D13 | *(Resolved by WP-183: `#pragma clang diagnostic` state, §5.5.)* | |
-| D14 | `-verify` sees identical diagnostics at one location once (§7.4), so a test needing two of them with two directives fails under kiln. | Engine deduplication; no libc++ test is known to depend on it. |
+| D14 | `-verify` sees identical diagnostics at one location once (§7.4), so a test needing two of them with two directives fails under kiln (harness tests encode the known cases with `dup(clang)`, §7.4.1). | Engine deduplication; no libc++ test is known to depend on it. |
 | D15 | A `-verify` report lists at most 10000 missing occurrences per level (§11.5). | Bounds the output of a count like `4000000000`. |
 
 ## 13. Integration notes and open questions

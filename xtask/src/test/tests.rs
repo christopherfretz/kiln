@@ -156,6 +156,7 @@ fn seed_corpus_passes_with_clang() {
         flag(!s.args.is_empty(), "args");
         flag(s.diags.iter().any(|d| d.severity == directives::Severity::Note), "diag-note");
         flag(!s.diags.is_empty(), "diag");
+        flag(s.diags.iter().any(|d| d.clang_dup), "diag-dup");
         flag(s.strict_diags, "strict-diags");
         flag(matches!(s.stdout, Some(StdoutExpect::Inline(_))), "stdout");
         flag(matches!(s.stdout, Some(StdoutExpect::File(_))), "stdout-file");
@@ -198,6 +199,7 @@ fn seed_corpus_passes_with_clang() {
         "compile-fail",
         "compile-ok",
         "diag",
+        "diag-dup",
         "diag-note",
         "env",
         "exit",

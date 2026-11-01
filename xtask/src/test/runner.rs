@@ -455,8 +455,10 @@ impl Test<'_> {
     }
 
     fn check_diags(&self, spec: &TestSpec, diags: &[Diagnostic]) -> Check {
+        let clang = self.cfg.compiler_kind == CompilerKind::Clang;
+        let directives = diag_parse::expand_clang_dups(&spec.diags, clang);
         let report = diag_parse::match_diags(
-            &spec.diags,
+            &directives,
             diags,
             &|f| self.in_test_file(f),
             spec.strict_diags,
@@ -464,7 +466,7 @@ impl Test<'_> {
         if report.is_ok() {
             Ok(())
         } else {
-            Err(Problem::Fail(diag_parse::explain(&report, &spec.diags, diags)))
+            Err(Problem::Fail(diag_parse::explain(&report, &directives, diags)))
         }
     }
 
