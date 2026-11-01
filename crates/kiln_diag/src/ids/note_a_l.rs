@@ -89,6 +89,7 @@ note_enters_statement_expression = Note (0) "jump enters a statement expression"
 note_entity_declared_at = Note (1) "{0} declared here";
 note_entity_declared_here = Note (1) "{0} declared here";
 note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
+note_exception_spec_evaluation_here = Note (1) "in evaluation of exception specification for '{0}' needed here";
 note_exits_cxx_catch = Note (0) "jump exits catch block";
 note_exits_cxx_try = Note (0) "jump exits try block";
 note_exits_dtor = Note (0) "jump exits scope of variable with non-trivial destructor";
@@ -102,6 +103,7 @@ note_explicitly_deleted_here = Note (1) "{0} has been explicitly marked deleted 
 note_expr_divide_by_zero = Note (0) "division by zero";
 note_expr_evaluates_to = Note (3) "expression evaluates to '{0} {1} {2}'";
 note_extern_c_begins_here = Note (0) "extern \"C\" language linkage specification begins here";
+note_extern_c_global_conflict = Note (1) "declared {0:in global scope|with C language linkage} here";
 note_final_overrider = Note (2) "final overrider of '{0}' in '{1}'";
 note_fn_template_spec_matched = Note (2) "function template '{0}' matches specialization {1}";
 note_for_range_begin_end = Note (4) "selected '{0:begin|end}' {1:function|template }{2} with iterator type {3}";

@@ -13,26 +13,71 @@
 //! diagnostic: "template template argument has different template
 //! parameters than its corresponding template template parameter" at
 //! the argument, with a note at the differing parameters.
+//!
+//! A non-type parameter of `P` whose type names an earlier parameter of
+//! the enclosing template (`template<class T, template<T> class P>`) is
+//! compared with the prior arguments substituted, as clang substitutes
+//! them into `P` before matching (`SubstDecl` of the template template
+//! parameter); `A`'s parameters are never substituted.
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::{DeclId, TemplateParamListId};
+use kiln_ast::{DeclId, QualType, TemplateParamListId};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
 
 use crate::Sema;
+use crate::templ::args::MultiLevelArgs;
+use crate::templ::subst::Substituter;
+
+/// The substitutions for the two parameter lists being matched: `P`'s
+/// (the enclosing template's prior arguments) and `A`'s (none). Swapped
+/// when a nested template template parameter of `P` becomes the
+/// argument.
+#[derive(Clone, Copy)]
+struct Sides<'m> {
+    p: Option<&'m MultiLevelArgs>,
+    a: Option<&'m MultiLevelArgs>,
+}
+
+impl Sides<'_> {
+    fn swap(self) -> Self {
+        Sides { p: self.a, a: self.p }
+    }
+}
 
 impl Sema<'_, '_> {
     /// [temp.arg.template]/3: whether template `a` (a class or alias
     /// template, or a template template parameter) matches template
-    /// template parameter `p`; diagnoses a mismatch at `at`.
-    pub(crate) fn check_template_template_arg(&mut self, p: DeclId, a: DeclId, at: Loc) -> bool {
+    /// template parameter `p`; diagnoses a mismatch at `at`. `prior`
+    /// substitutes the enclosing template's earlier arguments into `p`'s
+    /// dependent non-type parameter types.
+    pub(crate) fn check_template_template_arg(
+        &mut self,
+        p: DeclId,
+        a: DeclId,
+        at: Loc,
+        prior: &MultiLevelArgs,
+    ) -> bool {
         let pl = self.ast.template_parm(p).and_then(|x| x.params);
         let al = match self.kind_of(a) {
             DeclKind::TemplateTemplateParm => self.ast.template_parm(a).and_then(|x| x.params),
             _ => self.ast.template_info(a).map(|x| x.params),
         };
         let (Some(pl), Some(al)) = (pl, al) else { return true };
-        self.ttp_at_least_as_specialized(al, pl) || self.ttp_lists_equal(al, pl, at)
+        let sides = Sides { p: Some(prior), a: None };
+        self.ttp_at_least_as_specialized(al, pl, sides) || self.ttp_lists_equal(al, pl, at, sides)
+    }
+
+    /// The type of non-type parameter `d`, with `subst` applied when it
+    /// is dependent (unchanged if substitution fails).
+    fn ttp_nttp_type(&mut self, d: DeclId, subst: Option<&MultiLevelArgs>) -> Option<QualType> {
+        let ty = self.ast.decls.get(d).ty()?;
+        let Some(m) = subst.filter(|m| m.substituted() > 0) else { return Some(ty) };
+        if !self.is_dependent_type(ty) {
+            return Some(ty);
+        }
+        let at = self.ast.decls.get(d).loc();
+        Some(Substituter::new(self, m).ty(ty, at).unwrap_or(ty))
     }
 
     fn list_params(&self, l: TemplateParamListId) -> Vec<DeclId> {
@@ -55,16 +100,17 @@ impl Sema<'_, '_> {
         &mut self,
         a: TemplateParamListId,
         p: TemplateParamListId,
+        sides: Sides<'_>,
     ) -> bool {
         let (pa, pp) = (self.list_params(a), self.list_params(p));
         let mut j = 0;
         for &x in &pp {
             if self.is_pack_parm(x) {
                 // An expansion `X...` fills every remaining parameter.
-                return pa[j..].iter().all(|&y| self.ttp_param_fits(x, y));
+                return pa[j..].iter().all(|&y| self.ttp_param_fits(x, y, sides));
             }
             let Some(&y) = pa.get(j) else { return false };
-            if !self.ttp_param_fits(x, y) {
+            if !self.ttp_param_fits(x, y, sides) {
                 return false;
             }
             if !self.is_pack_parm(y) {
@@ -75,14 +121,15 @@ impl Sema<'_, '_> {
     }
 
     /// Whether `P`'s parameter `x`, as an argument, fits `A`'s `y`.
-    fn ttp_param_fits(&mut self, x: DeclId, y: DeclId) -> bool {
+    fn ttp_param_fits(&mut self, x: DeclId, y: DeclId, sides: Sides<'_>) -> bool {
         let (kx, ky) = (self.kind_of(x), self.kind_of(y));
         if kx != ky {
             return false;
         }
         match kx {
             DeclKind::NonTypeTemplateParm => {
-                let (Some(tx), Some(ty)) = (self.ast.decls.get(x).ty(), self.ast.decls.get(y).ty())
+                let (Some(tx), Some(ty)) =
+                    (self.ttp_nttp_type(x, sides.p), self.ttp_nttp_type(y, sides.a))
                 else {
                     return true;
                 };
@@ -98,7 +145,7 @@ impl Sema<'_, '_> {
                 let lx = self.ast.template_parm(x).and_then(|i| i.params);
                 let ly = self.ast.template_parm(y).and_then(|i| i.params);
                 match (lx, ly) {
-                    (Some(lx), Some(ly)) => self.ttp_at_least_as_specialized(lx, ly),
+                    (Some(lx), Some(ly)) => self.ttp_at_least_as_specialized(lx, ly, sides.swap()),
                     _ => true,
                 }
             }
@@ -109,7 +156,13 @@ impl Sema<'_, '_> {
     /// clang's `TemplateParameterListsAreEqual(A, P, Complain,
     /// TPL_TemplateTemplateArgumentMatch)`: `P`'s pack matches any number
     /// of `A`'s parameters of its kind; diagnoses the first difference.
-    fn ttp_lists_equal(&mut self, a: TemplateParamListId, p: TemplateParamListId, at: Loc) -> bool {
+    fn ttp_lists_equal(
+        &mut self,
+        a: TemplateParamListId,
+        p: TemplateParamListId,
+        at: Loc,
+        sides: Sides<'_>,
+    ) -> bool {
         let (pa, pp) = (self.list_params(a), self.list_params(p));
         let mut j = 0;
         for &x in &pp {
@@ -118,14 +171,14 @@ impl Sema<'_, '_> {
                     self.ttp_arity_mismatch(a, p, pa.len() > pp.len(), at);
                     return false;
                 };
-                if !self.ttp_kinds_match(y, x, at) {
+                if !self.ttp_kinds_match(y, x, at, sides) {
                     return false;
                 }
                 j += 1;
                 continue;
             }
             while let Some(&y) = pa.get(j) {
-                if !self.ttp_kinds_match(y, x, at) {
+                if !self.ttp_kinds_match(y, x, at, sides) {
                     return false;
                 }
                 j += 1;
@@ -162,7 +215,7 @@ impl Sema<'_, '_> {
 
     /// clang's `MatchTemplateParameterKind` (`TPL_TemplateTemplateArgumentMatch`)
     /// for `A`'s parameter `y` against `P`'s `x`.
-    fn ttp_kinds_match(&mut self, y: DeclId, x: DeclId, at: Loc) -> bool {
+    fn ttp_kinds_match(&mut self, y: DeclId, x: DeclId, at: Loc, sides: Sides<'_>) -> bool {
         let (ky, kx) = (self.kind_of(y), self.kind_of(x));
         let (ly, lx) = (self.ast.decls.get(y).loc(), self.ast.decls.get(x).loc());
         if ky != kx {
@@ -190,7 +243,7 @@ impl Sema<'_, '_> {
         match ky {
             DeclKind::NonTypeTemplateParm => {
                 if let (Some(ty), Some(tx)) =
-                    (self.ast.decls.get(y).ty(), self.ast.decls.get(x).ty())
+                    (self.ttp_nttp_type(y, sides.a), self.ttp_nttp_type(x, sides.p))
                     && !self.is_dependent_type(ty)
                     && !self.is_dependent_type(tx)
                     && !self.ast.types.same_type(ty, tx)
@@ -210,7 +263,7 @@ impl Sema<'_, '_> {
                 let ly = self.ast.template_parm(y).and_then(|i| i.params);
                 let lx = self.ast.template_parm(x).and_then(|i| i.params);
                 match (ly, lx) {
-                    (Some(ly), Some(lx)) => self.ttp_lists_equal(ly, lx, at),
+                    (Some(ly), Some(lx)) => self.ttp_lists_equal(ly, lx, at, sides),
                     _ => true,
                 }
             }
