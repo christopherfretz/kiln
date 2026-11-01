@@ -330,7 +330,10 @@ impl Collect<'_> {
                 self.out.push(e);
             }
             // clang `EmitBuiltinExpr` first tries the call as a constant.
-            ExprKind::CallExpr if crate::builtins::is_fold_candidate(ast, e) => self.out.push(e),
+            ExprKind::CallExpr if crate::builtins::is_fold_candidate(ast, e) => {
+                self.out.push(e);
+                self.out.extend(crate::builtins::folded_arg(ast, e));
+            }
             // clang `EmitCXXNewAllocSize` tries the array bound as a constant.
             ExprKind::CXXNewExpr => self.out.extend(ast.exprs.new_extra(e).array_size),
             ExprKind::StmtExpr => self.stmt(ast.exprs.stmt_expr_body(e)),
@@ -344,6 +347,11 @@ impl Collect<'_> {
                     self.expr(d);
                 }
                 self.default_arg(e, None, 0);
+            }
+            // A default member initializer use with its own source-location
+            // values: its immediate invocations are evaluated per use.
+            ExprKind::CXXDefaultInitExpr if ast.exprs.source_loc_values(e).is_some() => {
+                self.default_init(e, None, 0);
             }
             ExprKind::ImplicitCastExpr
                 if ast.exprs.cast_kind(e) == CastKind::LValueToRValue
@@ -376,6 +384,19 @@ impl Collect<'_> {
         self.immediates(d, at, depth);
     }
 
+    /// As [`Collect::default_arg`], for the default member initializer
+    /// use `u`.
+    fn default_init(&mut self, u: ExprId, at: Option<ExprId>, depth: u32) {
+        let ast = self.ast;
+        let f = ast.exprs.default_init_field(u);
+        let Some(d) = ast.decls.field(f).and_then(|x| x.init) else { return };
+        if depth > 32 {
+            return;
+        }
+        let at = at.or_else(|| ast.exprs.source_loc_values(u).is_some().then_some(u));
+        self.immediates(d, at, depth);
+    }
+
     /// The unevaluated immediate invocations in `root`, a default argument
     /// or default member initializer (evaluated in the use `at`).
     fn immediates(&mut self, root: ExprId, at: Option<ExprId>, depth: u32) {
@@ -387,6 +408,9 @@ impl Collect<'_> {
                     self.imm.push((x, at));
                 }
                 ExprKind::CXXDefaultArgExpr => self.default_arg(x, at, depth + 1),
+                ExprKind::CXXDefaultInitExpr if at.is_some() => {
+                    self.default_init(x, at, depth + 1);
+                }
                 ExprKind::CXXNoexceptExpr
                 | ExprKind::TypeTraitExpr
                 | ExprKind::ArrayTypeTraitExpr

@@ -296,6 +296,11 @@ pub(crate) mod bi {
     pub const SUBNORMAL: u32 = 4;
     pub const ZERO: u32 = 5;
     pub const SIGNALING: u32 = 6;
+    /// `__builtin_isfpclass`: whether `a`'s class is in the LLVM
+    /// `FPClassTest` mask `b` (0x1 sNaN, 0x2 qNaN, 0x4 -inf, 0x8 -normal,
+    /// 0x10 -subnormal, 0x20 -zero, 0x40 +zero, 0x80 +subnormal,
+    /// 0x100 +normal, 0x200 +inf).
+    pub const MASK: u32 = 7;
 
     /// Operations of `FP_OP`: `|a|`; `a` with the sign of `b`; `fmax`
     /// and `fmin` (a NaN operand yields the other; `-0 < +0`); the

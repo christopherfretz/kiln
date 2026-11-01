@@ -2294,7 +2294,11 @@ impl Compiler<'_> {
                 self.rv_inner(op, dst);
             }
             ExprKind::CXXDefaultInitExpr => match self.default_init_of(e) {
-                Some(x) => self.rv_inner(x, dst),
+                Some(x) => {
+                    let saved = self.enter_default_arg(e);
+                    self.rv_inner(x, dst);
+                    self.srcloc = saved;
+                }
                 None => self.unsupported(e),
             },
             ExprKind::ArrayInitIndexExpr => match self.array_index {
@@ -3335,7 +3339,10 @@ impl Compiler<'_> {
             }
             ExprKind::CXXDefaultInitExpr if self.default_init_of(e).is_some() => {
                 let x = self.default_init_of(e).unwrap_or(e);
-                self.lv(x, acc)
+                let saved = self.enter_default_arg(e);
+                let r = self.lv(x, acc);
+                self.srcloc = saved;
+                r
             }
             ExprKind::CXXThrowExpr => {
                 self.throw_invalid(e);
@@ -3557,7 +3564,10 @@ impl Compiler<'_> {
             }
             ExprKind::CXXDefaultInitExpr if self.default_init_of(e).is_some() => {
                 let x = self.default_init_of(e).unwrap_or(e);
-                return self.init_inner(x, p, ty);
+                let saved = self.enter_default_arg(e);
+                self.init_inner(x, p, ty);
+                self.srcloc = saved;
+                return;
             }
             ExprKind::ArrayInitLoopExpr => {
                 self.array_init_loop(e, p, ty);
@@ -4209,7 +4219,8 @@ fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
 }
 
 impl Compiler<'_> {
-    /// Enters default argument `e`: the source-location builtins in it
+    /// Enters default argument (or default member initializer use) `e`:
+    /// the source-location builtins in it
     /// take the values of this use unless an enclosing default argument
     /// already set them. Returns the scope to restore.
     fn enter_default_arg(&mut self, e: ExprId) -> Option<ExprId> {
