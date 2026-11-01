@@ -1,0 +1,22 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct A definition
+| `-FieldDecl referenced x 'int'
+|-FunctionDecl copy 'void (A &, const A &)'
+| |-ParmVarDecl used a 'A &'
+| |-ParmVarDecl used b 'const A &'
+| `-CompoundStmt
+|   `-CXXOperatorCallExpr 'A' lvalue '='
+|     |-ImplicitCastExpr 'A &(*)(const A &) noexcept' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 'A &(const A &) noexcept' lvalue CXXMethod 'operator=' 'A &(const A &) noexcept'
+|     |-DeclRefExpr 'A' lvalue ParmVar 'a' 'A &'
+|     `-DeclRefExpr 'const A' lvalue ParmVar 'b' 'const A &'
+`-FunctionDecl move 'void (A &, A &&)'
+  |-ParmVarDecl used a 'A &'
+  |-ParmVarDecl used b 'A &&'
+  `-CompoundStmt
+    `-CXXOperatorCallExpr 'A' lvalue '='
+      |-ImplicitCastExpr 'A &(*)(A &&) noexcept' <FunctionToPointerDecay>
+      | `-DeclRefExpr 'A &(A &&) noexcept' lvalue CXXMethod 'operator=' 'A &(A &&) noexcept'
+      |-DeclRefExpr 'A' lvalue ParmVar 'a' 'A &'
+      `-CXXStaticCastExpr 'A' xvalue static_cast<A &&> <NoOp>
+        `-DeclRefExpr 'A' lvalue ParmVar 'b' 'A &&'
