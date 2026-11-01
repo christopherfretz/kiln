@@ -554,15 +554,9 @@ impl Sema<'_, '_> {
         ) {
             return None;
         }
-        if self
-            .ast
-            .decls
-            .function(f)
-            .is_some_and(|x| {
-                x.spec.storage() == kiln_ast::decl::FnStorage::Static
-                    || x.spec.has_explicit_object()
-            })
-        {
+        if self.ast.decls.function(f).is_some_and(|x| {
+            x.spec.storage() == kiln_ast::decl::FnStorage::Static || x.spec.has_explicit_object()
+        }) {
             return None;
         }
         let class = self.ast.decls.get(f).ctx()?;

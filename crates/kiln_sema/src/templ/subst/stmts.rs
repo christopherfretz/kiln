@@ -428,7 +428,9 @@ impl Substituter<'_, '_, '_> {
         let if_exists =
             self.sema.lookup_qualified(ctx, name, crate::lookup::LookupKind::All).is_empty();
         let q = crate::using::Qualifier { ctx, nns, loc };
-        self.sema.act_on_using_declarator(loc, Some(q), dname, loc, if_exists, None).ok_or(SubstFail)
+        self.sema
+            .act_on_using_declarator(loc, Some(q), dname, loc, if_exists, None)
+            .ok_or(SubstFail)
     }
 
     /// A declaration of a declaration statement.

@@ -8,10 +8,10 @@
 use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::{ArgListId, TemplateNameId};
+use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TagKeyword, TemplateArg, TypeView};
 use kiln_ast::{DeclId, QualType};
-use kiln_ast::names::{DeclName, DeclNameView};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 

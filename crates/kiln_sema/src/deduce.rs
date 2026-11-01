@@ -104,11 +104,7 @@ impl Sema<'_, '_> {
         if t == QualType::ERROR {
             return None;
         }
-        let dependent = self
-            .ast
-            .types
-            .qflags(t)
-            .intersects(kiln_ast::types::TypeFlags::DEPENDENT);
+        let dependent = self.ast.types.qflags(t).intersects(kiln_ast::types::TypeFlags::DEPENDENT);
         if !dependent {
             let c = self.ast.types.canonical(t);
             let bad = match self.ast.types.view(c.ty()) {

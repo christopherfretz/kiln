@@ -404,7 +404,8 @@ impl Parser<'_, '_> {
             }
             self.parse_attributes(&mut attrs);
             let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
-            if let Some(d) = self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists, ellipsis)
+            if let Some(d) =
+                self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists, ellipsis)
             {
                 out.push(d);
             }
