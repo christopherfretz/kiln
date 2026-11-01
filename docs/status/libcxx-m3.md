@@ -90,7 +90,7 @@ Among the clusters that are rarely first:
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `65530f5` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `1214c494` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -99,8 +99,8 @@ Among the clusters that are rarely first:
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 385.3 s |
-| peak RSS | 72 MiB (largest single process, `std/utilities/meta/meta.unary/meta.unary.comp/is_compound.pass.cpp`; gnu-time) |
+| wall time | 428.5 s |
+| peak RSS | 72 MiB (largest single process, `std/strings/string.view/string.view.modifiers/remove_suffix.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -164,7 +164,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 10 | 6 | 22 | `compile: expected member name or '…' after declaration specifiers` | `std/language.support/support.limits/support.limits.general/map.version.compile.pass.cpp` | `expected member name or ';' after declaration specifiers` |
 | 11 | 6 | 18 | `compile: initialization by an initializer-list constructor is not supported yet` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `initialization by an initializer-list constructor is not supported yet` |
 | 12 | 6 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/equal.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
-| 13 | 5 | 46 | `compile: static assertion expression is not an integral constant expression` | `std/strings/string.view/string.view.find/find_first_of_pointer_size.pass.cpp` | `static assertion expression is not an integral constant expression` |
+| 13 | 5 | 45 | `compile: static assertion expression is not an integral constant expression` | `std/strings/string.view/string.view.find/find_first_of_pointer_size.pass.cpp` | `static assertion expression is not an integral constant expression` |
 | 14 | 5 | 15 | `compile: kiln: not yet implemented: substitution into CXXTryStmt` | `std/strings/string.view/string.view.access/at.pass.cpp` | `kiln: not yet implemented: substitution into CXXTryStmt` |
 | 15 | 4 | 11 | `compile: static assertion failed due to requirement '…':` | `std/containers/sequences/array/size_and_alignment.compile.pass.cpp` | `static assertion failed due to requirement 'alignof(std::array<short, 0>) == alignof(short)':` |
 | 16 | 4 | 10 | `compile: static assertion failed due to requirement '…'` | `std/numerics/bit/bit.cast/bit_cast.compile.pass.cpp` | `static assertion failed due to requirement '!...'` |
@@ -178,7 +178,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 24 | 2 | 2 | `compile: braced-init-list operands of a functional cast is not supported yet` | `std/utilities/utility/pairs/pairs.pair/ctor.brace-init.pass.cpp` | `braced-init-list operands of a functional cast is not supported yet` |
 | 25 | 1 | 12 | `compile: no type named '…' in '…'` | `std/utilities/meta/meta.trans/meta.trans.other/common_reference.compile.pass.cpp` | `no type named 'type' in 'std::__1::common_reference<B &, D &>'` |
 | 26 | 1 | 8 | `compile: ambiguous partial specializations of '…'` | `std/utilities/meta/meta.logical/conjunction.compile.pass.cpp` | `ambiguous partial specializations of 'conjunction<std::true_type>'` |
-| 27 | 1 | 7 | `compile: invalid operands to binary expression ('…' (aka '…') and '…' (aka '…'))` | `std/language.support/support.limits/support.limits.general/charconv.version.compile.pass.cpp` | `invalid operands to binary expression ('chars_format' (aka 'std::__1::chars_format') and 'chars_format' (aka 'std::__1::chars_format'))` |
+| 27 | 1 | 8 | `compile: invalid operands to binary expression ('…' (aka '…') and '…' (aka '…'))` | `std/language.support/support.limits/support.limits.general/charconv.version.compile.pass.cpp` | `invalid operands to binary expression ('chars_format' (aka 'std::__1::chars_format') and 'chars_format' (aka 'std::__1::chars_format'))` |
 | 28 | 1 | 6 | `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` | `std/utilities/utility/mem.res/mem.res.aliases/header_list_synop2.pass.cpp` | `static_cast from '__base_pointer' (aka 'std::__1::__list_node_base<std::__1::__list_imp<int, polymorphic_allocator<int>>::value_type, std::__1::__list_imp<int, …` |
 | 29 | 1 | 3 | `compile: static assertion failed due to requirement '…': Types differ unexpectedly` | `std/utilities/meta/meta.trans/meta.trans.other/decay.pass.cpp` | `static assertion failed due to requirement 'test_macros_detail::is_same<int (int) const, std::decay<int (int) const>::type>::value': Types differ unexpectedly` |
 | 30 | 1 | 1 | `compile: IR lowering failed: IrError { kind: BadCall, message: "call with N arguments to a function taking N" }` | `std/language.support/support.limits/limits/numeric.limits/default.pass.cpp` | `IR lowering failed: IrError { kind: BadCall, message: "call with 1 arguments to a function taking 2" }` |
