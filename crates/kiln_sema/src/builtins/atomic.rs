@@ -60,10 +60,6 @@ impl Sema<'_, '_> {
             return None;
         }
         let is_c11 = atomic::is_c11(id);
-        let is_n = matches!(
-            id,
-            atomic::LOAD_N | atomic::STORE_N | atomic::EXCHANGE_N | atomic::CMPXCHG_N
-        );
         let ptr = conv::decay(self, args[0]);
         if self.is_err_expr(ptr) {
             return None;
@@ -83,8 +79,7 @@ impl Sema<'_, '_> {
         let mut val = atom;
         if is_c11 {
             let Some(v) = self.ast.types.as_atomic(atom) else {
-                let msg =
-                    self.diag(DiagId::sema_atomic_op_needs_atomic, at).arg(self.ty_arg(pt));
+                let msg = self.diag(DiagId::sema_atomic_op_needs_atomic, at).arg(self.ty_arg(pt));
                 self.emit(msg);
                 return None;
             };
@@ -105,7 +100,8 @@ impl Sema<'_, '_> {
         }
         let ptr_at = self.begin_loc(ptr);
         if !self.require_complete(atom, ptr_at) {
-            let msg = self.diag(DiagId::sema_incomplete_type_required, ptr_at).arg(self.ty_arg(atom));
+            let msg =
+                self.diag(DiagId::sema_incomplete_type_required, ptr_at).arg(self.ty_arg(atom));
             self.emit(self.incomplete_note(msg, atom));
             return None;
         }
@@ -117,6 +113,57 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         }
+        let is_ptr = self.atomic_value_ok(id, form, at, pt, atom, val, ptr_at)?;
+        // The pointee's cv-qualifiers do not reach the value type.
+        let val = self.ast.types.unqualified(val);
+        let result = match form {
+            Form::Copy | Form::LoadCopy | Form::GnuXchg | Form::Init => QualType::VOID,
+            Form::C11CmpXchg | Form::GnuCmpXchg => QualType::BOOL,
+            _ => val,
+        };
+        let by_value = if atomic::by_value(id) { val } else { pt };
+        let conv_args = self.atomic_convert_args(form, args, ptr, val, by_value, is_ptr)?;
+        // clang's `SubExprs`: `ptr`, the order, then the values, the
+        // failure order and `weak` as the form has them.
+        let subs: Vec<ExprId> = {
+            let a = &conv_args;
+            match form {
+                Form::Init | Form::Load => vec![a[0], a[1]],
+                Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => {
+                    vec![a[0], a[2], a[1]]
+                }
+                Form::GnuXchg => vec![a[0], a[3], a[1], a[2]],
+                Form::C11CmpXchg => vec![a[0], a[3], a[1], a[4], a[2]],
+                Form::GnuCmpXchg => vec![a[0], a[4], a[1], a[5], a[2], a[3]],
+            }
+        };
+        self.atomic_check_orders(id, form, &subs);
+        if matches!(self.ast.types.canonical_view(val), TypeView::BitInt { .. }) {
+            let at = self.eloc(ptr);
+            let msg = self.diag(DiagId::sema_atomic_builtin_bit_int_prohibited, at);
+            self.emit(msg);
+            return None;
+        }
+        Some(self.builder().atomic_expr(id, &subs, result, at, rparen))
+    }
+
+    /// The value-type constraints of clang `BuildAtomicExpr` on `atom`
+    /// (the pointee of `pt`) and its value type `val`: whether `val` is a
+    /// pointer, or `None` after a diagnostic.
+    #[allow(clippy::too_many_arguments)]
+    fn atomic_value_ok(
+        &mut self,
+        id: u32,
+        form: Form,
+        at: Loc,
+        pt: QualType,
+        atom: QualType,
+        val: QualType,
+        ptr_at: Loc,
+    ) -> Option<bool> {
+        let is_c11 = atomic::is_c11(id);
+        let is_n =
+            matches!(id, atomic::LOAD_N | atomic::STORE_N | atomic::EXCHANGE_N | atomic::CMPXCHG_N);
         let is_int = conv::rank::is_integral_or_unscoped_enum(self, val)
             || matches!(self.ast.types.canonical_view(val), TypeView::BitInt { .. });
         let is_ptr = self.ast.types.is_pointer(val);
@@ -147,7 +194,8 @@ impl Sema<'_, '_> {
                 && let Some(p) = self.ast.types.pointee(val)
                 && !self.require_complete(p, ptr_at)
             {
-                let msg = self.diag(DiagId::sema_incomplete_type_required, ptr_at).arg(self.ty_arg(p));
+                let msg =
+                    self.diag(DiagId::sema_incomplete_type_required, ptr_at).arg(self.ty_arg(p));
                 self.emit(self.incomplete_note(msg, p));
                 return None;
             }
@@ -160,19 +208,25 @@ impl Sema<'_, '_> {
             return None;
         }
         if !is_c11 && !self.is_trivially_copyable_type(atom) && !self.is_scalar(atom) {
-            let msg =
-                self.diag(DiagId::sema_atomic_op_needs_trivial_copy, at).arg(self.ty_arg(pt));
+            let msg = self.diag(DiagId::sema_atomic_op_needs_trivial_copy, at).arg(self.ty_arg(pt));
             self.emit(msg);
             return None;
         }
-        // The pointee's cv-qualifiers do not reach the value type.
-        let val = self.ast.types.unqualified(val);
-        let result = match form {
-            Form::Copy | Form::LoadCopy | Form::GnuXchg | Form::Init => QualType::VOID,
-            Form::C11CmpXchg | Form::GnuCmpXchg => QualType::BOOL,
-            _ => val,
-        };
-        let by_value = if atomic::by_value(id) { val } else { pt };
+        Some(is_ptr)
+    }
+
+    /// The operands after `ptr` converted to the types the form takes
+    /// (clang `BuildAtomicExpr`), in call order, or `None` after a
+    /// diagnostic.
+    fn atomic_convert_args(
+        &mut self,
+        form: Form,
+        args: &[ExprId],
+        ptr: ExprId,
+        val: QualType,
+        by_value: QualType,
+        is_ptr: bool,
+    ) -> Option<Vec<ExprId>> {
         let mut conv_args = Vec::with_capacity(args.len());
         conv_args.push(ptr);
         for (i, &a) in args.iter().enumerate().skip(1) {
@@ -200,27 +254,20 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        // clang's `SubExprs`: `ptr`, the order, then the values, the
-        // failure order and `weak` as the form has them.
-        let subs: Vec<ExprId> = {
-            let a = &conv_args;
-            match form {
-                Form::Init | Form::Load => vec![a[0], a[1]],
-                Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => {
-                    vec![a[0], a[2], a[1]]
-                }
-                Form::GnuXchg => vec![a[0], a[3], a[1], a[2]],
-                Form::C11CmpXchg => vec![a[0], a[3], a[1], a[4], a[2]],
-                Form::GnuCmpXchg => vec![a[0], a[4], a[1], a[5], a[2], a[3]],
-            }
-        };
+        Some(conv_args)
+    }
+
+    /// `-Watomic-memory-ordering` for a constant order of `subs` (clang
+    /// `BuildAtomicExpr`).
+    fn atomic_check_orders(&mut self, id: u32, form: Form, subs: &[ExprId]) {
         let cmpxchg = matches!(form, Form::C11CmpXchg | Form::GnuCmpXchg);
         if form != Form::Init
             && let Some(o) = self.fold_int(subs[1])
             && !valid_order(id, o)
         {
             let at = self.begin_loc(subs[1]);
-            let msg = self.diag(DiagId::sema_atomic_op_invalid_memory_order, at).arg(u32::from(cmpxchg));
+            let msg =
+                self.diag(DiagId::sema_atomic_op_invalid_memory_order, at).arg(u32::from(cmpxchg));
             self.emit(msg);
         }
         if subs.len() >= 5
@@ -231,12 +278,5 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_atomic_op_invalid_memory_order, at).arg(2);
             self.emit(msg);
         }
-        if matches!(self.ast.types.canonical_view(val), TypeView::BitInt { .. }) {
-            let at = self.eloc(ptr);
-            let msg = self.diag(DiagId::sema_atomic_builtin_bit_int_prohibited, at);
-            self.emit(msg);
-            return None;
-        }
-        Some(self.builder().atomic_expr(id, &subs, result, at, rparen))
     }
 }

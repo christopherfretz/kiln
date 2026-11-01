@@ -674,7 +674,6 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
-            | ExprKind::AtomicExpr
             | ExprKind::CXXNewExpr
             | ExprKind::CXXDeleteExpr => {
                 for c in exprs.children(e, lists) {
@@ -734,6 +733,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             ExprKind::CXXDefaultArgExpr => {
                 let param = exprs.default_arg_param(e);
                 if let Some(c) = self.ast.decls.param(param).and_then(|p| p.default_arg) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            ExprKind::AtomicExpr => {
+                for c in exprs.children(e, lists) {
                     kids.push((Node::Expr(c), None));
                 }
             }

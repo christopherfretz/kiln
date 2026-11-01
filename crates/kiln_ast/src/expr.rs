@@ -2228,9 +2228,7 @@ impl ExprArena {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
                 v.extend(self.init_lists[n.b as usize].array_filler);
             }
-            ExprKind::RecoveryExpr | ExprKind::AtomicExpr => {
-                v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
-            }
+            ExprKind::RecoveryExpr => v.extend(lists.iter::<ExprId>(ListId::new(n.a))),
             ExprKind::LambdaExpr => {
                 if let Some(l) = self.lambdas.get(LambdaId::new(n.a)).inits {
                     v.extend(lists.iter::<ExprId>(l));
@@ -2248,6 +2246,7 @@ impl ExprArena {
             // expressions (spec/sema-templates.md §2.4).
             ExprKind::BinaryConditionalOperator
             | ExprKind::OffsetOfExpr
+            | ExprKind::AtomicExpr
             | ExprKind::CXXUnresolvedConstructExpr
             | ExprKind::ParenListExpr => {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));

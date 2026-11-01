@@ -3377,11 +3377,7 @@ pub mod builtin {
             pub fn num_vals(self) -> usize {
                 match self {
                     Form::Load => 0,
-                    Form::Init
-                    | Form::LoadCopy
-                    | Form::Copy
-                    | Form::Arithmetic
-                    | Form::Xchg => 1,
+                    Form::Init | Form::LoadCopy | Form::Copy | Form::Arithmetic | Form::Xchg => 1,
                     Form::GnuXchg | Form::C11CmpXchg => 2,
                     Form::GnuCmpXchg => 3,
                 }

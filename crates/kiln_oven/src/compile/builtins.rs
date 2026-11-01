@@ -418,7 +418,9 @@ impl Compiler<'_> {
                 op(self, bi::MEMCHR, sub, [a, b, c], [t, 0], begin);
             }
             // WP-154: clang's `IntExprEvaluator` lock-free folding.
-            id::atomic::ALWAYS_LOCK_FREE | id::atomic::IS_LOCK_FREE | id::atomic::C11_IS_LOCK_FREE => {
+            id::atomic::ALWAYS_LOCK_FREE
+            | id::atomic::IS_LOCK_FREE
+            | id::atomic::C11_IS_LOCK_FREE => {
                 let size = arg(0)?;
                 let (any, align) = if bid == id::atomic::C11_IS_LOCK_FREE {
                     (true, 0)
@@ -428,9 +430,8 @@ impl Compiler<'_> {
                 };
                 let max = u32::from(self.ast().types.target().max_atomic_inline_bytes);
                 let a = self.rv(size);
-                let sub = max
-                    | u32::from(any) << 8
-                    | u32::from(bid == id::atomic::ALWAYS_LOCK_FREE) << 9;
+                let sub =
+                    max | u32::from(any) << 8 | u32::from(bid == id::atomic::ALWAYS_LOCK_FREE) << 9;
                 op(self, bi::LOCK_FREE, sub, [a, dst, dst], [align, 0], begin);
             }
             id::MEMCPY | id::MEMMOVE => {
