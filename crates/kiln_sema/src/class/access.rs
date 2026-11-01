@@ -902,7 +902,12 @@ impl Sema<'_, '_> {
         naming: DeclId,
     ) -> Diag {
         let first = self.ast.first(m);
-        let loc = self.ast.decls.get(first).loc();
+        // clang locates an alias template at its `using` keyword.
+        let loc = (self.kind_of(first) == DeclKind::TypeAliasTemplate)
+            .then(|| self.ast.template_info(first).and_then(|i| i.pattern))
+            .flatten()
+            .and_then(|p| self.templ.alias_using_loc.get(&p).copied())
+            .unwrap_or_else(|| self.ast.decls.get(first).loc());
         if t.decl_access == Access::Protected
             && let Some(note) = self.protected_note(ec, t, naming, loc)
         {

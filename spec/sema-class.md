@@ -137,13 +137,16 @@ protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object
 of type 'D'`). Private: `'x' is a private member of 'S'` + `declared private
-here` / `implicitly declared private here`.
+here` / `implicitly declared private here`, located at the member's first
+declaration (a member alias template at its `using` keyword, as clang
+locates a `TypeAliasTemplateDecl`; WP-238).
 
 **Checked**: every name found by class member or qualified lookup into a class
 (for functions, the one selected by overload resolution), type names included
 ([class.access]/4, WP-174): a type or template name the parser commits to
 (`A::Priv`, an unqualified class-scope name, `typename A::Priv`), each
-nested-name-specifier component (`A::Priv::X`), an elaborated reference
+nested-name-specifier component (`A::Priv::X`, and a template-id one,
+`A::PT<int>::X`, before its `::`; WP-238), an elaborated reference
 (`struct A::Priv *`), a base-specifier (checked at once in the deriving class's
 context without its bases, as clang 19 does) and `T::type` after substitution
 (a SFINAE failure in a SFINAE context; reported at the name as written,
