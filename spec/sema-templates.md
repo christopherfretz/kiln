@@ -81,7 +81,8 @@ P4 **Bounded native stack.**
 - End-of-TU instantiation is a worklist (`pending`), not recursion: the
   drain keeps an explicit stack of saved queues to visit instantiations
   depth-first, in clang's `GlobalEagerInstantiationScope` order
-  (WP-172, spec/codegen.md §2a).
+  (WP-172, spec/codegen.md §2a), each scope under its requesting
+  definition's frame (§10.2, WP-238).
 
 P5 **Diagnostics identical to clang 19.**
 - This covers note texts, note order, elision, and when the instantiation
@@ -2691,13 +2692,18 @@ template name, then the canonical arguments with every type scoped,
 never the typedef they were written with (`'std::v<std::D<int, int>>'`
 for `std::v<_Del>`; `'std::Ptr<int *, std::D<int, int>,
 std::alloc<int>>::g'` for a member of a specialization spelled through
-the typedefs `_Del`, `_AllocT`). Known gap: clang instantiates the
-functions a function instantiation uses while that instantiation's
-frame is still open (`PerformPendingInstantiations` inside
+the typedefs `_Del`, `_AllocT`). At the end of the TU clang instantiates
+the definitions a definition requires while that definition's frame is
+still open (`PerformPendingInstantiations` inside
 `InstantiateFunctionDefinition`), so their notes carry the chain
 (`in instantiation of function template specialization 'std::make<int>'
-requested here`); kiln instantiates them later from the TU-level queue
-and prints only the innermost note.
+requested here`). kiln's drain does the same: the frame of the pending
+definition it just instantiated (captured as it is popped,
+`Inst.drain_capture`) is pushed back, untimed, while that definition's
+queue and vtable uses drain, and popped when the scope is left (WP-238,
+tests/conformance/temp.inst/pending-requester-context.cpp). A definition
+queued before the end of the TU is drained with no outer context, as in
+clang.
 
 A conversion function template specialization keeps the pattern's
 declaration name (`operator T`, which the mangling uses: `cvT_`), but

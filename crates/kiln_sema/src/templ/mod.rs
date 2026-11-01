@@ -249,6 +249,11 @@ pub struct InstState {
     pub(crate) fatal: bool,
     /// The members already queued in `pending` (no duplicates).
     pub(crate) queued: kiln_source::fx::FxHashSet<DeclId>,
+    /// While the end-of-TU drain instantiates one pending definition:
+    /// the stack depth it started at, and the last frame popped back to
+    /// that depth (the definition's own), which the drain keeps active
+    /// while the instantiations it required run (§4.4).
+    pub(crate) drain_capture: Option<(usize, Option<stack::InstFrame>)>,
     /// Inline static data members of specializations whose initializer
     /// is not instantiated yet ([temp.inst]/4: on first reference).
     pub(crate) deferred_inits: kiln_source::fx::FxHashSet<DeclId>,
