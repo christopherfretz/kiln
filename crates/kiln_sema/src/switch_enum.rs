@@ -162,7 +162,10 @@ impl Sema<'_, '_> {
     /// `ActOnFinishSwitchStmt`), `loc` the `switch` keyword.
     pub(crate) fn check_switch_cases(&mut self, sw: &SwitchState, cond: ExprId, loc: Loc) {
         let deps = self.ast.exprs.get(cond).deps();
-        if sw.invalid || deps.intersects(ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::ERROR) {
+        if sw.invalid
+            || deps.intersects(ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::ERROR)
+            || self.has_dependent_case_label(&sw.cases)
+        {
             return;
         }
         let default = sw.default;
@@ -220,6 +223,21 @@ impl Sema<'_, '_> {
             d = d.arg(unhandled.get(i).map_or_else(String::new, |&m| self.decl_arg(m)));
         }
         self.emit_switch(d.arg(n.to_string()));
+    }
+
+    /// A `case` label among `cases` is value-dependent (clang
+    /// `HasDependentValue`): none of the checks run, -Wswitch-default
+    /// included, until the instantiation.
+    fn has_dependent_case_label(&self, cases: &[StmtId]) -> bool {
+        let dependent = |e: ExprId| {
+            self.ast.exprs.get(e).deps().intersects(ExprDeps::TYPE | ExprDeps::VALUE)
+        };
+        cases.iter().any(|&c| {
+            self.ast.stmts.get(c).kind() == StmtKind::CaseStmt && {
+                let d = *self.ast.stmts.case_data(c);
+                dependent(d.lhs) || d.rhs.is_some_and(dependent)
+            }
+        })
     }
 
     /// clang checks the case list again in each instantiation: its

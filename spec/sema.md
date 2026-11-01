@@ -2332,7 +2332,9 @@ clang 19's C99/GNU complex support in C++:
   - Enumeration and constant checks (`switch_enum.rs`
     `check_switch_cases`, WP-219), in clang `ActOnFinishSwitchStmt`
     order, after `check_case_ranges`; skipped for a dependent or invalid
-    condition:
+    condition and for a value-dependent case label (clang
+    `HasDependentValue`: -Wswitch-default included, so a template whose
+    labels depend on a parameter warns only per instantiation, WP-230):
     1. no `default`: `-Wswitch-default` (off by default) `'switch'
        missing 'default' label`;
     2. nothing more if the case list is broken (an unfolded label, a
