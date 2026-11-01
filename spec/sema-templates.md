@@ -659,7 +659,12 @@ the running `Substituter` instead.
 2. Probe `specializations[(first(tmpl), canonical)]`. On a hit, return
    that decl.
 3. On a miss, create a `ClassTemplateSpecialization` decl with
-   `SpecInfo{kind: Undeclared, args: sugared}` and insert it.
+   `SpecInfo{kind: Undeclared, args: canonical}` and insert it. The
+   implicit specialization's arguments are canonical (clang's
+   `ClassTemplateSpecializationDecl`), so its members see `unsigned long`,
+   not the alias `sz` it was first named with; the written spelling stays
+   on the `TemplateSpecialization` sugar
+   (`tests/conformance/temp.inst/canonical-arguments-in-instantiation.cpp`).
    - No instantiation happens. The type `X<int>` is
      `TemplateSpecialization(sugar) → Record(spec)`.
    - This is clang's `CheckTemplateIdType`.
