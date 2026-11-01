@@ -10,8 +10,10 @@
 //!   `&&`/`||` decided by one known side) prunes the other edge: `if`,
 //!   loops, `?:` and the right operand of `&&`/`||`;
 //! - a switch on a constant reaches only the matching case (else the
-//!   default); with no default, the code after a switch over an
-//!   enumeration whose enumerators all have cases is unreachable;
+//!   default); the default edge of a switch over an enumeration whose
+//!   enumerators all have cases is unreachable (clang
+//!   `isAllEnumCasesCovered`), so with no default the code after it is
+//!   unreachable;
 //! - a handler is reachable only from a reachable throw-expression in its
 //!   try-block (or in a nested try-block without a catch-all): calls get
 //!   no exception edges;
@@ -19,6 +21,12 @@
 //!   are found by iterating to a fixed point;
 //! - an `if consteval` anywhere in the body: clang builds no CFG and
 //!   checks nothing.
+//!
+//! The same walk, in fall-off mode (`fall_off_kind`), classifies the
+//! live predecessors of the exit as clang `CheckFallThrough` does: a
+//! `return`, a throw leaving the body (fake edge), a `noreturn` call or a
+//! dispatch without a catch-all leaving the body (abnormal edge), and the
+//! end of the body (plain edge).
 
 use std::collections::HashSet;
 
@@ -28,9 +36,11 @@ use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
 
 use crate::Sema;
+use crate::stmt::Falloff;
 
 /// The state of one walk.
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts of one walk")]
 struct Reach {
     /// Labels a live `goto` reaches (grows across passes).
     labels: HashSet<DeclId>,
@@ -62,6 +72,16 @@ struct Reach {
     stmts_wanted: HashSet<StmtId>,
     /// The wanted statements met on a live path (in any pass).
     stmts_reached: HashSet<StmtId>,
+    /// The fall-off walk (clang `CheckFallThrough`): a try's handlers
+    /// are also reached when its dispatch has no predecessor.
+    falloff: bool,
+    /// A live `return` (this pass).
+    live_return: bool,
+    /// A live throw leaves the body (this pass).
+    fake_edge: bool,
+    /// A live call to a `noreturn` function, or a live dispatch without
+    /// a catch-all leaving the body (this pass).
+    abnormal_edge: bool,
 }
 
 struct Jump {
@@ -78,8 +98,9 @@ struct SwitchFrame {
     live: bool,
     /// The condition's constant value.
     value: Option<i128>,
-    /// `value` matches a case.
-    matched: bool,
+    /// The switch reaches its `default:` label (clang CFG: not when the
+    /// value matched a case, nor when every enumerator is covered).
+    default_edge: bool,
 }
 
 impl Sema<'_, '_> {
@@ -122,6 +143,67 @@ impl Sema<'_, '_> {
                 return Some(r.visited.difference(&r.reached).copied().collect());
             }
         }
+    }
+
+    /// How control reaches the end of the function body `body` (clang
+    /// `CheckFallThrough`): `Never` when it does not (or clang builds no
+    /// CFG), `Maybe` when the body also returns, throws out or calls a
+    /// `noreturn` function on a live path, else `Always`.
+    pub(crate) fn fall_off_kind(&mut self, body: StmtId) -> Falloff {
+        let mut r = Reach { falloff: true, ..Reach::default() };
+        loop {
+            r.changed = false;
+            r.found.clear();
+            (r.live_return, r.fake_edge, r.abnormal_edge) = (false, false, false);
+            let end = self.reach_stmt(body, true, &mut r);
+            if r.no_cfg {
+                return Falloff::Never;
+            }
+            if !r.changed {
+                return if !end {
+                    Falloff::Never
+                } else if r.live_return || r.fake_edge || r.abnormal_edge {
+                    Falloff::Maybe
+                } else {
+                    Falloff::Always
+                };
+            }
+        }
+    }
+
+    /// Whether the dispatch block of try statement `s` has predecessors
+    /// in clang's CFG: a throw-expression in its try-block (outside a
+    /// nested try-block and a lambda), or a nested try without a
+    /// catch-all, whose dispatch chains to it.
+    fn dispatch_has_preds(&self, s: StmtId) -> bool {
+        let (mut stmts, mut exprs) = (vec![self.ast.stmts.try_block(s)], Vec::new());
+        while let Some(s) = stmts.pop() {
+            if self.ast.stmts.get(s).kind() == StmtKind::CXXTryStmt {
+                if !self.has_catch_all(s) {
+                    return true;
+                }
+                let hs = self.ast.lists.iter::<StmtId>(self.ast.stmts.try_handlers(s));
+                stmts.extend(hs.map(|h| self.ast.stmts.catch_block(h)));
+                continue;
+            }
+            self.stmt_parts(s, &mut exprs, &mut stmts);
+            while let Some(e) = exprs.pop() {
+                match self.ast.exprs.get(e).kind() {
+                    ExprKind::LambdaExpr | ExprKind::UnaryExprOrTypeTraitExpr => {}
+                    ExprKind::CXXThrowExpr => return true,
+                    ExprKind::StmtExpr => stmts.push(self.ast.exprs.stmt_expr_body(e)),
+                    _ => exprs.extend(self.ast.exprs.children(e, &self.ast.lists)),
+                }
+            }
+        }
+        false
+    }
+
+    fn has_catch_all(&self, s: StmtId) -> bool {
+        self.ast
+            .lists
+            .iter::<StmtId>(self.ast.stmts.try_handlers(s))
+            .any(|h| self.ast.stmts.catch_var(h).is_none())
     }
 
     fn known_truth(&mut self, e: ExprId) -> Option<bool> {
@@ -320,7 +402,9 @@ impl Sema<'_, '_> {
             }
             StmtKind::IndirectGotoStmt => false,
             StmtKind::ReturnStmt | StmtKind::CoreturnStmt => {
-                self.reach_parts(s, live, r);
+                if self.reach_parts(s, live, r) {
+                    r.live_return = true;
+                }
                 false
             }
             StmtKind::BreakStmt => {
@@ -354,14 +438,27 @@ impl Sema<'_, '_> {
             StmtKind::DefaultStmt => {
                 live |= r.cases_live;
                 if let Some(f) = r.switches.last() {
-                    live = live || (f.live && !f.matched);
+                    live = live || f.default_edge;
                 }
                 self.reach_stmt(self.ast.stmts.default_sub(s), live, r)
             }
             StmtKind::CXXTryStmt => {
                 r.tries.push((s, false));
                 let mut out = self.reach_stmt(self.ast.stmts.try_block(s), live, r);
-                let (_, reached) = r.tries.pop().expect("try frame");
+                let (_, mut reached) = r.tries.pop().expect("try frame");
+                if r.falloff {
+                    // clang `CheckFallThrough` rescans a dispatch block
+                    // with no predecessor as live; a live one without a
+                    // catch-all chains to the enclosing dispatch, or
+                    // leaves the body.
+                    reached = reached || !self.dispatch_has_preds(s);
+                    if reached && !self.has_catch_all(s) {
+                        match r.tries.last_mut() {
+                            Some(t) => t.1 = true,
+                            None => r.abnormal_edge = true,
+                        }
+                    }
+                }
                 let handlers: Vec<StmtId> =
                     self.ast.lists.iter(self.ast.stmts.try_handlers(s)).collect();
                 for h in handlers {
@@ -500,41 +597,14 @@ impl Sema<'_, '_> {
             }
         }
         let matched = value.is_some_and(|v| case_values.iter().any(|&b| Self::in_case(b, v)));
-        r.switches.push(SwitchFrame { live, value, matched });
+        let default_edge =
+            live && !matched && !self.switch_covers_enum(d.cond, &cases, has_default);
+        r.switches.push(SwitchFrame { live, value, default_edge });
         r.jumps.push(Jump { is_loop: false, broke: false, continued: false });
         let body_out = self.reach_stmt(d.body, false, r);
         let j = r.jumps.pop().expect("switch jump frame");
         r.switches.pop();
-        let skips = live
-            && !has_default
-            && !matched
-            && (value.is_some() || !self.all_enum_cases_covered(d.cond, &case_values));
-        body_out || j.broke || skips
-    }
-
-    /// clang `SwitchStmt::isAllEnumCasesCovered`: the condition (before
-    /// promotion) has a complete enumeration type with enumerators, each
-    /// of which some case names.
-    fn all_enum_cases_covered(&self, mut cond: ExprId, cases: &[CaseBounds]) -> bool {
-        while self.ast.exprs.get(cond).kind() == ExprKind::ImplicitCastExpr {
-            cond = self.ast.exprs.operand(cond);
-        }
-        let t = &self.ast.types;
-        let ty = t.canonical(self.ast.exprs.get(cond).ty());
-        let Some(def) = t.as_enum(ty).and_then(|e| self.ast.definition(e)) else { return false };
-        let mut any = false;
-        for m in self.ast.decls.members(def) {
-            if self.kind_of(m) != DeclKind::EnumConstant {
-                continue;
-            }
-            any = true;
-            let v = self.ast.decls.enumerator(m).and_then(|x| x.value);
-            let v = v.and_then(|v| self.const_int(v));
-            if v.is_none_or(|v| !cases.iter().any(|&b| Self::in_case(b, v))) {
-                return false;
-            }
-        }
-        any
+        body_out || j.broke || (default_edge && !has_default)
     }
 
     /// The folded bounds of case `c`: `lo` and `hi` of a GNU range
@@ -571,6 +641,7 @@ impl Sema<'_, '_> {
             ExprKind::CXXThrowExpr => {
                 let live = self.reach_kids(e, live, r);
                 if live {
+                    r.fake_edge |= r.tries.is_empty();
                     let tries: Vec<StmtId> = r.tries.iter().map(|t| t.0).collect();
                     if !self.throw_caught(e, &tries) {
                         r.found.push(e);
@@ -579,13 +650,7 @@ impl Sema<'_, '_> {
                     // with a catch-all.
                     for i in (0..r.tries.len()).rev() {
                         r.tries[i].1 = true;
-                        let tr = r.tries[i].0;
-                        if self
-                            .ast
-                            .lists
-                            .iter::<StmtId>(self.ast.stmts.try_handlers(tr))
-                            .any(|h| self.ast.stmts.catch_var(h).is_none())
-                        {
+                        if self.has_catch_all(r.tries[i].0) {
                             break;
                         }
                     }
@@ -616,7 +681,11 @@ impl Sema<'_, '_> {
             }
             _ => {
                 let live = self.reach_kids(e, live, r);
-                live && !self.is_noreturn_call(e)
+                if live && self.is_noreturn_call(e) {
+                    r.abnormal_edge = true;
+                    return false;
+                }
+                live
             }
         }
     }

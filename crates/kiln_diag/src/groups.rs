@@ -43,7 +43,7 @@ macro_rules! diag_groups {
 }
 
 diag_groups! {
-    All = "all" [Most];
+    All = "all" [Most, Switch, SwitchBool];
     Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized, RangeLoopConstruct, Unused];
     Pragmas = "pragmas" [UnknownPragmas, IgnoredPragmas];
     Pedantic = "pedantic" [];
@@ -70,7 +70,7 @@ diag_groups! {
     ExternInitializer = "extern-initializer" [];
     VlaCxxExtension = "vla-cxx-extension" [];
     BitfieldWidth = "bitfield-width" [];
-    PointerArith = "pointer-arith" [];
+    PointerArith = "pointer-arith" [GnuPointerArith];
     DivisionByZero = "division-by-zero" [];
     ShiftCountNegative = "shift-count-negative" [];
     ShiftCountOverflow = "shift-count-overflow" [];
@@ -164,7 +164,7 @@ diag_groups! {
     // WP-074
     DeprecatedBuiltins = "deprecated-builtins" [];
     // WP-087
-    UnevaluatedExpression = "unevaluated-expression" [];
+    UnevaluatedExpression = "unevaluated-expression" [PotentiallyEvaluatedExpression];
     // WP-160
     Assume = "assume" [];
     InvalidPartialSpecialization = "invalid-partial-specialization" [];
@@ -215,6 +215,16 @@ diag_groups! {
     UnusedVariable = "unused-variable" [];
     // ----- WP-193 (GNU designators)
     GnuDesignator = "gnu-designator" [];
+    // ----- WP-219 (switch coverage, typeid, the GNU umbrella)
+    Switch = "switch" [];
+    SwitchEnum = "switch-enum" [];
+    CoveredSwitchDefault = "covered-switch-default" [];
+    SwitchDefault = "switch-default" [];
+    SwitchBool = "switch-bool" [];
+    PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
+    GnuPointerArith = "gnu-pointer-arith" [];
+    VlaExtension = "vla-extension" [VlaCxxExtension];
+    Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
 }
 
 impl Group {

@@ -794,8 +794,8 @@ diag_ids! {
     sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
     sema_arith_incomplete_pointee = Error (1) "arithmetic on a pointer to an incomplete type {0}";
     sema_subscript_incomplete_type = Error (1) "subscript of pointer to incomplete type {0}";
-    sema_arith_void_pointer = Extension [PointerArith] (1) "arithmetic on{0: a pointer| pointers} to void is a GNU extension";
-    sema_arith_function_pointer = Extension [PointerArith] (2) "arithmetic on{0: a pointer| pointers} to the function type {1} is a GNU extension";
+    sema_arith_void_pointer = Extension [GnuPointerArith] (1) "arithmetic on{0: a pointer| pointers} to void is a GNU extension";
+    sema_arith_function_pointer = Extension [GnuPointerArith] (2) "arithmetic on{0: a pointer| pointers} to the function type {1} is a GNU extension";
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
     sema_addrof_bitfield = Error (0) "address of bit-field requested";
     sema_addrof_vector_element = Error (0) "address of vector element requested";
@@ -1633,6 +1633,20 @@ diag_ids! {
     sema_array_designator_too_large = Error (2) "array designator index ({0}) exceeds array bounds ({1})";
     sema_gnu_array_range = Extension [GnuDesignator] (0) "use of GNU array range extension";
     sema_union_member_reference = Error (2) "union member '{0}' has reference type {1}";
+    // [stmt.switch] enumeration coverage, -Wswitch and neighbours (WP-219)
+    sema_switch_missing_case = Warning [Switch] (5) "{0:enumeration value {1} not handled in switch|enumeration values {1} and {2} not handled in switch|enumeration values {1}, {2}, and {3} not handled in switch|{4} enumeration values not handled in switch: {1}, {2}, {3}...}";
+    sema_switch_def_missing_case = WarningOff [SwitchEnum] (5) "{0:enumeration value {1} not explicitly handled in switch|enumeration values {1} and {2} not explicitly handled in switch|enumeration values {1}, {2}, and {3} not explicitly handled in switch|{4} enumeration values not explicitly handled in switch: {1}, {2}, {3}...}";
+    sema_switch_unreachable_default = WarningOff [CoveredSwitchDefault] (0) "default label in switch which covers all enumeration values";
+    sema_switch_not_in_enum = Warning [Switch] (1) "case value not in enumerated type {0}";
+    sema_switch_missing_case_for_condition = Warning (1) "no case matching constant switch condition '{0}'";
+    sema_switch_missing_default = WarningOff [SwitchDefault] (0) "'switch' missing 'default' label";
+    sema_switch_bool_condition = Warning [SwitchBool] (0) "switch condition has boolean value";
+    // [expr.typeid]/3 (WP-219)
+    sema_side_effects_typeid = Warning [PotentiallyEvaluatedExpression] (0) "expression with side effects will be evaluated despite being used as an operand to 'typeid'";
+    // [expr.add]/1: in C++ a `void` or function pointee is an error, not
+    // the GNU extension of C (WP-219)
+    sema_arith_void_pointer_cxx = Error (1) "arithmetic on{0: a|} pointer{0:|s} to void";
+    sema_arith_function_pointer_cxx = Error (2) "arithmetic on{0: a|} pointer{0:|s} to the function type {1}";
     // ----- WP-211 (GNU _Complex)
     sema_plain_complex = Warning (0) "plain '_Complex' requires a type specifier; assuming '_Complex double'";
     sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
