@@ -113,7 +113,7 @@ impl Cg<'_> {
             PtrBase::Temporary(_) => {
                 err(None, "pointers to lifetime-extended temporaries are not supported yet (M3)")
             }
-            PtrBase::TypeInfo(_) => err(None, "typeid constants are not supported yet (M3)"),
+            PtrBase::TypeInfo(t) => self.rtti(t),
         }
     }
 
