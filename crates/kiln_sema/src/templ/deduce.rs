@@ -834,8 +834,12 @@ impl Sema<'_, '_> {
             }
             TypeView::TemplateSpecialization { name, args, .. } => {
                 let r = self.deduce_template_id(name, args, a, d, next);
+                // A mismatch inside the arguments keeps its own `P`/`A`
+                // (clang reports the innermost pair); only an `A` that is
+                // no template-id at all reports the whole types.
+                let not_id = r == Tdk::NonDeducedMismatch && d.info.first.is_none();
                 if r == Tdk::Success || !flags.contains(TdfFlags::DERIVED_CLASS) {
-                    if r == Tdk::NonDeducedMismatch {
+                    if not_id {
                         return mismatch(d);
                     }
                     return r;
@@ -844,7 +848,7 @@ impl Sema<'_, '_> {
                 // `DeduceTemplateSpecArguments`).
                 match self.deduce_from_bases(name, args, a, d, next) {
                     Some(b) => b,
-                    None if r == Tdk::NonDeducedMismatch => mismatch(d),
+                    None if not_id => mismatch(d),
                     None => r,
                 }
             }
@@ -1029,6 +1033,8 @@ impl Sema<'_, '_> {
         level: u32,
     ) -> Tdk {
         let Some((atmpl, aname, aargs)) = self.template_id_of(a) else {
+            // The caller reports `P`/`A` themselves.
+            d.info.first = None;
             return Tdk::NonDeducedMismatch;
         };
         let aname = match aname {
@@ -1044,7 +1050,13 @@ impl Sema<'_, '_> {
         if ps.len() < as_.len() {
             self.complete_dependent_args(name, &mut ps);
         }
-        self.deduce_arg_list(&ps, &as_, true, d, level, Loc::INVALID)
+        let r = self.deduce_arg_list(&ps, &as_, true, d, level, Loc::INVALID);
+        if r == Tdk::NonDeducedMismatch {
+            // clang deduces against `P`'s canonical arguments, so an inner
+            // `P` prints canonically (`pr<type-parameter-0-0, int>`).
+            d.info.first = d.info.first.map(|x| self.ast.types.canonical_arg(x));
+        }
+        r
     }
 
     /// The arguments of a dependent class template-id `P` completed with
@@ -1180,11 +1192,12 @@ impl Sema<'_, '_> {
             }
             Tdk::NonDeducedMismatch => {
                 let (p, a) = (d.info.first?, d.info.second?);
-                Some(
-                    self.diag(DiagId::note_deduction_non_deduced_mismatch, loc)
-                        .arg(self.arg_str(p))
-                        .arg(self.arg_str(a)),
-                )
+                // `%diff{$ against $|types}`: two types are template-diffed.
+                let (p, a) = match (p.view(), a.view()) {
+                    (ArgView::Type(pt), ArgView::Type(at)) => self.ty_diff(pt, at),
+                    _ => (format!("'{}'", self.arg_str(p)), format!("'{}'", self.arg_str(a))),
+                };
+                Some(self.diag(DiagId::note_deduction_non_deduced_mismatch, loc).arg(p).arg(a))
             }
             _ => None,
         }

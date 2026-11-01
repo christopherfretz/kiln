@@ -31,6 +31,7 @@ use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
 use crate::scope::{Scope, ScopeKind};
+use crate::type_diff::DiffArgs as _;
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
 use kiln_oven::{EvalContext, EvalKind};
@@ -1751,8 +1752,7 @@ impl Sema<'_, '_> {
                     (DeclKind::TypeAlias, false) => "1",
                     (_, false) => "0",
                 })
-                .arg(self.ty_arg(underlying))
-                .arg(self.ty_arg(pty));
+                .diff_args(self, underlying, pty);
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
             return None;
@@ -2823,8 +2823,7 @@ impl Sema<'_, '_> {
                     let msg = self
                         .diag(id, d.name_loc())
                         .arg(sym_str(self, name))
-                        .arg(self.ty_arg(ty))
-                        .arg(self.ty_arg(pty));
+                        .diff_args(self, ty, pty);
                     let msg = self.note_prev(msg, p, self.is_var_definition(p));
                     self.emit(msg);
                 } else if spec.storage() != VarStorage::Extern && self.is_var_definition(p) {
@@ -3080,10 +3079,9 @@ impl Sema<'_, '_> {
                 .arg(name)
                 .arg(self.ty_arg(declared)),
             AutoFail::NoInitializerList => self.diag(DiagId::sema_auto_init_list_deduction, lbrace),
-            AutoFail::Conflict(a, b, _) => self
-                .diag(DiagId::sema_auto_inconsistent_deduction, lbrace)
-                .arg(self.ty_arg(a))
-                .arg(self.ty_arg(b)),
+            AutoFail::Conflict(a, b, _) => {
+                self.diag(DiagId::sema_auto_inconsistent_deduction, lbrace).diff_args(self, a, b)
+            }
             AutoFail::FromInitList => self
                 .diag(DiagId::sema_auto_var_deduction_failure_from_init_list, loc)
                 .arg(name)

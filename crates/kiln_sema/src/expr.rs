@@ -30,6 +30,7 @@ use crate::init::InitList;
 use crate::literal;
 use crate::lookup::LookupKind;
 use crate::overload::oper::{OperForm, OperResult};
+use crate::type_diff::DiffArgs as _;
 
 mod ref_cast;
 
@@ -2116,10 +2117,7 @@ impl Sema<'_, '_> {
         if conv::is_unscoped_enum(self, lt)
             && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
         {
-            let msg = self
-                .diag(DiagId::sema_assign_incompatible, loc)
-                .arg(self.ty_arg(lt))
-                .arg(self.ty_arg(res_ty));
+            let msg = self.diag(DiagId::sema_assign_incompatible, loc).diff_args(self, lt, res_ty);
             self.emit(msg);
             return self.recover_err(&[l, r], loc);
         }
@@ -2510,10 +2508,7 @@ impl Sema<'_, '_> {
                 return self.builder().conditional(c2, t2, f2, ty, loc);
             }
         }
-        let msg = self
-            .diag(DiagId::sema_incompatible_cond_operands, loc)
-            .arg(self.ty_arg(tt))
-            .arg(self.ty_arg(ft));
+        let msg = self.diag(DiagId::sema_incompatible_cond_operands, loc).diff_args(self, tt, ft);
         self.emit(msg);
         self.recover_err(&[c, t, f], loc)
     }

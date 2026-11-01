@@ -185,10 +185,10 @@ impl Sema<'_, '_> {
         let class = self.ast.types.as_record(src).and_then(|r| self.ast.definition(r)).unwrap_or(f);
         self.check_member_access(found, class, Some(class), at);
         if self.ovl_deleted(f) {
-            let mut err = ConvError::new(
-                DiagId::sema_conv_deleted_ctor,
-                vec![self.ty_arg(src), self.ty_arg(target)],
-            );
+            let mut err = ConvError::new(DiagId::sema_conv_deleted_ctor, {
+                let (a, b) = self.ty_diff(src, target);
+                vec![a, b]
+            });
             err.notes = self.deleted_function_notes(f, 0);
             return Err(err);
         }
@@ -282,10 +282,10 @@ impl Sema<'_, '_> {
                 vec![self.ty_arg(to), self.ty_arg(a.ty)],
             )
         } else {
-            ConvError::new(
-                DiagId::sema_ovl_ambiguous_conversion,
-                vec![self.ty_arg(a.ty), self.ty_arg(to)],
-            )
+            ConvError::new(DiagId::sema_ovl_ambiguous_conversion, {
+                let (f, t) = self.ty_diff(a.ty, to);
+                vec![f, t]
+            })
         };
         err.notes = self.udc_notes_of(a, to, opts, true);
         err
@@ -423,6 +423,6 @@ fn unsupported_udc() -> ConvError {
 }
 
 fn no_conversion(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> ConvError {
-    let (fa, ta) = (s.ty_arg(s.ety(e)), s.ty_arg(to));
+    let (fa, ta) = s.ty_diff(s.ety(e), to);
     ConvError::new(DiagId::sema_no_viable_conversion, vec![fa, ta])
 }

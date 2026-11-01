@@ -28,6 +28,7 @@ use kiln_source::fx::FxHashSet;
 use crate::Sema;
 use crate::conv::bases::{self, BaseSearch};
 use crate::declspec::{DeclSpec, Declarator};
+use crate::type_diff::DiffArgs as _;
 
 pub(crate) use abstract_::AbstractUse;
 pub(crate) use graph::ensure_virtuals;
@@ -394,8 +395,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_override_return_differs, at)
                 .arg(nm)
-                .arg(self.ty_arg(nr))
-                .arg(self.ty_arg(or))
+                .diff_args(self, nr, or)
                 .with_note(self.overridden_note(o));
             self.emit(msg);
             return false;
@@ -424,8 +424,7 @@ impl Sema<'_, '_> {
                     let msg = self
                         .diag(DiagId::sema_covariant_return_not_derived, at)
                         .arg(nm)
-                        .arg(self.ty_arg(nr))
-                        .arg(self.ty_arg(or))
+                        .diff_args(self, nr, or)
                         .with_note(self.overridden_note(o));
                     self.emit(msg);
                     return false;
@@ -457,8 +456,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_covariant_return_quals, at)
                 .arg(nm)
-                .arg(self.ty_arg(nr))
-                .arg(self.ty_arg(or))
+                .diff_args(self, nr, or)
                 .with_note(self.overridden_note(o));
             self.emit(msg);
             return false;
@@ -468,8 +466,7 @@ impl Sema<'_, '_> {
             let msg = self
                 .diag(DiagId::sema_covariant_return_more_qualified, at)
                 .arg(nm)
-                .arg(self.ty_arg(nr))
-                .arg(self.ty_arg(or))
+                .diff_args(self, nr, or)
                 .with_note(self.overridden_note(o));
             self.emit(msg);
             return false;

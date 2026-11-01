@@ -21,6 +21,7 @@ use crate::Sema;
 use crate::declspec::{DeclSpec, Declarator};
 use crate::templ::args::ConvertedArgs;
 use crate::templ::subst::Substituter;
+use crate::type_diff::DiffArgs as _;
 
 impl Sema<'_, '_> {
     /// The specialization of function template `tmpl` for converted
@@ -369,8 +370,7 @@ impl Sema<'_, '_> {
                     } else {
                         let n = self
                             .diag(DiagId::note_deduction_non_deduced_mismatch, self.loc_of(ft))
-                            .arg(self.ty_str(sty))
-                            .arg(self.ty_str(ty));
+                            .diff_args(self, sty, ty);
                         failures.push(n);
                     }
                 }

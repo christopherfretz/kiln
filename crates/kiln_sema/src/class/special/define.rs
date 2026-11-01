@@ -31,6 +31,7 @@ use super::SpecialKind;
 use super::deletion::Selected;
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
+use crate::type_diff::DiffArgs as _;
 
 /// An implicit special member being defined (clang's
 /// `CodeSynthesisContext::DefiningSynthesizedFunction`).
@@ -1061,8 +1062,7 @@ impl Sema<'_, '_> {
                 } else if conversion {
                     let from = call.args.first().map_or(QualType::ERROR, |&a| self.ety(a));
                     self.diag(DiagId::sema_conv_deleted_ctor, sites.deleted)
-                        .arg(self.ty_arg(from))
-                        .arg(self.ty_arg(ty))
+                        .diff_args(self, from, ty)
                 } else if spec.defaulted() == Defaulted::No {
                     self.diag(DiagId::sema_call_deleted_ctor, sites.deleted)
                         .arg(self.ty_arg(ty))
@@ -1102,7 +1102,7 @@ impl Sema<'_, '_> {
                     } else {
                         DiagId::sema_no_viable_conversion
                     };
-                    self.diag(id, sites.deleted).arg(self.ty_arg(from)).arg(self.ty_arg(ty))
+                    self.diag(id, sites.deleted).diff_args(self, from, ty)
                 } else {
                     let id = if ambiguous {
                         DiagId::sema_ovl_ambiguous_ctor

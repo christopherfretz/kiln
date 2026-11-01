@@ -20,6 +20,7 @@ use super::oper::OperForm;
 use super::{Candidate, CandidateFailure, Ics, IcsOptions, OverloadCandidateSet};
 use crate::Sema;
 use crate::conv::bases::{complete_class, is_derived_from};
+use crate::type_diff::DiffArgs as _;
 
 /// The conversion targets of one complete class (clang
 /// `getVisibleConversionFunctions`, templates skipped).
@@ -816,8 +817,7 @@ impl Sema<'_, '_> {
                     };
                     let m = self
                         .diag(kiln_diag::DiagId::note_ambiguous_type_conversion, set.loc)
-                        .arg(self.ty_arg(a.ty))
-                        .arg(self.ty_arg(to));
+                        .diff_args(self, a.ty, to);
                     out.push(m);
                     out.extend(self.udc_notes_of(&a, to, opts, true));
                 }

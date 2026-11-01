@@ -521,7 +521,11 @@ where `inner` is the declarator text so far (empty at the top):
 Diagnostics print `'T'` and add ` (aka 'U')` when `U`, the printed
 canonical type (`full_scope`), differs textually from `T` (clang's
 `desugarForDiagnostic`; deviations, if any, are recorded in spec/diag.md
-§11). Representative goldens (each a unit test, checked against clang 19):
+§11). A dependent type whose canonical form would name
+`type-parameter-D-I` gets no `aka` (clang's `Desugar` keeps the
+parameter's name, which the canonical printer cannot). A pair of class
+template specializations in a `%diff` argument prints the template diff
+instead (spec/diag.md §6.1). Representative goldens (each a unit test, checked against clang 19):
 
 | type | prints |
 |---|---|

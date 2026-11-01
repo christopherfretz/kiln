@@ -547,12 +547,13 @@ fn pointer_fix_hint(
 /// The diagnostic for a failed conversion of `e` to `to` in `ctx`.
 fn conversion_error(s: &mut Sema<'_, '_>, e: ExprId, to: QualType, ctx: ConvCtx) -> ConvError {
     let from = ty(s, e);
-    let (fa, ta) = (s.ty_arg(from), s.ty_arg(to));
+    // clang's `%diff` pair (spec/diag.md §6.4).
+    let (fa, ta) = s.ty_diff(from, to);
     let types = &s.ast.types;
     let record_src = types.as_record(from).is_some();
     match ctx {
         ConvCtx::Condition => {
-            ConvError::new(DiagId::sema_not_contextually_convertible_to_bool, vec![fa])
+            ConvError::new(DiagId::sema_not_contextually_convertible_to_bool, vec![s.ty_arg(from)])
         }
         ConvCtx::Assignment => {
             let from_d = {
@@ -652,10 +653,14 @@ fn bind_reference(
     // Diagnostics print the referee as written (clang
     // `DestType.getNonReferenceType()`): `I` in `I &&`.
     let written = s.ast.types.desugar_top(to);
-    let to_str = match s.ast.types.view(written.ty()) {
-        TypeView::LValueRef(p) | TypeView::RValueRef(p) => s.ty_arg(p),
-        _ => s.ty_arg(referee),
+    let to_ty = match s.ast.types.view(written.ty()) {
+        TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+        _ => referee,
     };
+    // The reference diagnostics format (to, from) as clang's `%diff`
+    // The reference diagnostics format (to, from) as clang's `%diff`
+    // pair (spec/diag.md §6.4), formatted only on failure.
+    let strs = |s: &Sema<'_, '_>| s.ty_diff(to_ty, from);
     // A non-const (or volatile) lvalue reference: binds no temporary.
     let plain_lref = !rvalue_ref && (!rq.contains(Quals::CONST) || rq.contains(Quals::VOLATILE));
     // [dcl.init.ref]/5.1 binds an lvalue; /5.3.1 binds an xvalue to an
@@ -683,7 +688,8 @@ fn bind_reference(
         // clang `FK_ReferenceInitFailed`: the referee as written.
         let Some(scs) = standard_conversion(s, e, r_un, ConvCtx::Initialization) else {
             let sel = if vk.is_glvalue() { "1" } else { "0" };
-            let args = vec![to_str, sel.into(), s.ty_arg(from)];
+            let (to_str, from_str) = strs(s);
+            let args = vec![to_str, sel.into(), from_str];
             return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
         };
         let mut x = apply_standard_conversion(s, e, &scs, r_un)?;
@@ -712,10 +718,9 @@ fn bind_reference(
                     && let Err(err) = &r
                     && err.id == DiagId::sema_ref_init_ambiguous
                 {
-                    let mut d = s
-                        .diag(DiagId::sema_ovl_ambiguous_conversion, at)
-                        .arg(s.ty_arg(from))
-                        .arg(to_str);
+                    let (to_str, from_str) = strs(s);
+                    let mut d =
+                        s.diag(DiagId::sema_ovl_ambiguous_conversion, at).arg(from_str).arg(to_str);
                     for n in &err.notes {
                         d = d.with_note(n.clone());
                     }
@@ -729,17 +734,18 @@ fn bind_reference(
                 // sequence to the /5.4.1 temporary (no conversion
                 // function set to report).
                 let sel = if vk.is_glvalue() { "1" } else { "0" };
-                let args = vec![to_str, sel.into(), s.ty_arg(from)];
+                let (to_str, from_str) = strs(s);
+                let args = vec![to_str, sel.into(), from_str];
                 return Err(ConvError::new(DiagId::sema_reference_bind_failed, args));
             }
             let lref_opts =
                 if ctx.is_direct() { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };
             if !plain_lref || (class_src && s.has_lvalue_ref_conversion_candidates(from, lref_opts))
             {
-                let mut err = ConvError::new(
-                    DiagId::sema_no_viable_conversion,
-                    vec![s.ty_arg(from), s.ty_arg(referee)],
-                );
+                let mut err = ConvError::new(DiagId::sema_no_viable_conversion, {
+                    let (f, r) = s.ty_diff(from, referee);
+                    vec![f, r]
+                });
                 err.notes = s.udc_failure_notes_with(e, to, opts);
                 return Err(err);
             }
@@ -751,7 +757,8 @@ fn bind_reference(
             } else {
                 DiagId::sema_lvalue_ref_bind_to_temporary
             };
-            return Err(ConvError::new(id, vec![sel.into(), to_str, s.ty_arg(from)]));
+            let (to_str, from_str) = strs(s);
+            return Err(ConvError::new(id, vec![sel.into(), to_str, from_str]));
         }
         return Err(unsupported("binding a reference to a temporary"));
     }
@@ -789,23 +796,26 @@ fn bind_reference(
                 .collect();
         let plural = if names.len() > 1 { "1" } else { "0" };
         let quoted = format!("'{}'", names.join(" "));
+        let (to_str, from_str) = strs(s);
         return Err(ConvError::new(
             DiagId::sema_reference_bind_drops_quals,
-            vec![to_str, s.ty_arg(from), quoted, plural.into()],
+            vec![to_str, from_str, quoted, plural.into()],
         ));
     }
     if !bind_ok_category {
         if rvalue_ref && vk == ValueCategory::LValue {
+            let (to_str, from_str) = strs(s);
             return Err(ConvError::new(
                 DiagId::sema_rvalue_ref_bind_to_lvalue,
-                vec![to_str, s.ty_arg(from)],
+                vec![to_str, from_str],
             ));
         }
         if plain_lref && vk == ValueCategory::PRValue {
             let sel = if rq.contains(Quals::VOLATILE) { "1" } else { "0" };
+            let (to_str, from_str) = strs(s);
             return Err(ConvError::new(
                 DiagId::sema_lvalue_ref_bind_to_temporary,
-                vec![sel.into(), to_str, s.ty_arg(from)],
+                vec![sel.into(), to_str, from_str],
             ));
         }
         return Err(unsupported("binding a reference to a temporary"));
