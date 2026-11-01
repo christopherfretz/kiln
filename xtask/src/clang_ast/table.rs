@@ -89,6 +89,9 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ImplicitValueInitExpr", Keep),
     // Designated clauses of a dependent list (WP-192; template patterns).
     ("DesignatedInitExpr", Keep),
+    // A designator re-initializing part of a prior initializer (WP-196).
+    ("DesignatedInitUpdateExpr", Keep),
+    ("NoInitExpr", Keep),
     ("ConstantExpr", Keep),
     ("CXXConstructExpr", Keep),
     ("CXXTemporaryObjectExpr", Keep),
@@ -231,8 +234,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("VAArgExpr", Keep),
     ("PredefinedExpr", Keep),
     ("UserDefinedLiteral", Unsupported(NOT_M2)),
-    ("DesignatedInitUpdateExpr", Unsupported(NOT_M2)),
-    ("NoInitExpr", Unsupported(NOT_M2)),
     ("ImaginaryLiteral", Unsupported(NOT_M2)),
     ("FixedPointLiteral", Unsupported(NOT_M2)),
     ("AtomicExpr", Keep),
@@ -382,7 +383,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "SubstNonTypeTemplateParmExpr" => &[],
         "UnaryExprOrTypeTraitExpr" => &["name", "argType"],
         "InitListExpr" => &["field", "array_filler"],
-        "ImplicitValueInitExpr" => &[],
+        "ImplicitValueInitExpr" | "DesignatedInitUpdateExpr" | "NoInitExpr" => &[],
         // clang's JSON has no designators (its text dump neither).
         "DesignatedInitExpr" => &[],
         "ConstantExpr" => &["value"],
@@ -530,6 +531,8 @@ pub const CLASS_KINDS: &[&str] = &[
     "ArrayInitLoopExpr",
     "ArrayInitIndexExpr",
     "OpaqueValueExpr",
+    "DesignatedInitUpdateExpr",
+    "NoInitExpr",
     // WP-075: the closure class of a lambda.
     "LambdaExpr",
     // WP-114: inheriting constructors and dependent using-declarations.

@@ -54,6 +54,7 @@ impl Substituter<'_, '_, '_> {
                 self.note_shared_this(e);
             }
             self.sema.mark_shared_expr_referenced(e);
+            self.sema.reissue_designator_warnings(e);
             return Ok(e);
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
