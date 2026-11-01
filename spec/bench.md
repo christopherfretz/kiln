@@ -15,7 +15,7 @@ cargo xtask bench [options] [paths...]
 
 | Option | Meaning |
 |---|---|
-| `--compiler <path>` | Compiler to measure. Default: `cargo build --release -p kiln_driver`, then `<target>/release/kiln` (a debug kiln says nothing about performance). |
+| `--compiler <path>` | Compiler to measure. Default: `cargo build --release -p kiln_driver`, then `<target>/release/kiln++` (a debug kiln says nothing about performance). |
 | `--baseline <dir>` | Baseline directory. Default `bench/baselines`. Relative paths are taken from the repo root. |
 | `--record` | Write the measurements as the new baselines (see "Recording"). With `--compare-with`, also merge the ratio table into `docs/status/perf.md`. |
 | `--compare-with <path>` | Also measure this compiler (normally `clang++-19`) on the same entries and print the ratio table. |

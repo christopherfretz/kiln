@@ -36,7 +36,7 @@ files/directories under bench/) and compares them with bench/baselines.
 See spec/bench.md.
 
 options:
-  --compiler <path>        compiler to measure (default: build and use a release kiln)
+  --compiler <path>        compiler to measure (default: build and use a release kiln++)
   --baseline <dir>         baseline directory (default: bench/baselines)
   --record                 write the measurements as the new baselines; with
                            --compare-with, also merge the ratio table into

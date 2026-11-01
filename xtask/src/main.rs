@@ -128,7 +128,7 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    // The kiln binary the kiln-mode run tests: built here (a no-op when
+    // The kiln++ binary the kiln-mode run tests: built here (a no-op when
     // `cargo test` above already built it), from this checkout, into
     // `$CARGO_TARGET_DIR`.
     let root = test::repo_root();

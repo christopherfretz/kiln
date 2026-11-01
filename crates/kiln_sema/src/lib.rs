@@ -243,6 +243,14 @@ pub struct Sema<'a, 'sm> {
     /// operator whose built-in fallback fails, spec/sema-overload.md
     /// §6.2): set and cleared around the fallback.
     pub(crate) trailing_notes: std::cell::RefCell<Vec<Diag>>,
+    /// The designator warnings of a braced list checked in a template
+    /// definition, by its semantic `InitListExpr`: an instantiation
+    /// shares the non-dependent list but issues them again, as clang's
+    /// re-checked list does (spec/sema.md §3.7, WP-196).
+    pub(crate) designator_rewarn: kiln_source::fx::FxHashMap<ExprId, Vec<Diag>>,
+    /// The warnings of the list being checked in a template definition,
+    /// collected for `designator_rewarn`.
+    pub(crate) designator_pending: Option<Vec<Diag>>,
     /// Callees whose function is not marked referenced yet (see
     /// `deferring_call_ref`), resolved by [`Sema::act_on_call`].
     pub(crate) deferred_call_refs: Vec<(ExprId, DeclId)>,
@@ -486,6 +494,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             va_list_type: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
+            designator_rewarn: kiln_source::fx::FxHashMap::default(),
+            designator_pending: None,
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
             implicit_declared: kiln_source::fx::FxHashMap::default(),
@@ -612,7 +622,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             d = d.context(self.inst.stack.context_key());
             let sev = self.diags.severity_at(id, d.loc());
             if self.inst.stack.is_sfinae() {
-                if sev >= kiln_diag::Severity::Error
+                if (sev >= kiln_diag::Severity::Error || is_sfinae_failure(id))
                     && let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                 {
                     s.errors += 1;
@@ -775,4 +785,17 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             s
         })
     }
+}
+
+/// clang's `SFINAEFailure` warnings: in a SFINAE context they are a
+/// substitution failure whatever their severity, even when disabled
+/// (`Sema::EmitDiagnostic` consults the SFINAE response before the
+/// mapping). The C99-designator extensions are not among them.
+fn is_sfinae_failure(id: DiagId) -> bool {
+    matches!(
+        id,
+        DiagId::sema_designated_init_reordered
+            | DiagId::sema_initializer_overrides
+            | DiagId::sema_initializer_union_overrides
+    )
 }

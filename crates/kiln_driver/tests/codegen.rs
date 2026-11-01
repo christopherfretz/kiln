@@ -8,6 +8,12 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+/// The `kiln++` beside the `kiln` binary under test (`kiln_driver`'s build
+/// script makes it): the C++ driver mode, spec/driver.md "Driver modes".
+fn kilnpp() -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++")
+}
+
 const MAIN: &str = "extern \"C\" int printf(const char*, ...);\n\
                     int add(int, int);\n\
                     int main() { printf(\"sum %d\\n\", add(2, 3)); return 4; }\n";
@@ -32,7 +38,7 @@ fn tools() -> bool {
 }
 
 fn kiln_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_kiln")).args(args).current_dir(dir).output().unwrap()
+    Command::new(kilnpp()).args(args).current_dir(dir).output().unwrap()
 }
 
 fn text(b: &[u8]) -> String {
@@ -112,7 +118,7 @@ fn compile_and_link() {
     assert!(err.contains("undefined reference to `add(int, int)'"), "{err}");
     assert!(
         err.ends_with(
-            "kiln: error: linker command failed with exit code 1 (use -v to see invocation)\n"
+            "kiln++: error: linker command failed with exit code 1 (use -v to see invocation)\n"
         ),
         "{err}"
     );
@@ -126,10 +132,10 @@ fn driver_errors_and_warnings() {
     assert_eq!(o.status.code(), Some(1));
     assert_eq!(
         text(&o.stderr),
-        "kiln: error: cannot specify -o when generating multiple output files\n"
+        "kiln++: error: cannot specify -o when generating multiple output files\n"
     );
     let o = kiln_in(&d, &["-emit-llvm", "add.cpp"]);
-    assert_eq!(text(&o.stderr), "kiln: error: -emit-llvm cannot be used when linking\n");
+    assert_eq!(text(&o.stderr), "kiln++: error: -emit-llvm cannot be used when linking\n");
     let args = [
         "-S",
         "-emit-llvm",
@@ -145,11 +151,11 @@ fn driver_errors_and_warnings() {
     assert_eq!(o.status.code(), Some(0));
     assert_eq!(
         text(&o.stderr),
-        "kiln: warning: -lm: 'linker' input unused [-Wunused-command-line-argument]\n\
-         kiln: warning: argument unused during compilation: '-L/x' [-Wunused-command-line-argument]\n\
-         kiln: warning: lib.o: 'linker' input unused [-Wunused-command-line-argument]\n\
-         kiln: warning: -Wl,-z,now: 'linker' input unused [-Wunused-command-line-argument]\n\
-         kiln: warning: argument unused during compilation: '-fuse-ld=lld' [-Wunused-command-line-argument]\n"
+        "kiln++: warning: -lm: 'linker' input unused [-Wunused-command-line-argument]\n\
+         kiln++: warning: argument unused during compilation: '-L/x' [-Wunused-command-line-argument]\n\
+         kiln++: warning: lib.o: 'linker' input unused [-Wunused-command-line-argument]\n\
+         kiln++: warning: -Wl,-z,now: 'linker' input unused [-Wunused-command-line-argument]\n\
+         kiln++: warning: argument unused during compilation: '-fuse-ld=lld' [-Wunused-command-line-argument]\n"
     );
     let o =
         kiln_in(&d, &["-S", "-emit-llvm", "-Wno-unused-command-line-argument", "-lm", "add.cpp"]);
@@ -158,11 +164,40 @@ fn driver_errors_and_warnings() {
     assert_eq!(o.status.code(), Some(1));
     assert_eq!(
         text(&o.stderr),
-        "kiln: error: -lm: 'linker' input unused [-Werror,-Wunused-command-line-argument]\n"
+        "kiln++: error: -lm: 'linker' input unused [-Werror,-Wunused-command-line-argument]\n"
     );
+}
+
+/// One driver, two names (spec/driver.md "Driver modes"): `kiln` compiles
+/// `.c` as C (not implemented yet), `kiln++` as C++ with clang++'s
+/// deprecation warning, and `--driver-mode=g++` makes `kiln` behave as
+/// `kiln++`. `--version` is the same under both names.
+#[test]
+fn kiln_and_kilnpp() {
+    let d = setup("modes");
+    let kiln = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_kiln")).args(args).current_dir(&d).output().unwrap()
+    };
+    let first_line = |o: &Output| text(&o.stdout).lines().next().unwrap_or_default().to_owned();
+    let v = kiln(&["--version"]);
+    assert!(first_line(&v).starts_with("kiln version "), "{}", text(&v.stdout));
+    assert_eq!(first_line(&kiln_in(&d, &["--version"])), first_line(&v));
+
     std::fs::write(d.join("c.c"), "int f(void) { return 0; }\n").unwrap();
-    let o = kiln_in(&d, &["-S", "-emit-llvm", "c.c"]);
+    let o = kiln(&["-S", "-emit-llvm", "c.c"]);
     assert_eq!(o.status.code(), Some(1));
+    assert_eq!(text(&o.stderr), "error: compiling C is not implemented yet\n");
+    let warning = "treating 'c' input as 'c++' when in C++ mode, this behavior is deprecated \
+                   [-Wdeprecated]\n";
+    let o = kiln_in(&d, &["-S", "-emit-llvm", "c.c"]);
+    assert_eq!(
+        (o.status.code(), text(&o.stderr)),
+        (Some(0), format!("kiln++: warning: {warning}"))
+    );
+    assert!(std::fs::read_to_string(d.join("c.ll")).unwrap().contains("define"));
+    let o = kiln(&["--driver-mode=g++", "-S", "-emit-llvm", "c.c", "-o", "-"]);
+    assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), format!("kiln: warning: {warning}")));
+    let o = kiln_in(&d, &["-x", "c", "-S", "-emit-llvm", "c.c"]);
     assert_eq!(text(&o.stderr), "error: compiling C is not implemented yet\n");
 }
 
@@ -203,7 +238,7 @@ fn verbose_prints_commands() {
 #[test]
 fn missing_tools() {
     let d = setup("missing");
-    let o = Command::new(env!("CARGO_BIN_EXE_kiln"))
+    let o = Command::new(kilnpp())
         .args(["-c", "add.cpp"])
         .current_dir(&d)
         .env("KILN_LLVM_DIR", d.join("no-llvm"))
@@ -213,7 +248,7 @@ fn missing_tools() {
     assert_eq!(o.status.code(), Some(1));
     assert_eq!(
         text(&o.stderr),
-        "kiln: error: unable to execute command: Executable \"llc-19\" doesn't exist!\n"
+        "kiln++: error: unable to execute command: Executable \"llc-19\" doesn't exist!\n"
     );
     assert!(!d.join("add.o").exists());
 }

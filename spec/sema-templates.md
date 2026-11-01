@@ -3100,7 +3100,7 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - Calls to function templates (deduction, WP-071).
 
 *`<type_traits>` probe*: run
-`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0` on
+`kiln++ -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0` on
 `#include <type_traits>`. The error count went from 464 on main to 431.
 No remaining error is a WP-069 template-syntax failure. The blockers
 are:
@@ -4561,7 +4561,7 @@ The headers use 143 distinct builtins for which `__has_builtin` is true
 - 76 are `__builtin_*` functions.
 
 Each WP's acceptance includes the drop in errors on
-`kiln -fsyntax-only` over the 8 headers. The status page is
+`kiln++ -fsyntax-only` over the 8 headers. The status page is
 `docs/status/libcxx-m3.md`, maintained by WP-081. The baseline today is
 490 errors on `<type_traits>`, 436 of them template-related
 (docs/status/libcxx-syntax.md).

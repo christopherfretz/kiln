@@ -397,7 +397,7 @@ impl Ast {
                 out.push(tag(k, 0));
                 self.decl_words(x.default_init_field(e), out);
             }
-            K::ArrayInitLoopExpr => {
+            K::ArrayInitLoopExpr | K::DesignatedInitUpdateExpr => {
                 out.push(tag(k, 0));
                 stack.extend([Work::Opt(id(n.a())), Work::Opt(id(n.b()))]);
             }
