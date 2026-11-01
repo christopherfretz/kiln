@@ -88,7 +88,12 @@ definitions and declarations interleaved, exactly like LLVM's module list;
 `move_function_to_end(f)` moves one to the end of that list (LLVM's
 `removeFromParent` + `insertAfter`; ids are unchanged), and `functions()`
 iterates in that print order. Attribute groups, unnamed function slots,
-comdats and metadata are numbered in print order.
+comdats and metadata are numbered in print order. Inside the crate,
+`Module::funcs` is indexed by `FuncId` only: every walk over all functions
+(printing, numbering, `verify`) goes through `ordered_funcs()` /
+`func_order`, and outside the crate only `functions()` is visible (WP-206
+audit). `crates/kiln_driver/tests/codegen.rs` `function_order_is_stable`
+pins that two compilations print the same text in clang's order.
 
 `dso_local` is not printed where LLVM implies it (local linkage, or
 non-default visibility); the printer omits it there so text is canonical.
