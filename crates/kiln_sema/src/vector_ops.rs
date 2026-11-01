@@ -832,65 +832,10 @@ impl Sema<'_, '_> {
                     None => return self.recover_err(&[c, t, f], loc),
                 }
             }
-            (None, None) => {
-                let elem = if self.ast.types.same_type(lt, rt) {
-                    lt
-                } else {
-                    match conv::usual_arithmetic_conversions_kind(
-                        self,
-                        t2,
-                        f2,
-                        conv::ArithConvKind::Conditional,
-                    ) {
-                        Ok((a, b, ty)) => {
-                            (t2, f2) = (a, b);
-                            ty
-                        }
-                        Err(err) => return self.conv_failed(&err, t, f, loc),
-                    }
-                };
-                if self.ast.types.as_enum(elem).is_some() {
-                    let msg = self
-                        .diag(DiagId::sema_conditional_vector_operand_type, loc)
-                        .arg(self.ty_arg(elem));
-                    self.emit(msg);
-                    return self.recover_err(&[c, t, f], loc);
-                }
-                let arith = self.ast.types.is_arithmetic(elem);
-                // clang builds a vector of any element type here and then
-                // rejects it by lane size; kiln has no vectors of
-                // non-arithmetic elements, so a same-size one is an
-                // incompatible-operands error instead.
-                if !arith && self.scalar_bits(elem) == self.scalar_bits(cp.elem) {
-                    let msg = self
-                        .diag(DiagId::sema_incompatible_cond_operands, loc)
-                        .arg(self.ty_arg(tt))
-                        .arg(self.ty_arg(ft));
-                    self.emit(msg);
-                    return self.recover_err(&[c, t, f], loc);
-                }
-                let kind = if cp.is_ext() { VectorKind::Ext } else { VectorKind::Generic };
-                let vt = self.ast.types.vector(elem, cp.count, kind);
-                if arith {
-                    t2 = conv::raw_cast(
-                        self,
-                        CastKind::VectorSplat,
-                        t2,
-                        vt,
-                        ValueCategory::PRValue,
-                        None,
-                    );
-                    f2 = conv::raw_cast(
-                        self,
-                        CastKind::VectorSplat,
-                        f2,
-                        vt,
-                        ValueCategory::PRValue,
-                        None,
-                    );
-                }
-                vt
-            }
+            (None, None) => match self.vector_cond_scalar_arms(cp, &mut t2, &mut f2, loc) {
+                Some(r) => r,
+                None => return self.recover_err(&[c, t, f], loc),
+            },
         };
         let Some(rp) = self.vector_parts(res) else {
             return self.recover_err(&[c, t, f], loc);
@@ -904,6 +849,65 @@ impl Sema<'_, '_> {
             return self.recover_err(&[c, t, f], loc);
         }
         self.builder().conditional(c2, t2, f2, res, loc)
+    }
+
+    /// `CheckVectorConditionalTypes` with two scalar arms: their common
+    /// type (usual arithmetic conversions), splatted to a vector of the
+    /// condition's kind and lane count. `None` after a diagnostic.
+    fn vector_cond_scalar_arms(
+        &mut self,
+        cp: VecParts,
+        t2: &mut ExprId,
+        f2: &mut ExprId,
+        loc: Loc,
+    ) -> Option<QualType> {
+        let lt = conv::strip_cv(self, self.ety(*t2));
+        let rt = conv::strip_cv(self, self.ety(*f2));
+        let elem = if self.ast.types.same_type(lt, rt) {
+            lt
+        } else {
+            match conv::usual_arithmetic_conversions_kind(
+                self,
+                *t2,
+                *f2,
+                conv::ArithConvKind::Conditional,
+            ) {
+                Ok((a, b, ty)) => {
+                    (*t2, *f2) = (a, b);
+                    ty
+                }
+                Err(err) => {
+                    self.emit_conv_error(err, loc);
+                    return None;
+                }
+            }
+        };
+        if self.ast.types.as_enum(elem).is_some() {
+            let msg =
+                self.diag(DiagId::sema_conditional_vector_operand_type, loc).arg(self.ty_arg(elem));
+            self.emit(msg);
+            return None;
+        }
+        let arith = self.ast.types.is_arithmetic(elem);
+        // clang builds a vector of any element type here and then rejects
+        // it by lane size; kiln has no vectors of non-arithmetic elements,
+        // so a same-size one is an incompatible-operands error instead.
+        if !arith && self.scalar_bits(elem) == self.scalar_bits(cp.elem) {
+            let msg = self
+                .diag(DiagId::sema_incompatible_cond_operands, loc)
+                .arg(self.ty_arg(lt))
+                .arg(self.ty_arg(rt));
+            self.emit(msg);
+            return None;
+        }
+        let kind = if cp.is_ext() { VectorKind::Ext } else { VectorKind::Generic };
+        let vt = self.ast.types.vector(elem, cp.count, kind);
+        if arith {
+            let pr = ValueCategory::PRValue;
+            *t2 = conv::raw_cast(self, CastKind::VectorSplat, *t2, vt, pr, None);
+            *f2 = conv::raw_cast(self, CastKind::VectorSplat, *f2, vt, pr, None);
+        }
+        Some(vt)
     }
 
     /// `b ? t : f` with a scalar condition and a vector arm (clang

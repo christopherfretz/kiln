@@ -397,12 +397,9 @@ impl Compiler<'_> {
         };
         // [expr.assign]/1: the right operand is sequenced first.
         let (rb, be) = self.vec_or_scalar(x.rhs, n);
-        let p = match self.lv_rmw(lhs, e) {
-            Place::Mem(p) => p,
-            _ => {
-                self.unsupported(e);
-                return Place::Mem(self.reg());
-            }
+        let Place::Mem(p) = self.lv_rmw(lhs, e) else {
+            self.unsupported(e);
+            return Place::Mem(self.reg());
         };
         let old = self.load_lanes(p, elem, n, ak::COMPOUND, e);
         let new: Vec<u32> = old
