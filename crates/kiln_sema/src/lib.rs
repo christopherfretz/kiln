@@ -239,6 +239,10 @@ pub struct Sema<'a, 'sm> {
     pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
     /// True while [`Sema::replay_dependent_access`] runs.
     pub(crate) replaying_access: bool,
+    /// The entity a failed initialization names in place of "a variable"
+    /// (clang `InitializedEntity::EK_Temporary` "a value" for `T{x}`,
+    /// `EK_New` "a new value"): a `sema_init_conversion_failed` select.
+    pub(crate) init_entity: Option<&'static str>,
     /// The current full-expression's cleanup state (spec/sema-class.md
     /// §5.3).
     pub(crate) cleanup: class::CleanupState,
@@ -434,6 +438,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
+            init_entity: None,
             cleanup: class::CleanupState::default(),
             cleanup_saved: Vec::new(),
             synth: Vec::new(),
