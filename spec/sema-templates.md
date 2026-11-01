@@ -3275,7 +3275,15 @@ explicit specialization errors remain. The blockers are:
   `extern template`) go through `member_of_spec_candidate` and
   `act_on_explicit_member_{spec,inst}` (MemberSpecInfo transitions).
   `template<> template<>` heads, in-class explicit specializations and
-  operator template-ids work.
+  operator template-ids work. A member class specialization
+  (`template<> struct O<long>::I { ... };`, WP-172): `act_on_tag` gives
+  the `template<>` to the qualifier (it is cleared before the body, so
+  the class's own member functions are not function template
+  specializations) and marks the member `ExplicitSpecialization`;
+  `scope_slots` stops at it, so its out-of-line members are defined
+  without `template<>` ([temp.expl.spec]/5). Member *enumeration*
+  specializations (`template<> enum class O<long>::E { ... };`) still
+  report "not yet implemented".
 - **Template candidates**: conversion-function templates
   ([temp.deduct.conv], `deduce_conversion`, `more_specialized_conversion`),
   `operator->` templates (`arrow.rs`), reversed/rewritten operator

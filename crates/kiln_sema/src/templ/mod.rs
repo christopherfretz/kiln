@@ -751,6 +751,14 @@ impl Sema<'_, '_> {
                         break;
                     }
                     slots.push(ScopeSlot::Empty(c));
+                } else if self
+                    .ast
+                    .member_spec_info(first)
+                    .is_some_and(|(_, m)| m.kind == SpecKind::ExplicitSpecialization)
+                {
+                    // A member class specialization (`template<> struct
+                    // O<long>::I { ... };`) is an ordinary class too.
+                    break;
                 }
             }
             match self.ast.decls.get(c).ctx() {
