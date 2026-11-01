@@ -1169,7 +1169,12 @@ initializer with `Origin::Let(t)` (`t` the `LifetimeExtendedTemporary`),
 outlive the initializer's full-expression, and are frozen after the
 result: a pointer to one freezes as `PtrBase::Temporary(t)` and its value
 is written to `LetData.value` through the new
-`SemaBridge::set_temporary_value(t, v)` (write-once). Reading one later
+`SemaBridge::set_temporary_value(t, v)` (write-once). A pointer to one
+whose type needs destruction (`Ast::needs_destruction`) fails the result
+with clang's `non-trivial destruction of lifetime-extended temporary with
+type 'T' used in the result of a constant expression is not yet
+supported` at the temporary (`CheckLValueConstantExpression`; WP-231), so
+`const D& r = D{1};` is dynamically initialized. Reading one later
 thaws it from `LetData.value` when it is usable in constant expressions
 ([expr.const]/4: const non-volatile type, extended by a variable usable
 in constant expressions); otherwise it is an external object and a read

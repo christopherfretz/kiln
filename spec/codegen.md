@@ -1243,14 +1243,29 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
 - Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
   `tests/conformance/basic.start.dynamic/order-run.cpp`,
   `tests/conformance/stmt.dcl/static-local-run.cpp`.
+- **Destructed temporaries (WP-231).** A temporary of a class with a
+  non-trivial destructor extended by a namespace-scope reference
+  (`const D& r = D{1};`) is never constant: the Oven rejects the result
+  (oven.md, clang `CheckLValueConstantExpression`), so `_ZGR` is a
+  `zeroinitializer` `global`, built in `__cxx_global_var_init` and
+  registered with `__cxa_atexit`, and the reference is `global ptr null`
+  stored there. `tests/codegen/ref_temporary_dtor_global.cpp`,
+  `tests/conformance/class.temporary/extended-temporary-destroyed-at-exit.cpp`.
+- **Reference read-through (WP-231).** A `DeclRefExpr` to a reference
+  marked `NonOdrUse::Constant` (sema: the reference is
+  constant-initialized, [expr.const]/4, cached in `Sema::ref_usable`)
+  emits its folded initializer (`expr.rs` `constant_ref_lvalue`, clang
+  `EmitDeclRefLValue`'s `NOUR_Constant` path) instead of loading the
+  reference; local reference initializers are fold candidates, and a
+  read through a reference to a `const` non-volatile object folds to the
+  value (`fold.rs` `refers_to_const_var`, clang `CEK_AsValueOrReference`).
+  `tests/codegen/ref_constant_read.cpp`,
+  `tests/conformance/basic.def.odr/reference-constant-init-not-odr-used.cpp`.
 - **Not implemented:** `init_priority`, `thread_local` dynamic
-  initialization (TLS wrappers), folding of uses of constant-initialized
-  references and of reads of `const` class objects that clang permits
-  ([basic.start.static]/3),
-  and a constant-initialized lifetime-extended temporary of a class
-  with a non-trivial destructor (`const D& r = D{1};`): clang emits a
-  `zeroinitializer` `_ZGR` global and stores the value in the init
-  function, kiln emits the folded value as the global's initializer.
+  initialization (TLS wrappers), folding of reads of `const` class
+  objects that clang permits ([basic.start.static]/3), and `constant` on
+  an `extern` declaration of a reference or const scalar (clang
+  `isTypeConstant`; `module.rs` `get_gvar` emits `external global`).
 
 ## 7g. Landed (WP-118): WP-100 follow-ups
 - **Constructor loops.** Sema gives `new K[2][3]` / `new K[n][3]()` a
