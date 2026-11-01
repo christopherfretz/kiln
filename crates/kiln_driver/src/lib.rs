@@ -305,6 +305,36 @@ fn syntax_only(
     SyntaxJob(job).run()
 }
 
+/// clang's `-Woption-ignored` for `-m[no-]outline-atomics` (the last one
+/// written) on a non-`AArch64` target: once per source input, as clang warns
+/// once per compile job. The driver's `-W` options apply; `true` when
+/// `-Werror` made it an error (clang then runs no job).
+fn warn_ignored_options(
+    args: &Args,
+    tc: &Toolchain,
+    inputs: &[&args::Input],
+    diag_opts: &DiagOptions,
+    stderr: &SharedWriter,
+) -> bool {
+    let Some(on) = args.outline_atomics else { return false };
+    if tc.target.is_aarch64() {
+        return false;
+    }
+    let flag = if on { "-moutline-atomics" } else { "-mno-outline-atomics" };
+    let sm = SourceManager::new();
+    let e = make_engine(
+        &sm,
+        &codegen_cmd::driver_diag_options(diag_opts),
+        stderr.clone(),
+        Some("kiln"),
+    );
+    for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
+        Diag::new(DiagId::drv_option_ignored, Span::INVALID).arg(tc.target.arch).arg(flag).emit(&e);
+    }
+    e.flush();
+    e.error_count() > 0
+}
+
 /// The inputs that exist (`-` is standard input); the others are errors.
 fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::Input> {
     args.inputs
@@ -370,6 +400,9 @@ pub fn run(command_line: &[String], mut io: Io) -> i32 {
         return 1;
     }
     drop(drv);
+    if warn_ignored_options(&args, &tc, &inputs, &diag_opts, &io.stderr) {
+        return 1;
+    }
 
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
     if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {

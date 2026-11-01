@@ -248,6 +248,10 @@ impl Sema<'_, '_> {
         let has_pack = params.iter().any(|&p| is_pack(self, p));
         // §6.1 step 1: the explicitly-specified arguments.
         let (mut ptys, variadic) = self.proto_param_types(templated);
+        // CWG1391: the parameters the explicit arguments make
+        // non-dependent (published on success; nested deductions in
+        // between overwrite the field).
+        let mut nondep = 0u64;
         // [temp.deduct.funcaddr]: P is the function type, with the
         // explicit arguments substituted below.
         let mut pfn = self.ast.decls.get(templated).ty().unwrap_or(QualType::ERROR);
@@ -347,6 +351,14 @@ impl Sema<'_, '_> {
                         self.check_partial_pack_lengths(ft, &d, &levels, &tys, shown, loc)
                     {
                         return Err(f);
+                    }
+                    if t.len() == tys.len() {
+                        nondep = t
+                            .iter()
+                            .take(64)
+                            .enumerate()
+                            .filter(|&(_, &x)| !self.is_dependent_type(x))
+                            .fold(0, |m, (j, _)| m | 1 << j);
                     }
                     ptys = t;
                     if let Some(f) = f {
@@ -555,6 +567,7 @@ impl Sema<'_, '_> {
                         return Err(f);
                     }
                 }
+                self.templ.explicit_nondep = nondep;
                 Ok(spec)
             }
             Some((_, failed)) => {

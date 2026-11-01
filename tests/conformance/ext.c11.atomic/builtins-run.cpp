@@ -4,6 +4,9 @@
 // test_and_set/clear, floating add/max, pointer arithmetic in units of the
 // pointee, fences, 128-bit operands and the lock-free query.
 //@ expect: run
+// -latomic: x86-64 has no 16-byte atomic RMW instructions, so those
+// operations are libatomic calls there (WP-228).
+//@ args: -latomic
 //@ stdout: 1 3
 //@ stdout: 7 8
 //@ stdout: 0 7

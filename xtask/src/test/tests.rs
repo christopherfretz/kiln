@@ -186,6 +186,7 @@ fn seed_corpus_passes_with_clang() {
         flag(s.ast_filter.is_some(), "ast-filter");
         flag(s.ast_implicit, "ast-implicit");
         flag(s.inst_report.is_some(), "inst-report");
+        flag(s.requires_target.is_some(), "requires");
     }
     let want = [
         "args",
@@ -210,6 +211,7 @@ fn seed_corpus_passes_with_clang() {
         "pp-expected",
         "pp-linemarkers",
         "placeholder",
+        "requires",
         "run",
         "run-args",
         "run-stdin",

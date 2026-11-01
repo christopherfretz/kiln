@@ -247,6 +247,12 @@ impl Types {
             && matches!(ast.types.canonical_view(self.info(t).q), TypeView::Vector { .. })
     }
 
+    /// Whether `t` is a GNU `_Complex` type (stored as `T[2]`).
+    pub fn is_complex(&self, ast: &Ast, t: OTy) -> bool {
+        matches!(self.kind(t), TyKind::Array { n: 2, .. })
+            && matches!(ast.types.canonical_view(self.info(t).q), TypeView::Complex(_))
+    }
+
     /// Interns `q` (any qualifiers and sugar are dropped).
     pub fn intern(&mut self, bridge: &mut dyn SemaBridge, q: QualType) -> OTy {
         let c = bridge.ast().types.canonical(q).without_quals();
@@ -467,6 +473,16 @@ impl Types {
                     return self.simple(c, size, align.max(1), TyKind::Opaque);
                 }
                 self.simple(c, size, align.max(1), TyKind::Array { elem, n })
+            }
+            // GNU `_Complex T` is stored as `T[2]` (real, imaginary;
+            // clang's `{T, T}`); `q` keeps the complex type.
+            TypeView::Complex(elem) => {
+                let elem = self.intern(bridge, elem);
+                let e = *self.info(elem);
+                if !matches!(e.kind, TyKind::Int { .. } | TyKind::Float(_)) {
+                    return self.simple(c, 0, 1, TyKind::Opaque);
+                }
+                self.simple(c, e.size * 2, e.align, TyKind::Array { elem, n: 2 })
             }
             _ => self.simple(c, 0, 1, TyKind::Opaque),
         }

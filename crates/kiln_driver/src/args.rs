@@ -277,7 +277,8 @@ pub struct Args {
     /// `-###`: print the commands instead of running them.
     pub print_commands: bool,
     /// `-m[no-]outline-atomics` (the last wins): `AArch64`'s
-    /// `+outline-atomics` target feature; ignored on x86-64. `None` is the
+    /// `+outline-atomics` target feature; ignored on x86-64, with clang's
+    /// `-Woption-ignored` warning naming the last spelling. `None` is the
     /// target's default (on, as clang 19 on an `AArch64` Linux host).
     pub outline_atomics: Option<bool>,
 }

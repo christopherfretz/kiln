@@ -5,8 +5,8 @@
 //! declaration with substituted types.
 
 use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, EnumData, FieldData, FnStorage, FriendTarget, InitStyle,
-    ParamData, TlsKind, VarStorage,
+    ConstexprKind, DeclFlags, DeclKind, EnumData, FieldData, FnStorage, FriendTarget, ParamData,
+    TlsKind, VarStorage,
 };
 use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclNameKind;
@@ -185,6 +185,7 @@ impl Substituter<'_, '_, '_> {
             dr.init_style = Some(x.spec.init_style());
         }
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
+        self.copy_begin_loc(d, v, ty);
         self.locals.insert(d, DeclOrPack::Decl(v));
         // A constrained placeholder's diagnostics point at its
         // type-constraint, as in the pattern.
@@ -203,6 +204,7 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn decomp_decl(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
         let (_, v) = self.decomp_declare(d, ctx)?;
         self.var_init(d, v)?;
+        self.sema.diagnose_unused_inst_var(d, v);
         Ok(v)
     }
 
@@ -286,6 +288,7 @@ impl Substituter<'_, '_, '_> {
         let v = self.sema.act_on_declarator(&ds, ty, &dr);
         self.sema.inst.deferring_init = saved;
         let Some(v) = v else { return Err(SubstFail) };
+        self.copy_begin_loc(d, v, ty);
         self.locals.insert(d, DeclOrPack::Decl(v));
         if self.sema.kind_of(v) == DeclKind::Var {
             self.sema.inst.deferred_inits.insert(v);
@@ -467,8 +470,13 @@ impl Substituter<'_, '_, '_> {
         if !trailing && !conversion {
             return (WrittenScope { anchor: loc, side: WrittenSide::Before, bound: loc }, true);
         }
+        // After the `->` when it was recorded: the last parameter's own
+        // type may name the same entity after its name.
         let last = ast.decls.function(d).and_then(|f| ast.lists.iter::<DeclId>(f.params).last());
-        let bound = last.map_or(loc, |p| ast.decls.get(p).loc().max(loc));
+        let bound = match self.sema.templ.trailing_arrow.get(&d) {
+            Some(&arrow) if trailing => arrow,
+            _ => last.map_or(loc, |p| ast.decls.get(p).loc().max(loc)),
+        };
         (WrittenScope { anchor: loc, side: WrittenSide::After, bound }, false)
     }
 
@@ -966,8 +974,8 @@ impl Substituter<'_, '_, '_> {
         if let Some(w) = fd.and_then(|x| x.bit_width) {
             dr.bit_width = Some(self.expr(w)?);
         }
-        if fd.and_then(|x| x.init).is_some() {
-            dr.init_style = Some(InitStyle::C);
+        if let Some(x) = fd.filter(|x| x.init.is_some()) {
+            dr.init_style = Some(x.init_style());
         }
         let f = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
         // Its attributes (`[[no_unique_address]]`, `alignas`, ...) as for
@@ -995,10 +1003,13 @@ impl Substituter<'_, '_, '_> {
         let n = *self.sema.ast.decls.get(d);
         let loc = n.loc();
         let u = self.sema.ast.decls.typedef(d).map(|x| x.underlying).ok_or(SubstFail)?;
-        // `typedef T x;` names its type before `x`, `using x = T;` after.
-        let side =
-            if n.kind() == DeclKind::TypeAlias { WrittenSide::After } else { WrittenSide::Before };
-        let scope = WrittenScope { anchor: loc, side, bound: loc };
+        // `typedef T x;` names its type from its decl-specifiers (or
+        // before `x`), `using x = T;` after `x`.
+        let scope = if n.kind() == DeclKind::TypeAlias {
+            WrittenScope { anchor: loc, side: WrittenSide::After, bound: loc }
+        } else {
+            self.decl_written_scope(d, loc)
+        };
         let ty = self.with_written_scope(scope, |s| s.ty(u, loc))?;
         if n.kind() == DeclKind::TypeAlias {
             let name = n.name().as_ident().ok_or(SubstFail)?;
@@ -1007,7 +1018,20 @@ impl Substituter<'_, '_, '_> {
         let mut ds = self.pattern_declspec(d, ty);
         ds.storage = Some((StorageSpec::Typedef, loc));
         let dr = self.pattern_declarator(d, ctx)?;
-        self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)
+        let td = self.sema.act_on_declarator(&ds, ty, &dr).ok_or(SubstFail)?;
+        self.copy_begin_loc(d, td, ty);
+        Ok(td)
+    }
+
+    /// Keeps pattern `d`'s decl-specifier start on its instantiation `new`
+    /// while the type `ty` is still dependent (a member of a member
+    /// template is substituted again, §5.8).
+    fn copy_begin_loc(&mut self, d: DeclId, new: DeclId, ty: QualType) {
+        if let Some(&b) = self.sema.ast.decls.cold.begin_loc.get(d)
+            && self.sema.is_dependent_type(ty)
+        {
+            let _ = self.sema.ast.decls.cold.begin_loc.insert(new, b);
+        }
     }
 
     /// A `static_assert` of the pattern: evaluated now ([temp.inst]/3).

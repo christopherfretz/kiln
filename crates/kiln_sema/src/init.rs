@@ -875,6 +875,11 @@ impl Sema<'_, '_> {
     /// `CXXDefaultInitExpr`), else the value-initializing [`Sema::filler`].
     pub(crate) fn field_filler(&mut self, f: DeclId, at: Loc) -> ExprId {
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        // A field whose initializer failed (clang: `BuildCXXDefaultInitExpr`
+        // fails, the list is invalid).
+        if self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID) {
+            return self.recover(fty, &[], at);
+        }
         if self.field_has_nsdmi(f) {
             let ctx = self.context();
             if let Some(e) = self.default_member_init(f, ctx, at) {
@@ -1224,6 +1229,9 @@ impl Sema<'_, '_> {
         if self.is_vector_type(ty) {
             return self.vector_list_init(ty, l);
         }
+        if let Some(e) = self.complex_list_init(ty, l) {
+            return e;
+        }
         if let Some(e) =
             self.list_construct(ty, l, InitStyle::CopyList, entity.unwrap_or(l.lbrace), None)
         {
@@ -1498,7 +1506,7 @@ impl Sema<'_, '_> {
     /// ([dcl.init.list]/7, clang's `-Wc++11-narrowing` errors).
     /// `entity` is the initialized type as diagnosed (`to` itself, or
     /// the enumeration for [dcl.init.list]/3.8).
-    fn check_narrowing(&mut self, e: ExprId, to: QualType, entity: QualType) {
+    pub(crate) fn check_narrowing(&mut self, e: ExprId, to: QualType, entity: QualType) {
         self.check_narrowing_impl(e, to, entity);
     }
 
@@ -1850,6 +1858,7 @@ impl Sema<'_, '_> {
                 union_field = Some(f);
             }
         } else {
+            let mut invalid = false;
             for (i, slot) in slots.into_iter().enumerate() {
                 let e = match slot {
                     Some(e) => e,
@@ -1857,9 +1866,18 @@ impl Sema<'_, '_> {
                         let b = bases[i];
                         self.init_base_list(b, |s| s.filler(b, rbrace))
                     }
-                    None => self.field_filler(fields[i - nb], rbrace),
+                    None => {
+                        let f = fields[i - nb];
+                        invalid |= self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID);
+                        self.field_filler(f, rbrace)
+                    }
                 };
                 inits.push(e);
+            }
+            // A field whose initializer failed makes the list invalid
+            // (clang: no `-Wunused-value`, no constant evaluation).
+            if invalid {
+                return self.recover(ty, &inits, lbrace);
             }
         }
         self.builder().init_list(ty, &inits, None, union_field, lbrace, rbrace)

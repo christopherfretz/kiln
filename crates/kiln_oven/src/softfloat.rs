@@ -344,6 +344,28 @@ pub(crate) fn bin(op: Op, kind: FloatKind, a: u128, b: u128) -> Option<u128> {
     Some(repack(kind, v))
 }
 
+/// `ilogb(a)` as `APFloat`'s `ilogb`: the unbiased exponent of a finite
+/// nonzero value (of its normalized form for a subnormal); `i32::MIN + 1`
+/// for zero, `i32::MAX` for infinity, `i32::MIN` for NaN.
+pub(crate) fn ilogb(kind: FloatKind, a: u128) -> i32 {
+    match unpack(kind, a) {
+        Val::Fin(_, e, _) => e,
+        Val::Zero(_) => i32::MIN + 1,
+        Val::Inf(_) => i32::MAX,
+        Val::NaN => i32::MIN,
+    }
+}
+
+/// `scalbn(a, n)` rounded to nearest even (`APFloat`'s `scalbn`): zero,
+/// infinity and NaN unchanged.
+pub(crate) fn scalbn(kind: FloatKind, a: u128, n: i64) -> u128 {
+    match unpack(kind, a) {
+        // Beyond +-2^17 every format has over- or underflowed already.
+        Val::Fin(s, e, m) => pack(kind, s, (i64::from(e) + n.clamp(-1 << 17, 1 << 17)) as i32, m),
+        _ => a,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -28,7 +28,7 @@
 //! dispatch without a catch-all leaving the body (abnormal edge), and the
 //! end of the body (plain edge).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::{BinaryOp, ExprKind, UnaryOp};
@@ -82,6 +82,9 @@ struct Reach {
     /// A live call to a `noreturn` function, or a live dispatch without
     /// a catch-all leaving the body (this pass).
     abnormal_edge: bool,
+    /// Whether each statement is reached, and whether control leaves it
+    /// normally (in any pass), when recorded ([`Sema::stmt_flow`]).
+    flow: Option<StmtFlow>,
 }
 
 struct Jump {
@@ -89,6 +92,10 @@ struct Jump {
     broke: bool,
     continued: bool,
 }
+
+/// Whether each statement is reached, and whether control leaves it
+/// normally.
+pub(crate) type StmtFlow = (HashMap<StmtId, bool>, HashMap<StmtId, bool>);
 
 /// The folded `lo` and `hi` of a case label.
 type CaseBounds = (Option<i128>, Option<i128>);
@@ -374,7 +381,35 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn reach_stmt(&mut self, s: StmtId, mut live: bool, r: &mut Reach) -> bool {
+    /// Whether each statement of `body` is reached, and whether control
+    /// leaves it normally, every case label counting as reached (clang
+    /// `FallthroughMapper::fillReachableBlocks`); `None` when clang would
+    /// build no CFG.
+    pub(crate) fn stmt_flow(&mut self, body: StmtId) -> Option<StmtFlow> {
+        let mut r = Reach { cases_live: true, flow: Some(Default::default()), ..Reach::default() };
+        loop {
+            r.changed = false;
+            r.found.clear();
+            self.reach_stmt(body, true, &mut r);
+            if r.no_cfg {
+                return None;
+            }
+            if !r.changed {
+                return r.flow;
+            }
+        }
+    }
+
+    fn reach_stmt(&mut self, s: StmtId, live: bool, r: &mut Reach) -> bool {
+        let out = self.reach_stmt_inner(s, live, r);
+        if let Some((before, after)) = r.flow.as_mut() {
+            *before.entry(s).or_default() |= live;
+            *after.entry(s).or_default() |= out;
+        }
+        out
+    }
+
+    fn reach_stmt_inner(&mut self, s: StmtId, mut live: bool, r: &mut Reach) -> bool {
         let n = *self.ast.stmts.get(s);
         match n.kind() {
             StmtKind::CompoundStmt => {

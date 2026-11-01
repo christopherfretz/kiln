@@ -1400,6 +1400,36 @@ stays `Opaque`: it has no value model yet. The operations are in
 - Codegen emits folded vector values as `<N x T>` constants
   (`kiln_codegen/src/consts.rs`).
 
+### Complex values — Landed (WP-211)
+A GNU `_Complex T` object is stored as `T[2]` (`ty.rs`): the real part,
+then the imaginary part. `compile/complex.rs` computes the operations
+clang 19's `ComplexExprEvaluator` folds on the two parts in registers
+(`cx_regs`), left operand first; `cx_init` stores a result into its
+destination. A complex value from anything else (a call, a list, `?:`,
+a statement expression) is materialized and its parts loaded.
+- **Folded:** unary `+ - ~` (`~` is the conjugate) and `__extension__`;
+  binary `+ - * /`; `==`/`!=` (both parts equal; a NaN part compares
+  unequal); every complex cast (real-to-complex, complex-to-complex,
+  integral/floating mixes, complex-to-real takes the real part,
+  complex-to-bool is "either part non-zero"); `__real`/`__imag` as
+  lvalues and rvalues; `__builtin_complex`; list initialization
+  `{re, im}`; GNU imaginary constants (`2.0i`: a `+0` real part).
+- **Arithmetic (`complex.rs`, `Op::Cx`):** floating `*` and `/` follow C11
+  Annex G as clang's `HandleComplexComplexMul`/`Div` do, on `APFloat`
+  operators that never fail (NaN and infinity are values). Integer
+  operations wrap like `APSInt`; only division by a zero divisor fails.
+  A real floating operand stays real (as in clang): it gets a `+0`
+  imaginary part for `*`/`/`, and `+`/`-` compute only the parts it
+  affects, with the `float` operators that fault on a NaN result or a
+  division by zero (`handleFloatFloatBinOp`).
+- **`++`/`--`** step the real part only (clang `IncDecSubobjectHandler`);
+  overflow notes name the element type.
+- **Rejected with the generic note**, as in clang 19: compound
+  assignment to a complex object (`CompoundAssignSubobjectHandler`), after
+  both operands are evaluated.
+- Tests: `tests/conformance/ext.complex/constexpr.cpp`,
+  `imaginary.cpp`.
+
 ### Reflection runtime (M6)
 - `std::meta::info` is a `ReflectionId(u32)` into sema's entity tables;
   it is a scalar in memory (8 bytes) with shadow kind `Reflection`.

@@ -158,9 +158,19 @@ impl Sema<'_, '_> {
 
     pub(crate) fn is_scalar(&self, t: QualType) -> bool {
         self.ast.types.is_arithmetic(t)
+            || self.ast.types.as_complex(t).is_some()
             || self.ast.types.as_enum(t).is_some()
             || self.ast.types.is_pointer(t)
             || self.is_nullptr_type(t)
+    }
+
+    /// An arithmetic, unscoped enumeration or GNU complex type: the
+    /// operand types of the arithmetic operators (clang's
+    /// `isArithmeticType`, which includes complex types).
+    pub(crate) fn is_arith_operand(&self, t: QualType) -> bool {
+        self.ast.types.is_arithmetic(t)
+            || conv::is_unscoped_enum(self, t)
+            || self.ast.types.as_complex(t).is_some()
     }
 
     pub(crate) fn is_nullptr_type(&self, t: QualType) -> bool {
@@ -220,6 +230,7 @@ impl Sema<'_, '_> {
 
     /// Emits a conversion error at `loc`.
     pub(crate) fn emit_conv_error(&self, err: ConvError, loc: Loc) {
+        let loc = err.at.unwrap_or(loc);
         let d = err.args.into_iter().fold(self.diag(err.id, loc), Diag::arg);
         self.emit(err.notes.into_iter().fold(d, Diag::with_note));
     }
@@ -456,6 +467,17 @@ impl Sema<'_, '_> {
             _ => self.eloc(e),
         };
         self.act_on_full_expr_at(e, cc)
+    }
+
+    /// [`Sema::act_on_full_expr`] of a constant-expression
+    /// ([expr.const]/22: a `static_assert` condition, an array bound, a
+    /// bit-field width, an enumerator value, a `case` value, an alignment,
+    /// a template argument).
+    pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
+        self.constant_full_expr += 1;
+        let r = self.act_on_full_expr(e);
+        self.constant_full_expr -= 1;
+        r
     }
 
     /// [`Sema::act_on_full_expr`] with conversion context `cc` for the
@@ -732,6 +754,14 @@ impl Sema<'_, '_> {
             }
         } else {
             d = d.range(self.expr_range(e));
+        }
+        // clang rebuilds every expression statement and for-increment of
+        // an instantiation (`TransformExprStmt` → `ActOnExprStmt`), so a
+        // non-dependent one warns again with the instantiation's notes,
+        // not deduplicated against the template definition's warning.
+        // The comma's left operand is checked only as the comma is built.
+        if !comma && !self.inst.stack.is_empty() {
+            d = d.allow_duplicate();
         }
         if let Some(n) = note {
             // The fix-it's range (clang `FixItHint::CreateReplacement` of
@@ -1273,7 +1303,9 @@ impl Sema<'_, '_> {
             && valid.iter().any(|&x| self.member_via_dependent_base(x))
             && let Some((this_ty, _)) = self.this_class()
         {
-            return self.dependent_implicit_member(this_ty, name, nns, loc);
+            let e = self.dependent_implicit_member(this_ty, name, nns, loc);
+            self.set_overload_begin(e, begin, loc);
+            return e;
         }
         if fns && (valid.len() > 1 || self.call_uses_adl(&valid, qualifier.is_none())) {
             let e = self.overload_name_ref(name, &found, &valid, qualifier.is_none(), nns, loc);
@@ -1657,6 +1689,7 @@ impl Sema<'_, '_> {
         }
         if n.kind() == DeclKind::Var {
             self.note_var_referenced(d, loc);
+            self.count_var_ref(d);
         }
         self.diagnose_deprecated(d, loc);
         let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
@@ -1806,13 +1839,14 @@ impl Sema<'_, '_> {
                     let d = w.diag(self, loc);
                     self.emit(d);
                 }
-                if let Ok(v) = u64::try_from(t.value) {
+                let e = if let Ok(v) = u64::try_from(t.value) {
                     self.builder().int_literal(t.ty, v, radix, loc)
                 } else {
                     #[allow(clippy::cast_possible_wrap, reason = "bit pattern")]
                     let cv = self.int_const(t.ty, t.value as i128);
                     self.builder().wide_int_literal(t.ty, cv, radix, loc)
-                }
+                };
+                if lit.imaginary { self.imaginary_literal(e, loc) } else { e }
             }
             Err(err) => {
                 let d = err.diag(self, loc);
@@ -1839,7 +1873,8 @@ impl Sema<'_, '_> {
                     self.emit(d);
                 }
                 let cv = literal::float_const(self, t.ty, t.bits);
-                self.builder().float_literal(t.ty, cv, loc)
+                let e = self.builder().float_literal(t.ty, cv, loc);
+                if lit.imaginary { self.imaginary_literal(e, loc) } else { e }
             }
             Err(err) => {
                 let d = err.diag(self, loc);
@@ -1847,6 +1882,15 @@ impl Sema<'_, '_> {
                 self.recover_err(&[], loc)
             }
         }
+    }
+
+    /// The GNU imaginary constant of real literal `sub` (clang
+    /// `ActOnNumericConstant`: `ext_imaginary_constant`).
+    fn imaginary_literal(&mut self, sub: ExprId, loc: Loc) -> ExprId {
+        self.error(DiagId::sema_imaginary_constant, loc);
+        let ty = self.ety(sub);
+        let cty = self.ast.types.complex(ty);
+        self.builder().imaginary_literal(sub, cty, loc)
     }
 
     /// A character literal ([lex.ccon]).
@@ -2121,8 +2165,7 @@ impl Sema<'_, '_> {
         let tv = self.ast.types.as_atomic(t0).unwrap_or(t0);
         match op {
             UnaryOp::Plus | UnaryOp::Minus => {
-                let ok = self.ast.types.is_arithmetic(tv)
-                    || conv::is_unscoped_enum(self, tv)
+                let ok = self.is_arith_operand(tv)
                     || (op == UnaryOp::Plus
                         && (self.ast.types.is_pointer(tv) || self.ast.types.is_array(t0)));
                 if !ok {
@@ -2139,7 +2182,10 @@ impl Sema<'_, '_> {
                 self.builder().unary(op, x, ty, loc, flags)
             }
             UnaryOp::Not => {
-                if !(self.ast.types.is_integral(tv) || conv::is_unscoped_enum(self, tv)) {
+                // GNU: `~` of a complex operand is its conjugate.
+                let complex = self.ast.types.as_complex(tv).is_some();
+                if !(complex || self.ast.types.is_integral(tv) || conv::is_unscoped_enum(self, tv))
+                {
                     return bad(self, e);
                 }
                 let x = conv::usual_unary_conversions(self, e);
@@ -2179,6 +2225,7 @@ impl Sema<'_, '_> {
                 self.builder().unary(op, x, p, loc, ExprFlags::CANNOT_OVERFLOW)
             }
             UnaryOp::AddrOf => self.address_of(e, loc),
+            UnaryOp::Real | UnaryOp::Imag => self.real_imag(op, e, loc),
             UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::PostInc | UnaryOp::PostDec => {
                 self.inc_dec(op, e, loc)
             }
@@ -2284,6 +2331,10 @@ impl Sema<'_, '_> {
             if !self.check_pointer_arith(t, false, loc) {
                 return self.recover_err(&[e], loc);
             }
+        } else if self.ast.types.as_complex(t).is_some() {
+            // clang 19 `ext_increment_complex`: every complex type.
+            let msg = self.diag(DiagId::sema_increment_complex, loc).arg(op.spelling());
+            self.emit(msg);
         } else if !self.ast.types.is_arithmetic(t) {
             let msg = self
                 .diag(DiagId::sema_incdec_invalid, loc)
@@ -2415,6 +2466,7 @@ impl Sema<'_, '_> {
             _ if op.is_compound_assignment() => self.compound_assign(op, l, r, loc),
             BinaryOp::Comma => {
                 self.diagnose_comma_lhs(l);
+                self.discard_assignment_ref(l);
                 let ty = self.ety(r);
                 let res = self.builder().binary(op, l, r, ty, loc);
                 self.mark_bitfield_if(res, r);
@@ -2456,10 +2508,7 @@ impl Sema<'_, '_> {
                     ArithConvKind::Arithmetic
                 };
                 let (lt, rt) = (self.value_ty(l), self.value_ty(r));
-                let arith = |s: &Self, t: QualType| {
-                    s.ast.types.is_arithmetic(t) || conv::is_unscoped_enum(s, t)
-                };
-                if !arith(self, lt) || !arith(self, rt) {
+                if !self.is_arith_operand(lt) || !self.is_arith_operand(rt) {
                     return self.invalid_operands(l, r, loc);
                 }
                 match conv::usual_arithmetic_conversions_kind(self, l, r, kind) {
@@ -2536,6 +2585,7 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_null_indirection(l);
         let lt = self.ety(l);
         let to = conv::strip_cv(self, lt);
         let conv = match conv::atomic_class_assign(self, to, r) {
@@ -2596,10 +2646,7 @@ impl Sema<'_, '_> {
                 (r2, p, p)
             }
             _ => {
-                let arith = |s: &Self, t: QualType| {
-                    s.ast.types.is_arithmetic(t) || conv::is_unscoped_enum(s, t)
-                };
-                if !arith(self, lt) || !arith(self, rt) {
+                if !self.is_arith_operand(lt) || !self.is_arith_operand(rt) {
                     return self.invalid_operands(l, r, loc);
                 }
                 match conv::usual_arithmetic_conversions_kind(
@@ -2628,12 +2675,15 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_null_indirection(l);
         // [expr.ass]/6: the result `E1 op E2` is assigned back to `E1`. An
         // arithmetic computation type converts implicitly to any arithmetic
         // left type, but not to an unscoped enumeration ([conv.prom]/3
         // promoted it), so `e += 1` is ill-formed (clang's
         // `CheckAssignmentOperands` with the computation result type).
-        if conv::is_unscoped_enum(self, lt)
+        let real_from_complex =
+            self.ast.types.as_complex(res_ty).is_some() && self.ast.types.as_complex(lt).is_none();
+        if (real_from_complex || conv::is_unscoped_enum(self, lt))
             && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
         {
             let msg = self.diag(DiagId::sema_assign_incompatible, loc).diff_args(self, lt, res_ty);
@@ -2692,9 +2742,7 @@ impl Sema<'_, '_> {
         if lp || rp {
             return self.invalid_operands(l, r, loc);
         }
-        let arith =
-            |s: &Self, t: QualType| s.ast.types.is_arithmetic(t) || conv::is_unscoped_enum(s, t);
-        if !arith(self, lt) || !arith(self, rt) {
+        if !self.is_arith_operand(lt) || !self.is_arith_operand(rt) {
             return self.invalid_operands(l, r, loc);
         }
         match conv::usual_arithmetic_conversions_kind(self, l, r, ArithConvKind::Arithmetic) {
@@ -2818,6 +2866,11 @@ impl Sema<'_, '_> {
             return self.recover_err(&[l2, r2], loc);
         }
         if !self.is_scalar(lt) || !self.is_scalar(rt) {
+            return self.invalid_operands(l, r, loc);
+        }
+        let complex =
+            self.ast.types.as_complex(lt).is_some() || self.ast.types.as_complex(rt).is_some();
+        if complex && !matches!(op, BinaryOp::EQ | BinaryOp::NE) {
             return self.invalid_operands(l, r, loc);
         }
         match conv::usual_arithmetic_conversions_kind(self, l, r, ArithConvKind::Comparison) {
@@ -3047,7 +3100,9 @@ impl Sema<'_, '_> {
             }
         }
         let arith = |s: &Self, q: QualType| {
-            s.ast.types.is_arithmetic(q) || s.ast.types.as_enum(q).is_some()
+            s.ast.types.is_arithmetic(q)
+                || s.ast.types.as_enum(q).is_some()
+                || s.ast.types.as_complex(q).is_some()
         };
         // [expr.cond]/7: after the standard conversions, operands of the
         // same type give that type (no promotion: `b ? s1 : s2` is
@@ -3067,7 +3122,13 @@ impl Sema<'_, '_> {
                 f,
                 ArithConvKind::Conditional,
             ) {
-                Ok((t2, f2, ty)) => self.builder().conditional(c2, t2, f2, ty, loc),
+                Ok((t2, f2, ty)) => {
+                    // clang's `PrepareScalarCast` to the result type: a
+                    // real arm of a complex result becomes complex.
+                    let t2 = self.real_to_complex(t2, ty);
+                    let f2 = self.real_to_complex(f2, ty);
+                    self.builder().conditional(c2, t2, f2, ty, loc)
+                }
                 Err(err) => self.conv_failed(&err, t, f, loc),
             };
         }
@@ -3732,6 +3793,7 @@ impl Sema<'_, '_> {
                             DiagId::sema_ovl_ambiguous_conversion
                                 | DiagId::sema_ref_init_ambiguous
                                 | DiagId::sema_conv_deleted_ctor
+                                | DiagId::sema_complex_to_real_cxx
                         );
                         if let Some(c) = named.filter(|c| c.overloadable && !as_such) {
                             self.bad_argument(c.decl, callee, a, params[i], i);
@@ -3739,7 +3801,10 @@ impl Sema<'_, '_> {
                             let mut d = err.diag(self, a);
                             let builtin =
                                 named.is_some_and(|c| self.ast.decls.builtin_id(c.decl).is_some());
-                            if !builtin && let Some(&p) = pdecls.get(i) {
+                            if !builtin
+                                && err.at.is_none()
+                                && let Some(&p) = pdecls.get(i)
+                            {
                                 d = d.with_note(self.param_decl_note(p));
                             }
                             self.emit(d);
@@ -4253,6 +4318,7 @@ impl Sema<'_, '_> {
                 if self.check_builtin_fn_use(e) {
                     return self.recover(ty, &[e], loc);
                 }
+                self.discard_assignment_ref(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
             return self.bad_cast(style, e, ty, loc);
@@ -4372,7 +4438,10 @@ impl Sema<'_, '_> {
             && conv::standard_conversion(self, e, to, ConvCtx::Cast).is_some()
             && let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Cast)
         {
-            match conv::apply_standard_conversion(self, e, &scs, to) {
+            let was = std::mem::replace(&mut self.explicit_conv, true);
+            let r = conv::apply_standard_conversion(self, e, &scs, to);
+            self.explicit_conv = was;
+            match r {
                 Ok(x) => {
                     self.mark_explicit(x, e);
                     return self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen);

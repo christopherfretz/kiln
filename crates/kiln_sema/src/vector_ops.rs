@@ -306,6 +306,7 @@ impl Sema<'_, '_> {
         if !self.check_modifiable(l, loc) {
             return self.recover_err(&[l, r], loc);
         }
+        self.check_null_indirection(l);
         let lhs = conv::strip_cv(self, lt0);
         if !self.ast.types.same_unqualified(ty, lhs) {
             let (x, y) = self.ty_arg_pair(lt0, ty);
