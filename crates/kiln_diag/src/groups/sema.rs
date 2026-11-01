@@ -75,7 +75,10 @@ SwitchDefault = "switch-default" [];
 SwitchEnum = "switch-enum" [];
 // ----- WP-220 (undefined variable templates)
 UndefinedVarTemplate = "undefined-var-template" [];
+UnreachableCodeBreak = "unreachable-code-break" [];
 UnreachableCodeFallthrough = "unreachable-code-fallthrough" [];
+UnreachableCodeLoopIncrement = "unreachable-code-loop-increment" [];
+UnreachableCodeReturn = "unreachable-code-return" [];
 UnusablePartialSpecialization = "unusable-partial-specialization" [];
 // ----- WP-217 (unused / fallthrough / constant-conversion warnings)
 UnusedButSetVariable = "unused-but-set-variable" [];

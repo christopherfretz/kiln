@@ -28,7 +28,8 @@ impl Sema<'_, '_> {
         if s.locals.is_empty() {
             return;
         }
-        let quiet = !self.inst.stack.is_empty() || self.diags.unrecoverable_error_count() > s.errors;
+        let quiet =
+            !self.inst.stack.is_empty() || self.diags.unrecoverable_error_count() > s.errors;
         let mut seen: Vec<DeclId> = Vec::new();
         let mut found: Vec<(Loc, Diag)> = Vec::new();
         for &(_, d, ns) in &s.locals {

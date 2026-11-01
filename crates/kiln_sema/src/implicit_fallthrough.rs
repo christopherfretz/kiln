@@ -360,7 +360,7 @@ impl Sema<'_, '_> {
     }
 
     /// `s` is an attributed statement with `[[fallthrough]]`.
-    fn ift_is_fallthrough(&self, s: StmtId) -> bool {
+    pub(crate) fn ift_is_fallthrough(&self, s: StmtId) -> bool {
         self.ast
             .lists
             .iter::<kiln_ast::AttrId>(self.ast.stmts.stmt_attrs(s))
