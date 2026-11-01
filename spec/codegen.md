@@ -1228,9 +1228,18 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   (`const P& r = {3, 4};`) has the referenced `const` type and is
   `constant` unless it has a `mutable` member (`const M& r = {1};`). The
   backing array of a namespace-scope `std::initializer_list` is a
-  `const` array, so it is `constant` when constant-initialized.
+  `const` array, so it is `constant` when constant-initialized. A
+  scalar braced list materializes directly (`const int& r = {};` is
+  `constant`), but `const int& r = {7};` materializes the `int` operand
+  of a `NoOp` cast inside the list and stays `global`. The rule is the
+  same for a temporary first reached through a frozen constant pointer
+  (`consts.rs` `ptr_base`, `PtrBase::Temporary`: a reference member of a
+  constexpr aggregate, `constexpr R x{{}};`, or a constexpr pointer to a
+  temporary), since `let_global` decides constness from the materialized
+  type, not the type it is passed (WP-224).
   `tests/codegen/init_list_global.cpp`,
-  `tests/codegen/ref_temporary_constant.cpp`.
+  `tests/codegen/ref_temporary_constant.cpp`,
+  `tests/codegen/ref_temporary_braced.cpp`.
 - Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
   `tests/conformance/basic.start.dynamic/order-run.cpp`,
   `tests/conformance/stmt.dcl/static-local-run.cpp`.
