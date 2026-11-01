@@ -49,6 +49,9 @@ pub(crate) struct MemberRef {
     pub(crate) error: bool,
     /// Named by a qualified-id (only `&C::m` forms a pointer to member).
     pub(crate) qualified: bool,
+    /// Where the qualified-id begins, when `e` is a `MemberExpr` (the
+    /// `DeclRefExpr` of `&C::m` begins at its qualifier).
+    pub(crate) begin: Option<Loc>,
 }
 
 const CV: Quals = Quals::CV;
@@ -114,7 +117,7 @@ impl Sema<'_, '_> {
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
             let e = self.member_of_object(this, obj_ty, class, true, d, shadow, nns, loc);
             if qualified && !self.is_err_expr(e) {
-                self.member_refs.insert(e, MemberRef { decl: d, error: false, qualified });
+                self.member_refs.insert(e, MemberRef { decl: d, error: false, qualified, begin: None });
             }
             return e;
         }
@@ -132,7 +135,7 @@ impl Sema<'_, '_> {
         });
         let e = self.builder().decl_ref(d, ty, loc, extra, nou, ExprFlags::NONE);
         let error = self.unevaluated == 0 || self.kind_of(d) == DeclKind::CXXMethod;
-        self.member_refs.insert(e, MemberRef { decl: d, error, qualified });
+        self.member_refs.insert(e, MemberRef { decl: d, error, qualified, begin: None });
         e
     }
 
@@ -970,7 +973,11 @@ impl Sema<'_, '_> {
         } else {
             let nou = if self.unevaluated > 0 { NonOdrUse::Unevaluated } else { NonOdrUse::None };
             let at = self.eloc(e);
-            self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE)
+            let x = self.builder().decl_ref(d, declared, at, None, nou, ExprFlags::NONE);
+            if let Some(b) = r.begin {
+                let _ = self.ast.templates.expr_begin.insert(x, b);
+            }
+            x
         };
         if self.kind_of(d) == DeclKind::CXXMethod {
             let at = self.eloc(e);

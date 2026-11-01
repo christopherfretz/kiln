@@ -762,9 +762,12 @@ impl Sema<'_, '_> {
     fn set_qualified_begin(&mut self, e: ExprId, begin: Option<Loc>, loc: Loc) {
         if let Some(b) = begin
             && b != loc
-            && self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr
         {
-            let _ = self.ast.templates.expr_begin.insert(e, b);
+            if self.ast.exprs.get(e).kind() == ExprKind::DeclRefExpr {
+                let _ = self.ast.templates.expr_begin.insert(e, b);
+            } else if let Some(r) = self.member_refs.get_mut(&e) {
+                r.begin = Some(b);
+            }
         }
     }
 
