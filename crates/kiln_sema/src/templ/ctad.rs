@@ -336,6 +336,21 @@ impl Sema<'_, '_> {
                 }
             }
         }
+        // A member template of an instantiated class template ([temp.mem])
+        // has no definition of its own until a specialization of it is
+        // instantiated; its constructors are those of the original
+        // member template's definition, the enclosing arguments
+        // substituted.
+        let mut member_def = None;
+        if def.is_none() && self.inst_template(tmpl) != tmpl {
+            let orig = self.inst_template(tmpl);
+            member_def = self.pattern_of(orig).and_then(|p| self.ast.definition(p));
+            if let Some(od) = member_def {
+                let (gs, any) = self.member_ctor_guides(ctx, name, injected, info.params, tmpl, od);
+                any_ctor = any;
+                out.extend(gs);
+            }
+        }
         if !any_ctor {
             let loc = self.ast.decls.get(first).loc();
             out.extend(self.implicit_guide(ctx, name, injected, info.params, None, loc));
@@ -346,10 +361,106 @@ impl Sema<'_, '_> {
         let _ = self.templ.ctad_origin.insert(g, GuideOrigin::Copy);
         out.push(g);
         self.ast.templates.dependent_depth = saved;
-        if def.is_some() {
+        if def.is_some() || member_def.is_some() {
             let _ = self.templ.ctad_guides.insert(first, out.clone());
         }
         out
+    }
+
+    /// The guides of the non-template constructors of `od`, the
+    /// definition of the member template that `tmpl` (a member template
+    /// of a class template specialization) was instantiated from: their
+    /// parameter types with the enclosing specialization's arguments and
+    /// `tmpl`'s own parameters substituted. Constructor templates of such
+    /// a member are not yet guides. Also whether `od` declares a
+    /// constructor.
+    fn member_ctor_guides(
+        &mut self,
+        ctx: DeclId,
+        name: DeclName,
+        ret: QualType,
+        params: TemplateParamListId,
+        tmpl: DeclId,
+        od: DeclId,
+    ) -> (Vec<DeclId>, bool) {
+        let pl = *self.ast.templates.param_list(params);
+        let own: Vec<DeclId> = self.ast.lists.iter::<DeclId>(pl.params).collect();
+        let mut args = Vec::with_capacity(own.len());
+        for &p in &own {
+            let a = self.template_param_arg(p);
+            let pack = self.ast.template_parm(p).is_some_and(|i| i.pack);
+            args.push(if pack { TemplateArg::pack(self.ast.types.arg_list(&[a])) } else { a });
+        }
+        let args = self.ast.types.arg_list(&args);
+        let mut levels = self.base_levels(tmpl);
+        levels.push(args, tmpl, LevelMode::Substitute);
+        let members: Vec<DeclId> = self.ast.members(od).collect();
+        let mut out = Vec::new();
+        let mut any_ctor = false;
+        let saved = self.ast.templates.dependent_depth;
+        self.ast.templates.dependent_depth = u32::from(pl.depth) + 1;
+        for m in members {
+            let n = *self.ast.decls.get(m);
+            if n.has(DeclFlags::IMPLICIT) || n.has(DeclFlags::INVALID) {
+                continue;
+            }
+            match n.kind() {
+                DeclKind::CXXConstructor => {}
+                DeclKind::FunctionTemplate
+                    if self
+                        .pattern_of(m)
+                        .is_some_and(|p| self.kind_of(p) == DeclKind::CXXConstructor) =>
+                {
+                    any_ctor = true;
+                    continue;
+                }
+                _ => continue,
+            }
+            any_ctor = true;
+            let Some(fd) = self.ast.decls.function(m) else { continue };
+            let cparams: Vec<DeclId> = self.ast.lists.iter::<DeclId>(fd.params).collect();
+            let explicit = fd.spec.is_explicit();
+            let cty = n.ty().unwrap_or(QualType::ERROR);
+            let variadic = self.ast.types.proto(cty).is_some_and(FuncProto::variadic);
+            let loc = n.loc();
+            let ptys = (|| {
+                let mut s = Substituter::new(self, &levels);
+                let mut ptys = Vec::with_capacity(cparams.len());
+                for &p in &cparams {
+                    let t = s.sema.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+                    let t = if let TypeView::PackExpansion { pattern, .. } =
+                        s.sema.ast.types.view(t.ty())
+                    {
+                        match s.expand_pattern(|s| s.ty(pattern, loc))? {
+                            Expansion::Unexpanded(x) => s.sema.ast.types.pack_expansion(x, None),
+                            Expansion::Elements(es) if es.len() == 1 => {
+                                s.sema.strip_expansion_ty(es[0])
+                            }
+                            Expansion::Elements(_) => return Err(SubstFail),
+                        }
+                    } else {
+                        s.ty(t, loc)?
+                    };
+                    ptys.push(t);
+                }
+                Ok::<_, SubstFail>(ptys)
+            })();
+            let Ok(ptys) = ptys else { continue };
+            let shape = GuideShape {
+                ret,
+                cparams: &cparams,
+                ptys: &ptys,
+                variadic,
+                explicit,
+                depth: pl.depth + 1,
+            };
+            let f = self.guide_function(ctx, name, loc, &shape);
+            let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params);
+            let _ = self.templ.ctad_origin.insert(g, GuideOrigin::Ctor);
+            out.push(g);
+        }
+        self.ast.templates.dependent_depth = saved;
+        (out, any_ctor)
     }
 
     /// The guide `template<P...> [explicit] C(params of ctor) -> C<P...>`

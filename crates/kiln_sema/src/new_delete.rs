@@ -272,6 +272,22 @@ impl Sema<'_, '_> {
             self.error(DiagId::sema_new_array_size_unknown, at);
             return self.recover_err(&kids, loc);
         }
+        // [dcl.type.class.deduct]/2: a placeholder for a deduced class
+        // type is not an array element (clang reports the innermost
+        // array: a later bound's `[`, else the first bound).
+        if d.chunks.is_empty()
+            && self.is_ctad_placeholder(tid.base)
+            && let Some(&(size, bracket)) = arrays.last()
+        {
+            let at = match size {
+                _ if arrays.len() > 1 => bracket,
+                Some(e) => self.begin_loc(e),
+                None => tid.loc,
+            };
+            let d = self.diag(DiagId::sema_ctad_compound_type, at).arg("form array of");
+            self.emit(d);
+            return self.recover_err(&kids, loc);
+        }
         // A dependent new-expression is checked at instantiation ([temp.res]).
         let kids_dep = kids.iter().any(|&k| {
             self.ast
@@ -328,10 +344,6 @@ impl Sema<'_, '_> {
         }
         // [dcl.type.class.deduct]/2: `new C(args)` (WP-071b).
         if self.is_ctad_placeholder(elem) {
-            if !arrays.is_empty() {
-                self.unsupported("class template argument deduction for an array new", tid.loc);
-                return self.recover_err(&kids, loc);
-            }
             let t = match &init {
                 NewInit::None => self.deduce_ctad(elem, &[], &[], CtadInit::Direct, tid.loc),
                 NewInit::Paren(es, l, r) => {
