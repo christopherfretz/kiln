@@ -32,6 +32,7 @@ pub mod report;
 pub mod spec;
 pub mod stack;
 pub mod subst;
+mod ttarg;
 pub mod var;
 pub(crate) mod written;
 
@@ -165,6 +166,12 @@ pub struct TemplState {
     /// substitution-failure note of a later deduction that finds it
     /// memoized (§6.1 step 4).
     pub(crate) fn_spec_failures: kiln_source::fx::FxHashMap<DeclId, kiln_diag::Diag>,
+    /// The function parameters the last call deduction found
+    /// non-dependent once its explicit template arguments were
+    /// substituted, as a bit set by index (CWG1391: their conversions
+    /// are checked before the specialization is formed, so a failure
+    /// names the template; spec/sema-overload.md §10.4).
+    pub(crate) explicit_nondep: u64,
     /// Pack elements produced by expansions (§11.3 `templ.pack_elements`).
     pub pack_elements: u64,
     /// The `...` of each fold-expression (clang `CXXFoldExpr::EllipsisLoc`;
@@ -198,6 +205,10 @@ pub struct TemplState {
     /// Where each dependent type and nested-name-specifier component was
     /// written, sorted (§5.8; [`Sema::written_loc`]).
     pub(crate) written_locs: kiln_source::fx::FxHashMap<written::WrittenKey, Vec<Loc>>,
+    /// The `->` of each function declared with a dependent trailing
+    /// return type: its dependent names are found after it (§5.8), not
+    /// among the parameters' (`auto f(int (*p)(T::type)) -> T::type`).
+    pub(crate) trailing_arrow: kiln_source::fx::FxHashMap<DeclId, Loc>,
 }
 
 /// The class an object expression names for the lookup of the first

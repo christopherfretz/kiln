@@ -286,7 +286,18 @@ pub(crate) fn float_bin(op: Op, kind: FloatKind, a: u128, b: u128) -> Result<u12
     if op == Op::FDiv && is_zero(kind, b) {
         return Err(FloatErr::DivZero);
     }
-    let r = match kind {
+    let r = float_bin_raw(op, kind, a, b).ok_or(FloatErr::Unsupported)?;
+    if is_nan(kind, r) {
+        return Err(FloatErr::NaN);
+    }
+    Ok(r)
+}
+
+/// `a op b` rounded to nearest even, with no check of the result (an
+/// `APFloat` operator: a NaN or an infinity is a value); `None` for a
+/// format whose arithmetic is not implemented.
+pub(crate) fn float_bin_raw(op: Op, kind: FloatKind, a: u128, b: u128) -> Option<u128> {
+    Some(match kind {
         FloatKind::Single => {
             let (x, y) = (f32::from_bits(a as u32), f32::from_bits(b as u32));
             let v = match op {
@@ -318,14 +329,8 @@ pub(crate) fn float_bin(op: Op, kind: FloatKind, a: u128, b: u128) -> Result<u12
             };
             from_f64(kind, v)
         }
-        FloatKind::X87Extended | FloatKind::Quad => {
-            softfloat::bin(op, kind, a, b).ok_or(FloatErr::Unsupported)?
-        }
-    };
-    if is_nan(kind, r) {
-        return Err(FloatErr::NaN);
-    }
-    Ok(r)
+        FloatKind::X87Extended | FloatKind::Quad => softfloat::bin(op, kind, a, b)?,
+    })
 }
 
 /// `-a`.

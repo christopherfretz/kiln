@@ -206,6 +206,7 @@ pub static TABLE: &[Row] = &[
     // §9.5 object model
     f("__builtin_addressof", DONE, Oven::Yes),
     f("__builtin_launder", DONE, Oven::Yes),
+    f("__builtin_complex", DONE, Oven::Yes),
     f("__builtin_bit_cast", DONE, Oven::Yes),
     f("__builtin_unreachable", DONE, Oven::Yes),
     // allocation

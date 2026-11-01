@@ -242,6 +242,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Const
                 | Kw::Volatile
                 | Kw::Restrict
+                | Kw::Complex
                 | Kw::Alignas
                 | Kw::Attribute
                 | Kw::Declspec

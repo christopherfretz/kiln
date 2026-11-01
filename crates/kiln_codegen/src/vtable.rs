@@ -19,7 +19,7 @@ use kiln_llvm::{
 };
 
 use crate::fir::{Op, V};
-use crate::func::{CallArg, min_align};
+use crate::func::min_align;
 use crate::module::{Cg, R, err};
 
 /// How a class's vtable is emitted (clang `getVTableLinkage` with
@@ -1012,13 +1012,7 @@ impl Cg<'_> {
             let q = ast.decls.get(p).ty().expect("param type");
             let a = self.f.locals[&p];
             // EmitDelegateCallArg.
-            vals.push(if self.referee(q).is_some() {
-                CallArg::Scalar(self.load(LTy::PTR, a.v, a.align, false))
-            } else if self.is_aggregate(q) {
-                CallArg::Agg(a)
-            } else {
-                CallArg::Scalar(self.load_scalar(a, q))
-            });
+            vals.push(self.delegate_call_arg(a, q));
             ptys.push(q);
         }
         let first = ast.first(d);
@@ -1044,6 +1038,7 @@ impl Cg<'_> {
             self.f.fir.set_tail(c);
         }
         // EmitReturnOfRValue.
+        self.delegate_cx_return(rq, sig.sret());
         if let Some(x) = rv
             && !agg
             && let Some(slot) = self.f.ret_slot

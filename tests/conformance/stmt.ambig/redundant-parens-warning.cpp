@@ -3,7 +3,7 @@
 // cast of an existing `x`, with a class or dependent `T`.
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(kiln): the redundant-parentheses -Wvexing-parse warning is not implemented
+// Verified against clang 19 (WP-191).
 //@ diag: 31:15 warning "parentheses were disambiguated as redundant parentheses around declaration of variable named 'a'"
 //@ diag: 31:14 note "add enclosing parentheses to perform a function-style cast"
 //@ diag: 31:15 note "remove parentheses to silence this warning"

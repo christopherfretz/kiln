@@ -193,6 +193,9 @@ pub(crate) struct Candidate {
     pub builtin: [QualType; 2],
     /// `BadDeduction`: why the template's deduction failed (§10.4).
     pub deduction: Option<Box<crate::templ::deduce_call::DeductionFailure>>,
+    /// A template specialization's parameters made non-dependent by
+    /// its explicit template arguments, by index (CWG1391, §10.4).
+    pub explicit_nondep: u64,
 }
 
 /// The result of overload resolution (spec/sema-overload.md §10.1).
@@ -225,6 +228,7 @@ impl Candidate {
             final_conv: None,
             builtin: [QualType::ERROR; 2],
             deduction: None,
+            explicit_nondep: 0,
         }
     }
 

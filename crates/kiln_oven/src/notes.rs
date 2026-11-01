@@ -183,7 +183,11 @@ impl Oven {
             Fault::FloatRange { kind, bits } => {
                 let t = site
                     .e
-                    .map_or_else(|| "int".into(), |e| Self::qname(ast, ast.exprs.get(e).ty()));
+                    .map_or_else(|| "int".into(), |e| {
+                        // A complex part: its element type (clang).
+                        let q = ast.exprs.get(e).ty();
+                        Self::qname(ast, ast.types.as_complex(q).unwrap_or(q))
+                    });
                 (
                     site.loc,
                     format!(
@@ -922,7 +926,14 @@ impl Oven {
         aux: u32,
     ) -> String {
         let signed = aux >> 8 & 1 != 0;
-        let ty = site.e.map_or_else(|| "int".into(), |e| Self::qname(ast, ast.exprs.get(e).ty()));
+        let ty = site.e.map_or_else(
+            || "int".into(),
+            |e| {
+                // A complex part (`++` steps the real part): its element type.
+                let q = ast.exprs.get(e).ty();
+                Self::qname(ast, ast.types.as_complex(q).unwrap_or(q))
+            },
+        );
         let vec =
             site.e.map_or_else(String::new, |e| Self::vector_suffix(ast, ast.exprs.get(e).ty()));
         match err {

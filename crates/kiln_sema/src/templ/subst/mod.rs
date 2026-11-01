@@ -22,7 +22,7 @@ pub(crate) use local::LocalMethod;
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::ids::{ArgListId, ListId, NnsId};
+use kiln_ast::ids::{ArgListId, ListId, NnsId, QualType};
 use kiln_ast::types::{ArgView, Nns, TemplateArg, TemplateName, TypeFlags};
 use kiln_source::Loc;
 use kiln_source::fx::FxHashMap;
@@ -92,6 +92,10 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// The occurrence rule of the declaration whose type is being
     /// substituted (§5.8; [`Substituter::with_written_scope`]).
     pub(crate) written_scope: Option<crate::templ::written::WrittenScope>,
+    /// The occurrences an *after* `written_scope` has used, per dependent
+    /// type: a type the declarator writes again (`T::type (*f)(T::type)`)
+    /// resolves to its next occurrence (§5.8).
+    written_used: std::cell::RefCell<FxHashMap<WrittenKey, Loc>>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -122,6 +126,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             partial_pack: None,
             written_locs: true,
             written_scope: None,
+            written_used: std::cell::RefCell::default(),
         }
     }
 
@@ -133,15 +138,51 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let saved = self.written_scope.replace(scope);
+        let used = self.written_used.take();
         let r = f(self);
         self.written_scope = saved;
+        let _ = self.written_used.replace(used);
         r
     }
 
+    /// Type operand `t` of the expression at `loc` (`sizeof(T::type)`,
+    /// `typeid(T::type)`): its dependent names are the occurrences after
+    /// the keyword (§5.8), not the nearest ones, which may belong to the
+    /// enclosing declaration's type.
+    pub(crate) fn ty_written_after(&mut self, t: QualType, loc: Loc) -> SubstResult<QualType> {
+        use crate::templ::written::{WrittenScope, WrittenSide};
+        let scope = WrittenScope { anchor: loc, side: WrittenSide::After, bound: loc };
+        self.with_written_scope(scope, |s| s.ty(t, loc))
+    }
+
     /// Where the dependent entity `key` was written nearest to `loc`
-    /// ([`Substituter::written_locs`]).
+    /// ([`Substituter::written_locs`]). Under an *after* scope, each
+    /// substitution of the same dependent type takes the next occurrence
+    /// (types are substituted in written order: a leading return type,
+    /// then the parameters). Only types advance: a nested-name-specifier
+    /// is looked up more than once per occurrence.
     pub(crate) fn written(&self, key: WrittenKey, loc: Loc) -> Loc {
-        if self.written_locs { self.sema.written_loc_in(key, loc, self.written_scope) } else { loc }
+        use crate::templ::written::WrittenSide;
+        if !self.written_locs {
+            return loc;
+        }
+        let Some(sc) = self.written_scope.filter(|sc| {
+            sc.side == WrittenSide::After && sc.anchor == loc && matches!(key, WrittenKey::Type(_))
+        }) else {
+            return self.sema.written_loc_in(key, loc, self.written_scope);
+        };
+        let prev = self.written_used.borrow().get(&key).copied();
+        let found = match prev {
+            Some(p) => {
+                let next = crate::templ::written::WrittenScope { bound: p.with_offset(1), ..sc };
+                let l = self.sema.written_loc_in(key, loc, Some(next));
+                // None after the previous one: it stays.
+                if l > p { l } else { p }
+            }
+            None => self.sema.written_loc_in(key, loc, Some(sc)),
+        };
+        let _ = self.written_used.borrow_mut().insert(key, found);
+        found
     }
 
     /// Records that the pattern context `pattern` is instantiated as

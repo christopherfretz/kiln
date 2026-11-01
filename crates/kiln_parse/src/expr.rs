@@ -417,6 +417,13 @@ impl Parser<'_, '_> {
                 self.bump();
                 return self.parse_cast_expr();
             }
+            Some(k @ (Kw::Real | Kw::Imag)) => {
+                // GNU `__real__ e` / `__imag__ e` (clang's `ParseCastExpression`).
+                self.bump();
+                let e = self.parse_cast_expr()?;
+                let op = if k == Kw::Real { UnaryOp::Real } else { UnaryOp::Imag };
+                return Some(self.s.act_on_unary(op, e, loc));
+            }
             Some(Kw::Noexcept) => return self.parse_noexcept_expr(),
             Some(Kw::New | Kw::Delete) => return self.parse_new_delete_expr(),
             Some(k @ Kw::CoAwait) => {

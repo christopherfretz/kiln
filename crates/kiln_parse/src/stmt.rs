@@ -7,7 +7,8 @@ use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, Std, TokKind};
 use kiln_sema::{
-    Chunk, DeclSpec, Declarator, DeclaratorContext, RangeInit, ScopeKind, TypeSpecKind,
+    Chunk, DeclSpec, Declarator, DeclaratorContext, EmptyBodyStmt, RangeInit, ScopeKind,
+    TypeSpecKind,
 };
 use kiln_source::Loc;
 
@@ -44,7 +45,9 @@ impl Parser<'_, '_> {
         if new_scope {
             self.s.pop_scope();
         }
-        (self.s.act_on_compound(&stmts, lbrace, rbrace), rbrace)
+        let block = self.s.act_on_compound(&stmts, lbrace, rbrace);
+        self.s.check_empty_loop_bodies(&stmts);
+        (block, rbrace)
     }
 
     /// A sub-statement in its own block scope ([stmt.pre]/1); a dropped
@@ -435,6 +438,9 @@ impl Parser<'_, '_> {
             if self.at_attr() {
                 self.parse_attributes(&mut attrs);
             }
+            // The leading attributes appertain to the exception variable
+            // ([except.pre]/1, [dcl.pre]/5).
+            self.lead_decl_attrs = attrs;
             let ctx = DeclaratorContext::Block;
             let ds = self.parse_decl_specifiers(ctx);
             let mut d = Declarator::new(ctx, self.loc());
@@ -492,6 +498,7 @@ impl Parser<'_, '_> {
             self.skip_if_rest_after_cond();
             return None;
         };
+        let rparen = self.prev_end();
         let (kind, cond) = if constexpr {
             (IfKind::Constexpr, self.s.act_on_constexpr_condition(c))
         } else {
@@ -501,7 +508,11 @@ impl Parser<'_, '_> {
         let els =
             if self.eat_kw(Kw::Else).is_some() { Some(self.parse_sub_statement()) } else { None };
         self.s.pop_scope();
-        Some(self.s.act_on_if(kind, init, var, Some(cond), then, els, loc))
+        let s = self.s.act_on_if(kind, init, var, Some(cond), then, els, loc);
+        if els.is_none() {
+            self.s.check_empty_body(EmptyBodyStmt::If, rparen, then);
+        }
+        Some(s)
     }
 
     /// `if !? consteval compound-statement (else statement)?`
@@ -593,9 +604,11 @@ impl Parser<'_, '_> {
             self.s.pop_scope();
             return None;
         };
+        let rparen = self.prev_end();
         let cond = self.s.act_on_start_switch(c, loc);
         let body = self.parse_sub_statement();
         let s = self.s.act_on_finish_switch(init, var, cond, body, loc);
+        self.s.check_empty_switch_body(cond, rparen, body);
         self.s.pop_scope();
         Some(s)
     }
@@ -663,12 +676,15 @@ impl Parser<'_, '_> {
         let loc = self.bump().span.lo;
         self.s.push_scope(ScopeKind::Control);
         let cond = self.parse_loop_condition("while", true);
+        let rparen = self.prev_end();
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
         self.s.act_on_end_loop();
         self.s.pop_scope();
         let (var, cond) = cond?;
-        Some(self.s.act_on_while(var, cond, body, loc))
+        let s = self.s.act_on_while(var, cond, body, loc);
+        self.s.note_loop_body(EmptyBodyStmt::While, s, rparen, body);
+        Some(s)
     }
 
     /// do-statement ([stmt.do]).
@@ -863,11 +879,16 @@ impl Parser<'_, '_> {
             return None;
         };
         self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let rparen = self.prev_end();
         let head = v.and_then(|v| self.s.act_on_for_range(init, v, range, temps, colon, loc));
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
         self.s.act_on_end_loop();
-        head.map(|h| self.s.act_on_finish_for_range(h, body))
+        let s = head.map(|h| self.s.act_on_finish_for_range(h, body));
+        if s.is_some() {
+            self.s.check_empty_body(EmptyBodyStmt::RangeFor, rparen, body);
+        }
+        s
     }
 
     /// The body of a loop whose head was in error: analysed (clang keeps
@@ -929,10 +950,13 @@ impl Parser<'_, '_> {
             inc = Some(e);
         }
         self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let rparen = self.prev_end();
         self.s.act_on_start_loop();
         let body = self.parse_sub_statement();
         self.s.act_on_end_loop();
-        Some(self.s.act_on_for(init, var, cond, inc, body, loc))
+        let s = self.s.act_on_for(init, var, cond, inc, body, loc);
+        self.s.note_loop_body(EmptyBodyStmt::For, s, rparen, body);
+        Some(s)
     }
 
     /// return-statement ([stmt.return]).

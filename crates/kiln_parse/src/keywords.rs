@@ -122,6 +122,9 @@ keywords! {
     Attribute = "__attribute__" | "__attribute";
     Declspec = "__declspec";
     Extension = "__extension__";
+    Complex = "_Complex" | "__complex__" | "__complex";
+    Real = "__real__" | "__real";
+    Imag = "__imag__" | "__imag";
     BuiltinOffsetof = "__builtin_offsetof";
     BuiltinBitCast = "__builtin_bit_cast";
     BuiltinVaArg = "__builtin_va_arg";
