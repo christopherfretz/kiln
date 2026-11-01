@@ -994,8 +994,16 @@ The specialization is then still completed with its implicit special
 members (`ensure_implicit` exempts invalid specializations), its default
 member initializers are not instantiated, and the use that required the
 definition fails without a further "incomplete type" error
-(`undefined_diagnosed`). Gap: member functions of such a specialization
-are still instantiated on use (`a.g()` after `A<int> a;`).
+(`undefined_diagnosed`). `instantiation_fails` is that quiet failure
+for the uses clang checks with `RequireCompleteType`: a variable
+definition (default-initialized or with an initializer) or a function
+parameter of the specialization's type is invalid, so its later uses
+raise nothing and instantiate nothing (`a.g()` after `A<int> a;`), and a
+member access that instantiated the class builds no expression, so the
+member function it names is not instantiated. Later uses find the class
+complete: a static member, a member pointer, or a later member call
+instantiate their members as usual
+(`tests/conformance/temp.inst/invalid-specialization-members.cpp`).
 
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first

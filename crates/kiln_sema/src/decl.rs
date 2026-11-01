@@ -3580,6 +3580,14 @@ impl Sema<'_, '_> {
         if self.reject_incomplete_array_init(v, ty, loc, &init) {
             return;
         }
+        // clang `AddInitializerToDecl`'s `RequireCompleteType`: a class
+        // template specialization failing to instantiate here leaves the
+        // variable invalid, quietly.
+        if !self.ast.types.is_reference(ty) && self.instantiation_fails(ty, loc) {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            self.discard_initializer(&init);
+            return;
+        }
         // A variable names itself, even when declared inside the
         // initializer of another entity (a lambda body).
         let entity = self.init_entity.take();
@@ -4015,6 +4023,10 @@ impl Sema<'_, '_> {
         }
         // clang checks (and names) the element type of a bounded array.
         let elem = self.bounded_array_element(ty);
+        if self.instantiation_fails(elem, self.ast.decls.get(v).loc()) {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return;
+        }
         if !self.require_complete(elem, self.ast.decls.get(v).loc()) {
             let msg = if self.ast.types.is_void(elem) {
                 self.diag(DiagId::sema_void_var, loc).arg(self.ty_arg(elem))
@@ -4127,6 +4139,14 @@ impl Sema<'_, '_> {
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            // clang `CheckParmsForFunctionDef`: a parameter whose class
+            // template specialization fails to instantiate is invalid.
+            if !self.ast.types.is_reference(pty)
+                && self.instantiation_fails(pty, self.ast.decls.get(p).loc())
+            {
+                self.ast.decls.set_flags(p, DeclFlags::INVALID);
+                continue;
+            }
             if !self.require_complete(pty, self.ast.decls.get(p).loc())
                 && !self.ast.types.is_reference(pty)
                 && !self.is_error_type(pty)

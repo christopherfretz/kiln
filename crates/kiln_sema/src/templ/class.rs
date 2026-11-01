@@ -418,6 +418,24 @@ impl Sema<'_, '_> {
         self.is_complete(q)
     }
 
+    /// Whether this use of `q` instantiates a class template
+    /// specialization whose instantiation fails ([temp.inst]/2, diagnosed
+    /// then). clang's `RequireCompleteType` returns the instantiation's
+    /// invalidity, so the use that instantiated it fails quietly (`A<int>
+    /// a;` is an invalid variable, `p->g()` builds no call and so does not
+    /// instantiate `g`); later uses find the class complete.
+    pub(crate) fn instantiation_fails(&mut self, q: QualType, loc: Loc) -> bool {
+        let Some(r) = self.undefined_spec(q) else { return false };
+        if self.instantiate_class(r, loc, true)
+            || !self.ast.decls.get(r).has(DeclFlags::INVALID)
+            || self.ast.definition(r).is_none()
+        {
+            return false;
+        }
+        self.inst.undefined_diagnosed.set(None);
+        true
+    }
+
     /// As [`Sema::require_complete`], but an undefined template is not
     /// diagnosed (the caller reports the incomplete type).
     pub fn require_complete_silent(&mut self, q: QualType, loc: Loc) -> bool {
