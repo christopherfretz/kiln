@@ -1739,7 +1739,11 @@ impl Sema<'_, '_> {
     }
 
     fn inc_dec(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
-        let t = self.ety(e);
+        // clang `CheckIncrementDecrementOperand`: an `_Atomic` operand is
+        // checked, and yields, its value type.
+        let operand_t = self.ety(e);
+        let atomic = self.ast.types.as_atomic(operand_t);
+        let t = atomic.unwrap_or(operand_t);
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
         if self.ast.types.builtin(t) == Some(BuiltinType::Bool) {
             let msg = self.diag(DiagId::sema_incdec_bool, loc).arg(if inc { "0" } else { "1" });
@@ -1771,7 +1775,7 @@ impl Sema<'_, '_> {
         }
         let flags =
             if self.narrower_than_int(t) { ExprFlags::CANNOT_OVERFLOW } else { ExprFlags::NONE };
-        let ty = if op.is_postfix() { conv::strip_cv(self, t) } else { t };
+        let ty = if op.is_postfix() || atomic.is_some() { conv::strip_cv(self, t) } else { t };
         let r = self.builder().unary(op, e, ty, loc, flags);
         self.mark_bitfield_if(r, e);
         r
@@ -2016,8 +2020,12 @@ impl Sema<'_, '_> {
     fn compound_assign(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         // The operands are checked as for `E1 op E2` before `E1` is
         // checked to be modifiable (clang's `CreateBuiltinBinOp`).
-        let lt = self.ety(l);
+        // An `_Atomic` target is checked by its value type (clang's
+        // `CreateBuiltinBinOp` via `UsualArithmeticConversions`).
+        let target_t = self.ety(l);
+        let lt = self.ast.types.as_atomic(target_t).unwrap_or(target_t);
         let rt = self.ety(r);
+        let rt = self.ast.types.as_atomic(rt).unwrap_or(rt);
         let (r2, lhs_ty, res_ty) = match op {
             BinaryOp::AddAssign | BinaryOp::SubAssign if self.ast.types.is_pointer(lt) => {
                 if !self.is_integral_or_enum(rt) || conv::is_scoped_enum(self, rt) {
@@ -2091,7 +2099,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[l, r], loc);
         }
-        let res = self.builder().compound_assign(op, l, r2, lt, lhs_ty, res_ty, loc);
+        let res = self.builder().compound_assign(op, l, r2, target_t, lhs_ty, res_ty, loc);
         self.mark_bitfield_if(res, l);
         res
     }
