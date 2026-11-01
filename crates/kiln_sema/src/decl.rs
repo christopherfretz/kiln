@@ -5736,14 +5736,7 @@ impl Sema<'_, '_> {
         let mut decls: Vec<DeclId> = Vec::new();
         for &x in &found.decls {
             let d = self.ast.strip_shadow(x);
-            let k = self.kind_of(d);
-            if is_type_kind(k) && k != DeclKind::UnresolvedUsingTypename {
-                let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm) {
-                    self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
-                } else {
-                    self.tag_type(d)
-                };
-                let c = self.ast.types.canonical(ty);
+            if let Some(c) = self.designated_type(d) {
                 if !types.contains(&c) {
                     types.push(c);
                 }
@@ -5764,6 +5757,24 @@ impl Sema<'_, '_> {
                 let k = self.kind_of(self.ast.strip_shadow(x));
                 k.is_function() || k == DeclKind::FunctionTemplate
             })
+    }
+
+    /// The canonical type a type declaration `d` designates (a typedef's
+    /// underlying type, a class's type), the identity of a type name for
+    /// lookup ([class.member.lookup]/3, [dcl.typedef]/3); `None` for a
+    /// non-type or a dependent using-declaration.
+    pub(crate) fn designated_type(&self, d: DeclId) -> Option<QualType> {
+        let k = self.kind_of(d);
+        if !is_type_kind(k) || k == DeclKind::UnresolvedUsingTypename {
+            return None;
+        }
+        let ty = if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm)
+        {
+            self.ast.decls.get(d).ty()?
+        } else {
+            self.tag_type(d)
+        };
+        Some(self.ast.types.canonical(ty))
     }
 
     /// The declaration an ambiguous lookup `found` recovers with when one

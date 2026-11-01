@@ -561,13 +561,25 @@ impl Sema<'_, '_> {
         let mut it = leaves.into_iter();
         let (found, path, _) = it.next()?;
         let mut acc = ClassHit { found, paths: vec![path], mixed: false };
-        let firsts = |f: &Found| -> Vec<DeclId> {
-            let mut v: Vec<DeclId> = f.decls.iter().map(|&d| self.ast.first(d)).collect();
-            v.sort_unstable();
+        // [class.member.lookup]/3: a type declaration stands for the type
+        // it designates (clang `HasSameDeclarations`), so typedefs of one
+        // type found in different bases name the same member.
+        let keys = |f: &Found| -> Vec<Result<QualType, DeclId>> {
+            let mut v = Vec::new();
+            for &d in &f.decls {
+                let k = self.designated_type(self.ast.strip_shadow(d)).ok_or(self.ast.first(d));
+                if !v.contains(&k) {
+                    v.push(k);
+                }
+            }
             v
         };
+        let same = |a: &Found, b: &Found| {
+            let (x, y) = (keys(a), keys(b));
+            x.len() == y.len() && x.iter().all(|k| y.contains(k))
+        };
         for (sub, path, _) in it {
-            if acc.mixed || firsts(&acc.found) != firsts(&sub) {
+            if acc.mixed || !same(&acc.found, &sub) {
                 acc.mixed = true;
                 for (j, &d) in sub.decls.iter().enumerate() {
                     let f = self.ast.first(d);
@@ -699,9 +711,17 @@ impl Sema<'_, '_> {
                         self.diag(kiln_diag::DiagId::note_ambiguous_member_type_found, loc)
                             .arg(self.ty_arg(ty))
                     } else if is_type_kind(k) {
-                        let ty = self.tag_type(d);
+                        // clang prints the class's type with its scope
+                        // (`getTypeDeclType`), without an `aka`.
+                        let names = crate::names::SemaNames::new(self);
+                        let ty = kiln_ast::types::print_type(
+                            &self.ast.types,
+                            &names,
+                            self.tag_type(d),
+                            kiln_ast::types::PrintOptions::CANONICAL,
+                        );
                         self.diag(kiln_diag::DiagId::note_ambiguous_member_type_found, loc)
-                            .arg(self.ty_arg(ty))
+                            .arg(format!("'{ty}'"))
                     } else {
                         self.diag(kiln_diag::DiagId::note_ambiguous_member_found, loc)
                     };
