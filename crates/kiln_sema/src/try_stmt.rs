@@ -272,15 +272,6 @@ impl Sema<'_, '_> {
         false
     }
 
-    /// True if expression statement `e` is a throw-expression (possibly
-    /// under its full-expression's cleanups): control does not continue.
-    pub(crate) fn is_throw_stmt_expr(&self, mut e: ExprId) -> bool {
-        if self.ast.exprs.get(e).kind() == ExprKind::ExprWithCleanups {
-            e = self.ast.exprs.operand(e);
-        }
-        self.is_throw_expr(e)
-    }
-
     /// The body of a function-try-block of constructor `f`: a `return`
     /// in a handler is ill-formed ([except.handle]/13, clang
     /// `DiagnoseReturnInConstructorExceptionHandler`).

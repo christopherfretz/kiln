@@ -603,6 +603,7 @@ impl Sema<'_, '_> {
         let (cond, cond_ty, invalid) = if self.is_dependent_type(ty0) {
             (cond, ty0, false)
         } else if ok {
+            self.check_switch_bool(cond, loc);
             let c = conv::integral_promotion(self, cond);
             let ty = self.ast.exprs.get(c).ty();
             (c, ty, false)
@@ -647,6 +648,7 @@ impl Sema<'_, '_> {
         let cases = match cases {
             Some(sw) => {
                 self.check_case_ranges(&sw);
+                self.check_switch_cases(&sw, cond, loc);
                 sw.cases
             }
             None => Vec::new(),
@@ -1231,107 +1233,11 @@ impl Sema<'_, '_> {
         self.ast.is_noreturn_fn(f)
     }
 
-    /// Whether control can reach the end of `s` (a structural
-    /// approximation of clang's CFG-based `-Wreturn-type`).
+    /// Whether control can reach the end of the function body `s`
+    /// (clang `CheckFallThrough` over the body's CFG, mirrored by the
+    /// reachability walk; spec/sema.md §7.5).
     fn falls_off(&mut self, s: StmtId) -> Falloff {
-        let n = *self.ast.stmts.get(s);
-        match n.kind() {
-            StmtKind::ReturnStmt | StmtKind::GotoStmt => Falloff::Never,
-            StmtKind::CompoundStmt => {
-                let list = self.ast.stmts.compound_body(s);
-                let items: Vec<StmtId> = self.ast.lists.iter(list).collect();
-                let mut result = Falloff::Always;
-                for &c in &items {
-                    match self.falls_off(c) {
-                        Falloff::Never => return Falloff::Never,
-                        Falloff::Maybe => result = Falloff::Maybe,
-                        Falloff::Always => {}
-                    }
-                }
-                result
-            }
-            StmtKind::IfStmt => {
-                let d = *self.ast.stmts.if_data(s);
-                let then = d.then.map_or(Falloff::Always, |t| self.falls_off(t));
-                let els = d.els.map_or(Falloff::Always, |e| self.falls_off(e));
-                // A constant condition selects one branch.
-                if let Some(c) = d.cond
-                    && let Some(v) = self.try_fold(c).and_then(|v| self.const_truth(v))
-                {
-                    return if v { then } else { els };
-                }
-                match (then, els) {
-                    (Falloff::Never, Falloff::Never) => Falloff::Never,
-                    (Falloff::Always, Falloff::Always) => Falloff::Always,
-                    _ => Falloff::Maybe,
-                }
-            }
-            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
-                let d = *self.ast.stmts.loop_data(s);
-                let infinite = match d.cond {
-                    None => true,
-                    Some(c) => self.try_fold(c).and_then(|v| self.const_truth(v)) == Some(true),
-                };
-                let breaks = d.body.is_some_and(|b| self.contains_break(b, 0));
-                let body_never = n.kind() == StmtKind::DoStmt
-                    && d.body.is_some_and(|b| self.falls_off(b) == Falloff::Never);
-                if (infinite || body_never) && !breaks {
-                    Falloff::Never
-                } else {
-                    Falloff::Maybe.min_with(Falloff::Always, d.body.map(|b| self.has_return(b)))
-                }
-            }
-            StmtKind::CXXForRangeStmt => {
-                // Never infinite: the condition is `__begin != __end`.
-                let body = self.ast.stmts.range_for_data(s).body;
-                Falloff::Maybe.min_with(Falloff::Always, Some(self.has_return(body)))
-            }
-            StmtKind::LabelStmt | StmtKind::AttributedStmt => self.falls_off(StmtId::new(n.b())),
-            StmtKind::CaseStmt => self.falls_off(self.ast.stmts.case_data(s).sub),
-            StmtKind::DefaultStmt => self.falls_off(self.ast.stmts.default_sub(s)),
-            StmtKind::SwitchStmt => {
-                let d = *self.ast.stmts.switch_data(s);
-                let has_default = self
-                    .ast
-                    .lists
-                    .iter::<StmtId>(d.cases)
-                    .any(|c| self.ast.stmts.get(c).kind() == StmtKind::DefaultStmt);
-                let body = self.falls_off(d.body);
-                if has_default && body == Falloff::Never && !self.contains_break(d.body, 0) {
-                    Falloff::Never
-                } else if self.has_return(d.body) {
-                    Falloff::Maybe
-                } else {
-                    Falloff::Always
-                }
-            }
-            StmtKind::ExprStmt => {
-                let e = self.ast.stmts.expr_stmt_expr(s);
-                if self.is_noreturn_call(e) || self.is_throw_stmt_expr(e) {
-                    Falloff::Never
-                } else {
-                    Falloff::Always
-                }
-            }
-            StmtKind::CXXTryStmt => {
-                // clang's CFG makes every handler a successor of the
-                // try-block's entry ([except.handle]).
-                let mut parts = vec![self.falls_off(self.ast.stmts.try_block(s))];
-                let handlers: Vec<StmtId> =
-                    self.ast.lists.iter(self.ast.stmts.try_handlers(s)).collect();
-                for h in handlers {
-                    parts.push(self.falls_off(self.ast.stmts.catch_block(h)));
-                }
-                if parts.iter().all(|&p| p == Falloff::Never) {
-                    Falloff::Never
-                } else if parts.iter().all(|&p| p == Falloff::Always) {
-                    Falloff::Always
-                } else {
-                    Falloff::Maybe
-                }
-            }
-            _ => Falloff::Always,
-        }
+        self.fall_off_kind(s)
     }
 
     pub(crate) fn is_noreturn_call(&self, e: ExprId) -> bool {
@@ -1394,42 +1300,17 @@ impl Sema<'_, '_> {
             _ => Vec::new(),
         }
     }
-
-    /// True if `s` contains a `break` that leaves the statement it is
-    /// nested in at `depth` 0.
-    fn contains_break(&self, s: StmtId, depth: u32) -> bool {
-        let k = self.ast.stmts.get(s).kind();
-        if k == StmtKind::BreakStmt {
-            return depth == 0;
-        }
-        let nested = matches!(
-            k,
-            StmtKind::WhileStmt
-                | StmtKind::ForStmt
-                | StmtKind::DoStmt
-                | StmtKind::SwitchStmt
-                | StmtKind::CXXForRangeStmt
-        );
-        let d = if nested { depth + 1 } else { depth };
-        self.children(s).into_iter().any(|c| self.contains_break(c, d))
-    }
-
-    fn has_return(&self, s: StmtId) -> bool {
-        self.ast.stmts.get(s).kind() == StmtKind::ReturnStmt
-            || self.children(s).into_iter().any(|c| self.has_return(c))
-    }
 }
 
+/// How control reaches the end of a function body (clang
+/// `ControlFlowKind`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Falloff {
+pub(crate) enum Falloff {
+    /// Never (or clang builds no CFG).
     Never,
+    /// On some path, others returning, throwing or ending in a call to a
+    /// `noreturn` function.
     Maybe,
+    /// On every path that leaves the body.
     Always,
-}
-
-impl Falloff {
-    /// A loop body: `Maybe` when it contains a `return`, else `Always`.
-    fn min_with(self, other: Falloff, has_return: Option<bool>) -> Falloff {
-        if has_return == Some(true) { self } else { other }
-    }
 }

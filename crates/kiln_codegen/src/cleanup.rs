@@ -87,6 +87,10 @@ pub(crate) enum Cleanup {
     /// Restores the stack pointer saved in `slot` before the scope's
     /// first variable length array (`CallStackRestore`, WP-183).
     StackRestore { slot: V },
+    /// Calls the deallocation function `op_delete` of class type `ty` on
+    /// `ptr` (`this`) after the complete-object destructor of a deleting
+    /// destructor, even if that destructor throws (`CallDtorDelete`).
+    DtorDelete { op_delete: DeclId, ptr: V, ty: QualType },
 }
 
 /// A value a cleanup uses: directly, or reloaded from the
@@ -1121,6 +1125,12 @@ impl Cg<'_> {
             }
             Cleanup::GuardAbort { guard } => self.emit_guard_abort(guard),
             Cleanup::StackRestore { slot } => self.emit_stack_restore(slot),
+            Cleanup::DtorDelete { op_delete, ptr, ty } => {
+                let loc = Some(self.ast.decls.get(op_delete).loc());
+                if let Err(e) = self.emit_delete_call(op_delete, ptr, ty, loc) {
+                    self.f.error.get_or_insert(e);
+                }
+            }
         }
     }
 
