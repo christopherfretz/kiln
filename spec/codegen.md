@@ -508,12 +508,12 @@ The normative description is spec/driver.md "Code generation". In short:
   `<opts>` to both command lines after it (WP-165). A `(case, triple)` pair in its `DEVIATIONS` table
   must only verify; every other pair must be identical. `KILN_CASE=<stem>`
   prints both texts; without `opt-19`/`clang++-19` it is skipped. The
-  corpus is 211 programs (ABI classification of 1- to 32-byte structs,
+  corpus is 215 programs (ABI classification of 1- to 32-byte structs,
   HFAs, byval, varargs, `__int128`, `long double`, bit-fields, static
   locals, string literals, references, control flow, new/delete, and the
   WP-088 `builtins_{bits,mem,fp,misc,srcloc}` cases, the WP-079
   `class_*` cases of §7, the WP-137 `consteval_oversized` case, and later
-  work packages' cases): 419/422 pairs exact; `DEVIATIONS` holds
+  work packages' cases): 427/430 pairs exact; `DEVIATIONS` holds
   `global_init_array_eh`, `eh_array_destroy_throwing_global` and
   `array_temporary_global` on aarch64 (§7f, §7m).
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
