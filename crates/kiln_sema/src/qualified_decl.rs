@@ -98,10 +98,12 @@ impl Sema<'_, '_> {
         }
         if is_record(cur_kind) {
             // [class.mem.general]/7 (`struct A { struct B { void f(); };
-            // void B::f(); };`): the qualifier is dropped.
+            // void B::f(); };`): clang clears the qualifier after it has
+            // chosen the nested class as the declaration's context, so the
+            // declaration stays a member of `B`.
             let m = self.diag(DiagId::sema_member_qualification, loc).arg(&n);
             self.emit(m);
-            return QualifiedDecl::Unqualify;
+            return QualifiedDecl::Keep;
         }
         QualifiedDecl::Keep
     }
