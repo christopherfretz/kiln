@@ -9,8 +9,8 @@
 
 use kiln_llvm::{
     BinOp, BlockId, CallOpts, CastOp, Clause, CmpXchgOpts, FastMath, Flags, FloatPredicate, FuncId,
-    GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module, Ordering,
-    RmwOp, SyncScope, TypeId, Value,
+    GepFlags, IntPredicate, IrBuilder, IrResult, MdKindId, MemOpts, MetadataId, Module,
+    OperandBundle, Ordering, RmwOp, SyncScope, TypeId, Value,
 };
 
 /// A block of the buffer.
@@ -101,6 +101,16 @@ pub(crate) enum Op {
         callee: V,
         args: Vec<V>,
         opts: Box<CallOpts>,
+    },
+    /// `call void @llvm.assume(i1 true) [ "<tag>"(<args>) ]` (clang
+    /// `CreateAlignmentAssumption`): the bundle operands are FIR values.
+    AssumeBundle {
+        fn_ty: TypeId,
+        callee: Value,
+        /// The `i1 true` constant.
+        cond: Value,
+        tag: &'static str,
+        args: Vec<V>,
     },
     /// `invoke ... to label %normal unwind label %unwind` (spec/codegen.md §7b).
     Invoke {
@@ -263,6 +273,7 @@ impl Op {
             | Op::CallBr { callee, args, .. } => {
                 std::iter::once(*callee).chain(args.iter().copied()).collect()
             }
+            Op::AssumeBundle { args, .. } => args.clone(),
             Op::LandingPad { clauses, .. } => clauses.clone(),
             Op::Resume { v } => vec![*v],
             Op::CondBr { c, .. } => vec![*c],
@@ -740,6 +751,14 @@ impl Fir {
                     Op::Call { fn_ty, callee, args, opts } => {
                         let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
                         b.call_ex(*fn_ty, val(*callee), &args, opts)?
+                    }
+                    Op::AssumeBundle { fn_ty, callee, cond, tag, args } => {
+                        let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
+                        let opts = CallOpts {
+                            bundles: vec![OperandBundle { tag: (*tag).into(), args }],
+                            ..CallOpts::default()
+                        };
+                        b.call_ex(*fn_ty, *callee, &[*cond], &opts)?
                     }
                     Op::Invoke { fn_ty, callee, args, opts, normal, unwind } => {
                         let args: Vec<Value> = args.iter().map(|&x| val(x)).collect();
