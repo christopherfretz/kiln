@@ -223,6 +223,7 @@ impl Sema<'_, '_> {
             }
             s.act_on_finish_function_def(f, b, rbrace);
         });
+        self.replay_dependent_access(pdef, f);
         self.pop_inst_frame();
     }
 }

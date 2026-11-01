@@ -429,8 +429,9 @@ impl Sema<'_, '_> {
                 .arg("non-type template argument")
                 .arg(raw.to_string())
                 .arg(self.ty_arg(pty));
+            // clang `ext_cce_narrowing` (a `-Wc++11-narrowing` error by
+            // default) recovers with the converted value.
             self.emit(d);
-            return Err(());
         }
         let c = match conv::implicit_convert(self, c, pty, ConvCtx::Initialization) {
             Ok(c) => c,
