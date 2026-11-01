@@ -924,6 +924,15 @@ Later uses of it are silent.
 - If its signature does not depend on the template's parameters, the
   second specialization to instantiate it reports "redefinition of 'f'"
   (clang). The note shows the first instantiation.
+- A friend function declared (unqualified) in a templated class
+  redeclares nothing when the template is defined: it is not linked
+  to an earlier declaration of the same name, nor checked against an
+  earlier definition (clang). Its instantiation is linked to the
+  namespace-scope declarations; if one of them, or an earlier
+  instantiation, already has a body, the instantiated definition
+  reports "redefinition of 'g'" with the instantiation note and
+  "previous definition is here" (libc++ `swap` friends of
+  `__compressed_pair`-like templates next to namespace `swap`).
 - A friend template, or a friend specialization (`friend void f<>(T)`),
   is substituted and then matched against the namespace-scope templates
   when it is instantiated.
@@ -1229,7 +1238,14 @@ recomputed exactly as for non-template code (clang's
   The exception spec and `explicit(bool)` come later, when needed
   ([temp.inst]/14).
 - **Parameters.** `ParmVar`s are substituted. A function parameter pack
-  becomes N `ParmVar`s (`DeclOrPack::Pack`).
+  becomes N `ParmVar`s (`DeclOrPack::Pack`). A specialization declared
+  from an earlier declaration takes the definition's parameter names
+  when its body is instantiated (clang instantiates them from the
+  definition), so a local of the body may reuse a forward
+  declaration's parameter name.
+- **Variables** keep the pattern's form of initialization (`cinit`,
+  `callinit`, `listinit`): `T v{a, b}` stays direct-list-initialization,
+  which may choose an explicit constructor.
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
@@ -1336,7 +1352,11 @@ retained, since the AST is append-only. They are metered as
      against the pattern. A pack that is not last is non-deduced.
    - **A P without template params.** It is not deduced. Its conversion
      is checked after deduction (CWG1391) and gives
-     `NonDependentConversionFailure`.
+     `NonDependentConversionFailure`. The same holds for a P whose
+     template params all sit in non-deduced contexts (`FS<A...>`, an
+     alias of `BFS<char, typename ti<A>::type...>`): a failed match of
+     its argument is not a deduction failure, and a successful one is
+     not an original argument for /4.
 3. **Finish** ([temp.deduct.general]/5):
    - an undeduced parameter takes its default (substituted in order); a
      pack takes the empty pack; anything else gives `Incomplete`;
@@ -1717,6 +1737,14 @@ template argument outside an expansion context is checked. A violation is
 type …", or "base type …"). The check walks the node, pruning on the
 flag, to name the first pack.
 
+A lambda whose body names an enclosing template's pack in a
+full-expression or a declaration (`[] { A x{}; return sizeof(x); }()...`)
+is itself unexpanded: its `LambdaExpr` carries `UNEXPANDED_PACK`, so the
+enclosing expansion takes it as part of its pattern. While the
+expansion probes for packs (§7.2), the first pack found ends the
+substitution of the lambda's body (no statement error is reported
+for the probe).
+
 ### 7.2 Expansion: `expand(pattern, site) -> Result<Expansion, SubstFail>`
 
 1. **Collect the unexpanded packs** in `pattern`, pruning on
@@ -1855,11 +1883,14 @@ cost is small.
     (`bool`) is fixed at construction.
 - **The associated constraints of a templated entity**
   ([temp.constr.decl]/3) are the conjunction, in this order, of:
-  1. the template-head's requires-clause;
-  2. each parameter's immediately-declared constraint, in order;
+  1. each parameter's immediately-declared constraint, in order
+     (an abbreviated template's invented parameters included, after
+     the written ones, as clang's `getAssociatedConstraints` does);
+  2. the template-head's requires-clause;
   3. the trailing requires-clause.
-  For abbreviated templates, the invented parameters come first in that
-  order, as clang does.
+  Satisfaction short-circuits in this order: in
+  `template<range R> requires (kind<R> != 0)`, a non-range `R` never
+  instantiates `kind<R>`.
 
 ### 8.2 Normalization and atomic-constraint identity
 
@@ -1912,6 +1943,11 @@ declared constraint of a constrained pack `C... Ts` is the fold
   - A non-constant result is clang's error "substitution into constraint
     expression resulted in a non-constant expression".
 - **`And` and `Or`** short-circuit from left to right.
+- **Context.** Atomic constraints are substituted in the context of the
+  constrained entity's declaration (its semantic `DeclContext`, via
+  `in_inst_context`), not where satisfaction is checked: an unqualified
+  name in a concept is looked up from the concept's namespace even when
+  the concept-id is checked inside another one.
 
 The result is stored:
 

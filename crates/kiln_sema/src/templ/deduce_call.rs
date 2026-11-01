@@ -445,11 +445,17 @@ impl Sema<'_, '_> {
                 continue;
             }
             let r = self.deduce_call_arg(p, a, &mut d);
-            if r != Tdk::Success {
+            // [temp.deduct.call]/1 (CWG1391): a P with no template
+            // parameter in a deduced context takes no part in deduction
+            // (`basic_format_string<char, type_identity_t<Args>...>`
+            // against `const char*`); the argument is checked by the
+            // conversion to the substituted P. Asked only on failure:
+            // otherwise skipping and deducing agree.
+            if r != Tdk::Success && self.has_deducible_params(p, &d, false) {
                 self.resugar_mismatch(p, &mut d);
                 return Err(DeductionFailure::new(r, d));
             }
-            if self.has_deducible_params(p, &d, false) && self.is_original_arg(a) {
+            if r == Tdk::Success && self.has_deducible_params(p, &d, false) && self.is_original_arg(a) {
                 originals.push((i, p, self.adjusted_call_arg(p, a, d.depth)));
             }
         }

@@ -173,7 +173,15 @@ impl Substituter<'_, '_, '_> {
         let t = self.decl_ty(d);
         let ty = self.named_decl_ty(d, t, loc)?;
         let ds = self.pattern_declspec(d, ty);
-        let dr = self.pattern_declarator(d, ctx)?;
+        let mut dr = self.pattern_declarator(d, ctx)?;
+        // The initialization's form as written (`T v{...}` is
+        // direct-list-initialization, which may choose an explicit
+        // constructor; [dcl.init.general]/16).
+        if let Some(x) = self.sema.ast.decls.var(d)
+            && x.init.is_some()
+        {
+            dr.init_style = Some(x.spec.init_style());
+        }
         let Some(v) = self.sema.act_on_declarator(&ds, ty, &dr) else { return Err(SubstFail) };
         self.locals.insert(d, DeclOrPack::Decl(v));
         // A constrained placeholder's diagnostics point at its
