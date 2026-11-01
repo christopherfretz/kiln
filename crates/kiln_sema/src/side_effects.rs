@@ -19,6 +19,22 @@ impl Sema<'_, '_> {
     /// Warns when unevaluated operand `e` has side effects, unless it is
     /// instantiation-dependent or this is a template instantiation (as
     /// clang, which checks the pattern instead), at `e`'s location.
+    /// [expr.typeid]/3: the evaluated operand `e` of `typeid` (a
+    /// polymorphic glvalue) with possible side effects, calls included
+    /// (clang `warn_side_effects_typeid`): not in an instantiation, nor
+    /// for an instantiation-dependent operand (the definition warns).
+    pub(crate) fn check_typeid_side_effects(&mut self, e: ExprId) {
+        if !self.inst.stack.is_empty()
+            || self.ast.exprs.get(e).deps().intersects(ExprDeps::TYPE_VALUE_INST | ExprDeps::ERROR)
+            || !self.has_possible_side_effects(e)
+        {
+            return;
+        }
+        let loc = self.expr_loc(e);
+        let msg = self.diag(DiagId::sema_side_effects_typeid, loc);
+        self.emit(msg);
+    }
+
     pub(crate) fn check_unevaluated_side_effects(&mut self, e: ExprId) {
         if !self.inst.stack.is_empty() || self.is_err_expr(e) || !self.has_side_effects(e) {
             return;
