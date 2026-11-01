@@ -737,4 +737,51 @@ mod tests {
         assert_eq!(Lang::from_path("a.h"), Lang::Cxx);
         assert_eq!(Lang::from_path("dir.c/a"), Lang::Cxx);
     }
+
+    /// spec/driver.md "-verify": clang `ParseDiagnosticArgs` semantics:
+    /// bare `-verify` adds `expected`, `-verify=` values are comma-split,
+    /// all prefixes are sorted and deduplicated; `-Xclang` forwards the
+    /// next argument to the same parser.
+    #[test]
+    fn verify_prefixes() {
+        use kiln_diag::verify::VerifyLevel;
+        assert_eq!(parse("-fsyntax-only t.cpp").verify, None);
+        let a = parse("-fsyntax-only -verify t.cpp");
+        assert_eq!(a.verify.as_ref().map(|v| v.prefixes.clone()), Some(vec!["expected".into()]));
+        let a = parse("-Xclang -verify=foo,bar -Xclang -verify=foo -verify t.cpp");
+        let v = a.verify.unwrap();
+        assert_eq!(v.prefixes, ["bar", "expected", "foo"]);
+        assert_eq!(v.ignore_unexpected, [false; 4]);
+        assert_eq!(a.errors, []);
+        let v = parse("-verify -verify-ignore-unexpected t.cpp").verify.unwrap();
+        assert_eq!(v.ignore_unexpected, [true; 4]);
+        let v = parse("-verify -Xclang -verify-ignore-unexpected=note,warning t.cpp").verify.unwrap();
+        let mut want = [false; 4];
+        want[VerifyLevel::Note as usize] = true;
+        want[VerifyLevel::Warning as usize] = true;
+        assert_eq!(v.ignore_unexpected, want);
+    }
+
+    /// spec/driver.md "-verify": an invalid prefix is an error and turns
+    /// verify off; invalid ignore levels are reported after the prefixes;
+    /// a trailing `-Xclang` is a missing value.
+    #[test]
+    fn verify_errors() {
+        let a = parse("-verify=9x,ok,a.b -verify-ignore-unexpected=bogus,note t.cpp");
+        assert_eq!(a.verify, None);
+        assert_eq!(
+            a.errors,
+            [
+                ArgError::InvalidVerifyPrefix("9x".into()),
+                ArgError::InvalidVerifyPrefix("a.b".into()),
+                ArgError::InvalidFlagValue("-verify-ignore-unexpected=".into(), "bogus".into()),
+            ]
+        );
+        let a = parse("-verify= t.cpp");
+        assert_eq!(a.errors, [ArgError::InvalidVerifyPrefix(String::new())]);
+        let a = parse("t.cpp -Xclang");
+        assert_eq!(a.errors, [ArgError::MissingValue("-Xclang".into())]);
+        let a = parse("-verify=a-b_c1 t.cpp");
+        assert_eq!(a.verify.unwrap().prefixes, ["a-b_c1"]);
+    }
 }
