@@ -30,6 +30,7 @@ use crate::declspec::{
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
+use crate::qualified_decl::QualifiedDecl;
 use crate::scope::{Scope, ScopeKind};
 use crate::type_diff::DiffArgs as _;
 use crate::{Sema, target};
@@ -138,6 +139,13 @@ impl Sema<'_, '_> {
     pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
+            TypeSpecKind::None
+                if ds.complex.is_some() && ds.width == Width::None && ds.sign == Sign::None =>
+            {
+                // clang `DeclSpec::Finish`: `ext_plain_complex`.
+                self.error(DiagId::sema_plain_complex, ds.complex.unwrap_or(loc));
+                QualType::DOUBLE
+            }
             TypeSpecKind::None if !ds.has_type_specifier() => {
                 if !ds.invalid {
                     self.error(DiagId::parse_missing_type_specifier, loc);
@@ -205,6 +213,10 @@ impl Sema<'_, '_> {
             }
             TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
         };
+        let base = match ds.complex {
+            Some(cloc) => self.complex_of_declspec(ds, base, cloc),
+            None => base,
+        };
         // clang `BuildQualifiedType`: the `_Atomic` qualifier makes the
         // unqualified type atomic and keeps its qualifiers outside.
         let base = match ds.atomic_qual {
@@ -221,6 +233,35 @@ impl Sema<'_, '_> {
         };
         let cv = ds.cv;
         if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
+    }
+
+    /// `_Complex T` for the type `base` named by the other specifiers of
+    /// `ds` (clang `DeclSpec::Finish`: a real floating or integer type).
+    fn complex_of_declspec(&mut self, ds: &DeclSpec, base: QualType, cloc: Loc) -> QualType {
+        let ok = matches!(
+            ds.base,
+            TypeSpecKind::None
+                | TypeSpecKind::Int
+                | TypeSpecKind::Char
+                | TypeSpecKind::Float
+                | TypeSpecKind::Double
+                | TypeSpecKind::Float128
+        );
+        if !ok {
+            if !ds.invalid && !self.is_error_type(base) {
+                // clang `DeclSpec::getSpecifierName(TST_typename)`.
+                let name = match ds.base {
+                    TypeSpecKind::Named => "type-name",
+                    b => b.spelling(),
+                };
+                let msg = self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(name);
+                self.emit(msg);
+            }
+            // clang drops the `_Complex` (`TSC_unspecified`) and goes on
+            // with the base type.
+            return base;
+        }
+        self.ast.types.complex(base)
     }
 
     /// True if `q` is the error type.
@@ -585,6 +626,33 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// `ty` wrapped in `ParenType` sugar for each pair of grouping
+    /// parentheses of `d` around exactly `inside` chunks (clang's
+    /// `DeclaratorChunk::Paren`, WP-191). Parentheses around no chunk (the
+    /// outermost type, `int (x)`) and around a function or array type
+    /// (`void (*f)(int)`, `int (*p)[3]`) get no node: clang's printer
+    /// shows neither, so the sugar would only cost a node.
+    fn declarator_parens(&mut self, mut ty: QualType, d: &Declarator, inside: usize) -> QualType {
+        if inside == 0 {
+            return ty;
+        }
+        for &(n, _, _) in &d.parens {
+            if n != inside {
+                continue;
+            }
+            let k = self.ast.types.kind(ty.ty());
+            if k == kiln_ast::types::TypeKind::Function
+                || k.is_array()
+                || k == kiln_ast::types::TypeKind::QualifiedArray
+                || self.is_error_type(ty)
+            {
+                return ty;
+            }
+            ty = self.ast.types.paren_type(ty);
+        }
+        ty
+    }
+
     /// The type of `d` given the decl-specifier type `base`
     /// ([dcl.meaning], [dcl.ptr], [dcl.ref], [dcl.array], [dcl.fct]).
     pub fn type_for_declarator(&mut self, base: QualType, d: &Declarator) -> QualType {
@@ -608,10 +676,11 @@ impl Sema<'_, '_> {
         let mut ty = self.ctad_declarator_check(base, spec_loc, d);
         let name = self.declarator_name(d);
         let mut prev_ref = false;
-        for chunk in d.chunks.iter().rev() {
+        for (i, chunk) in d.chunks.iter().enumerate().rev() {
             if self.is_error_type(ty) {
                 return ty;
             }
+            ty = self.declarator_parens(ty, d, i + 1);
             if let Some(which) = self.decltype_auto_compound(ty, chunk) {
                 let loc = Self::chunk_loc(chunk);
                 let msg = self.diag(DiagId::sema_decltype_auto_compound, loc).arg(which);
@@ -849,7 +918,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let c = conv::decay(self, e);
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         match self.eval_int(c, EvalContext::new(EvalKind::Other, loc)) {
             Ok(v) if v < 0 => {
                 match d.name {
@@ -1661,6 +1730,22 @@ impl Sema<'_, '_> {
             // drops the declaration.
             return None;
         }
+        let unqualified;
+        let d = match if d.dropped {
+            QualifiedDecl::Keep
+        } else {
+            self.diagnose_qualified_declaration(ds, d, head.is_some())
+        } {
+            QualifiedDecl::Keep => d,
+            QualifiedDecl::Unqualify => {
+                unqualified = Declarator { qualifier: None, ..d.clone() };
+                &unqualified
+            }
+            QualifiedDecl::Drop => {
+                self.templ.cur = None;
+                return None;
+            }
+        };
         if !d.dropped
             && ds.friend.is_none()
             && let Some((SpecialName::DeductionGuide(t), _)) = d.special
@@ -1683,6 +1768,7 @@ impl Sema<'_, '_> {
         // so `__attribute__((vector_size(8))) short f();` returns a vector.
         let base = self.apply_declspec_vector_attrs(base, ds);
         let base = self.ctad_decl_spec_check(ds, base, d);
+        self.warn_redundant_parens(ds, base, d);
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         if head.is_some() {
             if ds.is_typedef() {
@@ -2199,6 +2285,9 @@ impl Sema<'_, '_> {
         let mut attrs = attrs.to_vec();
         let ty = self.apply_vector_attrs(ty, &mut attrs, true);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        // [class.access.spec]/1: a member alias-declaration has the
+        // current access, as a member typedef does.
+        self.set_member_access(td);
         if let Some(t) = self.finish_template_pattern(td) {
             self.set_member_access(t);
         }
@@ -3052,7 +3141,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let c = conv::decay(self, w);
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
             Ok(v) => v,
             Err(mut f) => {
@@ -4867,7 +4956,7 @@ impl Sema<'_, '_> {
                 let cty = self.ast.exprs.get(c).ty();
                 if self.ast.types.as_enum(cty).is_some() { QualType::INT } else { cty }
             };
-            let c = self.act_on_full_expr(c);
+            let c = self.act_on_constant_full_expr(c);
             // A converted constant expression for a fixed underlying
             // type ([dcl.enum]/5), else an integral constant expression.
             let at = self.begin_loc(ie);
@@ -5245,7 +5334,7 @@ impl Sema<'_, '_> {
                 cond
             }
         };
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         let cloc = self.begin_loc(cond);
         // [dcl.pre]/10: a value-dependent condition waits for instantiation.
         if !self.has_errors_in(c) && !self.expr_is_value_dependent(c) {
@@ -5925,7 +6014,7 @@ impl Sema<'_, '_> {
         }
         let loc = self.ast.exprs.get(e).loc();
         let c = conv::lvalue_to_rvalue(self, e);
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         let r = self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(e)));
         if let Ok(v) = r {
             if v != 0 && (v < 0 || (v & (v - 1)) != 0) {

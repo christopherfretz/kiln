@@ -1,0 +1,23 @@
+// [class.mem.general]/11, [class.base.init]/9: a field whose default
+// member initializer fails is invalid: constructors, aggregate
+// initializations and constant evaluations using it do not repeat the error.
+//@ expect: compile-fail
+//@ strict-diags
+//@ diag: 14:20 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
+//@ diag: 15:13 error "constexpr variable 'ca' must be initialized by a constant expression"
+//@ diag: 15:13 note "subobject 'a' is not initialized"
+//@ diag: 14:16 note "subobject declared here"
+//@ diag: 16:20 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
+//@ diag: 18:20 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
+//@ diag: 20:21 error "cannot initialize a member subobject of type 'int *' with an rvalue of type 'int'"
+//@ diag: 22:38 error "cannot initialize a member subobject of type 'int' with an lvalue of type 'const char[2]'"
+struct A { int a = "s"; int b; constexpr A() : b(1) {} };
+constexpr A ca;
+struct B { int a = "s"; };
+B b1{}; B b2 = B(); constexpr B b3{};
+struct C { int a = "s"; int c = 1; };
+constexpr int k = C{}.c;
+struct D { int *p = 1; D() = default; D(int) : D() {} };
+D d(1);
+template<class T> struct F { int a = "s"; T t{}; };
+F<int> f; F<long> g;

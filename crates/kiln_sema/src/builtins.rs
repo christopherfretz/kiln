@@ -389,6 +389,7 @@ impl Sema<'_, '_> {
             | builtin::ISLESSGREATER
             | builtin::ISUNORDERED => self.builtin_unordered_compare(args, rparen),
             builtin::LAUNDER => self.builtin_launder(callee, args, rparen),
+            builtin::COMPLEX => self.builtin_complex(args, rparen),
             builtin::CONSTANT_P => self.builtin_constant_p(args, rparen),
             builtin::VA_START => self.builtin_va_start(callee, args, rparen),
             // WP-156: the vector reductions (vector_ops.rs).
@@ -414,7 +415,7 @@ impl Sema<'_, '_> {
 
     /// clang's `checkArgCount`: exactly `n` arguments, else `too few`
     /// at the `)` or `too many` at the first extra argument.
-    fn builtin_arg_count(&mut self, args: &[ExprId], n: usize, rparen: Loc) -> bool {
+    pub(crate) fn builtin_arg_count(&mut self, args: &[ExprId], n: usize, rparen: Loc) -> bool {
         if args.len() == n {
             return true;
         }

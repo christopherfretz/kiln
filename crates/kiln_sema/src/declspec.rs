@@ -173,6 +173,8 @@ pub struct DeclSpec {
     /// The C11 `_Atomic` type qualifier (no parenthesis; a clang
     /// extension in C++) written at.
     pub atomic_qual: Option<Loc>,
+    /// The GNU `_Complex` specifier written at.
+    pub complex: Option<Loc>,
     /// `short`/`long`.
     pub width: Width,
     /// `signed`/`unsigned`.
@@ -212,7 +214,10 @@ impl DeclSpec {
 
     /// True if any type-specifier was written.
     pub fn has_type_specifier(&self) -> bool {
-        self.base != TypeSpecKind::None || self.width != Width::None || self.sign != Sign::None
+        self.base != TypeSpecKind::None
+            || self.width != Width::None
+            || self.sign != Sign::None
+            || self.complex.is_some()
     }
 
     /// True if anything at all was written.
@@ -267,6 +272,18 @@ impl DeclSpec {
         } else {
             Ok(())
         }
+    }
+
+    /// Records the GNU `_Complex` specifier.
+    ///
+    /// # Errors
+    /// `_Complex _Complex`.
+    pub fn set_complex(&mut self, loc: Loc) -> Result<(), SpecError> {
+        self.note_type(loc);
+        if self.complex.replace(loc).is_some() {
+            return Err(SpecError::new(DiagId::parse_duplicate_decl_spec, &["_Complex"]));
+        }
+        Ok(())
     }
 
     fn note_type(&mut self, loc: Loc) {
@@ -619,6 +636,14 @@ pub struct Declarator {
     /// The outermost grouping parentheses and the number of chunks inside
     /// them (`B (x)`: `(0, loc of '(')`; [dcl.type.class.deduct]/2).
     pub outer_paren: Option<(usize, Loc)>,
+    /// Every pair of grouping parentheses, in the order they close: the
+    /// number of chunks inside them and the locations of `(` and `)`
+    /// (clang's `DeclaratorChunk::Paren`; `ParenType` sugar and
+    /// `-Wvexing-parse`'s redundant-parentheses warning, WP-191).
+    pub parens: Vec<(usize, Loc, Loc)>,
+    /// Not the first declarator of its declaration (clang's
+    /// `!isFirstDeclarator()`: a comma precedes it).
+    pub after_comma: bool,
 }
 
 /// Where a declarator appears, refining [`DeclaratorContext`] for the
@@ -717,6 +742,8 @@ impl Declarator {
             special: None,
             site: DeclSite::Plain,
             outer_paren: None,
+            parens: Vec::new(),
+            after_comma: false,
             virt_override: None,
             virt_final: None,
             pure: None,

@@ -1163,8 +1163,7 @@ clang 19 `CGAtomic` at -O0, mirrored:
   structs. Call sites keep the recursive `CallInfo::max_vector_width`.
 - **Validation:** `tests/codegen/va_arg.cpp` exact on aarch64 and
   x86_64; `tests/conformance/cstdarg.syn/va-arg.cpp` (run).
-- **Not implemented:** `_Complex` operands (unsupported in codegen
-  generally).
+- **Not implemented:** `_Complex` operands of `va_arg`.
 
 ## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
 Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
@@ -1597,6 +1596,41 @@ Tests: `tests/codegen/array_temporary.cpp`, `array_temporary_global.cpp`
 `dcl.fct.default/run-default-arg-temporary`; constexpr tests
 `class.temporary/constexpr-array`,
 `dcl.fct.default/constexpr-default-arg-temporary`.
+
+## 7n. Landed (WP-211): GNU `_Complex` (`complex.rs`)
+Mirrors clang 19's `ComplexExprEmitter` at `-O0` with the full complex
+range (`CX_Full`).
+- **Representation.** A complex value is the pair `(real, imag)` of
+  element values. In memory it is the IR struct `{ T, T }` (kiln_abi
+  `irtype.rs`), with parts at struct GEP 0/1. A part is `None` when the
+  consumer ignores it (clang `IgnoreReal`/`IgnoreImag`) or when the
+  operand of an arithmetic operator is real.
+- **Expressions.** These are lowered like clang's visitors:
+  - loads, `__real`/`__imag` (lvalue and rvalue);
+  - casts between real and complex;
+  - unary `+ - ~` (conjugate), `++`/`--` (real part only);
+  - `+ - * /`, assignment and compound assignment (the left value
+    converted to the computation type and back);
+  - `==`/`!=`, `?:` (phi of both parts), and conversion to `bool`;
+  - list initialization, `__builtin_complex`;
+  - folded constants (`extractvalue` of the constant pair);
+  - `ImaginaryLiteral` (a null real part).
+- **Multiplication.** For floating types it uses the four products, then
+  the NaN check on both results (`fcmp uno`, branch weights 1:1048575),
+  then the library call `__mul{s,d,x,t}c3`. Integer multiplication is
+  inline. A real operand uses the shortened forms.
+- **Division.** It calls the library routine `__div{s,d,x,t}c3` for
+  complex floating divisors. A real divisor divides each part directly.
+  Integer division uses clang's inline formula.
+- **Calls.** A complex argument or return goes through the target
+  classification (spec/abi.md §8.17). A returned pair is unpacked from
+  the coerced type (`cx_call_result`). Delegating calls (inheriting
+  constructors, lambda static invokers) forward the parts unchanged.
+- **Validation.** `tests/codegen/complex_{arith,calls,ops,types,delegate,
+  imaginary}.cpp` are exact on aarch64 and x86_64.
+- **Not implemented:** `_Complex _Float16` (kiln has no `_Float16`), and
+  complex ranges other than full (`-fcx-limited-range`,
+  `-fcomplex-arithmetic=`).
 
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)

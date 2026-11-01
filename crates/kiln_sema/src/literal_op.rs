@@ -273,8 +273,11 @@ impl Sema<'_, '_> {
             None
         };
         if let Some(status) = status {
-            // clang `StringLiteralParser::isValidUDSuffix` (C++17+).
-            let valid = s.starts_with('_') || s == "s" || s == "sv";
+            // clang `StringLiteralParser::isValidUDSuffix`: the numeric
+            // library suffixes and `sv` (sema has no -std; C++20's set).
+            let valid = s.starts_with('_')
+                || s == "sv"
+                || kiln_lex::literal::is_valid_ud_suffix(&s, kiln_lex::Std::Cxx26);
             let loc = self.ast.decls.get(f).loc();
             let m = self.diag(DiagId::sema_user_literal_reserved, loc).arg(status).arg(if valid {
                 "1"
@@ -379,6 +382,12 @@ impl Sema<'_, '_> {
             let arg = self.builder().int_literal(QualType::ULONGLONG, v, ast_radix(lit.radix), loc);
             return self.udl_call(sfx, &[arg], loc, ud_loc);
         }
+        if lit.imaginary && !self.has_raw_form(&forms) {
+            // clang: lookup failure is not fatal for `1i`; the GNU
+            // imaginary constant remains.
+            let plain = IntegerLiteral { ud_suffix: None, ..lit.clone() };
+            return self.act_on_integer_literal(&plain, loc, ud_loc);
+        }
         self.raw_udl(sfx, sfx_str, &forms, raw, UdOperand::Integer, loc, ud_loc)
     }
 
@@ -396,14 +405,32 @@ impl Sema<'_, '_> {
         let sfx = self.intern(sfx_str);
         let forms = self.literal_op_forms(sfx);
         if forms.iter().any(|f| f.1 == LitOpForm::One(QualType::LONGDOUBLE)) {
-            let cooked = FloatLiteral { suffix: FloatSuffix::L, ud_suffix: None, ..lit.clone() };
+            let cooked = FloatLiteral {
+                suffix: FloatSuffix::L,
+                ud_suffix: None,
+                imaginary: false,
+                ..lit.clone()
+            };
             let arg = self.act_on_float_literal(&cooked, loc, ud_loc);
             if self.is_err_expr(arg) {
                 return arg;
             }
             return self.udl_call(sfx, &[arg], loc, ud_loc);
         }
+        if lit.imaginary && !self.has_raw_form(&forms) {
+            let plain = FloatLiteral { ud_suffix: None, ..lit.clone() };
+            return self.act_on_float_literal(&plain, loc, ud_loc);
+        }
         self.raw_udl(sfx, sfx_str, &forms, raw, UdOperand::Float, loc, ud_loc)
+    }
+
+    /// Whether `forms` has a raw literal operator or a numeric literal
+    /// operator template ([lex.ext]/3-4).
+    fn has_raw_form(&self, forms: &[(DeclId, LitOpForm)]) -> bool {
+        forms
+            .iter()
+            .any(|f| matches!(f.1, LitOpForm::One(t) if self.is_const_ptr_to(t, QualType::CHAR)))
+            || !Self::templates_of(forms, TemplForm::CharPack).is_empty()
     }
 
     /// The raw literal operator or numeric literal operator template call

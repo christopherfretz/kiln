@@ -257,7 +257,13 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(e);
         let ety = n.ty();
         let t = &self.ast.types;
-        match t.canonical_view(declared) {
+        // The declarator's own reference node keeps its pointee's sugar
+        // (`auto (&r) = x;` is `int (&)`, WP-191).
+        let view = match t.view(declared.ty()) {
+            v @ (TypeView::LValueRef(_) | TypeView::RValueRef(_)) => v,
+            _ => t.canonical_view(declared),
+        };
+        match view {
             TypeView::LValueRef(p) | TypeView::RValueRef(p) => {
                 let rref = matches!(t.canonical_view(declared), TypeView::RValueRef(_));
                 // A forwarding reference `auto &&` bound to an lvalue
@@ -301,7 +307,22 @@ impl Sema<'_, '_> {
     fn deduce_match(&mut self, p: QualType, a: QualType) -> Option<QualType> {
         let t = &self.ast.types;
         let pq = t.canonical(p).quals();
-        match t.canonical_view(p) {
+        // Declarator parentheses and pointers are matched as written, so
+        // their sugar survives (`auto (*p) = &x;` is `int (*)`, WP-191).
+        let view = match t.view(p.ty()) {
+            TypeView::Paren(inner) => {
+                let r = self.deduce_match(inner, a)?;
+                let r = self.ast.types.paren_type(r);
+                return Some(if p.quals().is_empty() {
+                    r
+                } else {
+                    self.ast.types.qualify(r, p.quals())
+                });
+            }
+            v @ TypeView::Pointer(_) => v,
+            _ => t.canonical_view(p),
+        };
+        match view {
             TypeView::Auto { keyword, deduced: None, concept, args, pack } => {
                 let aq = self.ast.types.effective_quals(a);
                 let rest = Quals::from_bits(aq.bits() & !pq.bits());

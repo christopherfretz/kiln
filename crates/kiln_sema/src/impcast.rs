@@ -1,20 +1,23 @@
 //! Implicit-conversion warnings over a completed full-expression
 //! (clang's `CheckImplicitConversions` / `AnalyzeImplicitConversions`).
 //!
-//! Only `-Wliteral-conversion` is implemented: a floating literal
-//! (possibly negated or parenthesized) implicitly converted to an integer
-//! type whose value changes, or is out of range (clang's
-//! `DiagnoseFloatingImpCast` with `IsLiteral`).
+//! Implemented: `-Wliteral-conversion`, a floating literal (possibly
+//! negated or parenthesized) implicitly converted to an integer type
+//! whose value changes, or is out of range (clang's
+//! `DiagnoseFloatingImpCast` with `IsLiteral`); and `-Wconstant-conversion`,
+//! an integral constant implicitly converted to a narrower integer type
+//! whose value changes (clang's `warn_impcast_integer_precision_constant`).
 
-use kiln_ast::expr::{ExprKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
 use kiln_ast::types::BuiltinType;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::{Loc, Span};
 
 use crate::Sema;
+use crate::conv::bit_field_width;
 use crate::conv::narrow::float_kind;
-use crate::conv::rank::{int_signed, int_width};
+use crate::conv::rank::{int_signed, int_width, is_integral_or_unscoped_enum};
 use crate::conv::soft;
 
 /// Bound on the nodes looked at in one full-expression.
@@ -43,6 +46,20 @@ impl Sema<'_, '_> {
                 ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::StmtExpr | ExprKind::LambdaExpr => {
                     continue;
                 }
+                // clang's `AnalyzeAssignment`: a constant out of range of
+                // the bit-field assigned (`-Wbitfield-constant-conversion`,
+                // not implemented) skips the conversions of the right
+                // operand.
+                ExprKind::BinaryOperator
+                    if self.ast.exprs.binary_op(s) == BinaryOp::Assign
+                        && self.bit_field_overflow(s) =>
+                {
+                    let [l, r] = self.ast.exprs.operands(s);
+                    let at = n.loc();
+                    work.push((self.strip_impcast(r), at));
+                    work.push((l, at));
+                    continue;
+                }
                 k if k.is_explicit_cast() => {
                     let sub = self.strip_impcast(self.ast.exprs.operand(s));
                     work.push((sub, cc));
@@ -57,6 +74,24 @@ impl Sema<'_, '_> {
             let kids = self.ast.exprs.children(s, &self.ast.lists);
             work.extend(kids.into_iter().rev().map(|k| (k, at)));
         }
+    }
+
+    /// Whether assignment `e` stores into a bit-field an integral constant
+    /// its width cannot represent.
+    fn bit_field_overflow(&mut self, e: ExprId) -> bool {
+        let [l, r] = self.ast.exprs.operands(e);
+        let Some(w) = bit_field_width(self, l) else { return false };
+        let r = self.strip_impcast(r);
+        let ty = self.ast.exprs.get(r).ty();
+        if !is_integral_or_unscoped_enum(self, ty)
+            || !self.ast.exprs.get(r).deps().is_none()
+            || self.ast.types.builtin(self.ast.exprs.get(l).ty()) == Some(BuiltinType::Bool)
+        {
+            return false;
+        }
+        let Some(v) = self.fold_int(r) else { return false };
+        let signed = int_signed(self, self.ast.exprs.get(l).ty());
+        !representable(v < 0, v.unsigned_abs(), w, signed)
     }
 
     /// clang's `IgnoreParenImpCasts`.
@@ -83,10 +118,92 @@ impl Sema<'_, '_> {
         if self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
         }
-        if self.ast.types.builtin(from).and_then(|b| float_kind(self, b)).is_none() {
+        if self.ast.types.builtin(from).and_then(|b| float_kind(self, b)).is_some() {
+            self.floating_imp_cast(src, to, cc);
             return;
         }
-        self.floating_imp_cast(src, to, cc);
+        self.integer_constant_imp_cast(src, to, cc);
+    }
+
+    /// clang's `CheckImplicitConversion` for an integral constant `e`
+    /// converted to integer type `to` (`-Wconstant-conversion`): the value
+    /// needs more bits than `to` has, or a non-negative signed value of
+    /// exactly `to`'s width turns negative (`isSameWidthConstantConversion`;
+    /// not for a hexadecimal, octal or binary literal). The arms of a
+    /// conditional are checked separately. A runtime-behavior diagnostic.
+    fn integer_constant_imp_cast(&mut self, e: ExprId, to: QualType, cc: Loc) {
+        let n = *self.ast.exprs.get(e);
+        if n.kind() == ExprKind::ConditionalOperator {
+            for arm in self.ast.exprs.cond_arms(e) {
+                let a = self.strip_impcast(arm);
+                if self.ast.exprs.get(a).ty() != to {
+                    self.integer_constant_imp_cast(a, to, cc);
+                }
+            }
+            return;
+        }
+        let from = n.ty();
+        if self.ast.types.builtin(to) == Some(BuiltinType::Bool)
+            || !is_integral_or_unscoped_enum(self, from)
+            || self.ast.types.is_dependent(from)
+            || self.ast.types.canonical(from).without_quals()
+                == self.ast.types.canonical(to).without_quals()
+            || n.deps().intersects(ExprDeps::VALUE.with(ExprDeps::TYPE).with(ExprDeps::ERROR))
+        {
+            return;
+        }
+        // clang's `DiagRuntimeBehavior`: not in an unevaluated or a
+        // constant-evaluated context (a constant-expression).
+        if self.unevaluated > 0
+            || self.immediate > 0
+            || self.constant_full_expr > 0
+            || self.in_constant_evaluated()
+        {
+            return;
+        }
+        let (Some(tw), Some(fw)) = (int_width(self, to), int_width(self, from)) else { return };
+        let t_signed = int_signed(self, to);
+        // Only a conversion that can change a value of `from`.
+        if fw < tw || (fw == tw && (t_signed || !int_signed(self, from))) {
+            return;
+        }
+        let Some(v) = self.fold_int(e) else { return };
+        // clang's `GetValueRange` (the approximate `LikelySourceRange`).
+        let likely = if v < 0 { 129 - (!v).leading_zeros() } else { 128 - v.leading_zeros() };
+        let same_width = likely == tw
+            && t_signed
+            && v >= 0
+            && int_signed(self, from)
+            && !self.non_decimal_literal(e);
+        if likely <= tw && !same_width {
+            return;
+        }
+        let converted = truncate_to(v, tw, t_signed);
+        let range = self.expr_range(e);
+        let ctx = Span::new(cc, self.token_end(cc).unwrap_or(cc));
+        let d = self
+            .diag(DiagId::sema_constant_conversion, n.loc())
+            .arg(self.ty_arg(from))
+            .arg(self.ty_arg(to))
+            .arg(v.to_string())
+            .arg(converted.to_string())
+            .range(range)
+            .range(ctx);
+        self.diag_if_reachable(d, e);
+    }
+
+    /// Whether `e` is an integer literal spelled in hexadecimal, octal or
+    /// binary.
+    fn non_decimal_literal(&self, e: ExprId) -> bool {
+        if self.ast.exprs.get(e).kind() != ExprKind::IntegerLiteral {
+            return false;
+        }
+        let sm = self.diags.sm();
+        let at = sm.spelling_loc(self.ast.exprs.get(e).loc());
+        let Some((file, pos)) = sm.offset_of(at) else { return false };
+        let text = sm.text(file).as_bytes();
+        let pos = pos as usize;
+        text.get(pos) == Some(&b'0') && text.get(pos + 1).is_some_and(u8::is_ascii_alphanumeric)
     }
 
     /// clang's `CheckConditionalOperand` / `DiagnoseFloatingImpCast` for
@@ -235,5 +352,20 @@ fn representable(neg: bool, mag: u128, w: u32, signed: bool) -> bool {
         if neg { mag <= lim } else { mag < lim }
     } else {
         (!neg || mag == 0) && (w >= 128 || mag < (1u128 << w))
+    }
+}
+
+/// `v` truncated to a `w`-bit integer of signedness `signed` (clang's
+/// `PrettyPrintInRange`).
+fn truncate_to(v: i128, w: u32, signed: bool) -> i128 {
+    if w == 0 || w >= 128 {
+        return if w == 0 { 0 } else { v };
+    }
+    let sh = 128 - w;
+    if signed {
+        (v << sh) >> sh
+    } else {
+        // The low `w` bits, as a non-negative value.
+        v & ((1i128 << w) - 1)
     }
 }

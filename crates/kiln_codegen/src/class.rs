@@ -269,13 +269,7 @@ impl Cg<'_> {
                     return err(self.loc_of(e), "inherited constructor parameter not bound");
                 };
                 // EmitDelegateCallArg.
-                vals.push(if self.referee(q).is_some() {
-                    CallArg::Scalar(self.load(LTy::PTR, a.v, a.align, false))
-                } else if self.is_aggregate(q) {
-                    CallArg::Agg(a)
-                } else {
-                    CallArg::Scalar(self.load_scalar(a, q))
-                });
+                vals.push(self.delegate_call_arg(a, q));
                 ptys.push(q);
             }
         }

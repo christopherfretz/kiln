@@ -375,21 +375,12 @@ impl<'c> Ev<'c> {
         }
         let spelling = self.cx.spelling(&tok);
         let n = classify_number(&spelling, self.std);
-        // clang's `NumericLiteralParser` reads `1ui`, `1il`, ... as
-        // imaginary literals where kiln sees an invalid suffix.
-        let imaginary = n.diags.iter().any(|d| {
-            matches!(d.kind, LexDiagKind::InvalidSuffix { .. })
-                && is_imaginary_suffix(spelling.get(d.range.start as usize..d.range.end as usize))
-        });
-        if imaginary {
-            return Err(self.error(DiagId::pp_illegal_floating_literal, tok.span));
-        }
         self.lit_diags(&tok, &spelling, &n.diags, None);
         if n.has_error {
             return Err(Abort);
         }
         let lit = match n.class {
-            NumberClass::Integer(lit) if !is_imaginary_suffix(lit.ud_suffix) => lit,
+            NumberClass::Integer(lit) if !lit.imaginary => lit,
             NumberClass::Invalid => return Err(Abort),
             _ => return Err(self.error(DiagId::pp_illegal_floating_literal, tok.span)),
         };
@@ -679,18 +670,6 @@ fn plain_decimal(text: &str) -> Option<Val> {
     }
     let v = b[..digits].iter().fold(0u64, |v, &c| v * 10 + u64::from(c - b'0'));
     Some(Val { v, unsigned })
-}
-
-/// Whether a ud-suffix makes clang's `NumericLiteralParser` read the
-/// literal as imaginary (`1i`, `1il`, `1ui`, ...): only `u`/`l`/`z` and
-/// exactly one `i`/`j`, or the standard ud-suffix `if`.
-fn is_imaginary_suffix(s: Option<&str>) -> bool {
-    let Some(s) = s else { return false };
-    if s == "if" {
-        return true;
-    }
-    let im = s.bytes().filter(|b| matches!(b, b'i' | b'I' | b'j' | b'J')).count();
-    im == 1 && s.bytes().all(|b| b"iIjJuUlLzZ".contains(&b))
 }
 
 /// Whether `d` is an error that clang's `CharLiteralParser` reports

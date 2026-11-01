@@ -1,15 +1,21 @@
-//! `-Wunused-variable` (clang `ShouldDiagnoseUnusedDecl` /
-//! `DiagnoseUnusedDecl`, spec/sema.md "Unused variables"): a local
-//! variable that is never referenced, diagnosed when its scope is left
-//! (sorted by location, none once an error occurred in the scope), or,
-//! for a variable of dependent type, when it is instantiated.
+//! Unused local variables (clang `ShouldDiagnoseUnusedDecl` /
+//! `DiagnoseUnusedDecl` / `DiagnoseUnusedButSetDecl`, spec/sema.md
+//! "Unused variables"): `-Wunused-variable` for a local variable (or
+//! structured binding declaration) never referenced,
+//! `-Wunused-exception-parameter` for such an exception variable, and
+//! `-Wunused-but-set-variable` for one referenced only as the target of
+//! discarded assignments. Diagnosed when the scope is left (sorted by
+//! location, none once an error occurred in the scope), or, for a
+//! variable of dependent type, when it is instantiated.
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, VarStorage};
-use kiln_ast::expr::ExprKind;
+use kiln_ast::expr::{BinaryOp, ExprKind};
+use kiln_ast::names::OverloadedOperator;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId};
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
+use kiln_source::Loc;
 
 use crate::Sema;
 use crate::scope::{Ns, Scope};
@@ -19,22 +25,41 @@ impl Sema<'_, '_> {
     /// being left. Not in an instantiation (a variable of dependent type
     /// is checked as it is instantiated, [`Self::diagnose_unused_inst_var`]).
     pub(crate) fn diagnose_unused_locals(&mut self, s: &Scope) {
-        if s.locals.is_empty()
-            || !self.inst.stack.is_empty()
-            || self.diags.error_count() > s.errors
-            || !self.diags.is_enabled(DiagId::sema_unused_variable)
-        {
+        if s.locals.is_empty() {
             return;
         }
-        let mut found: Vec<DeclId> = Vec::new();
+        let quiet = !self.inst.stack.is_empty() || self.diags.error_count() > s.errors;
+        let mut seen: Vec<DeclId> = Vec::new();
+        let mut found: Vec<(Loc, Diag)> = Vec::new();
         for &(_, d, ns) in &s.locals {
-            if ns == Ns::Ordinary && !found.contains(&d) && self.should_diagnose_unused_var(d, d) {
-                found.push(d);
+            if ns != Ns::Ordinary {
+                continue;
+            }
+            // A structured binding stands for its decomposition.
+            let d = match self.ast.decls.get(d).kind() {
+                DeclKind::Binding => match self.ast.decls.binding_decomp(d) {
+                    Some(v) => v,
+                    None => continue,
+                },
+                _ => d,
+            };
+            if seen.contains(&d) {
+                continue;
+            }
+            seen.push(d);
+            let count = self.refs_minus_assign.remove(&d);
+            if quiet {
+                continue;
+            }
+            if let Some(msg) = self.unused_var_diag(d, d) {
+                found.push((self.ast.decls.get(d).loc(), msg));
+            } else if let Some(msg) = self.unused_but_set_diag(d, count) {
+                found.push((self.ast.decls.get(d).loc(), msg));
             }
         }
-        found.sort_by_key(|&d| self.ast.decls.get(d).loc());
-        for d in found {
-            self.emit_unused_var(d);
+        found.sort_by_key(|&(l, _)| l);
+        for (_, msg) in found {
+            self.emit(msg);
         }
     }
 
@@ -44,17 +69,134 @@ impl Sema<'_, '_> {
     pub(crate) fn diagnose_unused_inst_var(&mut self, pattern: DeclId, v: DeclId) {
         let Some(t) = self.ast.decls.get(pattern).ty() else { return };
         if self.ast.types.is_dependent(t)
-            && self.diags.is_enabled(DiagId::sema_unused_variable)
-            && self.should_diagnose_unused_var(v, pattern)
+            && let Some(msg) = self.unused_var_diag(v, pattern)
         {
-            self.emit_unused_var(v);
+            self.emit(msg);
         }
     }
 
-    fn emit_unused_var(&mut self, v: DeclId) {
+    /// clang `DiagnoseUnusedDecl` for variable `v` (referenced when
+    /// `pattern` is): the warning, when enabled and due.
+    fn unused_var_diag(&mut self, v: DeclId, pattern: DeclId) -> Option<Diag> {
+        let exception = self.ast.decls.var(v).is_some_and(|x| x.spec.is_exception_var());
+        let id = if exception {
+            DiagId::sema_unused_exception_param
+        } else {
+            DiagId::sema_unused_variable
+        };
+        if !self.diags.is_enabled(id) || !self.should_diagnose_unused_var(v, pattern) {
+            return None;
+        }
         let loc = self.ast.decls.get(v).loc();
-        let msg = self.diag(DiagId::sema_unused_variable, loc).arg(self.decl_arg(v));
-        self.emit(msg);
+        let arg = if self.ast.decls.is_decomposition(v) {
+            format!("'{}'", self.decomp_name(v))
+        } else {
+            self.decl_arg(v)
+        };
+        Some(self.diag(id, loc).arg(arg))
+    }
+
+    /// clang `DiagnoseUnusedButSetDecl` for local variable `v`, whose
+    /// references minus discarded assignments to it are `count`.
+    fn unused_but_set_diag(&mut self, v: DeclId, count: Option<(i32, bool)>) -> Option<Diag> {
+        let (refs, cond) = count?;
+        let n = *self.ast.decls.get(v);
+        if n.kind() != DeclKind::Var
+            || !n.has(DeclFlags::REFERENCED)
+            || !self.diags.is_enabled(DiagId::sema_unused_but_set_variable)
+        {
+            return None;
+        }
+        let name = n.name().as_ident()?;
+        // A variable marked unused, or a placeholder `_` (which behaves
+        // as if `[[maybe_unused]]`).
+        if self.unused_marked(v)
+            || (self.has_automatic_storage(v) && self.ast.symbols().as_str(name) == "_")
+        {
+            return None;
+        }
+        let ty = self.base_element(n.ty()?);
+        if self.ast.types.is_reference(ty) || self.ast.types.is_dependent(ty) {
+            return None;
+        }
+        // Any class type (gcc's behavior), or an enumeration marked unused.
+        if self.ast.types.as_record(ty).is_some() {
+            return None;
+        }
+        if let TypeView::Enum(decl) = self.ast.types.view(ty.ty())
+            && self.unused_marked(decl)
+        {
+            return None;
+        }
+        // A condition variable is referenced once by the condition itself.
+        if refs > 0 && !(cond && refs == 1) {
+            return None;
+        }
+        Some(self.diag(DiagId::sema_unused_but_set_variable, n.loc()).arg(self.decl_arg(v)))
+    }
+
+    /// clang `DoMarkVarDeclReferenced`: a reference to variable `d`
+    /// counts for `-Wunused-but-set-variable` when it is a local, not
+    /// `extern`, variable.
+    pub(crate) fn count_var_ref(&mut self, d: DeclId) {
+        let local =
+            self.ast.decls.get(d).ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function());
+        if local && self.ast.decls.var(d).is_some_and(|x| x.spec.storage() != VarStorage::Extern) {
+            self.refs_minus_assign.entry(d).or_insert((0, false)).0 += 1;
+        }
+    }
+
+    /// clang `MaybeDecrementCount` (from `IgnoredValueConversions`):
+    /// discarded-value expression `e`, as written (parentheses count), an
+    /// assignment, compound assignment, `operator=` call or increment /
+    /// decrement whose target is a variable named directly does not count
+    /// as a reference to it; a compound one or increment of a `volatile`
+    /// variable still does.
+    pub(crate) fn discard_assignment_ref(&mut self, e: ExprId) {
+        let ex = &self.ast.exprs;
+        let (lhs, compound) = match ex.get(e).kind() {
+            ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator => {
+                let op = ex.binary_op(e);
+                let ch = ex.children(e, &self.ast.lists);
+                let (l, r) = (ch[0], ch[1]);
+                let dependent = self.ast.types.is_dependent(self.ety(l))
+                    || self.ast.types.is_dependent(self.ety(r));
+                if (dependent && op != BinaryOp::Assign) || !op.is_assignment() {
+                    return;
+                }
+                (l, !dependent && op.is_compound_assignment())
+            }
+            ExprKind::CXXOperatorCallExpr => {
+                if ex.operator_call_op(e) != OverloadedOperator::Equal {
+                    return;
+                }
+                let Some(l) = self.ast.lists.iter::<ExprId>(ex.call_args(e)).next() else { return };
+                (l, false)
+            }
+            ExprKind::UnaryOperator if ex.unary_op(e).is_inc_dec() => (ex.operand(e), true),
+            _ => return,
+        };
+        if self.ast.exprs.get(lhs).kind() != ExprKind::DeclRefExpr {
+            return;
+        }
+        let v = self.ast.exprs.decl(lhs);
+        if self.ast.decls.get(v).kind() != DeclKind::Var {
+            return;
+        }
+        if compound && self.ast.decls.get(v).ty().is_some_and(|t| t.quals().is_volatile()) {
+            return;
+        }
+        if let Some(c) = self.refs_minus_assign.get_mut(&v) {
+            c.0 -= 1;
+        }
+    }
+
+    /// Whether variable `v` has automatic storage duration.
+    fn has_automatic_storage(&self, v: DeclId) -> bool {
+        self.ast.decls.var(v).is_some_and(|var| {
+            matches!(var.spec.storage(), VarStorage::None | VarStorage::Register)
+                && var.spec.tls() == kiln_ast::decl::TlsKind::None
+        })
     }
 
     /// clang `ShouldDiagnoseUnusedDecl` for variable `v`, referenced
@@ -62,19 +204,44 @@ impl Sema<'_, '_> {
     fn should_diagnose_unused_var(&mut self, v: DeclId, pattern: DeclId) -> bool {
         let n = *self.ast.decls.get(v);
         let p = *self.ast.decls.get(pattern);
-        if n.kind() != DeclKind::Var
-            || n.has(DeclFlags::INVALID)
-            || [n, p].iter().any(|x| x.has(DeclFlags::REFERENCED) || x.has(DeclFlags::USED))
-        {
+        if n.kind() != DeclKind::Var || n.has(DeclFlags::INVALID) {
             return false;
         }
-        let Some(name) = n.name().as_ident() else { return false };
         let Some(var) = self.ast.decls.var(v).copied() else { return false };
-        let automatic = matches!(var.spec.storage(), VarStorage::None | VarStorage::Register)
-            && var.spec.tls() == kiln_ast::decl::TlsKind::None;
-        // A C++26 placeholder (`_` with automatic storage).
-        if automatic && self.ast.symbols().as_str(name) == "_" {
-            return false;
+        if self.ast.decls.is_decomposition(v) {
+            // A structured binding declaration: unused when none of its
+            // bindings is referenced or marked unused (the variable itself
+            // is referenced by the bindings), unless all are placeholders.
+            let mut bindings = self.decomp_binding_list(v);
+            bindings.extend(self.decomp_binding_list(pattern));
+            if bindings
+                .iter()
+                .any(|&b| self.ast.decls.get(b).has(DeclFlags::REFERENCED) || self.unused_marked(b))
+            {
+                return false;
+            }
+            let automatic = self.has_automatic_storage(v);
+            if bindings.iter().all(|&b| {
+                automatic
+                    && self
+                        .ast
+                        .decls
+                        .get(b)
+                        .name()
+                        .as_ident()
+                        .is_some_and(|s| self.ast.symbols().as_str(s) == "_")
+            }) {
+                return false;
+            }
+        } else {
+            if [n, p].iter().any(|x| x.has(DeclFlags::REFERENCED) || x.has(DeclFlags::USED)) {
+                return false;
+            }
+            let Some(name) = n.name().as_ident() else { return false };
+            // A C++26 placeholder (`_` with automatic storage).
+            if self.has_automatic_storage(v) && self.ast.symbols().as_str(name) == "_" {
+                return false;
+            }
         }
         if [AttrKind::UNUSED, AttrKind::MAYBE_UNUSED]
             .iter()
@@ -82,11 +249,9 @@ impl Sema<'_, '_> {
         {
             return false;
         }
-        // Only variables local to a function (not an `extern` one, an
-        // exception variable has its own, unimplemented warning).
+        // Only variables local to a function (not an `extern` one).
         if !n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
             || var.spec.storage() == VarStorage::Extern
-            || var.spec.is_exception_var()
         {
             return false;
         }
@@ -120,7 +285,7 @@ impl Sema<'_, '_> {
                 return false;
             }
             if let Some(i) = init
-                && !self.trivially_constructed(v, i)
+                && !self.trivially_constructed(v, def, i)
             {
                 return false;
             }
@@ -135,29 +300,40 @@ impl Sema<'_, '_> {
             || self.find_attr(d, AttrKind::MAYBE_UNUSED).is_some()
     }
 
-    /// clang's constructor test for an unused class variable `v` with
-    /// initializer `init`: a non-trivial constructor counts only when the
-    /// initializer is a constant; a type-dependent initializer (a
-    /// constructor not known yet) does not.
-    fn trivially_constructed(&mut self, v: DeclId, init: ExprId) -> bool {
-        if self.expr_is_type_dependent(init) {
+    /// clang's constructor test for an unused variable `v` of class type
+    /// (definition `def`) with initializer `init`: a non-trivial
+    /// constructor counts only when the initializer is not a constant; a
+    /// type-dependent initializer (a constructor not known yet) counts
+    /// when the class declares a non-trivial constructor, and an
+    /// unresolved construction with dependent arguments always does.
+    fn trivially_constructed(&mut self, v: DeclId, def: DeclId, init: ExprId) -> bool {
+        let kind = self.ast.exprs.get(init).kind();
+        if matches!(kind, ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr) {
+            let c = self.ast.exprs.constructor(init);
+            if !self.ast.decls.function(c).is_some_and(|f| f.spec.is_trivial()) {
+                if self.expr_is_value_dependent(init) {
+                    return false;
+                }
+                let loc = self.ast.decls.get(v).loc();
+                if self.eval_const(init, kiln_oven::EvalContext::init(v, loc)).is_err() {
+                    return false;
+                }
+            }
+        }
+        if self.expr_is_type_dependent(init) && self.declares_nontrivial_ctor(def) {
             return false;
         }
-        if !matches!(
-            self.ast.exprs.get(init).kind(),
-            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr
-        ) {
-            return true;
-        }
-        let c = self.ast.exprs.constructor(init);
-        if self.ast.decls.function(c).is_some_and(|f| f.spec.is_trivial()) {
-            return true;
-        }
-        if self.expr_is_value_dependent(init) {
-            return false;
-        }
-        let loc = self.ast.decls.get(v).loc();
-        self.eval_const(init, kiln_oven::EvalContext::init(v, loc)).is_ok()
+        kind != ExprKind::CXXUnresolvedConstructExpr
+    }
+
+    /// Whether class definition `def` declares a constructor that is not
+    /// trivial (clang `RD->ctors()`: the declared ones, including
+    /// constructor templates' patterns not counted).
+    fn declares_nontrivial_ctor(&self, def: DeclId) -> bool {
+        self.ast.decls.members(def).any(|m| {
+            self.ast.decls.get(m).kind() == DeclKind::CXXConstructor
+                && !self.ast.decls.function(m).is_some_and(|f| f.spec.is_trivial())
+        })
     }
 
     fn skip_cleanups(&self, e: ExprId) -> ExprId {

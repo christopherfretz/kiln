@@ -250,6 +250,7 @@ impl Sema<'_, '_> {
         if !self.check_builtin_fn_use(e) && !self.check_overload_use(e) {
             self.diagnose_unused(e);
         }
+        self.discard_assignment_ref(e);
         let e = self.act_on_full_expr(e);
         self.builder().expr_stmt(e)
     }
@@ -443,7 +444,11 @@ impl Sema<'_, '_> {
     /// A condition declaration ([stmt.pre]/4): the variable `v` (already
     /// initialized) yields the condition value, a reference to `v`.
     pub fn act_on_condition_var(&mut self, v: DeclId, loc: Loc) -> (Option<DeclId>, ExprId) {
-        (Some(v), self.build_decl_ref(v, loc))
+        let r = self.build_decl_ref(v, loc);
+        if let Some(c) = self.refs_minus_assign.get_mut(&v) {
+            c.1 = true;
+        }
+        (Some(v), r)
     }
 
     /// The condition of `if constexpr` ([stmt.if]/2): contextually
@@ -573,6 +578,7 @@ impl Sema<'_, '_> {
     ) -> StmtId {
         let inc = inc.map(|e| {
             self.diagnose_unused(e);
+            self.discard_assignment_ref(e);
             self.act_on_full_expr(e)
         });
         let data = LoopData { init, cond_var, cond, inc, body: Some(body) };
@@ -754,7 +760,7 @@ impl Sema<'_, '_> {
                 let iv = self.const_int(v).unwrap_or(0);
                 let cv = self.int_const(cond_ty, iv);
                 let ce = self.builder().constant_expr(conv, Some(cv));
-                let ce = self.act_on_full_expr(ce);
+                let ce = self.act_on_constant_full_expr(ce);
                 (ce, (!invalid).then_some(iv))
             }
             Err(mut f) => {
@@ -764,7 +770,7 @@ impl Sema<'_, '_> {
                 let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
                 let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
-                (self.act_on_full_expr(conv), None)
+                (self.act_on_constant_full_expr(conv), None)
             }
         }
     }
