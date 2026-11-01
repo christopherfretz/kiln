@@ -1190,6 +1190,62 @@ Where the definitions are emitted (clang hands them to
 Tests: `tests/codegen/explicit_instantiation*.cpp`,
 `tests/codegen/structor_rauw_order.cpp` (IR parity on both triples).
 
+## 7j. Landed (WP-202): libc++ m3 "not supported yet" sweep
+- **Alignment of an allocation function's result** (clang
+  `AllocAlignAttrEmitter`, `new_delete.rs` `alloc_align_assume`): for a
+  replaceable aligned `operator new` / `__builtin_operator_new` and a GNU
+  `alloc_align(N)` function or member (`N` excludes `this`), a constant
+  power-of-two alignment is the ret `align N` attribute; any other value
+  (runtime, or a constant that is not a power of two) is zext'ed to `i64`
+  and asserted after the call, `call void @llvm.assume(i1 true)
+  [ "align"(ptr %r, i64 %a) ]` (FIR `Op::AssumeBundle`). None after a call
+  that ended the block (`noreturn`).
+- **Base-to-derived casts** (clang `GetAddressOfDerivedClass`,
+  `class.rs` `derived_ptr` / `derived_cast_offset`): `static_cast` (and the
+  C-style cast) of a pointer or reference to a base to the derived class
+  subtracts the base's non-virtual offset with `gep inbounds i8, p, -off`;
+  offset 0 is a no-op. A pointer cast is null-checked (`cast.notnull` /
+  `cast.null` / `cast.end` and a `phi`) unless the operand is `this`; a
+  reference (lvalue) cast never is. A virtual step is rejected by sema.
+- **Overloaded assignment operators evaluate the right operand first**
+  ([expr.ass]/1, clang `RtlArgs` in
+  `EmitCXXMemberOrOperatorMemberCallExpr`; `class.rs` `emit_method_call`):
+  for `=` and the compound assignments called as a member
+  `CXXOperatorCallExpr`, the arguments (a trivial copy/move assignment: the
+  source lvalue) are emitted before the object expression.
+- **Implicit assignment of an array member** (sema `assign_array_loop`,
+  clang `buildSingleCopyAssignRecursively`): when the element assignment is
+  not trivial, the defaulted copy/move assignment holds one loop per
+  dimension, `for (size_t __iD = 0; __iD != N; ++__iD)` assigning
+  `to[__iD]` from `from[__iD]` (each element cast to an xvalue for a move).
+  Codegen needs nothing new: the loop is an ordinary `ForStmt` (allocas in
+  order, `icmp ne`, plain `add i64 1`, `!llvm.loop`).
+- **Array compound literals** (sema `array_compound_literal`; `expr.rs`
+  `agg_visit`): `(T[]){...}` is a prvalue of the written array type with
+  the bound deduced from the list; it is materialized when bound to a
+  reference or decayed (`conv::decay` materializes an array prvalue before
+  `ArrayToPointerDecay`, clang `DefaultFunctionArrayConversion`). The
+  aggregate emitter emits the literal as `EmitAggExpr` of its initializer
+  (clang `VisitCompoundLiteralExpr`; C++ literals are not destroyed there).
+- Oven fixes found on the way: constant array types of differently
+  qualified elements (`const E[3]`, `E[3]`) share one `OTy`
+  (`Types::const_arrays`, clang `getUnqualifiedArrayType`), and a pointer
+  to a whole array object (`memcpy(&arr, ...)`) is a one-object extent
+  (`Types::extent_in`).
+- Sema deduction: a braced list for `P'[N]` with a non-dependent `P'`
+  deduces only `N` (clang `DeduceFromInitializerList`;
+  `std::to_array<long>({1, 2, 3})`).
+
+Tests: `tests/codegen/alloc_align_runtime.cpp`,
+`tests/codegen/cast_base_to_derived.cpp`,
+`tests/codegen/implicit_array_assign.cpp`,
+`tests/codegen/compound_literal_array.cpp` (IR parity on both triples);
+`tests/conformance/class.copy.assign/array-member-loop.cpp` (constant
+evaluation and run).
+
+Not done: the codegen side of a braced-init-list functional cast
+operand (`T({...})`; its sema is WP-200's).
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
@@ -1217,3 +1273,10 @@ no `result.ptr` spill).
 3. Bit-field and base-class constants, case ranges, reference members.
 4. Header-dependent `run` tests, once `decltype` parses (drop their
    `xfail(kiln)`).
+5. WP-202 follow-ups: `p->m` through a base-to-derived (or derived-to-base)
+   cast uses the pointee's natural alignment rather than clang's
+   `EmitPointerWithAlignment` (e.g. `align 4` vs `align 8` for a base of an
+   8-aligned class); the Itanium mangling of a dependent-sized array
+   (`A <expression> _`, emitted as `u7unknown` for `T (&&)[N]`); class-type
+   compound literals and list-initialized array temporaries (`A{1, 2}` with
+   `using A = int[2]`) in sema.
