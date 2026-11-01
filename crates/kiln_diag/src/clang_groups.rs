@@ -1030,7 +1030,6 @@ pub(crate) const CLANG_GROUP_NAMES: &[&str] = &[
     "used-but-marked-unused",
     "user-defined-literals",
     "user-defined-warnings",
-    "varargs",
     "variadic-macros",
     "vec-elem-size",
     "vector-conversion",

@@ -141,6 +141,7 @@ diag_groups! {
     DeleteIncomplete = "delete-incomplete" [];
     // WP-159
     MissingConstinit = "missing-constinit" [];
+    Varargs = "varargs" [];
     // WP-067a
     DefaultedFunctionDeleted = "defaulted-function-deleted" [];
     ClassConversion = "class-conversion" [];

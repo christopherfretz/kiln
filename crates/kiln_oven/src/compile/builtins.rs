@@ -398,7 +398,11 @@ impl Compiler<'_> {
             | id::STRPBRK
             | id::STRSTR
             | id::MEMSET
-            | id::MEMPCPY => self.trap_loc(begin, INVALID.into()),
+            | id::MEMPCPY
+            // clang evaluates no `va_list` operation.
+            | id::VA_START
+            | id::VA_END
+            | id::VA_COPY => self.trap_loc(begin, INVALID.into()),
             // The libm functions and the rounding intrinsics.
             _ if id::is_libm(bid) || is_rounding(bid) => self.trap_loc(begin, INVALID.into()),
             id::STRLEN | id::WCSLEN => {

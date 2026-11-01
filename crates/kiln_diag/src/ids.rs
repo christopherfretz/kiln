@@ -642,6 +642,11 @@ diag_ids! {
     sema_constinit_local = Error (0) "local variable cannot be declared 'constinit'";
     sema_constinit_non_constant = Error (0) "variable does not have a constant initializer";
     sema_missing_constinit = Warning [MissingConstinit] (1) "'constinit' specifier missing on initializing declaration of '{0}'";
+    sema_va_start_fixed_function = Error (0) "'va_start' used in function with fixed args";
+    sema_va_start_outside_function = Error (0) "'va_start' cannot be used outside a function";
+    sema_va_start_not_last_named_param = Warning [Varargs] (0) "second argument to 'va_start' is not the last named parameter";
+    sema_va_start_type_is_undefined = Warning [Varargs] (1) "passing {0:an object that undergoes default argument promotion|an object of reference type|a parameter declared with the 'register' keyword} to 'va_start' has undefined behavior";
+    note_va_start_parameter_type = Note (1) "parameter of type {0} is declared here";
     sema_constexpr_non_literal = Error (0) "constexpr can only be used in variable and function declarations";
     sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
     sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";

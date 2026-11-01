@@ -184,6 +184,9 @@ pub struct Sema<'a, 'sm> {
     /// pattern: clang walks the pattern's shadow list, which is newest
     /// first, so the instantiation's shadows come in reverse (WP-159).
     pub(crate) reverse_using_shadows: bool,
+    /// The type `__builtin_va_list` names (its typedef sugar; the `A` of
+    /// a builtin signature), once declared.
+    pub(crate) va_list_type: Option<QualType>,
     /// Overload resolution's pooled candidate sets and counters
     /// (spec/sema-overload.md §1.4).
     pub(crate) ovl: overload::OverloadScratch,
@@ -388,6 +391,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             group_placeholders: kiln_source::fx::FxHashMap::default(),
             deferring_call_ref: false,
             reverse_using_shadows: false,
+            va_list_type: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             deferred_call_refs: Vec::new(),
@@ -534,11 +538,19 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     }
 
     /// `q` as clang prints a type argument: `'T'`, or `'T' (aka 'int')`
-    /// when the canonical spelling differs.
+    /// when the canonical spelling differs. clang's `desugarForDiagnostic`
+    /// does not desugar `__builtin_va_list`, so a difference only there
+    /// gives no `aka`.
     pub fn ty_arg(&self, q: QualType) -> String {
         let names = names::SemaNames::new(self);
         let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
-        match aka(&self.ast.types, &names, q) {
+        let a = aka(&self.ast.types, &names, q).filter(|a| {
+            self.va_list_type.is_none_or(|v| {
+                let vc = print_type(&self.ast.types, &names, v, PrintOptions::CANONICAL);
+                s.replace("__builtin_va_list", &vc) != *a
+            })
+        });
+        match a {
             Some(a) => format!("'{s}' (aka '{a}')"),
             None => format!("'{s}'"),
         }
