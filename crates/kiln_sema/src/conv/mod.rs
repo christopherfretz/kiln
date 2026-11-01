@@ -96,11 +96,14 @@ pub struct ConvError {
     pub args: Vec<String>,
     /// Its notes (the candidates of a failed user-defined conversion).
     pub notes: Vec<kiln_diag::Diag>,
+    /// Where the diagnostic goes regardless of the caller's choice (a
+    /// conversion step clang diagnoses at the converted expression).
+    pub at: Option<Loc>,
 }
 
 impl ConvError {
     pub(crate) fn new(id: DiagId, args: Vec<String>) -> ConvError {
-        ConvError { id, args, notes: Vec::new() }
+        ConvError { id, args, notes: Vec::new(), at: None }
     }
 
     /// The diagnostic, with its caret at `e`'s location.
@@ -111,6 +114,7 @@ impl ConvError {
     /// The diagnostic, with its caret at `loc`.
     pub fn diag_at(&self, s: &Sema<'_, '_>, loc: Loc) -> kiln_diag::Diag {
         let entity = s.init_entity.filter(|_| self.id == DiagId::sema_init_conversion_failed);
+        let loc = self.at.unwrap_or(loc);
         let d = self.args.iter().enumerate().fold(s.diag(self.id, loc), |d, (i, a)| match entity {
             Some(sel) if i == 0 && a == "0" => d.arg(sel),
             _ => d.arg(a.as_str()),

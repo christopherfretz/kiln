@@ -295,7 +295,9 @@ fn complex_real(
     let Some(el) = s.ast.types.as_complex(from) else { return Ok(e) };
     if !s.explicit_conv {
         let (fa, ta) = (s.ty_arg(from), s.ty_arg(to));
-        return Err(ConvError::new(DiagId::sema_complex_to_real_cxx, vec![fa, ta]));
+        let mut err = ConvError::new(DiagId::sema_complex_to_real_cxx, vec![fa, ta]);
+        err.at = Some(s.begin_loc(e));
+        return Err(err);
     }
     let ck = if s.ast.types.is_floating(el) {
         CastKind::FloatingComplexToReal

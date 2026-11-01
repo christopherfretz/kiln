@@ -220,6 +220,7 @@ impl Sema<'_, '_> {
 
     /// Emits a conversion error at `loc`.
     pub(crate) fn emit_conv_error(&self, err: ConvError, loc: Loc) {
+        let loc = err.at.unwrap_or(loc);
         let d = err.args.into_iter().fold(self.diag(err.id, loc), Diag::arg);
         self.emit(err.notes.into_iter().fold(d, Diag::with_note));
     }
@@ -3731,6 +3732,7 @@ impl Sema<'_, '_> {
                             DiagId::sema_ovl_ambiguous_conversion
                                 | DiagId::sema_ref_init_ambiguous
                                 | DiagId::sema_conv_deleted_ctor
+                                | DiagId::sema_complex_to_real_cxx
                         );
                         if let Some(c) = named.filter(|c| c.overloadable && !as_such) {
                             self.bad_argument(c.decl, callee, a, params[i], i);
@@ -3738,7 +3740,7 @@ impl Sema<'_, '_> {
                             let mut d = err.diag(self, a);
                             let builtin =
                                 named.is_some_and(|c| self.ast.decls.builtin_id(c.decl).is_some());
-                            if !builtin && let Some(&p) = pdecls.get(i) {
+                            if !builtin && err.at.is_none() && let Some(&p) = pdecls.get(i) {
                                 d = d.with_note(self.param_decl_note(p));
                             }
                             self.emit(d);
