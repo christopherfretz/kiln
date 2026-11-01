@@ -314,6 +314,17 @@ impl Sema<'_, '_> {
         let mut matched = None;
         for c in cands {
             let c = if templ {
+                // [temp.over.link]/7: member templates are the same entity
+                // only when their template heads are equivalent too; heads
+                // differing in a non-type parameter's (dependent) type,
+                // e.g. `enable_if_t<C1, int> = 0` vs `enable_if_t<C2, int>
+                // = 0`, declare overloads.
+                let head = self.ast.template_info(c).map(|i| i.params);
+                if let (Some(a), Some(b)) = (head, self.templ.cur)
+                    && !self.heads_equivalent(a, b)
+                {
+                    continue;
+                }
                 match self.pattern_of(c) {
                     Some(p) => self.ast.latest(p),
                     None => continue,
