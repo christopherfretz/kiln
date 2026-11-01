@@ -248,6 +248,13 @@ impl Sema<'_, '_> {
         shadow: Option<DeclId>,
         nns: Option<kiln_ast::NnsId>,
     ) -> ExprId {
+        // clang `BuildDeclarationNameExpr`: an invalid declaration (a
+        // field whose type failed) names nothing, silently.
+        if self.ast.decls.get(d).has(DeclFlags::INVALID)
+            && !self.ast.decls.get(d).kind().is_function()
+        {
+            return self.recover_err(&[], loc);
+        }
         let qualified = nns.is_some();
         let declared = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let ty = self.non_reference(declared);

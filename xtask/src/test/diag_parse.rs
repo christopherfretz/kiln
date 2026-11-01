@@ -217,6 +217,22 @@ fn augment(
     false
 }
 
+/// The directives as matched against `compiler`'s output: under clang a
+/// group whose primary is `dup(clang)` is expected twice (clang repeats it,
+/// kiln's engine deduplicates it, spec/diag.md §7.4); under any other
+/// compiler once.
+pub fn expand_clang_dups(directives: &[DiagDirective], clang: bool) -> Vec<DiagDirective> {
+    let mut out = Vec::with_capacity(directives.len());
+    for g in directive_groups(directives) {
+        let group = g.iter().map(|&i| directives[i].clone());
+        if clang && directives[g[0]].clang_dup {
+            out.extend(group.clone());
+        }
+        out.extend(group);
+    }
+    out
+}
+
 /// Groups directive indices: `[primary, note, note, ...]`.
 fn directive_groups(directives: &[DiagDirective]) -> Vec<Vec<usize>> {
     let mut out: Vec<Vec<usize>> = Vec::new();
@@ -316,7 +332,14 @@ dir:with:colons/x.cpp:7:1: fatal error: 'nope.h' file not found
 ";
 
     fn d(line: u32, col: Option<u32>, severity: Severity, message: &str) -> DiagDirective {
-        DiagDirective { line, col, severity, message: message.into(), directive_line: 1 }
+        DiagDirective {
+            line,
+            col,
+            severity,
+            message: message.into(),
+            clang_dup: false,
+            directive_line: 1,
+        }
     }
 
     fn is_t(f: &str) -> bool {
@@ -424,6 +447,22 @@ dir:with:colons/x.cpp:7:1: fatal error: 'nope.h' file not found
         assert!(match_diags(&[d(1, Some(1), Severity::Fatal, "boom")], &ds, &is_t, true).is_ok());
         let dirs = [d(1, Some(1), Severity::Error, "boom"), d(1, Some(1), Severity::Error, "boom")];
         assert_eq!(match_diags(&dirs, &ds, &is_t, false).unmatched, [1]);
+    }
+
+    #[test]
+    fn clang_dup_groups_count_twice_under_clang_only() {
+        let once = "t.cpp:2:1: error: undef\nt.cpp:1:2: note: here\n";
+        let twice = format!("{once}{once}");
+        let mut dirs =
+            vec![d(2, Some(1), Severity::Error, "undef"), d(1, Some(2), Severity::Note, "")];
+        dirs[0].clang_dup = true;
+        let clang = expand_clang_dups(&dirs, true);
+        let kiln = expand_clang_dups(&dirs, false);
+        assert_eq!((clang.len(), kiln.len()), (4, 2));
+        assert!(match_diags(&clang, &parse(&twice), &is_t, true).is_ok());
+        assert!(match_diags(&kiln, &parse(once), &is_t, true).is_ok());
+        assert_eq!(match_diags(&clang, &parse(once), &is_t, true).unmatched, [2]);
+        assert_eq!(match_diags(&kiln, &parse(&twice), &is_t, true).unexpected, [1]);
     }
 
     #[test]

@@ -425,6 +425,11 @@ impl Sema<'_, '_> {
     /// report row (§11.3).
     pub(crate) fn pop_inst_frame(&mut self) {
         let Some(f) = self.inst.stack.pop() else { return };
+        if let Some((depth, slot)) = &mut self.inst.drain_capture
+            && *depth == self.inst.stack.len()
+        {
+            *slot = Some(f.clone());
+        }
         self.ast.end_instantiation();
         let incl = f.start.map_or(0, |t| u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX));
         let bytes = self.ast.node_live_bytes().saturating_sub(f.start_bytes);

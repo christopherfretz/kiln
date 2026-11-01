@@ -335,7 +335,12 @@ Redeclaration and linkage rules:
 - **Trailing return types** (`Chunk::Function::trailing`,
   [dcl.fct]/2): the function's return type, and an error
   (`function with trailing return type must specify return type 'auto'`)
-  unless the decl-specifier is a lone `auto`.
+  unless the decl-specifier is a lone `auto`. A return type of array or
+  function type ([dcl.fct]/11, `function cannot return function type`)
+  is diagnosed at that `auto` type-specifier when the return type is
+  trailing (the inner `auto` of a nested `auto (*)() -> F`; also after
+  substitution), otherwise at the function declarator's `(`, as clang
+  (`dcl.fct/return-function-type-trailing.cpp`).
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.

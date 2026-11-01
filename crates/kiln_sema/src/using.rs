@@ -324,6 +324,12 @@ impl Sema<'_, '_> {
                 // (clang: checked at instantiation).
                 return Some(self.dependent_class_using(class, q, name, name_loc, inheriting));
             }
+            // clang: a qualifier naming an invalid class (one whose
+            // instantiation failed, so it may have been dropped as a
+            // base) is not diagnosed again.
+            if self.ast.decls.get(q.ctx).has(kiln_ast::decl::DeclFlags::INVALID) {
+                return None;
+            }
             let msg = if inheriting && crate::conv::bases::is_derived_from(self, class, q.ctx) {
                 self.diag(DiagId::sema_using_decl_constructor_not_in_direct_base, using_loc)
                     .arg(self.ty_arg(self.class_type(q.ctx)))

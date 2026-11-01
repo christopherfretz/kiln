@@ -839,20 +839,40 @@ impl Parser<'_, '_> {
         true
     }
 
+    /// A type-name spec that starts with a template-id (`X<A>` or
+    /// `X<A>::type`).
+    fn parse_template_type_name_spec(
+        &mut self,
+        ds: &mut DeclSpec,
+        ctx: DeclaratorContext,
+        start: usize,
+        loc: Loc,
+    ) {
+        let scanned = self.scan_name_at(start).and_then(|(end, split, ..)| (!split).then_some(end));
+        let ty = self.parse_template_type_name(ctx);
+        if ty.is_none() {
+            // An invalid qualifier (`X<A>::type` where the instantiation
+            // of `X<A>` fails here) still spans the scanned name: the
+            // declaration goes on with an invalid type (clang's invalid
+            // `CXXScopeSpec`), not a syntax error.
+            if let Some(end) = scanned {
+                while self.pos() < end {
+                    self.bump();
+                }
+            }
+            ds.invalid = true;
+        }
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
         if self.at_template_type_name_checked(ctx, loc) {
-            let ty = self.parse_template_type_name(ctx);
-            if ty.is_none() {
-                ds.invalid = true;
-            }
-            if let Err(e) =
-                ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc)
-            {
-                ds.invalid = true;
-                self.spec_error(&e, loc);
-            }
+            self.parse_template_type_name_spec(ds, ctx, start, loc);
             return true;
         }
         match self.scan_name(start) {

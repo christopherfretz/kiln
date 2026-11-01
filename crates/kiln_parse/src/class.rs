@@ -1865,7 +1865,24 @@ impl Parser<'_, '_> {
         // A simple-template-id or dependent class-name ([class.derived.general]/1,
         // [temp.res.general]/4: implicitly a type here).
         if self.at_template_type_name(DeclaratorContext::TypeName) {
-            let ty = self.parse_template_type_name(DeclaratorContext::TypeName)?;
+            let scanned =
+                self.scan_name_at(self.pos()).and_then(|(end, split, ..)| (!split).then_some(end));
+            let Some(ty) = self.parse_template_type_name(DeclaratorContext::TypeName) else {
+                // A qualifier that fails (`X<A>::B` where `X<A>` fails
+                // to instantiate here): clang goes on to the name after
+                // it, "expected class name".
+                if let Some(end) = scanned
+                    && self.pos() < end
+                    && self.ident_of(self.tok_at(end - 1)).is_some()
+                    && Self::punct_of(self.tok_at(end - 2)) == Some(Punct::ColonColon)
+                {
+                    while self.pos() < end - 1 {
+                        self.bump();
+                    }
+                    self.error_here(DiagId::parse_expected_class_name);
+                }
+                return None;
+            };
             let pack_expansion = self.eat(Punct::Ellipsis).is_some();
             return Some(BaseSpecInfo { ty, loc, is_virtual, access, pack_expansion, attrs });
         }

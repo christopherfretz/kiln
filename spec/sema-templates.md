@@ -81,7 +81,8 @@ P4 **Bounded native stack.**
 - End-of-TU instantiation is a worklist (`pending`), not recursion: the
   drain keeps an explicit stack of saved queues to visit instantiations
   depth-first, in clang's `GlobalEagerInstantiationScope` order
-  (WP-172, spec/codegen.md §2a).
+  (WP-172, spec/codegen.md §2a), each scope under its requesting
+  definition's frame (§10.2, WP-238).
 
 P5 **Diagnostics identical to clang 19.**
 - This covers note texts, note order, elision, and when the instantiation
@@ -1005,6 +1006,28 @@ complete: a static member, a member pointer, or a later member call
 instantiate their members as usual
 (`tests/conformance/temp.inst/invalid-specialization-members.cpp`).
 
+As clang's `TemplateDeclInstantiator`, a field, a member typedef or
+alias, or an enumeration whose type (underlying type) fails to
+substitute is still declared, `INVALID` (a field or typedef of the error
+type, an enumeration of underlying type `int` with its enumerators), so
+lookup finds it and its uses are silent (`member_ref_without_object`
+builds nothing for an invalid declaration); a static data member or a
+member function whose type fails is not declared, and naming it is "no
+member named". Any member instantiated invalid makes the specialization
+invalid, not only a data member. The other uses that clang checks with
+`RequireCompleteType` fail the same quiet way when the instantiation
+fails at them (`instantiation_fails`): a field of that type (also a
+member class, whose instantiation now reports failure like a
+specialization's) is invalid, and a base-specifier naming it is dropped
+(class/members.rs), so the derived class does not find its members; a
+using-declaration whose qualifier names an invalid class is not
+diagnosed as "not a base class". A decl-specifier whose qualifier fails
+so (`X<A>::type v;`) spans the scanned name and the declaration goes on
+with an invalid type; a base-specifier `X<A>::B` is clang's "expected
+class name" at `B`
+(`temp.inst/invalid-specialization-invalid-members.cpp`,
+`temp.inst/invalid-specialization-base.cpp`).
+
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
   required the definition, as clang records it. It is used only in
@@ -1089,10 +1112,18 @@ instantiate their members as usual
 - An NSDMI whose substitution fails makes its field invalid (clang
   `InstantiateInClassInitializer`), so a constructor or aggregate
   initialization that uses it reports nothing more (WP-220;
-  `default_member_init` returns `None` for an invalid field). As landed,
-  kiln still instantiates NSDMIs with the class, so the error's notes
-  name the class instantiation, not the initializer and the constructor
-  (`tests/conformance/class.mem/nsdmi-subst-failure.cpp`).
+  `default_member_init` returns `None` for an invalid field). The error's
+  notes are clang's (WP-238, `tests/conformance/class.mem/nsdmi-subst-failure.cpp`,
+  `nsdmi-lazy-context-notes.cpp`): the initializer's frame at the
+  constructor (an out-of-line instantiated constructor at its pattern's
+  definition, as clang `InstantiateFunctionDefinition` relocates it), then
+  the constructor's instantiation or the exception-specification
+  evaluation that needed it. An implicit special member's exception
+  specification is resolved before it is defined, so an implicit default
+  constructor's initializers are first instantiated by its exception
+  specification. Open: aggregate initialization keeps filling the
+  remaining fields after a failed initializer (clang stops at the first;
+  `init.rs` `field_filler`).
 
 ### 4.10 Alias templates
 
@@ -1179,8 +1210,13 @@ follow clang:
 
 `tests/conformance/temp.inst/undefined-var-template.cpp` pins all of
 this. A variable template defined later in the TU is instantiated
-silently, but codegen still emits it as an external declaration
-(follow-up).
+silently: its queued implicit specialization finds the definition seen
+since (`instantiate_pending` -> `instantiate_late_var_spec`, clang
+`InstantiateVariableDefinition`) and is recorded in `end_of_tu_defs`, so
+codegen emits it as its own linkonce_odr definition (WP-238,
+`tests/codegen/var_template_defined_after_use.cpp`). One usable in
+constant expressions (`const int`) is not queued and stays an external
+declaration, as in clang.
 
 **Member variable templates defined out of line** (`template<class T>
 T A::v = T(1);`, WP-206). The implicit specialization `A::v<int>` is a
@@ -2684,13 +2720,18 @@ template name, then the canonical arguments with every type scoped,
 never the typedef they were written with (`'std::v<std::D<int, int>>'`
 for `std::v<_Del>`; `'std::Ptr<int *, std::D<int, int>,
 std::alloc<int>>::g'` for a member of a specialization spelled through
-the typedefs `_Del`, `_AllocT`). Known gap: clang instantiates the
-functions a function instantiation uses while that instantiation's
-frame is still open (`PerformPendingInstantiations` inside
+the typedefs `_Del`, `_AllocT`). At the end of the TU clang instantiates
+the definitions a definition requires while that definition's frame is
+still open (`PerformPendingInstantiations` inside
 `InstantiateFunctionDefinition`), so their notes carry the chain
 (`in instantiation of function template specialization 'std::make<int>'
-requested here`); kiln instantiates them later from the TU-level queue
-and prints only the innermost note.
+requested here`). kiln's drain does the same: the frame of the pending
+definition it just instantiated (captured as it is popped,
+`Inst.drain_capture`) is pushed back, untimed, while that definition's
+queue and vtable uses drain, and popped when the scope is left (WP-238,
+tests/conformance/temp.inst/pending-requester-context.cpp). A definition
+queued before the end of the TU is drained with no outer context, as in
+clang.
 
 A conversion function template specialization keeps the pattern's
 declaration name (`operator T`, which the mangling uses: `cvT_`), but
@@ -2723,6 +2764,17 @@ toward `-ftemplate-depth`. They are clang's `NonInstantiationEntries`.
   `DiagEngine::would_emit` first (spec/diag.md §7.4), so a dropped
   duplicate or an ignored warning does not set `last_emitted` and leave
   the next real error without its context.
+- kiln keeps the implicit-definition contexts (clang's "in implicit
+  default constructor for …", "in evaluation of exception specification
+  for … needed here": `Sema.synth`, `SynthContext`) apart from this
+  stack, with their own once-per-depth mark (`synth_noted`). clang has one
+  stack, so `Sema::emit` interleaves the two: each `SynthContext` records
+  the instantiation depth it was pushed at (`inst_depth`), and the
+  instantiation notes of frames pushed after the innermost one print
+  before the synthesis notes, the older ones after them (a default member
+  initializer instantiated while an exception specification is evaluated:
+  the initializer's note, then the specification's; WP-238,
+  tests/conformance/class.mem/nsdmi-lazy-context-notes.cpp).
 
 **Deduplication.** `Sema::emit` sets the diagnostic's dedup context to
 `InstantiationStack::context_key()`, a hash of every frame's `(kind,

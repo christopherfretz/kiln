@@ -868,8 +868,12 @@ impl Sema<'_, '_> {
                     let t = &self.ast.types;
                     if t.is_array(ty) || t.is_function(ty) {
                         let which = if t.is_array(ty) { "0" } else { "1" };
+                        // clang: a trailing return type is checked where
+                        // the `auto` placeholder is written, otherwise at
+                        // the function declarator's '('.
+                        let at = if trailing.is_some() { spec_loc } else { *loc };
                         let msg = self
-                            .diag(DiagId::sema_func_returning_array_function, *loc)
+                            .diag(DiagId::sema_func_returning_array_function, at)
                             .arg(which)
                             .arg(self.ty_arg(ty));
                         self.emit(msg);
@@ -3035,16 +3039,9 @@ impl Sema<'_, '_> {
         false
     }
 
-    fn act_on_field(
-        &mut self,
-        ds: &DeclSpec,
-        ty: QualType,
-        d: &Declarator,
-        invalid: bool,
-    ) -> DeclId {
-        let ctx = self.ctx;
-        let name = d.name.map(|n| n.0);
-        let nm = name.map(|n| sym_str(self, n));
+    /// The decl-specifiers of a non-static data member: `mutable`
+    /// ([dcl.stc]/9) gives `FieldData::MUTABLE`; the others are errors.
+    fn field_spec_flags(&mut self, ds: &DeclSpec, ty: QualType) -> u32 {
         let mut flags = 0;
         if let Some((s, loc)) = ds.storage {
             match s {
@@ -3072,6 +3069,20 @@ impl Sema<'_, '_> {
         if let Some(loc) = ds.consteval {
             self.error(DiagId::sema_consteval_wrong_decl_kind, loc);
         }
+        flags
+    }
+
+    fn act_on_field(
+        &mut self,
+        ds: &DeclSpec,
+        ty: QualType,
+        d: &Declarator,
+        invalid: bool,
+    ) -> DeclId {
+        let ctx = self.ctx;
+        let name = d.name.map(|n| n.0);
+        let nm = name.map(|n| sym_str(self, n));
+        let mut flags = self.field_spec_flags(ds, ty);
         if let Some(style) = d.init_style {
             // A default member initializer ([class.mem.general]/11),
             // replayed after the class is complete.
@@ -3105,7 +3116,15 @@ impl Sema<'_, '_> {
             }
             kw.is_some()
         };
-        let ty = if invalid && self.placeholder_keyword(ty).is_some() {
+        // clang `CheckFieldDecl`'s `RequireCompleteType`: a field of a
+        // class template specialization whose instantiation fails is
+        // invalid, quietly (and so is its class, §4.3 of
+        // sema-templates.md).
+        let failed_spec = !invalid
+            && !self.ast.types.is_reference(ty)
+            && self.instantiation_fails(self.bounded_array_element(ty), d.name_loc());
+        let invalid = invalid || failed_spec;
+        let ty = if failed_spec || (invalid && self.placeholder_keyword(ty).is_some()) {
             QualType::ERROR
         } else if !invalid && self.ast.types.is_sizeless(ty) {
             let msg = self.diag(DiagId::sema_field_sizeless, d.name_loc()).arg(self.ty_arg(ty));
@@ -3134,6 +3153,9 @@ impl Sema<'_, '_> {
         let width = d.bit_width.and_then(|w| self.bit_width(w, ty, nm.as_deref(), d.name_loc()));
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc());
         let f = self.builder().field(h, ty, width, flags);
+        if failed_spec {
+            self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        }
         // The decl-specifiers' start (clang's `FieldDecl::getBeginLoc`;
         // the Oven's `__builtin_bit_cast` notes point there).
         if ds.loc.is_valid() && ds.loc != d.name_loc() {

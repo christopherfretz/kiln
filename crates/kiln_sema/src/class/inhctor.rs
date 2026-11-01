@@ -153,7 +153,9 @@ impl Sema<'_, '_> {
         let at = n.loc();
         let mut written = Vec::new();
         for ib in self.inherited_bases(dc) {
-            self.mark_function_referenced(ib.ctor, at);
+            // clang marks it at the use (`CurrentLocation`), not the
+            // `InitLoc` the initializer is built at.
+            self.mark_function_referenced(ib.ctor, loc);
             let bty = self.class_type(ib.base);
             let kind = if ib.is_virtual {
                 ConstructionKind::VirtualBase

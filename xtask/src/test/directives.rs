@@ -181,7 +181,7 @@ impl Severity {
     }
 }
 
-/// `diag: <line>[:<col>] <severity> "<substring>"`.
+/// `diag: <line>[:<col>] <severity> "<substring>" [dup(clang)]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiagDirective {
     pub line: u32,
@@ -189,6 +189,9 @@ pub struct DiagDirective {
     pub col: Option<u32>,
     pub severity: Severity,
     pub message: String,
+    /// `dup(clang)`: clang prints this group twice, kiln once (its engine
+    /// deduplicates, spec/diag.md §7.4). Only on a primary directive.
+    pub clang_dup: bool,
     /// 1-based line of the directive itself, for error messages.
     pub directive_line: usize,
 }
@@ -199,7 +202,11 @@ impl fmt::Display for DiagDirective {
             Some(c) => write!(f, "{}:{}", self.line, c)?,
             None => write!(f, "{}", self.line)?,
         }
-        write!(f, " {} {:?}", self.severity.as_str(), self.message)
+        write!(f, " {} {:?}", self.severity.as_str(), self.message)?;
+        if self.clang_dup {
+            write!(f, " dup(clang)")?;
+        }
+        Ok(())
     }
 }
 
@@ -519,6 +526,9 @@ impl Parser {
                             line,
                             "a `note` diag must follow the error/warning/remark it belongs to",
                         );
+                    }
+                    if d.severity == Severity::Note && d.clang_dup {
+                        self.err(line, "`dup(clang)` marks a whole group: put it on the primary");
                     }
                     self.diags.push(d);
                 }
@@ -970,9 +980,9 @@ fn is_known_key(k: &str) -> bool {
     )
 }
 
-/// `<line>[:<col>] <severity> "<substring>"`.
+/// `<line>[:<col>] <severity> "<substring>" [dup(clang)]`.
 fn parse_diag(value: &str, directive_line: usize) -> Result<DiagDirective, String> {
-    let usage = "expected `diag: <line>[:<col>] <error|fatal|warning|note|remark> \"<substring>\"`";
+    let usage = "expected `diag: <line>[:<col>] <error|fatal|warning|note|remark> \"<substring>\" [dup(clang)]`";
     let (loc, rest) = value.split_once(char::is_whitespace).ok_or(usage)?;
     let (line, col) = match loc.split_once(':') {
         Some((l, c)) => (l, Some(c)),
@@ -996,8 +1006,13 @@ fn parse_diag(value: &str, directive_line: usize) -> Result<DiagDirective, Strin
     let (sev, rest) = rest.split_once(char::is_whitespace).ok_or(usage)?;
     let severity = Severity::parse_directive(sev)
         .ok_or_else(|| format!("unknown severity `{sev}`; {usage}"))?;
-    let message = parse_quoted(rest.trim()).map_err(|e| format!("{e}; {usage}"))?;
-    Ok(DiagDirective { line, col, severity, message, directive_line })
+    let rest = rest.trim();
+    let (rest, clang_dup) = match rest.strip_suffix("dup(clang)") {
+        Some(r) if r.ends_with(char::is_whitespace) => (r.trim_end(), true),
+        _ => (rest, false),
+    };
+    let message = parse_quoted(rest).map_err(|e| format!("{e}; {usage}"))?;
+    Ok(DiagDirective { line, col, severity, message, clang_dup, directive_line })
 }
 
 /// A `"..."` string with `\"` and `\\` escapes, and nothing after it.
@@ -1104,10 +1119,30 @@ mod tests {
                 col: Some(5),
                 severity: Severity::Error,
                 message: "static assertion failed".into(),
+                clang_dup: false,
                 directive_line: 3,
             }
         );
         assert_eq!(s.diags[1].severity, Severity::Note);
+    }
+
+    #[test]
+    fn diag_clang_dup() {
+        let s = ok(concat!(
+            "//@ expect: compile-fail\n",
+            "//@ diag: 2:1 error \"undefined template\" dup(clang)\n",
+            "//@ diag: 1:27 note \"declared here\"\n",
+            "//@ diag: 3:1 error \"x dup(clang)\"\n",
+        ));
+        assert!(s.diags[0].clang_dup && !s.diags[1].clang_dup);
+        assert_eq!(s.diags[2].message, "x dup(clang)");
+        assert!(!s.diags[2].clang_dup);
+        assert_eq!(s.diags[0].to_string(), "2:1 error \"undefined template\" dup(clang)");
+        let e = parse("//@ diag: 2 error \"a\"\n//@ diag: 3 note \"b\" dup(clang)\n", Lang::Cxx)
+            .unwrap_err();
+        assert!(format!("{e:?}").contains("put it on the primary"), "{e:?}");
+        let e = parse("//@ diag: 2 error \"a\"dup(clang)\n", Lang::Cxx).unwrap_err();
+        assert!(format!("{e:?}").contains("unexpected text after message"), "{e:?}");
     }
 
     #[test]

@@ -484,6 +484,12 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_base_is_union, s.loc);
                 continue;
             }
+            // clang `CheckBaseSpecifier`'s `RequireCompleteType`: a base
+            // whose instantiation fails here is dropped, quietly; lookup
+            // in the derived class does not find its members.
+            if self.instantiation_fails(s.ty, s.loc) {
+                continue;
+            }
             if !self.require_complete(s.ty, s.loc) {
                 let msg = self.diag(DiagId::sema_base_incomplete, s.loc);
                 let msg = self.incomplete_note(msg, s.ty);

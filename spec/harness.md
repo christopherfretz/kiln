@@ -63,7 +63,7 @@ directives are also ERRORs.
 | `expect: compile-ok \| compile-fail \| run \| pp \| ast \| layout \| vtables \| no-crash` | Test kind. Default `compile-ok`. |
 | `std: <std>` | `c++98 c++03 c++11 c++14 c++17 c++20 c++23 c++26` (C++), `c89 c99 c11 c17 c23` (C). Default `c++26` / `c17`. Passed as `-std=<std>`. |
 | `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
-| `diag: <line>[:<col>] <sev> "<substring>"` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. |
+| `diag: <line>[:<col>] <sev> "<substring>" [dup(clang)]` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. `dup(clang)`, after the substring and only on a primary (non-note) directive, says clang prints this group twice where kiln's engine prints it once (spec/diag.md §7.4.1); see "Diagnostics". |
 | `strict-diags` | The `diag:` list is exhaustive for diagnostics located in the test file. |
 | `verify` | `compile-ok` only; takes no value. The test's expectations are clang `expected-*` comments (spec/diag.md §11), checked by the compiler's own `-Xclang -verify` and by the oracle's (see "verify tests"). It cannot be combined with `diag:` or `strict-diags`. |
 | `stdout: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`. Repeated lines concatenate in order. |
@@ -131,6 +131,9 @@ Matching works as follows:
 - A directive matches a diagnostic when the line is equal, the column is equal
   (if one was given), the severity matches, and the message contains the
   substring. The severity `error` also accepts `fatal`.
+- A directive group whose primary carries `dup(clang)` counts as two
+  identical directive groups when the compiler under test is `clang`, and
+  as one otherwise.
 - Each directive group is matched to a distinct diagnostic group (maximum
   bipartite matching). **Groups are order-insensitive.** clang can emit a
   diagnostic for a later line first; for example, the preprocessor runs ahead

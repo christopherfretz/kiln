@@ -137,13 +137,16 @@ protected member named through an object expression or `&P::m`, when only (c)
 via `P` grants access the object's class must be `P` or derived from `P` (`'p'
 is a protected member of 'S'` + note `can only access this member on an object
 of type 'D'`). Private: `'x' is a private member of 'S'` + `declared private
-here` / `implicitly declared private here`.
+here` / `implicitly declared private here`, located at the member's first
+declaration (a member alias template at its `using` keyword, as clang
+locates a `TypeAliasTemplateDecl`; WP-238).
 
 **Checked**: every name found by class member or qualified lookup into a class
 (for functions, the one selected by overload resolution), type names included
 ([class.access]/4, WP-174): a type or template name the parser commits to
 (`A::Priv`, an unqualified class-scope name, `typename A::Priv`), each
-nested-name-specifier component (`A::Priv::X`), an elaborated reference
+nested-name-specifier component (`A::Priv::X`, and a template-id one,
+`A::PT<int>::X`, before its `::`; WP-238), an elaborated reference
 (`struct A::Priv *`), a base-specifier (checked at once in the deriving class's
 context without its bases, as clang 19 does) and `T::type` after substitution
 (a SFINAE failure in a SFINAE context; reported at the name as written,
@@ -352,9 +355,14 @@ defined (`mark_function_referenced`, also for `noexcept(X())` and the
 (`excspec.rs` `exc_spec_needs_unparsed_inits`, clang's
 `SpecialMemberExceptionSpecInfo`): each such field of the class is diagnosed
 at the constructor's location, the diagnostic not deduplicated (one per
-field), under a single context note `in evaluation of exception
+field), under the context note `in evaluation of exception
 specification for 'W::X::X' needed here` at the use (`SynthKind::
-ExceptionSpec`, note `note_exception_spec_evaluation_here`); the fields are
+ExceptionSpec`, note `note_exception_spec_evaluation_here`). Every implicit
+exception specification evaluated pushes one such context (`resolve_exc`,
+clang `EvaluateImplicitExceptionSpec`), a subobject's at the member or
+base-specifier that calls it (clang `getSubobjectLoc`; clang points at the
+base's type, kiln at the base-specifier, a follow-up), so a nested one
+prints one note per level, innermost first (WP-238); the fields are
 then invalid, so the definition, its constant evaluation and the enclosing
 class's implicit default constructor raise nothing more. These fields are
 reported before the bases are visited (clang visits the bases first).
@@ -788,14 +796,16 @@ ctor → `ListId`, written once with the body. Dump `CXXCtorInitializer 'S'` /
 `CXXCtorInitializer Field 'm' 'int'`; JSON `baseInit` / `anyInit` /
 `delegatingInit`.
 
-**Deviation: default member initializers of a class template** (WP-227).
-clang instantiates an NSDMI lazily, when a constructor first uses it
+**Default member initializers of a class template** (WP-223, WP-238).
+As clang, an NSDMI of a specialization is instantiated when first used
 (`in instantiation of default member initializer 'S<P>::b' requested
-here`), and reports its errors there and again at the use. kiln
-instantiates NSDMIs with the class and reports an error of one once, at
-the constructor's use (`in the default initializer of 'b'` + `declared
-here`, under the constructor's instantiation note), after the written
-mem-initializers' errors rather than before them.
+here`, at the constructor; spec/sema-templates.md §4.9) and a failed one
+makes its field invalid, so the constructor reports nothing more. The
+implicit constructor locations are the constructor's (`complete_ctor_inits`;
+for an instantiated constructor defined out of line, its pattern's
+definition). An inheriting constructor marks the inherited base
+constructors used at the use, not at the using-declaration (clang
+`DefineInheritingConstructor` `CurrentLocation`).
 
 ### 4.10 Inheriting constructors ([namespace.udecl]/3, [class.inhctor.init])
 **Landed (WP-114).** Modules `kiln_sema/src/using.rs` (class-scope
