@@ -3603,16 +3603,15 @@ impl Sema<'_, '_> {
     /// is such a reference.
     fn ref_to_bound_array(&mut self, ty: QualType, ety: QualType) -> Option<QualType> {
         let t = &self.ast.types;
-        let rvalue = match t.canonical_view(ty) {
-            TypeView::LValueRef(p) if matches!(t.canonical_view(p), TypeView::IncompleteArray(_)) => {
-                false
-            }
-            TypeView::RValueRef(p) if matches!(t.canonical_view(p), TypeView::IncompleteArray(_)) => {
-                true
-            }
+        let (rvalue, p) = match t.canonical_view(ty) {
+            TypeView::LValueRef(p) => (false, p),
+            TypeView::RValueRef(p) => (true, p),
             _ => return None,
         };
-        if !t.is_array(ety) || t.array_size(ety).is_none() {
+        if !matches!(t.canonical_view(p), TypeView::IncompleteArray(_))
+            || !t.is_array(ety)
+            || t.array_size(ety).is_none()
+        {
             return None;
         }
         let t = &mut self.ast.types;
