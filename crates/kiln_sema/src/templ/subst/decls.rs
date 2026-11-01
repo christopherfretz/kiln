@@ -8,6 +8,7 @@ use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, EnumData, FieldData, FnStorage, FriendTarget, InitStyle,
     ParamData, TlsKind, VarStorage,
 };
+use kiln_ast::ids::TemplateParamListId;
 use kiln_ast::names::DeclNameKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, QualType};
@@ -19,6 +20,7 @@ use crate::declspec::{
     Chunk, DeclSpec, Declarator, DeclaratorContext, DefaultArg, ParamInfo, SpecialName,
     StorageSpec, TypeSpecKind,
 };
+use crate::templ::stack::{FrameKind, SfinaeState};
 
 impl Substituter<'_, '_, '_> {
     /// The decl-specifiers of pattern declaration `d` naming type `ty`.
@@ -894,6 +896,7 @@ impl Substituter<'_, '_, '_> {
                 // `template<class U> friend class X;` names a namespace
                 // scope template, which substitution leaves unchanged.
                 let record = self.sema.current_class().map(|c| c.record).ok_or(SubstFail)?;
+                self.check_friend_class_head(t);
                 let fd = self.sema.builder().friend(record, loc, FriendTarget::Decl(t));
                 let first = self.sema.ast.first(t);
                 self.sema.push_friend(first);
@@ -916,5 +919,70 @@ impl Substituter<'_, '_, '_> {
                 Ok(Some(r))
             }
         }
+    }
+
+    /// [temp.over.link]/6 for `template<...> friend class X;` in a class
+    /// template, deferred from its definition (where its head is one
+    /// level deeper than `X`'s and may name the enclosing parameters):
+    /// the head substituted with this specialization's arguments must be
+    /// equivalent to that of `X`'s latest declaration outside a dependent
+    /// context (clang's
+    /// `TemplateDeclInstantiator::VisitClassTemplateDecl`). A head whose
+    /// substitution fails is not compared.
+    fn check_friend_class_head(&mut self, t: DeclId) {
+        let latest = self.sema.ast.latest(t);
+        let Some(prev) = self.sema.head_comparable_decl(latest) else { return };
+        let head = |s: &Self, d: DeclId| s.sema.ast.template_info(d).map(|i| i.params);
+        let (Some(new), Some(old)) = (head(self, t), head(self, prev)) else { return };
+        if prev == t || new == old {
+            return;
+        }
+        let l = *self.sema.ast.templates.param_list(new);
+        if self.args.retained_depth(l.depth) != self.sema.ast.templates.param_list(old).depth {
+            return;
+        }
+        if !self.sema.push_inst_frame(FrameKind::ConstraintSubstitution, t, t, l.template_loc) {
+            return;
+        }
+        if let Some(fr) = self.sema.inst.stack.frames.last_mut() {
+            fr.sfinae = Some(true);
+        }
+        self.sema.inst.sfinae.borrow_mut().push(SfinaeState::default());
+        let list = self.friend_head(new).ok();
+        let st = self.sema.inst.sfinae.borrow_mut().pop().unwrap_or_default();
+        self.sema.pop_inst_frame();
+        if let Some(list) = list.filter(|_| st.errors == 0) {
+            let _ = self.sema.check_template_heads_match(list, old);
+        }
+    }
+
+    /// Template parameter list `list` of a friend class template
+    /// substituted with its type-constraints and requires-clause
+    /// ([`Self::param_list`] keeps those unsubstituted).
+    fn friend_head(&mut self, list: TemplateParamListId) -> SubstResult<TemplateParamListId> {
+        let sub = self.param_list(list)?;
+        let l = *self.sema.ast.templates.param_list(sub);
+        let old = self.sema.ast.templates.param_list(list).params;
+        let old: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(old).collect();
+        let params: Vec<DeclId> = self.sema.ast.lists.iter::<DeclId>(l.params).collect();
+        for (&p, &o) in params.iter().zip(&old) {
+            // An unconstrained parameter is diagnosed at its first token.
+            if let Some(&b) = self.sema.ast.decls.cold.begin_loc.get(o) {
+                let _ = self.sema.ast.decls.cold.begin_loc.insert(p, b);
+            }
+            if let Some(c) = self.sema.ast.template_parm(p).and_then(|i| i.constraint) {
+                let c = self.expr(c)?;
+                self.sema.builder().set_parm_constraint(p, c);
+            }
+        }
+        let requires = l.requires.map(|r| self.expr(r)).transpose()?;
+        Ok(self.sema.builder().template_param_list(
+            l.template_loc,
+            l.l_angle,
+            l.r_angle,
+            l.depth,
+            &params,
+            requires,
+        ))
     }
 }

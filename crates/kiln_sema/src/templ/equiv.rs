@@ -11,7 +11,7 @@
 //! ill-formed, no diagnostic required, and kiln treats them as different
 //! (as clang does).
 
-use kiln_ast::decl::{DeclKind, FnStorage};
+use kiln_ast::decl::{DeclKind, FnStorage, FriendKind};
 use kiln_ast::{DeclId, ExprId, TemplateParamListId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -78,6 +78,34 @@ impl Sema<'_, '_> {
             .and_then(|t| self.ast.template_info(t))
             .map(|i| i.params);
         self.ast.decls.function(d).map(|_| (d, head))
+    }
+
+    /// Whether class template `t` was declared by a friend declaration
+    /// in a dependent context (`template<C U> friend class X;` in a class
+    /// template): its head is deeper than the namespace scope template's
+    /// and may name the enclosing template's parameters, so it is not
+    /// compared with other declarations' heads ([temp.friend]; clang's
+    /// `CheckClassTemplate` skips such a friend's head).
+    pub(crate) fn is_dependent_friend_template(&self, t: DeclId) -> bool {
+        self.kind_of(t) == DeclKind::ClassTemplate
+            && self
+                .pattern_of(t)
+                .is_some_and(|p| self.ast.decls.get(p).misc().friend() != FriendKind::None)
+            && self
+                .ast
+                .template_info(t)
+                .is_some_and(|i| self.ast.templates.param_list(i.params).depth > 0)
+    }
+
+    /// The latest of `t` and its previous declarations (a class
+    /// template's) that is not a friend in a dependent context
+    /// ([`Self::is_dependent_friend_template`]): the declaration whose
+    /// head a redeclaration's head is compared with.
+    pub(crate) fn head_comparable_decl(&self, mut t: DeclId) -> Option<DeclId> {
+        while self.is_dependent_friend_template(t) {
+            t = self.ast.prev(self.pattern_of(t)?).and_then(|p| self.ast.described_template(p))?;
+        }
+        Some(t)
     }
 
     /// clang's `TemplateParameterListsAreEqual` (`TPL_TemplateMatch`):

@@ -115,6 +115,10 @@ pub(crate) enum DeletedAs {
     /// ("conversion function from ... invokes a deleted function"), with
     /// the note on the parameter the argument initializes, if any.
     Conversion(Option<Diag>),
+    /// The [dcl.init.ref]/5.4.1 temporary of a non-class initializer
+    /// ("attempt to use a deleted function", clang's ICS-performed
+    /// conversion).
+    Use,
 }
 
 /// The call a selected constructor makes: its arguments and the form
@@ -1024,8 +1028,9 @@ impl Sema<'_, '_> {
                 let spec =
                     self.ast.decls.function(self.ast.first(m)).map(|x| x.spec).unwrap_or_default();
                 let mk = self.special_kind_of(m).filter(|x| x.is_ctor());
+                let use_ = matches!(sites.deleted_as, DeletedAs::Use);
                 let (deleted_as, param_note, conversion) = match sites.deleted_as {
-                    DeletedAs::Call => (None, None, false),
+                    DeletedAs::Call | DeletedAs::Use => (None, None, false),
                     DeletedAs::Param(n) => (None, Some(n), false),
                     DeletedAs::Cast(d) => (Some(d), None, false),
                     DeletedAs::Conversion(n) => (None, n, true),
@@ -1052,7 +1057,10 @@ impl Sema<'_, '_> {
                     self.emit(d.with_note(note));
                     return None;
                 }
-                let mut msg = if conversion {
+                let mut msg = if use_ {
+                    self.diag(DiagId::sema_use_deleted_function, sites.deleted)
+                        .arg(self.delete_message_suffix(m))
+                } else if conversion {
                     let from = call.args.first().map_or(QualType::ERROR, |&a| self.ety(a));
                     self.diag(DiagId::sema_conv_deleted_ctor, sites.deleted)
                         .arg(self.ty_arg(from))

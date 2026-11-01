@@ -183,6 +183,8 @@ diag_groups! {
     AsmOperandWidths = "asm-operand-widths" [];
     Asm = "asm" [AsmOperandWidths];
     PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
+    // ----- WP-154 (atomic builtins)
+    AtomicMemoryOrdering = "atomic-memory-ordering" [];
 }
 
 impl Group {

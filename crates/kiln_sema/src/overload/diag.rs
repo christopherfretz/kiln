@@ -105,7 +105,7 @@ impl Sema<'_, '_> {
 
     /// The detail of candidate `c`'s bad conversion (`slot` in its
     /// sequences; `arg` the argument index, `None` for the object).
-    fn bad_conversion_detail(&self, x: &Ics, arg: Option<usize>) -> String {
+    pub(crate) fn bad_conversion_detail(&self, x: &Ics, arg: Option<usize>) -> String {
         let Ics::Bad(b) = x else { return String::new() };
         let which = match arg {
             Some(i) => format!("{} argument", ordinal(i + 1)),

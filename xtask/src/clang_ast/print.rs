@@ -1414,6 +1414,7 @@ impl<'a> Printer<'a, '_> {
             }
             "CXXNullPtrLiteralExpr"
             | "CXXNoexceptExpr"
+            | "AtomicExpr"
             | "CXXPseudoDestructorExpr"
             | "ConditionalOperator"
             | "ParenExpr"

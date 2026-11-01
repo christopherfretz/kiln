@@ -1106,7 +1106,7 @@ diag_ids! {
     parse_concept_has_constraints = Error (0) "concept cannot have associated constraints";
     parse_concept_legacy_bool = Error (0) "ISO C++ does not permit the 'bool' keyword after 'concept'";
     sema_extraneous_template_params = Error (0) "extraneous template parameter list in template specialization";
-    sema_template_params_for_non_template = Error (1) "template parameter list matching the non-templated nested type {0} should be empty";
+    sema_template_params_for_non_template = Error (1) "template parameter list matching the non-templated nested type {0} should be empty ('template<>')";
     sema_template_param_default_redefined = Error (0) "template parameter redefines default argument";
     note_template_param_prev_default = Note (0) "previous default template argument defined here";
     sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";
@@ -1201,6 +1201,7 @@ diag_ids! {
     // WP-072: packs (spec/sema-templates.md §7, §10.5)
     sema_pack_length_mismatch = Error (4) "pack expansion contains parameter packs '{0}' and '{1}' that have different lengths ({2} vs. {3})";
     sema_pack_length_mismatch_outer = Error (3) "pack expansion contains parameter pack '{0}' that has a different length ({1} vs. {2}) from outer parameter packs";
+    sema_pack_length_mismatch_partial = Error (3) "pack expansion contains parameter pack '{0}' that has a different length (at least {1} vs. {2}) from outer parameter packs";
     sema_fold_empty = Error (1) "unary fold expression has empty expansion for operator '{0}' with no fallback value";
     sema_pack_index_invalid = Error (3) "invalid index {0} for pack {1} of size {2}";
     sema_integer_seq_negative_length = Error (0) "integer sequences must have non-negative sequence length";
@@ -1287,6 +1288,7 @@ diag_ids! {
     note_ovl_candidate_instantiation_depth = Note (0) "candidate template ignored: substitution exceeded maximum template instantiation depth";
     note_ovl_candidate_bad_deduction = Note (0) "candidate template ignored: failed template argument deduction";
     note_deduction_non_deduced_mismatch = Note (2) "candidate template ignored: could not match '{0}' against '{1}'";
+    note_ovl_candidate_deduced_mismatch = Note (4) "candidate template ignored: deduced type {0} of {1} parameter does not match adjusted type {2} of argument{3}";
     sema_partial_spec_ambiguous = Error (1) "ambiguous partial specializations of '{0}'";
     note_partial_spec_match = Note (1) "partial specialization matches {0}";
     sema_partial_spec_not_more_specialized = WarningError [InvalidPartialSpecialization] (1) "{0:class|variable} template partial specialization is not more specialized than the primary template";
@@ -1490,6 +1492,18 @@ diag_ids! {
     // Predefined identifiers (WP-140)
     sema_predefined_identifier_outside_function = Warning [PredefinedIdentifierOutsideFunction] (0) "predefined identifier is only valid inside function";
     sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
+    // Atomic builtins (WP-154; clang's `BuildAtomicExpr`)
+    sema_atomic_builtin_must_be_pointer = Error (2) "address argument to atomic builtin must be a pointer {1:|to a non-zero-sized object }({0} invalid)";
+    sema_atomic_op_needs_atomic = Error (1) "address argument to atomic operation must be a pointer to _Atomic type ({0} invalid)";
+    sema_atomic_op_needs_non_const_atomic = Error (2) "address argument to atomic operation must be a pointer to non-{0:const|constant} _Atomic type ({1} invalid)";
+    sema_atomic_op_needs_non_const_pointer = Error (1) "address argument to atomic operation must be a pointer to non-const type ({0} invalid)";
+    sema_atomic_op_needs_trivial_copy = Error (1) "address argument to atomic operation must be a pointer to a trivially-copyable type ({0} invalid)";
+    sema_atomic_op_needs_atomic_int_ptr_or_fp = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer, pointer or supported floating point type ({1} invalid)";
+    sema_atomic_op_needs_atomic_int_or_fp = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer or supported floating point type ({1} invalid)";
+    sema_atomic_op_needs_atomic_int = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer ({1} invalid)";
+    sema_atomic_op_needs_atomic_int_or_ptr = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer or pointer ({1} invalid)";
+    sema_atomic_builtin_bit_int_prohibited = Error (0) "argument to atomic builtin of type '_BitInt' is not supported";
+    sema_atomic_op_invalid_memory_order = Warning [AtomicMemoryOrdering] (1) "{0:|success |failure }memory order argument to atomic operation is invalid";
 }
 
 impl DiagId {

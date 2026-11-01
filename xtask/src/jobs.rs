@@ -227,17 +227,21 @@ impl Client {
         }
         pool.helper.notify_one();
         loop {
+            // A spare byte was read (or handed over) for a waiter: take it
+            // before the implicit token, otherwise it would be stranded in
+            // `spare` with nobody waiting for it — a pool token this process
+            // keeps but does not use, and leaks on a normal exit.
+            if let Some(b) = st.spare.pop() {
+                st.waiters -= 1;
+                st.held.push(b);
+                return token(Kind::Pool(b));
+            }
             if st.implicit_free {
                 st.implicit_free = false;
                 st.waiters -= 1;
                 // The read requested for us is no longer needed.
                 st.requested = st.requested.saturating_sub(1);
                 return token(Kind::Implicit);
-            }
-            if let Some(b) = st.spare.pop() {
-                st.waiters -= 1;
-                st.held.push(b);
-                return token(Kind::Pool(b));
             }
             if st.broken || st.released {
                 st.waiters -= 1;

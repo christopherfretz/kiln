@@ -178,7 +178,12 @@ template-template-param := template-head ('class'|'typename') '...'? identifier?
   clang's texts:
   - "extraneous template parameter list in template specialization"
   - "template parameter list matching the non-templated nested type
-    'X' should be empty"
+    'X' should be empty ('template<>')"
+  The lists are matched against every enclosing scope slot, explicit
+  specializations included (WP-161): a member partial specialization of
+  `Outer<int>` written with `template<class T> template<class U>` gets
+  the second error, and its declaration is then dropped
+  (`take_template_head` reports `head_mismatch`).
 
 **Defaults** are kept unparsed only where [temp.param]/15 requires
 delayed meaning; in practice they are always parsed immediately.
@@ -1234,7 +1239,15 @@ retained, since the AST is append-only. They are metered as
      `DeducedTemplateArgumentSubstitution`;
    - check that the deduced A is compatible ([temp.deduct.call]/4:
      equal, more cv-qualified, qualification-convertible, or a derived
-     class). Failure is `DeducedMismatch`.
+     class). Failure is `DeducedMismatch`. kiln records, for each
+     non-pack parameter with a deducible template parameter (probed by
+     deducing P from itself, clang's `hasDeducibleTemplateParameters`)
+     and an argument that is not a braced list or overload set, the
+     pair (P, adjusted A); after substitution it compares the
+     specialization's parameter type with A (`original_arg_mismatch`,
+     WP-161). The note prints the reference/pointer-stripped deduced
+     type, as clang does. Clang's template type diffing (`'pr<[...],
+     char>'`) is not implemented, so specializations print in full.
    - check the associated constraints (§8). The order is clang 19's,
      *after* the function type substitution (Q12, CWG2369).
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
@@ -1274,7 +1287,10 @@ result is `MiscellaneousDeductionFailure` (clang).
 - an overload set that contains a template;
 - a braced list (except as in §6.1);
 - a pack expansion that is not last;
-- a pack-index (P2662).
+- a pack-index (P2662);
+- `_Atomic(T)` (WP-154: clang 19 does not deduce through an `AtomicType`,
+  so `template<class T> void f(_Atomic(T)*)` called with an
+  `_Atomic(int)*` fails to deduce `T`).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
@@ -1587,9 +1603,11 @@ flag, to name the first pack.
    one of a shallower depth than the other), clang's multilevel text is
    used instead, naming the inner pack: "pack expansion contains
    parameter pack 'U' that has a different length (2 vs. 1) from outer
-   parameter packs" (outer length first). clang's "(at least 3 vs. 2)"
-   variant, for an explicitly specified pack that deduction may still
-   extend, is not produced: kiln reports the plain multilevel text.
+   parameter packs" (outer length first). For an explicitly specified
+   pack that deduction may still extend (`PackName.partial`), clang's
+   "(at least 3 vs. 2)" variant is used, with the explicit length first;
+   `deduce_call` checks this before deducing (`check_partial_pack_lengths`,
+   WP-161).
 4. **Expand.** For k in 0..N, substitute the pattern with
    `pack_index = Some(k)`. Restore the previous index afterwards. Inner
    expansions keep their own packs untouched.
@@ -1622,8 +1640,8 @@ A function parameter pack whose type is partially substituted
 parameter of type `PackExpansion(P<SubstPack(T), U>)`. Deduction against
 it substitutes the kept pack element by element: while deducing element
 *i* of the expansion, a `SubstTemplateTypeParmPack` in P is matched as
-element *i* of its pack. kiln has no final [temp.deduct.call]/4
-"deduced A" compatibility check, so an element mismatch is reported as
+element *i* of its pack. kiln's [temp.deduct.call]/4 "deduced A"
+check (§6.1) skips pack parameters, so an element mismatch is reported as
 "could not match 'P<T, U>' against 'P<char, long>'" where clang says
 "deduced type 'P<int, [...]>' of 1st parameter does not match adjusted
 type 'P<char, [...]>' of argument".
@@ -2007,6 +2025,7 @@ records it in `TABLE`.
 | bits | `__builtin_clz`/`l`/`ll`, `__builtin_ctz`/`l`/`ll`, `__builtin_popcount`/`l`/`ll`, `__builtin_clzg`†/`ctzg`†/`popcountg`† (type-generic, with an optional fallback argument), `__builtin_bswap16`/`32`/`64` | yes | `llvm.ctlz`/`cttz`/`ctpop`/`bswap` |
 | memory and strings | `__builtin_memcmp`, `__builtin_memcpy`, `__builtin_memmove`, `__builtin_memchr`, `__builtin_char_memchr`, `__builtin_strlen`, `__builtin_wcslen`, `__builtin_wmemchr`, `__builtin_wmemcmp`, `__builtin_strcmp`, `__builtin_strncmp`, `__builtin_strchr`, `__builtin_wcscmp`, `__builtin_wcsncmp`, `__builtin_wcschr`; `__builtin_strrchr`, `__builtin_strpbrk`, `__builtin_strstr` | yes (for trivially copyable element types); no for `strrchr`/`strpbrk`/`strstr` (clang 19) | libcall or `llvm.mem*` |
 | float classification | `__builtin_isfinite`, `__builtin_isinf`, `__builtin_isnan`, `__builtin_isnormal`, `__builtin_signbit`†, `__builtin_isgreater`, `isgreaterequal`, `isless`, `islessequal`, `islessgreater`, `isunordered` | yes for `isfinite`/`isinf`/`isnan`/`isnormal`; no for `signbit` and the six comparisons (the clang 19 probe rejects them) | `fcmp` / `llvm.is.fpclass` |
+| atomics (WP-154) | `__c11_atomic_*`†, `__atomic_*`† (an `AtomicExpr`, spec/sema.md §5.11) | only `__atomic_always_lock_free`/`__atomic_is_lock_free`/`__c11_atomic_is_lock_free` (spec/oven.md) | `load atomic`/`store atomic`/`atomicrmw`/`cmpxchg`/`fence` (spec/codegen.md §7d) |
 | float constants | `__builtin_huge_val`/`f`/`l`, `__builtin_nan`/`f`/`l`, `__builtin_nans`/`f`/`l` | yes | constants |
 | math | `__builtin_exp`/`exp2`/`expm1`/`frexp`/`ldexp`/`pow`/`scalbn`/`scalbln`, each with the `f` and `l` forms | no (clang 19) | libcall / LLVM intrinsic |
 | source location | `__builtin_FILE`, `__builtin_FILE_NAME`, `__builtin_FUNCTION`, `__builtin_LINE`, `__builtin_COLUMN`, `__builtin_source_location`† (keywords: a `SourceLocExpr`; in a default argument, the location of the call that uses it) | yes | constants; a private `.constant` `__impl` object per location |
@@ -3482,6 +3501,23 @@ explicit specialization errors remain. The blockers are:
     `act_on_tag` declaration path through `check_redeclared_class_head`.
     Function templates with different heads are overloads, so they
     never reach this check.
+  - A friend class template declared in a dependent context
+    (`template<C U> friend class X;` in a class template,
+    `is_dependent_friend_template`) has a head deeper than `X`'s that
+    may name the enclosing parameters. As in clang's
+    `CheckClassTemplate`, it is compared with neither side when it is
+    declared; other redeclarations compare with the latest declaration
+    before it that is not such a friend (`head_comparable_decl`). When
+    the enclosing class is instantiated, `check_friend_class_head`
+    (`templ/subst/decls.rs`) substitutes the friend's head, including
+    type-constraints and requires-clause, in a SFINAE frame and checks
+    it against that declaration, under the instantiation note (clang's
+    `TemplateDeclInstantiator::VisitClassTemplateDecl`; WP-167, tests
+    `temp.friend/friend-template-constrained-head.cpp` and
+    `friend-template-head-differs.cpp`). Deviation: clang compares
+    with the latest instantiated friend, so with two instantiated
+    dependent friends of one template it can diagnose (and note) where
+    kiln does not.
 - Canonical dependent types and dependent template arguments use real
   profiles. Equivalent alias template redeclarations therefore chain,
   e.g. libc++ `__swap_result_t` in `__utility/swap.h:33`. Function

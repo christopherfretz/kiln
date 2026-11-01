@@ -62,6 +62,8 @@ pub struct PackName {
     /// A pack substituted earlier (§7.2): one of the "outer parameter
     /// packs" of the diagnostic.
     pub outer: bool,
+    /// The partially substituted pack ([`Substituter::partial_pack`]).
+    pub partial: bool,
 }
 
 impl PackName {
@@ -117,6 +119,24 @@ impl Substituter<'_, '_, '_> {
         {
             let second = name(self);
             let at = self.pack.ellipsis.unwrap_or(loc);
+            if first.partial || second.partial {
+                // [temp.arg.explicit]/9: deduction may extend the
+                // explicitly specified pack, so only a pack shorter than
+                // it conflicts (clang's
+                // `err_pack_expansion_length_conflict_partial`).
+                let (named, at_least, other) =
+                    if first.partial { (first.name, len, n) } else { (second.name, n, len) };
+                if at_least > other {
+                    let d = self
+                        .sema
+                        .diag(DiagId::sema_pack_length_mismatch_partial, at)
+                        .arg(named)
+                        .arg(at_least)
+                        .arg(other);
+                    self.sema.emit(d);
+                }
+                return Err(SubstFail);
+            }
             // A pack of a shallower level than the other, or one
             // substituted earlier (§7.2), is an outer pack: clang
             // substitutes it first and reports

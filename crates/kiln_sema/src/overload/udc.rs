@@ -107,7 +107,11 @@ impl Sema<'_, '_> {
                         sites: DiagSites {
                             access: at,
                             deleted: at,
-                            deleted_as: DeletedAs::Conversion(None),
+                            deleted_as: if self.ast.types.as_record(self.ety(e)).is_some() {
+                                DeletedAs::Conversion(None)
+                            } else {
+                                DeletedAs::Use
+                            },
                         },
                         ..site
                     };

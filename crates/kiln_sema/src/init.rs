@@ -664,6 +664,13 @@ impl Sema<'_, '_> {
         l: &InitList,
         entity: Option<Loc>,
     ) -> ExprId {
+        // `_Atomic(T)` takes no braces (clang `InitListChecker`).
+        if self.ast.types.as_atomic(ty).is_some() {
+            let msg =
+                self.diag(DiagId::sema_illegal_initializer_type, l.lbrace).arg(self.ty_arg(ty));
+            self.emit(msg);
+            return self.recover(ty, &[], l.lbrace);
+        }
         if let Some(r) = self.ast.types.as_record(ty) {
             // Whether it is an aggregate needs its definition.
             self.instantiate_for_init(r, l.lbrace);

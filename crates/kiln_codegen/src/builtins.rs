@@ -596,6 +596,16 @@ impl Cg<'_> {
                 self.emit_block(cont, false);
                 return Ok(BuiltinCall::Emitted(None));
             }
+            id::atomic::CLEAR
+            | id::atomic::IS_LOCK_FREE
+            | id::atomic::SIGNAL_FENCE
+            | id::atomic::TEST_AND_SET
+            | id::atomic::THREAD_FENCE
+            | id::atomic::C11_IS_LOCK_FREE
+            | id::atomic::C11_SIGNAL_FENCE
+            | id::atomic::C11_THREAD_FENCE => {
+                return self.emit_atomic_builtin(b, e, &args).map(BuiltinCall::Emitted);
+            }
             _ if lib_name(b).is_some() => return Ok(BuiltinCall::Library),
             _ => {
                 let name = id::info(b).map_or("?", |i| i.name);
