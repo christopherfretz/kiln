@@ -3560,8 +3560,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
         }
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let ret =
-            self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+        // The return type as written: diagnostics name its typedef.
+        let ret = self.sugared_proto(fty).map_or(QualType::ERROR, |p| p.ret());
         let pushed = self.enter_definition_scopes(f);
         self.fn_saved.push(crate::class::SavedFn { func: self.func.take(), pushed });
         self.scopes.push(Scope::new(ScopeKind::Function, None));

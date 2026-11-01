@@ -372,9 +372,17 @@ The normative description is spec/driver.md "Code generation". In short:
   direct use of its referee (`load i32, ptr @g`); kiln loads the
   reference's slot. The Oven does not fold reference initializers yet,
   so `fold.rs` has nothing to substitute. No corpus case covers it.
-- **Namespace-scope and static reference variables** are diagnosed
-  (`dynamic initialization of a global is not supported yet (M3)`), even
-  when clang would constant-initialize them, for the same reason.
+- **Namespace-scope and static reference variables** are emitted as
+  clang does (a constant initializer when the referee is a constant
+  address, else dynamic initialization, §7e); only their uses differ, as
+  above.
+- **AArch64 loop canonicalization of initialization functions.**
+  clang 19's AArch64 `-O0` pipeline runs `loop-idiom-vectorize`, whose
+  LoopSimplify/LCSSA prerequisites rewrite loops in every function
+  without `optnone` (the `__cxx_global_var_init` functions): array
+  construction and EH-cleanup loops gain `.preheader`/`.loopexit` blocks
+  and LCSSA `phi`s. kiln emits the plain loops. `ir_vs_clang` lists
+  `global_init_array_eh` on aarch64 as a known deviation; x86_64 is exact.
 - **Reference members** (`struct S { int& r; }`) are diagnosed (`a
   reference member is not supported yet`).
 - **`dereferenceable(N)` of a reference to a class** uses the class's
@@ -975,6 +983,54 @@ clang 19 `CGAtomic` at -O0, mirrored:
 - **Not implemented:** `_Complex` operands (unsupported in codegen
   generally).
 
+## 7f. Landed (WP-178): dynamic initialization (`global_init.rs`)
+Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
+[basic.start.term], [stmt.dcl]/3).
+- **Which variables.** `emit_var_def` folds the initializer first; a
+  variable whose initializer does not fold gets a zero initializer and
+  needs construction, one of class type with a non-trivial destructor
+  (not a reference) needs destruction. The global is `constant` only
+  when it is `const` (not `mutable`) or a reference and needs neither.
+  Constant-initialized variables keep the constant path unchanged.
+- **Init functions.** Each such variable gets an internal
+  `__cxx_global_var_init[.N]` in `.text.startup` (`noinline`, `nounwind`
+  under `-fno-exceptions`, `uwtable`, the target attributes, x86
+  `min-legal-vector-width`) that runs the initializer into the global
+  and registers the destructor with `__cxa_atexit(dtor, ptr, @__dso_handle)`
+  (arrays: an internal `__cxx_global_array_dtor` helper). Ordered
+  variables are called, in declaration order (deferred variables keep
+  the slot of their first use), from `_GLOBAL__sub_I_<file>` (clang's
+  file-name transformation), registered in `@llvm.global_ctors` with
+  priority 65535.
+- **Partially-ordered variables.** Template instantiations and
+  non-internal inline variables have linkonce/weak linkage: their init
+  function gets its own `@llvm.global_ctors` entry keyed on the variable
+  (and `@llvm.used`, in the variable's comdat), guarded by an `i64` `_ZGV`
+  (its first byte tested with a plain load for a template
+  instantiation; the Itanium `__cxa_guard_acquire`/`release` protocol
+  when thread-safe, i.e. a non-template inline variable; an `i8` guard
+  only for a non-thread-safe internal variable).
+- **Static locals.** A static local whose initializer does not fold is
+  zero-initialized and guarded at its declaration: `_ZGV` (`i64`, in the
+  local's comdat when it has one), an acquire-load of the guard byte
+  (AArch64 tests the low bit), `!prof` branch weights `1, 1048575`,
+  `__cxa_guard_acquire`, the initializer under a `__cxa_guard_abort`
+  EH cleanup (`Cleanup::GuardAbort`), `__cxa_guard_release`, then the
+  destructor registration.
+- **Lifetime-extended temporaries.** A temporary bound to a reference
+  with static storage becomes `_ZGR<var>_` (`let_global`): constant when
+  the Oven folded it (the fold bridge now records
+  `set_temporary_value`), else initialized in the variable's init
+  function with its destructor registered via `__cxa_atexit`.
+- Tests: `tests/codegen/global_init_*.cpp` (IR parity on both triples),
+  `tests/conformance/basic.start.dynamic/order-run.cpp`,
+  `tests/conformance/stmt.dcl/static-local-run.cpp`.
+- **Not implemented:** `init_priority`, `thread_local` dynamic
+  initialization (TLS wrappers), explicit instantiation definitions of
+  static data members, folding of uses of constant-initialized
+  references and of reads of `const` class objects that clang permits
+  ([basic.start.static]/3).
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
@@ -994,9 +1050,9 @@ and indirect returns with `byval` (clang's `getNaturalAlignIndirect`, so
 no `result.ptr` spill).
 
 **Remaining (M3):**
-1. Oven folding of constant-initialized references; then global and
-   static reference variables and the direct-referee use (deviations
-   above).
+1. Oven folding of constant-initialized references, for the
+   direct-referee use (deviations above); `init_priority` and
+   `thread_local` dynamic initialization (§7e).
 2. The Sema gaps above, then corpus cases for them: class copy-init,
    braced returns, reference casts, temporaries, range-for over arrays.
 3. Bit-field and base-class constants, case ranges, reference members.

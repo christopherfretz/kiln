@@ -199,6 +199,14 @@ impl Types {
         matches!(self.kind(t), TyKind::Array { .. } | TyKind::Record { .. })
     }
 
+    /// Whether `t` is a GNU/clang vector type (stored as an array of its
+    /// lanes, WP-173).
+    pub fn is_vector(&self, ast: &Ast, t: OTy) -> bool {
+        matches!(self.kind(t), TyKind::Array { .. })
+            && !self.is_synthetic_array(t)
+            && matches!(ast.types.canonical_view(self.info(t).q), TypeView::Vector { .. })
+    }
+
     /// Interns `q` (any qualifiers and sugar are dropped).
     pub fn intern(&mut self, bridge: &mut dyn SemaBridge, q: QualType) -> OTy {
         let c = bridge.ast().types.canonical(q).without_quals();
@@ -378,10 +386,22 @@ impl Types {
                 }
                 self.push(info)
             }
-            // No value model yet (M4): only its size and alignment.
-            TypeView::Vector { .. } => {
+            // A GNU/clang vector (WP-173) is stored as an array of its
+            // elements, padded to the vector's own size and alignment (an
+            // `ext_vector_type(3)` occupies 4 lanes); `q` keeps the vector
+            // type, so notes name it. A vector of `bool` packs its lanes
+            // into bits and has no value model yet: only its size.
+            TypeView::Vector { elem, count, .. } => {
                 let (size, align) = bridge.opaque_size_align(c);
-                self.simple(c, size, align.max(1), TyKind::Opaque)
+                let elem = self.intern(bridge, elem);
+                let e = *self.info(elem);
+                let n = u64::from(count);
+                if !matches!(e.kind, TyKind::Int { .. } | TyKind::Float(_))
+                    || e.size.saturating_mul(n) > size
+                {
+                    return self.simple(c, size, align.max(1), TyKind::Opaque);
+                }
+                self.simple(c, size, align.max(1), TyKind::Array { elem, n })
             }
             _ => self.simple(c, 0, 1, TyKind::Opaque),
         }

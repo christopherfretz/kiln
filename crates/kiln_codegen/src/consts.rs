@@ -53,8 +53,19 @@ impl Cg<'_> {
                 let t = self.lty(ty);
                 self.scalar_const(s, t)
             }
+            // A vector value (scalar in IR, an aggregate image in the
+            // Oven): its `<N x T>` constant (clang `emitAbstract`).
+            ConstValue::Aggregate(_) if self.is_vector_ty(ty) => {
+                self.const_value(c, ty, None, true)
+            }
             ConstValue::Aggregate(_) => err(None, "aggregate constant in scalar context"),
         }
+    }
+
+    /// True if `ty` is a vector type laid out as an IR vector (not a
+    /// `bool` ext vector, whose value form is `<N x i1>`).
+    fn is_vector_ty(&mut self, ty: QualType) -> bool {
+        matches!(self.tys.convert_mem(ty), IrType::Vector(..))
     }
 
     /// A scalar constant of IR type `t`.
@@ -110,8 +121,9 @@ impl Cg<'_> {
             PtrBase::Function(d) => Ok(Value::func(self.get_fn(d)?)),
             PtrBase::StringLit { lit, .. } => Ok(gval(self.lit_global(lit))),
             PtrBase::Const(c) => Ok(gval(self.const_object(c)?)),
-            PtrBase::Temporary(_) => {
-                err(None, "pointers to lifetime-extended temporaries are not supported yet (M3)")
+            PtrBase::Temporary(t) => {
+                let ty = self.ast.decls.get(t).ty().unwrap_or(QualType::INT);
+                Ok(gval(self.let_global(t, ty)?))
             }
             PtrBase::TypeInfo(_) => err(None, "typeid constants are not supported yet (M3)"),
         }
@@ -362,10 +374,19 @@ impl Cg<'_> {
             IrType::RecordBase(_) => {
                 err(None, "base-class subobjects in constants are not supported yet (M3)")
             }
-            IrType::Void
-            | IrType::Vector(..)
-            | IrType::ScalableVector(..)
-            | IrType::TargetExt(_) => err(None, "vector constants are not supported yet (M3)"),
+            // clang `ConstExprEmitter`/`APValue::Vector`: one constant per
+            // lane, lane `i` at byte `i * sizeof(elem)` of the image.
+            IrType::Vector(et, n) => {
+                let (es, _) = self.tys.size_align(et);
+                let mut elems = Vec::with_capacity(*n as usize);
+                for i in 0..*n {
+                    elems.push(self.image_const(img, off + i * es, et, None)?);
+                }
+                self.m.const_vector(&elems).map_err(|e| ir_err(&e))
+            }
+            IrType::Void | IrType::ScalableVector(..) | IrType::TargetExt(_) => {
+                err(None, "scalable-vector and target-type constants are not supported yet (M3)")
+            }
         }
     }
 

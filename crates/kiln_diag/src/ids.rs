@@ -1546,6 +1546,15 @@ diag_ids! {
     sema_atomic_op_needs_atomic_int_or_ptr = Error (2) "address argument to atomic operation must be a pointer to {0:|atomic }integer or pointer ({1} invalid)";
     sema_atomic_builtin_bit_int_prohibited = Error (0) "argument to atomic builtin of type '_BitInt' is not supported";
     sema_atomic_op_invalid_memory_order = Warning [AtomicMemoryOrdering] (1) "{0:|success |failure }memory order argument to atomic operation is invalid";
+    // clang `CheckVectorConditionalTypes` (WP-173); the stray `}` in
+    // `..._mismatched` is clang 19's (a `%diff` typo in the .td file).
+    sema_conditional_vector_has_void = Error (1) "GNU vector conditional operand cannot be {0:void|a throw expression}";
+    sema_conditional_vector_operand_type = Error (1) "enumeration type {0} is not allowed in a vector conditional";
+    sema_conditional_vector_cond_result_mismatch = Error (0) "cannot mix vectors and extended vectors in a vector conditional";
+    sema_conditional_vector_mismatched = Error (2) "vector operands to the vector conditional must be the same type ({0} and {1})}}";
+    sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
+    sema_conditional_vector_element_size = Error (2) "vector condition type {0} and result type {1} do not have elements of the same size";
+    sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
     parse_attributes_not_allowed = Error (0) "an attribute list cannot appear here";
     sema_lvalue_cast_not_supported = Error (0) "assignment to cast is illegal, lvalue casts are not supported";
 }
