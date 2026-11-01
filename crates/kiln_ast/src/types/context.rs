@@ -825,6 +825,14 @@ impl TypeContext {
         }
     }
 
+    /// The element type `T` of a GNU `_Complex T` (canonically).
+    pub fn as_complex(&self, q: QualType) -> Option<QualType> {
+        match self.canonical_view(q) {
+            TypeView::Complex(e) => Some(e),
+            _ => None,
+        }
+    }
+
     /// The class of a (canonical) record type.
     pub fn as_record(&self, q: QualType) -> Option<DeclId> {
         match self.canonical_view(q) {

@@ -4371,7 +4371,10 @@ impl Sema<'_, '_> {
             && conv::standard_conversion(self, e, to, ConvCtx::Cast).is_some()
             && let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Cast)
         {
-            match conv::apply_standard_conversion(self, e, &scs, to) {
+            let was = std::mem::replace(&mut self.explicit_conv, true);
+            let r = conv::apply_standard_conversion(self, e, &scs, to);
+            self.explicit_conv = was;
+            match r {
                 Ok(x) => {
                     self.mark_explicit(x, e);
                     return self.explicit_cast(style, CastKind::NoOp, x, to, loc, rparen);

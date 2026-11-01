@@ -61,6 +61,14 @@ pub enum SecondStep {
     /// A bitcast between vectors of compatible types or (lax) the same
     /// size (clang `ICK_Vector_Conversion`; an extension).
     VectorConversion,
+    /// `_Complex float` to `_Complex double` (clang `ICK_Complex_Promotion`;
+    /// Promotion rank).
+    ComplexPromotion,
+    /// Between complex types (clang `ICK_Complex_Conversion`).
+    ComplexConversion,
+    /// Between a complex and a real type (clang `ICK_Complex_Real`; a rank
+    /// worse than Conversion).
+    ComplexReal,
 }
 
 /// The third conversion ([conv.fctptr], [conv.qual]).
@@ -84,6 +92,8 @@ pub enum ConvRank {
     Promotion,
     /// Conversion.
     Conversion,
+    /// clang's `ICR_Complex_Real_Conversion` (a complex-real conversion).
+    ComplexReal,
 }
 
 /// How an unscoped enumeration with a fixed underlying type was promoted
@@ -181,7 +191,10 @@ impl StandardConversion {
     pub fn rank(&self) -> ConvRank {
         match self.second {
             SecondStep::Identity => ConvRank::ExactMatch,
-            SecondStep::IntegralPromotion | SecondStep::FloatingPromotion => ConvRank::Promotion,
+            SecondStep::IntegralPromotion
+            | SecondStep::FloatingPromotion
+            | SecondStep::ComplexPromotion => ConvRank::Promotion,
+            SecondStep::ComplexReal => ConvRank::ComplexReal,
             _ => ConvRank::Conversion,
         }
     }
@@ -406,8 +419,11 @@ fn standard_conversion_non_atomic(
         (SecondStep::IntegralPromotion, to)
     } else if is_floating_promotion(s, cur, to) {
         (SecondStep::FloatingPromotion, to)
+    } else if is_complex_promotion(s, cur, to) {
+        (SecondStep::ComplexPromotion, to)
     } else if types.builtin(to) == Some(BuiltinType::Bool)
         && (super::rank::is_arithmetic_or_unscoped_enum(s, cur)
+            || types.as_complex(cur).is_some()
             || types.is_pointer(cur)
             || is_member_pointer(s, cur)
             || (is_nullptr_t(s, cur) && ctx.is_direct()))
@@ -415,6 +431,10 @@ fn standard_conversion_non_atomic(
         (SecondStep::BooleanConversion, to)
     } else if is_integral_or_unscoped_enum(s, cur) && types.is_integral(to) {
         (SecondStep::IntegralConversion, to)
+    } else if types.as_complex(cur).is_some() && types.as_complex(to).is_some() {
+        (SecondStep::ComplexConversion, to)
+    } else if is_complex_real(s, cur, to) {
+        (SecondStep::ComplexReal, to)
     } else if is_floating_conversion(s, cur, to) {
         (SecondStep::FloatingConversion, to)
     } else if (types.is_floating(cur) && types.is_integral(to))
@@ -456,6 +476,24 @@ fn standard_conversion_non_atomic(
     scs.third = third;
     scs.to_types[2] = to;
     Some(scs)
+}
+
+/// clang's `IsComplexPromotion`: `_Complex T` to `_Complex U` where `T`
+/// to `U` is a floating-point promotion.
+fn is_complex_promotion(s: &Sema<'_, '_>, from: QualType, to: QualType) -> bool {
+    match (s.ast.types.as_complex(from), s.ast.types.as_complex(to)) {
+        (Some(f), Some(t)) => is_floating_promotion(s, f, t),
+        _ => false,
+    }
+}
+
+/// clang's `ICK_Complex_Real` test: one side complex, the other an
+/// arithmetic (or unscoped enumeration) type.
+fn is_complex_real(s: &Sema<'_, '_>, from: QualType, to: QualType) -> bool {
+    let types = &s.ast.types;
+    let arith = |t: QualType| super::rank::is_arithmetic_or_unscoped_enum(s, t);
+    (types.as_complex(from).is_some() && arith(to))
+        || (types.as_complex(to).is_some() && arith(from))
 }
 
 /// clang's `IsVectorConversion`: a splat of an arithmetic value to an ext

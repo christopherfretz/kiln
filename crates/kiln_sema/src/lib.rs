@@ -227,6 +227,10 @@ pub struct Sema<'a, 'sm> {
     /// The next delay point drops its checks (the declaration of an
     /// explicit instantiation or specialization; [`Sema::exempt_next_delayed_access`]).
     pub(crate) exempt_next_delay: bool,
+    /// A standard conversion is being applied for an explicit cast (a
+    /// complex-to-real conversion is then allowed; clang's
+    /// `isCast(CCK)`).
+    pub(crate) explicit_conv: bool,
     /// Access checks in a class template pattern (or partial
     /// specialization) that passed only because the class may instantiate
     /// to a befriended specialization, keyed by the pattern's first
@@ -444,6 +448,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             delayed_access: Vec::new(),
             delayed_access_depth: Vec::new(),
             exempt_next_delay: false,
+            explicit_conv: false,
             dependent_access: kiln_source::fx::FxHashMap::default(),
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),

@@ -109,6 +109,11 @@ fn apply_second(
             };
             cast_to(s, ck, e, to, None)
         }
+        SecondStep::ComplexPromotion | SecondStep::ComplexConversion => {
+            let ck = complex_cast_kind(s, from, to);
+            cast_to(s, ck, e, to, None)
+        }
+        SecondStep::ComplexReal => return complex_real(s, e, from, to),
         SecondStep::BooleanConversion => {
             let mut e = e;
             let mut from = from;
@@ -122,6 +127,12 @@ fn apply_second(
                 CastKind::PointerToBoolean
             } else if member_pointer_parts(s, from).is_some() {
                 CastKind::MemberPointerToBoolean
+            } else if let Some(el) = s.ast.types.as_complex(from) {
+                if s.ast.types.is_floating(el) {
+                    CastKind::FloatingComplexToBoolean
+                } else {
+                    CastKind::IntegralComplexToBoolean
+                }
             } else if s.ast.types.is_floating(from) {
                 CastKind::FloatingToBoolean
             } else if is_integral_or_unscoped_enum(s, from) {
@@ -230,5 +241,70 @@ fn apply_second(
                 BaseSearch::NotDerived => e,
             }
         }
+    })
+}
+
+/// The cast between two complex types, by their element kinds (clang
+/// `ICK_Complex_Promotion` / `ICK_Complex_Conversion`).
+fn complex_cast_kind(s: &Sema<'_, '_>, from: QualType, to: QualType) -> CastKind {
+    let fl = |t: QualType| s.ast.types.as_complex(t).is_some_and(|el| s.ast.types.is_floating(el));
+    match (fl(from), fl(to)) {
+        (true, true) => CastKind::FloatingComplexCast,
+        (true, false) => CastKind::FloatingComplexToIntegralComplex,
+        (false, true) => CastKind::IntegralComplexToFloatingComplex,
+        (false, false) => CastKind::IntegralComplexCast,
+    }
+}
+
+/// The cast between two real arithmetic types (an element step of a
+/// complex-real conversion).
+fn real_cast_kind(s: &Sema<'_, '_>, from: QualType, to: QualType) -> Option<CastKind> {
+    let types = &s.ast.types;
+    if types.same_unqualified(from, to) {
+        return None;
+    }
+    let to_bool = types.builtin(to) == Some(BuiltinType::Bool);
+    Some(match (types.is_floating(from), types.is_floating(to)) {
+        (true, true) => CastKind::FloatingCast,
+        (true, false) if to_bool => CastKind::FloatingToBoolean,
+        (true, false) => CastKind::FloatingToIntegral,
+        (false, true) => CastKind::IntegralToFloating,
+        (false, false) if to_bool => CastKind::IntegralToBoolean,
+        (false, false) => CastKind::IntegralCast,
+    })
+}
+
+/// clang's `ICK_Complex_Real`: a real value converts to its element type
+/// and then to the complex type; a complex value takes its real part
+/// (only under an explicit cast in C++) and then converts.
+fn complex_real(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    from: QualType,
+    to: QualType,
+) -> Result<ExprId, ConvError> {
+    if let Some(el) = s.ast.types.as_complex(to) {
+        let fl = s.ast.types.is_floating(el);
+        let mut e = e;
+        if let Some(ck) = real_cast_kind(s, from, el) {
+            e = cast_to(s, ck, e, el, None);
+        }
+        let ck = if fl { CastKind::FloatingRealToComplex } else { CastKind::IntegralRealToComplex };
+        return Ok(cast_to(s, ck, e, to, None));
+    }
+    let Some(el) = s.ast.types.as_complex(from) else { return Ok(e) };
+    if !s.explicit_conv {
+        let (fa, ta) = (s.ty_arg(from), s.ty_arg(to));
+        return Err(ConvError::new(DiagId::sema_complex_to_real_cxx, vec![fa, ta]));
+    }
+    let ck = if s.ast.types.is_floating(el) {
+        CastKind::FloatingComplexToReal
+    } else {
+        CastKind::IntegralComplexToReal
+    };
+    let e = cast_to(s, ck, e, el, None);
+    Ok(match real_cast_kind(s, el, to) {
+        Some(ck) => cast_to(s, ck, e, to, None),
+        None => e,
     })
 }

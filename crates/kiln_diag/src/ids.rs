@@ -1620,6 +1620,7 @@ diag_ids! {
     sema_bad_cxx_cast_rvalue = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from rvalue to reference type {1}";
     sema_plain_complex = Warning (0) "plain '_Complex' requires a type specifier; assuming '_Complex double'";
     sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
+    sema_complex_to_real_cxx = Error (2) "implicit conversion from {0} to {1} is not permitted in C++";
 }
 
 impl DiagId {
