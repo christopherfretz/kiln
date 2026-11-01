@@ -241,8 +241,14 @@ impl TypeNames for SemaNames<'_> {
             ExprKind::DeclRefExpr => {
                 out.push_str(&self.simple(self.ast.exprs.decl(expr)).unwrap_or_default());
             }
-            ExprKind::ConstantExpr | ExprKind::ParenExpr | ExprKind::ImplicitCastExpr => {
+            ExprKind::ConstantExpr | ExprKind::ImplicitCastExpr => {
                 self.write_expr(self.ast.exprs.operand(expr), out);
+            }
+            // Kept as written (clang `printPretty`): `typeof (i)`.
+            ExprKind::ParenExpr => {
+                out.push('(');
+                self.write_expr(self.ast.exprs.operand(expr), out);
+                out.push(')');
             }
             // Everything else (`noexcept(sizeof(int) == 4)` in a
             // function type, ...) prints as clang's `printPretty`.

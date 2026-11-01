@@ -1882,6 +1882,28 @@ for them.
     operators; for a comparison, `comparison between NULL and non-pointer
     (NULL and 'T')` / `('T' and NULL)` when only one side is `__null`
     and the other is neither a pointer nor an array.
+- **GNU `typeof`** (`gnu_typeof.rs`; parsing in spec/parse.md §4):
+  `__typeof ( type-id )` is `TypeOf` sugar over that type
+  (`act_on_typeof_type`), printed `typeof(T)`. `__typeof e` /
+  `__typeof ( e )` (`act_on_typeof_expr`; clang
+  `ActOnTypeofExpression`) is sugar over the unevaluated operand's
+  expression type: an lvalue adds no reference (`__typeof(ri)` for
+  `int& ri` is `int`), cv-qualifiers are kept, an id-expression or
+  bit-field member gives its expression type, a function name its
+  function type, and side effects are not diagnosed (unlike
+  `decltype`). It prints `typeof (e)` (the parentheses are a
+  `ParenExpr`). An erroneous operand or an unresolved overload set
+  (`check_overload_use`: "reference to overloaded function could not
+  be resolved; did you mean to call it?") makes the type specifier an
+  error that combines with no other specifier. A type-dependent
+  operand gives a dependent type whose canonical form is keyed on the
+  operand's profile (clang `DependentTypeOfExprType`), rebuilt at
+  substitution (`templ/subst/types.rs`) and mangled as clang's vendor
+  type `u6typeof`; a dependent `__typeof(T)` is canonically `T`.
+  `__typeof_unqual` is the same with the cv-qualifiers dropped
+  (canonically, `ctx.unqualified`; `typeof_unqual (e)` prints).
+  No diagnostics of its own (no pedantic warning, as clang).
+  `tests/conformance/ext.gnu.typeof/`.
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
@@ -2298,7 +2320,7 @@ pointer constant: a zero integer literal, a `std::nullptr_t` value or
   (`null_deref_seen`), so a shared dereference that a rebuilt parent
   re-checks warns once. Other run-time warnings (division by zero,
   shift counts) are not repeated, as in clang.
-- **Deviations:** kiln does not parse `__null` yet. A default member
+- **Deviations:** A default member
   initializer of a class template does not warn again when a
   constructor uses it (clang instantiates it then), and a variable
   template specialization's warning can print later than clang's,

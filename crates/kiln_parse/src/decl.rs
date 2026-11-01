@@ -55,6 +55,7 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Typename
             | Kw::Decltype
             | Kw::Typeof
+            | Kw::TypeofUnqual
             | Kw::Atomic
     )
 }
@@ -622,19 +623,19 @@ impl Parser<'_, '_> {
                     }
                     continue;
                 }
-                Kw::Typeof => {
-                    self.unsupported(&format!("'{}'", k.spelling()), loc);
-                    self.bump();
-                    if self.eat(Punct::LParen).is_some() {
-                        self.skip_until(&[Punct::RParen], false, true);
-                    } else if k == Kw::Typename {
-                        let _ = self.scan_name(self.pos()).map(|(end, ..)| end);
-                        while self.ident().is_some() || self.at(Punct::ColonColon) {
-                            self.bump();
+                Kw::Typeof | Kw::TypeofUnqual => {
+                    // GNU `typeof` (spec/sema.md §5.8). An erroneous one
+                    // is an error type specifier that combines with
+                    // nothing (clang `SetTypeSpecError`).
+                    let Some(ty) = self.parse_typeof_specifier(k == Kw::TypeofUnqual) else {
+                        ds.invalid = true;
+                        if ds.base == TypeSpecKind::None {
+                            let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc);
                         }
-                    }
-                    ds.invalid = true;
-                    if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), loc) {
+                        continue;
+                    };
+                    if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                        ds.invalid = true;
                         self.spec_error(&e, loc);
                     }
                     continue;
@@ -768,6 +769,18 @@ impl Parser<'_, '_> {
         };
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         (TypeSpecKind::Named, self.s.act_on_decltype(e, loc, rparen))
+    }
+
+    /// GNU `typeof` specifier (spec/sema.md §5.8): `__typeof ( type-id )`
+    /// or `__typeof` and an unevaluated unary-expression, as clang;
+    /// `unqual` for `__typeof_unqual`. At the keyword; `None` after an
+    /// error.
+    pub(crate) fn parse_typeof_specifier(&mut self, unqual: bool) -> Option<QualType> {
+        let loc = self.bump().span.lo;
+        match self.parse_trait_operand()? {
+            crate::expr::TraitOperand::Type(ty, _) => Some(self.s.act_on_typeof_type(ty, unqual)),
+            crate::expr::TraitOperand::Expr(e) => self.s.act_on_typeof_expr(e, loc, unqual),
+        }
     }
 
     fn spec_error(&self, e: &SpecError, loc: Loc) {

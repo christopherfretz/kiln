@@ -35,6 +35,7 @@ mod for_loop_analysis;
 mod forms;
 mod gnu;
 mod gnu_null;
+mod gnu_typeof;
 mod impcast;
 mod implicit_fallthrough;
 pub mod init;

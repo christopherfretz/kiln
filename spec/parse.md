@@ -428,6 +428,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     leading `auto` and diagnosed otherwise by Sema.
   - `decltype ( expression )` and `decltype(auto)` are type specifiers;
     the operand is unevaluated.
+  - GNU `typeof` (`parse_typeof_specifier`; spec/sema.md §5.8):
+    `__typeof`/`__typeof__` (and `typeof`, a keyword only under
+    `-std=gnu++NN`, `Keywords::new(_, gnu)`) and
+    `__typeof_unqual`/`__typeof_unqual__` (no `typeof_unqual` in C++)
+    followed by the operand of `sizeof` (`parse_trait_operand`, clang's
+    `ParseExprAfterUnaryExprOrTypeTrait`): `( type-id )`, or an
+    unevaluated unary-expression, a parenthesized one taking its postfix
+    suffix (`__typeof(x)(y)` is the type of the call `x(y)`). As clang,
+    `__typeof_unqual` does not begin a type-id in the disambiguator
+    (`tentative.rs`) or a functional cast, so a template argument or a
+    C-style cast cannot start with it ("expected expression").
     A concept name followed by `auto` or `decltype ( auto` begins a
     declaration in the statement disambiguator (`tentative.rs`), so
     `std::same_as<X> decltype(auto) r = e;` in a block is a constrained
@@ -734,7 +745,7 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   start or a decl-specifier keyword, so `new (short(n), 'x') int` is a
   placement and `new (int (*)[2])` a type-id. A `(` followed by a
   member-pointer declarator (`new (void (T::*)())`, `member_pointer_at`;
-  WP-216) is a type-id too. `decltype`, `typeof`,
+  WP-216) is a type-id too. `decltype`, `typeof`, `__typeof_unqual`,
   `typename` and a class-key are always a type-id.
 - **new-type-id.** The decl-specifiers and an abstract new-declarator
   (`*`, `&`-free ptr-operators, then `[expr]` bounds); the first bound
