@@ -13,8 +13,8 @@ cargo xtask libcxx --gate m3 -j 2 --report docs/status/libcxx-m3.md
 
 ## Setup
 
-- kiln: debug build of the WP-178 branch (commit in the generated "Run" table below), with main
-  `e238afa8` (WP-160, WP-165, WP-168, WP-175 merged) merged in.
+- kiln: debug build of the WP-180 branch (commit in the generated "Run" table below), with main
+  `dc74a1b0` (WP-173, WP-178 merged) merged in.
 - Tests and headers: libc++ `llvmorg-19.1.7`. The tests come from the sparse checkout. The headers,
   `libc++.so`, `libc++experimental.a` and `libc++abi` come from the clang 19 packages in the
   container.
@@ -74,7 +74,7 @@ Per directory, WP-164 → WP-169 → main `e238afa8` → WP-178:
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `77adf19d` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `8a6aac25` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -83,7 +83,7 @@ Per directory, WP-164 → WP-169 → main `e238afa8` → WP-178:
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 443.8 s |
+| wall time | 549.3 s |
 | peak RSS | 85 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
@@ -98,9 +98,9 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 | `std/strings/string.view` | 93 | 56 | 32 | 0 | 0 | 5 (5) | 0 | 0 | 0 | 63.6% |
 | `std/containers/views/views.span` | 45 | 20 | 15 | 0 | 0 | 10 (9) | 0 | 0 | 0 | 57.1% |
 | `std/numerics/bit` | 17 | 14 | 1 | 0 | 0 | 2 (2) | 0 | 0 | 0 | 93.3% |
-| `std/language.support/support.limits` | 112 | 83 | 29 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 74.1% |
+| `std/language.support/support.limits` | 112 | 85 | 27 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 75.9% |
 | `std/language.support/support.initlist` | 5 | 5 | 0 | 0 | 0 | 0 (0) | 0 | 0 | 0 | 100.0% |
-| **total** | 642 | 443 | 142 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 75.7% |
+| **total** | 642 | 445 | 140 | 0 | 0 | 57 (51) | 0 | 0 | 0 | 76.1% |
 
 ### Failures by stage
 
@@ -112,7 +112,7 @@ Pass rate is PASS / (total − UNSUPPORTED). "driver" counts the UNSUPPORTED tes
 | `std/strings/string.view` | 32 | 0 | 0 | 0 |
 | `std/containers/views/views.span` | 15 | 0 | 0 | 0 |
 | `std/numerics/bit` | 1 | 0 | 0 | 0 |
-| `std/language.support/support.limits` | 29 | 0 | 0 | 0 |
+| `std/language.support/support.limits` | 27 | 0 | 0 | 0 |
 | `std/language.support/support.initlist` | 0 | 0 | 0 | 0 |
 
 ### Dominant first errors per directory
@@ -127,18 +127,18 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | `std/strings/string.view` | `compile: aggregate expression ConditionalOperator is not supported yet` (9); `compile: called object type '…' is not a function or function pointer` (8); `compile: static assertion expression is not an integral constant expression` (5) |
 | `std/containers/views/views.span` | `compile: no struct named '…' in '…'` (4); `compile: no matching function for call to '…'` (3); `compile: no matching constructor for initialization of '…'` (3) |
 | `std/numerics/bit` | `compile: static assertion failed due to requirement '…'` (1) |
-| `std/language.support/support.limits` | `compile: exception specification of overriding function is more lax than base version` (9); `compile: kiln: not yet implemented: designated initializers in a template` (4); `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` (3) |
+| `std/language.support/support.limits` | `compile: call to non-static member function without an object argument` (8); `compile: kiln: not yet implemented: designated initializers in a template` (4); `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` (3) |
 | `std/language.support/support.initlist` | — |
 
 ### Error clusters
 
-56 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
+55 clusters over the FAIL tests (and compiler crashes). A cluster is the failing step's `error:` message with the location dropped, quoted names replaced by `'…'` and numbers by `N`. "first" counts tests whose first error is the cluster, "any" tests that report it anywhere. Top 40:
 
 | # | first | any | cluster | example test | example message |
 |---:|---:|---:|---|---|---|
 | 1 | 15 | 15 | `compile: no struct named '…' in '…'` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `no struct named '__segmented_iterator_traits' in 'std'` |
 | 2 | 14 | 31 | `compile: kiln: not yet implemented: designated initializers in a template` | `std/containers/views/views.span/span.elem/at.pass.cpp` | `kiln: not yet implemented: designated initializers in a template` |
-| 3 | 12 | 15 | `compile: exception specification of overriding function is more lax than base version` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `exception specification of overriding function is more lax than base version` |
+| 3 | 11 | 14 | `compile: call to non-static member function without an object argument` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `call to non-static member function without an object argument` |
 | 4 | 11 | 13 | `compile: no member named '…' in '…'` | `std/utilities/utility/pairs/pairs.pair/assign_const_pair_U_V.pass.cpp` | `no member named 'operator=' in 'ArchetypeBases::TrivialValueBase<>'` |
 | 5 | 9 | 9 | `compile: aggregate expression ConditionalOperator is not supported yet` | `std/strings/string.view/string.view.ops/compare.pointer_size.pass.cpp` | `aggregate expression ConditionalOperator is not supported yet` |
 | 6 | 8 | 12 | `compile: called object type '…' is not a function or function pointer` | `std/strings/string.view/string.view.comparison/comparison.pass.cpp` | `called object type '<overloaded function type>' is not a function or function pointer` |
@@ -160,22 +160,22 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 22 | 1 | 12 | `compile: no type named '…' in '…'` | `std/utilities/meta/meta.trans/meta.trans.other/common_reference.compile.pass.cpp` | `no type named 'type' in 'std::common_reference<B &, D &>'` |
 | 23 | 1 | 8 | `compile: ambiguous partial specializations of '…'` | `std/utilities/meta/meta.logical/conjunction.compile.pass.cpp` | `ambiguous partial specializations of 'conjunction<integral_constant<bool, true>>'` |
 | 24 | 1 | 7 | `compile: invalid operands to binary expression ('…' (aka '…') and '…')` | `std/language.support/support.limits/support.limits.general/charconv.version.compile.pass.cpp` | `invalid operands to binary expression ('chars_format' (aka 'std::chars_format') and 'chars_format')` |
-| 25 | 1 | 4 | `compile: use of undeclared identifier '…'` | `std/language.support/support.limits/support.limits.general/coroutine.version.compile.pass.cpp` | `use of undeclared identifier '__builtin_coro_done'` |
-| 26 | 1 | 3 | `compile: static assertion failed due to requirement '…': Types differ unexpectedly` | `std/utilities/meta/meta.trans/meta.trans.other/decay.pass.cpp` | `static assertion failed due to requirement 'test_macros_detail::is_same<int (int) const, std::decay<int (int) const>::type>::value': Types differ unexpectedly` |
-| 27 | 1 | 1 | `compile: expected unqualified-id` | `std/language.support/support.limits/support.limits.general/random.version.compile.pass.cpp` | `expected unqualified-id` |
-| 28 | 1 | 1 | `compile: implicit assignment of an array of this type is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.pass.cpp` | `implicit assignment of an array of this type is not supported yet` |
-| 29 | 1 | 1 | `compile: redefinition of '…'` | `std/language.support/support.limits/support.limits.general/expected.version.compile.pass.cpp` | `redefinition of 'operator=='` |
-| 30 | 1 | 1 | `compile: static assertion failed due to requirement '…': streaming operator declaration not present` | `std/strings/string.view/string.view.io/stream_insert_decl_present.compile.pass.cpp` | `static assertion failed due to requirement 'HasDecl<std::string_view>::value': streaming operator declaration not present` |
-| 31 | 1 | 1 | `link: linker command failed with exit code N (use -v to see invocation)` | `std/utilities/utility/mem.res/mem.res.global/null_memory_resource.pass.cpp` | `linker command failed with exit code 1 (use -v to see invocation)` |
-| 32 | 0 | 14 | `compile: call to non-static member function without an object argument` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `call to non-static member function without an object argument` |
-| 33 | 0 | 13 | `compile: excess elements in scalar initializer` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `excess elements in scalar initializer` |
-| 34 | 0 | 13 | `compile: no class named '…' in '…'` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `no class named '__sentinel' in 'take_view<_View>'` |
-| 35 | 0 | 13 | `compile: this kind of name is not supported yet` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `this kind of name is not supported yet` |
-| 36 | 0 | 7 | `compile: static assertion failed` | `std/containers/views/views.span/range_concept_conformance.compile.pass.cpp` | `static assertion failed` |
-| 37 | 0 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = wchar_t]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::__1::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = …` |
-| 38 | 0 | 6 | `compile: pack expansion does not contain any unexpanded parameter packs` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `pack expansion does not contain any unexpanded parameter packs` |
-| 39 | 0 | 3 | `compile: a parameter pack may not be accessed at an out of bounds index` | `std/utilities/utility/pairs/pairs.pair/assign.pair_like_rv.pass.cpp` | `a parameter pack may not be accessed at an out of bounds index` |
-| 40 | 0 | 3 | `compile: a type specifier is required for all declarations` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `a type specifier is required for all declarations` |
+| 25 | 1 | 3 | `compile: static assertion failed due to requirement '…': Types differ unexpectedly` | `std/utilities/meta/meta.trans/meta.trans.other/decay.pass.cpp` | `static assertion failed due to requirement 'test_macros_detail::is_same<int (int) const, std::decay<int (int) const>::type>::value': Types differ unexpectedly` |
+| 26 | 1 | 1 | `compile: expected unqualified-id` | `std/language.support/support.limits/support.limits.general/random.version.compile.pass.cpp` | `expected unqualified-id` |
+| 27 | 1 | 1 | `compile: implicit assignment of an array of this type is not supported yet` | `std/containers/sequences/array/array.cons/implicit_copy.pass.cpp` | `implicit assignment of an array of this type is not supported yet` |
+| 28 | 1 | 1 | `compile: redefinition of '…'` | `std/language.support/support.limits/support.limits.general/expected.version.compile.pass.cpp` | `redefinition of 'operator=='` |
+| 29 | 1 | 1 | `compile: static assertion failed due to requirement '…': streaming operator declaration not present` | `std/strings/string.view/string.view.io/stream_insert_decl_present.compile.pass.cpp` | `static assertion failed due to requirement 'HasDecl<std::string_view>::value': streaming operator declaration not present` |
+| 30 | 1 | 1 | `link: linker command failed with exit code N (use -v to see invocation)` | `std/utilities/utility/mem.res/mem.res.global/null_memory_resource.pass.cpp` | `linker command failed with exit code 1 (use -v to see invocation)` |
+| 31 | 0 | 13 | `compile: excess elements in scalar initializer` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `excess elements in scalar initializer` |
+| 32 | 0 | 13 | `compile: no class named '…' in '…'` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `no class named '__sentinel' in 'take_view<_View>'` |
+| 33 | 0 | 13 | `compile: this kind of name is not supported yet` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `this kind of name is not supported yet` |
+| 34 | 0 | 7 | `compile: static assertion failed` | `std/containers/views/views.span/range_concept_conformance.compile.pass.cpp` | `static assertion failed` |
+| 35 | 0 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = wchar_t]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::__1::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = …` |
+| 36 | 0 | 6 | `compile: pack expansion does not contain any unexpanded parameter packs` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `pack expansion does not contain any unexpanded parameter packs` |
+| 37 | 0 | 3 | `compile: a parameter pack may not be accessed at an out of bounds index` | `std/utilities/utility/pairs/pairs.pair/assign.pair_like_rv.pass.cpp` | `a parameter pack may not be accessed at an out of bounds index` |
+| 38 | 0 | 3 | `compile: a type specifier is required for all declarations` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `a type specifier is required for all declarations` |
+| 39 | 0 | 3 | `compile: expected '…'` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected '>'` |
+| 40 | 0 | 3 | `compile: expected '…' at end of declaration list` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `expected ';' at end of declaration list` |
 
 ### Crashes
 
