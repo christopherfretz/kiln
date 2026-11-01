@@ -42,6 +42,12 @@ panic and never silently wrong IR.
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
   (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
   its parameter's default argument once, at the first use (WP-136).
+  The pre-pass walks every statement codegen emits, including try blocks
+  and their handlers (WP-214: a default argument naming a non-inline
+  `static const` member, first used in a try block, loaded the
+  `available_externally` member and failed to link; libc++'s
+  `memory_resource::__max_align`). Validation:
+  `tests/codegen/static_member_odr_use.cpp`.
   Non-initializer candidates (a load of a const variable, a builtin
   call) fold with `Oven::fold_rvalue` (lax mode, WP-165): like clang's
   `tryEmitAsConstant`, a read of any `const` non-volatile variable with an
