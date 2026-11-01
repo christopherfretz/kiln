@@ -10,7 +10,7 @@
 //! zero-length array is not an array).
 
 use kiln_ast::decl::{Access, DefinitionBits};
-use kiln_ast::expr::{BinaryOp, ExprDeps, TypeTrait, ValueCategory};
+use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, TypeTrait, ValueCategory};
 use kiln_ast::types::{ExcSpec, Quals, TypeFlags, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -77,6 +77,23 @@ impl Sema<'_, '_> {
                 &tys,
                 rhs_loc,
                 false,
+                QualType::BOOL,
+                loc,
+                rparen,
+            );
+        }
+        if matches!(
+            t,
+            TypeTrait::ReferenceBindsToTemporary
+                | TypeTrait::ReferenceConstructsFromTemporary
+                | TypeTrait::ReferenceConvertsFromTemporary
+        ) {
+            let value = self.eval_ref_from_temporary(t, args[0], args[1], loc, rparen);
+            return self.builder().type_trait_expr(
+                t,
+                &tys,
+                rhs_loc,
+                value,
                 QualType::BOOL,
                 loc,
                 rparen,
@@ -511,6 +528,75 @@ impl Sema<'_, '_> {
         });
         self.ctx = saved;
         Some(matches!(r, Some((true, Ok(())))))
+    }
+
+    /// `__reference_binds_to_temporary(T, U)` and the C++23
+    /// `__reference_constructs_from_temporary` /
+    /// `__reference_converts_from_temporary` ([meta.unary.prop], clang's
+    /// `EvaluateBinaryTypeTrait`): `T` is a reference and its
+    /// initialization from `declval<U>()` (direct for the first two, copy
+    /// for the last) is well-formed and binds it to a materialized
+    /// temporary rather than directly. The C++23 forms take a non-reference
+    /// `U` as a prvalue.
+    fn eval_ref_from_temporary(
+        &mut self,
+        t: TypeTrait,
+        to: (QualType, Loc),
+        from: (QualType, Loc),
+        loc: Loc,
+        rparen: Loc,
+    ) -> bool {
+        if !self.ast.types.is_reference(to.0) || self.ast.types.is_void(from.0) {
+            return false;
+        }
+        if !self.ast.types.is_reference(from.0)
+            && !self.ast.types.is_function(from.0)
+            && !matches!(self.ast.types.canonical_view(from.0), TypeView::IncompleteArray(_))
+            && !self.require_complete(from.0, from.1)
+        {
+            return false;
+        }
+        let prvalue = t != TypeTrait::ReferenceBindsToTemporary;
+        let (fty, vc) = match self.ast.types.canonical_view(from.0) {
+            TypeView::LValueRef(p) => (p, ValueCategory::LValue),
+            TypeView::RValueRef(p) if self.ast.types.is_function(p) => (p, ValueCategory::LValue),
+            TypeView::RValueRef(p) => (p, ValueCategory::XValue),
+            _ if self.ast.types.is_function(from.0) => (from.0, ValueCategory::LValue),
+            _ if prvalue => (from.0, ValueCategory::PRValue),
+            _ => (from.0, ValueCategory::XValue),
+        };
+        let tu = self.ast.tu;
+        let saved = std::mem::replace(&mut self.ctx, tu);
+        let r = self.in_sfinae(FrameKind::ConstraintSubstitution, tu, None, loc, |s| {
+            s.enter_unevaluated();
+            let op = s.builder().opaque_value_of(fty, vc, from.1);
+            let init = if t == TypeTrait::ReferenceConvertsFromTemporary {
+                crate::init::Initializer::Expr(op)
+            } else {
+                crate::init::Initializer::Paren(vec![op], loc, rparen)
+            };
+            let e = s.perform_init(to.0, init, loc, false);
+            s.exit_unevaluated();
+            (!s.is_err_expr(e)).then(|| s.binds_temporary(e))
+        });
+        self.ctx = saved;
+        matches!(r, Some((Some(true), Ok(()))))
+    }
+
+    /// Whether the reference initialization `e` binds to a materialized
+    /// temporary (clang's `!isDirectReferenceBinding()`).
+    fn binds_temporary(&self, mut e: ExprId) -> bool {
+        for _ in 0..64 {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::MaterializeTemporaryExpr => return true,
+                ExprKind::ParenExpr
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::ExprWithCleanups
+                | ExprKind::ConstantExpr => e = self.ast.exprs.operand(e),
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// The record of `q` (not looking through arrays), if it is a class

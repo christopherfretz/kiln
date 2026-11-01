@@ -41,15 +41,6 @@
 #if __has_builtin(__is_trivially_relocatable)
 #error __is_trivially_relocatable
 #endif
-#if __has_builtin(__reference_binds_to_temporary)
-#error __reference_binds_to_temporary
-#endif
-#if __has_builtin(__reference_constructs_from_temporary)
-#error __reference_constructs_from_temporary
-#endif
-#if __has_builtin(__reference_converts_from_temporary)
-#error __reference_converts_from_temporary
-#endif
 #if __has_builtin(__type_pack_element)
 #error __type_pack_element
 #endif
