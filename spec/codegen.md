@@ -1370,6 +1370,66 @@ evaluation and run).
 Not done: the codegen side of a braced-init-list functional cast
 operand (`T({...})`; its sema is WP-200's).
 
+## 7k. Landed (WP-190): WP-170 follow-ups
+- **Zero-initialization with member pointers** (clang
+  `isZeroInitializable` / `EmitNullConstant` / `EmitNullInitialization`;
+  `kiln_abi` `irtype.rs` `zero_init`, `null_init.rs`): an Itanium data
+  member pointer's null value is `-1`, so a type holding one (directly,
+  as an array element, or in a base or member) is not zero-initializable.
+  Its null constant is built field by field (`null_const`: `i64 -1` for
+  each data member pointer, `zeroinitializer` elsewhere, flattened base
+  subobjects, packed filler arrays for the tail of an array constant), and
+  a runtime zero-initialization (`T()`, `T{}`, value-initialized `new T`,
+  `new T[n]()`, globals, members of an aggregate) stores that constant
+  instead of a `memset 0` (`null_init_array_n` loops over a runtime count).
+  A function member pointer's null is `{0, 0}` and stays zero-initializable.
+- **Parenthesized aggregate initialization** (`Agg a(3)`, P0960): already
+  lowered through `CXXParenListInitExpr` as a braced list; WP-190 adds IR
+  parity tests (default member initializers for trailing members, nested
+  aggregates and bases, arrays, references, destructible temporaries,
+  mem-initializers, static and dynamic globals, `new Agg(...)` and
+  `new T[n](...)`).
+- **Array cookies** (§7g) were re-verified for `new T[n]` with a
+  non-trivial destructor. What was missing is the EH cleanup of a
+  braced-list `new T[n]{...}` (clang `EmitNewArrayInitializer`): with
+  exceptions on and a destructed element, an `array.init.end` slot (no
+  initial store) holds the current element pointer, stored before each
+  explicit element, before the constructor filler loop and right after the
+  `phi` of the generic loop; an `IrregularPartialArrayDestroy` over the
+  base element type (no extra zero GEPs for a multidimensional array)
+  destroys `[begin, *slot)` on unwind and is deactivated on every exit.
+  Inside a conditional (nothrow `new`), `begin` is saved to a slot first
+  (`IrregularPartialArray::saved`).
+- **Auxiliary allocas** (clang `AddAuxAllocas` / `AllocaTrackerRAII`;
+  `cleanup.rs` `add_aux_allocas`, `fir.rs` `mark` / `allocas_from` /
+  `erase_with_users`): allocas created while pushing an irregular partial
+  array cleanup belong to it; when the cleanup is popped with neither a
+  normal nor an EH entry, they are erased with every user, so a list that
+  cannot throw has no `arrayinit.endOfInit` / `array.init.end` traffic.
+- **Allocation attributes on virtual calls**: a virtual call takes the
+  allocation attributes of the method it names (`allocsize`, `noalias` for
+  `malloc`, ret `align N` for a constant `alloc_align`); a non-constant
+  alignment is the `llvm.assume` "align" bundle of §7j.
+- **Entity wording of `err_init_conversion_failed`** (sema
+  `init_entity`): a functional cast `T{x}` says "a value" (clang
+  `EK_Temporary`) and `new P(d)` / `new P{d}` says "a new value"
+  (`EK_New`) instead of "a variable".
+
+Tests: `tests/codegen/zero_init_member_ptr.cpp`,
+`tests/codegen/const_array_filler.cpp`,
+`tests/codegen/paren_aggregate_init_more.cpp`,
+`tests/codegen/array_new_partial_eh.cpp`, virtual cases in
+`tests/codegen/alloc_align_runtime.cpp` (IR parity on both triples);
+`tests/conformance/dcl.init.general/zero-init-member-pointer-run.cpp`
+(run); `tests/conformance/expr.type.conv/list-init-entity-diag.cpp`
+(strict diagnostics).
+
+Not done: "a member subobject" / "an array element" wording (WP-195);
+a regular partial-array cleanup for the generic non-list `new T[n](...)`
+loop; `internal constant` (vs `global`) for constant temporaries bound
+by `const int& a = {};`; the `A{&d}` array temporary; parsing
+`new (void (T::*)())()`.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
