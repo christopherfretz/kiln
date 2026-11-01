@@ -802,7 +802,10 @@ impl Sema<'_, '_> {
         }
         if flags.contains(TdfFlags::PARAM_WITH_REFERENCE_TYPE) {
             // clang: P's top-level cv is intersected with A's.
-            p = QualType::new(p.ty(), p.quals_bits() & at.quals_bits());
+            // clang: P's top-level cv is intersected with A's (an
+            // array's are its element's).
+            let aq = t.effective_quals(at).bits();
+            p = QualType::new(p.ty(), p.quals_bits() & aq);
         }
         if matches!(t.canonical_view(at), TypeView::Pointer(_) | TypeView::MemberPointer { .. }) {
             flags = flags.union(TdfFlags::IGNORE_QUALIFIERS);
@@ -811,22 +814,36 @@ impl Sema<'_, '_> {
         self.deduce(p, at, flags, d)
     }
 
-    /// A mismatch at the top of parameter type `p` is noted with `p` as
-    /// written (`T *`, not the canonical `type-parameter-0-0 *`).
+    /// A mismatch in parameter type `p` is noted with the mismatched part
+    /// as written (`T *`, not the canonical `type-parameter-0-0 *`): `p`,
+    /// or what it refers or points to or the element of an array, at any
+    /// depth (`S<T>` in `S<T> (&)[3]`).
     fn resugar_mismatch(&mut self, p: QualType, d: &mut DeducedArgs) {
         let t = &mut self.ast.types;
         let Some(first) = d.info.first else { return };
         let ArgView::Type(fq) = first.view() else { return };
-        let inner = match t.view(p.ty()) {
-            TypeView::LValueRef(x) | TypeView::RValueRef(x) => x,
-            _ => p,
-        };
-        let bare = t.unqualified(inner);
-        for cand in [inner, bare] {
-            if t.canonical(cand) == t.canonical(fq) {
-                d.info.first = Some(TemplateArg::ty(cand));
-                return;
+        let want = t.canonical(fq);
+        let mut cur = p;
+        for _ in 0..64 {
+            let bare = t.unqualified(cur);
+            for cand in [cur, bare] {
+                if t.canonical(cand) == want {
+                    d.info.first = Some(TemplateArg::ty(cand));
+                    return;
+                }
             }
+            cur = match t.view(cur.ty()) {
+                TypeView::LValueRef(x) | TypeView::RValueRef(x) | TypeView::Pointer(x) => x,
+                TypeView::ConstantArray(a) => a.elem,
+                TypeView::IncompleteArray(e) => e,
+                _ => {
+                    let next = t.desugar_once(cur);
+                    if next == cur {
+                        return;
+                    }
+                    next
+                }
+            };
         }
     }
 

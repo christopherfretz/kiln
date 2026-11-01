@@ -138,20 +138,26 @@ impl Sema<'_, '_> {
         if let Some(e) = self.init_list_ctor_init(ty, l, style, at, temp_end) {
             return Some(e);
         }
+        if let Some(item) = l.items.iter().find(|i| !i.designator.is_empty()) {
+            // todo(WP-067b follow-up): designators of a non-aggregate.
+            self.unsupported("this list-initialization of a class", item.value.loc(self));
+            let flat = Self::list_exprs(l);
+            return Some(self.recover(ty, &flat, l.lbrace));
+        }
         let mut args = Vec::with_capacity(l.items.len());
         for item in &l.items {
-            match item.value {
-                InitValue::Expr(e) if item.designator.is_empty() => args.push(e),
-                _ => {
-                    // todo(WP-067b follow-up): nested braced arguments
-                    // ([over.ics.list]) and designators of a non-aggregate.
-                    self.unsupported("this list-initialization of a class", item.value.loc(self));
-                    let flat = Self::list_exprs(l);
-                    return Some(self.recover(ty, &flat, l.lbrace));
-                }
+            match &item.value {
+                InitValue::Expr(e) => args.push(*e),
+                // A nested braced-init-list is an argument converted by
+                // [over.ics.list] (WP-152): the call-argument placeholder,
+                // as for `T x({...})`.
+                InitValue::List(n) => args.push(self.act_on_braced_arg(n.clone())),
             }
         }
         if args.iter().any(|&a| self.expr_is_type_dependent(a)) {
+            for &a in &args {
+                let _ = self.take_braced_arg(a);
+            }
             return None;
         }
         let mut site = ConstructSite::at(at);

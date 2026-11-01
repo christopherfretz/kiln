@@ -368,6 +368,13 @@ type parameter named `auto:N`, as in clang's dump.
   function had no template-head) and the next index.
 - It goes into the function's template parameter list. The list is
   created on the first such parameter if it does not exist yet.
+- In an out-of-line member definition the explicit heads that match the
+  qualifier's class-template levels (`match_template_lists_to_scope`)
+  belong to the classes, so the first invented parameter creates the
+  member's own list (or extends an explicit member head):
+  `template<class T> void A<T>::f(C auto)` is a template of depth 1.
+  `act_on_finish_template_decl` pops such invented heads (WP-169,
+  `temp.mem/out-of-line-abbreviated.cpp`).
 - `C auto` attaches the type-constraint `C<auto:N>`.
 - Generic lambdas use the same routine (WP-075).
 
@@ -2301,6 +2308,14 @@ ambiguity errors.
   `T = <int, char>`.
 - Specialization names print with the as-written args, omitting any arg
   equal to its default (types.md §18).
+- `NonDeducedMismatch` names the mismatched part of the parameter type as
+  written, at any depth through references, pointers and array elements
+  (`'S<T>'` for `S<T> (&)[3]`), never the canonical `type-parameter-0-0`.
+  For a reference parameter, P's top-level cv is intersected with A's
+  first, an array's cv being its element's (clang's
+  `TDF_ParamWithReferenceType`): `const S<T>&` against `const char[3]` is
+  `'const S<T>'`, `volatile S<T>&` is `'S<T>'` (WP-152). The same rule
+  makes `const T&` from `const char[3]` deduce `T = char[3]`.
 
 ### 10.5 Other template diagnostics (texts from clang 19; goldens are authoritative)
 
@@ -3383,8 +3398,6 @@ explicit specialization errors remain. The blockers are:
   - Partially substituted pack expansions (`tl<tl<Ts, Us>...>` with
     only `Ts` known) need clang's `SubstTemplateTypeParmPackType`:
     unimplemented ("partially substituted pack expansion").
-  - `using Ts::operator()...;`: the parser rejects a pack in a
-    using-declarator.
   - Lambda init-capture packs: WP-075. Fold-expanded constraints: Q17.
   - Pre-existing, seen while testing: `int a[] = {sizeof(Ts)...};`
     reports "sizeof incomplete type" (a reference to an incomplete
