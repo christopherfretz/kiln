@@ -971,11 +971,8 @@ impl Sema<'_, '_> {
             } else {
                 // A designated clause is a `DesignatedInitExpr` (clang
                 // `ActOnDesignatedInitializer`), rebuilt at instantiation.
-                let ds: Vec<kiln_ast::expr::Designator> = it
-                    .designator
-                    .iter()
-                    .map(|d| self.designator_ast(d))
-                    .collect();
+                let ds: Vec<kiln_ast::expr::Designator> =
+                    it.designator.iter().map(|d| self.designator_ast(d)).collect();
                 let loc = it.designator[0].loc();
                 // A designated pack expansion `.x = u...` is the
                 // expansion of the designated clause (clang parses the

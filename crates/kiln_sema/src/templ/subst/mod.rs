@@ -487,9 +487,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// find for it).
     pub(crate) fn class_not_instantiated(&mut self, d: DeclId, loc: Loc) -> SubstResult<bool> {
         let node = *self.sema.ast.decls.get(d);
-        if !node.flags().contains(DeclFlags::DEPENDENT_CTX)
-            || self.pairs.iter().any(|p| p.0 == d)
-        {
+        if !node.flags().contains(DeclFlags::DEPENDENT_CTX) || self.pairs.iter().any(|p| p.0 == d) {
             return Ok(false);
         }
         let Some(parent) = node.ctx() else { return Ok(false) };

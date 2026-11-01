@@ -1351,9 +1351,11 @@ impl Sema<'_, '_> {
         }
         // An argument already diagnosed (clang: an initializer that
         // contains errors deduces nothing, silently).
-        if args.iter().zip(0..).any(|(&a, i)| {
-            braced.get(i).and_then(Option::as_ref).is_none() && self.is_err_expr(a)
-        }) {
+        if args
+            .iter()
+            .zip(0..)
+            .any(|(&a, i)| braced.get(i).and_then(Option::as_ref).is_none() && self.is_err_expr(a))
+        {
             return None;
         }
         let Some(guides) = self.ctad_guides(tmpl, init, 0) else {

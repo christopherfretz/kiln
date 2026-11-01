@@ -31,11 +31,7 @@ impl Substituter<'_, '_, '_> {
 
     /// Whether record `m` of the pattern is an anonymous struct or union.
     pub(crate) fn is_anonymous_record(&self, m: DeclId) -> bool {
-        self.sema
-            .ast
-            .decls
-            .record(m)
-            .is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS))
+        self.sema.ast.decls.record(m).is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS))
     }
 
     /// Unnamed member class `m` of the pattern: defined now with its

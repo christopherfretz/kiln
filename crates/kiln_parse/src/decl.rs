@@ -2402,7 +2402,9 @@ impl Parser<'_, '_> {
                 let mut n = 0;
                 loop {
                     match self.peek(n).kind {
-                        TokKind::Punct(Punct::LSquare | Punct::LParen | Punct::LBrace) => depth += 1,
+                        TokKind::Punct(Punct::LSquare | Punct::LParen | Punct::LBrace) => {
+                            depth += 1;
+                        }
                         TokKind::Punct(Punct::RSquare | Punct::RParen | Punct::RBrace) => {
                             depth = depth.saturating_sub(1);
                             if depth == 0 {

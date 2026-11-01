@@ -243,7 +243,8 @@ impl Sema<'_, '_> {
             if let Some(d) = head {
                 if !nested && item.designator.len() > 1 {
                     nested = true;
-                    let msg = self.diag(DiagId::sema_designated_init_nested, self.designator_begin(d));
+                    let msg =
+                        self.diag(DiagId::sema_designated_init_nested, self.designator_begin(d));
                     self.emit(msg);
                 }
                 for d in &item.designator {
@@ -257,8 +258,10 @@ impl Sema<'_, '_> {
                 }
                 if !mixed && first_designator.is_none() {
                     mixed = true;
-                    let msg = self.diag(DiagId::sema_designated_init_mixed, self.designator_begin(d));
-                    let note = self.diag(DiagId::note_designated_init_mixed, self.item_begin(first));
+                    let msg =
+                        self.diag(DiagId::sema_designated_init_mixed, self.designator_begin(d));
+                    let note =
+                        self.diag(DiagId::note_designated_init_mixed, self.item_begin(first));
                     self.emit(msg.with_note(note));
                 }
             } else if !mixed && let Some(d) = first_designator.as_ref() {
@@ -1458,6 +1461,7 @@ impl Sema<'_, '_> {
     /// says: a designator path descends into a subobject, where the
     /// following non-designated clauses continue (clang
     /// `CheckDesignatedInitializer`).
+    #[allow(clippy::too_many_lines)]
     fn check_aggregate_in(
         &mut self,
         ty: QualType,
@@ -1497,7 +1501,8 @@ impl Sema<'_, '_> {
         let mut explicit = vec![false; total];
         let mut union_field = None;
         if let Some(p) = self.prior_list(sub.prior) {
-            let inits: Vec<ExprId> = self.ast.lists.iter(self.ast.exprs.init_list_inits(p)).collect();
+            let inits: Vec<ExprId> =
+                self.ast.lists.iter(self.ast.exprs.init_list_inits(p)).collect();
             let uf = self.ast.exprs.init_list(p).union_field;
             if union {
                 if let (Some(f), Some(&e)) = (uf, inits.first())
@@ -1528,7 +1533,7 @@ impl Sema<'_, '_> {
             if let Some(k) = k {
                 let (name, dloc) = match item.designator[k] {
                     Designator::Field(n, l) => (n, l),
-                    ref d => {
+                    ref d @ Designator::Index(..) => {
                         self.designator_mismatch(ty, d);
                         *pos += 1;
                         continue;
@@ -1654,6 +1659,7 @@ impl Sema<'_, '_> {
         self.builder().init_list(ty, &inits, None, union_field, lbrace, rbrace)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn check_array(
         &mut self,
         ty: QualType,
@@ -1668,7 +1674,9 @@ impl Sema<'_, '_> {
         let mut slots: Vec<Option<ExprId>> = Vec::new();
         let mut explicit: Vec<bool> = Vec::new();
         if let Some(p) = self.prior_list(sub.prior) {
-            for e in self.ast.lists.iter::<ExprId>(self.ast.exprs.init_list_inits(p)).collect::<Vec<_>>() {
+            for e in
+                self.ast.lists.iter::<ExprId>(self.ast.exprs.init_list_inits(p)).collect::<Vec<_>>()
+            {
                 slots.push(Some(e));
                 explicit.push(!self.is_filler_expr(e));
             }
@@ -1687,7 +1695,7 @@ impl Sema<'_, '_> {
             if let Some(k) = k {
                 let (ie, dloc) = match item.designator[k] {
                     Designator::Index(ie, l) => (ie, l),
-                    ref d => {
+                    ref d @ Designator::Field(..) => {
                         self.designator_mismatch(ty, d);
                         *pos += 1;
                         continue;
@@ -1757,7 +1765,8 @@ impl Sema<'_, '_> {
             };
             inits.push(e);
         }
-        let filler = if hole || (inits.len() as u64) < n { Some(self.filler(elem, rbrace)) } else { None };
+        let filler =
+            if hole || (inits.len() as u64) < n { Some(self.filler(elem, rbrace)) } else { None };
         let lty = if bound.is_none() {
             let complete = self.ast.types.constant_array(elem, n, None);
             let q = self.ast.types.effective_quals(ty);
@@ -1776,7 +1785,9 @@ impl Sema<'_, '_> {
             return;
         }
         let (id, at) = match *d {
-            Designator::Field(_, l) => (DiagId::sema_field_designator_non_record, self.period_before(l)),
+            Designator::Field(_, l) => {
+                (DiagId::sema_field_designator_non_record, self.period_before(l))
+            }
             Designator::Index(_, l) => (DiagId::sema_array_designator_non_array, l),
         };
         let msg = self.diag(id, at).arg(self.ty_arg(ty));
@@ -1852,7 +1863,12 @@ impl Sema<'_, '_> {
     /// The prior initializer a designator path descending into a slot
     /// merges into. A subobject initialized by an expression would need
     /// clang's `DesignatedInitUpdateExpr`.
-    fn descend_prior(&self, slot: Option<ExprId>, explicit: bool, item: &InitItem) -> Option<ExprId> {
+    fn descend_prior(
+        &self,
+        slot: Option<ExprId>,
+        explicit: bool,
+        item: &InitItem,
+    ) -> Option<ExprId> {
         let old = slot?;
         if explicit && self.ast.exprs.get(old).kind() != ExprKind::InitListExpr {
             self.unsupported(

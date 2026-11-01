@@ -1051,8 +1051,7 @@ impl Substituter<'_, '_, '_> {
     /// An initializer-clause of a braced list; a `DesignatedInitExpr`
     /// gives back its designators (clang `TransformDesignatedInitExpr`).
     fn init_value(&mut self, x: ExprId) -> SubstResult<InitItem> {
-        let (designator, x) = if self.sema.ast.exprs.get(x).kind() == ExprKind::DesignatedInitExpr
-        {
+        let (designator, x) = if self.sema.ast.exprs.get(x).kind() == ExprKind::DesignatedInitExpr {
             let ds = self.sema.ast.exprs.designators(x).to_vec();
             let init = self.sema.ast.exprs.designated_init(x);
             (self.designators(&ds)?, init)
@@ -1089,7 +1088,8 @@ impl Substituter<'_, '_, '_> {
         &mut self,
         ds: &[crate::init::Designator],
     ) -> SubstResult<Vec<crate::init::Designator>> {
-        let v: Vec<kiln_ast::expr::Designator> = ds.iter().map(|d| d.to_ast()).collect();
+        let v: Vec<kiln_ast::expr::Designator> =
+            ds.iter().map(crate::init::Designator::to_ast).collect();
         self.designators(&v)
     }
 
@@ -1107,7 +1107,8 @@ impl Substituter<'_, '_, '_> {
                         crate::templ::pack::Expansion::Elements(v) => out.extend(v),
                         crate::templ::pack::Expansion::Unexpanded(mut it) => {
                             if let InitValue::Expr(y) = it.value {
-                                it.value = InitValue::Expr(self.sema.act_pack_expansion(y, ellipsis));
+                                it.value =
+                                    InitValue::Expr(self.sema.act_pack_expansion(y, ellipsis));
                             }
                             out.push(it);
                         }
