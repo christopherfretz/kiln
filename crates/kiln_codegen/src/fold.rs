@@ -248,8 +248,7 @@ impl Collect<'_> {
                     for a in ast.lists.iter::<kiln_ast::AttrId>(ast.stmts.stmt_attrs(s)) {
                         let node = *ast.attrs.get(a);
                         if node.kind == kiln_ast::attr::AttrKind::ASSUME
-                            && let Some(e) =
-                                <ExprId as kiln_ast::ids::RawId>::from_raw(node.a)
+                            && let Some(e) = <ExprId as kiln_ast::ids::RawId>::from_raw(node.a)
                         {
                             self.expr(e);
                         }

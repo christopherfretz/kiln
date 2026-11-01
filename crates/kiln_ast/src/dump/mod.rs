@@ -467,10 +467,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(e), None));
                 }
             }
-            Node::Base(..)
-            | Node::Overrides(_)
-            | Node::Fixed(_)
-            | Node::SpecRef(_) => {}
+            Node::Base(..) | Node::Overrides(_) | Node::Fixed(_) | Node::SpecRef(_) => {}
         }
         // A nested immediate invocation has no wrapper in clang.
         for (k, _) in kids.iter_mut() {

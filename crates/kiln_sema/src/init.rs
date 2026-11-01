@@ -618,10 +618,8 @@ impl Sema<'_, '_> {
         let t = self.ty_arg(ty);
         let floc = self.ast.decls.get(f).loc();
         let note = self.diag(DiagId::note_uninit_reference_member, floc);
-        let msg = self
-            .diag(DiagId::sema_init_reference_member_uninitialized, at)
-            .arg(t)
-            .with_note(note);
+        let msg =
+            self.diag(DiagId::sema_init_reference_member_uninitialized, at).arg(t).with_note(note);
         self.emit(msg);
     }
 

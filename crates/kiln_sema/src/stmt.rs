@@ -4,10 +4,10 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, NewDecl, Payload};
 use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
+use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::{CaseData, IfData, IfKind, LoopData, StmtKind, SwitchData};
 use kiln_ast::types::{BuiltinType, TypeView};
-use kiln_ast::ids::RawId;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
 use kiln_source::Loc;

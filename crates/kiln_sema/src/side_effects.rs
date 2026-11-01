@@ -7,9 +7,9 @@
 
 use kiln_ast::ExprId;
 use kiln_ast::attr::AttrKind;
+use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
 use kiln_ast::ids::RawId;
 use kiln_ast::types::Quals;
-use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -168,7 +168,9 @@ impl Sema<'_, '_> {
                         return true;
                     }
                 }
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr
                 | ExprKind::UserDefinedLiteral => {
                     let pure = self.callee_decl(x).is_some_and(|f| {
                         self.find_attr(f, AttrKind::CONST).is_some()
@@ -197,7 +199,10 @@ impl Sema<'_, '_> {
                     let kids = exprs.children(x, &self.ast.lists);
                     if ck == CastKind::LValueToRValue
                         && kids.first().is_some_and(|&k| {
-                            self.ast.types.effective_quals(exprs.get(k).ty()).contains(Quals::VOLATILE)
+                            self.ast
+                                .types
+                                .effective_quals(exprs.get(k).ty())
+                                .contains(Quals::VOLATILE)
                         })
                     {
                         return true;
