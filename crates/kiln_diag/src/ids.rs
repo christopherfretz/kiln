@@ -1618,6 +1618,8 @@ diag_ids! {
     sema_fallthrough_invalid_placement = Error (0) "fallthrough annotation does not directly precede switch label";
     sema_explicit_inst_undefined_func_template = Error (1) "explicit instantiation of undefined function template '{0}'";
     sema_bad_cxx_cast_rvalue = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from rvalue to reference type {1}";
+    sema_plain_complex = Warning (0) "plain '_Complex' requires a type specifier; assuming '_Complex double'";
+    sema_invalid_complex_spec = Error (1) "'_Complex {0}' is invalid";
 }
 
 impl DiagId {

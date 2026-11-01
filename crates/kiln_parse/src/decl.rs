@@ -43,6 +43,7 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Double
             | Kw::Int128
             | Kw::Float128
+            | Kw::Complex
             | Kw::Auto
             | Kw::Const
             | Kw::Volatile
@@ -587,6 +588,7 @@ impl Parser<'_, '_> {
                 Kw::Float => ds.set_base(TypeSpecKind::Float, None, loc),
                 Kw::Double => ds.set_base(TypeSpecKind::Double, None, loc),
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
+                Kw::Complex => ds.set_complex(loc),
                 Kw::Auto => ds.set_base(TypeSpecKind::Auto, None, loc),
                 Kw::Struct | Kw::Class | Kw::Union | Kw::Enum => {
                     self.parse_tag_specifier(&mut ds, k, ctx);

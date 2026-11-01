@@ -138,6 +138,13 @@ impl Sema<'_, '_> {
     pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
+            TypeSpecKind::None
+                if ds.complex.is_some() && ds.width == Width::None && ds.sign == Sign::None =>
+            {
+                // clang `DeclSpec::Finish`: `ext_plain_complex`.
+                self.error(DiagId::sema_plain_complex, ds.complex.unwrap_or(loc));
+                QualType::DOUBLE
+            }
             TypeSpecKind::None if !ds.has_type_specifier() => {
                 if !ds.invalid {
                     self.error(DiagId::parse_missing_type_specifier, loc);
@@ -205,6 +212,10 @@ impl Sema<'_, '_> {
             }
             TypeSpecKind::Named => ds.named.unwrap_or(QualType::ERROR),
         };
+        let base = match ds.complex {
+            Some(cloc) => self.complex_of_declspec(ds, base, cloc),
+            None => base,
+        };
         // clang `BuildQualifiedType`: the `_Atomic` qualifier makes the
         // unqualified type atomic and keeps its qualifiers outside.
         let base = match ds.atomic_qual {
@@ -221,6 +232,30 @@ impl Sema<'_, '_> {
         };
         let cv = ds.cv;
         if cv.is_empty() { base } else { self.ast.types.qualify(base, cv) }
+    }
+
+    /// `_Complex T` for the type `base` named by the other specifiers of
+    /// `ds` (clang `DeclSpec::Finish`: a real floating or integer type).
+    fn complex_of_declspec(&mut self, ds: &DeclSpec, base: QualType, cloc: Loc) -> QualType {
+        let ok = match ds.base {
+            TypeSpecKind::None
+            | TypeSpecKind::Int
+            | TypeSpecKind::Char
+            | TypeSpecKind::Int128
+            | TypeSpecKind::Float
+            | TypeSpecKind::Double
+            | TypeSpecKind::Float128 => true,
+            _ => false,
+        };
+        if !ok {
+            if !ds.invalid && !self.is_error_type(base) {
+                let msg =
+                    self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(ds.base.spelling());
+                self.emit(msg);
+            }
+            return QualType::ERROR;
+        }
+        self.ast.types.complex(base)
     }
 
     /// True if `q` is the error type.
