@@ -1950,8 +1950,8 @@ used in type trait expression". Each "complete" check calls
 | `__is_pod(T)` | complete; trivial and standard-layout | `cls` |
 | `__has_virtual_destructor(T)` | complete; its destructor is virtual | `cls` |
 | `__has_unique_object_representations(T)` | complete; [meta.unary.prop]: no padding bits; floating types are false; member pointers per the Itanium ABI | `abi.record_layout` + `tc` |
-| `__is_trivially_equality_comparable(T)` | clang 19: trivially copyable, unique object representations, and no user `operator==` (or a defaulted one whose members are all trivially comparable) | `cls` + `abi` + lookup |
-| `__is_trivially_relocatable(T)` | clang 19: trivially copyable, or a class with `[[clang::trivial_abi]]` that is not volatile | `cls` |
+| `__is_trivially_equality_comparable(T)` | clang 19 (WP-166): not an enum or array; for a class, `const T& == const T&` (built under a SFINAE frame from the TU) selects a defaulted `operator==` whose parameters are `const T&` (or `T` when trivially copyable), recursively for every base and field (reference or enum fields fail; a union fails); then unique object representations without the trivially-copyable requirement | `cls` + `abi` + lookup |
+| `__is_trivially_relocatable(T)` | clang 19 (WP-166): a class that can be passed in registers (`canPassInRegisters`, as `__can_pass_in_regs`), or any other complete object type; references, functions and `void` are false | `cls` |
 | `__is_base_of(B,D)` | both are classes (not unions), `D` is complete when the two differ, and `B` is `D` or a base of `D` (cv ignored) | `cls.bases` (S3C) |
 | `__is_convertible(F,T)` / `__is_nothrow_convertible(F,T)` | `conv_check(F,T).ok` (and `.nothrow`). WP-131 landed them (and `__is_convertible_to`): `To` void is true only for `From` void; `To` function or array, or `From` void, is false; otherwise the copy-initialization of a `To` from an opaque `declval<From>()` operand under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `conv_check` |
 | `__is_constructible(T,A…)` / `__is_trivially_constructible` / `__is_nothrow_constructible` | `init_check(T, A…, Direct)`: `.ok`, `.ok && .trivial`, `.ok && .nothrow`. A reference `T` takes exactly one argument; it still counts as constructible when the reference binds to a temporary created by an implicit conversion (clang 19; only `__reference_constructs_from_temporary` excludes that). WP-131 landed `__is_constructible` and `__is_nothrow_constructible`: a temporary's direct-initialization (value-initialization for no arguments) built on opaque `declval` operands under a SFINAE frame, access from the TU; nothrow is `!can_throw` of the result | `init_check` |
@@ -1961,6 +1961,33 @@ used in type trait expression". Each "complete" check calls
 Two more behave the same way but are only probed, not used, by the M3
 headers. They are implemented in M3 because they cost one row each:
 `__reference_constructs_from_temporary` and `__is_layout_compatible`.
+
+**WP-166 rows** (`templ/builtins/traits/special.rs`), each to clang 19:
+- `__has_nothrow_assign` / `__has_nothrow_move_assign` /
+  `__has_nothrow_copy` / `__has_nothrow_constructor` (GCC; deprecated,
+  `-Wdeprecated-builtins`): POD (and references for `copy`) answer true,
+  `const` or reference operands of `assign` false; otherwise the trivial
+  special member answers true, else every matching non-template
+  member (copy assignment / move assignment / copy constructor callable
+  with one argument / default constructor callable with none) must be
+  nothrow, and at least one must exist.
+- `__can_pass_in_regs(T)`: `T` must be an unqualified class type
+  ("argument 'X' is not an unqualified class type"); the answer is
+  clang's `canPassInRegisters` (no non-trivial non-deleted copy/move
+  constructor or destructor, and one non-deleted copy/move constructor).
+- `__is_bitwise_cloneable(T)`: false for `void`, incomplete and dependent
+  types; arrays use their element; classes need every field to be;
+  every other type (references, functions) is true.
+- `__is_layout_compatible(T,U)` ([basic.types.general]/11): same type
+  ignoring cv (array elements included); enums with the same underlying
+  type; standard-layout structs whose fields, taken from the class that
+  declares them (`getStandardLayoutBaseWithFields`), match pairwise in
+  type, bit-field width, alignment and no `[[no_unique_address]]`;
+  unions match fields in any order. Incomplete operands other than `void`
+  and `T[]` are "incomplete type 'X' where a complete type is required".
+- `__is_pointer_interconvertible_base_of(B,D)` ([meta.rel]/5): non-union
+  classes; the same class (cv ignored) is true, else `D` must be complete
+  and standard-layout with `B` as a base.
 
 **Reference-from-temporary traits** (WP-138; libc++ `tuple`'s
 `std::tie` constructor uses `__reference_binds_to_temporary`). These are
@@ -2810,15 +2837,13 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
 `__has_builtin` answers false):
 | Stub | Owner |
 |---|---|
-| The 8 other overload-resolution traits (`__reference_*_from_temporary`, …) | WP-068a (`__is_trivially_constructible` / `__is_trivially_assignable` landed in WP-155: `init_check` `.ok && .trivial`, with clang 19's "no non-trivial call in the expression" rule; `__is_assignable` landed in WP-130: the assignment built on opaque operands under a SFINAE frame, access from the TU; `__is_constructible` / `__is_nothrow_constructible` the three `__is_convertible` forms and `__is_nothrow_assignable` in WP-131) |
-| `__is_layout_compatible`, `__is_pointer_interconvertible_base_of`, `__can_pass_in_regs`, `__is_bitwise_cloneable` | M4 (unassigned) |
-| `__is_trivially_relocatable` (`TRIVIALLY_RELOCATABLE` is never set) | unowned: S3C canPassInRegisters |
-| `__type_pack_element` and `__make_integer_seq` with pack arguments | WP-072 |
 | `__builtin_operator_new` / `__builtin_operator_delete` in the Oven (sema and codegen landed in WP-088) | WP-061b |
 
 The other §9.5 functions, the source-location builtins and
-`__builtin_bit_cast` in the Oven landed in WP-088 (§9.5). In all, 157
-table names answer yes and 25 are staged off.
+`__builtin_bit_cast` in the Oven landed in WP-088 (§9.5). Every trait
+row is implemented (the overload-resolution traits in WP-130, WP-131
+and WP-155; the last staged-off rows in WP-166), so `__has_builtin`
+answers yes for every table name.
 
 *Gaps* (each reports a diagnostic or is a known divergence):
 - Substituted types carry no argument locations, so the columns of
