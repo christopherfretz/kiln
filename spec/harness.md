@@ -493,8 +493,38 @@ it runs alongside:
   in-flight children; the pool can only lower the effective parallelism.
 - **Release.** Tokens are released by `Drop`: on a normal exit, an error
   return, a worker panic, and a child killed by the memory cap or a timeout.
-  Only a hard kill of xtask itself loses the tokens it holds (as for make
-  and cargo).
+- **Signals (WP-157).** With a live pool, xtask catches **SIGINT and
+  SIGTERM** on a dedicated thread (the `signal-hook` crate). The handler
+  `unsafe` stays inside that dependency, so xtask remains
+  `forbid(unsafe_code)`. On either signal:
+  1. every pool byte the process holds (by live tokens, or already read for
+     waiting workers) is written back to the fifo;
+  2. later token drops return nothing and new acquisitions are free;
+  3. the signal's default action ends the process (falling back to exit
+     status 128 + signal), and stderr says `xtask: signal N: returned K
+     jobserver token(s)`.
+
+  A child still running at that moment keeps running until it exits. For a
+  terminal ^C the children share xtask's process group and get the SIGINT
+  too, except `run_measured`'s, which run in their own group. So the pool
+  can briefly be oversubscribed by those children, never undercounted.
+- **SIGKILL cannot be handled.** No process can catch it, so `kill -9`
+  (including the kernel OOM killer), or any other fatal signal xtask does
+  not catch, loses the tokens xtask held, as it would for make and cargo.
+  Restore the pool with `cargo xtask jobserver refill`.
+- **`cargo xtask jobserver status|refill [--fifo <path>] [--jobs <n>]`.**
+  - The fifo is `MAKEFLAGS`' `fifo:` path, else `$KILN_JOBSERVER_FIFO`,
+    else `/run/kiln/jobserver.fifo`.
+  - `<n>` is `$KILN_JOBS`, else 20, as for `scripts/jobserver.sh`.
+  - Both open the fifo read+write with `O_NONBLOCK`. They count the idle
+    tokens by reading until `EWOULDBLOCK` and write the same bytes back.
+  - `refill` also writes `+` bytes up to `<n>` idle tokens. It is only
+    correct while no client holds tokens (nothing building or testing):
+    tokens in use come back on top of the refill. It leaves a pool above
+    `<n>` alone and reports it.
+  - Neither ever blocks. The non-blocking open uses a hard-coded
+    `O_NONBLOCK` per OS (Linux, Android, macOS and the BSDs); on other
+    platforms both fail with an error.
 - **Fallback.** With no `MAKEFLAGS`, the descriptor forms
   (`--jobserver-auth=R,W`, `--jobserver-fds=R,W`, which need inherited
   descriptors), a path that is not a fifo or cannot be opened (a warning

@@ -30,6 +30,8 @@ commands:
   libcxx      run libc++'s own tests (llvmorg-19.1.7 libcxx/test) with kiln; --gate m3
               is the M3 gate; not part of ci (`cargo xtask libcxx --help`; contract
               in spec/libcxx.md; needs scripts/fetch-libcxx-tests.sh)
+  jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
+              (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
   ci          the merge gate: fmt --check, clippy -D warnings, cargo test, then the
               corpus twice: xtask test --compiler clang++-19 (the corpus self-check;
               skipped when clang++-19 is not on PATH) and xtask test with kiln; fails
@@ -47,6 +49,7 @@ fn main() -> ExitCode {
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("libcxx") => libcxx::main(args),
         Some("stress") => stress(args),
+        Some("jobserver") => jobs::main(args),
         Some("ci") => ci(args),
         _ => {
             eprint!("{USAGE}");
