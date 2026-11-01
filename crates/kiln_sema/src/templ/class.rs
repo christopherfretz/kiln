@@ -1241,17 +1241,16 @@ impl Substituter<'_, '_, '_> {
                 } else {
                     sub.expr(init).map(Initializer::Expr)
                 };
-                match i {
-                    Ok(i) => sub.sema.act_on_field_init(field, i),
-                    Err(SubstFail) => {
-                        if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
-                            sub.sema.nsdmi_this.pop();
-                        }
-                        // clang `InstantiateInClassInitializer`: the field
-                        // is invalid, so a constructor using the
-                        // initializer is quiet ([class.base.init]/9.1).
-                        sub.sema.ast.decls.set_flags(field, DeclFlags::INVALID);
+                if let Ok(i) = i {
+                    sub.sema.act_on_field_init(field, i);
+                } else {
+                    if sub.sema.nsdmi_this.last().is_some_and(|&(f, _)| f == field) {
+                        sub.sema.nsdmi_this.pop();
                     }
+                    // clang `InstantiateInClassInitializer`: the field
+                    // is invalid, so a constructor using the
+                    // initializer is quiet ([class.base.init]/9.1).
+                    sub.sema.ast.decls.set_flags(field, DeclFlags::INVALID);
                 }
             }
             sub.sema.act_on_finish_delayed_class(spec);
