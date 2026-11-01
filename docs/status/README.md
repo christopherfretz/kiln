@@ -7,6 +7,8 @@
 | M2 C-ish subset | done (2026-10-28) | 47 AST golden dirs vs clang, 99 [expr.const] tests, Oven ≈0.02x clang time; IR-diff corpus 92/92 byte-identical to clang -O0 (46 programs × 2 triples); 33 printf `run` tests vs clang |
 | M3 classes/templates | planning | first blockers per libc++ header: [libcxx-syntax.md](libcxx-syntax.md) |
 
+libstdc++ consumption track (WP-188): [libstdcxx.md](libstdcxx.md), every public GCC 14 libstdc++ header as a one-line TU (`cargo xtask libstdcxx`): 39/109 ok at c++26, 44/109 at c++20; blocker clusters with corpus repros.
+
 C++23/C++26 language features (M4 checklist): [cxx-features.md](cxx-features.md), checked by `cargo xtask features`.
 
 Harness through kiln: 565/575 pass, 8 xfail (among them the 5 header-dependent `run` tests: `decltype` in libstdc++'s c++config.h), 2 fail (reflection, contracts).

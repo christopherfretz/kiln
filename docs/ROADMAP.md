@@ -136,6 +136,7 @@ from the P2996 text.
   a differential check. A kiln-owned `<meta>` is a fallback only. The maturity
   bar for the compiler is consuming BOTH libc++ (M4/M5 gates) and libstdc++
   (consumption track from M4, WP-188; mirrorbind under GCC uses it).
+  libstdc++ header status: `docs/status/libstdcxx.md` (`cargo xtask libstdcxx`).
 - Exit: mirrorbind (`git@github.com:christopherfretz/mirrorbind.git`) builds
   and its tests pass; its compile time and peak memory with kiln are recorded
   against GCC 16.1 (whose constexpr memory growth is the problem kiln exists

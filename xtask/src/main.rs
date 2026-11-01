@@ -10,6 +10,7 @@ mod features;
 mod gen_pp;
 mod jobs;
 mod libcxx;
+mod libstdcxx;
 mod oracle;
 mod test;
 mod util;
@@ -36,6 +37,9 @@ commands:
   libcxx      run libc++'s own tests (llvmorg-19.1.7 libcxx/test; --tag picks another
               checkout) with kiln; --gate m3 is the M3 gate; not part of ci (`cargo xtask libcxx --help`; contract
               in spec/libcxx.md; needs scripts/fetch-libcxx-tests.sh)
+  libstdcxx   compile each public libstdc++ header alone with kiln and clang++-19 and
+              report per-header status (docs/status/libstdcxx.md); informational, not
+              part of ci (`cargo xtask libstdcxx --help`; contract in spec/libstdcxx.md)
   features    check docs/status/cxx-features.md: done rows name passing tests and
               kiln's __cpp_* values match clang 22's; an M4-gate check, not part of
               ci (`cargo xtask features --help`; spec/harness.md \"Feature table\")
@@ -63,6 +67,7 @@ fn main() -> ExitCode {
         Some("diag-split") => diag_split::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("libcxx") => libcxx::main(args),
+        Some("libstdcxx") => libstdcxx::main(args),
         Some("features") => features::main(args),
         Some("stress") => stress(args),
         Some("jobserver") => jobs::main(args),
