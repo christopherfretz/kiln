@@ -21,6 +21,10 @@ WPs are sized so that one subagent finishes in a single session with a
 reviewable diff (roughly: one module, one spec section, < ~2k lines).
 
 ## Rules for implementers
+- **Never `git stash` in a worktree.** `refs/stash` belongs to the repository,
+  not the worktree: two agents stashing concurrently pop each other's changes
+  (WP-213/WP-215, 2026-11-01). Commit work in progress, or use `git diff >
+  x.patch` / `git apply` instead.
 
 1. Work in the git worktree the supervisor created for you at
    `.worktrees/wp-<id>` (branch `wp/<id>-<slug>`), addressing it by absolute
