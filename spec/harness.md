@@ -60,7 +60,7 @@ directives are also ERRORs.
 
 | Directive | Semantics |
 |---|---|
-| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| layout \| vtables` | Test kind. Default `compile-ok`. |
+| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| layout \| vtables \| no-crash` | Test kind. Default `compile-ok`. |
 | `std: <std>` | `c++98 c++03 c++11 c++14 c++17 c++20 c++23 c++26` (C++), `c89 c99 c11 c17 c23` (C). Default `c++26` / `c17`. Passed as `-std=<std>`. |
 | `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
 | `diag: <line>[:<col>] <sev> "<substring>"` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. |
@@ -168,6 +168,7 @@ satisfies `compile-fail`.
 | `ast` | kiln: `-fsyntax-only -fdump-ast[=implicit] [-fdump-ast-filter=<substr>]`; clang: `-fsyntax-only -Xclang -ast-dump=json`, normalized | exit 0; the diags match; the dump equals `<test>.expected` up to trailing whitespace on each line and trailing blank lines; the oracle agrees (below). See "ast tests". |
 | `layout` | kiln: `-fsyntax-only -fdump-record-layouts`; clang: `-fsyntax-only -Xclang -fdump-record-layouts-complete` | exit 0; the diags match; the dump has at least one record layout; the oracle's dump has the same blocks in the same order. See "Layout and vtable tests". |
 | `vtables` | kiln: `-fsyntax-only -fdump-vtable-layouts`; clang: `-S -emit-llvm -o <scratch>/test.ll -Xclang -fdump-vtable-layouts` | exit 0; the diags match; the dump has at least one vtable block; the oracle's dump has the same set of blocks. See "Layout and vtable tests". |
+| `no-crash` | `-fsyntax-only` | exit 0 or 1 (errors anywhere are fine, in the test file or not), and the diags match; any other exit code (an internal-error exit such as 70 or 101) is a FAIL, as is a crash or hang (above). For robustness tests over input the compiler cannot fully handle yet, e.g. whole headers with `-ferror-limit=0` (WP-141). |
 
 The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
 the inherited environment plus `env:`, and the `run-stdin:` /

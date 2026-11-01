@@ -1087,6 +1087,16 @@ impl Sema<'_, '_> {
         self.kind_of(tmpl) == DeclKind::ClassTemplate && self.injected_class_for(tmpl).is_some()
     }
 
+    /// The class whose injected-class-name class template `tmpl` names
+    /// here ([temp.local]/1): the innermost enclosing pattern, partial
+    /// specialization or specialization of `tmpl`. `None` outside them.
+    pub fn injected_class_decl(&self, tmpl: DeclId) -> Option<DeclId> {
+        if self.kind_of(tmpl) != DeclKind::ClassTemplate {
+            return None;
+        }
+        self.injected_class_for(tmpl)
+    }
+
     /// The class template whose injected-class-name class `d` declares
     /// ([temp.local]/1): the template of a pattern, a partial
     /// specialization or a specialization.

@@ -429,7 +429,7 @@ impl Sema<'_, '_> {
     /// instantiated member template ([temp.mem]), else retained.
     pub(crate) fn base_levels(&self, tmpl: DeclId) -> MultiLevelArgs {
         if self.inst_template(tmpl) != tmpl {
-            let mut c = self.ast.decls.get(tmpl).ctx();
+            let mut c = Some(self.inst_lexical_class(tmpl));
             while let Some(x) = c.filter(|&x| self.kind_of(x) == DeclKind::CXXRecord) {
                 if let Some((_, a)) = self.spec_args(x) {
                     return a;
@@ -438,6 +438,32 @@ impl Sema<'_, '_> {
             }
         }
         Self::outer_levels(tmpl, self.template_param_depth(tmpl))
+    }
+
+    /// The context of instantiated member template `tmpl` whose
+    /// specialization arguments enclose its own: its class, or for a
+    /// friend template defined in a class template, the class that
+    /// declared it (its lexical context; [temp.friend]/1).
+    pub(crate) fn inst_lexical_class(&self, tmpl: DeclId) -> DeclId {
+        let ctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        if self.kind_of(ctx) != DeclKind::CXXRecord
+            && let Some(l) = self.ast.decls.lexical_ctx(tmpl)
+            && self.kind_of(l) == DeclKind::CXXRecord
+        {
+            return l;
+        }
+        ctx
+    }
+
+    /// The context whose instantiated classes map the pattern's classes
+    /// for function template specialization `spec` of `tmpl`
+    /// ([`Self::inst_context_pairs`]): its own, or the class that
+    /// declared it for a friend template defined in a class template.
+    pub(crate) fn spec_pairs_ctx(&self, spec: DeclId, tmpl: DeclId) -> DeclId {
+        if self.inst_template(tmpl) != tmpl {
+            return self.inst_lexical_class(tmpl);
+        }
+        self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu)
     }
 
     /// The instantiated classes from `x` outwards (stopping at the first
@@ -613,6 +639,15 @@ impl Sema<'_, '_> {
         if self.ast.definition(f).is_some() || self.inst.fatal {
             return;
         }
+        // A use inside a ctor-initializer (`B<int>(3)` calling a
+        // constructor instantiated here) must not clobber the enclosing
+        // constructor's mem-initializer state.
+        let outer = std::mem::take(&mut self.mem_inits);
+        self.instantiate_function_definition_inner(f, poi);
+        self.mem_inits = outer;
+    }
+
+    fn instantiate_function_definition_inner(&mut self, f: DeclId, poi: Loc) {
         let Some(pattern) = self.ast.instantiated_from(f) else { return };
         let Some(pdef) = self.ast.definition(pattern) else { return };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };

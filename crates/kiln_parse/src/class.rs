@@ -809,6 +809,22 @@ impl Parser<'_, '_> {
     /// mem-initializer ([class.base.init]): the initializer (when sema can
     /// take it) and whether it parsed.
     fn parse_mem_initializer(&mut self) -> (Option<MemInitInfo>, bool) {
+        // A simple-template-id class-name, possibly qualified (`Leaf<I, T>(u)...`,
+        // [class.base.init]/2), names the base as a base-specifier would.
+        if self.at_template_type_name(DeclaratorContext::TypeName) {
+            let loc = self.loc();
+            let Some(ty) = self.parse_template_type_name(DeclaratorContext::TypeName) else {
+                return (None, false);
+            };
+            let Some(init) = self.parse_mem_init_args() else {
+                return (None, false);
+            };
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return (
+                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
+                true,
+            );
+        }
         let Ok(q) = self.parse_nested_name() else {
             return (None, false);
         };
@@ -1390,17 +1406,7 @@ impl Parser<'_, '_> {
         if !matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member) {
             return false;
         }
-        let mut i = self.pos();
-        if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
-            i += 1;
-        }
-        let mut last = None;
-        while let Some(n) = self.ident_of(self.tok_at(i))
-            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
-        {
-            last = Some(n);
-            i += 2;
-        }
+        let (i, last) = self.scan_qualifier();
         let t = self.tok_at(i);
         if Self::punct_of(t) == Some(Punct::Tilde) || self.kw_of(t) == Some(Kw::Operator) {
             return true;
@@ -1449,21 +1455,39 @@ impl Parser<'_, '_> {
 
     // -- special declarator-ids ----------------------------------------------------------
 
-    /// The last name in the nested-name-specifier starting here (`B` in
-    /// `A::B::f`), for recognising `C::C` ([class.ctor.general]/1).
-    pub(crate) fn last_qualifier_name(&self) -> Option<Symbol> {
+    /// Scans the nested-name-specifier starting here, of identifiers and
+    /// simple template-ids (`::A::B<int>::`): the index of the token after
+    /// it and its last name (`B`), so that `C<T>::C(` and `C<T>::~C(` are
+    /// recognised as constructor and destructor declarators
+    /// ([class.qual]/2).
+    fn scan_qualifier(&self) -> (usize, Option<Symbol>) {
         let mut i = self.pos();
         if Self::punct_of(self.tok_at(i)) == Some(Punct::ColonColon) {
             i += 1;
         }
         let mut last = None;
-        while let Some(n) = self.ident_of(self.tok_at(i))
-            && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::ColonColon)
-        {
+        while let Some(n) = self.ident_of(self.tok_at(i)) {
+            match Self::punct_of(self.tok_at(i + 1)) {
+                Some(Punct::ColonColon) => i += 2,
+                Some(Punct::Less) => match self.skip_template_args(i + 1) {
+                    Some((close, false))
+                        if Self::punct_of(self.tok_at(close + 1)) == Some(Punct::ColonColon) =>
+                    {
+                        i = close + 2;
+                    }
+                    _ => break,
+                },
+                _ => break,
+            }
             last = Some(n);
-            i += 2;
         }
-        last
+        (i, last)
+    }
+
+    /// The last name in the nested-name-specifier starting here (`B` in
+    /// `A::B::f`), for recognising `C::C` ([class.ctor.general]/1).
+    pub(crate) fn last_qualifier_name(&self) -> Option<Symbol> {
+        self.scan_qualifier().1
     }
 
     /// True if identifier `n`, which is at the current token, names a

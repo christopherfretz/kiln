@@ -34,6 +34,9 @@ pub enum Expect {
     /// `-fsyntax-only -fdump-vtable-layouts`; compare the dump with the
     /// oracle's (emitted at code generation) as a set of blocks.
     Vtables,
+    /// `-fsyntax-only` ends normally (exit 0 or 1): errors are fine, a
+    /// crash, a hang or an internal-error exit code is not.
+    NoCrash,
 }
 
 impl Expect {
@@ -46,6 +49,7 @@ impl Expect {
             "ast" => Self::Ast,
             "layout" => Self::Layout,
             "vtables" => Self::Vtables,
+            "no-crash" => Self::NoCrash,
             _ => return None,
         })
     }
@@ -60,6 +64,7 @@ impl Expect {
             Self::Ast => "ast",
             Self::Layout => "layout",
             Self::Vtables => "vtables",
+            Self::NoCrash => "no-crash",
         }
     }
 }
@@ -894,6 +899,14 @@ mod tests {
         assert!(!s.oracle, "oracle is off by default for compile-ok");
         assert_eq!(s.exit, None);
         assert_eq!(parse("", Lang::C).unwrap().std, "c17");
+    }
+
+    #[test]
+    fn no_crash_kind() {
+        let s = ok("//@ expect: no-crash\n//@ args: -ferror-limit=0\n#include <string>\n");
+        assert_eq!(s.expect, Expect::NoCrash);
+        assert_eq!(s.expect.as_str(), "no-crash");
+        assert!(!s.oracle);
     }
 
     #[test]

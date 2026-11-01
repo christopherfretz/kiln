@@ -851,7 +851,14 @@ impl<'a> Compiler<'a> {
     }
 
     fn unsupported(&mut self, e: ExprId) {
-        let k = self.b.ast().exprs.get(e).kind();
+        let n = self.b.ast().exprs.get(e);
+        let k = n.kind();
+        if k == ExprKind::RecoveryExpr || n.deps().contains(kiln_ast::expr::ExprDeps::ERROR) {
+            // An erroneous expression was diagnosed when it was built: the
+            // evaluation fails without a note (clang fails silently on an
+            // expression that `containsErrors()`).
+            return self.trap(e, "");
+        }
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
     }
 
