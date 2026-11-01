@@ -126,6 +126,11 @@ const SIDE_FN_WORDS: &[&str] = &["trivial", "noexcept-unevaluated"];
 /// Text-dump words of a function kiln has no field for.
 const UNSUPPORTED_FN_WORDS: &[&str] = &["noexcept-uninstantiated", "ineligible", "not_selected"];
 
+/// The class template specialization kinds, which are declaration
+/// contexts in filter mode's qualified names.
+const SPEC_CTX_KINDS: &[&str] =
+    &["ClassTemplateSpecializationDecl", "ClassTemplatePartialSpecializationDecl"];
+
 /// clang's text-dump words for an explicit class specialization's kind.
 const EXPLICIT_SPEC_WORDS: &[&str] = &[
     "explicit_specialization",
@@ -266,7 +271,10 @@ impl<'a> Index<'a> {
         let mut inner_dc = dc;
         if k.ends_with("Decl") {
             self.lexical.insert(id(n), dc);
-            if ctx_of(n).is_some() {
+            // A class template specialization listed by reference (no
+            // tag) is not the context its members are in.
+            if ctx_of(n).is_some() || (SPEC_CTX_KINDS.contains(&k) && text(n, "tagUsed").is_some())
+            {
                 self.contexts.insert(id(n), n);
                 inner_dc = n;
             }
@@ -408,6 +416,7 @@ fn render_kids(kids: &[Tree], indent: &mut String, out: &mut String) {
 }
 
 /// A declaration context, for qualified names in filter mode.
+#[derive(Clone)]
 enum Ctx {
     /// Contributes `name::`.
     Named(String),
@@ -547,16 +556,119 @@ impl<'a> Printer<'a, '_> {
                 return Ok(());
             }
         }
-        let pushed = ctx_of(n);
+        // clang's filter is a `RecursiveASTVisitor` that does not visit
+        // template instantiations: a template's specializations are
+        // skipped (an explicit specialization is visited where it is
+        // declared), and so are the members of an explicit instantiation.
+        if k == "ClassTemplateSpecializationDecl" && !self.is_explicit_specialization(n)? {
+            return Ok(());
+        }
+        let pushed = self.ctx_of_node(n)?;
+        // A context declared outside its semantic parent (`struct
+        // N::X<char> { ... }` at file scope): its members are named by
+        // the semantic chain.
+        if let (Some(c), Some(p)) = (&pushed, text(n, "parentDeclContextId")) {
+            let mut sem = self.semantic_ctx(p)?;
+            sem.push(c.clone());
+            return self.find_kids(n, f, &mut sem, out);
+        }
         let has = pushed.is_some();
         if let Some(c) = pushed {
             ctx.push(c);
         }
-        let r = kids(n).try_for_each(|c| self.find(c, f, ctx, out));
+        let r = self.find_kids(n, f, ctx, out);
         if has {
             ctx.pop();
         }
         r
+    }
+
+    /// Filter mode: [`Self::find`] over the children of `n`.
+    fn find_kids(&mut self, n: &'a Json, f: &str, ctx: &mut Vec<Ctx>, out: &mut String) -> Res<()> {
+        let k = kind(n);
+        let template = TEMPLATE_DECL_KINDS.contains(&k);
+        let mut pattern_seen = false;
+        kids(n)
+            .filter(|c| {
+                if !template {
+                    return true;
+                }
+                let ck = kind(c);
+                if ck == "ClassTemplateSpecializationDecl" || ck == "VarTemplateSpecializationDecl" {
+                    return false;
+                }
+                // A function template's first function is its pattern;
+                // the rest are its specializations.
+                if k == "FunctionTemplateDecl" && FN_KINDS.contains(&ck) {
+                    return !std::mem::replace(&mut pattern_seen, true);
+                }
+                true
+            })
+            .try_for_each(|c| self.find(c, f, ctx, out))
+    }
+
+    /// Whether class template specialization `n`, printed at its lexical
+    /// position, is an explicit specialization (not an explicit
+    /// instantiation): clang's JSON lacks the kind, the text dump has it.
+    fn is_explicit_specialization(&mut self, n: &Json) -> Res<bool> {
+        let Some(&pos) = self.ix.order.get(id(n)) else {
+            // Listed by reference: its full node is elsewhere.
+            return Ok(false);
+        };
+        Ok(self.side()?[pos].has_flag("explicit_specialization"))
+    }
+
+    /// What declaration context `n` contributes to a qualified name:
+    /// [`ctx_of`], or for a class template (partial) specialization its
+    /// name with its arguments (`X<int, 3>::`; `printQualifiedName`
+    /// prints a specialization context with `printTemplateArgumentList`).
+    fn ctx_of_node(&self, n: &Json) -> Res<Option<Ctx>> {
+        if !SPEC_CTX_KINDS.contains(&kind(n)) {
+            return Ok(ctx_of(n));
+        }
+        let nm = name(n).unwrap_or("");
+        let tmpl = if kind(n) == "ClassTemplateSpecializationDecl" {
+            self.ix.spec_template.get(id(n)).copied().ok_or_else(|| {
+                format!("clang-ast: specialization `{nm}` is not listed under a template")
+            })?
+        } else {
+            self.primary_of(n)?
+        };
+        let params: Vec<&Json> = kids(tmpl)
+            .filter(|c| {
+                matches!(
+                    kind(c),
+                    "TemplateTypeParmDecl" | "TemplateTemplateParmDecl" | "NonTypeTemplateParmDecl"
+                )
+            })
+            .collect();
+        let args: Vec<&Json> = kids(n).filter(|c| kind(c) == "TemplateArgument").collect();
+        if args.len() > params.len() {
+            return Err(format!("clang-ast: `{nm}` has more arguments than parameters"));
+        }
+        fn param_ty(p: &Json) -> Option<&str> {
+            (kind(p) == "NonTypeTemplateParmDecl").then(|| qual_type(p))
+        }
+        // clang drops trailing arguments equal to their parameter's
+        // default (`SuppressDefaultTemplateArgs`), unless one is a pack.
+        let mut end = args.len();
+        if !args.iter().any(|a| flag(a, "isPack")) {
+            while end > 0 && is_default_arg(params[end - 1], args[end - 1], param_ty(params[end - 1]))? {
+                end -= 1;
+            }
+        }
+        let mut parts = Vec::new();
+        for (a, p) in args[..end].iter().zip(&params) {
+            if flag(a, "isPack") {
+                // An empty pack prints nothing.
+                for e in kids(a).filter(|c| kind(c) == "TemplateArgument") {
+                    parts.push(qualified_name_arg(e, param_ty(p))?);
+                }
+            } else {
+                parts.push(qualified_name_arg(a, param_ty(p))?);
+            }
+        }
+        Ok(Some(Ctx::Named(format!("{nm}<{}>", parts.join(", ")))))
     }
 
     /// The context chain of the declaration context `id` (a declaration's
@@ -570,7 +682,7 @@ impl<'a> Printer<'a, '_> {
             if kind(c) == "TranslationUnitDecl" {
                 break;
             }
-            chain.extend(ctx_of(c));
+            chain.extend(self.ctx_of_node(c)?);
             let up = text(c, "parentDeclContextId")
                 .and_then(|p| self.ix.contexts.get(p))
                 .or_else(|| self.ix.lexical.get(self::id(c)));
@@ -2277,6 +2389,95 @@ fn ctx_of(n: &Json) -> Option<Ctx> {
         k if FN_KINDS.contains(&k) => Some(Ctx::Function(signature(n))),
         _ => None,
     }
+}
+
+/// The error for an argument filter mode cannot print in a specialization
+/// context.
+fn unsupported_ctx_arg(param: Option<&str>) -> String {
+    format!(
+        "clang-ast: filter mode cannot print a {} template argument of a specialization context",
+        param.map_or("type or template template".to_owned(), |p| format!("`{p}`"))
+    )
+}
+
+/// An integral template argument `v` of parameter type `param` as clang
+/// prints it in a qualified name: `bool` as `true`/`false`, `char` as a
+/// character literal, other integers decoded from clang's sign-extended
+/// 64-bit pattern (spec_arg). `None` for anything else.
+fn integral_arg(v: i64, param: &str) -> Option<String> {
+    Some(match param {
+        "bool" => (if v != 0 { "true" } else { "false" }).to_owned(),
+        "char" => {
+            let b = u8::try_from(v).ok().filter(|b| {
+                (b.is_ascii_graphic() || *b == b' ') && *b != b'\'' && *b != b'\\'
+            })?;
+            format!("'{}'", char::from(b))
+        }
+        "unsigned char" => (v as u8).to_string(),
+        "unsigned short" => (v as u16).to_string(),
+        "unsigned int" => (v as u32).to_string(),
+        "unsigned long" | "unsigned long long" | "size_t" | "std::size_t" => (v as u64).to_string(),
+        "int" | "long" | "long long" | "short" | "signed char" => v.to_string(),
+        _ => return None,
+    })
+}
+
+/// A JSON number as an exact integer (within 2^53, as spec_arg).
+fn exact_int(j: &Json) -> Option<i64> {
+    j.as_f64().filter(|f| f.fract() == 0.0 && f.abs() <= 9_007_199_254_740_992.0).map(|f| f as i64)
+}
+
+/// A class template specialization's argument as it prints in a qualified
+/// name (clang `printTemplateArgumentList`): a type, or an integral value
+/// decoded with its parameter's type `param`. Anything else is an error,
+/// not a guess.
+fn qualified_name_arg(a: &Json, param: Option<&str>) -> Res<String> {
+    if let Some(ty) = a.get("type").and_then(|t| text(t, "qualType")) {
+        return Ok(ty.to_owned());
+    }
+    let v = a.get("value").and_then(exact_int).ok_or_else(|| unsupported_ctx_arg(param))?;
+    param.and_then(|p| integral_arg(v, p)).ok_or_else(|| unsupported_ctx_arg(param))
+}
+
+/// Whether specialization argument `a` equals the default argument of
+/// template parameter `p` (clang `isSubstitutedDefaultArgument`): a
+/// non-dependent type compared desugared, or a literal value. A default
+/// the tool cannot compare is an error.
+fn is_default_arg(p: &Json, a: &Json, param: Option<&str>) -> Res<bool> {
+    if p.get("defaultArg").is_none() {
+        return Ok(false);
+    }
+    let unsupported = || {
+        format!(
+            "clang-ast: filter mode cannot compare a specialization context's argument with \
+             the default argument of `{}`",
+            name(p).unwrap_or("")
+        )
+    };
+    let d = kids(p).find(|c| kind(c) == "TemplateArgument").ok_or_else(unsupported)?;
+    fn desugared(t: &Json) -> Option<&str> {
+        text(t, "desugaredQualType").or_else(|| text(t, "qualType"))
+    }
+    if let Some(dt) = d.get("type") {
+        let dependent = kids(d).any(|c| flag(c, "isDependent"))
+            || desugared(dt).is_none_or(|q| q.contains("type-parameter"));
+        if dependent {
+            return Err(unsupported());
+        }
+        return Ok(a.get("type").and_then(desugared) == desugared(dt));
+    }
+    let e = kids(d).next().ok_or_else(unsupported)?;
+    let v = match (kind(e), e.get("value")) {
+        ("CXXBoolLiteralExpr", Some(Json::Bool(b))) => i64::from(*b),
+        ("CharacterLiteral", Some(v)) => exact_int(v).ok_or_else(unsupported)?,
+        ("IntegerLiteral", Some(v)) => {
+            v.as_str().and_then(|s| s.parse().ok()).ok_or_else(unsupported)?
+        }
+        _ => return Err(unsupported()),
+    };
+    let p = param.ok_or_else(unsupported)?;
+    let printed = integral_arg(v, p).ok_or_else(unsupported)?;
+    Ok(qualified_name_arg(a, param).ok() == Some(printed))
 }
 
 /// The qualified name of `nm` declared in `ctx`
