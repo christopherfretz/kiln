@@ -4498,7 +4498,7 @@ impl Sema<'_, '_> {
     /// declaration cannot be qualified); clang's
     /// `err_standalone_class_nested_name_specifier` at the qualifier.
     pub fn check_standalone_tag_qualifier(&mut self, keyword: TagKeyword, qual_loc: Loc) {
-        if self.at_explicit_head() {
+        if self.at_explicit_head() || self.templ.member_spec.is_some() {
             return;
         }
         let kind = match keyword {
