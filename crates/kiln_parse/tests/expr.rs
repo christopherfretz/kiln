@@ -237,7 +237,9 @@ fn stmt_ambig() {
     p.assert_dump("VarDecl b 'T (*)[2]'");
     p.assert_dump("CXXFunctionalCastExpr");
     let p = parse("typedef int T; int y; void g() { T(y), (void)0; }");
-    p.assert_clean();
+    // As in clang, the discarded cast warns (-Wunused-value).
+    assert_eq!(p.diags.len(), 1, "{:?}", p.diags);
+    p.assert_diag("1:34 warning: left operand of comma operator has no effect");
     p.assert_dump("BinaryOperator 'void' ','");
 }
 
