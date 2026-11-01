@@ -57,6 +57,9 @@ pub(crate) enum SynthKind {
     /// An inheriting constructor ([class.inhctor.init]; clang prints no
     /// note for it).
     Inheriting,
+    /// The evaluation of a special member's implicit exception
+    /// specification (clang `ExceptionSpecEvaluation`, [except.spec]/8).
+    ExceptionSpec,
 }
 
 /// How a constructor initializes the subobjects it has no
@@ -224,6 +227,10 @@ impl Sema<'_, '_> {
                         .arg(u8::from(spec.defaulted() == Defaulted::Explicit))
                         .arg(kind.index())
                         .arg(self.ty_arg(self.tag_type(class)))
+                }
+                SynthKind::ExceptionSpec => {
+                    self.diag(DiagId::note_exception_spec_evaluation_here, c.loc)
+                        .arg(self.qualified_decl_name(c.member))
                 }
                 SynthKind::Comparison(_) | SynthKind::Inheriting => {
                     let SynthKind::Comparison(k) = c.kind else { unreachable!("filtered") };
@@ -666,7 +673,7 @@ impl Sema<'_, '_> {
     /// [class.mem.general]/8): diagnosed at `loc` with the outermost
     /// lexically enclosing class, the note at the field's name; the field
     /// becomes invalid outside a SFINAE context so later uses are quiet.
-    fn default_member_init_not_yet_parsed(&mut self, field: DeclId, loc: Loc) {
+    pub(crate) fn default_member_init_not_yet_parsed(&mut self, field: DeclId, loc: Loc) {
         let mut outer = self.ast.decls.get(field).ctx();
         while let Some(c) = outer
             && let Some(p) = self.ast.decls.lexical_ctx(c)
@@ -680,7 +687,9 @@ impl Sema<'_, '_> {
         let note = self.diag(DiagId::note_default_member_init_not_yet_parsed, at);
         let d =
             self.diag(DiagId::sema_default_member_init_not_yet_parsed, loc).arg(class).arg(name);
-        self.emit(d.with_note(note));
+        // One per field at the same constructor (clang does not
+        // deduplicate; the field is invalid afterwards).
+        self.emit(d.with_note(note).allow_duplicate());
         if !self.inst.stack.is_sfinae() {
             self.ast.decls.set_flags(field, DeclFlags::INVALID);
         }

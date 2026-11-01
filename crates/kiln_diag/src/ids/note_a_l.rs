@@ -89,6 +89,7 @@ note_enters_statement_expression = Note (0) "jump enters a statement expression"
 note_entity_declared_at = Note (1) "{0} declared here";
 note_entity_declared_here = Note (1) "{0} declared here";
 note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
+note_exception_spec_evaluation_here = Note (1) "in evaluation of exception specification for '{0}' needed here";
 note_exits_cxx_catch = Note (0) "jump exits catch block";
 note_exits_cxx_try = Note (0) "jump exits try block";
 note_exits_dtor = Note (0) "jump exits scope of variable with non-trivial destructor";

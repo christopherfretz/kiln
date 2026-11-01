@@ -112,6 +112,9 @@ impl Sema<'_, '_> {
         at: Loc,
     ) -> bool {
         use SpecialKind as K;
+        if k == K::DefaultCtor {
+            self.exc_spec_needs_unparsed_inits(f, class, at);
+        }
         let const_arg = matches!(k, K::CopyCtor | K::CopyAssign) && self.copy_param_is_const_ref(f);
         let bases: Vec<BaseSpec> = self.ast.decls.bases(class, &self.ast.lists).copied().collect();
         let mut subs: Vec<BaseSpec> = bases.iter().filter(|b| !b.is_virtual).copied().collect();
@@ -138,6 +141,9 @@ impl Sema<'_, '_> {
             }
             if k == K::DefaultCtor && self.field_has_nsdmi(fld) {
                 let init = self.ast.decls.field(fld).and_then(|x| x.init);
+                if init.is_none() {
+                    continue;
+                }
                 if init.is_some_and(|e| self.can_throw(e)) {
                     return false;
                 }
@@ -161,6 +167,39 @@ impl Sema<'_, '_> {
             }
         }
         true
+    }
+
+    /// Default member initializers of `class` needed by the implicit
+    /// exception specification of default constructor `f` before they
+    /// are parsed ([class.mem.general]/8; clang's `BuildCXXDefaultInitExpr`
+    /// from `SpecialMemberExceptionSpecInfo`): each diagnosed at `f`, under
+    /// one exception-specification context note at the use `at`. The
+    /// fields become invalid, so the constructor's definition skips them
+    /// quietly (no cascade from the definition or its constant
+    /// evaluation). Reported before the bases are visited.
+    fn exc_spec_needs_unparsed_inits(&mut self, f: DeclId, class: DeclId, at: Loc) {
+        use super::define::{SynthContext, SynthKind};
+        let unparsed: Vec<DeclId> = self
+            .special_fields(class)
+            .into_iter()
+            .filter(|&fld| {
+                !self.ast.decls.get(fld).has(DeclFlags::INVALID)
+                    && self.field_has_nsdmi(fld)
+                    && self.ast.decls.field(fld).and_then(|x| x.init).is_none()
+            })
+            .collect();
+        if unparsed.is_empty() {
+            return;
+        }
+        let loc = self.ast.decls.get(f).loc();
+        self.synth.push(SynthContext { member: f, kind: SynthKind::ExceptionSpec, loc: at });
+        for fld in unparsed {
+            self.default_member_init_not_yet_parsed(fld, loc);
+        }
+        if self.synth_noted.get() == self.synth.len() {
+            self.synth_noted.set(0);
+        }
+        self.synth.pop();
     }
 
     /// Whether the member of kind `k` selected for a subobject of class
