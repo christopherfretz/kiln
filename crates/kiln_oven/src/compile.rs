@@ -3084,7 +3084,14 @@ impl Compiler<'_> {
                     (TyKind::Ptr(fp), TyKind::Ptr(tp)) => {
                         let fvoid = self.kind(fp) == TyKind::Void;
                         let tvoid = self.kind(tp) == TyKind::Void;
-                        if tvoid || fp == tp {
+                        // clang permits any cast from `void *` within
+                        // `std::allocator<T>::allocate` (an empty
+                        // allocation's `T[0]` included).
+                        let in_allocate = fvoid
+                            && self.cur_fn.is_some_and(|f| {
+                                new_delete::std_allocator_elem(self.ast(), f, "allocate").is_some()
+                            });
+                        if tvoid || fp == tp || in_allocate {
                             self.emit(Op::Mov, 0, &[dst, r]);
                         } else if fvoid && ek != ExprKind::CXXReinterpretCastExpr {
                             self.emit_at(Op::VoidCast, 0, &[dst, r, tp.0], e);
@@ -4224,16 +4231,15 @@ impl Compiler<'_> {
             c = skip_parens(ast, ast.exprs.operand(c));
         }
         // `p->~T()` on a scalar ([expr.prim.id.dtor]/2, [expr.call]/5):
-        // the object expression is evaluated and nothing else happens.
-        // The oven does not track the end of lifetime of an explicitly
-        // destroyed object (as for an explicit destructor call).
+        // the object expression is evaluated and the object's lifetime
+        // ends ([basic.life]/1.4; tracked for `std::allocator` storage,
+        // spec/oven.md "Transient allocation").
         if ast.exprs.get(c).kind() == ExprKind::CXXPseudoDestructorExpr {
-            let (base, arrow, _) = ast.exprs.pseudo_destructor(c);
-            if arrow {
-                self.rv(base);
-            } else {
-                self.lv_mem(base, Access::Addr);
-            }
+            let (base, arrow, destroyed) = ast.exprs.pseudo_destructor(c);
+            let p = if arrow { self.rv(base) } else { self.lv_mem(base, Access::Addr) };
+            let t = self.ty(destroyed);
+            let loc = self.begin(c);
+            self.emit_site(Op::EndLife, 3, &[p, t.0], c, loc);
             return self.reg();
         }
         let direct = (ast.exprs.get(c).kind() == ExprKind::DeclRefExpr
@@ -4271,17 +4277,13 @@ impl Compiler<'_> {
         {
             return r;
         }
-        // `std::allocator<T>::allocate`/`deallocate` (spec/oven.md
-        // "Transient allocation": deferred to the templates wave, so this
-        // never holds yet).
+        // `::operator new`/`::operator delete` (spec/oven.md "Transient
+        // allocation": constant only in `std::allocator<T>::allocate` /
+        // `deallocate`).
         if let Some(d) = direct
-            && new_delete::is_std_allocator_call(self.ast(), d)
+            && let Some(alloc) = new_delete::global_alloc_form(self.ast(), d)
         {
-            self.trap(
-                e,
-                "kiln: std::allocator in constant evaluation lands with the templates wave",
-            );
-            return self.reg();
+            return self.global_alloc_call(e, alloc, &args);
         }
         // An operator call whose callee is a member function: the first
         // argument is the object ([over.match.oper]/2, clang's
