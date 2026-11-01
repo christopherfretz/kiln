@@ -263,9 +263,12 @@ impl Sema<'_, '_> {
             if Self::declares_definition(d, vspec) && self.is_var_definition(p) {
                 let msg =
                     self.diag(DiagId::sema_redefinition, sid.loc).arg(self.partial_spec_name(p));
-                let msg = self.note_prev(msg, p, true);
+                let msg = self.note_prev_partial_def(msg, p);
                 self.emit(msg);
                 return Err(());
+            }
+            if Self::declares_definition(d, vspec) {
+                self.templ.partial_def_loc.insert(p, sid.loc);
             }
             return Ok(p);
         }

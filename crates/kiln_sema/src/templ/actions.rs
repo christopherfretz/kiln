@@ -395,6 +395,14 @@ impl Sema<'_, '_> {
         self.builder().unresolved_lookup(DeclName::ident(name), &decls, false, nns, targs, n.loc())
     }
 
+    /// The qualified function template-id `e` named at `loc` begins at
+    /// its qualifier `begin` (clang's `OverloadExpr::getBeginLoc`).
+    pub fn set_template_id_begin(&mut self, e: ExprId, begin: Loc, loc: Loc) {
+        if begin != loc && self.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr {
+            let _ = self.ast.templates.expr_begin.insert(e, begin);
+        }
+    }
+
     /// The template name of template (or template template parameter)
     /// `d` as written.
     pub fn template_name_for(&mut self, d: DeclId) -> TemplateNameId {

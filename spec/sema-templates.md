@@ -178,7 +178,12 @@ template-template-param := template-head ('class'|'typename') '...'? identifier?
   clang's texts:
   - "extraneous template parameter list in template specialization"
   - "template parameter list matching the non-templated nested type
-    'X' should be empty"
+    'X' should be empty ('template<>')"
+  The lists are matched against every enclosing scope slot, explicit
+  specializations included (WP-161): a member partial specialization of
+  `Outer<int>` written with `template<class T> template<class U>` gets
+  the second error, and its declaration is then dropped
+  (`take_template_head` reports `head_mismatch`).
 
 **Defaults** are kept unparsed only where [temp.param]/15 requires
 delayed meaning; in practice they are always parsed immediately.
@@ -1234,7 +1239,15 @@ retained, since the AST is append-only. They are metered as
      `DeducedTemplateArgumentSubstitution`;
    - check that the deduced A is compatible ([temp.deduct.call]/4:
      equal, more cv-qualified, qualification-convertible, or a derived
-     class). Failure is `DeducedMismatch`.
+     class). Failure is `DeducedMismatch`. kiln records, for each
+     non-pack parameter with a deducible template parameter (probed by
+     deducing P from itself, clang's `hasDeducibleTemplateParameters`)
+     and an argument that is not a braced list or overload set, the
+     pair (P, adjusted A); after substitution it compares the
+     specialization's parameter type with A (`original_arg_mismatch`,
+     WP-161). The note prints the reference/pointer-stripped deduced
+     type, as clang does. Clang's template type diffing (`'pr<[...],
+     char>'`) is not implemented, so specializations print in full.
    - check the associated constraints (§8). The order is clang 19's,
      *after* the function type substitution (Q12, CWG2369).
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
@@ -1590,9 +1603,11 @@ flag, to name the first pack.
    one of a shallower depth than the other), clang's multilevel text is
    used instead, naming the inner pack: "pack expansion contains
    parameter pack 'U' that has a different length (2 vs. 1) from outer
-   parameter packs" (outer length first). clang's "(at least 3 vs. 2)"
-   variant, for an explicitly specified pack that deduction may still
-   extend, is not produced: kiln reports the plain multilevel text.
+   parameter packs" (outer length first). For an explicitly specified
+   pack that deduction may still extend (`PackName.partial`), clang's
+   "(at least 3 vs. 2)" variant is used, with the explicit length first;
+   `deduce_call` checks this before deducing (`check_partial_pack_lengths`,
+   WP-161).
 4. **Expand.** For k in 0..N, substitute the pattern with
    `pack_index = Some(k)`. Restore the previous index afterwards. Inner
    expansions keep their own packs untouched.
@@ -1625,8 +1640,8 @@ A function parameter pack whose type is partially substituted
 parameter of type `PackExpansion(P<SubstPack(T), U>)`. Deduction against
 it substitutes the kept pack element by element: while deducing element
 *i* of the expansion, a `SubstTemplateTypeParmPack` in P is matched as
-element *i* of its pack. kiln has no final [temp.deduct.call]/4
-"deduced A" compatibility check, so an element mismatch is reported as
+element *i* of its pack. kiln's [temp.deduct.call]/4 "deduced A"
+check (§6.1) skips pack parameters, so an element mismatch is reported as
 "could not match 'P<T, U>' against 'P<char, long>'" where clang says
 "deduced type 'P<int, [...]>' of 1st parameter does not match adjusted
 type 'P<char, [...]>' of argument".
