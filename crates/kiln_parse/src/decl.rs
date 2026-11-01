@@ -1070,7 +1070,15 @@ impl Parser<'_, '_> {
         let ty = if let Ok((rec, ty)) = r {
             if use_ == TagUse::Definition {
                 match rec {
-                    Some(d) => self.parse_record_body(d, final_loc),
+                    Some(d) => {
+                        // `template<class T> template<class U> struct
+                        // Outer<T>::Inner<U*> {...}`: names in the body
+                        // are looked up in `Outer<T>` too ([class.nest]/3).
+                        let entered =
+                            qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
+                        self.parse_record_body(d, final_loc);
+                        self.s.act_on_exit_declarator_scope(entered);
+                    }
                     None => self.skip_class_body(),
                 }
             }

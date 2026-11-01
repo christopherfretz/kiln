@@ -716,8 +716,23 @@ arguments are substituted with the enclosing level, so `In<T, B>` of
 original partial as its pattern (`instantiated_from_map`). A
 specialization that matches it is instantiated from the original
 partial's definition, with the enclosing arguments as the outer levels
-plus the deduced arguments (§4.6). Out-of-class partial specializations
-of a member template are not redeclared yet (a follow-up).
+plus the deduced arguments (§4.6).
+
+Out-of-class partial specializations of a member template (WP-150):
+`template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
+- The parser takes `Outer<T>::` as a tag qualifier and enters its scope
+  for the body ([class.nest]/3); the qualifier consumes the outer head
+  (`match_template_lists_to_scope`), the inner one heads the partial.
+- The partial is created on the member template of the pattern with
+  `Outer` as its semantic context and the namespace as its lexical one,
+  so it is not in `Outer`'s member list. A definition of one declared in
+  the class completes that declaration; `}` returns to the context the
+  definition began in (`ClassBuild::outer`), not the lexical one.
+- When the member template is redeclared in `Outer<X>`
+  (`Substituter::member_template`), each partial of it not lexically in
+  the class is redeclared as above (clang's `VisitClassTemplateDecl`).
+  One declared after `Outer<X>` was instantiated is not part of it, as
+  with clang.
 
 ### 4.5 Explicit specializations and instantiations
 

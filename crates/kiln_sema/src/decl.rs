@@ -3745,7 +3745,7 @@ impl Sema<'_, '_> {
         }
         let _ = self.builder().begin_record_definition(r);
         let tag = self.ast.decls.record(r).map_or(TagKind::Struct, |x| x.tag);
-        self.classes.push(ClassBuild::new(r, tag));
+        self.classes.push(ClassBuild::new(r, tag, self.ctx));
         self.defining.push(r);
         self.scopes.push(Scope::new(ScopeKind::Record, Some(r)));
         self.ctx = r;
@@ -3763,12 +3763,16 @@ impl Sema<'_, '_> {
             None
         };
         self.defining.retain(|&d| d != r);
-        self.ctx = self
-            .ast
-            .decls
-            .lexical_ctx(r)
-            .or_else(|| self.ast.decls.get(r).ctx())
-            .unwrap_or(self.ast.tu);
+        self.ctx = build.as_ref().map_or_else(
+            || {
+                self.ast
+                    .decls
+                    .lexical_ctx(r)
+                    .or_else(|| self.ast.decls.get(r).ctx())
+                    .unwrap_or(self.ast.tu)
+            },
+            |b| b.outer,
+        );
         let mut bits = DefinitionBits::COMPLETE
             .with(DefinitionBits::AGGREGATE)
             .with(DefinitionBits::STANDARD_LAYOUT)
