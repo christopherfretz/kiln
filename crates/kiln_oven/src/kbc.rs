@@ -404,6 +404,10 @@ pub(crate) mod ak {
     pub const DYNAMIC_CAST: u32 = 7;
     pub const TYPEID: u32 = 8;
     pub const DESTROY: u32 = 9;
+    /// The construction of a subobject of an inactive union member by a
+    /// placement new (clang's `AK_Construct` in
+    /// `note_constexpr_access_inactive_union_member`).
+    pub const CONSTRUCT: u32 = 10;
 
     pub fn verb(k: u32) -> &'static str {
         match k {
@@ -411,6 +415,7 @@ pub(crate) mod ak {
             INCREMENT => "increment of",
             DECREMENT => "decrement of",
             INIT => "construction of",
+            CONSTRUCT => "construction of subobject of",
             MEMBER_CALL => "member call on",
             DYNAMIC_CAST => "dynamic_cast of",
             TYPEID => "typeid applied to",
