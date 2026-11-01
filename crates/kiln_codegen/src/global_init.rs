@@ -637,7 +637,7 @@ impl Cg<'_> {
                 ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
                     let f = ast.exprs.decl(e);
                     ast.decls.get(f).kind() == DeclKind::Field
-                        && !ast.decls.field(f).is_some_and(|x| x.bit_width.is_some())
+                        && ast.decls.field(f).is_none_or(|x| x.bit_width.is_none())
                         && !ast.types.is_reference(ast.decls.get(f).ty().unwrap_or(QualType::INT))
                 }
                 _ => false,
