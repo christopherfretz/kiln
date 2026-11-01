@@ -1182,6 +1182,30 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   consteval|immediate function 'f' is not a constant expression` with
   the Oven's notes. Default arguments and default member initializers
   are not checked at their definition (`note_default_init_full_expr`).
+- **Default uses** ([expr.const]/16, [dcl.fct.default]/5, [class.mem]/10;
+  WP-137). Each use of a default argument (`convert_call_args`,
+  `ctor_args`) or default member initializer (aggregate `field_filler`,
+  a constructor's implicit member init in `collect_field_init`) whose
+  definition holds an unvalued invocation is recorded with
+  `note_default_use` and checked at the end of the using
+  full-expression (`check_default_use`): each invocation is evaluated
+  afresh, and a failure is `call to consteval function 'h' is not a
+  constant expression` at the invocation, then `in the default
+  initializer of 'p'` at the use (callee begin, construct loc, ctor
+  name, or the closing `}`/`)` of an aggregate init) and `declared here`
+  at the parameter or field. A default used inside another default
+  argument or initializer is checked at that definition only. In an
+  immediate-escalating function (defaulted or implicit constructor,
+  `constexpr` template specialization, lambda) the failure escalates
+  instead; a constructor's reason note is `'D' is an immediate
+  constructor because the default initializer of 'm' contains a call to
+  a consteval function 'h' and that call is not a constant expression`.
+  An instantiation re-checks the defaults its shared expressions and
+  rebuilt init lists use (`templ/subst/shared.rs`, `subst/exprs.rs`),
+  so a template use is reported at the definition and at each
+  instantiation. Codegen folds each use separately (WP-144). clang 19's
+  extra report at a class template's NSDMI instantiation and inside
+  `sizeof` are not replicated.
 - **References.** A `DeclRefExpr` (or `&C::m`) naming an immediate
   function that is not the callee of a candidate is `cannot take
   address of consteval function 'f' outside of an immediate
@@ -1221,9 +1245,10 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
 - **Codegen.** A valued `ConstantExpr` lowers to its constant: scalars
   directly, aggregates by clang 19's `CreateCoercedStore` into the
   destination (one store per top-level element).
-- Gaps: default-argument and default-member-initializer invocations are
-  not checked where used; the escalation of a generic lambda's
-  conversion function is not tracked per specialization.
+- Gaps: the escalation of a generic lambda's conversion function is not
+  tracked per specialization; an implicit constructor does not escalate
+  through a member whose (non-NSDMI) default construction is a failed
+  consteval constructor call.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
