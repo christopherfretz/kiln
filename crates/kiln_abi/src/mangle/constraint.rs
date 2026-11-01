@@ -244,7 +244,8 @@ impl Mangler<'_, '_> {
         let x = ast.exprs.get(e);
         let (lhs, rhs) = (ExprId::try_new(x.a()), ExprId::try_new(x.b()));
         let Some(op) = BinaryOp::from_u8(x.aux()) else { return false };
-        let right = lhs.is_some_and(|l| ast.exprs.get(l).deps().contains(ExprDeps::UNEXPANDED_PACK));
+        let right =
+            lhs.is_some_and(|l| ast.exprs.get(l).deps().contains(ExprDeps::UNEXPANDED_PACK));
         let init = lhs.is_some() && rhs.is_some();
         self.out.push_str(match (right, init) {
             (false, false) => "fl",

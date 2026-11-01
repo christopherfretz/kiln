@@ -879,9 +879,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // A trailing requires-clause (clang 18+, cxx-abi issue 24): the
         // template pattern's, or an instantiated member's (uninstantiated)
         // copy.
-        let trailing = ast.templates.trailing_requires.get(src).or_else(|| {
-            ast.templates.trailing_requires.get(d)
-        });
+        let trailing = ast
+            .templates
+            .trailing_requires
+            .get(src)
+            .or_else(|| ast.templates.trailing_requires.get(d));
         if let Some(&r) = trailing {
             self.requires_clause(r, true);
         }
@@ -1999,8 +2001,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     kiln_ast::types::AutoKeyword::DecltypeAuto => "DK",
                     _ => "Dk",
                 });
-                let args: Vec<ArgView> =
-                    args.map(|l| ast.types.args(l).iter().map(|a| a.view()).collect()).unwrap_or_default();
+                let args: Vec<ArgView> = args
+                    .map(|l| ast.types.args(l).iter().map(|a| a.view()).collect())
+                    .unwrap_or_default();
                 self.type_constraint(c, &args);
                 return;
             }
@@ -2074,8 +2077,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push('_');
             }
             TypeView::TemplateTypeParm(d) => {
-                let (depth, idx) =
-                    ast.template_parm(d).map_or((0, 0), |p| (u32::from(p.depth), u32::from(p.index)));
+                let (depth, idx) = ast
+                    .template_parm(d)
+                    .map_or((0, 0), |p| (u32::from(p.depth), u32::from(p.index)));
                 self.template_param_at(depth, idx);
             }
             TypeView::CanonTemplateTypeParm { depth, index, .. } => {
