@@ -440,6 +440,22 @@ impl StmtArena {
         StmtId::new(self.expect(s, &[StmtKind::DefaultStmt]).a)
     }
 
+    /// The `Label` declaration of a `LabelStmt` or `GotoStmt`.
+    pub fn label_decl(&self, s: StmtId) -> DeclId {
+        DeclId::new(self.expect(s, &[StmtKind::LabelStmt, StmtKind::GotoStmt]).a)
+    }
+
+    /// The labelled statement of a `LabelStmt`, or the statement an
+    /// `AttributedStmt`'s attributes appertain to.
+    pub fn sub_stmt(&self, s: StmtId) -> StmtId {
+        StmtId::new(self.expect(s, &[StmtKind::LabelStmt, StmtKind::AttributedStmt]).b)
+    }
+
+    /// The attributes (`AttrId`s) of an `AttributedStmt`.
+    pub fn stmt_attrs(&self, s: StmtId) -> ListId {
+        ListId::new(self.expect(s, &[StmtKind::AttributedStmt]).a)
+    }
+
     /// The operand of a `ReturnStmt`.
     pub fn return_value(&self, s: StmtId) -> Option<ExprId> {
         ExprId::from_raw(self.expect(s, &[StmtKind::ReturnStmt]).a)

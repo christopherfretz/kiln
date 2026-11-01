@@ -185,6 +185,9 @@ struct Index<'a> {
     /// The `ClassTemplateDecl`s by name, with their lexical contexts (a
     /// partial specialization's JSON does not name its template).
     templates_by_name: HashMap<&'a str, Vec<&'a Json>>,
+    /// Label names by their `LabelDecl` id (a `GotoStmt` names only the
+    /// id; the declaration is its `LabelStmt`'s).
+    labels: HashMap<&'a str, &'a str>,
 }
 
 /// Whether `n` is a `CXXRecordDecl` whose destructor is non-trivial.
@@ -270,6 +273,11 @@ impl<'a> Index<'a> {
         }
         self.nontrivial_dtor |= has_nontrivial_dtor(n, k);
         self.note_template(n, k);
+        if k == "LabelStmt"
+            && let (Some(d), Some(nm)) = (text(n, "declId"), name(n))
+        {
+            self.labels.insert(d, nm);
+        }
         if parent == "FriendDecl" {
             self.befriended.insert(id(n));
         }
@@ -1554,9 +1562,19 @@ impl<'a> Printer<'a, '_> {
             }
             "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt"
             | "ContinueStmt" | "DefaultStmt" | "CaseStmt" | "DoStmt" | "CXXTryStmt"
-            | "GCCAsmStmt" | "FileScopeAsmDecl" => {
+            | "GCCAsmStmt" | "FileScopeAsmDecl" | "AttributedStmt" | "CXXAssumeAttr" => {
                 line = k.to_owned();
                 kids_out = self.kid_trees(n)?;
+            }
+            "LabelStmt" => {
+                line = format!("{k} '{}'", name(n).unwrap_or(""));
+                kids_out = self.kid_trees(n)?;
+            }
+            "GotoStmt" => {
+                let target = text(n, "targetLabelDeclId")
+                    .and_then(|d| self.ix.labels.get(d))
+                    .ok_or("clang-ast: a GotoStmt whose label is not in the dump")?;
+                line = format!("{k} '{target}'");
             }
             _ => return Err(format!("clang-ast: no printer for kept kind `{k}` (normalizer bug)")),
         }

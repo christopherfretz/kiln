@@ -1116,6 +1116,9 @@ pub struct ColdExprData {
     /// one, the location and context of the use. Computed by sema (which
     /// owns the source manager and the function-name printer).
     pub source_loc: ColdMap<ExprId, SourceLocValues>,
+    /// The initialized member of a union's `CXXParenListInitExpr`
+    /// (clang `getInitializedFieldInUnion`).
+    pub union_field: ColdMap<ExprId, DeclId>,
 }
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
@@ -1236,6 +1239,7 @@ impl Default for ColdExprData {
             array_trait: ColdMap::new("array_trait"),
             trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
             source_loc: ColdMap::new("source_loc"),
+            union_field: ColdMap::new("union_field"),
         }
     }
 }
@@ -1845,6 +1849,12 @@ impl ExprArena {
         ExprId::from_raw(self.expect_kind(e, ExprKind::CXXParenListInitExpr).b)
     }
 
+    /// The initialized member of a union's `CXXParenListInitExpr`.
+    pub fn paren_list_union_field(&self, e: ExprId) -> Option<DeclId> {
+        self.expect_kind(e, ExprKind::CXXParenListInitExpr);
+        self.cold.union_field.get(e).copied()
+    }
+
     /// The common expression (an `OpaqueValueExpr`) and element
     /// initializer of an `ArrayInitLoopExpr`.
     pub fn array_init_loop(&self, e: ExprId) -> [ExprId; 2] {
@@ -2311,6 +2321,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.array_trait.mem_row().prefixed("cold"));
         r.push(self.cold.trait_rhs_loc.mem_row().prefixed("cold"));
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));
+        r.push(self.cold.union_field.mem_row().prefixed("cold"));
         r
     }
 }

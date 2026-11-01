@@ -177,7 +177,7 @@ impl Sema<'_, '_> {
             .and_then(|p| self.ast.decls.record(p))
             .map_or(TagKind::Struct, |r| r.tag);
         let spec = self.builder().class_spec(tmpl, conv.sugared, conv.canonical, tag);
-        let print = self.suppress_default_args(tmpl, conv.sugared, written.len(), loc);
+        let print = self.suppress_default_args(tmpl, conv.canonical, written.len(), loc);
         if let Some((i, _)) = self.ast.spec_info(spec) {
             self.ast.templates.update_spec(i, |s| s.print_args = print);
         }
@@ -1176,6 +1176,32 @@ impl Substituter<'_, '_, '_> {
         Ok(last)
     }
 
+    /// Redoes the dependent `using typename B<T>::name;` that pattern
+    /// alias `m` stands for, with its substituted qualifier (clang's
+    /// `UnresolvedUsingTypenameDecl` instantiation): a using-declaration
+    /// and its shadows, or "'typename' keyword used on a non-type".
+    fn member_using_typename(&mut self, m: DeclId, loc: Loc) -> Result<Option<DeclId>, SubstFail> {
+        let Some(u) = self.sema.ast.decls.typedef(m).map(|t| t.underlying) else { return Ok(None) };
+        let TypeView::DependentName { nns: pnns, name, .. } = self.sema.ast.types.view(u.ty())
+        else {
+            return Ok(None);
+        };
+        let nns = self.nns(pnns, loc)?;
+        if self.nns_still_dependent(nns) {
+            return self.unimplemented("dependent using-declarations in templates", loc);
+        }
+        let ctx = self.nns_context(nns, loc)?;
+        let q = crate::using::Qualifier { ctx, nns, loc };
+        Ok(self.sema.act_on_using_typename_declarator(
+            loc,
+            Some(q),
+            DeclName::ident(name),
+            loc,
+            false,
+            None,
+        ))
+    }
+
     /// Replays member `m` of the pattern class (§4.6).
     fn member(&mut self, m: DeclId) -> Result<Option<DeclId>, SubstFail> {
         let n = *self.sema.ast.decls.get(m);
@@ -1209,6 +1235,9 @@ impl Substituter<'_, '_, '_> {
                 // An out-of-line redeclaration is not a member of the
                 // class's member list; only the first declaration is.
                 self.function_decl(m, DeclaratorContext::Member, None)?
+            }
+            DeclKind::TypeAlias if self.sema.using_typename.contains(&m) => {
+                return self.member_using_typename(m, loc);
             }
             DeclKind::Typedef | DeclKind::TypeAlias => self.typedef_decl(m)?,
             DeclKind::StaticAssert => {

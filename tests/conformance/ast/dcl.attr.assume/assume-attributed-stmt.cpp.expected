@@ -1,0 +1,54 @@
+Dumping f:
+FunctionDecl f 'int (int, int *)'
+|-ParmVarDecl used x 'int'
+|-ParmVarDecl used p 'int *'
+`-CompoundStmt
+  |-AttributedStmt
+  | |-CXXAssumeAttr
+  | | `-BinaryOperator 'bool' '>'
+  | |   |-ImplicitCastExpr 'int' <LValueToRValue>
+  | |   | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  | |   `-IntegerLiteral 'int' 0
+  | `-NullStmt
+  |-AttributedStmt
+  | |-CXXAssumeAttr
+  | | `-ImplicitCastExpr 'bool' <PointerToBoolean>
+  | |   `-ImplicitCastExpr 'int *' <LValueToRValue>
+  | |     `-DeclRefExpr 'int *' lvalue ParmVar 'p' 'int *'
+  | |-CXXAssumeAttr
+  | | `-BinaryOperator 'bool' '!='
+  | |   |-ImplicitCastExpr 'int' <LValueToRValue>
+  | |   | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  | |   `-IntegerLiteral 'int' 3
+  | `-NullStmt
+  |-AttributedStmt
+  | |-CXXAssumeAttr
+  | | `-ImplicitCastExpr 'bool' <IntegralToBoolean>
+  | |   `-CallExpr 'int'
+  | |     |-ImplicitCastExpr 'int (*)(int)' <FunctionToPointerDecay>
+  | |     | `-DeclRefExpr 'int (int)' lvalue Function 'g' 'int (int)'
+  | |     `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |       `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+  | `-NullStmt
+  `-ReturnStmt
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-ImplicitCastExpr 'int' xvalue <NoOp>
+        `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+
+Dumping f:
+FunctionTemplateDecl f
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+`-FunctionDecl f 'T (T)'
+  |-ParmVarDecl referenced v 'T'
+  `-CompoundStmt
+    |-AttributedStmt
+    | |-CXXAssumeAttr
+    | | `-BinaryOperator '<dependent type>' '>'
+    | |   |-DeclRefExpr 'T' lvalue ParmVar 'v' 'T'
+    | |   `-CXXUnresolvedConstructExpr 'T'
+    | |     `-IntegerLiteral 'int' 0
+    | `-NullStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'T' xvalue <NoOp>
+        `-DeclRefExpr 'T' lvalue ParmVar 'v' 'T'
+

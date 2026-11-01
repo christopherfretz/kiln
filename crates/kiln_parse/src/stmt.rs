@@ -1,5 +1,6 @@
 //! Statements ([stmt]; spec/parse.md §6).
 
+use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::InitStyle;
 use kiln_ast::stmt::IfKind;
 use kiln_ast::{DeclId, ExprId, StmtId};
@@ -80,11 +81,25 @@ impl Parser<'_, '_> {
         if !self.stack_ok() {
             return None;
         }
-        let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         if self.at_cxx11_attr() {
+            let start = self.loc();
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
+            // Statement attributes are applied once the statement is
+            // parsed (clang's `ProcessStmtAttributes`); only `[[assume]]`
+            // is kept so far (spec/parse.md §6).
+            if attrs.iter().any(|&a| self.s.ast.attrs.get(a).kind == AttrKind::ASSUME) {
+                let sub = self.parse_statement_after_attrs()?;
+                let pre23 = self.std < Std::Cxx23;
+                return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, pre23));
+            }
         }
+        self.parse_statement_after_attrs()
+    }
+
+    /// A statement after its attribute-specifier-seq.
+    fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
+        let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         let loc = self.loc();
         match Self::punct_of(self.tok()) {
             Some(Punct::LBrace) => return Some(self.parse_compound(true).0),
@@ -385,19 +400,7 @@ impl Parser<'_, '_> {
             let ds = self.parse_decl_specifiers(ctx);
             let mut d = Declarator::new(ctx, self.loc());
             self.parse_declarator(&mut d);
-            if d.name.is_none() {
-                // An abstract declarator's identifier location is where
-                // the name would be (clang `ParseDirectDeclarator`): the
-                // first array bound, else the token after the declarator.
-                d.loc = d
-                    .chunks
-                    .iter()
-                    .find_map(|c| match c {
-                        Chunk::Array { loc, .. } => Some(*loc),
-                        _ => None,
-                    })
-                    .unwrap_or_else(|| self.loc());
-            }
+            self.set_abstract_loc(&mut d);
             let base = self.s.type_from_declspec_at(&ds, d.name_loc());
             self.s.act_on_exception_decl(&ds, base, &d)
         };

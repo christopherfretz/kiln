@@ -2813,6 +2813,21 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// A union's parenthesized aggregate initialization: `init`
+    /// copy-initializes the member `field` ([dcl.init.general]/16.6.2.2).
+    pub fn paren_list_init_union(
+        &mut self,
+        ty: QualType,
+        init: ExprId,
+        field: DeclId,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let e = self.paren_list_init(ty, &[init], None, loc, rparen);
+        self.ast.exprs.cold.union_field.insert(e, field).expect("fresh expression");
+        e
+    }
+
     /// An `OpaqueValueExpr` standing for `source` (same type, category,
     /// object kind and dependence); `source` is shared, not a child.
     pub fn opaque_value(&mut self, source: ExprId) -> ExprId {
@@ -3024,6 +3039,14 @@ impl<'a> AstBuilder<'a> {
     /// `Label` declaration (`a` = label, `b` = sub-statement).
     pub fn label_stmt(&mut self, label: DeclId, sub: StmtId, loc: Loc) -> StmtId {
         self.stmt(StmtKind::LabelStmt, 0, loc, label.raw(), sub.raw())
+    }
+
+    /// An attributed statement `[[attrs]] sub` ([stmt.pre]/1, clang's
+    /// `AttributedStmt`): `a` = the `AttrId` list, `b` = the statement.
+    /// `loc` is the first attribute-specifier.
+    pub fn attributed_stmt(&mut self, attrs: &[AttrId], sub: StmtId, loc: Loc) -> StmtId {
+        let list = self.ast.lists.push(attrs);
+        self.stmt(StmtKind::AttributedStmt, 0, loc, list.raw(), sub.raw())
     }
 
     /// `goto label;` ([stmt.goto]); `a` = the `Label` declaration.

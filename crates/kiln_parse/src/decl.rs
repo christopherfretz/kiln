@@ -365,11 +365,7 @@ impl Parser<'_, '_> {
     fn parse_using_declaration(&mut self, using_loc: Loc, leading_if_exists: bool) -> Vec<DeclId> {
         let mut out = Vec::new();
         loop {
-            if let Some(l) = self.eat_kw(Kw::Typename) {
-                self.unsupported("'typename' using-declarators", l);
-                self.skip_to_semi();
-                return out;
-            }
+            let typename = self.eat_kw(Kw::Typename).is_some();
             let Ok(qual) = self.parse_nested_name_nns() else {
                 self.skip_to_semi();
                 return out;
@@ -404,9 +400,14 @@ impl Parser<'_, '_> {
             }
             self.parse_attributes(&mut attrs);
             let if_exists = leading_if_exists || self.has_using_if_exists(&attrs);
-            if let Some(d) =
+            let d = if typename {
+                self.s.act_on_using_typename_declarator(
+                    using_loc, qual, name, nl, if_exists, ellipsis,
+                )
+            } else {
                 self.s.act_on_using_declarator(using_loc, qual, name, nl, if_exists, ellipsis)
-            {
+            };
+            if let Some(d) = d {
                 out.push(d);
             }
             if self.eat(Punct::Comma).is_none() {
@@ -756,9 +757,22 @@ impl Parser<'_, '_> {
         loc: Loc,
     ) {
         let mut nns = None;
+        let mut d = d;
         if qualified {
+            let name = self.ident_of(self.tok_at(end - 1));
             if let Ok(Some(q)) = self.parse_nested_name_nns() {
                 nns = Some(q.nns);
+                // `X<A>::M`: the lookahead found `M` in `X`'s primary
+                // pattern; the placeholder names the member template of
+                // the specialization the qualifier names (as `td::M`
+                // with `typedef X<A> td` does), so its guides are those
+                // of the instantiated member ([temp.mem]).
+                if let Some(name) = name
+                    && let NameClass::TypeTemplate(m) = self.s.classify_name(name, Some(q.ctx))
+                    && self.s.is_ctad_template(m)
+                {
+                    d = m;
+                }
             } else {
                 ds.invalid = true;
             }
@@ -1644,6 +1658,22 @@ impl Parser<'_, '_> {
     /// ([dcl.fct]/1) after the `(` (and `act_on_start_prototype`), up to
     /// the `)`: the parameters and whether `...` ends the list. With
     /// `delay_args`, default arguments are saved in `late_fn`.
+    /// An abstract declarator's identifier location is where the name
+    /// would be (clang `ParseDirectDeclarator`): the first array bound,
+    /// else the token after the declarator. Named declarators keep theirs.
+    pub(crate) fn set_abstract_loc(&self, d: &mut Declarator) {
+        if d.name.is_none() && d.special.is_none() && d.decomp.is_none() {
+            d.loc = d
+                .chunks
+                .iter()
+                .find_map(|c| match c {
+                    Chunk::Array { loc, .. } => Some(*loc),
+                    _ => None,
+                })
+                .unwrap_or_else(|| self.loc());
+        }
+    }
+
     pub(crate) fn parse_param_clause(
         &mut self,
         d: &mut Declarator,
@@ -1679,6 +1709,7 @@ impl Parser<'_, '_> {
             let saved = std::mem::replace(&mut self.pack_hint, hint);
             self.parse_declarator(&mut pd);
             self.pack_hint = saved;
+            self.set_abstract_loc(&mut pd);
             if placeholder && !ds.invalid {
                 // An abbreviated function template's invented parameter
                 // ([dcl.fct]/22).
@@ -1690,6 +1721,7 @@ impl Parser<'_, '_> {
                     pd.ellipsis.is_some(),
                     constraint,
                     pname,
+                    d.qualifier,
                 );
                 ds.base = TypeSpecKind::Named;
                 ds.named = Some(ty);

@@ -5,7 +5,7 @@
 use kiln_ast::consts::{
     ByteImage, ByteRange, ConstValue, IntBits, NullKind, PtrBase, Reloc, Scalar, UnionMember,
 };
-use kiln_ast::decl::{DeclKind, VarEvalState};
+use kiln_ast::decl::{DeclKind, DefinitionBits, VarEvalState};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StringLitId};
@@ -53,6 +53,10 @@ pub(crate) struct VarInfo {
     pub state: VarEvalState,
     pub ty: QualType,
     pub is_const: bool,
+    /// Not usable, but readable by a lax fold ([`crate::Oven::fold_rvalue`],
+    /// clang `EvaluateAsRValue`): `const` non-volatile with an initializer
+    /// (clang `findCompleteObject` only notes such a read).
+    pub lax: bool,
 }
 
 pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
@@ -62,6 +66,7 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
         state: VarEvalState::NotEvaluated,
         ty: ast.decls.get(d).ty().unwrap_or(QualType::INT),
         is_const: false,
+        lax: false,
     };
     // A template parameter object ([temp.param]/8): a `const` object
     // whose value is the template argument's.
@@ -90,7 +95,27 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     // Potentially-constant ([expr.const]/3): constexpr, a reference, or
     // const-qualified integral or enumeration type.
     info.usable = constexpr || ast.types.is_reference(c) || (info.is_const && integral);
+    let q = ast.types.effective_quals(info.ty);
+    info.lax = !info.usable
+        && q.is_const()
+        && !q.is_volatile()
+        && (info.init.is_some() || matches!(info.state, VarEvalState::Value(_)))
+        && !has_mutable_fields(ast, info.ty);
     info
+}
+
+/// Whether `q` (or its array element type) is a class with a `mutable`
+/// member, directly or in a subobject: such an object may change after
+/// its initialization, so a lax fold does not read it.
+fn has_mutable_fields(ast: &Ast, q: QualType) -> bool {
+    let mut t = q;
+    while let Some(e) = ast.types.element(t) {
+        t = e;
+    }
+    ast.types.as_record(t).is_some_and(|r| {
+        let def = ast.definition(r).unwrap_or(r);
+        ast.decls.record(def).is_some_and(|x| x.defn.contains(DefinitionBits::HAS_MUTABLE_FIELDS))
+    })
 }
 
 /// Why a value cannot be frozen.
@@ -402,7 +427,12 @@ impl Oven {
                 "pointer to an object outside its lifetime is not a constant expression",
             )]));
         };
-        if p.is_static() {
+        // A variable with automatic storage duration reached through the
+        // globals path (outside its frame, or read by a lax fold) has no
+        // constant address ([expr.const]/14).
+        let automatic = matches!(a.origin, Origin::Global(d) | Origin::External(d)
+            if is_local_var(b.ast(), d));
+        if p.is_static() && !automatic {
             let base = match a.origin {
                 Origin::Global(d) | Origin::External(d) => PtrBase::Decl(d),
                 Origin::Str(lit, Some(origin)) => PtrBase::StringLit { lit, origin },
@@ -438,12 +468,14 @@ impl Oven {
         let what = if sub { "subobject of " } else { "" };
         let mut notes = Vec::with_capacity(2);
         match a.origin {
-            Origin::Var(d) => {
+            Origin::Var(d) | Origin::Global(d) | Origin::External(d) => {
                 let mut name = String::new();
                 kiln_ast::dump::AstNames::new(ast).write_name(d, &mut name);
+                // clang `note_constexpr_non_global`.
+                let kind = if ast.types.is_reference(q) { "reference" } else { "pointer" };
                 notes.push(Note::new(
                     loc,
-                    format!("pointer to {what}'{name}' is not a constant expression"),
+                    format!("{kind} to {what}'{name}' is not a constant expression"),
                 ));
                 notes.push(Note::new(ast.decls.get(d).loc(), "declared here"));
             }
@@ -772,7 +804,12 @@ impl Oven {
     fn resolve_var(&mut self, b: &mut dyn SemaBridge, g: u32, d: DeclId, top: u32) -> u64 {
         let info = var_info(b.ast(), d);
         let ty = self.types.intern(b, info.ty);
-        if !info.usable {
+        if info.lax {
+            // Resolved differently by strict and lax evaluations: reset
+            // when the mode changes (`Oven::eval_outermost`).
+            self.lax_globals.push(g);
+        }
+        if !(info.usable || info.lax && self.run.lax) {
             return self.external(ty, d);
         }
         let hu = if self.types.info(ty).has_union { flags::HAS_UNION } else { 0 };

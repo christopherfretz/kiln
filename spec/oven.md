@@ -161,6 +161,27 @@ the evaluator's flattened type table.
   ([basic.start.static]/2): manifestly constant-evaluated, but silent and
   not recorded, like `try_fold`. Codegen uses it for the initializers it
   emits as constants (spec/codegen.md).
+- `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
+  `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
+  `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
+  that has an initializer (or a known value) but is not usable in constant
+  expressions (a `const double`, a `const _Atomic(int)`, a `const` class,
+  array or pointer) is read as if it were (`VarInfo::lax`), except one
+  whose type contains a `mutable` member (the Oven has no "read of mutable
+  member" check yet, so such variables are excluded wholesale). Lax mode
+  applies only to an outermost evaluation (nested in a bridge callback it
+  is plain `try_fold`). Variables resolved under lax mode are recorded in
+  `lax_globals` and reset to unresolved when the next outermost
+  evaluation runs in the other mode, and lax-mode calls are never
+  memoized, so a lax read never leaks into a strict evaluation. Codegen
+  uses it for its non-initializer fold candidates; sema uses it
+  (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
+  (spec/sema.md §4.2).
+- Freezing a pointer or reference into a constant rejects a pointer to an
+  object of automatic storage duration (a static allocation whose origin
+  is a local variable read as a global): "pointer to '…' is not a
+  constant expression" (or "reference to …" when the frozen type is a
+  reference; clang `note_constexpr_non_global`), with "declared here".
 
 ### Manifestly constant-evaluated context — normative (WP-063)
 `__builtin_is_constant_evaluated()` ([expr.const]/20, [meta.const.eval])
@@ -1130,6 +1151,7 @@ impl Oven {
     pub fn try_fold(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn is_constant_initialized(&mut self, bridge: &mut dyn SemaBridge, var: DeclId) -> bool;
     pub fn fold_constant_init(&mut self, bridge: &mut dyn SemaBridge, e: ExprId, var: DeclId) -> Option<ConstValueId>;
+    pub fn fold_rvalue(&mut self, bridge: &mut dyn SemaBridge, e: ExprId) -> Option<ConstValueId>;
     pub fn stats(&self) -> &EvalStats;
     pub fn footprint(&self) -> usize;
     pub fn disassemble(&self) -> String;                          // debugging aid
@@ -1314,6 +1336,14 @@ evaluates.
 **Landed (WP-140): `PredefinedExpr`.** An lvalue of its `StringLiteral`
 child: the same static string object as the literal
 (`tests/conformance/dcl.fct.def.general/predefined-constexpr.cpp`).
+
+**Landed (WP-160): `[[assume(e)]]`.** Each assumption that sema did not
+mark `ASSUME_IGNORED` is evaluated when reached, inside its own
+temporaries scope. If it is false, evaluation fails with clang's
+`assumption evaluated to false` note at the assumption's expression
+location ([dcl.attr.assume]/1, [expr.const]/5.8). An assumption that has
+possible side effects is never evaluated, as in clang's `EvaluateStmt`
+(`tests/conformance/expr.const/assume-false.cpp`).
 
 ## Tests
 `crates/kiln_oven/tests/`, each test naming its section:

@@ -2,10 +2,14 @@
 //! `-Wunevaluated-expression` ("expression with side effects has no
 //! effect in an unevaluated context") on the operands of `sizeof`,
 //! `alignof`, `decltype`, `noexcept` and a `typeid` that is not
-//! evaluated.
+//! evaluated. Also the possible side effects of an assumption
+//! ([dcl.attr.assume]; clang's `-Wassume`).
 
 use kiln_ast::ExprId;
-use kiln_ast::expr::{ExprDeps, ExprKind};
+use kiln_ast::attr::AttrKind;
+use kiln_ast::expr::{CastKind, ExprDeps, ExprKind, ValueCategory};
+use kiln_ast::ids::RawId;
+use kiln_ast::types::Quals;
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -27,7 +31,7 @@ impl Sema<'_, '_> {
     /// clang's `Expr::getExprLoc`: an operator's location for unary,
     /// binary and member expressions; a subscript's base's; a member
     /// call's member name; where it begins otherwise.
-    fn expr_loc(&self, mut e: ExprId) -> Loc {
+    pub fn expr_loc(&self, mut e: ExprId) -> Loc {
         for _ in 0..256 {
             let exprs = &self.ast.exprs;
             match exprs.get(e).kind() {
@@ -110,5 +114,148 @@ impl Sema<'_, '_> {
             }
         }
         false
+    }
+
+    /// clang's `Expr::HasSideEffects(Ctx, /*IncludePossibleEffects=*/true)`:
+    /// [`Self::has_side_effects`] plus what may have effects: a call to a
+    /// function that is neither `const` nor `pure`, a volatile read, a
+    /// non-trivial constructor, a temporary with a non-trivial destructor,
+    /// a `dynamic_cast` to a reference (it may throw), a lambda's capture
+    /// initializers, the default arguments and member initializers used,
+    /// and any dependent or erroneous node (conservatively). Macro
+    /// expansions are not exempt.
+    #[allow(clippy::too_many_lines, reason = "one arm per expression kind")]
+    pub(crate) fn has_possible_side_effects(&self, e: ExprId) -> bool {
+        let exprs = &self.ast.exprs;
+        let dependent = ExprDeps::TYPE | ExprDeps::VALUE | ExprDeps::UNEXPANDED_PACK;
+        let mut stack = vec![e];
+        let mut seen = 0usize;
+        while let Some(x) = stack.pop() {
+            seen += 1;
+            if seen > 1_000_000 {
+                return true;
+            }
+            let n = exprs.get(x);
+            if n.deps().intersects(dependent | ExprDeps::ERROR) {
+                return true;
+            }
+            match n.kind() {
+                ExprKind::UnaryOperator if exprs.unary_op(x).is_inc_dec() => return true,
+                ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator
+                    if exprs.binary_op(x).is_assignment() =>
+                {
+                    return true;
+                }
+                ExprKind::CXXNewExpr
+                | ExprKind::CXXDeleteExpr
+                | ExprKind::AtomicExpr
+                | ExprKind::CXXThrowExpr
+                | ExprKind::CoawaitExpr
+                | ExprKind::DependentCoawaitExpr
+                | ExprKind::CoyieldExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::UnresolvedLookupExpr
+                | ExprKind::UnresolvedMemberExpr
+                | ExprKind::DependentScopeDeclRefExpr
+                | ExprKind::CXXDependentScopeMemberExpr
+                | ExprKind::CXXUnresolvedConstructExpr
+                | ExprKind::PackExpansionExpr
+                | ExprKind::SubstNonTypeTemplateParmPackExpr
+                | ExprKind::FunctionParmPackExpr
+                | ExprKind::CXXFoldExpr
+                | ExprKind::RecoveryExpr => return true,
+                ExprKind::CXXTypeidExpr => {
+                    if exprs.typeid_potentially_evaluated(x) {
+                        return true;
+                    }
+                }
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr
+                | ExprKind::UserDefinedLiteral => {
+                    let pure = self.callee_decl(x).is_some_and(|f| {
+                        self.find_attr(f, AttrKind::CONST).is_some()
+                            || self.find_attr(f, AttrKind::PURE).is_some()
+                    });
+                    if !pure {
+                        return true;
+                    }
+                    stack.extend(exprs.children(x, &self.ast.lists));
+                }
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXConstCastExpr
+                | ExprKind::CXXReinterpretCastExpr
+                | ExprKind::CXXDynamicCastExpr
+                | ExprKind::BuiltinBitCastExpr => {
+                    let ck = exprs.cast_kind(x);
+                    if n.kind() == ExprKind::CXXDynamicCastExpr
+                        && n.value_category() != ValueCategory::PRValue
+                        && ck == CastKind::Dynamic
+                    {
+                        return true;
+                    }
+                    let kids = exprs.children(x, &self.ast.lists);
+                    if ck == CastKind::LValueToRValue
+                        && kids.first().is_some_and(|&k| {
+                            self.ast
+                                .types
+                                .effective_quals(exprs.get(k).ty())
+                                .contains(Quals::VOLATILE)
+                        })
+                    {
+                        return true;
+                    }
+                    stack.extend(kids);
+                }
+                ExprKind::CXXConstructExpr
+                | ExprKind::CXXTemporaryObjectExpr
+                | ExprKind::CXXInheritedCtorInitExpr => {
+                    let c = exprs.constructor(x);
+                    if !self.ast.decls.function(c).is_some_and(|f| f.spec.is_trivial()) {
+                        return true;
+                    }
+                    stack.extend(exprs.children(x, &self.ast.lists));
+                }
+                ExprKind::CXXDefaultArgExpr => {
+                    let p = exprs.default_arg_param(x);
+                    stack.extend(self.ast.decls.param(p).and_then(|p| p.default_arg));
+                }
+                ExprKind::CXXDefaultInitExpr => {
+                    let f = exprs.default_init_field(x);
+                    stack.extend(self.ast.decls.field(f).and_then(|f| f.init));
+                }
+                ExprKind::LambdaExpr => {
+                    if let Some(l) = exprs.lambda(x).inits {
+                        stack.extend(
+                            self.ast.lists.get(l).iter().filter_map(|&r| ExprId::from_raw(r)),
+                        );
+                    }
+                }
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::RequiresExpr => {}
+                _ => stack.extend(exprs.children(x, &self.ast.lists)),
+            }
+        }
+        false
+    }
+
+    /// The function a call expression calls, if it names one.
+    fn callee_decl(&self, c: ExprId) -> Option<kiln_ast::DeclId> {
+        let exprs = &self.ast.exprs;
+        let mut r = exprs.callee(c);
+        for _ in 0..64 {
+            match exprs.get(r).kind() {
+                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr => {
+                    r = *exprs.children(r, &self.ast.lists).first()?;
+                }
+                ExprKind::DeclRefExpr | ExprKind::MemberExpr => return Some(exprs.decl(r)),
+                _ => return None,
+            }
+        }
+        None
     }
 }

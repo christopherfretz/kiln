@@ -187,10 +187,14 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("TopLevelStmtDecl", Unsupported(NOT_M2)),
     ("LifetimeExtendedTemporaryDecl", Unsupported(NOT_M2)),
     // Statements kiln does not dump in M2.
-    ("LabelStmt", Unsupported(NOT_M2)),
-    ("GotoStmt", Unsupported(NOT_M2)),
+    // Labels and `goto` (WP-160); the label is named by its `LabelStmt`.
+    ("LabelStmt", Keep),
+    ("GotoStmt", Keep),
     ("IndirectGotoStmt", Unsupported(NOT_M2)),
-    ("AttributedStmt", Unsupported("attributes are not in the M2 dump")),
+    // Only `[[assume]]` is kept on a statement (WP-160); another statement
+    // attribute is unsupported by its own kind.
+    ("AttributedStmt", Keep),
+    ("CXXAssumeAttr", Keep),
     ("CXXTryStmt", Keep),
     ("CXXCatchStmt", Keep),
     ("GCCAsmStmt", Keep),
@@ -450,7 +454,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         "WhileStmt" => &["hasVar"],
         "CompoundStmt" | "DeclStmt" | "NullStmt" | "ReturnStmt" | "BreakStmt" | "ContinueStmt"
         | "DefaultStmt" | "CaseStmt" | "DoStmt" | "ForStmt" | "CXXForRangeStmt" | "CXXTryStmt"
-        | "CXXCatchStmt" | "GCCAsmStmt" => &[],
+        | "CXXCatchStmt" | "GCCAsmStmt" | "AttributedStmt" | "CXXAssumeAttr" => &[],
+        "LabelStmt" => &["name", "declId"],
+        "GotoStmt" => &["targetLabelDeclId"],
         _ => return None,
     })
 }
@@ -579,6 +585,11 @@ pub const M2_KINDS: &[&str] = &[
     // GNU asm (WP-140).
     "FileScopeAsmDecl",
     "GCCAsmStmt",
+    // Labels, `goto`, `[[assume]]` (WP-160).
+    "LabelStmt",
+    "GotoStmt",
+    "AttributedStmt",
+    "CXXAssumeAttr",
     // Predefined identifiers (WP-140).
     "PredefinedExpr",
     "IntegerLiteral",
