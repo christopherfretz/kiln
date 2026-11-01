@@ -1394,6 +1394,10 @@ impl Cg<'_> {
         match s {
             Saved::Direct(a) => a,
             Saved::Slot { slot, ty, align } => CallArg::Scalar(self.load(ty, slot, align, false)),
+            Saved::AggSlot { slot, addr } => {
+                let al = self.pref_align(LTy::PTR);
+                CallArg::Agg(Addr { v: self.load(LTy::PTR, slot, al, false), ..addr })
+            }
         }
     }
 

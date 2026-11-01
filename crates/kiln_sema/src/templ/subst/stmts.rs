@@ -232,13 +232,17 @@ impl Substituter<'_, '_, '_> {
             }
             StmtKind::CaseStmt => {
                 let c = *self.sema.ast.stmts.case_data(s);
-                if c.rhs.is_some() {
-                    return self.unimplemented("case ranges in templates", loc);
-                }
                 let v = self.expr(c.lhs)?;
-                let v = self.sema.act_on_case_value(v, loc);
+                let (v, rhs) = match c.rhs {
+                    Some(hi) => {
+                        let hi = self.expr(hi)?;
+                        let (v, hi) = self.sema.act_on_case_range(v, hi, loc);
+                        (v, Some(hi))
+                    }
+                    None => (self.sema.act_on_case_value(v, loc), None),
+                };
                 let sub = self.stmt(c.sub);
-                Ok(self.sema.act_on_case(v, sub, loc))
+                Ok(self.sema.act_on_case(v, rhs, sub, loc))
             }
             StmtKind::DefaultStmt => {
                 self.sema.act_on_default_label(loc);

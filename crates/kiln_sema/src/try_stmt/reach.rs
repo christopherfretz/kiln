@@ -70,6 +70,9 @@ struct Jump {
     continued: bool,
 }
 
+/// The folded `lo` and `hi` of a case label.
+type CaseBounds = (Option<i128>, Option<i128>);
+
 struct SwitchFrame {
     /// The condition is reached.
     live: bool,
@@ -343,7 +346,8 @@ impl Sema<'_, '_> {
                 live |= r.cases_live;
                 if let Some(f) = r.switches.last() {
                     let (sl, value) = (f.live, f.value);
-                    live = live || (sl && (value.is_none() || self.fold_int(d.lhs) == value));
+                    let hit = value.is_none_or(|v| Self::in_case(self.case_bounds(s), v));
+                    live = live || (sl && hit);
                 }
                 self.reach_stmt(d.sub, live, r)
             }
@@ -492,11 +496,10 @@ impl Sema<'_, '_> {
             if self.ast.stmts.get(c).kind() == StmtKind::DefaultStmt {
                 has_default = true;
             } else {
-                let lhs = self.ast.stmts.case_data(c).lhs;
-                case_values.push(self.fold_int(lhs));
+                case_values.push(self.case_bounds(c));
             }
         }
-        let matched = value.is_some() && case_values.contains(&value);
+        let matched = value.is_some_and(|v| case_values.iter().any(|&b| Self::in_case(b, v)));
         r.switches.push(SwitchFrame { live, value, matched });
         r.jumps.push(Jump { is_loop: false, broke: false, continued: false });
         let body_out = self.reach_stmt(d.body, false, r);
@@ -512,7 +515,7 @@ impl Sema<'_, '_> {
     /// clang `SwitchStmt::isAllEnumCasesCovered`: the condition (before
     /// promotion) has a complete enumeration type with enumerators, each
     /// of which some case names.
-    fn all_enum_cases_covered(&self, mut cond: ExprId, cases: &[Option<i128>]) -> bool {
+    fn all_enum_cases_covered(&self, mut cond: ExprId, cases: &[CaseBounds]) -> bool {
         while self.ast.exprs.get(cond).kind() == ExprKind::ImplicitCastExpr {
             cond = self.ast.exprs.operand(cond);
         }
@@ -526,11 +529,30 @@ impl Sema<'_, '_> {
             }
             any = true;
             let v = self.ast.decls.enumerator(m).and_then(|x| x.value);
-            if v.is_none_or(|v| !cases.contains(&self.const_int(v))) {
+            let v = v.and_then(|v| self.const_int(v));
+            if v.is_none_or(|v| !cases.iter().any(|&b| Self::in_case(b, v))) {
                 return false;
             }
         }
         any
+    }
+
+    /// The folded bounds of case `c`: `lo` and `hi` of a GNU range
+    /// `case lo ... hi`, else the value twice.
+    fn case_bounds(&mut self, c: StmtId) -> CaseBounds {
+        let d = *self.ast.stmts.case_data(c);
+        let lo = self.fold_int(d.lhs);
+        let hi = match d.rhs {
+            Some(h) => self.fold_int(h),
+            None => lo,
+        };
+        (lo, hi)
+    }
+
+    /// The case of bounds `b` matches the value `v` (clang CFG
+    /// `shouldAddCase`).
+    fn in_case(b: CaseBounds, v: i128) -> bool {
+        matches!(b, (Some(lo), Some(hi)) if lo <= v && v <= hi)
     }
 
     fn reach_expr(&mut self, e: ExprId, live: bool, r: &mut Reach) -> bool {
@@ -542,7 +564,10 @@ impl Sema<'_, '_> {
         }
         let kind = self.ast.exprs.get(e).kind();
         match kind {
-            ExprKind::LambdaExpr => live,
+            // clang `CFGBuilder::VisitUnaryExprOrTypeTraitExpr` adds the
+            // node but walks only a VLA bound: the operand of `sizeof`
+            // and `alignof` is unevaluated.
+            ExprKind::LambdaExpr | ExprKind::UnaryExprOrTypeTraitExpr => live,
             ExprKind::CXXThrowExpr => {
                 let live = self.reach_kids(e, live, r);
                 if live {

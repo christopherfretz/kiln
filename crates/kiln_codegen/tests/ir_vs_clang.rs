@@ -30,6 +30,9 @@ const DEVIATIONS: &[(&str, &str)] = &[
     // whose LoopSimplify/LCSSA canonicalization reshapes the array loops
     // of the (non-`optnone`) global initialization functions.
     ("global_init_array_eh", "aarch64-unknown-linux-gnu"),
+    // The same canonicalization of `__cxx_global_array_dtor`'s
+    // partial-array EH cleanup loop (WP-205).
+    ("eh_array_destroy_throwing_global", "aarch64-unknown-linux-gnu"),
 ];
 
 fn corpus_dir() -> PathBuf {
