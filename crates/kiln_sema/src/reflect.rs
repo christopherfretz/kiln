@@ -136,12 +136,11 @@ impl Sema<'_, '_> {
             Some(Scalar::Reflection { id, .. }) => self.ast.reflections.get(id),
             _ => Reflectee::Null,
         };
-        match r {
-            Reflectee::Type(t) => Some(t),
-            _ => {
-                self.error(DiagId::sema_splice_not_type, at);
-                None
-            }
+        if let Reflectee::Type(t) = r {
+            Some(t)
+        } else {
+            self.error(DiagId::sema_splice_not_type, at);
+            None
         }
     }
 }

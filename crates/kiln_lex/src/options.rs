@@ -17,12 +17,13 @@ pub enum Std {
     Cxx20,
     /// C++23: `\u{...}` and `\N{...}`.
     Cxx23,
-    /// C++26: `^^`, `[:`, `:]` (P2996).
+    /// C++26 (with `reflection`: `^^`, `[:`, `:]`, P2996).
     Cxx26,
 }
 
 /// Options fixed for the lifetime of a [`crate::Lexer`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent command-line switches")]
 pub struct LexOptions {
     /// Language standard. Default: [`Std::Cxx26`].
     pub std: Std,

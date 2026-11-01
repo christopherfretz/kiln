@@ -752,7 +752,9 @@ impl Oven {
             TyKind::NullPtr => s.push_str("nullptr"),
             TyKind::Reflection => match kiln_ast::ReflectionId::from_bits(v) {
                 Some(r) => kiln_ast::consts::PrintEnv::reflection(ast, r, s),
-                None => s.push_str(&format!("^^#{v}")),
+                None => {
+                    let _ = write!(s, "^^#{v}");
+                }
             },
             TyKind::Ptr(pt) => s.push_str(&self.ptr_string(ast, v as u64, pt)),
             TyKind::Array { .. } | TyKind::Record { .. } => {
