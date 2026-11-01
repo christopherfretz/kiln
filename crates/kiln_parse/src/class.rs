@@ -809,6 +809,22 @@ impl Parser<'_, '_> {
     /// mem-initializer ([class.base.init]): the initializer (when sema can
     /// take it) and whether it parsed.
     fn parse_mem_initializer(&mut self) -> (Option<MemInitInfo>, bool) {
+        // A simple-template-id class-name, possibly qualified (`Leaf<I, T>(u)...`,
+        // [class.base.init]/2), names the base as a base-specifier would.
+        if self.at_template_type_name(DeclaratorContext::TypeName) {
+            let loc = self.loc();
+            let Some(ty) = self.parse_template_type_name(DeclaratorContext::TypeName) else {
+                return (None, false);
+            };
+            let Some(init) = self.parse_mem_init_args() else {
+                return (None, false);
+            };
+            let pack_expansion = self.eat(Punct::Ellipsis).is_some();
+            return (
+                Some(MemInitInfo { id: MemInitId::Type(ty), loc, init, pack_expansion }),
+                true,
+            );
+        }
         let Ok(q) = self.parse_nested_name() else {
             return (None, false);
         };

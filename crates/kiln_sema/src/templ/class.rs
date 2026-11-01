@@ -639,6 +639,15 @@ impl Sema<'_, '_> {
         if self.ast.definition(f).is_some() || self.inst.fatal {
             return;
         }
+        // A use inside a ctor-initializer (`B<int>(3)` calling a
+        // constructor instantiated here) must not clobber the enclosing
+        // constructor's mem-initializer state.
+        let outer = std::mem::take(&mut self.mem_inits);
+        self.instantiate_function_definition_inner(f, poi);
+        self.mem_inits = outer;
+    }
+
+    fn instantiate_function_definition_inner(&mut self, f: DeclId, poi: Loc) {
         let Some(pattern) = self.ast.instantiated_from(f) else { return };
         let Some(pdef) = self.ast.definition(pattern) else { return };
         let Some(body) = self.ast.decls.function(pdef).and_then(|x| x.body) else { return };
