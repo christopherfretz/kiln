@@ -61,6 +61,7 @@ fn kiln_ir(src: &str) -> Result<String, String> {
         source_filename: "t.cpp".to_owned(),
         exceptions: true,
         ident: IDENT.to_owned(),
+        ..CodegenOptions::default()
     };
     let m = emit(&mut tu.ast, &mut tu.oven, &target, &opts).map_err(|e| format!("codegen: {e}"))?;
     Ok(m.to_string())

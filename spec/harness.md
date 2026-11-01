@@ -621,9 +621,11 @@ full form. Any other argument is a usage error (exit 2).
 
 The end-to-end tests in `xtask/src/test/tests.rs` and
 `xtask/src/bench/tests.rs` skip themselves with a note when clang 19 is
-missing. GitHub CI (`.github/workflows/ci.yml`, ubuntu-24.04) installs
-`clang-19 libc++-19-dev libc++abi-19-dev` and runs `cargo xtask ci`, so
-nothing is skipped there.
+missing. GitHub CI (`.github/workflows/ci.yml`) runs `cargo xtask ci` in a
+`debian:trixie` container on `ubuntu-24.04-arm`, the reference environment
+(aarch64 Debian 13, clang 19.1.7, GCC 14), with `clang-19 llvm-19 lld-19
+libc++-19-dev libc++abi-19-dev` installed and `KILN_REQUIRE_LLVM=1`, so
+nothing is skipped there (docs/VALIDATION.md "GitHub Actions", WP-226).
 
 Landed (WP-096): the kiln-mode run, `--quick`, and the pass criteria above.
 Before it, `ci` ran only the clang self-check, and kiln regressions in the
