@@ -14,7 +14,7 @@ use kiln_ast::expr::{ConstructionKind, ExprFlags, ExprKind, StorageDuration};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId, TypeId};
-use kiln_llvm::{FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
+use kiln_llvm::{BinOp, Flags, FuncId, IntPredicate, Linkage, TypeId as LTy, UnnamedAddr, Value};
 
 use crate::cleanup::Cleanup;
 use crate::fir::{Op, V};
@@ -751,7 +751,7 @@ impl Cg<'_> {
                     // ([except.ctor]/4), so a throw destroys it.
                     if self.opts.exceptions && self.has_nontrivial_dtor(rd) {
                         let base = self.f.structor == Some(Structor::Base);
-                        let c = Cleanup::Dtor { addr: this.v, record: rd, base };
+                        let c = Cleanup::DelegatingDtor { addr: this.v, record: rd, base };
                         self.push_cleanup_kind(c, false, true);
                     }
                 }
@@ -1174,12 +1174,22 @@ impl Cg<'_> {
     /// virtual base of `*this` (its VTT argument, clang
     /// `GetVTTParameter(ForVirtualBase)`).
     pub(crate) fn call_dtor_of(&mut self, record: DeclId, addr: V, base: bool, virt: bool) {
-        if let Err(e) = self.try_call_dtor(record, addr, base, virt) {
+        if let Err(e) = self.try_call_dtor(record, addr, base, (virt, false)) {
             self.f.error.get_or_insert(e);
         }
     }
 
-    fn try_call_dtor(&mut self, record: DeclId, addr: V, base: bool, virt: bool) -> R<()> {
+    /// clang `CallDelegatingCtorDtor`: destroys `*this` after a delegating
+    /// constructor's target returned; a base-object variant forwards the
+    /// current function's VTT (`GetVTTParameter(Delegating)`).
+    pub(crate) fn call_dtor_delegating(&mut self, record: DeclId, addr: V, base: bool) {
+        if let Err(e) = self.try_call_dtor(record, addr, base, (false, true)) {
+            self.f.error.get_or_insert(e);
+        }
+    }
+
+    /// `vtt`: (virtual base, delegating) for `vtt_arg`.
+    fn try_call_dtor(&mut self, record: DeclId, addr: V, base: bool, vtt: (bool, bool)) -> R<()> {
         let ast = self.ast;
         let Some(def) = self.class_def(record) else { return Ok(()) };
         if !self.has_nontrivial_dtor(def) {
@@ -1195,7 +1205,7 @@ impl Cg<'_> {
         let mut sig = self.call_sig_this(fty, false, &[], Some(def));
         if base && self.structor_has_vbases(first) {
             sig = self.with_vtt(sig);
-            let vtt = self.vtt_arg(def, virt, false)?;
+            let vtt = self.vtt_arg(def, vtt.0, vtt.1)?;
             self.f.call_vtt = Some(vtt);
         }
         self.call_vals(&sig, callee, fid, Some(addr), &[], &[], None, &[])?;
@@ -1256,18 +1266,39 @@ impl Cg<'_> {
         };
         match ast.exprs.temporary_storage(m) {
             StorageDuration::FullExpression => self.push_full_expr_cleanup(c, true, true),
-            StorageDuration::Automatic => {
-                // `pushLifetimeExtendedDestroy`: outside a conditional
-                // branch, an EH-only cleanup covers the rest of the
-                // full-expression (a P2718 temporary of a range
-                // initializer is followed by more calls).
-                if self.opts.exceptions && self.f.conds.is_empty() {
-                    self.push_cleanup_kind(c.clone(), false, true);
-                }
-                self.f.cl.lifetime_extended.push((c, None));
-            }
+            StorageDuration::Automatic => self.push_lifetime_extended_destroy(c),
             StorageDuration::Static | StorageDuration::Thread => {}
         }
+    }
+
+    /// clang `pushLifetimeExtendedDestroy`: the cleanup covers the rest
+    /// of the full-expression as a deferred-deactivation cleanup
+    /// (`pushDestroyAndDeferDeactivation`; its EH half destroys the
+    /// temporary if a later part of the full-expression throws), and is
+    /// pushed again after it (`pushCleanupAfterFullExprWithActiveFlag`).
+    /// Inside a conditional branch the address is saved and both get
+    /// their own `cleanup.cond` flag (`ConditionalCleanup`), the first
+    /// one erased if its cleanup is never emitted.
+    fn push_lifetime_extended_destroy(&mut self, c: Cleanup) {
+        if self.f.fir.cur().is_none() {
+            self.f.cl.lifetime_extended.push((c, None));
+            return;
+        }
+        let in_cond = !self.f.conds.is_empty();
+        let c = if in_cond { self.save_cleanup_in_cond(c) } else { c };
+        let deact_flag = in_cond.then(|| self.create_cleanup_active_flag());
+        let z = V::C(self.m.const_bool(false));
+        let dominator =
+            self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
+        self.push_cleanup(c.clone());
+        let depth = self.f.cl.depth();
+        self.f.cl.deferred.push((depth, dominator));
+        if let Some(flag) = deact_flag {
+            self.init_full_expr_cleanup_with_flag(flag);
+            self.f.cl.stack[depth - 1].aux.push(flag.v);
+        }
+        let le_flag = in_cond.then(|| self.create_cleanup_active_flag());
+        self.f.cl.lifetime_extended.push((c, le_flag));
     }
 
     // ---- constructor calls ---------------------------------------------
@@ -1863,7 +1894,7 @@ impl Cg<'_> {
             voff
         } else {
             let c = self.i64c(i128::from(nv));
-            self.bin(kiln_llvm::BinOp::Add, kiln_llvm::Flags::NONE, voff, c)
+            self.bin(BinOp::Add, Flags::NONE, voff, c)
         };
         let adj = self.gep(LTy::I8, this.v, vec![off], true);
         let align = min_align(self.vbase_align(this.align, derived, vb), nv);

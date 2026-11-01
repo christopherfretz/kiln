@@ -37,6 +37,9 @@ pub(crate) struct SwitchState {
     pub cond_ty: QualType,
     /// Case values seen, with their locations.
     pub values: Vec<(i128, Loc)>,
+    /// GNU case ranges `lo ... hi` seen, with their `lo` and `hi`
+    /// expressions (checked when the switch ends).
+    pub ranges: Vec<(i128, i128, ExprId, ExprId)>,
     /// The `CaseStmt`/`DefaultStmt`s, in source order.
     pub cases: Vec<StmtId>,
     /// The first `default:`.
@@ -609,6 +612,7 @@ impl Sema<'_, '_> {
             f.switches.push(SwitchState {
                 cond_ty,
                 values: Vec::new(),
+                ranges: Vec::new(),
                 cases: Vec::new(),
                 default: None,
                 invalid,
@@ -630,7 +634,14 @@ impl Sema<'_, '_> {
         let cases = match self.func.as_mut() {
             Some(f) => {
                 f.breakables.pop();
-                f.switches.pop().map(|s| s.cases).unwrap_or_default()
+                f.switches.pop()
+            }
+            None => None,
+        };
+        let cases = match cases {
+            Some(sw) => {
+                self.check_case_ranges(&sw);
+                sw.cases
             }
             None => Vec::new(),
         };
@@ -642,20 +653,97 @@ impl Sema<'_, '_> {
     /// expression of the promoted condition type. Returns the
     /// `ConstantExpr` (or `e` when invalid).
     pub fn act_on_case_value(&mut self, e: ExprId, case_loc: Loc) -> ExprId {
+        let (ce, value) = self.convert_case_value(e, case_loc);
+        let Some(iv) = value else { return ce };
+        let loc = self.ast.exprs.get(e).loc();
+        let dup = self
+            .func
+            .as_ref()
+            .and_then(|f| f.switches.last())
+            .and_then(|s| s.values.iter().find(|(x, _)| *x == iv).copied());
+        if let Some((_, prev)) = dup {
+            let d = self
+                .diag(DiagId::sema_duplicate_case, loc)
+                .arg(iv.to_string())
+                .with_note(self.diag(DiagId::note_duplicate_case_prev, prev));
+            self.emit(d);
+        } else if let Some(s) = self.func.as_mut().and_then(|f| f.switches.last_mut()) {
+            s.values.push((iv, loc));
+        }
+        ce
+    }
+
+    /// The bounds of a GNU case range `case lo ... hi:`, each converted
+    /// like a case value; the range is checked when the switch ends
+    /// (clang `ActOnFinishSwitchStmt`).
+    pub fn act_on_case_range(&mut self, lo: ExprId, hi: ExprId, case_loc: Loc) -> (ExprId, ExprId) {
+        let (lo_ce, lo_v) = self.convert_case_value(lo, case_loc);
+        if self.func.as_ref().is_none_or(|f| f.switches.is_empty()) {
+            return (lo_ce, hi);
+        }
+        let (hi_ce, hi_v) = self.convert_case_value(hi, case_loc);
+        if let (Some(l), Some(h)) = (lo_v, hi_v)
+            && let Some(s) = self.func.as_mut().and_then(|f| f.switches.last_mut())
+        {
+            s.ranges.push((l, h, lo, hi));
+        }
+        (lo_ce, hi_ce)
+    }
+
+    /// The case ranges of the finished switch `sw`: an empty range is
+    /// dropped with a warning, then each range is checked against the
+    /// case values and the previous range (clang `ActOnFinishSwitchStmt`).
+    fn check_case_ranges(&mut self, sw: &SwitchState) {
+        let mut ranges = sw.ranges.clone();
+        ranges.sort_by_key(|r| r.0);
+        let mut kept = Vec::new();
+        for (lo, hi, le, he) in ranges {
+            if lo > hi {
+                let span = kiln_source::Span::new(self.begin_loc(le), self.expr_range(he).hi);
+                let d = self.diag(DiagId::sema_case_empty_range, self.begin_loc(le)).range(span);
+                self.emit(d);
+            } else {
+                kept.push((lo, hi, le));
+            }
+        }
+        let mut values = sw.values.clone();
+        values.sort_by_key(|v| v.0);
+        for (i, &(lo, hi, le)) in kept.iter().enumerate() {
+            // The largest case value in the range, else an overlap with
+            // the previous range.
+            let mut overlap =
+                values.iter().rev().find(|v| v.0 >= lo && v.0 <= hi).map(|&(v, l)| (v, l));
+            if i > 0 && lo <= kept[i - 1].1 {
+                overlap = Some((kept[i - 1].1, self.begin_loc(kept[i - 1].2)));
+            }
+            if let Some((v, prev)) = overlap {
+                let d = self
+                    .diag(DiagId::sema_duplicate_case, self.begin_loc(le))
+                    .arg(v.to_string())
+                    .with_note(self.diag(DiagId::note_duplicate_case_prev, prev));
+                self.emit(d);
+            }
+        }
+    }
+
+    /// Converts the case value `e` to the promoted condition type and
+    /// evaluates it: the `ConstantExpr` (or `e`) and its value, `None`
+    /// when dependent, invalid or outside a valid switch.
+    fn convert_case_value(&mut self, e: ExprId, case_loc: Loc) -> (ExprId, Option<i128>) {
         let Some(sw) = self.func.as_ref().and_then(|f| f.switches.last()) else {
             self.error(DiagId::sema_case_not_in_switch, case_loc);
-            return e;
+            return (e, None);
         };
         let (cond_ty, invalid) = (sw.cond_ty, sw.invalid);
         if self.expr_is_value_dependent(e) || self.is_dependent_type(cond_ty) {
-            return e;
+            return (e, None);
         }
         let loc = self.ast.exprs.get(e).loc();
         let conv = match conv::implicit_convert(self, e, cond_ty, ConvCtx::Initialization) {
             Ok(c) => c,
             Err(err) => {
                 self.emit_conv_error(err, loc);
-                return e;
+                return (e, None);
             }
         };
         let at = self.begin_loc(e);
@@ -665,23 +753,7 @@ impl Sema<'_, '_> {
                 let cv = self.int_const(cond_ty, iv);
                 let ce = self.builder().constant_expr(conv, Some(cv));
                 let ce = self.act_on_full_expr(ce);
-                if !invalid {
-                    let dup = self
-                        .func
-                        .as_ref()
-                        .and_then(|f| f.switches.last())
-                        .and_then(|s| s.values.iter().find(|(x, _)| *x == iv).copied());
-                    if let Some((_, prev)) = dup {
-                        let d = self
-                            .diag(DiagId::sema_duplicate_case, loc)
-                            .arg(iv.to_string())
-                            .with_note(self.diag(DiagId::note_duplicate_case_prev, prev));
-                        self.emit(d);
-                    } else if let Some(s) = self.func.as_mut().and_then(|f| f.switches.last_mut()) {
-                        s.values.push((iv, loc));
-                    }
-                }
-                ce
+                (ce, (!invalid).then_some(iv))
             }
             Err(mut f) => {
                 // [stmt.switch]/2: a converted constant expression (clang's
@@ -690,14 +762,20 @@ impl Sema<'_, '_> {
                 let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
                 let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
-                self.act_on_full_expr(conv)
+                (self.act_on_full_expr(conv), None)
             }
         }
     }
 
-    /// `case value: sub`.
-    pub fn act_on_case(&mut self, value: ExprId, sub: StmtId, loc: Loc) -> StmtId {
-        let s = self.builder().case_stmt(CaseData { lhs: value, rhs: None, sub }, loc);
+    /// `case value: sub`, or the GNU range `case value ... rhs: sub`.
+    pub fn act_on_case(
+        &mut self,
+        value: ExprId,
+        rhs: Option<ExprId>,
+        sub: StmtId,
+        loc: Loc,
+    ) -> StmtId {
+        let s = self.builder().case_stmt(CaseData { lhs: value, rhs, sub }, loc);
         self.record_case(s);
         s
     }
