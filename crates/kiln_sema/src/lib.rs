@@ -27,6 +27,7 @@ mod deduce;
 mod empty_body;
 pub mod except;
 pub mod expr;
+mod extern_c;
 mod fallthrough;
 mod forms;
 mod gnu;
@@ -167,6 +168,10 @@ pub struct Sema<'a, 'sm> {
     /// enclosing namespace and name: a later namespace-scope declaration
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
+    /// The latest namespace-scope declaration of each function or
+    /// variable with C language linkage, by name ([dcl.link]/6; clang's
+    /// extern "C" context, `extern_c.rs`).
+    pub(crate) extern_c: kiln_source::fx::FxHashMap<kiln_source::symbol::Symbol, DeclId>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     /// Taken out for the duration of an evaluation, so the bridge can
     /// reach the rest of `Sema` (`ensure_body` instantiates through it,
@@ -473,6 +478,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
+            extern_c: kiln_source::fx::FxHashMap::default(),
             oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),

@@ -2462,6 +2462,21 @@ impl Sema<'_, '_> {
         } else {
             self.find_prev_function(dname, d.qualifier, new_fn)
         };
+        // [dcl.link]/6: a C-linkage function of another scope.
+        let mut extern_c_redecl = false;
+        let prev = match prev {
+            None if !method
+                && !friend
+                && d.qualifier.is_none()
+                && self.templ.cur.is_none()
+                && dname.as_ident().is_some() =>
+            {
+                let p = self.extern_c_prev(name, false, d.name_loc());
+                extern_c_redecl = p.is_some();
+                p
+            }
+            p => p,
+        };
         let matches_member = prev.is_some_and(|p| {
             self.kind_of(p) == DeclKind::CXXMethod
                 && self.ast.decls.get(p).ty().is_some()
@@ -2601,6 +2616,9 @@ impl Sema<'_, '_> {
                     };
                     let msg = if same_params {
                         self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc())
+                    } else if extern_c_redecl {
+                        invalid_redecl = true;
+                        self.diag(DiagId::sema_conflicting_types, d.name_loc()).arg(fname.clone())
                     } else {
                         self.diag(DiagId::sema_ovl_static_nonstatic_member, d.name_loc())
                     };
@@ -2695,6 +2713,9 @@ impl Sema<'_, '_> {
         }
         if d.op_name.is_none() && d.lit_suffix.is_none() {
             self.note_local_extern(name, f);
+            if !method && !friend && d.qualifier.is_none() {
+                self.record_extern_c(name, f);
+            }
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
@@ -3275,6 +3296,11 @@ impl Sema<'_, '_> {
             None if ext || !self.in_local_scope() => self.find_prev_linkage(name, d.qualifier),
             p => p,
         };
+        // [dcl.link]/6-7: a C-linkage variable of another scope.
+        let prev = match prev {
+            None if d.qualifier.is_none() => self.extern_c_prev(name, true, d.name_loc()),
+            p => p,
+        };
         if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             let block = local.is_some() && self.in_local_scope();
@@ -3349,6 +3375,9 @@ impl Sema<'_, '_> {
         self.register_local(name, v);
         if spec.storage() == VarStorage::Extern {
             self.note_local_extern(name, v);
+        }
+        if d.qualifier.is_none() {
+            self.record_extern_c(name, v);
         }
         v
     }
