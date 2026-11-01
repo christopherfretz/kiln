@@ -229,6 +229,11 @@ ops! {
     // rolled back (a resource limit still fails the evaluation); execution
     // resumes at `end`.
     Speculate = 3,
+    // [dr, di, a, b, c, d]: GNU `_Complex` arithmetic, `dr + i di =
+    // (a + ib) op (c + id)` (`crate::complex`, spec/oven.md "Complex
+    // values"); aux = op (`complex::cx`) | float kind << 2, or for an
+    // integer element 1 << 6 | width << 7 | signed << 15
+    Cx = 6,
 }
 
 /// The kinds of `Builtin` and their operands.

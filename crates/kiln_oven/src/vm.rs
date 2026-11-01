@@ -10,6 +10,7 @@ use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
 use crate::arith::{self, FloatErr, IntErr, canon};
+use crate::complex;
 use crate::compile::{FState, GState, float_of};
 use crate::failure::{EvalFailure, FailKind};
 use crate::kbc::{Op, ak, cmp, new_aux};
@@ -1077,6 +1078,22 @@ impl Oven {
                         self.always_true_diag(b, pc, aux);
                     }
                     pc += 2;
+                }
+                Op::Cx => {
+                    let v = [reg!(2), reg!(3), reg!(4), reg!(5)];
+                    let sub = aux & 3;
+                    let r = if aux >> 6 & 1 == 0 {
+                        Some(complex::float_op(sub, float_of(aux >> 2 & 0xF), v))
+                    } else {
+                        complex::int_op(sub, aux >> 7 & 0xFF, aux >> 15 & 1 != 0, v)
+                    };
+                    let Some([x, y]) = r else {
+                        let err = IntErr::DivZero;
+                        fail!(Fault::Int { err, op: Op::IDiv, a: v[0], b: 0, aux: 0 });
+                    };
+                    reg!(0) = x;
+                    reg!(1) = y;
+                    pc += 7;
                 }
                 Op::Speculate => {
                     let func = self.stack[self.stack.len() - 1].func;
