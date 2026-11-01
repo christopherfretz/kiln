@@ -744,6 +744,14 @@ impl Sema<'_, '_> {
         } else {
             d = d.range(self.expr_range(e));
         }
+        // clang rebuilds every expression statement and for-increment of
+        // an instantiation (`TransformExprStmt` → `ActOnExprStmt`), so a
+        // non-dependent one warns again with the instantiation's notes,
+        // not deduplicated against the template definition's warning.
+        // The comma's left operand is checked only as the comma is built.
+        if !comma && !self.inst.stack.is_empty() {
+            d = d.allow_duplicate();
+        }
         if let Some(n) = note {
             // The fix-it's range (clang `FixItHint::CreateReplacement` of
             // the operator) keeps the note's macro-argument backtrace too.

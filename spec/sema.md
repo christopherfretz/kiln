@@ -1431,6 +1431,15 @@ for them.
     value of function declared with pure|const attribute` [-Wunused-value]
     at the call's start. Nothing but `nodiscard` is diagnosed for an
     expression spelled in a macro body (clang `ShouldSuppress`).
+  - **In an instantiation (WP-217)**: clang rebuilds every expression
+    statement and for-increment (`TransformExprStmt` → `ActOnExprStmt`),
+    so the warning of a non-dependent one is reported again in each
+    instantiation, with its notes: `emit_unused` marks it
+    `allow_duplicate` (spec/diag.md §7.4) inside an instantiation. Not
+    the comma's left operand (checked once, as the comma is built). A
+    deprecated use is not re-diagnosed (the shared node is not rebuilt).
+    The warning's range is the whole expression where clang's is the
+    callee (a caret difference only).
   - **Comma (WP-182)**: the left operand of a built-in comma is checked
     the same way when the comma is built (clang `CheckCommaOperands`),
     with the generic warning spelled `left operand of comma operator has
