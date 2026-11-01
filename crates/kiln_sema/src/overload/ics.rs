@@ -751,9 +751,7 @@ impl Sema<'_, '_> {
                 return self.list_ctor_conversion(l, c, to, opts);
             }
             // /8: an aggregate.
-            if l.items.len() as u64 <= self.aggregate_capacity(to)
-                && !self.designators_override(to, l)
-            {
+            if self.aggregate_list_fits(l, to) {
                 let id = StandardConversion::identity(to, to, RefBinding::NONE);
                 return Ics::UserDefined(UserConv {
                     before: id,
@@ -829,6 +827,13 @@ impl Sema<'_, '_> {
             kiln_ast::types::ArgView::Type(t) => Some(t),
             _ => None,
         }
+    }
+
+    /// Whether `l` can initialize aggregate `to` as far as overload
+    /// resolution checks: not too many elements, and no subobject
+    /// designated twice ([`Sema::designators_override`]).
+    fn aggregate_list_fits(&self, l: &InitList, to: QualType) -> bool {
+        l.items.len() as u64 <= self.aggregate_capacity(to) && !self.designators_override(to, l)
     }
 
     /// The most elements a braced-init-list for aggregate `to` can have

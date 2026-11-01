@@ -1891,16 +1891,15 @@ impl Sema<'_, '_> {
                 }
             } else {
                 for (i, slot) in slots.into_iter().enumerate() {
-                    let e = match slot {
-                        Some(e) => e,
-                        None => {
-                            let t = if i < nb {
-                                bases[i]
-                            } else {
-                                self.ast.decls.get(fields[i - nb]).ty().unwrap_or(QualType::ERROR)
-                            };
-                            self.builder().no_init(t)
-                        }
+                    let e = if let Some(e) = slot {
+                        e
+                    } else {
+                        let t = if i < nb {
+                            bases[i]
+                        } else {
+                            self.ast.decls.get(fields[i - nb]).ty().unwrap_or(QualType::ERROR)
+                        };
+                        self.builder().no_init(t)
                     };
                     inits.push(e);
                 }
@@ -2227,14 +2226,11 @@ impl Sema<'_, '_> {
                                 break union && matches!((a, b), (Key::Field(_), Key::Field(_)));
                             }
                         }
-                        // The same subobject, or a later clause naming
-                        // a whole object an earlier one initialized part
-                        // of.
-                        (None, None) | (Some(_), None) => break true,
-                        // A later clause naming part of an object an
-                        // earlier clause initialized (a braced value
-                        // too).
-                        (None, Some(_)) => break true,
+                        // The same subobject, a later clause naming a
+                        // whole object an earlier one initialized part
+                        // of, or part of an object an earlier clause
+                        // initialized (a braced value too).
+                        _ => break true,
                     }
                     i += 1;
                 };
@@ -2314,6 +2310,7 @@ impl Sema<'_, '_> {
     /// re-initializes only what the designators name ([dcl.init.aggr]/4
     /// with C99 designators). `update`: the enclosing list is itself
     /// (part of) an updater.
+    #[allow(clippy::too_many_arguments)]
     fn descend(
         &mut self,
         ty: QualType,
