@@ -170,12 +170,10 @@ impl Cg<'_> {
                 "atomic operation on a padded _Atomic type is not supported yet",
             );
         }
-        if size == 0 || !size.is_power_of_two() || size > 16 {
-            return err(
-                self.loc_of(e),
-                format!("atomic operation of {size} bytes (a library call) is not supported yet"),
-            );
+        if size == 0 {
+            return err(self.loc_of(e), "atomic operation on a zero-sized object");
         }
+        let use_libcall = !size.is_power_of_two() || size > 16;
         let rmw = at::rmw(id);
         let fp = ast.types.is_floating(value_q);
         if fp && matches!(rmw, Some((Rmw::Max | Rmw::Min, true))) {
@@ -199,7 +197,11 @@ impl Cg<'_> {
         let order = self.emit_scalar(order_e)?;
         // `ShouldCastToIntPtrTy`: floating add/sub/min/max work on the
         // floating type, everything else on `iN`.
-        let int_ty = self.m.types.int(u32::try_from(size * 8).unwrap_or(8));
+        let int_ty = if use_libcall {
+            LTy::PTR
+        } else {
+            self.m.types.int(u32::try_from(size * 8).unwrap_or(8))
+        };
         let op_ty = if fp
             && rmw.is_some_and(|(r, _)| matches!(r, Rmw::Add | Rmw::Sub | Rmw::Max | Rmw::Min))
         {
@@ -297,7 +299,13 @@ impl Cg<'_> {
         }
         let is_store = form == Form::Copy;
         let is_load = matches!(form, Form::Load | Form::LoadCopy);
-        if let Some((_, o, _)) = self.cint(order) {
+        if use_libcall {
+            let r = self.atomic_expr_libcall(e, &ops, size, order)?;
+            if is_cmpxchg {
+                // The `bool` comes straight from the call.
+                return Ok(Some(r));
+            }
+        } else if let Some((_, o, _)) = self.cint(order) {
             if let Some(ord) = success_order(o, is_load, is_store) {
                 self.atomic_op(&ops, ord)?;
             }
@@ -541,21 +549,75 @@ impl Cg<'_> {
     }
 
     /// A generic `__atomic_*` library call (`emitAtomicLibcall`): every
-    /// argument `noundef`, the callee `nounwind willreturn`.
-    fn atomic_libcall(&mut self, name: &str, args: Vec<V>, params: &[LTy]) {
+    /// argument `noundef`, the callee `nounwind willreturn`; `bool_ret` for
+    /// `__atomic_compare_exchange`, whose `bool` result is returned.
+    fn atomic_libcall(&mut self, name: &str, args: Vec<V>, params: &[LTy], bool_ret: bool) -> V {
         let fa = [Attr::Flag(AttrKind::NoUnwind), Attr::Flag(AttrKind::WillReturn)];
-        let f = self.rt_fn(name, LTy::VOID, params, &fa);
+        let rty = if bool_ret { LTy::I1 } else { LTy::VOID };
+        let f = self.rt_fn(name, rty, params, &fa);
         let fn_ty = self.m.func(f).ty();
         let nu = self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]);
+        let ret = if !bool_ret {
+            AttrList::default().ret
+        } else if self.is_x86() {
+            self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef), Attr::Flag(AttrKind::ZExt)])
+        } else {
+            nu
+        };
         let opts = CallOpts {
-            attrs: AttrList { params: vec![nu; args.len()], ..AttrList::default() },
+            attrs: AttrList { ret, params: vec![nu; args.len()], ..AttrList::default() },
             ..CallOpts::default()
         };
         let r = self.f.fir.push(
             Op::Call { fn_ty, callee: V::C(Value::func(f)), args, opts: Box::new(opts) },
-            LTy::VOID,
+            rty,
         );
         self.f.calls.push((Fir::last_inst(r), Some(f), true));
+        r
+    }
+
+    /// The library call of an `AtomicExpr` whose size is not a power of
+    /// two or above 16 bytes (clang 19 `EmitAtomicExpr`'s `UseLibcall`):
+    /// the generic `size_t`-first libatomic functions, the memory orders
+    /// passed as they are.
+    fn atomic_expr_libcall(&mut self, e: ExprId, ops: &AtomicOps, size: u64, order: V) -> R<V> {
+        let n = self.i64c(i128::from(size));
+        let mut args = vec![n, ops.ptr.v];
+        let addr = |a: Option<Addr>| a.map(|a| a.v).map_or_else(|| err(None, "malformed"), Ok);
+        let (name, cmpxchg) = match ops.form {
+            Form::C11CmpXchg | Form::GnuCmpXchg => {
+                args.push(addr(ops.val1)?);
+                args.push(addr(ops.val2)?);
+                args.push(order);
+                args.push(ops.order_fail.expect("failure order"));
+                ("__atomic_compare_exchange", true)
+            }
+            Form::Xchg | Form::GnuXchg => {
+                args.push(addr(ops.val1)?);
+                args.push(addr(ops.dest)?);
+                args.push(order);
+                ("__atomic_exchange", false)
+            }
+            Form::Copy => {
+                args.push(addr(ops.val1)?);
+                args.push(order);
+                ("__atomic_store", false)
+            }
+            Form::Load | Form::LoadCopy => {
+                args.push(addr(ops.dest)?);
+                args.push(order);
+                ("__atomic_load", false)
+            }
+            _ => return err(self.loc_of(e), format!("atomic operation of {size} bytes")),
+        };
+        let params: Vec<LTy> = (0..args.len())
+            .map(|i| match i {
+                0 => LTy::I64,
+                i if i + if cmpxchg { 2 } else { 1 } >= args.len() => LTy::I32,
+                _ => LTy::PTR,
+            })
+            .collect();
+        Ok(self.atomic_libcall(name, args, &params, cmpxchg))
     }
 
     /// `__atomic_load` / `__atomic_store (size, obj, tmp, seq_cst)`.
@@ -565,7 +627,7 @@ impl Cg<'_> {
         let o = self.ci32(5);
         let name = if store { "__atomic_store" } else { "__atomic_load" };
         let params = [LTy::I64, LTy::PTR, LTy::PTR, LTy::I32];
-        self.atomic_libcall(name, vec![n, lv.addr.v, tmp, o], &params);
+        self.atomic_libcall(name, vec![n, lv.addr.v, tmp, o], &params, false);
     }
 
     /// clang `EmitAtomicLoad` of the `_Atomic` lvalue `lv` (`seq_cst`).
@@ -591,21 +653,26 @@ impl Cg<'_> {
         if self.is_bool(vq) { self.cast(CastOp::Trunc, v, LTy::I1) } else { v }
     }
 
+    /// clang `AtomicInfo::materializeRValue`: `v` in a temporary of the
+    /// `_Atomic` type, its padding zeroed first.
+    fn materialize_atomic(&mut self, v: V, lv: LV, vq: QualType) -> V {
+        let t = self.temp(lv.q);
+        let (full, _) = self.size_align(lv.q);
+        let vty = self.mty(vq);
+        let bits = self.m.types.float_width(vty).map(u64::from);
+        if bits.is_some_and(|b| b < full * 8) || self.size_align(vq).0 < full {
+            self.memset(t, 0, full, false);
+        }
+        self.store_scalar(v, Addr { ty: vty, ..t }, vq);
+        t.v
+    }
+
     /// clang `EmitAtomicStore` of `v` to the `_Atomic` lvalue `lv`
     /// (`seq_cst`; initializations are plain stores, not this).
     pub(crate) fn atomic_store_lv(&mut self, v: V, lv: LV, vq: QualType) {
         if self.atomic_lv_libcall(lv.q) {
-            // `AtomicInfo::materializeRValue`: padding is zeroed first.
-            let t = self.temp(lv.q);
-            let (full, _) = self.size_align(lv.q);
-            let vty = self.mty(vq);
-            let bits = self.m.types.float_width(vty).map(u64::from);
-            if bits.is_some_and(|b| b < full * 8) || self.size_align(vq).0 < full {
-                self.memset(t, 0, full, false);
-            }
-            let ty = self.mty(vq);
-            self.store_scalar(v, Addr { ty, ..t }, vq);
-            self.atomic_lv_libcall_op(true, lv, t.v);
+            let t = self.materialize_atomic(v, lv, vq);
+            self.atomic_lv_libcall_op(true, lv, t);
             return;
         }
         let vol = self.is_volatile(lv.q);
@@ -640,7 +707,20 @@ impl Cg<'_> {
     /// `_Atomic` lvalue `lv`: the old value and the success flag.
     fn atomic_cmpxchg_lv(&mut self, lv: LV, vq: QualType, exp: V, des: V) -> R<(V, V)> {
         if self.atomic_lv_libcall(lv.q) {
-            return err(None, "an `__atomic_compare_exchange` library call is not supported yet");
+            // `EmitAtomicCompareExchangeLibcall`; the old value is read
+            // back from the expected buffer.
+            let et = self.materialize_atomic(exp, lv, vq);
+            let dt = self.materialize_atomic(des, lv, vq);
+            let size = self.size_align(lv.q).0;
+            let n = self.i64c(i128::from(size));
+            let o = self.ci32(5);
+            let params = [LTy::I64, LTy::PTR, LTy::PTR, LTy::PTR, LTy::I32, LTy::I32];
+            let args = vec![n, lv.addr.v, et, dt, o, o];
+            let ok = self.atomic_libcall("__atomic_compare_exchange", args, &params, true);
+            let (_, align) = self.size_align(lv.q);
+            let ty = self.mty(vq);
+            let old = self.load_scalar(Addr { v: et, ty, align }, vq);
+            return Ok((old, ok));
         }
         let vol = self.is_volatile(lv.q);
         let size = self.size_align(lv.q).0;
