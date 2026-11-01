@@ -145,7 +145,9 @@ nested-name-specifier component (`A::Priv::X`), an elaborated reference
 context without its bases, as clang 19 does) and `T::type` after substitution
 (a SFINAE failure in a SFINAE context), a qualified member template name
 (`A::PT<int>`), a mem-initializer-id, and each member a member
-using-declarator names ([namespace.udecl]/19). The parser's classification
+using-declarator names ([namespace.udecl]/19; named through an object of the
+current class, as clang's `BuildUsingDeclaration` does, so `using B::m;` of a
+protected member of a base is accessible). The parser's classification
 (`classify_name`) is side-effect free; `Sema::check_type_name_access` redoes
 the lookup for a class member to learn the naming class and using-shadow. An
 injected-class-name is a public member of its own class (`struct G : F2 {

@@ -525,6 +525,10 @@ impl Sema<'_, '_> {
         }
         let found = self.lookup_qualified_dn(q.ctx, name, LookupKind::All);
         let Some(naming) = found.naming else { return };
+        // clang names the members through an object of the current class
+        // (`setBaseObjectType` in `BuildUsingDeclaration`), so a derived
+        // class may redeclare a protected base member ([class.protected]).
+        let object = Some(self.ast.first(self.ctx));
         for (i, &d) in found.decls.iter().enumerate() {
             if self.kind_of(d) == DeclKind::CXXConstructor
                 || self.injected_class(d, naming).is_some()
@@ -532,7 +536,7 @@ impl Sema<'_, '_> {
                 continue;
             }
             let via = found.found.get(i).copied().unwrap_or(d);
-            self.check_member_access(via, naming, None, loc);
+            self.check_member_access(via, naming, object, loc);
         }
     }
 
