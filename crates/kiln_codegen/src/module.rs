@@ -657,10 +657,7 @@ impl<'a> Cg<'a> {
             }
             _ => false,
         };
-        if !instantiated
-            || self.is_explicit_inst_declaration(first)
-            || self.held.contains(&first)
-        {
+        if !instantiated || self.is_explicit_inst_declaration(first) || self.held.contains(&first) {
             return None;
         }
         ast.redecls_of(first).find(|&r| {
@@ -754,7 +751,12 @@ impl<'a> Cg<'a> {
                     return k;
                 }
                 // The member's own kind is implicit: the innermost
-                // explicitly instantiated enclosing class decides.
+                // explicitly instantiated enclosing class decides, unless
+                // the member (or a member class on the way) is excluded
+                // from explicit instantiation.
+                if ast.excluded_from_explicit_instantiation(first) {
+                    return None;
+                }
                 let mut ctx = ast.decls.get(first).ctx();
                 while let Some(c) = ctx {
                     if !matches!(
@@ -762,6 +764,11 @@ impl<'a> Cg<'a> {
                         DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
                     ) {
                         break;
+                    }
+                    if ast.member_spec_info(c).is_some()
+                        && ast.excluded_from_explicit_instantiation(c)
+                    {
+                        return None;
                     }
                     if let Some(k) = ast.spec_info(c).and_then(|(_, s)| explicit(s.kind)) {
                         return k;
@@ -1511,10 +1518,7 @@ impl<'a> Cg<'a> {
             .or_else(|| ast.redecls_of(first).find_map(|r| ast.decls.var(r).and_then(|x| x.init)));
         let mut needs_init = false;
         let init = match any_init.filter(|&i| !ast.is_trivial_default_construction(i)) {
-            None => {
-                let t = self.mty(ty);
-                self.m.const_zero(t)
-            }
+            None => self.null_const(ty)?,
             Some(e) => {
                 if let Some(c) = self.folds.get(e) {
                     self.const_value(c, ty, Some(e), true)?
@@ -1522,8 +1526,7 @@ impl<'a> Cg<'a> {
                     // Dynamic initialization ([basic.start.dynamic]): zero
                     // until the initialization function runs.
                     needs_init = true;
-                    let t = self.mty(ty);
-                    self.m.const_zero(t)
+                    self.null_const(ty)?
                 }
             }
         };
@@ -1658,7 +1661,7 @@ impl<'a> Cg<'a> {
         // A dynamic initializer runs, guarded, at the declaration
         // statement ([stmt.dcl]/3; `static_local_init`).
         let init = match init_expr.and_then(|e| self.folds.get(e).map(|c| (e, c))) {
-            None => self.m.const_zero(mt),
+            None => self.null_const(ty)?,
             Some((e, c)) => self.const_value(c, ty, Some(e), true)?,
         };
         let ity = self.m.const_type(init);

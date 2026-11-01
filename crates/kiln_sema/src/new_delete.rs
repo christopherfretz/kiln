@@ -1156,7 +1156,10 @@ impl Sema<'_, '_> {
                 match v.len() {
                     0 => Ok((Some(self.builder().implicit_value_init(elem)), None)),
                     1 => {
+                        // The initialized entity is "a new value".
+                        let entity = self.init_entity.replace("4");
                         let e = self.perform_init(elem, Initializer::Paren(v, l, r), at, false);
+                        self.init_entity = entity;
                         Ok((Some(e), None))
                     }
                     _ => {
@@ -1168,7 +1171,12 @@ impl Sema<'_, '_> {
             }
             NewInit::List(list) => {
                 if !array_form {
+                    let scalar = self.ast.types.as_record(elem).is_none();
+                    let entity = if scalar { self.init_entity.replace("4") } else { None };
                     let e = self.perform_init(elem, Initializer::List(list), at, true);
+                    if scalar {
+                        self.init_entity = entity;
+                    }
                     return Ok((Some(e), None));
                 }
                 let lbrace = list.lbrace;

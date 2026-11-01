@@ -392,7 +392,7 @@ diag_ids! {
     sema_float_literal_overflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too large for type {0}; maximum is {1}";
     sema_float_literal_underflow = Warning [LiteralRange] (2) "magnitude of floating-point constant too small for type {0}; minimum is {1}";
     sema_invalid_float_suffix = Error (1) "invalid suffix '{0}' on floating constant";
-    sema_init_conversion_failed = Error (5) "cannot initialize {0:a variable|a parameter|return object|a value} of type {1} with an {2:rvalue|lvalue} of type {3}{4}";
+    sema_init_conversion_failed = Error (5) "cannot initialize {0:a variable|a parameter|return object|a value|a new value} of type {1} with an {2:rvalue|lvalue} of type {3}{4}";
     sema_no_viable_conversion = Error (2) "no viable conversion from {0} to {1}";
     sema_no_viable_conversion_return = Error (2) "no viable conversion from returned value of type {0} to function return type {1}";
     sema_assign_incompatible = Error (2) "assigning to {0} from incompatible type {1}";
@@ -443,6 +443,7 @@ diag_ids! {
     parse_expected_expression = Error (0) "expected expression";
     parse_for_range_identifier = Error (0) "range-based for loop requires type for loop variable";
     parse_for_range_expected_decl = Error (0) "for range declaration must declare a variable";
+    parse_gnu_case_range = Extension [GnuCaseRange] (0) "use of GNU case range extension";
     parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
     parse_expected_name_of_pack = Error (0) "expected the name of a parameter pack";
     parse_stmt_expr_in_default_arg = Error (0) "default argument may not use a GNU statement expression";
@@ -876,6 +877,7 @@ diag_ids! {
     sema_default_not_in_switch = Error (0) "'default' statement not in switch statement";
     sema_duplicate_case = Error (1) "duplicate case value '{0}'";
     note_duplicate_case_prev = Note (0) "previous case defined here";
+    sema_case_empty_range = Warning (0) "empty case range specified";
     sema_multiple_default_labels = Error (0) "multiple default labels in one switch";
     sema_statement_requires_integer = Error (1) "statement requires expression of integer type ({0} invalid)";
     sema_expr_not_cce = Error (1) "{0} is not a constant expression";
@@ -1613,6 +1615,9 @@ diag_ids! {
     sema_vla_no_init = Error (0) "variable-sized object may not be initialized";
     sema_vla_cxx_extension_gnu = Extension [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
     sema_address_of_packed_member = Warning [AddressOfPackedMember] (2) "taking address of packed member {0} of class or structure {1} may result in an unaligned pointer value";
+    sema_unused_voidptr = Warning [UnusedValue] (0) "expression result unused; should this cast be to 'void'?";
+    sema_unused_variable = WarningOff [UnusedVariable] (1) "unused variable {0}";
+    sema_fallthrough_invalid_placement = Error (0) "fallthrough annotation does not directly precede switch label";
     sema_explicit_inst_undefined_func_template = Error (1) "explicit instantiation of undefined function template '{0}'";
     sema_bad_cxx_cast_rvalue = Error (2) "{0:const_cast|static_cast|reinterpret_cast|dynamic_cast|C-style cast|functional-style cast} from rvalue to reference type {1}";
     sema_var_template_spec_type = Error (4) "type {2} of {0:explicit instantiation|explicit specialization|partial specialization|redeclaration} of '{1}' does not match expected type {3}";
@@ -1620,6 +1625,7 @@ diag_ids! {
     sema_enum_explicit_instantiation = Error (0) "enumerations cannot be explicitly instantiated";
     sema_enum_template = Error (0) "enumeration cannot be a template";
     sema_no_declarators_error = Error (0) "declaration does not declare anything";
+    sema_explicit_inst_undefined_var_template = Error (1) "explicit instantiation of undefined variable template '{0}'";
 }
 
 impl DiagId {

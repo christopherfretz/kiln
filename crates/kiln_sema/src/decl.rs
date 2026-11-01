@@ -3935,7 +3935,9 @@ impl Sema<'_, '_> {
         let ret = self.sugared_proto(fty).map_or(QualType::ERROR, |p| p.ret());
         let pushed = self.enter_definition_scopes(f);
         self.fn_saved.push(crate::class::SavedFn { func: self.func.take(), pushed });
-        self.scopes.push(Scope::new(ScopeKind::Function, None));
+        let mut fs = Scope::new(ScopeKind::Function, None);
+        fs.errors = self.diags.error_count();
+        self.scopes.push(fs);
         self.ctx = f;
         let params: Vec<DeclId> = self
             .ast
@@ -5211,6 +5213,7 @@ impl Sema<'_, '_> {
                             }
                             None => self.diag(DiagId::sema_static_assert_failed, cloc),
                         };
+                        let d = d.range(self.expr_range(c));
                         let recs = self.false_atom_records(inner);
                         let mut notes = Vec::new();
                         self.render_records(&recs, &mut notes, 0);
@@ -5244,6 +5247,9 @@ impl Sema<'_, '_> {
                                 .arg(req),
                         }
                     };
+                    // clang `<< InnerCond->getSourceRange()` (the whole
+                    // condition's for a literal).
+                    let d = d.range(self.expr_range(if lit { c } else { inner }));
                     let d = self.explain_failed_comparison(d, inner);
                     self.emit(d);
                 }
@@ -5310,7 +5316,9 @@ impl Sema<'_, '_> {
             .diag(DiagId::note_expr_evaluates_to, self.ast.exprs.get(c).loc())
             .arg(self.const_display(lv))
             .arg(op)
-            .arg(self.const_display(rv));
+            .arg(self.const_display(rv))
+            .range(self.expr_range(l))
+            .range(self.expr_range(r));
         d.with_note(note)
     }
 
@@ -5732,7 +5740,11 @@ impl Sema<'_, '_> {
         let clang_scope = scope_s.as_deref() == Some("clang");
         // clang 19 names only the attribute, not its scope.
         if scope_s.as_deref().is_some_and(|s| s != "gnu")
-            && !(clang_scope && n == "using_if_exists")
+            && !(clang_scope
+                && matches!(
+                    n.as_str(),
+                    "using_if_exists" | "fallthrough" | "exclude_from_explicit_instantiation"
+                ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
             self.emit(msg);
@@ -5804,7 +5816,12 @@ impl Sema<'_, '_> {
             self.error(DiagId::parse_expected_expression, loc);
             return None;
         }
-        let node = AttrNode { kind, syntax, flags: 0, loc, a, b };
+        let flags = if kind == AttrKind::FALLTHROUGH && scope.is_some() {
+            AttrNode::FALLTHROUGH_SCOPED
+        } else {
+            0
+        };
+        let node = AttrNode { kind, syntax, flags, loc, a, b };
         Some(self.ast.attrs.push(node))
     }
 
@@ -6186,6 +6203,9 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
         ("abi_tag", _, true) => AttrKind::ABI_TAG,
         ("using_if_exists", _, _) if clang_scope => AttrKind::USING_IF_EXISTS,
+        ("exclude_from_explicit_instantiation", _, gnu) if gnu || clang_scope => {
+            AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION
+        }
         _ => return None,
     })
 }

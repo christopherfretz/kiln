@@ -458,10 +458,19 @@ are dropped from that entry.
 
 ### 8.4 Macro arguments
 
-If the caret and every range are in the same macro argument, levels that
-expand only the argument are skipped (clang's
-`checkRangesForMacroArgExpansion`). Kiln checks only the begin and end of
-each range (deviation D7).
+clang's `checkRangesForMacroArgExpansion` skips the levels that expand
+only a macro argument when the caret and every range are in that
+argument. It compares the ranges after `mapDiagnosticRanges`, which
+yields spelling (file) locations, so in practice the skip applies only to
+a diagnostic with no valid range whose caret is a macro-argument
+location (e.g. `use of undeclared identifier` on a macro argument). Kiln
+implements that observable rule (WP-203): a diagnostic that carries a
+range (an expression range, a fix-it removal) keeps its `expanded from
+macro` note for the argument's macro. Sema therefore attaches expression
+ranges to the diagnostics clang gives ranges (unused results, static
+assertion failures and their `expression evaluates to` note, invalid
+operands, no matching function); a diagnostic kiln emits without a range
+where clang has one loses the note.
 
 ### 8.5 Expansion model expected from the preprocessor
 
@@ -590,7 +599,7 @@ control characters.
 | D4 | `-fdiagnostics-color=auto` means off. | No terminal probing. |
 | D5 | Unicode printability and width are approximate (ASCII exact; combining/wide ranges coarse). | clang uses LLVM's full tables; no third-party deps here. |
 | D6 | Unknown-option suggestions consider kiln's groups only, so e.g. `-Wbogus` suggests `-Wmost` where clang's larger table ties and suggests nothing, and `-Rbogus` suggests nothing where clang suggests `-Rpass`. | Kiln lacks clang's group membership data. |
-| D7 | Macro-argument range checks look at range ends only. | Kiln spans are half-open; clang walks token by token. |
+| D7 | (Resolved by WP-203: the observable macro-argument rule is implemented, §8.4.) | |
 | D8 | (Resolved by WP-056: the include stack is printed.) | |
 | D9 | Selects are index-based (`{0:a\|b}`); there is no `%plural`. | Callers pass the index. |
 | D10 | `-WX` is accepted as `-Werror`. | MSVC-style alias some build systems pass. |

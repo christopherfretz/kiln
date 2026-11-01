@@ -183,6 +183,7 @@ impl Sema<'_, '_> {
             self.note_function_name_use(d, e, loc, m.nns.is_none());
             return Some(e);
         }
+        self.diagnose_deprecated(d, loc);
         let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
         if let Some(targs) = m.targs
             && self.ast.exprs.get(e).kind() == ExprKind::MemberExpr

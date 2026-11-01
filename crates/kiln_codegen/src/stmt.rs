@@ -5,7 +5,7 @@ use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
-use kiln_llvm::TypeId as LTy;
+use kiln_llvm::{BinOp, Flags, IntPredicate, TypeId as LTy};
 
 use crate::cleanup::{Depth, JumpDest};
 use crate::fir::{Blk, Op, V};
@@ -17,6 +17,8 @@ use crate::module::{Cg, R, err};
 pub(crate) struct Scope {
     depth: Depth,
     le: usize,
+    /// The `CleanupDeactivationScope`'s `OldDeactivateCleanupStackSize`.
+    deferred: usize,
     lexical: bool,
     /// The enclosing `CurrentCleanupScopeDepth`.
     old_cur: Depth,
@@ -53,7 +55,14 @@ impl Cg<'_> {
         let depth = self.f.cl.depth();
         let old_cur = std::mem::replace(&mut self.f.cl.cur_scope, depth);
         let old_stack_save = std::mem::replace(&mut self.f.did_stack_save, false);
-        Scope { depth, le: self.f.cl.lifetime_extended.len(), lexical, old_cur, old_stack_save }
+        Scope {
+            depth,
+            le: self.f.cl.lifetime_extended.len(),
+            deferred: self.f.cl.deferred.len(),
+            lexical,
+            old_cur,
+            old_stack_save,
+        }
     }
 
     /// `RunCleanupsScope::requiresCleanups`.
@@ -61,11 +70,13 @@ impl Cg<'_> {
         self.f.cl.depth() != s.depth
     }
 
-    /// `ForceCleanup` (and the scope's destructor): pops the cleanups
-    /// pushed since `s` began, then pushes the lifetime-extended ones;
-    /// a lexical scope rescopes its labels.
+    /// `ForceCleanup` (and the scope's destructor): deactivates the
+    /// deferred cleanups (`CleanupDeactivationScope::ForceDeactivate`),
+    /// pops the cleanups pushed since `s` began, then pushes the
+    /// lifetime-extended ones; a lexical scope rescopes its labels.
     pub(crate) fn end_scope(&mut self, s: Scope) {
         let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
+        self.deactivate_deferred(s.deferred);
         self.pop_cleanup_blocks_le(s.depth, s.le);
         self.f.cl.cur_scope = s.old_cur;
         self.f.did_stack_save = s.old_stack_save;
@@ -661,10 +672,16 @@ impl Cg<'_> {
         self.f.fir.set_cur(None);
         let outer_cont = self.f.jumps.last().and_then(|j| j.cont);
         self.f.jumps.push(Jump { brk: epilog, cont: outer_cont });
-        let saved =
-            self.f.sw.replace(SwitchCtx { inst: crate::fir::Fir::last_inst(sw), cond_ty, default });
+        let inst = crate::fir::Fir::last_inst(sw);
+        let ctx = SwitchCtx { inst, cond: c, cond_ty, default, range_head: default };
+        let saved = self.f.sw.replace(ctx);
         self.emit_stmt(d.body)?;
         self.f.jumps.pop();
+        // `setDefaultDest(CaseRangeBlock)`.
+        let head = self.f.sw.expect("switch").range_head;
+        if head != default {
+            self.f.fir.set_successor(inst, default, head);
+        }
         if !self.f.fir.is_placed(default) {
             if self.requires_cleanups(&cond_scope) {
                 self.emit_block(default, false);
@@ -685,8 +702,8 @@ impl Cg<'_> {
         self.emit_block(b, false);
         loop {
             let cd = *ast.stmts.case_data(s);
-            if cd.rhs.is_some() {
-                return err(Some(ast.stmts.get(s).loc()), "case ranges are not supported yet");
+            if let Some(rhs) = cd.rhs {
+                return self.emit_case_range(cd.lhs, rhs, cd.sub);
             }
             let sw = self.f.sw.expect("case outside a switch");
             let v = self.fold_int(cd.lhs).expect("case value folds");
@@ -700,5 +717,42 @@ impl Cg<'_> {
             }
             return self.emit_stmt(cd.sub);
         }
+    }
+
+    /// clang `EmitCaseStmtRange`: the block of `case lo ... hi: sub`
+    /// (already started by [`Self::emit_case`]) and its sub-statement,
+    /// then a switch case per value when the range has fewer than 64
+    /// more, else an unsigned range test chained before the default.
+    fn emit_case_range(&mut self, lo: ExprId, hi: ExprId, sub: StmtId) -> R<()> {
+        let dest = self.f.fir.cur().expect("case block");
+        self.emit_stmt(sub)?;
+        let mut sw = self.f.sw.expect("case outside a switch");
+        let lo = self.fold_int(lo).expect("case value folds");
+        let hi = self.fold_int(hi).expect("case value folds");
+        if hi < lo {
+            return Ok(());
+        }
+        let range = hi - lo;
+        if range < 64 {
+            for v in lo..=hi {
+                let k = V::C(self.m.const_int(sw.cond_ty, v));
+                self.f.fir.add_switch_case(sw.inst, k, dest);
+            }
+            return Ok(());
+        }
+        let restore = self.f.fir.cur();
+        let false_dest = sw.range_head;
+        let b = self.f.fir.create_block();
+        sw.range_head = b;
+        self.f.sw = Some(sw);
+        self.f.fir.place_at_end(b);
+        self.f.fir.set_cur(Some(b));
+        let lv = V::C(self.m.const_int(sw.cond_ty, lo));
+        let diff = self.bin(BinOp::Sub, Flags::NONE, sw.cond, lv);
+        let rv = V::C(self.m.const_int(sw.cond_ty, range));
+        let inbounds = self.icmp(IntPredicate::Ule, diff, rv);
+        self.cond_br(inbounds, dest, false_dest);
+        self.f.fir.set_cur(restore);
+        Ok(())
     }
 }

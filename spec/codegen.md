@@ -42,6 +42,12 @@ panic and never silently wrong IR.
   `EvaluateAsRValue` first), except `__builtin_is_constant_evaluated()`
   (WP-088). A `CXXDefaultArgExpr` has no children, so the pre-pass walks
   its parameter's default argument once, at the first use (WP-136).
+  The pre-pass walks every statement codegen emits, including try blocks
+  and their handlers (WP-214: a default argument naming a non-inline
+  `static const` member, first used in a try block, loaded the
+  `available_externally` member and failed to link; libc++'s
+  `memory_resource::__max_align`). Validation:
+  `tests/codegen/static_member_odr_use.cpp`.
   Non-initializer candidates (a load of a const variable, a builtin
   call) fold with `Oven::fold_rvalue` (lax mode, WP-165): like clang's
   `tryEmitAsConstant`, a read of any `const` non-volatile variable with an
@@ -393,7 +399,7 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
 ## 4. Statements
 - `stmt.rs` covers compound, declaration, expression, null, if (with
   init statement; constexpr and consteval if), switch (with case chains,
-  default, fall-through), while, do, for, break, continue, return,
+  default, fall-through, GNU case ranges §7l), while, do, for, break, continue, return,
   goto and labels, attributed statements and `static_assert` (no code).
 - A function's return goes through the `retval` slot and a single
   `return` block, as clang does; an sret return stores into the sret
@@ -528,7 +534,9 @@ The normative description is spec/driver.md "Code generation". In short:
   `const T(&)[N]` to a `T[N]` argument, copy-initializing a class object
   from an lvalue (so a function cannot return a named local or a
   parameter of class type), `S{...}` temporaries, and binding a
-  reference to a temporary.
+  reference to a temporary. In kiln_codegen itself, a local aggregate
+  whose folded initializer the constant lowering cannot spell is
+  initialized as written (`emit_agg_into`, WP-201).
 - **New/delete (§3.1).** The EH cleanup is emulated only for
   initializers that cannot throw; clang's `invoke` + landing pad for a
   throwing one waits for EH. The placement-argument alignment is
@@ -939,19 +947,14 @@ off and sema rejects `try`/`throw`).
   `except.ctor/run-unwind-destroy`, `expr.new/run-delete-on-throw`.
 
 **Left (WP-100), each a `CodegenError` or noted:**
-- Lifetime-extended temporaries: their EH cleanups are not deferred
-  (clang `pushCleanupAfterFullExprWithActiveFlag`), and a lifetime-
-  extended temporary in a conditional branch is unsupported.
-- A conditional temporary or braced array at a computed address
-  (needs saving across the branch) is a `CodegenError` (a regular
-  partial-array cleanup is saved since WP-118).
-- A delegating constructor's EH cleanup in a base variant with virtual
-  bases passes the VTT incorrectly.
 - D0 calls D1 and then the deallocation function directly; clang runs
   the deallocation as a normal-and-EH `CallDtorDelete` cleanup, which
   differs only when D1 can throw (a `noexcept(false)` destructor, which
   sema rejects until WP-112 lands member exception specifications).
-- A conditional `new` with a class-type placement argument.
+
+(Lifetime-extended temporaries, conditional temporaries at a computed
+address, the delegating constructor's VTT and conditional `new` with a
+class placement argument landed with WP-205, §7l.)
 
 ## 7c. Landed (WP-140): GNU inline asm (`asm.rs`)
 `emit_asm` is clang's `CodeGenFunction::EmitAsmStmt`: outputs become
@@ -1245,6 +1248,7 @@ enclosing class (`Cg::explicit_inst_kind`):
 | under an explicit instantiation definition | `GVA_StrongODR` | `weak_odr` in its own COMDAT, never deferred; vtable/RTTI `weak_odr`; C2/D2 in a C5/D5 COMDAT with `weak_odr` C1/D1 aliases |
 | under an explicit instantiation declaration | `GVA_AvailableExternally` (only defined when optimizing) | no definition; references name the external symbol; vtable an `external` declaration |
 | implicitly declared special member of either | `GVA_DiscardableODR` | `linkonce_odr` (not an instantiation) |
+| member (or member of a member class) declared `exclude_from_explicit_instantiation` | `GVA_DiscardableODR` | `linkonce_odr`, deferred until used: the enclosing class's explicit instantiation does not govern it (`Ast::excluded_from_explicit_instantiation`; libc++'s `_LIBCPP_HIDE_FROM_ABI`, WP-214; `tests/codegen/exclude_from_explicit_inst.cpp`) |
 | static local of a `weak_odr` function | `GVA_DiscardableODR` | `linkonce_odr` |
 
 Where the definitions are emitted (clang hands them to
@@ -1371,6 +1375,129 @@ evaluation and run).
 Not done: the codegen side of a braced-init-list functional cast
 operand (`T({...})`; its sema is WP-200's).
 
+## 7k. Landed (WP-190): WP-170 follow-ups
+- **Zero-initialization with member pointers** (clang
+  `isZeroInitializable` / `EmitNullConstant` / `EmitNullInitialization`;
+  `kiln_abi` `irtype.rs` `zero_init`, `null_init.rs`): an Itanium data
+  member pointer's null value is `-1`, so a type holding one (directly,
+  as an array element, or in a base or member) is not zero-initializable.
+  Its null constant is built field by field (`null_const`: `i64 -1` for
+  each data member pointer, `zeroinitializer` elsewhere, flattened base
+  subobjects, packed filler arrays for the tail of an array constant), and
+  a runtime zero-initialization (`T()`, `T{}`, value-initialized `new T`,
+  `new T[n]()`, globals, members of an aggregate) stores that constant
+  instead of a `memset 0` (`null_init_array_n` loops over a runtime count).
+  A function member pointer's null is `{0, 0}` and stays zero-initializable.
+- **Parenthesized aggregate initialization** (`Agg a(3)`, P0960): already
+  lowered through `CXXParenListInitExpr` as a braced list; WP-190 adds IR
+  parity tests (default member initializers for trailing members, nested
+  aggregates and bases, arrays, references, destructible temporaries,
+  mem-initializers, static and dynamic globals, `new Agg(...)` and
+  `new T[n](...)`).
+- **Array cookies** (§7g) were re-verified for `new T[n]` with a
+  non-trivial destructor. What was missing is the EH cleanup of a
+  braced-list `new T[n]{...}` (clang `EmitNewArrayInitializer`): with
+  exceptions on and a destructed element, an `array.init.end` slot (no
+  initial store) holds the current element pointer, stored before each
+  explicit element, before the constructor filler loop and right after the
+  `phi` of the generic loop; an `IrregularPartialArrayDestroy` over the
+  base element type (no extra zero GEPs for a multidimensional array)
+  destroys `[begin, *slot)` on unwind and is deactivated on every exit.
+  Inside a conditional (nothrow `new`), `begin` is saved to a slot first
+  (`IrregularPartialArray::saved`).
+- **Auxiliary allocas** (clang `AddAuxAllocas` / `AllocaTrackerRAII`;
+  `cleanup.rs` `add_aux_allocas`, `fir.rs` `mark` / `allocas_from` /
+  `erase_with_users`): allocas created while pushing an irregular partial
+  array cleanup belong to it; when the cleanup is popped with neither a
+  normal nor an EH entry, they are erased with every user, so a list that
+  cannot throw has no `arrayinit.endOfInit` / `array.init.end` traffic.
+- **Allocation attributes on virtual calls**: a virtual call takes the
+  allocation attributes of the method it names (`allocsize`, `noalias` for
+  `malloc`, ret `align N` for a constant `alloc_align`); a non-constant
+  alignment is the `llvm.assume` "align" bundle of §7j.
+- **Entity wording of `err_init_conversion_failed`** (sema
+  `init_entity`): a functional cast `T{x}` says "a value" (clang
+  `EK_Temporary`) and `new P(d)` / `new P{d}` says "a new value"
+  (`EK_New`) instead of "a variable".
+
+Tests: `tests/codegen/zero_init_member_ptr.cpp`,
+`tests/codegen/const_array_filler.cpp`,
+`tests/codegen/paren_aggregate_init_more.cpp`,
+`tests/codegen/array_new_partial_eh.cpp`, virtual cases in
+`tests/codegen/alloc_align_runtime.cpp` (IR parity on both triples);
+`tests/conformance/dcl.init.general/zero-init-member-pointer-run.cpp`
+(run); `tests/conformance/expr.type.conv/list-init-entity-diag.cpp`
+(strict diagnostics).
+
+Not done: "a member subobject" / "an array element" wording (WP-195);
+a regular partial-array cleanup for the generic non-list `new T[n](...)`
+loop; `internal constant` (vs `global`) for constant temporaries bound
+by `const int& a = {};`; the `A{&d}` array temporary; parsing
+`new (void (T::*)())()`.
+
+## 7l. Landed (WP-205): WP-118 EH follow-ups and GNU case ranges
+- **Lifetime-extended temporaries** (clang `pushLifetimeExtendedDestroy`,
+  `class.rs` `push_lifetime_extended_destroy`): a temporary bound to a
+  reference with automatic storage gets an EH-only destroy cleanup whose
+  deactivation is deferred to the end of the enclosing full-expression
+  (`pushDestroyAndDeferDeactivation`), plus a lifetime-extended
+  normal-and-EH cleanup guarded by an active flag that is set at the end
+  of the full-expression (`pushCleanupAfterFullExprWithActiveFlag`).
+  Inside a conditional branch the address is saved
+  (`saveValueInCond`), the deferred cleanup gets its own `cleanup.cond`
+  flag, and both flags start false and are set in the branch.
+- **Deferred deactivation** (clang `CleanupDeactivationScope`;
+  `Cleanups::deferred`, `expr.rs` `push_deferred_destroy` /
+  `deactivate_deferred`): one stack of (cleanup, dominating placeholder)
+  pairs serves braced aggregate members, lambda captures, the
+  lifetime-extended EH cleanups above and statement scopes; the end of a
+  record/array init list, a lambda or a scope (`end_scope`) deactivates
+  every entry pushed since it began, innermost first, so the EH cleanups
+  of temporaries extended inside a braced aggregate are gone once the
+  aggregate is complete. Deactivation allocates its `cleanup.isactive`
+  flag as an auxiliary alloca of the enclosing scope, erased with it when
+  the cleanup turns out unused.
+- **Sema (flagged):** `temporaries_in_aggregate` also descends into both
+  arms of a conditional operator, so `const A& a = c ? A{T()} : A{T()}`
+  extends the `T` temporaries of each arm ([class.temporary]/6.10).
+- **Conditional temporaries at a computed address**
+  (`DominatingValue<Address>::save`): a complete-object destroy cleanup
+  (`Cleanup::SavedObject`; an array too) pushed in a conditional branch
+  at an address that is not in the entry block stores the address to a
+  `cond-cleanup.save` slot and reloads it in the cleanup.
+- **Delegating constructor with virtual bases** (clang
+  `CallDelegatingCtorDtor`, `Cleanup::DelegatingDtor`,
+  `class.rs` `call_dtor_delegating`): the base-object variant's EH
+  cleanup passes the current function's VTT parameter unadjusted
+  (`GetVTTParameter(Delegating)`), not a sub-VTT GEP.
+- **Conditional `new` with class placement arguments**
+  (`DominatingValue<RValue>::save` of an aggregate): the argument's
+  address is saved like a pointer when it needs saving
+  (`Saved::AggSlot`); an `agg.tmp` in the entry block is used as is.
+- **GNU case ranges** (`stmt.rs` `emit_case_range`, clang
+  `EmitCaseStmtRange`): the body block is emitted first; an empty range
+  adds nothing; a range of fewer than 64 values adds one switch case per
+  value; a wider one appends a `sw.caserange` block at the end of the
+  function (`sub cond, lo`; `icmp ule diff, hi - lo`; branch to the body,
+  else to the previous range block or the default), and the switch's
+  default destination becomes the last range block
+  (`SwitchCtx::range_head`). A switch with a case range is never folded
+  as a constant switch. Sema is in spec/sema.md §7.5.
+- **Deviation (documented):** namespace-scope and static local arrays
+  with a throwing destructor (`__cxx_global_array_dtor`) keep the
+  aarch64 loop-canonicalization deviation of §6;
+  `eh_array_destroy_throwing_global` is exact on x86_64 and listed in
+  `ir_vs_clang`'s deviations for aarch64.
+
+Tests: `tests/codegen/eh_lifetime_extended.cpp`,
+`eh_conditional_computed_addr.cpp`, `eh_delegating_vtt.cpp`,
+`eh_new_class_placement.cpp`, `gnu_case_range.cpp` (exact on both
+triples), `eh_array_destroy_throwing_global.cpp` (x86_64 exact);
+`run` tests `except.ctor/run-lifetime-extended-unwind`,
+`stmt.switch/run-gnu-case-range`; diagnostics
+`stmt.switch/gnu-case-range`,
+`except.terminate/throw-in-noexcept-reach-unevaluated`.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33
@@ -1395,7 +1522,7 @@ no `result.ptr` spill).
    `thread_local` dynamic initialization (§7e).
 2. The Sema gaps above, then corpus cases for them: class copy-init,
    braced returns, reference casts, temporaries, range-for over arrays.
-3. Bit-field and base-class constants, case ranges, reference members.
+3. Bit-field and base-class constants, reference members.
 4. Header-dependent `run` tests, once `decltype` parses (drop their
    `xfail(kiln)`).
 5. WP-202 follow-ups: `p->m` through a base-to-derived (or derived-to-base)

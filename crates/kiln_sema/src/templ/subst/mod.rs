@@ -89,6 +89,9 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// nearest to the given location (§5.8); off for an alias template,
     /// whose substitution clang reports at the alias declaration.
     pub(crate) written_locs: bool,
+    /// The occurrence rule of the declaration whose type is being
+    /// substituted (§5.8; [`Substituter::with_written_scope`]).
+    pub(crate) written_scope: Option<crate::templ::written::WrittenScope>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -118,13 +121,27 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             init_failures: 0,
             partial_pack: None,
             written_locs: true,
+            written_scope: None,
         }
+    }
+
+    /// Runs `f` with `scope` as the declaration-level occurrence rule
+    /// (§5.8), restoring the previous one.
+    pub(crate) fn with_written_scope<T>(
+        &mut self,
+        scope: crate::templ::written::WrittenScope,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let saved = self.written_scope.replace(scope);
+        let r = f(self);
+        self.written_scope = saved;
+        r
     }
 
     /// Where the dependent entity `key` was written nearest to `loc`
     /// ([`Substituter::written_locs`]).
     pub(crate) fn written(&self, key: WrittenKey, loc: Loc) -> Loc {
-        if self.written_locs { self.sema.written_loc(key, loc) } else { loc }
+        if self.written_locs { self.sema.written_loc_in(key, loc, self.written_scope) } else { loc }
     }
 
     /// Records that the pattern context `pattern` is instantiated as

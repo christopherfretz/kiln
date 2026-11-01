@@ -26,6 +26,18 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Queues explicitly instantiated `decl` at `poi` even when an
+    /// implicit use queued it already: clang reports an undefined static
+    /// data member at each (§4.5).
+    pub(crate) fn queue_explicit_instantiation(&mut self, decl: DeclId, poi: Loc) {
+        if !self.inst.queued.insert(decl)
+            && self.inst.pending.iter().any(|p| p.decl == decl && p.poi == poi)
+        {
+            return;
+        }
+        self.inst.pending.push_back(PendingInst { decl, poi });
+    }
+
     /// Instantiates every queued definition, including the ones queued
     /// while draining ([temp.point]/7: the end of the TU is a point of
     /// instantiation of every specialization).
@@ -93,6 +105,9 @@ impl Sema<'_, '_> {
             // codegen defines these itself (`emit_late_explicit_insts`).
             if self.is_var_spec(p.decl) {
                 self.instantiate_late_var_spec(p.decl, p.poi);
+                if self.var_pattern_def(p.decl).is_none() {
+                    self.undefined_explicit_inst(p.decl, p.poi);
+                }
             } else if self.kind_of(p.decl) == kiln_ast::decl::DeclKind::Var {
                 self.instantiate_static_member_def(p.decl, p.poi);
             } else {
@@ -143,7 +158,13 @@ impl Sema<'_, '_> {
         if kind != SpecKind::ExplicitInstantiationDefinition || self.inst.fatal {
             return;
         }
-        let e = if let Some(t) = template {
+        let e = if let Some(t) = template
+            && self.is_var_spec(d)
+        {
+            let args = self.ast.spec_info(d).map(|(_, s)| s.args);
+            let name = args.map_or_else(|| self.decl_name(t), |a| self.spec_decl_name(t, a));
+            self.diag(kiln_diag::DiagId::sema_explicit_inst_undefined_var_template, poi).arg(name)
+        } else if let Some(t) = template {
             self.diag(kiln_diag::DiagId::sema_explicit_inst_undefined_func_template, poi)
                 .arg(self.decl_name(t))
         } else {

@@ -101,12 +101,15 @@ impl Parser<'_, '_> {
                 let sub = self.parse_statement_after_attrs()?;
                 return Some(self.s.act_on_attributed_stmt(&attrs, sub, start, self.std));
             }
+            // Otherwise they appertain to a declaration's entities.
+            self.stmt_attrs = attrs;
         }
         self.parse_statement_after_attrs()
     }
 
     /// A statement after its attribute-specifier-seq.
     fn parse_statement_after_attrs(&mut self) -> Option<StmtId> {
+        let lead_attrs = std::mem::take(&mut self.stmt_attrs);
         let in_stmt_expr = std::mem::take(&mut self.in_stmt_expr);
         self.skip_extension_before_using();
         let loc = self.loc();
@@ -194,6 +197,7 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_label_stmt(l, sub, loc));
         }
         if self.is_cxx_declaration_statement(false) {
+            self.lead_decl_attrs = lead_attrs;
             let decls = self.parse_simple_declaration(DeclaratorContext::Block, false);
             if decls.is_empty() {
                 return None;
@@ -604,12 +608,20 @@ impl Parser<'_, '_> {
             self.eat(Punct::Colon);
             return None;
         };
-        if self.at(Punct::Ellipsis) {
-            self.unsupported("case ranges", self.loc());
-            self.skip_until(&[Punct::Colon], true, true);
-            return None;
-        }
-        let v = self.s.act_on_case_value(v, loc);
+        // GNU `case lo ... hi:`.
+        let (v, rhs) = if let Some(dots) = self.eat(Punct::Ellipsis) {
+            let d = self.s.diag(DiagId::parse_gnu_case_range, dots);
+            self.emit(d);
+            let Some(hi) = self.parse_constant_expr() else {
+                self.skip_until(&[Punct::Colon, Punct::RBrace], true, false);
+                self.eat(Punct::Colon);
+                return None;
+            };
+            let (v, hi) = self.s.act_on_case_range(v, hi, loc);
+            (v, Some(hi))
+        } else {
+            (self.s.act_on_case_value(v, loc), None)
+        };
         if self.eat(Punct::Colon).is_none() {
             let d = self
                 .s
@@ -619,7 +631,7 @@ impl Parser<'_, '_> {
             self.emit(d);
         }
         let sub = self.parse_labeled_sub(false);
-        Some(self.s.act_on_case(v, sub, loc))
+        Some(self.s.act_on_case(v, rhs, sub, loc))
     }
 
     /// A loop condition `( condition )`; `do` takes only an expression.

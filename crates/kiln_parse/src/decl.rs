@@ -487,6 +487,7 @@ impl Parser<'_, '_> {
     #[allow(clippy::too_many_lines, reason = "one arm per decl-specifier")]
     pub(crate) fn parse_decl_specifiers(&mut self, ctx: DeclaratorContext) -> DeclSpec {
         let mut ds = DeclSpec::new(self.name_begin());
+        ds.attrs = std::mem::take(&mut self.lead_decl_attrs);
         loop {
             let loc = self.loc();
             if self.at_attr() || self.at_kw(Kw::Declspec) {

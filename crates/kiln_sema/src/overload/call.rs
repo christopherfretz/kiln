@@ -287,7 +287,9 @@ impl Sema<'_, '_> {
             OvlOutcome::Ambiguous if member => (DiagId::sema_ovl_ambiguous_member_call, true),
             OvlOutcome::Ambiguous => (DiagId::sema_ovl_ambiguous_call, true),
         };
-        let msg = self.diag(id, at).arg(text);
+        // clang `<< Fn->getSourceRange()`: the callee's name.
+        let range = kiln_source::Span::new(at, self.token_end(loc).unwrap_or(loc));
+        let msg = self.diag(id, at).arg(text).range(range);
         let msg = self.with_ovl_notes(msg, set, ambiguous);
         self.emit(msg);
         None

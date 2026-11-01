@@ -302,6 +302,19 @@ impl Collect<'_> {
                     self.expr(op.expr);
                 }
             }
+            // The try block and its handlers are emitted (a constant read
+            // there must fold as anywhere else, or it loads from a static
+            // member that has no definition).
+            StmtKind::CXXTryStmt => {
+                self.stmt(ast.stmts.try_block(s));
+                for h in ast.lists.iter::<StmtId>(ast.stmts.try_handlers(s)) {
+                    self.stmt(h);
+                }
+            }
+            StmtKind::CXXCatchStmt => {
+                ast.stmts.catch_var(s).into_iter().for_each(|v| self.local_decl(v));
+                self.stmt(ast.stmts.catch_block(s));
+            }
             _ => {}
         }
     }

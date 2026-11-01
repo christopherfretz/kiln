@@ -25,6 +25,7 @@ pub mod declspec;
 mod deduce;
 pub mod except;
 pub mod expr;
+mod fallthrough;
 mod forms;
 mod gnu;
 mod impcast;
@@ -53,6 +54,7 @@ pub mod target;
 pub mod templ;
 mod try_stmt;
 mod type_diff;
+mod unused_var;
 pub mod using;
 mod vector;
 mod vector_ops;
@@ -239,6 +241,10 @@ pub struct Sema<'a, 'sm> {
     pub(crate) access_failed: kiln_source::fx::FxHashSet<(DeclId, Loc, DeclId)>,
     /// True while [`Sema::replay_dependent_access`] runs.
     pub(crate) replaying_access: bool,
+    /// The entity a failed initialization names in place of "a variable"
+    /// (clang `InitializedEntity::EK_Temporary` "a value" for `T{x}`,
+    /// `EK_New` "a new value"): a `sema_init_conversion_failed` select.
+    pub(crate) init_entity: Option<&'static str>,
     /// The context access is checked from while a namespace-scope alias
     /// template is substituted in its own context: the use's
     /// (spec/sema-class.md §2.4, clang's `CheckTemplateIdType`).
@@ -442,6 +448,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             speculative_friend: std::cell::Cell::new(false),
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
+            init_entity: None,
             access_ctx: None,
             access_checks: 0,
             cleanup: class::CleanupState::default(),

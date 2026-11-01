@@ -338,6 +338,13 @@ impl Sema<'_, '_> {
             k if k.is_cast() && self.ast.exprs.cast_kind(e) == CastKind::NoOp => {
                 self.temporaries_in_aggregate(self.ast.exprs.operand(e), out, depth + 1);
             }
+            // Both arms of a prvalue conditional (clang's
+            // `visitLocalsRetainedByInitializer`).
+            ExprKind::ConditionalOperator => {
+                let [t, f] = self.ast.exprs.cond_arms(e);
+                self.temporaries_in_aggregate(t, out, depth + 1);
+                self.temporaries_in_aggregate(f, out, depth + 1);
+            }
             // The backing array of a `std::initializer_list` is extended
             // like a reference bound to it ([dcl.init.list]/6).
             ExprKind::CXXStdInitializerListExpr => {

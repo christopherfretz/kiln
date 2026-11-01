@@ -259,7 +259,14 @@ fn function_order_is_stable() {
     assert_eq!(order(&text(&a.stdout)), ORDER);
     if have("clang++-19") {
         let c = Command::new("clang++-19")
-            .args(["-std=c++26", "-S", "-emit-llvm", "-o", "-", "--target=aarch64-unknown-linux-gnu"])
+            .args([
+                "-std=c++26",
+                "-S",
+                "-emit-llvm",
+                "-o",
+                "-",
+                "--target=aarch64-unknown-linux-gnu",
+            ])
             .arg("order.cpp")
             .current_dir(&d)
             .output()

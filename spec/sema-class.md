@@ -1495,7 +1495,11 @@ Constructors, destructors, conversion functions, `= default` and
 definitions and temporaries. Modules in `kiln_sema/src/class/`:
 - `special/define.rs` (§4.5): `define_implicit_special` builds clang's
   implicit bodies of default/copy/move constructors, copy/move assignment
-  (memberwise, arrays via `__builtin_memcpy`, `kiln_ast::decl::builtin::MEMCPY`) and
+  (memberwise, trivially assignable arrays via `__builtin_memcpy`,
+  `kiln_ast::decl::builtin::MEMCPY`; other arrays by an element-wise
+  `for (size_t __iN = 0; __iN != n; ++__iN) to[__iN] = from[__iN]` loop,
+  one per dimension, moving the elements of an xvalue source, as clang
+  [class.copy.assign]/12.2, WP-202) and
   destructors when odr-used, with the "in implicit ... first required
   here" notes (`Diag::with_context_notes`); `special/excspec.rs` resolves
   implicit exception specifications on use.

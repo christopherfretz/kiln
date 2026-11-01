@@ -175,6 +175,14 @@ impl Sema<'_, '_> {
                 return t;
             }
         }
+        if n.kind() == ExprKind::SubstNonTypeTemplateParmExpr
+            && self.ast.types.as_record(n.ty()).is_some()
+        {
+            // A template parameter object ([temp.param]/8): the
+            // parameter's (deduced) class type, without the `const` of
+            // the object ([dcl.type.decltype]/1.3).
+            return crate::conv::strip_cv(self, n.ty());
+        }
         match n.value_category() {
             ValueCategory::LValue => self.ast.types.lvalue_ref_to(n.ty()),
             ValueCategory::XValue => self.ast.types.rvalue_ref_to(n.ty()),

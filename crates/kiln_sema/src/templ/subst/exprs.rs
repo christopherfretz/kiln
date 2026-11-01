@@ -44,7 +44,12 @@ impl Substituter<'_, '_, '_> {
 
     /// Substitutes into `e`.
     pub fn expr(&mut self, e: ExprId) -> SubstResult<ExprId> {
-        if !self.needs_rebuild(e) {
+        // A non-dependent overloaded member access (`M(1).f` called with
+        // dependent arguments) is formed again too: resolving its call
+        // consumes the overload set it records, so the pattern's node
+        // cannot be shared between specializations (clang's
+        // `TransformUnresolvedMemberExpr`).
+        if !self.needs_rebuild(e) && self.sema.member_overload(e).is_none() {
             if self.lambda_bodies > 0 {
                 self.note_shared_this(e);
             }
@@ -189,7 +194,11 @@ impl Substituter<'_, '_, '_> {
                 let [b, i] = ex(self).operands(e);
                 let b = self.expr(b)?;
                 let i = self.expr(i)?;
-                Ok(self.sema.act_on_subscript(b, i, loc))
+                let r = self.sema.act_on_subscript(b, i, loc);
+                if let Some(end) = self.sema.ast.exprs.end_loc(e) {
+                    self.sema.builder().set_subscript_end(r, end);
+                }
+                Ok(r)
             }
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
                 let callee = ex(self).callee(e);

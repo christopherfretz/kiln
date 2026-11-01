@@ -596,6 +596,17 @@ Lookup of a found member binds it (`typename A<T>::X` resolves to the
 member typedef, not to `DependentName`). If the member is not found and
 the class has dependent bases, the result is a dependent node.
 
+Inside a member of a class whose definition has a dependent base, an
+id-expression that names a non-static member (or an overload set or
+member template containing one) of a class not known to be a base of
+`*this` is an implicit `this->Q::name`. It is built as a dependent member
+access on an implicit `this` object (`Sema::dependent_implicit_member`)
+and resolved at instantiation (`Sema::member_via_dependent_base`; clang
+`IMA_Dependent`); when `Q` turns out not to be a base, the error is
+`'Q::name' is not a member of class 'D<O>'`.
+libc++ `basic_ostream::operator<<(int)` calls `ios_base::flags()` through
+the virtual base `basic_ios<C>` (WP-201).
+
 ### 3.5 ADL and operator lookup at instantiation ([temp.dep.candidate])
 
 When a dependent unqualified call or operator is substituted:
@@ -821,6 +832,20 @@ member} 'f' of class template 'X<int>'". Either has the note "explicit
 instantiation refers here" at the pattern declaration (WP-194). A
 class explicit instantiation skips undefined members, and an explicit
 instantiation declaration is never diagnosed.
+
+The same holds for a variable template specialization (WP-214):
+"explicit instantiation of undefined variable template 'N::v<int>'",
+printed qualified and with the canonical arguments. It is reported once.
+The location follows clang's point of instantiation.
+- If the specialization was odr-used before the explicit instantiation,
+  the error is at its first reference, even an unevaluated one
+  (`Sema::note_var_referenced` records it in `inst.undefined_var_uses`).
+- Otherwise the error is at the explicit instantiation.
+
+A static data member that an earlier use already queued is queued again
+by its explicit instantiation (`queue_explicit_instantiation`). It is
+then reported at both places, as clang's duplicate
+`PendingInstantiations` entries do.
 
 **An explicit instantiation declaration** (`extern template`) does not
 stop sema from instantiating inline and `constexpr` members when they
@@ -1466,10 +1491,42 @@ formed it:
   "typename specifier refers to non-type member", "no member named",
   "cannot be used prior to '::'" and access errors. The notes are
   unchanged.
-- An interned type written at several places resolves to the occurrence
-  nearest the anchor. That is exact when each declarator writes its own
-  type. Two identical dependent types in one declaration may swap
-  locations.
+- An interned type written at several places resolves by occurrence,
+  not by distance (WP-214). While a declaration's type is substituted,
+  `Substituter::written_scope` (a `WrittenScope`: anchor, side, bound)
+  says which occurrence it wrote, and `written_loc_in` picks it.
+  - *After* `bound`: the first occurrence at or after `bound`.
+  - *Before* `bound`: the last occurrence at or before `bound`.
+  - The scope applies only while the anchor matches. A type substituted
+    at another anchor (a default argument, an initializer) falls back to
+    the nearest occurrence.
+- The rule each declaration uses (`subst/decls.rs`):
+  - A parameter, field or variable whose decl-specifiers' start is
+    recorded (`decls.cold.begin_loc`) uses *after* that start. This finds
+    `int (*p)(T::type)`'s own occurrence, which is written after `p`.
+    Otherwise it uses *before* the declarator-id, or before where an
+    unnamed parameter's name would be.
+  - A leading return type uses *before* the function's name.
+  - A typedef uses *before* its name. An alias-declaration uses *after*
+    its name.
+  - A trailing return type, and a conversion function's type, use
+    *after* the last parameter's location.
+- Order. A leading return type is substituted before the parameters, so
+  the first error reported is the first one written, as in clang's
+  `TransformFunctionProtoType`. A trailing return type is substituted
+  after them. The parameters still enter scope before the exception
+  specification.
+- Known gaps. A typedef or variable whose declarator writes the type
+  again after the name (`typedef int (*f)(T::type)`) has no recorded
+  begin, so it can pick an earlier occurrence. So can a trailing return
+  type after a parameter of function-pointer type.
+- Dependent names inside expressions (`T::x` in a default argument,
+  `sizeof(typename T::type)`) are not affected. The expression keeps its
+  own location, so these are exact without the table. A partially
+  substituted member template is instantiated from its original pattern
+  with all levels of arguments at once (`MultiLevelArgs`), so its types
+  keep their written keys. Types formed during instantiation therefore
+  do not need recording.
 
 ## 6. Function templates
 
@@ -1650,6 +1707,11 @@ immediate context: errors are hard.
   "not a candidate" before deduction only when it is explicit
   non-dependently (clang `isNonDependentlyExplicit`;
   `Sema::nondependently_explicit`).
+- **Return types** ([temp.deduct.general]/11.10). A substituted
+  signature (or any substituted function type) whose return type is an
+  array or function type fails with `function cannot return
+  {array|function} type T`, a deduction failure under SFINAE (clang
+  `BuildFunctionType`; `Subst::check_return_type`, WP-201).
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.
@@ -1852,6 +1914,15 @@ The `SpecKind` transitions are those of §4.5.
   the TU, in no lookup or member list) memoized in
   `TemplateTables::{param_objects, param_object_values}`
   (`param_object(v)`, `param_object_value(d)`).
+- **Class template placeholders** (`template<std::array A>`,
+  [temp.param]/6.3): `convert_nttp_arg` deduces the type per argument by
+  CTAD as for `C x = e;` (`ctad_for_initializer`, copy-initialization),
+  then converts as a class argument. A use of such a parameter in the
+  pattern is type-dependent (`QualType::DEPENDENT`). After substitution,
+  `decltype(A)` of a template parameter object is the deduced class type
+  without `const` ([dcl.type.decltype]/1.3; `decltype_of` on a
+  `SubstNonTypeTemplateParmExpr` of class type); `decltype((A))` is
+  `const T&` (WP-201).
 - **Uses.** An id-expression naming a class-type NTTP in the pattern is an
   lvalue of type `const T` (builder `decl_ref_category`,
   `build_decl_ref_extra`); a reference NTTP names its referent (an
@@ -2095,6 +2166,12 @@ declared constraint of a constrained pack `C... Ts` is the fold
 
 - **Atomic.** Substitute `args` into `mapping` and then into `expr`,
   under `ConstraintSubstitution` (SFINAE).
+  - Names in the atom that substitution looks up again (unresolved
+    callees, §5.4) are looked up from the constrained entity's
+    definition context, not from the point of the check: for an entity
+    in a namespace (with no `this`), the substitution runs inside
+    `in_inst_context(namespace)` (`sat_atom_uncached`, WP-201; libc++
+    `ranges::__movable_box` concepts checked from `<string_view>`).
   - A substitution failure means not satisfied, with the captured
     diagnostic recorded.
   - Otherwise the expression must have type exactly `bool`. Anything else
@@ -2443,8 +2520,9 @@ initialization by a C-style cast `(S)x` that is the operand's last token
 (a call's or a parenthesized operand's `)`, a `}`), else the end of the
 last operand of an implicit node, cast, prefix/binary operator or
 conditional, else the node's own location (a name, literal, member name,
-postfix operator). A built-in subscript records no `]`, so `(S)a[i]`
-takes the `[` (clang: the `]`). The Oven and codegen read them from
+postfix operator). A built-in subscript records its `]` as its end
+location (`set_subscript_end`, from the parser and from substitution's
+pattern; WP-203), so `(S)a[i]` takes the `]`. The Oven and codegen read them from
 the outermost such default argument or member initializer in scope, and
 the codegen prepass evaluates the immediate invocations of such a member
 initializer per use (`fold_immediate_in`). Substitution drops the trailing

@@ -396,6 +396,12 @@ impl Sema<'_, '_> {
             // deduced from the argument (decayed, unqualified).
             let d = conv::decay(self, e);
             pty = conv::strip_cv(self, self.ast.exprs.get(d).ty());
+        } else if self.is_ctad_placeholder(pty) {
+            // `template<C V>` of a class template `C`
+            // ([temp.param]/6.3, [dcl.type.class.deduct]/1): deduced as
+            // for a variable `C x = e;`.
+            let init = crate::init::Initializer::Expr(e);
+            pty = self.ctad_for_initializer(pty, &init, false, at).ok_or(())?;
         } else if self.placeholder_keyword(pty).is_some() {
             // `auto&`, `auto*`, `decltype(auto)`, `const auto&`
             // ([temp.param]/6.3): deduced as for a variable
