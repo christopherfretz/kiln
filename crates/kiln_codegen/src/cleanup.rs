@@ -66,6 +66,9 @@ pub(crate) enum Cleanup {
     /// Ends a catch handler (`CallEndCatch`); `might_throw` when the
     /// caught object has a class type whose destructor may throw.
     EndCatch { might_throw: bool },
+    /// Releases a static-storage guard variable whose initialization threw
+    /// (`CallGuardAbort`, [stmt.dcl]/3).
+    GuardAbort { guard: V },
 }
 
 /// A value a cleanup uses: directly, or reloaded from the
@@ -960,6 +963,7 @@ impl Cg<'_> {
                     self.nounwind_runtime_call(f, LTy::VOID, Vec::new());
                 }
             }
+            Cleanup::GuardAbort { guard } => self.emit_guard_abort(guard),
         }
     }
 

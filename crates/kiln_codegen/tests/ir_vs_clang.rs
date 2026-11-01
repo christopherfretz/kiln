@@ -25,7 +25,12 @@ const TRIPLES: &[&str] = &["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gn
 
 /// `(case, triple)` pairs whose IR differs from clang's by a documented
 /// deviation: they must verify but need not match.
-const DEVIATIONS: &[(&str, &str)] = &[];
+const DEVIATIONS: &[(&str, &str)] = &[
+    // clang 19's AArch64 -O0 pipeline runs `loop(loop-idiom-vectorize)`,
+    // whose LoopSimplify/LCSSA canonicalization reshapes the array loops
+    // of the (non-`optnone`) global initialization functions.
+    ("global_init_array_eh", "aarch64-unknown-linux-gnu"),
+];
 
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/codegen")
