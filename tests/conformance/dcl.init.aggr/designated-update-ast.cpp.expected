@@ -1,0 +1,186 @@
+TranslationUnitDecl
+|-CXXRecordDecl referenced struct A definition
+| |-FieldDecl x 'int'
+| `-FieldDecl y 'int'
+|-CXXRecordDecl referenced struct B definition
+| |-FieldDecl a 'A'
+| `-FieldDecl z 'int'
+|-CXXRecordDecl referenced struct C definition
+| |-FieldDecl arr 'int[4]'
+| `-FieldDecl t 'int'
+|-CXXRecordDecl referenced union U definition
+| |-FieldDecl i 'int'
+| `-FieldDecl f 'float'
+|-CXXRecordDecl referenced struct D definition
+| |-FieldDecl u 'U'
+| `-FieldDecl k 'int'
+|-CXXRecordDecl referenced struct E definition
+| |-public 'A'
+| `-FieldDecl w 'int'
+|-CXXRecordDecl referenced struct F definition
+| `-FieldDecl e 'E'
+|-FunctionDecl used mk 'A ()'
+|-FunctionDecl used mu 'U ()'
+|-VarDecl b1 'B' cinit
+| `-InitListExpr 'B'
+|   |-DesignatedInitUpdateExpr 'A'
+|   | |-CallExpr 'A'
+|   | | `-ImplicitCastExpr 'A (*)()' <FunctionToPointerDecay>
+|   | |   `-DeclRefExpr 'A ()' lvalue Function 'mk' 'A ()'
+|   | `-InitListExpr 'A'
+|   |   |-NoInitExpr 'int'
+|   |   `-IntegerLiteral 'int' 3
+|   `-ImplicitValueInitExpr 'int'
+|-VarDecl c1 'C' cinit
+| `-InitListExpr 'C'
+|   |-InitListExpr 'int[4]'
+|   | |-IntegerLiteral 'int' 1
+|   | |-IntegerLiteral 'int' 9
+|   | |-IntegerLiteral 'int' 3
+|   | `-IntegerLiteral 'int' 4
+|   `-ImplicitValueInitExpr 'int'
+|-VarDecl d1 'D' cinit
+| `-InitListExpr 'D'
+|   |-DesignatedInitUpdateExpr 'U'
+|   | |-CallExpr 'U'
+|   | | `-ImplicitCastExpr 'U (*)()' <FunctionToPointerDecay>
+|   | |   `-DeclRefExpr 'U ()' lvalue Function 'mu' 'U ()'
+|   | `-InitListExpr 'U' field=f
+|   |   `-FloatingLiteral 'float' 1e0
+|   `-IntegerLiteral 'int' 2
+|-VarDecl f1 'F' cinit
+| `-InitListExpr 'F'
+|   `-DesignatedInitUpdateExpr 'E'
+|     |-CXXFunctionalCastExpr 'E' functional cast to E <NoOp>
+|     | `-InitListExpr 'E'
+|     |   |-InitListExpr 'A'
+|     |   | |-ImplicitValueInitExpr 'int'
+|     |   | `-ImplicitValueInitExpr 'int'
+|     |   `-ImplicitValueInitExpr 'int'
+|     `-InitListExpr 'E'
+|       |-NoInitExpr 'A'
+|       `-IntegerLiteral 'int' 4
+|-VarDecl b2 'B[2]' cinit
+| `-InitListExpr 'B[2]'
+|   |-InitListExpr 'B'
+|   | |-DesignatedInitUpdateExpr 'A'
+|   | | |-CallExpr 'A'
+|   | | | `-ImplicitCastExpr 'A (*)()' <FunctionToPointerDecay>
+|   | | |   `-DeclRefExpr 'A ()' lvalue Function 'mk' 'A ()'
+|   | | `-InitListExpr 'A'
+|   | |   |-IntegerLiteral 'int' 11
+|   | |   `-NoInitExpr 'int'
+|   | `-ImplicitValueInitExpr 'int'
+|   `-InitListExpr 'B'
+|     |-InitListExpr 'A'
+|     | |-ImplicitValueInitExpr 'int'
+|     | `-ImplicitValueInitExpr 'int'
+|     `-IntegerLiteral 'int' 4
+|-VarDecl b3 'B' cinit
+| `-InitListExpr 'B'
+|   |-DesignatedInitUpdateExpr 'A'
+|   | |-CXXFunctionalCastExpr 'A' functional cast to A <NoOp>
+|   | | `-InitListExpr 'A'
+|   | |   |-IntegerLiteral 'int' 1
+|   | |   `-IntegerLiteral 'int' 2
+|   | `-InitListExpr 'A'
+|   |   |-IntegerLiteral 'int' 5
+|   |   `-IntegerLiteral 'int' 6
+|   `-ImplicitValueInitExpr 'int'
+|-CXXRecordDecl referenced struct S definition
+| |-FieldDecl s 'char[8]'
+| `-FieldDecl n 'int'
+|-VarDecl s1 'S' cinit
+| `-InitListExpr 'S'
+|   |-DesignatedInitUpdateExpr 'char[8]'
+|   | |-StringLiteral 'char[8]' "hello"
+|   | `-InitListExpr 'char[8]'
+|   |   |-array_filler: NoInitExpr 'char'
+|   |   |-NoInitExpr 'char'
+|   |   |-CharacterLiteral 'char' 97
+|   |   |-NoInitExpr 'char'
+|   |   `-CharacterLiteral 'char' 112
+|   `-ImplicitValueInitExpr 'int'
+|-CXXRecordDecl referenced struct H definition
+| |-FieldDecl a 'A'
+| `-FieldDecl b 'A'
+|-CXXRecordDecl referenced struct G definition
+| `-FieldDecl c 'C'
+|-CXXRecordDecl referenced struct I definition
+| `-FieldDecl h 'H'
+|-FunctionDecl used mkc 'C ()'
+|-FunctionDecl used mkh 'H ()'
+|-VarDecl g1 'G' cinit
+| `-InitListExpr 'G'
+|   `-DesignatedInitUpdateExpr 'C'
+|     |-CallExpr 'C'
+|     | `-ImplicitCastExpr 'C (*)()' <FunctionToPointerDecay>
+|     |   `-DeclRefExpr 'C ()' lvalue Function 'mkc' 'C ()'
+|     `-InitListExpr 'C'
+|       |-InitListExpr 'int[4]'
+|       | |-array_filler: NoInitExpr 'int'
+|       | |-NoInitExpr 'int'
+|       | `-IntegerLiteral 'int' 9
+|       `-NoInitExpr 'int'
+|-VarDecl g2 'G' cinit
+| `-InitListExpr 'G'
+|   `-DesignatedInitUpdateExpr 'C'
+|     |-CallExpr 'C'
+|     | `-ImplicitCastExpr 'C (*)()' <FunctionToPointerDecay>
+|     |   `-DeclRefExpr 'C ()' lvalue Function 'mkc' 'C ()'
+|     `-InitListExpr 'C'
+|       |-InitListExpr 'int[4]'
+|       | |-array_filler: ImplicitValueInitExpr 'int'
+|       | `-IntegerLiteral 'int' 7
+|       `-NoInitExpr 'int'
+|-VarDecl g3 'G' cinit
+| `-InitListExpr 'G'
+|   `-DesignatedInitUpdateExpr 'C'
+|     |-CallExpr 'C'
+|     | `-ImplicitCastExpr 'C (*)()' <FunctionToPointerDecay>
+|     |   `-DeclRefExpr 'C ()' lvalue Function 'mkc' 'C ()'
+|     `-InitListExpr 'C'
+|       |-InitListExpr 'int[4]'
+|       | |-array_filler: ImplicitValueInitExpr 'int'
+|       | |-IntegerLiteral 'int' 7
+|       | |-ImplicitValueInitExpr 'int'
+|       | `-IntegerLiteral 'int' 8
+|       `-NoInitExpr 'int'
+|-VarDecl g4 'G' cinit
+| `-InitListExpr 'G'
+|   `-DesignatedInitUpdateExpr 'C'
+|     |-CallExpr 'C'
+|     | `-ImplicitCastExpr 'C (*)()' <FunctionToPointerDecay>
+|     |   `-DeclRefExpr 'C ()' lvalue Function 'mkc' 'C ()'
+|     `-InitListExpr 'C'
+|       |-InitListExpr 'int[4]'
+|       | |-array_filler: NoInitExpr 'int'
+|       | |-NoInitExpr 'int'
+|       | |-IntegerLiteral 'int' 9
+|       | |-NoInitExpr 'int'
+|       | `-IntegerLiteral 'int' 1
+|       `-NoInitExpr 'int'
+|-VarDecl i1 'I' cinit
+| `-InitListExpr 'I'
+|   `-DesignatedInitUpdateExpr 'H'
+|     |-CallExpr 'H'
+|     | `-ImplicitCastExpr 'H (*)()' <FunctionToPointerDecay>
+|     |   `-DeclRefExpr 'H ()' lvalue Function 'mkh' 'H ()'
+|     `-InitListExpr 'H'
+|       |-NoInitExpr 'A'
+|       `-InitListExpr 'A'
+|         |-IntegerLiteral 'int' 3
+|         `-ImplicitValueInitExpr 'int'
+`-VarDecl i2 'I' cinit
+  `-InitListExpr 'I'
+    `-DesignatedInitUpdateExpr 'H'
+      |-CallExpr 'H'
+      | `-ImplicitCastExpr 'H (*)()' <FunctionToPointerDecay>
+      |   `-DeclRefExpr 'H ()' lvalue Function 'mkh' 'H ()'
+      `-InitListExpr 'H'
+        |-InitListExpr 'A'
+        | |-IntegerLiteral 'int' 1
+        | `-NoInitExpr 'int'
+        `-InitListExpr 'A'
+          |-IntegerLiteral 'int' 4
+          `-IntegerLiteral 'int' 3

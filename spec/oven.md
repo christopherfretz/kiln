@@ -398,6 +398,11 @@ literal is one instruction and one step, not an interpreted loop.
   expression (clang has no `VisitVAArgExpr`), as for `va_start`/`va_end`/
   `va_copy`. It counts as a side effect for `__builtin_constant_p`-style
   folding (`has_side_effects`).
+- **`DesignatedInitUpdateExpr` (WP-196):** never a constant (clang's
+  evaluator has no visitor for one): the generic note at the expression,
+  so a `constexpr` variable initialized by a partial override is
+  ill-formed (spec/sema.md §6). Its `NoInitExpr` slots are reached only
+  through it.
 - **Not constant-evaluable** (a trap with "subexpression not valid in a
   constant expression", as clang 19): `__builtin_signbit`, the six
   ordered comparisons, the math functions; `__builtin_unreachable` when

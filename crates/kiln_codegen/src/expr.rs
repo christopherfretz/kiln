@@ -2932,6 +2932,16 @@ impl Cg<'_> {
                 self.emit_call(e, Some(dest))?;
                 Ok(())
             }
+            ExprKind::DesignatedInitUpdateExpr => {
+                // clang `AggExprEmitter::VisitDesignatedInitUpdateExpr`:
+                // the prior initialization, then the updater's clauses
+                // over it; its `NoInitExpr` slots leave the bytes alone
+                // ([dcl.init.aggr]/4, C99 6.7.9p19).
+                let [base, updater] = ast.exprs.designated_init_update(e);
+                self.emit_agg(base, dest, zeroed)?;
+                self.agg_visit(updater, dest, false)
+            }
+            ExprKind::NoInitExpr => Ok(()),
             ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr => {
                 if !(zeroed && self.zero_init(q)) {
                     let size = self.size_align(q).0;
@@ -3143,6 +3153,9 @@ impl Cg<'_> {
         let k = ast.exprs.get(e).kind();
         if matches!(k, ExprKind::ImplicitValueInitExpr | ExprKind::CXXScalarValueInitExpr) {
             return self.null_init_lvalue(lv, zeroed);
+        }
+        if k == ExprKind::NoInitExpr {
+            return Ok(());
         }
         if lv.bf.is_none() && self.referee(lv.q).is_some() {
             // A reference member binds to its initializer's address
