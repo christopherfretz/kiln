@@ -292,11 +292,12 @@ pub fn decay(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
         return e;
     }
     if s.ast.types.is_array(t) {
-        if n.value_category().is_glvalue() {
-            let p = array_decayed(s, t);
-            return raw_cast(s, CastKind::ArrayToPointerDecay, e, p, ValueCategory::PRValue, None);
-        }
-        return e;
+        // An array prvalue (a compound literal) is materialized first
+        // ([conv.array]/1, clang `DefaultFunctionArrayConversion`).
+        let e =
+            if n.value_category().is_glvalue() { e } else { s.materialize_temporary(e, t, false) };
+        let p = array_decayed(s, t);
+        return raw_cast(s, CastKind::ArrayToPointerDecay, e, p, ValueCategory::PRValue, None);
     }
     lvalue_to_rvalue(s, e)
 }

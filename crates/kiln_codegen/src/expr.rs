@@ -2677,6 +2677,11 @@ impl Cg<'_> {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
             }
+            // clang `VisitCompoundLiteralExpr`: `EmitAggExpr` of the
+            // initializer into the slot (C++: not destroyed here).
+            ExprKind::CompoundLiteralExpr => {
+                self.emit_agg(ast.exprs.compound_literal_init(e), dest, zeroed)
+            }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
                     let saved = self.enter_default_arg(e);
