@@ -8,7 +8,7 @@
 //! folded into a `zeroinitializer` filler).
 
 use kiln_abi::irtype::IrType;
-use kiln_ast::consts::{ConstValue, NullKind, PtrBase, Reloc, Scalar};
+use kiln_ast::consts::{ConstValue, NullKind, PtrBase, Reloc, Scalar, UnionMember};
 use kiln_ast::decl::{DeclKind, VarStorage};
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
@@ -38,7 +38,8 @@ impl Cg<'_> {
                 let it = self.tys.convert_mem(ty);
                 let bytes = img.bytes.to_vec();
                 let relocs = img.relocs.to_vec();
-                let img = Img { bytes, relocs };
+                let unions = img.unions.to_vec();
+                let img = Img { bytes, relocs, unions };
                 self.image_const(&img, 0, &it, e)
             }
         }
@@ -322,7 +323,7 @@ impl Cg<'_> {
             IrType::Record(d) => {
                 let rec = self.tys.record(*d).clone();
                 if rec.is_union {
-                    return self.union_const(img, off, t, rec.size, e);
+                    return self.union_const(img, off, (t, &rec), e);
                 }
                 let mut elems: Vec<(u64, Value)> = Vec::with_capacity(rec.members.len());
                 self.record_elems(img, off, 0, *d, false, e, &mut elems)?;
@@ -536,15 +537,17 @@ impl Cg<'_> {
 
     /// A union constant (clang `ConstStructBuilder` for unions): the active
     /// member then `undef` padding, as the union's IR type when the element
-    /// types match it, else a literal struct.
+    /// types match it, else a literal struct. The active member is the
+    /// initializer list's, else the one the Oven recorded in the image
+    /// (an evaluated value: `U u = make();`).
     fn union_const(
         &mut self,
         img: &Img,
         off: u64,
-        t: LTy,
-        size: u64,
+        (t, rec): (LTy, &kiln_abi::irtype::IrRecord),
         e: Option<ExprId>,
     ) -> R<Value> {
+        let size = rec.size;
         let e = e.map(|x| self.strip_init(x));
         let ile = e.filter(|&x| {
             matches!(
@@ -552,7 +555,12 @@ impl Cg<'_> {
                 ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr
             )
         });
-        let active = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).2);
+        let active = ile.and_then(|x| crate::expr::agg_init_parts(self.ast, x).2).or_else(|| {
+            img.unions
+                .iter()
+                .find(|u| u64::from(u.at) == off && rec.field_index.contains_key(&u.field))
+                .map(|u| u.field)
+        });
         let Some(f) = active else {
             if (0..size).all(|i| img.byte(off + i) == 0) && img.relocs.is_empty() {
                 return Ok(self.m.const_zero(t));
@@ -639,6 +647,7 @@ impl Cg<'_> {
 struct Img {
     bytes: Vec<u8>,
     relocs: Vec<Reloc>,
+    unions: Vec<UnionMember>,
 }
 
 impl Img {

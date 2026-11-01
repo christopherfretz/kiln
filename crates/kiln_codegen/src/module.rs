@@ -1512,8 +1512,14 @@ impl<'a> Cg<'a> {
         let needs_dtor = !is_ref && self.destructed_class(ty).is_some();
         let ity = self.m.const_type(init);
         let g = if let Some(&g) = self.gvars.get(&first) {
+            // A declaration created by an earlier use has the memory type;
+            // a union initialized through a non-largest member (or a
+            // struct holding one) has its initializer's type instead.
             if self.m.global(g).value_type() != ity {
-                return err(loc, "global redeclared with a different IR type");
+                if self.m.global(g).initializer().is_some() {
+                    return err(loc, "global redeclared with a different IR type");
+                }
+                self.m.retype_global_to_end(g, ity);
             }
             g
         } else {
