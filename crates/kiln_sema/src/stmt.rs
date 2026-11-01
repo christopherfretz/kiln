@@ -758,7 +758,7 @@ impl Sema<'_, '_> {
                 let iv = self.const_int(v).unwrap_or(0);
                 let cv = self.int_const(cond_ty, iv);
                 let ce = self.builder().constant_expr(conv, Some(cv));
-                let ce = self.act_on_full_expr(ce);
+                let ce = self.act_on_constant_full_expr(ce);
                 (ce, (!invalid).then_some(iv))
             }
             Err(mut f) => {
@@ -768,7 +768,7 @@ impl Sema<'_, '_> {
                 let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
                 let d = Self::with_failure_notes(msg, f);
                 self.emit(d);
-                (self.act_on_full_expr(conv), None)
+                (self.act_on_constant_full_expr(conv), None)
             }
         }
     }

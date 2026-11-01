@@ -458,6 +458,17 @@ impl Sema<'_, '_> {
         self.act_on_full_expr_at(e, cc)
     }
 
+    /// [`Sema::act_on_full_expr`] of a constant-expression
+    /// ([expr.const]/22: a `static_assert` condition, an array bound, a
+    /// bit-field width, an enumerator value, a `case` value, an alignment,
+    /// a template argument).
+    pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
+        self.constant_full_expr += 1;
+        let r = self.act_on_full_expr(e);
+        self.constant_full_expr -= 1;
+        r
+    }
+
     /// [`Sema::act_on_full_expr`] with conversion context `cc` for the
     /// implicit-conversion warnings (clang's `CheckCompletedExpr`
     /// location: the declared variable, `return`).

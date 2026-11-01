@@ -468,7 +468,7 @@ impl Sema<'_, '_> {
                 return Err(());
             }
         };
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         match self.eval_const(c, EvalContext::converted(at)) {
             Ok(v) => {
                 // Integral values are re-interned at the canonical type so

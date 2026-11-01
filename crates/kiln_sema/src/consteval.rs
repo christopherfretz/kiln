@@ -152,6 +152,12 @@ impl Sema<'_, '_> {
         self.imm.pending.const_eval += 1;
     }
 
+    /// Whether the expression being built is in a context entered with
+    /// [`Sema::enter_constant_evaluated`].
+    pub(crate) fn in_constant_evaluated(&self) -> bool {
+        self.imm.pending.const_eval > 0
+    }
+
     /// Leaves a context entered with [`Sema::enter_constant_evaluated`].
     pub fn exit_constant_evaluated(&mut self) {
         self.imm.pending.const_eval = self.imm.pending.const_eval.saturating_sub(1);

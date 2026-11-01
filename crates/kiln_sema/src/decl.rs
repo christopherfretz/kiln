@@ -849,7 +849,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let c = conv::decay(self, e);
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         match self.eval_int(c, EvalContext::new(EvalKind::Other, loc)) {
             Ok(v) if v < 0 => {
                 match d.name {
@@ -3013,7 +3013,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let c = conv::decay(self, w);
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
             Ok(v) => v,
             Err(mut f) => {
@@ -4824,7 +4824,7 @@ impl Sema<'_, '_> {
                 let cty = self.ast.exprs.get(c).ty();
                 if self.ast.types.as_enum(cty).is_some() { QualType::INT } else { cty }
             };
-            let c = self.act_on_full_expr(c);
+            let c = self.act_on_constant_full_expr(c);
             // A converted constant expression for a fixed underlying
             // type ([dcl.enum]/5), else an integral constant expression.
             let at = self.begin_loc(ie);
@@ -5202,7 +5202,7 @@ impl Sema<'_, '_> {
                 cond
             }
         };
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         let cloc = self.begin_loc(cond);
         // [dcl.pre]/10: a value-dependent condition waits for instantiation.
         if !self.has_errors_in(c) && !self.expr_is_value_dependent(c) {
@@ -5882,7 +5882,7 @@ impl Sema<'_, '_> {
         }
         let loc = self.ast.exprs.get(e).loc();
         let c = conv::lvalue_to_rvalue(self, e);
-        let c = self.act_on_full_expr(c);
+        let c = self.act_on_constant_full_expr(c);
         let r = self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(e)));
         if let Ok(v) = r {
             if v != 0 && (v < 0 || (v & (v - 1)) != 0) {

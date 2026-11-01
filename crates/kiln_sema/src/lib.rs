@@ -128,6 +128,10 @@ pub struct Sema<'a, 'sm> {
     /// Depth of immediate function contexts ([expr.const]/16) entered
     /// by `if consteval`.
     pub(crate) immediate: u32,
+    /// Depth of [`Sema::act_on_constant_full_expr`]: the full-expression
+    /// ending is a manifestly constant-evaluated constant-expression (no
+    /// runtime-behavior warnings, clang's `ConstantEvaluated` context).
+    pub(crate) constant_full_expr: u32,
     /// `DeclRefExpr`s of the current full-expression that are potential
     /// odr-uses ([basic.def.odr]/4): resolved at the end of the
     /// full-expression (spec/sema.md §5.2).
@@ -421,6 +425,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             unevaluated: 0,
             decltype_calls: Vec::new(),
             immediate: 0,
+            constant_full_expr: 0,
             pending_odr: Vec::new(),
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
