@@ -88,6 +88,11 @@ the evaluator's flattened type table.
   union type) (`mem::UKey`), so unions nested at one offset (`union {
   char c; union { int x; float y; } q; }`) each have their own entry
   (WP-224); two members of one union type at one offset share it.
+  Any write into a granule clears its pointer bit, so a class holding no
+  data (`Types::holds_no_data`: an empty class, or one of only such
+  subobjects) is zero-initialized and copied as zero bytes: an empty base
+  or `[[no_unique_address]]` member may share its address with a pointer
+  (libc++'s `__compressed_pair` in `std::unique_ptr`).
 - **Lifetime**: leaving a scope releases its objects (`release(mark)`); a
   released slot is reused first-in first-out with its generation bumped, so
   a dangling pointer is detected (generation mismatch) and still names its
@@ -771,8 +776,8 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   is `EndLife` aux 3 (check, then end). Any other member call on an object
   in `STD_ALLOC` storage is preceded by `EndLife` aux 4, which only checks
   that the object is within its lifetime ("member call on ..."). Outside
-  `STD_ALLOC` storage `EndLife` checks only the storage (null, deleted,
-  bounds) and does not track the lifetime (below). In an allocation with
+  `STD_ALLOC` storage the lifetime is tracked from the first explicit
+  destruction on ("Object lifetime" below). In an allocation with
   `HAS_UNION`, aux 4 also checks the active members on the path to the
   object (`union_path` with `ak::MEMBER_CALL`: "member call on member 'x'
   of union with active member 'c' ...", clang's `AK_MemberCall`, at the
@@ -824,18 +829,56 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   the call), the call stack, and "subobject declared here" (WP-224,
   `tests/conformance/expr.const/constexpr-trivial-copy-uninit.cpp`).
 
-*Deviations from clang 19.* Lifetime is tracked only in `STD_ALLOC`
-storage: destroying a local or a `new`-allocated object twice, or reading
-it after an explicit destructor call, is not diagnosed (clang diagnoses
-both). An explicit call of a virtual destructor ends only the lifetime of
+**Object lifetime outside `std::allocator` storage — landed (WP-222).**
+`EndLife` aux 2 on a frame or `new` allocation not yet tracked makes it
+`LIFE`-tracked (`mem::flags::LIFE`, `Memory::set_lifetime`): one
+`trial_write` of the allocation, the flag, `Space::life` started for its
+space if empty, every byte of the allocation marked within its lifetime,
+then the destroyed object's bytes marked outside it. From then on
+`Memory::check` consults the bytes as for `STD_ALLOC` storage (the
+`flags::TRACKED` mask), so a second explicit destruction, a read, an
+assignment or a member call of the destroyed object is diagnosed as there,
+and a placement new (`std::construct_at`) re-begins the lifetime. The cost
+is one flag test per access for untracked allocations and nothing per
+object: the bits are the space's bitmask, released with the frame or the
+heap block (static objects are not tracked). The implicit destructions
+check the object (`vm/life.rs`), diagnosing "destroying object 'x' whose
+lifetime has already ended" ([basic.life]/9) when no byte of it is within
+its lifetime: a registered destruction before its destructor runs
+(`run_cleanup`, the `Cleanup` records the object's type); the release of
+a scope's trivially destructible objects at `ScopeExit` and of a
+function's at `Ret` (only once `Memory::life_frame` is set; the callee's
+locals in its frame, its parameters in the caller's context, as clang
+destroys them there, [expr.call]/6); and `delete`/`delete[]` before the
+destructors and the deallocation. Arrays are checked element by element
+from the last, so the note names `a[1]` or `{*new S[2]#0}[0]`. A
+variable's note is at its declaration, others' at the destroying
+expression. A class containing a union is never diagnosed as destroyed
+(ending its active member's lifetime, as `std::optional::reset` does,
+leaves the union without an active member, which the bytes cannot tell
+from a destroyed object), and assigning a union member (`SetActive`)
+re-begins the lifetime of the whole union in tracked storage
+([class.union.general]/6)
+(`tests/conformance/basic.life/constexpr-lifetime-local.cpp`).
+
+*Deviations from clang 19.* A union whose own lifetime ended (`v.~V();
+v.b = 2;`) accepts the member assignment, which clang rejects. A class
+whose subobjects' lifetimes all ended one by one is diagnosed at its
+implicit destruction as if destroyed itself. Copying a destroyed object
+with a trivial copy constructor reports the read without clang's "in call
+to 'T(t)'" frame note. An explicit call of a virtual destructor ends only the lifetime of
 the static type's bytes. A placement new of the wrong type names the
 most-derived type at the offset as the "from" type, where clang names the
-designated subobject's type. A qualified call (`::operator new(n)`,
-`std::construct_at(...)`) is located at the name, two columns right of
-clang's location at the qualifier (the AST has no qualifier location);
-notes for unqualified calls agree. "in call to" notes print some
+designated subobject's type. "in call to" notes print some
 arguments differently (`decltype(...)` and `{temporary}` where clang
 prints the value).
+
+*Note locations.* A call-site note locates the callee at its begin, as
+clang's `getBeginLoc`: a qualified name (`::operator new(n)`,
+`std::construct_at(...)`, also when rebuilt by instantiation) at its
+qualifier, which sema records in `expr_begin`. An element step out of
+range is located at the begin of the subscripted base (`this->b[n]` at
+`this`). `tests/conformance/expr.const/note-begin-location.cpp`.
 
 *Memory benchmark.* `bench/oven/vector-alloc.cpp` builds a
 `std::vector<int>` of 100 000 elements by `push_back` and sums it: 18
@@ -1056,8 +1099,8 @@ so libc++'s short-string `__s.__is_long_` reads and writes check against
 are not separate operations: a member's lifetime is its complete
 object's, which is precise for constant evaluation because no constant
 expression can end a subobject's lifetime independently except through a
-union (tracked) or an explicit destructor call (tracked in
-`std::allocator` storage, "Transient allocation", WP-212).
+union (tracked) or an explicit destructor call (tracked per byte,
+"Transient allocation", WP-212, WP-222).
 Looking a member up by offset (`Types::field_at`, `subobject_at`,
 `has_member_at`) skips zero-size members (libc++'s `char __padding_[0]`
 shares its offset with the next member). Within a union, extents are
@@ -1193,10 +1236,9 @@ bench/oven/churn-tree.cpp within 1% of its pre-WP-076 instruction count
   destructor calls (`p->~T()`) and `::operator new`/`::operator delete`
   are evaluated (WP-212, "Transient allocation").
   An explicit call of a trivial destructor (WP-215) evaluates the
-  object expression and runs nothing; lifetime is tracked only in
-  `std::allocator` storage, so after `p->~T()` on a local kiln still
-  accepts a later read and the implicit destruction at scope end
-  (clang rejects both). Inheriting constructors (WP-114) evaluate their
+  object expression and runs nothing but the lifetime bookkeeping
+  (WP-222: a later read, or the implicit destruction at scope end, is
+  diagnosed as by clang). Inheriting constructors (WP-114) evaluate their
   `CXXInheritedCtorInitExpr` as a call of the base constructor with the
   inheriting constructor's own arguments (`compile/class.rs`
   `inherited_ctor`); notes name a non-constexpr inherited constructor

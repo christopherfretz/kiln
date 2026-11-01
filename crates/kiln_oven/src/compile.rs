@@ -828,6 +828,12 @@ impl<'a> Compiler<'a> {
                 ExprKind::UnaryOperator if ast.exprs.unary_op(e).is_postfix() => {
                     ast.exprs.operand(e)
                 }
+                // A qualified name begins at its qualifier (`::operator
+                // new`, `std::construct_at`; clang's `getBeginLoc`), which
+                // sema records when it is not the name's own location.
+                ExprKind::DeclRefExpr => {
+                    return ast.templates.expr_begin.get(e).copied().unwrap_or(n.loc());
+                }
                 _ => return n.loc(),
             };
         }
@@ -3400,9 +3406,10 @@ impl Compiler<'_> {
                 let it = self.ety(ie);
                 let (w, s) = int_of(self.kind(it)).unwrap_or((64, true));
                 let r = self.reg();
-                // clang's `ArraySubscriptExpr::getExprLoc`: the base's.
+                // clang diagnoses the element step at the base's begin
+                // (`this->b[n]` at `this`, `(*this).b[n]` at the paren).
                 let pc = self.emit_at(Op::PtrAdd, int_aux(w as u8, s), &[r, p, i, ety.0], e);
-                let loc = self.ast().exprs.get(pe).loc();
+                let loc = self.begin(pe);
                 if let Some(site) = self.o.sites.last_mut().filter(|x| x.pc == pc as u32) {
                     site.loc = loc;
                 }

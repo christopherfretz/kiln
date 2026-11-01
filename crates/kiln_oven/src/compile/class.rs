@@ -857,7 +857,8 @@ impl Compiler<'_> {
         // ([basic.life]/1.4; spec/oven.md "Transient allocation").
         let dtor = cls.filter(|_| self.ast().decls.get(md).kind() == DeclKind::CXXDestructor);
         if let Some(cls) = cls {
-            let (aux, at) = if dtor.is_some() { (1, loc) } else { (4, self.node(callee_e).loc()) };
+            // clang diagnoses both at the member name (`s.~S()`: `~S`).
+            let (aux, at) = (if dtor.is_some() { 1 } else { 4 }, self.node(callee_e).loc());
             self.emit_site(Op::EndLife, aux, &[this, cls.0], e, at);
         }
         // An explicit call of a trivial destructor (`p->~W()`) runs nothing

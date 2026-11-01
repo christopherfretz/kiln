@@ -7,6 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use kiln_ast::DeclId;
+use kiln_ast::decl::DeclKind;
 use kiln_ast::ids::ArgListId;
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -266,11 +267,13 @@ impl InstantiationStack {
     }
 
     /// The context notes for a diagnostic emitted now, or none when this
-    /// depth was already printed (§10.2). `name` renders an entity.
+    /// depth was already printed (§10.2). `name` renders an entity;
+    /// `note` picks the frame's note.
     pub(crate) fn context_notes(
         &self,
         limit: u32,
         name: &dyn Fn(&InstFrame) -> Option<String>,
+        note: &dyn Fn(&InstFrame) -> DiagId,
     ) -> Vec<Diag> {
         let n = self.frames.len() as u32;
         if n == 0 || self.last_emitted.get() == n {
@@ -303,7 +306,7 @@ impl InstantiationStack {
             if i >= skip_lo && i < skip_hi {
                 continue;
             }
-            let id = f.kind.note();
+            let id = note(f);
             let mut d = Diag::new(id, kiln_source::Span::empty(f.poi));
             if id.arg_count() == 1 {
                 d = d.arg(name(f).unwrap_or_default());
@@ -427,7 +430,31 @@ impl Sema<'_, '_> {
 
     /// The context notes the next diagnostic carries (§10.2).
     pub(crate) fn inst_context_notes(&self) -> Vec<Diag> {
-        self.inst.stack.context_notes(self.inst.limits.backtrace, &|f| Some(self.frame_name(f)))
+        self.inst.stack.context_notes(
+            self.inst.limits.backtrace,
+            &|f| Some(self.frame_name(f)),
+            &|f| self.frame_note(f),
+        )
+    }
+
+    /// The note a frame prints: its kind's, except that a variable
+    /// template specialization that is a class member is a static data
+    /// member (clang `PrintInstantiationStack`: `VD->isStaticDataMember()`
+    /// picks `note_template_static_data_member_def_here`).
+    fn frame_note(&self, f: &InstFrame) -> DiagId {
+        match f.kind {
+            FrameKind::VarTemplateInstantiation | FrameKind::VarTemplateInit
+                if self
+                    .ast
+                    .decls
+                    .get(f.entity)
+                    .ctx()
+                    .is_some_and(|c| self.kind_of(c) == DeclKind::CXXRecord) =>
+            {
+                DiagId::note_template_static_data_member_def_here
+            }
+            k => k.note(),
+        }
     }
 
     /// How a frame's entity prints in its note: a class by its type
@@ -526,13 +553,13 @@ mod tests {
     fn notes_print_once_per_depth() {
         let mut s = InstantiationStack::default();
         s.push(frame(FrameKind::ClassInstantiation, 1));
-        assert_eq!(s.context_notes(10, &|_| Some("A<int>".into())).len(), 1);
-        assert!(s.context_notes(10, &|_| None).is_empty());
+        assert_eq!(s.context_notes(10, &|_| Some("A<int>".into()), &|f| f.kind.note()).len(), 1);
+        assert!(s.context_notes(10, &|_| None, &|f| f.kind.note()).is_empty());
         s.push(frame(FrameKind::MemberFunction, 2));
-        assert_eq!(s.context_notes(10, &|_| None).len(), 2);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note()).len(), 2);
         let _ = s.pop();
         // Popped below the printed depth: prints again.
-        assert_eq!(s.context_notes(10, &|_| None).len(), 1);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note()).len(), 1);
     }
 
     #[test]
@@ -542,9 +569,9 @@ mod tests {
             s.push(frame(FrameKind::ClassInstantiation, i + 1));
         }
         // 5 + skip note + 5.
-        assert_eq!(s.context_notes(10, &|_| None).len(), 11);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note()).len(), 11);
         s.last_emitted.set(0);
-        assert_eq!(s.context_notes(0, &|_| None).len(), 15);
+        assert_eq!(s.context_notes(0, &|_| None, &|f| f.kind.note()).len(), 15);
     }
 
     #[test]

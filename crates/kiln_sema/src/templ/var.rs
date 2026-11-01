@@ -361,11 +361,12 @@ impl Sema<'_, '_> {
                 let note = self
                     .diag(DiagId::note_instantiation_required_here, info.point_of_instantiation)
                     .arg(explicit);
-                // clang names the template here, unqualified.
+                // clang names the template here, fully qualified without
+                // arguments (`N::X<short>::v`).
                 let msg = self
                     .diag(DiagId::sema_spec_after_instantiation, loc)
                     .range(sid.range)
-                    .arg(self.decl_name(tmpl))
+                    .arg(self.qualified_decl_name(tmpl))
                     .with_note(note);
                 self.emit(msg);
                 return Err(());
