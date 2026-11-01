@@ -698,6 +698,11 @@ impl Sema<'_, '_> {
             }
             // /7: a non-aggregate class: constructors ([over.match.list]).
             if !self.is_aggregate(to) {
+                // /2: a designated-initializer-list converts only to an
+                // aggregate.
+                if l.items.iter().any(|i| !i.designator.is_empty()) {
+                    return Ics::bad(BadKind::InitList, void_from, to);
+                }
                 return self.list_ctor_conversion(l, c, to, opts);
             }
             // /8: an aggregate.

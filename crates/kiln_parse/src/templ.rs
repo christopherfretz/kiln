@@ -17,6 +17,7 @@ use kiln_ast::types::{TagKeyword, TemplateArg, TemplateName};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
+use kiln_sema::DeclSite;
 use kiln_sema::templ::actions::TemplateIdRef;
 use kiln_sema::{Declarator, DeclaratorContext, NameClass};
 use kiln_source::Loc;
@@ -551,6 +552,7 @@ impl Parser<'_, '_> {
             return false;
         }
         let mut d = Declarator::new(DeclaratorContext::Prototype, start);
+        d.site = DeclSite::TemplateParam;
         // An unnamed `int...` / `int&...` is a pack here: a template
         // parameter list has no C variadic ellipsis ([temp.param]/1).
         let saved = std::mem::replace(&mut self.pack_hint, true);
@@ -638,7 +640,9 @@ impl Parser<'_, '_> {
         let a = if ctad_name && let Some(t) = self.at_template_name_arg() {
             t
         } else if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
-            TemplateArg::ty(self.with_greater_op(false, Self::parse_type_id)?)
+            TemplateArg::ty(
+                self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TemplateArg))?,
+            )
         } else if let Some(t) = self.at_template_name_arg() {
             t
         } else {
@@ -1064,6 +1068,7 @@ impl Parser<'_, '_> {
                     break;
                 }
                 let mut d = Declarator::new(DeclaratorContext::Prototype, start);
+                d.site = DeclSite::RequiresParam;
                 self.parse_declarator(&mut d);
                 let p = self.s.act_on_param_declarator(&ds, &d);
                 let idx = u16::try_from(params.len()).unwrap_or(u16::MAX);

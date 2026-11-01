@@ -37,6 +37,7 @@ impl Substituter<'_, '_, '_> {
     /// checks.
     fn chunk(&mut self, base: QualType, chunk: Chunk, loc: Loc) -> SubstResult<QualType> {
         let mut d = Declarator::new(DeclaratorContext::TypeName, loc);
+        d.site = crate::declspec::DeclSite::Subst;
         d.name = self.declarator_name;
         d.chunks.push(chunk);
         let t = self.sema.type_for_declarator_at(base, loc, &d);

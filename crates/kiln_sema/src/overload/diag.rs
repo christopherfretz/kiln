@@ -308,9 +308,12 @@ impl Sema<'_, '_> {
                 out.push(self.surrogate_note(set.cand(c).func()));
             } else {
                 out.push(self.ovl_note(set, c));
-                // clang `MaybeEmitInheritedConstructorNote`.
+                // clang `MaybeEmitInheritedConstructorNote` (not after a
+                // deduction failure: `DiagnoseBadDeduction` omits it).
                 let found = set.cand(c).found;
-                if self.kind_of(found) == DeclKind::ConstructorUsingShadow {
+                if self.kind_of(found) == DeclKind::ConstructorUsingShadow
+                    && !matches!(set.cand(c).failure, CandidateFailure::BadDeduction)
+                {
                     let nominated = self.ast.decls.ctor_shadow_nominated(found);
                     let base = nominated.and_then(|n| self.ast.decls.get(n).ctx()).or_else(|| {
                         self.ast.using_target(found).and_then(|t| self.ast.decls.get(t).ctx())

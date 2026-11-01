@@ -426,6 +426,18 @@ impl Substituter<'_, '_, '_> {
                 let o = self.expr(o)?;
                 Ok(self.sema.act_on_cast(style, ty, o, loc, end))
             }
+            ExprKind::CompoundLiteralExpr => {
+                // WP-180: clang's `TransformCompoundLiteralExpr` rebuilds
+                // through `BuildCompoundLiteralExpr` with the instantiated
+                // type and list.
+                let o = ex(self).compound_literal_init(e);
+                if self.sema.ast.exprs.get(o).kind() != ExprKind::InitListExpr {
+                    return self.unimplemented("substitution into this compound literal", loc);
+                }
+                let ty = self.ty(n.ty(), loc)?;
+                let l = self.init_list(o)?;
+                Ok(self.sema.act_on_compound_literal(ty, &l, loc))
+            }
             ExprKind::BuiltinBitCastExpr => {
                 // WP-074: `__builtin_bit_cast(T, e)` (a dependent one keeps
                 // `T` as its type and `e` unmaterialized).
@@ -628,6 +640,7 @@ impl Substituter<'_, '_, '_> {
         };
         let base = self.ty(x.allocated_ty, x.type_loc)?;
         let mut declarator = Declarator::new(DeclaratorContext::TypeName, x.type_loc);
+        declarator.site = crate::declspec::DeclSite::New;
         if n.has(ExprFlags::ARRAY_FORM) {
             let size = self.opt_expr(x.array_size)?;
             declarator.chunks.push(Chunk::Array { size, loc: x.type_loc });

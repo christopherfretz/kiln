@@ -17,6 +17,7 @@ use kiln_ast::types::TagKeyword;
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind, Token};
+use kiln_sema::DeclSite;
 use kiln_sema::{
     BaseSpecInfo, Chunk, DeclSpec, Declarator, DeclaratorContext, Initializer, MemInitId,
     MemInitInfo, NameClass, SpecialName, StorageSpec, TypeSpecKind,
@@ -1673,9 +1674,10 @@ impl Parser<'_, '_> {
             return;
         }
         let mut cd = Declarator::new(DeclaratorContext::TypeName, self.loc());
+        cd.site = DeclSite::ConversionId;
         self.parse_conversion_declarator(&mut cd);
         let base = self.s.type_from_declspec(&ds);
-        let ty = self.s.type_for_declarator(base, &cd);
+        let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &cd);
         if ds.invalid || cd.invalid {
             d.invalid = true;
         }

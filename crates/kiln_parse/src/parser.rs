@@ -677,40 +677,6 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.eat(Punct::Semi);
     }
 
-    /// The index of the first of `targets` at bracket depth 0, scanning
-    /// from the current token and stopping at an unbalanced closer, `{`,
-    /// `;` (unless a target) or end of file.
-    pub(crate) fn scan_for(&self, targets: &[Punct]) -> Option<(usize, Punct)> {
-        let mut depth = 0u32;
-        let mut i = self.pos;
-        loop {
-            let t = self.tok_at(i);
-            let p = match t.kind {
-                TokKind::Eof => return None,
-                TokKind::Punct(p) => p,
-                _ => {
-                    i += 1;
-                    continue;
-                }
-            };
-            if depth == 0 && targets.contains(&p) {
-                return Some((i, p));
-            }
-            match p {
-                Punct::LParen | Punct::LSquare => depth += 1,
-                Punct::RParen | Punct::RSquare => {
-                    if depth == 0 {
-                        return None;
-                    }
-                    depth -= 1;
-                }
-                Punct::LBrace | Punct::RBrace | Punct::Semi if depth == 0 => return None,
-                _ => {}
-            }
-            i += 1;
-        }
-    }
-
     // -- names --------------------------------------------------------------------
 
     /// Classifies the (possibly qualified) name starting at token index
