@@ -3342,7 +3342,19 @@ impl Sema<'_, '_> {
     /// False after a diagnostic.
     pub(crate) fn check_constexpr_var_literal(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
-        if vn.has(DeclFlags::INVALID) || !self.constexpr_var_non_literal(v) {
+        if vn.has(DeclFlags::INVALID) {
+            return true;
+        }
+        // `RequireLiteralType` first requires a complete type, which
+        // instantiates a class template specialization ([temp.inst]/2).
+        if self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+            && let Some(q) = vn.ty()
+            && !self.is_error_type(q)
+            && !self.is_dependent_type(q)
+        {
+            let _ = self.require_complete_silent(self.base_element(q), vn.loc());
+        }
+        if !self.constexpr_var_non_literal(v) {
             return true;
         }
         let q = vn.ty().unwrap_or(QualType::ERROR);
@@ -3351,6 +3363,54 @@ impl Sema<'_, '_> {
         self.emit(msg);
         self.ast.decls.set_flags(v, DeclFlags::INVALID);
         false
+    }
+
+    /// [dcl.constexpr]/4 (clang `CheckConstexprFunctionDefinition`, which
+    /// applies it to every non-static member function): a `constexpr`
+    /// member function defined outside an instantiation, in a class with
+    /// virtual bases, is an error with a note per virtual base; the
+    /// function is invalid.
+    fn check_constexpr_virtual_base(&mut self, f: DeclId) {
+        let kind = self.kind_of(f);
+        let member = matches!(
+            kind,
+            DeclKind::CXXMethod
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+                | DeclKind::CXXConversion
+        );
+        if !member
+            || self.is_static_method(f)
+            || !self.inst.stack.frames.is_empty()
+            || self.ast.decls.get(f).has(DeclFlags::INVALID)
+            || !self
+                .ast
+                .decls
+                .function(f)
+                .is_some_and(|x| x.spec.constexpr_kind() != ConstexprKind::None)
+        {
+            return;
+        }
+        let Some(class) = self.ast.decls.get(f).ctx() else { return };
+        let Some(def) = self.ast.definition(class) else { return };
+        if !self.defn_bits(def).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return;
+        }
+        let vbases = self.virtual_bases(def);
+        if vbases.is_empty() {
+            return;
+        }
+        let tag = self.ast.decls.record(def).map_or(0, |r| 2 * u8::from(r.tag == TagKind::Class));
+        let mut msg = self
+            .diag(DiagId::sema_constexpr_virtual_base, self.ast.decls.get(f).loc())
+            .arg(u8::from(kind == DeclKind::CXXConstructor))
+            .arg(tag)
+            .arg(u8::from(vbases.len() != 1));
+        for (_, b) in vbases {
+            msg = msg.with_note(self.diag(DiagId::note_constexpr_virtual_base_here, b.loc));
+        }
+        self.emit(msg);
+        self.ast.decls.set_flags(f, DeclFlags::INVALID);
     }
 
     /// Whether `v` is a `constexpr` variable of a known, complete
@@ -3570,6 +3630,7 @@ impl Sema<'_, '_> {
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
         }
+        self.check_constexpr_virtual_base(f);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
             && !self.in_template()

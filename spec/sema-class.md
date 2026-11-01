@@ -734,6 +734,14 @@ using-declarators), `class/inhctor.rs` (the inheriting constructor),
   (`constexpr_var_virtual_base`); constructing one inside a constant
   evaluation traps in the Oven with clang's `CheckLiteralType` note
   "non-literal type 'X' cannot be used in a constant expression" (WP-146).
+  The literal-type check first requires a complete type, so it
+  instantiates a class template specialization (WP-170). A `constexpr`
+  (or `consteval`) non-static member function, constructor or destructor
+  defined in a class with virtual bases is clang
+  `CheckConstexprFunctionDefinition`'s "constexpr constructor/member
+  function not allowed in struct/class with virtual base class(es)" at
+  its definition, with the same notes, and is invalid; it is checked
+  outside instantiations only (`check_constexpr_virtual_base`, WP-170).
   A C-variadic base constructor is inlined at each call by codegen
   (codegen.md); a template-variadic one is inherited per specialization,
   as clang.

@@ -639,6 +639,7 @@ diag_ids! {
     sema_constexpr_var_non_constant = Error (1) "constexpr variable '{0}' must be initialized by a constant expression";
     sema_constexpr_var_requires_const_destruction = Error (1) "constexpr variable '{0}' must have constant destruction";
     sema_constexpr_var_non_literal = Error (1) "constexpr variable cannot have non-literal type {0}";
+    sema_constexpr_virtual_base = Error (3) "constexpr {0:member function|constructor} not allowed in {1:struct|interface|class} with virtual base {2:class|classes}";
     sema_constinit_local = Error (0) "local variable cannot be declared 'constinit'";
     sema_constinit_non_constant = Error (0) "variable does not have a constant initializer";
     sema_missing_constinit = Warning [MissingConstinit] (1) "'constinit' specifier missing on initializing declaration of '{0}'";
