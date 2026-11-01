@@ -3295,6 +3295,33 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// A list or parenthesized initializer that depends on a template
+    /// parameter: kept for instantiation; returns whether it was.
+    fn defer_dependent_init(&mut self, v: DeclId, ty: QualType, init: &Initializer) -> bool {
+        if let Initializer::List(l) = init
+            && (self.ast.types.is_dependent(ty) || self.init_list_type_dependent(l))
+        {
+            // Initialized at instantiation ([temp.dep.expr]); clang keeps
+            // the list as written with type `void` (and `int[]` unbounded).
+            let e = self.dependent_init_list(l);
+            self.set_dependent_var_init(v, e);
+            return true;
+        }
+        if let Initializer::Paren(es, l, r) = init
+            && es.len() > 1
+            && (self.ast.types.is_dependent(ty)
+                || es.iter().any(|&a| self.expr_is_type_dependent(a)))
+        {
+            // `T x(a, b)` with a dependent `T` or argument: initialized at
+            // instantiation, kept as a `ParenListExpr` (clang
+            // `ActOnParenListExpr` / `AddInitializerToDecl`).
+            let e = self.builder().paren_list(es, *l, *r);
+            self.set_dependent_var_init(v, e);
+            return true;
+        }
+        false
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -3363,25 +3390,7 @@ impl Sema<'_, '_> {
             self.discard_initializer(&init);
             return;
         }
-        if let Initializer::List(l) = &init
-            && (self.ast.types.is_dependent(ty) || self.init_list_type_dependent(l))
-        {
-            // Initialized at instantiation ([temp.dep.expr]); clang keeps
-            // the list as written with type `void` (and `int[]` unbounded).
-            let e = self.dependent_init_list(l);
-            self.set_dependent_var_init(v, e);
-            return;
-        }
-        if let Initializer::Paren(es, l, r) = &init
-            && es.len() > 1
-            && (self.ast.types.is_dependent(ty)
-                || es.iter().any(|&a| self.expr_is_type_dependent(a)))
-        {
-            // `T x(a, b)` with a dependent `T` or argument: initialized at
-            // instantiation, kept as a `ParenListExpr` (clang
-            // `ActOnParenListExpr` / `AddInitializerToDecl`).
-            let e = self.builder().paren_list(es, *l, *r);
-            self.set_dependent_var_init(v, e);
+        if self.defer_dependent_init(v, ty, &init) {
             return;
         }
         if self.reject_incomplete_array_init(v, ty, loc, &init) {
