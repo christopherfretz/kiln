@@ -121,6 +121,16 @@ token injection makes it into the IS. Reference compiler: **GCC 16.1.0**
 only as an advisory oracle for AST/diagnostic spot checks — see BACKLOG
 WP-102). Reflection tests default to `oracle: none` with goldens written
 from the P2996 text.
+- **Standard libraries.** `<meta>` is mostly compiler-intrinsic glue, so the
+  library picks the intrinsic surface: kiln keeps ONE reflection core in the
+  Oven (`std::meta::info` as a native value, splices, annotations,
+  `define_aggregate`) behind two thin intrinsic shims, the p2996 fork's
+  `__metafunction(...)` for its `<experimental/meta>` (to get off the ground and
+  run the fork's tests and mirrorbind early) and GCC 16.1's for libstdc++'s
+  production `<meta>`. The same reflection programs run through both headers as
+  a differential check. A kiln-owned `<meta>` is a fallback only. The maturity
+  bar for the compiler is consuming BOTH libc++ (M4/M5 gates) and libstdc++
+  (consumption track from M4, WP-188; mirrorbind under GCC uses it).
 - Exit: mirrorbind (`git@github.com:christopherfretz/mirrorbind.git`) builds
   and its tests pass; its compile time and peak memory with kiln are recorded
   against GCC 16.1 (whose constexpr memory growth is the problem kiln exists
