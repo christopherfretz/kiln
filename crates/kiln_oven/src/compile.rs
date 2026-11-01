@@ -4274,7 +4274,7 @@ impl Compiler<'_> {
             let (base, arrow, destroyed) = ast.exprs.pseudo_destructor(c);
             let p = if arrow { self.rv(base) } else { self.lv_mem(base, Access::Addr) };
             let t = self.ty(destroyed);
-            let loc = self.begin(c);
+            let loc = self.begin(base);
             self.emit_site(Op::EndLife, 3, &[p, t.0], c, loc);
             return self.reg();
         }

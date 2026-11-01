@@ -602,8 +602,13 @@ impl Types {
                                 }
                                 continue;
                             }
+                            // A zero-size member (libc++'s `char
+                            // __padding_[0]` in a short string) shares its
+                            // offset with the next one, which holds the byte.
                             found = Some(*f);
-                            break;
+                            if sz != 0 {
+                                break;
+                            }
                         }
                     }
                     let f = found?;
