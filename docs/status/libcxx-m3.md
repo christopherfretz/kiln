@@ -74,7 +74,7 @@ Per directory, WP-164 → WP-169 → main `e238afa8` → WP-178:
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `8a6aac25` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `3bd00e9d` |
 | libc++ tests | `llvmorg-19.1.7` (`libcxx/test`) |
 | libc++ headers | `_LIBCPP_VERSION` 190107 |
 | target | `aarch64-unknown-linux-gnu` |
@@ -83,8 +83,8 @@ Per directory, WP-164 → WP-169 → main `e238afa8` → WP-178:
 | link flags | `t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi` |
 | features | `-fsized-deallocation`, `buildhost=linux`, `c++26`, `c++experimental`, `can-create-symlinks`, `has-64-bit-atomics`, `has-fconstexpr-steps`, `has-unix-headers`, `kiln`, `large_tests`, `libcpp-abi-version=1`, `libcpp-has-no-availability-markup`, `libcpp-has-thread-api-pthread`, `linux`, `long_tests`, `optimization=none`, `stdlib=libc++`, `stdlib=llvm-libc++`, `target=aarch64-unknown-linux-gnu` |
 | limits | 8192 MiB address space per process (kiln: plus its stack reservation); compile/link timeout 120 s; run timeout 30 s; -j 2 |
-| wall time | 549.3 s |
-| peak RSS | 85 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
+| wall time | 694.1 s |
+| peak RSS | 84 MiB (largest single process, `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_types.pass.cpp`; gnu-time) |
 
 ### Results by directory
 
@@ -146,11 +146,11 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 8 | 7 | 32 | `compile: static assertion expression is not an integral constant expression` | `std/containers/views/views.span/span.cons/copy.pass.cpp` | `static assertion expression is not an integral constant expression` |
 | 9 | 7 | 22 | `compile: expected member name or '…' after declaration specifiers` | `std/language.support/support.limits/support.limits.general/map.version.compile.pass.cpp` | `expected member name or ';' after declaration specifiers` |
 | 10 | 7 | 12 | `compile: member initializer '…' does not name a non-static data member or base class` | `std/utilities/utility/mem.res/mem.poly.allocator.class/mem.poly.allocator.mem/construct_pair.pass.cpp` | `member initializer 'pair' does not name a non-static data member or base class` |
-| 11 | 6 | 22 | `compile: out-of-line definition of '…' does not match any declaration in '…'` | `std/language.support/support.limits/support.limits.general/unordered_map.version.compile.pass.cpp` | `out-of-line definition of '__node_insert_unique' does not match any declaration in 'std::__1::__hash_table'` |
+| 11 | 6 | 22 | `compile: out-of-line definition of '…' does not match any declaration in '…'` | `std/language.support/support.limits/support.limits.general/unordered_map.version.compile.pass.cpp` | `out-of-line definition of '__node_insert_unique' does not match any declaration in 'std::__hash_table'` |
 | 12 | 4 | 14 | `compile: no matching function for call to '…'` | `std/containers/views/views.span/span.cons/assign.pass.cpp` | `no matching function for call to 'size'` |
 | 13 | 4 | 11 | `compile: static assertion failed due to requirement '…'` | `std/numerics/bit/bit.cast/bit_cast.compile.pass.cpp` | `static assertion failed due to requirement '!...'` |
 | 14 | 3 | 9 | `compile: static assertion failed due to requirement '…':` | `std/utilities/meta/meta.rel/is_convertible.pass.cpp` | `static assertion failed due to requirement 'std::is_convertible<Function, Function &&>::value':` |
-| 15 | 3 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::__1::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = cha…` |
+| 15 | 3 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<char>>, _CharT = char]` |
 | 16 | 3 | 3 | `compile: constexpr if condition is not a constant expression` | `std/containers/views/views.span/span.objectrep/as_bytes.pass.cpp` | `constexpr if condition is not a constant expression` |
 | 17 | 3 | 3 | `compile: no matching constructor for initialization of '…'` | `std/containers/views/views.span/span.cons/array.pass.cpp` | `no matching constructor for initialization of 'std::span<const int>'` |
 | 18 | 2 | 6 | `compile: static_cast from '…' (aka '…') to '…' (aka '…') is not allowed` | `std/utilities/utility/mem.res/mem.res.aliases/header_list_synop.pass.cpp` | `static_cast from '__base_pointer' (aka 'std::__list_node_base<int, void *> *') to '__node_pointer' (aka 'std::__list_node<int, void *> *') is not allowed` |
@@ -170,7 +170,7 @@ The three most common first-error clusters among each directory's FAIL tests, wi
 | 32 | 0 | 13 | `compile: no class named '…' in '…'` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `no class named '__sentinel' in 'take_view<_View>'` |
 | 33 | 0 | 13 | `compile: this kind of name is not supported yet` | `std/containers/sequences/array/range_concept_conformance.compile.pass.cpp` | `this kind of name is not supported yet` |
 | 34 | 0 | 7 | `compile: static assertion failed` | `std/containers/views/views.span/range_concept_conformance.compile.pass.cpp` | `static assertion failed` |
-| 35 | 0 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = wchar_t]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::__1::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = …` |
+| 35 | 0 | 6 | `compile: constraints not satisfied for class template '…' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = wchar_t]` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `constraints not satisfied for class template 'std::basic_format_context' [with _OutIt = back_insert_iterator<__format::__output_buffer<wchar_t>>, _CharT = wchar…` |
 | 36 | 0 | 6 | `compile: pack expansion does not contain any unexpanded parameter packs` | `std/language.support/support.limits/support.limits.general/chrono.version.compile.pass.cpp` | `pack expansion does not contain any unexpanded parameter packs` |
 | 37 | 0 | 3 | `compile: a parameter pack may not be accessed at an out of bounds index` | `std/utilities/utility/pairs/pairs.pair/assign.pair_like_rv.pass.cpp` | `a parameter pack may not be accessed at an out of bounds index` |
 | 38 | 0 | 3 | `compile: a type specifier is required for all declarations` | `std/language.support/support.limits/limits/is_specialized.pass.cpp` | `a type specifier is required for all declarations` |
