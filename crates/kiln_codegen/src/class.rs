@@ -1110,8 +1110,9 @@ impl Cg<'_> {
         self.emit_delete_call(od, this.v, ty, loc)
     }
 
-    /// `DestroyField`: destroys field `field` of `*this` (class `record`).
-    pub(crate) fn destroy_field_of_this(&mut self, field: DeclId, record: DeclId) {
+    /// `DestroyField`: destroys field `field` of `*this` (class `record`);
+    /// `eh` as for [`Self::array_destroy_at`].
+    pub(crate) fn destroy_field_of_this(&mut self, field: DeclId, record: DeclId, eh: bool) {
         let ast = self.ast;
         let _ = record;
         let this = self.this_addr();
@@ -1123,22 +1124,24 @@ impl Cg<'_> {
                 return;
             }
         };
-        self.destroy_object(lv.addr, q);
+        self.destroy_object(lv.addr, q, eh);
     }
 
     /// clang `emitDestroy` with `destroyCXXObject`.
-    pub(crate) fn destroy_object(&mut self, a: Addr, q: QualType) {
+    pub(crate) fn destroy_object(&mut self, a: Addr, q: QualType, eh: bool) {
         let Some(rd) = self.destructed_class(q) else { return };
         if self.array_elem(q).is_some() {
-            self.array_destroy_at(a, rd);
+            self.array_destroy_at(a, rd, eh);
         } else {
             self.call_dtor(rd, a.v, false);
         }
     }
 
     /// `emitArrayLength` + `emitArrayDestroy` for the constant-length
-    /// array at `a` (IR type `a.ty`) of objects of class `rd`.
-    pub(crate) fn array_destroy_at(&mut self, a: Addr, rd: DeclId) {
+    /// array at `a` (IR type `a.ty`) of objects of class `rd`; `eh`
+    /// destroys the rest if a destructor throws (clang
+    /// `useEHCleanupForArray`, on the normal path only).
+    pub(crate) fn array_destroy_at(&mut self, a: Addr, rd: DeclId, eh: bool) {
         let mut idx = vec![self.icn(LTy::I32, 0)];
         let mut t = a.ty;
         let mut n = 1u64;
@@ -1151,7 +1154,7 @@ impl Cg<'_> {
             return;
         }
         let begin = self.gep(a.ty, a.v, idx, true);
-        self.array_destroy(begin, n, t, rd);
+        self.array_destroy(begin, n, t, rd, eh);
     }
 
     /// Calls the destructor of `record` on the object at `addr` (`base`:
@@ -1344,13 +1347,15 @@ impl Cg<'_> {
         let elem_size = self.alloc_size(elem);
         let elem_align = min_align(dest.align, elem_size);
         let nn = self.i64c(i128::from(n));
-        self.construct_array_n(e, begin, elem, elem_align, nn)
+        self.construct_array_n(e, begin, elem, elem_align, nn, false)
     }
 
     /// The element loop of clang `EmitCXXAggrConstructorCall`: `num`
     /// objects of type `elem` from `begin`, each constructed by `e` in
     /// its own cleanup scope; a non-constant count is checked for zero
-    /// first (`isempty`).
+    /// first (`isempty`). With `zero_each` every element is
+    /// zero-initialized before its constructor runs (an array new's
+    /// value-initialization, clang's `zeroInitialize`).
     pub(crate) fn construct_array_n(
         &mut self,
         e: ExprId,
@@ -1358,6 +1363,7 @@ impl Cg<'_> {
         elem: LTy,
         elem_align: u64,
         num: V,
+        zero_each: bool,
     ) -> R<()> {
         let ast = self.ast;
         let mut out = None;
@@ -1383,7 +1389,13 @@ impl Cg<'_> {
             let c = Cleanup::PartialArray { begin, end: phi, elem, record: ctor_class };
             self.push_full_expr_cleanup(c, false, true);
         }
-        let r = self.construct_one(e, Addr { v: phi, ty: elem, align: elem_align }, false);
+        let at = Addr { v: phi, ty: elem, align: elem_align };
+        if zero_each && !self.class_bits(ctor_class).contains(DefinitionBits::EMPTY) {
+            // clang `EmitNullInitialization` of the element.
+            let size = self.alloc_size(elem);
+            self.memset(at, 0, size, false);
+        }
+        let r = self.construct_one(e, at, false);
         self.end_scope(sc);
         r?;
         let one = self.i64c(1);

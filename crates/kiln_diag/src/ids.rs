@@ -1607,6 +1607,7 @@ diag_ids! {
     sema_unused_call = Warning [UnusedValue] (1) "ignoring return value of function declared with {0} attribute";
     note_equality_comparison_to_assign = Note (0) "use '=' to turn this equality comparison into an assignment";
     note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
+    sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
 }
 
 impl DiagId {

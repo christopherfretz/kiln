@@ -1165,7 +1165,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn is_noreturn_call(&self, e: ExprId) -> bool {
+    pub(crate) fn is_noreturn_call(&self, e: ExprId) -> bool {
         let n = self.ast.exprs.get(e);
         if !matches!(
             n.kind(),
