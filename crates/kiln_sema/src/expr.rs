@@ -1146,6 +1146,7 @@ impl Sema<'_, '_> {
         if matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar) && n.has(DeclFlags::INVALID) {
             return self.recover_err(&[], loc);
         }
+        self.check_sve_use(d, loc);
         // [dcl.spec.auto.general]/11: a placeholder variable's type is
         // not known inside its own initializer.
         if n.kind() == DeclKind::Var
@@ -2203,6 +2204,35 @@ impl Sema<'_, '_> {
         if conv::standard_conversion(self, l, rt, ConvCtx::Comparison).is_some() {
             let l2 = conv::implicit_convert(self, l, rt, ConvCtx::Comparison).ok()?;
             return Some((l2, r, rt));
+        }
+        self.cv_combined_pointer(l, r, lt, rt)
+    }
+
+    /// [expr.type]/4.3, /4.5 at one level: `void*` and `const T*` give
+    /// `const void*`, `Base*` and `const Derived*` give `const Base*` -- a
+    /// pointer to either pointee with both sides' cv-qualifiers, if both
+    /// operands convert to it.
+    fn cv_combined_pointer(
+        &mut self,
+        l: ExprId,
+        r: ExprId,
+        lt: QualType,
+        rt: QualType,
+    ) -> Option<(ExprId, ExprId, QualType)> {
+        let types = &self.ast.types;
+        let (lpe, rpe) = (types.pointee(lt)?, types.pointee(rt)?);
+        let cv = types.effective_quals(lpe) | types.effective_quals(rpe);
+        for side in [lpe, rpe] {
+            let pointee = self.ast.types.unqualified(side);
+            let pointee = self.ast.types.qualify(pointee, cv);
+            let to = self.ast.types.pointer_to(pointee);
+            if conv::standard_conversion(self, l, to, ConvCtx::Comparison).is_some()
+                && conv::standard_conversion(self, r, to, ConvCtx::Comparison).is_some()
+            {
+                let l2 = conv::implicit_convert(self, l, to, ConvCtx::Comparison).ok()?;
+                let r2 = conv::implicit_convert(self, r, to, ConvCtx::Comparison).ok()?;
+                return Some((l2, r2, to));
+            }
         }
         None
     }
@@ -3317,6 +3347,12 @@ impl Sema<'_, '_> {
         if !self.require_complete(check, loc) {
             let msg = self.diag(DiagId::sema_sizeof_incomplete, loc).arg(name).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(msg, ty));
+            return false;
+        }
+        // clang `err_sizeof_alignof_typeof_sizeless`.
+        if self.ast.types.is_sizeless(check) {
+            let msg = self.diag(DiagId::sema_sizeof_sizeless, loc).arg(name).arg(self.ty_arg(ty));
+            self.emit(msg);
             return false;
         }
         true

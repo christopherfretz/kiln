@@ -489,9 +489,14 @@ impl Parser<'_, '_> {
                 }
                 continue;
             }
-            if !ds.has_type_specifier() && self.template_scope_end(self.pos()).is_some() {
+            if !ds.has_type_specifier()
+                && self.template_scope_end(self.pos()).is_some()
+                && !self.at_special_declarator(ctx)
+            {
                 // `X<A>::name` / `td::name` whose scope the lookahead
-                // cannot look into: parse the scope first.
+                // cannot look into: parse the scope first. Not
+                // `X<T*>::X(`, a constructor of a partial specialization:
+                // the declarator parses its scope, entering it.
                 self.annotate_template_scope();
             }
             if self.decltype_scope_end(self.pos()).is_some() || self.at_decltype_scope() {
@@ -1769,6 +1774,9 @@ impl Parser<'_, '_> {
                         (Quals::VOLATILE, "volatile")
                     };
                     self.bump();
+                    if d.chunks.is_empty() {
+                        d.fn_qual_locs[usize::from(k == Kw::Volatile)].get_or_insert(loc);
+                    }
                     if quals.contains(q) {
                         let diag = self.s.diag(DiagId::parse_duplicate_decl_spec, loc).arg(sp);
                         self.emit(diag);
@@ -1793,6 +1801,9 @@ impl Parser<'_, '_> {
                     && (self.at(Punct::Amp) || self.at(Punct::AmpAmp)) =>
                 {
                     ref_qual = if self.at(Punct::Amp) { RefQual::LValue } else { RefQual::RValue };
+                    if d.chunks.is_empty() {
+                        d.fn_qual_locs[2] = Some(loc);
+                    }
                     self.bump();
                 }
                 _ if self.at(Punct::Arrow) && trailing.is_none() => {

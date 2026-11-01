@@ -570,6 +570,10 @@ pub struct Declarator {
     /// `this` before a parameter-declaration (an explicit object
     /// parameter, P0847 [dcl.fct]/6).
     pub explicit_object: Option<Loc>,
+    /// Where the innermost function declarator's `const`, `volatile` and
+    /// ref-qualifier are ("explicit object member function cannot have
+    /// '...' qualifier" points at the first and quotes them in order).
+    pub fn_qual_locs: [Option<Loc>; 3],
     /// The declarator-id is an operator-function-id (`operator new`):
     /// `name` then holds the `operator` keyword and its location.
     pub op_name: Option<OverloadedOperator>,
@@ -675,6 +679,7 @@ impl Declarator {
             pure: None,
             late_noexcept: None,
             explicit_object: None,
+            fn_qual_locs: [None; 3],
             op_name: None,
             lit_suffix: None,
             ellipsis: None,

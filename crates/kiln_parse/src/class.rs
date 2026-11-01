@@ -182,16 +182,43 @@ impl Parser<'_, '_> {
         true
     }
 
-    /// clang's `ConsumeAndStoreInitializer` (without its template-argument
-    /// heuristics): moves a default argument or default member initializer
-    /// into `out`, up to (not including) the `,`, `)` or `;` that ends it.
-    /// Returns false at end of input or at an unbalanced closer.
+    /// clang's `ConsumeAndStoreInitializer`: moves a default argument or
+    /// default member initializer into `out`, up to (not including) the
+    /// `,`, `)` or `;` that ends it. A `,` after an unclosed `<` may be a
+    /// template argument separator: a tentative parse of what follows
+    /// decides ([`Parser::comma_ends_saved_initializer`]); once one such
+    /// comma did not end it, the `<` is known to open a template argument
+    /// list. Returns false at end of input or at an unbalanced closer.
     pub(crate) fn capture_initializer(&mut self, kind: InitKind, out: &mut Vec<Token>) -> bool {
         let mut first = true;
+        // clang's `AngleCount` (possible unclosed `<`s) and
+        // `KnownTemplateCount`.
+        let (mut angles, mut known) = (0u32, 0u32);
         loop {
             let t = self.tok();
             match Self::punct_of(t) {
-                Some(Punct::Comma) => return true,
+                Some(Punct::Comma) => {
+                    if angles == 0 {
+                        return true;
+                    }
+                    if known == 0 {
+                        if self.comma_ends_saved_initializer(kind == InitKind::Nsdmi) {
+                            return true;
+                        }
+                        known += 1;
+                    }
+                    self.take_into(out);
+                }
+                Some(Punct::Less) => {
+                    angles += 1;
+                    self.take_into(out);
+                }
+                Some(p @ (Punct::Greater | Punct::GreaterGreater)) => {
+                    let n = if p == Punct::Greater { 1 } else { 2 };
+                    angles = angles.saturating_sub(n);
+                    known = known.saturating_sub(n);
+                    self.take_into(out);
+                }
                 Some(Punct::Question) => {
                     if !self.capture_conditional(out) {
                         return false;
@@ -215,6 +242,18 @@ impl Parser<'_, '_> {
                 }
                 Some(Punct::Semi) if kind == InitKind::Nsdmi => return true,
                 _ if t.kind == TokKind::Eof => return false,
+                _ if self.kw_of(t) == Some(Kw::Template) => {
+                    // `template name <` certainly opens template arguments.
+                    self.take_into(out);
+                    if self.ident().is_some() {
+                        self.take_into(out);
+                        if self.at(Punct::Less) {
+                            angles += 1;
+                            known += 1;
+                            self.take_into(out);
+                        }
+                    }
+                }
                 _ if self.kw_of(t) == Some(Kw::Operator) => {
                     // `operator,` and friends: the punctuator is a name.
                     self.take_into(out);
