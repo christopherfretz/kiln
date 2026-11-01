@@ -119,6 +119,34 @@ Each test file names the standard section it covers in its directory path,
 and `spec/` entries list the tests that back them, so coverage of a spec is
 a query, not a guess.
 
+## GitHub Actions
+
+`.github/workflows/ci.yml` runs the same `cargo xtask ci` (full form, clang
+self-check included) on every push to `main`, on every pull request and every
+merge-queue group (`merge_group`). A newer push to the same ref cancels the
+older run (`concurrency: ci-<ref>`).
+
+The job runs in a `debian:trixie` container on the `ubuntu-24.04-arm`
+runner: the same aarch64 Debian 13 with Debian's clang 19.1.7, GCC 14 and
+libc++ 19 as the development container. The packages are installed in the
+first step (`clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev`,
+plus `build-essential procps time`). The environment is pinned because the
+differential tests depend on the host as well as on clang. They check
+search paths, `__has_builtin`/feature tables, target defaults and the
+host's `va_list` against goldens recorded with that clang on that host.
+Ubuntu's clang 19.1.1 fails a handful of them. An x86-64 host fails about
+16 corpus tests and several unit differentials (WP-226 evaluation). Other
+hosts are a follow-up (see BACKLOG). `KILN_REQUIRE_LLVM=1` turns a missing
+LLVM tool into a failure instead of a skip.
+
+`Swatinem/rust-cache` keeps `~/.cargo` and the dependency builds, and
+saves them even when the run fails. A warm run takes about 6 minutes:
+17 s of packages, about 1 minute of workspace build, 2.5 minutes of
+`cargo test`, and then the two corpus runs (46 s clang, 74 s kiln). A cold
+run adds a minute or two. Locally, `cargo xtask ci` is the same gate. Run
+it before pushing `main`, because Actions only reports after the push, and
+the local run is still the merge gate (docs/AGENTS.md rule 3).
+
 ## Differential testing against clang
 
 `clang-19` is the oracle for everything that is not a kiln-specific feature.
