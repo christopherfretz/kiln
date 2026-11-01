@@ -5129,6 +5129,7 @@ impl Sema<'_, '_> {
                             }
                             None => self.diag(DiagId::sema_static_assert_failed, cloc),
                         };
+                        let d = d.range(self.expr_range(c));
                         let recs = self.false_atom_records(inner);
                         let mut notes = Vec::new();
                         self.render_records(&recs, &mut notes, 0);
@@ -5162,6 +5163,9 @@ impl Sema<'_, '_> {
                                 .arg(req),
                         }
                     };
+                    // clang `<< InnerCond->getSourceRange()` (the whole
+                    // condition's for a literal).
+                    let d = d.range(self.expr_range(if lit { c } else { inner }));
                     let d = self.explain_failed_comparison(d, inner);
                     self.emit(d);
                 }
@@ -5228,7 +5232,9 @@ impl Sema<'_, '_> {
             .diag(DiagId::note_expr_evaluates_to, self.ast.exprs.get(c).loc())
             .arg(self.const_display(lv))
             .arg(op)
-            .arg(self.const_display(rv));
+            .arg(self.const_display(rv))
+            .range(self.expr_range(l))
+            .range(self.expr_range(r));
         d.with_note(note)
     }
 

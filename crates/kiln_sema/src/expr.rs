@@ -369,6 +369,14 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The source range of `e` (clang `getSourceRange`) for a diagnostic:
+    /// from its first token to the end of its last (to the last token's
+    /// start in a macro expansion, whose text `token_end` cannot read).
+    pub(crate) fn expr_range(&self, e: ExprId) -> kiln_source::Span {
+        let end = self.expr_end_loc(e);
+        kiln_source::Span::new(self.begin_loc(e), self.token_end(end).unwrap_or(end))
+    }
+
     /// The location of the last token of `e` (clang's `getEndLoc`): the
     /// stored closing token (`)`, `}`) when there is one, else the end of
     /// the last operand for a node that ends with one (a binary or prefix
@@ -696,8 +704,7 @@ impl Sema<'_, '_> {
         // The expression's range (clang `<< R1 << R2` / `getSourceRange`):
         // a diagnostic with a range keeps its "expanded from macro" notes
         // for a macro argument.
-        let end = self.expr_end_loc(e);
-        let range = kiln_source::Span::new(self.begin_loc(e), self.token_end(end).unwrap_or(end));
+        let range = self.expr_range(e);
         let mut d = args.into_iter().fold(self.diag(id, loc), Diag::arg).range(range);
         if let Some(n) = note {
             // The fix-it's range (clang `FixItHint::CreateReplacement` of
@@ -2200,7 +2207,12 @@ impl Sema<'_, '_> {
 
     pub(crate) fn invalid_operands(&mut self, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         let (a, b) = self.ty_arg_pair(self.ety(l), self.ety(r));
-        let msg = self.diag(DiagId::sema_invalid_operands, loc).arg(a).arg(b);
+        let msg = self
+            .diag(DiagId::sema_invalid_operands, loc)
+            .arg(a)
+            .arg(b)
+            .range(self.expr_range(l))
+            .range(self.expr_range(r));
         self.emit(msg);
         self.recover_err(&[l, r], loc)
     }
@@ -3196,7 +3208,8 @@ impl Sema<'_, '_> {
     ) {
         let msg = self
             .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
-            .arg(self.decl_name(d));
+            .arg(self.decl_name(d))
+            .range(self.expr_range(callee));
         let info = self.arg_info(a);
         let ics =
             self.try_implicit_conversion(&info, pt, crate::overload::IcsOptions::CANDIDATE_ARG);
@@ -3470,7 +3483,8 @@ impl Sema<'_, '_> {
                     let d = c.decl;
                     let msg = self
                         .diag(DiagId::sema_ovl_no_viable_function_in_call, self.begin_loc(callee))
-                        .arg(self.decl_name(d));
+                        .arg(self.decl_name(d))
+                        .range(self.expr_range(callee));
                     let detail = self.arity_detail(d, n, min, have, variadic);
                     let fl = self.ast.decls.get(d).loc();
                     let note = self.diag(DiagId::note_ovl_candidate_not_viable, fl).arg(detail);
