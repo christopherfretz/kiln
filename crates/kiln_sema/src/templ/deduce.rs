@@ -440,7 +440,7 @@ impl Sema<'_, '_> {
 
     /// The pattern of a pack-expansion template argument `P`, as an
     /// argument.
-    fn arg_expansion_pattern(&mut self, a: TemplateArg) -> Option<TemplateArg> {
+    pub(crate) fn arg_expansion_pattern(&mut self, a: TemplateArg) -> Option<TemplateArg> {
         match a.view() {
             ArgView::Type(q) => match self.ast.types.view(q.ty()) {
                 TypeView::PackExpansion { pattern, .. } => Some(TemplateArg::ty(pattern)),

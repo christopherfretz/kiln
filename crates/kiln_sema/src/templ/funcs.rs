@@ -166,7 +166,6 @@ impl Sema<'_, '_> {
         let ctx = self.ast.decls.get(f).ctx().unwrap_or(self.ast.tu);
         let pairs = self.inst_context_pairs(self.spec_pairs_ctx(f, tmpl));
         self.in_inst_context(ctx, |s| {
-            s.act_on_start_function_def(f);
             let pp: Vec<DeclId> = s
                 .ast
                 .decls
@@ -179,6 +178,18 @@ impl Sema<'_, '_> {
                 .function(f)
                 .map(|x| s.ast.lists.iter::<DeclId>(x.params).collect())
                 .unwrap_or_default();
+            // The specialization was declared from an earlier declaration
+            // whose parameters may be named differently: the body sees
+            // the definition's names (clang instantiates the parameters
+            // from the definition), so `T e_in` then a local `T e` is no
+            // redefinition of a forward declaration's `e`.
+            if pp.len() == fp.len() {
+                for (&a, &b) in pp.iter().zip(&fp) {
+                    let name = s.ast.decls.get(a).name();
+                    s.ast.decls.set_name(b, name);
+                }
+            }
+            s.act_on_start_function_def(f);
             let lbrace = s.ast.stmts.get(body).loc();
             let rbrace = if s.ast.stmts.get(body).kind() == kiln_ast::stmt::StmtKind::CompoundStmt {
                 s.ast.stmts.rbrace(body)
