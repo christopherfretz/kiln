@@ -199,7 +199,25 @@ array cookies).
   `nobuiltin`, and `operator new` also `allocsize(0)` and the
   `nonnull`/`noalias` return attributes clang adds implicitly
   (`alloc_fn_attrs`, applied in `module.rs::get_fn` and
-  `func.rs::emit_fn_def`).
+  `func.rs::emit_fn_def`). `alloc_fn_attrs` also gives any function
+  with GNU `malloc` and a pointer result a `noalias` result (clang
+  `RestrictAttr`) and turns GNU `alloc_size(n[, m])` into
+  `allocsize(n-1[,m-1])` (the LLVM index counts `this`, like the
+  one-based source index). `extern "C"` namespace-scope `malloc`,
+  `calloc`, `realloc` and `aligned_alloc` with a pointer result are the
+  library builtins clang gives an implicit `allocsize` (`(0)`, `(0,1)`,
+  `(1)`, `(1)`; `aligned_alloc` also an implicit `alloc_align(1)`) (clang
+  `AddKnownFunctionAttributes`).
+- **Direct calls** (`alloc_call_attrs`, from `emit_call` and the
+  non-virtual member call): a direct call of a replaceable `operator
+  new` gets `allocsize(0)`, `noalias` and `nonnull` unless nothrow;
+  other callees their `allocsize` and, with GNU `malloc`, `noalias`
+  (clang `ConstructAttributeList`). An `alloc_align` argument
+  (GNU `alloc_align(n)`, `aligned_alloc`'s, or the `std::align_val_t` of
+  a replaceable `operator new`) that is a constant power of two gives
+  the result `align N`. *Deviation:* for any other alignment clang emits
+  `llvm.assume(i1 true) ["align"(ptr %r, i64 %a)]` after the call; kiln
+  emits nothing (an optimization hint only).
 - **Calls** (`emit_new_delete_call`, clang's `EmitNewDeleteCall`): a
   replaceable callee called from a new- or delete-expression gets the
   `builtin` call-site attribute; an `operator new` call also
@@ -220,7 +238,10 @@ array cookies).
   `select` gives `-1`, in clang's instruction order. The flattened
   element count of a multidimensional new is the count times the inner
   bounds.
-- **Null check.** A `noexcept` allocation function that is neither the
+- **Null check.** (clang: nothrow and (non-POD or `hasInitializer`);
+  class default-init always has a `CXXConstructExpr` initializer in
+  clang's AST, so a nothrow `new` of any class is checked.) A `noexcept`
+  allocation function that is neither the
   reserved placement form nor a replaceable non-nothrow `operator new`
   may return null: when there is an initializer, the result is compared
   with `null` and initialization runs in a not-null block, joined by a `phi`

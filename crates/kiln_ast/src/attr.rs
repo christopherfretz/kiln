@@ -65,6 +65,16 @@ impl AttrKind {
     /// `ExprId`. Like `VECTOR_SIZE`, it is consumed into the declared type
     /// (a `Vector` / `DependentVector`) and never attached to the decl.
     pub const EXT_VECTOR_TYPE: AttrKind = AttrKind(90);
+    /// GNU `malloc` on a function returning a pointer (clang's
+    /// `RestrictAttr`): the result is `noalias` (WP-170).
+    pub const MALLOC: AttrKind = AttrKind(97);
+    /// GNU `alloc_size(n[, m])` (clang `AllocSizeAttr`): `a` / `b` are
+    /// `IntegerLiteral`s holding the one-based parameter indices n / m
+    /// (`b` = 0 when absent) (WP-170).
+    pub const ALLOC_SIZE: AttrKind = AttrKind(98);
+    /// GNU `alloc_align(n)` (clang `AllocAlignAttr`): `a` is an
+    /// `IntegerLiteral` holding the one-based parameter index (WP-170).
+    pub const ALLOC_ALIGN: AttrKind = AttrKind(99);
     /// `clang::using_if_exists` on a using-declaration (WP-062).
     pub const USING_IF_EXISTS: AttrKind = AttrKind(100);
 }

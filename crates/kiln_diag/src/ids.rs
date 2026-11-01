@@ -715,6 +715,13 @@ diag_ids! {
     sema_convertvector_incompatible_vector = Error (0) "first two arguments to __builtin_convertvector must have the same number of elements";
     sema_builtin_arg_must_be = Error (3) "{0:1st|2nd|3rd|4th|5th} argument must be a {1} (was {2})";
     sema_attribute_wrong_decl_type = Warning [IgnoredAttributes] (2) "{0} attribute only applies to {1}";
+    sema_attribute_pointers_only = Warning [IgnoredAttributes] (1) "{0} attribute only applies to return values that are pointers";
+    sema_attribute_pointers_refs_only = Warning [IgnoredAttributes] (1) "{0} attribute only applies to return values that are pointers or references";
+    sema_alloc_size_arg_count = Error (1) "'alloc_size' attribute takes {0:at least 1 argument|no more than 2 arguments}";
+    sema_attribute_param_not_ice = Error (2) "{0} attribute requires parameter {1} to be an integer constant";
+    sema_attribute_param_out_of_bounds = Error (2) "{0} attribute parameter {1} is out of bounds";
+    sema_attribute_param_integers_only = Error (1) "{0} attribute argument may only refer to a function parameter of integer type";
+    sema_attribute_implicit_this_arg = Error (1) "{0} attribute is invalid for the implicit this argument";
     sema_static_assert_failed = Error (0) "static assertion failed";
     sema_static_assert_failed_msg = Error (1) "static assertion failed: {0}";
     sema_static_assert_requirement_failed = Error (1) "static assertion failed due to requirement '{0}'";

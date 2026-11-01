@@ -1581,9 +1581,14 @@ impl Cg<'_> {
             return Ok(r);
         }
         let f = self.get_fn(callee_md)?;
-        let (extra, nr) = self.noreturn_extra(Some(callee_md), cfty);
+        let (mut extra, nr) = self.noreturn_extra(Some(callee_md), cfty);
+        let vals = self.emit_call_args(&sig, args)?;
+        let mut ret_extra = Vec::new();
+        self.alloc_call_attrs(callee_md, &vals, &mut extra, &mut ret_extra);
+        let callee = V::C(Value::func(f));
+        let this = Some(this.v);
         let r =
-            self.call_with(&sig, V::C(Value::func(f)), Some(f), Some(this.v), args, dest, &extra)?;
+            self.call_vals_ret(&sig, callee, Some(f), this, &vals, args, dest, &extra, &ret_extra)?;
         if nr {
             self.finish_noreturn_call();
         }

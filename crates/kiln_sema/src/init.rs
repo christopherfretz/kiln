@@ -846,7 +846,7 @@ impl Sema<'_, '_> {
     /// `E e{v};` for an enumeration `E` with a fixed underlying type `U`
     /// and `v` implicitly convertible to `U` ([dcl.init.list]/3.8): `v`
     /// is converted to `U` (narrowing rejected), then to `E`.
-    fn fixed_enum_list_init(&mut self, ty: QualType, l: &InitList) -> Option<ExprId> {
+    pub(crate) fn fixed_enum_list_init(&mut self, ty: QualType, l: &InitList) -> Option<ExprId> {
         let [InitItem { value: InitValue::Expr(e), designator }] = l.items.as_slice() else {
             return None;
         };

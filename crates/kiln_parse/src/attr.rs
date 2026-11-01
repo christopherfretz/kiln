@@ -27,6 +27,8 @@ fn takes_expr_args(name: &str) -> bool {
             | "warn_unused_result"
             | "ext_vector_type"
             | "vector_size"
+            | "alloc_size"
+            | "alloc_align"
     )
 }
 

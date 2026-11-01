@@ -5172,6 +5172,9 @@ impl Sema<'_, '_> {
             ("const", _, true) => AttrKind::CONST,
             ("pure", _, true) => AttrKind::PURE,
             ("cold", _, true) => AttrKind::COLD,
+            ("malloc", _, true) => AttrKind::MALLOC,
+            ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
+            ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,
             ("ext_vector_type", _, true) => AttrKind::EXT_VECTOR_TYPE,
             ("vector_size", _, true) => AttrKind::VECTOR_SIZE,
             ("using_if_exists", _, true) => AttrKind::USING_IF_EXISTS,
@@ -5187,8 +5190,10 @@ impl Sema<'_, '_> {
                 return None;
             }
         };
-        if matches!(kind, AttrKind::EXT_VECTOR_TYPE | AttrKind::VECTOR_SIZE) {
-            return self.vector_attribute(kind, syntax, &raw, args, loc);
+        if let std::ops::ControlFlow::Break(r) =
+            self.attribute_with_args(kind, syntax, &raw, args, loc)
+        {
+            return r;
         }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED => 1,
@@ -5310,6 +5315,14 @@ impl Sema<'_, '_> {
                 }
                 AttrKind::PACKED => (kind != DeclKind::Field && kind != DeclKind::CXXRecord)
                     .then_some("structs, unions, classes and fields"),
+                AttrKind::MALLOC if !kind.is_function() => Some("functions"),
+                AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN if !kind.is_function() => {
+                    Some("non-K&R-style functions")
+                }
+                AttrKind::MALLOC | AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN => {
+                    self.check_alloc_attr(d, node);
+                    None
+                }
                 _ => None,
             };
             if let Some(what) = bad {
@@ -5317,11 +5330,75 @@ impl Sema<'_, '_> {
                     AttrKind::NODISCARD => "'nodiscard'",
                     AttrKind::NORETURN => "'noreturn'",
                     AttrKind::PACKED => "'packed'",
+                    AttrKind::MALLOC => "'malloc'",
+                    AttrKind::ALLOC_SIZE => "'alloc_size'",
+                    AttrKind::ALLOC_ALIGN => "'alloc_align'",
                     _ => "'alignas'",
                 };
                 let msg =
                     self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc).arg(name).arg(what);
                 self.emit(msg);
+            }
+        }
+    }
+
+    /// GNU `malloc` / `alloc_size` / `alloc_align` on function `d`: the
+    /// return type must be a pointer (`alloc_align`: or a reference), and
+    /// the indices (one-based; index 1 of an implicit object member
+    /// function is `this`) must name integer parameters (clang
+    /// `handleRestrictAttr` / `handleAllocSizeAttr` / `AddAllocAlignAttr`).
+    fn check_alloc_attr(&mut self, d: DeclId, node: AttrNode) {
+        let Some(proto) = self.ast.decls.get(d).ty().and_then(|t| self.ast.types.proto(t)) else {
+            return;
+        };
+        let name = match node.kind {
+            AttrKind::MALLOC => "'malloc'",
+            AttrKind::ALLOC_SIZE => "'alloc_size'",
+            _ => "'alloc_align'",
+        };
+        let t = &self.ast.types;
+        let ret = proto.ret();
+        let refs = node.kind == AttrKind::ALLOC_ALIGN;
+        if !(t.is_pointer(ret) || t.is_dependent(ret) || (refs && t.is_reference(ret))) {
+            let id = if refs {
+                DiagId::sema_attribute_pointers_refs_only
+            } else {
+                DiagId::sema_attribute_pointers_only
+            };
+            let msg = self.diag(id, node.loc).arg(name);
+            self.emit(msg);
+            return;
+        }
+        if node.kind == AttrKind::MALLOC {
+            return;
+        }
+        let params = self.ast.types.params(proto).to_vec();
+        let this = u32::from(self.is_implicit_object_member(d));
+        for (i, raw) in [node.a, node.b].into_iter().enumerate() {
+            let Some(e) = ExprId::from_raw(raw) else { continue };
+            let n = self.ast.exprs.int_value(e).unwrap_or(0);
+            let pos = (i + 1).to_string();
+            if this == 1 && n == 1 {
+                let msg = self.diag(DiagId::sema_attribute_implicit_this_arg, node.loc).arg(name);
+                self.emit(msg);
+                return;
+            }
+            let k = n.checked_sub(1 + u64::from(this)).and_then(|k| usize::try_from(k).ok());
+            let Some(&p) = k.and_then(|k| params.get(k)) else {
+                let msg = self
+                    .diag(DiagId::sema_attribute_param_out_of_bounds, node.loc)
+                    .arg(name)
+                    .arg(pos);
+                self.emit(msg);
+                return;
+            };
+            // clang `checkParamIsIntegerType`: a dependent parameter is
+            // not an integer either.
+            if !self.ast.types.is_integral(p) {
+                let at = self.ast.exprs.get(e).loc();
+                let msg = self.diag(DiagId::sema_attribute_param_integers_only, at).arg(name);
+                self.emit(msg);
+                return;
             }
         }
     }
