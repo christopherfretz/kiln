@@ -643,6 +643,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
+        // The overload candidates' notes go with the error they explain,
+        // also when a range-based `for` holds it back.
+        if !self.trailing_notes.borrow().is_empty()
+            && d.id()
+                .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
+        {
+            for n in self.trailing_notes.take() {
+                d = d.with_note(n);
+            }
+        }
         if let Some((depth, held)) = self.diag_capture.borrow_mut().as_mut()
             && *depth == self.inst.stack.len()
         {
@@ -651,14 +661,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         }
         if self.inst.suppress_next_error.replace(false) {
             return;
-        }
-        if !self.trailing_notes.borrow().is_empty()
-            && d.id()
-                .is_some_and(|id| self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error)
-        {
-            for n in self.trailing_notes.take() {
-                d = d.with_note(n);
-            }
         }
         let mut inst_notes = Vec::new();
         if !self.inst.stack.is_empty()

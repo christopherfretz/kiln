@@ -316,13 +316,47 @@ impl Sema<'_, '_> {
             sub.ty(u, at)
         });
         self.pop_inst_frame();
-        let Ok(u) = r else { return Err(()) };
+        let Ok(u) = r else {
+            self.enable_if_alias_failure(tmpl, written.first().copied());
+            return Err(());
+        };
         // A substitution that checked access depends on the context it
         // was used from: redone at every use, as clang does.
         if self.access_checks == checks {
             let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);
         }
         Ok(self.ast.types.template_specialization(name, list, Some(u), true))
+    }
+
+    /// clang 19's `enable_if_t` rewrite (`CheckTemplateIdType`,
+    /// spec/sema-templates.md §5.7.1): when substituting an alias named
+    /// `enable_if_t` or `__enable_if_t` failed in a SFINAE context with the
+    /// `'enable_if' cannot be used` error, the captured error is replaced
+    /// by the failed requirement of the alias's first argument, at the
+    /// same location. Only the deduction-failure note's text changes.
+    fn enable_if_alias_failure(&mut self, tmpl: DeclId, first: Option<TemplateArg>) {
+        if !self.inst.stack.is_sfinae() || !matches!(self.decl_name(tmpl).as_str(), "enable_if_t" | "__enable_if_t") {
+            return;
+        }
+        let Some(ArgView::Expr { expr, .. }) = first.map(|a| a.view()) else {
+            return;
+        };
+        let mut sf = self.inst.sfinae.borrow_mut();
+        let Some(st) = sf.last_mut() else { return };
+        let Some(old) = st.first.as_ref() else { return };
+        if old.id() != Some(DiagId::sema_typename_nested_not_found_enable_if) {
+            return;
+        }
+        let at = old.loc();
+        drop(sf);
+        let failed = self.failed_condition(expr);
+        let d = self
+            .diag(DiagId::sema_typename_nested_not_found_requirement, at)
+            .arg(self.requirement_text(failed))
+            .range(self.expr_range(failed));
+        if let Some(st) = self.inst.sfinae.borrow_mut().last_mut() {
+            st.first = Some(d);
+        }
     }
 
     /// The arguments an alias template is substituted with: canonical,
