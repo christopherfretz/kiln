@@ -6013,6 +6013,18 @@ impl Sema<'_, '_> {
         {
             return self.classify_template_member(q, name);
         }
+        // A typedef naming a class template specialization that is not
+        // instantiated yet (`typedef X<int> T; T::name<...>`): the
+        // lookahead cannot instantiate, so classify by the template as
+        // for `X<int>::name` (WP-276).
+        if let Some(q) = qualifier
+            && self.kind_of(q) == DeclKind::CXXRecord
+            && self.ast.definition(q).is_none()
+            && let Some((_, spec)) = self.ast.spec_info(q)
+            && spec.kind != kiln_ast::templates::SpecKind::ExplicitSpecialization
+        {
+            return self.classify_template_member(spec.template, name);
+        }
         if let Some(q) = qualifier
             && self.is_dependent_ctx(q)
         {

@@ -271,6 +271,12 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   classified by the primary template's pattern, and, when the pattern
   lacks it, by the explicit and then the partial specializations
   (`Sema::classify_template_member`, WP-130).
+- A typedef qualifier `T::name` whose `T` names a class template
+  specialization that is not instantiated yet (and is not an explicit
+  specialization) is classified the same way, by the specialization's
+  template: the lookahead cannot instantiate, and an undefined class has
+  no members to find (`typedef X<int> T; W<T::rebind<float>, int>`,
+  WP-276).
 - `skip_template_args(i)` memoizes its result by token index `i` in
   `Parser::targs_memo`.
 - A result is valid while `Sema::lookup_stamp()` is unchanged. The stamp
