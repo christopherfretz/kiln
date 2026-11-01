@@ -14,6 +14,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
 | libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
+| libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 
 ## Conformance test format
@@ -144,6 +145,27 @@ the M3 exit gate. A run's `--report` regenerates the per-directory table and
 the error-cluster table of a status page (`docs/status/libcxx-m3.md`). It is
 run by hand or periodically, and the pass rate is tracked there. The
 contract is `spec/libcxx.md`.
+
+`cargo xtask libstdcxx` is the libstdc++ consumption track, also outside
+`ci`. It compiles every public header of the system libstdc++ (the
+extension-less files directly under `/usr/include/c++/<newest>`, so 109
+headers for GCC 14; `bits/`, `ext/`, `tr1/`, ... are reached only through
+them) as a one-line TU `#include <header>` with kiln
+`-std=<std> -stdlib=libstdc++ -fsyntax-only`, and with `clang++-19` on the
+same TU as the reference. Each compile runs under the harness's memory and
+time limits and takes a jobserver token (default `-j 2`). A header is
+`ok`, `fail` (error count and first error), `crash`, `timeout` or `killed`,
+with wall time and peak RSS for both compilers; a kiln failure on a header
+clang++-19 also rejects is counted apart, not as a kiln bug. `--report
+<path>` splices the run's region (summary line, run table, headers table,
+generated error clusters) into a status page between
+`<!-- libstdcxx:<std>:begin/end -->` markers, so one page holds a region
+per standard plus hand-written text; `docs/status/libstdcxx.md` is that
+page, with the hand-written cluster triage and its corpus repros
+(`libstdcxx-*.cpp` under `tests/conformance/`). The exit status is non-zero
+only for a tool error (kiln did not build, a compile could not be run, the
+report could not be written), never for header failures. The contract is
+`spec/libstdcxx.md`.
 
 Each test file names the standard section it covers in its directory path,
 and `spec/` entries list the tests that back them, so coverage of a spec is
