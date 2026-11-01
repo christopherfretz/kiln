@@ -764,6 +764,10 @@ impl Sema<'_, '_> {
     pub(crate) fn note_var_referenced(&mut self, v: DeclId, loc: Loc) {
         let deferred = self.inst.deferred_inits.contains(&v);
         if !deferred && !self.inst.member_defs.contains(&v) {
+            if self.is_var_spec(v) && self.var_pattern_def(v).is_none() {
+                let used = self.unevaluated == 0;
+                self.inst.undefined_var_uses.entry(v).or_insert((loc, used)).1 |= used;
+            }
             return;
         }
         let constant = self.might_be_constant_var(v);
