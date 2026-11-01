@@ -1589,6 +1589,15 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   consteval|immediate function 'f' is not a constant expression` with
   the Oven's notes. Default arguments and default member initializers
   are not checked at their definition (`note_default_init_full_expr`).
+- **Default-argument temporaries** ([class.temporary]/6, WP-216): a
+  default argument is its own full-expression at the definition
+  (`ExprWithCleanups`), but each use takes over its cleanups: the
+  `CXXDefaultArgExpr` child is the argument without that wrapper
+  (`Ast::default_arg_expr`, clang `ParmVarDecl::getDefaultArg`) and
+  `note_default_use` marks the using full-expression as needing cleanups
+  (clang `CheckCXXDefaultArgExpr`), so `g()` with `void g(const X& =
+  X())` destroys the `X` after the call. Codegen, the Oven and the AST
+  dump read the argument through `default_arg_expr`.
 - **Default uses** ([expr.const]/16, [dcl.fct.default]/5, [class.mem]/10;
   WP-137). Each use of a default argument (`convert_call_args`,
   `ctor_args`) or default member initializer (aggregate `field_filler`,
@@ -1979,6 +1988,12 @@ and `DiagnoseMisalignedMembers`:
   - Class, array and reference `T` need temporaries and are
     unsupported (`temporary_unsupported`) until classes have
     constructors (WP-065).
+  - Array `T{...}` (`array_list_cast`, WP-216; `using A = int[2]; A{1,
+    2}`) list-initializes an array prvalue that keeps the cv-qualifiers
+    of `T` ([expr.type]/2). An array of class type with a non-trivial
+    destructor is bound (`CXXBindTemporaryExpr` of the array type,
+    `maybe_bind_temporary` descends to the element type), and so is a
+    braced list bound to a reference to array (`reference_list_init`).
 
 ## 7. Statements (`stmt.rs`)
 - **Compound statements and scopes:** see §2.
