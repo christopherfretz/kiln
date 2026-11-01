@@ -463,7 +463,7 @@ impl Cg<'_> {
                 CastKind::ArrayToPointerDecay => {
                     let lv = self.emit_lvalue(s)?;
                     let decl = self.lvalue_from_decl(s);
-                    let v = self.decay(lv.addr);
+                    let v = self.decay(lv.addr, lv.q);
                     return Ok((v, decl.then_some(lv.addr.align)));
                 }
                 _ => {}

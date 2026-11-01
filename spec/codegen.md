@@ -49,8 +49,9 @@ panic and never silently wrong IR.
   double`, `const _Atomic(int)`, a `const` array or class element), so a
   global whose every use folds is not emitted. A load of a const variable
   is recognized through parentheses and `NoOp` casts (the xvalue cast of
-  an implicitly moved `return x;`). Variables with a `mutable` member are
-  not folded (clang folds their non-mutable members; deviation).
+  an implicitly moved `return x;`). A read of a `mutable` member is not
+  folded (the Oven's "read of mutable member" check, spec/oven.md); the
+  variable's other members are.
   Validation: `tests/codegen/const_fold_lax.cpp`.
 - `builtins.rs`: builtin calls (§3, "Calls"; WP-088).
 - `consts.rs`: turns Oven byte images into `kiln_llvm` constants. It has a
@@ -962,8 +963,23 @@ clang 19 `CGAtomic` at -O0, mirrored:
   yielding `true`; post-increment is `atomicrmw xchg i8 1` (never
   volatile) yielding the old byte in its memory form (`i8`), which clang
   then stores or extends as if it were the `i1` value. Where the value
-  must meet an `i1` (a conditional operator's `phi`) clang 19 emits
-  invalid IR; kiln reports an IR lowering error there.
+  must meet an `i1` clang 19 emits invalid IR; kiln deviates there
+  (WP-183): `eval_bool` (a branch condition, `!`, `&&`, `||`, a `?:`
+  condition) truncates an `i8` value of a `bool` expression to `i1`, and
+  `emit_conditional` converts its second arm to the first arm's type
+  when one is `i1` and the other `i8` (`trunc`, or `zext` that folds a
+  constant), so the `phi` keeps clang's type (the first arm's). Two `i8`
+  arms stay an `i8` `phi`, as in clang (valid IR, oracle-checked in
+  `tests/codegen/atomic_bool_inc.cpp`); the invalid-in-clang cases are a
+  run test with no oracle (`ext.c11.atomic/bool-postinc-run.cpp`).
+- **`_Atomic` aggregates in calls (WP-183).** `_Atomic(T)` with `T` an
+  aggregate is evaluated as an aggregate (`is_atomic_aggregate`, clang's
+  `getEvaluationKind`) for a `return` operand, a parameter, an argument
+  and a call result, and is an aggregate for the ABI (kiln_abi
+  `is_aggregate`, clang's `isAggregateTypeForABI`): x86-64 classifies it
+  `MEMORY` (`sret`/`byval`), AArch64 as an integer-coerced or indirect
+  composite. An `EmitAtomicInit` from an `_Atomic` aggregate initializer
+  (a call result) writes the whole atomic object, unprojected.
 - **Floating `min`/`max_fetch` (WP-165), a deviation:** clang 19 compares
   the old value and the operand with an `icmp` (invalid IR); kiln yields
   `llvm.minnum` / `llvm.maxnum` of the two, the value `atomicrmw fmin` /
@@ -1028,7 +1044,11 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   variable whose initializer does not fold gets a zero initializer and
   needs construction, one of class type with a non-trivial destructor
   (not a reference) needs destruction. The global is `constant` only
-  when it is `const` (not `mutable`) or a reference and needs neither.
+  when it is `const` or a reference and needs neither, and its type is
+  not a class (or array of classes) with a `mutable` member, directly or
+  in a subobject (clang `isTypeConstant`: `hasMutableFields`; WP-183,
+  `module.rs` `has_mutable`, also for static locals and the static data
+  members emitted with their class; `tests/codegen/const_mutable_fields.cpp`).
   Constant-initialized variables keep the constant path unchanged.
 - **Init functions.** Each such variable gets an internal
   `__cxx_global_var_init[.N]` in `.text.startup` (`noinline`, `nounwind`
@@ -1128,6 +1148,7 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
 - **Deviation (mangling, follow-up):** a namespace-scope anonymous union
   variable (`static union { int ga; };`) mangles as `_ZLUt_`; clang
   uses the first named member, `_Z2ga` (Itanium 5.1.2).
+
 ## 7h. Landed (WP-113): explicit instantiation linkage and order
 Linkage follows clang 19's `GetGVALinkageForFunction` /
 `GetGVALinkageForVariable` (`-O0`, ELF). "Under" means the entity's own
@@ -1169,10 +1190,9 @@ Where the definitions are emitted (clang hands them to
   definition is seen (for a variable template, after a non-defining
   `extern` declaration; sema `instantiate_late_var_spec` rebinds the
   specialization to the defining redeclaration): instantiated at the end
-  of the TU
-  and emitted after the last top-level declaration, in explicit
-  instantiation order, before the key-function vtables and the deferred
-  definitions (clang `PerformPendingInstantiations`;
+  of the TU and emitted after the last top-level declaration, in
+  explicit instantiation order, before the key-function vtables and the
+  deferred definitions (clang `PerformPendingInstantiations`;
   `TemplateTables::late_explicit_insts`, `Cg::emit_late_explicit_insts`).
   Members of an explicitly instantiated class that are defined after the
   class's explicit instantiation are not instantiated (as clang).
@@ -1183,12 +1203,41 @@ Where the definitions are emitted (clang hands them to
   them (sema `instantiate_members_of` and codegen `emit_class_members`
   skip `SpecKind::ExplicitSpecialization`, clang
   `InstantiateClassMembers`). An out-of-line `template<>` redeclaration
-  of a static data member or structor of an implicit specialization sets
-  that kind (`Sema::mark_member_explicit_spec`), with or without an
-  explicit instantiation.
+  of a static data member (`Sema::act_on_explicit_member_var_spec`,
+  WP-117) or structor (`Sema::mark_member_explicit_spec`) of an implicit
+  specialization sets that kind, with or without an explicit
+  instantiation.
 
 Tests: `tests/codegen/explicit_instantiation*.cpp`,
 `tests/codegen/structor_rauw_order.cpp` (IR parity on both triples).
+
+## 7i. Landed (WP-183): variable length arrays (`vla.rs`)
+Clang's `EmitAutoVarAlloca` / `EmitVariablyModifiedType` for the GNU
+extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
+- **Bounds.** `emit_vla_bounds(q)` walks a variably modified type
+  (arrays, pointers, references) and evaluates each `VariableArray` bound
+  once per function, zext/trunc to `i64` as unsigned, into
+  `Fx::vla_sizes` (clang `VLASizeMap`). Variable declarations, and
+  `typedef`/alias declarations in a `DeclStmt`, evaluate their bounds at
+  the declaration. The fold prepass (`fold.rs` `vla_bounds`) visits the
+  same bounds, so a `const _Atomic(int)` bound folds to a constant as in
+  clang's `tryEmitAsConstant`.
+- **Stack save.** The first VLA in a scope (`Fx::did_stack_save`, reset by
+  `begin_scope` and restored by `end_scope`, clang `RunCleanupsScope`)
+  allocates a `saved_stack` pointer slot, calls `@llvm.stacksave.p0`, and
+  pushes a normal-only `Cleanup::StackRestore` (`@llvm.stackrestore.p0`).
+- **Allocation.** After the save, `vla_size` multiplies the nested
+  dimensions (`mul nuw`), and `Op::DynAlloca` emits `alloca elem, i64 n`
+  aligned to the element alignment (at least 16 on x86-64, clang's large
+  array alignment). Each non-constant dimension gets an `__vla_expr` `i64`
+  slot and store (debug-info shadow, as clang). VLA elements of class type
+  needing construction or destruction are an M3 "not supported yet" error.
+- **Uses.** Array-to-pointer decay of a VLA emits no GEP; a subscript
+  through a decayed VLA uses the pointer's alignment, and one whose result
+  is itself a VLA scales the index by the element count (`mul nsw`).
+  `sizeof` of a VLA operand or type emits the operand ignored (or its
+  bounds) then `mul nuw` by the element size (skipped for size 1).
+  `kiln_abi::convert_mem` lowers a `VariableArray` as its element type.
 
 ## 7j. Landed (WP-202): libc++ m3 "not supported yet" sweep
 - **Alignment of an allocation function's result** (clang

@@ -117,6 +117,11 @@ pub(crate) enum DeletedAs {
     /// ("conversion function from ... invokes a deleted function"), with
     /// the note on the parameter the argument initializes, if any.
     Conversion(Option<Diag>),
+    /// As `Conversion(None)`, for the operand of a `return`: without a
+    /// viable constructor, clang's "no viable conversion from returned
+    /// value of type ..." (`err_typecheck_nonviable_condition` with the
+    /// `InitializedEntity::EK_Result` select; WP-183).
+    Return,
     /// The [dcl.init.ref]/5.4.1 temporary of a non-class initializer
     /// ("attempt to use a deleted function", clang's ICS-performed
     /// conversion).
@@ -1051,6 +1056,7 @@ impl Sema<'_, '_> {
                     DeletedAs::Param(n) => (None, Some(n), false),
                     DeletedAs::Cast(d) => (Some(d), None, false),
                     DeletedAs::Conversion(n) => (None, n, true),
+                    DeletedAs::Return => (None, None, true),
                 };
                 if let Some(d) = deleted_as {
                     let Some(mk) = mk else {
@@ -1109,14 +1115,18 @@ impl Sema<'_, '_> {
             }
             Selected::Missing | Selected::Ambiguous => {
                 let ambiguous = matches!(sel, Selected::Ambiguous);
+                let ret = matches!(sites.deleted_as, DeletedAs::Return);
                 let (conversion, param_note) = match sites.deleted_as {
                     DeletedAs::Conversion(n) => (true, n),
+                    DeletedAs::Return => (true, None),
                     _ => (false, None),
                 };
                 let msg = if conversion {
                     let from = call.args.first().map_or(QualType::ERROR, |&a| self.ety(a));
                     let id = if ambiguous {
                         DiagId::sema_ovl_ambiguous_conversion
+                    } else if ret {
+                        DiagId::sema_no_viable_conversion_return
                     } else {
                         DiagId::sema_no_viable_conversion
                     };

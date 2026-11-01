@@ -5,7 +5,7 @@
 //! written).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeView};
+use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeFlags, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -22,7 +22,9 @@ impl Substituter<'_, '_, '_> {
     /// constructors do).
     pub fn ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
         let flags = self.sema.ast.types.qflags(q);
-        if !Sema::dependent_flags(flags) {
+        // A variably modified type is always rebuilt: its bound names
+        // the instantiation's entities (clang `SubstType`).
+        if !Sema::dependent_flags(flags) && !flags.contains(TypeFlags::VARIABLY_MODIFIED) {
             return Ok(q);
         }
         self.check_stack(|_| loc)?;
@@ -148,6 +150,11 @@ impl Substituter<'_, '_, '_> {
             TypeView::IncompleteArray(elem) => {
                 let e = self.ty(elem, loc)?;
                 self.chunk(e, Chunk::Array { size: None, loc }, loc)
+            }
+            TypeView::VariableArray { elem, size } => {
+                let e = self.ty(elem, loc)?;
+                let s = self.expr(size)?;
+                self.chunk(e, Chunk::Array { size: Some(s), loc }, loc)
             }
             TypeView::DependentSizedArray { elem, size } => {
                 // A canonical array's bound is profiled: its first
@@ -322,13 +329,20 @@ impl Substituter<'_, '_, '_> {
             // A class template placeholder deduced from type-dependent
             // arguments: deduced again from the substituted ones
             // ([over.match.class.deduct], WP-071b).
+            // A template template parameter's placeholder names its
+            // argument's template ([dcl.type.class.deduct]).
             TypeView::DeducedTemplateSpecialization { name, deduced } => match deduced {
                 Some(d) if d == QualType::DEPENDENT => {
+                    let name = self.template_name(name, loc)?;
                     Ok(self.sema.ast.types.deduced_template_specialization(name, None))
                 }
                 Some(d) => {
                     let d = self.ty(d, loc)?;
                     Ok(self.sema.ast.types.deduced_template_specialization(name, Some(d)))
+                }
+                None if self.sema.ast.types.is_dependent(q) => {
+                    let name = self.template_name(name, loc)?;
+                    Ok(self.sema.ast.types.deduced_template_specialization(name, None))
                 }
                 None => Ok(q),
             },

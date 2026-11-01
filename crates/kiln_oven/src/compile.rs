@@ -2446,6 +2446,11 @@ impl Compiler<'_> {
             TypeView::LValueRef(r) | TypeView::RValueRef(r) => r,
             _ => q,
         };
+        // The size of a variable length array (GNU extension) is not a
+        // constant: clang's generic note at the `sizeof`.
+        if matches!(kind, TraitKind::SizeOf | TraitKind::DataSizeOf) && is_vla(ast, q) {
+            return self.throw_invalid(e);
+        }
         let t = self.ty(q);
         let v = match kind {
             TraitKind::SizeOf => self.o.types.size(t),
@@ -3230,36 +3235,18 @@ impl Compiler<'_> {
                         Local::Mem(p) => Place::Mem(p),
                     };
                 }
-                // A function parameter outside its call: an expression
-                // evaluated in the body (a `static_assert`, an array bound)
-                // has no frame for it. An automatic variable outside its
-                // frame is read like a global: usable if it is `constexpr`
-                // or a `const` integral with a constant initializer
-                // ([expr.const]/4), else its value is unknown.
-                // Its address alone is an unknown object, rejected when the
-                // result is frozen ("pointer to 'x' is not a constant
-                // expression").
-                let addr_only = matches!(acc, Access::Addr) && !is_reference_var(ast, d);
-                if ast.decls.get(d).kind() == DeclKind::ParmVar && !addr_only {
-                    let name = {
-                        let mut s = String::new();
-                        kiln_ast::dump::AstNames::new(ast).write_name(d, &mut s);
-                        s
-                    };
-                    let dl = ast.decls.get(d).loc();
-                    let loc = ast.exprs.get(e).loc();
-                    self.trap_notes(
-                        loc,
-                        format!(
-                            "function parameter '{name}' with unknown value cannot be used in a constant expression"
-                        ),
-                        vec![Note::new(dl, "declared here")],
-                    );
-                    return Place::Mem(self.reg());
-                }
+                // A function parameter outside its call (an expression
+                // evaluated in the body: a `static_assert`, a template
+                // argument) has no frame for it. Like an automatic variable
+                // outside its frame, it takes the globals path as an
+                // external object (`value::var_info`): naming it succeeds
+                // (clang `VisitVarDecl` `Success(VD)`), so `X<&q>` fails in
+                // the result check ("pointer to 'q' is not a constant
+                // expression"), and only a read faults ("function parameter
+                // 'q' with unknown value ...", `notes.rs`).
                 if !matches!(
                     ast.decls.get(d).kind(),
-                    DeclKind::Var | DeclKind::TemplateParamObject | DeclKind::ParmVar
+                    DeclKind::Var | DeclKind::ParmVar | DeclKind::TemplateParamObject
                 ) {
                     self.unsupported(e);
                     return Place::Mem(self.reg());
@@ -4427,5 +4414,18 @@ impl Compiler<'_> {
             e,
             loc,
         );
+    }
+}
+
+/// Whether `q` is a variable length array, or an array of them (GNU
+/// extension; clang `VariableArrayType`).
+pub(crate) fn is_vla(ast: &kiln_ast::Ast, q: QualType) -> bool {
+    let mut q = q;
+    loop {
+        match ast.types.canonical_view(q) {
+            TypeView::VariableArray { .. } => return true,
+            TypeView::ConstantArray(a) => q = a.elem,
+            _ => return false,
+        }
     }
 }

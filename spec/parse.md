@@ -294,6 +294,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   - Keywords are identifiers that `keywords.rs` maps to `Kw` with one
     hash lookup. The table includes the GNU spellings (`__inline__`,
     `__attribute__`, ...).
+  - C-only keywords that clang marks KEYNOCXX are not in the table
+    (WP-183). `_Bool` is a plain identifier in C++, so `_Bool b;`
+    gives "unknown type name '_Bool'", and `sizeof(_Bool)` gives "use
+    of undeclared identifier '_Bool'", as in clang. `_Atomic`,
+    `_Alignas` and `_Alignof` stay, since clang accepts them in C++.
 - **Bracket depth:** `bump` tracks `(`, `[` and `{` nesting, like
   clang's `ParenCount`/`BracketCount`/`BraceCount`.
 - **Expected tokens:**

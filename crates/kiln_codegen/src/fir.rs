@@ -39,6 +39,13 @@ pub(crate) enum Op {
         ty: TypeId,
         align: u64,
     },
+    /// A dynamic `alloca ty, i64 count` at the current insertion point
+    /// (a variable length array, WP-183).
+    DynAlloca {
+        ty: TypeId,
+        count: V,
+        align: u64,
+    },
     Load {
         ty: TypeId,
         ptr: V,
@@ -252,6 +259,7 @@ impl Op {
             Op::InsertElement { vec, elt, idx } => vec![*vec, *elt, *idx],
             Op::ShuffleVector { a, b, .. } => vec![*a, *b],
             Op::Load { ptr, .. } => vec![*ptr],
+            Op::DynAlloca { count, .. } => vec![*count],
             Op::Store { val, ptr, .. } => vec![*val, *ptr],
             Op::Bin { l, r, .. } | Op::ICmp { l, r, .. } | Op::FCmp { l, r, .. } => vec![*l, *r],
             Op::FNeg { v } | Op::Cast { v, .. } => vec![*v],
@@ -718,6 +726,9 @@ impl Fir {
                 };
                 let r = match &inst.op {
                     Op::Alloca { ty, align } => b.alloca(*ty, *align)?,
+                    Op::DynAlloca { ty, count, align } => {
+                        b.alloca_ex(*ty, Some(val(*count)), *align, false)?
+                    }
                     Op::Load { ty, ptr, mem } => b.load_ex(*ty, val(*ptr), *mem)?,
                     Op::Store { val: v, ptr, mem } => b.store_ex(val(*v), val(*ptr), *mem)?,
                     Op::Bin { op, flags, l, r } => {

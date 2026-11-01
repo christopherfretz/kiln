@@ -64,6 +64,10 @@ pub(crate) struct TyInfo {
     /// Contains a subobject of polymorphic class type (whose vptr slots
     /// hold the Oven's dynamic-type words, WP-077).
     pub has_vptr: bool,
+    /// Contains a `mutable` member subobject (reads of it from an object
+    /// whose lifetime began outside the evaluation are diagnosed,
+    /// [expr.const]/5.9).
+    pub has_mutable: bool,
     /// Union subobjects at fixed offsets: `union_pos[upos.0..upos.1]`.
     pub upos: (u32, u32),
 }
@@ -82,6 +86,8 @@ pub(crate) struct FieldInfo {
     /// class's definition); bases precede the members in
     /// [`Types::fields`] (WP-076, [class.derived]).
     pub base: bool,
+    /// A `mutable` member ([dcl.stc]/10).
+    pub mutable: bool,
 }
 
 /// The value class of a scalar type (how many registers, which ops).
@@ -248,6 +254,7 @@ impl Types {
             has_union: e.has_union,
             has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
             has_vptr: e.has_vptr,
+            has_mutable: e.has_mutable,
             upos: (start, end),
         });
         self.arrays.insert((elem, n), t);
@@ -278,6 +285,7 @@ impl Types {
             has_union: false,
             has_ptr: false,
             has_vptr: false,
+            has_mutable: false,
             upos: (0, 0),
         })
     }
@@ -362,6 +370,7 @@ impl Types {
                     has_union: e.has_union,
                     has_ptr: e.has_ptr || matches!(e.kind, TyKind::Ptr(_) | TyKind::NullPtr),
                     has_vptr: e.has_vptr,
+                    has_mutable: e.has_mutable,
                     upos: (start, end),
                 });
                 let _ = self.const_arrays.insert((elem, a.size), t);
@@ -442,7 +451,7 @@ impl Types {
                 (!empty).then_some((rdef, b.ty, ast.first(rd)))
             })
             .collect();
-        let fdecls: Vec<(DeclId, QualType, Option<u32>)> = ast
+        let fdecls: Vec<(DeclId, QualType, Option<u32>, bool)> = ast
             .members(def)
             .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
             .map(|m| {
@@ -451,7 +460,8 @@ impl Types {
                     .field(m)
                     .and_then(|f| f.bit_width)
                     .map(|e| eval_int(ast, e).map_or(0, |v| v.min(1 << 20) as u32));
-                (m, ast.decls.get(m).ty().unwrap_or(QualType::INT), w)
+                let mutable = ast.decls.field(m).is_some_and(kiln_ast::decl::FieldData::is_mutable);
+                (m, ast.decls.get(m).ty().unwrap_or(QualType::INT), w, mutable)
             })
             .collect();
         let layout = bridge.ensure_layout(def);
@@ -469,6 +479,7 @@ impl Types {
         let mut fields = Vec::with_capacity(fdecls.len());
         let (mut has_union, mut has_ptr) = (union, false);
         let mut has_vptr = poly;
+        let mut has_mutable = false;
         let mut upos = Vec::new();
         if union {
             upos.push((0, me));
@@ -479,6 +490,7 @@ impl Types {
             has_union |= bi.has_union;
             has_ptr |= bi.has_ptr;
             has_vptr |= bi.has_vptr;
+            has_mutable |= bi.has_mutable;
             for k in bi.upos.0..bi.upos.1 {
                 let (o, u) = self.union_pos[k as usize];
                 upos.push((off + o, u));
@@ -490,14 +502,16 @@ impl Types {
                 bit: 0,
                 width: None,
                 base: true,
+                mutable: false,
             });
         }
-        for (i, &(m, fq, w)) in fdecls.iter().enumerate() {
+        for (i, &(m, fq, w, mutable)) in fdecls.iter().enumerate() {
             let fty = self.intern(bridge, fq);
             let bits = offs.get(i).copied().unwrap_or(0);
             let fi = *self.info(fty);
             has_union |= fi.has_union;
             has_vptr |= fi.has_vptr;
+            has_mutable |= mutable || fi.has_mutable;
             has_ptr |= fi.has_ptr || matches!(fi.kind, TyKind::Ptr(_) | TyKind::NullPtr);
             if fi.has_union {
                 for k in fi.upos.0..fi.upos.1 {
@@ -513,6 +527,7 @@ impl Types {
                     bit: (bits % 8) as u32,
                     width: Some(w),
                     base: false,
+                    mutable,
                 }),
                 None => fields.push(FieldInfo {
                     decl: m,
@@ -521,6 +536,7 @@ impl Types {
                     bit: 0,
                     width: None,
                     base: false,
+                    mutable,
                 }),
             }
         }
@@ -536,6 +552,7 @@ impl Types {
         info.has_union = has_union;
         info.has_ptr = has_ptr;
         info.has_vptr = has_vptr;
+        info.has_mutable = has_mutable;
         info.upos = (ustart, uend);
         me
     }

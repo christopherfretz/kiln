@@ -195,6 +195,8 @@ impl<'a> IrTypes<'a> {
                 IrType::Array(Box::new(self.convert_mem(a.elem)), n)
             }
             TypeView::IncompleteArray(e) => IrType::Array(Box::new(self.convert_mem(e)), 0),
+            // clang `ConvertType`: a variable length array is its element.
+            TypeView::VariableArray { elem, .. } => self.convert_mem(elem),
             TypeView::Record(d) => {
                 let d = ast.first(d);
                 self.ensure_record(d);
