@@ -468,7 +468,7 @@ impl Sema<'_, '_> {
     ) -> (Vec<(ExprId, DeclId)>, Vec<ExprId>, Vec<ExprId>, Vec<DefaultUse>) {
         let cset: HashMap<ExprId, DeclId> = candidates.iter().copied().collect();
         let rset: HashSet<ExprId> = refs.iter().copied().collect();
-        let uset: HashMap<ExprId, DefaultUse> = uses.iter().map(|u| (u.expr, *u)).collect();
+        let use_map: HashMap<ExprId, DefaultUse> = uses.iter().map(|u| (u.expr, *u)).collect();
         let (mut outer, mut nested, mut bad) = (Vec::new(), Vec::new(), Vec::new());
         let mut live = Vec::new();
         let mut stack = vec![(e, false)];
@@ -485,7 +485,7 @@ impl Sema<'_, '_> {
             } else if !inside && rset.contains(&x) {
                 bad.push(x);
             }
-            if !inside && let Some(&u) = uset.get(&x) {
+            if !inside && let Some(&u) = use_map.get(&x) {
                 live.push(u);
             }
             let kids = self.ast.exprs.children(x, &self.ast.lists);

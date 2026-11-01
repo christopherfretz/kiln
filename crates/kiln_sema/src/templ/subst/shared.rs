@@ -4,7 +4,7 @@
 //! A non-dependent expression is not rebuilt by substitution: the
 //! instantiation reuses the pattern's node. Inside the template definition
 //! its functions were only *referenced* ([temp.res.general]/6), so the
-//! instantiation must odr-use them itself, as clang's TreeTransform does by
+//! instantiation must odr-use them itself, as clang's `TreeTransform` does by
 //! rebuilding the expression (`MarkDeclRefReferenced`, `MarkFunctionReferenced`).
 //! The default arguments and default member initializers it uses have
 //! their immediate invocations evaluated again. Unevaluated operands and
@@ -75,9 +75,9 @@ impl Sema<'_, '_> {
             // used again here: their immediate invocations are evaluated
             // (clang's rebuilt `CXXDefaultArgExpr`/`CXXDefaultInitExpr`).
             let at = match kind {
-                ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
-                    Some(self.begin_loc(self.ast.exprs.callee(x)))
-                }
+                ExprKind::CallExpr
+                | ExprKind::CXXMemberCallExpr
+                | ExprKind::CXXOperatorCallExpr => Some(self.begin_loc(self.ast.exprs.callee(x))),
                 ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => Some(loc),
                 ExprKind::InitListExpr => self.ast.exprs.end_loc(x),
                 _ => None,

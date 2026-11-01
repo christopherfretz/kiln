@@ -6,8 +6,8 @@ use kiln_ast::consts::{
     ByteImage, ByteRange, ConstValue, IntBits, NullKind, PtrBase, Reloc, Scalar, UnionMember,
 };
 use kiln_ast::decl::{DeclKind, VarEvalState};
-use kiln_ast::strings::StringEncoding;
 use kiln_ast::expr::ExprKind;
+use kiln_ast::strings::StringEncoding;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StringLitId};
 use kiln_source::Loc;
 
@@ -357,7 +357,10 @@ impl Oven {
         }
         let what = if reference { "reference" } else { "pointer" };
         Err(Freeze::Notes(vec![
-            Note::new(loc, format!("{what} to a consteval declaration is not a constant expression")),
+            Note::new(
+                loc,
+                format!("{what} to a consteval declaration is not a constant expression"),
+            ),
             Note::new(ast.decls.get(d).loc(), "declared here"),
         ]))
     }
@@ -1054,7 +1057,8 @@ fn expr_loc(ast: &Ast, mut e: ExprId) -> Loc {
             | ExprKind::ImplicitCastExpr => x.operand(e),
             ExprKind::CallExpr | ExprKind::CXXMemberCallExpr => {
                 let c = x.callee(e);
-                let c = if x.get(c).kind() == ExprKind::ImplicitCastExpr { x.operand(c) } else { c };
+                let c =
+                    if x.get(c).kind() == ExprKind::ImplicitCastExpr { x.operand(c) } else { c };
                 let ck = x.get(c).kind();
                 if ck == ExprKind::DeclRefExpr {
                     return ast.templates.expr_begin.get(c).copied().unwrap_or(x.get(c).loc());

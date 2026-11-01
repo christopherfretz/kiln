@@ -117,7 +117,8 @@ impl Sema<'_, '_> {
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
             let e = self.member_of_object(this, obj_ty, class, true, d, shadow, nns, loc);
             if qualified && !self.is_err_expr(e) {
-                self.member_refs.insert(e, MemberRef { decl: d, error: false, qualified, begin: None });
+                self.member_refs
+                    .insert(e, MemberRef { decl: d, error: false, qualified, begin: None });
             }
             return e;
         }

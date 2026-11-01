@@ -2995,12 +2995,12 @@ impl Cg<'_> {
             return;
         }
         let st = self.m.const_type(k);
-        let ssize = self.alloc_size(st);
+        let src_size = self.alloc_size(st);
         let mut dst = dst;
         if st != dst.ty {
-            dst = self.enter_struct_for_coerce(dst, ssize);
+            dst = self.enter_struct_for_coerce(dst, src_size);
         }
-        if ssize > dst_size {
+        if src_size > dst_size {
             // `CreateTempAllocaForCoercion`: at least the preferred
             // alignment (8 for a struct, `a:0:64` on both targets).
             let pref = if self.m.types.struct_fields(st).is_some() {

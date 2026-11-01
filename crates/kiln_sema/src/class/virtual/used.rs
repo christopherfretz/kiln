@@ -96,9 +96,10 @@ impl Sema<'_, '_> {
             }
         }
         let has_vbases = |s: &Self, c: DeclId| {
-            s.ast.definition(c).and_then(|d| s.ast.decls.record(d)).is_some_and(|r| {
-                r.defn.contains(DefinitionBits::HAS_VIRTUAL_BASES)
-            })
+            s.ast
+                .definition(c)
+                .and_then(|d| s.ast.decls.record(d))
+                .is_some_and(|r| r.defn.contains(DefinitionBits::HAS_VIRTUAL_BASES))
         };
         if !has_vbases(self, class) {
             return;
