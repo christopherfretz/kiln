@@ -2730,7 +2730,8 @@ impl Sema<'_, '_> {
         }
         let elem = self.pointee_sugared(ptr).unwrap_or(QualType::ERROR);
         if !self.ast.types.is_function(elem) && !self.require_complete(elem, loc) {
-            let msg = self.diag(DiagId::sema_arith_incomplete_pointee, loc).arg(self.ty_arg(elem));
+            // clang `err_subscript_incomplete_or_sizeless_type`.
+            let msg = self.diag(DiagId::sema_subscript_incomplete_type, loc).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
             return self.recover_err(&[b, i], loc);
         }
@@ -3511,8 +3512,11 @@ impl Sema<'_, '_> {
             x
         };
         if !self.require_complete(check, loc) {
-            let msg = self.diag(DiagId::sema_sizeof_incomplete, loc).arg(name).arg(self.ty_arg(ty));
-            self.emit(self.incomplete_note(msg, ty));
+            // clang names the checked type (`alignof`: the element type).
+            let shown = if size_like { ty } else { check };
+            let msg =
+                self.diag(DiagId::sema_sizeof_incomplete, loc).arg(name).arg(self.ty_arg(shown));
+            self.emit(self.incomplete_note(msg, shown));
             return false;
         }
         // clang `err_sizeof_alignof_typeof_sizeless`.

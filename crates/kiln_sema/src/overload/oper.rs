@@ -728,6 +728,9 @@ impl Sema<'_, '_> {
             self.ensure_implicit(def, crate::class::SpecialKind::MoveAssign);
         }
         let found = self.lookup_in_class_dn(def, DeclName::operator(name), LookupKind::Ordinary);
+        // An ambiguous lookup is diagnosed (clang's `~LookupResult`) and
+        // its declarations still compete.
+        self.diagnose_member_ambiguity(&found, DeclName::operator(name), loc);
         for (&d, &f) in found.decls.iter().zip(&found.found) {
             if self.ast.decls.get(d).has(DeclFlags::INVALID) {
                 continue;

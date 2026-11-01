@@ -181,7 +181,11 @@ operator". Failure: "no matching function for call to object of type 'F'" /
    the M2 built-in path runs. `= [] () ->` resolve only for a class left
    operand.
 2. **Member candidates**: qualified lookup of `operator@` in `T1` if complete
-   or being defined.
+   or being defined (also for `()`, [over.call.object], and for each
+   reversed/rewritten form). An ambiguous lookup ([class.member.lookup]/6)
+   is diagnosed at the operator ("member 'operator()' found in multiple
+   base classes of different types", as clang's `~LookupResult`), and every
+   declaration found stays a candidate (WP-152).
 3. **Non-member candidates**: unqualified lookup of `operator@` from the
    expression's context, skipping class scopes (/3.2), plus ADL over all
    operands.
@@ -352,7 +356,11 @@ error by default).
 | reference | as the referenced type, bound to the temporary |
 | non-class, one element / empty | element's ICS (narrowing → `Bad(Narrowing)`) / identity |
 
-Wording: "cannot convert initializer list argument to 'int'".
+Wording: "cannot convert initializer list argument to 'int'". Every failure
+of a braced argument is `Bad(InitList)` naming the parameter type (for a
+reference, the cv-qualified referenced type: `'const G'` for the implicit
+copy constructor), as clang's `TryListConversion` fails with the list as the
+source (WP-152).
 
 ### 3.4 Comparing ICSs (`compare_ics`, [over.ics.rank])
 (1) /2: `Standard` < `UserDefined` = `Ambiguous` < `Ellipsis`. (2) /3.1
@@ -859,11 +867,21 @@ Where the code differs from (or details) the design above:
   conversion (clang `FindConversionForRefInit`), so the candidate is not
   viable; a declaration's initialization still diagnoses the deleted
   function.
-- **[over.match.list].** Phase 1 runs only when an initializer-list
-  constructor is viable for the arguments (`init_list_phase1_viable`; an
-  empty list with a default constructor value-initializes); otherwise
-  phase 2 over all constructors. Building the `std::initializer_list`
-  object itself is still unsupported.
+- **[over.match.list].** `init_list_ctor_init` (`init.rs`) runs phase 1
+  as overload resolution over the initializer-list constructors and
+  constructor templates (a template's dependent `initializer_list<U>` is
+  recognized through `initializer_list_param` and `U` deduced from the
+  list), with the whole list as the one argument; an empty list with a
+  default constructor value-initializes. When nothing is viable,
+  `construct_class` runs phase 2 over all constructors with the elements;
+  a nested braced-init-list element is a placeholder argument
+  (`act_on_braced_arg`) as in a call (WP-169). The /3.1.1 bit is
+  `StandardConversion::std_init_list` (set on the `std::initializer_list`
+  row of [over.ics.list], for a standard or user-defined sequence);
+  `compare_ics` checks it after the /2 class and before /3.2, so
+  `S({1, 2})` prefers `S(initializer_list<int>)` to
+  `S(const int (&)[2])` (clang). The array-bound tie-breaker of /3.1.2 is
+  not implemented.
 - **Casts.** `static_cast` / functional / C-style casts from a class to a
   non-class type run the direct-initialization's user-defined conversion
   (explicit conversion functions are candidates) with clang's

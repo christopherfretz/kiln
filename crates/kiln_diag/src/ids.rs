@@ -511,6 +511,7 @@ diag_ids! {
     sema_using_decl_conflict = Error (0) "target of using declaration conflicts with declaration already in scope";
     sema_using_decl_conflict_reverse = Error (0) "declaration conflicts with target of using declaration already in scope";
     note_using_decl_target = Note (0) "target of using declaration";
+    sema_using_typename_non_type = Error (0) "'typename' keyword used on a non-type";
     note_using_decl_conflict = Note (0) "conflicting declaration";
     note_using_decl = Note (0) "using declaration";
     sema_use_of_empty_using_if_exists = Error (0) "reference to unresolved using declaration";
@@ -701,6 +702,7 @@ diag_ids! {
     sema_alignment_too_big = Error (1) "requested alignment must be {0} bytes or smaller";
     sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";
     sema_vector_zero_size = Error (0) "zero vector size";
+    sema_zero_array_size_sfinae = Error (0) "zero-length arrays are not permitted in C++";
     sema_vector_size_too_large = Error (0) "vector size too large";
     sema_vector_size_not_multiple = Error (0) "vector size not an integral multiple of component size";
     sema_attribute_requires_integer_constant = Error (1) "{0} attribute requires an integer constant";
@@ -777,6 +779,7 @@ diag_ids! {
     sema_comparison_distinct_pointers = Error (2) "comparison of distinct pointer types ({0} and {1})";
     sema_comparison_pointer_integer = Error (2) "comparison between pointer and integer ({0} and {1})";
     sema_arith_incomplete_pointee = Error (1) "arithmetic on a pointer to an incomplete type {0}";
+    sema_subscript_incomplete_type = Error (1) "subscript of pointer to incomplete type {0}";
     sema_arith_void_pointer = Extension [PointerArith] (1) "arithmetic on{0: a pointer| pointers} to void is a GNU extension";
     sema_arith_function_pointer = Extension [PointerArith] (2) "arithmetic on{0: a pointer| pointers} to the function type {1} is a GNU extension";
     sema_addrof_rvalue = Error (1) "cannot take the address of an rvalue of type {0}";
@@ -1215,6 +1218,7 @@ diag_ids! {
     sema_type_trait_arity = Error (5) "type trait requires {0}{1:| or more} argument{2:|s}; have {3} argument{4:|s}";
     sema_incomplete_type_trait = Error (1) "incomplete type {0} used in type trait expression";
     sema_deprecated_builtin = Warning [DeprecatedBuiltins] (2) "builtin {0} is deprecated; use {1} instead";
+    sema_builtin_pass_in_regs_non_class = Error (1) "argument {0} is not an unqualified class type";
     sema_dimension_expr_not_const = Error (0) "dimension expression does not evaluate to a constant unsigned int";
     sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only compatible with non-bool integers and enum types, but was given {1}";
     sema_only_enums_have_underlying = Error (0) "only enumeration types have underlying types";
