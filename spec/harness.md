@@ -81,12 +81,13 @@ directives are also ERRORs.
 | `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
 | `inst-report: <golden.json>` | kiln-specific: the compile's template instantiation report must equal the golden, timings masked. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
-| `requires: target-<arch>` | Run only when the compiler's default target has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR); otherwise **SKIP** with the reason `requires target-<arch>; the default target is <host>`. The default target is taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228). |
+| `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
+| `requires: clang>=X[.Y[.Z]]` | Run only when every clang the test runs is at least version `X.Y.Z` (missing components are 0). The clangs the test runs are the compiler under test when its kind is clang, and the oracle when its kind is clang and the test compares with it (`oracle` in effect, or `layout`/`vtables`, and an oracle configured). The version is the `X.Y.Z` after `clang version ` in the `--version` line; a clang whose version cannot be read never meets the requirement. Otherwise **SKIP** with the reason `requires clang>=X.Y.Z; the compiler is clang <version>` (or `the oracle is ...`; `... names no clang version` when it cannot be read). With no clang involved (kiln without an oracle, or a non-clang oracle) the requirement is met. For tests that a known defect of an older clang breaks (docs/VALIDATION.md, known oracle defects; WP-239). |
 | `skip[(kiln\|clang)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind. |
 | `xfail[(kiln\|clang)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
-`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `requires`, `verify`, and each `skip`/`xfail` qualifier may appear
+`pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, each `requires` kind (`target-`, `clang>=`), `verify`, and each `skip`/`xfail` qualifier may appear
 at most once; `oven` at most once per
 location (and once without one). If both a qualified marker
 and an unqualified marker apply, the qualified one's reason is reported.
@@ -556,7 +557,8 @@ The outcomes are evaluated in this order:
 
 1. The file cannot be read, or its directives are invalid: **ERROR**.
 2. A `skip` marker applies: **SKIP**.
-   So does an unmet `requires: target-<arch>`.
+   So does an unmet `requires: target-<arch>` or `requires: clang>=X.Y.Z`
+   (target first).
 3. The test is kiln-specific and the compiler is not kiln: **SKIP**.
 4. The test runs. A process that runs out of memory under the cap is
    **KILLED** ("Resource limits"), and a broken test (missing `stdout-file`
@@ -647,6 +649,10 @@ missing. GitHub CI (`.github/workflows/ci.yml`) runs `cargo xtask ci` in a
 (aarch64 Debian 13, clang 19.1.7, GCC 14), with `clang-19 llvm-19 lld-19
 libc++-19-dev libc++abi-19-dev` installed and `KILN_REQUIRE_LLVM=1`, so
 nothing is skipped there (docs/VALIDATION.md "GitHub Actions", WP-226).
+The job `check` (the required status check) and the job `check-x86_64`
+(the same container on the x86-64 `ubuntu-24.04` runner, WP-228) share
+their steps through the composite action `.github/actions/kiln-ci` rather
+than a matrix, which would rename `check` (WP-239).
 
 Landed (WP-096): the kiln-mode run, `--quick`, and the pass criteria above.
 Before it, `ci` ran only the clang self-check, and kiln regressions in the
@@ -698,8 +704,10 @@ from `tests/conformance/stress/`, with
   - `xtask/fixtures/basic/` (one fixture per outcome, with the expected status
     as the file-name prefix), including program arguments, stdin and
     environment, the oracle's binary hanging or crashing, token-wise and text
-    pp comparison, `pp-linemarkers` goldens, placeholders, and `verify`
-    (`pass-verify.cpp`, and `fail-verify.cpp` with its report);
+    pp comparison, `pp-linemarkers` goldens, placeholders, `requires`
+    (a pinned `--target` meeting and missing `target-x86_64`, and an unmet
+    `clang>=999` under the clang compiler) and `verify` (`pass-verify.cpp`,
+    and `fail-verify.cpp` with its report);
   - `xtask/fixtures/oven/`: `oven:` budgets, run against
     `xtask/fixtures/fake-kiln/kiln`, a shell script that identifies as kiln,
     compiles with clang and writes the canned report `<test>.oven.jsonl`

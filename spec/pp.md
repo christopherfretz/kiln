@@ -546,7 +546,7 @@ belong to WP-017, which builds them on `macro_defined` and
   `__DATE__`, `__TIME__` and `__TIMESTAMP__` can be fixed through
   `reproducible_time` and `timestamp`.
 - **Diagnostics.** Every [cpp] diagnostic has a `pp_*` id in
-  `kiln_diag/src/ids.rs`, with clang 19's wording, level and group. After
+  `kiln_diag/src/ids/pp.rs`, with clang 19's wording, level and group. After
   an error in a directive, the rest of the line is skipped.
 
 ## Deviations from clang 19 (each covered by a test or a test note)

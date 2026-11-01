@@ -856,6 +856,25 @@ fn better_binding_kind(a: RefBinding, b: RefBinding) -> bool {
             && b.contains(RefBinding::BINDS_FUNCTION_LVALUE))
 }
 
+/// True if canonical `a` and `b` are the same type but for their
+/// cv-qualifiers, an array's element qualifiers included.
+fn same_but_cv(s: &Sema<'_, '_>, a: QualType, b: QualType) -> bool {
+    let t = &s.ast.types;
+    let (mut a, mut b) = (a, b);
+    for _ in 0..4096 {
+        match (t.view(a.ty()), t.view(b.ty())) {
+            (TypeView::ConstantArray(x), TypeView::ConstantArray(y)) if x.size == y.size => {
+                (a, b) = (t.canonical(x.elem), t.canonical(y.elem));
+            }
+            (TypeView::IncompleteArray(x), TypeView::IncompleteArray(y)) => {
+                (a, b) = (t.canonical(x), t.canonical(y));
+            }
+            _ => break,
+        }
+    }
+    a.without_quals() == b.without_quals()
+}
+
 /// Compares two standard conversion sequences ([over.ics.rank]/3.2,
 /// /4), in clang's `CompareStandardConversionSequences` order.
 pub fn compare_standard_conversions(
@@ -948,10 +967,12 @@ pub fn compare_standard_conversions(
             return IcsCompare::Worse;
         }
         // /3.2.6: the same type but for top-level cv-qualifiers; the
-        // less qualified referent is better.
+        // less qualified referent is better. An array is qualified as
+        // its elements are ([basic.type.qualifier]/3; clang
+        // `getUnqualifiedArrayType`).
         let t = &s.ast.types;
         let (t1, t2) = (t.canonical(a.to_types[2]), t.canonical(b.to_types[2]));
-        if t1.without_quals() == t2.without_quals() && t1.quals() != t2.quals() {
+        if same_but_cv(s, t1, t2) && t.effective_quals(t1) != t.effective_quals(t2) {
             let (q1, q2) = (t.effective_quals(t1), t.effective_quals(t2));
             if q2.contains(q1) && q1 != q2 {
                 return IcsCompare::Better;

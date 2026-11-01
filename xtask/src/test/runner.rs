@@ -25,10 +25,14 @@ pub struct Config {
     pub root: PathBuf,
     pub compiler: PathBuf,
     pub compiler_kind: CompilerKind,
+    /// The compiler's clang version, when it is clang (`requires: clang>=`).
+    pub compiler_clang: Option<directives::ClangVersion>,
     /// The oracle compiler; `None` disables oracle comparisons (`--no-oracle`).
     pub oracle: Option<PathBuf>,
     /// What the oracle is (its stack reservation is allowed for if kiln).
     pub oracle_kind: CompilerKind,
+    /// The oracle's clang version, when it is clang (`requires: clang>=`).
+    pub oracle_clang: Option<directives::ClangVersion>,
     pub update: bool,
     /// Per-run scratch directory (under the cargo target dir).
     pub scratch: PathBuf,
@@ -175,9 +179,9 @@ impl Test<'_> {
         if let Some(r) = spec.skip_reason(kind) {
             return (Status::Skip, Some(r.to_owned()), String::new());
         }
-        // The compiler under test (and the oracle) target this host by
-        // default.
-        if let Some(r) = spec.unmet_requirement(std::env::consts::ARCH) {
+        // The compiler under test (and the oracle) target this host unless
+        // the test pins a `--target`.
+        if let Some(r) = spec.unmet_requirement(std::env::consts::ARCH, &self.clangs_run(&spec)) {
             return (Status::Skip, Some(r), String::new());
         }
         if spec.is_kiln_specific() && kind != CompilerKind::Kiln {
@@ -234,6 +238,23 @@ impl Test<'_> {
                 (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
             }
         }
+    }
+
+    /// The clangs `spec` runs, for `requires: clang>=`: the compiler under
+    /// test when it is clang, and the oracle when it is clang and the test
+    /// compares with it.
+    fn clangs_run(&self, spec: &TestSpec) -> Vec<directives::ClangRun<'static>> {
+        let mut out = Vec::new();
+        if self.cfg.compiler_kind == CompilerKind::Clang {
+            out.push(directives::ClangRun {
+                role: "the compiler",
+                version: self.cfg.compiler_clang,
+            });
+        }
+        if spec.oracle && self.cfg.oracle.is_some() && self.cfg.oracle_kind == CompilerKind::Clang {
+            out.push(directives::ClangRun { role: "the oracle", version: self.cfg.oracle_clang });
+        }
+        out
     }
 
     /// `<program> [-x lang] -std=<std> <mode...> <args...> <file> [-o out]`.

@@ -83,9 +83,22 @@ Constructors:
     declaration created in the scope instance), then the namespace's
     lookup table, and duplicates are removed by moving the last entry
     into the duplicate's slot (`LookupResult::resolveKind`). A qualified
-    lookup lists table order. An ambiguous *type* name (`S s;` with `S`
-    in the namespace and in one of its inline namespaces) is not yet
-    diagnosed: `classify_name` takes the first declaration.
+    lookup lists table order.
+  - **Identity** ([basic.lookup.general]/1, [class.member.lookup]/3;
+    WP-197): declarations of one entity, and type declarations that
+    designate the same type (two typedefs of `int`, a typedef and the
+    class it names), are one result (`is_ambiguous_lookup` compares
+    `designated_type`, canonical, then first declarations; clang's
+    `resolveKind` UniqueTypes). A set that is all functions is an
+    overload set, and an `UnresolvedUsing*` candidate defers the check
+    to instantiation. Member lookup's subobject merge (`class_hit`)
+    keys declarations the same way, and its candidate note names a
+    record by its canonical type.
+  - An ambiguous *type* name (`S s;` with `S` in the namespace and in
+    one of its inline namespaces) is diagnosed by the parser through
+    `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
+    (`ambiguous_type_recovery`) follows clang: the declaration is
+    dropped and the statement skipped.
 - **Block-scope using-directives** ([namespace.udir]/2): a local
   scope's `using namespace N;` is collected while walking outwards, and
   `N`'s members are searched at the nearest enclosing namespace (or the
@@ -999,10 +1012,15 @@ specification as written (`TypeNames` prints ` noexcept`,
       `type::value` and `typename type::vt` nest through it.
     - At block scope in a template, a declarator with a dependent
       qualifier (`using E<T>::A;`, [namespace.udecl]/8: an enumerator)
-      is a local `UnresolvedUsingValue`; its uses are dependent, and
-      the instantiation redoes the declarator (`subst/stmts.rs`
-      `local_using_decl`), so a non-enumerator target is diagnosed
-      then.
+      is a local `UnresolvedUsingValue` (its `using` keyword in
+      `cold.begin_loc`); a use is an `UnresolvedLookupExpr` that finds
+      it, without ADL (clang's dump). The instantiation redoes the
+      declarator (`subst/stmts.rs` `local_using_decl`), so a
+      non-enumerator target is diagnosed then, with its note at the
+      `using`, and a use (`local_using_ref`) is looked up again in the
+      instantiated block. The uses of a declarator that failed
+      (`Substituter::failed_usings`) are errors without another
+      diagnostic (clang's invalid `UsingDecl`; WP-197).
     - A qualifier that is still dependent after substitution (a
       generic lambda in a function template specialization, or a
       local class in one) leaves the declarator unresolved, rebuilt
@@ -1782,8 +1800,10 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   ([expr.const]/22; WP-137).
 - **Escalation** (P2564, [expr.const]/18-20). Immediate-escalating:
   a lambda call operator, a defaulted special member, a `constexpr`
-  function instantiated from a templated entity, and any templated
-  function while its definition is parsed. In one, a failed invocation
+  function instantiated from a templated entity, and a `constexpr`
+  function template while its definition is parsed (not a member of a
+  class template's pattern, clang's `TK_NonTemplate`: its failed
+  invocation is an error at the definition; WP-227). In one, a failed invocation
   or a bad reference makes the function immediate (`FnSpec::escalated`)
   instead of an error: the failed `ConstantExpr` loses its wrapper and
   its callee `DeclRefExpr` (or the `CXXConstructExpr`) is flagged
@@ -1797,9 +1817,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   ([expr.prim.lambda.closure]/10; clang 19 instead rejects every use of
   the conversion of a consteval lambda).
 - **Templates.** A template definition's non-dependent invocations are
-  checked at the definition (they are shared with every instantiation);
-  dependent ones are built and checked at instantiation, with
-  `in instantiation of ...` notes. A `ConstantExpr` is substituted
+  checked at the definition (they are shared with every instantiation),
+  including those of a constructor's mem-initializers, which are not
+  built until instantiation (sema-class.md §4.9); dependent ones are
+  built and checked at instantiation, with `in instantiation of ...`
+  notes. A shared invocation that failed at the definition is evaluated
+  again by each instantiation that substitutes it
+  (`recheck_shared_invocation`): reported again with the instantiation's
+  context, as clang reports its rebuilt `ConstantExpr`, or escalating an
+  immediate-escalating instantiation (`e<int>` of `template<class T>
+  constexpr int e() { return bad(1); }` becomes immediate, so a
+  non-constant call of it is an error; WP-227). A `ConstantExpr` is substituted
   through to its operand and re-wrapped by the rebuilt call. A shared
   (not rebuilt) expression is walked at each instantiation and the
   functions it odr-uses (named, constructors, bound destructors,
@@ -2138,8 +2166,26 @@ clang 19's C99/GNU complex support in C++:
     again merges with its prior initialization, seeded from the prior
     `InitListExpr` (`prior_list`). Seeded slots count as explicit unless
     they are fillers (`ImplicitValueInitExpr`, `CXXDefaultInitExpr`).
-    Descending into a subobject that an expression initialized is
-    unsupported, since clang would build `DesignatedInitUpdateExpr`.
+    Descending into a subobject that an expression initialized keeps
+    that object and re-initializes only part of it ([dcl.init.aggr]/4,
+    C99 6.7.9p19): the slot becomes a `DesignatedInitUpdateExpr` whose
+    base is the old initializer and whose updater is an `InitListExpr`
+    of the subobject's type, with `NoInitExpr` in the slots it does not
+    touch (an array updater runs to its highest index, with
+    `NoInitExpr` holes and filler; a union updater holds only the
+    designated member). Lists nested in an updater fill with
+    `NoInitExpr` too (`Sub::update`, clang `FillWithNoInit`), except a
+    braced value, which value-initializes, and a merged prior list,
+    which keeps its own fill (`is_update_list`). The next designator
+    warns `initializer partially overrides prior initialization of
+    this subobject` with the old initializer noted; keeping the old
+    object of a class with a non-trivial destructor is an error
+    (`initializer would partially override prior initialization of
+    object of type T with non-trivial destruction`). A full override
+    of an initializer that may have side effects notes that they will
+    not occur. Codegen emits the base and then the updater; the Oven
+    does not evaluate it, as clang's evaluator does not (`constexpr
+    variable must be initialized by a constant expression`).
     - out of declaration order: `-Wreorder-init-list` (ExtWarn, in
       `-Wreorder`), at the later value, with the note
       `previous initialization for field` on the earlier one. It covers
@@ -2148,6 +2194,17 @@ clang 19's C99/GNU complex support in C++:
       value, with the note `previous initialization is here`. A union
       initialized through a different member is the DefaultError form,
       at the designator.
+    - Order and override diagnostics are substitution failures
+      whatever their severity (clang's `SFINAEFailure` ExtWarns;
+      `is_sfinae_failure`), so a constraint or a SFINAE'd signature
+      using them fails. The `-Wc99-designator` warnings are not.
+    - In overload resolution ([over.ics.list]/8), a list that
+      initializes a subobject twice converts to no aggregate
+      (`designators_override`, clang `InOverloadResolution`): the same
+      path, a whole object after a part of it, a part after the whole,
+      another member of the same union, through anonymous members.
+      Order does not matter there, and a braced value's own designators
+      are not compared.
     - an unknown field: `field designator 'q' does not refer to any field
       in type T`, at the name.
     - a field designator into a scalar: `field designator cannot
@@ -2171,18 +2228,18 @@ clang 19's C99/GNU complex support in C++:
     designators are carried in `DesignatedInitExpr`s and in the written
     form of non-dependent lists. The semantic checks run on the
     instantiated type at the written locations. A designated pack
-    expansion gives one designated clause per element.
+    expansion gives one designated clause per element. A non-dependent
+    list that the instantiation shares rather than rebuilds keeps the
+    order and override diagnostics its definition check issued
+    (`designator_rewarn`), and each instantiation issues them again
+    under its instantiation note (`reissue_designator_warnings`), as
+    clang's rebuilt list does; a rebuilt list warns again by itself.
+    Neither is deduplicated against the definition's.
   - Deviations:
-    - A non-dependent designated list in a template pattern is not
-      re-checked at instantiation, so clang's repeated
-      `-Wreorder-init-list` under the instantiation note is missing.
     - A range designator whose clause has side effects evaluates the
       clause once per element. clang's codegen refuses it ("cannot
       compile this GNU array range designator extension yet"), and GCC
       evaluates it once.
-    - Reorder and override warnings do not cause a substitution failure
-      (clang's are warnings too, but SFINAE-visible as errors under
-      `-Werror`).
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when

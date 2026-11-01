@@ -358,6 +358,7 @@ impl Sema<'_, '_> {
                 | ExprKind::CallExpr
                 | ExprKind::CXXMemberCallExpr
                 | ExprKind::CXXPseudoDestructorExpr
+                | ExprKind::DesignatedInitUpdateExpr
                 | ExprKind::MemberExpr => true,
                 ExprKind::UnaryOperator => self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
@@ -426,6 +427,11 @@ impl Sema<'_, '_> {
                 ExprKind::UnaryOperator => !self.ast.exprs.unary_op(e).is_postfix(),
                 ExprKind::CXXRewrittenBinaryOperator => {
                     e = self.ast.exprs.rewritten_semantic(e);
+                    continue;
+                }
+                // clang: the base's range.
+                ExprKind::DesignatedInitUpdateExpr => {
+                    e = self.ast.exprs.designated_init_update(e)[0];
                     continue;
                 }
                 ExprKind::CXXOperatorCallExpr => {
@@ -1143,6 +1149,12 @@ impl Sema<'_, '_> {
         self.act_on_call_name_dn(DeclName::ident(name), loc)
     }
 
+    /// True if `d` is declared directly in a function body (a block-scope
+    /// declaration, [basic.scope.block]).
+    pub(crate) fn is_block_scope_decl(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).ctx().is_some_and(|c| self.kind_of(c).is_function())
+    }
+
     /// [`Sema::act_on_call_name`] for any unqualified-id (`operator()(x)`
     /// inside a member function names `this->operator()`; WP-121).
     pub fn act_on_call_name_dn(&mut self, name: DeclName, loc: Loc) -> ExprId {
@@ -1316,20 +1328,19 @@ impl Sema<'_, '_> {
             d = valid[0];
         } else if found.decls.len() > 1 {
             // Distinct entities found via using-directives ([namespace.udir]/6).
-            let text = self.decl_name_str(name);
-            let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
-            for c in self.ambiguity_order(&found.decls, qualifier.is_none()) {
-                let n = self
-                    .diag(DiagId::note_ambiguous_candidate, self.ast.decls.get(c).loc())
-                    .arg(self.qualified_decl_name(c));
-                msg = msg.with_note(n);
-            }
-            self.emit(msg);
+            self.diagnose_ambiguous_reference(name, &found.decls, qualifier.is_none(), loc);
             return self.recover_err(&[], loc);
         }
         if self.kind_of(d) == DeclKind::UnresolvedUsingIfExists {
             self.diag_unresolved_using(d, loc);
             return self.recover_err(&[], loc);
+        }
+        if self.kind_of(d) == DeclKind::UnresolvedUsingValue && self.is_block_scope_decl(d) {
+            // A local named by a dependent block-scope using-declarator
+            // (`using E<T>::a; ... a`): a dependent name looked up again
+            // in the instantiation (clang's `UnresolvedLookupExpr` over
+            // the `UnresolvedUsingValueDecl`, without ADL).
+            return self.builder().unresolved_lookup_in(name, &[d], false, nns, None, true, loc);
         }
         if self.kind_of(d) == DeclKind::UnresolvedUsingValue {
             // A member named by a dependent using-declarator: an implicit

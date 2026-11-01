@@ -1,0 +1,27 @@
+name: kiln-ci
+description: >
+  The steps shared by the `check` and `check-x86_64` jobs (docs/VALIDATION.md
+  "GitHub Actions"): the Debian toolchain packages, the pinned Rust
+  toolchain, the cargo cache, and `cargo xtask ci`. A local action is only
+  readable after checkout, so each job installs git and checks out first.
+runs:
+  using: composite
+  steps:
+    - name: Install the toolchain packages
+      shell: bash
+      run: |
+        apt-get update -qq
+        apt-get install -y -qq --no-install-recommends \
+          ca-certificates curl git build-essential procps time \
+          clang-19 llvm-19 lld-19 libc++-19-dev libc++abi-19-dev >/dev/null
+        clang++-19 --version | head -1
+    - uses: dtolnay/rust-toolchain@stable
+      with: { toolchain: "1.99.1", components: "rustfmt, clippy" }
+    # Saved even when `ci` fails, so the next run starts warm.
+    - uses: Swatinem/rust-cache@v2
+      with: { cache-on-failure: true }
+    # fmt, clippy, cargo test, then both corpus runs (clang self-check and
+    # kiln), as `cargo xtask ci` locally.
+    - name: cargo xtask ci
+      shell: bash
+      run: cargo xtask ci

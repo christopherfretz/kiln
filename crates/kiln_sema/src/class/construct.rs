@@ -259,8 +259,9 @@ impl Sema<'_, '_> {
             DeletedAs::Call => DeletedAs::Conversion(None),
             x => x,
         };
+        let begin = self.begin_loc(e);
         let site = ConstructSite {
-            loc: self.begin_loc(e),
+            loc: begin,
             temp_end: None,
             rparen: None,
             agg_end: None,
@@ -278,7 +279,16 @@ impl Sema<'_, '_> {
             ValueCategory::PRValue,
             None,
         );
-        Some(if ctx == ConvCtx::Argument { self.maybe_bind_temporary(x) } else { x })
+        if ctx == ConvCtx::Argument {
+            return Some(self.maybe_bind_temporary(x));
+        }
+        // The object created for a variable, member or element outlasts
+        // the full-expression, but its destructor is checked here (clang
+        // `SK_UserConversion`, `shouldDestroyEntity`; WP-227).
+        if self.converted_entity_destroyed(ctx) && self.check_element_dtor(to, begin) {
+            return Some(self.recover(to, &[], begin));
+        }
+        Some(x)
     }
 
     /// `T()` for a class `T` ([expr.type.conv]/2, [dcl.init.general]/9):

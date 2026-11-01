@@ -900,11 +900,15 @@ impl<'a> Compiler<'a> {
             // expression that `containsErrors()`).
             return self.trap(e, "");
         }
-        if matches!(k, ExprKind::AtomicExpr | ExprKind::VAArgExpr) {
-            // clang 19 never constant-evaluates an atomic builtin or a
-            // `__builtin_va_arg`: the generic note at the expression (the
-            // lock-free queries are folded in `compile/builtins.rs` before
-            // they reach here).
+        if matches!(
+            k,
+            ExprKind::AtomicExpr | ExprKind::VAArgExpr | ExprKind::DesignatedInitUpdateExpr
+        ) {
+            // clang 19 never constant-evaluates an atomic builtin, a
+            // `__builtin_va_arg` or a `DesignatedInitUpdateExpr` (its
+            // evaluator has no visitor for one): the generic note at the
+            // expression (the lock-free queries are folded in
+            // `compile/builtins.rs` before they reach here).
             return self.throw_invalid(e);
         }
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
