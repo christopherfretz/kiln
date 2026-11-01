@@ -18,7 +18,7 @@ Branch `wp/153-goto-cleanups-noreturn`, worktree `kiln/.worktrees/wp-153`.
 - **`[[noreturn]]`.**
   - Codegen: the `noreturn` attribute goes on declarations and
     definitions, and on direct call sites. Each such call is followed by
-    `unreachable`, as in clang (`kiln_codegen/src/expr.rs:1845`
+    `unreachable`, as in clang (`kiln_codegen/src/expr.rs:1868`
     `noreturn_call`, `kiln_codegen/src/class.rs` `noreturn_extra`).
   - Sema: fall-off analysis now looks at every redeclaration and at member
     calls (`kiln_sema/src/stmt.rs`).
@@ -36,7 +36,7 @@ Branch `wp/153-goto-cleanups-noreturn`, worktree `kiln/.worktrees/wp-153`.
   initializer reports the location of its use:
   - a constructor's name, or the class name for an implicit constructor;
   - the closing `}` of an aggregate initialization.
-  - Code: `kiln_sema/src/builtins.rs:1384` and `class/special/define.rs:635`.
+  - Code: `kiln_sema/src/builtins.rs:1384` and `class/special/define.rs:647`.
     The Oven and codegen read the value through `enter_default_arg`; the
     codegen prepass folds it per use (`kiln_codegen/src/fold.rs:389`).
   - Test: `expr.const/builtins-srcloc-member-init-run.cpp`.
