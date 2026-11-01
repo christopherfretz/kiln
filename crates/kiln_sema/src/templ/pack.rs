@@ -33,6 +33,11 @@ pub struct PackState {
     pub expanding: Option<(u32, String)>,
     /// The `...` of the expansion, where a length mismatch is reported.
     pub ellipsis: Option<Loc>,
+    /// A pack element substituted since the flag was last cleared is a
+    /// type that itself names an unexpanded pack of an enclosing
+    /// template (`alias<T, U>...` with `alias`'s pack bound to `{T, U}`
+    /// inside a template over the packs `T` and `U`).
+    pub element_has_packs: bool,
 }
 
 /// The result of expanding one pattern.
@@ -108,7 +113,13 @@ impl Substituter<'_, '_, '_> {
             ArgView::Pack(l) => {
                 let n = u32::try_from(self.sema.ast.types.args(l).len()).unwrap_or(u32::MAX);
                 let i = self.pack_reached(n, name, loc)?;
-                Ok(self.sema.ast.types.args(l)[i as usize])
+                let e = self.sema.ast.types.args(l)[i as usize];
+                if let ArgView::Type(t) = e.view()
+                    && self.sema.has_unexpanded_pack(t)
+                {
+                    self.pack.element_has_packs = true;
+                }
+                Ok(e)
             }
             _ => Ok(a),
         }
@@ -202,9 +213,15 @@ impl Substituter<'_, '_, '_> {
     /// One element of a type pack expansion: an element that still names
     /// an unexpanded pack (of a level not substituted, `tl<Ts, Us>...`
     /// with only `Ts` known) needs clang's partially-substituted packs.
+    /// An element whose packs came from the pack's own elements (the
+    /// arguments name packs of an enclosing template) is complete.
     pub(crate) fn element_ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
-        let t = self.ty(q, loc)?;
+        let saved = std::mem::take(&mut self.pack.element_has_packs);
+        let t = self.ty(q, loc);
+        let from_elements = std::mem::replace(&mut self.pack.element_has_packs, saved);
+        let t = t?;
         if self.pack_index.is_some()
+            && !from_elements
             && self.sema.ast.types.qflags(t).contains(kiln_ast::types::TypeFlags::UNEXPANDED_PACK)
         {
             return self.unimplemented("partially substituted pack expansion", loc);

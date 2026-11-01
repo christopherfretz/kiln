@@ -238,8 +238,10 @@ impl Sema<'_, '_> {
     }
 
     /// The pattern definition named by `X<args>` when `args` are `X`'s own
-    /// parameters in order and `X`'s definition (or one of its members) is
-    /// being processed ([temp.dep.type]/1.2).
+    /// parameters in order, or the arguments of one of `X`'s partial
+    /// specializations ([temp.spec.partial.member]: its out-of-line
+    /// members), and that definition (or one of its members) is being
+    /// processed ([temp.dep.type]/1.2).
     pub(crate) fn current_instantiation(&self, tmpl: DeclId, ty: QualType) -> Option<DeclId> {
         if self.kind_of(tmpl) != DeclKind::ClassTemplate {
             return None;
@@ -247,19 +249,23 @@ impl Sema<'_, '_> {
         let TypeView::TemplateSpecialization { args, .. } = self.ast.types.view(ty.ty()) else {
             return None;
         };
-        let info = self.ast.template_info(tmpl).copied()?;
+        // A friend redeclaration nested in a class template has deeper
+        // parameters (libc++ `template <class _Up> friend class weak_ptr;`
+        // inside `weak_ptr`).
+        let own_decl = self.head_template(tmpl);
+        let info = self.ast.template_info(own_decl).copied()?;
         let list = *self.ast.templates.param_list(info.params);
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
-        let args = self.ast.types.args(args).to_vec();
-        if params.len() != args.len() {
-            return None;
-        }
-        for (&p, &a) in params.iter().zip(&args) {
-            if !self.arg_names_param(p, a) {
-                return None;
-            }
-        }
-        let pat = self.pattern_of(tmpl)?;
+        let written = self.ast.types.args(args).to_vec();
+        let own = params.len() == written.len()
+            && params.iter().zip(&written).all(|(&p, &a)| self.arg_names_param(p, a));
+        let pat = if own {
+            self.pattern_of(tmpl)?
+        } else {
+            let canonical = self.ast.types.canonical_args(args);
+            let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
+            self.ast.templates.partial(i)?.partial
+        };
         if !self.templ.entering_context && !self.encloses(pat, self.ctx) {
             // `X<P...>` outside `X` (an alias template's or another
             // template's own parameters at the same positions) is an
@@ -1117,14 +1123,21 @@ impl Sema<'_, '_> {
     /// specializations.
     fn injected_class_for(&self, tmpl: DeclId) -> Option<DeclId> {
         let tmpl = self.ast.first(tmpl);
-        let mut c = Some(self.ctx);
-        while let Some(x) = c {
-            if self.kind_of(x) == DeclKind::CXXRecord
-                && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl)
-            {
-                return Some(x);
+        // Lexically enclosing classes (a friend defined in its class),
+        // then semantically enclosing ones (an out-of-line member
+        // definition `template<class T> void X<T>::f() { X x; }` is in
+        // the scope of `X`, [basic.scope.class]).
+        for semantic in [false, true] {
+            let mut c = Some(self.ctx);
+            while let Some(x) = c {
+                if self.kind_of(x) == DeclKind::CXXRecord
+                    && self.injected_template_of(x).is_some_and(|t| self.ast.first(t) == tmpl)
+                {
+                    return Some(x);
+                }
+                let (lex, sem) = (self.ast.decls.lexical_ctx(x), self.ast.decls.get(x).ctx());
+                c = if semantic { sem.or(lex) } else { lex.or(sem) };
             }
-            c = self.ast.decls.lexical_ctx(x).or_else(|| self.ast.decls.get(x).ctx());
         }
         None
     }

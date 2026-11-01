@@ -256,6 +256,16 @@ impl Substituter<'_, '_, '_> {
                 }
                 let base = self.member_base(base)?;
                 let name = self.sema.ast.decls.get(m).name();
+                if name.is_empty() && self.sema.kind_of(m) == DeclKind::Field {
+                    // The unnamed object of an anonymous struct or union
+                    // (`x.u` through an injected `IndirectField`): it has
+                    // no name to look up.
+                    let f = self.find_instantiated_decl(m, loc)?;
+                    let bt = self.sema.ety(base);
+                    let ot = if arrow { self.sema.pointee_sugared(bt).unwrap_or(bt) } else { bt };
+                    let q = self.sema.ast.types.effective_quals(ot);
+                    return Ok(self.sema.field_access(base, f, q, arrow, loc));
+                }
                 let name = self.member_name(name, loc)?;
                 // A member template-id `x.f<args>` (§6.4).
                 let targs = match self.sema.ovl.members.get(&e).and_then(|m| m.targs) {
@@ -501,6 +511,16 @@ impl Substituter<'_, '_, '_> {
                 })
             }
             ExprKind::CXXNewExpr => self.new_expr(e, loc, end),
+            ExprKind::CXXDeleteExpr => {
+                // [expr.delete], rebuilt from the operand as written (clang
+                // `TransformCXXDeleteExpr`).
+                let o = ex(self).delete_operand(e);
+                let o = self.expr(o)?;
+                let global = n.has(ExprFlags::GLOBAL);
+                let array = n.has(ExprFlags::ARRAY_AS_WRITTEN);
+                let cxx26 = self.sema.delete_cxx26;
+                Ok(self.sema.act_on_cxx_delete(global, array, loc, o, cxx26))
+            }
             ExprKind::RecoveryExpr => self.recovery_expr(e, loc),
             _ => self.unimplemented(&format!("substitution into {k:?}"), loc),
         }

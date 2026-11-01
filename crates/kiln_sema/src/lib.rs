@@ -235,6 +235,11 @@ pub struct Sema<'a, 'sm> {
     /// range-based `for` from `getCurScope()`); set by the outermost
     /// `in_inst_context`.
     pub(crate) range_for_outer_depth: Option<usize>,
+    /// The C++26 rule for deleting a pointer to an incomplete type
+    /// (P3144), as the parser last passed it to
+    /// [`Sema::act_on_cxx_delete`]; reused when a dependent
+    /// delete-expression is instantiated.
+    pub(crate) delete_cxx26: bool,
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
@@ -370,6 +375,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             extend_collector: None,
             diag_capture: std::cell::RefCell::new(None),
             range_for_outer_depth: None,
+            delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),

@@ -1155,6 +1155,10 @@ impl Sema<'_, '_> {
         }
         let ty = if self.ast.decls.builtin_id(d).is_some() {
             QualType::BUILTIN_FN
+        } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod)
+            && self.undeduced_dependent_use(d)
+        {
+            QualType::DEPENDENT
         } else if n.kind() == DeclKind::NonTypeTemplateParm
             && self.ast.types.as_record(declared).is_some()
         {
@@ -1935,6 +1939,10 @@ impl Sema<'_, '_> {
     /// ([expr.mul]/4), outside unevaluated operands.
     fn diagnose_division_by_zero(&mut self, op: BinaryOp, r: ExprId, loc: Loc) {
         if self.unevaluated > 0 || !self.ast.types.is_integral(self.ety(r)) {
+            return;
+        }
+        // A value-dependent divisor (`sizeof(T)`) has no value yet.
+        if self.expr_is_value_dependent(r) {
             return;
         }
         if self.fold_int(r) == Some(0) {

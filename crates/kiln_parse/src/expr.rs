@@ -170,7 +170,7 @@ impl Parser<'_, '_> {
 
     fn cur_binop(&self) -> Option<(u8, Option<BinaryOp>)> {
         let p = Self::punct_of(self.tok())?;
-        if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
+        if self.greater_ends_arg() && matches!(p, Punct::Greater | Punct::GreaterGreater) {
             return None;
         }
         let r = binop(p)?;
@@ -186,7 +186,7 @@ impl Parser<'_, '_> {
     /// ([expr.prim.fold]/1: any binary operator but `?:`).
     fn fold_op_at(&self, i: usize) -> Option<BinaryOp> {
         let p = Self::punct_of(self.tok_at(i))?;
-        if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
+        if self.greater_ends_arg() && matches!(p, Punct::Greater | Punct::GreaterGreater) {
             return None;
         }
         let op = binop(p)?.1?;
@@ -197,8 +197,11 @@ impl Parser<'_, '_> {
     /// `GreaterThanIsOperatorScope`).
     pub(crate) fn with_greater_op<T>(&mut self, on: bool, f: impl FnOnce(&mut Self) -> T) -> T {
         let saved = std::mem::replace(&mut self.greater_is_op, on);
+        let depth = self.total_depth();
+        let saved_depth = std::mem::replace(&mut self.greater_off_depth, depth);
         let r = f(self);
         self.greater_is_op = saved;
+        self.greater_off_depth = saved_depth;
         r
     }
 
@@ -382,6 +385,13 @@ impl Parser<'_, '_> {
                 self.unsupported("the GNU address-of-label operator", loc);
                 return None;
             }
+            if let Some((open, is_type)) = self.open_paren_template_scope() {
+                if is_type {
+                    return self.parse_c_style_cast_rest(open);
+                }
+                let e = self.with_greater_op(true, |p| p.parse_paren_rest(open))?;
+                return self.parse_postfix_suffix(e);
+            }
             if p == Punct::LParen
                 && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
             {
@@ -433,6 +443,25 @@ impl Parser<'_, '_> {
     /// `( type-id ) cast-expression`.
     fn parse_c_style_cast(&mut self) -> PExpr {
         let open = self.bump().span.lo;
+        self.parse_c_style_cast_rest(open)
+    }
+
+    /// At a `(` followed by a qualified name whose class template
+    /// specialization qualifier the lookahead cannot resolve
+    /// ([`Parser::template_scope_end`]): consumes the `(`, parses the
+    /// qualifier ahead, and says whether a type-id follows. `None` (and
+    /// nothing consumed) at any other token.
+    fn open_paren_template_scope(&mut self) -> Option<(Loc, bool)> {
+        if !self.at(Punct::LParen) || self.template_scope_end(self.pos() + 1).is_none() {
+            return None;
+        }
+        let open = self.bump().span.lo;
+        self.annotate_template_scope();
+        Some((open, self.is_cxx_type_id_at(self.pos(), TypeIdContext::InParens).0))
+    }
+
+    /// [`Parser::parse_c_style_cast`] after the `(` at `open`.
+    fn parse_c_style_cast_rest(&mut self, open: Loc) -> PExpr {
         let ty = self.parse_type_id();
         let Some(ty) = ty else {
             self.skip_until(&[Punct::RParen], false, true);
@@ -475,6 +504,25 @@ impl Parser<'_, '_> {
         let loc = self.bump().span.lo;
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
             return self.parse_sizeof_pack(loc);
+        }
+        self.s.enter_unevaluated();
+        let scoped = self.open_paren_template_scope();
+        self.s.exit_unevaluated();
+        if let Some((open, is_type)) = scoped {
+            if is_type {
+                let Some(ty) = self.parse_type_id() else {
+                    self.skip_until(&[Punct::RParen], false, true);
+                    return None;
+                };
+                let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+                return Some(self.s.act_on_trait_type(kind, ty, loc, rparen));
+            }
+            self.s.enter_unevaluated();
+            let e = self
+                .with_greater_op(true, |p| p.parse_paren_rest(open))
+                .and_then(|e| self.parse_postfix_suffix(e));
+            self.s.exit_unevaluated();
+            return Some(self.s.act_on_trait_expr(kind, e?, loc));
         }
         if self.at(Punct::LParen)
             && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
@@ -968,6 +1016,11 @@ impl Parser<'_, '_> {
         if self.decltype_scope_end(self.pos()).is_some() && !self.annotate_decltype_scope() {
             return None;
         }
+        // `X<A>::name` with `name` from a specialization of `X`: the
+        // qualifier is parsed first too.
+        if self.template_scope_end(self.pos()).is_some() {
+            self.annotate_template_scope();
+        }
         if self.at_decltype_scope() && !self.decltype_scope_ok() {
             self.skip_failed_decltype_scope();
             return Some(self.s.act_on_error_expr(&[], loc));
@@ -1289,6 +1342,7 @@ impl Parser<'_, '_> {
             return Some(self.s.act_on_value_init_cast(ty, loc, rparen));
         }
         let mut args = Vec::new();
+        let mut expansion = false;
         loop {
             if self.at(Punct::LBrace) {
                 self.unsupported("braced-init-list operands of a functional cast", self.loc());
@@ -1299,13 +1353,23 @@ impl Parser<'_, '_> {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };
+            // `T(args...)` ([temp.variadic]/5: an expression-list).
+            let e = match self.eat(Punct::Ellipsis) {
+                Some(l) => {
+                    expansion = true;
+                    self.s.act_pack_expansion(e, l)
+                }
+                None => e,
+            };
             args.push(e);
             if self.eat(Punct::Comma).is_none() {
                 break;
             }
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-        if let [e] = args[..] {
+        if let [e] = args[..]
+            && !expansion
+        {
             return Some(self.s.act_on_cast(CastStyle::Functional, ty, e, loc, rparen));
         }
         Some(self.s.act_on_paren_list_cast(ty, &args, loc, rparen))

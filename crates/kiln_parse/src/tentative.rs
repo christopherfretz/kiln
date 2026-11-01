@@ -970,9 +970,14 @@ impl Parser<'_, '_> {
     /// Parses a `decltype(e)::` at the current token ahead, as clang
     /// annotates the scope before disambiguating (WP-119): the scanner
     /// then classifies the name after it.
+    /// Also parses ahead a class template specialization qualifier in
+    /// which the lookahead cannot find the name
+    /// ([`Parser::annotate_template_scope`]).
     pub(crate) fn annotate_decltype_scope_here(&mut self) {
         if self.decltype_scope_end(self.pos()).is_some() {
             self.annotate_decltype_scope();
+        } else if self.template_scope_end(self.pos()).is_some() {
+            self.annotate_template_scope();
         }
     }
 

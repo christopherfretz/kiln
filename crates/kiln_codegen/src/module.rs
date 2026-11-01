@@ -222,7 +222,9 @@ impl<'a> Cg<'a> {
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
         for d in members {
             let n = ast.decls.get(d);
-            if n.has(DeclFlags::INVALID) {
+            // A templated declaration ([temp.pre]/8: an out-of-line
+            // member of a class template) is emitted only as instantiated.
+            if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) {
                 continue;
             }
             match n.kind() {
@@ -310,6 +312,11 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         let first = ast.first(d);
+        // [temp.explicit]/14: an explicit instantiation declaration
+        // provides no definition (references name the external symbol).
+        if self.is_explicit_inst_declaration(first) {
+            return Ok(());
+        }
         if !self.discardable_var(d) {
             return self.emit_var_def(d);
         }
@@ -415,6 +422,26 @@ impl<'a> Cg<'a> {
         })
     }
 
+    /// The definition of static data member `first` of an implicitly
+    /// instantiated class template specialization, which no walk of the
+    /// translation unit reaches ([temp.inst]/5: instantiated when used).
+    fn instantiated_var_def(&self, first: DeclId) -> Option<DeclId> {
+        let ast = self.ast;
+        if !matches!(ast.templ_link(first).get(), Some((TemplLinkKind::MemberOfSpecialization, _)))
+            || self.is_explicit_inst_declaration(first)
+        {
+            return None;
+        }
+        ast.redecls_of(first).find(|&r| {
+            let n = ast.decls.get(r);
+            !n.has(DeclFlags::INVALID)
+                && !n.has(DeclFlags::DEPENDENT_CTX)
+                && ast.decls.var(r).is_some_and(|v| {
+                    v.init.is_some() && !matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _)))
+                })
+        })
+    }
+
     pub fn fn_is_inline(&self, d: DeclId) -> bool {
         let ast = self.ast;
         self.is_implicit_instantiation(d)
@@ -441,7 +468,25 @@ impl<'a> Cg<'a> {
     }
 
     fn discardable_var(&self, d: DeclId) -> bool {
-        mangle::is_internal_symbol(self.ast, d) || self.var_is_inline(d)
+        mangle::is_internal_symbol(self.ast, d)
+            || self.var_is_inline(d)
+            || self.var_instantiation_linkage(self.ast.first(d)) == Some(Linkage::LinkOnceOdr)
+    }
+
+    /// Whether variable `first` is under an explicit instantiation
+    /// declaration (`extern template`), itself or through its class.
+    fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
+        let ast = self.ast;
+        let decl = |k: SpecKind| k == SpecKind::ExplicitInstantiationDeclaration;
+        match ast.templ_link(first).get() {
+            Some((TemplLinkKind::MemberOfSpecialization, i)) => {
+                ast.templates.member_spec(i).is_some_and(|m| decl(m.kind))
+            }
+            Some((TemplLinkKind::Specialization, _)) => {
+                ast.spec_info(first).is_some_and(|(_, s)| decl(s.kind))
+            }
+            _ => false,
+        }
     }
 
     // ---- types ---------------------------------------------------------
@@ -1044,6 +1089,8 @@ impl<'a> Cg<'a> {
             // is the point of first use, as clang's GetOrCreateLLVMGlobal
             // followed by the deferred definition reusing it).
             self.to_emit.push(Def::Decl(def));
+        } else if let Some(def) = self.instantiated_var_def(first) {
+            self.to_emit.push(Def::Decl(def));
         }
         let Some(ty) = ast.decls.get(first).ty() else { return err(None, "variable without type") };
         let lt = self.mty(ty);
@@ -1144,7 +1191,8 @@ impl<'a> Cg<'a> {
             g
         };
         let internal = mangle::is_internal_symbol(ast, d);
-        let inline = self.var_is_inline(d);
+        let instantiated = self.var_instantiation_linkage(first);
+        let inline = self.var_is_inline(d) || instantiated.is_some();
         let quals = ast.types.effective_quals(ty);
         let constant = quals.is_const() && !has_mutable(ty);
         let align = self.global_align(ty);
@@ -1161,7 +1209,7 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::Internal;
             gv.dso_local = false;
         } else if inline {
-            gv.linkage = Linkage::LinkOnceOdr;
+            gv.linkage = instantiated.unwrap_or(Linkage::LinkOnceOdr);
             gv.dso_local = true;
             gv.comdat = comdat;
         } else {
@@ -1169,6 +1217,37 @@ impl<'a> Cg<'a> {
             gv.dso_local = true;
         }
         Ok(())
+    }
+
+    /// The linkage of the definition of variable `first` when it is a
+    /// template instantiation (clang `getLVForDecl` /
+    /// `GetLLVMLinkageVarDefinition`): `weak_odr` for an explicit
+    /// instantiation definition ([temp.explicit]), `linkonce_odr` for an
+    /// implicit instantiation; `None` for an explicit specialization or a
+    /// non-templated variable.
+    fn var_instantiation_linkage(&self, first: DeclId) -> Option<Linkage> {
+        let ast = self.ast;
+        let explicit = |k: SpecKind| k == SpecKind::ExplicitInstantiationDefinition;
+        match ast.templ_link(first).get() {
+            Some((TemplLinkKind::MemberOfSpecialization, i)) => {
+                let m = ast.templates.member_spec(i)?;
+                if m.kind == SpecKind::ExplicitSpecialization {
+                    return None;
+                }
+                let class = ast.decls.get(first).ctx().and_then(|c| ast.spec_info(c));
+                if explicit(m.kind) || class.is_some_and(|(_, s)| explicit(s.kind)) {
+                    Some(Linkage::WeakOdr)
+                } else {
+                    Some(Linkage::LinkOnceOdr)
+                }
+            }
+            Some((TemplLinkKind::Specialization, _)) => match ast.spec_info(first)?.1.kind {
+                SpecKind::ExplicitSpecialization => None,
+                k if explicit(k) => Some(Linkage::WeakOdr),
+                _ => Some(Linkage::LinkOnceOdr),
+            },
+            _ => None,
+        }
     }
 
     /// A function-local `static` variable (clang `EmitStaticVarDecl`).

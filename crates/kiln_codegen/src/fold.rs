@@ -337,7 +337,7 @@ pub(crate) fn is_local(ast: &Ast, d: DeclId) -> bool {
     let mut c = ast.decls.get(d).ctx();
     while let Some(x) = c {
         match ast.decls.get(x).kind() {
-            DeclKind::Function => return true,
+            k if k.is_function() => return true,
             DeclKind::TranslationUnit | DeclKind::Namespace => return false,
             _ => c = ast.decls.get(x).ctx(),
         }

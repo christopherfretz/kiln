@@ -562,6 +562,9 @@ impl Parser<'_, '_> {
             return;
         }
         let r = class.record;
+        // A member class template of a non-template class is replayed
+        // after its head closed: its parameters are visible again.
+        let heads = self.s.act_on_reenter_template_scopes(r);
         self.trace(|p| format!("start_delayed_class({})", p.decl_name(r)));
         self.s.act_on_start_delayed_class(r);
         for item in &mut class.items {
@@ -590,6 +593,7 @@ impl Parser<'_, '_> {
         }
         self.trace(|p| format!("finish_delayed_class({})", p.decl_name(r)));
         self.s.act_on_finish_delayed_class(r);
+        self.s.act_on_exit_reentered_template_scopes(heads);
     }
 
     /// Skips what is left of the saved tokens and ends the replay.

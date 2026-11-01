@@ -194,12 +194,13 @@ impl Sema<'_, '_> {
         written: usize,
         loc: Loc,
     ) -> ArgListId {
-        let params = self.template_params(tmpl);
+        let head = self.head_template(tmpl);
+        let params = self.template_params(head);
         let elems: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
         if elems.len() != params.len() {
             return args;
         }
-        let depth = self.template_param_depth(tmpl);
+        let depth = self.template_param_depth(head);
         let mut n = elems.len();
         while n > 0 {
             let p = params[n - 1];
@@ -389,7 +390,14 @@ impl Sema<'_, '_> {
         if let Some(r) = self.undefined_spec(q) {
             return self.instantiate_class(r, loc, true);
         }
-        if self.ast.types.as_record(q).is_some() && !self.is_complete(q) {
+        if let Some(r) = self.ast.types.as_record(q)
+            && !self.is_complete(q)
+            // The class being defined may be named: lookup finds the
+            // members declared so far ([class.mem.general]/8; clang's
+            // `RequireCompleteDeclContext`), e.g. `C::duration` in a
+            // default template argument substituted inside `C`.
+            && !self.defining.iter().any(|&x| self.ast.first(x) == self.ast.first(r))
+        {
             let d = self.diag(DiagId::sema_incomplete_nested_name_spec, loc).arg(self.ty_arg(q));
             self.emit(d);
             return false;
@@ -437,7 +445,7 @@ impl Sema<'_, '_> {
                 c = self.ast.decls.get(x).ctx();
             }
         }
-        Self::outer_levels(tmpl, self.template_param_depth(tmpl))
+        Self::outer_levels(tmpl, self.template_param_depth(self.head_template(tmpl)))
     }
 
     /// The context of instantiated member template `tmpl` whose
@@ -986,10 +994,23 @@ impl Substituter<'_, '_, '_> {
         &mut self,
         spec: DeclId,
         def: DeclId,
+        local: Option<&mut Vec<LocalMethod>>,
+    ) {
+        self.class_body_with(spec, def, local, false);
+    }
+
+    /// [`Substituter::class_body`]; `anonymous` for an anonymous struct
+    /// or union (its `}` is followed by `;`).
+    pub(crate) fn class_body_with(
+        &mut self,
+        spec: DeclId,
+        def: DeclId,
         mut local: Option<&mut Vec<LocalMethod>>,
+        anonymous: bool,
     ) {
         let saved_entity = self.entity.replace(spec);
         self.sema.act_on_start_record_definition(spec);
+        self.class_attrs(spec, def);
         self.map_contexts(&[(def, spec)]);
         let sub = self;
         let specs = sub.class_bases(def);
@@ -1007,6 +1028,14 @@ impl Substituter<'_, '_, '_> {
             if n.kind() == DeclKind::Function
                 && n.misc().friend() != kiln_ast::decl::FriendKind::None
             {
+                continue;
+            }
+            if n.kind() == DeclKind::IndirectField {
+                // Injected by its anonymous struct or union.
+                continue;
+            }
+            if local.is_none() && sub.is_unnamed_member_class(m) {
+                let _ = sub.unnamed_member_class(m);
                 continue;
             }
             let r = if local.is_some()
@@ -1029,7 +1058,7 @@ impl Substituter<'_, '_, '_> {
                 }
             }
         }
-        sub.sema.act_on_finish_record_definition(spec, false);
+        sub.sema.act_on_finish_record_definition(spec, anonymous);
         // Default member initializers: in the complete-class context
         // (clang instantiates them when a constructor uses them; a gap).
         if !nsdmis.is_empty() {
