@@ -299,6 +299,7 @@ impl Sema<'_, '_> {
                 let at = self.ast.decls.get(f).loc();
                 self.mark_base_and_member_dtors_referenced(at, class);
                 self.check_destructor_delete(f, class);
+                self.mark_vtable_used(class, loc);
                 true
             }
         };
@@ -404,6 +405,10 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_ctor_inits(ctor, &info.out);
             self.mark_base_and_member_dtors_referenced(loc, class);
         }
+        // [basic.def.odr]/8: a constructor definition uses the vtable (at
+        // the use requiring an implicit definition).
+        let use_loc = self.synth.last().filter(|c| c.member == ctor).map_or(loc, |c| c.loc);
+        self.mark_vtable_used(class, use_loc);
         had_error
     }
 
