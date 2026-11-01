@@ -962,16 +962,20 @@ impl Sema<'_, '_> {
     pub(crate) fn dependent_init_list(&mut self, l: &crate::init::InitList) -> ExprId {
         let mut inits = Vec::with_capacity(l.items.len());
         for it in &l.items {
-            if !it.designator.is_empty() {
-                self.templ_unimplemented("designated initializers in a template", l.lbrace);
-            }
             let e = match &it.value {
                 crate::init::InitValue::Expr(e) => *e,
                 crate::init::InitValue::List(n) => self.dependent_init_list(n),
             };
             inits.push(e);
         }
-        self.builder().init_list(QualType::VOID, &inits, None, None, l.lbrace, l.rbrace)
+        let e = self.builder().init_list(QualType::VOID, &inits, None, None, l.lbrace, l.rbrace);
+        // Designators are kept beside the list and re-applied when it is
+        // substituted ([dcl.init.aggr]/3.1 is checked at instantiation).
+        if l.items.iter().any(|it| !it.designator.is_empty()) {
+            let d = l.items.iter().map(|it| it.designator.clone()).collect();
+            self.templ.init_designators.insert(e, d);
+        }
+        e
     }
 
     /// True if any initializer of `l` (recursively) is type-dependent.
