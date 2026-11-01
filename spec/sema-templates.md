@@ -707,6 +707,18 @@ silently (`diag = None`) at those sites. S3O lists them.
 Explicit specializations never reach this step: they are found by the
 probe in §4.2.
 
+**Member class templates** ([temp.spec.partial.member]/2). When a class
+template is instantiated, each in-class partial specialization of a
+member class template is redeclared for the instantiated member template
+(`Substituter::member_partial_spec`). Its template parameter list and
+arguments are substituted with the enclosing level, so `In<T, B>` of
+`Outer<int>` matches `In<int, char>`. The redeclaration records the
+original partial as its pattern (`instantiated_from_map`). A
+specialization that matches it is instantiated from the original
+partial's definition, with the enclosing arguments as the outer levels
+plus the deduced arguments (§4.6). Out-of-class partial specializations
+of a member template are not redeclared yet (a follow-up).
+
 ### 4.5 Explicit specializations and instantiations
 
 **Placement** ([temp.expl.spec]).
@@ -1253,6 +1265,22 @@ immediate context: errors are hard.
 
 ### 6.4 Explicit args and default arguments
 
+- **Explicit prefix of the trailing function parameter pack.** Only the
+  first template parameter pack takes explicit arguments
+  ([temp.arg.explicit]/9). Its explicit length is snapshotted before
+  deduction. It is the trailing function parameter pack's prefix only
+  when that pack's pattern (`U`, `U&&`, `U*`) expands this first pack.
+  Otherwise the prefix is empty, so a pack deduced earlier from
+  `tys<Tf...>` does not shorten `Up...`.
+- **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
+  A value-dependent `explicit(expr)` (kept in `decls.cold.explicit_expr`)
+  is substituted together with the signature when a specialization is
+  formed. `explicit(false)` makes the specialization non-explicit, and a
+  substitution failure is a deduction failure. A member of a class
+  template substitutes it when the class is instantiated. A template is
+  "not a candidate" before deduction only when it is explicit
+  non-dependently (clang `isNonDependentlyExplicit`;
+  `Sema::nondependently_explicit`).
 - **Default template arguments of function templates** are used only for
   parameters that are neither deduced nor given explicitly. They are
   substituted in order and may name earlier parameters.
@@ -1353,6 +1381,18 @@ This equivalence is used for:
 
 "Functionally equivalent but not equivalent" is ill-formed NDR. Clang and
 kiln treat it as a different entity.
+
+Constructors, conversion functions and the other special members follow
+the same rule ([temp.over.link]/7). A member template is a redeclaration
+only when both its template-head and its function type are equivalent.
+Two constructor templates that differ only in an `enable_if` NTTP are
+therefore distinct entities.
+
+**Implicit `this` in class templates** ([temp.dep.expr]/3). An implicit
+member call `f()` to an overloaded member of a class template is
+resolved at instantiation, as `this->f()` would be. This also holds for
+qualified `S::f()`, whose injected-class-name maps to the
+instantiation.
 
 ### 6.9 Explicit specialization and instantiation of function templates
 
@@ -1479,6 +1519,25 @@ flag, to name the first pack.
 5. **Splice** the N results into the enclosing list: template args, call
    args, initializer list, bases, mem-initializers, `UsingPack`
    members, or capture list.
+
+**Partial substitution** ([temp.variadic]/7, [temp.inst]/3). A pattern
+may expand a pack of the level being substituted together with a pack of
+an inner, retained level. For example, `Conv<U, T>...` in a member
+template of `Tup<T...>`, where T is substituted and U is not. When an
+element cannot be formed, `PackState::partial` is set and the expansion
+is redone in keep mode (`PackState::keep`). In keep mode, a substituted
+type parameter pack becomes `SubstTemplateTypeParmPack {associated,
+index, pack}`, which is dependent and unexpanded, and the result is
+`PackExpansion(pattern')`. A later substitution that expands the
+pattern takes element *i* of the recorded pack (clang's
+`SubstTemplateTypeParmPackType`). Only type packs are kept so far.
+Non-type and function parameter packs in keep mode are still "not yet
+implemented".
+
+A converted argument pack inside an argument list being substituted is
+rebuilt element by element. This happens for a partial
+specialization's `<U>` against `class... Up`, which is stored as the
+pack `{U}`.
 
 In deduction, a trailing P pack expansion matches the remaining A
 elements one by one. Each pack in the pattern collects its own
@@ -1762,6 +1821,24 @@ used in type trait expression". Each "complete" check calls
 Two more behave the same way but are only probed, not used, by the M3
 headers. They are implemented in M3 because they cost one row each:
 `__reference_constructs_from_temporary` and `__is_layout_compatible`.
+
+**Reference-from-temporary traits** (WP-138; libc++ `tuple`'s
+`std::tie` constructor uses `__reference_binds_to_temporary`). These are
+`__reference_binds_to_temporary(T,U)`,
+`__reference_constructs_from_temporary(T,U)` and
+`__reference_converts_from_temporary(T,U)`. Each is true iff:
+- `T` is a reference;
+- `U` is complete and not `void`;
+- initializing `T` from an opaque operand of type `U` is well-formed
+  (under a SFINAE frame, unevaluated); and
+- the initialization materializes a temporary
+  (`MaterializeTemporaryExpr` under parens, implicit casts and
+  cleanups).
+
+The operand's value category depends on the trait. The C++23 pair takes
+a non-reference `U` as a prvalue ([meta.unary.prop]), while
+`__reference_binds_to_temporary` takes it as an xvalue (clang). The
+`converts` form copy-initializes; the other two direct-initialize.
 
 ### 9.2 Type transforms (`UnaryTransform` types)
 
