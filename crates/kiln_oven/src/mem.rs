@@ -97,15 +97,37 @@ impl Ptr {
         p >> SLOT_SHIFT
     }
 
-    /// The key of the union subobject at byte `off` of `p`'s allocation
-    /// in [`Memory::unions`].
-    pub fn union_key(p: u64, off: u64) -> u64 {
-        Ptr::alloc_key(p) << 32 | off
+    /// The key of the union subobject of type `ty` at byte `off` of
+    /// `p`'s allocation in [`Memory::unions`].
+    pub fn union_key(p: u64, off: u64, ty: OTy) -> UKey {
+        UKey::new(Ptr::alloc_key(p), off, ty)
     }
 
     /// `p` with its offset replaced.
     pub fn with_off(p: u64, off: u64, past: bool) -> u64 {
         (p & !(OFF_MASK | PAST)) | (off & OFF_MASK) | if past { PAST } else { 0 }
+    }
+}
+
+/// The key of a union subobject's entry in [`Memory::unions`]: its
+/// allocation, its offset and its type. Nested unions can share an offset
+/// (`union N { char c; union { int x; } q; }`: `N` and `q` both at 0), so
+/// the offset alone does not name one (WP-224).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct UKey {
+    /// `alloc_key << 32 | offset`.
+    pub at: u64,
+    pub ty: OTy,
+}
+
+impl UKey {
+    pub fn new(alloc_key: u64, off: u64, ty: OTy) -> UKey {
+        UKey { at: alloc_key << 32 | off, ty }
+    }
+
+    /// The allocation identity ([`Ptr::alloc_key`]).
+    pub fn alloc_key(self) -> u64 {
+        self.at >> 32
     }
 }
 
@@ -412,9 +434,9 @@ pub(crate) struct Memory {
     /// The running evaluation context (0: the outermost; stamped on heap
     /// allocations in `Alloc::frame`).
     pub ctx: u32,
-    /// Active member of each union subobject with one: key
-    /// `alloc_key << 32 | offset`, value the field index.
-    pub unions: FxHashMap<u64, u32>,
+    /// Active member of each union subobject with one: key the
+    /// subobject ([`UKey`]), value the field index.
+    pub unions: FxHashMap<UKey, u32>,
     /// Bytes allocated (cumulative, granule-rounded; frame and heap).
     pub allocated: u64,
     /// Peak live bytes: `frame.top + heap_live`.
@@ -480,7 +502,7 @@ impl Memory {
                 * size_of::<Alloc>()
             + (self.free.capacity() + self.live.capacity() + self.hfree.capacity()) * 4
             + self.bins.footprint()
-            + self.unions.capacity() * (size_of::<(u64, u32)>() + 1)
+            + self.unions.capacity() * (size_of::<(UKey, u32)>() + 1)
             + self.trial.footprint()
     }
 
@@ -500,7 +522,7 @@ impl Memory {
         self.heap_allocs = 0;
         self.ctx = 0;
         if !self.unions.is_empty() {
-            self.unions.retain(|&k, _| ((k >> 32) as u32) & STATIC_BIT != 0);
+            self.unions.retain(|&k, _| (k.alloc_key() as u32) & STATIC_BIT != 0);
         }
         self.allocated = 0;
         self.peak = 0;
@@ -547,8 +569,8 @@ impl Memory {
             a.live = false;
             if a.flags & flags::HAS_UNION != 0 {
                 let key = u64::from(s) | u64::from(a.generation) << 22;
-                for &(o, _) in types.unions(a.ty) {
-                    self.unions.remove(&(key << 32 | o));
+                for &(o, ut) in types.unions(a.ty) {
+                    self.unions.remove(&UKey::new(key, o, ut));
                 }
             }
             if a.generation < GEN_MAX {
@@ -875,8 +897,8 @@ impl Memory {
         self.release_heap(i);
         if a.flags & flags::HAS_UNION != 0 {
             let key = Ptr::alloc_key(raw);
-            for &(o, _) in types.unions(a.ty) {
-                self.union_put(key << 32 | o, None);
+            for &(o, ut) in types.unions(a.ty) {
+                self.union_put(UKey::new(key, o, ut), None);
             }
         }
         Ok(())
@@ -1042,7 +1064,7 @@ enum Undo {
     /// bytes and shadow.
     Gran { sp: Sp, g: u32, bytes: [u8; 8], init: u8, ptr: u8, life: u8 },
     /// A union's active-member entry ([`Memory::unions`]).
-    Union(u64, Option<u32>),
+    Union(UKey, Option<u32>),
     /// An allocation's flags.
     Flags { sp: Sp, idx: u32, old: u8 },
     /// A heap slot (reused, or freed).
@@ -1250,7 +1272,7 @@ impl Memory {
 
     /// Sets (`Some`) or clears the active-member entry `key` of
     /// [`Memory::unions`], logged under a checkpoint.
-    pub fn union_put(&mut self, key: u64, v: Option<u32>) {
+    pub fn union_put(&mut self, key: UKey, v: Option<u32>) {
         let old = match v {
             Some(v) => self.unions.insert(key, v),
             None => self.unions.remove(&key),
@@ -1261,8 +1283,8 @@ impl Memory {
     }
 
     #[inline(never)]
-    fn trial_union(&mut self, key: u64, old: Option<u32>) {
-        let p = Ptr::decode((key >> 32) << SLOT_SHIFT);
+    fn trial_union(&mut self, key: UKey, old: Option<u32>) {
+        let p = Ptr::decode(key.alloc_key() << SLOT_SHIFT);
         let Some(cp) = self.trial.cps.last().copied() else {
             return;
         };
@@ -1913,14 +1935,14 @@ mod tests {
         let t = Types::default();
         let mut m = Memory::new(256 * MIB);
         let x = fnew(&mut m);
-        let key = Ptr::union_key(x, 0);
+        let key = Ptr::union_key(x, 0, OTy(0));
         m.union_put(key, Some(1));
         m.checkpoint(TrialMode::Transactional);
         m.union_put(key, Some(2));
         m.union_put(key, None);
         m.set_flags(Ptr::decode(x), flags::CONST);
         let y = fnew(&mut m);
-        m.union_put(Ptr::union_key(y, 0), Some(0));
+        m.union_put(Ptr::union_key(y, 0, OTy(0)), Some(0));
         m.set_flags(Ptr::decode(y), flags::CONST);
         assert_eq!(m.trial.log.len(), 3, "the trial's own object is not logged");
         m.rollback(&t);
