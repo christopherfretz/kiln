@@ -77,7 +77,7 @@ Columns:
 | P1061R10 | Structured bindings can introduce a pack | `__cpp_structured_bindings` 202403L / 202411L | todo | `conformance/dcl.struct.bind/pack.cpp` | `pack.cpp` pins kiln's "not supported yet" error. kiln's and clang 19's 202403L is the P0609 level. |
 | P0609R3 | Attributes for structured bindings | — | done | `conformance/dcl.struct.bind/p0609-probe.cpp` | Supplies `__cpp_structured_bindings` 202403L (see P1061). |
 | P2795R5 | Erroneous behaviour for uninitialized reads | — | todo | `conformance/dcl.attr.indet/p2795-probe.cpp` | Not in clang 22 (no `[[indeterminate]]`): written reason for the M4 exit. |
-| P2786R13 | Trivial relocatability | `__cpp_trivial_relocatability` — / 202502L | todo | `conformance/class.prop/p2786-probe.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`. Check its standing in the C++26 draft before investing (reportedly pulled at Kona 2025). |
+| P2786R13 | Trivial relocatability | `__cpp_trivial_relocatability` — / 202502L | partial | `conformance/class.prop/p2786-probe.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`. kiln has `__builtin_is_cpp_trivially_relocatable` (clang 22 semantics, WP-263); the macro stays undefined. Check its standing in the C++26 draft before investing (reportedly pulled at Kona 2025). |
 | P1306R5 | Expansion statements | `__cpp_expansion_statements` — / — | todo | `conformance/stmt.expand/p1306-probe.cpp` | Not in clang 22: written reason for the M4 exit. |
 | P2361R6 | Unevaluated strings | — | done | `conformance/lex.string.uneval/unevaluated-string-macro.cpp` | |
 | P2864R2 | Removing deprecated arithmetic conversion on enumerations | — | done | `conformance/expr.arith.conv/p2864-probe.cpp` | |

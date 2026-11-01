@@ -280,14 +280,15 @@ Redeclaration and linkage rules:
   tests/conformance/basic.scope.block/redeclaration-merge.cpp (WP-235).
 - **Exception specifications** ([except.spec]/5): function types that
   differ only in their exception specification are not "different
-  types". When the new declaration writes none and the previous one is
-  non-throwing the error is `'f' is missing exception specification
-  'noexcept'` (the previous specification as written); any other
-  difference is `exception specification in declaration does not
-  match previous declaration`. Both take a `previous declaration is
-  here` note, and the new declaration is marked invalid. Compatible
+  types". A new declaration that writes a specification incompatible
+  with the previous one's is the error `exception specification in
+  declaration does not match previous declaration` with a `previous
+  declaration is here` note, and is marked invalid. Compatible
   spellings (`noexcept`, `noexcept(true)`, `throw()`) compare equal
-  through the canonical type.
+  through the canonical type, and no specification matches
+  `noexcept(false)`. A new declaration that writes **none** where the
+  previous declaration has one follows "Exception specifications on
+  redeclarations" (§4.7).
 - **GNU asm labels** (`act_on_asm_label`, clang's
   `ActOn{Function,Variable}Declarator` and `mergeDeclAttributes`): a
   function or variable declarator's label becomes an `AsmLabel`
@@ -1062,6 +1063,37 @@ specification as written (`TypeNames` prints ` noexcept`,
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
+- **Exception specifications on redeclarations** (WP-268,
+  `merge_missing_exc_spec`; clang 19's missing-specification path of
+  `Sema::CheckEquivalentExceptionSpec`). A function redeclaration
+  (including a global `operator new`/`delete`) that writes no
+  exception specification where the previous declaration `p` (the
+  latest one redeclaration lookup found) has an incompatible one is
+  decided by the first matching row:
+
+  | Condition | Result | The redeclaration's type gets |
+  |---|---|---|
+  | `p` is non-throwing, the entity has C language linkage (its first declaration is in an `extern "C"` context), and `p` is in a system header, has no location, or the first declaration is a builtin (implicit `builtin_id`, or recognized as a `builtin::LIB` library function, §5.4) | accepted silently (C libraries may add the specification: libc++'s `extern "C" double lgamma_r(double, int*);` after glibc's `__THROW` one) | `throw()` |
+  | the redeclaration is a replaceable global allocation function ([new.delete], `is_replaceable_global_alloc`) and `p`'s specification is not value-dependent | `ExtWarn` `'f' is missing exception specification 'S'` (`sema_missing_exception_spec_ext`, `-Wmissing-exception-spec`, on by default, suppressed in system headers like any warning) | `p`'s |
+  | otherwise | error `'f' is missing exception specification 'S'` (`sema_missing_exception_spec`); the redeclaration is invalid | `p`'s unless value-dependent or deferred |
+
+  `S` is `p`'s specification as written (`noexcept`, `throw()`,
+  `noexcept(<expr>)` printed as clang prints it). Both diagnostics take
+  a `previous declaration is here` note and clang's fix-it inserting
+  ` S` just past the declarator's `)` (none with a trailing return
+  type, and, as kiln does not record where a cv- or ref-qualifier ends,
+  none after either). "`p`'s" specification is inherited as clang does:
+  `noexcept(true)` becomes `noexcept`, `noexcept(false)` none, others
+  as written. Only `p`'s location counts, not the redeclaration's: a
+  second redeclaration in user code follows the first (now `throw()`,
+  not in a system header) and is the error `... 'throw()'`. The
+  inherited specification is what `noexcept(f(...))` and codegen's
+  `nounwind` see. The global `operator delete` forms never reach the
+  table (a deallocation function without a specification is implicitly
+  `noexcept`, [except.spec]/11). The function name in these and the
+  other redeclaration diagnostics prints word operators as clang does
+  (`operator new`). Tests: `tests/conformance/except.spec/redecl-missing-*.cpp`
+  (the C-library case with an `-isystem` header in `Inputs/`).
 - *Diagnostics*: `TypeNames::aka` gives no `aka` when the written and
   canonical spellings differ only in exception specifications, matching
   clang's `desugarForDiagnostic`. The Oven's `this` trap says `implicit
@@ -3247,7 +3279,8 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 - **Overloading:** overload resolution beyond arity, user-defined
   conversions, operator overloading.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`
-  beyond the M2 basics. Design: spec/sema-templates.md.
+  beyond the M2 basics. Design: spec/sema-templates.md (the type-trait
+  list, including the clang 22 traits of WP-263, is its §9.1).
 - **Other language features:** lambdas, coroutines, reflection,
   contracts. (Exceptions landed with WP-100: §5.5, §7.5.)
 - **WP-064 follow-ups:**

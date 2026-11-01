@@ -59,6 +59,7 @@ LiteralRange = "literal-range" [];
 ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];
 MissingConstinit = "missing-constinit" [];
 MissingDeclarations = "missing-declarations" [];
+MissingExceptionSpec = "missing-exception-spec" [];
 NonPodVarargs = "non-pod-varargs" [];
 NullArithmetic = "null-arithmetic" [];
 NullConversion = "null-conversion" [];

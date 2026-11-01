@@ -11,6 +11,8 @@
 # `<source>.ast` with `@FILTER@` replaced by the `-fdump-ast-filter=` value;
 # likewise `<source>.layout` for `-fdump-record-layouts` and
 # `<source>.vtables` for `-fdump-vtable-layouts`.
+# It drops `-fclang-compat=<major>`, which the harness passes when the oracle
+# is a clang (spec/harness.md "Oracle").
 if [ "$1" = "--version" ]; then
   echo "kiln version 0.0.0-fake (xtask fixture)"
   exit 0
@@ -29,6 +31,7 @@ for a in "$@"; do
     -fdump-record-layouts) dump=layout ;;
     -fdump-vtable-layouts) dump=vtables ;;
     -fdump-ast-filter=*) filter=${a#-fdump-ast-filter=} ;;
+    -fclang-compat=*) ;;
     *.cpp | *.c | *.h) src=$a; set -- "$@" "$a" ;;
     *) set -- "$@" "$a" ;;
   esac

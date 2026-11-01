@@ -2,6 +2,41 @@
 
 use kiln_lex::{LexOptions, Std};
 
+/// Which clang release's answers kiln reproduces (`-fclang-compat=<major>`,
+/// spec/pp.md "clang compatibility level"): the version predefines
+/// (`__clang_major__`, `__VERSION__`, ...), the other non-`__cpp_*`
+/// predefined macros that differ between the releases, and the
+/// `__has_builtin` / `__has_feature` / `__has_extension` /
+/// `__has_attribute` / `__has_cpp_attribute` / `__is_identifier`
+/// answers. The `__cpp_*` feature-test macros follow kiln's own feature
+/// status, not this level.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClangCompat {
+    /// clang 19.1.7 (the default).
+    #[default]
+    Clang19,
+    /// clang 22.1.8.
+    Clang22,
+}
+
+impl ClangCompat {
+    /// Every level, oldest first.
+    pub const ALL: [ClangCompat; 2] = [ClangCompat::Clang19, ClangCompat::Clang22];
+
+    /// The level for clang major version `major`, if kiln models it.
+    pub fn from_major(major: u32) -> Option<ClangCompat> {
+        ClangCompat::ALL.into_iter().find(|c| c.major() == major)
+    }
+
+    /// The clang major version (`19`, `22`).
+    pub fn major(self) -> u32 {
+        match self {
+            ClangCompat::Clang19 => 19,
+            ClangCompat::Clang22 => 22,
+        }
+    }
+}
+
 /// Options of one preprocessor run.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]

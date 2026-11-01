@@ -97,6 +97,7 @@ pub fn arity(t: TypeTrait) -> Arity {
     use TypeTrait as T;
     match t {
         T::IsBaseOf
+        | T::IsVirtualBaseOf
         | T::IsSame
         | T::IsSameAs
         | T::IsAssignable
@@ -143,11 +144,12 @@ pub fn completeness(t: TypeTrait) -> Complete {
         | T::IsTriviallyCopyable
         | T::IsTriviallyEqualityComparable
         | T::IsTriviallyRelocatable
+        | T::IsCppTriviallyRelocatable
         | T::CanPassInRegs => Complete::Element,
         T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
             Complete::BoundedElement
         }
-        T::IsAggregate | T::IsFinal => Complete::Class,
+        T::IsAggregate | T::IsFinal | T::IsImplicitLifetime => Complete::Class,
         T::IsAbstract | T::IsEmpty | T::IsPolymorphic => Complete::NonUnionClass,
         _ => Complete::None,
     }
@@ -195,6 +197,8 @@ const fn f(name: &'static str, status: Status, oven: Oven) -> Row {
 }
 
 const DONE: Status = Status::Done;
+/// The clang 22 builtins WP-263 left for a follow-up.
+const LATER: Status = Status::Owner("WP-263 follow-up");
 
 /// The non-trait rows: §9.3 templates, then §9.4-9.5 functions.
 pub static TABLE: &[Row] = &[
@@ -386,6 +390,42 @@ pub static TABLE: &[Row] = &[
     f("__builtin_wmemmove", DONE, Oven::Yes),
     f("__builtin_memset", DONE, Oven::No),
     f("__builtin_mempcpy", DONE, Oven::No),
+    // Added by clang 20-22 and probed by the C++26 headers; staged off
+    // until implemented (spec/sema.md "clang 22 builtins"), so
+    // `__has_builtin` answers 0 at every `-fclang-compat` level.
+    Row { name: "__builtin_common_type", kind: Kind::Template, status: LATER, oven: Oven::No },
+    Row {
+        name: "__builtin_structured_binding_size",
+        kind: Kind::TypePredicate,
+        status: LATER,
+        oven: Oven::No,
+    },
+    Row {
+        name: "__builtin_lt_synthesizes_from_spaceship",
+        kind: Kind::TypePredicate,
+        status: LATER,
+        oven: Oven::No,
+    },
+    Row {
+        name: "__builtin_le_synthesizes_from_spaceship",
+        kind: Kind::TypePredicate,
+        status: LATER,
+        oven: Oven::No,
+    },
+    Row {
+        name: "__builtin_gt_synthesizes_from_spaceship",
+        kind: Kind::TypePredicate,
+        status: LATER,
+        oven: Oven::No,
+    },
+    Row {
+        name: "__builtin_ge_synthesizes_from_spaceship",
+        kind: Kind::TypePredicate,
+        status: LATER,
+        oven: Oven::No,
+    },
+    f("__builtin_invoke", LATER, Oven::No),
+    f("__builtin_is_within_lifetime", LATER, Oven::No),
 ];
 
 /// The row for builtin `name`, if `name` is in the table.
@@ -463,6 +503,26 @@ mod tests {
         assert_eq!(has_constexpr_builtin_staged("__builtin_constant_p"), Some(true));
         assert_eq!(has_builtin_staged("__builtin_expect"), None);
         assert_eq!(has_builtin_staged("__make_integer_seq"), Some(true));
+    }
+
+    #[test]
+    fn clang22_builtins() {
+        for n in [
+            "__builtin_is_virtual_base_of",
+            "__builtin_is_implicit_lifetime",
+            "__builtin_is_cpp_trivially_relocatable",
+        ] {
+            assert_eq!(has_builtin_staged(n), Some(true), "{n}");
+        }
+        for n in [
+            "__builtin_common_type",
+            "__builtin_structured_binding_size",
+            "__builtin_lt_synthesizes_from_spaceship",
+            "__builtin_invoke",
+            "__builtin_is_within_lifetime",
+        ] {
+            assert_eq!(has_builtin_staged(n), Some(false), "{n}");
+        }
     }
 
     #[test]

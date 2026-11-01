@@ -13,7 +13,8 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Stress | `tests/stress/` | Deep nesting, huge packs, the stack guard, runaway-allocation regressions, under `mem<=N` budgets |
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
-| libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md` | The real world |
+| libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md`, whole-suite status and the 10% sample procedure in `docs/status/libcxx.md` (M3b) | The real world |
+| libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/status/cxx-features.md`, checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every C++23/C++26 paper marked `done` has passing tests and clang 22's `__cpp_*` value |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 
@@ -146,6 +147,27 @@ the error-cluster table of a status page (`docs/status/libcxx-m3.md`). It is
 run by hand or periodically, and the pass rate is tracked there. The
 contract is `spec/libcxx.md`.
 
+`cargo xtask libstdcxx` is the libstdc++ consumption track, also outside
+`ci`. It compiles every public header of the system libstdc++ (the
+extension-less files directly under `/usr/include/c++/<newest>`, so 109
+headers for GCC 14; `bits/`, `ext/`, `tr1/`, ... are reached only through
+them) as a one-line TU `#include <header>` with kiln
+`-std=<std> -stdlib=libstdc++ -fsyntax-only`, and with `clang++-19` on the
+same TU as the reference. Each compile runs under the harness's memory and
+time limits and takes a jobserver token (default `-j 2`). A header is
+`ok`, `fail` (error count and first error), `crash`, `timeout` or `killed`,
+with wall time and peak RSS for both compilers; a kiln failure on a header
+clang++-19 also rejects is counted apart, not as a kiln bug. `--report
+<path>` splices the run's region (summary line, run table, headers table,
+generated error clusters) into a status page between
+`<!-- libstdcxx:<std>:begin/end -->` markers, so one page holds a region
+per standard plus hand-written text; `docs/status/libstdcxx.md` is that
+page, with the hand-written cluster triage and its corpus repros
+(`libstdcxx-*.cpp` under `tests/conformance/`). The exit status is non-zero
+only for a tool error (kiln did not build, a compile could not be run, the
+report could not be written), never for header failures. The contract is
+`spec/libstdcxx.md`.
+
 `cargo xtask features` is outside `ci` as well. It checks the language
 feature table, `docs/status/cxx-features.md`, which has one row per C++23 and
 C++26 paper with its status, its corpus tests and its `__cpp_*` macro value in
@@ -220,6 +242,18 @@ and `xtask libcxx --tag` picks a libc++ test checkout
 docs/status/wp-184-oracle-switch.md land, the corpus is baselined on 19 and
 `KILN_ORACLE=22` runs report FAILs (never mapping-table ERRORs). Contract:
 spec/harness.md "Oracle toolchain".
+
+**Clang compatibility level.** kiln reproduces one clang release's
+predefined macros and `__has_builtin`/`__has_feature`/`__has_extension`/
+`__has_attribute`/`__has_cpp_attribute` answers, chosen by
+`-fclang-compat=<major>`: 19 (the default) or 22 (spec/pp.md "clang
+compatibility level"; WP-263). The test runner passes the oracle's major
+version, so `KILN_ORACLE=22` (or `--oracle clang++-22`) compares kiln at
+level 22 with clang 22 and headers take the same `#if` branches under both. The
+`__cpp_*` feature-test macros are not part of the level: they follow what
+kiln implements (docs/status/cxx-features.md). Builtins that only clang 22
+has are tested by `skip(clang)` tests that were checked by hand against
+clang++-22.
 - `-E`: token-wise comparison after both outputs are re-lexed with
   `kiln_lex`. Identifiers and literals compare by spelling, punctuators by
   kind (a digraph equals its primary spelling), and whitespace is ignored.

@@ -195,6 +195,7 @@ sema_missing_constinit = Warning [MissingConstinit] (1) "'constinit' specifier m
 sema_missing_default_arg = Error (1) "missing default argument on parameter '{0}'";
 sema_missing_default_arg_unnamed = Error (0) "missing default argument on parameter";
 sema_missing_exception_spec = Error (2) "'{0}' is missing exception specification '{1}'";
+sema_missing_exception_spec_ext = ExtWarn [MissingExceptionSpec] (2) "'{0}' is missing exception specification '{1}'";
 sema_mptr_in_nonclass = Error (1) "'{0}' does not point into a class";
 sema_mptr_to_reference = Error (2) "'{0}' declared as a member pointer to a reference of type {1}";
 sema_mptr_to_void = Error (1) "'{0}' declared as a member pointer to void";
