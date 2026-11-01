@@ -484,6 +484,14 @@ belong to WP-017, which builds them on `macro_defined` and
   - the spacing of `#` results, taken from `LEADING_SPACE` flags rather
     than the source text;
   - `__VA_OPT__`, including P1042's stringify and placemarker cases;
+  - GNU `, ## __VA_ARGS__` (clang `MaybeRemoveCommaBeforeVaArgs`): the
+    comma is removed when the variadic argument is omitted. `token
+    pasting of ',' and __VA_ARGS__ is a GNU extension`
+    [-Wgnu-zero-variadic-macro-arguments] is reported at the spelling
+    in the definition (`expand.rs::emit_paste_comma`, WP-230): the `,`
+    when the argument is omitted, the `##` when it is present. There are
+    no "expanded from" notes, and the warning repeats per expansion
+    (`allow_duplicate`), as clang's does;
   - a function-like macro name followed by `(` on a later line, or after
     the end of a file.
 - **Locations.** Each expanded token has a `Loc` in a macro expansion
@@ -545,7 +553,7 @@ belong to WP-017, which builds them on `macro_defined` and
   `__DATE__`, `__TIME__` and `__TIMESTAMP__` can be fixed through
   `reproducible_time` and `timestamp`.
 - **Diagnostics.** Every [cpp] diagnostic has a `pp_*` id in
-  `kiln_diag/src/ids.rs`, with clang 19's wording, level and group. After
+  `kiln_diag/src/ids/pp.rs`, with clang 19's wording, level and group. After
   an error in a directive, the rest of the line is skipped.
 
 ## Deviations from clang 19 (each covered by a test or a test note)

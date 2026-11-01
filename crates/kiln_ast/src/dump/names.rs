@@ -959,7 +959,16 @@ impl<'a> AstNames<'a> {
             ExprKind::CXXUnresolvedConstructExpr => {
                 write_type(&ast.types, self, n.ty(), self.expr_types, out);
                 let (open, close) = if n.aux() != 0 { ('{', '}') } else { ('(', ')') };
-                if let Some(l) = ListId::from_raw(n.a()) {
+                let args = ListId::from_raw(n.a());
+                // The braced form's one argument is the list itself.
+                let list = args
+                    .map(|l| ast.lists.iter::<ExprId>(l).collect::<Vec<_>>())
+                    .filter(|v| n.aux() != 0 && v.len() == 1)
+                    .map(|v| v[0])
+                    .filter(|&x| exprs.get(x).kind() == ExprKind::InitListExpr);
+                if let Some(x) = list {
+                    self.expr(x, d, out);
+                } else if let Some(l) = args {
                     self.expr_list(l, open, close, d, out);
                 } else {
                     out.push(open);

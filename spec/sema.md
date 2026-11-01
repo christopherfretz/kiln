@@ -83,9 +83,22 @@ Constructors:
     declaration created in the scope instance), then the namespace's
     lookup table, and duplicates are removed by moving the last entry
     into the duplicate's slot (`LookupResult::resolveKind`). A qualified
-    lookup lists table order. An ambiguous *type* name (`S s;` with `S`
-    in the namespace and in one of its inline namespaces) is not yet
-    diagnosed: `classify_name` takes the first declaration.
+    lookup lists table order.
+  - **Identity** ([basic.lookup.general]/1, [class.member.lookup]/3;
+    WP-197): declarations of one entity, and type declarations that
+    designate the same type (two typedefs of `int`, a typedef and the
+    class it names), are one result (`is_ambiguous_lookup` compares
+    `designated_type`, canonical, then first declarations; clang's
+    `resolveKind` UniqueTypes). A set that is all functions is an
+    overload set, and an `UnresolvedUsing*` candidate defers the check
+    to instantiation. Member lookup's subobject merge (`class_hit`)
+    keys declarations the same way, and its candidate note names a
+    record by its canonical type.
+  - An ambiguous *type* name (`S s;` with `S` in the namespace and in
+    one of its inline namespaces) is diagnosed by the parser through
+    `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
+    (`ambiguous_type_recovery`) follows clang: the declaration is
+    dropped and the statement skipped.
 - **Block-scope using-directives** ([namespace.udir]/2): a local
   scope's `using namespace N;` is collected while walking outwards, and
   `N`'s members are searched at the nearest enclosing namespace (or the
@@ -197,7 +210,7 @@ Constructors:
      the outer `[`, without notes). In a GNU dialect (`-std=gnu++NN`,
      `Sema::gnu`) the warning is clang's `ext_vla_cxx_in_gnu_mode`, an
      Extension that is off by default (`sema_vla_cxx_extension_gnu`;
-     clang also adds it to `-Wall` in GNU mode, kiln does not).
+     `-Wall` enables it, `vla-cxx-extension` being in `all`, WP-230).
      `check_vla_var` then handles the variable: `extern` is an error
      ("cannot have 'extern' linkage"); `static`/`thread_local` folds the
      bound (`fold_rvalue_int`) to a constant array with the
@@ -728,12 +741,17 @@ and returns the scope it names:
 - **Enumerations** ([dcl.enum]):
   - enumerators are typed as clang types them
   - a fixed underlying type gets converted-constant-expression checks
-    and narrowing diagnostics
+    and narrowing diagnostics; a non-constant initializer is
+    `enumerator value is not a constant expression` (clang
+    `CheckEnumConstant`, WP-230)
+  - an unfixed one's initializer is an integral constant expression that
+    may fold (`fold_not_ice`, below)
   - an unfixed one gets its type from the enumerators' range (the best
     type), and the enumerators are then retyped to the enumeration
   - `replace_enumerator_init` records the converted initializer
 - **Bit-fields** ([class.bit]):
-  - the width must be an integral constant expression
+  - the width must be an integral constant expression; one that folds
+    laxly is accepted (`fold_not_ice`, below)
   - it must not be negative
   - it must not be zero-width with a name
   - it must not exceed the type's width
@@ -808,6 +826,18 @@ and returns the scope it names:
     reference), else a `-Wignored-attributes` warning; on a non-function
     `only applies to non-K&R-style functions`. Codegen: spec/codegen.md
     "Allocation functions".
+  - `flag_enum` and `enum_extensibility(open|closed)` (GNU syntax or
+    `clang::`, `AttrKind::FLAG_ENUM` / `ENUM_EXTENSIBILITY`, WP-230), on
+    enumerations (else `'x' attribute only applies to enums`
+    [-Wignored-attributes]). `flag_enum` takes no arguments;
+    `enum_extensibility` takes exactly one, an identifier (the parser
+    passes a leading identifier as `AttrArg::Ident`, clang
+    `attributeHasIdentifierArg`): `takes one argument`, `requires
+    parameter 0 to be an identifier`, and for another identifier
+    `'enum_extensibility' attribute argument not supported: 'x'`
+    [-Wignored-attributes]; an argument already in error drops it
+    silently. They change only the switch checks (§7 Statements). Not
+    yet: -Wflag-enum (an enumerator out of range of the flags).
 - **Ignored with a warning:**
   - unknown attributes: `unknown attribute 'x' ignored`. Scoped names
     print without their scope, as clang 19 does.
@@ -823,6 +853,7 @@ and returns the scope it names:
   | MALLOC | — | — |
   | ALLOC_SIZE | `ExprId` of an `IntegerLiteral` holding n | same for m, or 0 |
   | ALLOC_ALIGN | `ExprId` of an `IntegerLiteral` holding n | — |
+  | ENUM_EXTENSIBILITY | 1 for `open`, 0 for `closed` | — |
 
 - **Semantics:**
   - `nodiscard` applies to functions, records and enumerations. A
@@ -1015,10 +1046,15 @@ specification as written (`TypeNames` prints ` noexcept`,
       `type::value` and `typename type::vt` nest through it.
     - At block scope in a template, a declarator with a dependent
       qualifier (`using E<T>::A;`, [namespace.udecl]/8: an enumerator)
-      is a local `UnresolvedUsingValue`; its uses are dependent, and
-      the instantiation redoes the declarator (`subst/stmts.rs`
-      `local_using_decl`), so a non-enumerator target is diagnosed
-      then.
+      is a local `UnresolvedUsingValue` (its `using` keyword in
+      `cold.begin_loc`); a use is an `UnresolvedLookupExpr` that finds
+      it, without ADL (clang's dump). The instantiation redoes the
+      declarator (`subst/stmts.rs` `local_using_decl`), so a
+      non-enumerator target is diagnosed then, with its note at the
+      `using`, and a use (`local_using_ref`) is looked up again in the
+      instantiated block. The uses of a declarator that failed
+      (`Substituter::failed_usings`) are errors without another
+      diagnostic (clang's invalid `UsingDecl`; WP-197).
     - A qualifier that is still dependent after substitution (a
       generic lambda in a function template specialization, or a
       local class in one) leaves the declarator unresolved, rebuilt
@@ -1288,7 +1324,14 @@ diagnostics and IR.
   assignment on a pointer to `void` or to a function type is an error in
   C++ (`arithmetic on a pointer to void`, `arithmetic on pointers to the
   function type 'void ()'` for two pointer operands), not the GNU C
-  extension (`-Wgnu-pointer-arith`, kept for C).
+  extension (`-Wgnu-pointer-arith`, kept for C). A pointer difference
+  (`check_pointer_pair_arith`, clang `checkArithmeticBinOpPointerOperands`,
+  WP-230) runs after `'T *' and 'U *' are not pointers to compatible
+  types` too: a `void` pointee on one side is diagnosed for that side,
+  on both as `pointers to void`; likewise a function pointee, the
+  two-pointer form naming both pointees when the pointer types differ
+  (`arithmetic on pointers to function types 'void ()' and 'void
+  (int)'`); otherwise an incomplete pointee, left side first.
 - **Member-pointer equality** ([expr.eq]/4, clang's
   `CheckCompareOperands`, WP-085): when either operand of a comparison
   is a member pointer:
@@ -1812,8 +1855,10 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   ([expr.const]/22; WP-137).
 - **Escalation** (P2564, [expr.const]/18-20). Immediate-escalating:
   a lambda call operator, a defaulted special member, a `constexpr`
-  function instantiated from a templated entity, and any templated
-  function while its definition is parsed. In one, a failed invocation
+  function instantiated from a templated entity, and a `constexpr`
+  function template while its definition is parsed (not a member of a
+  class template's pattern, clang's `TK_NonTemplate`: its failed
+  invocation is an error at the definition; WP-227). In one, a failed invocation
   or a bad reference makes the function immediate (`FnSpec::escalated`)
   instead of an error: the failed `ConstantExpr` loses its wrapper and
   its callee `DeclRefExpr` (or the `CXXConstructExpr`) is flagged
@@ -1827,9 +1872,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   ([expr.prim.lambda.closure]/10; clang 19 instead rejects every use of
   the conversion of a consteval lambda).
 - **Templates.** A template definition's non-dependent invocations are
-  checked at the definition (they are shared with every instantiation);
-  dependent ones are built and checked at instantiation, with
-  `in instantiation of ...` notes. A `ConstantExpr` is substituted
+  checked at the definition (they are shared with every instantiation),
+  including those of a constructor's mem-initializers, which are not
+  built until instantiation (sema-class.md §4.9); dependent ones are
+  built and checked at instantiation, with `in instantiation of ...`
+  notes. A shared invocation that failed at the definition is evaluated
+  again by each instantiation that substitutes it
+  (`recheck_shared_invocation`): reported again with the instantiation's
+  context, as clang reports its rebuilt `ConstantExpr`, or escalating an
+  immediate-escalating instantiation (`e<int>` of `template<class T>
+  constexpr int e() { return bad(1); }` becomes immediate, so a
+  non-constant call of it is an error; WP-227). A `ConstantExpr` is substituted
   through to its operand and re-wrapped by the rebuilt call. A shared
   (not rebuilt) expression is walked at each instantiation and the
   functions it odr-uses (named, constructors, bound destructors,
@@ -2150,7 +2203,7 @@ clang 19's C99/GNU complex support in C++:
     - not integral or unscoped enumeration type: `integral constant
       expression must have integral or unscoped enumeration type, not T`
     - not constant: `expression is not an integral constant expression`
-      with the evaluator's notes
+      with the evaluator's notes, unless it folds (`fold_not_ice`)
     - negative: `array designator value '-1' is negative`
     - an empty range: `array designator range [3, 1] is empty`, at the
       `...`.
@@ -2168,8 +2221,26 @@ clang 19's C99/GNU complex support in C++:
     again merges with its prior initialization, seeded from the prior
     `InitListExpr` (`prior_list`). Seeded slots count as explicit unless
     they are fillers (`ImplicitValueInitExpr`, `CXXDefaultInitExpr`).
-    Descending into a subobject that an expression initialized is
-    unsupported, since clang would build `DesignatedInitUpdateExpr`.
+    Descending into a subobject that an expression initialized keeps
+    that object and re-initializes only part of it ([dcl.init.aggr]/4,
+    C99 6.7.9p19): the slot becomes a `DesignatedInitUpdateExpr` whose
+    base is the old initializer and whose updater is an `InitListExpr`
+    of the subobject's type, with `NoInitExpr` in the slots it does not
+    touch (an array updater runs to its highest index, with
+    `NoInitExpr` holes and filler; a union updater holds only the
+    designated member). Lists nested in an updater fill with
+    `NoInitExpr` too (`Sub::update`, clang `FillWithNoInit`), except a
+    braced value, which value-initializes, and a merged prior list,
+    which keeps its own fill (`is_update_list`). The next designator
+    warns `initializer partially overrides prior initialization of
+    this subobject` with the old initializer noted; keeping the old
+    object of a class with a non-trivial destructor is an error
+    (`initializer would partially override prior initialization of
+    object of type T with non-trivial destruction`). A full override
+    of an initializer that may have side effects notes that they will
+    not occur. Codegen emits the base and then the updater; the Oven
+    does not evaluate it, as clang's evaluator does not (`constexpr
+    variable must be initialized by a constant expression`).
     - out of declaration order: `-Wreorder-init-list` (ExtWarn, in
       `-Wreorder`), at the later value, with the note
       `previous initialization for field` on the earlier one. It covers
@@ -2178,6 +2249,17 @@ clang 19's C99/GNU complex support in C++:
       value, with the note `previous initialization is here`. A union
       initialized through a different member is the DefaultError form,
       at the designator.
+    - Order and override diagnostics are substitution failures
+      whatever their severity (clang's `SFINAEFailure` ExtWarns;
+      `is_sfinae_failure`), so a constraint or a SFINAE'd signature
+      using them fails. The `-Wc99-designator` warnings are not.
+    - In overload resolution ([over.ics.list]/8), a list that
+      initializes a subobject twice converts to no aggregate
+      (`designators_override`, clang `InOverloadResolution`): the same
+      path, a whole object after a part of it, a part after the whole,
+      another member of the same union, through anonymous members.
+      Order does not matter there, and a braced value's own designators
+      are not compared.
     - an unknown field: `field designator 'q' does not refer to any field
       in type T`, at the name.
     - a field designator into a scalar: `field designator cannot
@@ -2201,18 +2283,18 @@ clang 19's C99/GNU complex support in C++:
     designators are carried in `DesignatedInitExpr`s and in the written
     form of non-dependent lists. The semantic checks run on the
     instantiated type at the written locations. A designated pack
-    expansion gives one designated clause per element.
+    expansion gives one designated clause per element. A non-dependent
+    list that the instantiation shares rather than rebuilds keeps the
+    order and override diagnostics its definition check issued
+    (`designator_rewarn`), and each instantiation issues them again
+    under its instantiation note (`reissue_designator_warnings`), as
+    clang's rebuilt list does; a rebuilt list warns again by itself.
+    Neither is deduplicated against the definition's.
   - Deviations:
-    - A non-dependent designated list in a template pattern is not
-      re-checked at instantiation, so clang's repeated
-      `-Wreorder-init-list` under the instantiation note is missing.
     - A range designator whose clause has side effects evaluates the
       clause once per element. clang's codegen refuses it ("cannot
       compile this GNU array range designator extension yet"), and GCC
       evaluates it once.
-    - Reorder and override warnings do not cause a substitution failure
-      (clang's are warnings too, but SFINAE-visible as errors under
-      `-Werror`).
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
@@ -2362,7 +2444,9 @@ clang 19's C99/GNU complex support in C++:
   - Enumeration and constant checks (`switch_enum.rs`
     `check_switch_cases`, WP-219), in clang `ActOnFinishSwitchStmt`
     order, after `check_case_ranges`; skipped for a dependent or invalid
-    condition:
+    condition and for a value-dependent case label (clang
+    `HasDependentValue`: -Wswitch-default included, so a template whose
+    labels depend on a parameter warns only per instantiation, WP-230):
     1. no `default`: `-Wswitch-default` (off by default) `'switch'
        missing 'default' label`;
     2. nothing more if the case list is broken (an unfolded label, a
@@ -2374,13 +2458,18 @@ clang 19's C99/GNU complex support in C++:
        before promotion) continues;
     5. a case value, then each range's `lo` and `hi`, that is no
        enumerator's value: `case value not in enumerated type 'E'`
-       [-Wswitch]; a condition naming a const variable of static or
-       thread storage duration of the same enumeration is exempt;
+       [-Wswitch]; a label naming a const variable of static or
+       thread storage duration of the same enumeration is exempt, and so
+       is every value of an `enum_extensibility(open)` enumeration; for a
+       `flag_enum` one "an enumerator's value" means any value whose bits
+       are all bits of its positive single-bit enumerators (clang
+       `ShouldDiagnoseSwitchCaseNotInEnum`, `IsValueInFlagEnum`);
     6. enumerators sorted by value (first of equal values kept),
        deprecated, `[[maybe_unused]]` and unused ones skipped, not
        covered by a case or range: none and a `default` is `default
        label in switch which covers all enumeration values`
-       [-Wcovered-switch-default, off]; otherwise `enumeration value 'A'
+       [-Wcovered-switch-default, off] for a closed non-flag enumeration
+       (clang `isClosedNonFlag`); otherwise `enumeration value 'A'
        not handled in switch` (two: `values 'A' and 'B'`, three: `'A',
        'B', and 'C'`, more: `N enumeration values not handled in switch:
        'A', 'B', 'C'...`) [-Wswitch] without a `default`, or the same with
@@ -2475,7 +2564,8 @@ clang 19's C99/GNU complex support in C++:
   the end of a switch with no default over a fully covered enumeration
   (`isAllEnumCasesCovered`); reaches a handler only from a live throw in
   its try-block (or in a nested try without a catch-all, as calls have
-  no exception edges); iterates `goto` labels and loop back edges to a
+  no exception edges); gives a live `asm goto` an edge to each of its
+  labels besides the next statement (WP-230); iterates `goto` labels and loop back edges to a
   fixed point; and checks nothing in a function with an `if consteval`
   (clang builds no CFG). The operands of `sizeof`/`alignof` are not
   walked (a `noexcept` operand is, as clang's CFG does); a GNU case range
@@ -2590,7 +2680,7 @@ values clang attaches are precomputed into `AsmData.srclocs` (literal
 begin, then every later template line; offset + 2). Templates are
 substituted (`subst/stmts.rs`) and rechecked at instantiation.
 `act_on_file_scope_asm` builds a `FileScopeAsmDecl`. Not implemented:
-`asm goto` (rejected by the parser), immediate range checks
+immediate range checks
 (`validateInputSize`/`validateOutputSize`), `=@cc` flag outputs, register
 variables (`register int r asm("x0")`) as operands and their clobber
 conflict check, the C++17 "asm in constexpr function" extension warning;
@@ -2842,6 +2932,21 @@ unscoped enumeration is reported (spec/oven.md "Integration").
 | `case` label, enumerator of an enumeration with a fixed underlying type, `noexcept(e)` specifier | `EvalContext::converted(loc)`; a converted constant expression ([expr.const]/12) |
 | `if constexpr` condition | `EvalKind::IfConstexpr` |
 | array bound, bit-field width, enumerator without a fixed type, `alignas`, array designator | `EvalKind::Other` |
+
+- **GNU folding** (`Sema::fold_not_ice`, clang
+  `VerifyIntegerConstantExpression` with `AllowFold`, WP-230): for a
+  bit-field width, an enumerator without a fixed underlying type and an
+  array designator, an expression that is not an integral constant
+  expression but folds laxly (`fold_rvalue_int`: a `const` non-volatile
+  variable reads as its initializer, e.g. `(int)d` for `const double d =
+  2.0`) is accepted with its folded value. It warns `expression is not an
+  integral constant expression; folding it to a constant is a GNU
+  extension` [-Wgnu-folding-constant] (an Extension, so off unless
+  `-pedantic` or the group is enabled), with the evaluator's notes, at
+  the expression's begin (a lone "subexpression not valid" note moves
+  the location instead). Array bounds have their own folding (`variable
+  length array folded to constant array`, above). A `case` label,
+  `static_assert` and `alignas` never fold.
 
 - **Speculative folds (`try_fold`):**
   - narrowing checks in list-initialization and fixed-type enumerators

@@ -56,6 +56,8 @@ pub(super) fn class_name(a: &AttrNode) -> Option<&'static str> {
         AttrKind::BUILTIN => "Builtin",
         AttrKind::USING_IF_EXISTS => "UsingIfExists",
         AttrKind::HOT => "Hot",
+        AttrKind::FLAG_ENUM => "FlagEnum",
+        AttrKind::ENUM_EXTENSIBILITY => "EnumExtensibility",
         _ => return None,
     })
 }

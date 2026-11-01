@@ -2,7 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
-All = "all" [Most, Switch, SwitchBool];
+All = "all" [Most, Switch, SwitchBool, VlaCxxExtension];
 Asm = "asm" [AsmOperandWidths];
 Attributes = "attributes" [UnknownAttributes, IgnoredAttributes];
 BitfieldConstantConversion = "bitfield-constant-conversion" [SingleBitBitfieldConstantConversion];
@@ -14,9 +14,9 @@ Cxx14Extensions = "c++14-extensions" [Cxx14BinaryLiteral];
 Dangling = "dangling" [DanglingField, ReturnStackAddress];
 Deprecated = "deprecated" [DeprecatedDeclarations, DeprecatedRedundantConstexprStaticDef, DeprecatedThisCapture];
 Extra = "extra" [InitializerOverrides, UnusedButSetParameter];
-Gnu = "gnu" [GnuCaseRange, GnuDesignator, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments, VlaExtension];
+Gnu = "gnu" [GnuCaseRange, GnuDesignator, VlaExtension, GnuFoldingConstant, GnuImaginaryConstant, GnuIncludeNext, GnuLineMarker, GnuPointerArith, GnuStringLiteralOperatorTemplate, GnuZeroLineDirective, GnuZeroVariadicMacroArguments];
 LoopAnalysis = "loop-analysis" [ForLoopAnalysis, RangeLoopAnalysis];
-Most = "most" [Comment, UnknownPragmas, OverloadedVirtual, UnevaluatedExpression, Reorder, Uninitialized, RangeLoopConstruct, Unused];
+Most = "most" [Comment, Multichar, RangeLoopConstruct, Reorder, ReturnType, Trigraphs, Uninitialized, UnknownPragmas, Unused, OverloadedVirtual];
 Narrowing = "narrowing" [Cxx11Narrowing];
 OverrideInit = "override-init" [InitializerOverrides];
 Pedantic = "pedantic" [];
@@ -31,6 +31,6 @@ UnreachableCodeAggressive = "unreachable-code-aggressive" [UnreachableCode, Unre
 Unused = "unused" [UnusedValue, UnusedVariable, UnusedButSetVariable, UnusedFunction];
 UnusedFunction = "unused-function" [UnneededInternalDeclaration];
 UnusedTemplate = "unused-template" [UnneededInternalDeclaration];
-UnusedValue = "unused-value" [UnusedComparison, UnusedResult];
+UnusedValue = "unused-value" [UnusedComparison, UnusedResult, UnevaluatedExpression];
 UnusedVariable = "unused-variable" [UnusedConstVariable];
 VlaExtension = "vla-extension" [VlaCxxExtension];

@@ -680,7 +680,32 @@ or `LifetimeExtendedTemporary` whose type is destructed ([basic.life], clang
 declaration order. Sema's obligation when such a variable is declared: the
 destructor is accessible (`variable of type 'X' has private destructor`) and
 not deleted (`attempt to use a deleted function`), and is marked referenced
-(implicit definition).
+(implicit definition). An array variable's element destructor is marked
+referenced without a check (clang's `FinalizeVarWithDestructor` skips
+arrays); it is checked where each element is initialized instead.
+
+**Element destructors** (WP-227, clang `checkDestructorReference`;
+`init_dtor.rs` with hooks in `init.rs` and `class/construct.rs`): each
+subobject an initialization creates must be destructible, so an
+inaccessible destructor is `temporary of type 'X' has private destructor`
+and a deleted one `attempt to use a deleted function` (+ `'~X' has been
+explicitly marked deleted here`), at clang's locations:
+- an array's element type once per array (its own list's `}`, or the
+  outermost list's `}` under brace elision), before its elements; also
+  for a default- or constructor-initialized array (the declarator);
+- an aggregate's field before its initializer (at its begin), or after
+  it when designated (at the designator); a base after its initializer;
+  the fields left implicit, after the last element (all of them once any
+  designator appears; every field of an empty union list), at the `}`;
+- a converted element that is destroyed but not bound to a temporary
+  (a user-defined conversion initializing a variable, member or element),
+  at the converted expression.
+A deleted destructor stops the list (the rest is not checked, clang's
+`hadError`). Deviations: clang reports access errors at the end of the
+declaration and deleted ones at once, so their relative order differs in
+a declaration that has both; subobjects reached through a designator's
+path (`.a.b = ...`) are not checked; clang's same-location repeats are
+deduplicated (diag.md §7.4).
 
 ### 4.9 Ctor-initializers ([class.base.init])
 `act_on_mem_initializers(ctor, &[MemInitInfo], colon_loc)`, `MemInitInfo { id:
@@ -698,6 +723,22 @@ initializer 'y' does not name a non-static data member or base class`,
 'B'`), `an initializer for a delegating constructor must appear alone`,
 `initializing multiple members of union`.
 
+**In a template** (WP-223; clang `BuildMemInitializer` in a dependent
+context). The list is kept as written and substituted per instantiation, but
+an unqualified id is checked when the definition is parsed: it must name a
+field of the class or a type found by that lookup (member typedef,
+injected-class-name, a type in an enclosing scope, a template parameter). A
+dependent base is not searched ([temp.dep.general]/3), so `B(1)` for base
+`B<T>` gets the `does not name` error at the definition, and the
+constructor's instantiations add no implicit initializers. A qualified id
+whose qualifier can name an unknown specialization (`T::Self(2)`, or the
+current instantiation with a dependent base, `D::B(1)` / `D<T>::B(1)`) is a
+`DependentNameType` (`Sema::act_unknown_specialization_type`). It is looked
+up in the instantiation (`no type named 'Foo' in 'D7<int>'`). The same
+function makes `typename D::X` dependent for such a qualifier
+([temp.res.general]/5). A qualified id naming no type in a non-dependent
+qualifier is still `qualified member initializers` unsupported.
+
 **Completion** (clang `SetCtorInitializers`): stored in initialization order
 ([class.base.init]/13): virtual bases (inheritance-graph order, complete-object
 ctor only), direct bases, fields. An unwritten subobject gets
@@ -712,7 +753,11 @@ constructor`. Each written initializer is a full-expression; so is each implicit
 (a default-initializing construction of a member with no NSDMI), which is
 an immediate-escalation site for an implicitly defined constructor
 ([expr.const]/20; WP-158: `struct E { B b; }` with a consteval `B()`
-escalates `E()`, the reason naming the member). `reference member
+escalates `E()`, the reason naming the member). In a template the list is
+kept unbuilt until instantiation (`inst.pattern_mem_inits`), but the
+non-dependent immediate invocations of each written initializer are
+finished at the definition (`finish_immediate_parts`), and checked again
+in each instantiation (sema.md §8 "Templates"; WP-227). `reference member
 'r' binds to a temporary object whose lifetime would be shorter than the
 lifetime of the constructed object` + `reference member declared here`.
 Warnings: `field 'b' will be initialized after field 'a'` [-Wreorder-ctor],
@@ -726,6 +771,15 @@ cycles at TU end: `constructor for 'S' creates a delegation cycle`
 ctor → `ListId`, written once with the body. Dump `CXXCtorInitializer 'S'` /
 `CXXCtorInitializer Field 'm' 'int'`; JSON `baseInit` / `anyInit` /
 `delegatingInit`.
+
+**Deviation: default member initializers of a class template** (WP-227).
+clang instantiates an NSDMI lazily, when a constructor first uses it
+(`in instantiation of default member initializer 'S<P>::b' requested
+here`), and reports its errors there and again at the use. kiln
+instantiates NSDMIs with the class and reports an error of one once, at
+the constructor's use (`in the default initializer of 'b'` + `declared
+here`, under the constructor's instantiation note), after the written
+mem-initializers' errors rather than before them.
 
 ### 4.10 Inheriting constructors ([namespace.udecl]/3, [class.inhctor.init])
 **Landed (WP-114).** Modules `kiln_sema/src/using.rs` (class-scope
@@ -1014,6 +1068,20 @@ object`, with the same notes. Reference parameters, statics,
 (non-lambda) prvalues are not followed. Kiln's per-`(id, span)`
 deduplication (diag.md §7.4) drops clang's repeat of a non-dependent
 return's warning in each instantiation.
+
+**Dangling local pointers (WP-227, clang `LK_Extended` on a pointer
+variable).** `check_dangling_pointer_var(v, init)` (`stack_addr.rs`) runs
+after lifetime extension on the initializer of a non-dependent
+pointer-typed variable (through `ExprWithCleanups` and a one-element
+braced list): it is walked like a returned value, and each temporary
+reached only through `&`/array decay (`const int* p = U{1, 2};`, a
+member array of a class prvalue, a `?:` arm) is `temporary whose address
+is used as value of local variable 'p' will be destroyed at the end of
+the full-expression` [-Wdangling] at the temporary. A lifetime-extended
+temporary or a named array is not. Not covered: a reference variable
+bound through a pointer (`const int* const& r = U{5};`, clang's `bound
+to local reference`), assignments (`-Wdangling-assignment`) and pointer
+members with an NSDMI.
 
 ### 5.5 Copy elision and NRVO ([class.copy.elision])
 - **Guaranteed elision** ([dcl.init.general]/16.6.1): a prvalue of the same
@@ -1453,8 +1521,8 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   materializes for `&&`); `CastStyle::Dynamic` in `act_on_cast` routes
   there. `typeid` of a glvalue of polymorphic class type is marked
   evaluated (`typeid_expr(.., evaluated, ..)`).
-- New diagnostics (`kiln_diag`, end of the tables): the WP-078a block in
-  `ids.rs` plus `sema_dynamic_cast_no_rtti`, `sema_inaccessible_base`;
+- New diagnostics (`kiln_diag`, end of the tables): the WP-078a ids
+  (now sorted into `ids/sema_*.rs`, spec/diag.md §2.4) plus `sema_dynamic_cast_no_rtti`, `sema_inaccessible_base`;
   groups `OverloadedVirtual`, `InconsistentMissingOverride`,
   `AbstractFinalClass`, `InaccessibleBase`.
 - Not done (owners): `dtor_delete` (the destructor's operator delete) and
@@ -1523,7 +1591,8 @@ Constructors, destructors, conversion functions, `= default` and
 - `define_implicit_special` is the §4.5 stub (`sema_unsupported`
   "implicit definition of a ..."); implicit members are declared but
   have no bodies.
-- New diagnostics: the WP-067a block in `kiln_diag/src/ids.rs`; groups
+- New diagnostics: the WP-067a ids (now in the `kiln_diag/src/ids/*.rs`
+  area files, spec/diag.md §2.4); groups
   `DefaultedFunctionDeleted`, `ClassConversion`. Harness: `//@
   ast-implicit` (harness.md) dumps implicit members.
 - Not done (owners): implicit definitions, ctor-initializers and
@@ -1577,7 +1646,8 @@ definitions and temporaries. Modules in `kiln_sema/src/class/`:
   `-Wcall-to-pure-virtual-from-ctor-dtor` warning (`member_expr.rs`
   `check_pure_virtual_call_in_cdtor`; `cold.begin_loc` records a pure
   virtual's decl-spec start for its note).
-- New diagnostics: the WP-067b block at the end of `kiln_diag/src/ids.rs`;
+- New diagnostics: the WP-067b ids (now in the `kiln_diag/src/ids/*.rs`
+  area files, spec/diag.md §2.4);
   groups `Reorder`/`ReorderCtor`, `Uninitialized`, `Dangling`/
   `DanglingField`/`ReturnStackAddress`, `DelegatingCtorCycles`,
   `CallToPureVirtualFromCtorDtor`.
@@ -1683,7 +1753,26 @@ access, out-of-line declarator scope.**
   (instantiation). The destructor `MemberExpr` is located at the `~` (clang's
   name start), so a deleted destructor's use is diagnosed there; when
   rebuilt at instantiation it is at the destroyed type, as clang (WP-193).
-  A qualified destructor name (`p->D::~D()`) is not parsed yet.
+  Qualified destructor names (WP-223, [basic.lookup.qual.general]/4):
+  `act_on_member_destructor_q(base, qual, first, name, ..)`. On a class
+  object (`x.N::~Q`; `first` is `None`, `qual` the whole
+  nested-name-specifier) `Q` is looked up in `N`, then in the object's
+  class, then here, and the destructor of the class it names is accessed
+  as a qualified member of `N` through `member_access` (so `N` must be
+  the object's class or a base, the call is not virtual, and the errors
+  are clang's "no member named '~X' in 'W'" / "'X::~X' is not a member of
+  class 'W'"). On a scalar or dependent object
+  (`may_be_pseudo_destructor`) the parser splits `p->S::F::~Q` into the
+  prefix `S`, the first type-name `F` and `Q`; both are looked up in `S`
+  if present, else here, and each must denote the object type
+  (`sema_pseudo_dtor_not_type`, `sema_pseudo_dtor_type_mismatch`, second
+  name first, as clang). A qualified dependent form is a
+  `CXXPseudoDestructorExpr` whose qualified bit
+  (`Builder::pseudo_destructor_q`, `Ast::pseudo_destructor_qualified`)
+  makes `rebuild_member_destructor(.., qualified, ..)` name a class
+  type's destructor as a qualified member of that class (non-virtual,
+  and a base class's destructor is allowed: `this->B::~B()`). A
+  qualified destructor template-id (`p->N::~X<T>()`) is a gap.
   A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
@@ -1716,11 +1805,13 @@ access, out-of-line declarator scope.**
   (`sema_dtor_type_mismatch`, `note_dtor_type_found`,
   `sema_dtor_name_undeclared`, `sema_pseudo_dtor_*`) and
   `sema_qualified_member_of_unrelated`, with clang 19's text.
-- *Gaps*: qualified destructor names (`p->N::~T()`); dependent
+- *Gaps*: qualified destructor template-ids (`p->N::~X<T>()`); a
+  pseudo-destructor qualifier in a dependent scope; dependent
   `operator T()` printing in dumps; the "member has the same name as its
   class" error.
 - Tests: `tests/conformance/expr.ref/`, `dcl.meaning/`,
-  `ast/expr.ref/`, `class.member.lookup/ambiguous.cpp` (flipped).
+  `ast/expr.ref/`, `class.member.lookup/ambiguous.cpp` (flipped);
+  `expr.prim.id.dtor/`, `ast/expr.prim.id.dtor/` (WP-223).
 
 ### 8.4 `SemaBridge` (kiln_oven) — public-interface change
 Replace `fn vtable(&mut self, record) -> &VTableLayout` with

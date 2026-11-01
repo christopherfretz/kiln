@@ -475,6 +475,17 @@ impl Preprocessor<'_, '_> {
         v
     }
 
+    /// `token pasting of ',' and __VA_ARGS__ is a GNU extension` at the
+    /// macro body token `span` (expansion space) maps back to: clang
+    /// reports at the definition's `,` (variadic argument omitted or
+    /// empty) or `##` (present), with no macro-expansion notes, once per
+    /// expansion.
+    fn emit_paste_comma(&self, span: Span) {
+        let at = Span { lo: self.sm.spelling_loc(span.lo), hi: self.sm.spelling_loc(span.hi) };
+        let at = if at.lo.is_valid() { at } else { span };
+        self.emit(Diag::new(DiagId::pp_paste_comma, at).allow_duplicate());
+    }
+
     /// GNU `, ## __VA_ARGS__` with an omitted variadic argument (clang
     /// `MaybeRemoveCommaBeforeVaArgs`, C++ / paste-operator path).
     fn remove_comma_before_va(
@@ -490,7 +501,7 @@ impl Preprocessor<'_, '_> {
         let Some(c) = out.last().filter(|t| t.is_punct(Punct::Comma)).copied() else {
             return false;
         };
-        self.emit(Diag::new(DiagId::pp_paste_comma, c.tok.span));
+        self.emit_paste_comma(c.tok.span);
         out.pop();
         if out.last().is_some_and(PpTok::is_paste_op) {
             out.pop();
@@ -658,7 +669,7 @@ impl Preprocessor<'_, '_> {
                 {
                     pseudo = true;
                     if let Some(op) = out.pop() {
-                        self.emit(Diag::new(DiagId::pp_paste_comma, op.tok.span));
+                        self.emit_paste_comma(op.tok.span);
                     }
                 }
                 let first = self.append_arg(out, raw, cur.tok.span);

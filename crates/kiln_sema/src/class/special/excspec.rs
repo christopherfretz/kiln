@@ -133,6 +133,12 @@ impl Sema<'_, '_> {
             }
         }
         for fld in self.special_fields(class) {
+            if k == K::DefaultCtor {
+                // clang `BuildCXXDefaultInitExpr` instantiates it, from
+                // the constructor.
+                let poi = self.ast.decls.get(f).loc();
+                self.instantiate_nsdmi(fld, poi);
+            }
             if self.ast.decls.get(fld).has(DeclFlags::INVALID) {
                 continue;
             }

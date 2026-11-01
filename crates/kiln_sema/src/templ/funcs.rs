@@ -220,6 +220,9 @@ impl Sema<'_, '_> {
                         Err(_) => sub.sema.note_failed_mem_initializer(f),
                     }
                 }
+                if sub.sema.inst.failed_mem_inits.contains(&pdef) {
+                    sub.sema.note_failed_mem_initializer(f);
+                }
                 sub.sema.act_on_mem_initializers(f, &[], colon);
             }
             let b = sub.body(body);

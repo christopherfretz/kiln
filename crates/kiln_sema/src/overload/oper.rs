@@ -331,7 +331,7 @@ impl Sema<'_, '_> {
                     .map(|(&e, _)| e)
                     .collect();
                 for name in [Some(op), extra].into_iter().flatten() {
-                    self.adl_lookup_dn(DeclName::operator(name), &adl_args, &mut fns);
+                    self.adl_lookup_dn(DeclName::operator(name), &adl_args, loc, &mut fns);
                 }
                 let adl: Vec<(DeclId, DeclId)> = fns[n_unqual..].to_vec();
                 for (d, f) in adl {

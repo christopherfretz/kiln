@@ -663,7 +663,14 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (`act_on_braced_arg`, converted once the parameter type is known).
     A member destructor name may be a template-id, `p->~C<T>()`
     ([expr.prim.id.dtor]/1): the template-id is parsed as a type and
-    passed to `Sema::rebuild_member_destructor` (WP-149).
+    passed to `Sema::rebuild_member_destructor` (WP-149). A qualified
+    one, `x.N::~T()`, is parsed with the nested-name-specifier as the
+    qualifier; when the object is not of class type or is dependent
+    (`Sema::may_be_pseudo_destructor`) and the designator is
+    `[nns] type-name :: ~ type-name`, the last `type-name ::` is not a
+    nested-name-specifier but the pseudo-destructor's first type-name
+    (clang's `MayBePseudoDestructor`; `parse_pseudo_destructor`). Both
+    go to `Sema::act_on_member_destructor_q` (WP-223).
   - Then primary expressions:
     - literals and `this`-less id-expressions
     - qualified names `N::x`
@@ -754,6 +761,16 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   or `__attribute__`. `condition_has_init_statement` looks for a `;` at
   the top level of the parentheses, skipping balanced groups, so
   `if (int n{1}; n)` has an init-statement.
+- **Ambiguous names** ([basic.lookup.general]/1; WP-197): before that
+  decision, a statement that starts with an unqualified identifier
+  (not followed by `::`) asks Sema's `diagnose_ambiguous_name(name,
+  None, loc)`. When the lookup is ambiguous it reports `reference to
+  'x' is ambiguous` with candidate notes and the statement is skipped
+  to its `;` (clang's `ClassifyName` error in
+  `ParseStatementOrDeclaration`). Where a type name was already
+  classified (a decl-specifier's simple type, a qualified
+  `typename`-less type name) the same call reports the ambiguity and
+  recovery keeps the classified type, as clang's `getTypeName` does.
 
   Audit against clang 19 (WP-180). `T` is a class, `U` a template type
   parameter, `a` a variable, `I` a typedef; tests are under
@@ -858,6 +875,12 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   goes through `act_on_attributed_stmt` after the sub-statement is parsed,
   passing the language standard (sema has none of its own). So does one
   holding `likely`, `unlikely` or `fallthrough` (WP-182; spec/sema.md).
+- **Identifier argument (WP-230):** for `enum_extensibility` (clang
+  `attributeHasIdentifierArg`) a leading identifier is passed as
+  `AttrArg::Ident(name, loc)`; any further arguments, or a first one that
+  is not an identifier, parse as expressions. `flag_enum` and
+  `enum_extensibility` parse their arguments (so Sema can count them);
+  other attributes outside `takes_expr_args` skip theirs.
 - **No argument list (WP-182):** a standard attribute that takes no
   arguments (`carries_dependency`, `fallthrough`, `noreturn`,
   `no_unique_address`, `likely`, `unlikely`, `maybe_unused`), written
@@ -872,7 +895,7 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   `expected ']'` / `to match this '['` pair. The argument-count error of
   an `assume` without `(...)` still comes from Sema.
 
-## 7. Driver (`kiln -fsyntax-only [-fdump-ast]`)
+## 7. Driver (`kiln++ -fsyntax-only [-fdump-ast]`)
 - The driver builds the preprocessor exactly as `-E` does
   (`Job::build_preprocessor`: search list, predefines, `-D`/`-U`/
   `-include`, `#if` evaluation, feature queries; spec/driver.md). It

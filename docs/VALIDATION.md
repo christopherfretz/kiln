@@ -70,6 +70,11 @@ Directives (the full contract, including matching and outcome rules, is
   `skip(kiln):`, `skip(clang):`, `xfail(kiln):` and `xfail(clang):` apply to
   one compiler only. This lets the corpus be validated against clang while it
   still tracks kiln's gaps.
+- `requires: target-<arch>` / `requires: clang>=X[.Y[.Z]]` skip a test whose
+  precondition does not hold: the test's effective target (the last
+  `--target` in its `args`, else the host) must be `<arch>`, and every clang
+  the test runs (the compiler under test, and the oracle when the test
+  compares with one) must be at least that version.
 
 The directive header must come first; a `//@` line after it is an error.
 A `.h` file is a test only if it has directives, and `Inputs/` directories
@@ -111,6 +116,19 @@ needs `oracle: none`, since its oracle compile is not skipped in kiln mode.
 A timeout kills the compile's whole process group (the clang driver's `cc1`
 included). The defects found so far, each with the test that records it:
 
+- clang 19.1.0 to 19.1.2 answer `__has_builtin` with 0 for four builtins
+  they implement (`__can_pass_in_regs`, `__reference_binds_to_temporary`,
+  `__reference_constructs_from_temporary`,
+  `__reference_converts_from_temporary`; llvm/llvm-project#111477, fixed in
+  19.1.3). kiln answers 1, as 19.1.3 and later do. The probes live apart in
+  `templates/builtins/has-builtin-{probe,staged}-gh111477.cpp`, which carry
+  `requires: clang>=19.1.3`, so an older oracle skips them and the rest of
+  the probe still runs. The kiln_pp `features` differential test excuses the
+  same four answers from such a clang (`oracle_defect` in
+  `crates/kiln_pp/tests/features.rs`).
+- Ubuntu's clang 19.1.1 answers `__is_target_environment(gnut64)` with 1 on
+  a `-gnu` target; Debian's clang and kiln answer 0. The `features` test
+  excuses that one answer from an `Ubuntu clang version 19.` oracle.
 - clang 19.1.7 never terminates on a use of an explicitly specialized member
   class template (`template<> template<class U> struct X<int>::M`) whose
   specialization has a default member initializer, and crashes when that
@@ -146,8 +164,13 @@ plus `build-essential procps time`). The environment is pinned because the
 differential tests depend on the host as well as on clang. They check
 search paths, `__has_builtin`/feature tables, target defaults and the
 host's `va_list` against goldens recorded with that clang on that host.
-Ubuntu's clang 19.1.1 fails a handful of them. `KILN_REQUIRE_LLVM=1` turns a
-missing LLVM tool into a failure instead of a skip.
+**Oracle-version assumption:** the reference oracle is Debian's clang
+19.1.7, and kiln models clang 19.1.3 and later. An older 19.1 (Ubuntu
+24.04 ships 19.1.1) is tolerated only through the oracle defects listed
+above ("The defects found so far"): the corpus self-check and the kiln run pass
+with it (the GH111477 probes skip), but it is not what CI runs.
+`KILN_REQUIRE_LLVM=1` turns a missing LLVM tool into a failure instead of a
+skip.
 
 A second job, `check-x86_64`, runs the same steps in the same container on
 the x86-64 `ubuntu-24.04` runner (WP-228), so the host-dependent paths
@@ -158,7 +181,12 @@ carry `//@ requires: target-aarch64` (`run` tests, which cannot cross-run;
 spec/harness.md). The `-v` search-list test compares with clang++-19 live
 rather than with the reference container's goldens. `check` is the
 required status check; whether `check-x86_64` is too is a branch-rule
-decision.
+decision. The two jobs stay separate jobs (a matrix would rename the
+required check to `check (…)`). Each installs git, checks out, and runs
+the shared composite action `.github/actions/kiln-ci` (toolchain packages,
+Rust 1.99.1, the cache, `cargo xtask ci`), so the steps are written once.
+`ext.c11.atomic/alignment-warning-x86_64-run.cpp` is the x86-64 twin of an
+aarch64-only `run` test (WP-239).
 
 `Swatinem/rust-cache` keeps `~/.cargo` and the dependency builds, and
 saves them even when the run fails. A warm run takes about 6 minutes:
@@ -182,7 +210,7 @@ the local run is still the merge gate (docs/AGENTS.md rule 3).
   - one generated test per header (`cargo xtask gen-pp-corpus`): every
     libc++ 19 public header including `experimental/`, the C headers libc++
     wraps, and the top-level `/usr/include/*.h` headers it does not. This is
-    the M1 exit criterion: `kiln -E` must agree with `clang -E` on all of
+    the M1 exit criterion: `kiln++ -E` must agree with `clang -E` on all of
     them;
   - `torture/`: hand-written tests of the hard corners (hide sets,
     placemarkers, `__VA_OPT__`, stringizing, `#include` of macro-expanded
@@ -195,7 +223,7 @@ the local run is still the merge gate (docs/AGENTS.md rule 3).
   docs/status/pp-parity.md` refreshes the parity table on
   `docs/status/pp-parity.md`.
 - `run`: stdout and exit code must match a clang-built binary.
-- layout: `kiln -fdump-record-layouts` vs clang's for every class in the
+- layout: `kiln++ -fdump-record-layouts` vs clang's for every class in the
   corpus; mangled names vs clang's for every external symbol.
   `expect: layout` and `expect: vtables` tests make this a corpus feature:
   the harness runs kiln with `-fsyntax-only -fdump-record-layouts` (or

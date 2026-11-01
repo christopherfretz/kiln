@@ -31,6 +31,8 @@ EmptyBody = "empty-body" [];
 Exceptions = "exceptions" [];
 ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
 ExternInitializer = "extern-initializer" [];
+// ----- WP-197 (DR482 namespace extra qualification)
+ExtraQualification = "extra-qualification" [];
 GnuDesignator = "gnu-designator" [];
 GnuFoldingConstant = "gnu-folding-constant" [];
 GnuImaginaryConstant = "gnu-imaginary-constant" [];

@@ -1019,6 +1019,16 @@ impl Parser<'_, '_> {
     /// pseudo-destructor-name ([expr.ref]/1, [expr.prim.id.dtor]).
     fn parse_member_access_suffix(&mut self, e: ExprId, loc: Loc, arrow: bool) -> PExpr {
         let mut template_kw = self.eat_kw(Kw::Template).is_some();
+        // `p->T::~T()`, `p->N::T::~T()` on a scalar or dependent object: a
+        // pseudo-destructor-name whose last `type-name ::` is not a
+        // nested-name-specifier ([expr.prim.id.dtor]/2; clang's
+        // `MayBePseudoDestructor`).
+        if !template_kw
+            && let Some(cc) = self.pseudo_dtor_colons()
+            && self.s.may_be_pseudo_destructor(e, arrow)
+        {
+            return self.parse_pseudo_destructor(e, loc, arrow, cc);
+        }
         // `e.N::m`, `p->B::f`, `e.::N::m` ([expr.ref]/1 with a
         // qualified-id; [basic.lookup.qual.general]/2 looks the first
         // component up in the object's class, then here).
@@ -1032,9 +1042,31 @@ impl Parser<'_, '_> {
         } else {
             None
         };
-        if qual.is_some() && self.at(Punct::Tilde) {
-            self.unsupported("a qualified destructor name", self.loc());
-            return None;
+        if let Some(q) = qual
+            && self.at(Punct::Tilde)
+        {
+            // `x.N::~T()`, `p->B::~B()` on a class object
+            // ([expr.prim.id.dtor], [basic.lookup.qual.general]/4).
+            let tl = self.bump().span.lo;
+            let Some(name) = self.ident() else {
+                self.error_here(DiagId::parse_destructor_tilde_identifier);
+                return None;
+            };
+            let nl = self.bump().span.lo;
+            if self.at(Punct::Less) {
+                self.unsupported("a qualified destructor name with a template-id", nl);
+                return None;
+            }
+            return Some(self.s.act_on_member_destructor_q(
+                e,
+                Some(q),
+                None,
+                name,
+                tl,
+                nl,
+                loc,
+                arrow,
+            ));
         }
         if self.at(Punct::Tilde) {
             // `p->~T()` / `x.~T()`.
@@ -1050,7 +1082,7 @@ impl Parser<'_, '_> {
                 let class = self.s.classify_name(name, None);
                 return match self.parse_template_id_rest(class, name, nl) {
                     Ok(TemplateIdRef::Type(t)) => {
-                        Some(self.s.rebuild_member_destructor(e, t, nl, loc, arrow))
+                        Some(self.s.rebuild_member_destructor(e, t, false, nl, loc, arrow))
                     }
                     _ => None,
                 };
@@ -1090,6 +1122,89 @@ impl Parser<'_, '_> {
             e = self.s.act_on_member_template_args(e, l);
         }
         Some(e)
+    }
+
+    /// The index of the `::` before the `~` when the member designator at
+    /// the current token is `[nested-name-specifier] identifier :: ~`
+    /// (a possible pseudo-destructor-name, [expr.prim.id.dtor]).
+    fn pseudo_dtor_colons(&self) -> Option<usize> {
+        let colons = |p: &Self, i: usize| p.tok_at(i).kind == TokKind::Punct(Punct::ColonColon);
+        let mut i = self.pos();
+        if colons(self, i) {
+            i += 1;
+        }
+        loop {
+            if self.kw_of(self.tok_at(i)) == Some(Kw::Template) {
+                i += 1;
+            }
+            self.ident_of(self.tok_at(i))?;
+            let mut j = i + 1;
+            let template_id = self.tok_at(j).kind == TokKind::Punct(Punct::Less);
+            if template_id {
+                match self.skip_template_args(j) {
+                    Some((close, false)) => j = close + 1,
+                    _ => return None,
+                }
+            }
+            if !colons(self, j) {
+                return None;
+            }
+            if self.tok_at(j + 1).kind == TokKind::Punct(Punct::Tilde) {
+                return (!template_id).then_some(j);
+            }
+            i = j + 1;
+        }
+    }
+
+    /// `p->[S::] F :: ~ Q` with the `::` before the `~` at token `cc`
+    /// ([expr.prim.id.dtor]/2, [basic.lookup.qual.general]/4): `S` is
+    /// parsed as a nested-name-specifier, `F` and `Q` are type-names.
+    fn parse_pseudo_destructor(&mut self, e: ExprId, loc: Loc, arrow: bool, cc: usize) -> PExpr {
+        let first_at = cc - 1;
+        let qual = if self.pos() + 1 == first_at {
+            // `::F::~Q`.
+            let start = self.bump().span.lo;
+            Some(kiln_sema::using::Qualifier {
+                ctx: self.s.ast.tu,
+                nns: self.s.nns_global(),
+                loc: start,
+            })
+        } else if self.pos() < first_at {
+            self.s.begin_member_qualifier(e, arrow);
+            let q = self.parse_nested_name_upto(Some(first_at - 1));
+            self.s.end_member_qualifier();
+            let q = q.ok()?;
+            if self.pos() + 1 != first_at {
+                return None;
+            }
+            self.bump();
+            q
+        } else {
+            None
+        };
+        let first = self.ident()?;
+        let fl = self.bump().span.lo;
+        self.bump();
+        let tl = self.bump().span.lo;
+        let Some(name) = self.ident() else {
+            self.error_here(DiagId::parse_destructor_tilde_identifier);
+            return None;
+        };
+        let nl = self.bump().span.lo;
+        if self.at(Punct::Less) {
+            self.unsupported("a qualified destructor name with a template-id", nl);
+            return None;
+        }
+        Some(self.s.act_on_member_destructor_q(
+            e,
+            qual,
+            Some((first, fl)),
+            name,
+            tl,
+            nl,
+            loc,
+            arrow,
+        ))
     }
 
     /// True at a nested-name-specifier after `.`/`->`: `::`, `N::`,

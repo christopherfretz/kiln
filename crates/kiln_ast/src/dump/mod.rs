@@ -43,7 +43,9 @@ use crate::expr::{
 use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId};
 use crate::stmt::{IfKind, StmtKind};
 use crate::templates::{Requirement, SpecKind};
-use crate::types::{ArgView, ExcSpec, PrintOptions, TemplateArg, TypeKind, write_nns, write_type};
+use crate::types::{
+    ArgView, ExcSpec, PrintOptions, TemplateArg, TypeKind, write_declarator, write_nns, write_type,
+};
 
 /// Selects the declarations [`dump`] prints as separate trees (clang's
 /// `-ast-dump-filter`, spec/ast-dump.md §1). A declaration matches when
@@ -727,6 +729,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(f), Some("array_filler")));
                 }
                 for c in lists.iter::<ExprId>(exprs.paren_list_inits(e)) {
+                    kids.push((Node::Expr(c), None));
+                }
+            }
+            ExprKind::DesignatedInitUpdateExpr => {
+                for c in exprs.designated_init_update(e) {
                     kids.push((Node::Expr(c), None));
                 }
             }
@@ -2002,7 +2009,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 };
                 if let Some(head) = named {
                     self.line.push_str(head);
-                    self.written_cast_type(n.ty(), n.value_category());
+                    match exprs.cast_written_type(e) {
+                        Some(w) => write_type(
+                            &self.ast.types,
+                            &self.names,
+                            w,
+                            PrintOptions::SUGARED,
+                            &mut self.line,
+                        ),
+                        None => self.written_cast_type(n.ty(), n.value_category()),
+                    }
                     if k != ExprKind::CXXFunctionalCastExpr {
                         self.line.push('>');
                     }
@@ -2146,12 +2162,31 @@ impl<'a, W: io::Write> Dumper<'a, W> {
     /// as a reference for a glvalue (clang's `getTypeAsWritten`, sugared,
     /// unquoted).
     fn written_cast_type(&mut self, t: QualType, vk: ValueCategory) {
-        write_type(&self.ast.types, &self.names, t, PrintOptions::SUGARED, &mut self.line);
-        match vk {
-            ValueCategory::PRValue => {}
-            ValueCategory::LValue => self.line.push_str(" &"),
-            ValueCategory::XValue => self.line.push_str(" &&"),
-        }
+        let r = match vk {
+            ValueCategory::PRValue => "",
+            ValueCategory::LValue => "&",
+            ValueCategory::XValue => "&&",
+        };
+        // A reference to an array is spelled around its declarator:
+        // `int (&&)[3]` (the printer parenthesizes a function's own
+        // declarator, `void (&)()`, and a pointer's, `int (*&)[3]`).
+        let paren = !r.is_empty()
+            && matches!(
+                self.ast.types.kind(t.ty()),
+                TypeKind::ConstantArray
+                    | TypeKind::IncompleteArray
+                    | TypeKind::VariableArray
+                    | TypeKind::DependentSizedArray
+            );
+        let placeholder = if paren { format!("({r})") } else { r.to_owned() };
+        write_declarator(
+            &self.ast.types,
+            &self.names,
+            t,
+            PrintOptions::SUGARED,
+            &placeholder,
+            &mut self.line,
+        );
     }
 
     /// clang's `dumpBasePath`: ` (B -> virtual V)`, each step the base's

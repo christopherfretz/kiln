@@ -3091,7 +3091,7 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - Calls to function templates (deduction, WP-071).
 
 *`<type_traits>` probe*: run
-`kiln -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0` on
+`kiln++ -std=c++26 -stdlib=libc++ -fsyntax-only -ferror-limit=0` on
 `#include <type_traits>`. The error count went from 464 on main to 431.
 No remaining error is a WP-069 template-syntax failure. The blockers
 are:
@@ -3202,8 +3202,19 @@ first instead of emitting them (§5.7).
 *Gaps* (each reports a diagnostic or is a known divergence):
 - No TypeLocs: an error inside a written type points at the
   declarator, not the type.
-- Default member initializers are instantiated with the class. clang
-  instantiates them when used, with its own notes.
+- ~~Default member initializers are instantiated with the class~~
+  *Resolved (WP-223):* `Substituter::class_body_with` records each
+  field's pattern initializer in `inst.deferred_nsdmis` (the class's
+  arguments and context pairs in `inst.nsdmi_ctx`) and marks the field
+  as having one (`special.nsdmi`). `Sema::instantiate_nsdmi` instantiates
+  it at its first use ([temp.inst]/3, clang
+  `InstantiateInClassInitializer`): `default_member_init` (a constructor
+  or an aggregate initialization) and the implicit default constructor's
+  exception specification. It pushes the
+  `DefaultMemberInitializerInstantiation` frame; a failure makes the field
+  invalid, so later uses are quiet. A local class's or an anonymous
+  member's initializers are still instantiated with the class. Tests:
+  `temp.inst/lazy-default-member-init{,-errors}.cpp`.
 - ~~A qualified `DeclRefExpr` prints without its qualifier~~ *Resolved
   (WP-086):* `act_on_id_expression` records the nested-name-specifier in
   `DeclRefExtra.qualifier` and the qualifier's first token as the begin
@@ -4552,7 +4563,7 @@ The headers use 143 distinct builtins for which `__has_builtin` is true
 - 76 are `__builtin_*` functions.
 
 Each WP's acceptance includes the drop in errors on
-`kiln -fsyntax-only` over the 8 headers. The status page is
+`kiln++ -fsyntax-only` over the 8 headers. The status page is
 `docs/status/libcxx-m3.md`, maintained by WP-081. The baseline today is
 490 errors on `<type_traits>`, 436 of them template-related
 (docs/status/libcxx-syntax.md).

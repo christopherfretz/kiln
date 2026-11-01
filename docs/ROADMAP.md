@@ -26,7 +26,7 @@ time at ≤ clang memory. See `docs/status/pp-parity.md`, `docs/status/perf.md`.
 The first fully-conformant, independently valuable component, and highly
 parallelizable (lexer, macro expander, directives, include resolution, `-E`
 printer, diagnostics are separate work packages).
-- `kiln -E` on every header of libc++ 19, every C header in the sysroot that
+- `kiln++ -E` on every header of libc++ 19, every C header in the sysroot that
   libc++ includes, and the conformance corpus produces token streams equal to
   `clang -E` (compared token-wise, ignoring whitespace/line markers; and
   exactly, with `-P`, for the printer test).
@@ -39,7 +39,7 @@ printer, diagnostics are separate work packages).
   and lower peak RSS. Recorded in `bench/baselines/pp.json`.
 
 ## M2 — The C-ish subset, end to end, with the Oven — done (2026-10-28)
-Status: done. `kiln -fsyntax-only -fdump-ast` matches clang on 47 golden
+Status: done. `kiln++ -fsyntax-only -fdump-ast` matches clang on 47 golden
 directories; 99 [expr.const] source tests; Oven 0.02x clang time / 0.04x
 memory on `bench/oven`; codegen byte-identical to clang -O0 on the IR-diff
 corpus (46 programs × 2 triples) and the 79-case unit corpus; 33 printf
@@ -59,7 +59,11 @@ flow, `constexpr` functions and variables, `static_assert`, string literals,
 - IR differential tests: kiln's `-S -emit-llvm` is semantically compared with
   clang's via `opt`-normalized FileCheck goldens where structure matters.
 
-## M3 — Classes, overloading, templates
+## M3 — Classes, overloading, templates — done (2026-11-01)
+Status: done. The M3 libc++ gate (`cargo xtask libcxx --gate m3`) is 585/585
+on main `4c3e8be9` (`docs/status/libcxx-m3.md`); the 51 `.verify.cpp` tests
+the driver marks UNSUPPORTED need `-verify` (WP-143, M4). The clang 22
+oracle switch (WP-184) is unblocked.
 Member functions, constructors/destructors, references, overload resolution,
 implicit conversion sequences, class templates, function templates, deduction,
 partial/explicit specialization, `auto`, variadic templates, fold expressions,

@@ -92,7 +92,15 @@ pub enum ExprKind {
     ArrayInitIndexExpr,
     CXXStdInitializerListExpr,
     CompoundLiteralExpr,
+    /// An element of a [`ExprKind::DesignatedInitUpdateExpr`] updater
+    /// that keeps the base's initialization.
     NoInitExpr,
+    /// A subobject initialized by an expression, then partly
+    /// re-initialized by a designator into it ([dcl.init.aggr]/4 with
+    /// C99 designators; clang's `DesignatedInitUpdateExpr`): the base
+    /// and an updater `InitListExpr` whose `NoInitExpr` elements keep
+    /// the base's values.
+    DesignatedInitUpdateExpr,
     // temporaries
     MaterializeTemporaryExpr,
     CXXBindTemporaryExpr,
@@ -1164,6 +1172,11 @@ pub struct ColdExprData {
     /// The initialized member of a union's `CXXParenListInitExpr`
     /// (clang `getInitializedFieldInUnion`).
     pub union_field: ColdMap<ExprId, DeclId>,
+    /// The type as written of a named cast or functional cast, when the
+    /// dump cannot rebuild it from the node (clang `getTypeAsWritten`): a
+    /// non-class `CI{1}` / `static_cast<CI>(x)` whose prvalue drops the
+    /// qualifiers and sugar of `CI`, a reference named by an alias.
+    pub cast_written: ColdMap<ExprId, QualType>,
 }
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
@@ -1286,6 +1299,7 @@ impl Default for ColdExprData {
             trait_rhs_loc: ColdMap::new("trait_rhs_loc"),
             source_loc: ColdMap::new("source_loc"),
             union_field: ColdMap::new("union_field"),
+            cast_written: ColdMap::new("cast_written"),
         }
     }
 }
@@ -1469,6 +1483,13 @@ impl ExprArena {
         let n = self.get(e);
         assert!(n.kind.is_cast(), "expected a cast, found {:?}", n.kind);
         CastKind::from_u8(n.aux).expect("valid cast kind")
+    }
+
+    /// The type as written of a named or functional cast, when it is not
+    /// the node's type (plus `&`/`&&` for a glvalue); see
+    /// [`ColdExprData::cast_written`].
+    pub fn cast_written_type(&self, e: ExprId) -> Option<QualType> {
+        self.cold.cast_written.get(e).copied()
     }
 
     /// The base path (`ListId` of base-spec indices) of a derived-to-base /
@@ -1936,6 +1957,12 @@ impl ExprArena {
         [ExprId::new(n.a), ExprId::new(n.b)]
     }
 
+    /// The base and updater of a `DesignatedInitUpdateExpr`.
+    pub fn designated_init_update(&self, e: ExprId) -> [ExprId; 2] {
+        let n = self.expect_kind(e, ExprKind::DesignatedInitUpdateExpr);
+        [ExprId::new(n.a), ExprId::new(n.b)]
+    }
+
     /// The source expression of an `OpaqueValueExpr` (shared: not one of
     /// its [`ExprArena::children`]).
     pub fn opaque_source(&self, e: ExprId) -> Option<ExprId> {
@@ -2305,6 +2332,12 @@ impl ExprArena {
         )
     }
 
+    /// True if the destructor name of a `CXXPseudoDestructorExpr` was
+    /// qualified (`p->T::~T`; [`crate::builder::AstBuilder::pseudo_destructor_q`]).
+    pub fn pseudo_destructor_qualified(&self, e: ExprId) -> bool {
+        self.expect_kind(e, ExprKind::CXXPseudoDestructorExpr).aux & 2 != 0
+    }
+
     /// The closing-token location of `e`, if stored.
     pub fn end_loc(&self, e: ExprId) -> Option<Loc> {
         let n = self.get(e);
@@ -2345,7 +2378,7 @@ impl ExprArena {
                 v.extend(lists.iter::<ExprId>(ListId::new(n.a)));
                 v.extend(id(n.b));
             }
-            ExprKind::ArrayInitLoopExpr => {
+            ExprKind::ArrayInitLoopExpr | ExprKind::DesignatedInitUpdateExpr => {
                 v.extend(id(n.a));
                 v.extend(id(n.b));
             }
@@ -2449,6 +2482,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.trait_rhs_loc.mem_row().prefixed("cold"));
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));
         r.push(self.cold.union_field.mem_row().prefixed("cold"));
+        r.push(self.cold.cast_written.mem_row().prefixed("cold"));
         r
     }
 }

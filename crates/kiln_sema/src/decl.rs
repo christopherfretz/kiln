@@ -91,6 +91,9 @@ pub enum AttrArg {
     Expr(ExprId),
     /// A type-id (`alignas(T)`).
     Type(QualType),
+    /// The leading identifier of an attribute whose first parameter is
+    /// one (`enum_extensibility(open)`; clang `attributeHasIdentifierArg`).
+    Ident(Symbol, Loc),
 }
 
 /// The state of an enumeration whose body is being processed.
@@ -2494,10 +2497,14 @@ impl Sema<'_, '_> {
             } else {
                 self.qualifier_desc(ctx)
             };
-            let msg = self
-                .diag(DiagId::sema_member_def_no_match, d.name_loc())
-                .arg(fname.clone())
-                .arg(scope);
+            // clang selects "declaration" or "definition" by whether a
+            // body follows.
+            let id = if self.templ.fn_def_next {
+                DiagId::sema_member_def_no_match
+            } else {
+                DiagId::sema_member_decl_no_match
+            };
+            let msg = self.diag(id, d.name_loc()).arg(fname.clone()).arg(scope);
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(p) = prev
@@ -3150,13 +3157,8 @@ impl Sema<'_, '_> {
         let c = self.act_on_constant_full_expr(c);
         let v = match self.eval_int(c, EvalContext::new(EvalKind::Other, self.begin_loc(w))) {
             Ok(v) => v,
-            Err(mut f) => {
-                let at = Self::fold_lone_invalid(&mut f, self.begin_loc(w));
-                let d = self.diag(DiagId::sema_expr_not_ice, at);
-                let d = Self::with_failure_notes(d, f);
-                self.emit(d);
-                return None;
-            }
+            // clang `VerifyBitField`: `AllowFold`.
+            Err(f) => self.fold_not_ice(c, f, self.begin_loc(w))?,
         };
         if v < 0 {
             let msg = match name {
@@ -3566,6 +3568,7 @@ impl Sema<'_, '_> {
         // long as it does (spec/sema-class.md §5.4).
         if !self.is_err_expr(e) {
             self.extend_temporaries(v, e);
+            self.check_dangling_pointer_var(v, e);
             // [class.dtor]/15 (spec/sema-class.md §4.8).
             let vty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
             self.check_var_destructor(v, vty, loc);
@@ -4971,19 +4974,26 @@ impl Sema<'_, '_> {
             } else {
                 EvalContext::new(EvalKind::Other, at)
             };
-            match self.eval_int(c, ctx) {
-                Ok(v) => {
-                    let v = self.check_enumerator_range(v, build.fixed, ie);
-                    value = Some(v);
-                    let cv = self.int_const(cty, v);
-                    init_e = Some(self.builder().constant_expr(c, Some(cv)));
-                }
-                Err(mut f) => {
-                    let at = Self::fold_lone_invalid(&mut f, self.ast.exprs.get(ie).loc());
-                    let msg = self.diag(DiagId::sema_expr_not_ice, at);
+            let v = match self.eval_int(c, ctx) {
+                Ok(v) => Some(v),
+                // clang `CheckEnumConstant`: a converted constant
+                // expression `enumerator value is not a constant
+                // expression`; otherwise an integral constant expression
+                // that may be folded (`AllowFold`).
+                Err(mut f) if build.fixed.is_some() => {
+                    let at = Self::fold_lone_invalid(&mut f, at);
+                    let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("enumerator value");
                     let msg = Self::with_failure_notes(msg, f);
                     self.emit(msg);
+                    None
                 }
+                Err(f) => self.fold_not_ice(c, f, at),
+            };
+            if let Some(v) = v {
+                let v = self.check_enumerator_range(v, build.fixed, ie);
+                value = Some(v);
+                let cv = self.int_const(cty, v);
+                init_e = Some(self.builder().constant_expr(c, Some(cv)));
             }
         }
         (value, init_e)
@@ -5661,6 +5671,11 @@ impl Sema<'_, '_> {
             None => self.lookup_name(name, LookupKind::Ordinary),
         };
         let Some(&d) = found.decls.first() else { return NameClass::Undeclared };
+        // An ambiguous lookup that found a type recovers with the
+        // earliest type found ([basic.lookup.general]/1; clang's
+        // `getTypeName`): the parser commits to a type-name and
+        // [`Sema::diagnose_ambiguous_name`] reports the ambiguity once.
+        let d = self.ambiguous_type_recovery(&found).unwrap_or(d);
         let k = self.ast.decls.get(d).kind();
         if k == DeclKind::Namespace {
             return NameClass::Namespace(d);
@@ -5710,6 +5725,136 @@ impl Sema<'_, '_> {
             return NameClass::FunctionTemplate(self.ast.strip_shadow(f));
         }
         NameClass::Value(d)
+    }
+
+    /// True if `found`, the result of an ordinary lookup, is ambiguous
+    /// ([basic.lookup.general]/1, [namespace.udir]/6, [class.member.lookup]/6):
+    /// distinct entities that are not one overload set. A set with a
+    /// dependent using-declarator is resolved at instantiation.
+    pub(crate) fn is_ambiguous_lookup(&self, found: &crate::lookup::Found) -> bool {
+        if found.ambiguity.is_some() {
+            return true;
+        }
+        // Declarations of one entity, and type names of one type, are
+        // not ambiguous ([basic.lookup.general]/1, [dcl.typedef]/3;
+        // clang `resolveKind`'s `UniqueTypes`).
+        let mut types: Vec<QualType> = Vec::new();
+        let mut decls: Vec<DeclId> = Vec::new();
+        for &x in &found.decls {
+            let d = self.ast.strip_shadow(x);
+            if let Some(c) = self.designated_type(d) {
+                if !types.contains(&c) {
+                    types.push(c);
+                }
+            } else if !decls.contains(&self.ast.first(d)) {
+                decls.push(self.ast.first(d));
+            }
+        }
+        types.len() + decls.len() > 1
+            && !found.decls.iter().any(|&x| {
+                matches!(
+                    self.kind_of(self.ast.strip_shadow(x)),
+                    DeclKind::UnresolvedUsingValue
+                        | DeclKind::UnresolvedUsingTypename
+                        | DeclKind::UnresolvedUsingIfExists
+                )
+            })
+            && !found.decls.iter().all(|&x| {
+                let k = self.kind_of(self.ast.strip_shadow(x));
+                k.is_function() || k == DeclKind::FunctionTemplate
+            })
+    }
+
+    /// The canonical type a type declaration `d` designates (a typedef's
+    /// underlying type, a class's type), the identity of a type name for
+    /// lookup ([class.member.lookup]/3, [dcl.typedef]/3); `None` for a
+    /// non-type or a dependent using-declaration.
+    pub(crate) fn designated_type(&self, d: DeclId) -> Option<QualType> {
+        let k = self.kind_of(d);
+        if !is_type_kind(k) || k == DeclKind::UnresolvedUsingTypename {
+            return None;
+        }
+        let ty =
+            if matches!(k, DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::TemplateTypeParm) {
+                self.ast.decls.get(d).ty()?
+            } else {
+                self.tag_type(d)
+            };
+        Some(self.ast.types.canonical(ty))
+    }
+
+    /// The declaration an ambiguous lookup `found` recovers with when one
+    /// of the candidates is a type: the earliest such declaration, as
+    /// clang's `getTypeName` picks it (`None` if `found` is not ambiguous
+    /// or holds no type).
+    fn ambiguous_type_recovery(&self, found: &crate::lookup::Found) -> Option<DeclId> {
+        if found.decls.len() < 2 || !self.is_ambiguous_lookup(found) {
+            return None;
+        }
+        found
+            .decls
+            .iter()
+            .copied()
+            .filter(|&x| is_type_kind(self.kind_of(self.ast.strip_shadow(x))))
+            .min_by_key(|x| x.index())
+    }
+
+    /// Reports an ambiguous ordinary lookup of `name` (after `qualifier`)
+    /// where the parser commits to it: a type-name in a decl-specifier,
+    /// or an identifier that starts a statement (clang's `ClassifyName`).
+    /// Distinct entities are clang's `err_ambiguous_reference` with a
+    /// "candidate found by name lookup" note each; an ambiguous class
+    /// member lookup is [`Sema::diagnose_member_ambiguity`]'s. True if the
+    /// lookup was ambiguous ([basic.lookup.general]/1).
+    pub fn diagnose_ambiguous_name(
+        &mut self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        loc: Loc,
+    ) -> bool {
+        let qualifier = qualifier.map(|q| self.type_name_qualifier(q));
+        if qualifier
+            .is_some_and(|q| self.kind_of(q) == DeclKind::ClassTemplate || self.is_dependent_ctx(q))
+        {
+            return false;
+        }
+        let found = match qualifier {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Ordinary),
+            None => self.lookup_name(name, LookupKind::Ordinary),
+        };
+        if !self.is_ambiguous_lookup(&found) {
+            return false;
+        }
+        if !self.diagnose_member_ambiguity(&found, DeclName::ident(name), loc) {
+            self.diagnose_ambiguous_reference(
+                DeclName::ident(name),
+                &found.decls,
+                qualifier.is_none(),
+                loc,
+            );
+        }
+        true
+    }
+
+    /// clang's `err_ambiguous_reference` for distinct entities `decls`
+    /// found by one lookup of `name` ([namespace.udir]/6), with a note
+    /// per candidate in clang's order.
+    pub(crate) fn diagnose_ambiguous_reference(
+        &self,
+        name: DeclName,
+        decls: &[DeclId],
+        unqualified: bool,
+        loc: Loc,
+    ) {
+        let text = self.decl_name_str(name);
+        let mut msg = self.diag(DiagId::sema_ambiguous_reference, loc).arg(text);
+        for c in self.ambiguity_order(decls, unqualified) {
+            let n = self
+                .diag(DiagId::note_ambiguous_candidate, self.ast.decls.get(c).loc())
+                .arg(self.qualified_decl_name(c));
+            msg = msg.with_note(n);
+        }
+        self.emit(msg);
     }
 
     /// The context a nested-name-specifier component `name::` names
@@ -5895,7 +6040,11 @@ impl Sema<'_, '_> {
             && !(clang_scope
                 && matches!(
                     n.as_str(),
-                    "using_if_exists" | "fallthrough" | "exclude_from_explicit_instantiation"
+                    "using_if_exists"
+                        | "fallthrough"
+                        | "exclude_from_explicit_instantiation"
+                        | "flag_enum"
+                        | "enum_extensibility"
                 ))
         {
             let msg = self.diag(DiagId::parse_unknown_attribute, loc).arg(raw);
@@ -5919,6 +6068,9 @@ impl Sema<'_, '_> {
         }
         if kind == AttrKind::ABI_TAG {
             return self.abi_tag_attribute(syntax, &n, args, loc);
+        }
+        if kind == AttrKind::ENUM_EXTENSIBILITY {
+            return self.enum_extensibility_attribute(syntax, args, loc);
         }
         let takes = match kind {
             AttrKind::NODISCARD | AttrKind::DEPRECATED | AttrKind::ASSUME => 1,
@@ -5958,7 +6110,7 @@ impl Sema<'_, '_> {
                 }
                 a = e.raw();
             }
-            (_, Some(AttrArg::Type(_))) => {
+            (_, Some(AttrArg::Type(_) | AttrArg::Ident(..))) => {
                 self.error(DiagId::parse_expected_expression, loc);
                 return None;
             }
@@ -5977,6 +6129,55 @@ impl Sema<'_, '_> {
         Some(self.ast.attrs.push(node))
     }
 
+    /// `enum_extensibility(open|closed)` (clang
+    /// `handleEnumExtensibilityAttr`): exactly one argument, an identifier
+    /// naming a supported kind; `a` is 1 for `open`.
+    fn enum_extensibility_attribute(
+        &mut self,
+        syntax: AttrSyntax,
+        args: &[AttrArg],
+        loc: Loc,
+    ) -> Option<AttrId> {
+        let name = "'enum_extensibility'";
+        // An argument already diagnosed (`(open, closed)`: undeclared
+        // `closed`) drops the attribute silently.
+        if args.iter().any(|a| {
+            matches!(a, AttrArg::Expr(e) if self.ast.exprs.get(*e).deps().contains(kiln_ast::expr::ExprDeps::ERROR))
+        }) {
+            return None;
+        }
+        let id = match args {
+            [AttrArg::Ident(id, _)] => *id,
+            [AttrArg::Expr(_) | AttrArg::Type(_)] => {
+                let msg = self.diag(DiagId::sema_attribute_param_not_ident, loc).arg(name).arg("0");
+                self.emit(msg);
+                return None;
+            }
+            _ => {
+                let msg = self
+                    .diag(DiagId::parse_attribute_wrong_arg_count, loc)
+                    .arg("enum_extensibility")
+                    .arg("1");
+                self.emit(msg);
+                return None;
+            }
+        };
+        let a = match sym_str(self, id).as_str() {
+            "open" => 1,
+            "closed" => 0,
+            other => {
+                let msg = self
+                    .diag(DiagId::sema_attribute_arg_not_supported, loc)
+                    .arg(name)
+                    .arg(format!("'{other}'"));
+                self.emit(msg);
+                return None;
+            }
+        };
+        let node = AttrNode { kind: AttrKind::ENUM_EXTENSIBILITY, syntax, flags: 0, loc, a, b: 0 };
+        Some(self.ast.attrs.push(node))
+    }
+
     /// GNU `abi_tag("t", ...)`: string literals, kept sorted and unique
     /// (clang `handleAbiTagAttr`) as one interned symbol in `a`, the tags
     /// separated by `,` (spec/abi.md §8.15). A tag-less `abi_tag` (only
@@ -5992,7 +6193,7 @@ impl Sema<'_, '_> {
         for arg in args {
             let lit = match arg {
                 AttrArg::Expr(e) => self.string_lit_of(*e),
-                AttrArg::Type(_) => None,
+                AttrArg::Type(_) | AttrArg::Ident(..) => None,
             };
             let Some(lit) = lit else {
                 let msg = self.diag(DiagId::parse_attribute_requires_string, loc).arg(n.to_owned());
@@ -6092,6 +6293,9 @@ impl Sema<'_, '_> {
                 AttrKind::PACKED => (kind != DeclKind::Field && kind != DeclKind::CXXRecord)
                     .then_some("structs, unions, classes and fields"),
                 AttrKind::MALLOC if !kind.is_function() => Some("functions"),
+                AttrKind::FLAG_ENUM | AttrKind::ENUM_EXTENSIBILITY if kind != DeclKind::Enum => {
+                    Some("enums")
+                }
                 AttrKind::ALLOC_SIZE | AttrKind::ALLOC_ALIGN if !kind.is_function() => {
                     Some("non-K&R-style functions")
                 }
@@ -6109,6 +6313,8 @@ impl Sema<'_, '_> {
                     AttrKind::MALLOC => "'malloc'",
                     AttrKind::ALLOC_SIZE => "'alloc_size'",
                     AttrKind::ALLOC_ALIGN => "'alloc_align'",
+                    AttrKind::FLAG_ENUM => "'flag_enum'",
+                    AttrKind::ENUM_EXTENSIBILITY => "'enum_extensibility'",
                     _ => "'alignas'",
                 };
                 let msg =
@@ -6347,6 +6553,8 @@ fn attr_kind_of(n: &str, std: bool, gnu: bool, clang_scope: bool) -> Option<Attr
         ("pure", _, true) => AttrKind::PURE,
         ("cold", _, true) => AttrKind::COLD,
         ("hot", _, true) => AttrKind::HOT,
+        ("flag_enum", _, gnu) if gnu || clang_scope => AttrKind::FLAG_ENUM,
+        ("enum_extensibility", _, gnu) if gnu || clang_scope => AttrKind::ENUM_EXTENSIBILITY,
         ("malloc", _, true) => AttrKind::MALLOC,
         ("alloc_size", _, true) => AttrKind::ALLOC_SIZE,
         ("alloc_align", _, true) => AttrKind::ALLOC_ALIGN,

@@ -15,6 +15,7 @@ note_ambiguous_atomic_constraints = Note (0) "similar constraint expressions not
 note_ambiguous_atomic_constraints_similar_expression = Note (0) "similar constraint expression here";
 note_ambiguous_candidate = Note (1) "candidate found by name lookup is '{0}'";
 note_ambiguous_member_found = Note (0) "member found by ambiguous name lookup";
+note_ambiguous_member_type_found = Note (1) "member type {0} found by ambiguous name lookup";
 note_ambiguous_type_conversion = Note (2) "because of ambiguity in conversion of {0} to {1}";
 note_asm_input_duplicate_first = Note (1) "constraint '{0}' is already present here";
 note_asm_missing_constraint_modifier = Note (1) "use constraint modifier \"{0}\"";
@@ -123,6 +124,7 @@ note_indirection_through_null = Note (0) "consider using __builtin_trap() or qua
 note_inequality_comparison_to_or_assign = Note (0) "use '|=' to turn this inequality comparison into an or-assignment";
 note_init_list_narrowing_silence = Note (0) "insert an explicit cast to silence this issue";
 note_init_previous = Note (0) "previous initialization is here";
+note_init_previous_side_effects = Note (0) "previous initialization with side effects is here (side effects will not occur at run time)";
 note_insert_break_fixit = Note (0) "insert 'break;' to avoid fall-through";
 note_insert_fallthrough_fixit = Note (1) "insert '{0};' to silence this warning";
 note_inst_declaration_hint = Note (1) "add an explicit instantiation declaration to suppress this warning if '{0}' is explicitly instantiated in another translation unit";

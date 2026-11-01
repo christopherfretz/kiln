@@ -881,6 +881,11 @@ impl Parser<'_, '_> {
             };
         }
         let NameClass::Type(t, d) = class else {
+            // `typename D::X` for the current instantiation `D` with a
+            // dependent base: looked up at instantiation ([temp.dep.type]/6).
+            if let Some(t) = self.s.act_unknown_specialization_type(q, name, kw, name_loc) {
+                return Some(t);
+            }
             let text = self.s.ast.symbols().as_str(name).to_owned();
             let ctx = self.s.qualifier_desc(q.ctx);
             let d =
@@ -888,6 +893,7 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         };
+        self.s.diagnose_ambiguous_name(name, Some(q.ctx), name_loc);
         self.s.mark_type_referenced(d);
         self.s.check_type_name_access(name, Some(q.ctx), d, name_loc);
         let kind = self.s.ast.decls.get(d).kind();

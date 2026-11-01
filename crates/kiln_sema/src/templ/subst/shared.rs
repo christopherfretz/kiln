@@ -7,8 +7,9 @@
 //! instantiation must odr-use them itself, as clang's `TreeTransform` does by
 //! rebuilding the expression (`MarkDeclRefReferenced`, `MarkFunctionReferenced`).
 //! The default arguments and default member initializers it uses have
-//! their immediate invocations evaluated again. Unevaluated operands and
-//! lambda bodies are not entered.
+//! their immediate invocations evaluated again, and so are its own
+//! immediate invocations that failed at the definition. Unevaluated
+//! operands and lambda bodies are not entered.
 
 use kiln_ast::ExprId;
 use kiln_ast::expr::{ExprKind, NonOdrUse};
@@ -63,6 +64,8 @@ impl Sema<'_, '_> {
                         self.mark_function_referenced(f, loc);
                     }
                 }
+                // A failed immediate invocation is reported again.
+                ExprKind::ConstantExpr => self.recheck_shared_invocation(x),
                 ExprKind::CXXDeleteExpr => {
                     if let Some(f) = self.ast.exprs.operator_delete(x) {
                         self.mark_function_referenced(f, loc);

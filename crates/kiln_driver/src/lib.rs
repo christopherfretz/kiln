@@ -1,4 +1,6 @@
-//! The `kiln` driver: a clang-compatible command line over the frontend.
+//! The `kiln` driver: a clang-compatible command line over the frontend,
+//! one binary under two names as clang and clang++ (`kiln`, `kiln++`;
+//! spec/driver.md "Driver modes").
 //! See `spec/driver.md` and `docs/ARCHITECTURE.md` ("Driver").
 //!
 //! Preprocessing (`-E`, `-M`, `-MM`), `-fsyntax-only [-fdump-ast]`
@@ -24,7 +26,7 @@ use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Format, JsonSink, TextSin
 use kiln_source::{SourceManager, Span};
 
 use crate::args::{Action, ArgError, Args, Lang};
-use crate::pp_cmd::{Job, JobResult, input_lang};
+use crate::pp_cmd::{Job, JobResult};
 use crate::syntax_cmd::SyntaxJob;
 use crate::toolchain::{LangStd, Target, Toolchain};
 
@@ -110,6 +112,10 @@ OVERVIEW: kiln, a C++26 frontend emitting LLVM IR
 
 USAGE: kiln [options] file...
 
+kiln++ compiles every input as C++. kiln picks by extension: .c, .h and
+.i are C (preprocessing only so far), everything else is C++. -x <lang>
+overrides both.
+
 Implemented: -E -P -C -CC -dM -o -x -std= -D -U -I -isystem -iquote
 -idirafter -cxx-isystem -nostdinc -nostdinc++ -nostdlibinc -nobuiltininc
 -isysroot --sysroot -resource-dir -stdlib= --target= --embed-dir= -M -MM
@@ -141,6 +147,9 @@ fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         }
         ArgError::InvalidFlagValue(a, v) => {
             Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(v)
+        }
+        ArgError::UnsupportedValue(o, v) => {
+            Diag::new(DiagId::drv_unsupported_option_argument, Span::INVALID).arg(o).arg(v)
         }
     };
     d.emit(engine);
@@ -305,31 +314,43 @@ fn syntax_only(
     SyntaxJob(job).run()
 }
 
-/// clang's `-Woption-ignored` for `-m[no-]outline-atomics` (the last one
-/// written) on a non-`AArch64` target: once per source input, as clang warns
-/// once per compile job. The driver's `-W` options apply; `true` when
-/// `-Werror` made it an error (clang then runs no job).
-fn warn_ignored_options(
+/// The driver's warnings about the command line, with its `-W` options
+/// applied, before any job runs: clang's deprecated `treating 'c' input as
+/// 'c++' when in C++ mode` once per promoted input (spec/driver.md "Input
+/// languages"), then `-Woption-ignored` for `-m[no-]outline-atomics` (the
+/// last one written) on a non-`AArch64` target, once per source input, as
+/// clang warns once per compile job. `true` when `-Werror` made one an
+/// error (clang then runs no job).
+fn driver_warnings(
     args: &Args,
     tc: &Toolchain,
     inputs: &[&args::Input],
     diag_opts: &DiagOptions,
     stderr: &SharedWriter,
 ) -> bool {
-    let Some(on) = args.outline_atomics else { return false };
-    if tc.target.is_aarch64() {
+    let promoted = args.promoted_inputs(inputs);
+    let ignored = args.outline_atomics.filter(|_| !tc.target.is_aarch64());
+    if promoted.is_empty() && ignored.is_none() {
         return false;
     }
-    let flag = if on { "-moutline-atomics" } else { "-mno-outline-atomics" };
     let sm = SourceManager::new();
     let e = make_engine(
         &sm,
         &codegen_cmd::driver_diag_options(diag_opts),
         stderr.clone(),
-        Some("kiln"),
+        Some(&args.program),
     );
-    for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
-        Diag::new(DiagId::drv_option_ignored, Span::INVALID).arg(tc.target.arch).arg(flag).emit(&e);
+    for (_, (from, to)) in promoted {
+        Diag::new(DiagId::drv_treating_input_as_cxx, Span::INVALID).arg(from).arg(to).emit(&e);
+    }
+    if let Some(on) = ignored {
+        let flag = if on { "-moutline-atomics" } else { "-mno-outline-atomics" };
+        for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
+            Diag::new(DiagId::drv_option_ignored, Span::INVALID)
+                .arg(tc.target.arch)
+                .arg(flag)
+                .emit(&e);
+        }
     }
     e.flush();
     e.error_count() > 0
@@ -349,17 +370,26 @@ fn existing_inputs<'a>(args: &'a Args, drv: &DiagEngine<'_>) -> Vec<&'a args::In
         .collect()
 }
 
-/// Runs the driver on `argv` (without the program name). Returns the exit
-/// code: 0 on success, 1 on any error (clang's convention).
+/// Runs the driver on `argv` (without the program name) as `kiln++`: every
+/// input is C++ unless `-x` or `--driver-mode=gcc` says otherwise. Returns
+/// the exit code: 0 on success, 1 on any error (clang's convention).
+pub fn run(command_line: &[String], io: Io) -> i32 {
+    run_as("kiln++", command_line, io)
+}
+
+/// Runs the driver on `argv` (without the program name) for the program
+/// `argv0`, whose basename is the driver diagnostics' prefix and whose
+/// name picks the driver mode (`kiln` or `kiln++`; spec/driver.md "Driver
+/// modes"). Returns the exit code as [`run`].
 #[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
-pub fn run(command_line: &[String], mut io: Io) -> i32 {
-    let args = Args::parse(command_line);
+pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
+    let args = Args::parse_as(argv0, command_line);
     let diag_opts = DiagOptions::from_args(&args.diag_args);
     let dsm = SourceManager::new();
     let mut drv_opts = diag_opts.clone();
     drv_opts.warnings.clear();
     drv_opts.remarks.clear();
-    let drv = make_engine(&dsm, &drv_opts, io.stderr.clone(), Some("kiln"));
+    let drv = make_engine(&dsm, &drv_opts, io.stderr.clone(), Some(&args.program));
     for e in &args.errors {
         emit_arg_error(e, &drv);
     }
@@ -400,7 +430,7 @@ pub fn run(command_line: &[String], mut io: Io) -> i32 {
         return 1;
     }
     drop(drv);
-    if warn_ignored_options(&args, &tc, &inputs, &diag_opts, &io.stderr) {
+    if driver_warnings(&args, &tc, &inputs, &diag_opts, &io.stderr) {
         return 1;
     }
 
@@ -420,7 +450,7 @@ pub fn run(command_line: &[String], mut io: Io) -> i32 {
     let mut errors = 0u32;
     let mut side_deps: Vec<(String, String)> = Vec::new();
     for input in inputs {
-        let lang = input_lang(input.lang, &input.path);
+        let lang = args.input_lang(input);
         let std = match input_std(&args, lang) {
             Ok(s) => s,
             Err(d) => {

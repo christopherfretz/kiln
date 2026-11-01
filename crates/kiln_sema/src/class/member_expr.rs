@@ -38,6 +38,18 @@ struct DtorObject {
     arrow: bool,
 }
 
+/// How a destructor name in a member access was qualified.
+#[derive(Clone, Copy, Debug)]
+enum DtorQual {
+    /// `x.~T`.
+    None,
+    /// `x.N::~T` on a class object: the qualifier as written.
+    Written(crate::using::Qualifier),
+    /// `p->T::~T` on a scalar or dependent object, or such a name
+    /// substituted: a class type is named through itself.
+    Implied,
+}
+
 /// A name of a non-static member whose meaning depends on the operand it
 /// appears in (spec/sema-class.md §2.6): `&C::m` forms a pointer to
 /// member; anything else needs an object.
@@ -437,23 +449,221 @@ impl Sema<'_, '_> {
         // clang's destructor name starts at the `~` (`GetNameFromUnqualifiedId`):
         // a use of a deleted destructor is diagnosed there.
         let name_loc = if tilde.is_valid() { tilde } else { loc };
-        self.finish_member_destructor(obj, destroyed, Some(td), loc, name_loc, op_loc)
+        self.finish_member_destructor(
+            obj,
+            destroyed,
+            Some(td),
+            DtorQual::None,
+            loc,
+            name_loc,
+            op_loc,
+        )
+    }
+
+    /// True if a member access on `base` that continues `type-name :: ~`
+    /// is a pseudo-destructor-name ([expr.prim.id.dtor]/2): the object is
+    /// not of class type, or is dependent. On a class object the
+    /// nested-name-specifier is an ordinary qualifier ([expr.ref]/4;
+    /// clang's `MayBePseudoDestructor` from `ActOnStartCXXMemberReference`).
+    pub fn may_be_pseudo_destructor(&self, base: ExprId, arrow: bool) -> bool {
+        if self.is_err_expr(base) {
+            return false;
+        }
+        let bt = self.ety(base);
+        let obj = if !arrow {
+            bt
+        } else if let Some(p) = self.ast.types.pointee(bt) {
+            p
+        } else {
+            return self.ast.types.is_dependent(bt);
+        };
+        self.ast.types.is_dependent(obj) || self.ast.types.as_record(obj).is_none()
+    }
+
+    /// A qualified destructor name in a member access
+    /// ([expr.prim.id.dtor], [basic.lookup.qual.general]/4):
+    ///
+    /// - `x.N::~Q` on a class object (`first` is `None`; `qual` is `N`, the
+    ///   whole nested-name-specifier): `Q` is looked up in `N`, then in the
+    ///   object's class, then here; the result names the destructor of
+    ///   that class as a member of `N` ([expr.ref]/4), so `N` must be the
+    ///   object's class or a base, and the call is not virtual
+    ///   ([class.virtual]/16).
+    /// - `p->S::F::~Q` / `p->F::~Q` on a scalar or dependent object
+    ///   (`first` is `F`, `qual` the prefix `S` if any): `F` and `Q` are
+    ///   looked up in `S` when present, else here, and both must name the
+    ///   object's type (clang's `ActOnPseudoDestructorExpr` with a
+    ///   `FirstTypeName`).
+    ///
+    /// `tilde` is the `~`, `loc` the name after it, `op_loc` the `.`/`->`.
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member access")]
+    pub fn act_on_member_destructor_q(
+        &mut self,
+        base: ExprId,
+        qual: Option<crate::using::Qualifier>,
+        first: Option<(kiln_source::symbol::Symbol, Loc)>,
+        name: kiln_source::symbol::Symbol,
+        tilde: Loc,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let Some((fname, floc)) = first else {
+            let Some(q) = qual else {
+                return self.act_on_member_destructor(base, name, tilde, loc, op_loc, arrow);
+            };
+            return self.member_destructor_in(base, q, name, tilde, loc, op_loc, arrow);
+        };
+        let obj = match self.destructor_object(base, loc, op_loc, arrow) {
+            Ok(o) => o,
+            Err(e) => return e,
+        };
+        let scope = qual.map(|q| q.ctx);
+        if scope.is_some_and(|c| self.is_dependent_ctx(c)) {
+            self.templ_unimplemented("a pseudo-destructor name in a dependent scope", floc);
+            return self.recover_err(&[obj.base], loc);
+        }
+        let look = |s: &Self, n| {
+            let found = match scope {
+                Some(c) => s.lookup_qualified(c, n, LookupKind::Ordinary),
+                None => s.lookup_name(n, LookupKind::Ordinary),
+            };
+            s.type_named_by(&found)
+        };
+        let dependent = self.ast.types.is_dependent(obj.ty);
+        let t1 = look(self, fname);
+        // `Q` where the destructor name appears; then in the class `F`
+        // names (`p->T::~T` where only `T`'s scope declares `T`).
+        let named = look(self, name).or_else(|| {
+            let d = t1.and_then(|(t, _)| self.ast.types.as_record(t))?;
+            let d = self.ast.definition(d)?;
+            let found = self.lookup_in_class(d, name, LookupKind::Ordinary);
+            self.type_named_by(&found)
+        });
+        let mut bad = false;
+        for (n, at, ty) in [(name, loc, named), (fname, floc, t1)] {
+            match ty {
+                None if dependent => {
+                    self.templ_unimplemented("a dependent destructor name", at);
+                    return self.recover_err(&[obj.base], loc);
+                }
+                None => {
+                    let text = self.ast.symbols().as_str(n).to_owned();
+                    let msg = self
+                        .diag(DiagId::sema_pseudo_dtor_not_type, at)
+                        .arg(text)
+                        .arg(self.ty_arg(obj.ty));
+                    self.emit(msg);
+                    bad = true;
+                }
+                Some((t, _)) if obj.def.is_none() && !dependent && !self.is_dependent_type(t) => {
+                    if self.is_scalar(obj.ty) && !self.same_unqual(obj.ty, t) {
+                        let msg = self
+                            .diag(DiagId::sema_pseudo_dtor_type_mismatch, at)
+                            .diff_args(self, obj.ty, t);
+                        self.emit(msg);
+                        bad = true;
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+        let Some((destroyed, td)) = named.filter(|_| !bad) else {
+            return self.recover_err(&[obj.base], loc);
+        };
+        for (_, d) in t1.iter().chain(named.iter()) {
+            self.mark_type_referenced(*d);
+        }
+        let name_loc = if tilde.is_valid() { tilde } else { loc };
+        self.finish_member_destructor(
+            obj,
+            destroyed,
+            Some(td),
+            DtorQual::Implied,
+            loc,
+            name_loc,
+            op_loc,
+        )
+    }
+
+    /// `x.N::~Q` on a class object (see [`Sema::act_on_member_destructor_q`]).
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member access")]
+    fn member_destructor_in(
+        &mut self,
+        base: ExprId,
+        q: crate::using::Qualifier,
+        name: kiln_source::symbol::Symbol,
+        tilde: Loc,
+        loc: Loc,
+        op_loc: Loc,
+        arrow: bool,
+    ) -> ExprId {
+        let obj = match self.destructor_object(base, loc, op_loc, arrow) {
+            Ok(o) => o,
+            Err(e) => return e,
+        };
+        let in_qual = || {
+            let found = self.lookup_qualified(q.ctx, name, LookupKind::Ordinary);
+            self.type_named_by(&found)
+        };
+        let named = (!self.is_dependent_ctx(q.ctx))
+            .then(in_qual)
+            .flatten()
+            .or_else(|| {
+                let found = self.lookup_in_class(obj.def?, name, LookupKind::Ordinary);
+                self.type_named_by(&found)
+            })
+            .or_else(|| {
+                let found = self.lookup_name(name, LookupKind::Ordinary);
+                self.type_named_by(&found)
+            });
+        let Some((destroyed, td)) = named else {
+            if self.ast.types.is_dependent(obj.ty) || self.is_dependent_ctx(q.ctx) {
+                self.templ_unimplemented("a dependent destructor name", loc);
+            } else {
+                let text = self.ast.symbols().as_str(name).to_owned();
+                let msg = self.diag(DiagId::sema_dtor_name_undeclared, loc).arg(text);
+                self.emit(msg);
+            }
+            return self.recover_err(&[obj.base], loc);
+        };
+        let name_loc = if tilde.is_valid() { tilde } else { loc };
+        self.finish_member_destructor(
+            obj,
+            destroyed,
+            Some(td),
+            DtorQual::Written(q),
+            loc,
+            name_loc,
+            op_loc,
+        )
+    }
+
+    /// True if `a` and `b` are the same type ignoring top-level cv.
+    fn same_unqual(&self, a: QualType, b: QualType) -> bool {
+        let x = self.ast.types.canonical(a);
+        let y = self.ast.types.canonical(b);
+        QualType::unqual(x.ty()) == QualType::unqual(y.ty())
     }
 
     /// A pseudo-destructor `base.~T` / `base->~T` formed again at
     /// instantiation with the substituted object and destroyed type: a
     /// class type now names its destructor (clang's
     /// `TreeTransform::RebuildCXXPseudoDestructorExpr`).
+    /// `qualified`: the name was qualified (`p->T::~T`), so a class type
+    /// names its destructor as a qualified member ([expr.ref]/4).
     pub fn rebuild_member_destructor(
         &mut self,
         base: ExprId,
         destroyed: QualType,
+        qualified: bool,
         loc: Loc,
         op_loc: Loc,
         arrow: bool,
     ) -> ExprId {
+        let qual = if qualified { DtorQual::Implied } else { DtorQual::None };
         match self.destructor_object(base, loc, op_loc, arrow) {
-            Ok(obj) => self.finish_member_destructor(obj, destroyed, None, loc, loc, op_loc),
+            Ok(obj) => self.finish_member_destructor(obj, destroyed, None, qual, loc, loc, op_loc),
             Err(e) => e,
         }
     }
@@ -536,11 +746,13 @@ impl Sema<'_, '_> {
     /// `td` by destructor name lookup, `None` when substituted). `name_loc`
     /// is where the destructor name begins (the `~`; the destroyed type
     /// when substituted, as clang's `RebuildCXXPseudoDestructorExpr`).
+    #[allow(clippy::too_many_arguments, reason = "the parts of a member access")]
     fn finish_member_destructor(
         &mut self,
         obj: DtorObject,
         destroyed: QualType,
         td: Option<DeclId>,
+        qual: DtorQual,
         loc: Loc,
         name_loc: Loc,
         op_loc: Loc,
@@ -550,13 +762,45 @@ impl Sema<'_, '_> {
             return self.recover_err(&[base], loc);
         }
         if self.ast.types.is_dependent(obj_ty) || self.ast.types.is_dependent(destroyed) {
-            return self.builder().pseudo_destructor(b, arrow, destroyed, loc);
+            let qualified = !matches!(qual, DtorQual::None);
+            return self.builder().pseudo_destructor_q(b, arrow, qualified, destroyed, loc);
         }
-        let same = {
-            let x = self.ast.types.canonical(obj_ty);
-            let y = self.ast.types.canonical(destroyed);
-            QualType::unqual(x.ty()) == QualType::unqual(y.ty())
-        };
+        let same = self.same_unqual(obj_ty, destroyed);
+        if let Some(def) = def
+            && !matches!(qual, DtorQual::None)
+        {
+            // `x.N::~Q`: the destructor of the class `Q` names, a member of
+            // `N` (the class itself when the qualifier was substituted);
+            // `member_access` checks that `N` is the object's class or a
+            // base ([expr.ref]/4) and records the qualifier, so the call
+            // is not virtual ([class.virtual]/16).
+            let class = self.ast.types.as_record(destroyed).and_then(|r| self.ast.definition(r));
+            let q = if let DtorQual::Written(q) = qual {
+                q
+            } else {
+                let Some(c) = class else {
+                    let msg = self
+                        .diag(DiagId::sema_dtor_type_mismatch, loc)
+                        .arg(self.ty_arg(destroyed))
+                        .arg(self.ty_arg(obj_ty));
+                    self.emit(msg);
+                    return self.recover_err(&[base], loc);
+                };
+                let ty = self.class_type(c);
+                let nns = self.ast.types.nns(kiln_ast::types::Nns::Type {
+                    prefix: None,
+                    ty,
+                    template_kw: false,
+                });
+                crate::using::Qualifier { ctx: c, nns, loc: name_loc }
+            };
+            let canon = self.ast.types.canonical(destroyed).ty();
+            if let Some(c) = class {
+                self.ensure_implicit(c, crate::class::special::SpecialKind::Dtor);
+            }
+            let dn = self.ast.names.destructor(canon);
+            return self.member_access(base, b, obj_ty, def, arrow, dn, Some(q), name_loc);
+        }
         if let Some(def) = def {
             if !same {
                 let mut msg = self
@@ -591,7 +835,8 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[base], loc);
         }
-        self.builder().pseudo_destructor(b, arrow, destroyed, loc)
+        let qualified = !matches!(qual, DtorQual::None);
+        self.builder().pseudo_destructor_q(b, arrow, qualified, destroyed, loc)
     }
 
     /// The type and type declaration a lookup result names, if it names a

@@ -117,7 +117,7 @@ Indistinguishable}` implements these rules in clang 19's
 - /4.4.1–4.4.2: conversions to `void*`, then the derived/base pointer orderings;
 - /3.2.5: same type except top-level cv, where the more cv-qualified one is worse (qualification-adjusted similarity);
 - /3.2.3, /3.2.4: the reference-binding kinds (rvalue reference to an rvalue over lvalue reference; lvalue reference to a function lvalue over rvalue reference), not for the object parameter of a member without a ref-qualifier;
-- /3.2.6: two reference bindings to the same type but for top-level cv, the less qualified referent better;
+- /3.2.6: two reference bindings to the same type but for top-level cv, the less qualified referent better (array element cv counts as the array's: `int(&)[]` beats `const int(&)[]`; `same_but_cv`);
 - /4.3: for floating-point conversions between types of equal rank, the one whose target matches the source's conversion rank is better;
 - /4.4.3–4.4.8: the derived/base member-pointer, class (`DerivedToBase`) and reference rules.
 
@@ -129,6 +129,7 @@ target's formats (`format_subset`). bf16 and f16 are unordered.
 `implicit_convert(s, e, to, ctx) -> Result<ExprId, ConvError>`:
 - Error and dependent types pass through unchanged.
 - A reference target binds directly to a reference-compatible glvalue ([dcl.init.ref]/5.1, 5.3.1, the xvalue case). The result is `NoOp` or `DerivedToBase` (with path) to `cv T`, keeping the category.
+  - P0388R4 ([dcl.init.ref]/4, WP-197): `T[N]` is reference-compatible with `T[]` (`unknown_bound_of`: same canonical element type), so `int (&r)[] = a;` binds directly with a `NoOp` to `int[]`. As in clang, the pair is unrelated when the binding would drop qualifiers, so a mismatch is `sema_reference_bind_failed` (`lvalue` only for an lvalue) rather than a temporary. In ranking, `h(int(&)[])` against `h(int(&)[3])` is ambiguous (clang 19; the deeper similarity of non-top-level bounds is not modelled).
 - A class target, or a class source, goes through overload resolution
   (WP-068a, spec/sema-overload.md §10.3): `try_implicit_conversion` computes
   the implicit conversion sequence and a user-defined one is applied by

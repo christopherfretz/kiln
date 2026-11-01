@@ -105,6 +105,7 @@ sema_ctor_explicit_copy_list = Error (0) "chosen constructor is explicit in copy
 sema_ctor_return_type = Error (0) "constructor cannot have a return type";
 sema_dangling_field_param = Warning [DanglingField] (2) "binding reference member {0} to stack allocated parameter {1}";
 sema_dangling_field_param_addr = Warning [DanglingField] (2) "initializing pointer member {0} with the stack address of parameter {1}";
+sema_dangling_variable = Warning [Dangling] (2) "temporary {0:whose address is used as value of|bound to} local {0:variable|reference} {1} will be destroyed at the end of the full-expression";
 sema_decl_negative_array_size = Error (1) "'{0}' declared as an array with a negative size";
 sema_decltype_auto_cannot_be_combined = Error (0) "'decltype(auto)' cannot be combined with other type specifiers";
 sema_decltype_auto_compound = Error (1) "cannot form {0:pointer to|reference to|array of} 'decltype(auto)'";

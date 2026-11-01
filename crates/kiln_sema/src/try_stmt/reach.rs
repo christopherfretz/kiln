@@ -565,6 +565,21 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// A GNU asm statement: its operands, then, for a reachable `asm goto`,
+    /// an edge to each of its labels besides the fall-through.
+    fn reach_asm(&mut self, s: StmtId, live: bool, r: &mut Reach) -> bool {
+        let out = self.reach_parts(s, live, r);
+        if out && self.ast.stmts.asm_bits(s) & kiln_ast::stmt::asm_bits::GOTO != 0 {
+            let labels = self.ast.stmts.asm_data(s).labels;
+            for l in self.ast.lists.iter::<DeclId>(labels) {
+                if r.labels.insert(l) {
+                    r.changed = true;
+                }
+            }
+        }
+        out
+    }
+
     fn reach_stmt_inner(&mut self, s: StmtId, mut live: bool, r: &mut Reach) -> bool {
         let n = *self.ast.stmts.get(s);
         match n.kind() {
@@ -600,6 +615,9 @@ impl Sema<'_, '_> {
                 Self::unit(Unit::Stmt(s), live, r);
                 false
             }
+            // [dcl.asm], GNU `asm goto`: an edge to each label as well as
+            // to the next statement (clang's CFG `GCCAsmStmt` successors).
+            StmtKind::GCCAsmStmt => self.reach_asm(s, live, r),
             StmtKind::ReturnStmt | StmtKind::CoreturnStmt => {
                 let outer = r.scan.as_mut().and_then(|sc| sc.cur_ret.replace(s));
                 let at = self.reach_parts(s, live, r);

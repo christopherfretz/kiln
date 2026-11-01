@@ -605,7 +605,7 @@ impl Sema<'_, '_> {
             self.act_on_call(m, &[], loc, loc)
         } else {
             let mut found = Vec::new();
-            self.adl_lookup_dn(DeclName::ident(get), &[e], &mut found);
+            self.adl_lookup_dn(DeclName::ident(get), &[e], loc, &mut found);
             recoverable = !found.is_empty();
             let ule = self.builder().unresolved_lookup(
                 DeclName::ident(get),

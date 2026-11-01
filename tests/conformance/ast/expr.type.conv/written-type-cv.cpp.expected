@@ -1,0 +1,81 @@
+TranslationUnitDecl
+|-TypeAliasDecl referenced CI 'const int'
+|-TypeAliasDecl referenced R 'int &'
+|-CXXRecordDecl referenced struct V definition
+| |-FieldDecl v 'int'
+| |-CXXConstructorDecl used V 'void (int)' implicit-inline
+| | |-ParmVarDecl used x 'int'
+| | |-CXXCtorInitializer Field 'v' 'int'
+| | | `-ImplicitCastExpr 'int' <LValueToRValue>
+| | |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+| | `-CompoundStmt
+| `-CXXConstructorDecl used V 'void (int, int)' implicit-inline
+|   |-ParmVarDecl used x 'int'
+|   |-ParmVarDecl used y 'int'
+|   |-CXXCtorInitializer Field 'v' 'int'
+|   | `-BinaryOperator 'int' '+'
+|   |   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   | `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   |   `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |     `-DeclRefExpr 'int' lvalue ParmVar 'y' 'int'
+|   `-CompoundStmt
+|-TypeAliasDecl referenced CV 'const V'
+|-CXXRecordDecl referenced struct A definition
+| |-FieldDecl a 'int'
+| `-FieldDecl b 'int'
+|-TypeAliasDecl referenced CA 'const A'
+|-FunctionDecl f 'void (int)'
+| |-ParmVarDecl used x 'int'
+| `-CompoundStmt
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXFunctionalCastExpr 'int' functional cast to CI <NoOp>
+|   |   `-InitListExpr 'int'
+|   |     `-IntegerLiteral 'int' 1
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXFunctionalCastExpr 'int' functional cast to CI <NoOp>
+|   |   `-IntegerLiteral 'int' 2
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXStaticCastExpr 'int' static_cast<CI> <NoOp>
+|   |   `-IntegerLiteral 'int' 3
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXStaticCastExpr 'int' lvalue static_cast<R> <NoOp>
+|   |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXFunctionalCastExpr 'CV':'const V' functional cast to CV <ConstructorConversion>
+|   |   `-CXXConstructExpr 'CV':'const V' 'void (int)'
+|   |     `-IntegerLiteral 'int' 1
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXTemporaryObjectExpr 'CV':'const V' 'void (int, int)'
+|   |   |-IntegerLiteral 'int' 1
+|   |   `-IntegerLiteral 'int' 2
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXTemporaryObjectExpr 'CV':'const V' 'void (int)' list
+|   |   `-IntegerLiteral 'int' 2
+|   `-CStyleCastExpr 'void' <ToVoid>
+|     `-CXXFunctionalCastExpr 'CA':'const A' functional cast to CA <NoOp>
+|       `-CXXParenListInitExpr 'CA':'const A'
+|         |-IntegerLiteral 'int' 1
+|         `-IntegerLiteral 'int' 2
+|-FunctionDecl used h 'void ()'
+|-FunctionDecl g 'void (int (&)[3], int (*)[3])'
+| |-ParmVarDecl used a 'int (&)[3]'
+| |-ParmVarDecl used p 'int (*)[3]'
+| `-CompoundStmt
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXStaticCastExpr 'int[3]' lvalue static_cast<int (&)[3]> <NoOp>
+|   |   `-DeclRefExpr 'int[3]' lvalue ParmVar 'a' 'int (&)[3]'
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXStaticCastExpr 'int[3]' xvalue static_cast<int (&&)[3]> <NoOp>
+|   |   `-DeclRefExpr 'int[3]' lvalue ParmVar 'a' 'int (&)[3]'
+|   |-CStyleCastExpr 'void' <ToVoid>
+|   | `-CXXStaticCastExpr 'void ()' lvalue static_cast<void (&)()> <NoOp>
+|   |   `-DeclRefExpr 'void ()' lvalue Function 'h' 'void ()'
+|   `-CStyleCastExpr 'void' <ToVoid>
+|     `-CXXStaticCastExpr 'int (*)[3]' lvalue static_cast<int (*&)[3]> <NoOp>
+|       `-DeclRefExpr 'int (*)[3]' lvalue ParmVar 'p' 'int (*)[3]'
+`-FunctionDecl m 'void ()'
+  `-CompoundStmt
+    `-CStyleCastExpr 'void' <ToVoid>
+      `-CXXStaticCastExpr 'struct V':'V' static_cast<struct V> <NoOp>
+        `-CXXTemporaryObjectExpr 'V' 'void (int)' list
+          `-IntegerLiteral 'int' 2

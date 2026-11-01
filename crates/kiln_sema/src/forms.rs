@@ -296,6 +296,13 @@ impl Sema<'_, '_> {
     /// `T{ ... }` ([expr.type.conv]/2): direct-list-initialization of a
     /// prvalue of non-class type `T`. `loc` is the start of the type.
     pub fn act_on_list_cast(&mut self, ty: QualType, l: &InitList, loc: Loc) -> ExprId {
+        let r = self.build_list_cast(ty, l, loc);
+        self.note_cast_written_type(r, ty);
+        r
+    }
+
+    /// [`Sema::act_on_list_cast`] before the type as written is recorded.
+    fn build_list_cast(&mut self, ty: QualType, l: &InitList, loc: Loc) -> ExprId {
         let ty = if self.is_ctad_placeholder(ty) {
             self.act_on_ctad_list_cast_type(ty, l, loc)
         } else {
@@ -431,7 +438,9 @@ impl Sema<'_, '_> {
         if self.ast.types.as_record(ty).is_some() {
             let mut site = crate::class::ConstructSite::at(loc);
             site.temp_end = Some(rparen);
-            let to = conv::strip_cv(self, ty);
+            // The temporary has the written type, qualifiers and sugar
+            // included (clang: `CV(1, 2)` is a `'CV':'const V'`).
+            let to = ty;
             if let Some(x) = self.construct_class(to, args, crate::class::InitStyle::Direct, site) {
                 if self.is_err_expr(x) {
                     return x;
