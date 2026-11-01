@@ -46,6 +46,8 @@ struct Replay {
     cur: Token,
     prev_hi: Loc,
     depth: [u32; 3],
+    /// The interrupted stream's `greater_is_op` and `greater_off_depth`.
+    greater: (bool, u32),
     inject: bool,
 }
 
@@ -90,8 +92,12 @@ pub struct Parser<'a, 'sm> {
     pub(crate) in_stmt_expr: bool,
     /// False while parsing a template argument: a `>` or `>>` ends the
     /// argument instead of being an operator ([temp.names]/4, clang's
-    /// `GreaterThanIsOperator`). Brackets restore it.
+    /// `GreaterThanIsOperator`). Brackets restore it: see
+    /// [`Parser::greater_ends_arg`].
     pub(crate) greater_is_op: bool,
+    /// The total bracket depth where `greater_is_op` was last turned off:
+    /// a `>` nested in a bracket opened since is an operator again.
+    pub(crate) greater_off_depth: u32,
     /// The parameter-declaration being parsed declares a type with an
     /// unexpanded pack (or `auto`): a `...` before its `)` belongs to the
     /// declarator, not the parameter list ([dcl.fct]/14).
@@ -183,6 +189,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             trace: Vec::new(),
             in_stmt_expr: false,
             greater_is_op: true,
+            greater_off_depth: 0,
             pack_hint: false,
             targs_memo: RefCell::new(TemplateArgsMemo::default()),
             halt: Cell::new(None),
@@ -348,6 +355,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             cur: self.cur,
             prev_hi: self.prev_hi,
             depth: self.depth,
+            greater: (self.greater_is_op, self.greater_off_depth),
             inject: false,
         };
         self.replay.push(saved);
@@ -356,6 +364,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.cur = cur;
         self.prev_hi = Loc::INVALID;
         self.depth = [0; 3];
+        self.greater_is_op = true;
+        self.greater_off_depth = 0;
     }
 
     /// Inserts a `;` before the current token (at its location), as clang
@@ -375,6 +385,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             cur: self.cur,
             prev_hi: self.prev_hi,
             depth: self.depth,
+            greater: (self.greater_is_op, self.greater_off_depth),
             inject: true,
         };
         self.replay.push(saved);
@@ -396,6 +407,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.cur = r.cur;
             self.prev_hi = r.prev_hi;
             self.depth = r.depth;
+            (self.greater_is_op, self.greater_off_depth) = r.greater;
         }
         done
     }
@@ -423,6 +435,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             _ => return 0,
         };
         self.depth[b as usize]
+    }
+
+    /// The number of brackets of every kind open at the current token.
+    pub(crate) fn total_depth(&self) -> u32 {
+        self.depth.iter().sum()
+    }
+
+    /// Whether a `>` here ends a template argument rather than being an
+    /// operator ([temp.names]/4): not inside a bracket opened since the
+    /// template argument began (clang's `BalancedDelimiterTracker`
+    /// restores `GreaterThanIsOperator` inside `()`, `[]` and `{}`).
+    pub(crate) fn greater_ends_arg(&self) -> bool {
+        !self.greater_is_op && self.total_depth() <= self.greater_off_depth
     }
 
     fn close(&mut self, b: Bracket) {
@@ -886,7 +911,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     }
                     stack.pop();
                 }
-                Punct::Semi => return None,
+                // A `;` ends the scan unless inside braces (a
+                // requires-expression or lambda body in the argument).
+                Punct::Semi if !stack.contains(&Punct::LBrace) => return None,
                 // `>=` is a relational operator inside a template
                 // argument ([temp.names]/4 splits only `>` and `>>`;
                 // clang parses `B<n >= 1>` as one argument).
@@ -1043,7 +1070,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             return false;
         }
         let qual = r.ok().flatten().map(|q| (q.ctx, q.nns));
-        self.decltype_scope = Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
+        self.decltype_scope =
+            Some(DecltypeScope { level: self.replay.len(), pos: self.pos, qual, loc });
         true
     }
 

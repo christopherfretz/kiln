@@ -438,7 +438,13 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
         DeclKind::Function => decl_name(ast, d) == "main" && in_global_ns(ast, d),
         // Only variables with internal linkage are mangled at global scope
         // (clang `shouldMangleCXXName`): `static int h;` is `_ZL1h`.
-        DeclKind::Var => in_global_ns(ast, d) && !is_local(ast, d) && !has_internal_linkage(ast, d),
+        // A variable template specialization is `_Z1vIiE`.
+        DeclKind::Var => {
+            in_global_ns(ast, d)
+                && !is_local(ast, d)
+                && !has_internal_linkage(ast, d)
+                && ast.spec_info(ast.first(d)).is_none()
+        }
         _ => false,
     }
 }

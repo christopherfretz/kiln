@@ -72,7 +72,8 @@ impl Substituter<'_, '_, '_> {
                 .members(ctx)
                 .filter(|&f| {
                     ast.decls.get(f).kind() == DeclKind::IndirectField
-                        && ast.lists.iter::<DeclId>(ast.indirect_field_chain(f)).next() == Some(head)
+                        && ast.lists.iter::<DeclId>(ast.indirect_field_chain(f)).next()
+                            == Some(head)
                 })
                 .collect()
         };

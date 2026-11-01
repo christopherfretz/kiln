@@ -647,7 +647,7 @@ impl Parser<'_, '_> {
             self.spec_error(&e, loc);
         }
         let open = self.bump().span.lo;
-        if let Some(e) = self.parse_constant_expr() {
+        if let Some(e) = self.with_greater_op(true, Self::parse_constant_expr) {
             ds.explicit_expr = Some(e);
             self.expect_closing(Punct::RParen, Punct::LParen, open);
         } else {
@@ -678,7 +678,8 @@ impl Parser<'_, '_> {
             return (TypeSpecKind::DecltypeAuto, None);
         }
         self.s.enter_decltype();
-        let e = self.parse_expression();
+        // [temp.names]/4: inside the parentheses `>` is an operator again.
+        let e = self.with_greater_op(true, Self::parse_expression);
         self.s.exit_decltype(e);
         let Some(e) = e else {
             self.skip_until(&[Punct::RParen], false, true);

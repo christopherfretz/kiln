@@ -1252,6 +1252,7 @@ diag_ids! {
     note_previous_template_specialization = Note (0) "previous template specialization is here";
     sema_explicit_inst_declaration_after_definition = Error (0) "explicit instantiation declaration (with 'extern') follows explicit instantiation definition (without 'extern')";
     note_explicit_instantiation_definition_here = Note (0) "explicit instantiation definition is here";
+    note_explicit_instantiation_here = Note (0) "explicit instantiation refers here";
     sema_redundant_constexpr_static_def = WarningOff [DeprecatedRedundantConstexprStaticDef] (0) "out-of-line definition of constexpr static data member is redundant in C++17 and is deprecated";
     note_var_template_spec_here = Note (1) "in instantiation of variable template specialization '{0}' requested here";
     sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";

@@ -170,7 +170,7 @@ impl Parser<'_, '_> {
 
     fn cur_binop(&self) -> Option<(u8, Option<BinaryOp>)> {
         let p = Self::punct_of(self.tok())?;
-        if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
+        if self.greater_ends_arg() && matches!(p, Punct::Greater | Punct::GreaterGreater) {
             return None;
         }
         let r = binop(p)?;
@@ -186,7 +186,7 @@ impl Parser<'_, '_> {
     /// ([expr.prim.fold]/1: any binary operator but `?:`).
     fn fold_op_at(&self, i: usize) -> Option<BinaryOp> {
         let p = Self::punct_of(self.tok_at(i))?;
-        if !self.greater_is_op && matches!(p, Punct::Greater | Punct::GreaterGreater) {
+        if self.greater_ends_arg() && matches!(p, Punct::Greater | Punct::GreaterGreater) {
             return None;
         }
         let op = binop(p)?.1?;
@@ -197,8 +197,11 @@ impl Parser<'_, '_> {
     /// `GreaterThanIsOperatorScope`).
     pub(crate) fn with_greater_op<T>(&mut self, on: bool, f: impl FnOnce(&mut Self) -> T) -> T {
         let saved = std::mem::replace(&mut self.greater_is_op, on);
+        let depth = self.total_depth();
+        let saved_depth = std::mem::replace(&mut self.greater_off_depth, depth);
         let r = f(self);
         self.greater_is_op = saved;
+        self.greater_off_depth = saved_depth;
         r
     }
 

@@ -9,10 +9,10 @@
 //! A failure is reported (or, in a SFINAE context, captured, §5.7) where
 //! it happens and returned as [`SubstFail`].
 
+mod anon;
 mod decls;
 mod exprs;
 mod lambda;
-mod anon;
 mod local;
 mod stmts;
 mod types;

@@ -1,9 +1,9 @@
 //! `decltype` ([dcl.type.decltype]), `decltype(auto)` and deduced return
 //! types ([dcl.spec.auto], [dcl.type.auto.deduct]; spec/sema.md §4.3.1).
 
+use kiln_ast::decl::DeclFlags;
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::types::{AutoKeyword, Quals, TypeView};
-use kiln_ast::decl::DeclFlags;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -478,10 +478,7 @@ impl Sema<'_, '_> {
         self.in_template()
             && self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX)
             && self.ast.decls.get(d).ty().is_some_and(|fty| {
-                self.ast
-                    .types
-                    .proto(fty)
-                    .is_some_and(|p| self.contains_undeduced_auto(p.ret()))
+                self.ast.types.proto(fty).is_some_and(|p| self.contains_undeduced_auto(p.ret()))
             })
     }
 }
