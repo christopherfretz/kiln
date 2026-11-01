@@ -167,6 +167,13 @@ pub struct Sema<'a, 'sm> {
     /// enclosing namespace and name: a later namespace-scope declaration
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
+    /// Block-scope variables whose qualified declarator-id was rejected
+    /// (`static T(::a);`, [`qualified_decl::QualifiedDecl::DropLocal`]):
+    /// declared invalid in the block, standing for a namespace member, so
+    /// a later block-scope redeclaration sees a previous declaration with
+    /// linkage (clang pushes the invalid out-of-line declaration on the
+    /// block's scope chain; WP-235).
+    pub(crate) dropped_qualified_locals: kiln_source::fx::FxHashSet<DeclId>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     /// Taken out for the duration of an evaluation, so the bridge can
     /// reach the rest of `Sema` (`ensure_body` instantiates through it,
@@ -473,6 +480,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
+            dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
             oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),

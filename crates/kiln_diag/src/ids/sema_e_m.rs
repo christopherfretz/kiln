@@ -50,6 +50,7 @@ sema_expr_not_ice = Error (0) "expression is not an integral constant expression
 sema_expr_not_ice_folded = Extension [GnuFoldingConstant] (0) "expression is not an integral constant expression; folding it to a constant is a GNU extension";
 sema_ext_vector_type_on_non_typedef = Error (0) "'ext_vector_type' attribute only applies to typedefs";
 sema_extern_init = Warning [ExternInitializer] (0) "'extern' variable has an initializer";
+sema_extern_non_extern = Error (1) "extern declaration of '{0}' follows non-extern declaration";
 sema_extraneous_template_params = Error (0) "extraneous template parameter list in template specialization";
 sema_falloff_nonvoid = Warning [ReturnType] (0) "non-void function does not return a value";
 sema_falloff_nonvoid_lambda = Warning [ReturnType] (0) "non-void lambda does not return a value";

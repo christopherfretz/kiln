@@ -244,6 +244,33 @@ Redeclaration and linkage rules:
   definition, else `previous declaration is here`.
 - **Linkage** ([basic.link]): `static`, `extern`, `extern "C"`, members
   of unnamed namespaces, and `const` variables at namespace scope.
+- **Block-scope variables** (`merge_local_var`, clang's `MergeVarDecl`;
+  [basic.scope.block]/2, [dcl.stc]/5, [basic.link]/6-7): a variable
+  redeclaring a variable or parameter of the same block is checked in
+  clang's order, stopping at the first error:
+  1. an `extern` that also finds a declaration with linkage in the
+     enclosing namespace (or an earlier block-scope `extern` of the name)
+     when the block's declaration has none: `redefinition of 'x' as
+     different kind of symbol`;
+  2. differing types (as above; skipped when the earlier declaration is
+     invalid, e.g. `static Q(a);` of incomplete `Q`);
+  3. `static` after an `extern`: `static declaration of 'x' follows
+     non-static declaration`;
+  4. non-`static` after `static` (unless an `extern` redeclaring a
+     declaration with linkage): `non-static declaration of 'x' follows
+     static declaration`;
+  5. `extern` after a declaration without linkage: `extern declaration
+     of 'x' follows non-extern declaration`;
+  6. non-`extern` after a declaration with linkage: `non-extern
+     declaration of 'x' follows extern declaration`;
+  7. otherwise `redefinition of 'x'`, unless both are `extern`.
+  The note is at the earlier declaration (`previous definition` unless it
+  is `extern`), even when that declarator was invalid. A new declarator
+  that is itself invalid is not merged. A qualified declarator rejected
+  in a block (`T(::a);`, "cannot name the global scope") still declares
+  `a` in the block, invalid and with linkage (`dropped_qualified_locals`),
+  as clang does. Test:
+  tests/conformance/basic.scope.block/redeclaration-merge.cpp (WP-235).
 - **Exception specifications** ([except.spec]/5): function types that
   differ only in their exception specification are not "different
   types". When the new declaration writes none and the previous one is

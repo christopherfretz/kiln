@@ -30,6 +30,11 @@ pub(crate) enum QualifiedDecl {
     Unqualify,
     /// Diagnosed; the declaration is dropped (clang marks it invalid).
     Drop,
+    /// Diagnosed in a function: the variable is declared unqualified and
+    /// invalid in the block, as clang pushes its invalid out-of-line
+    /// declaration on the block's scope chain, so a later redeclaration of
+    /// the name in the block is diagnosed against it (WP-235).
+    DropLocal,
 }
 
 impl Sema<'_, '_> {
@@ -103,6 +108,11 @@ impl Sema<'_, '_> {
                     .arg(self.scope_name(dc))
             };
             self.emit(m);
+            let var_like = !ds.is_typedef()
+                && !matches!(d.chunks.first(), Some(crate::declspec::Chunk::Function { .. }));
+            if cur_kind.is_function() && !is_record(cur_kind) && var_like {
+                return QualifiedDecl::DropLocal;
+            }
             return QualifiedDecl::Drop;
         }
         if is_record(cur_kind) {
