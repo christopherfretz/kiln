@@ -147,7 +147,14 @@ Constructors:
   `AllowInlineNamespace`; WP-179). A qualified declaration (`int I::x
   = 1;`, `void N::f() {}`) and the template lookup of an explicit
   specialization (`current_scope_with_inline_dn`, [temp.expl.spec]/3)
-  do see them. Redeclaration lookup leaves out using-shadows
+  do see them. A qualified *variable* declarator whose lookup finds
+  more than one variable or function entity (`int Z::t;` with `t` in
+  both `Z` and an inline namespace of `Z`) is ambiguous:
+  `redefinition of 't' as different kind of symbol`, note `previous
+  definition is here` at the first-declared entity, and the new
+  declaration is invalid (`ambiguous_qualified_prev`, clang's
+  `MergeVarDecl` on an ambiguous `Previous`; WP-235, test
+  tests/conformance/namespace.def/inline-qualified-redefinition.cpp). Redeclaration lookup leaves out using-shadows
   (`current_scope_shadows` returns those, for §4.8's conflict checks). If the current scope is the outermost block of a
   control statement (a Block directly above a Control scope), it also
   searches the Control scope, so `if (int x = 0) { int x; }` is
@@ -244,6 +251,33 @@ Redeclaration and linkage rules:
   definition, else `previous declaration is here`.
 - **Linkage** ([basic.link]): `static`, `extern`, `extern "C"`, members
   of unnamed namespaces, and `const` variables at namespace scope.
+- **Block-scope variables** (`merge_local_var`, clang's `MergeVarDecl`;
+  [basic.scope.block]/2, [dcl.stc]/5, [basic.link]/6-7): a variable
+  redeclaring a variable or parameter of the same block is checked in
+  clang's order, stopping at the first error:
+  1. an `extern` that also finds a declaration with linkage in the
+     enclosing namespace (or an earlier block-scope `extern` of the name)
+     when the block's declaration has none: `redefinition of 'x' as
+     different kind of symbol`;
+  2. differing types (as above; skipped when the earlier declaration is
+     invalid, e.g. `static Q(a);` of incomplete `Q`);
+  3. `static` after an `extern`: `static declaration of 'x' follows
+     non-static declaration`;
+  4. non-`static` after `static` (unless an `extern` redeclaring a
+     declaration with linkage): `non-static declaration of 'x' follows
+     static declaration`;
+  5. `extern` after a declaration without linkage: `extern declaration
+     of 'x' follows non-extern declaration`;
+  6. non-`extern` after a declaration with linkage: `non-extern
+     declaration of 'x' follows extern declaration`;
+  7. otherwise `redefinition of 'x'`, unless both are `extern`.
+  The note is at the earlier declaration (`previous definition` unless it
+  is `extern`), even when that declarator was invalid. A new declarator
+  that is itself invalid is not merged. A qualified declarator rejected
+  in a block (`T(::a);`, "cannot name the global scope") still declares
+  `a` in the block, invalid and with linkage (`dropped_qualified_locals`),
+  as clang does. Test:
+  tests/conformance/basic.scope.block/redeclaration-merge.cpp (WP-235).
 - **Exception specifications** ([except.spec]/5): function types that
   differ only in their exception specification are not "different
   types". When the new declaration writes none and the previous one is
@@ -296,7 +330,16 @@ Redeclaration and linkage rules:
   destructor; `add enclosing parentheses to perform a function-style
   cast`; `remove parentheses to silence this warning`). Otherwise the
   off-by-default "redundant parentheses surrounding declarator"
-  [-Wredundant-parens], except for `A (::B)`. Not in an instantiation.
+  [-Wredundant-parens], except when the declarator-id's
+  nested-name-specifier begins with the global `::` (`A (::B)`,
+  `A (::N::B)`: `Declarator::global_qualifier`, set by the parser; clang
+  walks the specifier's prefixes for `Global`). Not in an instantiation.
+  Parameter declarators, exception declarations and the abstract
+  declarators of type-ids (`sizeof(int (*))`, `W<int (*)>`, a template
+  parameter) cannot be expressions and only get -Wredundant-parens
+  (WP-235); a parenthesized new-type-id whose declarator has a function
+  chunk does not warn (its parentheses are required). Test:
+  `tests/conformance/dcl.ambig.res/redundant-parens-abstract.cpp`.
 - **Qualified declarator-ids** (`qualified_decl.rs`, clang
   `diagnoseQualifiedDeclaration`, WP-191): a qualified name must be
   declared in a scope that encloses its qualifier's: "definition or
@@ -305,7 +348,19 @@ Redeclaration and linkage rules:
   because namespace 'N' does not enclose namespace 'M'", and for members
   "non-friend class member 'f' cannot have a qualified name" / "extra
   qualification on member 'f'". The declaration is then dropped, or (for
-  the recoverable ones) declared unqualified.
+  the recoverable ones) declared unqualified. Every declarator-id form
+  is checked (WP-235): identifiers, operator-function-ids, conversion-
+  function-ids (`operator long`), literal-operator-ids (`operator""_y`),
+  constructor and destructor names; the scopes print unqualified (`'M'
+  does not enclose namespace 'C'`). In a class, a qualified conversion
+  function or literal operator is left to the other checks (clang
+  rejects both while parsing). A function template explicit
+  specialization outside a namespace enclosing its template is "function
+  template specialization of 'h' not in a namespace enclosing 'N'" with
+  "explicitly specialized declaration is here" (`check_spec_scope`).
+  Test: `tests/conformance/dcl.meaning/qualified-declarator-special-names.cpp`.
+  **Deviation:** a class template specialization scope prints without its
+  arguments (`'TT'`, clang `'TT<int>'`).
 - **Default-initialization without a default constructor**
   (`check_class_default_init`, WP-191): a class variable with no
   initializer whose default constructor is missing is resolved as
@@ -335,7 +390,12 @@ Redeclaration and linkage rules:
 - **Trailing return types** (`Chunk::Function::trailing`,
   [dcl.fct]/2): the function's return type, and an error
   (`function with trailing return type must specify return type 'auto'`)
-  unless the decl-specifier is a lone `auto`.
+  unless the decl-specifier is a lone `auto`. A return type of array or
+  function type ([dcl.fct]/11, `function cannot return function type`)
+  is diagnosed at that `auto` type-specifier when the return type is
+  trailing (the inner `auto` of a nested `auto (*)() -> F`; also after
+  substitution), otherwise at the function declarator's `(`, as clang
+  (`dcl.fct/return-function-type-trailing.cpp`).
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.
@@ -735,7 +795,15 @@ and returns the scope it names:
 ### 4.4 Tags, enumerations, bit-fields and anonymous records
 - **`act_on_tag(kind, name, TagUse, …)`** implements [dcl.type.elab]
   and [class.name]:
-  - A reference finds or injects the tag.
+  - A reference finds or injects the tag. An unqualified reference
+    whose lookup finds tags of two namespaces (an inline namespace's
+    and its parent's, [namespace.def.general]/7) is "reference to 'X'
+    is ambiguous" with candidate notes, recovering with the last tag;
+    the parser reports a class template-id `X<int>` the same way.
+  - `struct N::X;` (or an opaque `enum N::E : int;`) outside an
+    explicit specialization or instantiation is "forward declaration
+    of struct cannot have a nested name specifier" at the qualifier
+    ([dcl.type.elab]/1, [dcl.enum]/1), reported before the lookup.
   - A declaration redeclares the tag in the current scope.
   - A definition checks for redefinition and kind mismatch.
 - **Enumerations** ([dcl.enum]):
@@ -893,6 +961,19 @@ and returns the scope it names:
     The storage class itself stays `None`, so the AST dump shows no
     `extern`, as in clang. `extern "C" int x; extern "C" int x = 1;`
     is a declaration followed by its definition.
+  - [dcl.link]/6-7 (`extern_c.rs`): `Sema::extern_c` maps each name
+    declared as a C-linkage function or variable (non-template,
+    non-local) to its latest declaration. An unqualified function or
+    variable declared with C language linkage that finds no
+    redeclaration by ordinary lookup links to that entity's redecl
+    group, so two `extern "C" void f();` in different namespaces are
+    one entity (lookup through both using-directives is then not
+    ambiguous). A function whose parameters differ is "conflicting
+    types for 'f'" (the note names the first declaration; a
+    variable's names the latest, as in clang). A global-scope variable
+    and a C-linkage entity of the same name in a namespace conflict
+    either way (`err_extern_c_global_conflict` and its note); a
+    global function does not.
 - **Redefinition through an initializer** (clang
   `AddInitializerToDecl`): a namespace-scope variable that was a
   declaration before its initializer (`extern`, or a single-line
@@ -1318,7 +1399,13 @@ diagnostics and IR.
     initialization failure of its static step instead of `C-style cast
     from rvalue to reference type`).
 - **Constant-folding warnings:** division by zero, negative shifts and
-  over-wide shifts warn when the operands fold.
+  over-wide shifts warn when the operands fold. They are run-time
+  behavior diagnostics anchored at the right operand (clang's
+  `DiagRuntimeBehavior` → `DiagIfReachable`, §5.12): they are dropped
+  where `runtime_diag_quiet` holds, deferred to the end of a function
+  body (and dropped there when unreachable), and skipped in the
+  initializer of a namespace-scope `constexpr` variable or of a static
+  data member's first declaration (WP-235).
 - **Pointer arithmetic on `void` or a function type** ([expr.add]/1;
   `check_pointer_arith`, WP-219): `+`, `-`, `++`, `--` and compound
   assignment on a pointer to `void` or to a function type is an error in
@@ -1570,9 +1657,8 @@ for them.
     `lambda_mangle.var`); otherwise at once.
   - The warning carries the expression's range, so a macro-argument
     location gets clang's `expanded from macro` note (spec/diag.md §8.4).
-  - The run-time diagnostics of §5.15 use the same queue. kiln has no
-    constant-evaluated or discarded-statement context, where clang's
-    `DiagRuntimeBehavior` drops them too.
+  - The run-time diagnostics of §5.15 use the same queue and are
+    dropped in the same contexts (§5.12, `runtime_diag_quiet`).
   - In a default argument, the parser reports
     `default argument may not use a GNU statement expression`.
 - **Unused variables (WP-203; clang `ShouldDiagnoseUnusedDecl` /
@@ -1684,12 +1770,36 @@ for them.
     aggregate its `InitListExpr`; an abstract class is an error, and a
     class with a non-trivial destructor wraps the literal in a
     `CXXBindTemporaryExpr`;
-  - a dependent literal holds the list as written (an `InitListExpr`
-    of type `void`) until instantiation.
+  - a dependent literal, including an array literal whose element
+    type or bound is dependent, holds the list as written (an
+    `InitListExpr` of type `void`). Substitution rebuilds it through
+    `act_on_compound_literal`, so every check above runs per
+    instantiation (WP-235).
+  - a literal at namespace scope (no enclosing function; this includes
+    a default member initializer and a variable template's
+    initializer) is [GNU] and must have a constant initializer (C99
+    6.5.2.5p3; clang's `CheckForConstantInitializer`). Otherwise the
+    error is "initializer element is not a compile-time constant",
+    reported at the culprit (WP-235):
+    - for an aggregate list, the first element, recursively, that does
+      not fold (`try_fold`; implicit value-initializations are
+      constant). The location is that of clang's `getExprLoc`: the
+      operator of a binary or member expression, otherwise the first
+      token;
+    - for a constructor call, the type-id after the `(`;
+    - for a scalar or vector literal, its `{`.
 
-  Array literals of a dependent type and literals at namespace scope
-  (constant elements, `ConstantExpr` wrapping) are reported as not
-  supported yet.
+    A dependent literal is checked when instantiated. A valid
+    non-array literal is a prvalue, as it is inside a function, and its
+    variable is constant-initialized.
+
+  Deviations:
+  - Array literals at namespace scope are reported as not supported
+    yet. clang makes them lvalues naming an internal
+    `.compoundliteral` global, which needs a static-storage object in
+    the Oven and codegen.
+  - kiln does not wrap the elements of a namespace-scope literal in
+    `ConstantExpr` nodes, as clang does.
 
 ### 5.9 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `ActOnCXXNew`/`BuildCXXNew` and `ActOnCXXDelete` for non-class
@@ -1950,9 +2060,26 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   through `act_on_va_arg`.
 - **Runtime-behavior diagnostics** (`stmt.rs`, clang
   `DiagRuntimeBehavior`): inside a function body they are queued on
-  `FnState::runtime_diags` and flushed in `end_function_body`; in an
-  unevaluated operand or an immediate context they are dropped; outside a
+  `FnState::runtime_diags` and flushed in `end_function_body`; outside a
   function (a namespace-scope initializer) they are emitted at once.
+  `runtime_diag_quiet` drops them where clang's innermost evaluation
+  context is not potentially evaluated (WP-235):
+  - an unevaluated operand;
+  - a manifestly constant-evaluated expression: a constant-expression
+    the parser enters with `enter_constant_evaluated` or sema with
+    `act_on_constant_full_expr`, and the conversions of a non-type
+    template argument. The Oven reports the constant-evaluation failure
+    instead (`division by zero` as a note of the error);
+  - a quiet context of the body, counted by `FnState::rt_quiet`: the
+    body of a `consteval` function, the immediate compound statement of
+    `if consteval` / `if !consteval`, and the branch a non-dependent
+    `if constexpr` condition discards (`enter_discarded_statement`,
+    from the parser's `constexpr_condition_value`).
+
+  A variable's initializer, including its conversions, is potentially
+  evaluated again (`enter_var_initializer` zeroes `rt_quiet` until
+  `act_on_init` is done; clang's `ActOnCXXEnterDeclInitializer`). So
+  `if constexpr (false) { int x = 1 / 0; }` still warns, as in clang.
   Each queued diagnostic has an optional anchor expression; an anchored
   one is dropped at the flush when the anchor is unreachable (see the
   unused-value reachability rule, WP-203).
@@ -1960,7 +2087,17 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   so clang's CFG reachability filter does not apply to them
   (`if (0) va_arg(ap, char)` is silent there, reported here), and a
   non-dependent expression shared by a template and its instantiation is
-  checked once, at definition.
+  checked once, at definition, except for `-Wnull-dereference` (§5.15).
+  At the end of a body in a dependent context the queue is flushed
+  unfiltered for a function template declared by name. For any other
+  function (a member of a class template, a lambda or local class in a
+  template, a generic lambda's call operator) the anchored entries are
+  dropped, and their instantiations warn instead: clang finishes a
+  `FunctionTemplateDecl` without an analysis policy, and its
+  `IssueWarnings` returns early for a dependent context. The unanchored
+  ones (`-Wvarargs` `va_arg` promotion, `-Wuninitialized` self-reference)
+  are still reported at the definition, because the instantiation shares
+  and does not re-check them (clang reports them per instantiation).
 
 ### 5.13 Vector conditionals (`vector_ops.rs`, WP-173)
 The vector operators themselves are summarized in spec/types.md
@@ -2063,13 +2200,30 @@ pointer constant: a zero integer literal, a `std::nullptr_t` value or
   operand or an immediate function context (§5.1 reachability). Member
   access, subscripts, `&*`, `(void)` and discarded operands load nothing
   and are not diagnosed.
-- **Deviations:** a non-dependent `*null` in a template is reported at
-  the definition only, because instantiation shares non-dependent
-  subtrees; clang re-diagnoses it in each instantiation. A dependent
-  one (`*(T *)0`) is reported per instantiation, as clang does. kiln
-  does not parse `__null` yet.
+- **Templates** (WP-235): a dependent `*(T *)0` is checked when the
+  instantiation rebuilds it. A non-dependent one is shared by the
+  instantiation (spec/sema-templates.md §5.4), so the definition keeps
+  each warning it computed, keyed by the dereference and numbered in
+  check order (`null_deref_rewarn`). The walk that marks a shared
+  expression's functions referenced (`mark_shared_expr_referenced`,
+  which skips unevaluated operands and lambda bodies) collects the
+  recorded dereferences it meets and queues their warnings again, in
+  that order, under the instantiation's notes and reachability, unless
+  the context is quiet. It costs nothing while no template has warned.
+  Inside an instantiation these warnings are exempt from the engine's
+  deduplication against the definition's report (spec/diag.md §7.4)
+  and deduplicated per dereference and instantiation context instead
+  (`null_deref_seen`), so a shared dereference that a rebuilt parent
+  re-checks warns once. Other run-time warnings (division by zero,
+  shift counts) are not repeated, as in clang.
+- **Deviations:** kiln does not parse `__null` yet. A default member
+  initializer of a class template does not warn again when a
+  constructor uses it (clang instantiates it then), and a variable
+  template specialization's warning can print later than clang's,
+  which instantiates it at its first use.
 - Tests: `tests/conformance/expr.unary.op/null-dereference-indirection.cpp`,
-  `tests/conformance/dcl.init.ref/null-dereference-binding.cpp`.
+  `tests/conformance/dcl.init.ref/null-dereference-binding.cpp`,
+  `tests/conformance/temp.inst/null-dereference-rewarn.cpp`.
 ### 5.16 GNU `_Complex` (`complex.rs`, `conv/`, WP-211)
 clang 19's C99/GNU complex support in C++:
 - **Types.** `_Complex` combines with `float`, `double`, `long double`

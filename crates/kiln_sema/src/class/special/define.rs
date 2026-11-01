@@ -45,6 +45,10 @@ pub(crate) struct SynthContext {
     pub kind: SynthKind,
     /// The use that required the definition.
     pub loc: Loc,
+    /// The instantiation frames already active when it was pushed: the
+    /// ones pushed later are inside it, so their notes print before its
+    /// own (clang keeps both kinds on one `CodeSynthesisContexts` stack).
+    pub inst_depth: usize,
 }
 
 /// What [`SynthContext::member`] is (clang `DefaultedFunctionKind`).
@@ -57,6 +61,9 @@ pub(crate) enum SynthKind {
     /// An inheriting constructor ([class.inhctor.init]; clang prints no
     /// note for it).
     Inheriting,
+    /// The evaluation of a special member's implicit exception
+    /// specification (clang `ExceptionSpecEvaluation`, [except.spec]/8).
+    ExceptionSpec,
 }
 
 /// How a constructor initializes the subobjects it has no
@@ -198,17 +205,17 @@ pub(crate) struct Saved {
 impl Sema<'_, '_> {
     // -- the code-synthesis context ----------------------------------------
 
-    /// Adds the notes of the implicit definitions in progress to `d`
-    /// (clang `PrintContextStack`): once per nesting depth, innermost
-    /// first, and not to notes or diagnostics that are not emitted.
-    pub(crate) fn with_synth_note(&self, d: Diag) -> Diag {
+    /// The notes of the implicit definitions in progress for `d` (clang
+    /// `PrintContextStack`): once per nesting depth, innermost first, and
+    /// none for notes or diagnostics that are not emitted.
+    pub(crate) fn synth_notes(&self, d: &Diag) -> Vec<Diag> {
         let n = self.synth.len();
         if n == 0 || self.synth_noted.get() == n {
-            return d;
+            return Vec::new();
         }
-        let Some(id) = d.id() else { return d };
+        let Some(id) = d.id() else { return Vec::new() };
         if !self.diags.is_enabled_at(id, d.loc()) {
-            return d;
+            return Vec::new();
         }
         let notes: Vec<Diag> = self
             .synth
@@ -225,6 +232,9 @@ impl Sema<'_, '_> {
                         .arg(kind.index())
                         .arg(self.ty_arg(self.tag_type(class)))
                 }
+                SynthKind::ExceptionSpec => self
+                    .diag(DiagId::note_exception_spec_evaluation_here, c.loc)
+                    .arg(self.qualified_decl_name(c.member)),
                 SynthKind::Comparison(_) | SynthKind::Inheriting => {
                     let SynthKind::Comparison(k) = c.kind else { unreachable!("filtered") };
                     let class = self.cmp_class(c.member).unwrap_or(self.ast.tu);
@@ -235,11 +245,12 @@ impl Sema<'_, '_> {
             })
             .collect();
         self.synth_noted.set(n);
-        d.with_context_notes(notes)
+        notes
     }
 
     pub(crate) fn push_synth(&mut self, member: DeclId, kind: SynthKind, loc: Loc) -> Saved {
-        self.synth.push(SynthContext { member, kind, loc });
+        let inst_depth = self.inst.stack.len();
+        self.synth.push(SynthContext { member, kind, loc, inst_depth });
         let saved = Saved {
             ctx: self.ctx,
             func: self.func.take(),
@@ -300,6 +311,11 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        // clang: the exception specification is needed because the
+        // function is being defined (`ResolveExceptionSpec` before the
+        // definition's context note), so the default member initializers
+        // it instantiates note the exception-specification evaluation.
+        self.resolve_exception_spec(f, loc);
         let saved = self.push_synth(f, SynthKind::Special(kind), loc);
         let ok = match kind {
             SpecialKind::DefaultCtor => self.define_ctor(f, class, ImplicitInit::Default),
@@ -347,7 +363,14 @@ impl Sema<'_, '_> {
         iik: ImplicitInit,
         any_errors: bool,
     ) -> bool {
-        let loc = self.ast.decls.get(ctor).loc();
+        // clang `InstantiateFunctionDefinition` moves an instantiated
+        // member to its pattern's definition, so an out-of-line one
+        // locates the implicit initializations there.
+        let loc = self
+            .ast
+            .instantiated_from(ctor)
+            .and_then(|p| self.ast.definition(p))
+            .map_or_else(|| self.ast.decls.get(ctor).loc(), |d| self.ast.decls.get(d).loc());
         let mut info = InitInfo {
             ctor,
             iik,
@@ -667,7 +690,7 @@ impl Sema<'_, '_> {
     /// [class.mem.general]/8): diagnosed at `loc` with the outermost
     /// lexically enclosing class, the note at the field's name; the field
     /// becomes invalid outside a SFINAE context so later uses are quiet.
-    fn default_member_init_not_yet_parsed(&mut self, field: DeclId, loc: Loc) {
+    pub(crate) fn default_member_init_not_yet_parsed(&mut self, field: DeclId, loc: Loc) {
         let mut outer = self.ast.decls.get(field).ctx();
         while let Some(c) = outer
             && let Some(p) = self.ast.decls.lexical_ctx(c)
@@ -681,7 +704,9 @@ impl Sema<'_, '_> {
         let note = self.diag(DiagId::note_default_member_init_not_yet_parsed, at);
         let d =
             self.diag(DiagId::sema_default_member_init_not_yet_parsed, loc).arg(class).arg(name);
-        self.emit(d.with_note(note));
+        // One per field at the same constructor (clang does not
+        // deduplicate; the field is invalid afterwards).
+        self.emit(d.with_note(note).allow_duplicate());
         if !self.inst.stack.is_sfinae() {
             self.ast.decls.set_flags(field, DeclFlags::INVALID);
         }

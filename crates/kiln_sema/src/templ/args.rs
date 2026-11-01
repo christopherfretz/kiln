@@ -305,8 +305,11 @@ impl Sema<'_, '_> {
                         | DeclKind::TemplateTemplateParm,
                     ) => {
                         let d = self.ast.types.template_decl(n);
-                        if d.is_some_and(|d| !self.check_template_template_arg(p, d, at)) {
-                            return Err(());
+                        if let Some(d) = d {
+                            let args = self.prior_levels(tmpl, depth, prior);
+                            if !self.check_template_template_arg(p, d, at, &args) {
+                                return Err(());
+                            }
                         }
                         Ok(a)
                     }
@@ -367,6 +370,16 @@ impl Sema<'_, '_> {
             m.push(ArgListId::EMPTY, tmpl, LevelMode::Retain);
         }
         m
+    }
+
+    /// Runs `f`, a conversion of a converted constant expression, as part
+    /// of that manifestly constant-evaluated expression: no run-time
+    /// behavior warnings (`-Wnull-dereference` on the load).
+    fn in_cce<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.constant_full_expr += 1;
+        let r = f(self);
+        self.constant_full_expr -= 1;
+        r
     }
 
     /// `e` converted to the type of non-type parameter `p` as a
@@ -441,7 +454,7 @@ impl Sema<'_, '_> {
             return Err(());
         }
         let pty = conv::strip_cv(self, pty);
-        let c = conv::lvalue_to_rvalue(self, e);
+        let c = self.in_cce(|s| conv::lvalue_to_rvalue(s, e));
         let cty = conv::strip_cv(self, self.ast.exprs.get(c).ty());
         let t = &self.ast.types;
         let int_like = |q| t.is_integral(q) || t.as_enum(q).is_some();
@@ -467,7 +480,7 @@ impl Sema<'_, '_> {
             // default) recovers with the converted value.
             self.emit(d);
         }
-        let c = match conv::implicit_convert(self, c, pty, ConvCtx::Initialization) {
+        let c = match self.in_cce(|s| conv::implicit_convert(s, c, pty, ConvCtx::Initialization)) {
             Ok(c) => c,
             Err(err) => {
                 self.emit_conv_error(err, at);

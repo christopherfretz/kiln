@@ -586,7 +586,7 @@ impl Sema<'_, '_> {
 
     /// The location of the first token after `loc`'s (one byte long)
     /// token: the class name after a destructor's `~`.
-    fn next_token_loc(&self, loc: Loc) -> Loc {
+    pub(crate) fn next_token_loc(&self, loc: Loc) -> Loc {
         let sm = self.diags.sm();
         let Some((file, off)) = sm.offset_of(loc) else { return loc };
         let text = sm.text(file).as_bytes();

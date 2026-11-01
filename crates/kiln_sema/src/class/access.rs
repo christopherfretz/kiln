@@ -401,8 +401,15 @@ impl Sema<'_, '_> {
             AccessCheck { member: found, naming_class: naming, object_class: object, loc, repeat };
         // Delayed only while still in the declaration's own context: a
         // class or function body (or lambda) inside the delayed region is
-        // its own context (clang's `pushUndelayed`).
-        if self.delayed_access_depth.last().is_some_and(|&(_, ctx, _)| ctx == self.ctx) {
+        // its own context (clang's `pushUndelayed`). So is a SFINAE
+        // substitution the declaration triggers (deduction for an explicit
+        // instantiation, a default template argument): its checks are
+        // made now, in the template's context, as substitution failures
+        // ([temp.spec.general]/6 exempts only the names written,
+        // [temp.deduct.general]/8).
+        if !self.inst.stack.is_sfinae()
+            && self.delayed_access_depth.last().is_some_and(|&(_, ctx, _)| ctx == self.ctx)
+        {
             self.delayed_access.push(check);
             return true;
         }
@@ -895,7 +902,12 @@ impl Sema<'_, '_> {
         naming: DeclId,
     ) -> Diag {
         let first = self.ast.first(m);
-        let loc = self.ast.decls.get(first).loc();
+        // clang locates an alias template at its `using` keyword.
+        let loc = (self.kind_of(first) == DeclKind::TypeAliasTemplate)
+            .then(|| self.ast.template_info(first).and_then(|i| i.pattern))
+            .flatten()
+            .and_then(|p| self.templ.alias_using_loc.get(&p).copied())
+            .unwrap_or_else(|| self.ast.decls.get(first).loc());
         if t.decl_access == Access::Protected
             && let Some(note) = self.protected_note(ec, t, naming, loc)
         {

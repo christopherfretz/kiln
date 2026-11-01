@@ -1286,6 +1286,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let prefix_nns = qual.map(|q| q.1);
         Ok(match (class, qual) {
             (NameClass::TypeTemplate(d), _) if !dep_prefix => {
+                // [class.access]/4: the template name before `<...>::` is
+                // access-checked like any other nested-name component.
+                self.s.check_type_name_access(name, qual.map(|q| q.0), d, loc);
                 let tn = self.s.template_name_for(d);
                 let Ok(kiln_sema::templ::actions::TemplateIdRef::Type(ty)) =
                     self.s.act_template_id(tn, args, loc, loc)

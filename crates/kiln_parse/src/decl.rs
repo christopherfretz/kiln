@@ -823,20 +823,56 @@ impl Parser<'_, '_> {
     /// A type-name in a decl-specifier-seq (`T`, `N::T`), or an unknown
     /// identifier that can only be one. Returns false (consuming nothing)
     /// if the tokens are not a type name.
+    /// [`Parser::at_template_type_name`], diagnosing `X<int>` with `X`
+    /// naming class templates of two namespaces (an inline namespace's and
+    /// its parent's): ambiguous ([basic.lookup.general]/1), recovering
+    /// with the first.
+    fn at_template_type_name_checked(&mut self, ctx: DeclaratorContext, loc: Loc) -> bool {
+        if !self.at_template_type_name(ctx) {
+            return false;
+        }
+        if let Some(name) = self.ident()
+            && self.peek_is(1, Punct::Less)
+        {
+            self.s.diagnose_ambiguous_name(name, None, loc);
+        }
+        true
+    }
+
+    /// A type-name spec that starts with a template-id (`X<A>` or
+    /// `X<A>::type`).
+    fn parse_template_type_name_spec(
+        &mut self,
+        ds: &mut DeclSpec,
+        ctx: DeclaratorContext,
+        start: usize,
+        loc: Loc,
+    ) {
+        let scanned = self.scan_name_at(start).and_then(|(end, split, ..)| (!split).then_some(end));
+        let ty = self.parse_template_type_name(ctx);
+        if ty.is_none() {
+            // An invalid qualifier (`X<A>::type` where the instantiation
+            // of `X<A>` fails here) still spans the scanned name: the
+            // declaration goes on with an invalid type (clang's invalid
+            // `CXXScopeSpec`), not a syntax error.
+            if let Some(end) = scanned {
+                while self.pos() < end {
+                    self.bump();
+                }
+            }
+            ds.invalid = true;
+        }
+        if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc) {
+            ds.invalid = true;
+            self.spec_error(&e, loc);
+        }
+    }
+
     fn parse_type_name_spec(&mut self, ds: &mut DeclSpec, ctx: DeclaratorContext) -> bool {
         let start = self.pos();
         let loc = self.name_begin();
-        if self.at_template_type_name(ctx) {
-            let ty = self.parse_template_type_name(ctx);
-            if ty.is_none() {
-                ds.invalid = true;
-            }
-            if let Err(e) =
-                ds.set_base(TypeSpecKind::Named, Some(ty.unwrap_or(QualType::ERROR)), loc)
-            {
-                ds.invalid = true;
-                self.spec_error(&e, loc);
-            }
+        if self.at_template_type_name_checked(ctx, loc) {
+            self.parse_template_type_name_spec(ds, ctx, start, loc);
             return true;
         }
         match self.scan_name(start) {
@@ -1029,6 +1065,7 @@ impl Parser<'_, '_> {
         }
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
+        let qual_loc = self.tok().span.lo;
         let qualifier = self.parse_tag_qualifier(ds);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
@@ -1073,6 +1110,9 @@ impl Parser<'_, '_> {
             ds.invalid = true;
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
+        }
+        if use_ == TagUse::Declaration && qualifier.is_some() {
+            self.s.check_standalone_tag_qualifier(keyword, qual_loc);
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs);
@@ -1443,6 +1483,7 @@ impl Parser<'_, '_> {
             && d.ctx != DeclaratorContext::TypeName
         {
             let last_qual = self.last_qualifier_name();
+            let global = self.at(Punct::ColonColon);
             let saved = self.s.set_entering_context(true);
             let qual = self.parse_nested_name();
             self.s.set_entering_context(saved);
@@ -1450,6 +1491,7 @@ impl Parser<'_, '_> {
                 d.invalid = true;
                 None
             });
+            d.global_qualifier = global && qual.is_some();
             if self.at(Punct::Tilde) || self.at_kw(Kw::Operator) {
                 d.qualifier = qual;
                 entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
@@ -2098,8 +2140,22 @@ impl Parser<'_, '_> {
             (Some(v), Some(_)) => self.s.act_on_enter_decl_initializer(v),
             _ => 0,
         };
+        // The initializer, with its conversions, is potentially evaluated.
+        let quiet = self.s.enter_var_initializer();
         let init = self.parse_initializer(d.init_style, d.is_function_declarator());
         self.s.act_on_exit_declarator_scope(entered);
+        let r = self.finish_declarator_initializer(d, v, init);
+        self.s.exit_var_initializer(quiet);
+        r
+    }
+
+    /// The semantic action of declarator `d`'s parsed initializer `init`.
+    fn finish_declarator_initializer(
+        &mut self,
+        d: &Declarator,
+        v: Option<DeclId>,
+        init: Result<Option<Initializer>, ()>,
+    ) -> Result<(), ()> {
         match init {
             Ok(init) => {
                 match (v, init) {

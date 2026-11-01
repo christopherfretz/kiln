@@ -1,0 +1,123 @@
+# C++23 / C++26 language feature table (2026-11-01)
+
+One row per core-language paper on the M4 list ([ROADMAP.md](../ROADMAP.md) M4),
+plus DR-level papers. This is the M4 exit checklist: every C++23 row must be
+`done`, and every C++26 row that clang 22 ships must be `done` or carry a
+written reason. `cargo xtask features` checks the table mechanically (format
+and checks: [spec/harness.md](../../spec/harness.md), "Feature table").
+
+Columns:
+
+- **Macro**: `` `__cpp_name` KILN / CLANG22 ``. KILN is `kiln++ -std=c++26 -dM -E`;
+  CLANG22 is `clang++-22 -std=c++26 -dM -E -x c++ /dev/null` (22.1.8). `—` means
+  the macro is not defined; a bare `—` means the paper has no `__cpp_*` macro of
+  its own. Where clang 19 differs from clang 22, its value is in Notes (kiln's
+  predefines are generated from clang 19, so they match it everywhere).
+- **Status**: `done` = kiln passes corpus tests covering the core forms;
+  `partial` = some pass, or some are `xfail(kiln)`; `todo` = nothing passes.
+  Seeded on 2026-11-01 (WP-185) from a corpus run through kiln.
+- **Corpus tests**: paths under `tests/`. `*-probe.cpp` files are WP-185's
+  one-per-paper probes; a probe marked `xfail(clang)` names the clang
+  versions that lack the feature in its reason.
+
+## C++23
+
+| Paper | Feature | `__cpp_*` macro (kiln / clang 22) | Status | Corpus tests | Notes |
+|---|---|---|---|---|---|
+| P0847R7 | Deducing `this` (explicit object parameters) | `__cpp_explicit_this_parameter` — / 202110L | partial | `conformance/dcl.fct/explicit-object-call.cpp`<br>`conformance/dcl.fct/explicit-object-qualifiers.cpp`<br>`conformance/dcl.fct/explicit-object-diags.cpp`<br>`conformance/templates/deduce/temp.deduct.call-member.cpp`<br>`conformance/dcl.fct/p0847-lambda-probe.cpp` | Member functions work; an explicit object parameter on a lambda does not (probe is `xfail(kiln)`). clang 19: macro not defined (libc++ 19 keys `_LIBCPP_HAS_EXPLICIT_THIS_PARAMETER` on clang >= 18 instead). |
+| P1938R3 | `if consteval` | `__cpp_if_consteval` 202106L / 202106L | done | `conformance/stmt.if/consteval-if-requires-compound.cpp`<br>`conformance/dcl.constexpr/consteval-run.cpp`<br>`conformance/ast/stmt.if/if-constexpr-consteval.cpp`<br>`conformance/ast/dcl.constexpr/consteval-if.cpp` | |
+| P1169R4 | `static operator()` | `__cpp_static_call_operator` 202207L / 202207L | done | `conformance/over.oper/static-call.cpp`<br>`conformance/ast/over.oper/static-call.cpp`<br>`conformance/expr.prim.lambda/static-lambda.cpp` | |
+| P2589R1 | `static operator[]` | — | done | `conformance/over.oper/static-call.cpp`<br>`conformance/ast/over.oper/static-call.cpp` | Bumps `__cpp_multidimensional_subscript` to 202211L (recorded on P2128). |
+| P2128R6 | Multidimensional subscript operator | `__cpp_multidimensional_subscript` 202211L / 202211L | done | `conformance/over.oper/static-call.cpp`<br>`conformance/over.match.oper/selection.cpp` | P2128 alone is 202110L. |
+| P0849R8 | `auto(x)` and `auto{x}` decay-copy | `__cpp_auto_cast` 202110L / 202110L | todo | `conformance/expr.type.conv/p0849-probe.cpp` | kiln advertises the macro without the feature (Macro gaps). |
+| P1774R8 | `[[assume]]` | — | done | `conformance/dcl.attr.assume/assume-diags.cpp`<br>`conformance/dcl.attr.assume/assume-comma-unused.cpp`<br>`conformance/dcl.attr.assume/assume-pre-cxx23-ext.cpp`<br>`conformance/expr.const/assume-false.cpp`<br>`conformance/ast/dcl.attr.assume/assume-attributed-stmt.cpp` | Detected with `__has_cpp_attribute(assume)`; no `__cpp_*` macro. |
+| P2334R1 | `#elifdef` and `#elifndef` | — | done | `conformance/cpp.cond/p2334-probe.cpp` | |
+| P2437R1 | `#warning` | — | done | `conformance/cpp.error/warning.h` | |
+| P1467R9 | Extended floating-point types | — | todo | `conformance/basic.extended.fp/p1467-probe.cpp` | Detected with `__STDCPP_FLOAT16_T__` and friends, not a `__cpp_*` macro. Neither clang 19 nor clang 22 implements it (probe `xfail(clang)`). |
+| P2718R0 | Lifetime extension in range-based `for` | `__cpp_range_based_for` 202211L / 202211L | done | `conformance/stmt.ranged/p2718-order.cpp`<br>`conformance/stmt.ranged/p2718-constexpr.cpp` | |
+| P2448R2 | Relaxing some constexpr restrictions | — | done | `conformance/dcl.constexpr/p2448-probe.cpp` | `__cpp_constexpr` 202207L; that macro is recorded on P2747, its latest bump. |
+| P2242R3 | Non-literal variables, labels and `goto` in constexpr functions | — | done | `conformance/dcl.constexpr/p2242-probe.cpp` | `__cpp_constexpr` 202110L (see P2747). |
+| P2280R4 | Unknown references in constant expressions | — | todo | `conformance/expr.const/p2280-probe.cpp` | DR. clang 19 lacks it (probe `xfail(clang)`); clang 20+ accepts. |
+| P2647R1 | `static constexpr` variables in constexpr functions | — | done | `conformance/dcl.constexpr/p2647-probe.cpp` | `__cpp_constexpr` 202211L (see P2747). |
+| P2582R1 | CTAD from inherited constructors | — | todo | `conformance/over.match.class.deduct/p2582-probe.cpp` | Neither clang implements it (probe `xfail(clang)`). Its macro bump, `__cpp_deduction_guides` 202207L, is absent from both (both 201703L). |
+| P2324R2 | Labels at the end of compound statements | — | done | `conformance/stmt.label/p2324-probe.cpp` | ROADMAP M4 cites this as "P2360 labels at the end of blocks"; P2324 is the labels paper. |
+| P0330R8 | `size_t` literal suffixes | `__cpp_size_t_suffix` 202011L / 202011L | done | `conformance/lex.icon/p0330-probe.cpp`<br>`conformance/ast/lex.icon/integer-literals.cpp` | ROADMAP M4 cites this as "P2324 `size_t` literals"; the paper is P0330. |
+| P2360R0 | Alias-declaration in an init-statement | — | partial | `conformance/stmt.pre/p2360-probe.cpp`<br>`conformance/stmt.pre/p2360-for-probe.cpp` | `if`/`switch` forms work; the range-based `for` form is rejected (`xfail(kiln)`). |
+| P2290R3 | Delimited escape sequences | — | done | `conformance/lex.ccon/p2290-probe.cpp`<br>`differential/pp/torture/lex.literal-forms.cpp` | |
+| P2071R2 | Named universal character escapes | `__cpp_named_character_escapes` 202207L / 202207L | done | `conformance/lex.charset/p2071-probe.cpp` | |
+| P2295R6 | UTF-8 as a portable source encoding | — | done | `conformance/lex.phases/p2295-probe.cpp` | |
+| P2362R3 | Ill-formed multicharacter and non-encodable wide literals | — | done | `conformance/lex.ccon/p2362-probe.cpp` | |
+| P2201R1 | Mixed string literal concatenation | — | done | `conformance/lex.string/p2201-probe.cpp` | |
+| P2156R1 | Duplicate attributes | — | done | `conformance/dcl.attr.grammar/p2156-probe.cpp` | |
+| P2266R3 | Simpler implicit move | `__cpp_implicit_move` 202207L / 202207L | done | `conformance/dcl.init.ref/implicit-move-return.cpp` | |
+| P2468R2 | The equality operator you are looking for | — | done | `conformance/class.compare/ambiguous-reversed.cpp`<br>`conformance/class.compare/rewritten-selection.cpp`<br>`conformance/over.match.oper/rewritten-template-errors.cpp` | DR. |
+| P2493R0 | Missing feature-test macros for C++20 core papers | — | done | `conformance/cpp.predefined/p2493-probe.cpp` | |
+| P1102R2 | Optional `()` for lambdas | — | done | `conformance/expr.prim.lambda/p1102-probe.cpp` | |
+| P2036R3 | Lambda trailing-return-type scope | — | todo | `conformance/expr.prim.lambda/p2036-probe.cpp` | DR. The probe covers init-capture visibility in the trailing return type and `noexcept`; clang 19/22 also skip the const-qualified `decltype((x))` part. |
+| P2173R1 | Attributes on lambda expressions | — | done | `conformance/expr.prim.lambda/attributes.cpp` | |
+| P2564R3 | `consteval` needs to propagate up | `__cpp_consteval` 202211L / 202211L | done | `conformance/dcl.constexpr/consteval-escalation.cpp`<br>`conformance/dcl.constexpr/consteval-lambda.cpp`<br>`conformance/dcl.constexpr/consteval-generic-lambda-reason.cpp`<br>`conformance/expr.prim.lambda/consteval-conversion.cpp` | DR. |
+| P2513R4 | `char8_t` compatibility fix | `__cpp_char8_t` 202207L / 202207L | done | `conformance/dcl.init.string/p2513-probe.cpp` | DR. |
+| P2327R1 | De-deprecating volatile compound operations | — | done | `conformance/expr.ass/p2327-probe.cpp` | DR; CWG2654 extends it to every compound assignment. kiln does not emit P1152's `-Wdeprecated-volatile` for `++`/`--` (follow-up). |
+| P1401R5 | Narrowing contextual conversions to `bool` | — | done | `conformance/dcl.pre/p1401-probe.cpp` | |
+
+## C++26 (non-reflection)
+
+| Paper | Feature | `__cpp_*` macro (kiln / clang 22) | Status | Corpus tests | Notes |
+|---|---|---|---|---|---|
+| P2662R3 | Pack indexing | `__cpp_pack_indexing` 202311L / 202311L | done | `conformance/templates/packs/temp.variadic-pack-index-expr.cpp`<br>`conformance/templates/packs/temp.variadic-pack-index-type.cpp` | |
+| P2169R4 | Placeholder variables `_` | `__cpp_placeholder_variables` 202306L / 202306L | todo | `conformance/basic.scope.scope/p2169-probe.cpp` | kiln advertises the macro without the feature (Macro gaps). |
+| P2573R2 | `= delete("reason")` | `__cpp_deleted_function` 202403L / 202403L | done | `conformance/dcl.fct.def.delete/redeclaration.cpp`<br>`conformance/dcl.fct.def.delete/templates.cpp`<br>`conformance/dcl.fct.def.delete/uses.cpp` | |
+| P2741R3 | User-generated `static_assert` messages | `__cpp_static_assert` 202306L / 202306L | todo | `conformance/dcl.pre/p2741-probe.cpp` | kiln advertises the macro without the feature (Macro gaps). |
+| P2893R3 | Variadic friends | `__cpp_variadic_friend` — / 202403L | todo | `conformance/class.friend/p2893-probe.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`. |
+| P2747R2 | `constexpr` placement new | `__cpp_constexpr` 202306L / 202406L | todo | `conformance/expr.new/p2747-probe.cpp`<br>`conformance/expr.new/constexpr-placement.cpp` | clang 19: 202306L, the P2738 level, with no P2747 (probe `xfail(clang)`). `constexpr-placement.cpp` pins clang 19's pre-P2747 rejection; flip it at the oracle switch (WP-184). |
+| P3068R6 | `constexpr` exceptions | `__cpp_constexpr_exceptions` — / — | todo | `conformance/expr.throw/p3068-probe.cpp`<br>`conformance/expr.throw/constexpr-throw.cpp` | Not in clang 22: written reason for the M4 exit. `constexpr-throw.cpp` pins the pre-P3068 rejection. |
+| P2738R1 | `constexpr` cast from `void*` | — | done | `conformance/expr.static.cast/p2738-probe.cpp` | `__cpp_constexpr` 202306L (see P2747). |
+| P1967R14 | `#embed` | `__cpp_pp_embed` — / — | done | `conformance/cpp.embed/p1967-probe.cpp`<br>`differential/pp/torture/cpp.embed-params.cpp` | Neither clang defines `__cpp_pp_embed`; use `__has_embed`. clang reports `#embed` in C++ as a C23 extension (`-Wc23-extensions`), and kiln matches. |
+| P0963R3 | Structured binding declaration as a condition | — | partial | `conformance/dcl.struct.bind/condition.cpp` | Accepted, but with clang 19's "C++17 extension" warning, which C++26 should not emit. Its `__cpp_structured_bindings` bump (202406L) is subsumed by P1061's. |
+| P1061R10 | Structured bindings can introduce a pack | `__cpp_structured_bindings` 202403L / 202411L | todo | `conformance/dcl.struct.bind/pack.cpp` | `pack.cpp` pins kiln's "not supported yet" error. kiln's and clang 19's 202403L is the P0609 level. |
+| P0609R3 | Attributes for structured bindings | — | done | `conformance/dcl.struct.bind/p0609-probe.cpp` | Supplies `__cpp_structured_bindings` 202403L (see P1061). |
+| P2795R5 | Erroneous behaviour for uninitialized reads | — | todo | `conformance/dcl.attr.indet/p2795-probe.cpp` | Not in clang 22 (no `[[indeterminate]]`): written reason for the M4 exit. |
+| P2786R13 | Trivial relocatability | `__cpp_trivial_relocatability` — / 202502L | todo | `conformance/class.prop/p2786-probe.cpp` | clang 19 lacks it: macro not defined, probe `xfail(clang)`. Check its standing in the C++26 draft before investing (reportedly pulled at Kona 2025). |
+| P1306R5 | Expansion statements | `__cpp_expansion_statements` — / — | todo | `conformance/stmt.expand/p1306-probe.cpp` | Not in clang 22: written reason for the M4 exit. |
+| P2361R6 | Unevaluated strings | — | done | `conformance/lex.string.uneval/unevaluated-string-macro.cpp` | |
+| P2864R2 | Removing deprecated arithmetic conversion on enumerations | — | done | `conformance/expr.arith.conv/p2864-probe.cpp` | |
+| P2748R5 | Disallow binding a returned glvalue to a temporary | — | done | `conformance/class.temporary/return-dangling.cpp`<br>`conformance/stmt.return/stack-address-temporary.cpp` | |
+| P3144R2 | Deleting a pointer to an incomplete type is ill-formed | — | done | `conformance/expr.delete/delete-incomplete.cpp` | |
+| P2963R3 | Ordering of constraints involving fold expressions | — | done | `conformance/templates/concepts/temp.constr.fold-expanded.cpp` | |
+| P2865R6 | Removing deprecated array comparisons | — | todo | `conformance/expr.eq/p2865-probe.cpp` | clang 19 only warns (probe `xfail(clang)`). |
+| P3176R1 | The Oxford variadic comma | — | todo | `conformance/dcl.fct/p3176-probe.cpp` | clang 19 lacks the deprecation (probe `xfail(clang)`). |
+
+## DR-level papers
+
+DRs already listed above: P2280, P2468, P2036, P2564, P2513, P2327.
+
+| Paper | Feature | `__cpp_*` macro (kiln / clang 22) | Status | Corpus tests | Notes |
+|---|---|---|---|---|---|
+| P1949R7 | C++ identifier syntax using UAX 31 | — | done | `conformance/lex.name/p1949-probe.cpp` | |
+| P2316R2 | Consistent character literal encoding | — | done | `conformance/cpp.cond/p2316-probe.cpp` | |
+| P1854R4 | Making non-encodable string literals ill-formed | — | done | `conformance/lex.ccon/p1854-probe.cpp` | |
+
+Not tabulated:
+- Contracts (P2900): clang 22 does not ship them.
+- P2300-adjacent library hooks: the libc++ status table covers them.
+- Module DRs (P2615, P2788, P3034): belong with the M4 modules work.
+- Codegen-only DRs with no front-end observable (P2809 trivial infinite loops, P2752 static storage for braced initializers).
+
+## Macro gaps
+
+kiln's `__cpp_*` set under `-std=c++26` is clang 19's, so it differs from clang 22 as follows:
+
+| Macro | kiln (= clang 19) | clang 22 | Row | Action |
+|---|---|---|---|---|
+| `__cpp_explicit_this_parameter` | — | 202110L | P0847 (partial) | Add it once lambdas with an explicit object parameter work. Adding it changes which libc++/libstdc++ code kiln parses (`<variant>` and `<format>` `visit` members, libstdc++ ranges and `std::function`), so it needs a gate run. |
+| `__cpp_constexpr` | 202306L | 202406L | P2747 (todo) | Bump with P2747. |
+| `__cpp_structured_bindings` | 202403L | 202411L | P1061 (todo) | Bump with P0963 (202406L) and P1061. |
+| `__cpp_variadic_friend` | — | 202403L | P2893 (todo) | Add with the feature. |
+| `__cpp_trivial_relocatability` | — | 202502L | P2786 (todo) | Add with the feature. |
+| `__cpp_modules` | — | 1 | (modules, not tabulated) | Add with the M4 modules work. |
+
+kiln advertises these macros without implementing the feature (clang 19 did implement them):
+`__cpp_auto_cast` (P0849), `__cpp_placeholder_variables` (P2169), `__cpp_static_assert` 202306L (P2741).
+libc++ 19/22 and libstdc++ 14 headers do not test any of them today, but user
+code that does would pick a code path kiln then rejects. Either implement the
+feature or withdraw the macro in `crates/kiln_pp/src/predef.rs` `apply_flags`.

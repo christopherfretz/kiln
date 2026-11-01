@@ -28,6 +28,7 @@ mod deduce;
 mod empty_body;
 pub mod except;
 pub mod expr;
+mod extern_c;
 mod fallthrough;
 mod for_loop_analysis;
 mod forms;
@@ -171,6 +172,17 @@ pub struct Sema<'a, 'sm> {
     /// enclosing namespace and name: a later namespace-scope declaration
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
+    /// Block-scope variables whose qualified declarator-id was rejected
+    /// (`static T(::a);`, [`qualified_decl::QualifiedDecl::DropLocal`]):
+    /// declared invalid in the block, standing for a namespace member, so
+    /// a later block-scope redeclaration sees a previous declaration with
+    /// linkage (clang pushes the invalid out-of-line declaration on the
+    /// block's scope chain; WP-235).
+    pub(crate) dropped_qualified_locals: kiln_source::fx::FxHashSet<DeclId>,
+    /// The latest namespace-scope declaration of each function or
+    /// variable with C language linkage, by name ([dcl.link]/6; clang's
+    /// extern "C" context, `extern_c.rs`).
+    pub(crate) extern_c: kiln_source::fx::FxHashMap<kiln_source::symbol::Symbol, DeclId>,
     /// The constant evaluator of the translation unit (spec/sema.md §8).
     /// Taken out for the duration of an evaluation, so the bridge can
     /// reach the rest of `Sema` (`ensure_body` instantiates through it,
@@ -260,6 +272,15 @@ pub struct Sema<'a, 'sm> {
     /// shares the non-dependent list but issues them again, as clang's
     /// re-checked list does (spec/sema.md §3.7, WP-196).
     pub(crate) designator_rewarn: kiln_source::fx::FxHashMap<ExprId, Vec<Diag>>,
+    /// The `-Wnull-dereference` warnings of a template definition, by
+    /// the dereference they point at, numbered in the order they were
+    /// checked: an instantiation sharing the non-dependent expression
+    /// issues them again, as clang's rebuilt one does (spec/sema.md
+    /// §5.15, WP-235).
+    pub(crate) null_deref_rewarn: kiln_source::fx::FxHashMap<ExprId, (usize, Diag)>,
+    /// The null dereferences warned about per instantiation context
+    /// (`queue_null_deref`).
+    pub(crate) null_deref_seen: kiln_source::fx::FxHashSet<(ExprId, u64)>,
     /// The warnings of the list being checked in a template definition,
     /// collected for `designator_rewarn`.
     pub(crate) designator_pending: Option<Vec<Diag>>,
@@ -487,6 +508,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             defining: Vec::new(),
             enums: Vec::new(),
             local_externs: Vec::new(),
+            dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
+            extern_c: kiln_source::fx::FxHashMap::default(),
             oven: Some(Oven::new(Budget::default())),
             global_ops: new_delete::GlobalOps::default(),
             braced_args: Vec::new(),
@@ -509,6 +532,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
+            null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
+            null_deref_seen: kiln_source::fx::FxHashSet::default(),
             designator_pending: None,
             deferred_call_refs: Vec::new(),
             classes: Vec::new(),
@@ -629,6 +654,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 d = d.with_note(n);
             }
         }
+        let mut inst_notes = Vec::new();
         if !self.inst.stack.is_empty()
             && let Some(id) = d.id()
         {
@@ -649,10 +675,21 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             // Only a diagnostic that will print takes the context notes,
             // which print once per depth (§10.2).
             if self.diags.would_emit(&d) {
-                d.prepend_notes(self.inst_context_notes());
+                inst_notes = self.inst_context_notes();
             }
         }
-        let d = self.with_synth_note(d);
+        // The instantiations begun inside the innermost implicit
+        // definition print first, then the definitions, then the rest.
+        let synth_notes = self.synth_notes(&d);
+        let inner = self
+            .synth
+            .last()
+            .map_or(0, |c| self.inst.stack.len().saturating_sub(c.inst_depth))
+            .min(inst_notes.len());
+        let outer = inst_notes.split_off(inner);
+        inst_notes.extend(synth_notes);
+        inst_notes.extend(outer);
+        d.prepend_notes(inst_notes);
         d.emit(self.diags);
     }
 

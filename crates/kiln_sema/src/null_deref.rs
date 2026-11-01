@@ -11,8 +11,9 @@
 //!   behavior" (clang `SemaInit`, `SK_BindReference`).
 //!
 //! Both are run-time behavior diagnostics (clang `DiagRuntimeBehavior`):
-//! dropped in unevaluated operands and immediate function contexts and
-//! when the dereference is unreachable.
+//! dropped in unevaluated operands, discarded statements, manifestly
+//! constant-evaluated expressions and immediate function contexts
+//! (`runtime_diag_quiet`) and when the dereference is unreachable.
 
 use kiln_ast::ExprId;
 use kiln_ast::expr::{ExprKind, UnaryOp};
@@ -66,12 +67,67 @@ impl Sema<'_, '_> {
         null.then_some(uo)
     }
 
-    /// clang `DiagRuntimeBehavior` anchored at `anchor`.
+    /// clang `DiagRuntimeBehavior` anchored at `anchor`. In a template
+    /// definition the warning is also kept for the instantiations that
+    /// share the expression ([`Sema::reissue_null_deref_warnings`]).
     fn null_deref_diag(&mut self, msg: kiln_diag::Diag, anchor: ExprId) {
-        if self.unevaluated > 0 || self.immediate > 0 {
+        if self.runtime_diag_quiet() {
             return;
         }
-        self.diag_if_reachable(msg, anchor);
+        if self.in_template() {
+            let n = self.null_deref_rewarn.len();
+            self.null_deref_rewarn.entry(anchor).or_insert((n, msg.clone()));
+        }
+        self.queue_null_deref(msg, anchor);
+    }
+
+    /// Queues the null-dereference warning `msg` at the dereference
+    /// `uo`. Inside an instantiation it is exempt from the engine's
+    /// deduplication against the template definition's report (clang
+    /// warns again per instantiation) and deduplicated here instead, per
+    /// dereference and instantiation context: a shared dereference that
+    /// a rebuilt parent re-checks warns once.
+    fn queue_null_deref(&mut self, msg: kiln_diag::Diag, uo: ExprId) {
+        let msg = if self.inst.stack.is_empty() {
+            msg
+        } else {
+            if !self.null_deref_seen.insert((uo, self.inst.stack.context_key())) {
+                return;
+            }
+            msg.allow_duplicate()
+        };
+        self.diag_if_reachable(msg, uo);
+    }
+
+    /// Whether an instantiation sharing a non-dependent expression must
+    /// look for null dereferences in it to warn about again
+    /// ([`Sema::reissue_null_derefs`]).
+    pub(crate) fn null_deref_rewarn_active(&self) -> bool {
+        !self.null_deref_rewarn.is_empty() && !self.runtime_diag_quiet()
+    }
+
+    /// Issues again, at an instantiation sharing them
+    /// (spec/sema-templates.md §5.4), the null-dereference warnings that
+    /// the template definition found at the dereferences `derefs`: clang rebuilds the expression and
+    /// so re-checks it per instantiation. The walk over the shared
+    /// expression is [`Sema::mark_shared_expr_referenced`]'s (unevaluated
+    /// operands and lambda bodies are not entered), and the warning is
+    /// filtered by the instantiation's own reachability. A dereference
+    /// whose rebuilt parent re-checks it too warns once
+    /// ([`Sema::queue_null_deref`]).
+    pub(crate) fn reissue_null_derefs(&mut self, derefs: &[ExprId]) {
+        let mut hits: Vec<(usize, ExprId)> = derefs
+            .iter()
+            .filter_map(|x| self.null_deref_rewarn.get(x).map(|(n, _)| (*n, *x)))
+            .collect();
+        // In the order the definition checked them.
+        hits.sort_unstable();
+        for (_, uo) in hits {
+            if let Some((_, d)) = self.null_deref_rewarn.get(&uo) {
+                let d = d.clone();
+                self.queue_null_deref(d, uo);
+            }
+        }
     }
 
     /// clang's `CheckForNullPointerDereference` (SemaExpr): `e` is about

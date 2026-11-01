@@ -418,6 +418,24 @@ impl Sema<'_, '_> {
         self.is_complete(q)
     }
 
+    /// Whether this use of `q` instantiates a class template
+    /// specialization whose instantiation fails ([temp.inst]/2, diagnosed
+    /// then). clang's `RequireCompleteType` returns the instantiation's
+    /// invalidity, so the use that instantiated it fails quietly (`A<int>
+    /// a;` is an invalid variable, `p->g()` builds no call and so does not
+    /// instantiate `g`); later uses find the class complete.
+    pub(crate) fn instantiation_fails(&mut self, q: QualType, loc: Loc) -> bool {
+        let Some(r) = self.undefined_spec(q) else { return false };
+        if self.instantiate_class(r, loc, true)
+            || !self.ast.decls.get(r).has(DeclFlags::INVALID)
+            || self.ast.definition(r).is_none()
+        {
+            return false;
+        }
+        self.inst.undefined_diagnosed.set(None);
+        true
+    }
+
     /// As [`Sema::require_complete`], but an undefined template is not
     /// diagnosed (the caller reports the incomplete type).
     pub fn require_complete_silent(&mut self, q: QualType, loc: Loc) -> bool {
@@ -715,7 +733,9 @@ impl Sema<'_, '_> {
         self.in_inst_context(parent, |s| s.instantiate_class_body(r, def, &args, &outer));
         self.replay_dependent_access(def, r);
         self.pop_inst_frame();
-        self.ast.definition(r).is_some()
+        // As for a specialization: an instantiation that failed leaves
+        // the class complete but invalid ([`Sema::instantiation_fails`]).
+        self.ast.definition(r).is_some() && !self.ast.decls.get(r).has(DeclFlags::INVALID)
     }
 
     /// The definition of member `r`'s pattern `pattern`: for an
@@ -881,7 +901,7 @@ impl Sema<'_, '_> {
 
     /// Whether variable template specialization `v` is implicitly
     /// instantiated (not explicitly specialized or instantiated).
-    fn is_implicit_var_spec(&self, v: DeclId) -> bool {
+    pub(crate) fn is_implicit_var_spec(&self, v: DeclId) -> bool {
         self.ast.spec_info(v).is_some_and(|(_, s)| s.kind == SpecKind::ImplicitInstantiation)
     }
 
@@ -1268,12 +1288,18 @@ impl Substituter<'_, '_, '_> {
             {
                 Ok(Some(sub.local_class(m, local.as_deref_mut())))
             } else {
-                sub.member(m)
+                let salt = std::mem::replace(&mut sub.sema.inst.stack.member_salt, m.index());
+                let r = sub.member(m);
+                sub.sema.inst.stack.member_salt = salt;
+                r
             };
             let data = matches!(n.kind(), DeclKind::Field | DeclKind::Var);
             invalid |= data && r.is_err();
             if let Ok(Some(x)) = r {
-                invalid |= data && sub.sema.ast.decls.get(x).has(DeclFlags::INVALID);
+                // clang `InstantiateClass`: any member instantiated
+                // invalid (a field, typedef or enumeration whose type
+                // fails) makes the specialization invalid.
+                invalid |= sub.sema.ast.decls.get(x).has(DeclFlags::INVALID);
                 sub.member_link(x, m);
                 if let Some(l) = local.as_deref_mut() {
                     sub.collect_local_method(spec, x, m, l);

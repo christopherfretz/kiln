@@ -490,6 +490,12 @@ impl<'a> Cg<'a> {
                     });
                     if let Some(def) = def {
                         self.emit_global_var(def)?;
+                    } else if ast.spec_info(first).is_some()
+                        && ast.decls.var(first).is_some_and(|v| v.init.is_some())
+                    {
+                        // A variable template specialization used before
+                        // its template's definition is its own definition.
+                        self.emit_global_var(first)?;
                     }
                 }
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor => {

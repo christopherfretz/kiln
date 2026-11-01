@@ -810,7 +810,5 @@ the canonical type, and is omitted when equal. `print_type` with
   represented in any integer type".
 - Tests: `tests/conformance/basic.fundamental/int128-*.cpp`,
   `tests/codegen/int128_ops.cpp`, `tests/mangle/int128.cpp`.
-- Gaps (not `__int128`-specific): Oven notes print a typedef without its
-  `(aka '...')` and kiln emits `-Wshift-count-overflow` /
-  `-Wdivision-by-zero` in a constexpr variable's initializer where clang
-  does not.
+- Gap (not `__int128`-specific): Oven notes print a typedef without its
+  `(aka '...')`.

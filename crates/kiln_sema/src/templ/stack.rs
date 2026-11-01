@@ -200,6 +200,12 @@ pub struct InstantiationStack {
     /// The stack depth at which the context was last printed; 0 = never
     /// (clang's `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) last_emitted: Cell<u32>,
+    /// The pattern member a class instantiation is substituting now
+    /// (`DeclId::index`, 0 = none), mixed into [`Self::context_key`]: clang
+    /// substitutes each declarator of `typedef typename T::type g, (*h)(...)`
+    /// on its own and reports a shared decl-specifier error once per
+    /// declarator ([temp.inst]/3; spec/sema-templates.md §10.2).
+    pub(crate) member_salt: u32,
 }
 
 impl InstantiationStack {
@@ -241,6 +247,9 @@ impl InstantiationStack {
         let mut h = FxHasher::default();
         for f in &self.frames {
             (f.kind, f.entity, f.args, f.poi).hash(&mut h);
+        }
+        if self.member_salt != 0 {
+            self.member_salt.hash(&mut h);
         }
         // 0 means "no context"; keep it reserved.
         h.finish().max(1)
@@ -416,6 +425,11 @@ impl Sema<'_, '_> {
     /// report row (§11.3).
     pub(crate) fn pop_inst_frame(&mut self) {
         let Some(f) = self.inst.stack.pop() else { return };
+        if let Some((depth, slot)) = &mut self.inst.drain_capture
+            && *depth == self.inst.stack.len()
+        {
+            *slot = Some(f.clone());
+        }
         self.ast.end_instantiation();
         let incl = f.start.map_or(0, |t| u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX));
         let bytes = self.ast.node_live_bytes().saturating_sub(f.start_bytes);

@@ -14,6 +14,7 @@ use kiln_ast::types::{ExcSpec, NoexceptValue, Quals};
 use kiln_ast::{DeclId, QualType};
 use kiln_source::Loc;
 
+use super::define::{SynthContext, SynthKind};
 use super::{Selected, SpecialKind};
 use crate::Sema;
 
@@ -66,7 +67,21 @@ impl Sema<'_, '_> {
         if cflags.contains(DeclFlags::INVALID) || cflags.contains(DeclFlags::DEPENDENT_CTX) {
             return false;
         }
-        let nothrow = self.implicit_nothrow(first, class, k, &inherited, depth, at);
+        // clang `EvaluateImplicitExceptionSpec`: under an
+        // exception-specification context at the use (a nested one at the
+        // subobject that calls it).
+        let inst_depth = self.inst.stack.len();
+        self.synth.push(SynthContext {
+            member: first,
+            kind: SynthKind::ExceptionSpec,
+            loc: at,
+            inst_depth,
+        });
+        let nothrow = self.implicit_nothrow(first, class, k, &inherited, depth);
+        if self.synth_noted.get() == self.synth.len() {
+            self.synth_noted.set(0);
+        }
+        self.synth.pop();
         let spec = if nothrow {
             ExcSpec::BasicNoexcept
         } else {
@@ -109,9 +124,11 @@ impl Sema<'_, '_> {
         k: SpecialKind,
         inherited: &[crate::class::inhctor::InheritedBase],
         depth: usize,
-        at: Loc,
     ) -> bool {
         use SpecialKind as K;
+        if k == K::DefaultCtor {
+            self.exc_spec_needs_unparsed_inits(f, class);
+        }
         let const_arg = matches!(k, K::CopyCtor | K::CopyAssign) && self.copy_param_is_const_ref(f);
         let bases: Vec<BaseSpec> = self.ast.decls.bases(class, &self.ast.lists).copied().collect();
         let mut subs: Vec<BaseSpec> = bases.iter().filter(|b| !b.is_virtual).copied().collect();
@@ -121,6 +138,8 @@ impl Sema<'_, '_> {
         for b in subs {
             let Some(bc) = self.base_class(&b) else { continue };
             let first = self.ast.first(bc);
+            // clang `getSubobjectLoc`.
+            let at = b.loc;
             if let Some(ib) = inherited.iter().find(|ib| ib.base == first) {
                 if !self.resolve_exc(ib.ctor, depth + 1, at) {
                     return false;
@@ -133,17 +152,22 @@ impl Sema<'_, '_> {
             }
         }
         for fld in self.special_fields(class) {
-            if k == K::DefaultCtor {
+            if k == K::DefaultCtor && self.inst.deferred_nsdmis.contains_key(&fld) {
                 // clang `BuildCXXDefaultInitExpr` instantiates it, from
-                // the constructor.
+                // the constructor, under the exception-specification
+                // context.
                 let poi = self.ast.decls.get(f).loc();
                 self.instantiate_nsdmi(fld, poi);
             }
+            let at = self.ast.decls.get(fld).loc();
             if self.ast.decls.get(fld).has(DeclFlags::INVALID) {
                 continue;
             }
             if k == K::DefaultCtor && self.field_has_nsdmi(fld) {
                 let init = self.ast.decls.field(fld).and_then(|x| x.init);
+                if init.is_none() {
+                    continue;
+                }
                 if init.is_some_and(|e| self.can_throw(e)) {
                     return false;
                 }
@@ -167,6 +191,36 @@ impl Sema<'_, '_> {
             }
         }
         true
+    }
+
+    /// Default member initializers of `class` needed by the implicit
+    /// exception specification of default constructor `f` before they
+    /// are parsed ([class.mem.general]/8; clang's `BuildCXXDefaultInitExpr`
+    /// from `SpecialMemberExceptionSpecInfo`): each diagnosed at `f`, under
+    /// one exception-specification context note at the use. The
+    /// fields become invalid, so the constructor's definition skips them
+    /// quietly (no cascade from the definition or its constant
+    /// evaluation). Reported before the bases are visited, under the
+    /// context [`Sema::resolve_exception_spec`] pushed. A specialization's
+    /// initializer awaiting lazy instantiation was parsed in its pattern.
+    fn exc_spec_needs_unparsed_inits(&mut self, f: DeclId, class: DeclId) {
+        let unparsed: Vec<DeclId> = self
+            .special_fields(class)
+            .into_iter()
+            .filter(|&fld| {
+                !self.ast.decls.get(fld).has(DeclFlags::INVALID)
+                    && self.field_has_nsdmi(fld)
+                    && self.ast.decls.field(fld).and_then(|x| x.init).is_none()
+                    && !self.inst.deferred_nsdmis.contains_key(&fld)
+            })
+            .collect();
+        if unparsed.is_empty() {
+            return;
+        }
+        let loc = self.ast.decls.get(f).loc();
+        for fld in unparsed {
+            self.default_member_init_not_yet_parsed(fld, loc);
+        }
     }
 
     /// Whether the member of kind `k` selected for a subobject of class

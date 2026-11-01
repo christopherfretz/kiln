@@ -460,6 +460,11 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         let s = m.spec;
         let (i, info) = self.ast.spec_info(s).map(|(i, x)| (i, *x))?;
+        // [temp.expl.spec]/3: in a scope where the template may be
+        // defined (clang's `CheckTemplateSpecializationScope`; WP-235).
+        if !self.check_spec_scope(info.template, false, name_loc) {
+            return None;
+        }
         let used = self.ast.decls.get(s).has(DeclFlags::USED) || self.ast.definition(s).is_some();
         let after_inst = match info.kind {
             SpecKind::ImplicitInstantiation => used,

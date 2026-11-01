@@ -551,6 +551,10 @@ pub struct Declarator {
     /// The context named by a nested-name-specifier on the declarator-id
     /// (`int N::x = 1;`).
     pub qualifier: Option<DeclId>,
+    /// That nested-name-specifier begins with the global `::`
+    /// (`A (::N::x);`): clang's walk of its prefixes for a `Global`
+    /// specifier.
+    pub global_qualifier: bool,
     /// The operators, innermost (closest to the name) first; the type is
     /// built from the last.
     pub chunks: Vec<Chunk>,
@@ -746,6 +750,7 @@ impl Declarator {
             outer_paren: None,
             parens: Vec::new(),
             after_comma: false,
+            global_qualifier: false,
             virt_override: None,
             virt_final: None,
             pure: None,

@@ -65,15 +65,23 @@ impl Sema<'_, '_> {
     /// the definitions and vtables a body requires are instantiated right
     /// after it, before the rest of the enclosing queue (a depth-first,
     /// pre-order walk). The walk keeps its own stack of saved queues, so
-    /// a long chain of instantiations does not recurse natively.
+    /// a long chain of instantiations does not recurse natively. As in
+    /// clang, whose nested `perform` runs inside the requesting
+    /// `InstantiateFunctionDefinition`, the requesting definition's frame
+    /// stays on the instantiation stack while its scope drains, so the
+    /// nested instantiations carry its "in instantiation of … requested
+    /// here" note (and count toward the depth limit).
     fn drain_pending_instantiations(&mut self) {
-        type Saved = (std::collections::VecDeque<PendingInst>, Vec<(DeclId, Loc)>);
+        type Saved = (std::collections::VecDeque<PendingInst>, Vec<(DeclId, Loc)>, bool);
         let mut saved: Vec<Saved> = Vec::new();
         loop {
             if self.inst.fatal {
                 self.inst.pending.clear();
-                for (q, _) in &mut saved {
+                for (q, _, resumed) in &mut saved {
                     q.clear();
+                    if *resumed {
+                        let _ = self.inst.stack.pop();
+                    }
                 }
                 return;
             }
@@ -81,8 +89,21 @@ impl Sema<'_, '_> {
                 // Enter the instantiation's own scope.
                 let outer = std::mem::take(&mut self.inst.pending);
                 let outer_vt = std::mem::take(&mut self.vtable_uses);
-                saved.push((outer, outer_vt));
+                let prev = self.inst.drain_capture.replace((self.inst.stack.len(), None));
                 self.instantiate_pending(p);
+                let frame = std::mem::replace(&mut self.inst.drain_capture, prev).and_then(|c| c.1);
+                // Keep the definition's frame for what it required (not
+                // timed or charged again: the report saw it once).
+                let resumed = frame.is_some_and(|mut f| {
+                    if self.inst.pending.is_empty() && self.vtable_uses.is_empty() {
+                        return false;
+                    }
+                    f.start = None;
+                    f.child_ns = 0;
+                    self.inst.stack.push(f);
+                    true
+                });
+                saved.push((outer, outer_vt, resumed));
                 // `GlobalEagerInstantiationScope::perform`.
                 self.define_used_vtables();
                 continue;
@@ -92,7 +113,10 @@ impl Sema<'_, '_> {
                 continue;
             }
             // Leave the scope: its queue and vtable uses are exhausted.
-            let Some((outer, outer_vt)) = saved.pop() else { return };
+            let Some((outer, outer_vt, resumed)) = saved.pop() else { return };
+            if resumed {
+                let _ = self.inst.stack.pop();
+            }
             self.inst.pending = outer;
             self.vtable_uses = outer_vt;
         }
@@ -118,8 +142,24 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        let had = self.ast.definition(p.decl).is_some();
         let is_var = self.kind_of(p.decl) == kiln_ast::decl::DeclKind::Var;
+        if is_var
+            && self.is_implicit_var_spec(p.decl)
+            && !self.inst.member_defs.contains(&p.decl)
+            && self.ast.decls.var(p.decl).is_some_and(|v| v.init.is_none())
+        {
+            // An implicit variable template specialization used before its
+            // template's definition: instantiated from the definition seen
+            // since (clang `InstantiateVariableDefinition` finds the
+            // pattern's definition at the end of the TU), and emitted as
+            // its own definition (spec/codegen.md §2a).
+            self.instantiate_late_var_spec(p.decl, p.poi);
+            if self.ast.decls.var(p.decl).is_some_and(|v| v.init.is_some()) {
+                self.ast.templates.add_end_of_tu_def(p.decl);
+                return;
+            }
+        }
+        let had = self.ast.definition(p.decl).is_some();
         let redecls = self.ast.redecls_of(p.decl).count();
         if is_var {
             self.instantiate_static_member_def(p.decl, p.poi);
