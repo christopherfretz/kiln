@@ -245,6 +245,8 @@ fn target_types(arch: Arch) -> TargetTypes {
         ptrdiff_t: TypeId::LONG,
         intptr_t: TypeId::LONG,
         pointer_bytes: 8,
+        // clang: x86-64 without `-mcx16` inlines 64 bits, AArch64 128.
+        max_atomic_inline_bytes: if x86 { 8 } else { 16 },
     }
 }
 

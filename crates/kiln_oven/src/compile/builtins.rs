@@ -55,6 +55,7 @@ fn has_side_effects(ast: &Ast, e: ExprId) -> bool {
             }
             ExprKind::CXXNewExpr
             | ExprKind::CXXDeleteExpr
+            | ExprKind::AtomicExpr
             | ExprKind::CXXThrowExpr
             | ExprKind::CoawaitExpr
             | ExprKind::CoyieldExpr => return true,
@@ -416,6 +417,22 @@ impl Compiler<'_> {
                 let c = n.map_or(dst, |n| self.rv(n));
                 op(self, bi::MEMCHR, sub, [a, b, c], [t, 0], begin);
             }
+            // WP-154: clang's `IntExprEvaluator` lock-free folding.
+            id::atomic::ALWAYS_LOCK_FREE | id::atomic::IS_LOCK_FREE | id::atomic::C11_IS_LOCK_FREE => {
+                let size = arg(0)?;
+                let (any, align) = if bid == id::atomic::C11_IS_LOCK_FREE {
+                    (true, 0)
+                } else {
+                    let p = arg(1)?;
+                    self.lock_free_object(p)
+                };
+                let max = u32::from(self.ast().types.target().max_atomic_inline_bytes);
+                let a = self.rv(size);
+                let sub = max
+                    | u32::from(any) << 8
+                    | u32::from(bid == id::atomic::ALWAYS_LOCK_FREE) << 9;
+                op(self, bi::LOCK_FREE, sub, [a, dst, dst], [align, 0], begin);
+            }
             id::MEMCPY | id::MEMMOVE => {
                 let (d, s, n) = (arg(0)?, arg(1)?, arg(2)?);
                 let t = [self.designator(d), self.designator(s)];
@@ -428,6 +445,28 @@ impl Compiler<'_> {
             }
         }
         Some(self.finish_builtin(dst))
+    }
+
+    /// The object argument of `__atomic_is_lock_free`/`always_lock_free`:
+    /// whether it is a null pointer constant (any suitably-sized object
+    /// qualifies), else the alignment of its pointee type before the
+    /// implicit conversion to `const volatile void *` (0: incomplete).
+    fn lock_free_object(&mut self, p: ExprId) -> (bool, u32) {
+        let ast = self.ast();
+        let mut x = skip_parens(ast, p);
+        while ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
+            if ast.exprs.cast_kind(x) == kiln_ast::expr::CastKind::NullToPointer {
+                return (true, 0);
+            }
+            x = skip_parens(ast, ast.exprs.operand(x));
+        }
+        let Some(pointee) = ast.types.pointee(ast.exprs.get(x).ty()) else { return (false, 0) };
+        if ast.types.is_void(pointee) {
+            return (false, 0);
+        }
+        let t = self.ty(pointee);
+        let info = self.o.types.info(t);
+        (false, if info.size == 0 { 0 } else { info.align })
     }
 
     fn finish_builtin(&mut self, dst: u32) -> u32 {

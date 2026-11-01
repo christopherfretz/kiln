@@ -868,6 +868,12 @@ impl<'a> Compiler<'a> {
             // expression that `containsErrors()`).
             return self.trap(e, "");
         }
+        if k == ExprKind::AtomicExpr {
+            // clang 19 never constant-evaluates an atomic builtin: the
+            // generic note at the call (the lock-free queries are folded in
+            // `compile/builtins.rs` before they reach here).
+            return self.throw_invalid(e);
+        }
         self.trap(e, &format!("kiln: constant evaluation of {k:?} is not supported yet"));
     }
 
@@ -2878,7 +2884,11 @@ impl Compiler<'_> {
                 let begin = self.begin(op);
                 self.o.sites[at..].iter_mut().for_each(|s| s.loc = begin);
             }
-            CastKind::NoOp | CastKind::UserDefinedConversion | CastKind::ConstructorConversion => {
+            CastKind::NoOp
+            | CastKind::UserDefinedConversion
+            | CastKind::ConstructorConversion
+            | CastKind::NonAtomicToAtomic
+            | CastKind::AtomicToNonAtomic => {
                 self.rv_inner(op, dst);
             }
             CastKind::DerivedToBase
