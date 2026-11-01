@@ -1523,8 +1523,8 @@ The vector operators themselves are summarized in spec/types.md
     elided, is `cannot initialize a vector element of type T with an
     rvalue|lvalue of type V`. Deviation: clang 19 does not stop the list at
     a designator, so `{1, 2, .z = 5}` is an error there (a `void`
-    "vector element"). Kiln does not diagnose the C99 mixture of
-    designated and positional items in either case.
+    "vector element"). The C99 mixture of designated and positional
+    items is diagnosed on the written list in both cases (below).
   - a non-class `T` list-initialized from one class-type element (or
     `bool` from `nullptr`) is initialized from the element itself
     (`class_element_list_init`; clang's core-24034 rewrite in
@@ -1534,6 +1534,65 @@ The vector operators themselves are summarized in spec/types.md
     return value; an argument adds its "passing argument" note), no
     `-Wbraced-scalar-init`, and narrowing checked on the user
     conversion's result
+- **Designators** (WP-192; clang `SemaInit.cpp`). The parser reads
+  `.name`, nested `.a.b`, `[i]` (C99) and mixtures of them. A leading
+  `[` begins a designator unless it begins a lambda (clang
+  `MayBeDesignationStart`): `[=`, `[...` and `[]` are lambdas, and
+  `[&`, `[*` or `[identifier` scan to the matching `]` and are a
+  designator when `=` follows.
+  - Syntactic warnings come from `act_on_init_list_syntax`, once per
+    written list at parse time, never on instantiation. All are
+    `-Wc99-designator` (in `-Wc99-extensions`):
+    - nested designators: at the first designator's `.`
+    - array designators: at the `[`
+    - the mixture of designated and positional items: at the designator
+      begin, with a note on the first non-designated item, or, when
+      item 0 is designated, at item 0 with the note on the positional
+      item. A designated pack expansion `.m = e...` counts as
+      non-designated here, as in clang.
+  - Semantic checks run in `check_aggregate_in` and `check_array`,
+    again at every instantiation. A designator names a direct field or
+    a field of an anonymous member (`designated_field`). A nested or
+    anonymous designator descends into the subobject (`Sub { braced:
+    false, entry, prior }`), and the positional items that follow keep
+    filling it (`.p.y = 1, 7, 8` sets `p.z` and `w`). A subobject named
+    again merges with its prior initialization, seeded from the prior
+    `InitListExpr` (`prior_list`). Seeded slots count as explicit unless
+    they are fillers (`ImplicitValueInitExpr`, `CXXDefaultInitExpr`).
+    Descending into a subobject that an expression initialized is
+    unsupported, since clang would build `DesignatedInitUpdateExpr`.
+    - out of declaration order: `-Wreorder-init-list` (ExtWarn, in
+      `-Wreorder`), at the later value, with the note
+      `previous initialization for field` on the earlier one. It covers
+      only the list's own designators.
+    - a re-initialized subobject: `-Winitializer-overrides` at the new
+      value, with the note `previous initialization is here`. A union
+      initialized through a different member is the DefaultError form,
+      at the designator.
+    - an unknown field: `field designator 'q' does not refer to any field
+      in type T`, at the name.
+    - a field designator into a scalar: `field designator cannot
+      initialize a non-class type`, at the `.`.
+    - an array designator into a class: `array designator cannot
+      initialize non-array type`, at the `[`.
+    - an array designator leaving a hole gives the list an
+      `array_filler`, even when the element count equals the bound.
+    - non-aggregate types are `designated_non_aggregate`.
+  - In templates (spec/ast.md §5.6, spec/sema-templates.md §5.4), the
+    designators are carried in `DesignatedInitExpr`s and in the written
+    form of non-dependent lists. The semantic checks run on the
+    instantiated type at the written locations. A designated pack
+    expansion gives one designated clause per element.
+  - Deviations:
+    - A non-dependent designated list in a template pattern is not
+      re-checked at instantiation, so clang's repeated
+      `-Wreorder-init-list` under the instantiation note is missing.
+    - An array designator beyond the bound is reported as excess
+      elements, not as clang's `array designator index exceeds array
+      bounds`.
+    - Reorder and override warnings do not cause a substitution failure
+      (clang's are warnings too, but SFINAE-visible as errors under
+      `-Werror`).
 - **`init_from_list`** builds clang's semantic `InitListExpr`, with
   `array_filler`.
 - **References** (`reference_list_init`, [dcl.init.list]/3.10): when
