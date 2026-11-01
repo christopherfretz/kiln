@@ -3105,6 +3105,25 @@ impl Sema<'_, '_> {
         let _ = self.builder().set_var_init(v, e);
     }
 
+    /// clang `AddInitializerToDecl`: a declaration that was not a
+    /// definition before its initializer (`extern int a = 2;`) still
+    /// redefines an earlier definition. Diagnoses it and marks `v`
+    /// invalid; true when it did.
+    fn extern_init_redefines(&mut self, v: DeclId, spec: VarSpec, loc: Loc) -> bool {
+        let ext = spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v);
+        if !ext || self.in_local_scope() || self.is_in_class_static(v) {
+            return false;
+        }
+        let def = self.ast.redecls_of(v).find(|&x| x != v && self.is_var_definition(x));
+        let Some(def) = def else { return false };
+        let name = self.ast.decls.get(v).name();
+        let msg = self.diag(DiagId::sema_redefinition, loc).arg(self.decl_name_str(name));
+        let msg = self.note_prev(msg, def, true);
+        self.emit(msg);
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        true
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -3121,21 +3140,9 @@ impl Sema<'_, '_> {
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
-        let ext = spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v);
-        if ext && !self.in_local_scope() && !self.is_in_class_static(v) {
-            // clang `AddInitializerToDecl`: a declaration that was not a
-            // definition before its initializer (`extern int a = 2;`)
-            // still redefines an earlier definition.
-            let def = self.ast.redecls_of(v).find(|&x| x != v && self.is_var_definition(x));
-            if let Some(def) = def {
-                let name = self.ast.decls.get(v).name();
-                let msg = self.diag(DiagId::sema_redefinition, loc).arg(self.decl_name_str(name));
-                let msg = self.note_prev(msg, def, true);
-                self.emit(msg);
-                self.ast.decls.set_flags(v, DeclFlags::INVALID);
-                self.discard_initializer(&init);
-                return;
-            }
+        if self.extern_init_redefines(v, spec, loc) {
+            self.discard_initializer(&init);
+            return;
         }
         if spec.storage() == VarStorage::Extern && !self.check_extern_init(v, loc) {
             return;

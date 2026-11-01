@@ -1140,17 +1140,16 @@ impl Sema<'_, '_> {
         self.ctor_diag_ty = Some(ty);
         let tmp = self.list_construct(r, l, style, at, None);
         self.ctor_diag_ty = None;
-        let tmp = match tmp {
-            Some(t) => t,
-            None => {
-                // An aggregate temporary with too many elements gets
-                // clang's `diagnoseListInit` reference note.
-                let agg = self.ast.types.is_array(r) || self.ast.types.as_record(r).is_some();
-                let saved = self.ref_temp_note.replace(agg.then_some((r, at)));
-                let t = self.init_from_list_at(r, l, entity);
-                self.ref_temp_note.set(saved);
-                t
-            }
+        let tmp = if let Some(t) = tmp {
+            t
+        } else {
+            // An aggregate temporary with too many elements gets
+            // clang's `diagnoseListInit` reference note.
+            let agg = self.ast.types.is_array(r) || self.ast.types.as_record(r).is_some();
+            let saved = self.ref_temp_note.replace(agg.then_some((r, at)));
+            let t = self.init_from_list_at(r, l, entity);
+            self.ref_temp_note.set(saved);
+            t
         };
         self.init_from_expr(ty, tmp, ConvCtx::Initialization, at)
     }
