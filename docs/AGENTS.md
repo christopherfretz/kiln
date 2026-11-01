@@ -34,12 +34,17 @@ reviewable diff (roughly: one module, one spec section, < ~2k lines).
    `git worktree add .worktrees/wp-<id> -b wp/<id>-<slug>` before spawning.)
 2. Read `README.md`, `docs/ARCHITECTURE.md`, the `spec/` entry, and the
    crate's `lib.rs` docs before writing code.
-3. `#![forbid(unsafe_code)]` stays. `cargo xtask ci` must be green before
-   handing back: fmt, clippy `-D warnings`, `cargo test`, and the corpus
-   under both clang 19 (the self-check) and kiln (no FAIL, XPASS or ERROR;
-   spec/harness.md "CI"). A kiln gap your WP does not close is marked
-   `xfail(kiln): <reason>` in the test, not left failing.
-   `cargo xtask ci --quick` (no clang self-check) is fine while iterating.
+3. `#![forbid(unsafe_code)]` stays. The gate is `cargo xtask ci`: fmt,
+   clippy `-D warnings`, `cargo test`, and the corpus under both clang 19
+   (the self-check) and kiln (no FAIL, XPASS or ERROR; spec/harness.md
+   "CI"). A kiln gap your WP does not close is marked `xfail(kiln):
+   <reason>` in the test, not left failing. Since 2026-11-01 the full gate
+   runs off-box: every handback becomes a pull request and GitHub's merge
+   queue runs `ci` (docs/VALIDATION.md "GitHub Actions") before main moves.
+   Locally, hand back once `cargo xtask ci --quick` (no clang self-check),
+   the corpus dirs you touched, fmt and clippy are clean and origin/main is
+   merged in. Implementers never push to origin or merge to main; the
+   supervisor pushes the branch, opens the PR and queues it.
 4. Do not change a public interface outside your WP without recording the
    change in the spec and flagging it in the handback. Other agents may be
    building against it concurrently.
@@ -48,8 +53,9 @@ reviewable diff (roughly: one module, one spec section, < ~2k lines).
 6. Every new behavior ships with a test. Every test names its standard
    section. Every spec change ships with its tests.
 7. No new third-party dependency without approval in the WP.
-8. Hand back with: a summary, the test evidence (commands + results), open
-   questions, and any spec gaps discovered.
+8. Hand back with: the branch head, a summary, the test evidence (commands +
+   results, quick-CI log path), open questions, and concrete follow-ups
+   (file:line) for a BACKLOG row.
 
 ## Review gates (supervisor)
 
