@@ -266,6 +266,14 @@ impl Substituter<'_, '_, '_> {
             }
             ExprKind::UnresolvedLookupExpr => match self.local_using_ref(e, false) {
                 Some(r) => Ok(r),
+                // A function template-id not called (`&f<T>`, `auto *p =
+                // f<T>;`) names its one specialization once the arguments
+                // are substituted, as the parser resolves a non-dependent
+                // one ([over.over]/3 via [temp.arg.explicit]/4).
+                None if self.sema.ast.templates.expr_targs.get(e).is_some() => {
+                    let r = self.callee(e)?;
+                    Ok(self.sema.resolve_single_template_id(r))
+                }
                 None => self.callee(e),
             },
             ExprKind::MemberExpr => {

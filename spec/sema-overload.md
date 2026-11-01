@@ -1061,7 +1061,10 @@ Where the code differs from (or details) the design above:
     `address of overloaded function` with deduction notes.
 - Address of a function template ([temp.deduct.funcaddr]):
   - `resolve_single_template_id` resolves `&f<int>` when exactly one
-    template accepts the explicit args.
+    template accepts the explicit args. The parser calls it for a
+    template-id not followed by `(`; template instantiation calls it again
+    for an uncalled template-id whose arguments were dependent
+    (`auto *p = &f<T>;`, [over.over]/3, [temp.arg.explicit]/4; WP-276).
   - When no non-template matches the target, `address_template_candidates`
     deduces P (the template's function type) from A (the target type)
     through `deduce_spec(.., target)`. It keeps the specializations that
