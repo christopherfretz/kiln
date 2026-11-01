@@ -329,6 +329,15 @@ impl Sema<'_, '_> {
                 // A dependent expression stays one: its canonical form
                 // (a profile) cannot be substituted.
                 ArgView::Expr { profile: Some(_), .. } => a,
+                // A pack holding a pack expansion (`index_sequence<Is...>`)
+                // keeps its elements substitutable the same way.
+                ArgView::Pack(l)
+                    if self.ast.types.args(l).iter().any(|e| {
+                        matches!(e.view(), ArgView::Expr { profile: Some(_), .. })
+                    }) =>
+                {
+                    TemplateArg::pack(self.alias_subst_args(l))
+                }
                 _ => self.ast.types.canonical_arg(a),
             })
             .collect();

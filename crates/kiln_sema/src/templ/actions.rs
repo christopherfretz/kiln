@@ -435,7 +435,13 @@ impl Sema<'_, '_> {
                 // dependent arguments; an argument that is a pack expansion
                 // cannot be matched to parameters yet (WP-071), so that
                 // specialization stands for itself.
-                if !args.iter().any(|&a| self.is_pack_expansion_arg(a)) {
+                // The exception is an expansion that only reaches the
+                // alias's trailing parameter pack (`index_sequence<Is...>`
+                // for `template<size_t... I> using index_sequence =
+                // integer_sequence<size_t, I...>`): the pack is bound to
+                // the expansion and substitution re-forms it (clang's
+                // `CheckTemplateArgumentList` + `SubstTemplateTypeParmPack`).
+                if self.alias_args_substitutable(d, args) {
                     let locs = std::mem::take(&mut self.templ.arg_locs);
                     let t = self.alias_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
@@ -492,6 +498,17 @@ impl Sema<'_, '_> {
                 Err(())
             }
         }
+    }
+
+    /// Whether alias template `d` can be substituted with `args` now:
+    /// no argument is a pack expansion, or every pack expansion falls on
+    /// the alias's trailing parameter pack (WP-156).
+    fn alias_args_substitutable(&self, d: DeclId, args: &[TemplateArg]) -> bool {
+        let Some(first) = args.iter().position(|&a| self.is_pack_expansion_arg(a)) else {
+            return true;
+        };
+        let params = self.template_params(self.ast.first(d));
+        params.last().is_some_and(|&p| self.is_pack_decl(p)) && first + 1 >= params.len()
     }
 
     /// Whether `a` is a pack expansion (`T...`, `TT...`, `e...`).

@@ -49,6 +49,20 @@ pub struct PackState {
     /// its arguments, expanded with the retained packs later (clang's
     /// `TransformTemplateTypeParmType` with no pack index).
     pub keep: bool,
+    /// The element substituted since the flag was last cleared came from
+    /// a pack element that is itself a pack expansion (`Is...` bound to
+    /// `index_sequence`'s pack `I`): the element is its pattern and the
+    /// substituted element is re-formed as an expansion (clang's
+    /// `getPackSubstitutedTemplateArgument` and the
+    /// `containsUnexpandedParameterPack` re-wrap in `TransformTypes`).
+    pub element_expansion: bool,
+    /// Set on the enclosing state when an expansion finishes: per
+    /// element, whether it must be re-formed as an expansion. Taken by
+    /// the expansion site with [`Substituter::take_rewrap`].
+    pub rewrap: Vec<bool>,
+    /// The expansion site re-forms elements flagged in `rewrap`; only
+    /// then is an expansion element stripped to its pattern.
+    pub rewrap_ok: bool,
 }
 
 /// The result of expanding one pattern.
@@ -124,7 +138,14 @@ impl Substituter<'_, '_, '_> {
             ArgView::Pack(l) => {
                 let n = u32::try_from(self.sema.ast.types.args(l).len()).unwrap_or(u32::MAX);
                 let i = self.pack_reached(n, name, loc)?;
-                let e = self.sema.ast.types.args(l)[i as usize];
+                let mut e = self.sema.ast.types.args(l)[i as usize];
+                if self.pack.rewrap_ok
+                    && let Some(p) = self.expansion_pattern_arg(e)
+                {
+                    e = p;
+                    self.pack.element_expansion = true;
+                    self.pack.element_has_packs = true;
+                }
                 if let ArgView::Type(t) = e.view()
                     && self.sema.has_unexpanded_pack(t)
                 {
@@ -134,6 +155,24 @@ impl Substituter<'_, '_, '_> {
             }
             _ => Ok(a),
         }
+    }
+
+    /// The pattern of a pack-expansion argument (`T...`, `e...`, `TT...`).
+    fn expansion_pattern_arg(&mut self, a: TemplateArg) -> Option<TemplateArg> {
+        match a.view() {
+            ArgView::Type(q) => type_pattern(self.sema, q).map(TemplateArg::ty),
+            ArgView::Expr { expr, .. } => expr_pattern(self.sema, expr)
+                .map(|p| self.sema.ast.builder().template_arg_expr(p)),
+            ArgView::TemplateExpansion { name, .. } => Some(TemplateArg::template(name)),
+            _ => None,
+        }
+    }
+
+    /// Which elements of the expansion that just finished must be
+    /// re-formed as expansions (their pack element was one); empty when
+    /// none.
+    pub(crate) fn take_rewrap(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.pack.rewrap)
     }
 
     /// Expands a pattern (§7.2): `f` substitutes the pattern once, under
@@ -150,10 +189,32 @@ impl Substituter<'_, '_, '_> {
     pub fn expand_pattern_at<T>(
         &mut self,
         ellipsis: Option<Loc>,
+        f: impl FnMut(&mut Self) -> SubstResult<T>,
+    ) -> SubstResult<Expansion<T>> {
+        self.expand_pattern_impl(ellipsis, false, f)
+    }
+
+    /// [`Self::expand_pattern_at`] for a site that re-forms the elements
+    /// [`Self::take_rewrap`] flags as expansions: a pack element that is
+    /// itself an expansion is substituted as its pattern.
+    pub(crate) fn expand_pattern_rewrap<T>(
+        &mut self,
+        ellipsis: Option<Loc>,
+        f: impl FnMut(&mut Self) -> SubstResult<T>,
+    ) -> SubstResult<Expansion<T>> {
+        self.expand_pattern_impl(ellipsis, true, f)
+    }
+
+    fn expand_pattern_impl<T>(
+        &mut self,
+        ellipsis: Option<Loc>,
+        rewrap_ok: bool,
         mut f: impl FnMut(&mut Self) -> SubstResult<T>,
     ) -> SubstResult<Expansion<T>> {
+        let mut rewrap = Vec::new();
         let saved_state = std::mem::take(&mut self.pack);
         self.pack.ellipsis = ellipsis;
+        self.pack.rewrap_ok = rewrap_ok;
         let saved_index = self.pack_index.take();
         self.pack.probing = true;
         let probe = f(self);
@@ -168,8 +229,15 @@ impl Substituter<'_, '_, '_> {
                 let mut res = Ok(());
                 for k in 0..n {
                     self.pack_index = Some(k);
+                    self.pack.element_expansion = false;
                     match f(self) {
-                        Ok(x) => out.push(x),
+                        Ok(x) => {
+                            out.push(x);
+                            if self.pack.element_expansion {
+                                rewrap.resize(out.len() - 1, false);
+                                rewrap.push(true);
+                            }
+                        }
                         Err(e) => {
                             res = Err(e);
                             break;
@@ -190,6 +258,7 @@ impl Substituter<'_, '_, '_> {
         };
         self.pack = saved_state;
         self.pack_index = saved_index;
+        self.pack.rewrap = if matches!(r, Ok(Expansion::Elements(_))) { rewrap } else { Vec::new() };
         r
     }
 
@@ -207,8 +276,13 @@ impl Substituter<'_, '_, '_> {
         let mut out = Vec::with_capacity(items.len());
         for &x in items {
             if let Some(p) = pattern_of(self.sema, x) {
-                match self.expand_pattern(|s| each(s, p))? {
-                    Expansion::Elements(v) => out.extend(v),
+                match self.expand_pattern_rewrap(None, |s| each(s, p))? {
+                    Expansion::Elements(v) => {
+                        let rw = self.take_rewrap();
+                        for (k, y) in v.into_iter().enumerate() {
+                            out.push(if rw.get(k) == Some(&true) { rewrap(self, y) } else { y });
+                        }
+                    }
                     Expansion::Unexpanded(y) => out.push(rewrap(self, y)),
                 }
             } else {
@@ -261,8 +335,18 @@ impl Substituter<'_, '_, '_> {
             };
             // A `PackExpansionExpr` is located at its `...`.
             let ellipsis = self.sema.ast.exprs.get(x).loc();
-            match self.expand_pattern_at(Some(ellipsis), |s| s.expr(p))? {
-                Expansion::Elements(v) => out.extend(v),
+            match self.expand_pattern_rewrap(Some(ellipsis), |s| s.expr(p))? {
+                Expansion::Elements(v) => {
+                    let rw = self.take_rewrap();
+                    for (k, y) in v.into_iter().enumerate() {
+                        let y = if rw.get(k) == Some(&true) {
+                            self.sema.act_pack_expansion(y, ellipsis)
+                        } else {
+                            y
+                        };
+                        out.push(y);
+                    }
+                }
                 Expansion::Unexpanded(y) => out.push(self.sema.act_pack_expansion(y, ellipsis)),
             }
         }
