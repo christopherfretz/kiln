@@ -451,7 +451,7 @@ impl Types {
                     .field(m)
                     .and_then(|f| f.bit_width)
                     .map(|e| eval_int(ast, e).map_or(0, |v| v.min(1 << 20) as u32));
-                let mutable = ast.decls.field(m).is_some_and(|f| f.is_mutable());
+                let mutable = ast.decls.field(m).is_some_and(kiln_ast::decl::FieldData::is_mutable);
                 (m, ast.decls.get(m).ty().unwrap_or(QualType::INT), w, mutable)
             })
             .collect();

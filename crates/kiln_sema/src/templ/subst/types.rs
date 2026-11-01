@@ -5,7 +5,7 @@
 //! written).
 
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeView};
+use kiln_ast::types::{ArgView, ExcSpec, ExprOperand, TypeFlags, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -22,7 +22,9 @@ impl Substituter<'_, '_, '_> {
     /// constructors do).
     pub fn ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
         let flags = self.sema.ast.types.qflags(q);
-        if !Sema::dependent_flags(flags) {
+        // A variably modified type is always rebuilt: its bound names
+        // the instantiation's entities (clang `SubstType`).
+        if !Sema::dependent_flags(flags) && !flags.contains(TypeFlags::VARIABLY_MODIFIED) {
             return Ok(q);
         }
         self.check_stack(|_| loc)?;
@@ -147,6 +149,11 @@ impl Substituter<'_, '_, '_> {
             TypeView::IncompleteArray(elem) => {
                 let e = self.ty(elem, loc)?;
                 self.chunk(e, Chunk::Array { size: None, loc }, loc)
+            }
+            TypeView::VariableArray { elem, size } => {
+                let e = self.ty(elem, loc)?;
+                let s = self.expr(size)?;
+                self.chunk(e, Chunk::Array { size: Some(s), loc }, loc)
             }
             TypeView::DependentSizedArray { elem, size } => {
                 // A canonical array's bound is profiled: its first

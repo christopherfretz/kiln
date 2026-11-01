@@ -1077,6 +1077,34 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   references and of reads of `const` class objects that clang permits
   ([basic.start.static]/3).
 
+## 7g. Landed (WP-183): variable length arrays (`vla.rs`)
+Clang's `EmitAutoVarAlloca` / `EmitVariablyModifiedType` for the GNU
+extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
+- **Bounds.** `emit_vla_bounds(q)` walks a variably modified type
+  (arrays, pointers, references) and evaluates each `VariableArray` bound
+  once per function, zext/trunc to `i64` as unsigned, into
+  `Fx::vla_sizes` (clang `VLASizeMap`). Variable declarations, and
+  `typedef`/alias declarations in a `DeclStmt`, evaluate their bounds at
+  the declaration. The fold prepass (`fold.rs` `vla_bounds`) visits the
+  same bounds, so a `const _Atomic(int)` bound folds to a constant as in
+  clang's `tryEmitAsConstant`.
+- **Stack save.** The first VLA in a scope (`Fx::did_stack_save`, reset by
+  `begin_scope` and restored by `end_scope`, clang `RunCleanupsScope`)
+  allocates a `saved_stack` pointer slot, calls `@llvm.stacksave.p0`, and
+  pushes a normal-only `Cleanup::StackRestore` (`@llvm.stackrestore.p0`).
+- **Allocation.** After the save, `vla_size` multiplies the nested
+  dimensions (`mul nuw`), and `Op::DynAlloca` emits `alloca elem, i64 n`
+  aligned to the element alignment (at least 16 on x86-64, clang's large
+  array alignment). Each non-constant dimension gets an `__vla_expr` `i64`
+  slot and store (debug-info shadow, as clang). VLA elements of class type
+  needing construction or destruction are an M3 "not supported yet" error.
+- **Uses.** Array-to-pointer decay of a VLA emits no GEP; a subscript
+  through a decayed VLA uses the pointer's alignment, and one whose result
+  is itself a VLA scales the index by the element count (`mul nsw`).
+  `sizeof` of a VLA operand or type emits the operand ignored (or its
+  bounds) then `mul nuw` by the element size (skipped for size 1).
+  `kiln_abi::convert_mem` lowers a `VariableArray` as its element type.
+
 ## Status and what remains
 **Done:** WP-052 (lowering, §2–§4; unit corpus 79/79 exact on aarch64)
 and WP-052b (driver §5; IR-diff corpus 92/92 exact on both triples; 33

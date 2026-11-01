@@ -258,7 +258,9 @@ impl Sema<'_, '_> {
             }
         }
         if let Some(elem) = self.ast.types.element(q) {
-            if self.ast.types.is_array(q) && self.ast.types.array_size(q).is_none() {
+            // A variable length array is complete (GNU extension).
+            let vla = matches!(self.ast.types.canonical_view(q), TypeView::VariableArray { .. });
+            if self.ast.types.is_array(q) && self.ast.types.array_size(q).is_none() && !vla {
                 return false;
             }
             return self.is_complete(elem);
@@ -696,12 +698,24 @@ impl Sema<'_, '_> {
                             // a GNU extension, but an error in a SFINAE
                             // context (`err_typecheck_zero_array_size`), so
                             // `int[0]` never matches `T[N]`.
-                            Some(0) if self.inst.stack.is_sfinae() => {
+                            Some(Ok(0)) if self.inst.stack.is_sfinae() => {
                                 let l = self.begin_loc(*e);
                                 self.error(DiagId::sema_zero_array_size_sfinae, l);
                                 return QualType::ERROR;
                             }
-                            Some(n) => self.ast.types.constant_array(ty, n, None),
+                            // clang `BuildArrayType`: an array of variable
+                            // length arrays is one too.
+                            Some(Ok(_))
+                                if matches!(
+                                    self.ast.types.canonical_view(ty),
+                                    TypeView::VariableArray { .. }
+                                ) =>
+                            {
+                                self.error(self.vla_ext_id(), *loc);
+                                self.ast.types.variable_array(ty, *e)
+                            }
+                            Some(Ok(n)) => self.ast.types.constant_array(ty, n, None),
+                            Some(Err(size)) => self.ast.types.variable_array(ty, size),
                             None => return QualType::ERROR,
                         },
                     };
@@ -765,8 +779,9 @@ impl Sema<'_, '_> {
     }
 
     /// Evaluates an array bound ([dcl.array]/1): a converted constant
-    /// expression of type `std::size_t`.
-    fn array_bound(&mut self, e: ExprId, d: &Declarator) -> Option<u64> {
+    /// expression of type `std::size_t`; `Err(size)` for a variable length
+    /// array (GNU extension) with converted bound `size`.
+    fn array_bound(&mut self, e: ExprId, d: &Declarator) -> Option<Result<u64, ExprId>> {
         let ety = self.ast.exprs.get(e).ty();
         let loc = self.begin_loc(e);
         if self.is_error_type(ety) {
@@ -804,7 +819,7 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return None;
                 }
-                u64::try_from(v).ok()
+                u64::try_from(v).ok().map(Ok)
             }
             Err(f) => self.folded_array_bound(c, d, loc, f),
         }
@@ -815,16 +830,33 @@ impl Sema<'_, '_> {
     /// clang folds the bound if it can (`EvaluateAsInt`: a `const double`
     /// or `const _Atomic(int)` variable reads as its value) and makes a
     /// constant array as an extension (`TryToFixInvalidVariablyModifiedType`,
-    /// after `-Wvla-cxx-extension` with the failure's notes). Anything
-    /// else is a variable length array, which kiln does not support.
+    /// after `-Wvla-cxx-extension` with the failure's notes). In a
+    /// function a bound that is not a constant expression makes a
+    /// variable length array (clang `BuildArrayType`, after the same
+    /// warning) even when it would fold; [`Self::check_vla_var`] rejects or
+    /// folds one with static storage duration. Anything else is a
+    /// variable length array kiln does not support.
     fn folded_array_bound(
         &mut self,
         c: ExprId,
         d: &Declarator,
         loc: Loc,
         mut f: kiln_oven::EvalFailure,
-    ) -> Option<u64> {
+    ) -> Option<Result<u64, ExprId>> {
         let at = d.name.map_or(d.loc, |(_, l)| l);
+        let local = matches!(
+            d.ctx,
+            DeclaratorContext::Block
+                | DeclaratorContext::ForInit
+                | DeclaratorContext::Condition
+                | DeclaratorContext::TypeName
+        ) && self.in_local_scope();
+        if local {
+            let wloc = Self::fold_lone_invalid(&mut f, loc);
+            let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
+            self.emit(w);
+            return Some(Err(c));
+        }
         let folded = match d.ctx {
             DeclaratorContext::File | DeclaratorContext::Member => {
                 self.fold_rvalue_int(c).filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
@@ -836,10 +868,59 @@ impl Sema<'_, '_> {
             return None;
         };
         let wloc = Self::fold_lone_invalid(&mut f, loc);
-        let w = Self::with_failure_notes(self.diag(DiagId::sema_vla_cxx_extension, wloc), f);
+        let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
         self.emit(w);
         self.error(DiagId::sema_vla_folded_to_constant, at);
-        u64::try_from(v).ok()
+        u64::try_from(v).ok().map(Ok)
+    }
+
+    /// clang `ext_vla_cxx` / `ext_vla_cxx_in_gnu_mode` (off by default in
+    /// a GNU dialect).
+    fn vla_ext_id(&self) -> DiagId {
+        if self.gnu { DiagId::sema_vla_cxx_extension_gnu } else { DiagId::sema_vla_cxx_extension }
+    }
+
+    /// clang `CheckVariableDeclarationType` for a variable length array:
+    /// one with static or thread storage duration has its bound folded
+    /// (`TryToFixInvalidVariablyModifiedType`, after the warning
+    /// [`Self::folded_array_bound`] gave) or is an error, as is one with
+    /// `extern` linkage. Returns the variable's type.
+    fn check_vla_var(&mut self, ty: QualType, spec: VarSpec, d: &Declarator) -> QualType {
+        let TypeView::VariableArray { elem, size } = self.ast.types.canonical_view(ty) else {
+            return ty;
+        };
+        let at = d.name.map_or(d.loc, |(_, l)| l);
+        if spec.storage() == VarStorage::Extern {
+            self.error(DiagId::sema_vla_extern_linkage, at);
+            return QualType::ERROR;
+        }
+        if spec.storage() != VarStorage::Static && spec.tls() == TlsKind::None {
+            return ty;
+        }
+        let folded = self
+            .fold_rvalue_int(size)
+            .filter(|&v| (0..=i128::from(u64::MAX >> 4)).contains(&v))
+            .and_then(|v| u64::try_from(v).ok());
+        let Some(n) = folded else {
+            self.error(DiagId::sema_vla_static_storage, at);
+            return QualType::ERROR;
+        };
+        self.error(DiagId::sema_vla_folded_to_constant, at);
+        self.ast.types.constant_array(elem, n, None)
+    }
+
+    /// clang `FK_VariableLengthArrayHasInitializer`: a variable length
+    /// array cannot be initialized ("variable-sized object may not be
+    /// initialized", at the bound). True (and `v` invalid) if rejected.
+    fn reject_vla_init(&mut self, v: DeclId, ty: QualType, init: &Initializer) -> bool {
+        let TypeView::VariableArray { size, .. } = self.ast.types.canonical_view(ty) else {
+            return false;
+        };
+        let at = self.begin_loc(size);
+        self.error(DiagId::sema_vla_no_init, at);
+        self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        self.discard_initializer(init);
+        true
     }
 
     pub(crate) fn is_scoped_enum(&self, en: DeclId) -> bool {
@@ -2925,6 +3006,7 @@ impl Sema<'_, '_> {
     fn act_on_var(&mut self, ds: &DeclSpec, ty: QualType, d: &Declarator, name: Symbol) -> DeclId {
         let (ctx, lexical) = self.decl_contexts(d);
         let spec = self.var_spec(ds, d);
+        let ty = self.check_vla_var(ty, spec, d);
         if self.kind_of(ctx) == DeclKind::CXXRecord {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
@@ -3108,6 +3190,9 @@ impl Sema<'_, '_> {
             return;
         }
         let mut ty = vn.ty().unwrap_or(QualType::ERROR);
+        if self.reject_vla_init(v, ty, &init) {
+            return;
+        }
         let direct = spec.init_style() == kiln_ast::decl::InitStyle::List;
         if self.ast.decls.decomp_bindings(v).is_some()
             && let Some(t) = self.decomp_array_type(ty, &init, direct)

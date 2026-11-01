@@ -20,6 +20,8 @@ pub(crate) struct Scope {
     lexical: bool,
     /// The enclosing `CurrentCleanupScopeDepth`.
     old_cur: Depth,
+    /// The enclosing `DidCallStackSave` (WP-183).
+    old_stack_save: bool,
 }
 
 impl Cg<'_> {
@@ -50,7 +52,8 @@ impl Cg<'_> {
         }
         let depth = self.f.cl.depth();
         let old_cur = std::mem::replace(&mut self.f.cl.cur_scope, depth);
-        Scope { depth, le: self.f.cl.lifetime_extended.len(), lexical, old_cur }
+        let old_stack_save = std::mem::replace(&mut self.f.did_stack_save, false);
+        Scope { depth, le: self.f.cl.lifetime_extended.len(), lexical, old_cur, old_stack_save }
     }
 
     /// `RunCleanupsScope::requiresCleanups`.
@@ -65,6 +68,7 @@ impl Cg<'_> {
         let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
         self.pop_cleanup_blocks_le(s.depth, s.le);
         self.f.cl.cur_scope = s.old_cur;
+        self.f.did_stack_save = s.old_stack_save;
         if let Some(labels) = labels
             && !labels.is_empty()
         {
@@ -212,8 +216,16 @@ impl Cg<'_> {
             StmtKind::DeclStmt => {
                 for d in ast.lists.iter::<DeclId>(ast.stmts.decl_stmt_decls(s)).collect::<Vec<_>>()
                 {
-                    if ast.decls.get(d).kind() == DeclKind::Var {
-                        self.emit_var_decl(d)?;
+                    match ast.decls.get(d).kind() {
+                        DeclKind::Var => self.emit_var_decl(d)?,
+                        // clang `EmitDecl`: a typedef of a variably
+                        // modified type evaluates its bounds.
+                        DeclKind::Typedef | DeclKind::TypeAlias => {
+                            if let Some(t) = ast.decls.typedef(d) {
+                                self.emit_vla_bounds(t.underlying)?;
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 Ok(())

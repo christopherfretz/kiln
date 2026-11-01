@@ -182,6 +182,16 @@ the evaluator's flattened type table.
   constant expression" (or "reference to …" when the frozen type is a
   reference; clang `note_constexpr_non_global`), with "declared here".
 
+- **Variable length arrays** (WP-183, GNU extension): a VLA local lowers
+  to a zero-sized opaque object, so declaring one in a constant
+  evaluation succeeds, `sizeof` of a VLA (`is_vla`) throws `Invalid`
+  ("subexpression not valid in a constant expression"), and an element
+  access is clang's `note_constexpr_access_unsized_array` ("{read
+  of,assignment to,...} element of array without known bound is not
+  allowed in a constant expression"). Clang's designator lets the
+  pointer arithmetic succeed and fails the access; kiln faults at the
+  arithmetic for a nonzero index, where the cold note path
+  (`indexes_vla`) reports it as a read whatever the access is.
 - **Mutable members** (WP-183, [expr.const]/4, /5.9): a `mutable`
   subobject of an object usable in constant expressions is not usable, so
   a read of it (or of anything inside it) from an object whose lifetime

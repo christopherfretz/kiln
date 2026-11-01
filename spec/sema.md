@@ -167,6 +167,25 @@ Constructors:
      evaluation's notes) and the ExtWarn "variable length array folded
      to constant array as an extension" [-Wgnu-folding-constant] at the
      declarator name (WP-165)
+   - variable length arrays in a function (WP-183, clang `BuildArrayType`):
+     a non-constant bound of a block-scope declarator (variable, typedef,
+     alias, type-id) makes a `VariableArray` even when it would fold.
+     `-Wvla-cxx-extension` is emitted at the bound with the strict
+     evaluation's notes (an array of a VLA, `int k[3][n]`, warns once at
+     the outer `[`, without notes). In a GNU dialect (`-std=gnu++NN`,
+     `Sema::gnu`) the warning is clang's `ext_vla_cxx_in_gnu_mode`, an
+     Extension that is off by default (`sema_vla_cxx_extension_gnu`;
+     clang also adds it to `-Wall` in GNU mode, kiln does not).
+     `check_vla_var` then handles the variable: `extern` is an error
+     ("cannot have 'extern' linkage"); `static`/`thread_local` folds the
+     bound (`fold_rvalue_int`) to a constant array with the
+     -Wgnu-folding-constant ExtWarn at the name, or is an error ("cannot
+     have 'static' storage duration"). Any initializer is the error
+     "variable-sized object may not be initialized" at the bound. A VLA
+     variable counts as complete. Template substitution rebuilds a
+     `VariableArray` with the substituted bound. Kiln's diagnostic
+     dedupe keeps an instantiation from repeating the warning (clang
+     repeats it), and `sizeof(T[n])` warns once (clang twice).
 2. It moves `constexpr`'s implied `const` onto the variable's type.
 3. It looks up a previous declaration (§3), checks that redeclarations
    are compatible, and links the redeclaration chain.

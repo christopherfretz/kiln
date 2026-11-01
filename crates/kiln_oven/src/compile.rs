@@ -2416,6 +2416,11 @@ impl Compiler<'_> {
             TypeView::LValueRef(r) | TypeView::RValueRef(r) => r,
             _ => q,
         };
+        // The size of a variable length array (GNU extension) is not a
+        // constant: clang's generic note at the `sizeof`.
+        if matches!(kind, TraitKind::SizeOf | TraitKind::DataSizeOf) && is_vla(ast, q) {
+            return self.throw_invalid(e);
+        }
         let t = self.ty(q);
         let v = match kind {
             TraitKind::SizeOf => self.o.types.size(t),
@@ -4391,5 +4396,18 @@ impl Compiler<'_> {
             e,
             loc,
         );
+    }
+}
+
+/// Whether `q` is a variable length array, or an array of them (GNU
+/// extension; clang `VariableArrayType`).
+pub(crate) fn is_vla(ast: &kiln_ast::Ast, q: QualType) -> bool {
+    let mut q = q;
+    loop {
+        match ast.types.canonical_view(q) {
+            TypeView::VariableArray { .. } => return true,
+            TypeView::ConstantArray(a) => q = a.elem,
+            _ => return false,
+        }
     }
 }

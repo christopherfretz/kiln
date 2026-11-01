@@ -1565,6 +1565,10 @@ diag_ids! {
     sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
     sema_conditional_vector_element_size = Error (2) "vector condition type {0} and result type {1} do not have elements of the same size";
     sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
+    sema_vla_static_storage = Error (0) "variable length array declaration cannot have 'static' storage duration";
+    sema_vla_extern_linkage = Error (0) "variable length array declaration cannot have 'extern' linkage";
+    sema_vla_no_init = Error (0) "variable-sized object may not be initialized";
+    sema_vla_cxx_extension_gnu = Extension [VlaCxxExtension] (0) "variable length arrays in C++ are a Clang extension";
 }
 
 impl DiagId {

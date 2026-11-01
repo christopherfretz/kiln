@@ -102,6 +102,9 @@ pub struct Sema<'a, 'sm> {
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
+    /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
+    /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
+    pub gnu: bool,
     /// The `#pragma pack` state (clang's `AlignPackStack`): the current
     /// maximum field alignment in bytes (0: none) and the pushed
     /// `(label, value)` entries. Applied to each class definition as it
@@ -377,6 +380,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             exceptions: true,
             rtti: true,
             range_lifetime_extension: false,
+            gnu: false,
             pack: (0, Vec::new()),
             scopes: vec![scope::Scope::new(ScopeKind::TranslationUnit, Some(tu))],
             ctx: tu,

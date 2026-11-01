@@ -251,7 +251,10 @@ impl Cg<'_> {
             }
             ExprKind::UnaryExprOrTypeTraitExpr => match self.folds.get(e) {
                 Some(c) => V::C(self.const_scalar_value(c, q)?),
-                None => return err(self.loc_of(e), "unfolded type trait expression"),
+                None => match self.emit_vla_sizeof(e)? {
+                    Some(v) => v,
+                    None => return err(self.loc_of(e), "unfolded type trait expression"),
+                },
             },
             ExprKind::SubstNonTypeTemplateParmExpr => {
                 return self.emit_scalar_opt(ExprId::new(n.b()));
@@ -655,7 +658,7 @@ impl Cg<'_> {
             }
             CastKind::ArrayToPointerDecay => {
                 let lv = self.emit_lvalue(s)?;
-                self.decay(lv.addr)
+                self.decay(lv.addr, lv.q)
             }
             CastKind::FunctionToPointerDecay | CastKind::BuiltinFnToFnPtr => {
                 self.emit_lvalue(s)?.addr.v
@@ -719,7 +722,12 @@ impl Cg<'_> {
     }
 
     /// `gep inbounds [N x T], p, i64 0, i64 0`.
-    pub(crate) fn decay(&mut self, a: Addr) -> V {
+    pub(crate) fn decay(&mut self, a: Addr, q: QualType) -> V {
+        // clang `EmitArrayToPointerDecay`: a variable length array's
+        // address already points to its first element.
+        if self.is_vla(q) {
+            return a.v;
+        }
         let z = self.i64c(0);
         self.gep(a.ty, a.v, vec![z, z], true)
     }
@@ -1896,7 +1904,13 @@ impl Cg<'_> {
         if n.kind() == ExprKind::ImplicitCastExpr
             && ast.exprs.cast_kind(e) == CastKind::ArrayToPointerDecay
         {
-            return Some(ast.exprs.operand(e));
+            let a = ast.exprs.operand(e);
+            // clang `isSimpleArrayDecayOperand`: not a variable length
+            // array.
+            if self.is_vla(ast.exprs.get(a).ty()) {
+                return None;
+            }
+            return Some(a);
         }
         None
     }
@@ -1990,8 +2004,8 @@ impl Cg<'_> {
         let (base, idx) = if swapped { (r, l) } else { (l, r) };
         let pre = if swapped { Some(self.emit_scalar(idx)?) } else { None };
         let iq = ast.exprs.get(idx).ty();
-        let esz = self.size_align(q).0;
-        let ety = self.mty(q);
+        let mut esz = self.size_align(q).0;
+        let mut ety = self.mty(q);
         let (addr, indices) = if let Some(arr) = self.simple_decay_operand(base) {
             let alv = if ast.exprs.get(arr).kind() == ExprKind::ArraySubscriptExpr {
                 self.subscript_lvalue(arr)?
@@ -2005,6 +2019,23 @@ impl Cg<'_> {
             let iv = self.int_cast(iv, LTy::I64, self.is_signed(iq));
             let z = self.i64c(0);
             (alv.addr, vec![z, iv])
+        } else if self.is_vla_decay(base) || self.is_vla(q) {
+            // clang `EmitPointerWithAlignment`: the decayed variable
+            // length array's alignment; an element of variable length
+            // array type scales the index by its element count.
+            let (p, align) = self.ptr_align(base)?;
+            let iv = match pre {
+                Some(v) => v,
+                None => self.emit_scalar(idx)?,
+            };
+            let iv = self.int_cast(iv, LTy::I64, self.is_signed(iq));
+            if let Some((iv, elem)) = self.vla_scaled_index(q, iv)? {
+                esz = self.size_align(elem).0;
+                ety = self.mty(elem);
+                (Addr { v: p, ty: ety, align }, vec![iv])
+            } else {
+                (Addr { v: p, ty: ety, align }, vec![iv])
+            }
         } else {
             let p = self.emit_scalar(base)?;
             let align = self.natural_align(q);
@@ -3257,6 +3288,13 @@ impl Cg<'_> {
             _ => {}
         }
         let q = ast.decls.get(d).ty().expect("var type");
+        if self.is_vla(q) {
+            let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
+            return self.emit_vla_var(d, q, init);
+        }
+        // clang `EmitAutoVarAlloca`: `EmitVariablyModifiedType` (a pointer
+        // or reference to a variable length array).
+        self.emit_vla_bounds(q)?;
         let ty = self.mty(q);
         let dtor_class = self.destructed_class(q);
         // NRVO: the variable lives in the return slot (clang

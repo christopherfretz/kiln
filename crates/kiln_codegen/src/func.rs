@@ -163,6 +163,12 @@ pub(crate) struct Fx {
     /// `CXXInheritedCtorInitExprArgs`), forwarded by its
     /// `CXXInheritedCtorInitExpr`.
     pub inh_args: Option<(Vec<CallArg>, Vec<QualType>)>,
+    /// The evaluated element counts of the variable length array bounds
+    /// emitted so far, by size expression (clang `VLASizeMap`, WP-183).
+    pub vla_sizes: FxHashMap<kiln_ast::ExprId, V>,
+    /// A stack save was emitted in the current cleanup scope (clang
+    /// `DidCallStackSave`).
+    pub did_stack_save: bool,
 }
 
 impl Fx {
@@ -205,6 +211,8 @@ impl Fx {
             opaque: FxHashMap::default(),
             array_index: Vec::new(),
             inh_args: None,
+            vla_sizes: FxHashMap::default(),
+            did_stack_save: false,
         }
     }
 }
