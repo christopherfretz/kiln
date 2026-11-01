@@ -148,6 +148,9 @@ pub struct StandardConversion {
     pub fixed_enum: FixedEnumPromotion,
     /// The reference binding this sequence performs, if any.
     pub rb: RefBinding,
+    /// A list-initialization sequence converting to
+    /// `std::initializer_list<X>` ([over.ics.rank]/3.1.1).
+    pub std_init_list: bool,
 }
 
 impl StandardConversion {
@@ -177,6 +180,7 @@ impl StandardConversion {
             null_pointer: false,
             fixed_enum: FixedEnumPromotion::None,
             rb,
+            std_init_list: false,
         }
     }
 }
@@ -360,6 +364,7 @@ fn standard_conversion_non_atomic(
         null_pointer: false,
         fixed_enum: FixedEnumPromotion::None,
         rb: RefBinding::NONE,
+        std_init_list: false,
     };
     // A bit-field width only matters before the lvalue transformation
     // drops it; it stays attached to the value.

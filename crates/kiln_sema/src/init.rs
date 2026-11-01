@@ -142,9 +142,14 @@ impl Sema<'_, '_> {
         for item in &l.items {
             match item.value {
                 InitValue::Expr(e) if item.designator.is_empty() => args.push(e),
+                // A nested braced-init-list is a constructor argument
+                // like a call's ([over.match.list]/1.2, [over.ics.list]).
+                InitValue::List(ref inner) if item.designator.is_empty() => {
+                    args.push(self.act_on_braced_arg(inner.clone()));
+                }
                 _ => {
-                    // todo(WP-067b follow-up): nested braced arguments
-                    // ([over.ics.list]) and designators of a non-aggregate.
+                    // todo(WP-067b follow-up): designators of a
+                    // non-aggregate.
                     self.unsupported("this list-initialization of a class", item.value.loc(self));
                     let flat = Self::list_exprs(l);
                     return Some(self.recover(ty, &flat, l.lbrace));

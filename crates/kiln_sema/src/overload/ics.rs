@@ -675,7 +675,13 @@ impl Sema<'_, '_> {
         if let Some(c) = self.ast.types.as_record(to) {
             // /5: std::initializer_list<X>.
             if let Some(elem) = self.initializer_list_element(to) {
-                return self.worst_element(l, elem, to, opts);
+                let mut r = self.worst_element(l, elem, to, opts);
+                match &mut r {
+                    Ics::Standard(s) => s.std_init_list = true,
+                    Ics::UserDefined(u) => u.after.std_init_list = true,
+                    _ => {}
+                }
+                return r;
             }
             if !self.require_complete_silent(to, Loc::INVALID) {
                 return Ics::bad(BadKind::InitList, void_from, to);
@@ -1076,7 +1082,9 @@ impl Sema<'_, '_> {
         }
         let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
         let t = self.non_reference(pty);
-        self.initializer_list_element(t).is_some()
+        // A constructor template's `std::initializer_list<U>` is
+        // dependent ([dcl.init.list]/2 names the template, WP-169).
+        self.initializer_list_param(t).is_some()
     }
 
     /// A user-defined conversion of `a` to `to` ([over.match.copy],
@@ -1527,6 +1535,17 @@ impl Sema<'_, '_> {
         }
         if ca > cb {
             return IcsCompare::Worse;
+        }
+        // /3.1.1: a list-initialization sequence converting to
+        // std::initializer_list is better than one that does not, even
+        // if another rule of /3 would apply (CWG1467).
+        let to_list = |i: &Ics| match i {
+            Ics::Standard(s) => s.std_init_list,
+            Ics::UserDefined(u) => u.after.std_init_list,
+            _ => false,
+        };
+        if to_list(a) != to_list(b) {
+            return if to_list(a) { IcsCompare::Better } else { IcsCompare::Worse };
         }
         match (a, b) {
             (Ics::Standard(x), Ics::Standard(y)) => compare_standard_conversions(self, x, y),
