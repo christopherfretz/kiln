@@ -81,6 +81,7 @@ UnreachableCodeLoopIncrement = "unreachable-code-loop-increment" [];
 UnreachableCodeReturn = "unreachable-code-return" [];
 UnusablePartialSpecialization = "unusable-partial-specialization" [];
 // ----- WP-217 (unused / fallthrough / constant-conversion warnings)
+UnusedButSetParameter = "unused-but-set-parameter" [];
 UnusedButSetVariable = "unused-but-set-variable" [];
 UnusedComparison = "unused-comparison" [];
 UnusedConstVariable = "unused-const-variable" [];

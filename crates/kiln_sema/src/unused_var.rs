@@ -31,6 +31,9 @@ impl Sema<'_, '_> {
         let quiet =
             !self.inst.stack.is_empty() || self.diags.unrecoverable_error_count() > s.errors;
         let mut seen: Vec<DeclId> = Vec::new();
+        // The parameters' warnings come first (clang
+        // `ActOnFinishFunctionBody`, ahead of the body scope's pop).
+        let mut params: Vec<(Loc, Diag)> = Vec::new();
         let mut found: Vec<(Loc, Diag)> = Vec::new();
         for &(_, d, ns) in &s.locals {
             if ns != Ns::Ordinary {
@@ -55,11 +58,17 @@ impl Sema<'_, '_> {
             if let Some(msg) = self.unused_var_diag(d, d) {
                 found.push((self.ast.decls.get(d).loc(), msg));
             } else if let Some(msg) = self.unused_but_set_diag(d, count) {
-                found.push((self.ast.decls.get(d).loc(), msg));
+                let to = if self.ast.decls.get(d).kind() == DeclKind::ParmVar {
+                    &mut params
+                } else {
+                    &mut found
+                };
+                to.push((self.ast.decls.get(d).loc(), msg));
             }
         }
+        params.sort_by_key(|&(l, _)| l);
         found.sort_by_key(|&(l, _)| l);
-        for (_, msg) in found {
+        for (_, msg) in params.into_iter().chain(found) {
             self.emit(msg);
         }
     }
@@ -97,22 +106,27 @@ impl Sema<'_, '_> {
         Some(self.diag(id, loc).arg(arg))
     }
 
-    /// clang `DiagnoseUnusedButSetDecl` for local variable `v`, whose
+    /// clang `DiagnoseUnusedButSetDecl` for local variable or function
+    /// parameter `v` (`-Wunused-but-set-parameter`, [dcl.fct]/13), whose
     /// references minus discarded assignments to it are `count`.
     fn unused_but_set_diag(&mut self, v: DeclId, count: Option<(i32, bool)>) -> Option<Diag> {
         let (refs, cond) = count?;
         let n = *self.ast.decls.get(v);
-        if n.kind() != DeclKind::Var
-            || !n.has(DeclFlags::REFERENCED)
-            || !self.diags.is_enabled(DiagId::sema_unused_but_set_variable)
-        {
+        let id = match n.kind() {
+            DeclKind::Var => DiagId::sema_unused_but_set_variable,
+            DeclKind::ParmVar => DiagId::sema_unused_but_set_parameter,
+            _ => return None,
+        };
+        if !n.has(DeclFlags::REFERENCED) || !self.diags.is_enabled(id) {
             return None;
         }
         let name = n.name().as_ident()?;
         // A variable marked unused, or a placeholder `_` (which behaves
-        // as if `[[maybe_unused]]`).
+        // as if `[[maybe_unused]]`; a parameter is never a placeholder).
         if self.unused_marked(v)
-            || (self.has_automatic_storage(v) && self.ast.symbols().as_str(name) == "_")
+            || (id == DiagId::sema_unused_but_set_variable
+                && self.has_automatic_storage(v)
+                && self.ast.symbols().as_str(name) == "_")
         {
             return None;
         }
@@ -133,16 +147,17 @@ impl Sema<'_, '_> {
         if refs > 0 && !(cond && refs == 1) {
             return None;
         }
-        Some(self.diag(DiagId::sema_unused_but_set_variable, n.loc()).arg(self.decl_arg(v)))
+        Some(self.diag(id, n.loc()).arg(self.decl_arg(v)))
     }
 
     /// clang `DoMarkVarDeclReferenced`: a reference to variable `d`
     /// counts for `-Wunused-but-set-variable` when it is a local, not
-    /// `extern`, variable.
+    /// `extern`, variable, or a function parameter.
     pub(crate) fn count_var_ref(&mut self, d: DeclId) {
-        let local =
-            self.ast.decls.get(d).ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function());
-        if local && self.ast.decls.var(d).is_some_and(|x| x.spec.storage() != VarStorage::Extern) {
+        let n = *self.ast.decls.get(d);
+        let local = n.ctx().is_some_and(|c| self.ast.decls.get(c).kind().is_function())
+            && self.ast.decls.var(d).is_some_and(|x| x.spec.storage() != VarStorage::Extern);
+        if local || n.kind() == DeclKind::ParmVar {
             self.refs_minus_assign.entry(d).or_insert((0, false)).0 += 1;
         }
     }
@@ -181,7 +196,7 @@ impl Sema<'_, '_> {
             return;
         }
         let v = self.ast.exprs.decl(lhs);
-        if self.ast.decls.get(v).kind() != DeclKind::Var {
+        if !matches!(self.ast.decls.get(v).kind(), DeclKind::Var | DeclKind::ParmVar) {
             return;
         }
         if compound && self.ast.decls.get(v).ty().is_some_and(|t| t.quals().is_volatile()) {

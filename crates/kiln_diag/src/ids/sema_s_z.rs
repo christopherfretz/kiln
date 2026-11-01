@@ -132,6 +132,7 @@ sema_unreachable_code_return = WarningOff [UnreachableCodeReturn] (0) "'return' 
 sema_unreachable_fallthrough_attr = WarningOff [UnreachableCodeFallthrough] (0) "fallthrough annotation in unreachable code";
 sema_unreachable_loop_increment = WarningOff [UnreachableCodeLoopIncrement] (0) "loop will run at most once (loop increment never executed)";
 sema_unsupported_string_concat = Error (0) "unsupported non-standard concatenation of string literals";
+sema_unused_but_set_parameter = WarningOff [UnusedButSetParameter] (1) "parameter {0} set but not used";
 sema_unused_but_set_variable = WarningOff [UnusedButSetVariable] (1) "variable {0} set but not used";
 sema_unused_call = Warning [UnusedValue] (1) "ignoring return value of function declared with {0} attribute";
 sema_unused_comma_left_operand = Warning [UnusedValue] (0) "left operand of comma operator has no effect";

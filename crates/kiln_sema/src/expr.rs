@@ -1689,6 +1689,8 @@ impl Sema<'_, '_> {
         }
         if n.kind() == DeclKind::Var {
             self.note_var_referenced(d, loc);
+        }
+        if matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar) {
             self.count_var_ref(d);
         }
         self.diagnose_deprecated(d, loc);
