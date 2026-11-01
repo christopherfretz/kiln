@@ -1116,8 +1116,20 @@ recomputed exactly as for non-template code (clang's
   labels of an `asm goto` are rebuilt by name (`act_on_label`,
   `act_on_goto`, `act_on_asm_goto_label`), so each instantiation owns its
   `LabelDecl`s and the jump-scope checker (spec/sema.md §7.4) runs on it.
-  Not yet: `CXXTryStmt` (needs the handler's exception declaration
-  substituted through `act_on_exception_decl`).
+- **Try-blocks** (WP-160, clang `TransformCXXTryStmt`/`TransformCXXCatchStmt`).
+  The compound statement is substituted in a try scope. Each handler gets
+  its control scope, and its exception declaration is declared again from
+  the substituted type through `act_on_exception_decl`. That repeats the
+  decay, the incomplete-type and abstract-type checks and the
+  copy-initialization from the exception object, and maps the pattern
+  variable to the new one. `act_on_try` then checks the handler order on
+  the instantiated types; -Wexceptions is `allow_duplicate`, so it prints
+  once per instantiation as in clang. A pattern handler whose declaration
+  is invalid fails the statement. Function-try-blocks take the same path
+  (`body` of a non-compound body).
+- **`[[assume]]`** (WP-160): an `AttributedStmt`'s assumptions are
+  substituted, converted and checked again (`build_cxx_assume_expr`,
+  -Wassume at instantiation).
 
 ### 5.6 Declarations
 

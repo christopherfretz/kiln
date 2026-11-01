@@ -1467,7 +1467,11 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   unambiguous derived class of, an earlier one gets `-Wexceptions`
   `exception of type T will be caught by earlier handler` with the note
   `for type U` (clang `CheckCXXTryBlock`, references and pointers
-  compared by their pointee).
+  compared by their pointee). Exact duplicates use clang's
+  `CatchHandlerType` key (WP-160): the top-level cv-qualifiers are dropped
+  first, then a reference or pointer is stripped and the pointee keeps its
+  cv-qualifiers. So `int` then `const int &` is not a duplicate, while
+  `const int` then `int &` is. The public-base search ignores cv.
 - `push_try_scope` marks the scope a try barrier (`Scope::try_barrier`)
   for the implicit move of thrown locals (§5.5).
 - Function-try-blocks: `check_function_try_block` (from
