@@ -141,7 +141,12 @@ impl Cg<'_> {
     /// An internal `void()` function in `.text.startup` (clang
     /// `CreateGlobalInitOrCleanUpFunction`).
     fn init_function(&mut self, name: &str) -> R<FuncId> {
-        let fty = self.m.types.function(LTy::VOID, &[], false);
+        self.startup_function(name, &[])
+    }
+
+    /// An internal `void(params)` function in `.text.startup`.
+    fn startup_function(&mut self, name: &str, params: &[LTy]) -> R<FuncId> {
+        let fty = self.m.types.function(LTy::VOID, params, false);
         let f = match self.m.add_function(name, fty) {
             Ok(f) => f,
             Err(e) => return err(None, format!("bad initialization function: {e:?}")),
@@ -291,14 +296,34 @@ impl Cg<'_> {
         // EmitDeclDestroy.
         if let Some(rd) = self.destructed_class(ty) {
             if self.array_elem(ty).is_some() {
-                return err(
-                    loc,
-                    "destruction of a static array of class type is not supported yet (M3)",
-                );
+                let helper = self.global_array_dtor(d, addr, rd)?;
+                let null = V::C(self.m.const_null(LTy::PTR));
+                self.register_global_dtor_fn(helper, null);
+            } else {
+                self.register_global_dtor(rd, V::C(gval(g)))?;
             }
-            self.register_global_dtor(rd, V::C(gval(g)))?;
         }
         Ok(())
+    }
+
+    /// clang `generateDestroyHelper`: `__cxx_global_array_dtor[.N]`,
+    /// destroying the elements of the static array at `a` of class
+    /// `record` in reverse order ([basic.start.term]/1).
+    fn global_array_dtor(&mut self, d: DeclId, a: Addr, record: DeclId) -> R<V> {
+        let f = self.startup_function("__cxx_global_array_dtor", &[LTy::PTR])?;
+        let nu = self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]);
+        self.m.func_mut(f).attrs.params = vec![nu];
+        let saved = std::mem::replace(&mut self.f, Fx::empty());
+        self.start_init_fn(f);
+        // The (unused) object parameter is spilled, as every parameter
+        // at -O0.
+        let p = self.f.fir.alloca(LTy::PTR, 8);
+        self.store(V::Arg(0), p, 8, false);
+        self.array_destroy_at(a, record);
+        let r = self.finish_init_fn(f, d);
+        self.f = saved;
+        r?;
+        Ok(V::C(Value::func(f)))
     }
 
     /// `@__dso_handle` (clang `CreateRuntimeVariable`, hidden).
@@ -321,12 +346,17 @@ impl Cg<'_> {
             return err(Some(ast.decls.get(def).loc()), "destructor not declared");
         };
         let (callee, _) = self.structor_ref(dtor, Structor::Complete)?;
+        self.register_global_dtor_fn(callee, addr);
+        Ok(())
+    }
+
+    /// `__cxa_atexit(callee, arg, &__dso_handle)`.
+    fn register_global_dtor_fn(&mut self, callee: V, arg: V) {
         let h = self.dso_handle();
         let nounwind = [Attr::Flag(AttrKind::NoUnwind)];
         let atexit =
             self.rt_fn("__cxa_atexit", LTy::I32, &[LTy::PTR, LTy::PTR, LTy::PTR], &nounwind);
-        self.nounwind_runtime_call(atexit, LTy::I32, vec![callee, addr, V::C(gval(h))]);
-        Ok(())
+        self.nounwind_runtime_call(atexit, LTy::I32, vec![callee, arg, V::C(gval(h))]);
     }
 
     // ---- guarded initialization ----------------------------------------
