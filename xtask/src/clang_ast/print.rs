@@ -594,7 +594,8 @@ impl<'a> Printer<'a, '_> {
                     return true;
                 }
                 let ck = kind(c);
-                if ck == "ClassTemplateSpecializationDecl" || ck == "VarTemplateSpecializationDecl" {
+                if ck == "ClassTemplateSpecializationDecl" || ck == "VarTemplateSpecializationDecl"
+                {
                     return false;
                 }
                 // A function template's first function is its pattern;
@@ -653,7 +654,9 @@ impl<'a> Printer<'a, '_> {
         // default (`SuppressDefaultTemplateArgs`), unless one is a pack.
         let mut end = args.len();
         if !args.iter().any(|a| flag(a, "isPack")) {
-            while end > 0 && is_default_arg(params[end - 1], args[end - 1], param_ty(params[end - 1]))? {
+            while end > 0
+                && is_default_arg(params[end - 1], args[end - 1], param_ty(params[end - 1]))?
+            {
                 end -= 1;
             }
         }
@@ -2408,9 +2411,9 @@ fn integral_arg(v: i64, param: &str) -> Option<String> {
     Some(match param {
         "bool" => (if v != 0 { "true" } else { "false" }).to_owned(),
         "char" => {
-            let b = u8::try_from(v).ok().filter(|b| {
-                (b.is_ascii_graphic() || *b == b' ') && *b != b'\'' && *b != b'\\'
-            })?;
+            let b = u8::try_from(v)
+                .ok()
+                .filter(|b| (b.is_ascii_graphic() || *b == b' ') && *b != b'\'' && *b != b'\\')?;
             format!("'{}'", char::from(b))
         }
         "unsigned char" => (v as u8).to_string(),
