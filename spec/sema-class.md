@@ -1046,7 +1046,12 @@ duration. Applies to variables, references in aggregate-initialized objects
 of a reference to a temporary (`returning reference to local temporary object`
 [-Wreturn-stack-address]), a mem-initializer reference member (§4.9), a
 temporary in a `new`-initializer or a function argument (full-expression
-lifetime).
+lifetime). A `.` member access is followed only when it designates a
+non-static data member of non-reference type ([class.temporary]/6.7): a
+reference member denotes what it was bound to, so `int &r = make().first;`
+(with `int &first`) extends nothing and `return make().first;` is not
+`returning reference to local temporary object`, for the extension, the
+return check and the `-Wreturn-stack-address` walk alike (WP-276).
 
 **P2718R0 (C++23 range-for)**: temporaries in the *for-range-initializer* are
 extended to `__range` (clang 19 dump: `MaterializeTemporaryExpr 'S' xvalue
