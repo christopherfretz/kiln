@@ -465,7 +465,7 @@ impl Cg<'_> {
             let (val, _) = self.declare_structor(first, v)?;
             return Ok((V::C(val), None));
         };
-        self.c1_decl.insert(first);
+        let first_ref = self.c1_decl.insert(first);
         if self.structor_has_vbases(first) {
             // A separate complete-object function.
             let (val, f) = self.declare_structor(first, v)?;
@@ -474,8 +474,14 @@ impl Cg<'_> {
         }
         if self.complete_is_rauw(def) {
             // The complete-object declaration is later replaced by the
-            // base variant, which takes its place in the module.
+            // base variant, which takes its place in the module (clang
+            // `applyReplacements` moves the base function to where the
+            // complete-object declaration was created: here, at the end).
+            let existed = self.sfns.contains_key(&(first, Structor::Base));
             let f = self.base_fn(first, false)?;
+            if existed && first_ref {
+                self.m.move_function_to_end(f);
+            }
             self.queue_structor(first, v);
             return Ok((V::C(Value::func(f)), None));
         }

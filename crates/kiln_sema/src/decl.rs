@@ -4142,7 +4142,11 @@ impl Sema<'_, '_> {
                     // template's ([temp.param]/12, /14). One of a class
                     // only a friend declaration introduced makes it
                     // visible ([namespace.memdef]/3): a new decl (below).
-                    self.check_redeclared_class_head(p);
+                    // `[extern] template struct C<args>::I;` explicitly
+                    // instantiates a member class ([temp.explicit]/3).
+                    if qualifier.is_none() || !self.act_on_explicit_member_class_inst(p, nloc) {
+                        self.check_redeclared_class_head(p);
+                    }
                     return p;
                 }
             } else if let Some(q) = qualifier {

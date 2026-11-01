@@ -430,6 +430,11 @@ impl Sema<'_, '_> {
             self.act_on_explicit_member_inst(self.ast.first(p), ext.is_some(), sloc);
             return None;
         }
+        if let Some(p) = prev_ok
+            && !in_class
+        {
+            self.mark_member_explicit_spec(p);
+        }
         let mut spec = FnSpec::new();
         if ds.inline.is_some() {
             spec = spec.with_inline(true);

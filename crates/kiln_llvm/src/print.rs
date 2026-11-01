@@ -330,7 +330,7 @@ impl<'a> Printer<'a> {
             md_order: Vec::new(),
             global_slot: Vec::with_capacity(m.globals.len()),
             alias_slot: Vec::with_capacity(m.aliases.len()),
-            func_slot: Vec::with_capacity(m.funcs.len()),
+            func_slot: vec![NO_SLOT; m.funcs.len()],
             cur: None,
             local: LocalSlots::default(),
         };
@@ -349,8 +349,8 @@ impl<'a> Printer<'a> {
         for a in &m.aliases {
             p.alias_slot.push(next(a.name.is_empty()));
         }
-        for f in &m.funcs {
-            p.func_slot.push(next(f.name.is_empty()));
+        for &f in &m.func_order {
+            p.func_slot[f.index()] = next(m.funcs[f.index()].name.is_empty());
         }
         p.number_attrs();
         p.number_metadata();
@@ -366,10 +366,10 @@ impl<'a> Printer<'a> {
 
     fn number_attrs(&mut self) {
         let m = self.m;
-        for f in &m.funcs {
+        for f in m.ordered_funcs() {
             self.add_attr_slot(f.attrs.func);
         }
-        for f in &m.funcs {
+        for f in m.ordered_funcs() {
             for &bb in &f.layout {
                 for &i in &f.blocks[bb.index()].insts {
                     if let InstKind::Call(c) | InstKind::Invoke(c) | InstKind::CallBr(c) =
@@ -411,7 +411,7 @@ impl<'a> Printer<'a> {
                 self.add_md_slot(md, &mut stack);
             }
         }
-        for f in &m.funcs {
+        for f in m.ordered_funcs() {
             for &(_, md) in &f.md {
                 self.add_md_slot(md, &mut stack);
             }
@@ -796,9 +796,9 @@ impl<'a> Printer<'a> {
         for i in 0..m.aliases.len() {
             self.alias(w, i)?;
         }
-        for i in 0..m.funcs.len() {
+        for &f in &m.func_order {
             w.write_char('\n')?;
-            self.function(w, FuncId(i as u32))?;
+            self.function(w, f)?;
         }
         if !self.attr_order.is_empty() {
             w.write_char('\n')?;
@@ -868,8 +868,7 @@ impl<'a> Printer<'a> {
         let mut seen = vec![false; m.comdats.len()];
         let mut order: Vec<ComdatId> = Vec::new();
         let used = m
-            .funcs
-            .iter()
+            .ordered_funcs()
             .filter_map(|f| f.comdat)
             .chain(m.globals.iter().filter_map(|g| g.comdat));
         for c in used {
@@ -1588,7 +1587,7 @@ impl<'a> TypeFinder<'a> {
             t.ty(a.value_type);
             t.value(a.aliasee);
         }
-        for f in &m.funcs {
+        for f in m.ordered_funcs() {
             t.ty(f.ty);
             t.attrs(&f.attrs);
             if let Some(p) = f.personality {
