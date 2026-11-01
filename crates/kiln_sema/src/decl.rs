@@ -21,7 +21,6 @@ use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
 
 use crate::class::ClassBuild;
-use crate::qualified_decl::QualifiedDecl;
 use crate::constfold;
 use crate::conv::{self, ConvCtx};
 use crate::declspec::{
@@ -31,6 +30,7 @@ use crate::declspec::{
 use crate::init::{InitValue, Initializer};
 use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
+use crate::qualified_decl::QualifiedDecl;
 use crate::scope::{Scope, ScopeKind};
 use crate::type_diff::DiffArgs as _;
 use crate::{Sema, target};

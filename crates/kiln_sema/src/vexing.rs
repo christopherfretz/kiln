@@ -4,14 +4,14 @@
 //! parentheses, `T(x);`, which could instead have been a function-style
 //! cast of an existing `x` (spec/sema.md §4.2).
 
-use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::QualType;
+use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_diag::DiagId;
 
-use crate::declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext};
-use crate::lookup::LookupKind;
 use crate::Sema;
 use crate::decl::sym_str;
+use crate::declspec::{Chunk, DeclSpec, Declarator, DeclaratorContext};
+use crate::lookup::LookupKind;
 
 impl Sema<'_, '_> {
     /// clang's `warnAboutRedundantParens`, called when the outermost
@@ -94,7 +94,10 @@ impl Sema<'_, '_> {
             .and_then(|r| self.ast.definition(r))
             .is_some_and(|def| self.defn_bits(def).contains(DefinitionBits::TRIVIAL_DTOR));
         if !trivial_complete {
-            let note = self.diag(DiagId::note_raii_guard_add_name, lparen).arg(self.ty_arg(base)).arg(&ident);
+            let note = self
+                .diag(DiagId::note_raii_guard_add_name, lparen)
+                .arg(self.ty_arg(base))
+                .arg(&ident);
             w = w.with_note(note);
         }
         w = w
