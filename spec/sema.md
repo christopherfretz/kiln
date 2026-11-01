@@ -1136,7 +1136,10 @@ diagnostics and IR.
     `kiln_abi` layout
   - **casts:** C-style, functional, `static_cast`,
     `reinterpret_cast`, `const_cast`, with
-    `mark_part_of_explicit_cast`
+    `mark_part_of_explicit_cast`. `const_cast<T&&>(prvalue)` of a class
+    type ([expr.const.cast]/4) materializes the prvalue and yields an
+    xvalue `NoOp` cast of the temporary (`ref_cast`, WP-201; libc++
+    `__movable_box`)
 - **Constant-folding warnings:** division by zero, negative shifts and
   over-wide shifts warn when the operands fold.
 - **Member-pointer equality** ([expr.eq]/4, clang's

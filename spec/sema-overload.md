@@ -185,7 +185,12 @@ operator". Failure: "no matching function for call to object of type 'F'" /
    reversed/rewritten form). An ambiguous lookup ([class.member.lookup]/6)
    is diagnosed at the operator ("member 'operator()' found in multiple
    base classes of different types", as clang's `~LookupResult`), and every
-   declaration found stays a candidate (WP-152).
+   declaration found stays a candidate (WP-152). An undefined class
+   template specialization is instantiated if it can be; an operand of a
+   class that stays incomplete (the template is only declared, libc++
+   `ostream&` from `<iosfwd>`) contributes no member candidates and is
+   not diagnosed (clang `isCompleteType`; `require_complete_silent`,
+   WP-201).
 3. **Non-member candidates**: unqualified lookup of `operator@` from the
    expression's context, skipping class scopes (/3.2), plus ADL over all
    operands.

@@ -388,6 +388,10 @@ literal is one instruction and one step, not an interpreted loop.
   elements left and a size that is a multiple of the element size
   (`note_constexpr_memcpy_*`: null, type pun, non-trivial, overlap for
   `memcpy`, unsupported); `memmove` handles overlap in either direction.
+  The type check compares array types element-wise without qualifiers
+  (`Types::same_unqualified`), and a pointer that designates a whole
+  array (sema's implicit copy assignment of an array member passes
+  `&this->m`) copies the array's elements (WP-201).
   The fast path compares, scans or moves bytes directly when the
   elements are one byte (or, for `memcpy`/`memmove`, scalars) and no
   union is involved; any irregularity falls back to the element-wise
@@ -890,6 +894,13 @@ are not separate operations: a member's lifetime is its complete
 object's, which is precise for constant evaluation because no constant
 expression can end a subobject's lifetime independently except through a
 union (tracked) or an explicit destructor call (not yet parsed, below).
+Looking a member up by offset (`Types::field_at`, `subobject_at`,
+`has_member_at`) skips zero-size members (libc++'s `char __padding_[0]`
+shares its offset with the next member). Within a union, extents are
+computed per member, so a path through a bit-field member of a union
+resolves (WP-201). A function named by a `DeclRefExpr` or a member access
+(`t.f` with `f` a static member function) is an lvalue whose address is
+`fn_ptr(func_index)`; references to functions evaluate to it (WP-201).
 
 **Construction.** `CXXConstructExpr` (complete, base and delegating; a
 prvalue initializes its target object directly, [dcl.init.general]/17.6.1;
