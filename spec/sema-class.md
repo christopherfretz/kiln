@@ -1453,8 +1453,8 @@ specifiers and virtual base-specifiers are no longer `sema_unsupported`.
   materializes for `&&`); `CastStyle::Dynamic` in `act_on_cast` routes
   there. `typeid` of a glvalue of polymorphic class type is marked
   evaluated (`typeid_expr(.., evaluated, ..)`).
-- New diagnostics (`kiln_diag`, end of the tables): the WP-078a block in
-  `ids.rs` plus `sema_dynamic_cast_no_rtti`, `sema_inaccessible_base`;
+- New diagnostics (`kiln_diag`, end of the tables): the WP-078a ids
+  (now sorted into `ids/sema_*.rs`, spec/diag.md §2.4) plus `sema_dynamic_cast_no_rtti`, `sema_inaccessible_base`;
   groups `OverloadedVirtual`, `InconsistentMissingOverride`,
   `AbstractFinalClass`, `InaccessibleBase`.
 - Not done (owners): `dtor_delete` (the destructor's operator delete) and
@@ -1523,7 +1523,8 @@ Constructors, destructors, conversion functions, `= default` and
 - `define_implicit_special` is the §4.5 stub (`sema_unsupported`
   "implicit definition of a ..."); implicit members are declared but
   have no bodies.
-- New diagnostics: the WP-067a block in `kiln_diag/src/ids.rs`; groups
+- New diagnostics: the WP-067a ids (now in the `kiln_diag/src/ids/*.rs`
+  area files, spec/diag.md §2.4); groups
   `DefaultedFunctionDeleted`, `ClassConversion`. Harness: `//@
   ast-implicit` (harness.md) dumps implicit members.
 - Not done (owners): implicit definitions, ctor-initializers and
@@ -1577,7 +1578,8 @@ definitions and temporaries. Modules in `kiln_sema/src/class/`:
   `-Wcall-to-pure-virtual-from-ctor-dtor` warning (`member_expr.rs`
   `check_pure_virtual_call_in_cdtor`; `cold.begin_loc` records a pure
   virtual's decl-spec start for its note).
-- New diagnostics: the WP-067b block at the end of `kiln_diag/src/ids.rs`;
+- New diagnostics: the WP-067b ids (now in the `kiln_diag/src/ids/*.rs`
+  area files, spec/diag.md §2.4);
   groups `Reorder`/`ReorderCtor`, `Uninitialized`, `Dangling`/
   `DanglingField`/`ReturnStackAddress`, `DelegatingCtorCycles`,
   `CallToPureVirtualFromCtorDtor`.
