@@ -249,6 +249,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Result<QualType, ()> {
         let spec = self.get_class_spec(tmpl, written, arg_locs, loc)?;
+        self.diagnose_template_id_use(spec, loc);
         let list = self.ast.types.arg_list(written);
         let rec = self.tag_type(spec);
         Ok(self.ast.types.template_specialization(name, list, Some(rec), false))
