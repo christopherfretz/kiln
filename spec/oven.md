@@ -1787,7 +1787,7 @@ follow clang trunk's P3068 branch.
   ([except.handle]/15). The mem-initializers of a constructor are not yet
   inside its try-block (follow-up).
 - A failed evaluation restores the lengths of the in-flight and handled
-  stacks (`Excs::mark`), and `Oven::reset` clears them.
+  stacks (`Excs::lens`/`truncate`), and `Oven::reset` clears them.
 
 *Deliberate divergences from clang trunk's P3068 branch* (each follows
 the standard): `nullptr` is not caught by a `const int *&` handler (a
