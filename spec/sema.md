@@ -3875,6 +3875,15 @@ Each rule names the libc++ test it fixed and its corpus test.
     return value; an argument adds its "passing argument" note), no
     `-Wbraced-scalar-init`, and narrowing checked on the user
     conversion's result
+  - a non-aggregate class parameter copy-list-initialized from a braced
+    argument (`f({1})`, a default argument, a member call) is constructed
+    from the list; when the constructor chosen is explicit ("chosen
+    constructor is explicit in copy-initialization" + "explicit
+    constructor declared here") or deleted, the error ends with the
+    "passing argument to parameter 'p' here" note (clang
+    `PrintInitLocationNote`; `list_param_note`, taken by the outermost
+    list constructor call only, so an element's own construction does
+    not carry it; WP-366)
 - **Designators** (WP-192; clang `SemaInit.cpp`). The parser reads
   `.name`, nested `.a.b`, `[i]` (C99), the GNU range `[a ... b]`
   (WP-193; `-Wgnu-designator`, an Extension shown under `-pedantic`, at
