@@ -91,9 +91,12 @@ fn have_clang() -> bool {
     ok
 }
 
+/// clang 19 as both the compiler and the oracle: the fixtures' expected
+/// messages name `clang++-19`, whatever the default `KILN_ORACLE` is.
 fn clang_opts(paths: &[PathBuf]) -> Options {
     Options {
         compiler: Some("clang++-19".into()),
+        oracle: Some("clang++-19".into()),
         jobs: Some(2),
         paths: paths.to_vec(),
         ..Options::default()

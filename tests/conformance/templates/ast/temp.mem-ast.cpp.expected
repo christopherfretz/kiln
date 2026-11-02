@@ -25,5 +25,5 @@ TranslationUnitDecl
 |-VarDecl b 'A<int>::B<char> *'
 |-VarDecl s 'int' cinit
 | `-ImplicitCastExpr 'int' <IntegralCast>
-|   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'A<int>::B<char>'
+|   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'A<int>::B<char>'
 `-VarDecl x 'A<int>::X<long>':'int *'

@@ -1384,6 +1384,10 @@ impl AstNames<'_> {
 }
 
 impl TypeNames for AstNames<'_> {
+    fn implicit_typedef(&self, decl: DeclId) -> bool {
+        self.ast.decls.get(decl).flags().contains(DeclFlags::IMPLICIT)
+    }
+
     fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
         self.ast.spec_print_args(decl)
     }
@@ -1532,6 +1536,10 @@ impl PrintEnv for AstNames<'_> {
 }
 
 impl TypeNames for Ast {
+    fn implicit_typedef(&self, decl: DeclId) -> bool {
+        self.decls.get(decl).flags().contains(DeclFlags::IMPLICIT)
+    }
+
     fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {
         self.spec_print_args(decl)
     }

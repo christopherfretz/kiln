@@ -7,13 +7,13 @@ TranslationUnitDecl
       |-DeclStmt
       | `-VarDecl referenced a 'int[]' cinit
       |   `-InitListExpr 'void'
-      |     `-PackExpansionExpr '<dependent type>' lvalue
+      |     `-PackExpansionExpr 'Ts' lvalue
       |       `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
       |-DeclStmt
       | `-VarDecl referenced b 'int[]' cinit
       |   `-InitListExpr 'void'
       |     |-IntegerLiteral 'int' 0
-      |     |-PackExpansionExpr '<dependent type>' lvalue
+      |     |-PackExpansionExpr 'Ts' lvalue
       |     | `-DeclRefExpr 'Ts' lvalue ParmVar 'ts' 'Ts...'
       |     `-IntegerLiteral 'int' 0
       `-ReturnStmt

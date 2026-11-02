@@ -580,6 +580,16 @@ pub struct Sema<'a, 'sm> {
     pub(crate) lambdas: Vec<lambda::LambdaScope>,
     /// The mangling-number state of closure types (spec/sema-lambda.md).
     pub(crate) lambda_mangle: lambda::ManglingState,
+    /// `size_t` as clang 22 spells it: the implicit, unnamed-by-lookup
+    /// alias `__size_t` (clang's `PredefinedSugarType`), the type of
+    /// `sizeof`/`alignof` and of the allocation functions' size under
+    /// `-fclang-compat=22` ([`Sema::size_type`]).
+    pub(crate) size_t_sugar: QualType,
+    /// clang 22's `__signed_size_t` (a `z` literal) and `__ptrdiff_t`
+    /// (pointer subtraction), implicit like [`Sema::size_t_sugar`]
+    /// ([`Sema::signed_size_type`], [`Sema::ptrdiff_type`]).
+    pub(crate) signed_size_t_sugar: QualType,
+    pub(crate) ptrdiff_t_sugar: QualType,
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
@@ -609,6 +619,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         let tu = ast.tu;
         templ::builtins::declare_builtin_templates(&mut ast);
         builtins::declare_int128_typedefs(&mut ast, &target);
+        let size_t = QualType::unqual(target.size_t);
+        let ptrdiff_t = QualType::unqual(target.ptrdiff_t);
         let mut s = Sema {
             ast,
             diags,
@@ -738,7 +750,11 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             srcloc: builtins::SrcLocCache::default(),
             lambdas: Vec::new(),
             lambda_mangle: lambda::ManglingState::default(),
+            size_t_sugar: size_t,
+            signed_size_t_sugar: ptrdiff_t,
+            ptrdiff_t_sugar: ptrdiff_t,
         };
+        s.declare_size_t_sugar();
         s.declare_builtin_va_list();
         s.declare_sve_typedefs();
         s

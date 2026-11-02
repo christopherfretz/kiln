@@ -13,7 +13,7 @@ TranslationUnitDecl
 | |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 M
 | |-CXXRecordDecl struct R definition
 | | |-FieldDecl a 'A[M]'
-| | `-FieldDecl p 'R<T, N> *'
+| | `-FieldDecl p 'R<A, M> *'
 | `-ClassTemplateSpecialization 'R'
 |-ClassTemplateDecl R
 | |-TemplateTypeParmDecl class depth 0 index 0 U

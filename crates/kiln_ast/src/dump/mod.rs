@@ -86,6 +86,10 @@ pub struct DumpOptions<'a> {
     /// The main file: without `all_files`, top-level declarations located
     /// in other files are skipped.
     pub main_file: Option<FileId>,
+    /// clang 22's type printing (`-fclang-compat=22`, spec/ast-dump.md
+    /// §2): a tag type as written is not sugar, so `'S'` prints without
+    /// the scoped `:'q::S'` that clang 19's `ElaboratedType` gave.
+    pub written_tags: bool,
 }
 
 impl std::fmt::Debug for DumpOptions<'_> {
@@ -99,6 +103,7 @@ impl std::fmt::Debug for DumpOptions<'_> {
             .field("filter", &self.filter)
             .field("sources", &self.sources.is_some())
             .field("main_file", &self.main_file)
+            .field("written_tags", &self.written_tags)
             .finish()
     }
 }
@@ -1017,10 +1022,11 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         // A bare enumeration type is what an enumerator has (kiln wraps
         // written names in no sugar, spec/types.md §15 R4): clang prints
         // it with its scope, `'S::K'`.
+        let written_tags = self.opts.written_tags;
         let opts = if types.kind(q.ty()) == TypeKind::Enum {
-            PrintOptions { full_scope: true, ..PrintOptions::SUGARED }
+            PrintOptions { full_scope: true, written_tags, ..PrintOptions::SUGARED }
         } else {
-            PrintOptions::SUGARED
+            PrintOptions { written_tags, ..PrintOptions::SUGARED }
         };
         write_type(types, &self.names, q, opts, &mut self.line);
         let e1 = self.line.len();
@@ -1029,7 +1035,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         if self.opts.canonical_types {
             write_type(types, &self.names, q, PrintOptions::CANONICAL, &mut self.line);
         } else {
-            write_type(types, &self.names, q, PrintOptions::DESUGARED, &mut self.line);
+            let opts = PrintOptions {
+                written_tags: self.opts.written_tags,
+                full_scope: opts.full_scope && self.opts.written_tags,
+                ..PrintOptions::DESUGARED
+            };
+            write_type(types, &self.names, q, opts, &mut self.line);
             if self.line[s2..] == self.line[s1..e1] {
                 self.line.truncate(e1 + 1);
                 return;

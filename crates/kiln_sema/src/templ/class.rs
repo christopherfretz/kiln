@@ -303,7 +303,11 @@ impl Sema<'_, '_> {
             self.ensure_template_constraints(tmpl, conv.sugared, 3, loc)?;
         }
         let list = self.ast.types.arg_list(written);
-        if let Some(&u) = self.inst.alias_cache.get(&(tmpl, conv.canonical)) {
+        // clang 22 substitutes the arguments as written (`'Ptr<I>':'I *'`,
+        // `'Ptr<Ptr<T>>':'Ptr<T> *'`), so the cache is per written list.
+        let sugared = self.clang_compat >= 22;
+        let key = (tmpl, if sugared { conv.sugared } else { conv.canonical });
+        if let Some(&u) = self.inst.alias_cache.get(&key) {
             return Ok(self.ast.types.template_specialization(name, list, Some(u), true));
         }
         let Some(pattern) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
@@ -314,7 +318,8 @@ impl Sema<'_, '_> {
         let mut args = Self::outer_levels(tmpl, depth);
         // clang 19 substitutes an alias with the canonical arguments: the
         // aliased type of `Ptr<I>` is `int *`, not `I *`.
-        let subst_args = self.alias_subst_args(conv.sugared);
+        let subst_args =
+            if sugared { conv.sugared } else { self.alias_subst_args(conv.sugared) };
         args.push(subst_args, tmpl, LevelMode::Substitute);
         if !self.push_inst_frame(FrameKind::AliasTemplate, pattern, tmpl, loc) {
             return Err(());
@@ -361,7 +366,7 @@ impl Sema<'_, '_> {
         // `decltype`) is redone too, so every use fails
         // ([temp.deduct.general]/8).
         if self.access_checks == checks && self.sfinae_errors() == trapped {
-            let _ = self.inst.alias_cache.insert((tmpl, conv.canonical), u);
+            let _ = self.inst.alias_cache.insert(key, u);
         }
         Ok(self.ast.types.template_specialization(name, list, Some(u), true))
     }

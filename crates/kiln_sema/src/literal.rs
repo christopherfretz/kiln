@@ -72,10 +72,12 @@ pub struct FloatLiteralTyping {
 }
 
 fn width_of(s: &Sema<'_, '_>, q: QualType) -> u32 {
+    let q = s.ast.types.canonical(q);
     s.ast.types.builtin(q).map_or(64, |b| builtin_width(s, b))
 }
 
 fn signed_of(s: &Sema<'_, '_>, q: QualType) -> bool {
+    let q = s.ast.types.canonical(q);
     s.ast.types.builtin(q).is_some_and(|b| builtin_signed(s, b))
 }
 
@@ -90,16 +92,6 @@ fn unsigned_of(q: QualType) -> QualType {
         QualType::INT => QualType::UINT,
         QualType::LONG => QualType::ULONG,
         QualType::LONGLONG => QualType::ULONGLONG,
-        other => other,
-    }
-}
-
-fn signed_counterpart(q: QualType) -> QualType {
-    match q {
-        QualType::UINT => QualType::INT,
-        QualType::ULONG => QualType::LONG,
-        QualType::ULONGLONG => QualType::LONGLONG,
-        QualType::USHORT => QualType::SHORT,
         other => other,
     }
 }
@@ -121,7 +113,8 @@ pub fn type_integer_literal(
 /// an unsuffixed (or `l`/`ll`) decimal literal holds only signed types
 /// and non-decimal literals also try each unsigned counterpart. A `z`
 /// suffix gives the signed type corresponding to `size_t` (`uz`:
-/// `size_t`).
+/// `size_t`), with clang 22's `__signed_size_t`/`__size_t` sugar under
+/// `-fclang-compat=22`.
 ///
 /// A decimal literal too large for every signed type but within
 /// `unsigned long long` gets that type and the
@@ -145,8 +138,8 @@ pub fn classify_integer_literal(
     let allow_unsigned = lit.suffix.unsigned || lit.radix != Radix::Decimal;
     let u = lit.suffix.unsigned;
     if lit.suffix.size == IntSize::Size {
-        let size_t = QualType::unqual(s.target.size_t);
-        let signed_size = signed_counterpart(size_t);
+        let size_t = s.size_type();
+        let signed_size = s.signed_size_type();
         if !u && fits(s, signed_size, value) {
             return Ok(IntLiteralTyping { ty: signed_size, value, warning: None });
         }

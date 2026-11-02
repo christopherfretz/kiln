@@ -125,11 +125,11 @@ TranslationUnitDecl
       |-DeclStmt
       | |-CXXRecordDecl struct Q definition
       | | `-FieldDecl referenced v 'int'
-      | `-VarDecl used q 'struct Q':'Q' listinit
-      |   `-InitListExpr 'struct Q':'Q'
+      | `-VarDecl used q 'struct Q' listinit
+      |   `-InitListExpr 'struct Q'
       |     `-IntegerLiteral 'int' 3
       |-ImplicitCastExpr 'bool' <IntegralToBoolean>
       | `-ImplicitCastExpr 'int' <LValueToRValue>
       |   `-MemberExpr 'int' lvalue .v
-      |     `-DeclRefExpr 'struct Q':'Q' lvalue Var 'q' 'struct Q':'Q'
+      |     `-DeclRefExpr 'struct Q' lvalue Var 'q' 'struct Q'
       `-CompoundStmt

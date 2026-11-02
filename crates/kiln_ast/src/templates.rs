@@ -1937,13 +1937,20 @@ impl AstBuilder<'_> {
         e
     }
 
-    /// `pattern...` ([temp.variadic]/5): `PackExpansionExpr` of dependent
-    /// type with the pattern's category; the expansion has no unexpanded
-    /// packs of its own.
-    pub fn pack_expansion_expr(&mut self, pattern: ExprId, ellipsis: Loc) -> ExprId {
+    /// `pattern...` ([temp.variadic]/5): `PackExpansionExpr` with the
+    /// pattern's category; the expansion has no unexpanded packs of its
+    /// own. Its type is the dependent type, or the pattern's type when
+    /// `pattern_type` is set (clang 22 keeps it: `PackExpansionExpr 'Ts'`).
+    pub fn pack_expansion_expr(
+        &mut self,
+        pattern: ExprId,
+        ellipsis: Loc,
+        pattern_type: bool,
+    ) -> ExprId {
         let deps = (self.deps(pattern) | DEP_ALL).without(ExprDeps::UNEXPANDED_PACK);
-        let vk = self.ast.exprs.get(pattern).value_category();
-        let ty = self.dependent_ty();
+        let n = *self.ast.exprs.get(pattern);
+        let vk = n.value_category();
+        let ty = if pattern_type { n.ty() } else { self.dependent_ty() };
         self.simple(ExprKind::PackExpansionExpr, vk, deps, 0, ty, ellipsis, pattern.raw(), 0)
     }
 

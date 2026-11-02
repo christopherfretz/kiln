@@ -49,6 +49,36 @@ pub(crate) fn declare_int128_typedefs(ast: &mut Ast, target: &TargetTypes) {
 }
 
 impl Sema<'_, '_> {
+    /// The aliases behind [`Sema::size_type`], [`Sema::signed_size_type`]
+    /// and [`Sema::ptrdiff_type`] under `-fclang-compat=22`: clang 22
+    /// prints `size_t`, its signed counterpart and `ptrdiff_t` as written
+    /// by the implementation (`PredefinedSugarType`: `__size_t`,
+    /// `__signed_size_t`, `__ptrdiff_t`) while no declaration of those
+    /// names is visible, so the aliases are implicit and linked into no
+    /// lookup table (`__size_t x;` stays an unknown type name, as clang).
+    pub(crate) fn declare_size_t_sugar(&mut self) {
+        if self.target.pointer_bytes == 0 {
+            return;
+        }
+        let size_t = QualType::unqual(self.target.size_t);
+        let signed = match size_t {
+            QualType::UINT => QualType::INT,
+            QualType::ULONGLONG => QualType::LONGLONG,
+            _ => QualType::LONG,
+        };
+        let ptrdiff_t = QualType::unqual(self.target.ptrdiff_t);
+        let mk = |s: &mut Self, name: &str, ty: QualType| {
+            let tu = s.ast.tu;
+            let n = DeclName::ident(s.ast.symbols().intern(name));
+            let h = DeclHead::new(tu, n, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+            let d = s.ast.builder().unlinked_alias(h, ty);
+            s.ast.decls.get(d).ty().unwrap_or(ty)
+        };
+        self.size_t_sugar = mk(self, "__size_t", size_t);
+        self.signed_size_t_sugar = mk(self, "__signed_size_t", signed);
+        self.ptrdiff_t_sugar = mk(self, "__ptrdiff_t", ptrdiff_t);
+    }
+
     /// The implicit typedef `__builtin_va_list` (clang's `Sema::Initialize`
     /// and `CreateVaListDecl`), declared in the translation unit:
     /// - `AArch64` (AAPCS64 §10.1.5): `typedef std::__va_list

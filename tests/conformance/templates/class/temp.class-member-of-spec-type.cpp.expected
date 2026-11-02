@@ -17,6 +17,6 @@ TranslationUnitDecl
 |   `-FieldDecl tag 'int'
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
-    |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'Outer<char>'
-    `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+    |-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'Outer<char>'
+    `-ImplicitCastExpr '__size_t':'unsigned long' <IntegralCast>
       `-IntegerLiteral 'int' 8

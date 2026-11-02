@@ -33,7 +33,7 @@ FunctionDecl test_capture 'int (P)'
   |     `-CompoundStmt
   |       `-ReturnStmt
   |         `-ImplicitCastExpr 'int' <LValueToRValue>
-  |           `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |           `-DeclRefExpr 'const int' lvalue Binding 'a' 'int'
   |-DeclStmt
   | `-VarDecl used mixed '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)' cinit
   |   `-LambdaExpr '(lambda at tests/conformance/dcl.struct.bind/lambda-capture.cpp:12:16)'
@@ -44,7 +44,7 @@ FunctionDecl test_capture 'int (P)'
   |       `-ReturnStmt
   |         `-BinaryOperator 'int' '*'
   |           |-ImplicitCastExpr 'int' <LValueToRValue>
-  |           | `-DeclRefExpr 'int' lvalue Binding 'a' 'int'
+  |           | `-DeclRefExpr 'const int' lvalue Binding 'a' 'int'
   |           `-ImplicitCastExpr 'int' <LValueToRValue>
   |             `-DeclRefExpr 'int' lvalue Binding 'b' 'int'
   `-ReturnStmt

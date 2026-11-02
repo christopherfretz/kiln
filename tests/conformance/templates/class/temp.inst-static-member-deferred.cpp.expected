@@ -4,15 +4,15 @@ TranslationUnitDecl
 | |-CXXRecordDecl struct Traits definition
 | | |-VarDecl size 'const int' static inline constexpr cinit
 | | | `-ImplicitCastExpr 'const int' <IntegralCast>
-| | |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+| | |   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'T'
 | | `-VarDecl align 'const int' static inline constexpr cinit
 | |   `-ImplicitCastExpr 'const int' <IntegralCast>
-| |     `-UnaryExprOrTypeTraitExpr 'unsigned long' alignof 'T'
+| |     `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' alignof 'T'
 | `-ClassTemplateSpecializationDecl struct Traits definition implicit_instantiation
 |   |-TemplateArgument type 'int'
 |   |-VarDecl referenced size 'const int' static inline constexpr cinit value=4
 |   | `-ImplicitCastExpr 'const int' <IntegralCast>
-|   |   `-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|   |   `-UnaryExprOrTypeTraitExpr '__size_t':'unsigned long' sizeof 'int'
 |   `-VarDecl align 'const int' static constexpr
 `-StaticAssertDecl
   `-BinaryOperator 'bool' '=='
