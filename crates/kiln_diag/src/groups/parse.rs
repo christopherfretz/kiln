@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 AmbiguousEllipsis = "ambiguous-ellipsis" [];
+C11Extensions = "c11-extensions" [];
 Cxx20Extensions = "c++20-extensions" [];
 Cxx26Extensions = "c++26-extensions" [];
 CxxAttributeExtension = "cxx-attribute-extension" [];

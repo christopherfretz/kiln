@@ -69,6 +69,22 @@ impl Sema<'_, '_> {
     /// The declaration after `template<>` ended.
     pub fn act_explicit_spec_end(&mut self) {
         self.templ.explicit_spec = None;
+        self.templ.spec_headers.clear();
+    }
+
+    /// The `template` keywords of the leading `template<>` headers of the
+    /// declaration whose [`Sema::act_explicit_spec_start`] or
+    /// [`Sema::act_member_template_spec_start`] was just called, in
+    /// source order. At namespace scope they are matched to the classes
+    /// of the declaration's qualifier ([temp.expl.spec]/17; clang's
+    /// `MatchTemplateParametersToScopeSpecifier`) and any left over are
+    /// extraneous ([`Sema::check_extra_spec_headers`]).
+    pub fn act_explicit_spec_headers(&mut self, heads: &[Loc]) {
+        self.templ.spec_headers.clear();
+        if matches!(self.kind_of(self.ctx), DeclKind::Namespace | DeclKind::TranslationUnit) {
+            self.templ.spec_headers.extend_from_slice(heads);
+            self.templ.explicit_depth = self.inst.stack.len();
+        }
     }
 
     /// `template<>` followed by a non-empty template head was parsed
@@ -83,6 +99,7 @@ impl Sema<'_, '_> {
     /// The declaration after `template<> template<...>` ended.
     pub fn act_member_template_spec_end(&mut self) {
         self.templ.member_spec = None;
+        self.templ.spec_headers.clear();
     }
 
     /// `t` redeclares, after `template<> template<...>`, a member
@@ -195,6 +212,7 @@ impl Sema<'_, '_> {
                 TagForm::ExplicitInst { declaration: ext.is_some() }
             }
         } else if self.templ.explicit_spec.take().is_some() {
+            let _ = self.check_extra_spec_headers(qualifier, 0);
             TagForm::ExplicitSpec
         } else if self.take_template_head(qualifier).is_some() {
             TagForm::Partial

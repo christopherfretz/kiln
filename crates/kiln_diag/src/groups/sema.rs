@@ -23,6 +23,7 @@ ConstantLogicalOperand = "constant-logical-operand" [];
 CoroNonAlignedAllocationFunction = "coro-non-aligned-allocation-function" [];
 CoveredSwitchDefault = "covered-switch-default" [];
 Cxx11Narrowing = "c++11-narrowing" [];
+CxxPre20Compat = "pre-c++20-compat" [];
 DanglingField = "dangling-field" [];
 DefaultedFunctionDeleted = "defaulted-function-deleted" [];
 DelegatingCtorCycles = "delegating-ctor-cycles" [];
@@ -42,6 +43,7 @@ ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
 ExternInitializer = "extern-initializer" [];
 // ----- WP-197 (DR482 namespace extra qualification)
 ExtraQualification = "extra-qualification" [];
+ExtraneousTemplateHead = "extraneous-template-head" [];
 FlexibleArrayExtensions = "flexible-array-extensions" [];
 FloatConversionRank = "float-conversion-rank" [];
 FormatExtraArgs = "format-extra-args" [];

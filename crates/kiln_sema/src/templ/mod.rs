@@ -207,6 +207,10 @@ pub struct TemplState {
     /// inner head specializes member template `B` of the implicitly
     /// instantiated `A<int>`, which the outer `template<>` matched.
     pub(crate) member_spec: Option<Loc>,
+    /// The `template` keywords of the leading `template<>` headers of the
+    /// namespace-scope declaration being parsed, not yet matched to its
+    /// qualifier ([`Sema::check_extra_spec_headers`]).
+    pub(crate) spec_headers: Vec<Loc>,
     /// The instantiation-stack depth at which `explicit_spec` /
     /// `explicit_inst` was set: a declarator met while a class named in
     /// the declaration's qualifier is instantiated is not the explicit
@@ -866,6 +870,8 @@ impl Sema<'_, '_> {
             open.push(i);
         }
         open.reverse();
+        let written = open.iter().filter(|&&i| !self.templ.heads[i].invented).count();
+        let extra_diagnosed = self.check_extra_spec_headers(qualifier, written);
         if open.is_empty() {
             return None;
         }
@@ -909,7 +915,7 @@ impl Sema<'_, '_> {
         }
         let rest: Vec<usize> = it.collect();
         let &innermost = rest.last()?;
-        if rest.len() > 1 {
+        if rest.len() > 1 && !extra_diagnosed {
             let loc = self.templ.heads[rest[0]].template_loc;
             self.error(DiagId::sema_extraneous_template_params, loc);
         }
@@ -919,6 +925,118 @@ impl Sema<'_, '_> {
         let list = self.templ.heads[innermost].list;
         self.templ.cur = list;
         list
+    }
+
+    /// Matches the pending `template<>` headers ([`TemplState::spec_headers`],
+    /// taken) and the `written` non-empty heads after them to the classes
+    /// of `qualifier`, outermost first, as clang's
+    /// `MatchTemplateParametersToScopeSpecifier` does: an implicitly
+    /// instantiated specialization takes a `template<>`, a class template
+    /// (or partial specialization) a non-empty head, and an explicit
+    /// specialization none, its members being declared as those of an
+    /// ordinary class ([temp.expl.spec]/5). The last header is the
+    /// declaration's own; any other left over is extraneous
+    /// ([temp.expl.spec]/17): when all of them are `template<>`, clang 22's
+    /// "extraneous template parameter list in template specialization"
+    /// (`-Wextraneous-template-head`, an error by default; clang 19 a plain
+    /// warning without a group), else the error clang also gives for
+    /// extra non-empty heads (the declaration is then dropped), both at
+    /// the first extra header's `template`.
+    /// A `template<>` left over when the qualifier names (or is nested in)
+    /// an explicit specialization adds "'template<>' header not required
+    /// for explicitly-specialized class ..." at that specialization.
+    /// Returns whether it diagnosed; only the case where an extra header
+    /// is a `template<>` is handled here (extra non-empty heads alone are
+    /// [`Self::take_template_head`]'s), and a `template<>` meeting a class
+    /// template, or a non-empty head an implicit specialization, is left
+    /// to the other checks.
+    pub(crate) fn check_extra_spec_headers(
+        &mut self,
+        qualifier: Option<DeclId>,
+        written: usize,
+    ) -> bool {
+        if self.inst.stack.len() != self.templ.explicit_depth {
+            return false;
+        }
+        let empties = std::mem::take(&mut self.templ.spec_headers);
+        let n = empties.len();
+        if n == 0 {
+            return false;
+        }
+        let total = n + written;
+        let mut consumed = 0;
+        for slot in self.scope_slots(qualifier) {
+            if consumed == total {
+                break;
+            }
+            let empty = consumed < n;
+            match slot {
+                ScopeSlot::Empty(_) if !empty => return false,
+                ScopeSlot::Params(_) if empty => return false,
+                _ => consumed += 1,
+            }
+        }
+        // Extra headers: `consumed .. total - 1`; only those with a
+        // `template<>` among them (`consumed < n`) are handled here.
+        if consumed + 1 >= total || consumed >= n {
+            return false;
+        }
+        let all_empty = total - 1 <= n;
+        let loc = empties[consumed];
+        let id = if !all_empty {
+            // clang marks the declaration invalid (dropped here, as for a
+            // head matching an implicit specialization).
+            self.templ.head_mismatch = true;
+            DiagId::sema_extraneous_template_params
+        } else if self.clang_compat >= 22 {
+            DiagId::sema_template_spec_extra_headers
+        } else {
+            DiagId::sema_template_spec_extra_headers_clang19
+        };
+        let mut d = self.diag(id, loc);
+        if let Some(q) = qualifier
+            && let Some(spec) = self.explicit_spec_in_scope(q)
+        {
+            let note = self
+                .diag(
+                    DiagId::note_explicit_template_spec_does_not_need_header,
+                    self.ast.decls.get(spec).loc(),
+                )
+                .arg(format!("'{}'", self.ty_canonical_str(self.tag_type(q))));
+            d = d.with_note(note);
+        }
+        self.emit(d);
+        true
+    }
+
+    /// The explicitly specialized class `c` is, or is nested in, if any
+    /// (clang's `ExplicitSpecLoc` walk in
+    /// `MatchTemplateParametersToScopeSpecifier`): a class template
+    /// specialization declared with `template<>`, or a member class of an
+    /// implicit specialization explicitly specialized.
+    fn explicit_spec_in_scope(&self, mut c: DeclId) -> Option<DeclId> {
+        for _ in 0..1024 {
+            if self.kind_of(c) == DeclKind::CXXRecord {
+                let first = self.ast.first(c);
+                if self.ast.described_template(first).is_none()
+                    && self.ast.partial_spec_info(first).is_none()
+                {
+                    if let Some((_, info)) = self.ast.spec_info(first) {
+                        if info.kind == SpecKind::ExplicitSpecialization {
+                            return Some(c);
+                        }
+                    } else if self
+                        .ast
+                        .member_spec_info(first)
+                        .is_some_and(|(_, m)| m.kind == SpecKind::ExplicitSpecialization)
+                    {
+                        return Some(c);
+                    }
+                }
+            }
+            c = self.ast.decls.get(c).ctx()?;
+        }
+        None
     }
 
     /// [temp.mem]/2: a local class shall not have member templates
