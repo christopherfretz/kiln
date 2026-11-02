@@ -3791,7 +3791,8 @@ impl Cg<'_> {
             // clang `IsConstantAggregate`: constexpr, or POD with a
             // constant initializer.
             let constexpr = ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr());
-            if let Some(c) = fold.filter(|_| constexpr || self.is_pod(q)) {
+            let constant_init = || self.is_pod(q) && !self.empty_copy_of_nonconstant(init);
+            if let Some(c) = fold.filter(|_| constexpr || constant_init()) {
                 // A constant the lowering cannot spell yet (bit-fields,
                 // base subobjects) is initialized as written instead,
                 // which has the same effect for a local.
@@ -4002,6 +4003,39 @@ impl Cg<'_> {
             let p = self.struct_gep(st, dst.v, i as u32);
             self.store(V::C(ek), p, min_align(dst.align, offs[i]), vol);
         }
+    }
+
+    /// clang `Expr::isConstantInitializer` on a trivial copy or move of an
+    /// empty class asks whether the source is constant. The copy reads
+    /// nothing ([class.copy.ctor]/14), so it folds whatever the source is,
+    /// and the fold does not answer that question: `E e2 = std::move(e)`
+    /// of a non-constexpr `e` is copied as written. The source counts as
+    /// constant only when it names a constexpr variable.
+    fn empty_copy_of_nonconstant(&self, init: ExprId) -> bool {
+        let ast = self.ast;
+        let mut e = init;
+        while matches!(
+            ast.exprs.get(e).kind(),
+            ExprKind::ExprWithCleanups | ExprKind::CXXBindTemporaryExpr | ExprKind::ParenExpr
+        ) {
+            e = self.sub(e);
+        }
+        if ast.exprs.get(e).kind() != ExprKind::CXXConstructExpr {
+            return false;
+        }
+        let ctor = ast.exprs.constructor(e);
+        let trivial = ast.decls.function(ctor).is_some_and(|f| f.spec.is_trivial());
+        let empty =
+            ast.decls.get(ctor).ctx().is_some_and(|rd| {
+                self.class_bits(rd).contains(kiln_ast::decl::DefinitionBits::EMPTY)
+            });
+        let mut args = ast.lists.iter::<ExprId>(ast.exprs.construct_args(e));
+        let (Some(src), true, true) = (args.next(), trivial, empty) else {
+            return false;
+        };
+        let src = self.ignore_paren_base_casts(src);
+        !(ast.exprs.get(src).kind() == ExprKind::DeclRefExpr
+            && ast.decls.var(ast.exprs.decl(src)).is_some_and(|v| v.spec.is_constexpr()))
     }
 
     fn stores_for_constant(&mut self, d: DeclId, at: Addr, k: Value, vol: bool) -> R<()> {

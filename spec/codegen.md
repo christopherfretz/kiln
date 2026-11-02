@@ -349,7 +349,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   - a constant aggregate goes through `emitStoresForConstant`. That means
     a single store, memset-0 plus a few stores, a bytewise memset, or a
     memcpy from a `@__const.<fn>.<var>` private global, in that order of
-    preference. Constants are never promoted to globals at -O0;
+    preference. Constants are never promoted to globals at -O0. An
+    aggregate is constant when it is constexpr, or when it is POD and
+    its initializer folds. The exception is a trivial copy or move of
+    an empty class, which reads nothing and so folds whatever its source
+    is. Like clang's `isConstantInitializer`, it is constant only when
+    its source names a constexpr variable. `E e2 = std::move(e)` emits
+    nothing;
   - a non-constant aggregate goes through `EmitAggExpr`, with
     `CheckAggExprForMemSetUse` (size > 16 and nonzero*4 <= size gives a
     memset);
