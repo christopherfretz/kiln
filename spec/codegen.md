@@ -717,10 +717,14 @@ The normative description is spec/driver.md "Code generation". In short:
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
   type names, `llvm.modf`, CWG2137's initializer-list constructor for
   `B{b}` (a sema change kiln should follow), and `-O0` instruction
-  choices (atomic temporaries, P0528 padding clearing, `select` for
-  vector `?:`, constant-folded reductions, `undef` widening shuffles,
-  `delete` block order). clang 22's IR for a `bool` vector element store
-  fails verification (`vector_ops`). Following them under
+  choices (atomic temporaries, `select` for vector `?:`, constant-folded
+  reductions, `undef` widening shuffles, `delete` block order). clang
+  22's IR for a `bool` vector element store fails verification
+  (`vector_ops`). The exception goes the other way: a padded `_Atomic`
+  operand's padding is zeroed (P0528) and a failed compare-exchange
+  writes the old value back to `*expected` (C11 7.17.7.4p2) at every
+  level, as clang 22 does. clang 19 did neither, so `atomic_padded` is an
+  oracle-19 `Structure` deviation. Following them under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
 - **Uses of constant-initialized reference variables as lvalues.** A

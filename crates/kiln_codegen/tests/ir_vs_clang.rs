@@ -63,6 +63,11 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // The same, for the EH cleanup of a static array temporary's
     // initialization (WP-216).
     ("array_temporary_global", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
+    // kiln zeroes a padded `_Atomic` operand's padding and writes a failed
+    // compare-exchange's old value back to `*expected` (C11 7.17.7.4p2) at
+    // every compat level, as clang 22 does; clang 19 did neither.
+    ("atomic_padded", "aarch64-unknown-linux-gnu", "19", Allow::Structure),
+    ("atomic_padded", "x86_64-unknown-linux-gnu", "19", Allow::Structure),
     // clang 20+ passes an AArch64 empty class by value as `i64` (GCC's
     // convention; `-fclang-abi-compat=19` keeps the old `i8`). kiln follows
     // clang 19 until codegen honours `-fclang-compat=22` (WP-184 residual).
