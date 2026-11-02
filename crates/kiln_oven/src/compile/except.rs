@@ -87,12 +87,16 @@ impl Compiler<'_> {
                 let q = ast.decls.get(v).ty().unwrap_or(kiln_ast::QualType::INT);
                 let by_ref = ast.types.is_reference(q);
                 let q = if by_ref { ast.types.pointee(q).unwrap_or(q) } else { q };
+                // `cv T` or `const T&` with T a pointer: converted
+                // ([except.handle]/3.3-3.4); `T&` binds the object itself.
+                let cq = ast.types.canonical(q).quals();
                 let t = self.ty(q);
                 let ptr = matches!(
                     self.kind(t),
                     TyKind::Ptr(_) | TyKind::MemPtr { .. } | TyKind::NullPtr
                 );
-                (if ptr && !by_ref { 2 } else { 1 }, t, by_ref)
+                let conv = ptr && (!by_ref || (cq.is_const() && !cq.is_volatile()));
+                (if conv { 2 } else { 1 }, t, by_ref && !conv)
             }
         };
         let dst = self.reg();
@@ -103,6 +107,13 @@ impl Compiler<'_> {
         if let Some(v) = var {
             if by_ref {
                 self.locals.insert(v, Local::Mem(dst));
+            } else if aux == 2 && self.ast().types.is_reference(self.ast().decls.get(v).ty().unwrap_or(kiln_ast::QualType::INT)) {
+                // `const T&` to a converted pointer: bound to a temporary
+                // holding the converted value.
+                let p = self.reg();
+                self.alloc_var(p, t, v, true);
+                self.emit(Op::InitStore, 0, &[p, dst, t.0]);
+                self.locals.insert(v, Local::Mem(p));
             } else if let Some(Local::Mem(p)) = self.locals.get(&v).copied() {
                 let init = self.ast().decls.var(v).and_then(|x| x.init);
                 if let Some(i) = init {
