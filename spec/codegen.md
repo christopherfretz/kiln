@@ -176,6 +176,13 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
     `&&`/`||`/`!`/`?:` conditions into branches and folds constants;
   - bit-fields load the storage unit, then `shl`/`ashr` (signed) or
     `lshr`/`and` (unsigned); stores mask, clear and `or` into the unit;
+  - a constructor's initialization of a bit-field member (a mem-init
+    or a default member initializer `bool b : 1 {false};`,
+    [class.base.init]/9) is stored through the storage unit the same
+    way: `field_lvalue_init` defers a bit-field to `field_lvalue`, as
+    clang `EmitLValueForFieldInitialization` does (WP-286;
+    `tests/codegen/bitfield_member_init.cpp`,
+    `tests/conformance/class.base.init/bitfield-default-member-init-run.cpp`);
   - `++`/`--` on bool, integers, floats and pointers, including bit-fields.
 - Calls:
   - a call site gets `nounwind` only when the callee's prototype is
