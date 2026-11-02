@@ -380,18 +380,18 @@ impl Sema<'_, '_> {
         let ainfo = af.info().with_trailing_return(false);
         let pexc = t.canonical_exc(t.exc_spec(&pf));
         let aexc = t.canonical_exc(t.exc_spec(&af));
-        let pparams: Vec<QualType> =
+        let canon_params: Vec<QualType> =
             t.params(&pf).iter().map(|&x| t.canonical(x).without_quals()).collect();
         if pinfo != ainfo
-            || pparams.as_slice() != t.params(&af)
+            || canon_params.as_slice() != t.params(&af)
             || (pexc != aexc && aexc != kiln_ast::types::ExcSpec::Nothrow)
         {
             return None;
         }
         let ret = self.deduce_match(pf.ret(), af.ret())?;
-        let params = self.ast.types.params(&pf).to_vec();
+        let declared_params = self.ast.types.params(&pf).to_vec();
         let exc = self.ast.types.exc_spec(&pf);
-        Some(self.ast.types.function(ret, &params, pf.info(), exc))
+        Some(self.ast.types.function(ret, &declared_params, pf.info(), exc))
     }
 
     /// `return e;` (or `return;` when `value` is `None`) in a function
