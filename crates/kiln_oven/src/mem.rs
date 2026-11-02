@@ -2151,6 +2151,24 @@ mod tests {
         assert_eq!((m.heap.top, m.heap_live, m.heap_count), (0, 0, 0));
     }
 
+    /// spec/oven.md "Construction" (WP-387): `void *` tags intern to
+    /// stable pointer marks, and past the mark space fall back to 1.
+    #[test]
+    fn void_marks_intern_and_saturate() {
+        let mut m = Memory::new(MIB);
+        assert_eq!(m.void_mark(0), 1);
+        assert_eq!(m.void_tag(1), 0);
+        let a = m.void_mark(8);
+        assert_eq!((a, m.void_mark(9), m.void_mark(8)), (PTR_TAGGED, PTR_TAGGED + 1, a));
+        assert_eq!(m.void_tag(a), 8);
+        for t in 10..300 {
+            let k = m.void_mark(t);
+            assert!(k == 1 || m.void_tag(k) == t);
+        }
+        assert_eq!(m.void_mark(1000), 1);
+        assert_eq!(m.void_tag(255), 255 - u32::from(PTR_TAGGED) + 8);
+    }
+
     #[test]
     fn reset_clears_the_heap() {
         let mut m = Memory::new(256 * MIB);

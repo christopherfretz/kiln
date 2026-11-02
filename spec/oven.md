@@ -53,7 +53,10 @@ the evaluator's flattened type table.
 - Register machine: each frame is a window of 128-bit registers in one
   growable `Vec<u128>`; every scalar fits one register (integers canonical:
   sign- or zero-extended from their width; floats as IEEE bit patterns,
-  x87 in the low 80 bits; pointers as an encoded `Ptr`). Locals whose
+  x87 in the low 80 bits; pointers as an encoded `Ptr` in the low 64
+  bits, a `void *` with its designator tag, `kbc::VOID_TAG`, the
+  designated type + 1, in bits 64..96, kept through memory by the pointer
+  mark, "Abstract memory" and "Construction"). Locals whose
   address is never taken and that are not aggregates live in registers;
   the others live in abstract memory.
 - Typed, checked arithmetic per width (1..128 bits, `_BitInt`-ready): signed
@@ -95,7 +98,9 @@ the evaluator's flattened type table.
 - **Spaces**: the *frame* space is a bump arena of all frame objects of the
   current evaluation; the *static* space holds globals and thawed constants
   and persists for the TU. Each space keeps the bytes, a per-byte
-  initialized bitmap and a per-8-byte-granule "holds a pointer" bit; unions
+  initialized bitmap and a per-8-byte-granule pointer mark byte (0: no
+  pointer; 1: a pointer; `mem::PTR_TAGGED` (2) and up: a `void *` and
+  its designator tag, below and "Construction"); unions
   keep their active member in a side map keyed by (allocation, offset,
   union type) (`mem::UKey`), so unions nested at one offset (`union {
   char c; union { int x; float y; } q; }`) each have their own entry
@@ -1056,13 +1061,45 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   `new (f(s)) S{}` is "... from 'int' to 'S'", as in clang 22, whose
   `void *` keeps the full lvalue designator; a `void *` made from `&s`
   designates `s` (`expr.new/p2747-placement-voidified-subobject*.cpp`).
-  The tag rides registers only: copies, calls, returns and register
-  locals keep it; every pointer operation reads the low 64 bits; a
-  store to memory (a `void *` member, a `void *` local whose address is
-  taken) and a cast back to `T *` drop it, so such a `void *` falls back
-  to the outermost object. Deviation: the tag is a type, not a path, so
-  two subobjects of one type at one offset (empty bases,
-  `[[no_unique_address]]`) are not told apart.
+  Copies, calls, returns and register locals keep the tag; every pointer
+  operation reads the low 64 bits. A store of a tagged pointer to memory
+  (a `void *` member or array element, a `void *` local whose address is
+  taken, an object copy) keeps it in the granule's pointer mark (WP-387):
+  the tag types are interned TU-wide (`Memory::void_mark`, append-only,
+  so a rolled-back or copied mark stays valid), mark `PTR_TAGGED + i`
+  naming the `i`-th, and a load of a pointer whose granule bears such a
+  mark puts the tag back in bits 64..96 (`Memory::void_tag`). A `void
+  *` therefore costs what it did before: 8 bytes in memory plus the
+  granule's existing mark byte, 16 in a register; the intern table
+  holds at most 254 types (4 bytes each plus a hash entry). Once it is
+  full, a `void *` of a further type is stored untagged (mark 1). An
+  untagged `void *` (that one, a thawed constant's, which holds no
+  designator, or a builtin's result) designates the outermost object
+  at its address.
+  The tag is the designated subobject's type; with the pointer's offset
+  and past-the-end bit it names one subobject ([intro.object]/9: two
+  distinct objects of one type have distinct addresses), except members
+  of one type of a union, which the Oven's typed pointers do not tell
+  apart either (`Memory::union_alts`). An empty base is a subobject of
+  its class at its offset (`Types::empty_bases`, kept apart from
+  `Types::fields` as it holds no storage), so it and an empty
+  `[[no_unique_address]]` member at the same address are different
+  designated objects, and constructing an object that holds no data
+  (`Types::holds_no_data`) by placement touches no byte (the member
+  sharing its address keeps its value)
+  (`expr.new/p2747-placement-voidified-through-memory*.cpp`).
+- *Casts from `void *`* (C++26, P2738R1, [expr.static.cast]/14): `VoidCast
+  [dst, p, T]` aux 0 (a `static_cast` from `cv void *` to `cv T *`
+  outside `std::allocator<T>::allocate`) succeeds for null and when the
+  type the `void *`'s tag records is similar to `T` ([conv.qual]/2,
+  `Types::similar`: equal but for the cv-qualifiers at each pointer or
+  array level), as clang's check of `Designator.getType`; otherwise
+  "cast from 'void *' is not allowed in a constant expression because
+  the pointed object type 'U' is not similar to the target type 'T'". So
+  a `void *` made from a base subobject, a first member or an array is
+  not the derived object, the enclosing object or the first element. An
+  untagged `void *` succeeds when the allocation has a `T` subobject at
+  its address (`expr.static.cast/p2738-void-cast-designator*.cpp`).
   A placement new allocates nothing: constructing and destroying objects
   in one storage in a loop holds that storage only
   (`expr.new/p2747-placement-churn.cpp`, 100000 objects, one heap
