@@ -246,6 +246,11 @@ reference-init texts apply instead (WP-161): no usable constructor is
 (`sema_reference_bind_failed`), an ambiguous one is "conversion from
 'int' to 'const F' is ambiguous" at the initializer, and a deleted one is
 "attempt to use a deleted function" (`DeletedAs::Use`).
+The /5.4.1 constructor call is bound to its temporary
+(`maybe_bind_temporary`, clang's `CXXBindTemporaryExpr` under the
+`MaterializeTemporaryExpr`), so a class with a non-trivial destructor, an
+implicit one included, is destroyed at the end of the full-expression or
+with the extending reference ([class.temporary]/4).
 A `return` operand copy-initializing a class with no viable converting
 constructor is clang's "no viable conversion from returned value of type
 'int' to function return type 'S'" (`sema_no_viable_conversion_return`)
