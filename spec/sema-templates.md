@@ -27,7 +27,7 @@ deviation is listed in §1.5.
 | Declarations | class, function, variable and alias templates; member templates; concepts; abbreviated function templates; friend templates | `export` and modules reachability (M4) |
 | Specialization | implicit instantiation, partial and explicit specialization, explicit instantiation (declaration and definition) | — |
 | Deduction | calls, explicit args, defaults, address of overload set, conversion functions, `auto`/`decltype(auto)`, NTTP `auto`, partial ordering | deducing `this` (M4) |
-| CTAD | implicit guides from constructors and constructor templates, the copy guide, user-declared guides, aggregate CTAD (P1816), alias CTAD (P1814), inherited-constructor guides (P2582, §6.6.1), guides of member templates of instantiated class templates, [over.match.list] phase 1 (WP-071b, WP-134) | inherited-ctor guides through a base named by the injected-class-name (`using G::F::F;`), and an alias template of a class template that inherits constructors |
+| CTAD | implicit guides from constructors and constructor templates, the copy guide, user-declared guides, aggregate CTAD (P1816), alias CTAD (P1814), inherited-constructor guides (P2582, §6.6.1), guides of member templates of instantiated class templates, [over.match.list] phase 1 (WP-071b, WP-134) | — |
 | Packs | type, value and template packs; expansion in every context in §2.7; folds; `sizeof...`; pack indexing P2662 | expansion statements P1306 (M6, with reflection) |
 | Concepts | normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto` | fold-expanded constraints P2963 (clang 19 has no support, M4); concept and variable-template template parameters P2841 (M5) |
 | Reflection | — | splices as template arguments (M6) |
@@ -338,7 +338,7 @@ All of these are built by sema actions, which compute dependence as in
 
 | Syntax (in a dependent context) | Node |
 |---|---|
-| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
+| `T::x`, `X<T>::x` or `X<T>::operator@` (not the current instantiation) in an expression; also `D::x` / `D<T>::x` naming the current instantiation `D` when lookup finds nothing and `D` has a dependent base ([temp.dep.type]/6; `Sema::unknown_specialization_nns` rebuilds the specifier on the injected-class-name type, so instantiation looks `x` up in the specialization, an implicit member access in a member function; WP-309; the same for a nested-name-specifier component `D::N::` when `N` is found neither as a nested name nor as an ordinary name in `D`, e.g. `using G::F::F;` with a dependent base `F<U, T, int>`, WP-367) | `DependentScopeDeclRefExpr {nns, name (a `DeclName`), targs?}` |
 | `e.m` or `p->m` with a type-dependent object, or a member of the current instantiation that is not found when it has dependent bases | `CXXDependentScopeMemberExpr {base, arrow, nns?, name, targs?}` |
 | unqualified `f(args)` with type-dependent args, where lookup finds functions or templates (or nothing) | `UnresolvedLookupExpr {requires_adl, overloaded, decls, targs?}`, plus `CallExpr` of dependent type |
 | unqualified `operator@(args)` / `operator T(args)` (an operator- or conversion-function-id as the callee) whose lookup finds nothing ([temp.dep.general]/2, [basic.lookup.argdep]/1) | an empty `UnresolvedLookupExpr` with `requires_adl`, as for an undeclared `f(args)` (`Sema::act_on_id_expression_dn` while `deferring_call_ref`); ADL at the call or at instantiation, and no candidate is clang's `use of undeclared 'operator@'` (`sema_undeclared_use`) |
@@ -2582,8 +2582,9 @@ Building it uses the `BuildingDeductionGuides` frame.
 
 The set then goes through overload resolution with the initializer as
 the arguments. The result type is the guide's return type, after
-substitution (for a guide from an inherited constructor, mapped to the
-derived class, §6.6.1). If several best guides tie, the
+substitution (for a guide from an inherited constructor, already the
+derived class, or mapped to it at selection for a "late" guide, §6.6.1).
+If several best guides tie, the
 [over.match.best.general]/2.10–13 tie-breakers apply.
 
 For list-initialization, overload resolution is [over.match.list]:
@@ -2658,42 +2659,63 @@ of `A` are guides of `C`, each with its return type `R` replaced by
 `R` against `B`.
 - **Which bases** (`inherited_ctor_bases`): each `Using` or (dependent)
   `UnresolvedUsingValue` member of `C`'s pattern definition named by a
-  constructor name, whose nested-name-specifier is a type equal
-  (canonically) to a non-pack base-specifier's type. Only a `B` that is a
-  specialization of a class template contributes. The definition's
-  `HAS_INHERITED_CTOR` bit short-circuits the scan.
+  constructor name, whose nested-name-specifier is either a type equal
+  (canonically) to a non-pack base-specifier's type, or `C::N` (`C` named
+  by its injected-class-name, `N` a member of the unknown specialization,
+  [temp.dep.type]/6) where `N` is the name of the class template of exactly
+  one base-specifier (`dependent_base_named`; `using G::F::F;` in the
+  standard's example). Only a `B` that is a specialization of a class
+  template contributes. The definition's `HAS_INHERITED_CTOR` bit
+  short-circuits the scan.
 - **Deducible** `A`: every template parameter of `C` is deduced from `B`
   against itself (`alias_deducible(C, B, B)`; an undeduced pack is
   empty). `template<class T> struct E : B<int> { using B<int>::B; };`
   gets no guides from `B`.
 - **Forming** (`inherited_guide`, cached in `ctad_alias_cache` under
   `(C, g)`): the guides of `B`'s template are its full set (implicit,
-  copy, user-declared; no aggregate candidate), except ones it inherited
-  itself. A guide template goes through the alias transform
-  (`build_alias_guide(C, B, g)`, §6.6), so its deducibility constraint
-  (`templ.ctad_alias`) is exactly that `CC<R>` matches. A non-template
-  guide is cloned with `C<...>` as its return type, or dropped when `CC<R>`
-  does not match. Each formed guide is recorded in `templ.ctad_inherited`.
-- **Result** (`ctad_result_type`): the selected guide template's
-  substituted `R` is deduced against `B` and `C`'s injected-class-name is
-  substituted with the deduced arguments.
+  copy, user-declared, and the ones `B` itself inherited, so inheritance is
+  transitive; no aggregate candidate). A guide template goes through the
+  alias transform (`build_alias_guide(C, B, g, inherited = true)`, §6.6)
+  and its substituted return type `R` is deduced against `B` right away,
+  symbolically on the new guide's own parameters
+  (`inherited_guide_result`; a pack expansion in `B` deduces the whole
+  pack): the guide's return type becomes `CC<R>::type`, written with the
+  new guide's parameters, and the `__is_deducible` constraint is not
+  attached (a symbolic match implies it). Each formed guide is recorded in
+  `templ.ctad_inherited` as `InheritedGuide { class, base, source_ret }`,
+  `source_ret = Some(R)`. When the symbolic deduction fails the guide
+  keeps `R` as its return type and the alias constraint
+  (`templ.ctad_alias`), `source_ret = None` (a "late" guide), and the
+  result is mapped at selection. A non-template guide is cloned with
+  `C<...>` as its return type, or dropped when `CC<R>` does not match.
+- **Alias templates and further inheritance** use the formed guides like
+  any other guide of `C` (`ctad_guides`, §6.6): an alias template of `C`
+  and a class that inherits from `C` both see them, and the alias guide of
+  an inherited guide is itself recorded as inherited (keeping /2.10). Late
+  guides are not passed on.
+- **Result** (`ctad_result_type`): the selected guide's return type is the
+  result, except for a late guide, whose substituted `R` is deduced against
+  `B` and `C`'s injected-class-name substituted with the deduced
+  arguments.
 - **Ranking** ([over.match.best.general]/2.10, `better`): a guide not
   formed from an inherited constructor beats one that is when their
   parameters for the arguments have the same types (`same_guide_params`).
   It comes before /2.11 (user-declared over implicit).
-- **Notes** print such a guide as an alias guide is printed:
-  `requires __is_deducible(C, B<X *>) C(X *) -> B<X *>` (no clang text
+- **Notes** print such a guide as an alias guide is printed, with the
+  constraint naming `R` and the return type naming `C`:
+  `requires __is_deducible(C, B<X *>) C(X *) -> C<X>` (no clang text
   exists).
-- `__cpp_deduction_guides` stays 201703L, as in clang 19 and 22.
-- **Not done:** a base named through the injected-class-name
-  (`using G::F::F;` in the standard's example) fails earlier, in
-  using-declaration lookup. Guides `B` inherited itself, and an alias
-  template whose target inherits constructors, contribute nothing.
+- `__cpp_deduction_guides` stays at the value clang defines (201703L in
+  clang 19 and 22): kiln adopts 202207L only once the oracle clang
+  implements P2582, so the predefined macros keep matching the oracle.
 
 Tests: `tests/conformance/over.match.class.deduct/p2582-inherited-guides.cpp`
 (the standard's example with `F<U, T, int>` written out, constructor
 templates, user guide templates, /2.10, packs, casts and `new`),
 `.../p2582-not-deducible.cpp` (`D`, `E` and a non-matching `R`),
+`.../p2582-transitive-alias.cpp` (transitive guides, packs, alias
+templates of inheriting classes, `using G::F::F;`),
+`tests/conformance/temp.dep.type/p6-inherited-ctor-injected-base.cpp`,
 `.../run-p2582.cpp`, `.../p2582-probe.cpp`.
 
 The M3 exit headers need only the user-declared guides:
