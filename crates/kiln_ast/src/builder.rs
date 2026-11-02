@@ -2716,6 +2716,47 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// A value-dependent `__builtin_offsetof(operand, comps...)` in a
+    /// template (clang's dependent `OffsetOfExpr`): a `std::size_t`
+    /// (`ty`) prvalue, never type-dependent, value-dependent through the
+    /// operand type or an index. The designator is kept as written for
+    /// instantiation; the index expressions are its children.
+    pub fn dependent_offsetof(
+        &mut self,
+        ty: QualType,
+        operand: QualType,
+        comps: &[crate::expr::OffsetofComponent],
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        use crate::expr::OffsetofComponent;
+        let mut deps = self.type_deps(ty) | self.type_deps(operand).without(ExprDeps::TYPE);
+        let mut indices = Vec::new();
+        for c in comps {
+            if let OffsetofComponent::Index { index, .. } = *c {
+                deps |= self.deps(index).without(ExprDeps::TYPE);
+                indices.push(index);
+            }
+        }
+        if deps.intersects(ExprDeps::TYPE_VALUE_INST) {
+            deps |= ExprDeps::VALUE_INST;
+        }
+        let list = self.ast.lists.push(&indices);
+        let e = self.simple(
+            ExprKind::OffsetOfExpr,
+            ValueCategory::PRValue,
+            deps,
+            0,
+            ty,
+            loc,
+            list.raw(),
+            0,
+        );
+        self.ast.exprs.cold.end_loc.insert(e, rparen).expect("fresh expression");
+        self.ast.exprs.cold.offsetof_pattern.insert(e, (operand, comps.into())).expect("fresh expression");
+        e
+    }
+
     /// A compound literal `( T ) { ... }` (C99 6.5.2.5, a GNU extension in
     /// C++): `init` is the `InitListExpr`; a prvalue of type `ty`.
     pub fn compound_literal(&mut self, ty: QualType, init: ExprId, loc: Loc) -> ExprId {

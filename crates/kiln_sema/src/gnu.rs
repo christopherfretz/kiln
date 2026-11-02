@@ -3,6 +3,7 @@
 //! `( T ) { ... }`. Each matches clang's behaviour for C++.
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
+pub use kiln_ast::expr::OffsetofComponent;
 use kiln_ast::expr::ExprKind;
 use kiln_ast::ids::RawId;
 use kiln_ast::stmt::StmtKind;
@@ -27,31 +28,6 @@ use crate::target;
 pub struct StmtExprScope {
     outer_odr: Vec<ExprId>,
     outer_imm: crate::consteval::SavedImm,
-}
-
-/// One part of a `__builtin_offsetof` designator (clang
-/// `Sema::OffsetOfComponent`).
-#[derive(Clone, Copy, Debug)]
-pub enum OffsetofComponent {
-    /// A member name: the leading identifier (`start` = `end` = its
-    /// location) or `.identifier` (`start` is the `.`).
-    Field {
-        /// The member name.
-        name: Symbol,
-        /// The `.`, or the name for the leading identifier.
-        start: Loc,
-        /// The name.
-        end: Loc,
-    },
-    /// `[ index ]`.
-    Index {
-        /// The index expression.
-        index: ExprId,
-        /// The `[`.
-        start: Loc,
-        /// The `]`.
-        end: Loc,
-    },
 }
 
 impl Sema<'_, '_> {
@@ -199,6 +175,23 @@ impl Sema<'_, '_> {
         comps: &[OffsetofComponent],
         rparen: Loc,
     ) -> ExprId {
+        // A dependent operand type or a value-dependent index defers the
+        // whole designator to instantiation (clang `BuildBuiltinOffsetOf`
+        // builds a dependent `OffsetOfExpr`; [temp.dep.constexpr]).
+        let dependent = self.ast.types.is_dependent(ty)
+            || comps.iter().any(|c| match *c {
+                OffsetofComponent::Index { index, .. } => self
+                    .ast
+                    .exprs
+                    .get(index)
+                    .deps()
+                    .intersects(kiln_ast::expr::ExprDeps::TYPE_VALUE_INST),
+                OffsetofComponent::Field { .. } => false,
+            });
+        if dependent {
+            let st = self.size_type();
+            return self.builder().dependent_offsetof(st, ty, comps, loc, rparen);
+        }
         let mut indices = Vec::new();
         let offset = self.offsetof_value(loc, ty, comps, &mut indices);
         let fits = offset.and_then(|v| u32::try_from(v).ok());

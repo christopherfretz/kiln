@@ -1083,6 +1083,33 @@ pub enum Designator {
     },
 }
 
+/// One part of a `__builtin_offsetof` designator (clang
+/// `Sema::OffsetOfComponent`). A value-dependent `OffsetOfExpr` keeps
+/// its operand type and designator as written for instantiation
+/// ([`ColdExprData::offsetof_pattern`]).
+#[derive(Clone, Copy, Debug)]
+pub enum OffsetofComponent {
+    /// A member name: the leading identifier (`start` = `end` = its
+    /// location) or `.identifier` (`start` is the `.`).
+    Field {
+        /// The member name.
+        name: Symbol,
+        /// The `.`, or the name for the leading identifier.
+        start: Loc,
+        /// The name.
+        end: Loc,
+    },
+    /// `[ index ]`.
+    Index {
+        /// The index expression.
+        index: ExprId,
+        /// The `[`.
+        start: Loc,
+        /// The `]`.
+        end: Loc,
+    },
+}
+
 /// Side record of an `InitListExpr` (semantic form, §5.6).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct InitListExtra {
@@ -1183,6 +1210,10 @@ pub struct ColdExprData {
     /// non-class `CI{1}` / `static_cast<CI>(x)` whose prvalue drops the
     /// qualifiers and sugar of `CI`, a reference named by an alias.
     pub cast_written: ColdMap<ExprId, QualType>,
+    /// A value-dependent `OffsetOfExpr`: the operand type and the
+    /// designator as written, rebuilt at instantiation (clang keeps its
+    /// `OffsetOfNode`s; spec/sema.md §5.8).
+    pub offsetof_pattern: ColdMap<ExprId, (QualType, Box<[OffsetofComponent]>)>,
 }
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
@@ -1306,6 +1337,7 @@ impl Default for ColdExprData {
             source_loc: ColdMap::new("source_loc"),
             union_field: ColdMap::new("union_field"),
             cast_written: ColdMap::new("cast_written"),
+            offsetof_pattern: ColdMap::new("offsetof_pattern"),
         }
     }
 }
@@ -2532,6 +2564,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.source_loc.mem_row().prefixed("cold"));
         r.push(self.cold.union_field.mem_row().prefixed("cold"));
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
+        r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
         r
     }
 }
@@ -2567,6 +2600,12 @@ impl ExprArena {
     /// The compound statement of a `StmtExpr`.
     pub fn stmt_expr_body(&self, e: ExprId) -> StmtId {
         StmtId::new(self.expect_kind(e, ExprKind::StmtExpr).a)
+    }
+
+    /// The operand type and designator as written of a value-dependent
+    /// `OffsetOfExpr` ([`ColdExprData::offsetof_pattern`]).
+    pub fn offsetof_pattern(&self, e: ExprId) -> Option<(QualType, &[OffsetofComponent])> {
+        self.cold.offsetof_pattern.get(e).map(|(t, c)| (*t, &**c))
     }
 
     /// The byte offset an `OffsetOfExpr` evaluates to.

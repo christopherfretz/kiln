@@ -634,6 +634,26 @@ impl Substituter<'_, '_, '_> {
                 let list = self.expr(list)?;
                 Ok(self.sema.act_on_va_arg(list, ty, ty_loc, loc, end))
             }
+            // clang `TransformOffsetOfExpr`: the operand type and the
+            // index expressions, then `BuildBuiltinOffsetOf` again.
+            ExprKind::OffsetOfExpr => {
+                let Some((operand, comps)) = ex(self).offsetof_pattern(e) else {
+                    return Ok(e);
+                };
+                let comps = comps.to_vec();
+                let operand = self.ty(operand, loc)?;
+                let mut out = Vec::with_capacity(comps.len());
+                for c in comps {
+                    out.push(match c {
+                        crate::OffsetofComponent::Index { index, start, end } => {
+                            let index = self.expr(index)?;
+                            crate::OffsetofComponent::Index { index, start, end }
+                        }
+                        f @ crate::OffsetofComponent::Field { .. } => f,
+                    });
+                }
+                Ok(self.sema.act_on_builtin_offsetof(loc, operand, &out, end))
+            }
             ExprKind::ShuffleVectorExpr => {
                 // clang `TransformShuffleVectorExpr`: the operands, rebuilt
                 // (and re-checked) as the builtin call.
