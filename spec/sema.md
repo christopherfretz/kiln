@@ -1033,9 +1033,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   `defer_late_noexcept(f, d)` gives `f`'s type `ExcSpec::Deferred(f)`
   and puts `f` in `unparsed_exc`. The parser brackets the replay with
   `act_on_start_delayed_exception_spec(f) -> bool` (a `this` scope with
-  `f`'s cv-qualifiers unless `f` is static, [expr.prim.this]/2) and
+  `f`'s cv-qualifiers, [expr.prim.this]/2) and
   `act_on_end_this_scope`. `act_on_exception_spec(f, spec)` then sets
   the written spec on every redeclaration (`set_member_exception_spec`).
+  A static `f` gets an unqualified `this` scope too, as in clang, so a
+  non-static member named in its spec is found as `this->m`.
+  `act_on_exception_spec` then reports the first `CXXThisExpr` in the
+  operand: `'this' cannot be [implicitly] used in a static member
+  function declaration` (`sema_this_static_member_func`,
+  [expr.prim.this]/3; clang `checkThisInStaticMemberFunctionExceptionSpec`;
+  WP-280, `class.mem.general/static-member-noexcept-this.cpp`). Clang
+  diagnoses it again when a class template's static member is
+  instantiated; kiln diagnoses only the pattern (a follow-up).
   `throw()`, `noexcept` and `noexcept(expr)` all go through this path.
 - *Needed*: `exc_spec_needed(f, loc)` runs at every use that marks a
   function referenced, including unevaluated operands such as

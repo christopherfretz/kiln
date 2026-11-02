@@ -25,6 +25,7 @@ mod r#virtual;
 
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::types::ExcSpec;
+use kiln_ast::expr::ExprKind;
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
@@ -337,16 +338,50 @@ impl Sema<'_, '_> {
     /// [`Sema::act_on_noexcept_spec`] or
     /// [`Sema::act_on_dynamic_exception_spec`].
     pub fn act_on_exception_spec(&mut self, f: DeclId, spec: ExcSpec) {
+        if self.is_static_method(f)
+            && let ExcSpec::NoexceptExpr { expr, .. } = spec
+        {
+            self.check_this_in_static_exception_spec(expr);
+        }
         self.set_member_exception_spec(f, spec);
     }
 
+    /// [expr.prim.this]/3: `this` shall not appear in a static member
+    /// function's declaration. Its replayed *noexcept-specifier* was
+    /// parsed with `this` in scope (so a member named in it is found as
+    /// `this->m`, clang's `CXXThisScopeRAII`), and the first `this`,
+    /// written or implicit, is diagnosed: `'this' cannot be implicitly
+    /// used in a static member function declaration` (clang
+    /// `checkThisInStaticMemberFunctionExceptionSpec`).
+    fn check_this_in_static_exception_spec(&mut self, e: ExprId) {
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            if self.ast.exprs.get(x).kind() == ExprKind::CXXThisExpr {
+                let implicit = self.ast.exprs.this_is_implicit(x);
+                let loc = self.ast.exprs.get(x).loc();
+                let msg = self.diag(DiagId::sema_this_static_member_func, loc).arg(u32::from(implicit));
+                self.emit(msg);
+                return;
+            }
+            let mut kids = self.ast.exprs.children(x, &self.ast.lists);
+            kids.reverse();
+            stack.extend(kids);
+        }
+    }
+
     /// Before the replayed *noexcept-specifier* of member function `f` is
-    /// parsed: `this` may appear in it unless `f` is static
-    /// ([expr.prim.this]/2), with `f`'s cv-qualifiers. Returns whether a
-    /// `this` scope was entered, for [`Sema::act_on_end_this_scope`].
+    /// parsed: `this` may appear in it, with `f`'s cv-qualifiers
+    /// ([expr.prim.this]/2). A static member function's gets one too, as
+    /// in clang, so that a member it names is diagnosed by
+    /// [`Sema::act_on_exception_spec`] rather than as a call without an
+    /// object. Returns whether a `this` scope was entered, for
+    /// [`Sema::act_on_end_this_scope`].
     pub fn act_on_start_delayed_exception_spec(&mut self, f: DeclId) -> bool {
-        if self.is_static_method(f) || self.kind_of(f) == DeclKind::Function {
+        if self.kind_of(f) == DeclKind::Function {
             return false;
+        }
+        if self.is_static_method(f) {
+            return self.act_on_start_this_scope(true, kiln_ast::types::Quals::NONE);
         }
         let ty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let quals = self
