@@ -377,13 +377,20 @@ impl Sema<'_, '_> {
         let pt = self.intern("promise_type");
         let found = self.lookup_in_class(def, pt, LookupKind::Ordinary);
         let Some(&p) = found.decls.iter().find(|&&d| crate::lookup::is_type_kind(self.kind_of(d))) else {
+            let std = self.ast.types.nns(Nns::Namespace { prefix: None, ns });
+            let qual = self.ast.types.elaborated(TagKeyword::None, Some(std), traits);
             let d = self
                 .diag(DiagId::sema_implied_std_coroutine_traits_promise_type_not_found, floc)
-                .arg(format!("'{}'", self.ty_arg(traits).trim_matches('\'')));
+                .arg(self.ty_arg(qual));
             self.emit(d);
             return None;
         };
         let promise_ty = self.type_of_type_decl(p);
+        if self.is_error_type(promise_ty) {
+            // The lookup already reported why (e.g. no member
+            // `promise_type` in the return type); clang says nothing more.
+            return None;
+        }
         let std = self.ast.types.nns(Nns::Namespace { prefix: None, ns });
         let nns = self.ast.types.nns(Nns::Type { prefix: Some(std), ty: traits, template_kw: false });
         let elab = self.ast.types.elaborated(TagKeyword::None, Some(nns), promise_ty);
