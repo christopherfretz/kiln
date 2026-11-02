@@ -1118,11 +1118,17 @@ impl Parser<'_, '_> {
             self.parse_virt_specifiers(d, friend);
         }
         match self.parse_asm_label() {
-            Ok(l) => d.asm_label = l,
+            Ok(l) => {
+                if l.is_some() {
+                    d.end = self.prev_lo();
+                }
+                d.asm_label = l;
+            }
             Err(()) => {
                 self.skip_until(&[Punct::Comma], true, false);
             }
         }
+        self.gnu_attr_end = Loc::INVALID;
         if d.is_function_declarator()
             && d.asm_label.is_none()
             && d.virt_final.is_none()
@@ -1135,8 +1141,17 @@ impl Parser<'_, '_> {
         } else {
             self.parse_member_tail_attrs(&mut d.attrs);
         }
+        // GNU attributes (closed by `))`) extend the declarator's range;
+        // C++11 ones (`]]`) do not (clang `MaybeParseGNUAttributes(D)`).
+        if self.gnu_attr_end != Loc::INVALID {
+            d.end = self.gnu_attr_end;
+        }
         if !has_width && d.virt_final.is_none() && d.virt_override.is_none() {
             self.parse_virt_specifiers(d, friend);
+        }
+        // So does the last virt-specifier, wherever it was written.
+        if let Some(v) = d.virt_final.max(d.virt_override) {
+            d.end = v;
         }
         (has_width, width_failed)
     }
@@ -1344,6 +1359,17 @@ impl Parser<'_, '_> {
         self.s.end_delayed_deprecation_to(level, None);
     }
 
+    /// Records where the declarator of member function `target` (one
+    /// without a body) ends, when it has a known end.
+    fn record_declarator_end(&mut self, target: Option<DeclId>, d: &Declarator) {
+        if let Some(f) = target
+            && d.end != Loc::INVALID
+            && self.s.ast.decls.function(f).is_some_and(|x| x.body.is_none())
+        {
+            let _ = self.s.ast.decls.cold.declarator_end.insert(f, d.end);
+        }
+    }
+
     fn parse_member_declaration_inner(&mut self) {
         let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
@@ -1391,6 +1417,8 @@ impl Parser<'_, '_> {
             if !self.at(Punct::Colon) {
                 self.parse_declarator(&mut d);
                 self.parse_trailing_requires(&mut d);
+                let e = self.prev_lo();
+                d.end = if e == self.cxx11_attr_run.1 { self.cxx11_attr_run.0 } else { e };
             }
             let parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
@@ -1426,6 +1454,7 @@ impl Parser<'_, '_> {
             let (nsdmi, init) = self.classify_member_init(&mut d, has_width, is_fn, data_member);
             let (decl, target) =
                 if width_failed { (None, None) } else { self.act_on_member(&ds, base, &d) };
+            self.record_declarator_end(target, &d);
             if let Some(x) = decl {
                 self.s.act_on_group_declarator(&mut group, x);
             }

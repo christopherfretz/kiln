@@ -60,6 +60,7 @@ struct Replay {
     pos: usize,
     cur: Token,
     prev_hi: Loc,
+    prev_lo: Loc,
     depth: [u32; 3],
     /// The interrupted stream's `greater_is_op` and `greater_off_depth`.
     greater: (bool, u32),
@@ -83,9 +84,18 @@ pub struct Parser<'a, 'sm> {
     cur: Token,
     /// The end of the token before `pos`.
     prev_hi: Loc,
+    /// The start of the token before `pos`.
+    prev_lo: Loc,
     pos: usize,
     /// Open `#pragma GCC visibility push`es.
     pub(crate) visibility_depth: u32,
+    /// The start of the last `__attribute__((...))`'s closing `)`, or
+    /// `Loc::INVALID` (a member declarator's end, clang `SetRangeEnd`).
+    pub(crate) gnu_attr_end: Loc,
+    /// The last run of adjacent `[[...]]` specifiers: the start of the
+    /// token before it and of its final `]` (a declarator's end excludes
+    /// them, clang `ParseFunctionDeclarator`).
+    pub(crate) cxx11_attr_run: (Loc, Loc),
     /// Open `(`, `[`, `{` consumed and not yet closed (clang's
     /// `ParenCount`/`BracketCount`/`BraceCount`).
     depth: [u32; 3],
@@ -271,8 +281,11 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             src: RefCell::new(src),
             cur,
             prev_hi: Loc::INVALID,
+            prev_lo: Loc::INVALID,
             pos: 0,
             visibility_depth: 0,
+            gnu_attr_end: Loc::INVALID,
+            cxx11_attr_run: (Loc::INVALID, Loc::INVALID),
             depth: [0; 3],
             kw,
             lex_opts,
@@ -416,6 +429,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         if self.prev_hi == Loc::INVALID { self.loc() } else { self.prev_hi }
     }
 
+    /// The start of the previous token (clang's `PrevTokLocation`, where
+    /// a declarator's source range ends).
+    pub(crate) fn prev_lo(&self) -> Loc {
+        if self.prev_lo == Loc::INVALID { self.loc() } else { self.prev_lo }
+    }
+
     /// True at the end of input.
     pub(crate) fn at_eof(&self) -> bool {
         self.tok().kind == TokKind::Eof
@@ -441,6 +460,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         }
         self.pos += 1;
         self.prev_hi = t.span.hi;
+        self.prev_lo = t.span.lo;
         if let Some(r) = self.replay.last() {
             if r.inject && self.pos >= r.toks.len() {
                 // The inserted tokens are consumed: resume the stream.
@@ -476,6 +496,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             pos: self.pos,
             cur: self.cur,
             prev_hi: self.prev_hi,
+            prev_lo: self.prev_lo,
             depth: self.depth,
             greater: (self.greater_is_op, self.greater_off_depth),
             inject: false,
@@ -485,6 +506,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.pos = 0;
         self.cur = cur;
         self.prev_hi = Loc::INVALID;
+        self.prev_lo = Loc::INVALID;
         self.depth = [0; 3];
         self.greater_is_op = true;
         self.greater_off_depth = 0;
@@ -506,6 +528,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             pos: self.pos,
             cur: self.cur,
             prev_hi: self.prev_hi,
+            prev_lo: self.prev_lo,
             depth: self.depth,
             greater: (self.greater_is_op, self.greater_off_depth),
             inject: true,
@@ -528,6 +551,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             self.pos = r.pos;
             self.cur = r.cur;
             self.prev_hi = r.prev_hi;
+            self.prev_lo = r.prev_lo;
             self.depth = r.depth;
             (self.greater_is_op, self.greater_off_depth) = r.greater;
         }
@@ -1103,6 +1127,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             flags: TokFlags::empty(),
         };
         self.prev_hi = mid;
+        self.prev_lo = lo;
         lo
     }
 

@@ -1917,6 +1917,13 @@ recomputed exactly as for non-template code (clang's
   the list is substituted, so the constructor's parameter is
   initialized from it by [over.ics.list] (`call_arg_list`; WP-295,
   `tests/conformance/over.ics.list/dependent-paren-init-braced-arg.cpp`).
+- **Block-scope namespace aliases** ([namespace.alias]; clang
+  `VisitNamespaceAliasDecl`): the target is never dependent, so the
+  alias is declared again in the instantiation's block scope with the
+  same target, or the instantiation's alias when the target is an
+  earlier local alias (`subst/stmts.rs` `local_decl`; WP-370, libstdc++
+  variant:1546,
+  `tests/conformance/namespace.alias/local-alias-in-function-template.cpp`).
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
