@@ -269,7 +269,7 @@ parser then recovers as if `typename` had been written.
 A parameter-declaration of a function declared at namespace or block
 scope with an unqualified declarator-id (`template <class T> void
 f(X<T>::m x);`) is such a context (WP-287): the parser sets
-`param_needs_typename` while parsing that parameter's
+`param_typename` while parsing that parameter's
 decl-specifier-seq (`parse_param_clause`, `DeclSite::Plain`, not a
 deduction guide, whose parameters clang treats as implicit), and the
 error is at the first token of the name. Gap: kiln's tentative parse

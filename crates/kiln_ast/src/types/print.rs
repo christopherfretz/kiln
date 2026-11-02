@@ -642,6 +642,20 @@ impl Printer<'_> {
         }
     }
 
+    /// Prints a `SubstTemplateTypeParm`'s replacement with `f`. clang
+    /// substitutes canonical template arguments, and prints the bare
+    /// `RecordType` that leaves scoped: `'view<int>::iterator<false>'`
+    /// (WP-287). A dependent replacement (a partial substitution) keeps
+    /// its parameter names.
+    fn subst(&mut self, replacement: QualType, f: fn(&mut Self, QualType)) {
+        if self.ctx.is_dependent(replacement) {
+            f(self, replacement);
+        } else {
+            let r = self.ctx.canonical(replacement);
+            self.with_scope(true, |p| f(p, r));
+        }
+    }
+
     fn with_scope(&mut self, scope: bool, f: impl FnOnce(&mut Self)) {
         let saved = self.scope;
         self.scope = scope;
@@ -983,18 +997,8 @@ impl Printer<'_> {
                 self.parm_name(depth, index);
                 self.space_before_ph();
             }
-            // clang substitutes canonical template arguments, and prints
-            // the bare `RecordType` that leaves scoped:
-            // `'view<int>::iterator<false>'` (WP-287). A dependent
-            // replacement (a partial substitution) keeps its parameter
-            // names.
             TypeView::SubstTemplateTypeParm { replacement, .. } => {
-                if self.ctx.is_dependent(replacement) {
-                    self.before(replacement);
-                } else {
-                    let r = self.ctx.canonical(replacement);
-                    self.with_scope(true, |p| p.before(r));
-                }
+                self.subst(replacement, Self::before);
             }
             TypeView::SubstTemplateTypeParmPack { associated, index, .. } => {
                 let names = self.names;
@@ -1182,12 +1186,7 @@ impl Printer<'_> {
                 self.after(QualType::new(base, quals.bits()));
             }
             TypeView::SubstTemplateTypeParm { replacement, .. } => {
-                if self.ctx.is_dependent(replacement) {
-                    self.after(replacement);
-                } else {
-                    let r = self.ctx.canonical(replacement);
-                    self.with_scope(true, |p| p.after(r));
-                }
+                self.subst(replacement, Self::after);
             }
             TypeView::PackExpansion { pattern, .. } => {
                 self.after(pattern);

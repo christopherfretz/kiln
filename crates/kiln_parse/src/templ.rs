@@ -25,7 +25,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::expr::prec;
 use crate::keywords::Kw;
-use crate::parser::{Parser, is_template_class};
+use crate::parser::{ParamTypename, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 
 /// The kind of a template-parameter ([temp.param]/1), decided from its
@@ -997,7 +997,7 @@ impl Parser<'_, '_> {
                     DeclaratorContext::Block
                     | DeclaratorContext::Condition
                     | DeclaratorContext::ForInit => true,
-                    DeclaratorContext::Prototype => self.param_needs_typename,
+                    DeclaratorContext::Prototype => self.param_typename == ParamTypename::Required,
                     _ => false,
                 };
                 if needs_typename && self.s.is_dependent_ctx(q.ctx) {
