@@ -1070,11 +1070,11 @@ impl Sema<'_, '_> {
                         self.emit(d);
                     }
                     Some(self.act_on_full_expr(e))
-                } else if self.ast.types.is_void(ety) && !ret_dep {
-                    let d = self.diag(DiagId::sema_return_void_expr_in_nonvoid, loc).arg(fname);
-                    self.emit(d);
-                    Some(self.act_on_full_expr(e))
                 } else {
+                    // A `void` operand of a non-void function is an
+                    // ill-formed copy-initialization ([stmt.return]/2,
+                    // [dcl.init.general]/16), as in clang.
+
                     candidate = self.copy_elision_candidate(e, ret);
                     let e = self.implicit_move(e);
                     let c = self.convert_for_init(e, ret, ConvCtx::Return);

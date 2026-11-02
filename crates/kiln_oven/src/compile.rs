@@ -1704,11 +1704,7 @@ impl Compiler<'_> {
                 // "control reached end of constexpr function" when nothing
                 // else returns (spec/oven.md "Erroneous expressions").
                 if self.o.clang_compat >= 22
-                    && v.is_some_and(|v| {
-                        let n = ast.exprs.get(v);
-                        n.kind() == ExprKind::RecoveryExpr
-                            || n.deps().contains(kiln_ast::expr::ExprDeps::ERROR)
-                    })
+                    && v.is_some_and(|v| ast.exprs.is_erroneous_operand(v, &ast.lists))
                 {
                     return;
                 }

@@ -2571,6 +2571,24 @@ impl ExprArena {
             _ => self.cold.end_loc.get(e).copied(),
         }
     }
+    /// Whether `e`, a `return` operand, is erroneous in itself (clang
+    /// 22 drops such a `return`, `ActOnReturnStmt` getting `ExprError`),
+    /// as opposed to a valid operand whose conversion to the return type
+    /// failed (a `RecoveryExpr` over error-free operands, which clang keeps
+    /// and which fails evaluation without a note).
+    pub fn is_erroneous_operand(&self, e: ExprId, lists: &IdLists) -> bool {
+        let n = self.get(e);
+        if n.kind() != ExprKind::RecoveryExpr {
+            return n.deps().contains(ExprDeps::ERROR);
+        }
+        let kids = self.children(e, lists);
+        kids.is_empty()
+            || kids.iter().any(|&c| {
+                let k = self.get(c);
+                k.kind() == ExprKind::RecoveryExpr || k.deps().contains(ExprDeps::ERROR)
+            })
+    }
+
 
     /// The child expressions of `e` in dump order (§11): the expressions
     /// `e` owns, as clang's `Stmt::children`. Shared subexpressions are

@@ -14,7 +14,7 @@
 //@ diag: 27:13 note "this use of statement expressions is not supported in a constant expression"
 //@ diag: 38:15 note "in call to 'leaves_loop()'"
 //@ requires: clang<22
-// clang 22 no longer emits error: static assertion expression is not an integral constant expression; WP-355 residual
+// clang 19 spelling; constexpr-unsupported-clang22.cpp has clang 22's (WP-394).
 constexpr int trailing_null() { return ({ 2; ; }); }
 constexpr int last_decl() { ({ int x = 1; }); return 0; }
 constexpr int early_return(int v) {

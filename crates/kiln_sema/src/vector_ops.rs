@@ -773,7 +773,13 @@ impl Sema<'_, '_> {
             }
             let n = u32::try_from(args.len() - 2).unwrap_or(u32::MAX);
             if l.count != n {
-                res = self.ast.types.vector(l.elem, n, VectorKind::Generic);
+                // clang 22 keeps an ext_vector_type operand's kind.
+                let kind = if self.clang_compat >= 22 && l.is_ext() {
+                    l.kind
+                } else {
+                    VectorKind::Generic
+                };
+                res = self.ast.types.vector(l.elem, n, kind);
             }
             count = Some(i128::from(l.count));
         }

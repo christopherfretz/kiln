@@ -68,10 +68,7 @@ impl Substituter<'_, '_, '_> {
     fn erroneous_return(&self, s: StmtId) -> bool {
         let ast = &self.sema.ast;
         ast.stmts.get(s).kind() == StmtKind::ReturnStmt
-            && ast.stmts.return_value(s).is_some_and(|v| {
-                let n = ast.exprs.get(v);
-                n.kind() == ExprKind::RecoveryExpr || n.deps().contains(ExprDeps::ERROR)
-            })
+            && ast.stmts.return_value(s).is_some_and(|v| ast.exprs.is_erroneous_operand(v, &ast.lists))
     }
 
     /// A sub-statement: a statement that is not compound gets a block

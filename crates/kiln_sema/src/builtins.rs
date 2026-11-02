@@ -807,6 +807,18 @@ impl Sema<'_, '_> {
         let cvp = self.ast.types.qualify(QualType::VOID, Quals::CONST);
         let cvp = self.ast.types.pointer_to(cvp);
         let p = args[0];
+        // clang 22: the decayed first argument must be a pointer (not
+        // `std::nullptr_t` nor a class converting to one).
+        if self.clang_compat >= 22 {
+            let dp = conv::decay(self, p);
+            if !self.ast.types.is_pointer(self.ety(dp)) && !self.is_err_expr(dp) {
+                let d = self
+                    .diag(DiagId::sema_builtin_assume_aligned_non_pointer, self.begin_loc(callee))
+                    .range(self.expr_range(callee));
+                self.emit(d);
+                return None;
+            }
+        }
         if let Err(e) = conv::implicit_convert(self, p, cvp, ConvCtx::Argument) {
             let d = e.diag_at(self, self.begin_loc(p));
             self.emit(d);

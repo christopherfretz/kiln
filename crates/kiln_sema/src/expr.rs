@@ -4694,6 +4694,12 @@ impl Sema<'_, '_> {
         if self.is_integral_or_enum(t) && !conv::is_scoped_enum(self, t) {
             return conv::integral_promotion(self, x);
         }
+        // [expr.call]/12 (CWG722): a `std::nullptr_t` argument is
+        // converted to `void *`; clang 22 builds the `NullToPointer` cast.
+        if self.clang_compat >= 22 && self.is_nullptr_type(t) {
+            let vp = self.ast.types.pointer_to(QualType::VOID);
+            return conv::implicit_convert(self, x, vp, ConvCtx::Argument).unwrap_or(x);
+        }
         x
     }
 
