@@ -245,6 +245,7 @@ impl Sema<'_, '_> {
         let depth = self.template_param_depth(ft);
         let n = params.len();
         let mut d = DeducedArgs::new(depth, n);
+        d.loc = loc;
         let Some(templated) = self.templated_function(ft) else {
             return Err(DeductionFailure::new(Tdk::MiscellaneousDeductionFailure, d));
         };
@@ -407,10 +408,15 @@ impl Sema<'_, '_> {
             }
         }
         // Arity ([temp.deduct.call]/1: a parameter without an argument
-        // is not deduced from).
+        // is not deduced from). A function parameter pack anywhere (clang
+        // `isTemplateVariadic`) leaves the check to the specialization's
+        // viability: a non-trailing one is a non-deduced context, deduced
+        // empty, so `f(1, 2, 3)` of `f(T..., U)` is `f<int>` with "requires
+        // 1 argument".
         let nargs = args.len();
         let fn_pack = ptys.last().and_then(|&t| crate::templ::pack::type_pattern(self, t));
-        if call.is_some() && nargs > ptys.len() + retained && !variadic && fn_pack.is_none() {
+        let any_pack = ptys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
+        if call.is_some() && nargs > ptys.len() + retained && !variadic && !any_pack {
             return Err(DeductionFailure::new(Tdk::TooManyArguments, d));
         }
         if call.is_some() && nargs < self.fn_min_args(templated) {
@@ -662,6 +668,7 @@ impl Sema<'_, '_> {
     /// [temp.deduct.call]/4. Probed by deducing `p` from itself.
     fn has_deducible_params(&mut self, p: QualType, d: &DeducedArgs, pattern: bool) -> bool {
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
+        probe.loc = d.loc;
         // The packs a pack expansion's pattern names, element-wise.
         if pattern {
             probe.pack_cur = Some(Vec::new());
@@ -696,6 +703,7 @@ impl Sema<'_, '_> {
     /// The template parameter packs pack expansion pattern `p` names.
     fn pattern_packs(&mut self, p: QualType, d: &DeducedArgs) -> Vec<u16> {
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
+        probe.loc = d.loc;
         probe.pack_cur = Some(Vec::new());
         self.deduce(p, p, TdfFlags::NONE, &mut probe);
         probe.pack_cur.unwrap_or_default().into_iter().map(|x| x.0).collect()

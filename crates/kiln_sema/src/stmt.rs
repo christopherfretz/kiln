@@ -1306,6 +1306,25 @@ impl Sema<'_, '_> {
             st.runtime_diags.push((msg, Some(anchor)));
             return;
         }
+        self.emit_unless_constant_init(msg);
+    }
+
+    /// clang `DiagRuntimeBehavior` with no statement (`DiagIfReachable`
+    /// with an empty list): dropped where [`Sema::runtime_diag_quiet`]
+    /// and in the initializer of a constexpr variable (a local one too)
+    /// or of a static data member's first, non-inline declaration;
+    /// otherwise emitted at once, in a function body too.
+    pub(crate) fn diag_runtime_behavior_now(&mut self, msg: kiln_diag::Diag) {
+        if !self.runtime_diag_quiet() {
+            self.emit_unless_constant_init(msg);
+        }
+    }
+
+    /// Emits `msg` unless it is in the initializer of a constexpr variable
+    /// or of a static data member's first, non-inline declaration (clang
+    /// `DiagIfReachable` reading the `ManglingContextDecl`: that
+    /// initializer is required to be a constant expression anyway).
+    fn emit_unless_constant_init(&mut self, msg: kiln_diag::Diag) {
         if let Some(v) = self.lambda_mangle.var
             && let Some(var) = self.ast.decls.var(v)
         {

@@ -1079,7 +1079,8 @@ errors.
 | `static_assert` | fully: substituted and evaluated now | — |
 | member template | declaration: a new template decl, with outer levels substituted and its own parameters retained (§5.1); `TemplateInfo.member_of` points to the pattern member | its own specializations need it |
 | friend | declaration; a hidden friend's definition is in `instantiated_from` | odr-use (§4.9) |
-| anonymous union | definition | — |
+| anonymous struct or union, unnamed member class | definition, with the unnamed member object and the injected `IndirectField`s (`subst/anon.rs`) | — |
+| unnamed bit-field | declaration, width substituted (a non-dependent width's `ConstantExpr` is not wrapped again) | — |
 
 6. Complete the class:
    - implicit special-member declarations (S3C);
@@ -1806,7 +1807,15 @@ recomputed exactly as for non-template code (clang's
   parser replays them. Local enumerations are substituted the same way.
   An anonymous struct or union member of a local class is instantiated as
   in a class template (`unnamed_member_class`), which declares its member
-  object and injects its members' names (WP-192).
+  object and injects its members' names (WP-192). A block-scope
+  anonymous union of the body (of a function template, a lambda or a
+  generic lambda in one) is defined by its declaration statement's class
+  (`local_class`, marked anonymous), then its unnamed object, the
+  statement's next declaration, is declared again for it
+  (`local_anonymous_object`), injecting the members' names; the pattern
+  names a member as `obj.member`, so only the object is linked (WP-311,
+  `tests/conformance/class.union.anon/function-template-locals.cpp`,
+  `template-unnamed-members-ast.cpp`).
 - **Member templates** are created as in §4.6.
 - **`static_assert`** is evaluated with the substituted condition.
 - **`using` declarations** with packs give a `UsingPack` decl.
@@ -1941,7 +1950,17 @@ argument substitution in `deduce_call`):
   `argument may not have 'void' type` at the substituted type, clang's
   `err_param_with_void_type`; a SFINAE failure with the usual
   `substitution failure [with ...]` note. A function type substituted
-  to have a `void` parameter (`void (*)(T)`) fails the same way.
+  to have a `void` parameter (`void (*)(T)`) fails the same way; outside
+  deduction (an alias `template<class T> using F = void(T);` used as
+  `F<void>`, a member `void f(T)` of `W<void>`) it is a hard error at the
+  alias's or member's parameter, with the instantiation note.
+- **Parameter adjustment** ([dcl.fct]/5): every parameter of a substituted
+  function type is adjusted after substitution exactly as a written one
+  (`adjust_param_type`: array of `T` to pointer to `T`, function to
+  pointer to function, top-level cv dropped), so `F<int[3]>` is
+  `void(int*)` and `F<int()>` is `void(int(*)())` (clang
+  `BuildFunctionType`; test
+  `temp.alias/function-type-parameter-adjustment.cpp`, WP-311).
 - **Array of `void`, of a function or of a reference**: clang's
   `BuildArrayType` wording, `array has incomplete element type 'void'`
   (also for a non-template `void x[3]`, which no longer uses the old
@@ -2271,9 +2290,12 @@ immediate context: errors are hard.
   explicit arguments are substituted, one whose packs are all given
   is expanded to its explicit elements; it still counts as one
   parameter in the too-many-arguments check (clang retains the
-  expansion). An undeduced pack is then empty, and the arity is
-  checked on the specialization (`candidate function [with T = <>]
-  not viable: requires 1 argument, …`). A parameter pack never counts
+  expansion). A pack that is left unexpanded (not all given) skips the
+  too-many-arguments check before deduction (clang `isTemplateVariadic`:
+  a pack anywhere, not only trailing; WP-311). An undeduced pack is then
+  empty, and the arity is checked on the specialization (`candidate
+  function [with T = <>] not viable: requires 1 argument, …`; test
+  `temp.deduct.call/non-trailing-pack-arity.cpp`). A parameter pack never counts
   towards the minimum argument count (`fn_min_args`, clang
   `getMinRequiredArguments`), wherever it is.
 - **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
@@ -3765,9 +3787,15 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
 - The shadow check does not cover function parameters. Kiln emits a
   plain error where clang emits the ExtWarn
   `-Wstrict-primary-template-shadow`.
-- Inherited defaults are not recorded on the redeclaration's
-  parameters. A class-template forward redeclaration creates no new
-  decl, so chained default checks are partial.
+- Each class template redeclaration is its own `ClassTemplateDecl`
+  (with its own parameter list and pattern record) linked into the
+  chain, as clang's (WP-311). `merge_template_defaults` gives every
+  redeclaration's parameters the defaults of the others, but in
+  `Sema::inherited_defaults`, not on the AST: the dump prints no
+  `inherited from`. `check_template_param_list` takes the location of a
+  repeated default from whichever earlier redeclaration gave it.
+  `tests/conformance/temp.class/redeclaration-diags.cpp`,
+  `tests/conformance/temp.class/redeclaration-ast.cpp`.
 - A template template parameter's inner list is not order-checked.
 - A template template parameter's own default template arguments
   ([temp.param]/14, [temp.arg.template]) complete `TT<args>` when the
@@ -3780,11 +3808,12 @@ The dependent-reference constructors (`dependent_scope_decl_ref`,
   pack expansion.
   `tests/conformance/temp.param/template-template-param-own-defaults.cpp`.
 - The arity note (`template is declared here`) names the latest
-  declaration, as name lookup finds it: a class template redeclaration
-  after the definition creates no decl, so its name location is recorded
-  in `templ.class_redecl_loc`, keyed by the latest decl at the time
-  (`diag_template_arity`;
+  declaration, as name lookup finds it (`diag_template_arity`;
   `tests/conformance/temp.arg.general/arity-note-latest-redeclaration.cpp`).
+- The injected-class-name type `X<P...>` names the parameters of the
+  first declaration, even inside a definition that renamed them (clang
+  caches it in the chain's common data); a first declaration made by a
+  friend declaration defers to the definition's.
 - `TT<args>` for a template template parameter `TT` checks only the arity
   against `TT`'s own list (`check_ttp_arity`: "too few/many template
   arguments for template template parameter 'TT'", note at `TT`); a pack
@@ -5261,6 +5290,45 @@ type is at least as specialized (`templ/order.rs`, `OrderingType.refq`);
 one template is more specialized only if it wins some pair and loses
 none. This makes the `DoNotOptimize(T&)` / `DoNotOptimize(const T&)`
 pair of libc++'s `test_macros.h` unambiguous for a non-const lvalue.
+
+### 11.5 Memoized results and their keys (WP-313)
+
+Every memo is keyed by interned ids only (a `DeclId`, a canonical
+`ArgListId` from the type interner, a `NormId`, a partial-spec row
+index), so a key is a few words and equal keys mean equal inputs. The
+tables are arena-owned (they live as long as the TU's `Sema`) and grow
+with the number of distinct keys, never with the number of uses. A hit
+must not change diagnostics: a memo that can record a failure keeps
+what a later use needs to re-diagnose it (`fn_spec_failures`, the
+`atom_cache` records).
+
+| Result | Table | Key |
+|---|---|---|
+| A class, function or variable specialization (its declaration, chosen pattern and `from_args`) | `TemplateTables` spec list, `find_spec` | (first decl of the template, canonical argument list) |
+| The partial specialization a variable or class specialization is instantiated from | `SpecInfo.from` / `from_args` of that specialization | as above: matched once, when the specialization is created (§4.4, §4.11) |
+| An alias template specialization's type | `InstState.alias_cache` | (alias template, canonical argument list) |
+| Partial ordering of two partial specializations | `TemplState.partial_order` | (row index, row index) |
+| A function specialization's first signature-substitution error | `TemplState.fn_spec_failures` | the (invalid) specialization `DeclId` |
+| Constraint satisfaction of an entity | `ConceptState.sat_cache` | (entity, canonical argument list) |
+| An atomic constraint's value and its notes | `ConceptState.atom_cache` | (atom, canonical arguments of each level it names) |
+| Subsumption | `ConceptState.subsume_cache` | (normal form, normal form) |
+| A type's identity (hash-consing) | `TypeContext` intern table | the structural key (spec/types.md §7.1) |
+
+Not memoized, by design: explicit-argument substitution into a function
+template (each call of `std::declval<T>()` substitutes its explicit
+argument again: ~3 report `default` rows per call, 305k in
+`simd_copy.pass.cpp` but under 2% of its instantiation time; caching it
+would need the SFINAE note replayed per use), default template
+arguments (substituted per `check_template_args`, as clang), and
+default function arguments (substituted at each use, [temp.inst]/12;
+`lazy_defaults` only records which are pending).
+
+WP-313 found the `experimental/simd` slowness was not a missing memo but
+two quadratic costs on every lookup and every frame: the intern hash
+left a type's second `u32` out of its bucket bits (fixed by folding
+FxHash, spec/types.md §7.1), and the per-frame memory meter summed every
+lookup overload set (`LookupTables` now keeps the sums as the sets grow,
+O(1) per frame). Instantiation counts are unchanged.
 
 ## 12. Agent parallelization
 

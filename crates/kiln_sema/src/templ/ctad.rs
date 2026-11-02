@@ -63,6 +63,11 @@ struct GuideShape<'p> {
     explicit: bool,
     /// The dependent depth of the guide's declaration.
     depth: u16,
+    /// Not written by the user: false only for an alias template's guide
+    /// formed from a user-declared one, which keeps that guide's
+    /// precedence over implicit ones ([over.match.best.general]/2.11;
+    /// clang `buildDeductionGuide(..., F->isImplicit())`).
+    implicit: bool,
 }
 
 /// The signature of the guide of a constructor template whose template
@@ -519,6 +524,7 @@ impl Sema<'_, '_> {
                 variadic,
                 explicit,
                 depth: pl.depth + 1,
+                implicit: true,
             };
             let f = self.guide_function(ctx, name, loc, &shape);
             let g = self.builder().detached_template_decl(DeclKind::FunctionTemplate, f, params);
@@ -556,7 +562,15 @@ impl Sema<'_, '_> {
             .map(|&p| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR))
             .collect();
         let depth = self.ast.templates.param_list(params).depth + 1;
-        let shape = GuideShape { ret, cparams: &cparams, ptys: &ptys, variadic, explicit, depth };
+        let shape = GuideShape {
+            ret,
+            cparams: &cparams,
+            ptys: &ptys,
+            variadic,
+            explicit,
+            depth,
+            implicit: true,
+        };
         let f = self.guide_function(ctx, name, loc, &shape);
         if let Some(r) = ctor.and_then(|c| self.ast.templates.trailing_requires.get(c).copied()) {
             let _ = self.ast.templates.trailing_requires.insert(f, r);
@@ -651,6 +665,7 @@ impl Sema<'_, '_> {
                 variadic,
                 explicit,
                 depth: cl.depth + 1,
+                implicit: true,
             };
             let f = s.sema.guide_function(ctx, name, loc, &shape);
             // The trailing requires-clause may name the parameters.
@@ -690,7 +705,9 @@ impl Sema<'_, '_> {
         let info = FuncInfo::new().with_trailing_return(true).with_variadic(g.variadic);
         let fty = self.ast.types.function(g.ret, g.ptys, info, ExcSpec::None);
         let mut h = DeclHead::new(ctx, name, loc);
-        h.flags = DeclFlags::IMPLICIT;
+        if g.implicit {
+            h.flags = DeclFlags::IMPLICIT;
+        }
         let spec = FnSpec::new().with_variadic(g.variadic).with_explicit(g.explicit);
         let saved = self.ast.templates.dependent_depth;
         self.ast.templates.dependent_depth = u32::from(g.depth);
@@ -831,6 +848,7 @@ impl Sema<'_, '_> {
             variadic: false,
             explicit: false,
             depth,
+            implicit: true,
         };
         let saved = self.ast.templates.dependent_depth;
         let f = self.guide_function(ctx, name, loc, &shape);
@@ -1050,6 +1068,7 @@ impl Sema<'_, '_> {
         let list = *self.ast.templates.param_list(info.params);
         let params: Vec<DeclId> = self.ast.lists.iter::<DeclId>(list.params).collect();
         let mut d = DeducedArgs::new(list.depth, params.len());
+        d.loc = self.ast.decls.get(alias).loc();
         if self.deduce(rhs, ty, TdfFlags::NONE, &mut d) != Tdk::Success {
             return false;
         }
@@ -1088,7 +1107,7 @@ impl Sema<'_, '_> {
     /// [`Sema::deduce_call`](crate::Sema) through `templ.ctad_alias`.
     #[allow(clippy::too_many_lines, reason = "the [over.match.class.deduct]/3 steps in order")]
     fn build_alias_guide(&mut self, alias: DeclId, rhs: QualType, g: DeclId) -> Option<DeclId> {
-        use crate::templ::deduce::{DeducedArgs, TdfFlags, Tdk};
+        use crate::templ::deduce::{DeducedArgs, TdfFlags};
         let f = self.pattern_of(g)?;
         let gl = *self.ast.templates.param_list(self.ast.template_info(g)?.params);
         let al = *self.ast.templates.param_list(self.ast.template_info(alias)?.params);
@@ -1096,32 +1115,26 @@ impl Sema<'_, '_> {
             return None;
         }
         let fty = self.ast.decls.get(f).ty()?;
-        let proto = self.ast.types.proto(fty)?;
+        // As written: the new guide's parameters print with `g`'s sugar.
+        let proto = self.ast.types.proto_of(fty.ty())?;
         let ret = proto.ret();
         let ptys: Vec<QualType> = self.ast.types.params(proto).to_vec();
         let variadic = proto.variadic();
         let gps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(gl.params).collect();
         let mut d = DeducedArgs::new(gl.depth, gps.len());
         d.expansions = true;
-        if self.deduce(ret, rhs, TdfFlags::NONE, &mut d) != Tdk::Success {
-            return None;
-        }
+        d.loc = self.alias_guide_loc(alias);
+        // clang 19 ignores the result: deduction stops at the first
+        // argument it cannot deduce (`pair<A, B>`'s `B` against the `T...`
+        // of `tuple<int, T...>`), and the guide is formed with what was
+        // deduced, its deducibility constraint deciding later.
+        let _ = self.deduce(ret, rhs, TdfFlags::NONE, &mut d);
         let first = self.ast.first(alias);
         let ctx = self.ast.decls.get(first).ctx().unwrap_or(self.ast.tu);
         // The alias template's parameters the deductions name (clang
-        // `MarkUsedTemplateParameters`); found as those deducible from
-        // the deductions themselves.
+        // `MarkUsedTemplateParameters`).
         let aps: Vec<DeclId> = self.ast.lists.iter::<DeclId>(al.params).collect();
-        let deduced: Vec<TemplateArg> =
-            d.args.iter().copied().filter(|a| !matches!(a.view(), ArgView::Null)).collect();
-        let mut du = DeducedArgs::new(al.depth, aps.len());
-        du.expansions = true;
-        let used: Vec<bool> =
-            if self.deduce_args(&deduced, &deduced, true, &mut du, Loc::INVALID) == Tdk::Success {
-                du.args.iter().map(|a| !matches!(a.view(), ArgView::Null)).collect()
-            } else {
-                vec![true; aps.len()]
-            };
+        let used = self.params_named(&d.args, al.depth, aps.len(), d.loc);
         let all_used = used.iter().all(|&u| u);
         // The deductions are canonical: name the (used, renumbered) alias
         // template parameters in them again.
@@ -1255,16 +1268,26 @@ impl Sema<'_, '_> {
             let mut aligned = true;
             for &t in &ptys {
                 if let TypeView::PackExpansion { pattern, .. } = s.sema.ast.types.view(t.ty()) {
-                    match s.expand_pattern(|s| s.ty(pattern, loc))? {
+                    match s.expand_pattern_rewrap(None, |s| s.ty(pattern, loc))? {
                         Expansion::Unexpanded(x) => {
                             nptys.push(s.sema.ast.types.pack_expansion(x, None));
                         }
                         Expansion::Elements(es) => {
                             aligned &= es.len() == 1;
                             // An element that is an expansion (an alias
-                            // template's pack) stays a function parameter
-                            // pack: drop the substitution sugar over it.
-                            nptys.extend(es.into_iter().map(|e| s.sema.strip_expansion_ty(e)));
+                            // template's pack `T...`) is substituted as its
+                            // pattern and stays a function parameter pack:
+                            // `const U&...` with `U = <int, T...>` is
+                            // `const int&, const T&...` (clang
+                            // `TransformFunctionTypeParams`).
+                            let rw = s.take_rewrap();
+                            for (k, e) in es.into_iter().enumerate() {
+                                nptys.push(if rw.get(k) == Some(&true) {
+                                    s.sema.ast.types.pack_expansion(e, None)
+                                } else {
+                                    s.sema.strip_expansion_ty(e)
+                                });
+                            }
                         }
                     }
                 } else {
@@ -1283,6 +1306,7 @@ impl Sema<'_, '_> {
                 variadic,
                 explicit: s.sema.fn_spec(f).is_explicit(),
                 depth: gl.depth + 1,
+                implicit: s.sema.ast.decls.get(f).has(DeclFlags::IMPLICIT),
             };
             let nf = s.sema.guide_function(ctx, name, loc, &shape);
             let gps2: Vec<DeclId> = s
@@ -1318,6 +1342,48 @@ impl Sema<'_, '_> {
         }
         let _ = self.templ.ctad_alias.insert(ng, (alias, rhs));
         Some(ng)
+    }
+
+    /// Which of the `n` template parameters of depth `depth` the deduced
+    /// arguments `args` name (clang `MarkUsedTemplateParameters` without
+    /// `OnlyDeduced`): each element of a deduced pack, or the pattern of
+    /// an element that is an expansion (`T...` of `tuple<T..., U>`, whose
+    /// list is otherwise a non-deduced context), probed by deducing it
+    /// from itself.
+    fn params_named(&mut self, args: &[TemplateArg], depth: u16, n: usize, loc: Loc) -> Vec<bool> {
+        use crate::templ::deduce::{DeducedArgs, Tdk};
+        let mut elems = Vec::new();
+        for &a in args {
+            match a.view() {
+                ArgView::Null => {}
+                ArgView::Pack(l) => elems.extend_from_slice(self.ast.types.args(l)),
+                _ => elems.push(a),
+            }
+        }
+        let mut used = vec![false; n];
+        for e in elems {
+            let mut probe = DeducedArgs::new(depth, n);
+            probe.expansions = true;
+            let e = match self.arg_expansion_pattern(e) {
+                Some(p) => {
+                    probe.pack_cur = Some(Vec::new());
+                    p
+                }
+                None => e,
+            };
+            if self.deduce_args(&[e], &[e], true, &mut probe, loc) != Tdk::Success {
+                return vec![true; n];
+            }
+            for (u, a) in used.iter_mut().zip(&probe.args) {
+                *u |= !matches!(a.view(), ArgView::Null);
+            }
+            for (i, _) in probe.pack_cur.unwrap_or_default() {
+                if let Some(u) = used.get_mut(usize::from(i)) {
+                    *u = true;
+                }
+            }
+        }
+        used
     }
 
     /// `t` without the top-level sugar over a pack expansion (an alias
@@ -1733,9 +1799,13 @@ impl Sema<'_, '_> {
             }
         }
         out.push_str("> ");
-        if let Some(&(alias, rhs)) = self.templ.ctad_alias.get(&g) {
+        if let Some(&(alias, _)) = self.templ.ctad_alias.get(&g) {
+            // clang names the guide's return type, which is the alias's
+            // defining-type-id only when all of it was deduced.
             let n = self.decl_name_str(self.ast.decls.get(alias).name());
-            let r = self.ty_str(rhs);
+            let ty = self.ast.decls.get(pattern).ty().unwrap_or(QualType::ERROR);
+            let ret = self.ast.types.proto_of(ty.ty()).map_or(QualType::ERROR, FuncProto::ret);
+            let r = self.ty_str(ret);
             let _ = std::fmt::Write::write_fmt(
                 &mut out,
                 format_args!("requires __is_deducible({n}, {r}) "),

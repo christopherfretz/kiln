@@ -1,0 +1,24 @@
+TranslationUnitDecl
+|-ClassTemplateDecl R
+| |-TemplateTypeParmDecl class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 1 N
+| |-CXXRecordDecl struct R
+| `-ClassTemplateSpecializationDecl struct R definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-TemplateArgument value 'int' 2
+|   |-FieldDecl a 'int[2]'
+|   `-FieldDecl p 'R<int, 2> *'
+|-ClassTemplateDecl R
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 A
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 M
+| |-CXXRecordDecl struct R definition
+| | |-FieldDecl a 'A[M]'
+| | `-FieldDecl p 'R<T, N> *'
+| `-ClassTemplateSpecialization 'R'
+|-ClassTemplateDecl R
+| |-TemplateTypeParmDecl class depth 0 index 0 U
+| |-NonTypeTemplateParmDecl 'int' depth 0 index 1 K
+| |-CXXRecordDecl struct R
+| `-ClassTemplateSpecialization 'R'
+`-VarDecl r 'R<int, 2>' callinit
+  `-CXXConstructExpr 'R<int, 2>' 'void () noexcept'
