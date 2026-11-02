@@ -1843,7 +1843,12 @@ Constructors, destructors, conversion functions, `= default` and
   destructor name. It runs in the class of a qualified id-expression and
   in the class of a member access. It also runs in the nominated class of
   a member using-declaration. An unqualified `operator=` runs
-  `declare_implicit_named_in_scope` over the enclosing class scopes. `declare_implicit` sets triviality from the
+  `declare_implicit_named_in_scope` over the enclosing class scopes.
+  An implicit member (and its parameters) is in a dependent context
+  exactly when its class is ([temp.dep]/1): `declare_implicit` sets
+  `dependent_depth` from the class's `DEPENDENT_CTX` around the
+  declaration, since the first use of a non-template class may sit in a
+  template definition (WP-335). `declare_implicit` sets triviality from the
   class bits, or for copy/move members of a class with `NEEDS_OVL_*` from
   `selected_all_trivial` (clang `SpecialMemberIsTrivial`, §4.3); `constexpr`
   follows the C++23+ rules (§4.6).
@@ -2066,11 +2071,22 @@ access, out-of-line declarator scope.**
   `rebuild_member_destructor` with the destructor's (instantiated)
   class, qualified as written; access is then checked in the
   instantiated member (WP-336).
+  Test for the injected-class-name case:
+  `tests/conformance/expr.prim.id.dtor/libstdcxx-injected-class-name-dtor-in-template.cpp`
+  (libstdc++ shared_ptr_base.h:625, WP-332). A dependent qualifier
+  (`this->B<T>::~B()`) is still `templ_unimplemented` ("a dependent
+  destructor name").
   A pseudo-destructor on a scalar or dependent object is
   a `CXXPseudoDestructorExpr` (`Builder::pseudo_destructor`,
   `Ast::pseudo_destructor`); the Oven and codegen evaluate its object
   expression only, and the Oven does not end the object's lifetime (as
-  for an explicit destructor call; a gap).
+  for an explicit destructor call; a gap). A pointer to a class is a
+  scalar object too ([expr.prim.id.dtor]/2): `p.~P()` with `P` naming
+  `S*` is a pseudo-destructor call (libc++'s `__cpp17_destructible` on
+  iterator types; WP-339); only when the destructor name denotes the
+  pointee (`p.~S()`) does `finish_member_destructor` report clang's
+  "member reference type 'S *' is a pointer; did you mean to use '->'?"
+  (clang `BuildPseudoDestructorExpr`).
 - *Member not found* ([expr.ref]/7.4, [class.member.lookup]/1): "no
   member named 'm' in 'C'" names the object's class without its
   cv-qualifiers (`member_access`; clang prints the record, so a
@@ -2208,7 +2224,7 @@ lands.
 Performance and memory (bench.md): `bench/frontend/classes.cpp` (generated: 5k
 classes, depth-6 hierarchies, 20 members each, implicit members never used)
 gates `Ast::memory()` bytes per class — the lazy policy must keep unused
-implicit members at zero bytes — and a mirrorbind-style synthetic (many small
+implicit members at zero bytes — and a reference-workload-style synthetic (many small
 polymorphic classes) for `final_overrider`/vtable cache size.
 
 ## 11. Open questions (with recommendation)

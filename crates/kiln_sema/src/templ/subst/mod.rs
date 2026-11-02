@@ -50,6 +50,7 @@ pub enum DeclOrPack {
 }
 
 /// One substitution (clang's `TemplateInstantiator`, §5.2).
+#[allow(clippy::struct_excessive_bools)]
 pub struct Substituter<'s, 'a, 'sm> {
     /// The semantic analyzer the rebuilt nodes go through.
     pub sema: &'s mut Sema<'a, 'sm>,
@@ -79,6 +80,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// substituted ([`crate::Sema::ref_locs`]): the first reference
     /// rebuilt takes it (clang's `ReferenceTypeLoc`).
     pub(crate) ref_loc: Option<Loc>,
+    /// A type parameter becomes its (sugared) argument with no
+    /// `SubstTemplateTypeParmType` around it (clang's `Final`
+    /// substitution of a non-type parameter's type by
+    /// `CheckTemplateArgument`).
+    pub(crate) final_subst: bool,
     /// How many lambda bodies are being rebuilt (a shared expression in
     /// one still captures `this`).
     pub(crate) lambda_bodies: u32,
@@ -146,6 +152,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             declarator_name: None,
             type_begin: None,
             ref_loc: None,
+            final_subst: false,
             lambda_bodies: 0,
             stmt_failed: false,
             init_failures: 0,
@@ -820,7 +827,7 @@ impl Substituter<'_, '_, '_> {
 
     /// Whether `c` is the pattern of a class template or of a class
     /// template partial specialization.
-    fn is_class_pattern(&self, c: DeclId) -> bool {
+    pub(crate) fn is_class_pattern(&self, c: DeclId) -> bool {
         let first = self.sema.ast.first(c);
         self.sema.kind_of(c) == DeclKind::CXXRecord
             && (self.sema.ast.described_template(first).is_some()
@@ -885,7 +892,7 @@ impl Substituter<'_, '_, '_> {
     /// True if none of the outermost `n` levels is substituted (a level of
     /// undeduced arguments keeps its parameters, as a class template's
     /// does in the guide of a constructor template, WP-134).
-    fn levels_retained(&self, n: u16) -> bool {
+    pub(crate) fn levels_retained(&self, n: u16) -> bool {
         (0..n).all(|k| {
             self.args.level(k).is_none_or(|l| {
                 l.mode == crate::templ::args::LevelMode::Retain

@@ -63,7 +63,7 @@ flow, `constexpr` functions and variables, `static_assert`, string literals,
 Status: done. The M3 libc++ gate (`cargo xtask libcxx --gate m3`) is 585/585
 on main `4c3e8be9` (`docs/status/libcxx-m3.md`; since WP-143 the gate is 642 tests incl. `.verify.cpp`:
 630 pass, 6 unsupported, and the 6 `.verify.cpp` failures are WP-253). The clang 22
-oracle switch (WP-184) waits for M3b.
+oracle switch (WP-184 C–E) is WP-355 in M4.
 Member functions, constructors/destructors, references, overload resolution,
 implicit conversion sequences, class templates, function templates, deduction,
 partial/explicit specialization, `auto`, variadic templates, fold expressions,
@@ -78,7 +78,11 @@ record layout matching clang (checked by layout-dump differential tests).
   `<bit>`, `<limits>`, `<initializer_list>` from libc++ compile and their
   libc++ tests pass.
 
-## M3b — libc++ 19 end to end (operator decision 2026-11-01)
+## M3b — libc++ 19 end to end — done (2026-11-02)
+Status: closed by operator decision at 98.3% of `std/` (7469 pass / 92 fail / 29 xfail / 1110 unsupported /
+5 timeout on fe5406b9; `docs/status/libcxx.md`). The remainder is coroutines (WP-351, M4), environment
+exclusions (WP-340) and small sema clusters tracked as follow-up rows; the ≥ 99% target was a goal, not a
+gate, and M4 started the same day (WP-351, WP-355…359).
 Before any C++23/26 feature work or the clang 22 oracle switch, the C++20-level
 base must be fully functional, and the measure is libc++ 19 driven end to end
 with the clang 19 oracle still in place: every libc++ 19 header compiles, the
@@ -124,7 +128,7 @@ static initialization order, inline variables.
   libc++ test checkout move from clang/llvm 19 to clang/llvm 22 (both are in the
   sandbox). The M3 gate is frozen on 19 so its numbers stay comparable; M4+ gates run
   on 22 in `-std=c++26`. Steps A/B (the `KILN_ORACLE` and `-fclang-compat`
-  knobs, default 19) landed early (WP-262/263); C–E are shelved until M3b exits.
+  knobs, default 19) landed early (WP-262/263); C–E are WP-355 (started 2026-11-02).
 - Exit: every C++23 row is `done`; every clang-22 C++26 row is `done` or has a
   written reason; `<vector>`, `<string>`, `<memory>`, `<optional>`, `<variant>`,
   `<tuple>`, `<algorithm>`, `<ranges>`, `<format>`, `<expected>`, `<mdspan>`,
@@ -138,11 +142,13 @@ library surface (M4's feature table covers the language). Track pass rate in `do
   written reason that is not "kiln bug".
 - Stretch: build libc++ itself with kiln and run the suite against it.
 
-## M6 — C++26 reflection and mirrorbind
+## M6 — C++26 reflection and the reference workload
+*The reference workload* is a private, reflection-heavy downstream C++26
+codebase that motivates kiln; it is referred to only by that name here.
 P2996 reflection, `std::meta` runtime in the Oven, splicing, annotations
 (P3394), `define_aggregate`, expansion statements (P1306), plus whichever of
 token injection makes it into the IS. Reference compiler: **GCC 16.1.0**
-(it builds mirrorbind; the Bloomberg p2996 clang fork does not and is used
+(it builds the reference workload; the Bloomberg p2996 clang fork does not and is used
 only as an advisory oracle for AST/diagnostic spot checks — see BACKLOG
 WP-102). Reflection tests default to `oracle: none` with goldens written
 from the P2996 text.
@@ -151,20 +157,20 @@ from the P2996 text.
   Oven (`std::meta::info` as a native value, splices, annotations,
   `define_aggregate`) behind two thin intrinsic shims, the p2996 fork's
   `__metafunction(...)` for its `<experimental/meta>` (to get off the ground and
-  run the fork's tests and mirrorbind early) and GCC 16.1's for libstdc++'s
+  run the fork's tests and the reference workload early) and GCC 16.1's for libstdc++'s
   production `<meta>`. The same reflection programs run through both headers as
   a differential check. A kiln-owned `<meta>` is a fallback only. The maturity
   bar for the compiler is consuming BOTH libc++ (M4/M5 gates) and libstdc++
-  (consumption track from M4, WP-188; mirrorbind under GCC uses it).
+  (consumption track from M4, WP-188; the reference workload under GCC uses it).
   libstdc++ header status: `docs/status/libstdcxx.md` (`cargo xtask libstdcxx`).
-- Exit: mirrorbind (`git@github.com:christopherfretz/mirrorbind.git`) builds
+- Exit: the reference workload builds
   and its tests pass; its compile time and peak memory with kiln are recorded
   against GCC 16.1 (whose constexpr memory growth is the problem kiln exists
   to fix).
 
 ## M7 — Performance campaign
 With correctness pinned by M5/M6, optimize the Oven and the frontend against
-the `bench/` corpus: template-heavy code, reflection-heavy mirrorbind, and
+the `bench/` corpus: template-heavy code, the reflection-heavy reference workload, and
 synthetic constexpr workloads. Publish the numbers.
 
 ## Continuous

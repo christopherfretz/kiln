@@ -211,6 +211,7 @@ impl Sema<'_, '_> {
                 false
             }
             AttrKind::NODISCARD => self.check_nodiscard_subject(d, kind, node),
+            AttrKind::PREFERRED_NAME => self.check_preferred_name(d, node),
             // clang `handleDeprecatedAttr`: not (yet) on a
             // using-declaration.
             AttrKind::DEPRECATED if kind == DeclKind::Using => {

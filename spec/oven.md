@@ -465,7 +465,8 @@ literal is one instruction and one step, not an interpreted loop.
   19's `IntExprEvaluator`: a power-of-two size within the target's inline
   width (`Target::max_atomic_inline_bytes`: aarch64 16, x86_64 8 bytes) is
   lock-free for the c11 form, a null object, a single byte, or an object
-  whose pointee alignment is at least the size; otherwise
+  whose pointee alignment is at least the size (the pointee as written:
+  an `aligned` typedef's alignment counts, `typedef_align`; WP-335); otherwise
   `always_lock_free` is false and `is_lock_free` is not a constant.
   `NonAtomicToAtomic`/`AtomicToNonAtomic` casts are no-ops, also when
   they initialize an object in place: `_Atomic(S)` of class type `S` is
@@ -1487,7 +1488,7 @@ address-taken pre-scan); a 262144-term chain costs 34 MB end to end (was
 **Counters and benchmarks.** No new counters: construction is `calls`
 and `steps`, heap objects are `allocs`. Entries `bench/oven/class-churn`
 (10000 heap objects per round with owning destructors, 8 rounds) and
-`bench/oven/soa` (a 4096-row struct-of-arrays table, mirrorbind's
+`bench/oven/soa` (a 4096-row struct-of-arrays table, the reference workload's
 binding-table shape); gated copies `tests/conformance/class.dtor/
 churn-objects.cpp` and `class.mem/soa-table.cpp` carry `oven:` budgets.
 The class ops must not tax evaluations that do not use them: the VM
@@ -2043,7 +2044,10 @@ loops, switch incl. fallthrough, break/continue, return); labels and
 and functions; `static_assert`; compound assignment, comma, conditional,
 casts, `sizeof`/`alignof` (of a reference type: the referred type's;
 `alignof e` naming a variable or data member is its declared alignment,
-`SemaBridge::alignof_decl`, clang `GetAlignOfExpr`, spec/abi.md §3.2);
+`SemaBridge::alignof_decl`, clang `GetAlignOfExpr`, spec/abi.md §3.2;
+`alignof(T)` where `T`'s sugar has a typedef with `aligned` is that
+typedef's alignment via `SemaBridge::opaque_size_align`, as the Oven's
+canonical type model drops it, WP-335);
 string literals (each evaluation of a `StringLiteral` is a distinct object;
 frozen pointers keep it through `PtrBase::StringLit { lit, origin }`, so
 `p + 1 != q` for `constexpr const char *p = "ab", *q = "ab";` is rejected

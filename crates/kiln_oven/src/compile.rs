@@ -2570,7 +2570,7 @@ impl Compiler<'_> {
                 }
             }
             TraitKind::AlignOf | TraitKind::PreferredAlignOf => {
-                u64::from(self.o.types.info(t).align)
+                u64::from(self.typedef_align(q).unwrap_or_else(|| self.o.types.info(t).align))
             }
             TraitKind::VecStep => {
                 self.unsupported(e);
@@ -2579,6 +2579,35 @@ impl Compiler<'_> {
         };
         let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
         self.konst(dst, crate::arith::canon(u128::from(v), w, s));
+    }
+
+    /// The alignment in bytes of `q` when a typedef in its sugar carries
+    /// `__attribute__((aligned))` (clang `getTypeInfo` of a `TypedefType`
+    /// honours the typedef's own alignment; the Oven's type model is
+    /// canonical and drops it), via `kiln_abi`; `None` when no typedef in
+    /// the sugar chain has attributes. libc++'s `atomic_ref` names its
+    /// object through `typedef _Tp _Aligned_Tp
+    /// __attribute__((aligned(required_alignment)))`.
+    pub(super) fn typedef_align(&mut self, q: QualType) -> Option<u32> {
+        let ast = self.ast();
+        let mut x = q;
+        let attributed = loop {
+            if let TypeView::Typedef { decl, .. } = ast.types.view(x.ty())
+                && ast.decls.get(decl).has(kiln_ast::decl::DeclFlags::HAS_ATTRS)
+            {
+                break true;
+            }
+            let d = ast.types.desugar_once(x);
+            if d.ty() == x.ty() {
+                break false;
+            }
+            x = d;
+        };
+        if !attributed {
+            return None;
+        }
+        let (size, align) = self.b.opaque_size_align(q);
+        (size != 0).then_some(align)
     }
 
     /// The declaration an `alignof e` operand names: `e` (under

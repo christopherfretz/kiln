@@ -507,7 +507,7 @@ impl Sema<'_, '_> {
         // The temporary is destroyed: clang's `CXXBindTemporaryExpr` of a
         // class with a non-trivial destructor is a non-trivial call.
         if ok && check == InitCheck::Trivial && !self.ast.types.is_reference(ty) {
-            return Some(self.is_destructible(TypeTrait::IsTriviallyDestructible, ty));
+            return Some(self.is_destructible(TypeTrait::IsTriviallyDestructible, ty, loc));
         }
         Some(ok)
     }
@@ -819,7 +819,7 @@ impl Sema<'_, '_> {
             T::IsImplicitLifetime => self.is_implicit_lifetime(q),
             T::IsCppTriviallyRelocatable => self.is_cxx_trivially_relocatable(q, 0),
             T::IsDestructible | T::IsNothrowDestructible | T::IsTriviallyDestructible => {
-                self.is_destructible(t, q)
+                self.is_destructible(t, q, loc)
             }
             T::HasTrivialDefaultConstructor => {
                 self.is_pod_type(q)
@@ -1064,7 +1064,7 @@ impl Sema<'_, '_> {
 
     /// [meta.unary.prop] `is_destructible` and its trivially / nothrow
     /// variants (clang's `UTT_Is*Destructible`).
-    fn is_destructible(&mut self, t: TypeTrait, q: QualType) -> bool {
+    fn is_destructible(&mut self, t: TypeTrait, q: QualType, loc: Loc) -> bool {
         let tys = &self.ast.types;
         if tys.is_reference(q) {
             return true;
@@ -1088,7 +1088,7 @@ impl Sema<'_, '_> {
             return false;
         }
         if t == TypeTrait::IsNothrowDestructible {
-            return self.dtor_nothrow(r, d);
+            return self.dtor_nothrow(r, d, loc);
         }
         true
     }
@@ -1099,7 +1099,15 @@ impl Sema<'_, '_> {
     /// of a non-static data member is potentially throwing. Virtual bases
     /// are direct bases of a complete object, so walking the direct bases
     /// covers them.
-    fn dtor_nothrow(&mut self, r: DeclId, d: DeclId) -> bool {
+    fn dtor_nothrow(&mut self, r: DeclId, d: DeclId, loc: Loc) -> bool {
+        // A destructor of a class template specialization keeps its
+        // `noexcept(expr)` uninstantiated until needed ([temp.inst]/14):
+        // `is_nothrow_destructible` needs it.
+        let first = self.ast.first(d);
+        if self.uninstantiated_exc.contains_key(&first) {
+            self.instantiate_exception_spec(first, loc);
+        }
+        let d = first;
         let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
         let t = &self.ast.types;
         let Some(p) = t.proto(ty) else { return false };
@@ -1125,7 +1133,7 @@ impl Sema<'_, '_> {
             }
             let Some(sr) = self.element_record(q) else { return true };
             match self.select_special(sr, SpecialKind::Dtor, Quals::default(), Quals::default()) {
-                Selected::Found(sd) => self.dtor_nothrow(sr, sd),
+                Selected::Found(sd) => self.dtor_nothrow(sr, sd, loc),
                 // A deleted or ambiguous one deletes this destructor
                 // instead ([class.dtor]/7).
                 _ => true,

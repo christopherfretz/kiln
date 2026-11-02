@@ -102,13 +102,30 @@ Constructors:
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
     (`ambiguous_type_recovery`) follows clang: the declaration is
     dropped and the statement skipped.
-- **Block-scope using-directives** ([namespace.udir]/2): a local
-  scope's `using namespace N;` is collected while walking outwards, and
-  `N`'s members are searched at the nearest enclosing namespace (or the
-  translation unit) that encloses `N`, together with that scope's own
-  using-directives.
-- **Qualified lookup** ([basic.lookup.qual]) searches one context's
-  table, plus that namespace's using-directives.
+- **Using-directives** ([namespace.udir]/2-4, WP-339): a namespace-scope
+  `using namespace N;` is recorded on its namespace (or the translation
+  unit) in `LookupTables::using_dirs` (`Ast::add_using_directive`), so it
+  outlives the namespace body and holds for every later reopening and
+  lookup into it; a directive inside an inline namespace is also
+  recorded on each enclosing namespace up to the first non-inline one
+  ([namespace.def.general]/7). A block-scope directive stays on its
+  scope. Unqualified lookup (`visible_using_directives`) collects the
+  directives of the scopes on the stack, then closes them transitively
+  over the nominated namespaces' own directives; each nominated
+  namespace `N` is searched at the nearest enclosing namespace that
+  contains both the directive's scope and `N` (`common_namespace`). At
+  that level its members are *joined* with the namespace's own (clang's
+  `CppNamespaceLookup`): `k(0L)` sees both `S::k(int)` and
+  `S::T::k(long)` from inside `S::U` with `using namespace T;`. Literal
+  operators ([lex.ext]/3-8) are found the same way, through
+  `std::literals::chrono_literals` and `std::chrono`'s directive.
+- **Qualified lookup** ([basic.lookup.qual], [namespace.qual]/2) searches
+  one context's table; only if that finds nothing (after the lookup
+  kind's filter) does it search the namespaces nominated by the
+  context's recorded directives, recursively, each once: S'(X, m) is the
+  union, over nominated namespaces, of their own members, else of their
+  own nominated namespaces' S'. Two different entities so found are
+  ambiguous.
 - **The name before `::`** ([basic.lookup.qual]/1) is looked up for
   namespaces, types and type templates only (`LookupKind::Nested`). The
   parser's lookahead classifies such a component with
@@ -603,6 +620,25 @@ Redeclaration and linkage rules:
   placeholder under pointer and reference declarators (`auto *`,
   `const auto &`, `auto &&`) is deduced as for a function call
   ([temp.deduct.call]/2-4) with `auto` as the template parameter.
+  A type-constraint on the placeholder (`C<A> decltype(auto) x = e;`)
+  is checked against the deduced placeholder type
+  ([dcl.type.auto.deduct]/2.2, /4), not the variable's type: the
+  `const` that `constexpr` adds ([dcl.constexpr]/10) is not part of it,
+  so `constexpr same_as<const bool> decltype(auto) r = X::v;` (with
+  `decltype(X::v)` = `const bool`) is satisfied and `constexpr
+  same_as<const int> decltype(auto) d = 1;` is `deduced type 'int' does
+  not satisfy 'same_as<const int>'` (`deduce_var_auto`, WP-335). The
+  variable's type still carries that `const` unless `decltype(e)` is a
+  reference: `constexpr decltype(auto) b = 1;` is `const int`,
+  `constexpr decltype(auto) r = (g);` is `const int &` for a `constexpr
+  int g` (`deduce_placeholder`).
+  A copy-list-initializer (`auto l = {...}`, and the range of a
+  range-based `for` over a braced list) deduces `std::initializer_list<U>`
+  from each element; a nested braced-init-list element is a non-deduced
+  context ([temp.deduct.call]/1) and is left out (`auto_list_items`), so
+  `{P{0, 1}, {2, 3}}` deduces `U = P<int, int>` and `{{1}}` deduces
+  nothing (`cannot deduce actual type ... from initializer list`), as
+  does a designated element (WP-339).
 - Deduced return types ([dcl.spec.auto.general]/9-11): the first
   `return` deduces, later ones must agree (clang's
   `'auto' in return type deduced as ... here but deduced as ...`),
@@ -1508,6 +1544,13 @@ and returns the scope it names:
   - A failed comparison adds `expression evaluates to 'L op R'` at the
     operator, underlining the whole comparison (clang
     `DiagnoseStaticAssertDetails`).
+  - In a template definition (`in_template()`, or a context flagged
+    `DEPENDENT_CTX`) the condition is not evaluated, even when it is not
+    value-dependent (P2593R1, a DR; clang's
+    `CurContext->isDependentContext()`): `else static_assert(false);` in
+    a discarded branch is fine, and the instantiation that keeps it
+    fails (libstdc++ ranges:9507; WP-332). Test:
+    `dcl.pre/static-assert-false-in-template-definition.cpp`.
   - On failure it reports
     `static assertion failed due to requirement '…'`, with the
     condition printed by `TypeNames::write_expr`, plus the message if
@@ -2179,7 +2222,13 @@ diagnostics and IR.
     type `T` only when `T` is a non-class, non-dependent type; a class
     (or dependent) result keeps its cv-qualifiers, so `decltype(f())`
     for `const X f()` is `const X` ([expr.type]/2, clang
-    `getNonLValueExprType`; WP-276)
+    `getNonLValueExprType`; WP-276). The callee must be a function
+    lvalue or a pointer to function ([expr.call]/1): a pointer to
+    member function is not callable without an object (`(o.*pmf)(a)`),
+    so `pmf(a)` is `called object type 'P' (aka 'int (S::*)(int)') is
+    not a function or function pointer` (a substitution failure in a
+    requires-expression: libc++'s `invocable<int (S::*)(int), int>` is
+    false; WP-335)
   - **member access:** `.` and `->` on records and through
     `IndirectField`; members found in base classes, static members,
     enumerators and member functions, implicit `this->`, `this`,
@@ -2279,17 +2328,26 @@ diagnostics and IR.
     pointers, otherwise (a non-null integer, `nullptr` as a non-null
     operand of a different kind) `invalid operands`.
   Not yet: the composite type that needs a cv-union of both sides
-  (`const int B::*` vs `volatile int D::*`; [expr.type]/4.6) and
-  constant evaluation of the comparison (WP-076).
+  for comparisons (`const int B::*` vs `volatile int D::*`;
+  [expr.type]/4.6) and constant evaluation of the comparison (WP-076).
 - **Composite pointer type** ([expr.type]/4; `composite_pointer` in
   `expr.rs`, used by `==`, `<`, `<=>` and `?:`): after the null,
   same-type and one-way-conversion cases, `cv_combined_pointer` tries a
   pointer to either side's unqualified pointee with the cv-qualifiers of
   both (`void *` vs `const B *` is `const void *`; `B *` vs `const D *`
   is `const B *`), taking the first that both operands reach by a
-  standard conversion (WP-155). Not yet: multi-level cv-combination
-  (`int **` vs `const int **` is `const int *const *`) and the member
-  pointer case above.
+  standard conversion (WP-155). Member pointers take the same path
+  ([expr.type]/4.6, WP-335): a null pointer constant against a member
+  pointer converts to it, and two member pointers combine to a member
+  pointer of the cv-combined pointee in either side's class (`int S::*`
+  vs `const int S::*` is `const int S::*`; `int S::*` vs `int D::*` is
+  `int D::*`; a pointer to `noexcept` member function converts to the
+  plain one). Unrelated classes have no composite type (`incompatible
+  operand types ('int A::*' and 'int B::*')` for `?:`). This is what
+  libc++'s `common_with`, `common_reference` and
+  `equality_comparable_with` see through `decltype(b ? x : y)`. Not
+  yet: multi-level cv-combination (`int **` vs `const int **` is
+  `const int *const *`).
 
 ### 5.1 Unevaluated operands
 `unevaluated > 0` inside `sizeof`, `alignof` and `noexcept` operands.
@@ -2356,6 +2414,24 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   printf builtins an implicit `format(printf, F, A)` attribute
   (`builtin::printf_format`, WP-282) and an implicit `NoThrow`
   attribute, in clang's order. Later lookups find that declaration.
+- **One declaration per builtin** (WP-332): every implicit use looks
+  the name up first, as clang does. The memberwise copy of a trivially
+  copyable array member (spec/sema-class.md §4.5, clang
+  `buildMemcpyForAssignmentOp`) does an ordinary lookup of
+  `__builtin_memcpy` in the translation unit and calls what it finds
+  (the lazily created builtin of an earlier written call, or a user
+  redeclaration); only when nothing is found does it call
+  `lazily_create_builtin`, and later written calls then find that
+  declaration. A user redeclaration with the builtin's type
+  (`extern "C" void *__builtin_memcpy(void *, const void *, size_t)`)
+  is a redeclaration of the implicit one, before or after it. A
+  redeclaration inherits the builtin id, and a first declaration of a
+  builtin's name at file scope with C linkage and the builtin's type
+  (ignoring the exception specification) is recognized as the builtin
+  (`recognize_builtin_decl`; clang `BuiltinAttr`), so a call through it
+  still lowers as the builtin. Tests:
+  `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-written-first.cpp`,
+  `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-implicit-first.cpp`.
 - **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
   placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
 - **Calls:** `act_on_call` converts the callee with
@@ -2916,8 +2992,15 @@ and aggregate element types.
   array cannot have dynamic size` (see the gaps below).
 - **Allocation function** ([expr.new]/12-19): `PASS_ALIGN` when
   `alignof(T)` exceeds `__STDCPP_DEFAULT_NEW_ALIGNMENT__` (16 on both
-  targets, `kiln_abi::Target::default_new_align`). Global lookup only
-  (class-scope `operator new` is `todo(WP-068b)`): the candidates whose
+  targets, `kiln_abi::Target::default_new_align`). Lookup is in the
+  allocated class first, then global (`::new` only global;
+  [expr.new]/12, `alloc_fns`). A class-scope
+  `operator new` / `operator delete` (`AllocFns::naming` is its class)
+  is access-checked from the context of the expression ([expr.new]/19,
+  [expr.delete]/12, clang `CheckAllocationAccess`): `'operator new' is
+  a private member of 'P'` with the `declared private here` note, a
+  substitution failure in a requires-expression (libc++
+  `shared_ptr_Y.pass.cpp`; WP-335). Among the candidates: those whose
   leading parameters are `size_t` (and `align_val_t` when aligned) and
   that accept the placement arguments, preferring the most exact
   matches; with `PASS_ALIGN` a second round without the alignment
@@ -3561,6 +3644,13 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   included (stl_tree.h:2107). Tests:
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp`.
+  A qualifier `typename X<P...>::template M<A...>::m` (or the type
+  `X<P...>::template M<A...>` itself) is rebuilt as the specialization
+  `M<A...>` of the member class or alias template `M` of the current
+  instantiation, as the in-class `typename M<A...>::m` names it
+  (`rebuild_ci_member_template_id`; libstdc++ valarray:1100
+  `valarray<_Tp>::template _UnaryOp<_Name>::_Rt`, WP-332). Test:
+  `tests/conformance/temp.dep.type/libstdcxx-out-of-line-member-template-qualifier.cpp`.
 - **Member template-ids with non-template overloads**
   ([temp.arg.explicit]/4, [over.match.call.general]/1): an unqualified
   function template-id `f<A>(args)` names the whole overload set that
@@ -3576,6 +3666,146 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   an element of the list is type-dependent (`braced_arg_type_dependent`).
   This is `defer_dependent_init` (<format>:439 `_Utf32_view`). Test:
   `tests/conformance/dcl.init.general/libstdcxx-paren-braced-init-dependent.cpp`.
+
+### 5.22 Rules from the libc++ `.verify` cluster B (WP-338)
+- **An out-of-line constructor stays explicit** ([dcl.fct.spec]/4,
+  [over.match.copy]/1.1): the explicit-specifier belongs to the first
+  declaration (it is allowed only in the class). An out-of-line
+  definition or member-template definition without `explicit`
+  inherits the flag and any `explicit(expr)` operand from the previous
+  declaration (`class/special/declare.rs`). Copy-initialization does
+  not consider it, and the "explicit constructor is not a candidate"
+  note points at the first declaration (`overload/diag.rs`). This
+  covers `complex<float> cf = cd;`. Test:
+  `tests/conformance/over.match.copy/explicit-ctor-out-of-line-definition.cpp`.
+- **The underlying type of an incomplete enumeration** ([dcl.enum]/5,
+  [meta.trans.other]): `__underlying_type(E)` for an enumeration
+  without a fixed underlying type, before its `}`, is an error.
+  The message is "cannot determine underlying type of incomplete
+  enumeration type 'E'" (`sema_underlying_type_of_incomplete_enum`),
+  with a "forward declaration of" note at `E`
+  (`templ/builtins/transforms.rs`). Inside a class template
+  instantiation the error is located at the declarator, not at the
+  `__underlying_type` keyword. Types carry no locations, so tests give
+  only the line. Test:
+  `tests/conformance/dcl.enum/underlying-type-incomplete-enum.cpp`.
+- **An invalid base makes the derived specialization invalid**
+  ([class.derived]/2, clang `CheckBaseSpecifier`): instantiating a
+  class whose base specialization is invalid, for example because a
+  member typedef failed to substitute, marks the class invalid
+  (`templ/class.rs` `class_body_with`). `underlying_type<E>::type`
+  after the error is then quiet. Test:
+  `tests/conformance/class.derived/invalid-base-makes-derived-invalid.cpp`.
+- **An erroneous template argument is diagnosed once**
+  ([temp.arg.general]/1): an argument that is an error expression,
+  such as an undeclared name, is rejected for a type parameter without
+  a second "must be a type" error (`templ/args.rs`
+  `check_template_arg`, clang's `RecoveryExpr`). Test:
+  `tests/conformance/temp.arg.general/erroneous-argument-single-diagnostic.cpp`.
+- **`T{...}` of an invalid class in an instantiation**
+  ([temp.inst]/2, [expr.type.conv]): when substituting a braced
+  functional cast names a class whose instantiation is invalid (for
+  example a failed `static_assert`), the expression fails silently
+  (`templ/subst/exprs.rs` `invalid_class_braced_cast`). Only the
+  `static_assert` is reported, with no "no viable conversion"
+  (`std::numbers::e_v<int>`). `T()` and a non-template `I<char>{}`
+  still diagnose, as in clang. Test:
+  `tests/conformance/temp.inst/invalid-class-braced-cast.cpp`.
+- **Attributes of instantiated static data members**
+  ([dcl.attr.deprecated]/4, [temp.inst]/3): a static data member
+  instantiated with its class, deferred in-class initializer or not,
+  gets all of the pattern's attributes (`class_attrs`), not only
+  `alignas`. So `numeric_limits<T>::has_denorm` warns at each use, and
+  the out-of-line definition without the attribute inherits it
+  through the redeclaration chain. Test:
+  `tests/conformance/dcl.attr.deprecated/static-data-member-instantiation.cpp`.
+- **"no template named 'X' in 'N'"** ([temp.names]/3): at namespace
+  or class scope, a decl-specifier `N::X<...>` whose `X` is not a
+  member of the non-dependent `N` gets `sema_no_member_template`
+  (clang `DiagnoseUnknownTypeName` with `IsTemplateName`). The argument
+  list is skipped and the declarators are not diagnosed again
+  (`kiln_parse` `qualified_unknown_type_follows`,
+  `parse_qualified_type_rest`). At block scope the statement is
+  parsed as an expression, as clang does. Test:
+  `tests/conformance/temp.names/no-template-named-qualified.cpp`.
+
+### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
+Each rule names the libc++ test it fixed and its corpus test.
+- **Deleted call operator** ([over.call.object]/1,
+  [dcl.fct.def.delete]/2): a call through an object whose selected
+  `operator()` is deleted reports "call to deleted function call operator
+  in type 'T'" with the candidate notes (`oper.rs`,
+  `diagnose_deleted_use` for `OperForm::Call`). A requires-clause naming
+  a deleted member is unsatisfied, with "attempt to use a deleted
+  function" as the reason (ranges `begin`/`end`/`rbegin`/`rend`). Test:
+  `tests/conformance/over.call.object/deleted-call-operator.cpp`.
+- **Invalid classes** ([temp.inst]/2): a class whose instantiation
+  failed, or one that dropped a base-specifier that names no class
+  ([class.derived.general]/2; `attach_bases` returns false), is marked
+  invalid. Initializing an object of an invalid class reports nothing
+  more and recovers (`is_invalid_class`). This covers list-init,
+  parenthesized aggregate init, `static_cast` and functional casts. As
+  an aggregate element, the invalid class takes one initializer
+  (out_ptr/inout_ptr). Tests:
+  `tests/conformance/temp.inst/invalid-class-quiet-init.cpp`,
+  `tests/conformance/class.derived/dependent-base-not-class.cpp`.
+- **typename-specifier after a failed qualifier**
+  ([temp.res.general]/4): only the first failing component is
+  diagnosed, and the parser skips the rest of the specifier
+  (tuple_element). Test:
+  `tests/conformance/temp.res/typename-failed-qualifier.cpp`.
+- **Non-type argument of class type with no conversion**
+  ([temp.arg.nontype]/1): reported with the converted-constant wording
+  "value of type 'S' is not implicitly convertible to 'int'", at the
+  argument (tuple_size_incomplete). Test:
+  `tests/conformance/temp.arg.nontype/class-arg-no-conversion.cpp`.
+- **Non-type parameter types substituted from prior arguments**
+  ([temp.param]/7):
+  - `template <class T, T V>`: `V`'s substituted type is checked at the
+    parameter, under a `PriorArgSubstitution` frame ("while
+    substituting prior template arguments into non-type template
+    parameter 'V' [with T = ...]").
+  - A deduced placeholder (`template <Pair P>`) is checked at the
+    argument, with "template parameter is declared here".
+  - Implicit deduction guides return the canonical injected type.
+  
+  Covers the pair/array NTTP tests. Test:
+  `tests/conformance/temp.param/nttp-structural-prior-args.cpp`.
+- **`static_cast<void>`** ([expr.static.cast]/6): its result is never
+  unused, unlike `(a == b);` or a comma's left operand
+  (size_incompatible_comparison). Test:
+  `tests/conformance/expr.static.cast/void-cast-not-unused.cpp`.
+- **Assignment through a const-returning call** ([expr.assign]/1): the
+  left operand may be a call whose return type is const-qualified
+  (through a reference), or a non-const member of one through `.`. The
+  error is "cannot assign to return value because function 'f' returns
+  a const value", with a note at the return type (get_const). Test:
+  `tests/conformance/expr.assign/const-return-call.cpp`.
+- **Initializer-list constructors in implicit conversion sequences**
+  ([over.ics.list]/7, [over.ics.rank]/3.3): a conversion through an
+  initializer-list constructor is an ordinary user-defined conversion,
+  with no rank of its own. So `one({1, 2})` with `one(pair<int, int>)` and
+  `one(span<const int>)` is ambiguous (span initializer_list, P2447R4).
+  Test: `tests/conformance/over.ics.list/init-list-ctor-ambiguous.cpp`.
+- **`preferred_name`** (clang extension, `__attribute__` and
+  `[[clang::]]`):
+  - Placement: on a class template. On anything else it warns "only
+    applies to class templates" and is ignored.
+  - Argument: a single type, which must be a cv-unqualified typedef for
+    a specialization of that template. Otherwise: "argument 'X' to
+    'preferred_name' attribute is not a typedef for a specialization of
+    'T'", with a note at the typedef.
+  - Printing: a specialization prints as the typedef
+    (`TypeNames::preferred_name`, `Ast::preferred_name_of`), with scope
+    unless printed among a written template-id's arguments. This applies
+    in C++ printing only.
+  
+  The pair/array NTTP tests print `std::string`. Test:
+  `tests/conformance/dcl.attr/preferred-name.cpp`.
+- **Substituted classes among written template arguments** ([temp.names]):
+  a class substituted into a written template-id prints unscoped there
+  (`'Box<Q, int>'`) and scoped elsewhere (`'N::Q *'`) (tuple.by.type).
+  Test: `tests/conformance/temp.names/substituted-args-unscoped.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

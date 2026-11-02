@@ -715,6 +715,26 @@ impl Ast {
         }
     }
 
+    /// The `preferred_name` typedef type of class template specialization
+    /// `decl`: the argument of a `preferred_name` attribute on a
+    /// declaration of its template's pattern that names a typedef for
+    /// `decl` (clang `printRecordBefore`'s `UsePreferredNames`).
+    pub fn preferred_name_of(&self, decl: DeclId) -> Option<QualType> {
+        let (_, info) = self.spec_info(decl)?;
+        let pattern = self.template_info(info.template)?.pattern?;
+        let me = self.first(decl);
+        self.redecls_of(pattern).find_map(|r| {
+            self.lists.iter::<crate::AttrId>(self.attrs.of_decl(r)).find_map(|a| {
+                let n = self.attrs.get(a);
+                let t = (n.kind == crate::attr::AttrKind::PREFERRED_NAME)
+                    .then(|| QualType::from_raw(n.b))
+                    .flatten()?;
+                let r = self.types.as_record(t)?;
+                (self.first(r) == me).then_some(t)
+            })
+        })
+    }
+
     /// Writes template parameter `index` of template `associated` as
     /// clang prints a substituted pack's replaced parameter (its name,
     /// or `type-parameter-<index>` when it has none).
