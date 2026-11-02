@@ -168,7 +168,11 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
     pointers); pointer difference: `ptrtoint`, `sub`, then `sdiv exact`;
   - floating add/sub (also compound) contract a single-use `fmul`
     operand (looking through a single-use `fneg`) into
-    `llvm.fmuladd.*`, as `tryEmitFMulAdd` does under `-ffp-contract=on`.
+    `llvm.fmuladd.*`, as `tryEmitFMulAdd` does under `-ffp-contract=on`:
+    `b*c + a` / `b*c - a` are `fmuladd(b, c, a)` / `fmuladd(b, c, -a)`,
+    `a + b*c` / `a - b*c` are `fmuladd(b, c, a)` / `fmuladd(-b, c, a)`
+    (the addend of a right product is never negated), and a looked-through
+    fneg flips the sign of `b` (tests/codegen/fmuladd_operand_order.cpp).
 - Values:
   - an lvalue-to-rvalue conversion of a glvalue `?:` is emitted as a
     scalar `?:`: each arm loads in its own block and the result is a phi;
