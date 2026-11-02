@@ -13,9 +13,9 @@ use kiln_ast::ids::RawId;
 use kiln_ast::lookup::LookupFlags;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::types::{
-    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeView,
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Quals, RefQual, TagKeyword, TypeFlags, TypeView,
 };
-use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId};
+use kiln_ast::{AttrId, DeclHead, DeclId, ExprId, QualType, StmtId, StringLitId};
 use kiln_diag::{DiagId, FixIt};
 use kiln_source::symbol::Symbol;
 use kiln_source::{Loc, Span};
@@ -545,11 +545,8 @@ impl Sema<'_, '_> {
                 })
                 .collect();
             let cl = self.ast.types.arg_list(&canon);
-            let still_dependent = self
-                .ast
-                .types
-                .arg_list_flags(cl)
-                .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION);
+            let still_dependent =
+                self.ast.types.arg_list_flags(cl).intersects(TypeFlags::DEPENDENT_INSTANTIATION);
             let args = if still_dependent { &out } else { &canon };
             let Ok(crate::templ::actions::TemplateIdRef::Type(t)) =
                 self.act_template_id(name, args, loc, loc)
@@ -790,7 +787,9 @@ impl Sema<'_, '_> {
             self.warn_redundant_parens(None, d);
         }
         // [dcl.type.class.deduct]/2.
-        let mut ty = self.ctad_declarator_check(base, spec_loc, d);
+        let ty = self.ctad_declarator_check(base, spec_loc, d);
+        // [dcl.spec.auto.general]/2-5.
+        let mut ty = self.auto_declarator_check(ty, spec_loc, d);
         let name = self.declarator_name(d);
         let mut prev_ref = false;
         for (i, chunk) in d.chunks.iter().enumerate().rev() {
@@ -1257,8 +1256,17 @@ impl Sema<'_, '_> {
         ty = self.adjust_param_type(ty);
         let original_ty = (ty != declared).then_some(declared);
         if let Some(l) = d.ellipsis {
-            // [dcl.fct]/16: a function parameter pack `T... x`.
-            ty = self.act_pack_expansion_type(ty, l);
+            // [dcl.fct]/16, [temp.variadic]/5: a function parameter pack
+            // `T... x` names a pack; else clang's
+            // `err_function_parameter_pack_without_parameter_packs`, which
+            // prints the declared (unadjusted) type and drops the `...`.
+            if self.ast.types.flags(declared.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
+                ty = self.act_pack_expansion_type(ty, l);
+            } else if !self.is_error_type(declared) {
+                let m =
+                    self.diag(DiagId::sema_param_pack_without_packs, l).arg(self.ty_arg(declared));
+                self.emit(m);
+            }
         }
         ParamInfo {
             name: d.name,
@@ -2001,7 +2009,7 @@ impl Sema<'_, '_> {
                 self.templ.cur = None;
             }
         }
-        let invalid = ds.invalid || d.invalid || self.is_error_type(ty);
+        let mut invalid = ds.invalid || d.invalid || self.is_error_type(ty);
         if head.is_none() && self.templ.explicit_inst.is_some() && self.at_explicit_head() {
             self.check_explicit_inst_specifiers(ds, ty);
         }
@@ -2009,7 +2017,11 @@ impl Sema<'_, '_> {
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
-            return self.act_on_function_spec_declarator(ds, ty, d, invalid);
+            match self.act_on_function_spec_declarator(ds, ty, d, invalid) {
+                Ok(r) => return r,
+                // No template to specialize: a plain, invalid function.
+                Err(()) => invalid = true,
+            }
         }
         if let Some((ext, _)) = self.templ.explicit_inst.filter(|_| self.at_explicit_head()) {
             self.templ.explicit_inst = None;
@@ -2220,6 +2232,9 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_asm_label_on_auto_decl, loc).arg(text);
             self.emit(msg);
         }
+        if kind == DeclKind::Var && matches!(ds.storage, Some((StorageSpec::Register, _))) {
+            self.check_register_variable(ds, decl, lit, loc);
+        }
         let node = AttrNode {
             kind: AttrKind::ASM_LABEL,
             syntax: AttrSyntax::Keyword,
@@ -2232,6 +2247,44 @@ impl Sema<'_, '_> {
         attrs.insert(0, id);
         let first = self.ast.first(decl);
         let _ = self.ast.decls.cold.asm_label.insert(first, lit);
+    }
+
+    /// A GNU register variable `register T v asm("reg")` ([dcl.asm]; clang
+    /// `ActOnVariableDeclarator`). At block scope the register name must be
+    /// one the target knows; at file scope also one the target can hold a
+    /// global variable in, of the variable's size, and the type must be
+    /// integral or a pointer (else the variable is invalid). A dependent
+    /// type's size is not checked.
+    fn check_register_variable(&mut self, ds: &DeclSpec, v: DeclId, lit: StringLitId, loc: Loc) {
+        let arch = self.abi.triple.arch;
+        let name = String::from_utf8_lossy(self.ast.strings.bytes(lit)).into_owned();
+        let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        if !kiln_abi::asm::is_valid_register_name(arch, &name) {
+            self.emit(self.diag(DiagId::sema_asm_unknown_register_name, loc).arg(name));
+        } else if !self.in_local_scope() && !self.is_dependent_type(ty) {
+            let bits = target::size_align(&self.ast, ty, self.abi()).map(|(s, _)| s * 8);
+            match bits.map(|b| kiln_abi::asm::global_register_size_mismatch(arch, &name, b)) {
+                Some(None) => {
+                    let msg = self.diag(DiagId::sema_asm_invalid_global_var_reg, loc).arg(name);
+                    self.emit(msg);
+                }
+                Some(Some(true)) => {
+                    let msg = self.diag(DiagId::sema_asm_register_size_mismatch, loc).arg(name);
+                    self.emit(msg);
+                }
+                _ => {}
+            }
+        }
+        // A dependent type is neither integral nor a pointer (clang 19
+        // diagnoses it on x86_64 and crashes on AArch64).
+        if self.in_local_scope() || self.is_error_type(ty) {
+            return;
+        }
+        let t = &self.ast.types;
+        if !t.is_integral(ty) && !t.is_pointer(ty) {
+            self.error(DiagId::sema_asm_bad_register_type, ds.loc);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
     }
 
     /// Reports an unsupported construct (`{what} is not supported yet`).
@@ -2513,6 +2566,17 @@ impl Sema<'_, '_> {
         }
         self.register_local(name, td);
         td
+    }
+
+    /// Where the type-constraint of the constrained placeholder in the
+    /// type `ds d` declares is written: the decl-specifier's, else one in
+    /// a trailing return type (`auto (*v)() -> C auto`).
+    pub(crate) fn placeholder_constraint_loc(ds: &DeclSpec, d: &Declarator) -> Option<Loc> {
+        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+            Some(ds.constraint_loc)
+        } else {
+            d.trailing_constraint.is_valid().then_some(d.trailing_constraint)
+        }
     }
 
     /// The outermost `&`/`&&` of `d` when its declared type is a
@@ -3178,8 +3242,8 @@ impl Sema<'_, '_> {
         {
             let _ = self.ast.decls.cold.begin_loc.insert(f, ds.loc);
         }
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
-            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
+            self.inst.concepts.placeholder_locs.insert(f, l);
         }
         if d.missing_typename {
             self.missing_typename_fns.insert(f);
@@ -3595,11 +3659,16 @@ impl Sema<'_, '_> {
         let invalid = invalid || {
             let kw = self.placeholder_keyword(ty);
             if let Some(kw) = kw {
-                let tag = self.ast.decls.record(ctx).map_or(TagKind::Struct, |r| r.tag);
+                use crate::templ::ctad_site::site;
+                let s = match self.ast.decls.record(ctx).map_or(TagKind::Struct, |r| r.tag) {
+                    TagKind::Struct => site::STRUCT_MEMBER,
+                    TagKind::Union => site::UNION_MEMBER,
+                    TagKind::Class => site::CLASS_MEMBER,
+                };
                 let msg = self
-                    .diag(DiagId::sema_auto_not_allowed_field, ds.type_loc.unwrap_or(ds.loc))
+                    .diag(DiagId::sema_auto_not_allowed, ds.type_loc.unwrap_or(ds.loc))
                     .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
-                    .arg(tag as u8);
+                    .arg(s);
                 // Once per declarator of a group (as clang).
                 self.emit(msg.allow_duplicate());
             }
@@ -3660,8 +3729,8 @@ impl Sema<'_, '_> {
             self.note_type_spec_loc(f, ds, d.name_loc());
             self.note_ref_loc(f, d, ty);
         }
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
-            self.inst.concepts.placeholder_locs.insert(f, ds.constraint_loc);
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
+            self.inst.concepts.placeholder_locs.insert(f, l);
         }
         if d.init_style.is_some() {
             self.special.nsdmi.insert(f);
@@ -3773,6 +3842,14 @@ impl Sema<'_, '_> {
             && !self.in_local_scope()
     }
 
+    /// The variable's storage class makes it invalid: `register` at file
+    /// scope ([`Sema::register_at_file_scope`]) or `mutable` on anything
+    /// but a non-static data member ([dcl.stc]/9, clang
+    /// `err_mutable_nonmember`, which `var_spec` reports).
+    pub(crate) fn storage_invalidates_var(&self, ds: &DeclSpec, d: &Declarator) -> bool {
+        matches!(ds.storage, Some((StorageSpec::Mutable, _))) || self.register_at_file_scope(ds, d)
+    }
+
     pub(crate) fn var_spec(&mut self, ds: &DeclSpec, d: &Declarator) -> VarSpec {
         let mut spec = VarSpec::new();
         if let Some(style) = d.init_style {
@@ -3793,8 +3870,11 @@ impl Sema<'_, '_> {
                     }
                 }
             }
-            Some((StorageSpec::Mutable, loc)) => {
-                self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
+            Some((StorageSpec::Mutable, _)) => {
+                // [dcl.stc]/9: only a non-static data member (a field never
+                // gets here); at the name, and the variable is invalid
+                // (`storage_invalidates_var`).
+                self.error(DiagId::sema_mutable_nonmember, d.name_loc());
             }
             _ => {}
         }
@@ -4028,7 +4108,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous || self.register_at_file_scope(ds, d) {
+        if ambiguous || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
@@ -4038,9 +4118,9 @@ impl Sema<'_, '_> {
         }
         self.note_ref_loc(v, d, ty);
         self.lambda_mangle.var = Some(v);
-        if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+        if let Some(l) = Self::placeholder_constraint_loc(ds, d) {
             // The constrained placeholder's diagnostics point here.
-            self.inst.concepts.placeholder_locs.insert(v, ds.constraint_loc);
+            self.inst.concepts.placeholder_locs.insert(v, l);
         }
         self.check_abstract_var(v);
         self.check_void_init_var(v, d);
@@ -4832,8 +4912,9 @@ impl Sema<'_, '_> {
         }
         if self.ast.types.is_reference(ty) {
             if spec.storage() != VarStorage::Extern {
+                // Repeats the template definition's report (WP-318).
                 let msg = self.diag(DiagId::sema_reference_var_requires_init, loc).arg(name);
-                self.emit(msg);
+                self.emit(msg.per_instantiation());
             }
             return;
         }
@@ -4883,7 +4964,11 @@ impl Sema<'_, '_> {
     /// variable, a reference type, so `S::name &r;` with no `S::name`
     /// (whose type recovers to `int`, [dcl.type.simple]) reports
     /// "declaration of reference variable 'r' requires an initializer"
-    /// after "no type named 'name' in 'S'" (WP-308). True if it reported.
+    /// after "no type named 'name' in 'S'" (WP-308); and, for a dependent
+    /// reference type, `T &r;` in a template pattern reports at the
+    /// definition (clang checks the reference before it stops at a
+    /// dependent type) and again, with the instantiation note, for each
+    /// instantiation (WP-318). True if it reported.
     fn uninit_array_or_reference(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
         let Some(ty) = vn.ty() else { return false };
@@ -4906,9 +4991,8 @@ impl Sema<'_, '_> {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
             return true;
         }
-        if !vn.has(DeclFlags::INVALID)
-            || self.ast.types.is_dependent(ty)
-            || !self.ast.types.is_reference(ty)
+        if !self.ast.types.is_reference(ty)
+            || !(vn.has(DeclFlags::INVALID) || self.ast.types.is_dependent(ty))
         {
             return false;
         }

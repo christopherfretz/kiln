@@ -274,6 +274,24 @@ If `typename` is missing outside these contexts, clang's error and fix-it
 apply: "missing 'typename' prior to dependent type name 'T::type'". The
 parser then recovers as if `typename` had been written.
 
+A qualifier naming a class that is declared in a dependent context but is
+not the current instantiation where it is used ([temp.dep.type]/1) makes
+the name dependent too: a local class `L` of a function template named
+after its definition (`L::U x;` at block scope), or a member class `N` of
+a class template named in a block of a member function outside `N`
+(clang's `computeDeclContext` gives no context for it). In a context
+where `typename` is required (block scope, a condition, a for-init, a
+function parameter outside the implied contexts above), a type found
+through such a qualifier is "missing 'typename' prior to dependent type
+name 'L::U'" at the qualifier (`Sema::is_unentered_dependent_class`,
+checked by `kiln_parse` `check_missing_typename_in_class` from the
+qualified type arm of `parse_type_name_spec`). Kiln still finds the type
+in `L` and recovers as if `typename` had been written. Inside `L`'s own
+definition (its members, its declarators' scope) `L` is the current
+instantiation and no `typename` is needed. Clang parses `L::U *p;` and
+`sizeof(L::U)` at block scope as expressions; kiln parses them as types
+(a gap). Test: `tests/conformance/temp.res.general/missing-typename-unentered-class.cpp`.
+
 A parameter-declaration of a function declared at namespace or block
 scope with an unqualified declarator-id (`template <class T> void
 f(X<T>::m x);`) is such a context (WP-287): the parser sets
@@ -452,14 +470,15 @@ type parameter named `auto:N`, as in clang's dump.
   `auto` in any other clause (a nested function declarator, a function
   type in a type-id, alias, typedef, variable or template parameter) is
   "'auto' not allowed in function prototype that is not a function
-  declaration" at the `auto` (`sema_auto_not_allowed_prototype`), and the
+  declaration" at the `auto` (`sema_auto_not_allowed`, §6.3), and the
   parameter's type becomes `int`. `decltype(auto)` is never a parameter's
   placeholder ("... in function prototype", "... in lambda parameter").
 - A parameter declarator with a trailing return type
   (`auto (*cb)(int) -> int`) keeps its decl-specifier `auto`: it is the
   function type's `auto` ([dcl.fct]/2; a `C auto` or `const auto` there is
   `sema_trailing_return_without_auto`). A placeholder in that trailing
-  return type (under pointer and reference declarators) is checked as
+  return type (under pointer, reference and further function
+  declarators: `auto (*cb)(int) -> auto (*)(int) -> C auto`) is checked as
   above, reported at the decl-specifier, and otherwise invents a
   parameter (`void f(auto (*p)() -> C auto)` is a template; clang's
   `GetFullTypeForDeclarator`). Tests: `dcl.fct/p22-auto-nested-prototype*.cpp`,
@@ -488,6 +507,17 @@ type parameter named `auto:N`, as in clang's dump.
 | attribute-list | `[[a...]]` | — | rejected, as clang |
 | structured-binding pack | `auto [...xs] = e` | — | M4 |
 | friend pack | `friend T...;` | — | M4 |
+
+A pattern that names no unexpanded pack is "pack expansion does not
+contain any unexpanded parameter packs" at the `...`
+(`sema_pack_expansion_without_packs`), except for a function parameter
+pack ([dcl.fct]/16): there clang's wording names the parameter's declared
+type before array/function adjustment, "type 'int' of function parameter
+pack does not contain any unexpanded parameter packs"
+(`sema_param_pack_without_packs`, `act_on_param_declarator`), and the
+parameter is kept as a plain parameter. A misplaced `auto` in its clause
+has already become `int` (§2.6), so `void f(auto (*...x)(C auto...))`
+reports both. Test: `temp.variadic/p5-param-pack-without-packs.cpp`.
 
 **Fold expressions** ([expr.prim.fold]) take the 32 fold-operators.
 After `(`:
@@ -2068,6 +2098,16 @@ formed it:
   template class" note points there, as clang's
   `RequireCompleteDeclContext` does, not at the declarator (WP-307;
   `temp.inst/instantiation-note-template-id-column.cpp`).
+- A using-declaration's qualifier error (`T` not a class or not a base,
+  "cannot be used prior to '::'") is reported at the start of its
+  nested-name-specifier, as clang does: `Substituter::qualifier_begin`
+  walks the NNS prefixes to the outermost dependent one and returns its
+  written location (block scope `subst/stmts.rs` `local_using_decl`,
+  member `templ/class.rs` `member_using`/`member_using_typename`, pack
+  expansions included; WP-328,
+  `namespace.udecl/dependent-qualifier-location.cpp`). A non-dependent
+  leading prefix (`N::X<T>::m`) or a leading `::` is not recorded, so
+  such a qualifier reports at its first dependent component.
 - Recording happens only while parsing (the instantiation stack is
   empty), so instantiation never grows the table.
 - `Substituter::written(key, loc)` returns the recorded location nearest
@@ -2241,9 +2281,8 @@ formed it:
      relies on it
      (`tests/conformance/temp.deduct.call/noexcept-function-pointer-argument.cpp`,
      `libstdcxx-deduce-noexcept-fnptr.cpp`).
-     Deviation: binding `void (&)(int)` to a `noexcept` function is not
-     yet reference-compatible in kiln ([dcl.init.ref]/4, `ics.rs`
-     `ref_related`), so such a call is "not viable" after deduction.
+     Binding `void (&)(int)` to a `noexcept` function after deduction is
+     reference-compatible ([dcl.init.ref]/4, see spec/sema-conv.md).
 4. **Success.** `get_function_spec(ft, canonical)` memoizes and returns
    the `FunctionTemplateSpecialization` decl. It has the substituted
    type and is a declaration only.
@@ -2340,6 +2379,62 @@ least as specialized as").
    error.
 4. `C auto`: check `C<deduced, args…>` (§8). On failure, "deduced type
    'int' does not satisfy 'C'" plus the note chain.
+
+**Where the placeholder sits** (clang `getContainedDeducedType`,
+[dcl.spec.auto.general]/3). The placeholder of a declared type is found
+by walking pointers, references and function return types
+(`contained_placeholder`); a function type's own trailing return type
+is part of that walk, so `auto (*p)(int) -> auto (*)(int) -> auto = g;`
+deduces the innermost `auto`. Deduction matches a function type
+against the initializer's exactly except for the return type: equal
+parameter types (top-level cv dropped), equal variadic, cv and ref
+qualifiers, and an equal exception specification (a `noexcept`
+initializer also matches a potentially-throwing declared type), else
+"variable 'p' with type '…' has incompatible initializer of type '…'".
+The result keeps the declared sugar (`int (*(*)(int))(int)` prints as
+`auto (*)(int) -> auto (*)(int) -> int`), and a constrained placeholder
+there is checked at its type-constraint, both for a variable and for an
+invented parameter (§2.6).
+Tests: `dcl.spec.auto/nested-return-placeholder-run.cpp`,
+`dcl.spec.auto/nested-return-placeholder-diags.cpp`.
+
+**Positions that forbid a placeholder** ([dcl.spec.auto.general]/2-6,
+[expr.prim.req.general]/4; clang `err_auto_not_allowed` from
+`GetDeclSpecTypeForDeclarator`, `templ/ctad_site.rs`). One diagnostic,
+`sema_auto_not_allowed`: "'auto' (or 'decltype(auto)') not allowed
+<position>", with clang's position selector, at the decl-specifier's
+placeholder. The placeholder checked is the decl-specifier's own, or, when
+the declarator's function declarator nearest the name has a trailing return
+type, the one contained in that trailing type (`declarator_placeholder`;
+`using F = auto (*)(int) -> int;` is fine, `-> auto` is not). GNU
+`__auto_type` is not checked here. The position comes from the
+declarator (`auto_declarator_site`):
+
+| Declarator | Position |
+|---|---|
+| any `typedef` declarator | "in typedef" |
+| alias-declaration type-id (`DeclSite::Alias`) | "in type alias" |
+| template argument, type template parameter default (`TemplateArg`, `TypeParamDefault`) | "in template argument" |
+| requires-expression parameter (`RequiresParam`) | "in requires expression parameter" |
+| other type-ids (`sizeof`, `alignof`, casts, `typeid`, `__typeof__`, default-argument operands; `TypeName`/`Plain` without a name) | "here" |
+| non-static data member (struct / union / class) | "in non-static {struct,union,class} member" |
+| handler's exception-declaration | "in exception declaration" |
+| parameter (§2.6 placement) | "in function prototype", "in lambda parameter", "in function prototype that is not a function declaration" |
+
+An enum-base names a type-specifier without a declarator
+(`type_specifier_placeholder_check`, "here"). The declarator recovers as
+the error type (the parameter rule of §2.6 recovers as `int`), so its uses
+do not cascade, and `typeid` of an error type stops before its
+`<typeinfo>` check (clang's `ParseCXXTypeid`). A deduced class template
+in an alias or type template parameter default gives clang's "requires
+template arguments" (its `TemplateTypeArg` context), not "argument
+deduction not allowed". Positions that deduce or invent are unaffected:
+variables, `new`, NTTPs, return types, structured bindings (a `typedef` one
+gets only the decomposition error, `dcl.struct.bind/specifiers.cpp`), conditions,
+range-for, conversion functions, generic lambdas and abbreviated templates.
+Tests: `dcl.spec.auto/p5-auto-not-allowed.cpp` (every position above),
+`dcl.spec.auto/p5-auto-allowed.cpp`,
+`expr.prim.req.general/p4-auto-param.cpp`.
 
 **Uses:**
 - variables;
@@ -2598,25 +2693,61 @@ instantiation.
 For `template<> R f<args>(params)` or `template<> R f(params)`, and for
 `template R f(params);`:
 1. Collect the function templates named `f` in the scope.
-2. Deduce each one from the declared function type ([temp.deduct.decl]).
-   An explicit instantiation that writes no exception specification
-   takes each template's non-dependent nothrow one first ([temp.explicit]/9,
-   [except.spec]/2; clang `adjustCCAndNoReturn(..., AdjustExceptionSpec)`;
-   WP-294, libstdc++'s `extern template bool has_facet<...>(const
-   locale&)` of a `throw()` template,
-   `tests/conformance/temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp`).
-   Deviations: a written mismatching specification is "does not refer
-   to a function template" where clang says "exception specification in
-   explicit instantiation does not match instantiated one"; an explicit
-   specialization differing only in its exception specification is "no
-   function template matches" where clang matches it and reports the
-   redeclaration mismatch; a template with a dependent `noexcept(expr)`
-   does not match an instantiation without one.
+2. Deduce each one from the declared function type ([temp.deduct.decl];
+   `deduce_decl`). Neither top-level exception specification takes part.
+   Nothing is deduced from it, so `template void f() noexcept;` of
+   `template <bool B> void f() noexcept(B)` is "couldn't infer template
+   argument 'B'". The template's specification is not substituted with
+   the explicit arguments, so `noexcept(T::value)` is no substitution
+   failure. This is clang's `adjustCCAndNoReturn(..., AdjustExceptionSpec)`.
+   A mismatch elsewhere in the type prints both whole types with their
+   specifications ("could not match 'void (int) noexcept' against 'void
+   (long)'"). Then the specialization's specification is instantiated
+   if it is still pending ([temp.inst]/14) and compared (WP-322):
+   - **Explicit instantiation** ([temp.explicit]/9, [except.spec]/5;
+     `check_inst_exc_spec`, clang `ActOnExplicitInstantiation` →
+     `CheckEquivalentExceptionSpec`). One that writes no specification
+     takes the template's. This covers libstdc++'s `extern template bool
+     has_facet<...>(const locale&)` of a `throw()` template
+     (`tests/conformance/temp.explicit/libstdcxx-explicit-inst-exception-spec.cpp`).
+     One that writes a specification must agree with the instantiated
+     one: both non-throwing, or both potentially-throwing. Here no
+     specification does not match `noexcept(false)`: clang does not set
+     `AllowNoexceptAllMatchWithNoSpec`, and a failed instantiation counts
+     as none. Otherwise the error is "exception specification in
+     explicit instantiation does not match instantiated one", at the
+     decl-specifiers. Its note "explicit instantiation refers here" is
+     at the specialization's latest declaration: the template, or an
+     earlier explicit specialization. The explicit instantiation then
+     has no effect, and this is checked before §4.5's kind checks.
+   - **Explicit specialization, or a friend naming a specialization**
+     ([temp.expl.spec], [except.spec]/5; `check_spec_exc_spec`, clang
+     `MergeFunctionDecl`). It redeclares the specialization, whose
+     specification is the instantiated one, moved to the new name. One
+     that writes none where the instantiated one is non-throwing gets
+     "'h<int>' is missing exception specification 'noexcept'". Any other
+     mismatch gets "exception specification in declaration does not
+     match previous declaration". Each has "previous declaration is
+     here" at the new name, and the declaration is invalid. Here no
+     specification matches `noexcept(false)`. The check comes after the
+     after-instantiation check (§4.5).
+   Tests: `tests/conformance/temp.explicit/exception-spec-match.cpp`,
+   `tests/conformance/temp.expl.spec/exception-spec-redeclaration.cpp`.
+   Left: a friend whose noexcept-specifier waits for the end of its
+   class is not compared, where clang checks it later. Instantiating an
+   explicit instantiation definition does not instantiate a pending
+   specification, which clang does in `InstantiateFunctionDefinition`.
 3. Take the most specialized of those that succeed (§6.7).
 4. If none or several remain, the errors are clang's: "no function
    template matches function template specialization 'f'" and
    "function template specialization 'f' ambiguously refers to more than
    one function template".
+5. When nothing named `f` is visible (an unqualified declarator-id
+   without template arguments), clang declares a plain, invalid function
+   after the error, and so does kiln (`act_on_function_spec_declarator`
+   returns `Err(())`, WP-318): a later call resolves to it and reports
+   nothing more
+   (`tests/conformance/temp.expl.spec/no-matching-template-declares-function.cpp`).
 
 The `SpecKind` transitions are those of §4.5.
 
@@ -3032,6 +3163,21 @@ whose head the notes name. It evaluates:
     `EvalContext` kind; Q5).
   - A non-constant result is clang's error "substitution into constraint
     expression resulted in a non-constant expression".
+  - A substituted atom that is still value-dependent is *satisfied* only
+    while the levels themselves are dependent (a retained level or a
+    dependent argument: a partial check during a template definition,
+    checked again at instantiation). With concrete levels it is an
+    **internal error**, not "not satisfied": [temp.constr.atomic]/3
+    gives only substitution failure, `false` and a non-constant result
+    as outcomes, and substitution with concrete arguments always yields
+    a non-dependent expression, so a dependent one means kiln's
+    substituter left the atom incomplete. Treating it as unsatisfied
+    would silently pick another overload or reject a valid program; it
+    is reported as `sema_unimplemented_template_feature` ("an atomic
+    constraint that stays value-dependent after substitution",
+    `sat_atom_uncached` in `templ/concepts/sat.rs`), and the fix for any
+    reachable case is in the substitution, not this guard. No known
+    program reaches it (libc++ M3 gate, WP-325).
 - **`And` and `Or`** short-circuit from left to right.
 - **Context.** Atomic constraints are substituted in the context of the
   constrained entity's declaration (its semantic `DeclContext`, via
@@ -4290,7 +4436,9 @@ pub fn has_constexpr_builtin_staged(name: &str) -> Option<bool>;
     `sema_only_enums_have_underlying`, `sema_pack_index_out_of_bounds`;
   - `sema_integer_seq_*`, `sema_bit_cast_*`;
   - `sema_auto_var_*`, `sema_auto_inconsistent_deduction`,
-    `sema_decltype_auto_*`, `sema_auto_not_allowed_field`,
+    `sema_decltype_auto_*`, `sema_auto_not_allowed` (then
+    `sema_auto_not_allowed_field`; WP-314 merged it with the prototype
+    error into one id with clang's position selector),
     `sema_auto_fn_virtual`;
   - `sema_call_incomplete_return`,
     `sema_call_function_incomplete_return`, `sema_cast_to_incomplete`,
@@ -4755,10 +4903,10 @@ explicit specialization errors remain. The blockers are:
   requires-expression stores its value in `ExprNode.aux`
   (`ExprArena::satisfied`/`set_satisfied`), and the Oven folds that.
   The §8.3 `atom_cache` landed with WP-109 (below).
-- Conservative fallbacks (WP-073; tightened by WP-109, below): an atom
-  was treated as *satisfied* when its substitution hit
-  `sema_unimplemented_template_feature`, or when it was still
-  value-dependent after substitution.
+- Conservative fallbacks (WP-073; replaced by WP-109's fallback policy,
+  below, and §8.3): an atom was treated as *satisfied* when its
+  substitution hit `sema_unimplemented_template_feature`, or when it was
+  still value-dependent after substitution.
 - Call sites:
   - `deduce_call.rs` checks the associated constraints after deduction
     (`Tdk::ConstraintsNotSatisfied`, `DeductionFailure::sat`, and the

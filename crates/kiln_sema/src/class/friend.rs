@@ -29,6 +29,9 @@ pub(crate) struct FriendSpec {
     pub(crate) templates: Vec<DeclId>,
     /// The declarator-id.
     pub(crate) loc: Loc,
+    /// Its noexcept-specifier waits for the end of the class (not in
+    /// `ty`), so it is not compared with the specialization's.
+    pub(crate) late_exc: bool,
 }
 
 impl Sema<'_, '_> {
@@ -153,11 +156,18 @@ impl Sema<'_, '_> {
             let target = FriendTarget::Type { ty, owned_tag: None };
             let fd = self.builder().friend(record, loc, target);
             let args = sid.args.clone();
-            self.friend_specs.insert(fd, FriendSpec { name, ty, args, templates, loc });
+            let late_exc = d.late_noexcept.is_some();
+            self.friend_specs.insert(fd, FriendSpec { name, ty, args, templates, loc, late_exc });
             return Some(fd);
         }
         let explicit = Some(self.ast.types.arg_list(&sid.args));
         let m = self.match_function_spec_in(&templates, explicit, name, ty, false, loc)?;
+        // A noexcept-specifier delayed to the end of the class is not
+        // compared (clang's delayed equivalence check is a follow-up).
+        let fix_at = crate::except::missing_exc_spec_fixit_loc(d);
+        if d.late_noexcept.is_none() && !self.check_spec_exc_spec(m.spec, ty, loc, fix_at) {
+            return None;
+        }
         Some(self.befriend_spec(record, m.spec, loc))
     }
 
@@ -173,6 +183,9 @@ impl Sema<'_, '_> {
     ) -> Option<DeclId> {
         let explicit = Some(self.ast.types.arg_list(args));
         let m = self.match_function_spec_in(&fs.templates, explicit, fs.name, ty, false, fs.loc)?;
+        if !fs.late_exc && !self.check_spec_exc_spec(m.spec, ty, fs.loc, None) {
+            return None;
+        }
         Some(self.befriend_spec(record, m.spec, fs.loc))
     }
 

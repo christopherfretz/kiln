@@ -611,6 +611,17 @@ impl Substituter<'_, '_, '_> {
             ds.base = TypeSpecKind::None;
             ds.named = None;
         }
+        // A trailing return type is declared again as written, `auto`
+        // then `-> R` ([dcl.fct]/2), so the instantiation's type keeps the
+        // trailing form (`auto (int) -> int`, clang's
+        // `TransformFunctionProtoType`; WP-318).
+        let trailing = (info.trailing_return() && ds.base != TypeSpecKind::None).then(|| {
+            let arrow = self.sema.templ.trailing_arrow.get(&d).copied().unwrap_or(loc);
+            (ret, arrow)
+        });
+        if trailing.is_some() {
+            ds.named = Some(self.sema.plain_auto_type());
+        }
         dr.chunks.push(Chunk::Function {
             params,
             variadic: info.variadic(),
@@ -619,16 +630,19 @@ impl Substituter<'_, '_, '_> {
             exc,
             quals: info.this_quals(),
             ref_qual: info.ref_qual(),
-            trailing: None,
+            trailing,
             ambiguous: false,
         });
         let fs = self.sema.ast.decls.function(d).map(|x| x.spec);
         if let Some(s) = fs {
+            // Where the pattern's specifiers were written, when its
+            // override control was deferred (`virt_spec_locs`).
+            let (ol, fl) = self.sema.virt_spec_locs.get(&d).copied().unwrap_or_default();
             if s.is_override() {
-                dr.virt_override = Some(loc);
+                dr.virt_override = Some(ol.unwrap_or(loc));
             }
             if s.is_final() {
-                dr.virt_final = Some(loc);
+                dr.virt_final = Some(fl.unwrap_or(loc));
             }
             // The pure-specifier: declared again so the instantiation is
             // created pure (`is_pure` is not a late bit; [class.abstract]/2).
@@ -641,7 +655,11 @@ impl Substituter<'_, '_, '_> {
         // `InstantiateFunctionDeclaration` keeps it).
         let requires = self.sema.ast.templates.trailing_requires.get(d).copied();
         dr.trailing_requires = requires;
-        let base = if ds.base == TypeSpecKind::None { QualType::VOID } else { ret };
+        let base = match ds.named {
+            _ if ds.base == TypeSpecKind::None => QualType::VOID,
+            Some(auto) if trailing.is_some() => auto,
+            _ => ret,
+        };
         let r = match friend {
             Some(fl) => self.sema.act_on_friend(&ds, base, Some(&dr), fl),
             None => self.sema.act_on_declarator(&ds, base, &dr),

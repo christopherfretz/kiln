@@ -85,11 +85,12 @@ pub enum Counter {
     Allocs,
     PeakArena,
     FrozenBytes,
+    StaticBytes,
     Evaluations,
 }
 
 impl Counter {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Steps,
         Self::Bytes,
         Self::PeakBytes,
@@ -97,6 +98,7 @@ impl Counter {
         Self::Allocs,
         Self::PeakArena,
         Self::FrozenBytes,
+        Self::StaticBytes,
         Self::Evaluations,
     ];
 
@@ -110,6 +112,7 @@ impl Counter {
             Self::Allocs => "allocs",
             Self::PeakArena => "peak_arena",
             Self::FrozenBytes => "frozen_bytes",
+            Self::StaticBytes => "static_bytes",
             Self::Evaluations => "evaluations",
         }
     }
@@ -148,7 +151,7 @@ pub struct OvenBudget {
 /// `[<line>[:<col>]] <counter><=N...` (any order; at least one bound).
 pub fn parse_oven(value: &str) -> Result<OvenBudget, String> {
     let usage = "expected `oven: [<line>[:<col>]] <counter><=N...` with counters \
-                 steps|bytes|peak_bytes|calls|allocs|peak_arena|frozen_bytes|evaluations";
+                 steps|bytes|peak_bytes|calls|allocs|peak_arena|frozen_bytes|static_bytes|evaluations";
     let mut items = value.split_whitespace().peekable();
     let at = match items.peek() {
         Some(first) if first.starts_with(|c: char| c.is_ascii_digit()) => {

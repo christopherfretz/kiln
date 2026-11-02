@@ -336,6 +336,7 @@ impl Sema<'_, '_> {
                 (TypeView::Pointer(p), TypeView::Pointer(x))
                 | (TypeView::LValueRef(p), TypeView::LValueRef(x))
                 | (TypeView::RValueRef(p), TypeView::RValueRef(x)) => (d, a) = (p, x),
+                (TypeView::Function(p), TypeView::Function(x)) => (d, a) = (p.ret(), x.ret()),
                 (TypeView::RValueRef(p), TypeView::LValueRef(_)) => {
                     let TypeView::Auto { keyword, deduced: None, .. } =
                         self.ast.types.canonical_view(p)
@@ -361,18 +362,12 @@ impl Sema<'_, '_> {
         deduced: QualType,
         loc: Loc,
     ) -> bool {
-        let mut cur = declared;
-        let mut found = None;
-        for _ in 0..256 {
-            match self.ast.types.canonical_view(cur) {
-                TypeView::Auto { deduced: None, concept: Some(c), args, .. } => {
-                    found = Some((c, args));
-                    break;
-                }
-                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
-                _ => break,
+        let found = self.contained_placeholder(declared).and_then(|leaf| {
+            match self.ast.types.canonical_view(leaf) {
+                TypeView::Auto { concept: Some(c), args, .. } => Some((c, args)),
+                _ => None,
             }
-        }
+        });
         let Some((c, extra)) = found else { return true };
         if self.ast.types.is_dependent(deduced) || self.is_error_type(deduced) {
             return true;
@@ -400,18 +395,41 @@ impl Sema<'_, '_> {
         false
     }
 
-    /// The keyword of the placeholder in `declared` (under pointer and
-    /// reference declarators).
-    pub(crate) fn placeholder_keyword(&self, declared: QualType) -> Option<AutoKeyword> {
-        let mut cur = declared;
+    /// The type one declarator further toward the placeholder of a
+    /// declared type `t` (clang's `GetContainedDeducedTypeVisitor`,
+    /// restricted to the declarators a placeholder appears under in
+    /// kiln): a pointer's or reference's pointee, a function type's
+    /// return type (`auto (*p)(int) -> auto (*)(int) -> auto`,
+    /// [dcl.spec.auto.general]/3, [dcl.fct]/22). Spec:
+    /// sema-templates.md §6.3.
+    pub(crate) fn placeholder_step(&self, t: QualType) -> Option<QualType> {
+        match self.ast.types.canonical_view(t) {
+            TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => Some(p),
+            TypeView::Function(f) => Some(f.ret()),
+            _ => None,
+        }
+    }
+
+    /// The undeduced placeholder contained in `t` (as
+    /// [`Sema::placeholder_step`] walks it), canonical.
+    pub(crate) fn contained_placeholder(&self, t: QualType) -> Option<QualType> {
+        let mut cur = t;
         for _ in 0..256 {
-            match self.ast.types.canonical_view(cur) {
-                TypeView::Auto { keyword, deduced: None, .. } => return Some(keyword),
-                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
-                _ => return None,
+            if let TypeView::Auto { deduced: None, .. } = self.ast.types.canonical_view(cur) {
+                return Some(self.ast.types.canonical(cur));
             }
+            cur = self.placeholder_step(cur)?;
         }
         None
+    }
+
+    /// The keyword of the placeholder in `declared` (under pointer and
+    /// reference declarators and function return types).
+    pub(crate) fn placeholder_keyword(&self, declared: QualType) -> Option<AutoKeyword> {
+        match self.ast.types.canonical_view(self.contained_placeholder(declared)?) {
+            TypeView::Auto { keyword, .. } => Some(keyword),
+            _ => None,
+        }
     }
 
     /// A plain undeduced placeholder `kw`.
@@ -425,34 +443,45 @@ impl Sema<'_, '_> {
     /// into the undeduced placeholder, so the instantiated variable
     /// deduces from its substituted initializer.
     pub(crate) fn dependent_auto(&mut self, declared: QualType) -> QualType {
-        let mut cur = declared;
-        for _ in 0..256 {
-            match self.ast.types.canonical_view(cur) {
-                TypeView::Auto { keyword, deduced: None, concept, args, pack } => {
-                    let d = self.ast.types.auto_type(
-                        keyword,
-                        Some(QualType::DEPENDENT),
-                        concept,
-                        args,
-                        pack,
-                    );
-                    return self.replace_placeholder(declared, d);
-                }
-                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
-                _ => break,
-            }
-        }
-        QualType::DEPENDENT
+        let Some(leaf) = self.contained_placeholder(declared) else { return QualType::DEPENDENT };
+        let TypeView::Auto { keyword, concept, args, pack, .. } =
+            self.ast.types.canonical_view(leaf)
+        else {
+            return QualType::DEPENDENT;
+        };
+        let d = self.ast.types.auto_type(keyword, Some(QualType::DEPENDENT), concept, args, pack);
+        self.replace_placeholder(declared, d)
     }
 
     /// `declared` with its placeholder (under pointer and reference
-    /// declarators) replaced by `with`, keeping the cv-qualifiers written
-    /// on each level.
+    /// declarators and function return types) replaced by `with`,
+    /// keeping the cv-qualifiers written on each level. A function type
+    /// keeps its sugar (parameters as written, the trailing-return form:
+    /// clang prints `auto (*)(int) -> int`).
     pub(crate) fn replace_placeholder(&mut self, declared: QualType, with: QualType) -> QualType {
         let t = &self.ast.types;
-        let q = t.canonical(declared).quals();
-        let r = match t.canonical_view(declared) {
+        // The declarator nodes as written first (their sugar survives),
+        // then the canonical type.
+        let (view, q) = match t.view(declared.ty()) {
+            v @ (TypeView::Pointer(_)
+            | TypeView::LValueRef(_)
+            | TypeView::RValueRef(_)
+            | TypeView::Function(_)
+            | TypeView::Paren(_)) => (v, declared.quals()),
+            _ => (t.canonical_view(declared), t.canonical(declared).quals()),
+        };
+        let r = match view {
             TypeView::Auto { deduced: None, .. } => with,
+            TypeView::Function(f) => {
+                let ret = self.replace_placeholder(f.ret(), with);
+                let params = self.ast.types.params(&f).to_vec();
+                let exc = self.ast.types.exc_spec(&f);
+                self.ast.types.function(ret, &params, f.info(), exc)
+            }
+            TypeView::Paren(p) => {
+                let inner = self.replace_placeholder(p, with);
+                self.ast.types.paren_type(inner)
+            }
             TypeView::Pointer(p) => {
                 let inner = self.replace_placeholder(p, with);
                 self.ast.types.pointer_to(inner)

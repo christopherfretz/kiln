@@ -20,6 +20,7 @@ use kiln_diag::DiagId;
 use kiln_lex::{Punct, TokKind};
 use kiln_sema::DeclSite;
 use kiln_sema::templ::actions::TemplateIdRef;
+use kiln_sema::using::Qualifier;
 use kiln_sema::{Declarator, DeclaratorContext, NameClass};
 use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
@@ -510,7 +511,9 @@ impl Parser<'_, '_> {
         }
         // The default argument's location (clang's diagnostics point there).
         let eq = self.loc();
-        let Some(t) = self.with_greater_op(false, Self::parse_type_id) else {
+        let Some(t) =
+            self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TypeParamDefault))
+        else {
             return false;
         };
         self.s.act_on_template_param_default(p, TemplateArg::ty(t), eq);
@@ -908,7 +911,7 @@ impl Parser<'_, '_> {
     /// else the type found by qualified lookup.
     pub(crate) fn parse_qualified_type_rest(
         &mut self,
-        q: kiln_sema::using::Qualifier,
+        q: Qualifier,
         kw: TagKeyword,
     ) -> Option<QualType> {
         let template_kw = self.eat_kw(Kw::Template).is_some();
@@ -1080,30 +1083,59 @@ impl Parser<'_, '_> {
                 }
             }
             Some(q) => {
-                let needs_typename = match ctx {
-                    DeclaratorContext::Block
-                    | DeclaratorContext::Condition
-                    | DeclaratorContext::ForInit => true,
-                    DeclaratorContext::Prototype => self.param_typename == ParamTypename::Required,
-                    _ => false,
-                };
-                if needs_typename && self.s.is_dependent_ctx(q.ctx) {
-                    let k = usize::from(self.at_kw(Kw::Template));
-                    if let Some(name) = self.ident_of(self.tok_at(self.pos() + k)) {
-                        let text = format!(
-                            "{}{}",
-                            self.s.nns_str(q.nns),
-                            self.s.ast.symbols().as_str(name)
-                        );
-                        let d = self.s.diag(DiagId::parse_missing_typename, start).arg(text);
-                        self.emit(d);
-                        if ctx == DeclaratorContext::Prototype {
-                            self.param_typename = ParamTypename::Missing;
-                        }
-                    }
+                if self.s.is_dependent_ctx(q.ctx) {
+                    self.diagnose_missing_typename(q, ctx, start);
                 }
                 self.parse_qualified_type_rest(q, TagKeyword::None)
             }
+        }
+    }
+
+    /// Whether a dependent qualified type name in context `ctx` needs
+    /// `typename` ([temp.res.general]/4, P0634: block scope, a condition,
+    /// a for-init-statement, a parameter of a function declared with an
+    /// unqualified declarator-id at namespace or block scope).
+    fn typename_required(&self, ctx: DeclaratorContext) -> bool {
+        match ctx {
+            DeclaratorContext::Block
+            | DeclaratorContext::Condition
+            | DeclaratorContext::ForInit => true,
+            DeclaratorContext::Prototype => self.param_typename == ParamTypename::Required,
+            _ => false,
+        }
+    }
+
+    /// "missing 'typename' prior to dependent type name" for the
+    /// dependent qualified name `q::name` at `start` (the name follows),
+    /// where `ctx` requires `typename`; it is parsed as if written.
+    fn diagnose_missing_typename(&mut self, q: Qualifier, ctx: DeclaratorContext, start: Loc) {
+        if !self.typename_required(ctx) {
+            return;
+        }
+        let k = usize::from(self.at_kw(Kw::Template));
+        if let Some(name) = self.ident_of(self.tok_at(self.pos() + k)) {
+            let text = format!("{}{}", self.s.nns_str(q.nns), self.s.ast.symbols().as_str(name));
+            let d = self.s.diag(DiagId::parse_missing_typename, start).arg(text);
+            self.emit(d);
+            if ctx == DeclaratorContext::Prototype {
+                self.param_typename = ParamTypename::Missing;
+            }
+        }
+    }
+
+    /// A type found in a class that is dependent but not the current
+    /// instantiation (`L::U` for a local class `L` of a function template,
+    /// outside `L`; [temp.dep.type]/1) is a dependent qualified name: it
+    /// needs `typename` where one is required (clang classifies it as a
+    /// dependent name; kiln keeps the type it found).
+    pub(crate) fn check_missing_typename_in_class(
+        &mut self,
+        q: Qualifier,
+        ctx: DeclaratorContext,
+        start: Loc,
+    ) {
+        if self.typename_required(ctx) && self.s.is_unentered_dependent_class(q.ctx) {
+            self.diagnose_missing_typename(q, ctx, start);
         }
     }
 

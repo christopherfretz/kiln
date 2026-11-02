@@ -1136,6 +1136,11 @@ impl Sema<'_, '_> {
             ExprKind::DeclRefExpr | ExprKind::MemberExpr | ExprKind::ArraySubscriptExpr => {
                 if self.ast.types.effective_quals(n.ty()).is_volatile() {
                     None
+                } else if n.kind() == ExprKind::DeclRefExpr {
+                    // clang's `Expr::getExprLoc` of a DeclRefExpr is its
+                    // begin: a qualified name (`N::x;`) is reported at
+                    // its nested-name-specifier (WP-318).
+                    Some((DiagId::sema_unused_expr, self.begin_loc(x), Vec::new()))
                 } else {
                     Some((DiagId::sema_unused_expr, loc, Vec::new()))
                 }
@@ -4797,6 +4802,15 @@ impl Sema<'_, '_> {
                 self.discard_assignment_ref(e);
                 return self.explicit_cast(style, CastKind::ToVoid, e, ty, loc, rparen);
             }
+            if style == CastStyle::Const {
+                // clang `err_bad_const_cast_dest`: `void` is not a pointer.
+                let msg = self
+                    .diag(DiagId::sema_bad_const_cast_dest, loc)
+                    .arg(style.select())
+                    .arg(self.ty_arg(ty));
+                self.emit(msg);
+                return self.recover(ty, &[e], loc);
+            }
             return self.bad_cast(style, e, ty, loc);
         }
         // [expr.static.cast]/4 with a class target: direct-initialization
@@ -5058,8 +5072,19 @@ impl Sema<'_, '_> {
         self.recover(ty, &[e], loc)
     }
 
+    /// clang `err_bad_cxx_cast_generic`. The target is not a reference, so
+    /// the operand went through `DefaultFunctionArrayLvalueConversion`
+    /// first and the message names the decayed type (`'int *'` for an
+    /// `int[3]` lvalue, `'void (*)(int)'` for a function; [expr.cast]/4).
     fn bad_cast(&mut self, style: CastStyle, e: ExprId, ty: QualType, loc: Loc) -> ExprId {
         let from = self.ety(e);
+        let from = if self.ast.types.is_array(from) {
+            conv::array_decayed(self, from)
+        } else if self.ast.types.is_function(from) {
+            self.ast.types.pointer_to(from)
+        } else {
+            from
+        };
         let msg = self
             .diag(DiagId::sema_bad_cxx_cast, loc)
             .arg(style.select())

@@ -1100,6 +1100,31 @@ impl Sema<'_, '_> {
         self.builder().paren_list_init(ty, &inits, None, at, rparen)
     }
 
+    /// Verify-only parenthesized aggregate initialization (spec/sema.md
+    /// "Verify-only initialization"; clang `TryOrBuildParenListInitialization`
+    /// with `VerifyOnly`): whether [`Sema::paren_aggregate_init`] of `ty`
+    /// from `args` would succeed, with no lasting effect. It is attempted
+    /// with its diagnostics dropped, in an unevaluated context (nothing it
+    /// names is odr-used, so no function is instantiated or implicit
+    /// member defined, and its temporaries add no cleanups), and the
+    /// braced-init-list arguments it consumes are put back. Class
+    /// templates it needs complete are still instantiated, as in clang.
+    /// The caller builds the initialization afresh when it succeeds.
+    pub(crate) fn verify_paren_aggregate_init(
+        &mut self,
+        ty: QualType,
+        args: &[ExprId],
+        at: Loc,
+        rparen: Loc,
+    ) -> bool {
+        let braced = self.braced_args.clone();
+        self.enter_unevaluated();
+        let (e, _) = self.capturing(|s| s.paren_aggregate_init(ty, args, at, rparen));
+        self.exit_unevaluated();
+        self.braced_args = braced;
+        !self.is_err_expr(e)
+    }
+
     /// clang's `err_excess_initializers` of a parenthesized aggregate
     /// initialization, at the entity `at`, once the elements are
     /// initialized (`kind`: "0" array, "3" union, "4" struct).
@@ -1289,6 +1314,25 @@ impl Sema<'_, '_> {
                             .is_some_and(|x: &FieldData| x.bit_width.is_some()))
             })
             .collect()
+    }
+
+    /// Whether aggregate `ty` has no elements ([dcl.init.aggr]/2): an
+    /// array of bound 0, or a class without direct bases and without
+    /// members other than unnamed bit-fields. Brace elision never enters
+    /// such an aggregate ([dcl.init.aggr]/16 takes no clause for it; clang
+    /// and GCC reject the clause instead, `initializer for aggregate with
+    /// no elements requires explicit braces`). The one rule for both
+    /// initialization (`init_element`) and the overload viability walk
+    /// (`aggregate_list_walk`).
+    pub(crate) fn aggregate_has_no_elements(&self, ty: QualType) -> bool {
+        if self.ast.types.is_array(ty) {
+            return self.ast.types.array_size(ty) == Some(0);
+        }
+        let Some(r) = self.ast.types.as_record(ty) else {
+            return false;
+        };
+        let def = self.ast.definition(r).unwrap_or(r);
+        self.init_bases(def).is_empty() && self.init_fields(def).is_empty()
     }
 
     /// List-initialization ([dcl.init.list]/3).
@@ -1776,6 +1820,15 @@ impl Sema<'_, '_> {
                 };
                 if elide && self.is_vector_type(ty) {
                     self.elided_vector_init(ty, items, pos, at)
+                } else if elide && self.aggregate_has_no_elements(ty) {
+                    // clang `CheckImplicitInitList` with no elements:
+                    // the clause is consumed and the element recovers.
+                    *pos += 1;
+                    let msg = self
+                        .diag(DiagId::sema_implicit_empty_initializer, self.begin_loc(e))
+                        .range(self.expr_range(e));
+                    self.emit(msg);
+                    self.recover(ty, &[e], self.begin_loc(e))
                 } else if elide {
                     // A designated clause whose designator names the
                     // aggregate itself (`.m = 1`) starts a brace-elided

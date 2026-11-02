@@ -581,6 +581,25 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         Ok(self.sema.ast.types.nns(r))
     }
 
+    /// Where the pattern's dependent qualifier `n` begins (§5.8): the
+    /// written location of its first dependent component (`T` in
+    /// `T::B::`), nearest to `loc`. A declaration keeps no location for
+    /// its qualifier, so a using-declaration reports a qualifier error
+    /// here, at the start of the nested-name-specifier as clang does
+    /// (`QualifierLoc.getBeginLoc()`). A non-dependent leading prefix
+    /// (`N::X<T>::`) is not recorded: the location is that of `X<T>::`.
+    pub(crate) fn qualifier_begin(&self, n: NnsId, loc: Loc) -> Loc {
+        let mut first = n;
+        let mut cur = Some(n);
+        while let Some(c) = cur {
+            if self.sema.ast.types.nns_flags(c).intersects(TypeFlags::DEPENDENT_INSTANTIATION) {
+                first = c;
+            }
+            cur = self.sema.ast.types.nns_prefix(c);
+        }
+        self.written(WrittenKey::Nns(first), loc)
+    }
+
     /// True if the substituted specifier `n` is still dependent (its
     /// arguments were dependent: an alias or member template named in
     /// another template), so names after it are looked up later.

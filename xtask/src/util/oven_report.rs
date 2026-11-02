@@ -48,6 +48,7 @@ pub struct Counters {
     pub allocs: u64,
     pub peak_arena: u64,
     pub frozen_bytes: u64,
+    pub static_bytes: u64,
     pub wall_us: u64,
     /// How many evaluations these counters cover.
     pub evaluations: u64,
@@ -63,13 +64,16 @@ impl Counters {
             Counter::Allocs => self.allocs,
             Counter::PeakArena => self.peak_arena,
             Counter::FrozenBytes => self.frozen_bytes,
+            Counter::StaticBytes => self.static_bytes,
             Counter::Evaluations => self.evaluations,
         }
     }
 
     /// Combines evaluations: every counter is summed except `peak_bytes`
     /// and `peak_arena`, which are maxima (each top-level evaluation starts
-    /// from empty frame and heap spaces, so the peaks do not add up).
+    /// from empty frame and heap spaces, so the peaks do not add up), and
+    /// `static_bytes`, the maximum of a space that persists (the report's
+    /// total may be higher: unrecorded work also uses that space).
     /// Saturates rather than overflows.
     pub fn combine(&self, o: &Self) -> Self {
         Self {
@@ -80,6 +84,7 @@ impl Counters {
             allocs: self.allocs.saturating_add(o.allocs),
             peak_arena: self.peak_arena.max(o.peak_arena),
             frozen_bytes: self.frozen_bytes.saturating_add(o.frozen_bytes),
+            static_bytes: self.static_bytes.max(o.static_bytes),
             wall_us: self.wall_us.saturating_add(o.wall_us),
             evaluations: self.evaluations.saturating_add(o.evaluations),
         }
@@ -162,6 +167,19 @@ impl Report {
         let sum = evaluations.iter().fold(Counters::default(), |acc, e| acc.combine(&e.counters));
         let mut bad = Vec::new();
         for c in Counter::ALL {
+            // The static space is also used by work no evaluation records
+            // (spec/oven.md "Reporting protocol"): its total is a
+            // high-water mark, at least every evaluation's.
+            if c == Counter::StaticBytes {
+                if total.get(c) < sum.get(c) {
+                    bad.push(format!(
+                        "`static_bytes` is {} but an evaluation's is {}",
+                        total.get(c),
+                        sum.get(c)
+                    ));
+                }
+                continue;
+            }
             if total.get(c) != sum.get(c) {
                 let rule = if matches!(c, Counter::PeakBytes | Counter::PeakArena) {
                     "maximum"
@@ -238,6 +256,8 @@ fn counters(j: &Json, total: bool) -> Result<Counters, String> {
         allocs: n("allocs")?,
         peak_arena: n("peak_arena")?,
         frozen_bytes: n("frozen_bytes")?,
+        // Added after the other counters: an older report lacks it.
+        static_bytes: if j.get("static_bytes").is_some() { n("static_bytes")? } else { 0 },
         wall_us: n("wall_us")?,
         evaluations: if total { n("evaluations")? } else { 0 },
     })
@@ -322,7 +342,7 @@ mod tests {
         assert_eq!(
             r.total.describe(),
             "steps=116 bytes=172 peak_bytes=50 calls=10 allocs=4 peak_arena=64 frozen_bytes=140 \
-             evaluations=4"
+             static_bytes=0 evaluations=4"
         );
         // Located aggregation: line 3 of t.cpp only (not h.h, not the null loc).
         let at3 = r.at(3, None, &in_t);
@@ -404,6 +424,18 @@ mod tests {
         assert!(e.contains("`frozen_bytes` is 139 but the sum over the evaluations is 140"), "{e}");
         let bad = GOOD.replace(r#""evaluations":4"#, r#""evaluations":5"#);
         assert!(Report::parse(&bad).unwrap_err().contains("count over the evaluations is 4"));
+        // `static_bytes` is a high-water mark: the total may exceed every
+        // evaluation's (unrecorded work), never fall below one.
+        let st = |total: u64| {
+            GOOD.replace(r#""frozen_bytes":24,"#, r#""frozen_bytes":24,"static_bytes":32,"#)
+                .replace(
+                    r#""frozen_bytes":140,"#,
+                    &format!(r#""frozen_bytes":140,"static_bytes":{total},"#),
+                )
+        };
+        assert_eq!(Report::parse(&st(48)).unwrap().total.static_bytes, 48);
+        let e = Report::parse(&st(16)).unwrap_err();
+        assert!(e.contains("`static_bytes` is 16 but an evaluation's is 32"), "{e}");
         // Duplicate keys are malformed JSON for this reader.
         let dup = r#"{"total":{"steps":0,"steps":0,"bytes":0,"peak_bytes":0,"calls":0,"allocs":0,"peak_arena":0,"frozen_bytes":0,"wall_us":0,"evaluations":0}}"#;
         assert!(Report::parse(dup).is_err());

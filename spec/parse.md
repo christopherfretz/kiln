@@ -191,6 +191,25 @@ clang's `Parser` over `Preprocessor::Lex`.
   declarations"), and a parameter `S::c &p` takes part in overload
   resolution as `int &` ("expects an lvalue for 1st argument")
   (`tests/conformance/dcl.type.simple/unknown-type-recovers-to-int.cpp`).
+  At block scope (and in a condition or for-init-statement) an
+  undeclared unqualified name followed by a ptr-operator (`u5 &r;`,
+  `u5 *p;`, `u5 &&r;`) is ambiguous (`undeclared_before_ptr_operator`,
+  clang's `ANK_Unresolved` in `isCXXSimpleDeclaration`); the declarator
+  decides, so `u5 & r + 1;` and `u5 & i;` with a declared `i` stay
+  expressions, and a declaration reports "unknown type name 'u5'" and
+  recovers to `int` (`unknown_type_follows` accepts a ptr-operator in
+  those contexts). `const u7 &c;` is likewise "unknown type name 'u7'"
+  plus the `int &` consequence, not "a type specifier is required".
+  Once a decl-specifier names no type (`DeclSpec::type_error`), the
+  later declarators of the group are skipped up to the `;`, as clang's
+  `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once
+  (WP-318, `tests/conformance/stmt.ambig/unknown-type-before-ptr-operator.cpp`).
+  A qualified name that its non-dependent scope does not declare,
+  followed by an identifier (`S::nom x`), is not a type in a type-id or
+  a declaration-specifier scan (clang returns `False` for an
+  `ANK_Unresolved` `annot_cxxscope` unless `InvalidAsDeclSpec` is
+  tracked), so `(S::nom x)` is a parenthesized expression, not a cast;
+  a statement or a parameter still weighs it as ambiguous (above).
   A member-pointer ptr-operator (`member_pointer_end`) is scanned as
   `::`? (`template`? name (`<args>`)? `::`)+ `*`: each component is
   classified in the context of the previous one; template arguments
@@ -399,10 +418,18 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   `thread_local` with the combined name when both appear: `'static
   thread_local'`), and both are dropped, so the friend declaration goes
   on (`reject_friend_storage`, WP-293;
-  `class.friend/friend-storage-class.cpp`). A condition declaration
-  (`parse_condition`) is a type name for this purpose: a storage class or
-  `thread_local` there is `type name does not allow storage class to be
-  specified` at the specifier and is dropped (WP-293).
+  `class.friend/friend-storage-class.cpp`). A type-specifier-seq takes
+  no storage class ([dcl.type.general]/1; clang
+  `ParseSpecifierQualifierList`): in `DeclaratorContext::TypeName` (every
+  type-id — casts, `sizeof`, `alignof`, `typeid`, template arguments,
+  alias-declarations, trailing return types —, a new-type-id, also
+  parenthesized, a conversion-type-id and a functional cast's type),
+  a condition declaration (`parse_condition`, WP-293) and an
+  exception-declaration (`parse_handler`) a storage class or
+  `thread_local` is `type name does not allow storage class to be
+  specified` at the specifier (else at `thread_local`) and is dropped
+  (`reject_type_name_storage`, WP-327). spec/sema.md [dcl.stc] lists
+  every context that rejects a storage class.
 
   Sema checks the combination when it converts the DeclSpec to a type
   (`[dcl.type.simple]`, `type_from_declspec_at`).
@@ -826,7 +853,10 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   placement and `new (int (*)[2])` a type-id. A `(` followed by a
   member-pointer declarator (`new (void (T::*)())`, `member_pointer_at`;
   WP-216) is a type-id too. `decltype`, `typeof`, `__typeof_unqual`,
-  `typename` and a class-key are always a type-id.
+  `typename` and a class-key are always a type-id, and so is a
+  decl-specifier keyword that is no type-specifier (`new (static int)`,
+  clang `isCXXDeclarationSpecifier`; its storage class is then rejected,
+  §4, WP-327).
 - **new-type-id.** The decl-specifiers and an abstract new-declarator
   (`*`, `&`-free ptr-operators, then `[expr]` bounds); the first bound
   is an expression, the later ones constant expressions (checked by
@@ -955,11 +985,24 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
   as clang's delayed typo correction reports it at the end of the
   full-expression. Elsewhere (a declaration's initializer, a condition, a
   `return`, a template instantiation) and for an unqualified name or a
-  member access (`s.nomember`) it is reported where it is written. A
-  full-expression nested in an expression statement (a declaration in a
-  lambda body) is held until the outer statement ends (clang ends it
-  sooner) (`tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
-  kiln_parse `delayed_no_member_after_missing_semi`).
+  member access (`s.nomember`) it is reported where it is written.
+  Nested in a larger expression statement (WP-318): when call arguments
+  held a delayed typo and the `)` is missing (`f(S::nom x);`,
+  `a = f(S::nom x);`, `g(1, S::nom x);`), the parser skips to the `)`
+  (stopping at `;`) and reports no "expected ')'", as clang's
+  `ParsePostfixExpressionSuffix` (`Sema::typo_count` tells it a typo
+  was held); in a parenthesized expression (`(S::nom x);`) "expected
+  ')'" and its note come first. Kept deviations: a delayed typo in a
+  subscript (`arr[S::nom x]`) is reported when the statement ends
+  (clang flushes it only at the end of the function; same set, other
+  order), and a full-expression nested in an expression statement (a
+  declaration in a lambda body) is held until the outer statement ends
+  (clang ends it sooner); both need a general per-full-expression
+  delayed-diagnostic scope
+  (`tests/conformance/stmt.expr/delayed-no-member-after-missing-semi.cpp`,
+  `tests/conformance/stmt.expr/delayed-no-member-nested-full-expression.cpp`,
+  kiln_parse `delayed_no_member_after_missing_semi`,
+  `delayed_no_member_nested_in_expression_statement`).
 - **Compound statements:** `parse_compound(new_scope)` pushes a `Block`
   scope. A function body reuses the `Function` scope that holds the
   parameters, so a body-level redeclaration of a parameter is diagnosed

@@ -169,8 +169,19 @@ impl Sema<'_, '_> {
                 invalid = true;
             }
         } else {
-            if let Some((StorageSpec::Static, sloc)) = ds.storage {
-                self.error(DiagId::sema_static_out_of_class, sloc);
+            // [class.static.data]/2-3: the out-of-class definition takes
+            // no storage class (clang `err_static_out_of_line`,
+            // `err_storage_class_for_static_member`); `mutable` was
+            // diagnosed by `var_spec` and makes it invalid.
+            match ds.storage {
+                Some((StorageSpec::Static, sloc)) => {
+                    self.error(DiagId::sema_static_out_of_class, sloc);
+                }
+                Some((StorageSpec::Extern | StorageSpec::Register, sloc)) => {
+                    self.error(DiagId::sema_storage_class_for_static_member, sloc);
+                }
+                Some((StorageSpec::Mutable, _)) => invalid = true,
+                _ => {}
             }
             spec = spec.with_storage(VarStorage::None);
             match self.find_prev(name, d.qualifier) {

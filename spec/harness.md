@@ -78,7 +78,7 @@ directives are also ERRORs.
 | `pp-compare: tokens \| text` | `pp` only. How outputs are compared (see "pp comparison"). Default `tokens`. |
 | `ast-implicit` | `ast` only. Include implicit declarations (implicit special members, injected-class-names, ...): kiln gets `-fdump-ast=implicit`, clang's dump is normalized as `xtask clang-ast --implicit`. Use with `ast-filter` to keep the builtin implicit declarations out. |
 | `pp-linemarkers` | `pp` only. Preprocess with `-E` instead of `-E -P`, so the output keeps line markers, and compare them (see "pp comparison"). |
-| `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
+| `oven: [<line>[:<col>]] <counter><=N ...` | kiln-specific constexpr budget; `<counter>` is `steps`, `bytes`, `peak_bytes`, `calls`, `allocs`, `peak_arena`, `frozen_bytes`, `static_bytes` or `evaluations`. Not for `pp`. See "kiln-specific tests". |
 | `inst-report: <golden.json>` | kiln-specific: the compile's template instantiation report must equal the golden, timings masked. Only `compile-ok`/`compile-fail`. See "kiln-specific tests". |
 | `mem<=N` | Address-space budget of every process the test runs, in MiB (a positive integer; written without a `:` value). It lowers `--mem-limit` for this test (the cap is the smaller of the two) and applies even under `--mem-limit 0`. See "Resource limits". |
 | `requires: target-<arch>` | Run only when the test's **effective target** has architecture `<arch>` (`aarch64` or `x86_64`; any other value is an ERROR). The effective target is the last `--target=<triple>`, `--target <triple>` or `-target <triple>` in the test's `args`; without one it is the compiler's default target, taken to be the host the harness runs on (`std::env::consts::ARCH`), as it is for kiln and clang. The triple's architecture is its first `-` component, with `arm64` read as `aarch64` and `amd64` as `x86_64`. Otherwise **SKIP** with the reason `requires target-<arch>; the test targets <arch> (`<triple>`)` or, without a `--target`, `requires target-<arch>; the default target is <host>`. For a `run` test whose expectations (diagnostic text, output) hold only on one target, since a run test cannot cross-run; a compile-only test pins `args: --target=<triple>` instead (WP-228), which then needs no `requires`. A `run` test that pins a `--target` other than the host's skips rather than failing to run its binary (WP-239). |
@@ -391,10 +391,12 @@ compile fails for that reason. Then:
 - No readable report, or a malformed one: **FAIL** (kiln broke the protocol).
 - `oven: <counter><=N ...` without a location bounds the report's `total`.
   Its `peak_bytes` and `peak_arena` are the maximum over the evaluations,
-  and `evaluations` their count.
+  `static_bytes` the static space's high-water mark over the TU (it covers
+  unrecorded work too, spec/oven.md "Reporting protocol"), and
+  `evaluations` their count.
 - `oven: <line>[:<col>] <counter><=N ...` bounds the evaluations whose `loc`
   is in the test file at that line (and column, if given), combined as for
-  the total (sums; maximum for `peak_bytes` and `peak_arena`; count for `evaluations`). If no
+  the total (sums; maximum for `peak_bytes`, `peak_arena` and `static_bytes`; count for `evaluations`). If no
   evaluation matches, the test FAILs: a budget on nothing is a stale budget.
 - Each bound is inclusive: a counter above it is a **FAIL**, naming the
   location, the counter, its value and the budget.

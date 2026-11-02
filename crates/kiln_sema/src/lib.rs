@@ -267,6 +267,11 @@ pub struct Sema<'a, 'sm> {
     /// declared with the same qualifier, so it redeclares `N::f`
     /// ([dcl.meaning.general]/2.3, [temp.friend]/1; WP-273).
     pub(crate) friend_qualifiers: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// Where `override` / `final` were written on each member function
+    /// whose override control is deferred to instantiation (a dependent
+    /// class or type; `check_override_control`): the instantiation is
+    /// declared with these locations ([class.virtual]/5).
+    pub(crate) virt_spec_locs: kiln_source::fx::FxHashMap<DeclId, (Option<Loc>, Option<Loc>)>,
     /// A friend function template of a class template is being
     /// instantiated (`friend_function_template`): a qualified one that
     /// matches no template is not diagnosed (clang).
@@ -463,6 +468,9 @@ pub struct Sema<'a, 'sm> {
     delayed_typos: Vec<Diag>,
     /// The nesting depth of [`Sema::begin_delayed_typos`].
     typo_delay: u32,
+    /// How many delayed-typo diagnostics were reported or held so far
+    /// ([`Sema::typo_count`]).
+    typo_count: u32,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -620,6 +628,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
             ref_locs: kiln_source::fx::FxHashMap::default(),
             friend_qualifiers: kiln_source::fx::FxHashMap::default(),
+            virt_spec_locs: kiln_source::fx::FxHashMap::default(),
             instantiating_friend_template: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
@@ -672,6 +681,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             diag_capture: std::cell::RefCell::new(None),
             delayed_typos: Vec::new(),
             typo_delay: 0,
+            typo_count: 0,
             range_for_outer_depth: None,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
@@ -829,10 +839,18 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         }
     }
 
+    /// The number of diagnostics reported through delayed typo correction
+    /// so far (held or emitted): the parser compares two counts to tell
+    /// whether a call's arguments held a `TypoExpr` (WP-318).
+    pub fn typo_count(&self) -> u32 {
+        self.typo_count
+    }
+
     /// Emits `d`, or holds it back inside a [`Sema::begin_delayed_typos`]
     /// scope (outside any instantiation, where a SFINAE context must see
     /// it).
     pub(crate) fn emit_delayed_typo(&mut self, d: Diag) {
+        self.typo_count = self.typo_count.wrapping_add(1);
         if self.typo_delay > 0 && self.inst.stack.is_empty() {
             self.delayed_typos.push(d);
         } else {
