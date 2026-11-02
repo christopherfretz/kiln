@@ -315,6 +315,15 @@ std-only fallback is `HashMap<u64 /*hash*/, TypeId>` with collisions
 chained through a `next_same_hash: Vec<TypeId>` (≈ 18–22 B per entry).
 See open question T1.
 
+The hash is FxHash with its high half folded into its low half
+(`h ^ (h >> 32)`, `intern::fx_hash`). FxHash multiplies last, so low bit
+`k` of the raw hash depends only on bits `0..=k` of the last word mixed
+in; the table buckets by the low bits, and a two-`u32` payload hashed as
+one 64-bit word (an elaborated type's `[nns, named]`) would otherwise put
+every key that differs only in its second `u32` in one probe chain
+(WP-313: libc++ `experimental/simd` spent most of its instantiation time
+there). The table is never iterated, so the hash is not observable.
+
 Kinds marked **D** and **O** in §5 never go through the table: the
 declaration (or the occurrence) creates the node and keeps its id.
 

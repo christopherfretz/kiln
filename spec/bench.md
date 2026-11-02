@@ -251,6 +251,11 @@ With `--compare-with`, `--record` also **merges** the ratio table (see
   compilers, a malformed or repeated row) the page is written from this run
   alone, with a warning on stdout; the rows it held are lost.
 
+- A section headed `## Measured by hand` (to the end of the page) holds
+  measurements no entry makes, such as a libc++ test timed under a debug
+  and a release kiln (WP-313). Every recording keeps it verbatim after the
+  generated table.
+
 After writing it the run prints how many rows were recorded, kept (and how
 many of those are stale), and dropped.
 

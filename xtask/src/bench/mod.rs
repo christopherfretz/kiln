@@ -574,13 +574,18 @@ fn oracle_report(
     let shown = shown_path(&cx.layout.root, page);
     // The page's other rows are kept (spec/bench.md "Recording"); one that
     // cannot be read back is rewritten from this run alone.
+    // So is its hand-written section.
+    let mut kept = None;
     let old = match std::fs::read_to_string(page) {
-        Ok(page_text) => perf_md::parse(&page_text, &tl, &ol).unwrap_or_else(|why| {
-            println!(
-                "warning: {shown} cannot be merged into ({why}); writing it from this run only"
-            );
-            Vec::new()
-        }),
+        Ok(page_text) => {
+            kept = perf_md::kept_section(&page_text).map(str::to_owned);
+            perf_md::parse(&page_text, &tl, &ol).unwrap_or_else(|why| {
+                println!(
+                    "warning: {shown} cannot be merged into ({why}); writing it from this run only"
+                );
+                Vec::new()
+            })
+        }
         Err(e) => {
             println!("warning: cannot read {shown} ({e}); writing it from this run only");
             Vec::new()
@@ -613,6 +618,11 @@ fn oracle_report(
             rss: cx.probe.source_id(),
         },
     );
+    let mut merged = merged;
+    if let Some(k) = kept {
+        merged.text.push('\n');
+        merged.text.push_str(&k);
+    }
     write_file(page, &merged.text)?;
     println!(
         "wrote {shown}: {} row(s) recorded, {} kept from earlier recordings ({} stale), {} \
