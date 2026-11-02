@@ -137,7 +137,20 @@ impl Parser<'_, '_> {
             for _ in 0..r.ntoks {
                 self.bump();
             }
-            self.s.module_merge_range(DeclId::new(r.lo), DeclId::new(r.hi));
+            // Every parse of the same text (a header re-entered under
+            // `__need_*` macros redeclares the same typedef) becomes
+            // visible: lookup may find any of them.
+            let same: Vec<(u32, u32)> = self.mods.as_ref().map_or_else(Vec::new, |m| {
+                m.records.get(&key).map_or_else(Vec::new, |v| {
+                    v.iter()
+                        .filter(|o| o.unit != unit && o.ntoks == r.ntoks && o.end == r.end)
+                        .map(|o| (o.lo, o.hi))
+                        .collect()
+                })
+            });
+            for (lo, hi) in same {
+                self.s.module_merge_range(DeclId::new(lo), DeclId::new(hi));
+            }
             return None;
         }
         Some(Some(DeclStart { key, pos: self.token_index(), first: self.s.ast.decls.next_id() }))
