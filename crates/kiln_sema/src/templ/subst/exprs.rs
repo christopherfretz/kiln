@@ -59,7 +59,28 @@ impl Substituter<'_, '_, '_> {
         }
         self.check_stack(|s| s.sema.ast.exprs.get(e).loc())?;
         let r = self.expr_node(e)?;
-        if self.sema.is_err_expr(r) { Err(SubstFail) } else { Ok(r) }
+        if self.sema.is_err_expr(r) {
+            return Err(SubstFail);
+        }
+        self.keep_template_kw(e, r);
+        Ok(r)
+    }
+
+    /// A name written `N::template x<A>` that is still unresolved after
+    /// substitution keeps its `template` keyword (clang's
+    /// `TransformDependentScopeDeclRefExpr` / `TransformUnresolvedLookupExpr`
+    /// pass the `TemplateKWLoc` on); a resolved `DeclRefExpr` does not
+    /// (WP-308).
+    fn keep_template_kw(&mut self, e: ExprId, r: ExprId) {
+        if r != e
+            && let Some(&kw) = self.sema.ast.templates.template_kw.get(e)
+            && matches!(
+                self.sema.ast.exprs.get(r).kind(),
+                ExprKind::UnresolvedLookupExpr | ExprKind::DependentScopeDeclRefExpr
+            )
+        {
+            let _ = self.sema.ast.templates.template_kw.insert(r, kw);
+        }
     }
 
     /// Substitutes into an optional expression.
@@ -518,7 +539,11 @@ impl Substituter<'_, '_, '_> {
                     let args = self.sema.ast.types.args(l).to_vec();
                     let tn = self.sema.template_name_for(t);
                     return match self.sema.act_template_id(tn, &args, loc, loc) {
-                        Ok(crate::templ::actions::TemplateIdRef::Value(x)) => Ok(x),
+                        Ok(crate::templ::actions::TemplateIdRef::Value(x)) => {
+                            // The qualifier as written (`S::template w<U>`).
+                            self.sema.set_template_id_qualifier(x, nns);
+                            Ok(x)
+                        }
                         // Not called, a function template-id names its
                         // one specialization, as for an unresolved
                         // lookup (above): `return D<I>::template f<F>;`
@@ -1247,6 +1272,9 @@ impl Substituter<'_, '_, '_> {
             let r = self.qualified_callee(c, &n, name, &decls, targs);
             if let (Ok(r), Some(b)) = (&r, begin) {
                 let _ = self.sema.ast.templates.expr_begin.insert(*r, b);
+            }
+            if let Ok(r) = r {
+                self.keep_template_kw(c, r);
             }
             return r;
         }
