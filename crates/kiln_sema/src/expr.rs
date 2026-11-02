@@ -480,10 +480,15 @@ impl Sema<'_, '_> {
     /// ([expr.const]/22: a `static_assert` condition, an array bound, a
     /// bit-field width, an enumerator value, a `case` value, an alignment,
     /// a template argument).
+    /// The immediate invocations of an enclosing full-expression (a
+    /// default template argument substituted by its overload resolution)
+    /// stay pending ([expr.const]/16).
     pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
+        let outer = self.set_aside_outer_immediates(e);
         self.constant_full_expr += 1;
         let r = self.act_on_full_expr(e);
         self.constant_full_expr -= 1;
+        self.restore_outer_immediates(outer);
         r
     }
 

@@ -1857,6 +1857,23 @@ A class template-id P with a class A tries A first. If that fails and
 ([temp.deduct.call]/4.3). The success must be unique; otherwise the
 result is `MiscellaneousDeductionFailure` (clang).
 
+A dependent class template-id `P` written with fewer arguments than its
+template has is first completed with the template's default arguments
+([temp.arg.general]/9), each substituted with the arguments before it, as
+`A`'s were (`complete_dependent_args`; clang converts a dependent
+template-id's arguments up front): `basic_string_view<_CharT>` is matched
+as `basic_string_view<_CharT, char_traits<_CharT>>`. The parameters, their
+defaults and their depth are the head declaration's (`head_template`, as
+in `check_template_args`), never the first declaration's: that may be a
+friend declaration inside a class template ([temp.friend]/1; libc++'s
+`friend class basic_string_view` in `__wrap_iter`), whose parameters sit
+one level deeper, so substituting at its depth would leave the default
+unsubstituted and deduce the default's own parameter as the function
+template's parameter of the same index (WP-286). A default that cannot be
+formed leaves `P` short and the deduction fails as before. Tests:
+`tests/conformance/temp.deduct.type/default-arg-friend-first-declaration*.cpp`,
+`tests/conformance/format.functions/libcxx-format-run.cpp`.
+
 **Non-deduced contexts:**
 - the nested-name-specifier of a qualified-id;
 - `decltype(e)`;
