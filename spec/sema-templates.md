@@ -202,6 +202,14 @@ delayed meaning; in practice they are always parsed immediately.
   `tests/conformance/basic.scope.pdecl/template-param-own-default.cpp`).
 - Redefining a default is an error: "template parameter redefines default
   argument".
+- A non-type parameter's decl-specifiers are checked as clang's
+  `CheckValidDeclSpecifiers` does (`act_on_param_declarator`,
+  `DeclSite::TemplateParam`; [temp.param]/2): a storage class,
+  `thread_local`, `inline`, `constexpr`/`consteval`/`constinit`,
+  `virtual` or `explicit` is "invalid declaration specifier in template
+  non-type parameter" once per specifier, at it, instead of the
+  function-parameter diagnostics (`template<static int a...>` reports the
+  misplaced `...` first). Test: `temp.param/nttp-invalid-decl-specifier.cpp`.
 - Defaults are stored in the cold "template default args" map
   (ast.md §8.1).
 
@@ -222,17 +230,35 @@ argument pack <1>". Partial specializations over it work
 (`template<Ts... a> struct Is<A<a...>>`). Such a parameter is not itself
 a parameter pack ([temp.param]/14), so "template parameter pack must be
 the last template parameter" does not apply to it: `template<Ts... a,
-int n>` is valid. Tests: `temp.variadic/p5-member-nttp-pack-expansion.cpp`,
-`temp.variadic/p5-member-nttp-pack-arity.cpp`.
+int n>` is valid. Arity is checked even when the argument list is
+dependent (`check_expanded_pack_arity`, as clang's
+`CheckTemplateArgumentList`): each expanded parameter takes at most one
+argument per element, a pack expansion argument counting as one, and
+"too few" is excused once a pack expansion was taken; so `O<>` with
+`Is<A<a...>>`, or `A<1, u...>` for a one-element expanded pack, is "too
+many template arguments for class template 'A'" in the instantiation.
+The template is named unqualified there (`diag_template_arity` uses
+the declaration's own name, as clang prints a `NamedDecl`), not
+`O<int, char>::A`. Tests: `temp.variadic/p5-member-nttp-pack-expansion.cpp`,
+`temp.variadic/p5-member-nttp-pack-arity.cpp`,
+`temp.variadic/p5-member-nttp-pack-dependent-arity.cpp`,
+`temp.variadic/p5-member-nttp-pack-alias-arity.cpp`.
 
 **Local classes** ([temp.mem]/2, WP-385). A local class, or a class
 nested in one, has no member templates. A member function, class,
 variable or alias template there is "templates cannot be declared
 inside of a local class" (`sema_template_decl_in_local`) at the
-`template` keyword (`check_template_in_local_class`). A friend function
-template is "templates can only be declared in namespace or class
-scope". A generic lambda in a member function is not a member template
-and is accepted. Test: `temp.mem/p2-local-class-member-template.cpp`.
+`template` keyword (`check_template_in_local_class`). An abbreviated
+function template (`void f(auto)`, [dcl.fct]/22) has no `template`
+keyword: it is diagnosed where its declaration starts, a leading
+attribute included (clang 22; clang 19 gives no location). A friend
+function template is "templates can only be declared in namespace or
+class scope". The member function template stays declared but invalid
+(its body is still checked), so a call finds no candidate: "no matching
+member function for call to 'f'" without notes. A generic lambda in a
+member function is not a member template and is accepted. Tests:
+`temp.mem/p2-local-class-member-template.cpp`,
+`temp.mem/p2-local-class-abbreviated-template.cpp`.
 
 ### 2.2 Template-ids and the `<` rule
 
@@ -264,10 +290,24 @@ unambiguous type-id and then a closing `>` before `;`
 "non-template declaration found by name lookup" at the declaration
 (`Sema::potential_template_name`,
 `Sema::diagnose_expr_intended_as_template_name`). The expression becomes
-an error, and a following `(args)` is still parsed. In C++20 the same
+an error, and a following `(args)` is still parsed. The expression is
+also invalid as clang's `ExprError` (`Parser::expr_invalid`): the rest of
+a `= initializer` is skipped to the next declarator's `,` or the `;`, and
+an expression statement to its `;`, with no "expected ';'" for a
+following `{}` (`int q = p<long>(3) + v<S>{};`). In C++20 the same
 spelling on an overload set of functions is the P0846 reading above.
-Clang's C++17 `ext_adl_only_template_id` warning (a template found only
-by ADL) is not implemented. Tests:
+Before C++20 a call `f<args>(…)` whose `f` ordinary lookup did not find
+(only argument-dependent lookup found its templates) is clang's
+extension warning "use of function template name with no prior
+declaration in function call with explicit template arguments is a C++20
+extension" (`sema_ext_adl_only_template_id`, `-Wc++20-extensions`) at the
+name, after the call's own diagnostics, also when overload resolution
+fails (clang's `ActOnCallExpr` check of the callee). A dependent call
+warns at the definition and again per instantiation (`per_instantiation`,
+spec/diag.md §7.4); a non-dependent one in a template once. A call where
+ADL finds no template is an undeclared identifier with no warning.
+Tests: `temp.names/adl-only-template-id-cxx17.cpp`,
+`temp.names/non-template-followed-by-args-recovery.cpp`,
 `temp.names/non-template-followed-by-args-cxx17.cpp`,
 `temp.names/non-template-followed-by-args.cpp`.
 
@@ -585,6 +625,26 @@ pack does not contain any unexpanded parameter packs"
 parameter is kept as a plain parameter. A misplaced `auto` in its clause
 has already become `int` (§2.6), so `void f(auto (*...x)(C auto...))`
 reports both. Test: `temp.variadic/p5-param-pack-without-packs.cpp`.
+When the pack's declared type is erroneous (an unknown type name, a bad
+member pointer, a reference to a reference) its declarator recovers as
+clang's `GetFullTypeForDeclarator` does (`Sema::declarator_int_recovery`,
+WP-390): a failed base or chunk becomes `int`, a function returning an
+array or function returns `int`, a reference to a reference collapses.
+The pack check then runs on the recovered type and reports it ("type
+'int' of function parameter pack ..."), with no further errors. Tests:
+`dcl.fct/pack-erroneous-type-recovers-to-int.cpp`,
+`dcl.fct/pack-grouped-declarator-id.cpp`.
+
+A function parameter pack with a default argument is "parameter pack
+cannot have a default argument" at the `=` ([dcl.fct.default]/3,
+`reject_param_pack_default`, from `act_on_param_default_arg` and the
+in-place default path); the argument is discarded. A template parameter
+pack's default ([temp.param]/14, `template<class... T = int>`, also
+non-type and template template packs) is "template parameter pack
+cannot have a default argument" at the `=`
+(`act_on_template_param_default`). Tests:
+`dcl.fct.default/pack-default-argument.cpp`,
+`temp.param/pack-default-argument.cpp`.
 
 A function parameter pack whose array bound alone names the pack
 (`int ...a[Ns]`, or `int a[Ns]...` after the misplaced-ellipsis
@@ -1148,6 +1208,14 @@ member templates):
 5. "implicit instantiation of undefined template" notes "template is
    declared here" at the latest redeclaration of the pattern when no
    partial specialization matched, as clang does.
+6. A partial specialization declared this way (`template<> template<char
+   c> struct O<int, char>::A<1, c>`) has no enclosing template levels:
+   the empty head adds no depth, so for a namespace-scope `O` its
+   parameters are at depth 0, not at the member template's depth 1.
+   Its specializations are instantiated with the enclosing levels cut to
+   its own depth, then its deduced arguments (`partial_levels`, used by
+   class instantiation and `spec_args`). Test:
+   `temp.expl.spec/member-partial-spec-of-implicit-spec-run.cpp`.
 
 **Member classes and member enumerations of an implicit instantiation**
 ([temp.expl.spec]/1, /5, /7; WP-206), such as `template<> struct

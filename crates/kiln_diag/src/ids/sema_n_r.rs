@@ -115,6 +115,7 @@ sema_pack_length_mismatch_outer = Error (3) "pack expansion contains parameter p
 sema_pack_length_mismatch_partial = Error (3) "pack expansion contains parameter pack '{0}' that has a different length (at least {1} vs. {2}) from outer parameter packs";
 sema_pack_outside_template = Error (0) "pack declaration outside of template";
 sema_param_constexpr_spec = Error (1) "function parameter cannot be {0:constexpr|consteval|constinit}";
+sema_param_default_argument_on_parameter_pack = Error (0) "parameter pack cannot have a default argument";
 sema_param_default_argument_references_param = Error (1) "default argument references parameter '{0}'";
 sema_param_pack_without_packs = Error (1) "type {0} of function parameter pack does not contain any unexpanded parameter packs";
 sema_param_redefinition = Error (1) "redefinition of parameter '{0}'";
