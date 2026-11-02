@@ -720,11 +720,6 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 push(n.a());
                 push(exprs.compound_assign(e).rhs.raw());
             }
-            ExprKind::ChooseExpr => {
-                for c in exprs.choose_operands(e) {
-                    push(c.raw());
-                }
-            }
             ExprKind::ConditionalOperator => {
                 push(n.a());
                 for c in exprs.cond_arms(e) {
@@ -760,6 +755,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             ExprKind::BinaryConditionalOperator
+            | ExprKind::ChooseExpr
             | ExprKind::OffsetOfExpr
             | ExprKind::CXXNewExpr
             | ExprKind::CXXDeleteExpr => {
