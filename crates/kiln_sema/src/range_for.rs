@@ -16,7 +16,7 @@ use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::declspec::{DeclSpec, StorageSpec};
-use crate::init::{InitList, InitValue, Initializer};
+use crate::init::{InitList, Initializer};
 use crate::lookup::{Found, LookupKind};
 use crate::overload::{CandidateKind, IcsOptions, OvlOutcome, SetKind};
 use crate::templ::auto::{AutoFail, AutoInit};
@@ -318,13 +318,7 @@ impl Sema<'_, '_> {
         let (items, kind, init_ty) = match &init {
             Initializer::Expr(e) => (vec![Some(*e)], AutoInit::Expr, self.ety(*e)),
             Initializer::List(l) => (
-                l.items
-                    .iter()
-                    .map(|it| match it.value {
-                        InitValue::Expr(e) if it.designator.is_empty() => Some(e),
-                        _ => None,
-                    })
-                    .collect(),
+                crate::templ::auto::auto_list_items(l, true),
                 AutoInit::CopyList,
                 QualType::VOID,
             ),

@@ -21,6 +21,7 @@ use kiln_source::Loc;
 use kiln_diag::DiagId;
 
 use crate::Sema;
+use crate::init::InitValue;
 use crate::declspec::{DeclSpec, TypeSpecKind};
 use crate::lookup::LookupKind;
 use crate::templ::actions::TemplateIdRef;
@@ -73,6 +74,24 @@ pub enum AutoFail {
     DecltypeAutoList,
     /// An erroneous initializer (already diagnosed).
     Error,
+}
+
+/// The items of braced-init-list `l` that deduce a placeholder (`None`
+/// for one that cannot: a designated item, or a nested braced-init-list
+/// of a direct-list-initialization). For copy-list-initialization
+/// (`copy`), deduction is against `std::initializer_list<U>`, and a nested
+/// braced-init-list element is a non-deduced context ([temp.deduct.call]/1,
+/// [dcl.type.auto.deduct]/2.1), so it is left out: its type comes from the
+/// element type deduced from the other elements.
+pub(crate) fn auto_list_items(l: &crate::init::InitList, copy: bool) -> Vec<Option<ExprId>> {
+    l.items
+        .iter()
+        .filter(|it| !(copy && it.designator.is_empty() && matches!(it.value, InitValue::List(_))))
+        .map(|it| match it.value {
+            InitValue::Expr(e) if it.designator.is_empty() => Some(e),
+            _ => None,
+        })
+        .collect()
 }
 
 impl Sema<'_, '_> {

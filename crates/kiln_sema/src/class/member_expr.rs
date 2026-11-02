@@ -706,8 +706,6 @@ impl Sema<'_, '_> {
             (base, arrow)
         };
         let bt = self.ety(base);
-        let record_pointee =
-            |s: &Self| s.ast.types.pointee(bt).is_some_and(|p| s.ast.types.as_record(p).is_some());
         let (b, ty) = if arrow {
             if self.ast.types.is_pointer(bt) {
                 let p = self.pointee_sugared(bt).unwrap_or(QualType::ERROR);
@@ -722,13 +720,6 @@ impl Sema<'_, '_> {
                 self.emit(msg);
                 return Err(self.recover_err(&[base], loc));
             }
-        } else if !dependent && self.ast.types.is_pointer(bt) && record_pointee(self) {
-            let msg = self
-                .diag(DiagId::sema_member_reference_suggestion, op_loc)
-                .arg(self.ty_arg(bt))
-                .arg("0");
-            self.emit(msg);
-            return Err(self.recover_err(&[base], loc));
         } else if !dependent && (self.ast.types.is_array(bt) || self.ast.types.is_function(bt)) {
             let d = conv::decay(self, base);
             (d, self.ety(d))
@@ -838,6 +829,25 @@ impl Sema<'_, '_> {
             return self.recover_err(&[base], loc);
         }
         if !same {
+            // `p.~T()` with `p` a pointer to `T`: a pseudo-destructor of
+            // the pointer only when the name denotes the pointer type
+            // ([expr.prim.id.dtor]/2, [expr.ref]/2); naming the pointee
+            // suggests `->` (clang `BuildPseudoDestructorExpr`).
+            if !arrow
+                && self.ast.types.is_pointer(obj_ty)
+                && self
+                    .ast
+                    .types
+                    .pointee(obj_ty)
+                    .is_some_and(|p| self.same_unqual(p, destroyed))
+            {
+                let msg = self
+                    .diag(DiagId::sema_member_reference_suggestion, op_loc)
+                    .arg(self.ty_arg(obj_ty))
+                    .arg("0");
+                self.emit(msg);
+                return self.recover_err(&[base], loc);
+            }
             let msg = self
                 .diag(DiagId::sema_pseudo_dtor_type_mismatch, loc)
                 .diff_args(self, obj_ty, destroyed);
