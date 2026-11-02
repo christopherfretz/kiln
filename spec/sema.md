@@ -998,7 +998,9 @@ specification as written (`TypeNames` prints ` noexcept`,
 - **`noexcept`** is `ExcSpec::BasicNoexcept`.
 - **`act_on_noexcept_spec(e, loc, start)`** ([except.spec]/2): `e` is
   a contextually converted constant expression of type `bool`
-  ([expr.const]/12), evaluated with `EvalContext::converted(start)`.
+  ([expr.const]/12), evaluated with `EvalContext::converted(start)`
+  (`Sema::bool_cce`, shared with `explicit(expr)`, spec/sema-class.md
+  §4.7).
   The result is `NoexceptExpr { expr: ConstantExpr(e'), value }`.
   Diagnostics point at `start`, the operand's first token, and follow
   clang 19:
@@ -1010,7 +1012,10 @@ specification as written (`TypeNames` prints ` noexcept`,
     constant expression (pointers, `std::nullptr_t`, floating point):
     `conversion from 'T' to 'bool' is not allowed in a converted
     constant expression`, with `T` as written (`int *const`);
-  - a class or scoped-enumeration type: `value of type 'T' is not
+  - a class type converts through its conversion functions (the
+    contextual conversion of [conv.general]/4, WP-275), so
+    `noexcept(bool_constant<true>())` is `noexcept(true)`; a class type
+    without one, or a scoped-enumeration type: `value of type 'T' is not
     implicitly convertible to 'bool'`;
   - a non-constant operand: `noexcept specifier argument is not a
     constant expression`, plus the Oven's notes.
@@ -1605,6 +1610,7 @@ constant and never look at the operand.
 | implicit calls: constructors, destructors, conversion functions, allocation functions | yes: constructors (`CXXConstructExpr`), destructors (`CXXBindTemporaryExpr`) and conversion functions (implicit member calls), each resolving the callee's spec first (WP-112); every `new` counts as throwing |
 | `__attribute__((nothrow))` on the callee | M3 (not parsed) |
 | a dependent operand (value-dependent `CXXNoexceptExpr`) | yes (lazily instantiated member specs, §4.7) |
+| a pseudo-destructor call `t.~T()` ([expr.prim.id.dtor]/2: no effect) | yes (WP-275): never potentially-throwing, and, as clang's `canThrow`, its object expression is not walked either (`noexcept(f().~I())` is true) |
 
 The operands of nested `sizeof`, `alignof` and `noexcept` are not
 looked at (they are unevaluated). An erroneous operand gives an error

@@ -374,6 +374,15 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     recognised at namespace and class scope only; a decl-specifier-seq
     with no type is allowed before a constructor, destructor or
     conversion function.
+  - an attribute-specifier-seq right after the declarator-id
+    (`declarator-id attribute-specifier-seq(opt)`, [dcl.decl.general]/4),
+    for every kind of declarator-id: an identifier or qualified-id
+    (`f [[deprecated]] (int)`, a member template `g [[nodiscard]] (T)`),
+    an operator-function-id (`operator() [[nodiscard]] (int)`,
+    `operator new [[a]] (size_t)`) and `~C [[a]] ()`. It lands in
+    `Declarator::attrs`, so it appertains to the declared entity. After a
+    conversion-type-id the attributes are parsed with the type (they
+    appertain to the type, as in clang).
   - on a function chunk: cv-qualifiers (a duplicate warns
     `duplicate 'const' declaration specifier`), a ref-qualifier, and an
     explicit object parameter (`this T self`, [dcl.fct]/6) in

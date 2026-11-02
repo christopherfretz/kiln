@@ -1550,9 +1550,7 @@ impl Parser<'_, '_> {
                 self.error_here(DiagId::parse_expected_unqualified_id);
                 d.invalid = true;
             }
-            if self.at_cxx11_attr() {
-                self.parse_attributes(&mut d.attrs);
-            }
+            self.parse_declarator_id_attrs(d);
         } else if self.at(Punct::LParen) && !(abstract_ok && self.is_param_list_start(1)) {
             // Like clang's ParseParenDeclarator: grouping is in effect
             // only for the inner declarator, then restored.
@@ -1572,13 +1570,25 @@ impl Parser<'_, '_> {
         {
             // WP-061a's operator-function-ids for allocation functions.
             self.parse_new_delete_operator_id(d);
+            self.parse_declarator_id_attrs(d);
         } else if (self.at(Punct::Tilde) || self.at_kw(Kw::Operator))
             && d.ctx != DeclaratorContext::TypeName
         {
             self.parse_special_declarator_id(d);
+            self.parse_declarator_id_attrs(d);
         }
         self.parse_declarator_suffixes(d, abstract_ok);
         self.s.act_on_exit_declarator_scope(entered);
+    }
+
+    /// `declarator-id attribute-specifier-seq(opt)` ([dcl.decl.general]/4):
+    /// the attributes appertain to the declared entity, for every kind of
+    /// declarator-id (`f [[a]] (int)`, `operator() [[a]] (int)`,
+    /// `~S [[a]] ()`).
+    fn parse_declarator_id_attrs(&mut self, d: &mut Declarator) {
+        if self.at_cxx11_attr() {
+            self.parse_attributes(&mut d.attrs);
+        }
     }
 
     /// The array and function declarator suffixes after a declarator-id
