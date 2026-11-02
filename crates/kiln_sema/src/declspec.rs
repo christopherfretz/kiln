@@ -194,6 +194,9 @@ pub struct DeclSpec {
     pub explicit_expr: Option<ExprId>,
     /// `friend` written at ([class.friend]).
     pub friend: Option<Loc>,
+    /// C11 `_Noreturn` written at: a clang extension in C++, the
+    /// `[[noreturn]]` of a function ([dcl.attr.noreturn]).
+    pub noreturn: Option<Loc>,
     /// cv-qualifiers.
     pub cv: Quals,
     /// Where `const`, `volatile` and `restrict` were first written (in
@@ -271,6 +274,7 @@ impl DeclSpec {
             && self.virtual_.is_none()
             && self.explicit.is_none()
             && self.friend.is_none()
+            && self.noreturn.is_none()
     }
 
     /// True if this is a `typedef` declaration.

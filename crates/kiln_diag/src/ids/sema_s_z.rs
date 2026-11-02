@@ -115,6 +115,8 @@ sema_template_spec_extra_headers = WarningError [ExtraneousTemplateHead] (0) "ex
 // clang 19's `warn_template_spec_extra_headers`: a plain warning in no group (clang 22 made it the default-error `-Wextraneous-template-head`); chosen by sema from its compat level, not a `_19` mirror (the kind and group differ).
 sema_template_spec_extra_headers_clang19 = Warning (0) "extraneous template parameter list in template specialization";
 sema_template_spec_needs_header = Error (0) "template specialization requires 'template<>'";
+sema_template_tag_noparams = Error (2) "extraneous 'template<>' in declaration of {0} '{1}'";
+sema_template_variable_noparams = Error (1) "extraneous 'template<>' in declaration of variable '{0}'";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
 sema_this_outside_member = Error (0) "invalid use of 'this' outside of a non-static member function";
 sema_this_static_member_func = Error (1) "'this' cannot be{0:| implicitly} used in a static member function declaration";

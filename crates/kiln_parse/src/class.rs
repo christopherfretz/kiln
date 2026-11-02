@@ -2199,6 +2199,7 @@ impl Parser<'_, '_> {
                 | Kw::Inline
                 | Kw::Virtual
                 | Kw::Friend
+                | Kw::Noreturn
                 | Kw::Static
                 | Kw::Extern
                 | Kw::Typedef

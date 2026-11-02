@@ -104,6 +104,7 @@ sema_format_star_type = Warning [Format] (3) "field {0:width|precision} should h
 sema_fp_conversion_rank = ExtWarn [FloatConversionRank] (3) "ISO C++ does not allow converting to {0} from {1} with {2:greater|unordered} conversion rank";
 sema_friend_def_in_local_class = Error (0) "friend function cannot be defined in a local class";
 sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in {1}";
+sema_friend_invalid_in_context = Error (0) "'friend' used outside of class";
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";
 sema_function_partial_spec = Error (0) "function template partial specialization is not allowed";

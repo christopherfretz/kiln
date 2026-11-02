@@ -1354,6 +1354,7 @@ impl Sema<'_, '_> {
                 ds.constexpr.or(ds.consteval).or(ds.constinit),
                 ds.virtual_,
                 ds.explicit,
+                ds.noreturn,
             ];
             for l in locs.into_iter().flatten() {
                 self.error(DiagId::sema_invalid_decl_spec_in_nontype_parm, l);
@@ -1982,7 +1983,7 @@ impl Sema<'_, '_> {
         if d.ctx != DeclaratorContext::Member
             && let Some(l) = ds.friend
         {
-            self.unsupported("'friend'", l);
+            self.error(DiagId::sema_friend_invalid_in_context, l);
         }
         // Member functions take cv/ref-qualifiers (WP-066b); a non-member
         // function type with them is `typedef`-only ([dcl.fct]/6).
@@ -2234,6 +2235,21 @@ impl Sema<'_, '_> {
         if let Some(sid) = &d.spec_id {
             return self.act_on_var_spec_declarator(ds, ty, d, sid, head);
         }
+        if head.is_none()
+            && d.qualifier.is_none()
+            && !d.global_qualifier
+            && !ds.is_typedef()
+            && !self.ast.types.is_function(ty)
+            && self.at_explicit_head()
+            && let (Some(t), Some((n, _))) = (self.templ.explicit_spec, d.name)
+        {
+            // `template<> int v;`: no template-id, so the head is
+            // extraneous and `v` a plain variable (clang's
+            // `err_template_variable_noparams`, [temp.expl.spec]/1).
+            self.templ.explicit_spec = None;
+            let msg = self.diag(DiagId::sema_template_variable_noparams, t).arg(sym_str(self, n));
+            self.emit(msg);
+        }
         if !invalid {
             self.warn_ambiguous_function(ds, d, ty);
         }
@@ -2267,6 +2283,22 @@ impl Sema<'_, '_> {
         }
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
+        if let Some(l) = ds.noreturn
+            && !ds.is_typedef()
+            && self.ast.types.is_function(ty)
+        {
+            // C11 `_Noreturn` (a clang extension in C++): the function's
+            // `[[noreturn]]` ([dcl.attr.noreturn]).
+            let node = AttrNode {
+                kind: AttrKind::NORETURN,
+                syntax: AttrSyntax::Keyword,
+                flags: 0,
+                loc: l,
+                a: 0,
+                b: 0,
+            };
+            attrs.push(self.ast.attrs.push(node));
+        }
         if let Some(op) = d.op_name
             && (ds.is_typedef() || !self.ast.types.is_function(ty))
         {
@@ -2286,6 +2318,10 @@ impl Sema<'_, '_> {
         }
         if ds.is_typedef() || !self.ast.types.is_function(ty) {
             self.virtual_on_non_function(ds, d);
+            // clang's `DiagnoseFunctionSpecifiers`: `_Noreturn` is dropped.
+            if let Some(l) = ds.noreturn {
+                self.error(DiagId::sema_noreturn_non_function, l);
+            }
         }
         let ty = self.apply_vector_attrs(ty, &mut attrs, ds.is_typedef());
         // [dcl.spec.general]/3: a function or member declared with no

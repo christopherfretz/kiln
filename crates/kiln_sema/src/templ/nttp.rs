@@ -54,6 +54,15 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some(r) = t.as_record(ty) else { return true };
+        // clang `RequireStructuralType`: the type must be complete
+        // ([temp.param]/6 via [basic.types.general]/5), in every language
+        // mode, also when substituted.
+        if !self.require_complete(ty, loc) {
+            let d = self.diag(DiagId::sema_nttp_incomplete, loc).arg(self.ty_arg(ty));
+            let d = self.incomplete_note(d, ty);
+            self.emit(here(d));
+            return false;
+        }
         let Some(def) = self.ast.definition(r) else { return true };
         let bits = self.record_bits(def);
         if !bits.contains(DefinitionBits::COMPLETE) {

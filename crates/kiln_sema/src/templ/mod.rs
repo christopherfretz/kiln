@@ -946,7 +946,10 @@ impl Sema<'_, '_> {
             && let Some(spec) = self.explicit_spec_in_scope(q)
         {
             let note = self
-                .diag(DiagId::note_explicit_template_spec_does_not_need_header, self.ast.decls.get(spec).loc())
+                .diag(
+                    DiagId::note_explicit_template_spec_does_not_need_header,
+                    self.ast.decls.get(spec).loc(),
+                )
                 .arg(format!("'{}'", self.ty_canonical_str(self.tag_type(q))));
             d = d.with_note(note);
         }

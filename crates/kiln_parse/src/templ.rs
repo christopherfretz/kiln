@@ -17,7 +17,7 @@ use kiln_ast::templates::Requirement;
 use kiln_ast::types::{TagKeyword, TemplateArg, TemplateName};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_lex::{Punct, TokKind};
+use kiln_lex::{Punct, Std, TokKind};
 use kiln_sema::DeclSite;
 use kiln_sema::templ::actions::TemplateIdRef;
 use kiln_sema::using::Qualifier;
@@ -183,6 +183,10 @@ impl Parser<'_, '_> {
                 self.s.act_explicit_spec_end();
                 return;
             }
+            if self.at_plain_tag_decl() {
+                self.extraneous_empty_template_head(loc, ctx);
+                return;
+            }
             let _ = self.s.act_explicit_specialization(false, loc);
             self.skip_unsupported_declaration();
             return;
@@ -206,6 +210,17 @@ impl Parser<'_, '_> {
         };
         let head = self.s.act_template_head(requires, r_angle);
         self.trace(|_| "template_head".to_owned());
+        let list = self.s.ast.templates.param_list(head).params;
+        if self.s.ast.lists.is_empty(list) && self.at_plain_tag_decl() {
+            // Every parameter failed (`template<template<class> static
+            // class TT> struct D`): the head is an empty one.
+            self.s.act_on_finish_template_decl();
+            self.extraneous_empty_template_head(loc, ctx);
+            if delays {
+                self.s.end_delayed_access_to(level, None);
+            }
+            return;
+        }
         if delays {
             self.template_delay_level = Some(level);
         }
@@ -215,6 +230,43 @@ impl Parser<'_, '_> {
             self.s.end_delayed_access_to(level, None);
         }
         self.s.act_on_finish_template_decl();
+    }
+
+    /// `class-key identifier` then `{`, `:`, `;` or `final`: a class
+    /// declaration whose name is not a template-id.
+    fn at_plain_tag_decl(&self) -> bool {
+        if !matches!(self.kw(), Some(Kw::Class | Kw::Struct | Kw::Union)) {
+            return false;
+        }
+        let name = self.tok_at(self.pos() + 1);
+        if !matches!(name.kind, TokKind::Identifier(_)) || self.kw_of(name).is_some() {
+            return false;
+        }
+        let t = self.tok_at(self.pos() + 2);
+        matches!(Self::punct_of(t), Some(Punct::LBrace | Punct::Colon | Punct::Semi))
+            || self.is_final_tok(t)
+    }
+
+    /// An empty template head on a class that is no template-id ([temp.pre]/1
+    /// needs parameters, [temp.expl.spec]/1 a template-id): clang's
+    /// `err_template_tag_noparams`, at the `template` keyword `loc`. The class
+    /// is then declared as a non-template.
+    fn extraneous_empty_template_head(&mut self, loc: Loc, ctx: DeclaratorContext) {
+        let key = match self.kw() {
+            Some(Kw::Class) => "class",
+            Some(Kw::Union) => "union",
+            _ => "struct",
+        };
+        let name = self
+            .ident_of(self.tok_at(self.pos() + 1))
+            .map_or(String::new(), |n| self.s.ast.symbols().as_str(n).to_owned());
+        let d = self.s.diag(DiagId::sema_template_tag_noparams, loc).arg(key).arg(name);
+        self.emit(d);
+        if ctx == DeclaratorContext::Member {
+            self.parse_member_declaration();
+        } else {
+            self.parse_simple_declaration(DeclaratorContext::File, true);
+        }
     }
 
     /// The class declaration of an explicit specialization or explicit
@@ -458,9 +510,15 @@ impl Parser<'_, '_> {
     pub(crate) fn parse_template_param_list_tail(&mut self) -> Loc {
         if !self.at_greater() {
             loop {
+                // A failed parameter is skipped to the next `,` or the
+                // closing `>`; the list goes on after a `,` (clang's
+                // `ParseTemplateParameterList`).
                 if !self.parse_template_param() {
-                    self.skip_until(&[Punct::Greater], true, false);
-                    break;
+                    self.skip_until(
+                        &[Punct::Comma, Punct::Greater, Punct::GreaterGreater],
+                        true,
+                        false,
+                    );
                 }
                 if self.eat(Punct::Comma).is_none() {
                     break;
@@ -622,16 +680,39 @@ impl Parser<'_, '_> {
         };
         let params = self.s.act_template_head(requires, r_angle);
         let typename_kw = match self.kw() {
-            Some(Kw::Class) => false,
-            Some(Kw::Typename) => true,
+            Some(Kw::Class) => {
+                self.bump();
+                false
+            }
+            Some(Kw::Typename) => {
+                // [temp.param]/1 before C++17: only `class` (clang
+                // ext_template_template_param_typename).
+                if self.std < Std::Cxx17 {
+                    let d = self.s.diag(DiagId::parse_template_template_param_typename, self.loc());
+                    self.emit(d);
+                }
+                self.bump();
+                true
+            }
             _ => {
-                let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("'class'");
-                self.emit(d);
-                self.s.act_on_finish_template_decl();
-                return false;
+                self.missing_template_template_param_key();
+                false
             }
         };
-        self.bump();
+        // The parameter's name, or none before `= , > >> ...`; anything
+        // else fails the parameter (clang: "expected identifier").
+        let named = self.ident().is_some() && self.kw().is_none();
+        if !named
+            && !self.at(Punct::Ellipsis)
+            && !self.at(Punct::Equal)
+            && !self.at(Punct::Comma)
+            && !self.at_greater()
+        {
+            let d = self.s.diag(DiagId::parse_expected, self.loc()).arg("identifier");
+            self.emit(d);
+            self.s.act_on_finish_template_decl();
+            return false;
+        }
         let (pack, name, at) = self.parse_param_pack_and_name();
         let p = self.s.act_on_template_template_param(params, typename_kw, pack, name, at);
         // Its name is not in scope in its own default
@@ -639,6 +720,31 @@ impl Parser<'_, '_> {
         let ok = self.parse_template_template_param_default(p);
         self.s.act_on_template_param_end(p);
         ok
+    }
+
+    /// A template template parameter's head followed by neither `class`
+    /// nor `typename` ([temp.param]/1). Clang 19 always reports it; clang
+    /// 22 only where the user plausibly forgot the key: before a name, `,`,
+    /// `>`, `>>` or `...`, or at `struct` (replaced, so consumed). Either
+    /// way the parameter recovers as a type template template parameter.
+    fn missing_template_template_param_key(&mut self) {
+        let is_struct = self.at_kw(Kw::Struct);
+        let next = if is_struct { self.pos() + 1 } else { self.pos() };
+        let t = self.tok_at(next);
+        let plausible = (matches!(t.kind, TokKind::Identifier(_)) && self.kw_of(t).is_none())
+            || matches!(
+                Self::punct_of(t),
+                Some(Punct::Comma | Punct::Greater | Punct::GreaterGreater | Punct::Ellipsis)
+            );
+        if self.s.clang_compat < 22 || plausible {
+            let keys = if self.std >= Std::Cxx17 { "'class' or 'typename'" } else { "'class'" };
+            let d =
+                self.s.diag(DiagId::parse_class_on_template_template_param, self.loc()).arg(keys);
+            self.emit(d);
+        }
+        if is_struct {
+            self.bump();
+        }
     }
 
     /// `= id-expression` of template template parameter `p`

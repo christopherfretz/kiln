@@ -91,6 +91,7 @@ keywords! {
     Namespace = "namespace";
     New = "new";
     Noexcept = "noexcept";
+    Noreturn = "_Noreturn";
     Nullptr = "nullptr";
     GnuNull = "__null";
     Operator = "operator";
