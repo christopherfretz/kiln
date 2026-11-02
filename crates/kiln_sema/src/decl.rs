@@ -7909,7 +7909,7 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<AttrId> {
         let a = self.attribute_node(syntax, scope, name, args, loc)?;
-        if scope.is_some_and(|s| sym_str(self, s) == "gnu") {
+        if scope.is_some_and(|s| matches!(&*sym_str(self, s), "gnu" | "__gnu__")) {
             self.ast.attrs.set_flags(a, AttrNode::GNU_SCOPED);
         }
         Some(a)
@@ -7926,7 +7926,9 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Option<AttrId> {
         let raw = sym_str(self, name);
-        let scope_s = scope.map(|s| sym_str(self, s));
+        // clang `normalizeAttrScopeName`: `__gnu__::` is `gnu::`.
+        let scope_s =
+            scope.map(|s| sym_str(self, s)).map(|s| if s == "__gnu__" { "gnu".into() } else { s });
         let n = raw.trim_start_matches("__").trim_end_matches("__").to_owned();
         let gnu = syntax == AttrSyntax::Gnu || scope_s.as_deref() == Some("gnu");
         let std = scope_s.is_none() && syntax != AttrSyntax::Gnu;

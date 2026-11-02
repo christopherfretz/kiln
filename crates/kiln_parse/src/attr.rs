@@ -406,7 +406,7 @@ impl Parser<'_, '_> {
     }
 
     /// `__attribute__(( gnu-attribute-list ))`.
-    fn parse_gnu_attributes(&mut self, out: &mut Vec<AttrId>) {
+    pub(crate) fn parse_gnu_attributes(&mut self, out: &mut Vec<AttrId>) {
         self.bump();
         let Some(l1) = self.expect(Punct::LParen) else { return };
         let Some(l2) = self.expect(Punct::LParen) else {

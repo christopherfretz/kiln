@@ -2881,6 +2881,14 @@ impl Parser<'_, '_> {
             self.parse_trailing_requires(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
+            // The first declarator of a group, when it declares a function,
+            // takes GNU attributes before its asm label as well (clang's
+            // `ParseDeclGroup`: `void f() __attribute__((x)) asm("l");`).
+            if declarators == 0 && d.is_function_declarator() {
+                while self.at_kw(Kw::Attribute) {
+                    self.parse_gnu_attributes(&mut d.attrs);
+                }
+            }
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
             // a malformed one drops the declarator.
             let Ok(label) = self.parse_asm_label() else {

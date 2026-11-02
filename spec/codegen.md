@@ -1553,6 +1553,7 @@ enclosing class (`Cg::explicit_inst_kind`):
 | explicit specialization, inline / constexpr | `GVA_DiscardableODR` | `linkonce_odr` |
 | under an explicit instantiation definition | `GVA_StrongODR` | `weak_odr` in its own COMDAT, never deferred; vtable/RTTI `weak_odr`; C2/D2 in a C5/D5 COMDAT with `weak_odr` C1/D1 aliases |
 | under an explicit instantiation declaration | `GVA_AvailableExternally` (only defined when optimizing) | no definition; references name the external symbol; vtable an `external` declaration |
+| `always_inline` function under an explicit instantiation declaration (WP-384) | `GVA_AvailableExternally`, emitted even at -O0 and removed by the always-inliner | `linkonce_odr` like an implicit instantiation (kiln has no always-inliner; the library exports no symbol for it, e.g. libstdc++'s `std::allocator<char>::deallocate`; `tests/conformance/temp.explicit/extern-template-always-inline-run.cpp`) |
 | implicitly declared special member of either | `GVA_DiscardableODR` | `linkonce_odr` (not an instantiation) |
 | member (or member of a member class) declared `exclude_from_explicit_instantiation` | `GVA_DiscardableODR` | `linkonce_odr`, deferred until used: the enclosing class's explicit instantiation does not govern it (`Ast::excluded_from_explicit_instantiation`; libc++'s `_LIBCPP_HIDE_FROM_ABI`, WP-214; `tests/codegen/exclude_from_explicit_inst.cpp`) |
 | static local of a `weak_odr` function | `GVA_DiscardableODR` | `linkonce_odr` |
