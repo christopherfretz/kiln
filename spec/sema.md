@@ -192,6 +192,14 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (`conv::implicit_convert`, `Sema::names_invalid_function`) recover
     silently, with no "cannot initialize" after the first error
     (WP-379, `expr.unary.op/address-of-invalid-member-function.cpp`).
+    `&` of a parenthesized member name ([expr.unary.op]/4, WP-392,
+    clang `CheckAddressOfOperand`): `&(C::f)` / `&(f)` naming an
+    instance member function (or an overload set of them) is "call to
+    non-static member function without an object argument" at the
+    name, and `&b.f` / `&this->f` (a bound member function) is "cannot
+    create a non-constant pointer to member function" at the `&`; both
+    recover silently, with no "cannot take the address of an rvalue"
+    (`expr.unary.op/addr-of-parenthesized-member-function.cpp`).
   - An ambiguous *type* name (`S s;` with `S` in the namespace and in
     one of its inline namespaces) is diagnosed by the parser through
     `diagnose_ambiguous_name` (spec/parse.md); Sema's recovery
@@ -723,9 +731,14 @@ Redeclaration and linkage rules:
   `volatile-qualified return type T is deprecated`
   [-Wdeprecated-volatile] (`sema_deprecated_volatile_return`, in
   `-Wdeprecated`), at the same location as the array/function return
-  check. Not re-checked after template substitution (clang warns for
-  `T f()` with `T = volatile int`). Tests:
-  `depr.volatile.type/volatile-return{,-cxx17}.cpp`.
+  check. After template substitution (WP-392, `check_volatile_return`)
+  a return type that became volatile warns at the return type's begin:
+  at the class template's instantiation for a member, at the alias's
+  use, and for a function template specialization formed by deduction
+  at its first use (held back by SFINAE and replayed, sema-templates.md
+  §5.7). A non-dependent volatile return type is not re-warned, and a
+  deduced `auto` / `decltype(auto)` return never warns. Tests:
+  `depr.volatile.type/volatile-return{,-cxx17,-subst,-subst-19}.cpp`.
 - **Prototype scope** ([basic.scope.param]): the parser brackets each
   parameter-declaration-clause with `act_on_start_prototype`,
   `act_on_prototype_param(&mut ParamInfo)` and `act_on_end_prototype`.
@@ -1711,7 +1724,13 @@ and returns the scope it names:
     - Test: tests/codegen/namespace_reopen_inline.cpp (IR diff against
       clang++-19 on both triples).
   - An unnamed namespace is created once per scope and gets an
-    implicit `UsingDirectiveDecl` ([namespace.unnamed]).
+    implicit `UsingDirectiveDecl` ([namespace.unnamed]). "Scope" is the
+    primary redeclaration context (`Sema::anon_namespaces`, keyed by
+    `primary_context(redecl_context(ctx))`, clang's
+    `getAnonymousNamespace` on the original namespace): an unnamed
+    namespace in a reopened `namespace N` or inside `extern "C++" { }`
+    extends the first one (WP-397). Its declaration location is the
+    `{` (clang's `NamespaceDecl` location for an unnamed namespace).
   - **Inline mismatch on reopening** ([namespace.def.general]/3,
     WP-389; clang `DiagnoseNamespaceInlineMismatch`,
     `Sema::check_namespace_inline_mismatch`): when a namespace
@@ -1725,9 +1744,11 @@ and returns the scope it names:
     ("non-inline namespace cannot be reopened as inline"). Both carry
     "previous definition is here" at the first definition and are
     reported at the name (for an unnamed namespace at the `namespace`
-    keyword; clang uses the `{`, a known column difference). Tests:
+    keyword, its note at the first definition's `{`, as clang 19 and
+    22). Tests:
     tests/conformance/namespace.def/inline-namespace-reopened-noninline.cpp,
-    tests/conformance/namespace.def/inline-namespace-mismatch.cpp.
+    tests/conformance/namespace.def/inline-namespace-mismatch.cpp,
+    tests/conformance/namespace.unnamed/reopened-inline-mismatch.cpp.
 - **Using-directives:** the payload is `Payload::None(nominated.raw())`.
 - **`extern "C"`/`"C++"`** creates a `LinkageSpecDecl`.
   - Without braces (`extern "C" int x;`) the parser calls

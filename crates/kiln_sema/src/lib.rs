@@ -202,6 +202,11 @@ pub struct Sema<'a, 'sm> {
     /// ending is a manifestly constant-evaluated constant-expression (no
     /// runtime-behavior warnings, clang's `ConstantEvaluated` context).
     pub(crate) constant_full_expr: u32,
+    /// Inside the full-expressions of an initializer dropped after its
+    /// diagnostic: an unexpanded pack in them is not reported again
+    /// (clang's `AddInitializerToDecl` returns for an invalid variable;
+    /// likewise a for-range-initializer, `ActOnCXXForRangeStmt`).
+    pub(crate) discarding_init: bool,
     /// The language standard (set by the parser; spellings in notes).
     pub(crate) std: kiln_lex::Std,
     /// `DeclRefExpr`s of the current full-expression that are potential
@@ -620,6 +625,12 @@ pub struct Sema<'a, 'sm> {
     pub(crate) inh_ctors: kiln_source::fx::FxHashMap<(DeclId, DeclId), DeclId>,
     /// The base constructor of each inheriting constructor.
     pub(crate) inh_ctor_base: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// The unnamed namespace of each namespace scope, keyed by the
+    /// scope's primary redeclaration context ([namespace.unnamed]/1;
+    /// clang's `getAnonymousNamespace` on the original namespace), so an
+    /// unnamed namespace in a reopened namespace or inside `extern "C++"`
+    /// extends the first one.
+    pub(crate) anon_namespaces: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -720,6 +731,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             agg_list_end: None,
             immediate: 0,
             constant_full_expr: 0,
+            discarding_init: false,
             std: kiln_lex::Std::Cxx26,
             pending_odr: Vec::new(),
             misaligned: Vec::new(),
@@ -825,6 +837,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inherited_aligned: kiln_source::fx::FxHashMap::default(),
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
+            anon_namespaces: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
@@ -928,6 +941,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                     s.errors += 1;
                     if s.first.is_none() {
                         s.first = Some(d);
+                    }
+                } else if sev < kiln_diag::Severity::Error && self.diags.would_emit(&d) {
+                    // A warning waits for the use of what the substitution
+                    // forms (§5.7); clang 22 keeps the context notes with it
+                    // (clang 19 none).
+                    if self.clang_compat >= 22 {
+                        d.prepend_notes(self.inst_context_notes());
+                    }
+                    if let Some(s) = self.inst.sfinae.borrow_mut().last_mut() {
+                        s.warnings.push(d);
                     }
                 }
                 return;

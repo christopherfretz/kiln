@@ -33,7 +33,6 @@ use crate::lookup::{LookupKind, is_tag_kind, is_type_kind};
 use crate::overload::redecl::NewFn;
 use crate::qualified_decl::QualifiedDecl;
 use crate::scope::{Ns, Scope, ScopeKind};
-use crate::templ::pack::PackOperand;
 use crate::type_diff::DiffArgs as _;
 use crate::{Sema, target};
 use kiln_ast::templates::is_template_kind;
@@ -1164,8 +1163,12 @@ impl Sema<'_, '_> {
                     // volatile-qualified return type is deprecated, at the
                     // function declarator's '(' or a trailing return
                     // type's `auto` (clang's `warn_deprecated_volatile_return`;
-                    // not before C++20).
+                    // not before C++20). A substituted declarator was
+                    // checked when its type was rebuilt, at the return
+                    // type (clang's `BuildFunctionType`; spec/sema-templates.md
+                    // §6.4).
                     if self.std >= kiln_lex::Std::Cxx20
+                        && self.inst.stack.is_empty()
                         && self.ast.types.effective_quals(ty).contains(Quals::VOLATILE)
                     {
                         let at = if trailing.is_some() { spec_loc } else { *loc };
@@ -1567,10 +1570,9 @@ impl Sema<'_, '_> {
         // [temp.variadic]/12: `void f(int = sizeof(Ts));` (clang
         // reports at the argument's begin).
         let unexpanded = !p.invalid
-            && self.lambdas.is_empty()
             && roots.iter().any(|&e| {
                 let at = self.begin_loc(e);
-                self.diagnose_unexpanded_pack(PackOperand::Expr(e), "default argument", at)
+                self.diagnose_unexpanded_default_arg(e, at)
             });
         // [dcl.fct.default]/3, after the unexpanded-pack check (clang's
         // `ActOnParamDefaultArgument`); an invalid argument says nothing.
@@ -2263,6 +2265,9 @@ impl Sema<'_, '_> {
             // [temp.explicit]/3: of a variable template or static data
             // member.
             let type_loc = ds.type_loc.unwrap_or(ds.loc);
+            // [dcl.constexpr]/9: `constexpr` makes the declared type const.
+            let ty =
+                if ds.constexpr.is_some() { self.ast.types.qualify(ty, Quals::CONST) } else { ty };
             self.act_on_explicit_var_inst(d, (ty, type_loc), ext.is_some(), invalid);
             return None;
         }
@@ -4642,9 +4647,11 @@ impl Sema<'_, '_> {
             Initializer::Paren(es, ..) => es.clone(),
             Initializer::List(l) => Self::list_exprs(l),
         };
+        let outer = std::mem::replace(&mut self.discarding_init, true);
         for e in es {
             self.act_on_full_expr(e);
         }
+        self.discarding_init = outer;
     }
 
     /// Diagnoses initializing `extern` variable `v` (clang
@@ -6866,11 +6873,16 @@ impl Sema<'_, '_> {
     // -- namespaces and linkage --------------------------------------------------
 
     /// `namespace N {` ([namespace.def]); `None` for an unnamed namespace.
+    /// `loc` is the `namespace` keyword (where an inline mismatch is
+    /// diagnosed for an unnamed namespace) and `lbrace` the `{`, an
+    /// unnamed namespace's own location (clang's `NamespaceDecl` location,
+    /// which notes point at).
     pub fn act_on_start_namespace(
         &mut self,
         name: Option<(Symbol, Loc)>,
         inline: bool,
         loc: Loc,
+        lbrace: Loc,
     ) -> DeclId {
         let mut prev = None;
         if let Some((n, nloc)) = name {
@@ -6898,10 +6910,14 @@ impl Sema<'_, '_> {
             }
         } else {
             // [namespace.unnamed]/1: every unnamed namespace of a scope is
-            // the same namespace.
-            prev = self.ast.decls.members(self.ctx).find(|&m| {
-                let n = self.ast.decls.get(m);
-                n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
+            // the same namespace, across the scope's redeclarations and
+            // transparent `extern "C++"` blocks.
+            let key = self.ast.primary_context(self.ast.redecl_context(self.ctx));
+            prev = self.anon_namespaces.get(&key).copied().or_else(|| {
+                self.ast.decls.members(self.ctx).find(|&m| {
+                    let n = self.ast.decls.get(m);
+                    n.kind() == DeclKind::Namespace && n.name() == DeclName::EMPTY
+                })
             });
         }
         let inline = match prev {
@@ -6914,12 +6930,16 @@ impl Sema<'_, '_> {
         let mut h = DeclHead::new(
             sem,
             name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0)),
-            name.map_or(loc, |n| n.1),
+            name.map_or(lbrace, |n| n.1),
         );
         if sem != self.ctx {
             h = h.lexical(self.ctx);
         }
         let ns = self.builder().namespace(h, inline, prev);
+        if name.is_none() {
+            let key = self.ast.primary_context(self.ast.redecl_context(self.ctx));
+            self.anon_namespaces.entry(key).or_insert(ns);
+        }
         if name.is_none() && prev.is_none() {
             // ... followed by an implicit `using namespace unique;`.
             let _ = self.using_directive(ns, loc, DeclFlags::IMPLICIT);

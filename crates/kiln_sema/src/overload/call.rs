@@ -142,6 +142,11 @@ impl Sema<'_, '_> {
                 if self.ast.decls.cold.requires_clause.contains(d) {
                     set.uncertain = true;
                 }
+                // clang's `TemplateDeductionInfo` takes the candidate set's
+                // location, the callee's begin with its nested-name-specifier
+                // (`Fn->getExprLoc()`); the specialization is referenced at
+                // the name.
+                self.templ.deduce_poi = Some(n.loc());
                 self.add_template_candidate(
                     &mut set,
                     d,
@@ -149,8 +154,9 @@ impl Sema<'_, '_> {
                     explicit,
                     CandidateKind::Function,
                     IcsOptions::NONE,
-                    n.loc(),
+                    at,
                 );
+                self.templ.deduce_poi = None;
             } else {
                 if self.ast.decls.cold.requires_clause.contains(d) {
                     set.uncertain = true;

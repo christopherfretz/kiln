@@ -746,6 +746,26 @@ The normative description is spec/driver.md "Code generation". In short:
   `stmt.ranged/constexpr-sum`) are `xfail(kiln)`: libstdc++'s
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
+### Inlining attributes on definitions (WP-389, WP-397)
+- `Cg::def_inline_attrs` follows clang's
+  `SetLLVMFunctionAttributesForDefinition`: `always_inline` gives
+  `alwaysinline` at every level, or `noinline` alone when `noinline` is
+  also present; otherwise `-O0` gives `noinline optnone`; above `-O0`
+  `noinline` (`[[gnu::noinline]]`, `[[clang::noinline]]`, `__attribute__`)
+  stays `noinline`, and a function `inline`-specified on any of its
+  declarations, or one instantiated from a pattern that is (not for an
+  explicit specialization; lambda call operators included), gets
+  `inlinehint` (`Cg::inline_specified`). `constexpr` and in-class
+  definitions are implicitly inline but not inline-specified, so they
+  get neither. Tests: `tests/codegen/noinline_matrix_o{0,1,2}.cpp`
+  (exact under oracle 19; on x86_64 above `-O0` only structural, see
+  "Deviations").
+- A template parameter object is emitted `linkonce_odr` with a comdat
+  and `dso_local`, or `internal` when its type or value names an
+  internal entity (spec/abi.md §8.22; clang 22 drops the comdat of an
+  internal one, kiln keeps it below `-fclang-compat=22`); it carries no
+  `align`, as clang's.
+
 ### Always-inliner (WP-389)
 - clang's `-O0` pipeline (`buildO0DefaultPipeline`) runs
   `AlwaysInlinerPass` (without lifetime markers) before `-emit-llvm`
@@ -763,6 +783,26 @@ The normative description is spec/driver.md "Code generation". In short:
   code), and it only runs for modules that need it. Test:
   `tests/codegen/always_inline.cpp` (exact under oracle 19, structural
   under 22).
+- **Cost (WP-397).** libstdc++'s and libc++'s headers define
+  `always_inline` functions that almost every TU uses, so the pass runs
+  for nearly every `-O0` compile. Measured on a TU including
+  `<string>`, `<vector>` and `<algorithm>` (`-O0 -c`, harness build,
+  aarch64, 20 interleaved runs, median wall clock; peak RSS ~64 MiB,
+  the frontend's, in every configuration): libstdc++ 0.339 s without
+  the pass, 0.362 s (+6.8%) with WP-389's two `opt` runs; libc++
+  0.445 s / 0.478 s (+7.4%). The pass itself is not the cost: `opt
+  -passes=always-inline` takes as long as `default<O0>` (process start
+  ~10 ms, IR parse ~12 ms) and inserts lifetime markers clang's O0
+  pipeline does not, so it is not used; skipping `opt` when no
+  `always_inline` function is called would never fire, as kiln defines
+  such a function only when it is used. The cost was the second `opt`
+  (bitcode back to text, ~17 ms) and `llc` reparsing text, so for an
+  object `llc` now reads the first run's bitcode directly (spec/driver.md
+  "IR optimization"): libstdc++ 0.359 s (+5.9%), libc++ 0.462 s
+  (+3.8%), a fixed ~20 ms per TU that shrinks relative to larger TUs.
+  The objects are byte-identical at `-O0`; above `-O0` the bitcode
+  keeps the in-memory use-list order, which makes `llc`'s output match
+  clang's in-process codegen where the text round trip did not.
 
 ### Deviations
 - **clang 22 codegen (WP-355).** kiln's IR follows clang 19 under every
@@ -783,6 +823,12 @@ The normative description is spec/driver.md "Code generation". In short:
   oracle-19 `Structure` deviation. Following them under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
+- **x86_64 frame pointer above `-O0` (WP-397).** clang omits
+  `"frame-pointer"="all"` and the `frame-pointer` module flag on x86_64
+  at `-O1` and above; kiln keeps them (`target_attrs`), so
+  `noinline_matrix_o1`/`_o2` are `Allow::Structure` there under oracle
+  19. clang 22 also drops the comdat of an internal template parameter
+  object (`linkage_internal_nttp`, oracle 22, `Allow::Structure`).
 - **Uses of constant-initialized reference variables as lvalues.** A
   read through a reference to a `const` referee folds (above), but clang
   also emits a non-odr-use of a reference usable in constant expressions
