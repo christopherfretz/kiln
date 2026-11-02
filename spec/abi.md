@@ -286,7 +286,22 @@ Byte-identical to clang 19's `DumpRecordLayout` in non-simple mode:
   - the class of a member pointer prints as a bare tag
     (`int struct C::*`);
   - written class, enum and typedef names print unqualified, without a
-    tag keyword.
+    tag keyword;
+  - a substituted template parameter prints its canonical replacement,
+    whose classes and enumerations carry their keyword and scope
+    (`enum E t`, `struct Q *p` in `P<E>`, `F<Q>`);
+  - template closers are split (`P<P<int> > *`,
+    `PrintOptions::split_closers`).
+- **Specialization names** ([temp.names], WP-324). A class template
+  specialization, in a header, a scope or a type, is named with its
+  arguments as clang's `printTag` does under the C policy
+  (`types::write_arg_list_c`): canonical arguments with their scope,
+  tag types with their keyword, trailing default arguments omitted,
+  values as template arguments (`struct S<int, 4>`,
+  `struct P<struct P<char> >`, `struct N<true, 'a', 3>`,
+  `struct ns::W<int *>`, `struct Outer<int>::In<char>`). An alias
+  template specialization names the class it stands for. Test:
+  `tests/conformance/temp.inst/layout-specialization-names.cpp`.
 - **Unnamed classes and enums** print `(unnamed struct at F:L:C)` (the
   presumed location of the tag keyword) when `DumpOptions::sources` is
   given, and `(unnamed struct)` otherwise. An anonymous struct or union
@@ -462,10 +477,15 @@ up to N.
   `record_definitions(ast)`, the order clang 19's
   `-fdump-record-layouts-complete` uses:
   - The classes are the complete, valid, non-dependent definitions.
-  - The order is lexical post-order: a class follows the classes
-    defined inside it, and top-level classes are in source order. A
-    class inside a function body is ordered as its own root, because
-    member function bodies are parsed after the enclosing `}`.
+  - The order is the order the classes were completed
+    (`DeclArena::completed_records`, spec/ast.md): a class follows the
+    classes defined inside it, top-level classes are in source order,
+    and a class inside a member function body follows the class (the
+    body is parsed after the enclosing `}`). An implicit instantiation
+    ([temp.inst]/2) comes where it was first required to be complete:
+    before a class whose member required it (`struct H { S<char, 2> s;
+    };` dumps `S<char, 2>` first), and a member class of a
+    specialization after that specialization (WP-324).
   - Each class is named as at its closing brace
     (`DumpOptions::at_definition`). An unnamed class later given a
     typedef name for linkage still prints `(unnamed struct at …)`
