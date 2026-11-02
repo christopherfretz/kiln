@@ -2968,20 +2968,23 @@ impl Sema<'_, '_> {
         r: ExprId,
     ) -> Option<(ExprId, ExprId, QualType)> {
         let (lt, rt) = (self.ety(l), self.ety(r));
+        // [expr.type]/4 applies alike to pointers to members.
+        let ptr = |s: &Self, t: QualType| s.ast.types.is_pointer(t) || s.is_member_pointer(t);
         let (lp, rp) = (
             self.ast.types.is_pointer(lt) || self.is_nullptr_type(lt),
             self.ast.types.is_pointer(rt) || self.is_nullptr_type(rt),
         );
+        let (lmp, rmp) = (self.is_member_pointer(lt), self.is_member_pointer(rt));
         let (lnull, rnull) =
             (conv::is_null_pointer_constant(self, l), conv::is_null_pointer_constant(self, r));
         if self.is_nullptr_type(lt) && self.is_nullptr_type(rt) {
             return Some((l, r, lt));
         }
-        if self.ast.types.is_pointer(lt) && (rnull || self.is_nullptr_type(rt)) {
+        if ptr(self, lt) && (rnull || self.is_nullptr_type(rt)) {
             let r2 = conv::implicit_convert(self, r, lt, ConvCtx::Comparison).ok()?;
             return Some((l, r2, lt));
         }
-        if self.ast.types.is_pointer(rt) && (lnull || self.is_nullptr_type(lt)) {
+        if ptr(self, rt) && (lnull || self.is_nullptr_type(lt)) {
             let l2 = conv::implicit_convert(self, l, rt, ConvCtx::Comparison).ok()?;
             return Some((l2, r, rt));
         }
@@ -2993,7 +2996,7 @@ impl Sema<'_, '_> {
             let l2 = conv::implicit_convert(self, l, rt, ConvCtx::Comparison).ok()?;
             return Some((l2, r, rt));
         }
-        if !(lp && rp) {
+        if !((lp && rp) || (lmp && rmp)) {
             return None;
         }
         if self.ast.types.same_type(lt, rt) {
@@ -3013,7 +3016,8 @@ impl Sema<'_, '_> {
     /// [expr.type]/4.3, /4.5 at one level: `void*` and `const T*` give
     /// `const void*`, `Base*` and `const Derived*` give `const Base*` -- a
     /// pointer to either pointee with both sides' cv-qualifiers, if both
-    /// operands convert to it.
+    /// operands convert to it. For pointers to members (/4.6), `int B::*`
+    /// and `const int D::*` give `const int D::*` the same way.
     fn cv_combined_pointer(
         &mut self,
         l: ExprId,
@@ -3024,10 +3028,17 @@ impl Sema<'_, '_> {
         let types = &self.ast.types;
         let (lpe, rpe) = (types.pointee(lt)?, types.pointee(rt)?);
         let cv = types.effective_quals(lpe) | types.effective_quals(rpe);
-        for side in [lpe, rpe] {
+        let class_of = |s: &Self, t: QualType| match s.ast.types.canonical_view(t) {
+            TypeView::MemberPointer { class, .. } => Some(class),
+            _ => None,
+        };
+        for (side, class) in [(lpe, class_of(self, lt)), (rpe, class_of(self, rt))] {
             let pointee = self.ast.types.unqualified(side);
             let pointee = self.ast.types.qualify(pointee, cv);
-            let to = self.ast.types.pointer_to(pointee);
+            let to = match class {
+                Some(c) => self.ast.types.member_pointer(pointee, c),
+                None => self.ast.types.pointer_to(pointee),
+            };
             if conv::standard_conversion(self, l, to, ConvCtx::Comparison).is_some()
                 && conv::standard_conversion(self, r, to, ConvCtx::Comparison).is_some()
             {
@@ -3886,7 +3897,12 @@ impl Sema<'_, '_> {
             None => conv::decay(self, callee),
         };
         let ft = self.ety(f);
-        let fn_ty = self.pointee_sugared(ft).filter(|p| self.ast.types.is_function(*p));
+        // A pointer to member function is not callable by itself: it
+        // needs an object (`(o.*pmf)()`, [expr.call]/1).
+        let fn_ty = (!self.is_member_pointer(ft))
+            .then(|| self.pointee_sugared(ft))
+            .flatten()
+            .filter(|p| self.ast.types.is_function(*p));
         let Some(fn_ty) = fn_ty else {
             let msg =
                 self.diag(DiagId::sema_call_not_function, loc).arg(self.ty_arg(self.ety(callee)));

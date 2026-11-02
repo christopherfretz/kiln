@@ -1843,7 +1843,12 @@ Constructors, destructors, conversion functions, `= default` and
   destructor name. It runs in the class of a qualified id-expression and
   in the class of a member access. It also runs in the nominated class of
   a member using-declaration. An unqualified `operator=` runs
-  `declare_implicit_named_in_scope` over the enclosing class scopes. `declare_implicit` sets triviality from the
+  `declare_implicit_named_in_scope` over the enclosing class scopes.
+  An implicit member (and its parameters) is in a dependent context
+  exactly when its class is ([temp.dep]/1): `declare_implicit` sets
+  `dependent_depth` from the class's `DEPENDENT_CTX` around the
+  declaration, since the first use of a non-template class may sit in a
+  template definition (WP-335). `declare_implicit` sets triviality from the
   class bits, or for copy/move members of a class with `NEEDS_OVL_*` from
   `selected_all_trivial` (clang `SpecialMemberIsTrivial`, §4.3); `constexpr`
   follows the C++23+ rules (§4.6).

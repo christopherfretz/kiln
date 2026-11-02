@@ -1020,6 +1020,14 @@ impl Sema<'_, '_> {
         let h = DeclHead::new(d, name, loc)
             .flags(DeclFlags::IMPLICIT)
             .access(kiln_ast::decl::Access::Public);
+        // An implicit member is in a dependent context exactly when its
+        // class is ([temp.dep]/1): the first use of a non-template class
+        // may sit in a template definition (`S x;` in a function template
+        // body declares `S::~S()`), and that must not make every later
+        // `v.~S()` instantiation-dependent.
+        let dep = self.ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX);
+        let saved = self.ast.templates.dependent_depth;
+        self.ast.templates.dependent_depth = if dep { saved.max(1) } else { 0 };
         let f = self.builder().append_implicit_member(h, kind, fty, spec);
         let ps: Vec<DeclId> = params
             .iter()
@@ -1029,6 +1037,7 @@ impl Sema<'_, '_> {
                 self.builder().param(f, DeclName::EMPTY, loc, t, i, 0)
             })
             .collect();
+        self.ast.templates.dependent_depth = saved;
         if !ps.is_empty() {
             let _ = self.builder().set_params(f, &ps);
         }
