@@ -304,22 +304,44 @@ impl Toolchain {
     /// `<sysroot>/usr/include` with a `c++/v1`, the per-target directory
     /// first if it exists.
     fn libcxx_dirs(&self, v: &mut Vec<SearchDirSpec>) {
-        let bases = [
+        let Some(base) = self.libcxx_include_base() else { return };
+        let per_target = format!("{base}/{}/c++/v1", self.target.triple);
+        if Path::new(&per_target).is_dir() {
+            v.push(SearchDirSpec::new(per_target, DirGroup::System));
+        }
+        v.push(SearchDirSpec::new(format!("{base}/c++/v1"), DirGroup::System));
+    }
+
+    /// The include base holding the libc++ headers (`<base>/c++/v1`):
+    /// the first of `<llvm>/bin/../include`, `<sysroot>/usr/local/include`,
+    /// `<sysroot>/usr/include` that has one, as [`Self::libcxx_dirs`].
+    fn libcxx_include_base(&self) -> Option<String> {
+        [
             format!("{}/bin/../include", self.llvm_dir),
             format!("{}/usr/local/include", self.sysroot),
             format!("{}/usr/include", self.sysroot),
-        ];
-        for base in bases {
-            let generic = format!("{base}/c++/v1");
-            if !Path::new(&generic).is_dir() {
-                continue;
+        ]
+        .into_iter()
+        .find(|base| Path::new(&format!("{base}/c++/v1")).is_dir())
+    }
+
+    /// Where libc++'s module interface sources (`std.cppm`,
+    /// `std.compat.cppm`) are (spec/modules.md §2): `<prefix>/share/libc++/v1`
+    /// for the `<prefix>/include/c++/v1` that `-stdlib=libc++` uses, with
+    /// symlinks resolved (Debian's `/usr/include/c++/v1` points into
+    /// `/usr/lib/llvm-N`), else `<llvm>/share/libc++/v1`.
+    pub fn libcxx_module_dir(&self) -> PathBuf {
+        let fallback = Path::new(&self.llvm_dir).join("share").join("libc++").join("v1");
+        let Some(base) = self.libcxx_include_base() else { return fallback };
+        let v1 = Path::new(&base).join("c++").join("v1");
+        let v1 = std::fs::canonicalize(&v1).unwrap_or(v1);
+        // `<prefix>/include/c++/v1` -> `<prefix>/share/libc++/v1`.
+        match v1.parent().and_then(Path::parent).and_then(Path::parent) {
+            Some(prefix) => {
+                let share = prefix.join("share").join("libc++").join("v1");
+                if share.is_dir() { share } else { fallback }
             }
-            let per_target = format!("{base}/{}/c++/v1", self.target.triple);
-            if Path::new(&per_target).is_dir() {
-                v.push(SearchDirSpec::new(per_target, DirGroup::System));
-            }
-            v.push(SearchDirSpec::new(generic, DirGroup::System));
-            return;
+            None => fallback,
         }
     }
 

@@ -266,9 +266,7 @@ impl Job<'_> {
                     .map(|(n, p)| (n.clone(), std::path::PathBuf::from(p)))
                     .collect(),
                 prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
-                std_dir: Some(
-                    Path::new(&self.toolchain.llvm_dir).join("share").join("libc++").join("v1"),
-                ),
+                std_dir: Some(self.toolchain.libcxx_module_dir()),
             });
         }
         let mut pp = Preprocessor::new(sm, engine, interner, opts);
