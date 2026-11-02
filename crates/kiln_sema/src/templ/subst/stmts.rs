@@ -124,7 +124,11 @@ impl Substituter<'_, '_, '_> {
             StmtKind::NullStmt => Ok(self.sema.act_on_null_stmt(loc)),
             StmtKind::ExprStmt => {
                 let e = self.sema.ast.stmts.expr_stmt_expr(s);
+                let last = self.stmt_expr_result == Some(e);
                 let e = self.expr(e)?;
+                if last {
+                    return Ok(self.sema.act_on_stmt_expr_result(e));
+                }
                 Ok(self.sema.act_on_expr_stmt(e))
             }
             StmtKind::DeclStmt => {

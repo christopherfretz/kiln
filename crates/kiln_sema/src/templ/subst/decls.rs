@@ -152,6 +152,14 @@ impl Substituter<'_, '_, '_> {
         self.sema.ast.decls.get(d).ty().unwrap_or(QualType::ERROR)
     }
 
+    /// Makes pattern declaration `d`'s written outermost `&`/`&&`
+    /// ([`crate::Sema::ref_locs`]) the next reference rebuilt; returns
+    /// the one it replaces.
+    fn swap_ref_loc(&mut self, d: DeclId) -> Option<Loc> {
+        let l = self.sema.ref_locs.get(&d).copied();
+        std::mem::replace(&mut self.ref_loc, l)
+    }
+
     /// `t`, the type of pattern declaration `d`, substituted with `d`'s
     /// name available to diagnostics.
     pub(crate) fn named_decl_ty(
@@ -164,10 +172,12 @@ impl Substituter<'_, '_, '_> {
         let saved = std::mem::replace(&mut self.declarator_name, name);
         let begin = self.decl_begin(d);
         let outer = self.type_begin.replace(begin);
+        let outer_ref = self.swap_ref_loc(d);
         let scope = self.decl_written_scope(d, loc);
         let r = self.with_written_scope(scope, |s| s.ty(t, loc));
         self.declarator_name = saved;
         self.type_begin = outer;
+        self.ref_loc = outer_ref;
         r
     }
 
@@ -390,18 +400,7 @@ impl Substituter<'_, '_, '_> {
                         );
                         self.sema.unowned_params.insert(np);
                         self.locals.insert(p, DeclOrPack::Decl(np));
-                        out.push(ParamInfo {
-                            name,
-                            ty,
-                            loc,
-                            attrs: Vec::new(),
-                            invalid: false,
-                            default_arg: DefaultArg::None,
-                            range: (loc, loc),
-                            type_loc: loc,
-                            decl: Some(np),
-                            explicit_object: None,
-                        });
+                        out.push(subst_param_info(name, ty, loc, np, None));
                         continue;
                     }
                 };
@@ -414,18 +413,7 @@ impl Substituter<'_, '_, '_> {
                     decls.push(np);
                     // The elements share the pack's name (carried by
                     // `np`); it is not a redefinition ([temp.variadic]/5).
-                    out.push(ParamInfo {
-                        name: None,
-                        ty,
-                        loc,
-                        attrs: Vec::new(),
-                        invalid: false,
-                        default_arg: DefaultArg::None,
-                        range: (loc, loc),
-                        type_loc: loc,
-                        decl: Some(np),
-                        explicit_object: None,
-                    });
+                    out.push(subst_param_info(None, ty, loc, np, None));
                 }
                 let l = self.sema.ast.lists.push(&decls);
                 self.locals.insert(p, DeclOrPack::Pack(l));
@@ -434,8 +422,10 @@ impl Substituter<'_, '_, '_> {
             let scope = self.decl_written_scope(p, n.loc());
             let begin = self.decl_begin(p);
             let outer = self.type_begin.replace(begin);
+            let outer_ref = self.swap_ref_loc(p);
             let ty = self.with_written_scope(scope, |s| s.ty(t, n.loc()));
             self.type_begin = outer;
+            self.ref_loc = outer_ref;
             let ty = ty?;
             // Created now, so that the rest of the signature (a trailing
             // return type, the exception specification) refers to it
@@ -446,18 +436,7 @@ impl Substituter<'_, '_, '_> {
             let np = self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo);
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
-            out.push(ParamInfo {
-                name,
-                ty,
-                loc: n.loc(),
-                attrs: Vec::new(),
-                invalid: false,
-                default_arg: DefaultArg::None,
-                range: (n.loc(), n.loc()),
-                type_loc: n.loc(),
-                decl: Some(np),
-                explicit_object: (eo != 0).then_some(n.loc()),
-            });
+            out.push(subst_param_info(name, ty, n.loc(), np, (eo != 0).then_some(n.loc())));
         }
         Ok(out)
     }
@@ -1089,7 +1068,9 @@ impl Substituter<'_, '_, '_> {
         };
         let begin = self.decl_begin(d);
         let outer = self.type_begin.replace(begin);
+        let outer_ref = self.swap_ref_loc(d);
         let ty = self.with_written_scope(scope, |s| s.ty(u, loc));
+        self.ref_loc = outer_ref;
         self.type_begin = outer;
         // clang `VisitTypedefNameDecl`: a member typedef whose type fails
         // to substitute is still declared, invalid (lookup finds it, its
@@ -1374,5 +1355,29 @@ impl Substituter<'_, '_, '_> {
             &params,
             requires,
         ))
+    }
+}
+
+/// A parameter of a substituted function type: the declaration `decl`
+/// already made, with nothing written but its name and location.
+fn subst_param_info(
+    name: Option<(Symbol, Loc)>,
+    ty: QualType,
+    loc: Loc,
+    decl: DeclId,
+    explicit_object: Option<Loc>,
+) -> ParamInfo {
+    ParamInfo {
+        name,
+        ty,
+        loc,
+        attrs: Vec::new(),
+        invalid: false,
+        default_arg: DefaultArg::None,
+        range: (loc, loc),
+        type_loc: loc,
+        ref_loc: Loc::INVALID,
+        decl: Some(decl),
+        explicit_object,
     }
 }

@@ -492,9 +492,21 @@ impl Sema<'_, '_> {
     /// place, so its temporaries are still destroyed at its end
     /// ([intro.execution]/5, [class.temporary]/4; clang's
     /// `ConstantEvaluated` context restores `ParentCleanup`).
+    ///
+    /// A constant-expression with temporaries of its own gets its own
+    /// `ExprWithCleanups`; the enclosing full-expression's state from
+    /// before it began (recorded by [`Sema::exit_constant_evaluated`] or
+    /// the substituter) is then restored, so `use(D(3)) + C<D(1).v>::v`
+    /// still destroys `D(3)` at its end. A default template argument is
+    /// substituted and converted in a context of its own
+    /// ([`Sema::default_template_arg`]).
     pub(crate) fn act_on_constant_full_expr(&mut self, e: ExprId) -> ExprId {
         let outer = self.set_aside_outer_immediates(e);
-        let pending = (!self.has_own_temporaries(e)).then(|| std::mem::take(&mut self.cleanup));
+        let pending = if self.has_own_temporaries(e) {
+            self.take_constant_outer_cleanups(e)
+        } else {
+            Some(std::mem::take(&mut self.cleanup))
+        };
         self.constant_full_expr += 1;
         let r = self.act_on_full_expr(e);
         self.constant_full_expr -= 1;
@@ -1837,29 +1849,6 @@ impl Sema<'_, '_> {
             self.note_immediate_ref(e, d);
         }
         e
-    }
-
-    /// `[[deprecated]]` ([dcl.attr.deprecated]).
-    pub(crate) fn diagnose_deprecated(&self, d: DeclId, loc: Loc) {
-        let Some(a) = self.find_attr(d, AttrKind::DEPRECATED) else { return };
-        let attr = *self.ast.attrs.get(a);
-        // clang `getNameForDiagnostic`: a function template
-        // specialization (whose attributes are the pattern's) prints its
-        // template arguments, `f<int>`.
-        let mut name = self.decl_name(d);
-        if self.ast.decls.function(d).is_some()
-            && let Some((_, i)) = self.ast.spec_info(d)
-        {
-            let names = crate::names::SemaNames::new(self);
-            kiln_ast::types::write_arg_list(&self.ast.types, &names, i.args, &mut name);
-        }
-        let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
-        let msg = match text {
-            Some(t) => self.diag(DiagId::sema_deprecated_msg, loc).arg(name.clone()).arg(t),
-            None => self.diag(DiagId::sema_deprecated, loc).arg(name.clone()),
-        };
-        let note = self.diag(DiagId::note_marked_deprecated, attr.loc).arg(name);
-        self.emit(msg.with_note(note));
     }
 
     /// The text of a narrow string literal.

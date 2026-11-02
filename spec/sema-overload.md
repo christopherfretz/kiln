@@ -404,7 +404,7 @@ error by default).
 | `std::initializer_list<X>` (or ref) | worst element ICS to `X`; identity if empty; any Bad → `Bad(InitList)` |
 | array `X[N]`/`X[]` | worst element ICS; too many elements → Bad |
 | non-aggregate class | `UserDefined` from [over.match.list] (`list_ctor` if phase 1 won) |
-| aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed |
+| aggregate class | `UserDefined{via: Aggregate}` if aggregate init is well-formed: no subobject designated twice, and no more elements than brace elision reaches ([dcl.init.aggr]/16, `aggregate_list_capacity`): each base and field (a union's first) takes one clause if it is a scalar or non-aggregate class, else its own capacity but at least one, so an empty class, an empty base or libc++'s `std::array<T, 0>` member takes `{}` (WP-304, `tests/conformance/over.ics.list/aggregate-elision-capacity*.cpp`) |
 | reference | as the referenced type, bound to the temporary |
 | non-class, one element / empty | element's ICS (narrowing → `Bad(Narrowing)`) / identity |
 
@@ -1122,7 +1122,10 @@ Where the code differs from (or details) the design above:
     overload of the name, `widen_function_template_id`; the qualifier and
     begin, so `&C::template m<A>` is a pointer to member) and resolved
     unless it is a call's callee (`Substituter::as_callee`), where the call
-    deduces the remaining arguments (WP-296).
+    deduces the remaining arguments (WP-296). WP-297 needed the same for
+    libc++ variant's relational operators (`relops_bool_conv.verify.cpp`:
+    the uncalled `__make_dispatch` must resolve for the static_assert to
+    fire; `over.over/qualified-template-id-in-template.cpp`).
   - When no non-template matches the target, `address_template_candidates`
     deduces P (the template's function type) from A (the target type)
     through `deduce_spec(.., target)`. It keeps the specializations that

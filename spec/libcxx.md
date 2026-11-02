@@ -172,6 +172,29 @@ Some features are deliberately missing:
 
 The target triple is fixed. The table must be revised on any other host.
 
+### Environment exclusions
+
+A few tests cannot pass on this host however they are compiled: built
+with clang 19 they fail at the same assertion. They are UNSUPPORTED with
+an `env:` reason, before any directive is read (`run::env_unsupported`,
+also in `--list`), only while the condition holds:
+- run as root (effective uid 0 in `/proc/self/status`, as in the agent
+  containers): 23 filesystem tests that expect `permissions(dir,
+  perms::none)` to make `dir/file` inaccessible get no `EACCES`, since
+  root bypasses permission checks (`ROOT_UNSUPPORTED` in `run.rs`, e.g.
+  `fs.op.status/status.pass.cpp`, `fs.op.is_block_file/is_block_file.pass.cpp`,
+  `directory_entry.mods/replace_filename.pass.cpp`; WP-297).
+- the scratch directory on a host-shared bind mount (the mount holding it
+  in `/proc/self/mountinfo` has type `fakeowner`, `fuse.grpcfuse` or
+  `virtiofs`): a directory's hard-link count is not `2 + subdirectories`
+  and `create_directory(p, attrs)` cannot copy the attributes
+  (`HOST_FS_UNSUPPORTED`: `fs.op.hard_lk_ct/hard_link_count.pass.cpp`,
+  `fs.op.create_directory/create_directory_with_attributes.pass.cpp`).
+
+A test joins a list only after its clang 19 build is shown to fail at the
+same assertion under the same condition; both lists are sorted (unit
+test `env_exclusions`).
+
 ## Commands
 
 Every step runs with the cwd and `TMPDIR` set to the test's scratch directory,
