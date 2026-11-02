@@ -1152,7 +1152,6 @@ impl Substituter<'_, '_, '_> {
     /// constructor's ctor-initializer is substituted, then the body.
     pub(crate) fn function_def(&mut self, f: DeclId, pdef: DeclId, body: kiln_ast::StmtId) {
         let sub = self;
-        sub.sema.act_on_start_function_def(f);
         let pp: Vec<DeclId> = sub
             .sema
             .ast
@@ -1175,6 +1174,14 @@ impl Substituter<'_, '_, '_> {
                 lbrace
             };
         sub.map_params(&pp, &fp);
+        // The member was declared from the in-class declaration, whose
+        // parameters may be named differently from the out-of-class
+        // definition's: the body sees the definition's names (clang
+        // `addInstantiatedParametersToScope`), so a local `__p` beside
+        // a definition parameter `__f` is no redefinition of the
+        // declaration's `__p` ([basic.scope.block]/2, [temp.inst]/4).
+        sub.rename_params_from_pattern(&pp);
+        sub.sema.act_on_start_function_def(f);
         if sub.sema.kind_of(f) == DeclKind::CXXConstructor {
             // The pattern's ctor-initializer, substituted and checked
             // as the parser's would be (spec/sema-class.md §4.9).
