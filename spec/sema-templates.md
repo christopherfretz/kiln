@@ -2515,9 +2515,18 @@ immediate context: errors are hard.
   `getMinRequiredArguments`), wherever it is.
 - **The explicit-specifier** ([temp.deduct.general]/7, [dcl.fct.spec]/3).
   A value-dependent `explicit(expr)` (kept in `decls.cold.explicit_expr`)
-  is substituted together with the signature when a specialization is
-  formed. `explicit(false)` makes the specialization non-explicit, and a
-  substitution failure is a deduction failure. A member of a class
+  is substituted once the specialization's signature is formed and, in
+  call deduction, only after its associated constraints are satisfied
+  ([temp.deduct.general]/5; clang `instantiateExplicitSpecifierDeferred`):
+  `get_function_spec_signature` leaves it pending
+  (`templ.explicit_pending`) and `finish_function_spec_explicit`
+  substitutes it, so a candidate whose constraint fails never forms an
+  `explicit(expr)` ill-formed for its arguments (libstdc++ `tuple`'s
+  `explicit(!__convertible_from_tuple_like<_UTuple>())`; test
+  `temp.deduct.general/constraints-before-explicit-specifier.cpp`).
+  `get_function_spec` does both. `explicit(false)` makes the
+  specialization non-explicit, and a substitution failure is a deduction
+  failure. A member of a class
   template substitutes it when the class is instantiated. A template is
   "not a candidate" before deduction only when it is explicit
   non-dependently (clang `isNonDependentlyExplicit`;
@@ -5025,6 +5034,17 @@ explicit specialization errors remain. The blockers are:
   pack is `TooManyArguments`, so `f<void>()` of `f(T &)` is "requires 1
   argument" rather than a substitution failure (WP-300). The check after
   substitution stays for expanded non-trailing packs.
+  The explicit substitution is clang's `Final` one
+  (`SubstituteExplicitTemplateArguments`): each type argument is
+  substituted as written (`Substituter::final_subst`, no
+  `SubstTemplateTypeParm` sugar), so a parameter it makes
+  non-dependent keeps the sugar in its CWG1391 note: `f<s::pl>(1, 2)`
+  of `f(W<T>, int)` notes "no known conversion from 'int' to
+  'W<s::pl>' (aka 'W<s::plain>')". Every other substitution records
+  the canonical argument under `SubstTemplateTypeParm`, which is not
+  `aka`-worthy (`print.rs::should_aka`), so a member of `V<s::pl>`
+  takes 'W<plain>' with no `aka` (WP-366). Test:
+  `tests/conformance/temp.arg.explicit/explicit-arg-sugar-nondependent-param.cpp`.
   `deduce_explicit_only` is the same pipeline with no call: it is used
   for a function template-id that is not called ([over.over]/3,
   `Sema::resolve_single_template_id`). Mismatch notes print P as
