@@ -1329,6 +1329,19 @@ impl Sema<'_, '_> {
                 // [temp.dep.candidate]), like an undeclared identifier.
                 return self.act_on_undeclared_call_name_dn(name, loc);
             }
+            // `D::x` with `D` the current instantiation and nothing found:
+            // a member of an unknown specialization when `D` has a
+            // dependent base ([temp.dep.type]/6, [temp.dep.expr]/3;
+            // clang's `wasNotFoundInCurrentInstantiation`), looked up again
+            // at instantiation (libc++ test support's
+            // `return (UnwrapAdaptor::c);`).
+            if let (Some(ctx), Some(nns), Some(b)) = (qualifier, nns, begin)
+                && self.kind_of(ctx) == DeclKind::CXXRecord
+                && let Some(n) =
+                    self.unknown_specialization_nns(crate::using::Qualifier { ctx, nns, loc: b })
+            {
+                return self.act_dependent_scope_ref(n, name, None, b, loc);
+            }
             let text = self.decl_name_str(name);
             let msg = match qualifier {
                 Some(q) => {

@@ -79,19 +79,28 @@ impl Sema<'_, '_> {
         kw: TagKeyword,
         loc: Loc,
     ) -> Option<QualType> {
-        let nns = if self.is_dependent_ctx(q.ctx) {
-            q.nns
+        let nns = self.unknown_specialization_nns(q)?;
+        Some(self.act_dependent_name_at(nns, name, None, kw, loc))
+    }
+
+    /// The specifier under which `q::name` names a member of an unknown
+    /// specialization when lookup found nothing in `q` ([temp.dep.type]/6):
+    /// `q`'s own when it is dependent, the injected-class-name type's when
+    /// `q` is the current instantiation with a dependent base; `None`
+    /// otherwise.
+    pub(crate) fn unknown_specialization_nns(&mut self, q: crate::using::Qualifier) -> Option<NnsId> {
+        if self.is_dependent_ctx(q.ctx) {
+            Some(q.nns)
         } else if self.kind_of(q.ctx) == DeclKind::CXXRecord && self.has_dependent_bases(q.ctx) {
             let prefix = match self.ast.types.nns_view(q.nns) {
                 Nns::Type { prefix, .. } => prefix,
                 _ => None,
             };
             let ty = self.this_class_type(q.ctx);
-            self.ast.types.nns(Nns::Type { prefix, ty, template_kw: false })
+            Some(self.ast.types.nns(Nns::Type { prefix, ty, template_kw: false }))
         } else {
-            return None;
-        };
-        Some(self.act_dependent_name_at(nns, name, None, kw, loc))
+            None
+        }
     }
 
     /// True if `t` is a dependent type ([temp.dep.type]/7).
