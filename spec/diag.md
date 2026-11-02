@@ -509,7 +509,14 @@ replaced by the locationless fatal `too many errors emitted, stopping now
 [-ferror-limit=]` (id `diag_too_many_errors`), which counts as an error;
 everything after it is dropped (§7.2). Warnings never count toward the
 limit. With the default 19, a TU with 30 errors prints 19 errors, the
-fatal, and `20 errors generated.`
+fatal, and `20 errors generated.`. With 19 errors there is no fatal.
+Probed against clang 22 and clang 19, which agree (WP-406):
+- 19, 20 and 21 errors at the default limit.
+- `-ferror-limit=` 0 to 5, 19 and 20.
+- Errors with notes, and errors from instantiation at end of TU.
+- `#error`, a missing `#include`, and `-Werror` and pragma-promoted
+  warnings.
+Test `intro.compliance/error-limit-default.cpp`.
 
 ### 7.4 Deduplication
 
