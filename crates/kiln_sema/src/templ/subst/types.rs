@@ -350,6 +350,12 @@ impl Substituter<'_, '_, '_> {
                 Ok(self.decl_type(i))
             }
             TypeView::Record(d) | TypeView::Enum(d) => {
+                // A member class of a pattern whose substituted class is
+                // still dependent: `typename X<A...>::name`.
+                if let Some((nns, name)) = self.dependent_member_nns(d, loc)? {
+                    let kw = kiln_ast::types::TagKeyword::Typename;
+                    return Ok(self.sema.ast.types.dependent_name(kw, nns, name));
+                }
                 let i = self.find_instantiated_decl(d, loc)?;
                 Ok(self.sema.tag_type(i))
             }
