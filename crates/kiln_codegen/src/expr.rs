@@ -185,10 +185,15 @@ impl Cg<'_> {
                 self.emit_throw(e, true)?;
                 return Ok(None);
             }
+            // clang `ScalarExprEmitter::VisitExprWithCleanups`: the value
+            // survives a shared cleanup block (`ForceCleanup({&V})`).
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
-                let r = self.emit_scalar_opt(self.sub(e));
-                self.end_scope(sc);
+                let mut r = self.emit_scalar_opt(self.sub(e));
+                match &mut r {
+                    Ok(Some(v)) => self.end_scope_reload(sc, &mut [v]),
+                    _ => self.end_scope(sc),
+                }
                 return r;
             }
             ExprKind::CXXThisExpr => self.this_value(),
@@ -318,6 +323,12 @@ impl Cg<'_> {
                 let r = self.emit_conditional(c, a, b);
                 self.f.opaque.remove(&common);
                 return r;
+            }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                return match self.emit_coawait(e, crate::coro::Want::Scalar)? {
+                    crate::coro::Got::Scalar(v) => Ok(v),
+                    _ => Ok(None),
+                };
             }
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Rv(v)) => return Ok(v),
@@ -603,6 +614,13 @@ impl Cg<'_> {
         }
         let fw = self.m.types.float_width(ft).unwrap_or(0);
         let tw = self.m.types.float_width(tt).unwrap_or(0);
+        if tw == fw {
+            // `half` ↔ `bfloat` (P1467 explicit conversion): through
+            // `float`, exact one way and singly rounded the other, as
+            // clang lowers `(T)(float)x`.
+            let w = self.cast(CastOp::FPExt, v, LTy::FLOAT);
+            return self.cast(CastOp::FPTrunc, w, tt);
+        }
         if tw < fw { self.cast(CastOp::FPTrunc, v, tt) } else { self.cast(CastOp::FPExt, v, tt) }
     }
 
@@ -905,7 +923,8 @@ impl Cg<'_> {
         match ast.exprs.unary_op(e) {
             UnaryOp::Minus | UnaryOp::Plus if self.f16_excess(q) => {
                 let v = self.emit_promoted(e)?;
-                Ok(self.cast(CastOp::FPTrunc, v, LTy::HALF))
+                let t = self.lty(q);
+                Ok(self.cast(CastOp::FPTrunc, v, t))
             }
             UnaryOp::Plus | UnaryOp::Extension => self.emit_scalar(s),
             UnaryOp::Minus => {
@@ -1066,7 +1085,8 @@ impl Cg<'_> {
             }
             _ if self.f16_excess(ast.exprs.get(e).ty()) && is_promotable_op(op) => {
                 let v = self.emit_promoted(e)?;
-                self.cast(CastOp::FPTrunc, v, LTy::HALF)
+                let t = self.lty(ast.exprs.get(e).ty());
+                self.cast(CastOp::FPTrunc, v, t)
             }
             _ => {
                 let lv = self.emit_scalar(l)?;
@@ -1090,11 +1110,16 @@ impl Cg<'_> {
     /// `ScalarExprEmitter::getPromotionType`: on x86-64 `_Float16`
     /// arithmetic is evaluated in `float`
     /// (`-ffloat16-excess-precision=standard`); an aarch64 target
-    /// operates on `half`. `__fp16` is promoted by sema.
+    /// operates on `half`. `__fp16` is promoted by sema. `__bf16`
+    /// arithmetic is evaluated in `float` on both targets (clang 19/22
+    /// `shouldEmitBFloat16WithExcessPrecision`,
+    /// `-fbfloat16-excess-precision=standard`; spec/codegen.md).
     pub(crate) fn f16_excess(&self, q: QualType) -> bool {
-        self.is_x86()
-            && self.ast.types.builtin(self.ast.types.canonical(q))
-                == Some(kiln_ast::types::BuiltinType::Float16)
+        match self.ast.types.builtin(self.ast.types.canonical(q)) {
+            Some(kiln_ast::types::BuiltinType::Float16) => self.is_x86(),
+            Some(kiln_ast::types::BuiltinType::BFloat16) => true,
+            _ => false,
+        }
     }
 
     /// clang `ScalarExprEmitter::EmitPromoted` to `float`: `+ - * /` and
@@ -1806,10 +1831,15 @@ impl Cg<'_> {
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
+            // clang `EmitLValue` of an `ExprWithCleanups`: the address
+            // survives a shared cleanup block (`ForceCleanup({&V})`).
             ExprKind::ExprWithCleanups => {
                 let sc = self.begin_scope(false);
-                let r = self.emit_lvalue(self.sub(e));
-                self.end_scope(sc);
+                let mut r = self.emit_lvalue(self.sub(e));
+                match &mut r {
+                    Ok(lv) => self.end_scope_reload(sc, &mut [&mut lv.addr.v]),
+                    Err(_) => self.end_scope(sc),
+                }
                 r
             }
             ExprKind::CXXDefaultInitExpr => match self.default_member_init(e) {
@@ -1858,6 +1888,12 @@ impl Cg<'_> {
                 let r = self.cond_lvalue(e, c, a, b);
                 self.f.opaque.remove(&common);
                 r
+            }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                match self.emit_coawait(e, crate::coro::Want::Lvalue)? {
+                    crate::coro::Got::Lv(lv) => Ok(lv),
+                    _ => err(self.loc_of(e), "co_await glvalue without a value"),
+                }
             }
             ExprKind::OpaqueValueExpr => match self.opaque_of(e) {
                 Some(Opaque::Lv(lv)) => Ok(lv),
@@ -2641,6 +2677,10 @@ impl Cg<'_> {
     pub(crate) fn emit_ignored(&mut self, e: ExprId) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
+        if matches!(ast.exprs.get(e).kind(), ExprKind::CoawaitExpr | ExprKind::CoyieldExpr) {
+            self.emit_coawait(e, crate::coro::Want::Ignored)?;
+            return Ok(());
+        }
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
                 if ast.exprs.get(e).kind() == ExprKind::VAArgExpr {
@@ -3230,6 +3270,10 @@ impl Cg<'_> {
             }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
+            ExprKind::CoawaitExpr | ExprKind::CoyieldExpr => {
+                self.emit_coawait(e, crate::coro::Want::Agg(dest, zeroed))?;
+                Ok(())
             }
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
                 self.agg_visit(ast.exprs.choose_chosen(e).expect("guarded"), dest, zeroed)

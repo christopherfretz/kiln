@@ -126,8 +126,24 @@ impl Parser<'_, '_> {
         if self.at_kw(Kw::Throw) {
             return self.parse_throw_expr();
         }
+        if self.at_kw(Kw::CoYield) {
+            return self.parse_coyield_expr();
+        }
         let lhs = self.parse_cast_expr()?;
         self.parse_rhs(lhs, prec::ASSIGN)
+    }
+
+    /// yield-expression ([expr.yield]): `co_yield assignment-expression`
+    /// or `co_yield braced-init-list` (clang's `ParseCoyieldExpression`).
+    fn parse_coyield_expr(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let e = if self.at(Punct::LBrace) {
+            let l = self.parse_init_list().ok()?;
+            self.s.act_on_braced_arg(l)
+        } else {
+            self.parse_assignment_expr()?
+        };
+        Some(self.s.act_on_coyield(e, loc))
     }
 
     /// throw-expression ([expr.throw]): `throw assignment-expression?`.
@@ -434,9 +450,12 @@ impl Parser<'_, '_> {
             }
             Some(Kw::Noexcept) => return self.parse_noexcept_expr(),
             Some(Kw::New | Kw::Delete) => return self.parse_new_delete_expr(),
-            Some(k @ Kw::CoAwait) => {
-                self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
-                return None;
+            Some(Kw::CoAwait) => {
+                // [expr.await]: `co_await cast-expression` (clang's
+                // `ParseCastExpression`, `kw_co_await`).
+                self.bump();
+                let e = self.parse_cast_expr()?;
+                return Some(self.s.act_on_coawait(e, loc));
             }
             _ => {}
         }
@@ -540,6 +559,10 @@ impl Parser<'_, '_> {
                         | Kw::Float
                         | Kw::Float128
                         | Kw::Float16
+                        | Kw::Float32
+                        | Kw::Float64
+                        | Kw::StdFloat128
+                        | Kw::Bf16
                         | Kw::Fp16
                         | Kw::Int
                         | Kw::Int128
@@ -1530,7 +1553,7 @@ impl Parser<'_, '_> {
                 Kw::Requires => Some(self.parse_requires_expression()),
                 // `typename T::type(e)` ([expr.type.conv]).
                 Kw::Typename => self.parse_functional_cast(),
-                Kw::CoYield | Kw::Template => {
+                Kw::Template => {
                     self.unsupported(&format!("'{}' expressions", k.spelling()), loc);
                     None
                 }

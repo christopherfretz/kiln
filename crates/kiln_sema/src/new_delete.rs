@@ -929,7 +929,7 @@ impl Sema<'_, '_> {
     /// The allocation function for `op` with `place` arguments, and
     /// whether it takes the alignment ([expr.new]/19: first with the
     /// alignment argument when the type is over-aligned, then without).
-    fn find_operator_new(
+    pub(crate) fn find_operator_new(
         &mut self,
         cands: &[DeclId],
         place: &[ExprId],

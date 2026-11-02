@@ -5,7 +5,6 @@
 //@ expect: compile-ok
 //@ std: c++23
 //@ xfail(clang): neither clang 19 nor clang 22 implements P1467 (no __STDCPP_FLOAT16_T__)
-//@ xfail(kiln): extended floating-point types are not implemented (P1467)
 #ifndef __STDCPP_FLOAT16_T__
 #error "no std::float16_t"
 #endif
