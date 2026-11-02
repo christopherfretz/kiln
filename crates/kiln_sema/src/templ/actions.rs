@@ -675,7 +675,9 @@ impl Sema<'_, '_> {
     /// found none either), diagnosed at `loc` as clang 22 does: lexically
     /// inside a class (a member function body, also through a lambda, a
     /// default member initializer) with a non-empty `ordinary` "'f' does
-    /// not refer to a template" with a note at its first declaration;
+    /// not refer to a template" with a note at its first declaration
+    /// (clang 19: "member 'f' used before its declaration" or "...from
+    /// dependent base class", [`Sema::diagnose_member_found_in_class`]);
     /// otherwise as an undeclared name.
     pub(crate) fn diagnose_args_for_non_template(
         &mut self,
@@ -684,6 +686,24 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) {
         let text = self.decl_name_str(name);
+        if self.clang_compat < 22
+            && !ordinary.is_empty()
+            && self.in_class_context()
+            && let Some(sym) = name.as_ident()
+            && let Some(decls) = self.diagnose_member_found_in_class(sym, loc, false)
+        {
+            // clang 19 diagnoses the member as found late in the class;
+            // the call then needs an object.
+            let member = decls.iter().any(|&d| {
+                let d = self.ast.strip_shadow(d);
+                self.kind_of(d) == DeclKind::CXXMethod && !self.is_static_method(d)
+            });
+            if member && !self.implicit_this_available() {
+                let msg = self.diag(DiagId::sema_member_call_without_object, loc);
+                self.emit(msg);
+            }
+            return;
+        }
         match ordinary.first() {
             Some(&d) if self.in_class_context() => {
                 let at = self.ast.decls.get(d).loc();

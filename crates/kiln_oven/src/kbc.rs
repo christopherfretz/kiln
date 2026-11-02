@@ -301,7 +301,7 @@ pub(crate) const NO_DTOR: u32 = u32::MAX;
 /// designator a placement new of the `void *` and a cast from it read
 /// (spec/oven.md "Construction"). Pointer operations read the low 64
 /// bits only; a store to memory keeps the tag in the granule's pointer
-/// mark (`Memory::void_mark`) and a load restores it.
+/// mark (`Memory::set_void_tag`) and a load restores it.
 pub(crate) const VOID_TAG: u32 = 1;
 
 /// The kinds of `Builtin` and their operands.

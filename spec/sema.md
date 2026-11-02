@@ -4148,19 +4148,87 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   it is an error expression. There is no correction, only "use of
   undeclared identifier", when the functions belong to several
   namespaces, or are found both directly and through a using-declaration
-  (several using-declarations included). There is none either when a
-  keyword or another visible name is no more distant (clang's
-  `CorrectTypo` limits: `(len+2)/3` edits, `len/edits >= 3`;
-  `closer_typo_candidate` scans the interner). Clang suggests that other
-  name; kiln does not yet. A qualified `N::f<int>` (or `::f<int>`) for a
-  single non-template `f` is "'f' does not name a template but is
-  followed by template arguments", as unqualified before C++20
-  (`potential_template_name_in`). Clang 19 reports the name as
-  undeclared (the delayed typo above). Clang 19 does correct to `::f`
-  when the expression it rebuilds is valid (`return f<int>;`,
-  `(f<int> 5)`), and kiln does not model that. Tests:
-  `tests/conformance/temp.names/undeclared-template-id-function-22.cpp`,
-  `undeclared-template-id-function-19.cpp`.
+  (several using-declarations included).
+- **Template-id typo candidates** ([temp.names]/3, WP-399; clang 22's
+  `CorrectTypo` from `DiagnoseEmptyLookup`, `correct_template_id_typo`):
+  for an uncalled template-id whose name ordinary lookup finds nothing or
+  only functions, the candidates are every identifier ordinary lookup
+  finds within `(len+2)/3` character edits (`closer_typo_candidate` scans
+  the interner), the keywords clang offers in that context
+  (`typo_keywords`: type and storage specifiers, named casts, `this` in a
+  non-static member function, statement keywords in a function with
+  `break`/`continue`/`case`/`default` only where valid, `namespace` /
+  `template` and the member specifiers outside one, `using` and
+  `static_assert` always), and the name itself or a near name ordinary
+  lookup does not find, qualified by every namespace and complete
+  non-union, non-template class declaring it (`typo_scopes`). Distance:
+  100 per character edit, 110 per qualifier component (spelled from the
+  innermost common context, or from `::` when that path starts with an
+  enclosing name). The least distance wins; a tie between different
+  candidates is no correction, as is a winner whose rounded distance
+  exceeds a third of a name of three or more characters (a shorter name
+  is only corrected to itself qualified). The winner decides the
+  outcome: a function, function template or static member function is
+  "did you mean 'y'?" with "'y' declared here" (an overload set named by
+  its one function callable with no arguments, else the first declared
+  by qualified lookup / last by unqualified), recovered as its overload
+  set (a function template with its template arguments); a non-static
+  member function adds "must be called" / "without an object argument";
+  a variable or enumerator outside a template adds the "expected to be a
+  non-type template" pair; a data member or template parameter, a type
+  (an alias template noted at its `using`) or a keyword is only
+  suggested; a namespace, concept or variable template is no correction.
+  Before the correction a name declared in an enclosing class
+  (`diagnose_member_found_in_class`) is "member 'f' used before its
+  declaration" (declared there) or "explicit qualification required to
+  use member 'f' from dependent base class" (inherited, or when the one
+  function callable with no arguments was picked), a note per
+  declaration and a `this->` fix-it in a non-static member function;
+  clang 19 says the same from the class lookup. Only this path ranks
+  candidates: the general undeclared-identifier path has no corrector.
+  Tests: `tests/conformance/temp.names/template-id-typo-*-22.cpp`,
+  `template-id-class-member-22.cpp`, `args-for-non-template-member-19.cpp`.
+- **Member access followed by template arguments** ([expr.ref],
+  [temp.names]/3-4, WP-399): `o.g<int>`, `p->g<>`, `X::g<int>` naming one
+  non-template member (also of the current instantiation) followed by
+  `<>` or `<` type-id ... `>` is "'g' does not name a template but is
+  followed by template arguments" with a note at the member, the list
+  skipped and the access an error; an overloaded member or a list that
+  need not be template arguments is parsed as a comparison. A bound
+  member function as an operand of a binary operator is only "reference
+  to non-static member function must be called". A member template-id of
+  a dependent object without `template` is "use 'template' keyword to
+  treat 'f' as a dependent template name" with the fix-it. Tests:
+  `tests/conformance/expr.ref/member-access-followed-by-template-args.cpp`,
+  `tests/conformance/temp.names/member-template-id-dependent-object.cpp`.
+- **Clang 19 correction to the qualified function** ([temp.names]/3,
+  WP-399; clang 19's `TypoExpr` and `CorrectDelayedTyposInExpr`): under
+  `-fclang-compat=19` an undeclared template-id whose best candidate is
+  the name itself qualified (exactly one non-member function or using
+  shadow, non-dependent arguments, outside an instantiation, inside a
+  delayed-typo scope) is speculatively rebuilt as a reference to that
+  function, template arguments dropped
+  (`speculate_template_id_typo`). The diagnostics engine holds every
+  diagnosis (fatal ones aside) from then on (spec/diag.md "Held
+  diagnostics"). At the correction point -- the end of the expression
+  statement (after its `;`, and before the unused-result check, which is
+  then skipped), a `return` operand (before the return's own checks:
+  "cannot initialize return object", "void function should not return a
+  value" still follow), an initializer (through the initialization, so
+  a type mismatch fails), a condition, a decltype operand -- the
+  speculation fails when a held error since it began (not a parse error,
+  not another typo diagnosis) belongs to it: the first recovery
+  expression built after the error contains an expression at the
+  template-id's location, or no recovery expression followed. A failed
+  speculation drops those errors and reports "use of undeclared
+  identifier 'val'"; a successful one "use of undeclared identifier
+  'val'; did you mean '::val'?" with "'::val' declared here". Typos
+  corrected in one batch fail together (`(val<int>, val<int> + 1)`).
+  Calls, overload sets and edit-distance candidates are never corrected
+  on this path. Tests:
+  `tests/conformance/temp.names/undeclared-template-id-correct-19.cpp`,
+  `undeclared-template-id-function-19.cpp`; clang 22:
+  `undeclared-template-id-function-22.cpp`.
 
 ### 5.23 Library-facing diagnostics from the libc++ `.verify.cpp` clusters (WP-337)
 Each rule names the libc++ test it fixed and its corpus test.

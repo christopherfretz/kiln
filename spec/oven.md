@@ -314,7 +314,27 @@ the evaluator's flattened type table.
   to the global taken in one mode still designates it in the other
   (test `limits.rs::lax_globals_do_not_grow`). The slot is reused only
   when the object is live, of the same type and not mid-resolution;
-  otherwise a fresh one is allocated and recorded. Codegen
+  otherwise a fresh one is allocated and recorded. **Lax folds** through
+  a usable variable (WP-395): a constexpr pointer, reference or class
+  member pointing at a lax global (`constexpr const double *p = &d;
+  int a[(int)*p];`) is resolved strictly, before or outside any lax fold,
+  so the pointer it holds must designate an object a later lax fold can
+  read. A lax global whose initializer evaluates as a strict constant
+  (or whose value sema already froze) therefore gets one static object
+  for both modes, holding that value but flagged external
+  (`Origin::External`, `Alloc::frame == LAX_READ`): a strict read still
+  faults "read of non-constexpr variable" exactly as before, and only a
+  lax fold (`Memory::lax`, set by `fold_rvalue` for its outermost run)
+  may read it; writes fault in either mode. Such a global is resolved
+  once per translation unit (one strict evaluation of its initializer,
+  memoized like any variable) and is not recorded in `lax_globals`. A lax
+  global whose initializer is not a strict constant (it reads another
+  lax global) keeps the mode-dependent object above, so a usable
+  pointer to it taken strictly still does not fold (open limitation).
+  A genuinely non-constant bound (a pointer to a non-`const` variable, or
+  any function-scope bound, which clang does not fold) stays a variable
+  length array (tests `expr.const/lax-fold-through-pointer.cpp`,
+  `dcl.array/vla-through-constexpr-pointer.cpp`). Codegen
   uses it for its non-initializer fold candidates; sema uses it
   (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
   (spec/sema.md §4.2).
@@ -1145,18 +1165,39 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   Copies, calls, returns and register locals keep the tag; every pointer
   operation reads the low 64 bits. A store of a tagged pointer to memory
   (a `void *` member or array element, a `void *` local whose address is
-  taken, an object copy) keeps it in the granule's pointer mark (WP-387):
-  the tag types are interned TU-wide (`Memory::void_mark`, append-only,
-  so a rolled-back or copied mark stays valid), mark `PTR_TAGGED + i`
-  naming the `i`-th, and a load of a pointer whose granule bears such a
-  mark puts the tag back in bits 64..96 (`Memory::void_tag`). A `void
-  *` therefore costs what it did before: 8 bytes in memory plus the
-  granule's existing mark byte, 16 in a register; the intern table
-  holds at most 254 types (4 bytes each plus a hash entry). Once it is
-  full, a `void *` of a further type is stored untagged (mark 1). An
-  untagged `void *` (that one, a thawed constant's, which holds no
-  designator, or a builtin's result) designates the outermost object
-  at its address.
+  taken, an object copy) keeps it with the granule's pointer mark (WP-387,
+  WP-395), and a load of a pointer whose granule bears a tagged mark puts
+  the tag back in bits 64..96 (`Memory::set_void_tag`,
+  `Memory::void_tag`). The first 253 distinct tag types are interned
+  TU-wide (append-only, so a rolled-back or copied mark stays valid):
+  mark `PTR_TAGGED + i` names the `i`-th, and a `void *` costs what it
+  did before, 8 bytes plus the granule's existing mark byte. A pointer of
+  any further type is marked `PTR_SPILL` and its tag kept in a map keyed
+  by space and granule (`Memory::vspill`), which a trial's rollback
+  restores (`Undo::Gran` carries the spilled tag) and `Memory::copy`
+  carries with the marks. There is no cap and no fallback: the 300th
+  distinct type is checked as the first is
+  (`expr.static.cast/p2738-void-cast-300-types.cpp`). A map for every
+  tag (no table) measured 3.5% slower on a `void *` store/load loop (15M
+  tagged stores and loads: 1.10 s table, 1.17 s map, 1.09 s table plus
+  spill, medians of 11) and within noise on `bench/oven`; the table
+  keeps the common case to a byte. A frozen `void *` carries its tag as
+  the pointer's designated type (`Scalar::Pointer::designated`,
+  spec/ast.md §9; carried through the frozen value rather than rebuilt
+  from the declaration and offset), and thawing puts it back in the register or the
+  granule's mark: a `constexpr const void *g = &s.x;` read in a later
+  evaluation designates `s.x`, not `s`, with no allocation on the thaw
+  path (the type is interned once). An untagged `void *` (a builtin's
+  result) designates the outermost object at its address.
+  The tag is a type, not a designator path. With the pointer's offset
+  and past-the-end bit that names one subobject in every case the
+  standard distinguishes, but a `void *` loaded from memory cannot tell
+  which of two same-typed members of a union it came from, and an
+  untagged `void *` falls back to the outermost object at its address
+  (`expr.static.cast/p2738-void-cast-thawed.cpp` covers thawed
+  constants: the complete object, a member, an array element, an empty
+  base at offset 0 against the first member and a `[[no_unique_address]]`
+  member sharing its address).
   The tag is the designated subobject's type; with the pointer's offset
   and past-the-end bit it names one subobject ([intro.object]/9: two
   distinct objects of one type have distinct addresses), except members
@@ -1176,7 +1217,11 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   `Types::similar`: equal but for the cv-qualifiers at each pointer or
   array level), as clang's check of `Designator.getType`; otherwise
   "cast from 'void *' is not allowed in a constant expression because
-  the pointed object type 'U' is not similar to the target type 'T'". So
+  the pointed object type 'U' is not similar to the target type 'T'",
+  clang's wording: the operand type as written (`'CVP' (aka 'const void
+  *')`), `U` with the qualifiers of the declaration naming the
+  subobject (the variable through array elements, or the member; none
+  for a base: `'const D'`, `'int'`), and `T` as written. So
   a `void *` made from a base subobject, a first member or an array is
   not the derived object, the enclosing object or the first element. An
   untagged `void *` succeeds when the allocation has a `T` subobject at
@@ -1188,6 +1233,20 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   Within `std::allocator<T>::allocate` a cast from `void*` to `T*` (as
   libc++ writes `static_cast<T*>(__builtin_operator_new(...))`) is a plain
   move, not the C++26 `void*` cast check.
+  Before C++26 ([expr.const]/5.14 of C++11 to C++23) every other cast
+  from `cv void *` to an object pointer (`static_cast`, C-style,
+  functional, in any function including a template instantiation) is
+  not a core constant expression: the cast compiles to a null test and
+  two traps at its begin location, "cast from 'void *' is not allowed in
+  a constant expression in C++ standards before C++2c" for a non-null
+  operand and "cast from 'void *' is not allowed in a constant
+  expression" for null (the operand type as written, with its aka), as
+  clang 19 and 22 in every mode. clang reports this as a CCE note and
+  keeps evaluating; kiln stops at it, which gives the same diagnostics
+  wherever clang needs a constant (`expr.const/p2738-void-cast-pre26-cxx*.cpp`).
+  A `void *` argument in an "in call to" note prints the subobject its
+  tag designates (`f(&s)`, not the first member at its address), an
+  untagged one the whole object.
 - *Destruction.* An explicit destructor call `p->~T()` (including the one
   in `std::destroy_at`) lowers to `EndLife [p, T]` aux 1 before the call
   (the object must be within its lifetime: "destruction of object outside

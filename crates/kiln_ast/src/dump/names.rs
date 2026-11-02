@@ -1563,6 +1563,11 @@ impl PrintEnv for AstNames<'_> {
         self.ast.decls.get(decl).ty()
     }
 
+    fn same_unqualified(&self, a: QualType, b: QualType) -> bool {
+        let t = &self.ast.types;
+        t.canonical(a).without_quals() == t.canonical(b).without_quals()
+    }
+
     fn type_name(&self, ty: QualType, out: &mut String) {
         write_type(&self.ast.types, self, ty, PrintOptions::SUGARED, out);
     }
@@ -1663,6 +1668,10 @@ impl PrintEnv for Ast {
 
     fn decl_type(&self, decl: DeclId) -> Option<QualType> {
         self.decls.get(decl).ty()
+    }
+
+    fn same_unqualified(&self, a: QualType, b: QualType) -> bool {
+        AstNames::new(self).same_unqualified(a, b)
     }
 
     fn type_name(&self, ty: QualType, out: &mut String) {

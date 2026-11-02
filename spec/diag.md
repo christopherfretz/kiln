@@ -608,7 +608,21 @@ analyses that stop after an error:
 So a warning promoted by `-Werror` makes the run fail but does not
 silence the later warnings.
 
-### 7.6 Thread safety
+### 7.6 Held diagnostics (WP-399)
+
+`hold()` starts holding back every diagnostic but a fatal one; holds
+nest, and the outermost `release()` emits the held ones not dropped, in
+order, through the normal path (error limit, dedup, system headers then
+apply). A held diagnostic counts as emitted while held (`error_count()`
+and the other counters include it, so Sema's "an error occurred" checks
+see it); `drop_held(i)` discards held diagnostic `i` and un-counts it.
+`held_len()` is the index the next held diagnostic gets and
+`held_errors_from(i)` lists the held errors from index `i` with their
+ids. The user is Sema's clang 19 speculative typo correction
+(spec/sema.md "Clang 19 correction to the qualified function"), which
+drops the errors a failed speculation caused.
+
+### 7.7 Thread safety
 
 `DiagEngine` is `Send + Sync` and every method takes `&self`, so one
 engine MAY be shared by parallel workers (scoped threads). Counters are
