@@ -518,9 +518,11 @@ pub(crate) struct Memory {
     /// The base subobjects a constructor did not construct
     /// ([`Memory::set_unconstructed`]) in this evaluation, by pointer:
     /// their bytes are outside their lifetime while their derived object
-    /// is not ([`Memory::holds_unconstructed`]). Empty unless Sema
-    /// diagnosed a constructor (WP-390).
-    pub unconstructed: Vec<(u64, OTy)>,
+    /// is not ([`Memory::holds_unconstructed`]); an empty base (`true`)
+    /// has no bytes and is found by identity
+    /// ([`Memory::empty_unconstructed`]). Empty unless Sema diagnosed a
+    /// constructor (WP-390, WP-401).
+    pub unconstructed: Vec<(u64, OTy, bool)>,
     /// Open checkpoints and their undo log (spec/oven.md "Trial
     /// evaluation").
     trial: Trial,
@@ -1294,10 +1296,17 @@ impl Memory {
     /// Its destruction is checked as a frame object's is (`life_frame`).
     /// Entries a rolled-back trial made stay (an error path only).
     pub fn set_unconstructed(&mut self, raw: u64, len: u64, ty: OTy) -> Result<(), MemFault> {
+        let (sp, abs, a) = self.check_storage(raw, len, true)?;
         if len == 0 {
+            // An empty base: no bytes to mark; the allocation is tracked
+            // so its destructions and member calls consult the entry.
+            if a.flags & flags::TRACKED == 0 {
+                self.track_life(raw)?;
+            }
+            self.life_frame = true;
+            self.unconstructed.push((raw, ty, true));
             return Ok(());
         }
-        let (sp, abs, a) = self.check_storage(raw, len, true)?;
         if a.flags & flags::TRACKED == 0 {
             self.track_life(raw)?;
         }
@@ -1306,7 +1315,7 @@ impl Memory {
         s.set_init(abs, len, false);
         s.set_life(abs, len, false);
         self.life_frame = true;
-        self.unconstructed.push((raw, ty));
+        self.unconstructed.push((raw, ty, false));
         Ok(())
     }
 
@@ -1316,13 +1325,25 @@ impl Memory {
     pub fn holds_unconstructed(&self, raw: u64, len: u64, ty: OTy) -> bool {
         let p = Ptr::decode(raw);
         let off = u64::from(p.off);
-        self.unconstructed.iter().any(|&(b, bt)| {
+        self.unconstructed.iter().any(|&(b, bt, empty)| {
             let q = Ptr::decode(b);
             let o = u64::from(q.off);
-            q.slot == p.slot
+            !empty
+                && q.slot == p.slot
                 && q.generation == p.generation
                 && (off..off + len).contains(&o)
                 && (o != off || bt != ty)
+        })
+    }
+
+    /// Whether the `ty` object at `raw` is an empty base subobject its
+    /// derived class's constructor did not construct (WP-401): it has no
+    /// bytes whose lifetime could tell.
+    pub fn empty_unconstructed(&self, raw: u64, ty: OTy) -> bool {
+        let p = Ptr::decode(raw);
+        self.unconstructed.iter().any(|&(b, bt, empty)| {
+            let q = Ptr::decode(b);
+            empty && bt == ty && q.slot == p.slot && q.generation == p.generation && q.off == p.off
         })
     }
 

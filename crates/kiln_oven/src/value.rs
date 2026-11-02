@@ -773,7 +773,9 @@ impl Oven {
             TyKind::Record { union, first, count, decl, .. } => {
                 let (first, count) = (first as usize, count as usize);
                 if !union {
-                    self.unconstructed_base(b, raw, decl, first..first + count)?;
+                    if !self.mem.unconstructed.is_empty() {
+                        self.unconstructed_base(b, raw, t, decl, first..first + count)?;
+                    }
                 }
                 if union {
                     let key = Ptr::union_key(raw, u64::from(p.off), t);
@@ -797,45 +799,63 @@ impl Oven {
     }
 
     /// clang `CheckEvaluationResult` of a base subobject without a value:
-    /// a direct base of the class `rdef` at `raw` (fields `range`) whose
-    /// constructor never ran, its bytes outside their lifetime
-    /// (`Memory::set_unconstructed`), is "constructor of base class 'B'
-    /// is not called" at the base-specifier (WP-390).
+    /// a direct base of the class `t` (definition `rdef`, fields `range`)
+    /// at `raw` whose constructor never ran, its bytes outside their
+    /// lifetime (`Memory::set_unconstructed`; an empty base by identity,
+    /// WP-401), is "constructor of base class 'B' is not called" at the
+    /// base-specifier (WP-390); the first such base as written.
     fn unconstructed_base(
         &self,
         b: &dyn SemaBridge,
         raw: u64,
+        t: OTy,
         rdef: DeclId,
         range: std::ops::Range<usize>,
     ) -> Result<(), Freeze> {
         let off = u64::from(Ptr::decode(raw).off);
+        let mut dead: Vec<OTy> = Vec::new();
         for i in range {
             let f = self.types.fields[i];
             if !f.base {
                 break;
             }
             let n = self.types.copy_size(f.ty);
-            if n == 0 || !self.mem.ended(Ptr::with_off(raw, off + f.offset, false), n) {
-                continue;
+            if n != 0 && self.mem.ended(Ptr::with_off(raw, off + f.offset, false), n) {
+                dead.push(f.ty);
             }
-            if self.run.silent {
-                return Err(Freeze::Fault(FailKind::NotConstant));
-            }
-            let ast = b.ast();
-            let q = self.types.info(f.ty).q;
-            let canon = ast.types.canonical(q).ty();
-            let loc = ast
-                .decls
-                .bases(rdef, &ast.lists)
-                .find(|s| !s.is_virtual && ast.types.canonical(s.ty).ty() == canon)
-                .map_or(ast.decls.get(rdef).loc(), |s| s.loc);
-            let t = Self::type_name(ast, q);
-            return Err(Freeze::Notes(vec![Note::new(
-                loc,
-                format!("constructor of base class '{t}' is not called"),
-            )]));
         }
-        Ok(())
+        for &(bt, o) in self.types.empty_bases(t) {
+            if self.mem.empty_unconstructed(Ptr::with_off(raw, off + o, false), bt) {
+                dead.push(bt);
+            }
+        }
+        if dead.is_empty() {
+            return Ok(());
+        }
+        if self.run.silent {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        }
+        let ast = b.ast();
+        let canon: Vec<_> =
+            dead.iter().map(|&d| ast.types.canonical(self.types.info(d).q).ty()).collect();
+        let spec = ast
+            .decls
+            .bases(rdef, &ast.lists)
+            .filter(|s| !s.is_virtual)
+            .find(|s| canon.contains(&ast.types.canonical(s.ty).ty()));
+        let (loc, i) = match spec {
+            Some(s) => {
+                let c = ast.types.canonical(s.ty).ty();
+                (s.loc, canon.iter().position(|&d| d == c).unwrap_or(0))
+            }
+            None => (ast.decls.get(rdef).loc(), 0),
+        };
+        let q = self.types.info(dead[i]).q;
+        let name = Self::type_name(ast, q);
+        Err(Freeze::Notes(vec![Note::new(
+            loc,
+            format!("constructor of base class '{name}' is not called"),
+        )]))
     }
 
     fn walk_field(
