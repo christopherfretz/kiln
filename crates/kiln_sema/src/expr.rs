@@ -1092,6 +1092,9 @@ impl Sema<'_, '_> {
                     _ => Some((DiagId::sema_unused_expr, loc, Vec::new())),
                 }
             }
+            // clang `isUnusedResultAWarning`'s default case: a void
+            // result is never unused (`static_cast<void>(x);`).
+            ExprKind::CXXStaticCastExpr if self.ast.types.is_void(n.ty()) => None,
             ExprKind::CXXStaticCastExpr => {
                 // Always unused, but a constructor conversion reports a
                 // nodiscard constructor or class (clang
@@ -2256,12 +2259,84 @@ impl Sema<'_, '_> {
                     .diag(DiagId::note_var_declared_const, self.ast.decls.get(d).loc())
                     .arg(self.decl_name(d));
                 self.emit(msg.with_note(note));
+            } else if self.diagnose_const_return(e, loc) {
             } else if !self.diagnose_const_this_member(e, loc) {
                 self.error(DiagId::sema_read_only_not_assignable, loc);
             }
             return false;
         }
         true
+    }
+
+    /// clang `DiagnoseConstAssignment`'s `ConstFunction`: the modified
+    /// operand is a call to a function whose return type is
+    /// const-qualified (after its reference), [expr.assign]/1. The note
+    /// is at the return type's first type-specifier.
+    fn diagnose_const_return(&mut self, e: ExprId, loc: Loc) -> bool {
+        let mut c = self.ignore_paren_imp_casts(e);
+        // Through `.` member accesses of non-const members (clang walks
+        // the `MemberExpr` bases: `get().m = 1`).
+        while self.ast.exprs.get(c).kind() == ExprKind::MemberExpr
+            && !self.ast.exprs.get(c).has(ExprFlags::ARROW)
+        {
+            let field = self.ast.exprs.decl(c);
+            let declared = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
+            if self.ast.types.effective_quals(declared).is_const() {
+                return false;
+            }
+            c = self.ignore_paren_imp_casts(self.ast.exprs.operand(c));
+        }
+        if !matches!(
+            self.ast.exprs.get(c).kind(),
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr
+        ) {
+            return false;
+        }
+        let Some(f) = self.callee_decl(c) else { return false };
+        let n = self.ast.decls.get(f);
+        if !n.kind().is_function() {
+            return false;
+        }
+        let fty = n.ty().unwrap_or(QualType::ERROR);
+        let Some(ret) = self.ast.types.proto(fty).map(kiln_ast::types::FuncProto::ret) else {
+            return false;
+        };
+        let pointee = match self.ast.types.canonical_view(ret) {
+            TypeView::LValueRef(p) | TypeView::RValueRef(p) => p,
+            _ => ret,
+        };
+        if !self.ast.types.effective_quals(pointee).is_const() {
+            return false;
+        }
+        let name = format!("'{}'", self.name_for_diagnostic(f));
+        let at = self.ret_type_loc(f);
+        let note = self
+            .diag(DiagId::note_function_returns_const, at)
+            .arg(name.clone())
+            .arg(self.ty_arg(ret));
+        let msg = self.diag(DiagId::sema_assign_const_function_ret, loc).arg(name);
+        self.emit(msg.with_note(note));
+        true
+    }
+
+    /// Where function `f`'s return type was written (its first
+    /// type-specifier, clang `getReturnTypeSourceRange`), for a function
+    /// whose return type is dependent or const-qualified; else its name.
+    fn ret_type_loc(&self, f: DeclId) -> Loc {
+        let mut d = f;
+        for _ in 0..8 {
+            if let Some(&l) = self.type_spec_locs.get(&d) {
+                return l;
+            }
+            let from = self.ast.instantiated_from(d).or_else(|| {
+                self.ast.spec_info(d).and_then(|(_, i)| self.templated_function(i.from))
+            });
+            match from {
+                Some(p) if p != d => d = p,
+                _ => break,
+            }
+        }
+        self.ast.decls.get(f).loc()
     }
 
     fn mark_bitfield_if(&mut self, result: ExprId, from: ExprId) {
@@ -4900,6 +4975,15 @@ impl Sema<'_, '_> {
                 return self.recover(ty, &[e], loc);
             }
             return self.bad_cast(style, e, ty, loc);
+        }
+        // clang `TryStaticImplicitCast`: a class target must be complete;
+        // the use whose instantiation fails (a failed `static_assert` in
+        // the class, [temp.inst]/2) fails quietly.
+        if style.allows_static()
+            && self.ast.types.as_record(ty).is_some()
+            && self.instantiation_fails(ty, loc)
+        {
+            return self.recover(ty, &[e], loc);
         }
         // [expr.static.cast]/4 with a class target: direct-initialization
         // of a temporary from an object of the same or a derived class

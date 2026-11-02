@@ -1,7 +1,7 @@
 //! Initialization ([dcl.init]): copy-, direct- and list-initialization
 //! of scalars, references, arrays and aggregates (spec/sema.md §6).
 
-use kiln_ast::decl::{DeclKind, DefinitionBits, FieldData, TagKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, FieldData, TagKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
@@ -151,6 +151,17 @@ impl Sema<'_, '_> {
             }
             None => true,
         }
+    }
+
+    /// Whether `ty` is a class whose definition is invalid (its
+    /// instantiation failed, [temp.inst]/2): clang initializes no object
+    /// of it and says nothing more (the failure was diagnosed).
+    pub(crate) fn is_invalid_class(&self, ty: QualType) -> bool {
+        self.ast
+            .types
+            .as_record(ty)
+            .and_then(|r| self.ast.definition(r))
+            .is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::INVALID))
     }
 
     /// List-initialization of a non-aggregate class `ty` by a constructor
@@ -986,7 +997,7 @@ impl Sema<'_, '_> {
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         // A field whose initializer failed (clang: `BuildCXXDefaultInitExpr`
         // fails, the list is invalid).
-        if self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID) {
+        if self.ast.decls.get(f).has(DeclFlags::INVALID) {
             return self.recover(fty, &[], at);
         }
         if self.field_has_nsdmi(f) {
@@ -1013,6 +1024,9 @@ impl Sema<'_, '_> {
         at: Loc,
         rparen: Loc,
     ) -> ExprId {
+        if self.is_invalid_class(ty) {
+            return self.recover(ty, args, at);
+        }
         if self.ast.types.is_array(ty) {
             let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
             let bound = self.ast.types.array_size(ty);
@@ -1370,6 +1384,9 @@ impl Sema<'_, '_> {
         if let Some(r) = self.ast.types.as_record(ty) {
             // Whether it is an aggregate needs its definition.
             self.instantiate_for_init(r, l.lbrace);
+        }
+        if self.is_invalid_class(ty) {
+            return self.recover(ty, &[], l.lbrace);
         }
         if self.is_aggregate(ty) {
             // [dcl.init.list]/3.2: an aggregate class initialized from a
@@ -1752,8 +1769,29 @@ impl Sema<'_, '_> {
     }
 
     /// One element of an aggregate: a nested list, a brace-elided
-    /// sub-aggregate ([dcl.init.aggr]/16) or an expression.
+    /// sub-aggregate ([dcl.init.aggr]/16) or an expression. Inside an
+    /// instantiation the element's position salts the deduplication
+    /// context, so each element of an expanded pack reports.
     fn init_element(
+        &mut self,
+        ty: QualType,
+        items: &[InitItem],
+        pos: &mut usize,
+        at: Loc,
+    ) -> ExprId {
+        if self.inst.stack.is_empty() {
+            return self.init_element_at(ty, items, pos, at);
+        }
+        let saved = self.inst.stack.element_salt;
+        let mut h = kiln_source::fx::FxHasher::default();
+        std::hash::Hash::hash(&(saved, *pos), &mut h);
+        self.inst.stack.element_salt = std::hash::Hasher::finish(&h).max(1);
+        let r = self.init_element_at(ty, items, pos, at);
+        self.inst.stack.element_salt = saved;
+        r
+    }
+
+    fn init_element_at(
         &mut self,
         ty: QualType,
         items: &[InitItem],
@@ -1914,6 +1952,13 @@ impl Sema<'_, '_> {
         let Some(r) = record else {
             return self.recover(ty, &[], lbrace);
         };
+        // clang `CheckStructUnionTypes`: an invalid class (one whose
+        // instantiation failed, [temp.inst]/2) is not checked; it is
+        // taken to consume one initializer, quietly.
+        if self.is_invalid_class(ty) {
+            *pos = (*pos + 1).min(items.len());
+            return self.recover(ty, &[], lbrace);
+        }
         let fields = self.init_fields(r);
         let def = self.ast.definition(r).unwrap_or(r);
         let union = self.ast.decls.record(def).is_some_and(|x| x.tag == TagKind::Union);
@@ -2166,7 +2211,7 @@ impl Sema<'_, '_> {
                     }
                     None => {
                         let f = fields[i - nb];
-                        invalid |= self.ast.decls.get(f).has(kiln_ast::decl::DeclFlags::INVALID);
+                        invalid |= self.ast.decls.get(f).has(DeclFlags::INVALID);
                         self.field_filler(f, rbrace)
                     }
                 };

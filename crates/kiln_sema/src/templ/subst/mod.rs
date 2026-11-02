@@ -50,6 +50,7 @@ pub enum DeclOrPack {
 }
 
 /// One substitution (clang's `TemplateInstantiator`, §5.2).
+#[allow(clippy::struct_excessive_bools)]
 pub struct Substituter<'s, 'a, 'sm> {
     /// The semantic analyzer the rebuilt nodes go through.
     pub sema: &'s mut Sema<'a, 'sm>,
@@ -79,6 +80,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// substituted ([`crate::Sema::ref_locs`]): the first reference
     /// rebuilt takes it (clang's `ReferenceTypeLoc`).
     pub(crate) ref_loc: Option<Loc>,
+    /// A type parameter becomes its (sugared) argument with no
+    /// `SubstTemplateTypeParmType` around it (clang's `Final`
+    /// substitution of a non-type parameter's type by
+    /// `CheckTemplateArgument`).
+    pub(crate) final_subst: bool,
     /// How many lambda bodies are being rebuilt (a shared expression in
     /// one still captures `this`).
     pub(crate) lambda_bodies: u32,
@@ -146,6 +152,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             declarator_name: None,
             type_begin: None,
             ref_loc: None,
+            final_subst: false,
             lambda_bodies: 0,
             stmt_failed: false,
             init_failures: 0,

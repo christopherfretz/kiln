@@ -69,6 +69,7 @@ note_previous_namespace_alias = Note (1) "previously defined as an alias for '{0
 note_previous_template_specialization = Note (0) "previous template specialization is here";
 note_previous_use = Note (0) "previous use is here";
 note_previous_using_decl = Note (0) "previous using declaration";
+note_prior_template_arg_substitution = Note (1) "while substituting prior template arguments into {0}";
 note_protected_by_consteval_if = Note (0) "jump enters controlled statement of consteval if";
 note_protected_by_constexpr_if = Note (0) "jump enters controlled statement of constexpr if";
 note_protected_by_cxx_catch = Note (0) "jump bypasses initialization of catch block";
