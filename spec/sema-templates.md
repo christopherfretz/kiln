@@ -1663,6 +1663,9 @@ recomputed exactly as for non-template code (clang's
   are unreachable today because their construct is rejected or
   unimplemented before substitution: coroutine expressions and
   statements, `template for`, computed `goto` and `contract_assert`.
+- **`ChooseExpr`** (WP-307; clang `TransformChooseExpr`): the condition
+  (unwrapped from its `ConstantExpr`) and both operands are substituted
+  and `act_on_choose_expr` runs again.
 - **Dependent `OffsetOfExpr`** (WP-307; clang `TransformOffsetOfExpr`):
   the stored operand type and the index expressions are substituted and
   `act_on_builtin_offsetof` runs again with the stored components, so

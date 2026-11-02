@@ -161,6 +161,10 @@ impl Cg<'_> {
         let q = n.ty();
         Ok(Some(match n.kind() {
             ExprKind::ParenExpr => return self.emit_scalar_opt(ast.exprs.operand(e)),
+            // clang `getChosenSubExpr`: only the chosen operand is emitted.
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
+                return self.emit_scalar_opt(ast.exprs.choose_chosen(e).expect("guarded"));
+            }
             ExprKind::CompoundLiteralExpr => {
                 return self.emit_scalar_opt(ast.exprs.compound_literal_init(e));
             }
@@ -1792,6 +1796,9 @@ impl Cg<'_> {
         let q = n.ty();
         match n.kind() {
             ExprKind::ParenExpr => self.emit_lvalue(ast.exprs.operand(e)),
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
+                self.emit_lvalue(ast.exprs.choose_chosen(e).expect("guarded"))
+            }
             ExprKind::CXXDefaultArgExpr => match default_arg_of(ast, e) {
                 Some(d) => {
                     let saved = self.enter_default_arg(e);
@@ -3170,6 +3177,9 @@ impl Cg<'_> {
             }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 self.agg_visit(ast.exprs.operand(e), dest, zeroed)
+            }
+            ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
+                self.agg_visit(ast.exprs.choose_chosen(e).expect("guarded"), dest, zeroed)
             }
             // clang `AggExprEmitter::VisitCXXRewrittenBinaryOperator`: the
             // semantic form (`(y <=> x)` reversed, or `0 <=> (y <=> x)`).

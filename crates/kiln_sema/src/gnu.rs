@@ -165,6 +165,60 @@ impl Sema<'_, '_> {
         ))
     }
 
+    /// `__builtin_choose_expr(cond, lhs, rhs)` at `loc` (clang
+    /// `ActOnChooseExpr`): `cond` must be an integral constant expression
+    /// (`'__builtin_choose_expr' requires a constant expression`, with the
+    /// evaluation's notes); a nonzero value picks `lhs`, zero `rhs`, and
+    /// the result is the chosen operand unconverted: its type, value
+    /// category and object kind. A type- or value-dependent `cond` leaves
+    /// the result type-dependent until substitution.
+    pub fn act_on_choose_expr(
+        &mut self,
+        loc: Loc,
+        cond: ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
+        _rparen: Loc,
+    ) -> ExprId {
+        if [cond, lhs, rhs].iter().any(|&x| self.is_err_expr(x)) {
+            return self.recover_err(&[cond, lhs, rhs], loc);
+        }
+        // A substituted condition was already wrapped once.
+        let mut cond = cond;
+        while self.ast.exprs.get(cond).kind() == ExprKind::ConstantExpr {
+            cond = self.ast.exprs.operand(cond);
+        }
+        let deps = self.ast.exprs.get(cond).deps();
+        if deps.intersects(kiln_ast::expr::ExprDeps::TYPE.with(kiln_ast::expr::ExprDeps::VALUE)) {
+            return self.builder().choose_expr(cond, lhs, rhs, None, loc);
+        }
+        let at = self.begin_loc(cond);
+        let c = conv::lvalue_to_rvalue(self, cond);
+        let ty = self.ast.exprs.get(c).ty();
+        let r = if conv::is_integral_or_unscoped_enum(self, ty) {
+            let c = self.act_on_constant_full_expr(c);
+            self.eval_int(c, kiln_oven::EvalContext::new(kiln_oven::EvalKind::Other, at))
+                .map(|v| (c, v))
+        } else {
+            Err(kiln_oven::EvalFailure::silent(kiln_oven::FailKind::NotConstant))
+        };
+        match r {
+            Ok((c, v)) => {
+                let ty = self.ast.exprs.get(c).ty();
+                let cv = self.int_const(ty, v);
+                let wrapped = self.builder().constant_expr(c, Some(cv));
+                self.builder().choose_expr(wrapped, lhs, rhs, Some(v != 0), loc)
+            }
+            Err(mut f) => {
+                let at = Self::fold_lone_invalid(&mut f, at);
+                let d = self.diag(DiagId::sema_choose_expr_requires_constant, at);
+                let d = Self::with_failure_notes(d, f);
+                self.emit(d);
+                self.recover_err(&[cond, lhs, rhs], loc)
+            }
+        }
+    }
+
     /// `__builtin_offsetof(ty, comps...)` at `loc` (clang
     /// `BuildBuiltinOffsetOf`): a `std::size_t` prvalue holding the byte
     /// offset of the designated subobject. Indices must be constant.

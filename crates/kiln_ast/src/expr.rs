@@ -1636,6 +1636,25 @@ impl ExprArena {
         self.cond_arms[self.expect_kind(e, ExprKind::ConditionalOperator).b as usize]
     }
 
+    /// The condition and the two operands of a `ChooseExpr`.
+    pub fn choose_operands(&self, e: ExprId) -> [ExprId; 3] {
+        let n = self.expect_kind(e, ExprKind::ChooseExpr);
+        let [l, r] = self.cond_arms[n.b as usize];
+        [ExprId::new(n.a), l, r]
+    }
+
+    /// The operand a `ChooseExpr`'s constant condition selected; `None`
+    /// while the condition is dependent.
+    pub fn choose_chosen(&self, e: ExprId) -> Option<ExprId> {
+        let n = self.expect_kind(e, ExprKind::ChooseExpr);
+        let [l, r] = self.cond_arms[n.b as usize];
+        match n.aux {
+            1 => Some(l),
+            2 => Some(r),
+            _ => None,
+        }
+    }
+
     /// The side record of an `InitListExpr`.
     pub fn init_list(&self, e: ExprId) -> &InitListExtra {
         &self.init_lists[self.expect_kind(e, ExprKind::InitListExpr).b as usize]
@@ -2603,7 +2622,7 @@ impl ExprArena {
                 v.extend(id(n.a));
                 v.push(self.compound_assigns[n.b as usize].rhs);
             }
-            ExprKind::ConditionalOperator => {
+            ExprKind::ConditionalOperator | ExprKind::ChooseExpr => {
                 v.extend(id(n.a));
                 v.extend(self.cond_arms[n.b as usize]);
             }

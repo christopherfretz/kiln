@@ -34,6 +34,7 @@ sema_cce_narrowing_value = WarningError [Cxx11Narrowing] (3) "{0} evaluates to {
 sema_cce_not_implicitly_convertible = Error (2) "value of type {0} is not implicitly convertible to {1}";
 sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
 sema_cdtor_function_try_handler_mem_expr = Warning [Exceptions] (1) "cannot refer to a non-static member from the handler of a {0:constructor|destructor} function try block";
+sema_choose_expr_requires_constant = Error (0) "'__builtin_choose_expr' requires a constant expression";
 sema_circular_arrow = Error (0) "circular pointer delegation detected";
 sema_class_spec_not_in_enclosing_ns = Error (2) "class template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_cmp_category_not_found = Error (2) "cannot {1:use builtin operator '<=>'|default 'operator<=>'} because type '{0}' was not found; include <compare>";

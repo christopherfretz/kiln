@@ -634,6 +634,15 @@ impl Substituter<'_, '_, '_> {
                 let list = self.expr(list)?;
                 Ok(self.sema.act_on_va_arg(list, ty, ty_loc, loc, end))
             }
+            // clang `TransformChooseExpr`: all three operands, then
+            // `ActOnChooseExpr` again.
+            ExprKind::ChooseExpr => {
+                let [c, l, r] = ex(self).choose_operands(e);
+                let c = self.expr(c)?;
+                let l = self.expr(l)?;
+                let r = self.expr(r)?;
+                Ok(self.sema.act_on_choose_expr(loc, c, l, r, loc))
+            }
             // clang `TransformExtVectorElementExpr`: the base, then the
             // member access again (`RebuildExtVectorElementExpr`).
             ExprKind::ExtVectorElementExpr => {

@@ -2082,6 +2082,19 @@ for them.
     expressions and whose type and components are kept in
     `ColdExprData::offsetof_pattern`; substitution rebuilds it
     (sema-templates.md §5.4; `ext.gnu.offsetof/dependent*.cpp`).
+- **`__builtin_choose_expr(c, a, b)`** (`act_on_choose_expr`, clang
+  `ActOnChooseExpr`; WP-307): `c` must be an integral (or unscoped
+  enumeration) constant expression, else `'__builtin_choose_expr'
+  requires a constant expression` at `c` with the evaluation's notes
+  (no class-type contextual conversion yet). It is wrapped in a
+  `ConstantExpr`; nonzero picks `a`. The `ChooseExpr` takes the chosen
+  operand's type, value category and object kind with no conversion,
+  and its type/value dependence (other dependence bits from all three).
+  A type- or value-dependent `c` gives a `<dependent type>` prvalue
+  until substitution. `ignore_parens` looks through it to the chosen
+  operand, as clang's `IgnoreParens`; codegen and the Oven emit and
+  evaluate only the chosen operand
+  (`ext.gnu.builtins/choose-expr*.cpp`).
 - **Binary conditional** `x ?: y` (`act_on_binary_conditional`, in
   `forms.rs`): a `BinaryConditionalOperator` with `x` shared through an
   `OpaqueValueExpr`. Unless both operands are glvalues of the same

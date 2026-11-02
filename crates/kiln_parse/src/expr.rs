@@ -561,6 +561,7 @@ impl Parser<'_, '_> {
                         | Kw::WChar
                         | Kw::Extension
                         | Kw::BuiltinOffsetof
+                        | Kw::BuiltinChooseExpr
                         | Kw::BuiltinBitCast
                         | Kw::BuiltinVaArg
                         | Kw::BuiltinConvertVector
@@ -923,6 +924,45 @@ impl Parser<'_, '_> {
         }
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
         Some(self.s.act_on_source_loc_expr(kind, loc, rparen))
+    }
+
+    /// `__builtin_choose_expr ( assignment-expression ,
+    /// assignment-expression , assignment-expression )` (clang
+    /// `ParseBuiltinPrimaryExpression`).
+    fn parse_builtin_choose_expr(&mut self) -> PExpr {
+        let loc = self.bump().span.lo;
+        let Some(open) = self.eat(Punct::LParen) else {
+            let d = self
+                .s
+                .diag(DiagId::parse_expected_after, self.expected_loc())
+                .arg("'__builtin_choose_expr'")
+                .arg("'('");
+            self.emit(d);
+            return None;
+        };
+        let mut ops = [None; 3];
+        for (i, slot) in ops.iter_mut().enumerate() {
+            if i > 0 && self.eat(Punct::Comma).is_none() {
+                let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("','");
+                self.emit(d);
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            }
+            let Some(e) = self.parse_assignment_expr() else {
+                self.skip_until(&[Punct::RParen], true, true);
+                return None;
+            };
+            *slot = Some(e);
+        }
+        if !self.at(Punct::RParen) {
+            let d = self.s.diag(DiagId::parse_expected, self.expected_loc()).arg("')'");
+            self.emit(d);
+            self.skip_until(&[Punct::RParen], true, true);
+            return None;
+        }
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let [Some(c), Some(l), Some(r)] = ops else { return None };
+        Some(self.s.act_on_choose_expr(loc, c, l, r, rparen))
     }
 
     /// `__builtin_offsetof ( type-id , offsetof-member-designator )`
@@ -1392,6 +1432,7 @@ impl Parser<'_, '_> {
                 }
                 Kw::Typeid => self.parse_typeid(),
                 Kw::BuiltinOffsetof => self.parse_builtin_offsetof(),
+                Kw::BuiltinChooseExpr => self.parse_builtin_choose_expr(),
                 Kw::BuiltinBitCast => self.parse_builtin_bit_cast(),
                 Kw::BuiltinVaArg => self.parse_builtin_va_arg(),
                 Kw::BuiltinConvertVector => self.parse_builtin_convert_vector(),

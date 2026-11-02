@@ -308,10 +308,15 @@ impl Sema<'_, '_> {
     pub(crate) fn ignore_parens(&self, e: ExprId) -> ExprId {
         let mut e = e;
         for _ in 0..256 {
-            if self.ast.exprs.get(e).kind() == ExprKind::ParenExpr {
-                e = self.ast.exprs.operand(e);
-            } else {
-                break;
+            // clang `IgnoreParensSingleStep` also looks through a
+            // `__builtin_choose_expr` to its chosen operand.
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::ChooseExpr => match self.ast.exprs.choose_chosen(e) {
+                    Some(c) => e = c,
+                    None => break,
+                },
+                _ => break,
             }
         }
         e

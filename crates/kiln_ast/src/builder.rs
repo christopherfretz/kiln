@@ -1758,6 +1758,55 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// `__builtin_choose_expr(cond, lhs, rhs)` (clang `ChooseExpr`):
+    /// `chosen` is `Some(true)` when the constant condition picked `lhs`,
+    /// `Some(false)` for `rhs`, `None` while the condition is dependent.
+    /// The chosen operand gives the type, value and object kind and the
+    /// type/value dependence (clang `computeDependence(ChooseExpr*)`).
+    pub fn choose_expr(
+        &mut self,
+        cond: ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
+        chosen: Option<bool>,
+        loc: Loc,
+    ) -> ExprId {
+        let all = self.deps(cond) | self.deps(lhs) | self.deps(rhs);
+        let side = self.ast.exprs.push_cond_arms(lhs, rhs);
+        let Some(pick) = chosen else {
+            return self.simple(
+                ExprKind::ChooseExpr,
+                ValueCategory::PRValue,
+                all | ExprDeps::TYPE_VALUE_INST,
+                0,
+                QualType::DEPENDENT,
+                loc,
+                cond.raw(),
+                side,
+            );
+        };
+        let active = if pick { lhs } else { rhs };
+        let n = *self.ast.exprs.get(active);
+        let tv = ExprDeps::TYPE.with(ExprDeps::VALUE);
+        // The active operand's type/value bits, every other bit of all three.
+        let d = n.deps();
+        let deps = d.without(d.without(tv)) | all.without(tv);
+        let aux = if pick { 1 } else { 2 };
+        self.push_expr(
+            ExprKind::ChooseExpr,
+            n.value_category(),
+            n.object_kind(),
+            ExprFlags::NONE,
+            deps,
+            aux,
+            n.ty(),
+            loc,
+            cond.raw(),
+            side,
+        )
+    }
+
+
     /// An ext-vector element access `base.accessor` or `base->accessor`
     /// (clang `ExtVectorElementExpr`): of type `ty` and value category
     /// `vk`; a glvalue designates a vector component. `base` is the
