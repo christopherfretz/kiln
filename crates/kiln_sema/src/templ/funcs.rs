@@ -301,7 +301,11 @@ impl Sema<'_, '_> {
                 return None;
             }
         };
-        if invalid {
+        // A parameter that names no type makes the declaration invalid,
+        // and clang matches no template for an invalid one
+        // (`CheckFunctionTemplateSpecialization` runs only for a valid
+        // declaration; WP-308).
+        if invalid || d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid)) {
             return None;
         }
         let name_loc = d.name_loc();

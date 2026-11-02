@@ -1367,7 +1367,27 @@ impl Sema<'_, '_> {
             // resolved at instantiation, like a lone one (below).
             return self.builder().dependent_member(None, true, name, false, nns, None, loc);
         }
+        // clang `LookupResult::resolveKind`: an invalid function template
+        // (one declared with a parameter type that names no type) is
+        // ignored beside other declarations, so `t3` naming an invalid
+        // template and a valid function is that function (WP-308).
+        let bad = |s: &Self, x: DeclId| {
+            s.kind_of(x) == DeclKind::FunctionTemplate && s.ast.decls.get(x).has(DeclFlags::INVALID)
+        };
+        let mut found = found;
         let mut d = d;
+        if found.decls.len() > 1 && found.decls.iter().any(|&x| !bad(self, x)) {
+            let keep: Vec<bool> = found.decls.iter().map(|&x| !bad(self, x)).collect();
+            if keep.contains(&false) {
+                let mut k = keep.iter();
+                found.decls.retain(|_| k.next().copied().unwrap_or(true));
+                if found.found.len() == keep.len() {
+                    let mut k = keep.iter();
+                    found.found.retain(|_| k.next().copied().unwrap_or(true));
+                }
+                d = found.decls[0];
+            }
+        }
         let any_tmpl = found.decls.iter().any(|&x| self.kind_of(x) == DeclKind::FunctionTemplate);
         if any_tmpl
             && found.decls.iter().all(|&x| {

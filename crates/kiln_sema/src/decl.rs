@@ -4519,8 +4519,7 @@ impl Sema<'_, '_> {
         if vn.kind() != DeclKind::Var {
             return;
         }
-        if vn.has(DeclFlags::INVALID) {
-            self.invalid_reference_uninit(v);
+        if self.uninit_array_or_reference(v) || vn.has(DeclFlags::INVALID) {
             return;
         }
         // An in-class static data member declaration is not a definition
@@ -4623,28 +4622,48 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// An invalid variable definition without an initializer: clang's
-    /// `ActOnUninitializedDecl` still reports a reference type before it
-    /// stops at the invalid declaration, so `S::name &r;` with no
-    /// `S::name` (whose type recovers to `int`, [dcl.type.simple]) reports
+    /// clang's `ActOnUninitializedDecl` checks before it stops at an
+    /// invalid declaration or a dependent type, for a variable definition
+    /// without an initializer: an array of unknown bound ([dcl.array]/5,
+    /// "definition of variable with array type needs an explicit size or
+    /// an initializer"; a `constexpr` one is "must be initialized by a
+    /// constant expression"), which makes it invalid; and, for an invalid
+    /// variable, a reference type, so `S::name &r;` with no `S::name`
+    /// (whose type recovers to `int`, [dcl.type.simple]) reports
     /// "declaration of reference variable 'r' requires an initializer"
-    /// after "no type named 'name' in 'S'" (WP-308).
-    fn invalid_reference_uninit(&mut self, v: DeclId) {
+    /// after "no type named 'name' in 'S'" (WP-308). True if it reported.
+    fn uninit_array_or_reference(&mut self, v: DeclId) -> bool {
         let vn = *self.ast.decls.get(v);
-        let Some(ty) = vn.ty() else { return };
-        let extern_ = self.ast.decls.var(v).is_some_and(|x| x.spec.storage() == VarStorage::Extern);
-        if extern_
+        let Some(ty) = vn.ty() else { return false };
+        let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
+        if spec.storage() == VarStorage::Extern
             || !self.is_var_definition(v)
             || self.is_error_type(ty)
-            || self.ast.types.is_dependent(ty)
-            || !self.ast.types.is_reference(ty)
             || self.contains_undeduced_auto(ty)
         {
-            return;
+            return false;
+        }
+        if matches!(self.ast.types.canonical_view(ty), TypeView::IncompleteArray(_)) {
+            let msg = if spec.is_constexpr() {
+                let name = self.decl_name(v);
+                self.diag(DiagId::sema_constexpr_var_non_constant, vn.loc()).arg(name)
+            } else {
+                self.diag(DiagId::sema_typecheck_incomplete_array_needs_initializer, vn.loc())
+            };
+            self.emit(msg);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return true;
+        }
+        if !vn.has(DeclFlags::INVALID)
+            || self.ast.types.is_dependent(ty)
+            || !self.ast.types.is_reference(ty)
+        {
+            return false;
         }
         let name = self.decl_name(v);
         let msg = self.diag(DiagId::sema_reference_var_requires_init, vn.loc()).arg(name);
         self.emit(msg);
+        true
     }
 
     // -- function definitions ----------------------------------------------------
