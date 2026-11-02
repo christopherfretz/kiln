@@ -6512,6 +6512,21 @@ impl Sema<'_, '_> {
                 invalid = true;
             }
         }
+        // [dcl.pre]/5, [class.mem.general]/3: a member-declaration or
+        // declaration without declarators declares at least one name; an
+        // anonymous union or struct with no member declares none (clang
+        // `BuildAnonymousStructOrUnion`, once, for the template's
+        // pattern: an instantiation is not diagnosed again).
+        if self.inst.stack.is_empty()
+            && !self.ast.decls.members(rec).any(|m| self.kind_of(m) == DeclKind::Field)
+        {
+            let d = self.diag(DiagId::sema_no_declarators, ds.loc);
+            let d = match self.specifiers_before_type(ds) {
+                Some(end) => d.range(Span::new(ds.loc, end)),
+                None => d,
+            };
+            self.emit(d);
+        }
         let ty = self.tag_type(rec);
         let h = DeclHead::new(ctx, DeclName::EMPTY, ds.loc).flags(DeclFlags::IMPLICIT);
         let obj = if in_class {
@@ -6564,6 +6579,26 @@ impl Sema<'_, '_> {
             self.register_local(name, ind);
         }
         obj
+    }
+
+    /// The end of the decl-specifiers written before the type-specifier
+    /// of `ds` (`static const` in `static const union { };`), clang's
+    /// `DeclSpec` source range: `None` when the type-specifier comes
+    /// first. Read from the source text before the type-specifier.
+    fn specifiers_before_type(&self, ds: &DeclSpec) -> Option<Loc> {
+        let t = ds.type_loc?;
+        let sm = self.diags.sm();
+        let (file, pos) = sm.offset_of(t)?;
+        let (_, start) = sm.offset_of(ds.loc)?;
+        if pos <= start {
+            return None;
+        }
+        let text = sm.text(file).as_bytes();
+        let mut i = pos as usize;
+        while i > start as usize && text.get(i - 1).is_some_and(u8::is_ascii_whitespace) {
+            i -= 1;
+        }
+        u32::try_from(i).ok().filter(|&o| o > start).map(|o| sm.loc(file, o))
     }
 
     // -- name classification -----------------------------------------------------

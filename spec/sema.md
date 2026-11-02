@@ -922,6 +922,16 @@ and returns the scope it names:
   - Conflicts are diagnosed (`member of anonymous union redeclares 'x'`).
   - Anonymous unions outside a class must be `static` at namespace
     scope.
+  - An anonymous union or struct with no member (no `Field`; an unnamed
+    bit-field counts as one) declares no name ([dcl.pre]/5,
+    [class.mem.general]/3). That is "declaration does not declare
+    anything" [-Wmissing-declarations] at the decl-specifier-seq, after
+    the scope errors above (clang `BuildAnonymousStructOrUnion`). Its
+    range covers the specifiers written before the class-key (`static
+    const`), read from the source (`specifiers_before_type`). A
+    template's pattern is diagnosed when it is parsed, and an
+    instantiation is not diagnosed again. Test:
+    class.union.anon/empty-anonymous-record-declares-nothing.cpp.
   - An anonymous struct outside a class is an error.
   - `act_on_finish_record_definition(r, then_semi)` sets `ANONYMOUS`
     and `HAS_VARIANT_MEMBERS`.
