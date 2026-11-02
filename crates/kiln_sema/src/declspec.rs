@@ -567,6 +567,11 @@ pub struct Declarator {
     pub loc: Loc,
     /// An error was already reported.
     pub invalid: bool,
+    /// A parameter needed the missing-`typename` recovery
+    /// ([temp.res.general]/4): the function is declared, but a later
+    /// qualified (out-of-line) declaration does not match it (clang marks
+    /// it invalid). Set by the parser.
+    pub missing_typename: bool,
     /// The initializer syntax that follows (the parser peeks at `=`, `(`
     /// or `{` before the declaration is created; [dcl.init]/1).
     pub init_style: Option<kiln_ast::decl::InitStyle>,
@@ -742,6 +747,7 @@ impl Declarator {
             attrs: Vec::new(),
             loc,
             invalid: false,
+            missing_typename: false,
             init_style: None,
             direct_init: false,
             grouping: false,

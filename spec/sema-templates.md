@@ -270,14 +270,32 @@ A parameter-declaration of a function declared at namespace or block
 scope with an unqualified declarator-id (`template <class T> void
 f(X<T>::m x);`) is such a context (WP-287): the parser sets
 `param_typename` while parsing that parameter's
-decl-specifier-seq (`parse_param_clause`, `DeclSite::Plain`, not a
-deduction guide, whose parameters clang treats as implicit), and the
-error is at the first token of the name. Gap: kiln's tentative parse
-classifies `X<T>::m` by the primary template's member, so `void
-g(X<T>::m);` (a lone, unnamed parameter) is a function declarator with
-this error, where clang's `InvalidAsDeclSpec` tie-breaker makes it a
-variable (`variable has incomplete type 'void'`)
-(`tests/conformance/temp.res.general/missing-typename-parameter.cpp`).
+decl-specifier-seq (`parse_param_clause`, `DeclSite::Plain`), and the
+error is at the first token of the name. A namespace-scope deduction
+guide's first parameter is implicit, as in clang, whose
+constructor-declarator lookahead annotates that parameter only; its other
+parameters need `typename` (WP-291). After the error the declaration is
+recovered as if `typename` were written, but it is invalid in clang:
+`Declarator::missing_typename` puts the function in
+`Sema::missing_typename_fns`, and a qualified (out-of-line) redeclaration
+skips it, so `template <class T> void N::f(X<T>::m) {}` is "out-of-line
+definition of 'f' does not match any declaration in namespace 'N'"
+whatever its parameter says. Calls and unqualified redeclarations still
+find it. Whether `g(X<T>::m)` is a parameter at all is the tentative
+parse's decision (spec/parse.md §2.1): `void g(X<T>::m);` is a variable
+(`tests/conformance/temp.res.general/missing-typename-parameter.cpp`,
+`missing-typename-invalid-decl.cpp`,
+`tests/conformance/dcl.ambig.res/dependent-qualified-param-or-init.cpp`).
+
+**Deduction guides** ([temp.deduct.guide]/3, WP-291): every template
+parameter of a deduction-guide template must be deducible from the guide's
+parameter types, be a pack, or have a default argument. `act_on_deduction_guide`
+deduces each parameter type against itself (`check_guide_deducible`); a
+parameter left null appears only in non-deduced contexts
+([temp.deduct.type]/5), and clang's "deduction guide template contains a
+template parameter that cannot be deduced" is reported at the template name
+with a "non-deducible template parameter" note per parameter. The guide
+becomes invalid (`tests/conformance/temp.deduct.guide/non-deducible-parameter.cpp`).
 
 **`template`** is needed after `::`, `.` or `->` when the qualifier or
 object is dependent and not the current instantiation, as in
@@ -1036,6 +1054,13 @@ Later uses of it are silent. As in clang's `InstantiateClass`, the class
 body's own failures do so too (`class_body_with`): a failed base
 specifier, an invalid data member (field or static data member) of the
 pattern, which is skipped, or a data member whose instantiation fails.
+A `static_assert` member that fails (its condition is false, not a
+constant expression, or does not convert; `static_assert_checked`) also
+stops the body: the members after it are not instantiated
+(clang's `InstantiateClass` bails out on `isFailed`), so libc++'s
+`optional<char[20]>` reports only its assertion. Other invalid members
+(a member function whose type fails) do not stop it
+(tests/conformance/temp.inst/failed-static-assert-stops-instantiation.cpp).
 The specialization is then still completed with its implicit special
 members (`ensure_implicit` exempts invalid specializations), its default
 member initializers are not instantiated, and the use that required the
@@ -4665,6 +4690,12 @@ declarator scopes.**
   the other's prvalue type. If both directions succeed, the result is
   `sema_conditional_ambiguous`; if one does, it is applied. Gap: the
   /6 overloaded-operator candidates are not tried.
+- *[expr.cond]/7 class prvalue result*: when the arms are a class type
+  (after /4) and not glvalues of the same category, each glvalue arm
+  copy-initializes the prvalue result (clang `PerformCopyInitialization`
+  of an `InitializeTemporary` entity), so `b ? std::move(x) : X(3)` runs
+  `X(X&&)` and moves from `x`
+  (tests/conformance/expr.cond/class-glvalue-arm-copy.cpp).
 - *Calls returning `F&&`*: a call whose result type is an rvalue
   reference to function is an lvalue ([expr.call]/14), so
   `declval<Fn>()()` is callable and `decltype` of it is `F&`.
