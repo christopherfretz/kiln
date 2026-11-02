@@ -502,7 +502,10 @@ impl Sema<'_, '_> {
                 // name-independent.
                 let placeholder = self.is_placeholder_name(sym);
                 let repeated = names.iter().any(|&(s, _, _)| s == sym);
-                if c.var.is_none() && repeated && placeholder && names.iter().all(|e| e.0 != sym || e.1)
+                if c.var.is_none()
+                    && repeated
+                    && placeholder
+                    && names.iter().all(|e| e.0 != sym || e.1)
                 {
                     self.diagnose_placeholder_redecl(nloc);
                 } else if c.var.is_none() && repeated {
@@ -553,7 +556,9 @@ impl Sema<'_, '_> {
             // names each one).
             // A capture of `_` after an init-capture `_` (clang).
             if let Some(&(_, init, _)) = names.iter().find(|&&(s, i, v)| {
-                s == sym && (c.var.is_none() || v == Some(var)) && !(i && self.is_placeholder_name(s))
+                s == sym
+                    && (c.var.is_none() || v == Some(var))
+                    && !(i && self.is_placeholder_name(s))
             }) {
                 let msg = self.diag(DiagId::sema_capture_more_than_once, nloc).arg(text);
                 self.emit(msg);

@@ -68,6 +68,7 @@ parse_expected_while = Error (0) "expected 'while' in do/while loop";
 parse_ext_alias_in_init_statement = ExtWarn [Cxx23Extensions] (0) "alias declaration in this context is a C++23 extension";
 parse_ext_constexpr_if = ExtWarn [Cxx17Extensions] (0) "constexpr if is a C++17 extension";
 parse_ext_for_range_init_stmt = ExtWarn [Cxx20Extensions] (0) "range-based for loop initialization statements are a C++20 extension";
+parse_ext_static_assert_user_message = ExtWarn [Cxx26Extensions] (0) "'static_assert' with a user-generated message is a C++26 extension";
 parse_extraneous_closing_brace = Error (0) "extraneous closing brace ('}}')";
 parse_extraneous_rparen = Error (0) "extraneous ')' before ';'";
 parse_fold_operand_not_cast = Error (0) "expression not permitted as operand of fold expression";

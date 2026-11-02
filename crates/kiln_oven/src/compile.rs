@@ -422,6 +422,54 @@ impl Oven {
         idx
     }
 
+    /// The function of [`Oven::evaluate_chars`]: in one scope, `size`,
+    /// then `data` (a pointer to characters), then `bi::MSG_CHARS`;
+    /// returns the size. Not cached (a failed `static_assert` is
+    /// evaluated once).
+    pub(crate) fn compile_chars(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        size: ExprId,
+        data: ExprId,
+    ) -> u32 {
+        let idx = self.funcs.len() as u32;
+        self.funcs.push(Func {
+            decl: None,
+            entry: UNCOMPILED,
+            state: FState::Stub,
+            nregs: 0,
+            ret: RetKind::Void,
+            params: Vec::new(),
+            memo: false,
+            this_reg: None,
+            this_ty: None,
+        });
+        let mut c = Compiler::new(self, b);
+        let entry = c.here();
+        let size_ty = c.ety(size);
+        let data_ty = c.ety(data);
+        let ct = match c.kind(data_ty) {
+            TyKind::Ptr(t) => t,
+            _ => data_ty,
+        };
+        c.open_scope(&[], true);
+        let n = c.reg();
+        c.rv_into(size, n);
+        let p = c.reg();
+        c.rv_into(data, p);
+        let loc = c.begin(data);
+        c.emit_site(Op::Builtin, crate::kbc::bi::MSG_CHARS, &[n, n, p, p, ct.0, 0], data, loc);
+        c.close_scope();
+        c.emit(Op::Ret, 1, &[n]);
+        let nregs = c.max;
+        let f = &mut self.funcs[idx as usize];
+        f.entry = entry;
+        f.state = FState::Ready;
+        f.nregs = nregs;
+        f.ret = RetKind::Scalar(size_ty);
+        idx
+    }
+
     /// A function destroying the object of type `ty` whose address is in
     /// its register 0 (the constant destruction of `constexpr` variable
     /// `d`, [dcl.constexpr]/6), or `None` if destroying it does nothing.

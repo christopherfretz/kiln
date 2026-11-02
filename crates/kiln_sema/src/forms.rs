@@ -658,7 +658,10 @@ impl Sema<'_, '_> {
                 },
                 None => self.ast.exprs.get(args[1]).loc(),
             };
-            Some(self.diag(DiagId::sema_auto_expr_init_multiple_expressions, second).arg(name.clone()))
+            Some(
+                self.diag(DiagId::sema_auto_expr_init_multiple_expressions, second)
+                    .arg(name.clone()),
+            )
         } else if let Some(at) = nested {
             Some(self.diag(DiagId::sema_auto_expr_init_paren_braces, at).arg(1u8).arg(name.clone()))
         } else if list.is_none() && self.is_braced_arg(args[0]) {

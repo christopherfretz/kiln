@@ -5,8 +5,8 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
-    ConstexprKind, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, FieldData, FnSpec, FnStorage,
-    FriendKind, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
+    ConstexprKind, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, FieldData, FnSpec,
+    FnStorage, FriendKind, LinkageLang, TagKind, TlsKind, VarSpec, VarStorage,
 };
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::ids::RawId;
@@ -3642,7 +3642,8 @@ impl Sema<'_, '_> {
             if independent && self.kind_of(prev) == DeclKind::Field {
                 self.diagnose_placeholder_redecl(d.name_loc());
             } else {
-                let note = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
+                let note =
+                    self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
                 let msg =
                     self.diag(DiagId::sema_duplicate_member, d.name_loc()).arg(sym_str(self, n));
                 self.emit(msg.with_note(note));
@@ -6623,13 +6624,26 @@ impl Sema<'_, '_> {
         };
         let c = self.act_on_constant_full_expr(c);
         let cloc = self.begin_loc(cond);
+        // [dcl.pre]/11 (P2741): a message that is not a string literal is
+        // checked now, evaluated only if the assertion fails.
+        let parts = msg.and_then(|m| self.static_assert_message_parts(m));
         // [dcl.pre]/10: a value-dependent condition waits for instantiation.
         if !self.has_errors_in(c) && !self.expr_is_value_dependent(c) {
             match self.eval_const(c, EvalContext::new(EvalKind::StaticAssert, loc)) {
-                Ok(v) if self.const_truth(v) != Some(false) => {}
+                Ok(v) if self.const_truth(v) != Some(false) => {
+                    if let (Some(m), Some(Some((size, data)))) = (msg, parts) {
+                        self.check_static_assert_message(m, size, data, loc);
+                    }
+                }
                 Ok(_) => {
                     failed = true;
-                    let text = msg.and_then(|m| self.string_literal_text(m));
+                    let text = match (msg, parts) {
+                        (Some(m), None) => self.string_literal_text(m),
+                        (Some(m), Some(Some((size, data)))) => {
+                            self.static_assert_message_text(m, size, data, loc)
+                        }
+                        _ => None,
+                    };
                     // clang's `findFailedBooleanCondition`: the failing
                     // conjunct, printed unless it is a literal.
                     let inner = self.failed_condition(c);
@@ -6693,6 +6707,140 @@ impl Sema<'_, '_> {
         }
         let ctx = self.ctx;
         (self.builder().static_assert(ctx, loc, c, msg), failed)
+    }
+
+    /// The `size()` and `data()` calls of `static_assert` message `m`
+    /// that is not a string literal ([dcl.pre]/11, P2741; clang
+    /// `Sema::EvaluateAsString`): `None` for a string literal or a
+    /// dependent or invalid message (nothing to check), `Some(None)` if
+    /// it is ill-formed (diagnosed at `m`).
+    #[allow(clippy::option_option, reason = "not checked / ill-formed / the calls")]
+    fn static_assert_message_parts(&mut self, m: ExprId) -> Option<Option<(ExprId, ExprId)>> {
+        if self.ast.exprs.get(m).kind() == ExprKind::StringLiteral
+            || self.has_errors_in(m)
+            || self.expr_is_value_dependent(m)
+        {
+            return None;
+        }
+        let at = self.begin_loc(m);
+        let class = self
+            .ast
+            .types
+            .as_record(self.ety(m))
+            .filter(|&r| self.kind_of(r) == DeclKind::CXXRecord)
+            .map(|r| self.ast.definition(r).unwrap_or(r));
+        let Some(class) = class else {
+            self.error(DiagId::sema_static_assert_invalid_message, at);
+            return Some(None);
+        };
+        let size_sym = self.intern("size");
+        let data_sym = self.intern("data");
+        let no_size = self.lookup_in_class(class, size_sym, LookupKind::Ordinary).decls.is_empty();
+        let no_data = self.lookup_in_class(class, data_sym, LookupKind::Ordinary).decls.is_empty();
+        if no_size || no_data {
+            let sel = match (no_size, no_data) {
+                (true, true) => "2",
+                (true, false) => "0",
+                _ => "1",
+            };
+            let d = self.diag(DiagId::sema_static_assert_missing_member_function, at).arg(sel);
+            self.emit(d);
+            return Some(None);
+        }
+        // clang's `BuildExpr`: `m.size()`, `m.data()`.
+        let call = |s: &mut Self, sym: Symbol| {
+            let f = s.act_on_member(m, sym, at, at, false);
+            if s.is_err_expr(f) {
+                return None;
+            }
+            let c = s.act_on_call(f, &[], at, at);
+            (!s.is_err_expr(c) && !s.expr_is_value_dependent(c)).then_some(c)
+        };
+        let size = call(self, size_sym);
+        let data = call(self, data_sym);
+        let size_t = self.size_type();
+        let ccp = self.const_char_ptr(QualType::CHAR);
+        let Some(size) = self.static_assert_message_conv(size, size_t, "0", "std::size_t", at)
+        else {
+            return Some(None);
+        };
+        let Some(data) = self.static_assert_message_conv(data, ccp, "1", "const char *", at) else {
+            return Some(None);
+        };
+        Some(Some((size, data)))
+    }
+
+    /// The `size()` or `data()` call `e` of a `static_assert` message
+    /// converted to `to` (clang `BuildConvertedConstantExpression`);
+    /// `None` after diagnosing a call that is invalid or does not convert.
+    fn static_assert_message_conv(
+        &mut self,
+        e: Option<ExprId>,
+        to: QualType,
+        sel: &str,
+        to_text: &str,
+        at: Loc,
+    ) -> Option<ExprId> {
+        let converted =
+            e.and_then(|e| match conv::implicit_convert(self, e, to, ConvCtx::Initialization) {
+                Ok(c) => Some(c),
+                Err(_) => {
+                    let d = self
+                        .diag(DiagId::sema_cce_not_implicitly_convertible, at)
+                        .arg(self.ty_arg(self.ety(e)))
+                        .arg(self.ty_arg(to));
+                    self.emit(d);
+                    None
+                }
+            });
+        if converted.is_none() {
+            let d = self
+                .diag(DiagId::sema_static_assert_invalid_mem_fn_ret_ty, at)
+                .arg(sel)
+                .arg(to_text);
+            self.emit(d);
+        }
+        converted
+    }
+
+    /// The text of the failed `static_assert`'s message `m` from its
+    /// `size()` and `data()` calls, evaluated in the Oven
+    /// ([dcl.pre]/12); `None` after diagnosing a message that is not a
+    /// constant expression (clang 22's wording, at `m`).
+    fn static_assert_message_text(
+        &mut self,
+        m: ExprId,
+        size: ExprId,
+        data: ExprId,
+        loc: Loc,
+    ) -> Option<String> {
+        let (bytes, r) = self.eval_chars(size, data, EvalContext::new(EvalKind::StaticAssert, loc));
+        let ok = r.is_ok();
+        if let Err(f) = r {
+            let at = self.begin_loc(m);
+            let d = self.diag(DiagId::sema_static_assert_message_constexpr, at);
+            let d = Self::with_failure_notes(d, f);
+            self.emit(d);
+        }
+        // clang prints what was read before a failing read.
+        (ok || !bytes.is_empty()).then(|| escape_diag_text(&bytes))
+    }
+
+    /// clang's check of the message of a `static_assert` that holds
+    /// (`-Winvalid-static-assert-message`, an error by default): the
+    /// message is still evaluated. [dcl.pre]/12 makes it an unevaluated
+    /// operand, so the check is skipped when the warning is disabled.
+    fn check_static_assert_message(&mut self, m: ExprId, size: ExprId, data: ExprId, loc: Loc) {
+        let at = self.begin_loc(m);
+        if !self.diags.is_enabled_at(DiagId::sema_static_assert_message_not_constant, at) {
+            return;
+        }
+        let (_, r) = self.eval_chars(size, data, EvalContext::new(EvalKind::StaticAssert, loc));
+        if let Err(f) = r {
+            let d = self.diag(DiagId::sema_static_assert_message_not_constant, at);
+            let d = Self::with_failure_notes(d, f);
+            self.emit(d);
+        }
     }
 
     /// The conjunct of the failed condition `c` that evaluates to false
@@ -8120,4 +8268,25 @@ impl Sema<'_, '_> {
         self.abi.triple.arch == kiln_abi::target::Arch::X86_64
             && self.ast.types.canonical(ty).ty() == QualType::HALF.ty()
     }
+}
+
+/// `bytes` as clang's diagnostic engine prints a string argument
+/// (`pushEscapedString`): valid UTF-8 as is, except that an unprintable
+/// code point other than a tab or newline prints as `<U+XXXX>`; a byte
+/// that is not valid UTF-8 prints as `<XX>`.
+fn escape_diag_text(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            if c.is_control() && c != '\t' && c != '\n' {
+                out.push_str(&format!("<U+{:04X}>", u32::from(c)));
+            } else {
+                out.push(c);
+            }
+        }
+        for b in chunk.invalid() {
+            out.push_str(&format!("<{b:02X}>"));
+        }
+    }
+    out
 }

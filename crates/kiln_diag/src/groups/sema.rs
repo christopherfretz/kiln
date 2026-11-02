@@ -63,6 +63,7 @@ InstantiationAfterSpecialization = "instantiation-after-specialization" [];
 InvalidNoreturn = "invalid-noreturn" [];
 InvalidOffsetof = "invalid-offsetof" [];
 InvalidPartialSpecialization = "invalid-partial-specialization" [];
+InvalidStaticAssertMessage = "invalid-static-assert-message" [];
 LiteralConversion = "literal-conversion" [];
 LiteralRange = "literal-range" [];
 ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];
