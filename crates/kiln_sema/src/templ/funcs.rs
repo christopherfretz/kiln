@@ -774,7 +774,7 @@ impl Sema<'_, '_> {
         let f = self.builder().function_spec_redecl(s, lexical, name_loc, ty, fspec);
         let params: Vec<crate::declspec::ParamInfo> =
             d.function_params().map(<[crate::declspec::ParamInfo]>::to_vec).unwrap_or_default();
-        let (defaults, _) = self.merge_default_args(None, false, &params);
+        let (defaults, _) = self.merge_default_args(None, false, &params, true);
         self.create_params(f, &params, &defaults);
         if self.kind_of(lexical) == DeclKind::CXXRecord {
             self.set_member_access(f);

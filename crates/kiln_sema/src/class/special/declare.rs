@@ -481,7 +481,7 @@ impl Sema<'_, '_> {
         // (clang's `ActOnFunctionDeclarator`): an invalid constructor is
         // not a user-declared one and no candidate (WP-318).
         *invalid |= fparams.iter().any(|p| p.invalid);
-        let (defaults, redefined) = self.merge_default_args(prev_ok, false, &fparams);
+        let (defaults, redefined) = self.merge_default_args(prev_ok, false, &fparams, true);
         if redefined {
             prev_ok = None;
             redecl_invalid = true;

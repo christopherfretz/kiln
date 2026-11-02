@@ -4959,10 +4959,15 @@ impl Sema<'_, '_> {
             return c;
         }
         // reinterpret_cast ([expr.reinterpret.cast]).
-        if style.allows_reinterpret()
-            && let Some(ck) = self.reinterpret(xt, to, style, loc)
-        {
-            return self.explicit_cast(style, ck, x, to, loc, rparen);
+        if style.allows_reinterpret() {
+            match self.reinterpret(xt, to, style, loc) {
+                Ok(Some(ck)) => return self.explicit_cast(style, ck, x, to, loc, rparen),
+                // Diagnosed (clang's `TC_Failed` with its own message): the
+                // cast is erroneous, so a default argument or initializer
+                // it appears in is invalid, with no follow-on diagnostic.
+                Err(()) => return self.recover(ty, &[e], loc),
+                Ok(None) => {}
+            }
         }
         self.bad_cast(style, e, ty, loc)
     }
@@ -5145,13 +5150,19 @@ impl Sema<'_, '_> {
         None
     }
 
+    /// The `reinterpret_cast` part of cast `style` from `from` to `to`
+    /// ([expr.reinterpret.cast]; clang `TryReinterpretCast`): the cast
+    /// kind, `Ok(None)` when it does not apply (the caller reports the
+    /// generic bad cast), or `Err(())` after a specific error (a pointer
+    /// to a smaller integer, a vector of a different size: clang's
+    /// `TC_Failed`), when the cast is erroneous.
     fn reinterpret(
         &mut self,
         from: QualType,
         to: QualType,
         style: CastStyle,
         loc: Loc,
-    ) -> Option<CastKind> {
+    ) -> Result<Option<CastKind>, ()> {
         // clang `TryReinterpretCast`: a vector and a vector or integer of
         // the same data size (`areLaxCompatibleVectorTypes`) bit-cast.
         let (fv, tv) = (self.is_vector_type(from), self.is_vector_type(to));
@@ -5159,7 +5170,7 @@ impl Sema<'_, '_> {
             if (!tv && !self.ast.types.is_integral(to))
                 || (!fv && !self.ast.types.is_integral(from))
             {
-                return None;
+                return Ok(None);
             }
             // `areLaxCompatibleVectorTypes`: never between a scalar and an
             // ext vector.
@@ -5169,7 +5180,7 @@ impl Sema<'_, '_> {
                 && self.lax_size(from).is_some()
                 && self.lax_size(from) == self.lax_size(to)
             {
-                return Some(CastKind::BitCast);
+                return Ok(Some(CastKind::BitCast));
             }
             let id = if !tv {
                 DiagId::sema_bad_cxx_cast_vector_to_scalar_different_size
@@ -5181,17 +5192,17 @@ impl Sema<'_, '_> {
             let msg =
                 self.diag(id, loc).arg(style.select()).arg(self.ty_arg(from)).arg(self.ty_arg(to));
             self.emit(msg);
-            return Some(CastKind::BitCast);
+            return Err(());
         }
         let (fp, tp) = (self.ast.types.is_pointer(from), self.ast.types.is_pointer(to));
         if fp && tp {
             if style == CastStyle::Reinterpret && self.casts_away_quals(from, to) {
-                return None;
+                return Ok(None);
             }
-            return Some(CastKind::BitCast);
+            return Ok(Some(CastKind::BitCast));
         }
         if tp && self.is_integral_or_enum(from) {
-            return Some(CastKind::IntegralToPointer);
+            return Ok(Some(CastKind::IntegralToPointer));
         }
         if fp && self.is_integral_or_enum(to) {
             let pw = u32::try_from(self.abi.pointer_size * 8).unwrap_or(64);
@@ -5199,8 +5210,9 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_reinterpret_cast_small_int, loc).arg(self.ty_arg(to));
                 self.emit(msg);
+                return Err(());
             }
-            return Some(CastKind::PointerToIntegral);
+            return Ok(Some(CastKind::PointerToIntegral));
         }
         // [expr.reinterpret.cast]/4: a value of type `std::nullptr_t`
         // converts to an integral type (not an enumeration) with the
@@ -5212,16 +5224,17 @@ impl Sema<'_, '_> {
                 let msg =
                     self.diag(DiagId::sema_reinterpret_cast_small_int, loc).arg(self.ty_arg(to));
                 self.emit(msg);
+                return Err(());
             }
-            return Some(CastKind::PointerToIntegral);
+            return Ok(Some(CastKind::PointerToIntegral));
         }
         if style == CastStyle::Reinterpret
             && self.is_integral_or_enum(from)
             && self.ast.types.same_unqualified(from, to)
         {
-            return Some(CastKind::NoOp);
+            return Ok(Some(CastKind::NoOp));
         }
-        None
+        Ok(None)
     }
 }
 

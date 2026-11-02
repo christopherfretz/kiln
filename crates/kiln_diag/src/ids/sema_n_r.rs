@@ -168,6 +168,7 @@ sema_reference_to_unsatisfied_function = Error (1) "invalid reference to functio
 sema_reference_to_void = Error (0) "cannot form a reference to 'void'";
 sema_reference_var_requires_init = Error (1) "declaration of reference variable '{0}' requires an initializer";
 sema_reflect_operand = Error (1) "cannot reflect {0}";
+sema_register_storage_class = WarningError [Register] (0) "ISO C++17 does not allow 'register' storage class specifier";
 sema_reinterpret_cast_small_int = Error (1) "cast from pointer to smaller type {0} loses information";
 sema_reorder_ctor = WarningOff [ReorderCtor] (4) "{0:field|base class} {1} will be initialized after {2:field|base} {3}";
 sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order does not match the declaration order";

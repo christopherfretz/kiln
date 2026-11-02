@@ -1135,15 +1135,20 @@ impl Sema<'_, '_> {
     /// A parameter-declaration ([dcl.fct]/3): its type, adjusted
     /// ([dcl.fct]/5: arrays and functions become pointers).
     pub fn act_on_param_declarator(&mut self, ds: &DeclSpec, d: &Declarator) -> ParamInfo {
+        // [dcl.stc]/2: no storage class but `register`, which C++17
+        // removed and clang accepts as an extension (an error by default,
+        // `-Wregister`). Both before the type, in clang's order.
+        match ds.storage {
+            Some((StorageSpec::Register, loc)) => {
+                self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+            }
+            Some((_, loc)) => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
+            None => {}
+        }
         let base = self.type_from_declspec(ds);
         let base = self.apply_declspec_vector_attrs(base, ds);
         self.warn_redundant_parens(None, d);
         let mut ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
-        if let Some((s, loc)) = ds.storage
-            && s != StorageSpec::Register
-        {
-            self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
-        }
         // [dcl.constexpr]/1, [dcl.constinit]/1: clang `err_invalid_constexpr`.
         let specs = [ds.constexpr, ds.consteval, ds.constinit];
         if let Some((which, l)) =
@@ -2601,6 +2606,8 @@ impl Sema<'_, '_> {
         // `ActOnFunctionDeclarator`).
         invalid_decl |= d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid));
         let mut invalid_redecl = invalid_decl;
+        // A redeclaration of an invalid declaration (below).
+        let mut prev_invalid = false;
         let late_exc =
             d.late_noexcept.is_some() || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
         let mut delayed_prev = false;
@@ -2788,6 +2795,7 @@ impl Sema<'_, '_> {
             // an invalid old declaration); `pick_prev_function` prefers a
             // valid corresponding declaration.
             invalid_redecl = true;
+            prev_invalid = true;
         } else if friend
             && d.qualifier.is_some()
             && !quiet_friend
@@ -2984,7 +2992,7 @@ impl Sema<'_, '_> {
         if self.explicit_object_member(ds, d, &params, method) {
             spec = spec.with_explicit_object(true);
         }
-        let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params);
+        let (defaults, redefined) = self.merge_default_args(prev_ok, block, &params, !prev_invalid);
         // clang marks the redeclaration invalid and leaves it out of the
         // redeclaration chain; calls ignore it.
         if redefined {
@@ -3290,13 +3298,17 @@ impl Sema<'_, '_> {
     /// ("redefinition of default argument"; the redeclaration is then
     /// invalid, the second result), one given earlier is inherited.
     /// Declarations in different scopes (a block-scope redeclaration of
-    /// a namespace-scope function) have distinct sets. Then every
-    /// parameter after one with a default argument needs one.
+    /// a namespace-scope function) have distinct sets. Then, with
+    /// `trailing`, every parameter after one with a default argument
+    /// needs one (clang checks no redeclaration of an invalid function:
+    /// `void f(int, int = (int)"s"); void f(int = 1, int);` reports only
+    /// the cast).
     pub(crate) fn merge_default_args(
         &mut self,
         prev: Option<DeclId>,
         block: bool,
         params: &[ParamInfo],
+        trailing: bool,
     ) -> (Vec<Option<ExprId>>, bool) {
         let mut out: Vec<Option<ExprId>> = params
             .iter()
@@ -3354,6 +3366,7 @@ impl Sema<'_, '_> {
         // (`void f(int = 1, u8, int);` with undeclared `u8` reports only
         // the unknown type name).
         if let Some(first) = out.iter().position(Option::is_some)
+            && trailing
             && !params.iter().any(|p| p.invalid)
         {
             for (i, p) in params.iter().enumerate().skip(first + 1) {
@@ -3613,6 +3626,17 @@ impl Sema<'_, '_> {
         Some(self.builder().constant_expr(c, Some(cv)))
     }
 
+    /// clang `err_typecheck_sclass_fscope`: `register` (without a GNU
+    /// `asm` register) on an unqualified variable outside a function (a
+    /// member is a field, a static member cannot be `register`); the
+    /// variable is invalid.
+    pub(crate) fn register_at_file_scope(&self, ds: &DeclSpec, d: &Declarator) -> bool {
+        matches!(ds.storage, Some((StorageSpec::Register, _)))
+            && d.asm_label.is_none()
+            && d.qualifier.is_none()
+            && !self.in_local_scope()
+    }
+
     pub(crate) fn var_spec(&mut self, ds: &DeclSpec, d: &Declarator) -> VarSpec {
         let mut spec = VarSpec::new();
         if let Some(style) = d.init_style {
@@ -3621,7 +3645,18 @@ impl Sema<'_, '_> {
         match ds.storage {
             Some((StorageSpec::Static, _)) => spec = spec.with_storage(VarStorage::Static),
             Some((StorageSpec::Extern, _)) => spec = spec.with_storage(VarStorage::Extern),
-            Some((StorageSpec::Register, _)) => spec = spec.with_storage(VarStorage::Register),
+            Some((StorageSpec::Register, loc)) => {
+                spec = spec.with_storage(VarStorage::Register);
+                // [dcl.stc]: removed in C++17; clang accepts it as an
+                // extension (an error by default, `-Wregister`), silently
+                // for a GNU register variable (`asm("reg")`).
+                if d.asm_label.is_none() {
+                    self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+                    if self.register_at_file_scope(ds, d) {
+                        self.error(DiagId::sema_illegal_storage_class_on_var, d.name_loc());
+                    }
+                }
+            }
             Some((StorageSpec::Mutable, loc)) => {
                 self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc);
             }
@@ -3857,7 +3892,7 @@ impl Sema<'_, '_> {
         h.lexical = Some(lexical);
         self.mark_pattern_next();
         let v = self.builder().var(h, ty, spec, prev_ok);
-        if ambiguous {
+        if ambiguous || self.register_at_file_scope(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
