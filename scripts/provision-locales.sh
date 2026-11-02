@@ -11,8 +11,13 @@
 #
 # Debian/Ubuntu only (apt-get, /etc/locale.gen, locale-gen); needs root.
 # Idempotent and quiet: exits 0 without touching anything when every locale
-# is already present. Installs the `locales` package only when locale-gen
-# is missing.
+# is already present (a few ms). Installs the `locales` package only when
+# locale-gen is missing.
+#
+# The generated locales live in the container's /usr/lib/locale, not in the
+# workspace, so an ephemeral container loses them on every restart: run this
+# at each container start, before a libc++ run (a fresh container takes
+# about 10 s). Waits for the dpkg lock when another apt-get is running.
 #
 # Usage: scripts/provision-locales.sh
 set -euo pipefail
@@ -49,9 +54,10 @@ fi
 export PATH="$PATH:/usr/sbin:/sbin"
 if ! command -v locale-gen >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
-  if ! apt-get install -y -qq locales >/dev/null 2>&1; then
-    apt-get update -qq >/dev/null
-    apt-get install -y -qq locales >/dev/null
+  apt=(apt-get -o DPkg::Lock::Timeout=600)
+  if ! "${apt[@]}" install -y -qq locales >/dev/null 2>&1; then
+    "${apt[@]}" update -qq >/dev/null
+    "${apt[@]}" install -y -qq locales >/dev/null
   fi
 fi
 
