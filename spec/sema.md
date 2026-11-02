@@ -2043,8 +2043,14 @@ clang's `LazilyCreateBuiltin`. kiln knows one builtin,
   `lazily_create_builtin`, and later written calls then find that
   declaration. A user redeclaration with the builtin's type
   (`extern "C" void *__builtin_memcpy(void *, const void *, size_t)`)
-  is a redeclaration of the implicit one, before or after it. Test:
-  `tests/conformance/over.match.call/builtin-memcpy-single-decl.cpp`.
+  is a redeclaration of the implicit one, before or after it. A
+  redeclaration inherits the builtin id, and a first declaration of a
+  builtin's name at file scope with C linkage and the builtin's type
+  (ignoring the exception specification) is recognized as the builtin
+  (`recognize_builtin_decl`; clang `BuiltinAttr`), so a call through it
+  still lowers as the builtin. Tests:
+  `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-written-first.cpp`,
+  `tests/conformance/class.copy.assign/libstdcxx-builtin-memcpy-implicit-first.cpp`.
 - **Name:** a `DeclRefExpr` to a builtin is a prvalue of the
   placeholder type `QualType::BUILTIN_FN` (`<builtin fn type>`).
 - **Calls:** `act_on_call` converts the callee with
