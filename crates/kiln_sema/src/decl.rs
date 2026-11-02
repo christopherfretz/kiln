@@ -5214,14 +5214,11 @@ impl Sema<'_, '_> {
         let dname = name.map_or(DeclName::EMPTY, |n| DeclName::ident(n.0));
         let mut h = DeclHead::new(ctx, dname, name.map_or(loc, |n| n.1));
         h.lexical = Some(if qualifier.is_some() { self.ctx } else { ctx });
+        let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         let d = if is_enum {
             let fx = fixed.map(|f| (f, self.enum_promotion(f)));
             self.builder().enumeration(h, scoped, fx, prev)
-        } else if use_ == TagUse::Reference
-            && qualifier.is_none()
-            && prev.is_none()
-            && self.templ.cur.is_none()
-        {
+        } else if plain_ref && self.templ.cur.is_none() {
             self.namespace_tag_record(h, Self::tag_kind_of(keyword))
         } else {
             self.mark_pattern_next();
