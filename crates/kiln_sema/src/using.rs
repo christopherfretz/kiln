@@ -806,7 +806,22 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return None;
         };
+        // [enum.udecl]/1: the using-enum-declarator designates a
+        // non-dependent type (a member enumeration of the current
+        // instantiation, or a local one of a template, is dependent).
+        if self.ast.types.is_dependent(ty) {
+            self.error(DiagId::sema_using_enum_is_dependent, name_loc);
+            return None;
+        }
         self.mark_type_referenced(td);
+        Some(self.using_enum_of(e, &written, name_loc))
+    }
+
+    /// The using-enum-declaration for enumeration `e` (`written` is how
+    /// the declarator spelled it): checks completeness and introduces a
+    /// shadow of each enumerator in the current scope. Also the
+    /// instantiation of a block-scope `using enum` in a template.
+    pub(crate) fn using_enum_of(&mut self, e: DeclId, written: &str, name_loc: Loc) -> DeclId {
         // A scoped member enumeration of a class template specialization
         // is defined when first required ([temp.inst]/3).
         self.require_member_enum(e, name_loc);
@@ -821,7 +836,7 @@ impl Sema<'_, '_> {
             self.emit(msg);
             let ud = self.builder().using_enum(h, e);
             self.ast.decls.set_flags(ud, kiln_ast::decl::DeclFlags::INVALID);
-            return Some(ud);
+            return ud;
         };
         let ud = self.builder().using_enum(h, def);
         let enumerators: Vec<DeclId> = self
@@ -835,7 +850,7 @@ impl Sema<'_, '_> {
                 let _ = self.introduce_shadow(DeclName::ident(n), name_loc, c);
             }
         }
-        Some(ud)
+        ud
     }
 
     // -- namespace aliases -------------------------------------------------------------

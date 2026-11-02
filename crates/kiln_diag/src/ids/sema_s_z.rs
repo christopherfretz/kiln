@@ -178,6 +178,7 @@ sema_using_decl_not_base_class = Error (2) "using declaration refers into '{0}',
 sema_using_decl_redeclaration = Error (0) "redeclaration of using declaration";
 sema_using_decl_refers_to_own_class = Error (0) "using declaration refers to its own class";
 sema_using_enum_incomplete = Error (1) "enumeration '{0}' is incomplete";
+sema_using_enum_is_dependent = Error (0) "using-enum cannot name a dependent type";
 sema_using_enum_not_enum = Error (1) "'{0}' is not an enumerated type";
 sema_using_enum_unknown_typename = Error (1) "unknown type name {0}";
 sema_using_requires_qualname = Error (0) "using declaration requires a qualified name";
