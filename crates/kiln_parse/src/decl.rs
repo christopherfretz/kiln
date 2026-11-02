@@ -1100,7 +1100,7 @@ impl Parser<'_, '_> {
     /// `X<A>::C` (the out-of-line definition of a member class of a class
     /// template, [temp.mem.class]); the scope is entered as clang's
     /// `ParseClassSpecifier` does.
-    fn parse_tag_qualifier(&mut self, ds: &mut DeclSpec) -> Option<DeclId> {
+    fn parse_tag_qualifier(&mut self, ds: &mut DeclSpec) -> Option<kiln_sema::using::Qualifier> {
         let template_id_qual = || {
             self.ident().is_some()
                 && self.peek_is(1, Punct::Less)
@@ -1115,7 +1115,7 @@ impl Parser<'_, '_> {
             return None;
         }
         let saved = self.s.set_entering_context(true);
-        let q = self.parse_nested_name();
+        let q = self.parse_nested_name_nns();
         self.s.set_entering_context(saved);
         q.unwrap_or_else(|()| {
             ds.invalid = true;
@@ -1176,7 +1176,8 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         let qual_loc = self.tok().span.lo;
-        let qualifier = self.parse_tag_qualifier(ds);
+        let qual = self.parse_tag_qualifier(ds);
+        let qualifier = qual.map(|q| q.ctx);
         if keyword != TagKeyword::Enum
             && qualifier.is_none()
             && self.parse_ttp_elaborated(ds, kw_loc, ctx)
@@ -1223,6 +1224,22 @@ impl Parser<'_, '_> {
         }
         if use_ == TagUse::Declaration && qualifier.is_some() {
             self.s.check_standalone_tag_qualifier(keyword, qual_loc);
+        }
+        if let (Some(q), Some((n, nloc)), TagUse::Reference | TagUse::Friend) = (qual, name, use_)
+            && self.s.is_dependent_ctx(q.ctx)
+        {
+            // `class-key T::X` with a dependent qualifier ([dcl.type.elab],
+            // [temp.dep.type]/6): a dependent name type with the class-key
+            // as its keyword, resolved (and its tag kind checked) at
+            // instantiation, as clang's `ActOnDependentTag`; with `friend`,
+            // a friend type ([class.friend]/3, libstdc++ generator:684
+            // `friend struct _Erased_promise::_Subyield_state;`).
+            let ty = self.s.act_dependent_name_at(q.nns, n, None, keyword, nloc);
+            if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
+                ds.invalid = true;
+                self.spec_error(&e, kw_loc);
+            }
+            return;
         }
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs);

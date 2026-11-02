@@ -17,11 +17,11 @@ absolute numbers.
 
 ### `-std=c++26`
 
-**c++26: 80 of 109 headers ok with kiln (29 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.11 s / p95 0.63 s, peak RSS p50 13 MiB / p95 44 MiB; clang++-19 wall p50 0.10 s / p95 0.64 s, peak RSS p50 96 MiB / p95 145 MiB**
+**c++26: 108 of 109 headers ok with kiln (1 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.11 s / p95 0.62 s, peak RSS p50 13 MiB / p95 44 MiB; clang++-19 wall p50 0.11 s / p95 0.63 s, peak RSS p50 90 MiB / p95 140 MiB**
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `969e7cff` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `4bdc6435` |
 | reference | `Debian clang version 19.1.7 (3+b1)` |
 | libstdc++ | `_GLIBCXX_RELEASE` 14, `__GLIBCXX__` 20250315 (`/usr/include/c++/14`) |
 | headers | extension-less files directly in the include directory; not compiled: subdirectories (`backward/`, `bits/`, `debug/`, `decimal/`, `experimental/`, `ext/`, `parallel/`, `pstl/`, `tr1/`, `tr2/`) and `.h`/`.tcc` files |
@@ -29,7 +29,7 @@ absolute numbers.
 | flags (both compilers) | `-std=c++26 -stdlib=libstdc++ -fsyntax-only -ferror-limit=0 t.cpp` (`t.cpp`: `#include <h>`) |
 | limits | 8192 MiB address space per compile (kiln: plus its stack reservation); timeout 120 s; -j 2 |
 | RSS source | `gnu-time` |
-| wall time | 62.4 s |
+| wall time | 48.6 s |
 
 #### Headers (`-std=c++26`)
 
@@ -37,142 +37,124 @@ absolute numbers.
 
 | header | kiln | errors | first error | clang++-19 | kiln wall | kiln RSS | clang wall | clang RSS |
 |---|---|---:|---|---|---:|---:|---:|---:|
-| `<algorithm>` | ok |  |  | ok | 0.16 s | 14 MiB | 0.16 s | 99 MiB |
-| `<any>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.05 s | 87 MiB |
-| `<array>` | ok |  |  | ok | 0.07 s | 11 MiB | 0.09 s | 91 MiB |
-| `<atomic>` | ok |  |  | ok | 0.13 s | 12 MiB | 0.09 s | 91 MiB |
-| `<barrier>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.58 s | 38 MiB | 0.55 s | 138 MiB |
-| `<bit>` | ok |  |  | ok | 0.05 s | 9 MiB | 0.06 s | 86 MiB |
-| `<bitset>` | ok |  |  | ok | 0.20 s | 21 MiB | 0.24 s | 107 MiB |
-| `<cassert>` | ok |  |  | ok | 0.05 s | 7 MiB | 0.05 s | 81 MiB |
-| `<ccomplex>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.60 s | 44 MiB | 0.57 s | 143 MiB |
-| `<cctype>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 82 MiB |
-| `<cerrno>` | ok |  |  | ok | 0.01 s | 8 MiB | 0.03 s | 81 MiB |
-| `<cfenv>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.03 s | 81 MiB |
-| `<cfloat>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.02 s | 81 MiB |
-| `<charconv>` | ok |  |  | ok | 0.04 s | 10 MiB | 0.06 s | 88 MiB |
-| `<chrono>` | fail | 6 | `chrono:2449:24: error: use of undeclared identifier '_Rep'` | ok | 0.65 s | 43 MiB | 0.68 s | 153 MiB |
-| `<cinttypes>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 82 MiB |
-| `<ciso646>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 81 MiB |
-| `<climits>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 81 MiB |
-| `<clocale>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 81 MiB |
-| `<cmath>` | ok |  |  | ok | 0.13 s | 18 MiB | 0.12 s | 98 MiB |
-| `<codecvt>` | ok |  |  | ok | 0.25 s | 25 MiB | 0.22 s | 112 MiB |
-| `<compare>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.04 s | 87 MiB |
-| `<complex>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.56 s | 44 MiB | 0.55 s | 143 MiB |
-| `<concepts>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.04 s | 86 MiB |
-| `<condition_variable>` | fail | 3 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.57 s | 42 MiB | 0.60 s | 146 MiB |
-| `<coroutine>` | ok |  |  | ok | 0.04 s | 10 MiB | 0.06 s | 87 MiB |
-| `<csetjmp>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 82 MiB |
-| `<csignal>` | ok |  |  | ok | 0.04 s | 8 MiB | 0.04 s | 83 MiB |
-| `<cstdalign>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 81 MiB |
-| `<cstdarg>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 81 MiB |
-| `<cstdbool>` | ok |  |  | ok | 0.03 s | 7 MiB | 0.03 s | 81 MiB |
-| `<cstddef>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 83 MiB |
-| `<cstdint>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 81 MiB |
-| `<cstdio>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 83 MiB |
-| `<cstdlib>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.04 s | 83 MiB |
-| `<cstring>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.04 s | 82 MiB |
-| `<ctgmath>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.63 s | 44 MiB | 0.58 s | 143 MiB |
-| `<ctime>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 82 MiB |
-| `<cuchar>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 82 MiB |
-| `<cwchar>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 82 MiB |
-| `<cwctype>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.04 s | 82 MiB |
-| `<deque>` | ok |  |  | ok | 0.11 s | 15 MiB | 0.14 s | 97 MiB |
-| `<exception>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.04 s | 86 MiB |
-| `<execution>` | fail | 12 | `bits/out_ptr.h:233:46: error: use of undeclared identifier '_Alloc'` | ok | 0.71 s | 45 MiB | 0.72 s | 156 MiB |
-| `<expected>` | ok |  |  | ok | 0.04 s | 10 MiB | 0.06 s | 88 MiB |
-| `<filesystem>` | fail | 3 | `tuple:2446:14: error: no matching function for call to '__get_helper'` | ok | 0.59 s | 44 MiB | 0.64 s | 145 MiB |
-| `<format>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.50 s | 37 MiB | 0.57 s | 134 MiB |
-| `<forward_list>` | ok |  |  | ok | 0.17 s | 14 MiB | 0.13 s | 96 MiB |
-| `<fstream>` | fail | 3 | `bits/fstream.tcc:387:7: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.53 s | 37 MiB | 0.53 s | 137 MiB |
-| `<functional>` | ok |  |  | ok | 0.17 s | 17 MiB | 0.19 s | 105 MiB |
-| `<future>` | fail | 10 | `mutex:591:48: error: pack expansions of braced lists is not supported yet` | ok | 0.68 s | 44 MiB | 0.66 s | 152 MiB |
-| `<generator>` | fail | 83 | `ranges:1888:42: error: use of undeclared identifier '_Const'` | ok | 0.41 s | 29 MiB | 0.36 s | 133 MiB |
-| `<initializer_list>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 82 MiB |
-| `<iomanip>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.55 s | 37 MiB | 0.55 s | 137 MiB |
-| `<ios>` | ok |  |  | ok | 0.27 s | 26 MiB | 0.30 s | 114 MiB |
-| `<iosfwd>` | ok |  |  | ok | 0.04 s | 8 MiB | 0.03 s | 84 MiB |
-| `<iostream>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.51 s | 36 MiB | 0.53 s | 136 MiB |
-| `<istream>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.50 s | 39 MiB | 0.52 s | 136 MiB |
-| `<iterator>` | ok |  |  | ok | 0.26 s | 25 MiB | 0.24 s | 113 MiB |
-| `<latch>` | ok |  |  | ok | 0.06 s | 12 MiB | 0.06 s | 91 MiB |
-| `<limits>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 83 MiB |
-| `<list>` | fail | 2 | `bits/stl_list.h:189:14: error: use of undeclared identifier '_Iter'` | ok | 0.11 s | 13 MiB | 0.10 s | 96 MiB |
-| `<locale>` | ok |  |  | ok | 0.28 s | 27 MiB | 0.27 s | 116 MiB |
-| `<map>` | ok |  |  | ok | 0.11 s | 14 MiB | 0.11 s | 97 MiB |
-| `<memory>` | fail | 8 | `bits/out_ptr.h:233:46: error: use of undeclared identifier '_Alloc'` | ok | 0.55 s | 39 MiB | 0.56 s | 140 MiB |
-| `<memory_resource>` | ok |  |  | ok | 0.16 s | 18 MiB | 0.19 s | 104 MiB |
-| `<mutex>` | fail | 2 | `mutex:591:48: error: pack expansions of braced lists is not supported yet` | ok | 0.12 s | 15 MiB | 0.11 s | 98 MiB |
-| `<new>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 83 MiB |
-| `<numbers>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.03 s | 86 MiB |
-| `<numeric>` | ok |  |  | ok | 0.05 s | 11 MiB | 0.06 s | 89 MiB |
-| `<optional>` | ok |  |  | ok | 0.05 s | 11 MiB | 0.06 s | 90 MiB |
-| `<ostream>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.47 s | 39 MiB | 0.51 s | 135 MiB |
-| `<print>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.45 s | 37 MiB | 0.51 s | 135 MiB |
-| `<queue>` | ok |  |  | ok | 0.14 s | 15 MiB | 0.21 s | 101 MiB |
-| `<random>` | ok |  |  | ok | 0.31 s | 29 MiB | 0.34 s | 121 MiB |
-| `<ranges>` | fail | 81 | `ranges:1888:42: error: use of undeclared identifier '_Const'` | ok | 0.33 s | 28 MiB | 0.35 s | 132 MiB |
-| `<ratio>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.06 s | 86 MiB |
-| `<regex>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.63 s | 42 MiB | 0.68 s | 149 MiB |
-| `<scoped_allocator>` | ok |  |  | ok | 0.08 s | 13 MiB | 0.09 s | 94 MiB |
-| `<semaphore>` | ok |  |  | ok | 0.10 s | 14 MiB | 0.10 s | 96 MiB |
-| `<set>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.12 s | 97 MiB |
-| `<shared_mutex>` | ok |  |  | ok | 0.07 s | 12 MiB | 0.07 s | 92 MiB |
-| `<source_location>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 83 MiB |
-| `<span>` | ok |  |  | ok | 0.09 s | 13 MiB | 0.09 s | 93 MiB |
-| `<spanstream>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.52 s | 37 MiB | 0.53 s | 136 MiB |
-| `<sstream>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.48 s | 37 MiB | 0.54 s | 136 MiB |
-| `<stack>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.13 s | 97 MiB |
-| `<stacktrace>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.51 s | 38 MiB | 0.53 s | 137 MiB |
-| `<stdexcept>` | ok |  |  | ok | 0.24 s | 21 MiB | 0.19 s | 107 MiB |
-| `<stdfloat>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 81 MiB |
-| `<stop_token>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.60 s | 41 MiB | 0.61 s | 143 MiB |
-| `<streambuf>` | ok |  |  | ok | 0.28 s | 25 MiB | 0.25 s | 113 MiB |
-| `<string>` | ok |  |  | ok | 0.27 s | 20 MiB | 0.23 s | 107 MiB |
-| `<string_view>` | ok |  |  | ok | 0.18 s | 13 MiB | 0.11 s | 97 MiB |
-| `<syncstream>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.59 s | 39 MiB | 0.58 s | 136 MiB |
-| `<system_error>` | ok |  |  | ok | 0.21 s | 21 MiB | 0.27 s | 108 MiB |
-| `<text_encoding>` | ok |  |  | ok | 0.22 s | 19 MiB | 0.20 s | 103 MiB |
-| `<thread>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.81 s | 41 MiB | 0.64 s | 143 MiB |
-| `<tuple>` | ok |  |  | ok | 0.08 s | 12 MiB | 0.11 s | 93 MiB |
-| `<type_traits>` | ok |  |  | ok | 0.05 s | 9 MiB | 0.08 s | 85 MiB |
-| `<typeindex>` | ok |  |  | ok | 0.14 s | 9 MiB | 0.09 s | 86 MiB |
-| `<typeinfo>` | ok |  |  | ok | 0.04 s | 7 MiB | 0.06 s | 82 MiB |
-| `<unordered_map>` | ok |  |  | ok | 0.19 s | 15 MiB | 0.18 s | 100 MiB |
-| `<unordered_set>` | ok |  |  | ok | 0.15 s | 16 MiB | 0.14 s | 100 MiB |
-| `<utility>` | ok |  |  | ok | 0.06 s | 10 MiB | 0.05 s | 88 MiB |
-| `<valarray>` | fail | 16 | `bits/valarray_after.h:179:35: error: expected a type` | ok | 0.25 s | 22 MiB | 0.23 s | 110 MiB |
-| `<variant>` | ok |  |  | ok | 0.05 s | 11 MiB | 0.06 s | 90 MiB |
-| `<vector>` | ok |  |  | ok | 0.12 s | 15 MiB | 0.15 s | 99 MiB |
-| `<version>` | ok |  |  | ok | 0.05 s | 7 MiB | 0.05 s | 81 MiB |
+| `<algorithm>` | ok |  |  | ok | 0.14 s | 15 MiB | 0.13 s | 94 MiB |
+| `<any>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.05 s | 81 MiB |
+| `<array>` | ok |  |  | ok | 0.06 s | 11 MiB | 0.07 s | 86 MiB |
+| `<atomic>` | ok |  |  | ok | 0.07 s | 12 MiB | 0.07 s | 86 MiB |
+| `<barrier>` | ok |  |  | ok | 0.52 s | 39 MiB | 0.61 s | 133 MiB |
+| `<bit>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.04 s | 81 MiB |
+| `<bitset>` | ok |  |  | ok | 0.20 s | 21 MiB | 0.21 s | 102 MiB |
+| `<cassert>` | ok |  |  | ok | 0.03 s | 7 MiB | 0.03 s | 76 MiB |
+| `<ccomplex>` | ok |  |  | ok | 0.62 s | 43 MiB | 0.64 s | 137 MiB |
+| `<cctype>` | ok |  |  | ok | 0.01 s | 8 MiB | 0.02 s | 76 MiB |
+| `<cerrno>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.03 s | 76 MiB |
+| `<cfenv>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.03 s | 76 MiB |
+| `<cfloat>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 75 MiB |
+| `<charconv>` | ok |  |  | ok | 0.04 s | 10 MiB | 0.05 s | 83 MiB |
+| `<chrono>` | ok |  |  | ok | 0.64 s | 45 MiB | 0.77 s | 147 MiB |
+| `<cinttypes>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 76 MiB |
+| `<ciso646>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.03 s | 75 MiB |
+| `<climits>` | ok |  |  | ok | 0.01 s | 8 MiB | 0.03 s | 76 MiB |
+| `<clocale>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 76 MiB |
+| `<cmath>` | ok |  |  | ok | 0.13 s | 18 MiB | 0.11 s | 93 MiB |
+| `<codecvt>` | ok |  |  | ok | 0.23 s | 25 MiB | 0.23 s | 107 MiB |
+| `<compare>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.05 s | 81 MiB |
+| `<complex>` | ok |  |  | ok | 0.57 s | 44 MiB | 0.57 s | 137 MiB |
+| `<concepts>` | ok |  |  | ok | 0.02 s | 9 MiB | 0.04 s | 80 MiB |
+| `<condition_variable>` | ok |  |  | ok | 0.56 s | 44 MiB | 0.63 s | 140 MiB |
+| `<coroutine>` | ok |  |  | ok | 0.05 s | 9 MiB | 0.04 s | 82 MiB |
+| `<csetjmp>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 76 MiB |
+| `<csignal>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.03 s | 78 MiB |
+| `<cstdalign>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 73 MiB |
+| `<cstdarg>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 73 MiB |
+| `<cstdbool>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 73 MiB |
+| `<cstddef>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 76 MiB |
+| `<cstdint>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 73 MiB |
+| `<cstdio>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 74 MiB |
+| `<cstdlib>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.04 s | 78 MiB |
+| `<cstring>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.04 s | 76 MiB |
+| `<ctgmath>` | ok |  |  | ok | 0.63 s | 45 MiB | 0.58 s | 137 MiB |
+| `<ctime>` | ok |  |  | ok | 0.03 s | 7 MiB | 0.03 s | 76 MiB |
+| `<cuchar>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 77 MiB |
+| `<cwchar>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 77 MiB |
+| `<cwctype>` | ok |  |  | ok | 0.01 s | 8 MiB | 0.03 s | 76 MiB |
+| `<deque>` | ok |  |  | ok | 0.13 s | 14 MiB | 0.17 s | 92 MiB |
+| `<exception>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.05 s | 81 MiB |
+| `<execution>` | ok |  |  | ok | 0.75 s | 45 MiB | 0.70 s | 150 MiB |
+| `<expected>` | ok |  |  | ok | 0.04 s | 10 MiB | 0.07 s | 83 MiB |
+| `<filesystem>` | ok |  |  | ok | 0.60 s | 42 MiB | 0.60 s | 140 MiB |
+| `<format>` | ok |  |  | ok | 0.46 s | 39 MiB | 0.49 s | 129 MiB |
+| `<forward_list>` | ok |  |  | ok | 0.11 s | 14 MiB | 0.10 s | 91 MiB |
+| `<fstream>` | ok |  |  | ok | 0.49 s | 39 MiB | 0.57 s | 132 MiB |
+| `<functional>` | ok |  |  | ok | 0.16 s | 18 MiB | 0.19 s | 100 MiB |
+| `<future>` | ok |  |  | ok | 0.65 s | 45 MiB | 0.65 s | 146 MiB |
+| `<generator>` | fail | 2 | `generator:164:8: error: 'co_yield' expressions is not supported yet` | ok | 0.32 s | 29 MiB | 0.36 s | 127 MiB |
+| `<initializer_list>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 76 MiB |
+| `<iomanip>` | ok |  |  | ok | 0.51 s | 37 MiB | 0.58 s | 131 MiB |
+| `<ios>` | ok |  |  | ok | 0.26 s | 26 MiB | 0.27 s | 109 MiB |
+| `<iosfwd>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 78 MiB |
+| `<iostream>` | ok |  |  | ok | 0.49 s | 36 MiB | 0.53 s | 130 MiB |
+| `<istream>` | ok |  |  | ok | 0.50 s | 38 MiB | 0.54 s | 130 MiB |
+| `<iterator>` | ok |  |  | ok | 0.31 s | 24 MiB | 0.28 s | 108 MiB |
+| `<latch>` | ok |  |  | ok | 0.08 s | 12 MiB | 0.07 s | 85 MiB |
+| `<limits>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.06 s | 78 MiB |
+| `<list>` | ok |  |  | ok | 0.14 s | 13 MiB | 0.13 s | 90 MiB |
+| `<locale>` | ok |  |  | ok | 0.32 s | 26 MiB | 0.31 s | 110 MiB |
+| `<map>` | ok |  |  | ok | 0.12 s | 15 MiB | 0.13 s | 92 MiB |
+| `<memory>` | ok |  |  | ok | 0.59 s | 39 MiB | 0.59 s | 134 MiB |
+| `<memory_resource>` | ok |  |  | ok | 0.16 s | 18 MiB | 0.19 s | 99 MiB |
+| `<mutex>` | ok |  |  | ok | 0.12 s | 15 MiB | 0.12 s | 92 MiB |
+| `<new>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 78 MiB |
+| `<numbers>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.04 s | 80 MiB |
+| `<numeric>` | ok |  |  | ok | 0.05 s | 11 MiB | 0.06 s | 84 MiB |
+| `<optional>` | ok |  |  | ok | 0.06 s | 10 MiB | 0.06 s | 84 MiB |
+| `<ostream>` | ok |  |  | ok | 0.50 s | 39 MiB | 0.52 s | 129 MiB |
+| `<print>` | ok |  |  | ok | 0.49 s | 37 MiB | 0.55 s | 129 MiB |
+| `<queue>` | ok |  |  | ok | 0.15 s | 15 MiB | 0.16 s | 95 MiB |
+| `<random>` | ok |  |  | ok | 0.39 s | 28 MiB | 0.36 s | 116 MiB |
+| `<ranges>` | ok |  |  | ok | 0.38 s | 28 MiB | 0.39 s | 126 MiB |
+| `<ratio>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.04 s | 80 MiB |
+| `<regex>` | ok |  |  | ok | 0.66 s | 42 MiB | 0.69 s | 143 MiB |
+| `<scoped_allocator>` | ok |  |  | ok | 0.08 s | 13 MiB | 0.10 s | 88 MiB |
+| `<semaphore>` | ok |  |  | ok | 0.11 s | 14 MiB | 0.12 s | 90 MiB |
+| `<set>` | ok |  |  | ok | 0.11 s | 14 MiB | 0.13 s | 91 MiB |
+| `<shared_mutex>` | ok |  |  | ok | 0.08 s | 13 MiB | 0.08 s | 87 MiB |
+| `<source_location>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 77 MiB |
+| `<span>` | ok |  |  | ok | 0.08 s | 13 MiB | 0.12 s | 87 MiB |
+| `<spanstream>` | ok |  |  | ok | 0.49 s | 38 MiB | 0.56 s | 131 MiB |
+| `<sstream>` | ok |  |  | ok | 0.50 s | 38 MiB | 0.56 s | 131 MiB |
+| `<stack>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.12 s | 92 MiB |
+| `<stacktrace>` | ok |  |  | ok | 0.51 s | 38 MiB | 0.53 s | 132 MiB |
+| `<stdexcept>` | ok |  |  | ok | 0.21 s | 21 MiB | 0.21 s | 102 MiB |
+| `<stdfloat>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 75 MiB |
+| `<stop_token>` | ok |  |  | ok | 0.57 s | 42 MiB | 0.56 s | 138 MiB |
+| `<streambuf>` | ok |  |  | ok | 0.24 s | 25 MiB | 0.24 s | 106 MiB |
+| `<string>` | ok |  |  | ok | 0.23 s | 20 MiB | 0.21 s | 101 MiB |
+| `<string_view>` | ok |  |  | ok | 0.11 s | 14 MiB | 0.11 s | 91 MiB |
+| `<syncstream>` | ok |  |  | ok | 0.53 s | 37 MiB | 0.53 s | 131 MiB |
+| `<system_error>` | ok |  |  | ok | 0.21 s | 21 MiB | 0.21 s | 102 MiB |
+| `<text_encoding>` | ok |  |  | ok | 0.16 s | 19 MiB | 0.16 s | 98 MiB |
+| `<thread>` | ok |  |  | ok | 0.61 s | 40 MiB | 0.60 s | 138 MiB |
+| `<tuple>` | ok |  |  | ok | 0.08 s | 12 MiB | 0.10 s | 87 MiB |
+| `<type_traits>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.06 s | 80 MiB |
+| `<typeindex>` | ok |  |  | ok | 0.03 s | 10 MiB | 0.04 s | 81 MiB |
+| `<typeinfo>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 77 MiB |
+| `<unordered_map>` | ok |  |  | ok | 0.15 s | 16 MiB | 0.13 s | 95 MiB |
+| `<unordered_set>` | ok |  |  | ok | 0.13 s | 16 MiB | 0.13 s | 94 MiB |
+| `<utility>` | ok |  |  | ok | 0.05 s | 9 MiB | 0.06 s | 82 MiB |
+| `<valarray>` | ok |  |  | ok | 0.26 s | 23 MiB | 0.23 s | 105 MiB |
+| `<variant>` | ok |  |  | ok | 0.05 s | 11 MiB | 0.07 s | 85 MiB |
+| `<vector>` | ok |  |  | ok | 0.17 s | 14 MiB | 0.14 s | 94 MiB |
+| `<version>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 75 MiB |
 
 #### Error clusters (`-std=c++26`, generated)
 
-20 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 20; the hand-written triage is in "Clusters" below.
+2 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 2; the hand-written triage is in "Clusters" below.
 
 | # | first | any | cluster | headers (first) |
 |---:|---:|---:|---|---|
-| 1 | 19 | 24 | `call to '…' is ambiguous` | `<barrier>` `<ccomplex>` `<complex>` `<condition_variable>` `<ctgmath>` `<format>` `<fstream>` `<iomanip>` `<iostream>` `<istream>` `<ostream>` `<print>` `<regex>` `<spanstream>` `<sstream>` `<stacktrace>` `<stop_token>` `<syncstream>` `<thread>` |
-| 2 | 6 | 6 | `use of undeclared identifier '…'` | `<chrono>` `<execution>` `<generator>` `<list>` `<memory>` `<ranges>` |
-| 3 | 2 | 2 | `pack expansions of braced lists is not supported yet` | `<future>` `<mutex>` |
-| 4 | 1 | 4 | `no matching function for call to '…'` | `<filesystem>` |
-| 5 | 1 | 3 | `expected a type` | `<valarray>` |
-| 6 | 0 | 3 | `out-of-line definition of '…' does not match any declaration in '…'` | (e.g. `<generator>`) |
-| 7 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
-| 8 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Range = <error type>]` | (e.g. `<generator>`) |
-| 9 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Range = _Base]` | (e.g. `<generator>`) |
-| 10 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Tp = _InnerIter]` | (e.g. `<generator>`) |
-| 11 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Tp = _PatternIter]` | (e.g. `<generator>`) |
-| 12 | 0 | 2 | `destructor type '…' in object destruction expression does not match the type '…' of the object being destroyed` | (e.g. `<condition_variable>`) |
-| 13 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
-| 14 | 0 | 2 | `no matching constructor for initialization of '…'` | (e.g. `<execution>`) |
-| 15 | 0 | 2 | `no type named '…' in '…'` | (e.g. `<generator>`) |
-| 16 | 0 | 2 | `pack expansion does not contain any unexpanded parameter packs` | (e.g. `<generator>`) |
-| 17 | 0 | 2 | `requires clause differs in template redeclaration` | (e.g. `<generator>`) |
-| 18 | 0 | 2 | `static assertion failed` | (e.g. `<generator>`) |
-| 19 | 0 | 1 | `'…' expressions is not supported yet` | (e.g. `<generator>`) |
-| 20 | 0 | 1 | `no struct named '…' in '…'` | (e.g. `<generator>`) |
+| 1 | 1 | 1 | `'…' expressions is not supported yet` | `<generator>` |
+| 2 | 0 | 1 | `no struct named '…' in '…'` | (e.g. `<generator>`) |
 
 <!-- libstdcxx:c++26:end -->
 
@@ -181,11 +163,11 @@ absolute numbers.
 
 ### `-std=c++20`
 
-**c++20: 98 of 109 headers ok with kiln (11 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.13 s / p95 0.50 s, peak RSS p50 12 MiB / p95 28 MiB; clang++-19 wall p50 0.11 s / p95 0.42 s, peak RSS p50 92 MiB / p95 122 MiB**
+**c++20: 109 of 109 headers ok with kiln (0 fail, 0 crash, 0 timeout, 0 killed; 0 on headers clang++-19 rejects); clang++-19 accepts 109 of 109; kiln wall p50 0.08 s / p95 0.36 s, peak RSS p50 12 MiB / p95 27 MiB; clang++-19 wall p50 0.09 s / p95 0.36 s, peak RSS p50 87 MiB / p95 116 MiB**
 
 | | |
 |---|---|
-| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `969e7cff` |
+| kiln | `kiln version 0.0.1 (C++26 frontend, LLVM IR backend)` at commit `4bdc6435` |
 | reference | `Debian clang version 19.1.7 (3+b1)` |
 | libstdc++ | `_GLIBCXX_RELEASE` 14, `__GLIBCXX__` 20250315 (`/usr/include/c++/14`) |
 | headers | extension-less files directly in the include directory; not compiled: subdirectories (`backward/`, `bits/`, `debug/`, `decimal/`, `experimental/`, `ext/`, `parallel/`, `pstl/`, `tr1/`, `tr2/`) and `.h`/`.tcc` files |
@@ -193,7 +175,7 @@ absolute numbers.
 | flags (both compilers) | `-std=c++20 -stdlib=libstdc++ -fsyntax-only -ferror-limit=0 t.cpp` (`t.cpp`: `#include <h>`) |
 | limits | 8192 MiB address space per compile (kiln: plus its stack reservation); timeout 120 s; -j 2 |
 | RSS source | `gnu-time` |
-| wall time | 62.2 s |
+| wall time | 14.4 s |
 
 #### Headers (`-std=c++20`)
 
@@ -201,135 +183,122 @@ absolute numbers.
 
 | header | kiln | errors | first error | clang++-19 | kiln wall | kiln RSS | clang wall | clang RSS |
 |---|---|---:|---|---|---:|---:|---:|---:|
-| `<algorithm>` | ok |  |  | ok | 0.22 s | 14 MiB | 0.17 s | 97 MiB |
-| `<any>` | ok |  |  | ok | 0.10 s | 9 MiB | 0.09 s | 87 MiB |
-| `<array>` | ok |  |  | ok | 0.12 s | 11 MiB | 0.11 s | 91 MiB |
-| `<atomic>` | ok |  |  | ok | 0.19 s | 12 MiB | 0.11 s | 91 MiB |
-| `<barrier>` | ok |  |  | ok | 0.44 s | 22 MiB | 0.33 s | 113 MiB |
-| `<bit>` | ok |  |  | ok | 0.09 s | 9 MiB | 0.09 s | 86 MiB |
-| `<bitset>` | ok |  |  | ok | 0.31 s | 18 MiB | 0.38 s | 106 MiB |
-| `<cassert>` | ok |  |  | ok | 0.11 s | 7 MiB | 0.09 s | 81 MiB |
-| `<ccomplex>` | ok |  |  | ok | 0.56 s | 27 MiB | 0.42 s | 118 MiB |
-| `<cctype>` | ok |  |  | ok | 0.06 s | 8 MiB | 0.10 s | 82 MiB |
-| `<cerrno>` | ok |  |  | ok | 0.19 s | 7 MiB | 0.09 s | 81 MiB |
-| `<cfenv>` | ok |  |  | ok | 0.10 s | 7 MiB | 0.05 s | 82 MiB |
-| `<cfloat>` | ok |  |  | ok | 0.06 s | 7 MiB | 0.06 s | 81 MiB |
-| `<charconv>` | ok |  |  | ok | 0.08 s | 10 MiB | 0.11 s | 87 MiB |
-| `<chrono>` | fail | 6 | `chrono:2449:24: error: use of undeclared identifier '_Rep'` | ok | 0.80 s | 41 MiB | 0.88 s | 149 MiB |
-| `<cinttypes>` | ok |  |  | ok | 0.07 s | 7 MiB | 0.08 s | 81 MiB |
-| `<ciso646>` | ok |  |  | ok | 0.08 s | 7 MiB | 0.09 s | 81 MiB |
-| `<climits>` | ok |  |  | ok | 0.11 s | 8 MiB | 0.09 s | 81 MiB |
-| `<clocale>` | ok |  |  | ok | 0.08 s | 7 MiB | 0.07 s | 81 MiB |
-| `<cmath>` | ok |  |  | ok | 0.23 s | 18 MiB | 0.17 s | 98 MiB |
-| `<codecvt>` | ok |  |  | ok | 0.32 s | 19 MiB | 0.28 s | 107 MiB |
-| `<compare>` | ok |  |  | ok | 0.08 s | 9 MiB | 0.08 s | 86 MiB |
-| `<complex>` | ok |  |  | ok | 0.50 s | 28 MiB | 0.39 s | 118 MiB |
-| `<concepts>` | ok |  |  | ok | 0.08 s | 9 MiB | 0.10 s | 85 MiB |
-| `<condition_variable>` | fail | 1 | `bits/shared_ptr_base.h:625:9: error: destructor type '_Sp_counted_ptr_inplace' in object destruction expression does not match the type '_Sp_counted_ptr_inplace…` | ok | 0.50 s | 26 MiB | 0.42 s | 121 MiB |
-| `<coroutine>` | ok |  |  | ok | 0.09 s | 10 MiB | 0.07 s | 87 MiB |
-| `<csetjmp>` | ok |  |  | ok | 0.08 s | 7 MiB | 0.08 s | 82 MiB |
-| `<csignal>` | ok |  |  | ok | 0.15 s | 8 MiB | 0.07 s | 83 MiB |
-| `<cstdalign>` | ok |  |  | ok | 0.06 s | 7 MiB | 0.07 s | 81 MiB |
-| `<cstdarg>` | ok |  |  | ok | 0.07 s | 6 MiB | 0.07 s | 81 MiB |
-| `<cstdbool>` | ok |  |  | ok | 0.07 s | 7 MiB | 0.06 s | 81 MiB |
-| `<cstddef>` | ok |  |  | ok | 0.07 s | 8 MiB | 0.06 s | 83 MiB |
-| `<cstdint>` | ok |  |  | ok | 0.06 s | 7 MiB | 0.06 s | 81 MiB |
-| `<cstdio>` | ok |  |  | ok | 0.06 s | 7 MiB | 0.06 s | 82 MiB |
-| `<cstdlib>` | ok |  |  | ok | 0.08 s | 7 MiB | 0.08 s | 83 MiB |
-| `<cstring>` | ok |  |  | ok | 0.07 s | 7 MiB | 0.08 s | 82 MiB |
-| `<ctgmath>` | ok |  |  | ok | 0.47 s | 27 MiB | 0.38 s | 118 MiB |
-| `<ctime>` | ok |  |  | ok | 0.08 s | 8 MiB | 0.06 s | 82 MiB |
-| `<cuchar>` | ok |  |  | ok | 0.04 s | 8 MiB | 0.05 s | 83 MiB |
-| `<cwchar>` | ok |  |  | ok | 0.05 s | 8 MiB | 0.05 s | 82 MiB |
-| `<cwctype>` | ok |  |  | ok | 0.05 s | 7 MiB | 0.05 s | 81 MiB |
-| `<deque>` | ok |  |  | ok | 0.14 s | 14 MiB | 0.14 s | 96 MiB |
-| `<exception>` | ok |  |  | ok | 0.07 s | 9 MiB | 0.07 s | 86 MiB |
-| `<execution>` | fail | 4 | `pstl/algorithm_impl.h:1978:22: error: no matching constructor for initialization of '_PartitionRange'` | ok | 0.54 s | 31 MiB | 0.48 s | 132 MiB |
-| `<expected>` | ok |  |  | ok | 0.03 s | 7 MiB | 0.05 s | 81 MiB |
-| `<filesystem>` | fail | 1 | `tuple:2446:14: error: no matching function for call to '__get_helper'` | ok | 0.39 s | 28 MiB | 0.39 s | 122 MiB |
-| `<format>` | fail | 2 | `format:4173:9: error: call to '__builtin_memcpy' is ambiguous` | ok | 0.59 s | 33 MiB | 0.55 s | 132 MiB |
-| `<forward_list>` | ok |  |  | ok | 0.13 s | 14 MiB | 0.12 s | 95 MiB |
-| `<fstream>` | ok |  |  | ok | 0.27 s | 22 MiB | 0.31 s | 112 MiB |
-| `<functional>` | ok |  |  | ok | 0.23 s | 16 MiB | 0.20 s | 104 MiB |
-| `<future>` | fail | 8 | `mutex:591:48: error: pack expansions of braced lists is not supported yet` | ok | 0.42 s | 29 MiB | 0.40 s | 126 MiB |
-| `<generator>` | fail | 14 | `ranges:1888:42: error: use of undeclared identifier '_Const'` | ok | 0.26 s | 22 MiB | 0.29 s | 122 MiB |
-| `<initializer_list>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 82 MiB |
-| `<iomanip>` | ok |  |  | ok | 0.26 s | 22 MiB | 0.27 s | 113 MiB |
-| `<ios>` | ok |  |  | ok | 0.20 s | 21 MiB | 0.21 s | 109 MiB |
-| `<iosfwd>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 84 MiB |
-| `<iostream>` | ok |  |  | ok | 0.22 s | 21 MiB | 0.23 s | 110 MiB |
-| `<istream>` | ok |  |  | ok | 0.21 s | 21 MiB | 0.24 s | 110 MiB |
-| `<iterator>` | ok |  |  | ok | 0.21 s | 20 MiB | 0.21 s | 108 MiB |
-| `<latch>` | ok |  |  | ok | 0.06 s | 12 MiB | 0.06 s | 90 MiB |
-| `<limits>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 83 MiB |
-| `<list>` | fail | 2 | `bits/stl_list.h:189:14: error: use of undeclared identifier '_Iter'` | ok | 0.09 s | 13 MiB | 0.11 s | 95 MiB |
-| `<locale>` | ok |  |  | ok | 0.24 s | 21 MiB | 0.23 s | 111 MiB |
-| `<map>` | ok |  |  | ok | 0.11 s | 14 MiB | 0.11 s | 96 MiB |
-| `<memory>` | ok |  |  | ok | 0.27 s | 23 MiB | 0.28 s | 115 MiB |
-| `<memory_resource>` | ok |  |  | ok | 0.15 s | 17 MiB | 0.16 s | 103 MiB |
-| `<mutex>` | fail | 2 | `mutex:591:48: error: pack expansions of braced lists is not supported yet` | ok | 0.19 s | 14 MiB | 0.13 s | 97 MiB |
-| `<new>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.06 s | 83 MiB |
-| `<numbers>` | ok |  |  | ok | 0.05 s | 9 MiB | 0.06 s | 85 MiB |
-| `<numeric>` | ok |  |  | ok | 0.06 s | 10 MiB | 0.05 s | 89 MiB |
-| `<optional>` | ok |  |  | ok | 0.05 s | 10 MiB | 0.06 s | 90 MiB |
-| `<ostream>` | ok |  |  | ok | 0.21 s | 21 MiB | 0.21 s | 110 MiB |
-| `<print>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.03 s | 79 MiB |
-| `<queue>` | ok |  |  | ok | 0.13 s | 15 MiB | 0.13 s | 100 MiB |
-| `<random>` | ok |  |  | ok | 0.30 s | 27 MiB | 0.31 s | 120 MiB |
-| `<ranges>` | fail | 14 | `ranges:1888:42: error: use of undeclared identifier '_Const'` | ok | 0.23 s | 21 MiB | 0.32 s | 121 MiB |
-| `<ratio>` | ok |  |  | ok | 0.05 s | 9 MiB | 0.10 s | 85 MiB |
-| `<regex>` | ok |  |  | ok | 0.46 s | 28 MiB | 0.56 s | 125 MiB |
-| `<scoped_allocator>` | ok |  |  | ok | 0.12 s | 12 MiB | 0.12 s | 93 MiB |
-| `<semaphore>` | ok |  |  | ok | 0.17 s | 14 MiB | 0.16 s | 95 MiB |
-| `<set>` | ok |  |  | ok | 0.19 s | 14 MiB | 0.17 s | 96 MiB |
-| `<shared_mutex>` | ok |  |  | ok | 0.17 s | 12 MiB | 0.10 s | 92 MiB |
-| `<source_location>` | ok |  |  | ok | 0.07 s | 8 MiB | 0.07 s | 82 MiB |
-| `<span>` | ok |  |  | ok | 0.15 s | 12 MiB | 0.13 s | 93 MiB |
-| `<spanstream>` | ok |  |  | ok | 0.08 s | 7 MiB | 0.09 s | 81 MiB |
-| `<sstream>` | ok |  |  | ok | 0.40 s | 21 MiB | 0.34 s | 110 MiB |
-| `<stack>` | ok |  |  | ok | 0.18 s | 14 MiB | 0.16 s | 96 MiB |
-| `<stacktrace>` | ok |  |  | ok | 0.05 s | 7 MiB | 0.06 s | 81 MiB |
-| `<stdexcept>` | ok |  |  | ok | 0.26 s | 18 MiB | 0.29 s | 106 MiB |
-| `<stdfloat>` | ok |  |  | ok | 0.03 s | 6 MiB | 0.05 s | 76 MiB |
-| `<stop_token>` | ok |  |  | ok | 0.47 s | 26 MiB | 0.42 s | 118 MiB |
-| `<streambuf>` | ok |  |  | ok | 0.36 s | 20 MiB | 0.27 s | 107 MiB |
-| `<string>` | ok |  |  | ok | 0.25 s | 18 MiB | 0.23 s | 105 MiB |
-| `<string_view>` | ok |  |  | ok | 0.15 s | 14 MiB | 0.16 s | 96 MiB |
-| `<syncstream>` | ok |  |  | ok | 0.35 s | 21 MiB | 0.34 s | 111 MiB |
-| `<system_error>` | ok |  |  | ok | 0.30 s | 19 MiB | 0.23 s | 106 MiB |
-| `<text_encoding>` | ok |  |  | ok | 0.06 s | 7 MiB | 0.08 s | 81 MiB |
-| `<thread>` | ok |  |  | ok | 0.46 s | 26 MiB | 0.36 s | 118 MiB |
-| `<tuple>` | ok |  |  | ok | 0.10 s | 12 MiB | 0.12 s | 92 MiB |
-| `<type_traits>` | ok |  |  | ok | 0.07 s | 8 MiB | 0.11 s | 85 MiB |
-| `<typeindex>` | ok |  |  | ok | 0.07 s | 9 MiB | 0.07 s | 86 MiB |
-| `<typeinfo>` | ok |  |  | ok | 0.05 s | 8 MiB | 0.07 s | 82 MiB |
-| `<unordered_map>` | ok |  |  | ok | 0.19 s | 15 MiB | 0.18 s | 99 MiB |
-| `<unordered_set>` | ok |  |  | ok | 0.18 s | 15 MiB | 0.20 s | 99 MiB |
-| `<utility>` | ok |  |  | ok | 0.08 s | 10 MiB | 0.11 s | 88 MiB |
-| `<valarray>` | fail | 16 | `bits/valarray_after.h:179:35: error: expected a type` | ok | 0.35 s | 22 MiB | 0.30 s | 108 MiB |
-| `<variant>` | ok |  |  | ok | 0.11 s | 11 MiB | 0.16 s | 90 MiB |
-| `<vector>` | ok |  |  | ok | 0.23 s | 14 MiB | 0.38 s | 98 MiB |
-| `<version>` | ok |  |  | ok | 0.13 s | 7 MiB | 0.20 s | 80 MiB |
+| `<algorithm>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.14 s | 91 MiB |
+| `<any>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.04 s | 81 MiB |
+| `<array>` | ok |  |  | ok | 0.08 s | 11 MiB | 0.07 s | 85 MiB |
+| `<atomic>` | ok |  |  | ok | 0.09 s | 11 MiB | 0.09 s | 86 MiB |
+| `<barrier>` | ok |  |  | ok | 0.27 s | 22 MiB | 0.27 s | 107 MiB |
+| `<bit>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.04 s | 81 MiB |
+| `<bitset>` | ok |  |  | ok | 0.19 s | 18 MiB | 0.20 s | 100 MiB |
+| `<cassert>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 76 MiB |
+| `<ccomplex>` | ok |  |  | ok | 0.35 s | 27 MiB | 0.30 s | 112 MiB |
+| `<cctype>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 76 MiB |
+| `<cerrno>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.02 s | 76 MiB |
+| `<cfenv>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 76 MiB |
+| `<cfloat>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.02 s | 75 MiB |
+| `<charconv>` | ok |  |  | ok | 0.04 s | 10 MiB | 0.06 s | 82 MiB |
+| `<chrono>` | ok |  |  | ok | 0.65 s | 41 MiB | 0.66 s | 144 MiB |
+| `<cinttypes>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 76 MiB |
+| `<ciso646>` | ok |  |  | ok | 0.01 s | 7 MiB | 0.03 s | 76 MiB |
+| `<climits>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 76 MiB |
+| `<clocale>` | ok |  |  | ok | 0.01 s | 8 MiB | 0.03 s | 76 MiB |
+| `<cmath>` | ok |  |  | ok | 0.12 s | 18 MiB | 0.11 s | 93 MiB |
+| `<codecvt>` | ok |  |  | ok | 0.22 s | 19 MiB | 0.24 s | 101 MiB |
+| `<compare>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.08 s | 81 MiB |
+| `<complex>` | ok |  |  | ok | 0.32 s | 27 MiB | 0.30 s | 112 MiB |
+| `<concepts>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.04 s | 80 MiB |
+| `<condition_variable>` | ok |  |  | ok | 0.33 s | 26 MiB | 0.33 s | 115 MiB |
+| `<coroutine>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.07 s | 82 MiB |
+| `<csetjmp>` | ok |  |  | ok | 0.03 s | 7 MiB | 0.03 s | 76 MiB |
+| `<csignal>` | ok |  |  | ok | 0.04 s | 8 MiB | 0.03 s | 78 MiB |
+| `<cstdalign>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.04 s | 76 MiB |
+| `<cstdarg>` | ok |  |  | ok | 0.03 s | 7 MiB | 0.04 s | 76 MiB |
+| `<cstdbool>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 76 MiB |
+| `<cstddef>` | ok |  |  | ok | 0.04 s | 7 MiB | 0.03 s | 78 MiB |
+| `<cstdint>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 76 MiB |
+| `<cstdio>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 77 MiB |
+| `<cstdlib>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 77 MiB |
+| `<cstring>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.03 s | 77 MiB |
+| `<ctgmath>` | ok |  |  | ok | 0.39 s | 27 MiB | 0.28 s | 111 MiB |
+| `<ctime>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 76 MiB |
+| `<cuchar>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 77 MiB |
+| `<cwchar>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 77 MiB |
+| `<cwctype>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 76 MiB |
+| `<deque>` | ok |  |  | ok | 0.14 s | 14 MiB | 0.11 s | 90 MiB |
+| `<exception>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.07 s | 81 MiB |
+| `<execution>` | ok |  |  | ok | 0.42 s | 31 MiB | 0.47 s | 126 MiB |
+| `<expected>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.04 s | 76 MiB |
+| `<filesystem>` | ok |  |  | ok | 0.36 s | 27 MiB | 0.37 s | 116 MiB |
+| `<format>` | ok |  |  | ok | 0.46 s | 34 MiB | 0.49 s | 127 MiB |
+| `<forward_list>` | ok |  |  | ok | 0.10 s | 13 MiB | 0.13 s | 90 MiB |
+| `<fstream>` | ok |  |  | ok | 0.24 s | 21 MiB | 0.25 s | 106 MiB |
+| `<functional>` | ok |  |  | ok | 0.17 s | 17 MiB | 0.18 s | 98 MiB |
+| `<future>` | ok |  |  | ok | 0.36 s | 29 MiB | 0.36 s | 121 MiB |
+| `<generator>` | ok |  |  | ok | 0.22 s | 21 MiB | 0.28 s | 116 MiB |
+| `<initializer_list>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 77 MiB |
+| `<iomanip>` | ok |  |  | ok | 0.25 s | 22 MiB | 0.27 s | 107 MiB |
+| `<ios>` | ok |  |  | ok | 0.21 s | 21 MiB | 0.20 s | 104 MiB |
+| `<iosfwd>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.02 s | 78 MiB |
+| `<iostream>` | ok |  |  | ok | 0.22 s | 20 MiB | 0.21 s | 105 MiB |
+| `<istream>` | ok |  |  | ok | 0.21 s | 21 MiB | 0.25 s | 104 MiB |
+| `<iterator>` | ok |  |  | ok | 0.22 s | 19 MiB | 0.21 s | 100 MiB |
+| `<latch>` | ok |  |  | ok | 0.07 s | 11 MiB | 0.06 s | 85 MiB |
+| `<limits>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 75 MiB |
+| `<list>` | ok |  |  | ok | 0.10 s | 13 MiB | 0.12 s | 89 MiB |
+| `<locale>` | ok |  |  | ok | 0.24 s | 21 MiB | 0.23 s | 105 MiB |
+| `<map>` | ok |  |  | ok | 0.11 s | 14 MiB | 0.12 s | 90 MiB |
+| `<memory>` | ok |  |  | ok | 0.31 s | 23 MiB | 0.25 s | 109 MiB |
+| `<memory_resource>` | ok |  |  | ok | 0.16 s | 17 MiB | 0.19 s | 98 MiB |
+| `<mutex>` | ok |  |  | ok | 0.12 s | 15 MiB | 0.12 s | 91 MiB |
+| `<new>` | ok |  |  | ok | 0.01 s | 8 MiB | 0.03 s | 77 MiB |
+| `<numbers>` | ok |  |  | ok | 0.02 s | 9 MiB | 0.03 s | 80 MiB |
+| `<numeric>` | ok |  |  | ok | 0.05 s | 10 MiB | 0.05 s | 84 MiB |
+| `<optional>` | ok |  |  | ok | 0.06 s | 10 MiB | 0.06 s | 84 MiB |
+| `<ostream>` | ok |  |  | ok | 0.21 s | 21 MiB | 0.22 s | 104 MiB |
+| `<print>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 76 MiB |
+| `<queue>` | ok |  |  | ok | 0.12 s | 15 MiB | 0.17 s | 94 MiB |
+| `<random>` | ok |  |  | ok | 0.29 s | 26 MiB | 0.32 s | 114 MiB |
+| `<ranges>` | ok |  |  | ok | 0.23 s | 21 MiB | 0.27 s | 116 MiB |
+| `<ratio>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.04 s | 80 MiB |
+| `<regex>` | ok |  |  | ok | 0.38 s | 28 MiB | 0.37 s | 121 MiB |
+| `<scoped_allocator>` | ok |  |  | ok | 0.07 s | 12 MiB | 0.11 s | 88 MiB |
+| `<semaphore>` | ok |  |  | ok | 0.10 s | 14 MiB | 0.10 s | 90 MiB |
+| `<set>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.11 s | 91 MiB |
+| `<shared_mutex>` | ok |  |  | ok | 0.07 s | 12 MiB | 0.09 s | 87 MiB |
+| `<source_location>` | ok |  |  | ok | 0.03 s | 8 MiB | 0.02 s | 77 MiB |
+| `<span>` | ok |  |  | ok | 0.09 s | 12 MiB | 0.09 s | 87 MiB |
+| `<spanstream>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 76 MiB |
+| `<sstream>` | ok |  |  | ok | 0.23 s | 21 MiB | 0.23 s | 105 MiB |
+| `<stack>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.10 s | 90 MiB |
+| `<stacktrace>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.03 s | 75 MiB |
+| `<stdexcept>` | ok |  |  | ok | 0.19 s | 17 MiB | 0.17 s | 100 MiB |
+| `<stdfloat>` | ok |  |  | ok | 0.01 s | 6 MiB | 0.02 s | 71 MiB |
+| `<stop_token>` | ok |  |  | ok | 0.32 s | 25 MiB | 0.30 s | 112 MiB |
+| `<streambuf>` | ok |  |  | ok | 0.19 s | 19 MiB | 0.24 s | 102 MiB |
+| `<string>` | ok |  |  | ok | 0.20 s | 18 MiB | 0.21 s | 100 MiB |
+| `<string_view>` | ok |  |  | ok | 0.12 s | 14 MiB | 0.11 s | 91 MiB |
+| `<syncstream>` | ok |  |  | ok | 0.24 s | 21 MiB | 0.23 s | 105 MiB |
+| `<system_error>` | ok |  |  | ok | 0.17 s | 19 MiB | 0.18 s | 100 MiB |
+| `<text_encoding>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 76 MiB |
+| `<thread>` | ok |  |  | ok | 0.34 s | 25 MiB | 0.31 s | 113 MiB |
+| `<tuple>` | ok |  |  | ok | 0.07 s | 12 MiB | 0.08 s | 87 MiB |
+| `<type_traits>` | ok |  |  | ok | 0.04 s | 9 MiB | 0.05 s | 80 MiB |
+| `<typeindex>` | ok |  |  | ok | 0.03 s | 9 MiB | 0.04 s | 81 MiB |
+| `<typeinfo>` | ok |  |  | ok | 0.02 s | 8 MiB | 0.03 s | 77 MiB |
+| `<unordered_map>` | ok |  |  | ok | 0.13 s | 15 MiB | 0.13 s | 93 MiB |
+| `<unordered_set>` | ok |  |  | ok | 0.14 s | 15 MiB | 0.16 s | 93 MiB |
+| `<utility>` | ok |  |  | ok | 0.04 s | 10 MiB | 0.08 s | 82 MiB |
+| `<valarray>` | ok |  |  | ok | 0.22 s | 22 MiB | 0.20 s | 103 MiB |
+| `<variant>` | ok |  |  | ok | 0.08 s | 11 MiB | 0.07 s | 85 MiB |
+| `<vector>` | ok |  |  | ok | 0.15 s | 13 MiB | 0.14 s | 93 MiB |
+| `<version>` | ok |  |  | ok | 0.02 s | 7 MiB | 0.02 s | 76 MiB |
 
 #### Error clusters (`-std=c++20`, generated)
 
-13 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 13; the hand-written triage is in "Clusters" below.
+0 clusters over kiln's non-ok headers that clang++-19 accepts. A cluster is an `error:` message with the location dropped, quoted names as `'…'` and numbers as `N` (`spec/libcxx.md` "Clusters"). "first" counts headers whose first error it is, "any" headers that report it. Top 0; the hand-written triage is in "Clusters" below.
 
 | # | first | any | cluster | headers (first) |
 |---:|---:|---:|---|---|
-| 1 | 4 | 4 | `use of undeclared identifier '…'` | `<chrono>` `<generator>` `<list>` `<ranges>` |
-| 2 | 2 | 2 | `pack expansions of braced lists is not supported yet` | `<future>` `<mutex>` |
-| 3 | 1 | 4 | `no matching function for call to '…'` | `<filesystem>` |
-| 4 | 1 | 2 | `call to '…' is ambiguous` | `<format>` |
-| 5 | 1 | 2 | `destructor type '…' in object destruction expression does not match the type '…' of the object being destroyed` | `<condition_variable>` |
-| 6 | 1 | 2 | `no matching constructor for initialization of '…'` | `<execution>` |
-| 7 | 1 | 1 | `expected a type` | `<valarray>` |
-| 8 | 0 | 2 | `constexpr if condition is not a constant expression` | (e.g. `<generator>`) |
-| 9 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Range = <error type>]` | (e.g. `<generator>`) |
-| 10 | 0 | 2 | `constraints not satisfied for alias template '…' [with _Range = _Base]` | (e.g. `<generator>`) |
-| 11 | 0 | 2 | `expected '…' after alias declaration` | (e.g. `<generator>`) |
-| 12 | 0 | 2 | `no type named '…' in '…'` | (e.g. `<generator>`) |
-| 13 | 0 | 1 | `out-of-line definition of '…' does not match any declaration in '…'` | (e.g. `<valarray>`) |
 
 <!-- libstdcxx:c++20:end -->
 

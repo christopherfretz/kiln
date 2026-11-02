@@ -5184,7 +5184,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn tag_matches(&self, d: DeclId, keyword: TagKeyword) -> bool {
+    pub(crate) fn tag_matches(&self, d: DeclId, keyword: TagKeyword) -> bool {
         let n = self.ast.decls.get(d);
         match keyword {
             TagKeyword::Enum => n.kind() == DeclKind::Enum,
