@@ -1339,17 +1339,19 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     .arg(text);
                 self.emit(d);
             }
-            if template_kw {
-                self.bump();
-            }
+            // The component begins at its `template` keyword, if any (clang's
+            // last-qualifier-name location).
+            let head = if template_kw { Some(self.bump().span.lo) } else { None };
             let loc = self.bump().span.lo;
+            let head = head.unwrap_or(loc);
             let Some((args, _, _)) = self.parse_template_arg_list() else { return Err(()) };
             let stop = limit == Some(self.pos);
             if !stop {
                 self.expect(Punct::ColonColon);
             }
-            qual =
-                Some(self.nested_name_template_id(class, qual, name, &args, template_kw, loc)?);
+            qual = Some(
+                self.nested_name_template_id(class, qual, name, &args, template_kw, loc, head)?,
+            );
             if stop {
                 break;
             }
@@ -1366,6 +1368,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         args: &[kiln_ast::types::TemplateArg],
         template_kw: bool,
         loc: Loc,
+        head: Loc,
     ) -> Result<(DeclId, NnsId), ()> {
         let dep_prefix = qual.is_some_and(|(c, _)| self.s.is_dependent_ctx(c));
         let prefix_nns = qual.map(|q| q.1);
@@ -1381,7 +1384,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     return Err(());
                 };
                 self.s
-                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, loc)
+                    .act_on_nested_name_template_id(prefix_nns, d, ty, template_kw, head)
                     .ok_or(())?
             }
             (_, Some((c, pn))) if dep_prefix || class == NameClass::Dependent => {
@@ -1393,7 +1396,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                     kiln_ast::types::TagKeyword::None,
                     loc,
                 );
-                self.s.act_on_nested_name_template_id(Some(pn), c, ty, template_kw, loc).ok_or(())?
+                self.s.act_on_nested_name_template_id(Some(pn), c, ty, template_kw, head).ok_or(())?
             }
             _ => {
                 let text = self.s.ast.symbols().as_str(name).to_owned();
