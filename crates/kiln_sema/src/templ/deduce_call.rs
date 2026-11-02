@@ -512,8 +512,11 @@ impl Sema<'_, '_> {
             let r = self.deduce(p, a, tdf, &mut d);
             if r != Tdk::Success {
                 // clang shows the written `cv T` of an underqualified
-                // result and the canonical type of a mismatch.
-                if r == Tdk::Underqualified
+                // result; clang 19 the canonical type of a mismatch,
+                // clang 22 the written one (`T *`, not
+                // `type-parameter-0-0 *`).
+                let mismatch = r == Tdk::NonDeducedMismatch && self.clang_compat >= 22;
+                if (r == Tdk::Underqualified || mismatch)
                     && let TypeView::Function(f) = self.ast.types.view(pfn.ty())
                 {
                     let written = self.non_reference(f.ret());
