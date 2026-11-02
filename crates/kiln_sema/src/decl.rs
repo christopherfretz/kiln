@@ -1334,7 +1334,9 @@ impl Sema<'_, '_> {
         let pos = d
             .chunks
             .iter()
-            .position(|ch| matches!(ch, Chunk::Array { size: Some(s), .. } if self.begin_loc(*s) == loc))
+            .position(
+                |ch| matches!(ch, Chunk::Array { size: Some(s), .. } if self.begin_loc(*s) == loc),
+            )
             .unwrap_or(0);
         let outer = &d.chunks[..pos];
         let id = if matches!(outer.first(), Some(Chunk::Function { .. })) {

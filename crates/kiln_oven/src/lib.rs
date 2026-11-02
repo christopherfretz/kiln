@@ -447,15 +447,6 @@ pub struct Oven {
     /// provisional global costs one static slot per translation unit, not
     /// one per evaluation (spec/oven.md "Unknown references").
     pub(crate) provisional_objs: FxHashMap<u32, (ty::OTy, u64)>,
-    /// Globals whose resolution depends on the lax mode
-    /// ([`value::VarInfo::lax`]), and the mode they were resolved in.
-    pub(crate) lax_globals: Vec<u32>,
-    pub(crate) lax_resolved: bool,
-    /// The object each lax global last resolved to: remade in place when
-    /// a mode switch resolves it again, so a lax global costs one static
-    /// slot per translation unit however often the mode alternates
-    /// (spec/oven.md "Evaluation entry points").
-    pub(crate) lax_objs: FxHashMap<u32, u64>,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -525,9 +516,6 @@ impl Oven {
             global_map: FxHashMap::default(),
             provisional: Vec::new(),
             provisional_objs: FxHashMap::default(),
-            lax_globals: Vec::new(),
-            lax_objs: FxHashMap::default(),
-            lax_resolved: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             lets: FxHashMap::default(),
@@ -784,8 +772,6 @@ impl Oven {
             + map(&self.global_map)
             + cap(&self.provisional)
             + map(&self.provisional_objs)
-            + cap(&self.lax_globals)
-            + map(&self.lax_objs)
             + map(&self.lit_exprs)
             + map(&self.thawed)
             + map(&self.lets)
@@ -896,17 +882,11 @@ impl Oven {
         (r, c)
     }
 
-    /// Starts the outermost context: globals resolved provisionally (or
-    /// for the other strictness) are forgotten, the counters reset.
+    /// Starts the outermost context: globals resolved provisionally are
+    /// forgotten, the counters reset.
     fn begin_outermost(&mut self, silent: bool, enum_check: bool, const_context: bool) {
         for g in self.provisional.drain(..) {
             self.globals[g as usize].state = compile::GState::Unresolved;
-        }
-        if self.lax_resolved != self.run.lax {
-            self.lax_resolved = self.run.lax;
-            for g in self.lax_globals.drain(..) {
-                self.globals[g as usize].state = compile::GState::Unresolved;
-            }
         }
         self.run.silent = silent;
         self.run.enum_check = enum_check;

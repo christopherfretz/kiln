@@ -301,39 +301,43 @@ the evaluator's flattened type table.
   array or pointer) is read as if it were (`VarInfo::lax`); its `mutable`
   members are not (below, WP-183). Lax mode
   applies only to an outermost evaluation (nested in a bridge callback it
-  is plain `try_fold`). Variables resolved under lax mode are recorded in
-  `lax_globals` and reset to unresolved when the next outermost
-  evaluation runs in the other mode, and lax-mode calls are never
-  memoized, so a lax read never leaks into a strict evaluation. A lax
-  global keeps one static object for the whole translation unit
-  (`Oven::lax_objs`, keyed by global, WP-387): re-resolving it in either
-  mode remakes that object in place (`Memory::reinit_static` drops its
-  union records and clears its contents and flags, keeping slot,
-  generation and address) instead of allocating a fresh one, so a
-  strict/lax alternation costs no static memory per switch and a pointer
-  to the global taken in one mode still designates it in the other
-  (test `limits.rs::lax_globals_do_not_grow`). The slot is reused only
-  when the object is live, of the same type and not mid-resolution;
-  otherwise a fresh one is allocated and recorded. **Lax folds** through
+  is plain `try_fold`). Lax-mode calls are never memoized, so a lax
+  read never leaks into a strict evaluation. A lax global keeps one
+  static object for the whole translation unit (WP-407): it is resolved
+  once, in whichever mode first names it, and is never reset by a mode
+  switch, so a strict/lax alternation costs no static memory and a
+  pointer to the global taken in one mode designates the same object,
+  holding the same value, in the other (test
+  `limits.rs::lax_globals_do_not_grow`). **Lax folds** through
   a usable variable (WP-395): a constexpr pointer, reference or class
   member pointing at a lax global (`constexpr const double *p = &d;
   int a[(int)*p];`) is resolved strictly, before or outside any lax fold,
   so the pointer it holds must designate an object a later lax fold can
-  read. A lax global whose initializer evaluates as a strict constant
-  (or whose value sema already froze) therefore gets one static object
-  for both modes, holding that value but flagged external
+  read. A lax global therefore gets one static object for both modes,
+  holding its value but flagged external
   (`Origin::External`, `Alloc::frame == LAX_READ`): a strict read still
   faults "read of non-constexpr variable" exactly as before, and only a
   lax fold (`Memory::lax`, set by `fold_rvalue` for its outermost run)
-  may read it; writes fault in either mode. Such a global is resolved
-  once per translation unit (one strict evaluation of its initializer,
-  memoized like any variable) and is not recorded in `lax_globals`. A lax
-  global whose initializer is not a strict constant (it reads another
-  lax global) keeps the mode-dependent object above, so a usable
-  pointer to it taken strictly still does not fold (open limitation).
+  may read it; writes fault in either mode. Its value is the one sema
+  froze, or else its initializer evaluated **laxly** whatever the mode
+  of the evaluation that resolves it (`Oven::resolve_var` sets
+  `RunState::lax` and `Memory::lax` around it): clang's
+  `VarDecl::evaluateValue` only notes (`CCEDiag`) a read of a
+  non-constexpr variable, so `const double d1 = d0 * 2;` keeps the value
+  5.0 for a later fold however it is reached (`constexpr const double
+  *p = &d1; int a[(int)*p];` folds, WP-407). Before WP-407 such a global
+  was resolved per mode and reset at each mode switch, so a pointer
+  resolved strictly did not fold and, worse, a pointer thawed in a lax
+  fold kept reading the lax contents in a later strict evaluation that
+  never re-resolved the global (`constexpr double v = *p;` accepted). An
+  initializer that does not fold even laxly leaves the object unbacked,
+  so every read faults in either mode; a global met mid-initialization
+  (`VarEvalState::Evaluating`) is resolved provisionally, for that
+  evaluation only.
   A genuinely non-constant bound (a pointer to a non-`const` variable, or
   any function-scope bound, which clang does not fold) stays a variable
   length array (tests `expr.const/lax-fold-through-pointer.cpp`,
+  `expr.const/lax-fold-through-pointer-chain.cpp`,
   `dcl.array/vla-through-constexpr-pointer.cpp`). Codegen
   uses it for its non-initializer fold candidates; sema uses it
   (`OvenBridge::fold_rvalue_int`) for clang's folded array bound
