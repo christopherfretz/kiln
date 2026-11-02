@@ -2425,8 +2425,12 @@ guide is used. A canonical pack-expansion argument (`Idx<I...>` in a
 guide's canonical signature) expands like the written one
 (`expand_arg`). The aggregate deduction candidate goes through the same
 alias transformation. Guide signatures print such members qualified
-(`typename P<T, short>::Chk::same<U>()`) where clang prints them as
-written (`Chk::template same<U>()`), a note-only difference.
+(`typename P<T, short>::Chk::template same<U>()`) where clang prints
+them as written (`Chk::template same<U>()`), and a member alias
+template-id in a qualifier gains a stray keyword (`template
+ChkDep<D>::ok()` for clang's `ChkDep<D>::ok()`): note-only differences
+kept for a follow-up (the rebuilt dependent name has no written-form
+sugar).
 `tests/conformance/over.match.class.deduct/alias-ctor-template-members.cpp`,
 `.../alias-aggregate.cpp`.
 
