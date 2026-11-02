@@ -311,7 +311,7 @@ impl<'a> AstNames<'a> {
             self.write_component(ctx, out);
             if spec_args && !self.is_unnamed(ctx) {
                 if let Some(args) = self.ast.spec_print_args(ctx) {
-                    write_arg_list(&self.ast.types, self, args, out);
+                    crate::types::write_arg_list_of(&self.ast.types, self, ctx, args, out);
                 } else if let Some((args, len)) = self.partial_print_args(ctx) {
                     write_arg_list_prefix(&self.ast.types, self, args, len, out);
                 }
@@ -437,7 +437,7 @@ impl<'a> AstNames<'a> {
             {
                 self.write_name(ctx, out);
                 if let Some(args) = self.ast.spec_print_args(ctx) {
-                    write_arg_list(&self.ast.types, self, args, out);
+                    crate::types::write_arg_list_of(&self.ast.types, self, ctx, args, out);
                 }
                 out.push_str("::");
             }
@@ -1365,6 +1365,18 @@ impl TypeNames for AstNames<'_> {
         self.ast.consts.print(value, &self.ast.strings, self, &opts, out);
     }
 
+    fn write_value_typed(&self, _ty: QualType, value: ConstValueId, out: &mut String) {
+        let opts = ValueOptions {
+            include_type: true,
+            ..ValueOptions::with_style(PrintStyle::TemplateArg)
+        };
+        self.ast.consts.print(value, &self.ast.strings, self, &opts, out);
+    }
+
+    fn arg_includes_type(&self, template: DeclId, index: usize) -> bool {
+        self.ast.nttp_has_deduced_type(template, index)
+    }
+
     fn write_symbol(&self, sym: Symbol, out: &mut String) {
         out.push_str(self.ast.symbols().as_str(sym));
     }
@@ -1449,6 +1461,14 @@ impl TypeNames for Ast {
 
     fn write_value(&self, ty: QualType, value: ConstValueId, out: &mut String) {
         AstNames::new(self).write_value(ty, value, out);
+    }
+
+    fn write_value_typed(&self, ty: QualType, value: ConstValueId, out: &mut String) {
+        AstNames::new(self).write_value_typed(ty, value, out);
+    }
+
+    fn arg_includes_type(&self, template: DeclId, index: usize) -> bool {
+        self.nttp_has_deduced_type(template, index)
     }
 
     fn write_symbol(&self, sym: Symbol, out: &mut String) {

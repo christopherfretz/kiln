@@ -459,7 +459,8 @@ impl Sema<'_, '_> {
                         _ => false,
                     }
                 });
-                if self.defaulted_is_trivial(f, k, true) && self.selected_all_trivial(r, k, const_arg)
+                if self.defaulted_is_trivial(f, k, true)
+                    && self.selected_all_trivial(r, k, const_arg)
                 {
                     self.ast.decls.mark_function(f, FnSpec::new().with_trivial(true));
                 } else {

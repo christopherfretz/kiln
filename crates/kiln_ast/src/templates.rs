@@ -729,6 +729,30 @@ impl Ast {
         self.spec_info(d).map(|(_, s)| s.print_args)
     }
 
+    /// Whether parameter `index` of template `t` (or of the template of
+    /// specialization `t`) is a non-type parameter whose type is a
+    /// placeholder, so its arguments print with their type (clang
+    /// `TemplateParameterList::shouldIncludeTypeForArgument`).
+    pub fn nttp_has_deduced_type(&self, t: DeclId, index: usize) -> bool {
+        let t = self.spec_info(t).map_or(t, |(_, s)| s.template);
+        let Some(info) = self.template_info(t) else { return false };
+        let Some(p) =
+            self.lists.iter::<DeclId>(self.templates.param_list(info.params).params).nth(index)
+        else {
+            return false;
+        };
+        if self.decls.get(p).kind() != DeclKind::NonTypeTemplateParm {
+            return false;
+        }
+        let Some(q) = self.decls.get(p).ty() else { return false };
+        let q = self.types.desugar_top(q);
+        matches!(
+            self.types.view(q.ty()),
+            crate::types::TypeView::Auto { .. }
+                | crate::types::TypeView::DeducedTemplateSpecialization { .. }
+        )
+    }
+
     /// The member record of `d` with its index, when `d` is a member of a
     /// class template specialization.
     pub fn member_spec_info(&self, d: DeclId) -> Option<(u32, &MemberSpecInfo)> {

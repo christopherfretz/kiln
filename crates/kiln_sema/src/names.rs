@@ -6,7 +6,7 @@
 
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::DeclKind;
-use kiln_ast::expr::{ExprFlags, ExprKind};
+use kiln_ast::expr::ExprKind;
 use kiln_ast::types::TypeNames;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType};
 use kiln_source::symbol::Symbol;
@@ -104,7 +104,13 @@ impl<'s> SemaNames<'s> {
                         // print a specialization's canonical arguments,
                         // which carry no sugar to suppress their scope
                         // (`std::Ptr<std::D<int>>::g`, WP-172).
-                        kiln_ast::types::write_arg_list_scoped(&self.ast.types, self, args, &mut s);
+                        kiln_ast::types::write_arg_list_scoped_of(
+                            &self.ast.types,
+                            self,
+                            c,
+                            args,
+                            &mut s,
+                        );
                     }
                     chain.push(s);
                     name_in_scope = n.name();
@@ -197,7 +203,7 @@ impl SemaNames<'_> {
         }
         self.write_unscoped(c, s);
         if let Some(args) = self.ast.spec_print_args(c) {
-            kiln_ast::types::write_arg_list(&self.ast.types, self, args, s);
+            kiln_ast::types::write_arg_list_of(&self.ast.types, self, c, args, s);
         }
     }
 }
@@ -234,10 +240,6 @@ impl TypeNames for SemaNames<'_> {
     fn write_expr(&self, expr: ExprId, out: &mut String) {
         let n = self.ast.exprs.get(expr);
         match n.kind() {
-            ExprKind::IntegerLiteral if !n.has(ExprFlags::WIDE) => {
-                let v = u64::from(n.a()) | (u64::from(n.b()) << 32);
-                out.push_str(&v.to_string());
-            }
             ExprKind::DeclRefExpr => {
                 out.push_str(&self.simple(self.ast.exprs.decl(expr)).unwrap_or_default());
             }
@@ -271,6 +273,14 @@ impl TypeNames for SemaNames<'_> {
             // printer.
             _ => kiln_ast::dump::AstNames::new(self.ast).write_value(ty, value, out),
         }
+    }
+
+    fn write_value_typed(&self, ty: QualType, value: ConstValueId, out: &mut String) {
+        kiln_ast::dump::AstNames::new(self.ast).write_value_typed(ty, value, out);
+    }
+
+    fn arg_includes_type(&self, template: DeclId, index: usize) -> bool {
+        self.ast.nttp_has_deduced_type(template, index)
     }
 
     fn write_symbol(&self, sym: Symbol, out: &mut String) {

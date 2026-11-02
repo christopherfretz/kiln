@@ -912,6 +912,16 @@ context-free defaults (`NoEnv`):
 - **References** print without `&` (`x`).
 - **Class values** print as `S{1, 2}`.
 - Everything else prints as in the dump.
+- The type (suffix or cast) shows only where clang's `IncludeType` asks
+  for it: in a type's argument list, an argument of a template parameter
+  that is a non-type parameter with a placeholder type (`auto`, a class
+  template placeholder; `Ast::nttp_has_deduced_type`, clang
+  `shouldIncludeTypeForArgument`): `D<5UL>` for `template <auto N>`, `A<5>`
+  for `template <unsigned long N>`. The type printer learns the template
+  from the specialization or template-id (`write_arg_list_of`,
+  `TypeNames::arg_includes_type` / `write_value_typed`). An argument kept
+  as an expression prints as written, with its integer-literal suffix
+  (`D<7ul>` written prints `D<7UL>`; WP-292).
 
 **String escapes** (`StringPool::write_literal`):
 - `\\ \" \n \t \r \0 \a \b \f \v` print as escapes.
