@@ -221,6 +221,8 @@ pub struct TestResult {
     pub wall: Duration,
     /// The largest per-process peak RSS among the test's steps, KiB.
     pub max_rss_kb: Option<u64>,
+    /// The peak RSS of its kiln++ compile step, KiB.
+    pub compile_rss_kb: Option<u64>,
 }
 
 /// One test to run: its path, the lit.local.cfg files above it (outermost
@@ -496,6 +498,7 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         detail: String::new(),
         wall: Duration::ZERO,
         max_rss_kb: None,
+        compile_rss_kb: None,
     };
     if let Some(reason) = env_unsupported(&job.rel, &cfg.scratch, cfg.libcxx_version) {
         r.outcome = Outcome::Unsupported(reason);
@@ -783,6 +786,9 @@ fn attempt_step(
         let m = process::run_measured(cmd, &cfg.probe, &scratch.join("rss.txt"), timeout, limit)?;
         r.wall += m.wall;
         r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
+        if stage == Stage::Compile {
+            r.compile_rss_kb = r.compile_rss_kb.max(m.max_rss_kb);
+        }
         verdict = judge(stage, &m, kind == Kind::Verify);
         if matches!(verdict, Step::Ok) {
             if attempt > 1 {
@@ -1143,6 +1149,7 @@ mod tests {
             detail: String::new(),
             wall: Duration::ZERO,
             max_rss_kb: None,
+            compile_rss_kb: None,
         };
         if lines.is_empty() {
             execute(&cfg, &src, &scratch, Kind::Pass, &[], run, &mut r);

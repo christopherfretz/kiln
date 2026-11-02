@@ -159,7 +159,12 @@ seven locales libc++'s tests ask for (`en_US.UTF-8`, `fr_FR.UTF-8`,
 `<format>` and `<chrono>` tests are UNSUPPORTED. Run it once per container
 before a libc++ run (`spec/libcxx.md` "Feature set"). `--gate m3` is
 the M3 exit gate. A run's `--report` regenerates the per-directory table and
-the error-cluster table of a status page (`docs/status/libcxx-m3.md`). It is
+the error-cluster table of a status page (`docs/status/libcxx-m3.md`). Its
+Run table reports two memory numbers: **peak RSS**, the largest
+single-process peak over every step of every test (the test binaries' runs
+included, so a `large_tests` test that allocates gigabytes sets it), and
+**kiln compile peak RSS**, the largest peak of a kiln++ compile step alone,
+which is the one that tracks kiln's memory (`spec/libcxx.md` "Report"). It is
 run by hand or periodically, and the pass rate is tracked there. The
 contract is `spec/libcxx.md`. It builds kiln++ with the optimized `harness`
 cargo profile by default (`--profile debug|harness|release`; `spec/libcxx.md`

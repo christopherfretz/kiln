@@ -14,7 +14,15 @@
 //!   (`_LIBCPP_HAS_X` defined to `0`);
 //! - `locale.<name>` for each locale `locale -a` lists ([`locale_features`]);
 //! - `has-no-zdump` when `zdump --version` fails (the tzdata validation
-//!   tests compare against `zdump`).
+//!   tests compare against `zdump`);
+//! - from the target triple ([`target_triple`], kiln's default target: the
+//!   harness passes no `--target`) and the host ([`target_features`]):
+//!   `target=<triple>` (`params.py` `target_triple`), `linux` (`__linux__`
+//!   among the compiler's macros) and `buildhost=<os>` (`sys.platform`);
+//! - the thread API `__config` settles on ([`thread_api_features`]):
+//!   `libcpp-has-thread-api-pthread` / `-external` (`features.py` `macros`,
+//!   libc++ 22's `true_false_macros`), which `__config_site` selects or
+//!   `__config` computes from the target OS.
 //!
 //! The libc++ version (`_LIBCPP_VERSION` in `__config`, [`libcxx_version`])
 //! is not a lit feature; the harness uses it to gate environment
@@ -22,9 +30,8 @@
 //! `TZDATA_Z_UNSUPPORTED`).
 //!
 //! The rest of the set is fixed ([`FEATURES`]): what that configuration
-//! derives for libc++ 19.1.7 (Debian `libc++-19-dev`) on
-//! aarch64-unknown-linux-gnu with its default parameters, with three
-//! deliberate differences:
+//! derives for libc++ 19.1.7 (Debian `libc++-19-dev`) on Linux with its
+//! default parameters, with three deliberate differences:
 //!
 //! - no compiler-identity features (`clang`, `clang-19`, `gcc`,
 //!   `apple-clang`, `msvc`, ...): kiln is none of them, so a
@@ -51,10 +58,15 @@ use std::path::Path;
 /// The C++ standard the suite is run in, as a lit feature and a flag.
 pub const STD: &str = "c++26";
 
-/// The target triple (`target=<triple>` feature).
-pub const TARGET: &str = "aarch64-unknown-linux-gnu";
+/// The target triple the suite is compiled for (the `target=<triple>`
+/// feature): kiln's default target, `<host arch>-unknown-linux-gnu`
+/// (`kiln_driver` `Target`, spec/driver.md "Toolchain"), since the harness
+/// passes no `--target`.
+pub fn target_triple() -> String {
+    format!("{}-unknown-linux-gnu", std::env::consts::ARCH)
+}
 
-/// Every static feature, sorted, without the `target=` one (see [`all`]).
+/// Every static feature, sorted (see [`all`]).
 const FEATURES: &[&str] = &[
     // Parameters (params.py defaults): std, stdlib, optimization,
     // enable_experimental, long_tests, large_tests.
@@ -74,27 +86,101 @@ const FEATURES: &[&str] = &[
     // `hasCompileFlag("-Xclang -verify-ignore-unexpected")` (spec/libcxx.md
     // ".verify.cpp").
     "verify-support",
-    // A `__config` macro (features.py `macros`) that `__config` computes
-    // from the target rather than `__config_site` setting it: every Linux
-    // build of libc++ with threads.
-    "libcpp-has-thread-api-pthread",
-    // Target and host.
-    "buildhost=linux",
+    // Snippet probes of the target and host (see the module doc).
     "can-create-symlinks",
     "has-64-bit-atomics",
     "has-unix-headers",
-    "linux",
     // This compiler.
     "kiln",
 ];
 
-/// The static feature set, including `target=<triple>` and without the
-/// derived ones (see [`detect`]).
+/// The static feature set plus the [`target_features`] of
+/// [`target_triple`], without the ones derived from the headers (see
+/// [`detect`]).
 pub fn all() -> Vec<String> {
     let mut v: Vec<String> = FEATURES.iter().map(|&f| f.to_owned()).collect();
-    v.push(format!("target={TARGET}"));
+    v.extend(target_features(&target_triple(), std::env::consts::OS));
     v.sort();
     v
+}
+
+/// The OS component of a target triple (`linux` in
+/// `aarch64-unknown-linux-gnu`; `<arch>-<vendor>-<os>[-<env>]`, or
+/// `<arch>-<os>[-<env>]` when the vendor is omitted).
+fn triple_os(triple: &str) -> &str {
+    let parts: Vec<&str> = triple.split('-').collect();
+    match parts.as_slice() {
+        [_, os] | [_, os, "gnu" | "musl" | "android" | "elf" | "eabi"] | [_, _, os, ..] => os,
+        _ => "",
+    }
+}
+
+/// The features lit derives from the target triple and the build host:
+/// `target=<triple>` (`params.py` `target_triple`), `linux` for a Linux
+/// target (`__linux__`, `features.py`) and `buildhost=<host_os>`
+/// (`sys.platform`, which is `linux` on Linux).
+pub fn target_features(triple: &str, host_os: &str) -> Vec<String> {
+    let mut v = vec![format!("target={triple}"), format!("buildhost={host_os}")];
+    if triple_os(triple).starts_with("linux") {
+        v.push("linux".to_owned());
+    }
+    v.sort();
+    v
+}
+
+/// Target OSes whose threads `__config` maps to pthreads when
+/// `__config_site` selects no thread API (`__config` "Thread API":
+/// `__linux__`, `__APPLE__`, `__FreeBSD__`, ...; Fuchsia too).
+const PTHREAD_OSES: &[&str] = &[
+    "linux",
+    "darwin",
+    "macos",
+    "ios",
+    "freebsd",
+    "netbsd",
+    "openbsd",
+    "wasi",
+    "nuttx",
+    "hurd",
+    "zos",
+    "aix",
+    "emscripten",
+    "fuchsia",
+];
+
+/// The thread-API features of a `__config_site` text for `triple`, as
+/// `__config` settles the API and lit reads it: nothing without threads
+/// (`_LIBCPP_HAS_NO_THREADS` defined, or `_LIBCPP_HAS_THREADS 0`); the API
+/// `__config_site` selects (libc++ 19: `_LIBCPP_HAS_THREAD_API_<X>`
+/// defined; libc++ ≥ 20: defined to `1`); else pthreads on the
+/// [`PTHREAD_OSES`]. lit maps `PTHREAD` to `libcpp-has-thread-api-pthread`
+/// and `EXTERNAL` to `libcpp-has-thread-api-external`.
+pub fn thread_api_features(site: &str, triple: &str) -> Vec<String> {
+    let mut threads = true;
+    let mut selected = None;
+    for (name, value) in defines(site) {
+        match name {
+            "_LIBCPP_HAS_NO_THREADS" => threads = false,
+            "_LIBCPP_HAS_THREADS" if value == "0" => threads = false,
+            _ => {}
+        }
+        if let Some(api) = name.strip_prefix("_LIBCPP_HAS_THREAD_API_")
+            && (value.is_empty() || value == "1")
+        {
+            selected.get_or_insert(api);
+        }
+    }
+    if !threads {
+        return Vec::new();
+    }
+    let os = triple_os(triple);
+    let api =
+        selected.or_else(|| PTHREAD_OSES.iter().any(|p| os.starts_with(p)).then_some("PTHREAD"));
+    match api {
+        Some("PTHREAD") => vec!["libcpp-has-thread-api-pthread".to_owned()],
+        Some("EXTERNAL") => vec!["libcpp-has-thread-api-external".to_owned()],
+        _ => Vec::new(),
+    }
 }
 
 /// The locales libc++'s tests ask for, by the name in their `locale.<name>`
@@ -110,10 +196,11 @@ pub const LOCALES: &[&str] = &[
     "zh_CN.UTF-8",
 ];
 
-/// The feature set of this machine and of the libc++ headers in `include`:
-/// [`all`], the [`config_site_features`] of `include/__config_site`,
-/// `has-no-zdump` when `zdump --version` fails, and `locale.<name>` for
-/// each of [`LOCALES`] that `locale -a` lists.
+/// The feature set of this machine and of the libc++ headers in `include`
+/// (the root the run uses: the system install or `.toolchain/libcxx-N-root`):
+/// [`all`], the [`config_site_features`] and [`thread_api_features`] of
+/// `include/__config_site`, `has-no-zdump` when `zdump --version` fails, and
+/// `locale.<name>` for each of [`LOCALES`] that `locale -a` lists.
 pub fn detect(include: &Path) -> Vec<String> {
     let listed = std::process::Command::new("locale")
         .arg("-a")
@@ -125,6 +212,7 @@ pub fn detect(include: &Path) -> Vec<String> {
     let mut set = all();
     let site = std::fs::read_to_string(include.join("__config_site")).unwrap_or_default();
     set.extend(config_site_features(&site));
+    set.extend(thread_api_features(&site, &target_triple()));
     let zdump = std::process::Command::new("zdump")
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -276,7 +364,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(all, sorted);
-        assert!(all.contains(&format!("target={TARGET}")));
+        assert!(all.contains(&format!("target={}", target_triple())));
         assert!(all.iter().any(|f| f == STD));
         assert!(all.iter().any(|f| f == "kiln"));
         assert!(all.iter().any(|f| f == "verify-support"));
@@ -317,6 +405,69 @@ mod tests {
         assert_eq!(parse_libcxx_version(config), Some(190_107));
         assert_eq!(libcxx_major(190_107), 19);
         assert_eq!(parse_libcxx_version("#define _LIBCPP_VERSIONX 1\n"), None);
+    }
+
+    #[test]
+    fn target_features_from_the_triple() {
+        assert_eq!(
+            target_features("aarch64-unknown-linux-gnu", "linux"),
+            ["buildhost=linux", "linux", "target=aarch64-unknown-linux-gnu"]
+        );
+        assert_eq!(
+            target_features("x86_64-pc-linux-gnu", "linux"),
+            ["buildhost=linux", "linux", "target=x86_64-pc-linux-gnu"]
+        );
+        assert_eq!(target_features("x86_64-linux-gnu", "linux")[1], "linux");
+        assert_eq!(
+            target_features("arm64-apple-macosx14.0", "darwin"),
+            ["buildhost=darwin", "target=arm64-apple-macosx14.0"]
+        );
+        assert_eq!(
+            target_features("x86_64-pc-windows-msvc", "linux"),
+            ["buildhost=linux", "target=x86_64-pc-windows-msvc"]
+        );
+        let t = target_triple();
+        assert!(t.ends_with("-unknown-linux-gnu") && t.starts_with(std::env::consts::ARCH));
+    }
+
+    /// libc++ 19 leaves the thread API to `__config` (`/* #undef ... */`),
+    /// which picks pthreads on Linux; libc++ 22 writes `0` for every API
+    /// and `__config` picks again.
+    #[test]
+    fn thread_api_from_config_site_and_target() {
+        let linux = "aarch64-unknown-linux-gnu";
+        let site19 = "/* #undef _LIBCPP_HAS_NO_THREADS */\n\
+                      /* #undef _LIBCPP_HAS_THREAD_API_PTHREAD */\n\
+                      /* #undef _LIBCPP_HAS_THREAD_API_EXTERNAL */\n";
+        assert_eq!(thread_api_features(site19, linux), ["libcpp-has-thread-api-pthread"]);
+        let site22 = "#define _LIBCPP_HAS_THREADS 1\n\
+                      #define _LIBCPP_HAS_THREAD_API_PTHREAD 0\n\
+                      #define _LIBCPP_HAS_THREAD_API_EXTERNAL 0\n\
+                      #define _LIBCPP_HAS_THREAD_API_WIN32 0\n\
+                      #define _LIBCPP_HAS_THREAD_API_C11 0 // FIXME\n";
+        assert_eq!(thread_api_features(site22, linux), ["libcpp-has-thread-api-pthread"]);
+        assert_eq!(
+            thread_api_features(site22, "x86_64-pc-linux-gnu"),
+            ["libcpp-has-thread-api-pthread"]
+        );
+        // No threads, an explicit API, an OS `__config` gives no pthreads.
+        assert_eq!(
+            thread_api_features("#define _LIBCPP_HAS_NO_THREADS\n", linux),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            thread_api_features("#define _LIBCPP_HAS_THREADS 0\n", linux),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            thread_api_features("#define _LIBCPP_HAS_THREAD_API_EXTERNAL\n", linux),
+            ["libcpp-has-thread-api-external"]
+        );
+        assert_eq!(
+            thread_api_features("#define _LIBCPP_HAS_THREAD_API_EXTERNAL 1\n", linux),
+            ["libcpp-has-thread-api-external"]
+        );
+        assert_eq!(thread_api_features("", "x86_64-pc-windows-msvc"), Vec::<String>::new());
     }
 
     /// libc++ ≥ 20 spells the carve-outs as `_LIBCPP_HAS_<X> 0|1`.

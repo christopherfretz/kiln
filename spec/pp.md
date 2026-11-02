@@ -446,6 +446,22 @@ check both levels; `kiln++ -fclang-compat=22 -dM` differs from
 `clang++-22 -dM` only in `__cpp_*` lines (checked by hand for both
 targets and several standards and flags, WP-263).
 
+**`__has_constexpr_builtin` and the P0533 builtins** (WP-380). kiln
+answers clang's `Constexpr` table at the selected level, not the larger
+set its Oven folds under GCC's policy (spec/oven.md "Floating-point
+math", WP-365): `__builtin_ceil`, `floor`, `trunc`, `round`, `rint`,
+`nearbyint`, `sqrt`, `fmod`, `frexp`, `ldexp`, `logb`, `ilogb`,
+`scalbn`, `modf`, `remainder`, `remquo`, `fdim`, `nextafter` answer 0 at
+both levels, as both clangs do, so library code that probes the operator
+takes the same branch it takes under clang. `fabs`, `fmin`, `fmax`,
+`copysign` and the classification builtins answer 1 at both levels; at
+22, `abs`/`labs`/`llabs`, `signbit` and the `isgreater` family answer 1
+too. Under `-fsyntax-only` and code generation the driver also applies
+kiln's builtin staging (spec/sema-templates.md §13.3), whose Oven column
+is clang 19's; the driver exempts those ten clang 22 additions, which the
+Oven folds (`OVEN_FOLDS_FROM_22`, `kiln_driver/src/pp_cmd.rs`).
+Test: `tests/conformance/c.math/has-constexpr-builtin-p0533.cpp`.
+
 ### `PpCallbacks`: consumers are WP-014 (`-M`), WP-017 (`-dD`, `-dI`) and phase 7
 
 ```rust
@@ -686,9 +702,28 @@ belong to WP-017, which builds them on `macro_defined` and
   `P1467_LIMITS`) plus `__FLT16_IS_IEC_60559__`. libstdc++ keys
   `<stdfloat>`, `numeric_limits` and the `<cmath>` overloads on them. The
   other `__FLT16_*__` macros stay clang's (same values, clang's shorter
-  digit strings); GCC's `__FLT32X_*__`/`__FLT64X_*__` are not defined
-  (kiln has no `_Float32x`/`_Float64x`). Test:
-  `conformance/basic.extended.fp/p1467-macros.cpp`, `-cxx17.cpp`.
+  digit strings). GCC's `__FLT32X_*__` (the `__FLT64_*__` values) and
+  `__FLT64X_*__` (`long double`'s: the `__FLT128_*__` values on AArch64,
+  x87's `FLT64X_X87` table on x86-64), with the `F32x`/`F64x` suffix,
+  are defined in every C++ mode too (WP-380; spec/types.md §5.1). Tests:
+  `conformance/basic.extended.fp/p1467-macros.cpp`, `-cxx17.cpp`,
+  `float-nx.cpp`, `float-nx-x86.cpp`, `float-nx-aarch64.cpp`.
+- **`__GNUC__` stays clang's 4 (`__GNUC_MINOR__` 2), decided by WP-380.**
+  glibc declares `typedef double _Float32x;` and `typedef long double
+  _Float64x;` (and the `_Float32`/`_Float64`/`_Float128` typedefs, and
+  `__CFLOAT32X` as `_Complex double`) whenever a C++ compiler is not GCC
+  >= 13. Reporting `__GNUC__` >= 13 would silence those typedefs, but it
+  would also send glibc and libstdc++ down GCC-only paths (`__GNUC_PREREQ`
+  and `__GNUC__` version guards that select GCC builtins, attributes and
+  intrinsics kiln does not provide) that clang-built headers never take,
+  and it would contradict clang's predefines, which kiln matches.
+  kiln instead keeps clang's value and the parser drops those glibc
+  typedefs of its keywords in system headers (spec/types.md §5.1), so
+  `-stdlib=libstdc++` and `-stdlib=libc++` headers compile on both
+  targets while `_Float32x`/`_Float64x` stay GCC's distinct types. The
+  cost: a library that keys `_FloatNx` support on `__GNUC__` >= 13 (and
+  not on `__FLT32X_MANT_DIG__`) does not see it. Test:
+  `conformance/basic.extended.fp/float-nx-glibc.cpp`.
 - **Diagnostics.** Every [cpp] diagnostic has a `pp_*` id in
   `kiln_diag/src/ids/pp.rs`, with clang 19's wording, level and group. After
   an error in a directive, the rest of the line is skipped.

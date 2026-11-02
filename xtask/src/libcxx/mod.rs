@@ -513,8 +513,18 @@ fn execute(opts: &Options) -> Result<bool, String> {
         return Err("no tests selected".into());
     }
     let cfg_cache = load_local_cfgs(&test_root, &tests);
-    let features = features::detect(&toolchain.libcxx_include());
-    let libcxx_version = features::libcxx_version(&toolchain.libcxx_include());
+    // The headers the run compiles against: the system install, or the
+    // extracted `.toolchain/libcxx-N-root` (also for `--list`, which does not
+    // set up the run's tree), so the features follow its `__config_site`.
+    let headers = match &libcxx {
+        Some(t) => t.include.clone(),
+        None => libcxx_install(&root, toolchain)
+            .ok()
+            .flatten()
+            .map_or_else(|| toolchain.libcxx_include(), |t| t.include),
+    };
+    let features = features::detect(&headers);
+    let libcxx_version = features::libcxx_version(&headers);
     let feature_refs: Vec<&str> = features.iter().map(String::as_str).collect();
 
     if opts.list {
@@ -760,7 +770,7 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
             t => format!("{t} (expected {})", cfg.tag),
         },
         libcpp_version: libcpp_version(cfg),
-        target: features::TARGET.to_owned(),
+        target: features::target_triple(),
         command,
         compile_flags: format!("{} <ADDITIONAL_COMPILE_FLAGS> <test>", flags.join(" ")),
         link_flags: format!("t.o -o t.exe {}", link.join(" ")),

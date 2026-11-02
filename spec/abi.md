@@ -852,7 +852,8 @@ member's definition: `X4<int>::X4<int>(int)` is untagged when the
 out-of-line `template<class T> template<class U> X4<T>::X4(U){}` is). Tags mangle as `B<source-name>`
 each, after the unqualified name (identifiers, `C2`/`D2`, operator codes),
 and a tagged namespace-scope variable is mangled (`_Z1vB1x`) rather than
-emitted under its plain name.
+emitted under its plain name. Standard substitutions: §8.20; namespace tags and implicit tags
+from return and variable types: §8.21.
 
 **Dependent signature types** (`mangle/dep.rs`, clang `CXXNameMangler`):
 a dependent template specialization is the unscoped template name plus
@@ -1092,6 +1093,8 @@ AArch64 HFA as its twin's is.
 | `_Float32` | SSE (`float`) | V reg / HFA | `DF32_` |
 | `_Float64` | SSE (`double`) | V reg / HFA | `DF64_` |
 | `_Float128` | SSE+SSEUP (`fp128`) | Q reg / HFA | `DF128_` |
+| `_Float32x` (GCC, WP-380) | as `double` | as `double` | `DF32x` |
+| `_Float64x` (GCC, WP-380) | as `long double` (X87, `x86_fp80`) | as `long double` (Q reg, `fp128`) | `DF64x` |
 
 On x86-64 an SSE+SSEUP pair is coerced as clang's `GetByteVectorType`
 (WP-365, `call.rs` `byte_vector`): a record that wraps a single element
@@ -1156,10 +1159,48 @@ a named module has module linkage, not internal (P2788).
 - **Tagged inline namespaces**: a namespace's own `abi_tag` is not
   mangled (`St7__cxx11`, not `St7__cxx11B5cxx11`); its tags are
   implied by its name.
-- **Not yet**: clang's implicit tags, where a function or variable
-  whose type names a tagged entity carries the tags its own name lacks
-  (`_Z3useB2tgv`). Test: `tests/mangle/std_abbrev.cpp` (clang-exact,
-  both triples).
+### 8.21 Landed (WP-384): implicit abi tags, namespace tags
+Checked symbol for symbol against clang 19 and 22 (`tests/mangle/
+std_substitutions.cpp`, `std_cxx11_abi_tag.cpp`, `std_libcxx_spelling.cpp`,
+`abi_tag_implicit.cpp`) and by linking libstdc++ programs
+(`tests/conformance/temp.explicit/libstdcxx-locale-name-run.cpp`).
+- Standard abbreviations: §8.20 (libc++'s `std::__1` spelling, which
+  none applies to, in
+  `tests/mangle/std_libcxx_spelling.cpp`).
+- **Namespace tags.** A namespace's `abi_tag` is never written: it marks
+  the namespace's tags as already used (clang `AbiTagState`), so they are
+  not repeated as implicit tags of names inside it. Only the first
+  declaration of the namespace counts (clang reads the canonical decl).
+  Sema accepts the attribute only on a named inline namespace; on a
+  non-inline or anonymous one it is dropped with
+  `sema_abi_tag_namespace` ("'abi_tag' attribute on {non-inline|anonymous}
+  namespace ignored", `-Wignored-attributes`;
+  `tests/conformance/namespace.def/abi-tag-non-inline-namespace.cpp`).
+  Every entity declared directly in libstdc++'s `inline namespace
+  __cxx11 __attribute__((abi_tag("cxx11")))` takes that tag from it:
+  `_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEC2Ev`, with no
+  `B5cxx11` on the namespace or the class.
+- **Implicit tags** (clang `makeFunctionReturnTypeTags`,
+  `makeVariableTypeTags`): the mangler tracks the tags *used* (written,
+  or a namespace's) and *emitted* while mangling a name. For a function
+  whose return type (dependent or not; through pointers, references,
+  template arguments, function types) mentions tagged entities, it
+  mangles the name and bare function type once with derived tags off
+  (`Mangler::trial_tags`, restoring output and substitutions afterwards),
+  then writes the return type's tags missing from that trial's used set
+  as extra `B` tags of the function's own name, merged with its explicit
+  tags and sorted: `_ZNKSt6locale4nameB5cxx11Ev`, `_Z4wrapB1xv`,
+  `_ZN1M3getB1xEv`, `_Z1fB1xI1AENT_4typeEv`, `_ZN1YB1y1mB1xEv`. A
+  tag the parameters already carry is not repeated. Variables do the same
+  with their type (`_Z2gsB5cxx11`), and a namespace-scope variable whose
+  type has tags is mangled rather than emitted under its C name
+  (`is_unmangled`, `var_type_has_tags`). The extra tags go to the
+  function's unqualified name only, also when it is an unscoped template
+  name, but not to a member template's name inside a nested template
+  prefix (`_ZN1SI1AE1hIS0_EENT_4typeEv`). Inside a local name the used
+  set restarts from the tags the enclosing encoding emitted
+  (`_ZZ5localB5cxx11vE1sB5cxx11`). Constructors, destructors and
+  conversion functions have no return-type tags.
 
 ### 8.21 Landed (WP-386): clang 20+ call lowering at `-fclang-compat=22`
 `IrTypes::with_clang_compat` carries the codegen compat level (the
