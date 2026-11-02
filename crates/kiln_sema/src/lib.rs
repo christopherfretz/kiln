@@ -47,6 +47,7 @@ mod jump_scope;
 pub mod lambda;
 pub mod literal;
 mod literal_op;
+mod local_friend;
 pub mod lookup;
 pub mod names;
 pub mod new_delete;
@@ -177,6 +178,10 @@ pub struct Sema<'a, 'sm> {
     /// Classes whose definitions are being processed (incomplete until
     /// their closing brace).
     pub(crate) defining: Vec<DeclId>,
+    /// Of those, the ones made invalid by a member of incomplete type
+    /// (clang's `Record->setInvalidDecl()` in `CheckFieldDecl`): a later
+    /// use that needs them complete fails quietly (spec/sema.md §4.3).
+    pub(crate) invalid_defining: kiln_source::fx::FxHashSet<DeclId>,
     /// Enumerations whose definitions are being processed.
     pub(crate) enums: Vec<decl::EnumBuild>,
     /// Block-scope function and `extern` variable declarations, by
@@ -466,6 +471,9 @@ pub struct Sema<'a, 'sm> {
     delayed_typos: Vec<Diag>,
     /// The nesting depth of [`Sema::begin_delayed_typos`].
     typo_delay: u32,
+    /// How many delayed-typo diagnostics were reported or held so far
+    /// ([`Sema::typo_count`]).
+    typo_count: u32,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -602,6 +610,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             misaligned: Vec::new(),
             imm: consteval::ImmState::default(),
             defining: Vec::new(),
+            invalid_defining: kiln_source::fx::FxHashSet::default(),
             enums: Vec::new(),
             local_externs: Vec::new(),
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
@@ -676,6 +685,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             diag_capture: std::cell::RefCell::new(None),
             delayed_typos: Vec::new(),
             typo_delay: 0,
+            typo_count: 0,
             range_for_outer_depth: None,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
@@ -833,10 +843,18 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         }
     }
 
+    /// The number of diagnostics reported through delayed typo correction
+    /// so far (held or emitted): the parser compares two counts to tell
+    /// whether a call's arguments held a `TypoExpr` (WP-318).
+    pub fn typo_count(&self) -> u32 {
+        self.typo_count
+    }
+
     /// Emits `d`, or holds it back inside a [`Sema::begin_delayed_typos`]
     /// scope (outside any instantiation, where a SFINAE context must see
     /// it).
     pub(crate) fn emit_delayed_typo(&mut self, d: Diag) {
+        self.typo_count = self.typo_count.wrapping_add(1);
         if self.typo_delay > 0 && self.inst.stack.is_empty() {
             self.delayed_typos.push(d);
         } else {

@@ -1,0 +1,59 @@
+TranslationUnitDecl
+|-VarDecl used a 'int' cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl used b 'long' cinit
+| `-ImplicitCastExpr 'long' <IntegralCast>
+|   `-IntegerLiteral 'int' 2
+|-VarDecl used x 'int' cinit
+| `-ImplicitCastExpr 'int' <LValueToRValue>
+|   `-ChooseExpr 'int' lvalue
+|     |-ConstantExpr 'int' value=1
+|     | `-IntegerLiteral 'int' 1
+|     |-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|     `-DeclRefExpr 'long' lvalue Var 'b' 'long'
+|-VarDecl y 'long' cinit
+| `-ImplicitCastExpr 'long' <LValueToRValue>
+|   `-ChooseExpr 'long' lvalue
+|     |-ConstantExpr 'bool' value=false
+|     | `-BinaryOperator 'bool' '=='
+|     |   |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'int'
+|     |   `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|     |     `-IntegerLiteral 'int' 8
+|     |-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|     `-DeclRefExpr 'long' lvalue Var 'b' 'long'
+|-VarDecl r 'int &' cinit
+| `-ChooseExpr 'int' lvalue
+|   |-ConstantExpr 'bool' value=true
+|   | `-CXXBoolLiteralExpr 'bool' true
+|   |-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|   `-FloatingLiteral 'double' 5e-1
+|-VarDecl k 'const int' constexpr cinit value=8
+| `-BinaryOperator 'int' '+'
+|   |-ChooseExpr 'int'
+|   | |-ConstantExpr 'int' value=0
+|   | | `-IntegerLiteral 'int' 0
+|   | |-FloatingLiteral 'double' 1.5e0
+|   | `-IntegerLiteral 'int' 7
+|   `-IntegerLiteral 'int' 1
+|-FunctionTemplateDecl f
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| `-FunctionDecl f 'int (T)'
+|   |-ParmVarDecl referenced t 'T'
+|   `-CompoundStmt
+|     `-ReturnStmt
+|       `-ChooseExpr '<dependent type>'
+|         |-BinaryOperator 'bool' '=='
+|         | |-UnaryExprOrTypeTraitExpr 'unsigned long' sizeof 'T'
+|         | `-ImplicitCastExpr 'unsigned long' <IntegralCast>
+|         |   `-IntegerLiteral 'int' 4
+|         |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|         `-IntegerLiteral 'int' 0
+`-FunctionDecl g 'int ()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-ChooseExpr 'int' lvalue
+          |-ConstantExpr 'bool' value=false
+          | `-CXXBoolLiteralExpr 'bool' false
+          |-DeclRefExpr 'int' lvalue Var 'a' 'int'
+          `-DeclRefExpr 'int' lvalue Var 'x' 'int'

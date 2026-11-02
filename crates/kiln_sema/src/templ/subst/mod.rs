@@ -93,10 +93,13 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// expression being rebuilt: its expression statement ends the
     /// statement expression (`act_on_stmt_expr_result`).
     pub(crate) stmt_expr_result: Option<kiln_ast::ExprId>,
-    /// Block-scope dependent using-declarations of the pattern whose
-    /// instantiation failed (diagnosed): their uses are invalid without
-    /// another diagnostic (clang's invalid `UsingDecl`).
-    pub(crate) failed_usings: Vec<DeclId>,
+    /// Block-scope declarations of the pattern whose instantiation
+    /// failed (diagnosed, or silent under SFINAE), with the rest of their
+    /// declaration statement: their uses are invalid without another
+    /// diagnostic (clang keeps the invalid declaration in the
+    /// instantiation's scope: an invalid `VarDecl`, `TypedefNameDecl`,
+    /// `UsingDecl`, ...).
+    pub(crate) failed_locals: Vec<DeclId>,
     /// The explicitly specified pack deduction may still extend
     /// ([temp.arg.explicit]/9; clang's partially substituted pack), by
     /// (depth, index): its length is a lower bound, checked against the
@@ -147,7 +150,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             stmt_failed: false,
             init_failures: 0,
             stmt_expr_result: None,
-            failed_usings: Vec::new(),
+            failed_locals: Vec::new(),
             partial_pack: None,
             written_locs: true,
             as_callee: false,
@@ -671,6 +674,11 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                     self.sema.ast.lists.at::<DeclId>(l, i as usize).ok_or(SubstFail)
                 }
             };
+        }
+        // A local whose declaration statement failed: an invalid use,
+        // already diagnosed ([temp.inst]/3; §5.6).
+        if self.failed_locals.contains(&d) {
+            return Err(SubstFail);
         }
         let node = *self.sema.ast.decls.get(d);
         if !node.flags().contains(DeclFlags::DEPENDENT_CTX) {

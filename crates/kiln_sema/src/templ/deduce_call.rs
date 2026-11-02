@@ -455,12 +455,13 @@ impl Sema<'_, '_> {
         // [temp.deduct.funcaddr]: the function type against the target.
         if let DeduceTarget::FuncAddr(a) | DeduceTarget::Decl(a) = target {
             let decl = matches!(target, DeduceTarget::Decl(_));
-            let (p0, a0) = if decl {
-                (self.with_exc_spec(pfn, ExcSpec::None), self.with_exc_spec(a, ExcSpec::None))
+            let (p0, a0, tdf) = if decl {
+                let p0 = self.with_exc_spec(pfn, ExcSpec::None);
+                (p0, self.with_exc_spec(a, ExcSpec::None), TdfFlags::NONE)
             } else {
-                (pfn, a)
+                (pfn, a, TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT)
             };
-            let r = self.deduce(p0, a0, TdfFlags::NONE, &mut d);
+            let r = self.deduce(p0, a0, tdf, &mut d);
             if r != Tdk::Success {
                 // clang shows the whole types with their specifications.
                 let whole_p = d.info.first.is_some_and(|f| match f.view() {

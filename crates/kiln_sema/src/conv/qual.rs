@@ -168,6 +168,22 @@ pub(crate) fn drop_noexcept(s: &mut Sema<'_, '_>, f: QualType) -> Option<QualTyp
     Some(s.ast.types.function(p.ret(), &params, p.info(), ExcSpec::None))
 }
 
+/// True if function type `referee` is reference-compatible with
+/// function type `from` only through a function pointer conversion
+/// ([dcl.init.ref]/4: "pointer to `void (int) noexcept`" converts to
+/// "pointer to `void (int)`"), both canonical and unqualified. Such a
+/// reference binds directly, and its conversion sequence is the
+/// identity ([over.ics.ref]/1), like that of an exact match (clang
+/// `ReferenceConversions::Function`).
+pub(crate) fn function_ref_compatible(
+    s: &mut Sema<'_, '_>,
+    referee: QualType,
+    from: QualType,
+) -> bool {
+    s.ast.types.is_function(referee)
+        && drop_noexcept(s, from).is_some_and(|f| s.ast.types.same_type(f, referee))
+}
+
 /// True if a prvalue of `from` converts to `to` by a function pointer
 /// conversion ([conv.fctptr]): "pointer to `noexcept` function" to
 /// "pointer to function", and likewise for pointers to member
@@ -182,23 +198,14 @@ pub fn is_function_pointer_conversion(s: &mut Sema<'_, '_>, from: QualType, to: 
         ) if s.ast.types.same_type(QualType::unqual(x), QualType::unqual(y)) => (a, b),
         _ => return false,
     };
-    is_function_conversion(s, pf, pt)
-}
-
-/// True if function type `from` becomes function type `to` by dropping
-/// its non-throwing exception specification ([conv.fctptr]): then "pointer
-/// to `from`" converts to "pointer to `to`", and `to` is
-/// reference-compatible with `from` ([dcl.init.ref]/4, clang
-/// `ReferenceConversions::Function`).
-pub(crate) fn is_function_conversion(s: &mut Sema<'_, '_>, from: QualType, to: QualType) -> bool {
-    if !s.ast.types.is_function(from) || !s.ast.types.is_function(to) {
+    if !s.ast.types.is_function(pf) || !s.ast.types.is_function(pt) {
         return false;
     }
-    if !s.ast.types.canonical(to).quals().is_empty() {
+    if !s.ast.types.canonical(pt).quals().is_empty() {
         return false;
     }
-    match drop_noexcept(s, s.ast.types.canonical(from)) {
-        Some(f) => s.ast.types.same_type(f, to),
+    match drop_noexcept(s, s.ast.types.canonical(pf)) {
+        Some(f) => s.ast.types.same_type(f, pt),
         None => false,
     }
 }

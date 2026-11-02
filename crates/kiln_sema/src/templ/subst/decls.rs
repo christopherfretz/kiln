@@ -611,6 +611,17 @@ impl Substituter<'_, '_, '_> {
             ds.base = TypeSpecKind::None;
             ds.named = None;
         }
+        // A trailing return type is declared again as written, `auto`
+        // then `-> R` ([dcl.fct]/2), so the instantiation's type keeps the
+        // trailing form (`auto (int) -> int`, clang's
+        // `TransformFunctionProtoType`; WP-318).
+        let trailing = (info.trailing_return() && ds.base != TypeSpecKind::None).then(|| {
+            let arrow = self.sema.templ.trailing_arrow.get(&d).copied().unwrap_or(loc);
+            (ret, arrow)
+        });
+        if trailing.is_some() {
+            ds.named = Some(self.sema.plain_auto_type());
+        }
         dr.chunks.push(Chunk::Function {
             params,
             variadic: info.variadic(),
@@ -619,7 +630,7 @@ impl Substituter<'_, '_, '_> {
             exc,
             quals: info.this_quals(),
             ref_qual: info.ref_qual(),
-            trailing: None,
+            trailing,
             ambiguous: false,
         });
         let fs = self.sema.ast.decls.function(d).map(|x| x.spec);
@@ -644,7 +655,11 @@ impl Substituter<'_, '_, '_> {
         // `InstantiateFunctionDeclaration` keeps it).
         let requires = self.sema.ast.templates.trailing_requires.get(d).copied();
         dr.trailing_requires = requires;
-        let base = if ds.base == TypeSpecKind::None { QualType::VOID } else { ret };
+        let base = match ds.named {
+            _ if ds.base == TypeSpecKind::None => QualType::VOID,
+            Some(auto) if trailing.is_some() => auto,
+            _ => ret,
+        };
         let r = match friend {
             Some(fl) => self.sema.act_on_friend(&ds, base, Some(&dr), fl),
             None => self.sema.act_on_declarator(&ds, base, &dr),
@@ -681,6 +696,18 @@ impl Substituter<'_, '_, '_> {
         // that has its own.
         if friend.is_none() {
             self.class_attrs(f, d);
+        }
+        // [expr.prim.this]/3: `this` in a static member function's
+        // *noexcept-specifier* is diagnosed again in each instantiation
+        // of the class, at the pattern's `this` (clang
+        // `checkThisInStaticMemberFunctionExceptionSpec` from
+        // `InitMethodInstantiation`).
+        if friend.is_none()
+            && self.sema.is_static_method(d)
+            && let kiln_ast::types::ExcSpec::NoexceptExpr { expr, .. } =
+                self.sema.ast.types.exc_spec(&p)
+        {
+            self.sema.check_this_in_static_exception_spec(expr);
         }
         if lazy_exc {
             let first = self.sema.ast.first(f);

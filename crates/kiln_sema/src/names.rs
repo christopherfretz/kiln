@@ -126,6 +126,25 @@ impl<'s> SemaNames<'s> {
 }
 
 impl SemaNames<'_> {
+    /// Class `d` declared inside a function, as clang's
+    /// `NamedDecl::printQualifiedName` prints it: unqualified directly in
+    /// the function, else scoped through it (`f()::L::N`). `None` outside
+    /// a function.
+    pub(crate) fn local_class_decl_name(&self, d: DeclId) -> Option<String> {
+        if !self.in_local_scope(d) {
+            return None;
+        }
+        let mut s = String::new();
+        let in_fn = self.ast.decls.get(d).ctx().is_some_and(|c| {
+            self.ast.decls.get(c).kind().is_function() || self.ast.closure_lambda(c).is_some()
+        });
+        if !in_fn {
+            self.write_decl_scope(d, &mut s);
+        }
+        self.write_unscoped(d, &mut s);
+        Some(s)
+    }
+
     /// Whether a function or closure type encloses `d`.
     fn in_local_scope(&self, d: DeclId) -> bool {
         let mut cur = self.ast.decls.get(d).ctx();

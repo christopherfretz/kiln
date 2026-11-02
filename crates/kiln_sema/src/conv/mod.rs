@@ -23,7 +23,7 @@ mod arith;
 pub(crate) mod bases;
 pub(crate) mod narrow;
 mod qual;
-pub(crate) use qual::{drop_noexcept, is_function_conversion};
+pub(crate) use qual::{drop_noexcept, function_ref_compatible};
 pub(crate) mod rank;
 pub(crate) mod scs;
 pub(crate) mod soft;
@@ -567,6 +567,17 @@ fn conversion_error(s: &mut Sema<'_, '_>, e: ExprId, to: QualType, ctx: ConvCtx)
         ConvCtx::Condition => {
             ConvError::new(DiagId::sema_not_contextually_convertible_to_bool, vec![s.ty_arg(from)])
         }
+        // A function template-id resolved early is an overload set to
+        // clang ([`Sema::diagnose_overload_assign`]).
+        ConvCtx::Assignment if let Some(ule) = s.overload_set_of(e) => {
+            let notes = s.overload_assign_notes(ule, to);
+            let mut err = ConvError::new(
+                DiagId::sema_assign_incompatible,
+                vec![s.ty_arg(to), s.ty_arg(QualType::OVERLOAD)],
+            );
+            err.notes = notes;
+            err
+        }
         ConvCtx::Assignment => {
             let from_d = {
                 let n = *s.ast.exprs.get(e);
@@ -678,12 +689,9 @@ fn bind_reference(
     // ([dcl.init.ref]/4).
     // A `T[N]` glvalue binds a `T (&)[]` (P0388R4); clang treats the
     // pair as unrelated when the binding would drop qualifiers.
-    // A function lvalue binds a reference to the function type without
-    // its `noexcept` ([dcl.init.ref]/4 via [conv.fctptr]; clang
-    // `SK_FunctionReferenceConversion`, a no-op cast).
     let same = s.ast.types.same_type(f_un, r_un)
         || (rq.contains(fq) && s.unknown_bound_of(r_un, f_un))
-        || is_function_conversion(s, f_un, r_un);
+        || function_ref_compatible(s, r_un, f_un);
     let base = match (s.ast.types.as_record(f_un), s.ast.types.as_record(r_un)) {
         (Some(d), Some(b)) if !same => find_base(s, d, b),
         _ => BaseSearch::NotDerived,
@@ -1025,6 +1033,15 @@ pub fn implicit_convert(
         // [over.over]: the target selects the function.
         let resolved = if ctx == ConvCtx::Condition {
             s.check_overload_use(e);
+            None
+        } else if ctx == ConvCtx::Assignment
+            && s.overload_operand(e).is_some()
+            && s.try_implicit_conversion(&s.arg_info(e), to, IcsOptions::NONE).is_bad()
+        {
+            // [expr.assign]/3 via [over.over]: clang's
+            // `CheckSingleAssignmentConstraints` resolves silently and
+            // reports the assignment.
+            s.diagnose_overload_assign(e, to);
             None
         } else {
             let at = s.begin_loc(e);

@@ -412,6 +412,12 @@ impl Sema<'_, '_> {
             {
                 continue;
             }
+            // clang's `addedMember` ignores an invalid declaration: a
+            // constructor with a parameter naming no type leaves the class
+            // an aggregate with its implicit default constructor (WP-318).
+            if self.is_invalid_decl(m) || self.is_invalid_decl(f) {
+                continue;
+            }
             let spec = self.ast.decls.function(f).map(|x| x.spec).unwrap_or_default();
             // [class.dtor]/4: a prospective destructor that was not
             // selected is not the destructor (clang counts only the
@@ -807,9 +813,12 @@ impl Sema<'_, '_> {
             return;
         }
         let flags = self.ast.decls.get(d).flags();
-        // A specialization made invalid by its members still has its
+        // A specialization, or a member or local class instantiated
+        // from a template, made invalid by its members still has its
         // special members (clang `CanDeclareSpecialMemberFunction`).
-        let invalid = flags.contains(DeclFlags::INVALID) && self.ast.spec_info(d).is_none();
+        let invalid = flags.contains(DeclFlags::INVALID)
+            && self.ast.spec_info(d).is_none()
+            && self.ast.instantiated_from(d).is_none();
         if flags.contains(DeclFlags::DEPENDENT_CTX) || invalid {
             return;
         }
