@@ -1345,6 +1345,7 @@ impl Parser<'_, '_> {
     }
 
     fn parse_member_declaration_inner(&mut self) {
+        let tmpl_kind = self.template_decl_kind.take();
         if !self.stack_ok() || self.parse_member_declaration_leader() {
             return;
         }
@@ -1435,6 +1436,9 @@ impl Parser<'_, '_> {
                 && let Some(f) = target
             {
                 self.push_late(LateItem::Method { f, parts });
+            }
+            if self.diagnose_multiple_template_declarators(tmpl_kind) {
+                break;
             }
             if self.eat(Punct::Comma).is_none() {
                 break;

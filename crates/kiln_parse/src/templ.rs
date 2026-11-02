@@ -30,6 +30,16 @@ use crate::keywords::Kw;
 use crate::parser::{ParamTypename, Parser, is_template_class};
 use crate::tentative::TypeIdContext;
 
+/// The kind of declaration a template head, `template<>` or an
+/// explicit-instantiation `template` introduces (clang's
+/// `ParsedTemplateKind`), for "can only declare a single entity".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TemplateDeclKind {
+    Template = 0,
+    ExplicitSpecialization = 1,
+    ExplicitInstantiation = 2,
+}
+
 /// The kind of a template-parameter ([temp.param]/1), decided from its
 /// first tokens as clang's `isStartOfTemplateTypeParameter` does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,7 +119,9 @@ impl Parser<'_, '_> {
             // explicit-instantiation ([temp.explicit]/1).
             if self.at_partial_specialization() || !self.at_spec_tag_or_template() {
                 self.s.act_explicit_inst_start(extern_loc, loc);
+                self.template_decl_kind = Some(TemplateDeclKind::ExplicitInstantiation);
                 self.parse_spec_declaration(ctx);
+                self.template_decl_kind = None;
                 self.s.act_explicit_inst_end();
                 return;
             }
@@ -162,7 +174,9 @@ impl Parser<'_, '_> {
                 || !self.at_spec_tag_or_template()
             {
                 self.s.act_explicit_spec_start(loc);
+                self.template_decl_kind = Some(TemplateDeclKind::ExplicitSpecialization);
                 self.parse_spec_declaration(ctx);
+                self.template_decl_kind = None;
                 self.s.act_explicit_spec_end();
                 return;
             }
@@ -244,11 +258,32 @@ impl Parser<'_, '_> {
             self.skip_unsupported_declaration();
             return;
         }
+        self.template_decl_kind = Some(TemplateDeclKind::Template);
         if ctx == DeclaratorContext::Member {
             self.parse_member_declaration();
         } else {
             self.parse_simple_declaration(DeclaratorContext::File, true);
         }
+        self.template_decl_kind = None;
+    }
+
+    /// [temp.pre]/5, [temp.expl.spec], [temp.explicit]: a template
+    /// declaration, explicit specialization or explicit instantiation
+    /// declares one entity. At the `,` after its first declarator, clang's
+    /// `err_multiple_template_declarators`; the rest of the group is
+    /// skipped to its `;` (left for the caller). True if reported.
+    pub(crate) fn diagnose_multiple_template_declarators(
+        &mut self,
+        kind: Option<TemplateDeclKind>,
+    ) -> bool {
+        let Some(kind) = kind else { return false };
+        if !self.at(Punct::Comma) {
+            return false;
+        }
+        let d = self.s.diag(DiagId::parse_multiple_template_declarators, self.loc()).arg(kind as u8);
+        self.emit(d);
+        self.skip_until(&[Punct::RBrace], true, false);
+        true
     }
 
     /// A class-key, `enum` or `template` after `template<>` or an

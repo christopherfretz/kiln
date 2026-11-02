@@ -2900,6 +2900,7 @@ impl Parser<'_, '_> {
         allow_fn_def: bool,
         level: usize,
     ) -> Vec<DeclId> {
+        let tmpl_kind = self.template_decl_kind.take();
         let mut ds = self.parse_decl_specifiers(ctx);
         let mut decls = Vec::new();
         if ds.tag_declares
@@ -3000,6 +3001,9 @@ impl Parser<'_, '_> {
                 return decls;
             }
             decls.extend(v);
+            if self.diagnose_multiple_template_declarators(tmpl_kind) {
+                break;
+            }
             if self.eat(Punct::Comma).is_none() {
                 break;
             }

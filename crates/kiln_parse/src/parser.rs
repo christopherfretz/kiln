@@ -172,6 +172,11 @@ pub struct Parser<'a, 'sm> {
     /// declaration after it ([class.access]/7), taken by
     /// `parse_simple_declaration`.
     pub(crate) template_delay_level: Option<usize>,
+    /// The kind of template declaration whose declaration is parsed
+    /// next, taken by `parse_simple_declaration` and
+    /// `parse_member_declaration`: a later declarator is "a template
+    /// declaration can only declare a single entity" ([temp.pre]/5).
+    pub(crate) template_decl_kind: Option<crate::templ::TemplateDeclKind>,
     /// The leading attribute-specifier-seq of a statement, parsed before
     /// it is known to be a declaration: the declaration's decl-specifiers
     /// take it ([dcl.pre]/5, [dcl.attr.grammar]/5).
@@ -294,6 +299,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             halt: Cell::new(None),
             decltype_scope: None,
             template_delay_level: None,
+            template_decl_kind: None,
             stmt_attrs: Vec::new(),
             lead_decl_attrs: Vec::new(),
             stmt_attrs_loc: None,

@@ -94,6 +94,7 @@ parse_misplaced_ellipsis_vararg = Warning [AmbiguousEllipsis] (1) "'...' in this
 parse_missing_dependent_template_kw = Error (1) "use 'template' keyword to treat '{0}' as a dependent template name";
 parse_missing_type_specifier = Error (0) "a type specifier is required for all declarations";
 parse_missing_typename = Error (1) "missing 'typename' prior to dependent type name '{0}'";
+parse_multiple_template_declarators = Error (1) "{0:a template declaration|an explicit template specialization|an explicit template instantiation} can only {0:declare|declare|instantiate} a single entity";
 parse_only_constructors_take_base_inits = Error (0) "only constructors take base initializers";
 parse_postfix_after_unary_requires_parens = Error (1) "expression cannot be followed by a postfix {0} operator; add parentheses";
 parse_pragma_expected_identifier = Warning [IgnoredPragmas] (1) "expected identifier in '#pragma {0}' - ignored";

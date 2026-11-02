@@ -377,6 +377,22 @@ class-head-name (or variable declarator-id) is a template-id:
   `template int A<int>::s;`.
 - A declaration: `extern template …`.
 
+**One declarator.** [temp.pre]/5: the declaration of a template head,
+`template<>` or an explicit instantiation has at most one declarator.
+The parser (`Parser::template_decl_kind`, taken by the next simple or
+member declaration) reports clang's `err_multiple_template_declarators`
+at the `,` after the first declarator ("a template declaration can only
+declare a single entity", "an explicit template specialization can only
+declare a single entity", "an explicit template instantiation can only
+instantiate a single entity") and skips the rest of the group; the first
+declarator is declared. clang 19 and 22 declare the later declarators
+too (with the same head), so a later use of `b` after
+`template<class T> int a, b;` is "use of undeclared identifier" in kiln
+only; and clang also reports "explicit template instantiation cannot
+have a definition" at the first declarator of an explicit-instantiation
+group, which kiln does not (WP-379,
+`tests/conformance/temp.pre/multiple-declarators.cpp`).
+
 **Friends.** `template<class U> friend struct B;`,
 `friend void f<>(T);` (a friend specialization), and
 `template<class U> friend void g(U);`.
