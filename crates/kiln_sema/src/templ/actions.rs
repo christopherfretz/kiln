@@ -334,7 +334,7 @@ impl Sema<'_, '_> {
         let own = params.len() == written.len()
             && params.iter().zip(&written).all(|(&p, &a)| self.arg_names_param(p, a));
         let pat = if own {
-            self.pattern_of(tmpl)?
+            self.own_args_partial(tmpl, args, &list).unwrap_or(self.pattern_of(tmpl)?)
         } else {
             let canonical = self.ast.types.canonical_args(args);
             let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
@@ -350,6 +350,37 @@ impl Sema<'_, '_> {
             return None;
         }
         Some(self.ast.definition(pat).unwrap_or(pat))
+    }
+
+    /// The partial specialization `X<P...>` of `tmpl` with the primary's
+    /// own arguments, more constrained than the primary
+    /// ([temp.spec.partial.general]/9), that the out-of-line member
+    /// declaration being entered names: its template head's
+    /// requires-clause is the partial specialization's and not the
+    /// primary's (`primary`, clang's `findPartialSpecialization` by
+    /// arguments and template parameters). libstdc++ ranges:6380
+    /// `template<view _Vp> requires forward_range<_Vp> template<bool>
+    /// class chunk_view<_Vp>::_Iterator`.
+    fn own_args_partial(
+        &self,
+        tmpl: DeclId,
+        args: ArgListId,
+        primary: &kiln_ast::templates::TemplateParamList,
+    ) -> Option<DeclId> {
+        if !self.templ.entering_context {
+            return None;
+        }
+        let canonical = self.ast.types.canonical_args(args);
+        let i = self.ast.templates.find_partial(self.ast.first(tmpl), canonical)?;
+        let partial = self.ast.templates.partial(i)?.partial;
+        let (_, ps) = self.ast.partial_spec_info(partial)?;
+        let plist = *self.ast.templates.param_list(ps.params);
+        let depth = self.template_param_depth(self.head_template(tmpl));
+        let head = self.templ.heads.iter().rev().find(|h| !h.taken && h.depth == depth)?;
+        let hlist = *self.ast.templates.param_list(head.list?);
+        (self.opt_exprs_equivalent(hlist.requires, plist.requires)
+            && !self.opt_exprs_equivalent(hlist.requires, primary.requires))
+        .then_some(partial)
     }
 
     /// Whether the class scope of pattern `pat` was entered for the rest

@@ -892,6 +892,18 @@ chrono:2449, ranges:1888. Tests:
 `temp.spec.partial.member/libstdcxx-member-partial-spec-params-in-body.cpp`,
 `temp.spec.partial.member/libstdcxx-constrained-member-partial-spec.cpp`.
 
+Out-of-line members of a partial specialization whose argument list is
+the primary's own (`template<class V> requires fw<V> class C<V>`;
+[temp.spec.partial.member]/1, [temp.over.link]/6; WP-332): the qualifier
+`C<V>::` in `template<class V> requires fw<V> template<bool B> class
+C<V>::It` names the partial, not the primary, when the matching
+enclosing template head's requires-clause is equivalent to the
+partial's and not to the primary's (`current_instantiation` →
+`own_args_partial`, only while entering a declarator context). Without
+it the head was matched against the primary and diagnosed as "requires
+clause differs". libstdc++ ranges:6380 (`chunk_view<_Vp>::_Iterator`).
+Test: `temp.spec.partial.member/libstdcxx-out-of-line-member-of-constrained-partial-same-args.cpp`.
+
 Out-of-class partial specializations of a member template (WP-150):
 `template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
 - The parser takes `Outer<T>::` as a tag qualifier and enters its scope
