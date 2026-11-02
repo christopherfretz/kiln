@@ -23,6 +23,7 @@ use kiln_source::Loc;
 
 use crate::Sema;
 use crate::conv::{self, ConvCtx};
+use crate::expr::CastStyle;
 use crate::init::Initializer;
 use crate::lookup::LookupKind;
 use crate::overload::oper::{OperForm, OperResult};
@@ -895,13 +896,21 @@ impl Sema<'_, '_> {
     }
 
     /// clang's `Decl::getEndLoc` approximated: the `}` of a definition,
-    /// else the name.
+    /// else the declarator's last token for a member declaration (its
+    /// pattern's, for an instantiated member; `ColdDeclData::
+    /// declarator_end`), else the name.
     fn decl_end_loc(&self, d: DeclId) -> Loc {
         if let Some(def) = self.ast.definition(d)
             && let Some(b) = self.ast.decls.function(def).and_then(|x| x.body)
             && self.ast.stmts.get(b).kind() == kiln_ast::stmt::StmtKind::CompoundStmt
         {
             return self.ast.stmts.rbrace(b);
+        }
+        let ends = &self.ast.decls.cold.declarator_end;
+        if let Some(&l) =
+            ends.get(d).or_else(|| self.ast.instantiated_from(d).and_then(|p| ends.get(p)))
+        {
+            return l;
         }
         self.ast.decls.get(d).loc()
     }
@@ -1289,6 +1298,26 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// One `operator new` lookup for the coroutine frame (clang
+    /// `LookupAllocationFunction`): the promise's scope or the global
+    /// one, with `(size, [align_val_t,] place...)`. Returns the function
+    /// and whether it takes the alignment.
+    fn coro_find_new(
+        &mut self,
+        promise_ty: QualType,
+        global: bool,
+        place: &[ExprId],
+        pass_align: bool,
+        loc: Loc,
+    ) -> (Option<DeclId>, bool) {
+        use kiln_ast::names::OverloadedOperator as OO;
+        let fns = self.alloc_fns(promise_ty, OO::New, global, loc);
+        match self.find_operator_new(&fns.fns, place, pass_align) {
+            Some((n, a)) => (Some(n), a),
+            None => (None, false),
+        }
+    }
+
     /// The frame's allocation and deallocation calls
     /// ([dcl.fct.def.coroutine]/9-12; clang `makeNewAndDeleteExpr`).
     #[allow(
@@ -1332,11 +1361,25 @@ impl Sema<'_, '_> {
                 ));
             }
         }
-        let fns = self.alloc_fns(promise_ty, OO::New, !contains_new, loc);
-        let mut new = self.find_operator_new(&fns.fns, &place, false).map(|x| x.0);
-        if contains_new && !place.is_empty() && new.is_none() {
-            place.clear();
-            new = self.find_operator_new(&fns.fns, &[], false).map(|x| x.0);
+        // clang `LookupAllocationFunction`: the promise's scope when it
+        // declares `operator new`, else the global scope. Under
+        // `-fcoro-aligned-allocation` (P2014R0 option 2) the
+        // `(size, align_val_t, ...)` forms are preferred: aligned with
+        // placement arguments, aligned, plain with placement arguments,
+        // plain.
+        let aligned = self.coro_aligned_allocation;
+        let (mut new, mut passed) =
+            self.coro_find_new(promise_ty, !contains_new, &place, aligned, loc);
+        if contains_new && !place.is_empty() && (new.is_none() || (aligned && !passed)) {
+            (new, passed) = self.coro_find_new(promise_ty, false, &[], aligned, loc);
+        }
+        let mut non_aligned_in_promise = false;
+        if contains_new && aligned && (new.is_none() || !passed) {
+            non_aligned_in_promise = new.is_some();
+            (new, passed) = self.coro_find_new(promise_ty, false, &place, false, loc);
+            if new.is_none() && !place.is_empty() {
+                (new, passed) = self.coro_find_new(promise_ty, false, &[], false, loc);
+            }
         }
         let is_global = new.is_some_and(|n| {
             self.ast.decls.get(n).ctx().is_none_or(|c| self.kind_of(c) != DeclKind::CXXRecord)
@@ -1348,8 +1391,13 @@ impl Sema<'_, '_> {
             };
             let nt = self.build_decl_ref(found[0], loc);
             place = vec![nt];
-            let g = self.alloc_fns(promise_ty, OO::New, true, loc);
-            new = self.find_operator_new(&g.fns, &place, false).map(|x| x.0);
+            (new, passed) = self.coro_find_new(promise_ty, true, &place, aligned, loc);
+        }
+        if non_aligned_in_promise && let Some(n) = new {
+            let d = self
+                .diag(DiagId::sema_non_aligned_allocation_function, self.ast.decls.get(n).loc())
+                .arg(format!("'{}'", self.decl_name(f)));
+            self.emit(d);
         }
         let callee_name = format!("'{}'", self.decl_name(f));
         let Some(new) = new else {
@@ -1363,7 +1411,7 @@ impl Sema<'_, '_> {
                 let d = self
                     .diag(DiagId::sema_coroutine_unfound_nothrow_new, loc)
                     .arg(callee_name)
-                    .arg(0u8);
+                    .arg(u8::from(aligned));
                 self.emit(d);
             }
             return None;
@@ -1389,7 +1437,7 @@ impl Sema<'_, '_> {
         // findDeleteForPromise: the class's, else the global one; the
         // sized form is preferred.
         let dels = self.alloc_fns(promise_ty, OO::Delete, false, loc);
-        let mut del = self.usual_delete(&dels.fns, false, false, true, false);
+        let mut del = self.usual_delete(&dels.fns, false, aligned, true, false);
         if del.is_none() && dels.in_class {
             let rty = self.tag_type(rec);
             self.no_suitable_delete(OO::Delete, rty, &dels.fns, loc);
@@ -1397,15 +1445,24 @@ impl Sema<'_, '_> {
         }
         if del.is_none() {
             let g = self.alloc_fns(promise_ty, OO::Delete, true, loc);
-            del = self.usual_delete(&g.fns, false, false, true, false);
+            del = self.usual_delete(&g.fns, false, aligned, true, false);
         }
         let (del, _) = del?;
         self.mark_function_referenced(del, loc);
         let size = self.coro_builtin_call("__builtin_coro_size", &[], loc);
+        // `static_cast<std::align_val_t>(__builtin_coro_align())`.
+        let frame_align = |s: &mut Self| {
+            let a = s.coro_builtin_call("__builtin_coro_align", &[], loc);
+            let avt = s.global_ops.align_val_t.unwrap_or(QualType::ERROR);
+            s.act_on_cast(CastStyle::Static, avt, a, loc, loc)
+        };
         let new_ref = self.build_decl_ref(new, loc);
         let mut args = vec![size];
+        if aligned && passed {
+            args.push(frame_align(self));
+        }
         let nparams = self.fn_params(new).map_or(0, |p| p.0.len());
-        if nparams > 1 {
+        if nparams > args.len() {
             args.extend(place);
         }
         let alloc = self.act_on_call(new_ref, &args, loc, loc);
@@ -1425,6 +1482,18 @@ impl Sema<'_, '_> {
         });
         if sized {
             dargs.push(self.coro_builtin_call("__builtin_coro_size", &[], loc));
+        }
+        // P2014R0: the alignment is passed when the selected function
+        // takes it (clang never forces the aligned form).
+        let next = self.fn_params(del).and_then(|(p, _)| p.get(dargs.len()).copied());
+        if aligned
+            && let (Some(t), Some(avt)) = (next, self.global_ops.align_val_t)
+            && {
+                let u = self.ast.types.unqualified(t);
+                self.ast.types.same_type(u, avt)
+            }
+        {
+            dargs.push(frame_align(self));
         }
         let dealloc = self.act_on_call(del_ref, &dargs, loc, loc);
         if self.is_err_expr(dealloc) {

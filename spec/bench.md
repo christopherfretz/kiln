@@ -68,7 +68,8 @@ header-style configuration layer, X-macro tables, Boost.PP-style recursive
 expansion), `oven` (constant evaluation), `frontend` (template-heavy parsing
 and semantic analysis), `overload` (overload resolution: named calls over
 large overload sets, constructor and conversion selection;
-spec/sema-overload.md §11).
+spec/sema-overload.md §11), `runtime` (`mode: run`: the speed of the generated
+program, e.g. a `std::generator<int>` iterated 10M times).
 
 ## Directives
 
@@ -80,8 +81,8 @@ scanner is shared; the keys are not.
 |---|---|
 | `std: <std>` | Language standard, one of the C++ values accepted by `cargo xtask test`. Default `c++26`. |
 | `args: <flags>` | Extra compiler flags, whitespace-split; may repeat (concatenated in order). |
-| `mode: syntax\|pp\|emit-llvm` | What the compiler does (below). Default `syntax`. |
-| `oven: [<line>[:<col>]] <counter><=N ...` | A constexpr budget, as in `cargo xtask test` (`spec/harness.md` "kiln-specific tests"); may repeat, once per location. Checked on every kiln run; a breach fails the entry. An error with `mode: pp`. |
+| `mode: syntax\|pp\|emit-llvm\|run` | What the compiler does (below). Default `syntax`. |
+| `oven: [<line>[:<col>]] <counter><=N ...` | A constexpr budget, as in `cargo xtask test` (`spec/harness.md` "kiln-specific tests"); may repeat, once per location. Checked on every kiln run; a breach fails the entry. An error with `mode: pp` or `mode: run`. |
 | `threshold-time: <PCT>` | This entry's allowed wall-clock regression (default 5). |
 | `threshold-mem: <PCT>` | This entry's allowed peak-RSS regression (default 2). |
 | `threshold-steps: <PCT>` | This entry's allowed constexpr `steps` regression (default 0). |
@@ -92,8 +93,18 @@ scanner is shared; the keys are not.
 | `syntax` | `-fsyntax-only` |
 | `pp` | `-E -o /dev/null` |
 | `emit-llvm` | `-S -emit-llvm -o /dev/null` |
+| `run` | none (see below) |
 
 Output goes to `/dev/null` so disk I/O does not enter the timing.
+
+With `mode: run` the program is measured, not the compiler: the entry is
+compiled and linked once, unmeasured, as `<compiler> -std=<std> <args...> -o
+<scratch>/bench-run.out bench/<group>/<name>.cpp` (a failed build fails the
+entry, with its stderr), and each of the N runs then executes that binary
+under the same wall-clock, peak-RSS and memory-cap rules as a compile (the
+cap is `--mem-limit`, with no kiln stack reservation). No constexpr or
+instantiation report is requested. Optimisation is the entry's business
+(`args: -O2`).
 
 A `cargo xtask test` key (`expect`, `diag`, `strict-diags`, `stdout`,
 `stdout-file`, `exit`, `run-args`, `run-stdin`, `run-stdin-file`, `env`,
@@ -147,7 +158,7 @@ the fixed 300 s timeout) fails the entry, and its remaining runs are skipped.
   warning (`noisy`); raise `--runs` or rerun on a quieter host.
 - The 1-minute load average (`/proc/loadavg`) is printed and recorded; a load
   above the CPU count is warned about.
-- **Constexpr counters** (kiln only, not in `mode: pp`): every run gets
+- **Constexpr counters** (kiln only, not in `mode: pp` or `mode: run`): every run gets
   `-fconstexpr-report=<scratch>/constexpr-report.jsonl` (removed before the
   run), and the report (`spec/oven.md` "Reporting protocol") is read after it.
   A missing or malformed report, or an `oven:` budget breach, fails the entry.
@@ -306,7 +317,7 @@ A **measurement** object:
 
 | Key | Type | Meaning |
 |---|---|---|
-| `mode` | string | `syntax`, `pp` or `emit-llvm` |
+| `mode` | string | `syntax`, `pp`, `emit-llvm` or `run` |
 | `flags` | string | Flags between the compiler and the file name, space-joined |
 | `source_hash` | string | `fnv1a64:<16 hex digits>` of the entry file's bytes |
 | `runs` | integer | N |

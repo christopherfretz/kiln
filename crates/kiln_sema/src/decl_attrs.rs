@@ -50,6 +50,7 @@ fn attr_name(node: &AttrNode) -> Option<&'static str> {
         AttrKind::USING_IF_EXISTS => "using_if_exists",
         AttrKind::FLAG_ENUM => "flag_enum",
         AttrKind::ENUM_EXTENSIBILITY => "enum_extensibility",
+        AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE => "coro_only_destroy_when_complete",
         AttrKind::EXCLUDE_FROM_EXPLICIT_INSTANTIATION => "exclude_from_explicit_instantiation",
         _ => return None,
     })
@@ -279,6 +280,12 @@ impl Sema<'_, '_> {
                 let name = attr_name(&node).unwrap_or_default();
                 wrong(self, DiagId::sema_attribute_wrong_decl_type, name, "enums")
             }
+            AttrKind::CORO_ONLY_DESTROY_WHEN_COMPLETE if !is_record_kind(kind) => wrong(
+                self,
+                DiagId::sema_attribute_wrong_decl_type,
+                "coro_only_destroy_when_complete",
+                "classes",
+            ),
             _ => true,
         }
     }
