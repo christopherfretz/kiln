@@ -1770,10 +1770,12 @@ impl Sema<'_, '_> {
         if qualifier.is_some() {
             // A declaration whose parameter needed the missing-`typename`
             // recovery is invalid: a qualified redeclaration does not
-            // match it (clang).
+            // match it (clang 19; clang 22 keeps the recovered
+            // declaration valid, spec/sema.md §1.1).
             found.retain(|&x| {
-                !self.missing_typename_fns.contains(&x)
-                    && !self.pattern_of(x).is_some_and(|p| self.missing_typename_fns.contains(&p))
+                self.clang_compat >= 22
+                    || !self.missing_typename_fns.contains(&x)
+                        && !self.pattern_of(x).is_some_and(|p| self.missing_typename_fns.contains(&p))
             });
         }
         if let Some(p) = self.pick_prev_function(&found, new) {
@@ -3176,6 +3178,7 @@ impl Sema<'_, '_> {
                 DiagId::sema_member_decl_no_match
             };
             let msg = self.diag(id, d.name_loc()).arg(fname.clone()).arg(scope);
+            let msg = if method { self.with_class_defined_note(msg, ctx) } else { msg };
             self.emit(msg);
             invalid_redecl = true;
         } else if let Some(p) = prev
@@ -7893,11 +7896,24 @@ impl Sema<'_, '_> {
     /// [`Sema::qualifier_desc`]); `None` for any other class.
     fn current_instantiation_desc(&self, q: DeclId) -> Option<String> {
         let first = self.ast.first(q);
+        // clang 22 prints the injected-class-name fully scoped (`'N::V<T>'`,
+        // `'H::O<U>'`), a partial specialization with its arguments as
+        // written (`'N::V<T *>'`).
+        let c22 = self.clang_compat >= 22;
+        let name = |s: &Self| {
+            if c22 {
+                let mut n = String::new();
+                kiln_ast::types::TypeNames::write_decl_name(&crate::names::SemaNames::new(s), q, true, &mut n);
+                n
+            } else {
+                s.decl_name(q)
+            }
+        };
         if let Some((_, info)) = self.ast.partial_spec_info(first) {
-            let mut s = self.decl_name(q);
+            let mut s = name(self);
             let names = crate::names::SemaNames::new(self);
-            let canon = self.ast.types.canonical_args(info.args);
-            kiln_ast::types::write_arg_list(&self.ast.types, &names, canon, &mut s);
+            let args = if c22 { info.args } else { self.ast.types.canonical_args(info.args) };
+            kiln_ast::types::write_arg_list(&self.ast.types, &names, args, &mut s);
             return Some(s);
         }
         let t = self.ast.described_template(first)?;
@@ -7912,7 +7928,7 @@ impl Sema<'_, '_> {
                 n
             })
             .collect();
-        Some(format!("{}<{}>", self.decl_name(q), params.join(", ")))
+        Some(format!("{}<{}>", name(self), params.join(", ")))
     }
 
     /// How a qualifier context is named in "no member named 'x' in ...".
@@ -8542,12 +8558,33 @@ impl Sema<'_, '_> {
     /// diagnostic (`ak_declcontext`: the class's type): the
     /// injected-class-name `A<T>` of a pattern, else the class with its
     /// scope (`N::A<long>::C`).
+    /// clang 22 follows `err_member_decl_does_not_match` naming a class
+    /// with `note_defined_here` at the class (spec/sema.md §1.1); clang 19
+    /// gives no note.
+    pub(crate) fn with_class_defined_note(
+        &self,
+        d: kiln_diag::Diag,
+        ctx: DeclId,
+    ) -> kiln_diag::Diag {
+        if self.clang_compat < 22
+            || !matches!(self.kind_of(ctx).payload(), kiln_ast::decl::PayloadClass::Record)
+        {
+            return d;
+        }
+        let decl = self.ast.decls.get(ctx);
+        let note = self
+            .diag(DiagId::note_entity_defined_here, decl.loc())
+            .arg(self.decl_name_str(decl.name()));
+        d.with_note(note)
+    }
+
     pub(crate) fn class_context_str(&mut self, c: DeclId) -> String {
         let t = self.this_class_type(c);
         let injected = t != self.tag_type(c);
         let names = crate::names::SemaNames::new(self);
         let opts = kiln_ast::types::PrintOptions {
-            full_scope: !injected,
+            // clang 22 scopes the injected class name too (`'N::A<T>'`).
+            full_scope: !injected || self.clang_compat >= 22,
             ..kiln_ast::types::PrintOptions::SUGARED
         };
         format!("'{}'", kiln_ast::types::print_type(&self.ast.types, &names, t, opts))

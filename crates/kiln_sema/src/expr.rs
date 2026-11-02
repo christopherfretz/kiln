@@ -4237,12 +4237,22 @@ impl Sema<'_, '_> {
         // [temp.inst]/12: the default arguments this call uses are
         // instantiated now.
         if let Some(c) = named {
+            // Where the instantiation is required: the call's start; at
+            // clang 22 a member call's member name (`getExprLoc`).
+            let poi = if self.clang_compat >= 22
+                && self.ast.exprs.get(callee).kind() == ExprKind::MemberExpr
+                && !self.is_static_method(c.decl)
+            {
+                self.eloc(callee)
+            } else {
+                self.begin_loc(callee)
+            };
             for &p in pdecls.iter().take(n).skip(have) {
                 if self.diagnose_unparsed_default_arg(c.decl, p, callee) {
                     return None;
                 }
                 if self.inst.lazy_defaults.contains_key(&p)
-                    && !self.instantiate_lazy_default(c.decl, p, self.begin_loc(callee))
+                    && !self.instantiate_lazy_default(c.decl, p, poi)
                 {
                     return None;
                 }

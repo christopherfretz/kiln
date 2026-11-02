@@ -930,6 +930,7 @@ impl Sema<'_, '_> {
             .diag(id, d.name_loc())
             .arg(self.decl_name_str(name))
             .arg(self.class_context_str(q));
+        let e = self.with_class_defined_note(e, q);
         self.emit(e);
         Some(None)
     }
