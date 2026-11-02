@@ -1018,6 +1018,9 @@ impl Cg<'_> {
             V::C(self.m.const_bool(true))
         } else if ast.types.is_pointer(q) {
             let pq = ast.types.pointee(q).expect("pointee");
+            if let Some((n, et)) = self.vla_inc_step(pq, inc)? {
+                return Ok(self.gep_nuw(et, old, vec![n], inc));
+            }
             let et = if ast.types.is_void(pq) || ast.types.is_function(pq) {
                 LTy::I8
             } else {
@@ -1180,6 +1183,10 @@ impl Cg<'_> {
                 let b = self.cast(CastOp::PtrToInt, r, LTy::I64);
                 let d = self.bin(BinOp::Sub, Flags::NONE, a, b);
                 let pq = ast.types.pointee(lq).expect("pointee");
+                if self.is_vla(pq) {
+                    let c = self.vla_bytes(pq)?;
+                    return Ok(self.bin(BinOp::SDiv, Flags::EXACT, d, c));
+                }
                 let sz = if ast.types.is_void(pq) || ast.types.is_function(pq) {
                     1
                 } else {
@@ -1202,6 +1209,9 @@ impl Cg<'_> {
                     idx = self.bin(BinOp::Sub, Flags::NONE, z, idx);
                 }
                 let et = ast.types.pointee(pq).expect("pointee");
+                if let Some((idx, ety)) = self.vla_pointer_step(et, idx)? {
+                    return Ok(self.gep_nuw(ety, p, vec![idx], !is && !sub));
+                }
                 let ety = if ast.types.is_void(et) || ast.types.is_function(et) {
                     LTy::I8
                 } else {
