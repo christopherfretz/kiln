@@ -203,7 +203,10 @@ clang's `Parser` over `Preprocessor::Lex`.
   Once a decl-specifier names no type (`DeclSpec::type_error`), the
   later declarators of the group are skipped up to the `;`, as clang's
   `ParseDeclGroup`, so `u5 &x1, &x2;` and `S::c &x3, &x4;` report once
-  (WP-318, `tests/conformance/stmt.ambig/unknown-type-before-ptr-operator.cpp`).
+  (WP-318, `tests/conformance/stmt.ambig/unknown-type-before-ptr-operator.cpp`);
+  `X<int>::t f, &g;` with `X` undefined reports the undefined template
+  once for the declaration, not per declarator (clang's second print is
+  the per-declaration repeat of spec/diag.md §7.4.1, WP-330).
   A qualified name that its non-dependent scope does not declare,
   followed by an identifier (`S::nom x`), is not a type in a type-id or
   a declaration-specifier scan (clang returns `False` for an
