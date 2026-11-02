@@ -391,15 +391,21 @@ fn execute(opts: &Options) -> Result<bool, String> {
     let feature_refs: Vec<&str> = features.iter().map(String::as_str).collect();
 
     if opts.list {
+        let target = target_dir(&root)?;
         for (p, rel) in &tests {
             let kind =
                 p.file_name().and_then(|n| n.to_str()).and_then(Kind::of).unwrap_or(Kind::Pass);
             let text = std::fs::read_to_string(p).unwrap_or_default();
-            let verdict = match run::prepare(
-                kind,
-                &text,
-                &local_cfgs(&cfg_cache, &test_root, p),
-                &feature_refs,
+            let verdict = match run::env_unsupported(rel, &target).map_or_else(
+                || {
+                    run::prepare(
+                        kind,
+                        &text,
+                        &local_cfgs(&cfg_cache, &test_root, p),
+                        &feature_refs,
+                    )
+                },
+                |r| Err(Outcome::Unsupported(r)),
             ) {
                 Ok((_, _, Some(x))) => format!("run (XFAIL: {x})"),
                 Ok(_) => "run".to_owned(),
