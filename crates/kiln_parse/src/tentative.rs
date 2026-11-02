@@ -219,6 +219,12 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     /// the current token? `True` if it must be one, `Ambiguous` for a
     /// simple-type-specifier followed by `(` (a functional cast is
     /// possible), `braced` for one followed by `{`.
+    /// The token index past the name after `typename` at `self.i`: a
+    /// splice `[: r :]` (-freflection) or a (qualified) name.
+    fn typename_end(&self) -> Option<usize> {
+        self.p.splice_end(self.i + 1).or_else(|| self.p.scan_name(self.i + 1).map(|n| n.0))
+    }
+
     fn decl_specifier(&self, braced: Tpr) -> Tpr {
         if let Some(k) = self.kw() {
             return match k {
@@ -285,12 +291,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                         None => Tpr::Error,
                     }
                 }
-                Kw::Typename => {
-                    let Some((end, _, _)) = self.p.scan_name(self.i + 1) else {
-                        return Tpr::Error;
-                    };
-                    self.after_simple_type(end, braced)
-                }
+                Kw::Typename => match self.typename_end() {
+                    Some(end) => self.after_simple_type(end, braced),
+                    None => Tpr::Error,
+                },
                 _ => Tpr::False,
             };
         }
@@ -403,6 +407,9 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 if !self.skip_attributes() {
                     return Tpr::Error;
                 }
+            }
+            Some(Kw::Typename) if self.p.splice_end(self.i + 1).is_some() => {
+                self.i = self.p.splice_end(self.i + 1).unwrap_or(self.i + 1);
             }
             Some(Kw::Typename | Kw::Struct | Kw::Class | Kw::Union | Kw::Enum) => {
                 self.i += 1;

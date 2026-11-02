@@ -5,7 +5,6 @@
 // format:3713 (friend std::make_format_args); 27 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): friend declaration of a qualified function template in a class template does not match
 namespace N { template<class T> void f(T); template<class T, class U> struct box {}; template<class I, class A> void g(box<I, A> &); }
 template<class X> class R { template<class T> friend void N::f(T); };
 class S { template<class T> friend void N::f(T); };

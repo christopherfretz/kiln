@@ -532,6 +532,29 @@ literal is one instruction and one step, not an interpreted loop.
   `i8` GEP by the count; `bcmp`, `wmemcpy` and `wmemmove` call the
   library functions.
 
+- **Landed (WP-270): checked arithmetic** (`builtin::CHECKED`). The
+  generic and typed `__builtin_{add,sub,mul}_overflow` forms are
+  evaluated, as clang 19's `ExprConstant`: the compiler evaluates both
+  operands, then the result pointer, then emits `bi::OVERFLOW` twice,
+  once with the `VALUE` flag for the wrapped result and once for the
+  flag, and stores the value through the pointer with the ordinary
+  assignment checks (a null pointer is "assignment to dereferenced null
+  pointer", an object from outside the evaluation "cannot modify an
+  object that is visible outside that expression"). The sub-operand
+  packs the operation (0 add, 1 sub, 2 mul), each operand's signedness,
+  the result's signedness and width; operands arrive canonical (sign- or
+  zero-extended to 128 bits). The VM computes in sign-magnitude with a
+  checked `u128` magnitude, so any `__int128`/`unsigned __int128` mix is
+  exact: overflow is a magnitude past `u128` or a value outside the
+  result type; the stored value is the wrapping operation truncated to
+  the result width (`arith::canon`). **Deliberate divergence:** for a
+  `bool` result clang 19's evaluator truncates to 8 bits (it stores 2 for
+  `1 + 1`), while its codegen and GCC use 1 bit; kiln uses 1 bit in both
+  (value `0`, overflow `true`).
+  `__builtin_alloca`, `__builtin_alloca_with_align`, `__builtin_vsnprintf`,
+  `__builtin_snprintf` and `__builtin_sprintf` trap "subexpression not
+  valid in a constant expression", as clang 19.
+
 ### Memoization — normative for M2
 - A function is memoized when its parameters (at most 4) are integral,
   `bool` or floating and its result is such a scalar (not a pointer, not
@@ -1527,14 +1550,64 @@ a statement expression) is materialized and its parts loaded.
 - Tests: `tests/conformance/ext.complex/constexpr.cpp`,
   `imaginary.cpp`.
 
-### Reflection runtime (M6)
-- `std::meta::info` is a `ReflectionId(u32)` into sema's entity tables;
-  it is a scalar in memory (8 bytes) with shadow kind `Reflection`.
-- All `std::meta` functions are intrinsics dispatched by name from the
-  `<meta>` header's declarations (`consteval` functions whose definitions are
-  kiln-internal); they call `SemaBridge` methods. `define_aggregate` and
-  friends mutate sema state and are therefore only allowed in the
-  evaluation contexts the standard permits; the bridge enforces that.
+### Reflection runtime (M6; WP-267 spike behind `-freflection`)
+- `std::meta::info` is a `ReflectionId(u32)` into sema's
+  `ReflectionTable` (spec/ast.md §10). It is an 8-byte scalar of
+  `TyKind::Reflection` (`ty.rs`). Its register and memory value is
+  `index - 1` (`ReflectionId::bits`/`from_bits`), so a value-initialized
+  `info{}` is the null reflection (table slot 1). It freezes to and thaws
+  from `Scalar::Reflection` (`value.rs`). A value that is not a table index
+  does not freeze: "kiln: value is not a reflection the compiler produced".
+- *Amended by the spike:* the shadow has no `Reflection` kind; it keeps
+  only init and pointer bits. A reflection cannot be forged because loads
+  and stores are typed and `memcpy` requires the same type on both sides
+  ("cannot constant evaluate 'memcpy' from object of type 'unsigned long'
+  to object of type 'std::meta::info'"). `__builtin_bit_cast` rejects
+  `info` in sema (not trivially copyable). Whether to add shadow kinds is
+  open (docs/status/reflection-spike.md R5).
+- **Dispatch.** A direct call to a declaration for which
+  `SemaBridge::meta_intrinsic(f)` returns a `MetaOp` (sema matches the
+  qualified name) compiles to `Op::Builtin` with aux
+  `bi::META | op << 8`. The operands are
+  `[dst, a, b, c, char type of a pointer argument, result type]`.
+  The VM (`vm/meta.rs`) calls the matching bridge method:
+
+  | `MetaOp` | bridge method | result |
+  |---|---|---|
+  | `TypeOf` | `reflect_type_of(r, loc)` | `info` |
+  | `NameOf` | `reflect_name(r, loc)` | a frozen string, thawed as `const char*` |
+  | `MembersCount` / `MemberAt` | `reflect_members(r, loc, oven)` | count / `info` (index checked) |
+  | `DefineMember` | `define_member(cls, ty, name, loc, oven)` | `info` of the new member |
+
+  A string argument is read up to its NUL; more than 4096 bytes is an
+  invalid name. A method that may evaluate (completing a template
+  specialization, checking a member type) receives the running Oven and
+  lends it back to sema for the nested evaluation (R-OVEN-1, sema's
+  `lend_oven`).
+- **Failures.** A bridge method fails with `Vec<Note>`. The first note
+  becomes the trap's message, the call stack follows, then the remaining
+  notes. An empty vector is a silent failure, used for a speculative fold.
+- **Memoization.** Every meta intrinsic increments `run.impure`, so
+  neither the call nor any call whose span contains it is memoized. This
+  matters because the result of a query can change between evaluations
+  (a class gains members, a specialization completes), and a defining call
+  must never be replayed (`tests/conformance/reflection/define-member-neg.cpp`).
+- **Mutation.** `define_member` (and later `define_aggregate`) changes the
+  AST while the evaluation runs. The Oven holds only ids, which stay
+  valid because the arenas are append-only. Sema enforces where mutation
+  is allowed (spec/sema.md "Reflection (spike, -freflection)"); the Oven
+  does not know whether an evaluation is manifestly constant-evaluated.
+- **Incomplete classes in the type table.** A class interned while it has
+  no definition, or while it is still being defined, is a *provisional*
+  `Opaque` slot. Its layout is not computed: `ensure_layout` caches by
+  first declaration and is never invalidated. `Types::refresh` runs at the
+  start of every evaluation, and an `intern` hit runs it as well; once the
+  class is complete, the slot is rebuilt **in place**, so a pointer
+  already holding the `OTy` stays valid. No object of a provisional type
+  can exist, because objects need complete types.
+- **Accounting.** The defining evaluation is an ordinary evaluation in
+  `-fconstexpr-report`: steps, bytes and calls of the Oven work, plus sema
+  work done inside a bridge call, which appears only in `wall_us`.
 
 ## Interface — amended 2026-10-28 per spec/ast.md Q2
 The Oven holds **no** borrow of the AST across calls: sema mutates the AST
@@ -1553,7 +1626,12 @@ pub trait SemaBridge {
     fn subobjects(&mut self, record: DeclId) -> &[Subobject];     // indexed by SubobjectId
     fn consts(&mut self) -> &mut ConstStore;                      // freeze results
     fn diag(&mut self, d: Diag);
-    // reflection ops added in M6
+    // reflection (WP-267 spike; all default to "not an intrinsic" / Err(vec![])):
+    fn meta_intrinsic(&self, f: DeclId) -> Option<MetaOp>;
+    fn reflect_type_of(&mut self, r: ReflectionId, loc: Loc) -> Result<ReflectionId, Vec<Note>>;
+    fn reflect_name(&mut self, r: ReflectionId, loc: Loc) -> Result<ConstValueId, Vec<Note>>;
+    fn reflect_members(&mut self, r: ReflectionId, loc: Loc, oven: &mut Oven) -> Result<Vec<ReflectionId>, Vec<Note>>;
+    fn define_member(&mut self, cls: ReflectionId, ty: ReflectionId, name: &str, loc: Loc, oven: &mut Oven) -> Result<ReflectionId, Vec<Note>>;
 }
 impl Oven {
     pub fn new(budget: Budget) -> Self;

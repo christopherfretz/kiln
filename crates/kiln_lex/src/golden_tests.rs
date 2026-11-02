@@ -15,7 +15,9 @@ use crate::literal::{LiteralOptions, NumberClass, classify_number, decode_char, 
 use crate::{Interner, LexOptions, Lexer, TokKind, dump_source};
 
 fn check(src: &str, expected: &[&str]) {
-    let got = dump_source(src, LexOptions::default());
+    // Reflection mode on: the goldens include the P2996 tokens (WP-267
+    // gated them on `-freflection`).
+    let got = dump_source(src, LexOptions { reflection: true, ..LexOptions::default() });
     let want: String = expected.concat();
     assert_eq!(got, want, "\n--- got ---\n{got}");
 }

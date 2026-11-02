@@ -298,6 +298,12 @@ pub(crate) mod bi {
     /// not a failure) << 9.
     pub const LOCK_FREE: u32 = 12;
 
+    /// A reflection intrinsic (WP-267 spike): sub = `MetaOp::code`; the
+    /// operands are the call's arguments (`a`, `b`, `c`); `t1` the
+    /// character type of a name argument, `t2` the result's pointer type
+    /// (`name_of`).
+    pub const META: u32 = 30;
+
     /// sub of `MEMCMP`/`MEMCHR`: the `w` form (elements compared as
     /// `wchar_t`, no narrow-character restriction).
     pub const WIDE: u32 = 1;
@@ -331,6 +337,16 @@ pub(crate) mod bi {
     pub const ROTL: u32 = 4;
     /// `INT_OP`: `__builtin_rotateright*`.
     pub const ROTR: u32 = 5;
+    // WP-270: checked arithmetic.
+    /// `__builtin_{add,sub,mul}_overflow` on canonical `a`, `b`: sub = op
+    /// (0 add, 1 sub, 2 mul) | `a` signed << 2 | `b` signed << 3 | result
+    /// signed << 4 | [`VALUE`] | result width << 6. Without `VALUE` the
+    /// value is the overflow flag (the infinitely precise result does not
+    /// fit the result type); with it, the wrapped result, canonical in the
+    /// result type.
+    pub const OVERFLOW: u32 = 21;
+    /// sub flag of `OVERFLOW`: produce the wrapped result.
+    pub const VALUE: u32 = 32;
     /// sub of `MEMCPY`: `wmemcpy`/`wmemmove`: `c` counts elements, not
     /// bytes.
     pub const WCHAR: u32 = 2;

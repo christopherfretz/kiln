@@ -696,6 +696,10 @@ impl Parser<'_, '_> {
         );
         let a = if ctad_name && let Some(t) = self.at_template_name_arg() {
             t
+        } else if self.at_splice() {
+            // [temp.arg.general]/3 (P2996): a splice-specifier here is a
+            // type splice in the spike (no value or template splices).
+            TemplateArg::ty(self.parse_splice_type()?)
         } else if self.is_cxx_type_id_at(self.pos(), TypeIdContext::AsTemplateArgument).0 {
             TemplateArg::ty(
                 self.with_greater_op(false, |p| p.parse_type_id_into(None, DeclSite::TemplateArg))?,
@@ -828,6 +832,9 @@ impl Parser<'_, '_> {
     /// ([temp.res.general]/3) at `typename`.
     pub(crate) fn parse_typename_specifier(&mut self) -> Option<QualType> {
         self.bump();
+        if self.at_splice() {
+            return self.parse_splice_type();
+        }
         let qual = self.parse_nested_name_nns().ok()?;
         let Some(q) = qual else {
             let d = self.s.diag(DiagId::parse_expected_qualified_after_typename, self.loc());

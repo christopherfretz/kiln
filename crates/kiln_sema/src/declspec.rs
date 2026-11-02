@@ -465,11 +465,12 @@ pub enum DefaultArg {
     /// `= e`, parsed in place and converted to the parameter's type
     /// ([`crate::Sema::act_on_param_default_init`]).
     Parsed(ExprId),
-    /// `=` at this location in a member function declared in a class
-    /// being defined: the tokens are saved and replayed in the
-    /// complete-class context (spec/sema-class.md §2.7); the parameter
-    /// gets `ParamData::DEFAULT_ARG_PENDING`.
-    Unparsed(Loc),
+    /// `=` at the first location, the argument starting at the second,
+    /// in a member function declared in a class being defined: the
+    /// tokens are saved and replayed in the complete-class context
+    /// (spec/sema-class.md §2.7); the parameter gets
+    /// `ParamData::DEFAULT_ARG_PENDING`.
+    Unparsed(Loc, Loc),
 }
 
 /// One declarator operator ([dcl.meaning]), clang's `DeclaratorChunk`.
@@ -798,6 +799,12 @@ impl Declarator {
     /// declarator (`f(int)`, `(*g)(int)` is not).
     pub fn is_function_declarator(&self) -> bool {
         matches!(self.chunks.first(), Some(Chunk::Function { .. }))
+    }
+
+    /// True if the outermost operator applied to the name is an array
+    /// declarator of unknown bound (`d[]`; clang `isArrayOfUnknownBound`).
+    pub fn is_array_of_unknown_bound(&self) -> bool {
+        matches!(self.chunks.first(), Some(Chunk::Array { size: None, .. }))
     }
 
     /// The parameters of a function declarator.

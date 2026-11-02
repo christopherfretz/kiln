@@ -4,7 +4,6 @@
 // 36 headers) (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): use of undeclared identifier '__builtin_mul_overflow' (GNU builtins not provided)
 #include <stdarg.h>
 unsigned long mul(unsigned long a, unsigned long b) {
   unsigned long r;

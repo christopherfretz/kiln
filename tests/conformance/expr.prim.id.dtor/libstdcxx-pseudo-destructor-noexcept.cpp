@@ -5,7 +5,6 @@
 // contiguous_iterator into <span>, <format>, ranges::subrange; 24 headers (docs/status/libstdcxx.md, WP-188).
 // Verified against clang 19.
 //@ expect: compile-ok
-//@ xfail(kiln): pseudo-destructor call on a scalar treated as potentially-throwing
 template<class T> concept A = requires(T &t) { t.~T(); };
 template<class T> concept B = requires(T &t) { { t.~T() } noexcept; };
 template<class T> constexpr bool n(T &t) { return noexcept(t.~T()); }

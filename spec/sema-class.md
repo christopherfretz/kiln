@@ -88,7 +88,7 @@ public.
 | member | decl kind | notes |
 |---|---|---|
 | non-static data member | `Field` | access from `ClassBuild`; `mutable` → `FieldData::MUTABLE`, `HAS_MUTABLE_FIELDS`; `[[no_unique_address]]` (M2); NSDMI style bits set now, `init` written at replay (§2.7) |
-| static data member | `Var`, `VarStorage::Static`, ctx = class | in-class: a declaration unless `inline` or `constexpr` (implicitly inline, [dcl.constexpr]/1); a `static const` integral/enum member with an initializer is usable in constant expressions; `int S::s = 1;` is a redeclaration (lexical ctx = namespace, `HAS_LEXICAL_CTX`) |
+| static data member | `Var`, `VarStorage::Static`, ctx = class | in-class: a declaration unless `inline` or `constexpr` (implicitly inline, [dcl.constexpr]/1); a `static const` integral/enum member with an initializer is usable in constant expressions ([class.static.data]/4: the initializer must be a constant expression of any value of the member's type, `unsigned __int128` above `INT128_MAX` included, WP-275, else `in-class initializer for static data member is not a constant expression`); `int S::s = 1;` is a redeclaration (lexical ctx = namespace, `HAS_LEXICAL_CTX`) |
 | member function | `CXXMethod` | in-class definition implicitly inline; `static` → `FnStorage::Static`; cv/ref-qualifiers into `FuncProto.this_quals`/`ref_qual` (types.md §5.4); `virtual`, `= 0`, `override`, `final` (§3.4) |
 | constructor / destructor / conversion | `CXXConstructor` / `CXXDestructor` / `CXXConversion` | `DeclName` tag 2/3/4 keyed by the canonical class `TypeId` / target `QualType` (ast.md §3) |
 | nested class / enum / typedef / alias | M2 kinds, ctx = class | access applies to the name; nested class is a member ([class.access.nest]) |
@@ -294,8 +294,12 @@ declaration ([dcl.meaning.general]/2). Tests: `expr.eq/`,
 The parser (WP-065) saves the tokens of member function bodies (with
 ctor-initializers), default arguments, *noexcept-specifier*s, NSDMIs and
 contract assertions. Until replay: parameters carry `ParamData` flag
-`DEFAULT_ARG_PENDING`, methods have `ExcSpec::Deferred(self)` and sit in
-`Sema.unparsed_exc`, fields have NSDMI style bits but `init == None`. After the
+`DEFAULT_ARG_PENDING` (and sit in `Sema.unparsed_default_args` with the
+argument's location: a call that uses one gives `use of default argument
+to function 'f' that is declared later in class 'S'` + `default argument
+declared here`, clang `CheckCXXDefaultArgExpr`; WP-269), methods and
+unqualified friends have `ExcSpec::Deferred(self)` and sit in
+`Sema.unparsed_exc` (sema.md §4.7), fields have NSDMI style bits but `init == None`. After the
 outermost class's `}` the parser replays in clang's order
 (`ParseLexedMethodDeclarations`, `ParseLexedMemberInitializers`,
 `ParseLexedMethodDefs`), each phase over the class and its nested classes in
@@ -688,6 +692,15 @@ Constructor: no return type (`constructor cannot have a return type`), not
 `static`/`virtual`/cv-/ref-qualified, copy ctor by reference (`copy constructor
 must pass its first argument by reference`), `explicit` / `explicit(bool)`
 (cold map). A non-explicit constructor is converting ([class.conv.ctor]).
+The operand of `explicit(expr)` is a contextually converted constant
+expression of type `bool` ([dcl.fct.spec]/4; `Sema::resolve_explicit`, the
+`Sema::bool_cce` shared with the *noexcept-specifier*, WP-275): a class type
+converts through a constexpr conversion function; a type with no conversion,
+a disallowed conversion, a narrowing and a non-constant operand get clang's
+converted-constant-expression errors at the operand (`explicit specifier
+argument ...`), after which the declaration is not explicit. A value-dependent
+operand waits for instantiation; an instantiated member whose operand is then
+invalid is dropped (clang `InstantiateExplicitSpecifier`).
 Destructor: name matches the class, no parameters (`destructor cannot have any
 parameters`), no return type; implicitly `noexcept` unless a subobject's isn't
 ([except.spec]/9). Conversion function ([class.conv.fct]): no return type
@@ -1370,7 +1383,9 @@ against `-complete` block by block, in order (abi.md §8.4).
 | `cleanup: CleanupState` | §5.3 |
 | `extend_collector: Option<Vec<ExprId>>` | §5.4 P2718 |
 | `unparsed_exc: FxHashSet<DeclId>` | §2.7 |
-| `uninstantiated_exc: FxHashMap<DeclId, DeclId>` (WP-112) | members of specializations whose dependent `noexcept(expr)` is instantiated when needed: first decl → pattern (sema.md §4.7) |
+| `uninstantiated_exc: FxHashMap<DeclId, DeclId>` (WP-112) | members, friends and function template specializations whose dependent `noexcept(expr)` is instantiated when needed: first decl → pattern (sema.md §4.7) |
+| `delayed_exc_equiv: Vec<(DeclId, DeclId)>` (WP-269) | redeclarations whose spec was unknown when declared, paired with the previous declaration (sema.md §4.7) |
+| `unparsed_default_args: FxHashMap<DeclId, Loc>` (WP-269) | §2.7 |
 | `special: SpecialState` (WP-067a) | pending `= default` checks, pending deleted uses, lazily found deleted implicit members, the definition bits of classes at `}`, fields with an NSDMI (§4) |
 | `FnState.this_ty`, `this_override` | §2.5 |
 | `Scope.nrvo` | §5.5 |

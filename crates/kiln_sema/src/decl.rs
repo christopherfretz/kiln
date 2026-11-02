@@ -288,6 +288,17 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The type a non-static data member of type `q` requires complete
+    /// (clang `CheckFieldDecl`): the element type of a bounded array, and
+    /// of an array of unknown bound, which is a flexible array member
+    /// (spec/sema.md §5.8, checked when the class is complete).
+    pub(crate) fn field_complete_type(&self, q: QualType) -> QualType {
+        match self.ast.types.canonical_view(q) {
+            TypeView::IncompleteArray(e) => self.bounded_array_element(e),
+            _ => self.bounded_array_element(q),
+        }
+    }
+
     /// True if `q` is a complete object type here (a class is incomplete
     /// until its closing brace).
     pub fn is_complete(&self, q: QualType) -> bool {
@@ -813,6 +824,14 @@ impl Sema<'_, '_> {
                     if self.require_non_abstract_element(*loc, ty) {
                         return QualType::ERROR;
                     }
+                    // §5.8 (clang `BuildArrayType`): an element class with a
+                    // flexible array member is a GNU extension.
+                    if self.has_flexible_array_member(ty) {
+                        let msg = self
+                            .diag(DiagId::sema_flexible_array_in_array, *loc)
+                            .arg(self.ty_arg(ty));
+                        self.emit(msg);
+                    }
                     ty = match size {
                         None => self.ast.types.incomplete_array(ty),
                         Some(e) if self.expr_is_value_dependent(*e) => {
@@ -840,6 +859,12 @@ impl Sema<'_, '_> {
                             {
                                 self.error(self.vla_ext_id(), *loc);
                                 self.ast.types.variable_array(ty, *e)
+                            }
+                            Some(Ok(0)) => {
+                                let l = self.begin_loc(*e);
+                                let msg = self.diag(DiagId::sema_zero_length_array, l);
+                                self.emit(msg.per_instantiation());
+                                self.ast.types.constant_array(ty, 0, None)
                             }
                             Some(Ok(n)) => self.ast.types.constant_array(ty, n, None),
                             Some(Err(size)) => self.ast.types.variable_array(ty, size),
@@ -1163,7 +1188,7 @@ impl Sema<'_, '_> {
         }
         match first.default_arg {
             DefaultArg::None => {}
-            DefaultArg::Unparsed(l) => self.error(DiagId::sema_explicit_object_param_default, l),
+            DefaultArg::Unparsed(l, _) => self.error(DiagId::sema_explicit_object_param_default, l),
             DefaultArg::Parsed(e) => {
                 let l = self.eloc(e);
                 self.error(DiagId::sema_explicit_object_param_default, l);
@@ -2454,6 +2479,9 @@ impl Sema<'_, '_> {
         }
         let mut prev_ok = None;
         let mut invalid_redecl = false;
+        let late_exc =
+            d.late_noexcept.is_some() || matches!(self.written_exc_spec(ty), ExcSpec::Deferred(_));
+        let mut delayed_prev = false;
         let fkind = if method { DeclKind::CXXMethod } else { DeclKind::Function };
         let new_fn = NewFn {
             ty,
@@ -2483,25 +2511,72 @@ impl Sema<'_, '_> {
                         | OverloadedOperator::ArrayDelete
                 )
         });
-        let prev = if global_new_delete {
+        // A qualified friend of a namespace function in a templated class
+        // whose own head or type is dependent is matched only when the class
+        // is instantiated: its template parameters are a level deeper than
+        // the namespace template's, and the match may depend on the class's
+        // arguments ([temp.friend]/1, [temp.over.link]/6). A name that finds
+        // nothing is diagnosed now (clang `ActOnFunctionDeclarator`).
+        let templated_friend =
+            friend && d.qualifier.is_some() && !method && self.in_templated_class(Some(lexical));
+        let deferred_friend =
+            templated_friend && (self.templ.cur.is_some() || self.ast.types.is_dependent(ty)) && {
+                let found = self.prev_candidates_dn(dname, d.qualifier);
+                !found.is_empty()
+                    && found.iter().all(|&x| {
+                        let k = self.kind_of(self.ast.strip_shadow(x));
+                        k.payload() == kiln_ast::decl::PayloadClass::Function
+                            || k == DeclKind::FunctionTemplate
+                    })
+            };
+        let prev = if global_new_delete || deferred_friend {
             None
         } else if friend && d.qualifier.is_none() && self.in_templated_class(Some(lexical)) {
             // A friend of a templated class redeclares nothing until
-            // instantiated (see `is_dependent_friend_fn`).
+            // instantiated (see `is_dependent_friend_fn`); a non-dependent
+            // one is checked against the using-declarators now (clang).
+            if new_fn.head.is_none() && !self.ast.types.is_dependent(ty) {
+                let shadows: Vec<DeclId> = self
+                    .ast
+                    .lookup_local(ctx, dname)
+                    .iter_with_inline()
+                    .filter(|&(x, via_inline)| {
+                        !via_inline && self.kind_of(x) == DeclKind::UsingShadow
+                    })
+                    .map(|(x, _)| x)
+                    .collect();
+                invalid_redecl |=
+                    self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
+            }
             None
         } else if friend && d.qualifier.is_none() {
             // Redeclaration lookup in the namespace sees hidden friends,
             // but not the members of its inline namespaces: those are in
             // other scopes ([dcl.meaning.general]/2.3, [namespace.memdef]/3;
             // clang's `FilterLookupForScope` without `AllowInlineNamespace`).
-            let found: Vec<DeclId> = self
+            let mut found: Vec<DeclId> = self
                 .ast
                 .lookup_local(ctx, dname)
                 .iter_with_inline()
                 .filter(|&(d, via_inline)| !via_inline && !self.is_dependent_friend_fn(d))
                 .map(|(d, _)| d)
                 .collect();
-            self.pick_prev_function(&found, new_fn)
+            // A using-declarator of the namespace is not redeclared: the
+            // friend overloads its target, or, corresponding to it, cannot
+            // befriend it ([namespace.udecl]/10, [basic.scope.scope]/4;
+            // clang `err_using_decl_friend`).
+            let shadows: Vec<DeclId> = found
+                .iter()
+                .copied()
+                .filter(|&x| self.kind_of(x) == DeclKind::UsingShadow)
+                .collect();
+            found.retain(|&x| self.kind_of(x) != DeclKind::UsingShadow);
+            let prev = self.pick_prev_function(&found, new_fn);
+            if prev.is_none() {
+                invalid_redecl |=
+                    self.friend_befriends_using_target(&shadows, new_fn, d.name_loc());
+            }
+            prev
         } else if method {
             let found = self.prev_candidates_dn(dname, d.qualifier);
             self.pick_prev_function(&found, new_fn)
@@ -2528,6 +2603,15 @@ impl Sema<'_, '_> {
                 && self.ast.decls.get(p).ty().is_some()
                 && self.declared_fn_type(p).is_some_and(|pty| self.same_ignoring_exc_spec(pty, ty))
         });
+        // An instantiated qualified friend template that matches no
+        // template declares nothing visible, without a diagnostic (clang).
+        let quiet_friend = deferred_friend
+            || friend
+                && d.qualifier.is_some()
+                && !method
+                && prev.is_none()
+                && new_fn.head.is_some()
+                && self.instantiating_friend_template;
         let mut ty = ty;
         if let Some(op) = d.op_name
             && global_new_delete
@@ -2556,7 +2640,11 @@ impl Sema<'_, '_> {
                     }
                 }
             }
-        } else if friend && d.qualifier.is_some() && (prev.is_none() || method && !matches_member) {
+        } else if friend
+            && d.qualifier.is_some()
+            && !quiet_friend
+            && (prev.is_none() || method && !matches_member)
+        {
             let msg = self
                 .diag(DiagId::sema_friend_def_no_match, d.name_loc())
                 .arg(fname.clone())
@@ -2615,10 +2703,32 @@ impl Sema<'_, '_> {
         } else if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
-                let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                let mut pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                // [except.spec]/13: a previous declaration's specification
+                // still uninstantiated is needed now (clang resolves the
+                // old one in `CheckEquivalentExceptionSpec`).
+                if !self.in_template()
+                    && matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
+                    && self.uninstantiated_exc.contains_key(&self.ast.first(p))
+                    && !self.exc_unparsed(p)
+                {
+                    self.resolve_exception_spec(p, d.name_loc());
+                    pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
+                }
+                // A friend whose noexcept-specifier waits for the end of
+                // its class (or, instantiated, until needed), or one
+                // redeclaring such a friend before its class is complete,
+                // matches whatever the other declaration has; the
+                // specifications are compared once both are known (clang's
+                // `DelayedEquivalentExceptionSpecChecks`), never as a
+                // missing specification.
+                let delayed = late_exc
+                    || matches!(self.written_exc_spec(pty), ExcSpec::Deferred(_))
+                        && self.same_ignoring_exc_spec(pty, ty);
                 // [except.spec]/5: a redeclaration without a specification.
                 let mut missing_err = false;
-                if !self.ast.types.same_type(pty, ty)
+                if !delayed
+                    && !self.ast.types.same_type(pty, ty)
                     && self.written_exc_spec(ty) == ExcSpec::None
                     && self.same_ignoring_exc_spec(pty, ty)
                 {
@@ -2632,9 +2742,18 @@ impl Sema<'_, '_> {
                     ty = t;
                     missing_err = err;
                 }
+                if delayed {
+                    delayed_prev = true;
+                }
+                let cmp = if delayed {
+                    let pexc = self.written_exc_spec(pty);
+                    self.with_exc_spec(ty, pexc)
+                } else {
+                    ty
+                };
                 if missing_err {
                     invalid_redecl = true;
-                } else if self.ast.types.same_type(pty, ty) {
+                } else if self.ast.types.same_type(pty, cmp) {
                     prev_ok = Some(p);
                     // [dcl.spec.auto.general]/13: the redeclaration has
                     // the deduced return type.
@@ -2735,7 +2854,7 @@ impl Sema<'_, '_> {
                         && !fl.contains(LookupFlags::ADL_ONLY)
                 })
             });
-            let k = if visible || d.qualifier.is_some() {
+            let k = if visible || d.qualifier.is_some() && !quiet_friend {
                 FriendKind::Declared
             } else {
                 FriendKind::Undeclared
@@ -2787,6 +2906,8 @@ impl Sema<'_, '_> {
         }
         if invalid_redecl {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
+        } else if templated_friend {
+            self.friend_qualifiers.insert(f, ctx);
         }
         if d.op_name.is_none() && d.lit_suffix.is_none() {
             self.note_local_extern(name, f);
@@ -2796,6 +2917,9 @@ impl Sema<'_, '_> {
         }
         self.create_params(f, &params, &defaults);
         self.defer_late_noexcept(f, d);
+        if delayed_prev && let Some(p) = prev_ok {
+            self.delayed_exc_equiv.push((f, p));
+        }
         if d.lit_suffix.is_some() {
             if !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
                 && !self.check_literal_operator_decl(f)
@@ -2979,7 +3103,10 @@ impl Sema<'_, '_> {
             match p.default_arg {
                 // Replayed in the complete-class context through
                 // `act_on_param_default_arg` (spec/sema-class.md §2.7).
-                DefaultArg::Unparsed(_) => self.ast.decls.mark_default_arg_pending(pd),
+                DefaultArg::Unparsed(_, at) => {
+                    self.ast.decls.mark_default_arg_pending(pd);
+                    self.unparsed_default_args.insert(pd, at);
+                }
                 // A default parsed in place was converted by
                 // `act_on_param_default_init`; `defaults` also holds the
                 // inherited ones ([dcl.fct.default]/4).
@@ -3012,7 +3139,7 @@ impl Sema<'_, '_> {
             .iter()
             .map(|p| match p.default_arg {
                 DefaultArg::Parsed(e) => Some(e),
-                DefaultArg::None | DefaultArg::Unparsed(_) => None,
+                DefaultArg::None | DefaultArg::Unparsed(..) => None,
             })
             .collect();
         let mut redefined = false;
@@ -3182,10 +3309,11 @@ impl Sema<'_, '_> {
             QualType::ERROR
         } else if !invalid
             && !self.ast.types.is_reference(ty)
-            && !self.require_complete(self.bounded_array_element(ty), d.name_loc())
+            && !self.require_complete(self.field_complete_type(ty), d.name_loc())
         {
-            // clang checks (and names) the element type of a bounded array.
-            let elem = self.bounded_array_element(ty);
+            // clang checks (and names) the element type of a bounded array
+            // (and of a flexible array member, §5.8).
+            let elem = self.field_complete_type(ty);
             let msg = self.diag(DiagId::sema_field_incomplete, d.name_loc()).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
             // clang marks the field invalid: initialization never
@@ -3733,6 +3861,26 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Initializes variable `v` of type `ty` from `init`. A variable
+    /// names itself, even when declared inside the initializer of another
+    /// entity (a lambda body); `init_var` is the variable being
+    /// initialized (WP-271 `diag_capture`).
+    fn perform_var_init(
+        &mut self,
+        v: DeclId,
+        ty: QualType,
+        init: Initializer,
+        loc: Loc,
+        direct: bool,
+    ) -> ExprId {
+        let entity = self.init_entity.take();
+        let var = self.init_var.replace(v);
+        let e = self.perform_init(ty, init, loc, direct);
+        self.init_entity = entity;
+        self.init_var = var;
+        e
+    }
+
     fn act_on_init_inner(&mut self, v: DeclId, init: Initializer) {
         let vn = *self.ast.decls.get(v);
         if vn.kind() != DeclKind::Var {
@@ -3814,12 +3962,8 @@ impl Sema<'_, '_> {
             self.discard_initializer(&init);
             return;
         }
-        // A variable names itself, even when declared inside the
-        // initializer of another entity (a lambda body).
-        let entity = self.init_entity.take();
         let braced = matches!(init, Initializer::List(_));
-        let e = self.perform_init(ty, init, loc, direct);
-        self.init_entity = entity;
+        let e = self.perform_var_init(v, ty, init, loc, direct);
         if self.ast.exprs.get(e).kind() == ExprKind::CXXParenListInitExpr {
             // P0960 (clang's `parenlistinit`).
             let style = VarSpec::new().with_init_style(kiln_ast::decl::InitStyle::ParenList);
@@ -4326,6 +4470,38 @@ impl Sema<'_, '_> {
         };
         self.ast.decls.get(f).misc().friend() != FriendKind::None
             && self.in_templated_class(self.ast.decls.lexical_ctx(f))
+    }
+
+    /// [namespace.udecl]/10: an unqualified friend function (template)
+    /// `new` that corresponds to the target of one of the namespace's
+    /// using-declarators `shadows` would redeclare it: "cannot befriend
+    /// target of using declaration" at `loc` (clang). Returns whether it
+    /// was reported.
+    fn friend_befriends_using_target(&mut self, shadows: &[DeclId], new: NewFn, loc: Loc) -> bool {
+        for &s in shadows.iter().rev() {
+            let t = self.ast.strip_shadow(s);
+            let corresponds = match self.kind_of(t) {
+                DeclKind::FunctionTemplate => {
+                    let head = self.ast.template_info(t).map(|i| i.params);
+                    self.pattern_of(t).is_some_and(|p| self.fn_corresponds(p, head, new))
+                }
+                k if k.payload() == kiln_ast::decl::PayloadClass::Function => {
+                    self.fn_corresponds(t, None, new)
+                }
+                _ => false,
+            };
+            if corresponds {
+                let msg = self
+                    .diag(DiagId::sema_using_decl_friend, loc)
+                    .with_note(
+                        self.diag(DiagId::note_using_decl_target, self.ast.decls.get(t).loc()),
+                    )
+                    .with_note(self.diag(DiagId::note_using_decl, self.ast.decls.get(s).loc()));
+                self.emit(msg);
+                return true;
+            }
+        }
+        false
     }
 
     /// True if lexical context `cur` is, or is nested in, a class template
@@ -5228,6 +5404,10 @@ impl Sema<'_, '_> {
         }
         if !any_named {
             bits = bits.with(DefinitionBits::EMPTY);
+        }
+        // §5.8: flexible array members.
+        if self.check_flexible_array_members(r) {
+            bits = bits.with(DefinitionBits::HAS_FLEXIBLE_ARRAY_MEMBER);
         }
         if self.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union) {
             bits = bits.with(DefinitionBits::HAS_VARIANT_MEMBERS);

@@ -88,13 +88,21 @@ fn binop(p: Punct) -> Option<(u8, Option<BinaryOp>)> {
     Some((r.0, Some(r.1)))
 }
 
+/// The operand of `sizeof`/`alignof`/`typeof` ([`Parser::parse_trait_operand`]).
+pub(crate) enum TraitOperand {
+    /// `( type-id )`, with the `)`.
+    Type(QualType, Loc),
+    Expr(ExprId),
+}
+
 /// True for a simple-type-specifier keyword that can begin a functional
-/// cast (`int(x)`).
+/// cast (`int(x)`; not `__typeof_unqual`, as clang).
 fn is_simple_type_kw(k: Kw) -> bool {
     is_type_specifier_kw(k)
         && !matches!(
             k,
             Kw::Const
+                | Kw::TypeofUnqual
                 | Kw::Volatile
                 | Kw::Restrict
                 | Kw::Atomic
@@ -533,6 +541,7 @@ impl Parser<'_, '_> {
                         | Kw::New
                         | Kw::Noexcept
                         | Kw::Nullptr
+                        | Kw::GnuNull
                         | Kw::Operator
                         | Kw::ReinterpretCast
                         | Kw::Requires
@@ -634,6 +643,17 @@ impl Parser<'_, '_> {
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
             return self.parse_sizeof_pack(loc);
         }
+        match self.parse_trait_operand()? {
+            TraitOperand::Type(ty, rparen) => Some(self.s.act_on_trait_type(kind, ty, loc, rparen)),
+            TraitOperand::Expr(e) => Some(self.s.act_on_trait_expr(kind, e, loc)),
+        }
+    }
+
+    /// The operand of `sizeof`/`alignof` or GNU `typeof`, after the
+    /// keyword (clang `ParseExprAfterUnaryExprOrTypeTrait`): `( type-id )`,
+    /// or an unevaluated unary-expression (a parenthesized one takes its
+    /// postfix suffix). `None` after an error.
+    pub(crate) fn parse_trait_operand(&mut self) -> Option<TraitOperand> {
         self.s.enter_unevaluated();
         let scoped = self.open_paren_template_scope();
         self.s.exit_unevaluated();
@@ -644,14 +664,14 @@ impl Parser<'_, '_> {
                     return None;
                 };
                 let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-                return Some(self.s.act_on_trait_type(kind, ty, loc, rparen));
+                return Some(TraitOperand::Type(ty, rparen));
             }
             self.s.enter_unevaluated();
             let e = self
                 .with_greater_op(true, |p| p.parse_paren_rest(open))
                 .and_then(|e| self.parse_postfix_suffix(e));
             self.s.exit_unevaluated();
-            return Some(self.s.act_on_trait_expr(kind, e?, loc));
+            return Some(TraitOperand::Expr(e?));
         }
         if self.at(Punct::LParen)
             && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
@@ -662,12 +682,12 @@ impl Parser<'_, '_> {
                 return None;
             };
             let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-            return Some(self.s.act_on_trait_type(kind, ty, loc, rparen));
+            return Some(TraitOperand::Type(ty, rparen));
         }
         self.s.enter_unevaluated();
         let e = self.parse_cast_expr();
         self.s.exit_unevaluated();
-        Some(self.s.act_on_trait_expr(kind, e?, loc))
+        Some(TraitOperand::Expr(e?))
     }
 
     /// A builtin type trait `__trait ( ... )` (spec/sema-templates.md
@@ -1324,8 +1344,9 @@ impl Parser<'_, '_> {
                 return self.with_greater_op(true, |p| p.parse_paren_rest(loc));
             }
             TokKind::Punct(Punct::LSquare) => return self.parse_lambda_expr(),
-            TokKind::Punct(Punct::CaretCaret | Punct::SpliceOpen) => {
-                self.unsupported("reflection", loc);
+            TokKind::Punct(Punct::CaretCaret) => return self.parse_reflect_expr(),
+            TokKind::Punct(Punct::SpliceOpen) => {
+                self.unsupported("expression splice", loc);
                 return None;
             }
             _ => {}
@@ -1352,6 +1373,10 @@ impl Parser<'_, '_> {
                 Kw::Nullptr => {
                     self.bump();
                     Some(self.s.act_on_nullptr(loc))
+                }
+                Kw::GnuNull => {
+                    self.bump();
+                    Some(self.s.act_on_gnu_null(loc))
                 }
                 Kw::StaticCast => self.parse_named_cast(CastStyle::Static),
                 Kw::ConstCast => self.parse_named_cast(CastStyle::Const),

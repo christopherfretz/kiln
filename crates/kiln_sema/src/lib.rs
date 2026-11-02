@@ -30,9 +30,12 @@ pub mod except;
 pub mod expr;
 mod extern_c;
 mod fallthrough;
+mod flex_array;
 mod for_loop_analysis;
 mod forms;
 mod gnu;
+mod gnu_null;
+mod gnu_typeof;
 mod impcast;
 mod implicit_fallthrough;
 pub mod init;
@@ -51,6 +54,7 @@ mod packed;
 mod predefined;
 mod qualified_decl;
 mod range_for;
+mod reflect;
 mod rtti;
 pub mod scope;
 mod self_ref;
@@ -118,6 +122,10 @@ pub struct Sema<'a, 'sm> {
     /// Run-time type information is enabled (`-f[no-]rtti`; default on):
     /// `typeid` is an error otherwise.
     pub rtti: bool,
+    /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
+    /// splices and the kiln reflection intrinsics (spec/sema.md
+    /// "Reflection (spike, -freflection)").
+    pub reflection: bool,
     /// The temporaries of a for-range-initializer are extended to the
     /// whole loop (C++23, P2718R0; spec/sema-class.md §5.4).
     pub range_lifetime_extension: bool,
@@ -232,6 +240,16 @@ pub struct Sema<'a, 'sm> {
     /// that is a function or array is diagnosed there (clang's
     /// `FunctionTypeLoc` begin; [dcl.fct]/11, WP-222, WP-241).
     pub(crate) type_spec_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// The namespace named by the qualifier of each friend function (or
+    /// function template pattern) declared with a qualified name in a
+    /// templated class (`friend void N::f(T);`): its instantiation is
+    /// declared with the same qualifier, so it redeclares `N::f`
+    /// ([dcl.meaning.general]/2.3, [temp.friend]/1; WP-273).
+    pub(crate) friend_qualifiers: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// A friend function template of a class template is being
+    /// instantiated (`friend_function_template`): a qualified one that
+    /// matches no template is not diagnosed (clang).
+    pub(crate) instantiating_friend_template: bool,
     /// Where `constinit` was written on each variable declaration that
     /// has it ([dcl.constinit]; WP-159).
     pub(crate) constinit_locs: kiln_source::fx::FxHashMap<DeclId, Loc>,
@@ -326,6 +344,10 @@ pub struct Sema<'a, 'sm> {
     /// (clang `InitializedEntity::EK_Temporary` "a value" for `T{x}`,
     /// `EK_New` "a new value"): a `sema_init_conversion_failed` select.
     pub(crate) init_entity: Option<&'static str>,
+    /// The variable whose initializer is being analysed (the entity of a
+    /// top-level initializer list while [`Sema::init_entity`] is `None`;
+    /// a flexible array member's initialization, §5.8).
+    pub(crate) init_var: Option<DeclId>,
     /// The context access is checked from while a namespace-scope alias
     /// template is substituted in its own context: the use's
     /// (spec/sema-class.md §2.4, clang's `CheckTemplateIdType`).
@@ -380,8 +402,11 @@ pub struct Sema<'a, 'sm> {
     pub(crate) extend_collector: Option<Vec<ExprId>>,
     /// Diagnostics held back while a range-based `for` step runs, so
     /// clang's trailing notes (`when looking up 'begin' function...`)
-    /// can be attached to the last of them (`range_for.rs`).
-    pub(crate) diag_capture: std::cell::RefCell<Option<Vec<Diag>>>,
+    /// can be attached to the last of them (`range_for.rs`), with the
+    /// instantiation stack depth where the capture began: a SFINAE
+    /// context entered inside it (a deduction during the step's overload
+    /// resolution) takes its errors as usual.
+    pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>)>>,
     /// The scope depth at the point of instantiation (clang numbers the
     /// implicit `__begin`/`__end` variables of an instantiated dependent
     /// range-based `for` from `getCurScope()`); set by the outermost
@@ -395,6 +420,17 @@ pub struct Sema<'a, 'sm> {
     /// Member functions whose *noexcept-specifier* awaits replay
     /// (`ExcSpec::Deferred`, spec/sema-class.md §2.7).
     pub(crate) unparsed_exc: kiln_source::fx::FxHashSet<DeclId>,
+    /// Redeclarations whose exception specification was not known when
+    /// they were declared (a friend's, saved for its complete-class
+    /// context or left uninstantiated), paired with the previous
+    /// declaration: compared once it is (clang's
+    /// `DelayedEquivalentExceptionSpecChecks`, spec/sema.md §4.7).
+    pub(crate) delayed_exc_equiv: Vec<(DeclId, DeclId)>,
+    /// Parameters whose default argument waits for its complete-class
+    /// context, with the argument's location: a use before then is
+    /// clang's "use of default argument to function ... that is declared
+    /// later in class" ([class.mem.general]/7).
+    pub(crate) unparsed_default_args: kiln_source::fx::FxHashMap<DeclId, Loc>,
     /// Members of class template specializations whose dependent
     /// *noexcept-specifier* is instantiated when needed ([temp.inst]/14,
     /// clang's `EST_Uninstantiated`): the first declaration maps to its
@@ -487,6 +523,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pragma_packs: Vec::new(),
             exceptions: true,
             rtti: true,
+            reflection: false,
             range_lifetime_extension: false,
             gnu: false,
             pack: (0, Vec::new()),
@@ -522,6 +559,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),
             type_spec_locs: kiln_source::fx::FxHashMap::default(),
+            friend_qualifiers: kiln_source::fx::FxHashMap::default(),
+            instantiating_friend_template: false,
             constinit_locs: kiln_source::fx::FxHashMap::default(),
             ref_usable: kiln_source::fx::FxHashMap::default(),
             empty_loop_bodies: kiln_source::fx::FxHashMap::default(),
@@ -548,6 +587,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             access_failed: kiln_source::fx::FxHashSet::default(),
             replaying_access: false,
             init_entity: None,
+            init_var: None,
             access_ctx: None,
             access_checks: 0,
             cleanup: class::CleanupState::default(),
@@ -567,6 +607,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_for_outer_depth: None,
             delete_cxx26: true,
             unparsed_exc: kiln_source::fx::FxHashSet::default(),
+            delayed_exc_equiv: Vec::new(),
+            unparsed_default_args: kiln_source::fx::FxHashMap::default(),
             uninstantiated_exc: kiln_source::fx::FxHashMap::default(),
             fn_saved: Vec::new(),
             member_refs: kiln_source::fx::FxHashMap::default(),
@@ -639,7 +681,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
-        if let Some(held) = self.diag_capture.borrow_mut().as_mut() {
+        if let Some((depth, held)) = self.diag_capture.borrow_mut().as_mut()
+            && !(self.inst.stack.len() > *depth && self.inst.stack.is_sfinae())
+        {
             held.push(d);
             return;
         }

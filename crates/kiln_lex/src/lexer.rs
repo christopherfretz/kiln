@@ -1365,7 +1365,7 @@ impl<'a> Lexer<'a> {
         let one = |p: Punct| (TokKind::Punct(p), p1, none);
         let two = |p: Punct| (TokKind::Punct(p), p2, none);
         let digraph = |p: Punct, end: usize| (TokKind::Punct(p), end, TokFlags::DIGRAPH);
-        let cxx26 = self.std_at_least(Std::Cxx26);
+        let cxx26 = self.opts.reflection && self.std_at_least(Std::Cxx26);
         match (c, c2) {
             ('{', _) => one(P::LBrace),
             ('}', _) => one(P::RBrace),

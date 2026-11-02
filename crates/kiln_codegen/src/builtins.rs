@@ -55,7 +55,9 @@ pub(crate) fn is_fold_candidate(ast: &Ast, e: ExprId) -> bool {
     let q = ast.exprs.get(e).ty();
     // `__builtin_is_constant_evaluated()` is false outside a manifestly
     // constant-evaluated context, which a fold is not.
-    builtin_callee(ast, e).is_some_and(|(_, b)| b != id::IS_CONSTANT_EVALUATED)
+    // A checked arithmetic builtin stores its result, so it is emitted.
+    builtin_callee(ast, e)
+        .is_some_and(|(_, b)| b != id::IS_CONSTANT_EVALUATED && id::checked_op(b).is_none())
         && (ast.types.is_integral(q) || ast.types.is_floating(q))
 }
 
@@ -95,7 +97,10 @@ fn lib_name(b: u32) -> Option<&'static str> {
         | id::ABORT
         | id::BCMP
         | id::WMEMCPY
-        | id::WMEMMOVE => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
+        | id::WMEMMOVE
+        | id::SNPRINTF
+        | id::SPRINTF
+        | id::VSNPRINTF => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ if id::is_libm(b) => id::info(b).and_then(|i| i.name.strip_prefix("__builtin_")),
         _ => None,
     }
@@ -762,6 +767,8 @@ impl Cg<'_> {
             | id::atomic::C11_THREAD_FENCE => {
                 return self.emit_atomic_builtin(b, e, &args).map(BuiltinCall::Emitted);
             }
+            _ if id::checked_op(b).is_some() => self.emit_checked(b, e, &args)?,
+            id::ALLOCA | id::ALLOCA_WITH_ALIGN => self.emit_alloca(b, e, &args)?,
             _ if lib_name(b).is_some() => return Ok(BuiltinCall::Library),
             _ => {
                 let name = id::info(b).map_or("?", |i| i.name);
@@ -870,7 +877,7 @@ impl Cg<'_> {
         self.intrinsic_call_ty(f, args, rty)
     }
 
-    fn intrinsic_call_ty(&mut self, f: FuncId, args: Vec<V>, rty: LTy) -> V {
+    pub(crate) fn intrinsic_call_ty(&mut self, f: FuncId, args: Vec<V>, rty: LTy) -> V {
         let fn_ty = self.m.func(f).ty();
         let r = self.f.fir.push(
             Op::Call { fn_ty, callee: V::C(Value::func(f)), args, opts: Box::default() },

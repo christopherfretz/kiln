@@ -19,6 +19,7 @@
 mod asm;
 mod atomic;
 mod builtins;
+mod checked;
 mod class;
 mod cleanup;
 mod complex;

@@ -84,6 +84,7 @@ keywords! {
     New = "new";
     Noexcept = "noexcept";
     Nullptr = "nullptr";
+    GnuNull = "__null";
     Operator = "operator";
     Private = "private";
     Protected = "protected";
@@ -111,6 +112,7 @@ keywords! {
     Typeid = "typeid";
     Typename = "typename";
     Typeof = "__typeof" | "__typeof__" | "typeof";
+    TypeofUnqual = "__typeof_unqual" | "__typeof_unqual__";
     Union = "union";
     Unsigned = "unsigned";
     Using = "using";
@@ -166,10 +168,16 @@ pub enum BuiltinKw {
 
 impl Keywords {
     /// Interns every keyword spelling in `interner`.
-    pub fn new(interner: &Interner) -> Self {
+    /// The table for a translation unit; `gnu` (`-std=gnu++NN`) adds the
+    /// GNU keywords that are not reserved identifiers (`typeof`, as clang
+    /// in C++; spec/sema.md §5.8).
+    pub fn new(interner: &Interner, gnu: bool) -> Self {
         let mut map = HashMap::new();
         for (k, spellings) in Kw::TABLE {
             for s in *spellings {
+                if !gnu && *s == "typeof" {
+                    continue;
+                }
                 map.insert(interner.intern(s), *k);
             }
         }

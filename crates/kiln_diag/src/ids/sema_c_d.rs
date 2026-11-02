@@ -2,6 +2,7 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+sema_c99_flexible_array_member = Extension [C99Extensions] (0) "flexible array members are a C99 feature";
 sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
 sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
 sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";
@@ -130,6 +131,7 @@ sema_decomp_decl_type = Error (1) "decomposition declaration cannot be declared 
 sema_decomp_decl_unbindable_type = Error (2) "cannot decompose {0:union|non-class, non-array} type {1}";
 sema_decomp_decl_wrong_number_bindings = Error (3) "type {0} decomposes into {1}, but {2} provided";
 sema_decrement_bool = Error (0) "cannot decrement expression of type bool";
+sema_default_arg_declared_later = Error (2) "use of default argument to function {0} that is declared later in class {1}";
 sema_default_arg_in_partial_spec = Error (0) "default template argument in a class template partial specialization";
 sema_default_arg_redefinition = Error (0) "redefinition of default argument";
 sema_default_init_const = Error (1) "default initialization of an object of const type {0}";
