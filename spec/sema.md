@@ -687,9 +687,15 @@ Redeclaration and linkage rules:
   placeholder or an error) is "restrict requires a pointer or reference
   ('int' is invalid)" at the qualifier, which is dropped
   (`type_from_declspec_at`, so `__restrict int *p;` qualifies `int` and
-  is diagnosed). It is reported once per declaration group where clang
-  reports it per declarator. `_Atomic int g();` (friend or not) is
-  accepted, as clang 19 and 22 do;
+  is diagnosed). As clang forms each declarator's type anew
+  ([dcl.decl.general]/3), it is reported once per declarator: the
+  group's type is formed once, and the parser repeats the error for each
+  later declarator (`take_declspec_restrict_error`,
+  `report_restrict_not_pointer`; `__restrict int e, *f;` reports it
+  twice). A `__restrict` ptr-operator qualifies its own declarator only
+  (`int *__restrict a, *b;`: `b` is `int *`; WP-379,
+  `dcl.decl/restrict-per-declarator.cpp`). `_Atomic int g();` (friend or
+  not) is accepted, as clang 19 and 22 do;
   `class.friend/restrict-atomic-decl-specifiers.cpp`.
 - `act_on_decltype(e)` ([dcl.type.decltype]): `DecltypeType` sugar
   over the declared type of an unparenthesized id-expression or member

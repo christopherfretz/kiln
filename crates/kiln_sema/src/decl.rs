@@ -252,6 +252,7 @@ impl Sema<'_, '_> {
     /// qualifier is dropped (`__restrict int h();`, WP-371).
     fn declspec_quals(&mut self, ds: &DeclSpec, base: QualType) -> Quals {
         let cv = ds.cv;
+        self.declspec_restrict_error = None;
         if let Some(rloc) = ds.cv_locs[2]
             && cv.contains(Quals::RESTRICT)
             && !self.restrict_ok(base)
@@ -259,9 +260,28 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_typecheck_invalid_restrict_not_pointer, rloc);
             let msg = msg.arg(self.ty_arg(base));
             self.emit(msg);
+            self.declspec_restrict_error = Some((rloc, base));
             return cv - Quals::RESTRICT;
         }
         cv
+    }
+
+    /// The `__restrict` error the decl-specifier-seq whose type was formed
+    /// last reported, if any: the parser repeats it
+    /// ([`Sema::report_restrict_not_pointer`]) for each later declarator
+    /// of the group (`__restrict int a, b;` is reported twice, as clang
+    /// does; WP-379).
+    pub fn take_declspec_restrict_error(&mut self) -> Option<(Loc, QualType)> {
+        self.declspec_restrict_error.take()
+    }
+
+    /// "restrict requires a pointer or reference ('T' is invalid)" again
+    /// at the `__restrict` of a decl-specifier-seq of type `T`, for a later
+    /// declarator of its group (not deduplicated).
+    pub fn report_restrict_not_pointer(&mut self, (rloc, base): (Loc, QualType)) {
+        let msg = self.diag(DiagId::sema_typecheck_invalid_restrict_not_pointer, rloc);
+        let msg = msg.arg(self.ty_arg(base)).allow_duplicate();
+        self.emit(msg);
     }
 
     /// True if `restrict` may qualify `ty`: a pointer, reference or

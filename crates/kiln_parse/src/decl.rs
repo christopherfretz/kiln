@@ -2927,6 +2927,7 @@ impl Parser<'_, '_> {
         // binding declaration is alone in its group.
         let mut first_decomp: Option<(Loc, Option<DeclId>)> = None;
         let mut declarators = 0usize;
+        let mut restrict_error = None;
         let _ = self.s.take_declarator_type_invalid();
         let mut type_invalid = false;
         loop {
@@ -2935,6 +2936,7 @@ impl Parser<'_, '_> {
             self.parse_trailing_requires(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
+            self.repeat_declspec_errors(&mut restrict_error, declarators == 0);
             // GNU asm label (clang's `ParseAsmAttributesAfterDeclarator`):
             // a malformed one drops the declarator.
             let Ok(label) = self.parse_asm_label() else {
@@ -3016,6 +3018,22 @@ impl Parser<'_, '_> {
         }
         self.expect_declaration_semi(ctx);
         decls
+    }
+
+    /// clang forms each declarator's type from the decl-specifier-seq
+    /// anew: its "restrict requires a pointer or reference" is reported
+    /// once per declarator (`__restrict int a, b;`). The first declarator
+    /// (`first`) takes the error of the group's type; later ones repeat it.
+    pub(crate) fn repeat_declspec_errors(
+        &mut self,
+        restrict_error: &mut Option<(Loc, QualType)>,
+        first: bool,
+    ) {
+        if first {
+            *restrict_error = self.s.take_declspec_restrict_error();
+        } else if let Some(r) = *restrict_error {
+            self.s.report_restrict_not_pointer(r);
+        }
     }
 
     /// The type of decl-specifier-seq `ds`, formed once the first

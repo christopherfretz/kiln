@@ -1373,6 +1373,7 @@ impl Parser<'_, '_> {
         let is_static = matches!(ds.storage, Some((StorageSpec::Static, _)));
         let is_typedef = ds.is_typedef();
         let mut base_ty: Option<QualType> = None;
+        let mut restrict_error = None;
         let mut first = true;
         let mut group = AutoGroup::default();
         loop {
@@ -1393,6 +1394,7 @@ impl Parser<'_, '_> {
             }
             let parts = mem::take(&mut self.late_fn);
             let base = *base_ty.get_or_insert_with(|| self.member_base_type(&ds, &d));
+            self.repeat_declspec_errors(&mut restrict_error, first);
             // clang forms each member declarator's type anew: every one
             // without a type is reported (`static y, z;`).
             let untyped = !ds.has_type_specifier() && !ds.invalid;

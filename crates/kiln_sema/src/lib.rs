@@ -557,6 +557,11 @@ pub struct Sema<'a, 'sm> {
     /// declarator, so the flag sticks and the group's later declarators
     /// are parsed but not declared ([`Sema::take_declarator_type_invalid`]).
     pub(crate) declarator_type_invalid: bool,
+    /// The "restrict requires a pointer or reference" the last
+    /// decl-specifier-seq's type reported (its `__restrict` and type),
+    /// repeated for each later declarator of its group as clang forms
+    /// every declarator's type anew ([`Sema::take_declspec_restrict_error`]).
+    pub(crate) declspec_restrict_error: Option<(Loc, QualType)>,
     /// The class template the last `template<..> friend class X;`
     /// befriended ([temp.friend]/1), taken by [`Sema::act_on_friend`].
     pub(crate) friend_class_template: Option<DeclId>,
@@ -763,6 +768,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
             declarator_type_invalid: false,
+            declspec_restrict_error: None,
             friend_class_template: None,
             inherited_defaults: kiln_source::fx::FxHashMap::default(),
             inherited_aligned: kiln_source::fx::FxHashMap::default(),
