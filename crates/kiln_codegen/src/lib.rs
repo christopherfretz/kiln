@@ -24,6 +24,7 @@ mod class;
 mod cleanup;
 mod complex;
 mod consts;
+mod coro;
 mod dyncast;
 mod eh;
 mod expr;

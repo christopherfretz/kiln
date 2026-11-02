@@ -405,6 +405,24 @@ fn plan<'a>(
     steps
 }
 
+/// Whether the IR text needs the coroutine lowering: it declares an
+/// `llvm.coro.*` intrinsic (clang's `CoroConditionalWrapper` test,
+/// `coro::declaresAnyIntrinsic`). Every `presplitcoroutine` function
+/// calls `llvm.coro.id`; a `__builtin_coro_noop` alone needs it too
+/// (spec/driver.md "Coroutine lowering").
+pub fn needs_coro_lowering(ir: &str) -> bool {
+    ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
+}
+
+/// `opt` running clang's O0 coroutine lowering (`CoroConditionalWrapper`
+/// in `buildO0DefaultPipeline`): `CoroEarly`, `CoroSplit`, `CoroCleanup`,
+/// then `GlobalDCE`. Text in, text out.
+fn coro_lowering(tc: &Toolchain) -> Command {
+    let mut cmd = Command::new(tc, Tool::Opt);
+    cmd.arg("-passes=coro-early,cgscc(coro-split),coro-cleanup,globaldce").arg("-S").arg("-");
+    cmd
+}
+
 /// `llc` for an assembly or object output.
 fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String) -> Command {
     let mut cmd = Command::new(tc, Tool::Llc);
@@ -521,6 +539,24 @@ fn execute(
                     failed = true;
                     continue;
                 }
+                // A coroutine is lowered first: `llc` does not run the
+                // coroutine passes (spec/driver.md "Coroutine lowering").
+                if cmd.tool == Tool::Llc
+                    && let Some(text) = &ir
+                    && needs_coro_lowering(text)
+                {
+                    let opt = coro_lowering(tc);
+                    if args.verbose {
+                        let mut err = io.stderr.clone();
+                        let _ = err.write_all(opt.render(false).as_bytes());
+                    }
+                    let mut out = Vec::new();
+                    if !opt.run(Some(text), &mut out, &io.stderr, drv) {
+                        failed = true;
+                        continue;
+                    }
+                    ir = Some(String::from_utf8_lossy(&out).into_owned());
+                }
                 failed |= !cmd.run(ir.as_deref(), &mut io.stdout, &io.stderr, drv);
             }
             Step::External { cmd, piped: false } => {
@@ -599,6 +635,14 @@ mod tests {
         assert_eq!(default_output("foo.cpp", Phase::IrText), "foo.ll");
         assert_eq!(default_output("foo.cpp", Phase::Bitcode), "foo.bc");
         assert_eq!(default_output("-", Phase::Object), "-.o");
+    }
+
+    #[test]
+    fn coro_lowering_detection() {
+        assert!(needs_coro_lowering("declare token @llvm.coro.id(i32, ptr, ptr, ptr) #1\n"));
+        assert!(needs_coro_lowering("declare ptr @llvm.coro.noop() #1\n"));
+        assert!(!needs_coro_lowering("define void @\"llvm.coro.id\"() {\n}\n"));
+        assert!(!needs_coro_lowering("declare void @f() #0\n"));
     }
 
     #[test]
