@@ -598,6 +598,12 @@ pub struct Sema<'a, 'sm> {
     pub(crate) inh_ctors: kiln_source::fx::FxHashMap<(DeclId, DeclId), DeclId>,
     /// The base constructor of each inheriting constructor.
     pub(crate) inh_ctor_base: kiln_source::fx::FxHashMap<DeclId, DeclId>,
+    /// The unnamed namespace of each namespace scope, keyed by the
+    /// scope's primary redeclaration context ([namespace.unnamed]/1;
+    /// clang's `getAnonymousNamespace` on the original namespace), so an
+    /// unnamed namespace in a reopened namespace or inside `extern "C++"`
+    /// extends the first one.
+    pub(crate) anon_namespaces: kiln_source::fx::FxHashMap<DeclId, DeclId>,
     /// The `this` type of the default member initializers being parsed,
     /// innermost last, with their fields (`C*`, spec/sema-class.md §2.5).
     pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
@@ -790,6 +796,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             inherited_aligned: kiln_source::fx::FxHashMap::default(),
             inh_ctors: kiln_source::fx::FxHashMap::default(),
             inh_ctor_base: kiln_source::fx::FxHashMap::default(),
+            anon_namespaces: kiln_source::fx::FxHashMap::default(),
             friend_specs: kiln_source::fx::FxHashMap::default(),
             nsdmi_this: Vec::new(),
             initializing: None,
