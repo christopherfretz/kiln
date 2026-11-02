@@ -117,6 +117,10 @@ pub(crate) struct Types {
     /// The `dsize` of each class whose data ends before its size (its
     /// tail padding may hold a derived class's members).
     data_sizes: FxHashMap<OTy, u64>,
+    /// The direct non-virtual empty bases (type, offset) of each class
+    /// with one: not in [`Types::fields`] (they hold no storage), but
+    /// subobjects a pointer may designate ([`Types::has_subobject`]).
+    empty_bases: FxHashMap<OTy, Vec<(OTy, u64)>>,
     /// Class slots interned while the class had no definition or was
     /// still being defined (`S*` in a constant expression inside `S`'s
     /// member-specification): kept `Opaque` and rebuilt in place once
@@ -174,9 +178,9 @@ pub(crate) fn float_kind(b: BuiltinType, long_double: FloatFormat) -> Option<Flo
         BuiltinType::Float16 | BuiltinType::Half => FloatKind::Half,
         BuiltinType::BFloat16 => FloatKind::BFloat16,
         BuiltinType::Float | BuiltinType::Float32 => FloatKind::Single,
-        BuiltinType::Double | BuiltinType::Float64 => FloatKind::Double,
+        BuiltinType::Double | BuiltinType::Float64 | BuiltinType::Float32x => FloatKind::Double,
         BuiltinType::Float128 | BuiltinType::StdFloat128 => FloatKind::Quad,
-        BuiltinType::LongDouble => match long_double {
+        BuiltinType::LongDouble | BuiltinType::Float64x => match long_double {
             FloatFormat::IeeeSingle => FloatKind::Single,
             FloatFormat::X87Extended => FloatKind::X87Extended,
             FloatFormat::IeeeQuad => FloatKind::Quad,
@@ -373,6 +377,24 @@ impl Types {
                 return true;
             }
             match (self.kind(a), self.kind(b)) {
+                (TyKind::Array { elem: x, n }, TyKind::Array { elem: y, n: m }) if n == m => {
+                    (a, b) = (x, y);
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// [conv.qual]/2: whether `a` and `b` are similar types (alike but
+    /// for the cv-qualifiers at each level; [`Types::intern`] drops the
+    /// top-level ones).
+    pub fn similar(&self, mut a: OTy, mut b: OTy) -> bool {
+        loop {
+            if a == b {
+                return true;
+            }
+            match (self.kind(a), self.kind(b)) {
+                (TyKind::Ptr(x), TyKind::Ptr(y)) => (a, b) = (x, y),
                 (TyKind::Array { elem: x, n }, TyKind::Array { elem: y, n: m }) if n == m => {
                     (a, b) = (x, y);
                 }
@@ -654,7 +676,9 @@ impl Types {
             .record(def)
             .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::POLYMORPHIC));
         // Direct non-virtual bases as written; empty bases have no storage
-        // the evaluator touches (they would shadow the member at offset 0).
+        // the evaluator touches (they would shadow the member at offset 0)
+        // and are kept apart (`empty_bases`).
+        let mut ebases: Vec<(QualType, DeclId)> = Vec::new();
         let bdecls: Vec<(DeclId, QualType, DeclId)> = ast
             .decls
             .bases(def, &ast.lists)
@@ -666,6 +690,9 @@ impl Types {
                     .decls
                     .record(rdef)
                     .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::EMPTY));
+                if empty {
+                    ebases.push((b.ty, ast.first(rd)));
+                }
                 (!empty).then_some((rdef, b.ty, ast.first(rd)))
             })
             .collect();
@@ -709,6 +736,12 @@ impl Types {
                 Some((vdef, ast.decls.get(vdef).ty()?, off))
             })
             .collect();
+        let eoffs: Vec<(QualType, u64)> = ebases
+            .iter()
+            .map(|&(bq, first)| {
+                (bq, layout.bases.iter().find(|&&(b, _)| b == first).map_or(0, |&(_, o)| o))
+            })
+            .collect();
         // Reserve the slot first so self-referential pointers terminate.
         let me = match slot {
             Some(t) => {
@@ -721,6 +754,10 @@ impl Types {
         self.map.insert(c, me);
         if dsize < size && !union {
             let _ = self.data_sizes.insert(me, dsize);
+        }
+        if !eoffs.is_empty() {
+            let eb = eoffs.iter().map(|&(bq, off)| (self.intern(bridge, bq), off)).collect();
+            let _ = self.empty_bases.insert(me, eb);
         }
         let mut fields = Vec::with_capacity(fdecls.len());
         let (mut has_union, mut has_ptr) = (union, false);
@@ -816,6 +853,10 @@ impl Types {
                 upos: (ustart, uend),
             });
             self.nv_views.insert(me, view);
+            // The view holds the same non-virtual bases, empty ones included.
+            if let Some(eb) = self.empty_bases.get(&me).cloned() {
+                let _ = self.empty_bases.insert(view, eb);
+            }
             self.nv_class.insert(view, me);
             for (&(vd, _, off), &vty) in vdecls.iter().zip(&vtys) {
                 let vi = *self.info(vty);
@@ -940,12 +981,16 @@ impl Types {
                 let es = self.size(elem);
                 es != 0 && off / es < n && self.has_subobject(elem, off % es, p)
             }
-            TyKind::Record { .. } => self.fields(root).iter().any(|f| {
-                f.width.is_none()
-                    && off >= f.offset
-                    && off < f.offset + self.size(f.ty).max(1)
-                    && self.has_subobject(f.ty, off - f.offset, p)
-            }),
+            TyKind::Record { .. } => {
+                self.fields(root).iter().any(|f| {
+                    f.width.is_none()
+                        && off >= f.offset
+                        && off < f.offset + self.size(f.ty).max(1)
+                        && self.has_subobject(f.ty, off - f.offset, p)
+                }) || self.empty_bases.get(&root).is_some_and(|v| {
+                    v.iter().any(|&(b, o)| o == off && self.has_subobject(b, 0, p))
+                })
+            }
             _ => false,
         }
     }

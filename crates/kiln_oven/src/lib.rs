@@ -448,6 +448,11 @@ pub struct Oven {
     /// ([`value::VarInfo::lax`]), and the mode they were resolved in.
     pub(crate) lax_globals: Vec<u32>,
     pub(crate) lax_resolved: bool,
+    /// The object each lax global last resolved to: remade in place when
+    /// a mode switch resolves it again, so a lax global costs one static
+    /// slot per translation unit however often the mode alternates
+    /// (spec/oven.md "Evaluation entry points").
+    pub(crate) lax_objs: FxHashMap<u32, u64>,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -517,6 +522,7 @@ impl Oven {
             provisional: Vec::new(),
             provisional_objs: FxHashMap::default(),
             lax_globals: Vec::new(),
+            lax_objs: FxHashMap::default(),
             lax_resolved: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
@@ -761,6 +767,7 @@ impl Oven {
             + cap(&self.provisional)
             + map(&self.provisional_objs)
             + cap(&self.lax_globals)
+            + map(&self.lax_objs)
             + map(&self.lit_exprs)
             + map(&self.thawed)
             + map(&self.lets)
