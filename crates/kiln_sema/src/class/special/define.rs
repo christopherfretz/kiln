@@ -1197,10 +1197,7 @@ impl Sema<'_, '_> {
                         DiagId::sema_ovl_no_conversion_in_cast
                     };
                     let from = self.ety(*arg);
-                    self.diag(id, sites.deleted)
-                        .arg(c)
-                        .arg(self.ty_arg(from))
-                        .arg(self.ty_arg(ty))
+                    self.diag(id, sites.deleted).arg(c).arg(self.ty_arg(from)).arg(self.ty_arg(ty))
                 } else if conversion {
                     let from = call.args.first().map_or(QualType::ERROR, |&a| self.ety(a));
                     let id = if ambiguous {
