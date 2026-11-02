@@ -432,6 +432,14 @@ type parameter named `auto:N`, as in clang's dump.
   the specialization's parameters ([temp.inst]/3; WP-298, libc++
   formatter.handle.pass.cpp; `dcl.fct/abbreviated-leading-param-run.cpp`,
   `tests/codegen/abbreviated_template_leading_param.cpp`).
+- A friend function declarator finishes its invented head like any
+  other declarator: `friend R f(S, C auto)` (defined in the class or not)
+  declares an abbreviated friend function *template* ([dcl.fct]/22,
+  [temp.friend]/1), not a function with a dependent parameter type. A
+  call found by ADL then deduces it, so an atomic constraint calling it
+  is non-dependent after substitution (WP-307, libc++
+  `sized_sentinel_for` with range.iter.ops `distance_apriori_sentinel`;
+  `temp.constr.atomic/abbreviated-friend-template.cpp`).
 - Generic lambdas use the same routine (WP-075).
 
 ### 2.7 Pack expansions by context ([temp.variadic]/5)
