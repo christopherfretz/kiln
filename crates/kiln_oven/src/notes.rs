@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use kiln_ast::decl::DeclKind;
 use kiln_ast::decl::builtin as id;
 use kiln_ast::dump::AstNames;
-use kiln_ast::expr::{ExprFlags, ExprKind};
+use kiln_ast::expr::{ExprFlags, ExprKind, UnaryOp};
 use kiln_ast::lambda::ClosureThunk;
 use kiln_ast::types::TypeNames as _;
 use kiln_ast::{Ast, DeclId, ExprId, QualType};
@@ -29,6 +29,9 @@ pub(crate) const BACKTRACE_LIMIT: usize = 10;
 /// Elements of an array argument printed before eliding (clang's
 /// `APValue::printPretty`).
 const MAX_ELEMS: u64 = 10;
+
+/// clang 22's `note_constexpr_dereferencing_null`.
+const NULL_DEREF_22: &str = "dereferencing a null pointer is not allowed in a constant expression";
 
 pub(crate) fn notes_name(ast: &Ast, d: DeclId) -> String {
     name_of(ast, d)
@@ -248,10 +251,23 @@ impl Oven {
                 )
             }
             Fault::Invalid => (site.loc, "subexpression not valid in a constant expression".into()),
+            // clang 22 note_constexpr_pointer_arith_unspecified; clang 19's
+            // generic note.
+            Fault::PtrArith { p, q, pointee } if self.clang_compat >= 22 => (
+                site.loc,
+                format!(
+                    "arithmetic involving unrelated objects '{}' and '{}' has unspecified value",
+                    self.ptr_string(ast, p, pointee),
+                    self.ptr_string(ast, q, pointee)
+                ),
+            ),
+            Fault::PtrArith { .. } => {
+                (site.loc, "subexpression not valid in a constant expression".into())
+            }
             Fault::PtrSub => {
                 (site.loc, "subtracted pointers are not elements of the same array".into())
             }
-            Fault::PtrCmp { p, q, pointee } => (
+            Fault::PtrCmp { p, q, pointee } if self.clang_compat < 22 => (
                 site.loc,
                 format!(
                     "comparison between '{}' and '{}' has unspecified value",
@@ -259,8 +275,9 @@ impl Oven {
                     self.ptr_string(ast, q, pointee)
                 ),
             ),
-            // clang note_constexpr_pointer_comparison_unspecified (P2280).
-            Fault::PtrCmpUnknown { p, q, pointee } => (
+            // clang note_constexpr_pointer_comparison_unspecified (P2280;
+            // clang 22 for every comparison of unrelated objects).
+            Fault::PtrCmpUnknown { p, q, pointee } | Fault::PtrCmp { p, q, pointee } => (
                 site.loc,
                 format!(
                     "comparison between pointers to unrelated objects '{}' and '{}' has unspecified value",
@@ -275,9 +292,15 @@ impl Oven {
                     self.ptr_string(ast, p, pointee)
                 ),
             ),
+            Fault::LiteralCmp if self.clang_compat >= 22 => (
+                site.loc,
+                "comparison of addresses of potentially overlapping literals has unspecified value"
+                    .into(),
+            ),
             Fault::LiteralCmp => {
                 (site.loc, "comparison of addresses of literals has unspecified value".into())
             }
+            Fault::NullDeref => (site.loc, NULL_DEREF_22.into()),
             Fault::NullField => (site.loc, "cannot access field of null pointer".into()),
             Fault::NullBase => (site.loc, "cannot access base class of null pointer".into()),
             Fault::BadDowncast { dynamic, to } => (
@@ -1148,6 +1171,17 @@ impl Oven {
     ) -> (Loc, String) {
         let verb = ak::verb(k);
         let msg = match f {
+            // clang 22 diagnoses `*null` at the `*`; a read of `*p`
+            // carries no separate check, so its site is the `*`.
+            MemFault::Null
+                if self.clang_compat >= 22
+                    && site.e.is_some_and(|e| {
+                        ast.exprs.get(e).kind() == ExprKind::UnaryOperator
+                            && ast.exprs.unary_op(e) == UnaryOp::Deref
+                    }) =>
+            {
+                NULL_DEREF_22.to_owned()
+            }
             MemFault::Null => {
                 format!("{verb} dereferenced null pointer is not allowed in a constant expression")
             }

@@ -13,16 +13,16 @@
 //@ diag: 32:91 note "subexpression not valid in a constant expression"
 //@ diag: 33:15 note "in call to 'no_such_member()'"
 //@ diag: 35:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 34:71 note "read of dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 34 note "null pointer"
 //@ diag: 35:15 note "in call to 'null_read()'"
 //@ diag: 37:15 error "static assertion expression is not an integral constant expression"
-//@ diag: 36:71 note "assignment to dereferenced null pointer is not allowed in a constant expression"
+//@ diag: 36 note "null pointer"
 //@ diag: 37:15 note "in call to 'null_write()'"
 //@ diag: 39:15 error "static assertion expression is not an integral constant expression"
 //@ diag: 38:87 note "cannot access base class of null pointer"
 //@ diag: 39:15 note "in call to 'null_base()'"
-//@ requires: clang<22
-// clang 22 emits error: static assertion expression is not an integral constant expression; WP-355 residual
+// clang 19 and 22 word and place these null-pointer notes differently; kiln
+// follows its -fclang-compat level (WP-377), so the directives are column-less.
 struct A { int a = 1; constexpr int fa() const { return a; } };
 struct D : A { int d = 3; };
 constexpr int null_member() { D x; int D::*p = nullptr; return x.*p; }
