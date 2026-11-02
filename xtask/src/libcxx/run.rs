@@ -262,6 +262,23 @@ const HOST_FS_UNSUPPORTED: &[&str] = &[
     "std/input.output/filesystems/fs.op.funcs/fs.op.hard_lk_ct/hard_link_count.pass.cpp",
 ];
 
+/// On aarch64, LLVM lowers a signed 128-bit overflow multiply
+/// (`llvm.smul.with.overflow.i128`, from `__builtin_mul_overflow`) to a
+/// `__muloti4` libcall that only compiler-rt's builtins provide; the
+/// GNU toolchain's link line (clang's and kiln's) links libgcc, which has
+/// no `__muloti4`. (`x86_64` expands it inline.)
+const COMPILER_RT_UNSUPPORTED: &[&str] =
+    &["std/numerics/numeric.ops/numeric.ops.sat/mul_sat.pass.cpp"];
+
+/// With the system tzdata at 2024b or later, `tzdata.zi` spells numeric
+/// abbreviations as `%z`, which libc++ 19's tzdb parser keeps verbatim
+/// (`sys_info::abbrev` is `"%z"` where `zdump` prints `"+03"`).
+const TZDATA_Z_UNSUPPORTED: &[&str] =
+    &["std/time/time.zone/time.zone.timezone/time.zone.members/sys_info.zdump.pass.cpp"];
+
+/// The system tzdata database `TZDATA_Z_UNSUPPORTED` depends on.
+const TZDATA_ZI: &str = "/usr/share/zoneinfo/tzdata.zi";
+
 /// With glibc locale data whose `en_US.UTF-8` digit grouping is `3` (glibc
 /// 2.41 here; `LC_ALL=en_US.UTF-8 locale -k grouping`), not the `3;3`
 /// these tests expect on every non-Windows, non-AIX target.
@@ -290,7 +307,28 @@ pub fn env_unsupported(rel: &str, scratch: &Path) -> Option<String> {
     {
         return Some(format!("env: TMPDIR is on a host-shared {fs} mount"));
     }
+    if COMPILER_RT_UNSUPPORTED.contains(&rel) && cfg!(target_arch = "aarch64") {
+        return Some("env: aarch64 needs __muloti4 from compiler-rt; libgcc is linked".to_owned());
+    }
+    if TZDATA_Z_UNSUPPORTED.contains(&rel)
+        && let Some(v) = tzdata_version(TZDATA_ZI).filter(|v| tzdata_uses_percent_z(v))
+    {
+        return Some(format!("env: tzdata {v} uses %z, which libc++ 19 does not parse"));
+    }
     None
+}
+
+/// The `# version YYYYx` of a `tzdata.zi` file, if readable.
+fn tzdata_version(path: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let v = text.lines().next()?.strip_prefix("# version ")?.trim();
+    Some(v.to_owned())
+}
+
+/// Whether tzdata release `v` (`YYYYx`) is 2024b or later, the first to
+/// use `%z` in `tzdata.zi`.
+fn tzdata_uses_percent_z(v: &str) -> bool {
+    v.len() == 5 && v.is_ascii() && v >= "2024b"
 }
 
 /// Whether this process's effective uid is 0 (`/proc/self/status`).
@@ -533,7 +571,9 @@ fn execute(
         ],
         _ => {
             let mut run = Command::new(&exe);
-            run.current_dir(scratch);
+            // lit does not pass `TZ` to tests: the local zone is the
+            // system's `/etc/localtime` (spec/libcxx.md "Commands").
+            run.current_dir(scratch).env_remove("TZ");
             vec![
                 (Stage::Compile, compile(&["-c", "-o", &obj_s]), true),
                 (Stage::Link, link(), true),
@@ -768,7 +808,13 @@ mod tests {
 
     #[test]
     fn env_exclusions() {
-        for list in [ROOT_UNSUPPORTED, HOST_FS_UNSUPPORTED, GROUPING_UNSUPPORTED] {
+        for list in [
+            ROOT_UNSUPPORTED,
+            HOST_FS_UNSUPPORTED,
+            COMPILER_RT_UNSUPPORTED,
+            TZDATA_Z_UNSUPPORTED,
+            GROUPING_UNSUPPORTED,
+        ] {
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
@@ -782,6 +828,11 @@ mod tests {
         let listed = env_unsupported(GROUPING_UNSUPPORTED[0], &tmp);
         assert_eq!(listed.is_some(), en_us_grouping_is_3());
         assert!(listed.is_none_or(|r| r == GROUPING_REASON));
+        let mul = env_unsupported(COMPILER_RT_UNSUPPORTED[0], &tmp);
+        assert_eq!(mul.is_some(), cfg!(target_arch = "aarch64"));
+        assert!(tzdata_uses_percent_z("2024b") && tzdata_uses_percent_z("2026b"));
+        assert!(!tzdata_uses_percent_z("2024a") && !tzdata_uses_percent_z("2019c"));
+        assert!(!tzdata_uses_percent_z("garbage"));
         // The effective uid is the second `Uid:` field (real, effective,
         // saved, filesystem).
         assert!(euid_is_root("Name:\tx\nUid:\t1000\t0\t0\t0\nGid:\t0\t0\t0\t0\n"));

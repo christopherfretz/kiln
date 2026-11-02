@@ -2,7 +2,6 @@
 // expansion and a list of types. WP-185 feature probe.
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(kiln): variadic friend declarations not parsed
 //@ requires: clang>=22
 template <class... Ts> class C {
   friend Ts...;

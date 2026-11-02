@@ -71,6 +71,10 @@ pub struct LookupTables {
     set_words: usize,
     set_cap: usize,
     inline_children: FxHashMap<DeclId, Vec<DeclId>>,
+    /// The namespaces nominated by the using-directives of a namespace or
+    /// the translation unit (primary context), in declaration order
+    /// ([namespace.udir]; spec/sema.md §3.1).
+    using_dirs: FxHashMap<DeclId, Vec<DeclId>>,
     /// Bumped by every insertion (see [`LookupTables::generation`]).
     generation: u64,
 }
@@ -268,6 +272,29 @@ impl LookupTables {
         self.inline_children.get(&parent).map_or(&[], Vec::as_slice)
     }
 
+    /// Records that namespace (or translation unit) `ctx` (primary)
+    /// contains a using-directive nominating namespace `nominated`
+    /// (primary). A repeated directive is recorded once.
+    pub fn add_using_directive(&mut self, ctx: DeclId, nominated: DeclId) {
+        self.generation += 1;
+        let v = self.using_dirs.entry(ctx).or_default();
+        if !v.contains(&nominated) {
+            v.push(nominated);
+        }
+    }
+
+    /// The namespaces nominated by the using-directives of `ctx`
+    /// (primary), in declaration order. Those of `ctx`'s inline
+    /// namespaces are not included.
+    pub fn using_directives(&self, ctx: DeclId) -> &[DeclId] {
+        self.using_dirs.get(&ctx).map_or(&[], Vec::as_slice)
+    }
+
+    /// True if no namespace-scope using-directive has been recorded.
+    pub fn has_no_using_directives(&self) -> bool {
+        self.using_dirs.is_empty()
+    }
+
     /// A counter that changes whenever an entry may have changed: two
     /// equal values bracket a span in which every lookup through these
     /// tables gives the same answer (the parser's template-argument scan
@@ -314,6 +341,14 @@ impl HeapSize for LookupTables {
             m.count,
             m.live_bytes + kids as u64 * 4,
             m.reserved_bytes + kids as u64 * 4,
+        ));
+        let dirs: usize = self.using_dirs.values().map(Vec::capacity).sum();
+        let m = MemRow::of_map("using_dirs", &self.using_dirs);
+        r.push(MemRow::new(
+            "using_dirs",
+            m.count,
+            m.live_bytes + dirs as u64 * 4,
+            m.reserved_bytes + dirs as u64 * 4,
         ));
         r
     }

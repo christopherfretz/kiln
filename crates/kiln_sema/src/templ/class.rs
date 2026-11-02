@@ -1339,7 +1339,7 @@ impl Substituter<'_, '_, '_> {
         self.map_contexts(&[(def, spec)]);
         let sub = self;
         let (specs, mut invalid) = sub.class_bases(def);
-        sub.sema.act_on_base_specifiers(spec, &specs);
+        invalid |= !sub.sema.attach_bases(spec, &specs);
         // clang `CheckBaseSpecifier`: "if the base class is invalid the
         // derived class is as well" (`underlying_type<E>` deriving from an
         // `__underlying_type_impl<E>` whose `type` failed: a later

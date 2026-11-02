@@ -1284,7 +1284,7 @@ CXXRecordDecl referenced struct B2 definition
 /// Every fixture, dumped under every option combination.
 fn all_dumps() -> Vec<String> {
     let (located, sm, main) = located();
-    let fixtures = [spec_example(), decl_kinds(), located];
+    let fixtures = vec![spec_example(), decl_kinds(), located];
     let mut out = Vec::new();
     for bits in 0..32u32 {
         let opts = DumpOptions {

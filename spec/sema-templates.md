@@ -27,8 +27,8 @@ deviation is listed in §1.5.
 | Declarations | class, function, variable and alias templates; member templates; concepts; abbreviated function templates; friend templates | `export` and modules reachability (M4) |
 | Specialization | implicit instantiation, partial and explicit specialization, explicit instantiation (declaration and definition) | — |
 | Deduction | calls, explicit args, defaults, address of overload set, conversion functions, `auto`/`decltype(auto)`, NTTP `auto`, partial ordering | deducing `this` (M4) |
-| CTAD | implicit guides from constructors and constructor templates, the copy guide, user-declared guides, aggregate CTAD (P1816), alias CTAD (P1814), guides of member templates of instantiated class templates, [over.match.list] phase 1 (WP-071b, WP-134) | inherited-ctor CTAD (P2582; clang 19 has no support) |
-| Packs | type, value and template packs; expansion in every context in §2.7; folds; `sizeof...`; pack indexing P2662 | structured-binding packs P1061 (clang 19 has no support, M4); variadic friends P2893 (M4); expansion statements P1306 (M6, with reflection) |
+| CTAD | implicit guides from constructors and constructor templates, the copy guide, user-declared guides, aggregate CTAD (P1816), alias CTAD (P1814), inherited-constructor guides (P2582, §6.6.1), guides of member templates of instantiated class templates, [over.match.list] phase 1 (WP-071b, WP-134) | inherited-ctor guides through a base named by the injected-class-name (`using G::F::F;`), and an alias template of a class template that inherits constructors |
+| Packs | type, value and template packs; expansion in every context in §2.7; folds; `sizeof...`; pack indexing P2662 | expansion statements P1306 (M6, with reflection) |
 | Concepts | normalization, satisfaction, subsumption, `requires`-expressions, constrained `auto` | fold-expanded constraints P2963 (clang 19 has no support, M4); concept and variable-template template parameters P2841 (M5) |
 | Reflection | — | splices as template arguments (M6) |
 
@@ -505,8 +505,8 @@ type parameter named `auto:N`, as in clang's dump.
 | fold-expression | `(t + ...)` | parenthesized primary | yes |
 | pack-index | `t...[0]`, `T...[0]` | postfix and type | yes |
 | attribute-list | `[[a...]]` | — | rejected, as clang |
-| structured-binding pack | `auto [...xs] = e` | — | M4 |
-| friend pack | `friend T...;` | — | M4 |
+| structured-binding pack | `auto [...xs] = e` | decomposition declarator (P1061, §7.1) | yes |
+| friend pack | `friend T...;` | friend-type-specifier-list (P2893, §7.1) | yes |
 
 A pattern that names no unexpanded pack is "pack expansion does not
 contain any unexpanded parameter packs" at the `...`
@@ -2575,13 +2575,16 @@ built and cached in `guides[X]` (from the definition's template, never a
 friend first declaration's deeper head, §4.8.1):
 - one implicit guide per constructor of the primary pattern;
 - the copy-deduction candidate `X(X<T…>) -> X<T…>`;
-- every namespace-scope `CXXDeductionGuide` declared so far.
+- every namespace-scope `CXXDeductionGuide` declared so far;
+- the guides from inherited constructors (§6.6.1), formed on each use
+  (the base may gain user guides later) and cached per source guide.
 Building it uses the `BuildingDeductionGuides` frame.
 
 The set then goes through overload resolution with the initializer as
 the arguments. The result type is the guide's return type, after
-substitution. If several best guides tie, the [over.match.best]/2.10–12
-tie-breakers apply.
+substitution (for a guide from an inherited constructor, mapped to the
+derived class, §6.6.1). If several best guides tie, the
+[over.match.best.general]/2.10–13 tie-breakers apply.
 
 For list-initialization, overload resolution is [over.match.list]:
 initializer-list guides first, with the whole list as the argument.
@@ -2642,7 +2645,56 @@ with the argument's template, after which the placeholder is deduced as
 above (libc++ `ranges::to`; WP-198).
 
 **Landed (WP-071b, WP-134):** see spec/sema.md §4.3.2 for what is
-implemented and what is deferred (P2582 inherited-constructor guides).
+implemented and what is deferred.
+
+#### 6.6.1 Guides from inherited constructors (P2582, `ctad/inherit.rs`)
+
+[over.match.class.deduct]/1, last paragraph (C++23): when class template
+`C` is defined and inherits constructors from a direct base denoted in its
+base-specifier-list by `B`, let `A` be the alias template
+`template<C's parameters> using A = B;`. If `A` is deducible, the guides
+of `A` are guides of `C`, each with its return type `R` replaced by
+`CC<R>::type`: the specialization of `C` whose arguments are deduced from
+`R` against `B`.
+- **Which bases** (`inherited_ctor_bases`): each `Using` or (dependent)
+  `UnresolvedUsingValue` member of `C`'s pattern definition named by a
+  constructor name, whose nested-name-specifier is a type equal
+  (canonically) to a non-pack base-specifier's type. Only a `B` that is a
+  specialization of a class template contributes. The definition's
+  `HAS_INHERITED_CTOR` bit short-circuits the scan.
+- **Deducible** `A`: every template parameter of `C` is deduced from `B`
+  against itself (`alias_deducible(C, B, B)`; an undeduced pack is
+  empty). `template<class T> struct E : B<int> { using B<int>::B; };`
+  gets no guides from `B`.
+- **Forming** (`inherited_guide`, cached in `ctad_alias_cache` under
+  `(C, g)`): the guides of `B`'s template are its full set (implicit,
+  copy, user-declared; no aggregate candidate), except ones it inherited
+  itself. A guide template goes through the alias transform
+  (`build_alias_guide(C, B, g)`, §6.6), so its deducibility constraint
+  (`templ.ctad_alias`) is exactly that `CC<R>` matches. A non-template
+  guide is cloned with `C<...>` as its return type, or dropped when `CC<R>`
+  does not match. Each formed guide is recorded in `templ.ctad_inherited`.
+- **Result** (`ctad_result_type`): the selected guide template's
+  substituted `R` is deduced against `B` and `C`'s injected-class-name is
+  substituted with the deduced arguments.
+- **Ranking** ([over.match.best.general]/2.10, `better`): a guide not
+  formed from an inherited constructor beats one that is when their
+  parameters for the arguments have the same types (`same_guide_params`).
+  It comes before /2.11 (user-declared over implicit).
+- **Notes** print such a guide as an alias guide is printed:
+  `requires __is_deducible(C, B<X *>) C(X *) -> B<X *>` (no clang text
+  exists).
+- `__cpp_deduction_guides` stays 201703L, as in clang 19 and 22.
+- **Not done:** a base named through the injected-class-name
+  (`using G::F::F;` in the standard's example) fails earlier, in
+  using-declaration lookup. Guides `B` inherited itself, and an alias
+  template whose target inherits constructors, contribute nothing.
+
+Tests: `tests/conformance/over.match.class.deduct/p2582-inherited-guides.cpp`
+(the standard's example with `F<U, T, int>` written out, constructor
+templates, user guide templates, /2.10, packs, casts and `new`),
+`.../p2582-not-deducible.cpp` (`D`, `E` and a non-matching `R`),
+`.../run-p2582.cpp`, `.../p2582-probe.cpp`.
 
 The M3 exit headers need only the user-declared guides:
 `array(_Tp, _Up...)`, the `span` guides and the `basic_string_view`
@@ -2670,9 +2722,21 @@ guides.
    deducing f2's params from f1's synthesized types succeeds for every
    pair. Packs follow /8–11. The last tie-breaker for packs is
    [temp.func.order]/5: a function without a trailing pack wins.
-5. **Constraints.** If both directions succeed and the template-heads are
-   equivalent, the more constrained one wins
-   ([temp.func.order]/6, P2113; subsumption §8.4).
+5. **Constraints.** If both directions succeed, the more constrained one
+   wins ([temp.func.order]/6, P2113; subsumption §8.4), but only when the
+   constraints are comparable (`constraints_comparable`, clang
+   `getMoreSpecializedTemplate`; WP-339): the template-parameter-lists
+   and the function parameter lists (all declared parameters, after the
+   /3 object parameter and reversal) have the same length (/6.1), the
+   corresponding template parameters are equivalent ignoring their
+   type-constraints (same kind, packness, non-type parameter type,
+   template template parameter head) and the positionally corresponding
+   parameter types are the same ignoring top-level cv (/6.2.2), and, for
+   a conversion, the conversion types are the same. Otherwise neither is
+   more specialized: for CTAD the later [over.match.best]/2.11-2.13
+   tie-breakers decide (a constrained constructor guide
+   `zt(const tp<D>&) requires C` against the user guide `zt(tp<D>)` of a
+   two-parameter class template: the user guide wins).
 6. **Result.** `Some(winner)` or `None` (ambiguous).
 
 `po_cache: (f1, f2, ctx, nargs) → Option<DeclId>` is valid because
@@ -2877,6 +2941,43 @@ The `SpecKind` transitions are those of §4.5.
 | function parameter pack (instantiated) | N `ParmVar`s; a reference that cannot expand yet is a `FunctionParmPackExpr` |
 | pack substituted while an inner pattern is still unexpanded | `SubstTemplateTypeParmPack`, `SubstNonTypeTemplateParmPackExpr` |
 | using-declaration pack | a `UsingPack` decl |
+| structured binding pack (pattern, P1061) | a `Binding` in `Sema::binding_packs`, of type `PackExpansion(DEPENDENT)` |
+| structured binding pack (decomposed) | N `IMPLICIT` `Binding`s of the pack's name (`Sema::binding_pack_elems`) that replace it in the decomposition's binding list (`Decls::expand_decomp_bindings`) |
+| friend pack (P2893) | a `Friend` whose `FriendTarget::Type` is `PackExpansion(T)` |
+
+**Structured binding packs** ([dcl.struct.bind]/1, [temp.variadic]/5,
+P1061, WP-359). `auto [a, ...xs] = e;` is allowed only in a templated
+entity (`sema_pack_outside_template`, clang 22 "pack declaration outside
+of template"), with at most one pack (`sema_decomp_decl_multiple_packs`
+with `note_previous_binding_pack`); either error drops the declaration,
+as clang does. Before C++26 it warns `parse_ext_binding_pack`
+(`-Wc++26-extensions`). In the pattern the decomposition is never
+decomposed, even for a non-dependent initializer (clang 22): every
+binding is dependent and the pack an unexpanded `PackExpansion(DEPENDENT)`.
+`is_pack_decl` counts the pack, so `sizeof...(xs)`, `xs...`, folds and
+`xs...[i]` see it. When the instantiated decomposition knows its element
+count `n` (array, tuple-like, member-wise), `expand_binding_pack`
+introduces `n - (bindings - 1)` implicit bindings of the pack's name and
+the count check treats the pack as that many names
+(`wrong_number_of_bindings` when there are fewer elements than non-pack
+names; its text is clang 19's "decomposes into N elements", where clang 22
+says "binds to": a wording follow-up). The
+substituter then maps the pattern pack to that list (`remap_binding_pack`
+after the declaration statement, `DeclOrPack::Pack`), so later expansions
+expand over the new bindings. If the decomposition failed, the pack goes
+into `failed_locals` and its uses fail silently (already diagnosed). A
+pack in a generic lambda whose levels are retained stays a pack. Tests
+`tests/conformance/dcl.struct.bind/pack*.cpp`, `run-pack-fold.cpp`.
+
+**Friend packs** ([class.friend]/3, [temp.variadic]/5.9, P2893, WP-359):
+`friend Ts...;` is a `Friend` of type `PackExpansion(Ts)`
+(`act_on_friend_type`); `friend_decl` in the substituter expands it into
+one `act_on_friend` per element. A friend type or function naming an
+unexpanded pack outside an expansion is `sema_unexpanded_pack`
+("friend declaration contains unexpanded parameter pack 'Ts'"); a `...`
+whose pattern names no pack is "pack expansion does not contain any
+unexpanded parameter packs". The friend-type-specifier-list parse is in
+spec/parse.md.
 
 An unexpanded pack is the `UNEXPANDED_PACK` bit on types, expressions and
 template args. Every *full-expression*, declarator, base-specifier and
@@ -5961,10 +6062,10 @@ Each question has a recommendation (R).
     lowering and codegen iterative along binary spines in M3, and test
     with `fold-65536.cpp`. Otherwise kiln depends on the stack guard and
     fails where clang succeeds.
-17. **Q17: Deferred C++26 features**: structured-binding packs (P1061),
-    fold-expanded constraints (P2963), variadic friends (P2893) and
-    concept template parameters (P2841). **R:** M4/M5, when the clang
-    oracle supports them.
+17. **Q17: Deferred C++26 features**: fold-expanded constraints (P2963)
+    and concept template parameters (P2841). **R:** M4/M5, when the clang
+    oracle supports them. Structured-binding packs (P1061) and variadic
+    friends (P2893) landed in WP-359 against clang 22 (§7.1).
 
 ### Supervisor decisions
 
@@ -5986,5 +6087,5 @@ Each question has a recommendation (R).
 | Q14 | Subsumption cap 65,536 clauses, diagnosed as an error. |
 | Q15 | Reserved depths recorded in types.md §5.3; user templates limited to depth < 0x7FF0. |
 | Q16 | Dumper, Oven lowering and codegen are iterative along binary spines in M3, tested by `fold-65536.cpp` (owner: WP-072 adds the test; each walker's owner crate fixes its walker; the Oven's `compile.rs` is WP-076's). |
-| Q17 | P1061, P2963, P2893, P2841 deferred to M4/M5. |
+| Q17 | P2963, P2841 deferred to M4/M5; P1061, P2893 landed (WP-359). |
 | Q3 (2026-10-31) | Measured in WP-106 (§14 Q3): sharing saves 0.8% of `inst.bytes` on `libcxx_m3.cpp` (≤3% counting literal leaves), below the 15% bar. Q3 is closed: sharing stays as the substituter's base case via `needs_rebuild`; no `ExprDeps::LOCAL` bit, no `-fno-share-nondependent` flag. |

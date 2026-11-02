@@ -1406,7 +1406,16 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             }
             DeclKind::Friend => {
                 if let FriendTarget::Type { ty, .. } = decls.friend_target(d) {
-                    self.ty(ty);
+                    // `friend Ts...;` (P2893): clang prints the pattern,
+                    // then `...`.
+                    if let crate::types::TypeView::PackExpansion { pattern, .. } =
+                        self.ast.types.view(ty.ty())
+                    {
+                        self.ty(pattern);
+                        self.line.push_str("...");
+                    } else {
+                        self.ty(ty);
+                    }
                 }
             }
             DeclKind::TemplateTypeParm
