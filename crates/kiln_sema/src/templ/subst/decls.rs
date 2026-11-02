@@ -520,7 +520,7 @@ impl Substituter<'_, '_, '_> {
             _ => self.param_infos(d),
         };
         let method = friend.is_none() && self.sema.kind_of(d) == DeclKind::CXXMethod;
-        let lazy_exc = self.sema.lazy_exc_spec(d, p, friend.is_some());
+        let lazy_exc = self.sema.lazy_exc_spec(d, p);
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
             let ret = match early_ret {
@@ -673,14 +673,20 @@ impl Substituter<'_, '_, '_> {
             if first == f {
                 self.sema.uninstantiated_exc.insert(first, d);
             } else {
-                // A friend redeclaring a function: [except.spec]/5 makes
-                // its specification the earlier declaration's.
+                // A friend redeclaring a function: its specification is
+                // instantiated now and must match the earlier
+                // declaration's ([except.spec]/5; clang
+                // `CheckEquivalentExceptionSpec` resolves an
+                // `EST_Uninstantiated` one first). The pair was queued
+                // by `act_on_friend` while the spec was `Deferred`; it
+                // is re-aimed at the first declaration, which clang's
+                // note names, so an earlier mismatched friend (itself
+                // diagnosed) is not the reference.
                 self.sema.delayed_exc_equiv.retain(|&(n, _)| n != f);
-                let pexc = self.sema.declared_fn_type(first).map(|t| self.sema.written_exc_spec(t));
-                if let (Some(pexc), Some(ty)) = (pexc, self.sema.ast.decls.get(f).ty()) {
-                    let t = self.sema.with_exc_spec(ty, pexc);
-                    self.sema.ast.decls.set_ty(f, t);
-                }
+                self.sema.delayed_exc_equiv.push((f, first));
+                self.sema.uninstantiated_exc.insert(f, d);
+                self.sema.instantiate_exception_spec(f, loc);
+                self.sema.check_delayed_exc_equiv(f);
             }
         }
         if requires.is_some() {

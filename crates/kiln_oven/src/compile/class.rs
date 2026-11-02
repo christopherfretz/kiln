@@ -145,15 +145,22 @@ impl Compiler<'_> {
     // ---- destruction ------------------------------------------------------
 
     /// The function index of the destructor run for an object of type
-    /// `ty` (each element of an array), if it is not trivial.
+    /// `ty` (each element of an array), if it is not trivial. An
+    /// anonymous union is never destroyed on its own: the destructor of
+    /// the enclosing class that would destroy it is user-provided (the
+    /// implicit one would be deleted, [class.dtor]/7), and destroying it
+    /// has no effect ([class.union.anon]; clang's `HandleDestructionImpl`).
     pub(super) fn dtor_of(&mut self, ty: OTy) -> Option<u32> {
         let mut t = ty;
         while let TyKind::Array { elem, .. } = self.kind(t) {
             t = elem;
         }
-        let TyKind::Record { decl, .. } = self.kind(t) else { return None };
+        let TyKind::Record { decl, union, .. } = self.kind(t) else { return None };
         let ast = self.b.ast();
-        if record_bits(ast, decl).contains(DefinitionBits::TRIVIAL_DTOR) {
+        let bits = record_bits(ast, decl);
+        if bits.contains(DefinitionBits::TRIVIAL_DTOR)
+            || (union && bits.contains(DefinitionBits::ANONYMOUS))
+        {
             return None;
         }
         let d = ast.destructor(decl)?;
@@ -397,6 +404,14 @@ impl Compiler<'_> {
             if fi.base || fi.width.is_some() || super::is_reference_decl(self.ast(), fi.decl) {
                 continue;
             }
+            // The destructor of an anonymous union member is never
+            // invoked: its members are variant members of this class
+            // ([class.dtor]/13; clang's `MarkBaseAndMemberDestructorsReferenced`).
+            if let TyKind::Record { decl, union: true, .. } = self.kind(fi.ty)
+                && record_bits(self.b.ast(), decl).contains(DefinitionBits::ANONYMOUS)
+            {
+                continue;
+            }
             if self.dtor_of(fi.ty).is_none() {
                 continue;
             }
@@ -559,7 +574,11 @@ impl Compiler<'_> {
                 [a] => {
                     let a = skip_parens(self.ast(), a);
                     if self.node(a).value_category().is_glvalue() {
-                        let src = self.lv_mem(a, Access::Read);
+                        // A class holding no data is not read (clang's
+                        // `isReadByLvalueToRvalueConversion`): copying an
+                        // `extern const` empty object is a constant.
+                        let read = !self.o.types.holds_no_data(ty);
+                        let src = self.lv_mem(a, if read { Access::Read } else { Access::Addr });
                         let full = matches!(self.kind(ty), TyKind::Record { union: false, .. });
                         let aux = 1 | 4 | if full { 2 } else { 0 };
                         self.emit_at(Op::Copy, aux, &[p, src, ty.0], e);
@@ -882,7 +901,8 @@ impl Compiler<'_> {
             && let (Some(cls), [src]) = (cls, args)
             && let TyKind::Record { union, .. } = self.kind(cls)
         {
-            let s = self.lv_mem(*src, Access::Read);
+            let read = !self.o.types.holds_no_data(cls);
+            let s = self.lv_mem(*src, if read { Access::Read } else { Access::Addr });
             self.emit_site(Op::Copy, 4 | if union { 0 } else { 2 }, &[this, s, cls.0], e, loc);
             return this;
         }

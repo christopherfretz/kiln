@@ -93,7 +93,12 @@ panic and never silently wrong IR.
 ### 2a. Emission order (WP-172)
 Function and global positions in the module are **creation order** (the
 first `get_fn`/`get_gvar` of a name creates its declaration); a later
-definition fills the existing declaration in place. Emission order still
+definition fills the existing declaration in place. A declaration whose
+mangled name already names a function of the same type is that function
+(clang `GetOrCreateLLVMFunction`): a runtime function codegen declared
+first (`__cxa_allocate_exception` for a `throw`) and a user's
+`extern "C"` redeclaration of it in another namespace ([dcl.link]/7)
+share one symbol, never a renamed `name.1` copy. Emission order still
 matters, because it decides where declarations created inside a body
 land, the order in which comdats are created (at definition), and
 nounwind inference: clang's `TryMarkNoThrow` marks a definition
@@ -153,6 +158,8 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
 ## 3. Expressions (clang CGExprScalar/CGExprAgg/CGDecl rules mirrored)
 `expr.rs` mirrors clang's `ScalarExprEmitter`, `EmitLValue`,
 `AggExprEmitter`, `EmitBranchOnBoolExpr` and `EmitAutoVarDecl`.
+A `CXXRewrittenBinaryOperator` emits its semantic form in every one of
+them, the aggregate path included (a reversed `<=>` with a class result).
 - Conversions follow `EmitScalarConversion`:
   - to bool: `icmp ne 0`, `fcmp une 0.0` or `icmp ne null`;
   - integer to integer: cast by source signedness;
@@ -176,6 +183,10 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
 - Values:
   - an lvalue-to-rvalue conversion of a glvalue `?:` is emitted as a
     scalar `?:`: each arm loads in its own block and the result is a phi;
+  - an lvalue-to-rvalue conversion of a reference-returning call, also
+    through the lvalue `CK_UserDefinedConversion` of a conversion
+    function returning a reference (`operator bool&()`), loads from the
+    returned address (clang `EmitLoadOfLValue`);
   - `&&`/`||` produce an `i1` phi; `EmitBranchOnBoolExpr` splits
     `&&`/`||`/`!`/`?:` conditions into branches and folds constants;
   - bit-fields load the storage unit, then `shl`/`ashr` (signed) or
@@ -367,7 +378,13 @@ strong constructor). Validation: `tests/codegen/instantiation_order.cpp`,
   - a constant aggregate goes through `emitStoresForConstant`. That means
     a single store, memset-0 plus a few stores, a bytewise memset, or a
     memcpy from a `@__const.<fn>.<var>` private global, in that order of
-    preference. Constants are never promoted to globals at -O0;
+    preference. Constants are never promoted to globals at -O0. An
+    aggregate is constant when it is constexpr, or when it is POD and
+    its initializer folds. The exception is a trivial copy or move of
+    an empty class, which reads nothing and so folds whatever its source
+    is. Like clang's `isConstantInitializer`, it is constant only when
+    its source names a constexpr variable. `E e2 = std::move(e)` emits
+    nothing;
   - a non-constant aggregate goes through `EmitAggExpr`, with
     `CheckAggExprForMemSetUse` (size > 16 and nonzero*4 <= size gives a
     memset);
@@ -724,7 +741,11 @@ pointer, a VTT or a virtual call reports a `CodegenError` naming WP-080.
     ignored.
 - **Member-expression folds** (`ScalarExprEmitter::VisitMemberExpr`): an
   integral or enumeration `MemberExpr` that the Oven folds becomes a
-  constant, after the object is evaluated for side effects.
+  constant, after the object is evaluated for side effects. A `const`
+  non-volatile static data member named this way (`this->b.w`) folds to
+  its variable's constant initializer even when the object does not fold
+  (clang `tryToConvertMemberExprToDeclRefExpr`): the read is not an
+  odr-use ([basic.def.odr]/5) and needs no out-of-line definition.
 - **Pointers to members** (`memptr.rs`; Itanium §2.3, the ARM variant on
   AArch64; see spec/abi.md §8.6):
   - `&C::m` constants and Oven `Scalar::MemberPtr` constants, with

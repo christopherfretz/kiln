@@ -266,6 +266,19 @@ If `typename` is missing outside these contexts, clang's error and fix-it
 apply: "missing 'typename' prior to dependent type name 'T::type'". The
 parser then recovers as if `typename` had been written.
 
+A parameter-declaration of a function declared at namespace or block
+scope with an unqualified declarator-id (`template <class T> void
+f(X<T>::m x);`) is such a context (WP-287): the parser sets
+`param_typename` while parsing that parameter's
+decl-specifier-seq (`parse_param_clause`, `DeclSite::Plain`, not a
+deduction guide, whose parameters clang treats as implicit), and the
+error is at the first token of the name. Gap: kiln's tentative parse
+classifies `X<T>::m` by the primary template's member, so `void
+g(X<T>::m);` (a lone, unnamed parameter) is a function declarator with
+this error, where clang's `InvalidAsDeclSpec` tie-breaker makes it a
+variable (`variable has incomplete type 'void'`)
+(`tests/conformance/temp.res.general/missing-typename-parameter.cpp`).
+
 **`template`** is needed after `::`, `.` or `->` when the qualifier or
 object is dependent and not the current instantiation, as in
 `x.template f<int>()` and `T::template X<U>`. Without it, `<` is
@@ -292,6 +305,7 @@ All of these are built by sema actions, which compute dependence as in
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
 | `int x(e)` with a type-dependent `e` | the initializer is kept as `ParenListExpr` |
+| `X x(e)`, `X x = e`, `X x{e}` whose type `X` is a dependent class type (including the current instantiation, [temp.dep.type]/7) | the initializer is kept unconverted (a `ParenListExpr` for the parenthesized form) and initialization runs only at instantiation, as clang's `AddInitializerToDecl`; overload resolution against a dependent target would treat every candidate's conversion as an identity and report ambiguity (WP-276) |
 | `sizeof...(P)` | `SizeOfPackExpr` |
 | `e...` / `T...` | `PackExpansionExpr` / `PackExpansion` type |
 | `(e op ...)` | `CXXFoldExpr` |
@@ -350,6 +364,10 @@ concept-definition   := 'template' template-head 'concept' identifier attribute*
 - One may follow a template-head, or follow a function declarator (a
   trailing clause, stored in the cold map, ast.md §8.1).
 - Operands of `&&` and `||` must be primary expressions.
+- A builtin type-trait call (`__is_trivially_destructible(T)`, any
+  `BuiltinKw::Trait`) is such a primary expression, as in clang's
+  `ParseCastExpression(PrimaryExprOnly)`; libc++'s `<expected>` relies on
+  it (WP-276).
 - For anything else clang's error applies ("parentheses are required
   around this expression in a requires clause", with a fix-it), and the
   parser recovers by parsing a full unary expression.
@@ -704,7 +722,13 @@ the running `Substituter` instead.
 
 With dependent args, steps 2–3 are skipped. The result is a dependent
 `TemplateSpecialization` type, unless it names the current instantiation
-(§3.4).
+(§3.4). Its arguments are not converted, so a non-dependent expression
+argument (the `1` of `X<T, 1>`) carries its canonical profile and compares
+as an expression ([temp.over.link]/5): two declarations writing `X<T, 1>`
+name the same type and redeclare the same function template
+(`tests/conformance/temp.over.link/non-type-literal-arg-in-dependent-specialization.cpp`).
+Divergence: clang converts such arguments first, so `X<T, true>` and
+`X<T, 1>` for a `bool` parameter are equivalent there and distinct here.
 
 ### 4.3 Triggers for implicit instantiation ([temp.inst]/2)
 
@@ -773,6 +797,11 @@ original partial as its pattern (`instantiated_from_map`). A
 specialization that matches it is instantiated from the original
 partial's definition, with the enclosing arguments as the outer levels
 plus the deduced arguments (§4.6).
+Its associated constraints stay the original partial's, unsubstituted
+(`member_constraints`, as for a member template): matching checks them
+with the enclosing specialization's levels plus the deduced arguments
+(`template <forward_range T> struct cat<T>` in libc++'s
+`lazy_split_view`; WP-276).
 
 Out-of-class partial specializations of a member template (WP-150):
 `template<class T> template<class U> struct Outer<T>::Inner<U*> {...}`.
@@ -992,6 +1021,14 @@ errors.
    ImplicitInstantiation`.
 8. `Ast::end_instantiation()`, record the report entry (§11.3), and pop
    the frame.
+
+A member class completed on its own (`instantiate_member_class`) is
+substituted with the arguments of its nearest enclosing specialization.
+Every enclosing pattern class maps to its instantiation, up through
+that specialization and the classes around it
+(`inst_context_pairs`). So `view<V>::outer<C>::value_type` naming
+`inner<C>` (a sibling member template of `view`) finds
+`view<int>::inner` (WP-276).
 
 Any error during instantiation marks the specialization `invalid` (P7).
 Later uses of it are silent. As in clang's `InstantiateClass`, the class
@@ -1527,6 +1564,11 @@ recomputed exactly as for non-template code (clang's
   it, as when its elements' constructors bind temporaries: `T a[] = {{1}}`
   with `T(const int&)` (WP-278;
   `tests/conformance/dcl.init.aggr/array-of-class-from-list-in-template.cpp`).
+  A construction is redone from its written arguments (clang
+  `TransformInitializer`), also when it was resolved at definition: `T x(e)` and `T x{e}` with `e` of class `T` or a
+  class derived from it ([dcl.init.general]/16.6.2, [dcl.init.list]/3.2)
+  call the copy or move constructor at instantiation. Only a construction
+  with no parentheses and no written argument is a default-initialization.
 - **Local classes** inside an instantiated body are instantiated fully
   and immediately ([temp.inst]/3), by the body's own substituter
   (`subst/local.rs`, WP-131): so their members see the function's
@@ -2371,7 +2413,11 @@ pub enum NormNode {                         // 12 B, hash-consed in NormTable
 - A concept-id `C<A…>` normalizes `C`'s constraint expression with the
   parameter mapping substituted by `A…`. The frame is
   `ParameterMappingSubstitution`; a failure there makes the program
-  ill-formed (clang's error).
+  ill-formed (clang's error). The mapping is `A…` shaped to `C`'s
+  parameters: when `C`'s last parameter is a pack, the arguments for it
+  are grouped into one pack argument ([temp.arg.general]/4), so `C<F, T, T>`
+  written directly and `C<F, A...>` reached by substituting `A := {T, T}`
+  give the same mapping (and identical atoms).
 - Anything else gives an `Atomic` node.
 
 **Identity** ([temp.constr.atomic]/2). Two atomic constraints are

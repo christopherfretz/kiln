@@ -2007,23 +2007,31 @@ impl Oven {
         init: bool,
         full: Option<&kiln_ast::Ast>,
     ) -> Result<(), Fault> {
-        // An empty class copies no byte (see `Op::ZeroInit`).
-        let size = if self.types.holds_no_data(ty) { 0 } else { self.types.size(ty) };
-        let (ss, sa, sa_alloc) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
-            f,
-            ak: ak::READ,
-            ty,
-            p: src,
-        })?;
-        if sa_alloc.flags & flags::MUTABLE_OUTSIDE != 0 {
-            self.mutable_path(src, ty)?;
-        }
-        if let Some(ast) = full
-            && !matches!(self.types.kind(ty), TyKind::Record { union: true, .. })
-            && let off = u64::from(Ptr::decode(src).off)
-            && let Some((field, sub)) = self.first_uninit(ast, ss, sa, src, off, ty, None)
-        {
-            return Err(Fault::Uninit { field, ty: sub, src, whole: ty });
+        // An empty class copies no byte (see `Op::ZeroInit`), a class
+        // no tail padding.
+        let empty = self.types.holds_no_data(ty);
+        let size = if empty { 0 } else { self.types.copy_size(ty) };
+        // Nor is its source read (clang's `isReadByLvalueToRvalueConversion`):
+        // copying an `extern const` empty object is a constant.
+        let mut src_at = None;
+        if !empty {
+            let (ss, sa, sa_alloc) = self.mem.check(src, size, false).map_err(|f| Fault::Mem {
+                f,
+                ak: ak::READ,
+                ty,
+                p: src,
+            })?;
+            src_at = Some((ss, sa));
+            if sa_alloc.flags & flags::MUTABLE_OUTSIDE != 0 {
+                self.mutable_path(src, ty)?;
+            }
+            if let Some(ast) = full
+                && !matches!(self.types.kind(ty), TyKind::Record { union: true, .. })
+                && let off = u64::from(Ptr::decode(src).off)
+                && let Some((field, sub)) = self.first_uninit(ast, ss, sa, src, off, ty, None)
+            {
+                return Err(Fault::Uninit { field, ty: sub, src, whole: ty });
+            }
         }
         let k = if init { ak::INIT } else { ak::ASSIGN };
         let (ds, da, a) =
@@ -2031,9 +2039,7 @@ impl Oven {
         if !init && let Some(f) = write_fault(ds, a, ty) {
             return Err(Fault::Mem { f, ak: k, ty, p: dst });
         }
-        if size == 0 {
-            return Ok(());
-        }
+        let Some((ss, sa)) = src_at.filter(|_| size != 0) else { return Ok(()) };
         self.mem.trial_write(dst, size).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;
         self.mem.copy(ds, da, ss, sa, size);
         if self.types.info(ty).has_union {

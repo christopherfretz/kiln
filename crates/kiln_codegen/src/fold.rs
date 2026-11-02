@@ -95,16 +95,17 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits, imm) = {
+    let (cands, inits, imm, statics) = {
         let mut c = Collect {
             ast,
             out: Vec::new(),
             inits: FxHashMap::default(),
             imm: Vec::new(),
             defaults: FxHashSet::default(),
+            statics: Vec::new(),
         };
         c.tu();
-        (c.out, c.inits, c.imm)
+        (c.out, c.inits, c.imm, c.statics)
     };
     let mut b = Bridge { ast, abi: target };
     let mut folds = Folds::default();
@@ -123,6 +124,11 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         };
         if let Some(v) = v {
             folds.expr.insert(e, v);
+        }
+    }
+    for (e, init) in statics {
+        if let Some(v) = folds.get(init) {
+            folds.expr.entry(e).or_insert(v);
         }
     }
     for key @ (e, at) in imm {
@@ -151,6 +157,9 @@ struct Collect<'a> {
     /// Parameters whose default argument was already walked: a
     /// `CXXDefaultArgExpr` has no children, its expression is shared.
     defaults: FxHashSet<DeclId>,
+    /// Member accesses naming a `const` static data member, with that
+    /// member's initializer: the access folds to its value.
+    statics: Vec<(ExprId, ExprId)>,
 }
 
 impl Collect<'_> {
@@ -413,6 +422,22 @@ impl Collect<'_> {
                     || matches!(ast.types.canonical_view(n.ty()), TypeView::Enum(_)) =>
             {
                 self.out.push(e);
+                // clang `tryEmitAsConstant(MemberExpr)` converts a named
+                // `const` static data member to its variable first
+                // (`tryToConvertMemberExprToDeclRefExpr`): the value is the
+                // variable's, whatever the base (`this->b.w`).
+                let d = ast.exprs.decl(e);
+                if ast.decls.get(d).kind() == DeclKind::Var
+                    && let Some(init) = ast.decls.var(d).and_then(|v| v.init)
+                    && ast.decls.get(d).ty().is_some_and(|t| {
+                        let q = ast.types.effective_quals(t);
+                        q.is_const() && !q.is_volatile()
+                    })
+                {
+                    self.out.push(init);
+                    self.inits.insert(init, d);
+                    self.statics.push((e, init));
+                }
             }
             // clang `EmitBuiltinExpr` first tries the call as a constant.
             ExprKind::CallExpr => {
