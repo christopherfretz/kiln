@@ -183,6 +183,13 @@ residual` (docs/status/wp-184-oracle-switch.md).
     (clang's `MergeVarDecl` returns at an invalid new declaration), so
     it reports no redefinition and `c` still names the valid `c`.
     `dcl.type/missing-type-specifier-implicit-int.cpp`.
+    A variable redefinition (`redefinition of 'y'`, or `... with a
+    different type`), in the same or a reopened namespace, is invalid
+    too (clang `setInvalidDecl`), and `is_ambiguous_lookup` ignores
+    invalid declarations as `resolveKind` does, so a later use of the
+    name, at the start of a statement or through a using-directive
+    included, finds the first `y` rather than an ambiguous set (WP-405;
+    `basic.def.odr/redefinition-reopened-namespace.cpp`).
     A function whose declaration is invalid (an unknown return or
     parameter type) is erroneous when named outside a call (clang's
     `BuildDeclarationNameExpr` makes such a name an error; a call
