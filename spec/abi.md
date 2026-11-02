@@ -1161,6 +1161,25 @@ a named module has module linkage, not internal (P2788).
   (`_Z3useB2tgv`). Test: `tests/mangle/std_abbrev.cpp` (clang-exact,
   both triples).
 
+### 8.21 Landed (WP-386): clang 20+ call lowering at `-fclang-compat=22`
+`IrTypes::with_clang_compat` carries the codegen compat level (the
+driver's `-fclang-compat`, default 19) into classification. At 22,
+`aarch64_arg` follows clang 20+ (`AArch64ABIInfo::classifyArgumentType`,
+GCC's convention): an empty class (`[class.prop]`, no data members, size
+1) is no longer ignored-or-`i8` but goes down the generic small-aggregate
+path, so it is passed as `i64` (`trunc` to the `i8` slot in the callee);
+a variadic empty argument likewise. A zero-size struct (the GNU
+`int a[0]` member) is still ignored, and an empty class *returned* is
+still `void` (clang 22 kept `classifyReturnType`). x86-64 is unchanged
+(an empty class is `Ignore` there under both). `-fclang-abi-compat=19`
+in clang 22 does not restore the old `i8`, so kiln keys on the compat
+level only. Below 22 the clang 19 lowering (`i8` / ignored) is kept.
+The IR-level companions (the data layout, `dead_on_return`, GEP `nuw`)
+are spec/codegen.md §6a. Tests: `tests/conformance/expr.call/
+ir-clang22-argument-passing.cpp` (exact against clang 22) and the
+oracle-22 `ir_vs_clang` corpus, whose former empty-class `Abi`
+deviations now match.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

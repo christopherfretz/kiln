@@ -176,14 +176,16 @@ impl<'a> Cg<'a> {
         opts: &'a CodegenOptions,
         void_ptr: QualType,
     ) -> Self {
+        // clang 20+'s AArch64 data layout at compat 22 (spec/codegen.md §6a).
         let spec = match target.triple.arch {
+            Arch::AArch64 if opts.clang_compat >= 22 => kiln_llvm::AARCH64_LINUX_GNU_22,
             Arch::AArch64 => kiln_llvm::AARCH64_LINUX_GNU,
             Arch::X86_64 => kiln_llvm::X86_64_LINUX_GNU,
         };
         Cg {
             ast,
             folds,
-            tys: IrTypes::new(ast, target),
+            tys: IrTypes::new(ast, target).with_clang_compat(opts.clang_compat),
             target,
             opts,
             m: Module::with_target(&opts.source_filename, spec),
@@ -1363,6 +1365,15 @@ impl<'a> Cg<'a> {
                     s.push(Attr::ByVal(t));
                     s.push(Attr::Align(*align));
                 }
+                // clang 21+: the callee owns an indirect argument the caller
+                // does not destroy (spec/codegen.md §6a; LLVM 21+ syntax).
+                ArgKind::Indirect { byval: false, .. }
+                    if self.opts.clang_compat >= 22
+                        && self.opts.llvm_major >= 21
+                        && self.destructed_class(sig.params[i]).is_none() =>
+                {
+                    s.push(Attr::Flag(AttrKind::DeadOnReturn));
+                }
                 ArgKind::Direct { align: Some(n), .. } => s.push(Attr::AlignStack(*n)),
                 ArgKind::Direct { coerce: IrType::Struct(fs, _), flatten: true, .. } => {
                     for _ in 1..fs.len() {
@@ -1382,6 +1393,8 @@ impl<'a> Cg<'a> {
     pub fn target_attrs(&self, out: &mut Vec<Attr>) {
         if self.is_x86() {
             out.push(Attr::string("frame-pointer", "all"));
+        } else if self.fp_no_reserve() {
+            out.push(Attr::string("frame-pointer", "non-leaf-no-reserve"));
         } else {
             out.push(Attr::string("frame-pointer", "non-leaf"));
         }
@@ -1923,18 +1936,29 @@ impl<'a> Cg<'a> {
 
     // ---- module trailer ------------------------------------------------
 
+    /// clang 22's AArch64 `"frame-pointer"="non-leaf-no-reserve"` (module
+    /// flag 4), at compat 22 with an LLVM 22 backend (LLVM 19 rejects the
+    /// value; spec/codegen.md §6a).
+    fn fp_no_reserve(&self) -> bool {
+        !self.is_x86() && self.opts.clang_compat >= 22 && self.opts.llvm_major >= 22
+    }
+
     fn trailer(&mut self) {
+        let fp = match (self.target.triple.arch, self.fp_no_reserve()) {
+            (Arch::X86_64, _) => 2,
+            (Arch::AArch64, true) => 4,
+            (Arch::AArch64, false) => 1,
+        };
         let m = &mut self.m;
-        m.add_named_metadata("llvm.linker.options", &[]);
+        // clang 20+ emits no empty `!llvm.linker.options`.
+        if self.opts.clang_compat < 22 {
+            m.add_named_metadata("llvm.linker.options", &[]);
+        }
         m.add_module_flag_i32(1, "wchar_size", 4);
         m.add_module_flag_i32(8, "PIC Level", 2);
         m.add_module_flag_i32(7, "PIE Level", 2);
         m.add_module_flag_i32(7, "uwtable", 2);
-        m.add_module_flag_i32(
-            7,
-            "frame-pointer",
-            if self.target.triple.arch == Arch::X86_64 { 2 } else { 1 },
-        );
+        m.add_module_flag_i32(7, "frame-pointer", fp);
         m.add_ident(&self.opts.ident);
     }
 }

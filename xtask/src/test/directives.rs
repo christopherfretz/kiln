@@ -34,6 +34,9 @@ pub enum Expect {
     /// `-fsyntax-only -fdump-vtable-layouts`; compare the dump with the
     /// oracle's (emitted at code generation) as a set of blocks.
     Vtables,
+    /// `-S -emit-llvm -O0`; compare the module with the oracle's, exactly
+    /// after dropping comments and the producer lines (WP-386).
+    Ir,
     /// `-fsyntax-only` ends normally (exit 0 or 1): errors are fine, a
     /// crash, a hang or an internal-error exit code is not.
     NoCrash,
@@ -49,6 +52,7 @@ impl Expect {
             "ast" => Self::Ast,
             "layout" => Self::Layout,
             "vtables" => Self::Vtables,
+            "ir" => Self::Ir,
             "no-crash" => Self::NoCrash,
             _ => return None,
         })
@@ -64,6 +68,7 @@ impl Expect {
             Self::Ast => "ast",
             Self::Layout => "layout",
             Self::Vtables => "vtables",
+            Self::Ir => "ir",
             Self::NoCrash => "no-crash",
         }
     }
@@ -992,13 +997,13 @@ impl Parser {
             run_args: self.run_args,
             stdin,
             env: self.env,
-            // `layout` and `vtables` have no golden: the oracle is their
-            // only reference, and `oracle:` does not apply to them.
+            // `layout`, `vtables` and `ir` have no golden: the oracle is
+            // their only reference, and `oracle:` does not apply to them.
             oracle: self.oracle.unwrap_or(
                 if verify || matches!(expect, Expect::Run | Expect::Pp) {
                     !skip_clang
                 } else {
-                    matches!(expect, Expect::Layout | Expect::Vtables)
+                    matches!(expect, Expect::Layout | Expect::Vtables | Expect::Ir)
                 },
             ),
             oven: self.oven,
@@ -1709,7 +1714,9 @@ mod tests {
 
     #[test]
     fn layout_and_vtables_directives() {
-        for (text, want) in [("layout", Expect::Layout), ("vtables", Expect::Vtables)] {
+        for (text, want) in
+            [("layout", Expect::Layout), ("vtables", Expect::Vtables), ("ir", Expect::Ir)]
+        {
             let s = ok(&format!("//@ expect: {text}\n//@ diag: 2 warning \"w\"\n"));
             assert_eq!(s.expect, want);
             assert_eq!(s.expect.as_str(), text);

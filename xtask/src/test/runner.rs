@@ -228,6 +228,7 @@ impl Test<'_> {
             Expect::Ast => self.ast(&spec),
             Expect::Layout => self.dump(&spec, DumpKind::Layout),
             Expect::Vtables => self.dump(&spec, DumpKind::Vtables),
+            Expect::Ir => self.dump(&spec, DumpKind::Ir),
             Expect::NoCrash => self.no_crash(&spec),
         };
         // Budgets are checked once the kind's own checks pass.
@@ -981,12 +982,13 @@ impl Test<'_> {
     }
 }
 
-/// The dump an `expect: layout` or `expect: vtables` test compares
-/// (`spec/harness.md` "Layout and vtable tests").
+/// The dump an `expect: layout`, `expect: vtables` or `expect: ir` test
+/// compares (`spec/harness.md` "Layout and vtable tests", "IR tests").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DumpKind {
     Layout,
     Vtables,
+    Ir,
 }
 
 impl DumpKind {
@@ -994,6 +996,7 @@ impl DumpKind {
         match expect {
             Expect::Layout => Some(Self::Layout),
             Expect::Vtables => Some(Self::Vtables),
+            Expect::Ir => Some(Self::Ir),
             _ => None,
         }
     }
@@ -1003,6 +1006,7 @@ impl DumpKind {
         match self {
             Self::Layout => "expect: layout",
             Self::Vtables => "expect: vtables",
+            Self::Ir => "expect: ir",
         }
     }
 
@@ -1011,6 +1015,7 @@ impl DumpKind {
         match self {
             Self::Layout => "record layout",
             Self::Vtables => "vtable",
+            Self::Ir => "function definition",
         }
     }
 
@@ -1019,6 +1024,7 @@ impl DumpKind {
         match self {
             Self::Layout => record_layout_blocks(dump).len(),
             Self::Vtables => vtable_blocks(dump).len(),
+            Self::Ir => dump.lines().filter(|l| l.starts_with("define ")).count(),
         }
     }
 
@@ -1027,6 +1033,7 @@ impl DumpKind {
         match self {
             Self::Layout => layout_diff(want, got),
             Self::Vtables => vtables_diff(want, got),
+            Self::Ir => ir_diff(want, got),
         }
     }
 }
@@ -1051,7 +1058,7 @@ impl Test<'_> {
             let theirs = self.dump_of(&oracle, spec, kind, true)?;
             if kind.count(&theirs) == 0 {
                 let hint = match kind {
-                    DumpKind::Layout => "",
+                    DumpKind::Layout | DumpKind::Ir => "",
                     DumpKind::Vtables => {
                         "; clang dumps a vtable only when it emits it: give every dynamic \
                          class a key function defined in the test"
@@ -1090,15 +1097,23 @@ impl Test<'_> {
                 &["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
             }
             (false, DumpKind::Vtables) => &["-S", "-emit-llvm", "-Xclang", "-fdump-vtable-layouts"],
+            (_, DumpKind::Ir) => &["-S", "-emit-llvm", "-O0"],
         };
         let ir = match (kiln, kind) {
-            (false, DumpKind::Vtables) => {
+            (false, DumpKind::Vtables) | (_, DumpKind::Ir) => {
                 Some(self.scratch()?.join(if oracle { "oracle.ll" } else { "test.ll" }))
             }
             _ => None,
         };
+        // `expect: ir` compares the module written to the scratch file.
+        let module = |ir: Option<&Path>| -> Result<String, Problem> {
+            let p = ir.unwrap_or(Path::new(""));
+            fs::read_to_string(p)
+                .map_err(|e| Problem::Broken(format!("cannot read {}: {e}", p.display())))
+        };
         if oracle {
-            return Ok(self.oracle_compile(program, spec, mode, ir.as_deref())?.stdout_str());
+            let o = self.oracle_compile(program, spec, mode, ir.as_deref())?;
+            return if kind == DumpKind::Ir { module(ir.as_deref()) } else { Ok(o.stdout_str()) };
         }
         let o = self.compile(spec, mode, ir.as_deref())?;
         if !o.success() {
@@ -1110,8 +1125,47 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
-        Ok(o.stdout_str())
+        if kind == DumpKind::Ir { module(ir.as_deref()) } else { Ok(o.stdout_str()) }
     }
+}
+
+/// An LLVM module without what differs between producers but not in the
+/// program: comment lines and trailing comments (`; preds = ...`), the
+/// `; ModuleID` and `source_filename` lines, and `!llvm.ident` with its
+/// `"... version ..."` string node (`spec/harness.md` "IR tests").
+fn ir_normalize(ir: &str) -> String {
+    let mut out = String::new();
+    for line in ir.lines() {
+        let line = match line.find("; preds = ") {
+            Some(i) if !line.starts_with(';') => line[..i].trim_end(),
+            _ => line,
+        };
+        let producer = line.starts_with('!')
+            && line.contains("= !{!\"")
+            && (line.contains("clang version") || line.contains("kiln version"));
+        if line.starts_with(';')
+            || line.starts_with("source_filename")
+            || line.starts_with("!llvm.ident")
+            || producer
+        {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Compares two LLVM modules after [`ir_normalize`]: a line diff, or
+/// `None` when they agree.
+fn ir_diff(want: &str, got: &str) -> Option<String> {
+    let (theirs, ours) = (ir_normalize(want), ir_normalize(got));
+    (theirs != ours).then(|| {
+        format!(
+            "the LLVM IR differs from the oracle's\n--- diff (-oracle +actual) ---\n{}",
+            indent(&line_diff(&theirs, &ours))
+        )
+    })
 }
 
 /// Compares record-layout dumps block by block, in order (clang's builtin
@@ -1251,7 +1305,7 @@ fn compat_for(
 
 #[cfg(test)]
 mod compat_tests {
-    use super::compat_for;
+    use super::{compat_for, ir_diff, ir_normalize};
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
     /// the clang a `requires:` names when the oracle does not meet it.
@@ -1264,5 +1318,20 @@ mod compat_tests {
         assert_eq!(compat_for(19, Some([20, 0, 0]), None), 22);
         assert_eq!(compat_for(22, None, Some([22, 0, 0])), 19);
         assert_eq!(compat_for(19, None, Some([22, 0, 0])), 19);
+    }
+
+    #[test]
+    fn ir_normalize_drops_producer_lines_and_comments() {
+        let clang = "; ModuleID = 'a.cpp'\nsource_filename = \"a.cpp\"\n\n\
+                     ; Function Attrs: noinline\ndefine void @f() #0 {\n  br label %1\n\n\
+                     1:                                                ; preds = %0\n  ret void\n}\n\
+                     !llvm.ident = !{!0}\n!0 = !{!\"Debian clang version 22.1.8\"}\n";
+        let kiln = "; ModuleID = 'a.cpp'\nsource_filename = \"b.cpp\"\n\n\
+                    define void @f() #0 {\n  br label %1\n\n1:\n  ret void\n}\n\
+                    !llvm.ident = !{!0}\n!0 = !{!\"kiln version 0.0.1\"}\n";
+        assert_eq!(ir_normalize(clang), ir_normalize(kiln));
+        assert!(ir_diff(clang, kiln).is_none());
+        let d = ir_diff(clang, &kiln.replace("ret void", "unreachable")).expect("a diff");
+        assert!(d.contains("+  unreachable") && d.contains("-  ret void"), "{d}");
     }
 }

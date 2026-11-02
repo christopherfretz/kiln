@@ -206,6 +206,7 @@ fn seed_corpus_passes_with_clang() {
         "exit",
         "header-test",
         "inst-report",
+        "ir",
         "layout",
         "no-crash",
         "oracle",

@@ -502,6 +502,19 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   image's bytes as its IR type (the Oven's object representation already
   packs the fields in target bit order; WP-207). Base classes are still
   M3 errors in constants.
+- **GEP flags (WP-386).** Every address computation is
+  `getelementptr inbounds`. At `-fclang-compat=22` (clang 20+, which
+  emits `nuw` whenever the offset is known non-negative) `FnCx::gep_nuw`
+  adds `nuw` to: member access (`struct_gep`: a field index, instruction
+  or constant expression), an array subscript or pointer `+ n` whose
+  index has unsigned type ([expr.sub]/2, [expr.add]/4; in either operand
+  order), and `++p` / `p++` (a step of `+1`). A signed index, `p - n`,
+  `--p` / `p--` keep plain `inbounds`, as clang's
+  `EmitCheckedInBoundsGEP` (`isSigned` / `isSubtraction`). Below 22 no
+  `nuw` (clang 19). LLVM 19 parses `nuw`, so this is keyed on the compat
+  level only. Not yet: the GEPs built outside these helpers (array
+  initialization loops, `_Complex` and `va_list` parts, VLA strides),
+  which clang 22 also flags (§6a).
 
 ### 3.1 New- and delete-expressions (`new_delete.rs`, WP-061a)
 clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
@@ -729,7 +742,15 @@ The normative description is spec/driver.md "Code generation". In short:
   exact, `DEVIATIONS` holding `global_init_array_eh`,
   `eh_array_destroy_throwing_global` and `array_temporary_global` on
   aarch64 (§7f, §7m); under oracle 22, 465/516 structural and 485/516 ABI
-  slices equal, the rest listed (below, "clang 22 codegen").
+  slices equal, the rest listed (below, "clang 22 codegen"). kiln gets
+  `-fclang-compat=N` for oracle N (WP-386, §6a): at WP-386, 546 pairs,
+  oracle 19 531 exact; oracle 22 151 exact, 502 structural and 523 ABI
+  slices equal (491 / 512 before kiln followed clang 22 at compat 22).
+- **Exact IR goldens** (`expect: ir`, spec/harness.md "IR tests";
+  WP-386): `tests/conformance/*/ir-clang22-*.cpp` pin kiln's
+  `-fclang-compat=22` module to clang 22's byte for byte (after dropping
+  comments and the producer lines) under `requires: clang>=22` and
+  `requires: llvm>=22`, on the host target of each CI leg.
 - **`run` tests:** 35 printf-based programs (`extern "C" int printf`, no
   headers) under `tests/conformance/<section>/`, each naming its section,
   are compiled, linked and run by kiln and by clang, and their stdout and
@@ -739,10 +760,10 @@ The normative description is spec/driver.md "Code generation". In short:
   `c++config.h` uses `decltype`, which kiln_parse does not support yet.
 
 ### Deviations
-- **clang 22 codegen (WP-355).** kiln's IR follows clang 19 under every
-  `-fclang-compat`; the oracle-22 `DEVIATIONS` entries record where clang
-  20-22 changed: AArch64 empty classes passed by value as `i64` (19:
-  `i8`; an ABI change, GCC's convention), x86-64 `__int128` as `i128`
+- **clang 22 codegen (WP-355, WP-386).** At `-fclang-compat=22` kiln
+  follows clang 22 where §6a says; elsewhere its IR is clang 19's under
+  every level. The oracle-22 `DEVIATIONS` entries record the rest of
+  what clang 20-22 changed: x86-64 `__int128` as `i128`
   (19: two `i64`s; the same registers), AArch64 aggregates of pointers
   coerced to `ptr`/`[N x ptr]` (19: integers), `(unnamed struct)` in IR
   type names, `llvm.modf`, CWG2137's initializer-list constructor for
@@ -754,7 +775,7 @@ The normative description is spec/driver.md "Code generation". In short:
   operand's padding is zeroed (P0528) and a failed compare-exchange
   writes the old value back to `*expected` (C11 7.17.7.4p2) at every
   level, as clang 22 does. clang 19 did neither, so `atomic_padded` is an
-  oracle-19 `Structure` deviation. Following them under
+  oracle-19 `Structure` deviation. Following the rest under
   `-fclang-compat=22` is a follow-up (docs/status/wp-184-oracle-switch.md,
   "Residual").
 - **Uses of constant-initialized reference variables as lvalues.** A
@@ -834,6 +855,34 @@ The normative description is spec/driver.md "Code generation". In short:
   `ConceptSpecializationExpr` or `RequiresExpr` likewise lowers to the
   satisfaction Sema recorded (`i1` constant; an unrecorded one is an
   error), and `fold.rs` skips its operands; WP-136.)
+
+## 6a. Landed (WP-386): clang 22 codegen at `-fclang-compat=22`
+`CodegenOptions` carries `clang_compat` (the driver's `-fclang-compat`)
+and `llvm_major` (`llvm-config --version` of `KILN_LLVM_DIR`, probed once
+per process; spec/driver.md "Toolchain"). What clang 20-22 changed is
+keyed on the compat level, and additionally on the backend's major where
+LLVM 19 rejects the syntax (checked with `llvm-as` of both toolchains):
+
+| clang 22 | key | clang 19 / older backend |
+|---|---|---|
+| AArch64 data layout `e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32` (`kiln_llvm::AARCH64_LINUX_GNU_22`; LLVM 19 accepts it) | compat ≥ 22 | `e-m:e-i8:8:32-...` |
+| AArch64 empty class by value as `i64` (spec/abi.md §8.21) | compat ≥ 22 | `i8` / ignored |
+| GEP `nuw` (§3 "GEP flags") | compat ≥ 22 | `inbounds` only |
+| `dead_on_return` on an indirect, non-`byval` parameter whose type has a trivial destructor (AArch64 aggregates over 16 bytes, non-trivially-copyable classes, large vectors), on definitions, declarations and calls, before `noundef` | compat ≥ 22 and LLVM ≥ 21 | none (LLVM 19's `llvm-as` rejects it) |
+| AArch64 `"frame-pointer"="non-leaf-no-reserve"` and module flag `frame-pointer` 4 | compat ≥ 22 and LLVM ≥ 22 | `"non-leaf"`, 1 (LLVM 19 rejects the value) |
+| no empty `!llvm.linker.options` | compat ≥ 22 | `!llvm.linker.options = !{}` |
+
+x86-64's data layout and `"frame-pointer"="all"` are the same in both.
+The `xtask test` harness runs kiln at the oracle's compat level with the
+oracle's LLVM (spec/harness.md "Oracle toolchain"), so the oracle-22 legs
+see all six. The `module.rs` hunk is `Cg::new` (data layout, `IrTypes`
+compat), `sig_attrs`, `target_attrs` and `trailer`. Not yet: clang 22's
+`captures(none)` for `nocapture` on intrinsic declarations (LLVM 21+
+syntax; `llvm.memcpy`/`llvm.memset`), `!nonnull`/`!align` on loads of a
+reference parameter's slot, the `_ZTI`/`_ZTS` order, and the GEPs §3
+lists. Tests: `tests/conformance/expr.call/ir-clang22-argument-passing.cpp`,
+`tests/conformance/expr.sub/ir-clang22-gep-flags.cpp` (`expect: ir`),
+and `ir_vs_clang` under oracle 22.
 
 ## 7. Landed (WP-079): classes
 Lowering of non-polymorphic classes (`class.rs`, `cleanup.rs`,

@@ -1356,11 +1356,12 @@ impl Cg<'_> {
         self.ir_layout(t).0
     }
 
-    /// `getelementptr inbounds %T, ptr %p, i32 0, i32 i`.
+    /// `getelementptr inbounds [nuw] %T, ptr %p, i32 0, i32 i` (clang
+    /// `CreateStructGEP`; `nuw` per [`Self::gep_nuw`]).
     pub fn struct_gep(&mut self, t: LTy, p: V, i: u32) -> V {
         let z = self.m.const_int(LTy::I32, 0);
         let iv = self.m.const_int(LTy::I32, i128::from(i));
-        self.gep(t, p, vec![V::C(z), V::C(iv)], true)
+        self.gep_nuw(t, p, vec![V::C(z), V::C(iv)], true)
     }
 
     // ---- instructions with IRBuilder constant folding --------------------
@@ -1843,6 +1844,24 @@ impl Cg<'_> {
 
     pub fn gep(&mut self, src: LTy, base: V, idx: Vec<V>, inbounds: bool) -> V {
         let flags = if inbounds { GepFlags::INBOUNDS } else { GepFlags::NONE };
+        self.gep_flags(src, base, idx, flags)
+    }
+
+    /// An `inbounds` GEP that is also `nuw` when `nuw` holds and the
+    /// compat level is 22 or later: clang 20+ marks a struct field address
+    /// (`CreateStructGEP`) and an index of unsigned type that is added
+    /// (`EmitCheckedInBoundsGEP` with `!SignedIndices && !IsSubtraction`)
+    /// `inbounds nuw`; clang 19 wrote `inbounds` alone (spec/codegen.md §3,
+    /// "GEP flags"). LLVM 19 parses `nuw` on GEPs.
+    pub fn gep_nuw(&mut self, src: LTy, base: V, idx: Vec<V>, nuw: bool) -> V {
+        let mut flags = GepFlags::INBOUNDS;
+        if nuw && self.opts.clang_compat >= 22 {
+            flags = flags.with(GepFlags::NUW);
+        }
+        self.gep_flags(src, base, idx, flags)
+    }
+
+    fn gep_flags(&mut self, src: LTy, base: V, idx: Vec<V>, flags: GepFlags) -> V {
         if let V::C(b) = base
             && idx.iter().all(|i| matches!(i, V::C(_)))
         {

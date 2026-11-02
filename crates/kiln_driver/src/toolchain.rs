@@ -460,8 +460,6 @@ fn detect_gcc(sysroot: &str, target: &Target) -> Option<GccInstall> {
     best.map(|(_, g)| g)
 }
 
-/// `/usr/lib/llvm-22` -> `22`; `None` unless the last component is
-/// `llvm-N`.
 /// The major of `<dir>/bin/llvm-config --version`, cached per directory
 /// for the life of the process (the driver asks once per compile job; a
 /// process normally sees one installation). `None` when the tool is
@@ -499,6 +497,8 @@ fn llvm_config_version_major(out: &str) -> Option<u32> {
     major.parse().ok()
 }
 
+/// `/usr/lib/llvm-22` -> `22`; `None` unless the last component is
+/// `llvm-N`.
 fn llvm_dir_major(dir: &Path) -> Option<u32> {
     dir.file_name()?.to_str()?.strip_prefix("llvm-")?.parse().ok()
 }
@@ -559,10 +559,8 @@ mod tests {
     /// directory without one falls back to the name, then 19.
     #[test]
     fn llvm_major_probe() {
-        let tc = |d: &str| Toolchain {
-            llvm_dir: d.to_owned(),
-            ..Toolchain::new(AARCH64, None, None)
-        };
+        let tc =
+            |d: &str| Toolchain { llvm_dir: d.to_owned(), ..Toolchain::new(AARCH64, None, None) };
         assert_eq!(tc("/nonexistent/llvm-22").llvm_major(), 22);
         assert_eq!(tc("/nonexistent/llvm").llvm_major(), 19);
         for n in [19, 22] {
