@@ -875,10 +875,9 @@ impl Types {
                         && off >= f.offset
                         && off < f.offset + self.size(f.ty).max(1)
                         && self.has_subobject(f.ty, off - f.offset, p)
-                }) || self
-                    .empty_bases
-                    .get(&root)
-                    .is_some_and(|v| v.iter().any(|&(b, o)| o == off && self.has_subobject(b, 0, p)))
+                }) || self.empty_bases.get(&root).is_some_and(|v| {
+                    v.iter().any(|&(b, o)| o == off && self.has_subobject(b, 0, p))
+                })
             }
             _ => false,
         }
