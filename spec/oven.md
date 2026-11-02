@@ -101,6 +101,21 @@ the evaluator's flattened type table.
   a dangling pointer is detected (generation mismatch) and still names its
   origin for as long as possible. Slots whose generation would wrap are
   retired.
+- **Static reclamation** (WP-322, WP-060): a static object that dies
+  during compilation (the scratch copy `Oven::has_constant_destruction`
+  destroys) is freed by `Memory::free_static`, wherever it lies, not only
+  when it is the most recent static: its slot is dead and is reused with
+  its generation bumped (a dangling pointer faults as stale, and memo keys
+  holding it never match the new object), and its range joins a sorted,
+  coalesced free list that `Memory::alloc_static` allocates from first-fit
+  before growing the space; a free range that reaches the top lowers it.
+  So the static space held does not grow with the number of dead statics
+  (`static_bytes`, "Reporting protocol"). Inside a trial ("Trial
+  evaluation") free ranges and slots are not reused, and the top is never
+  lowered below the top the innermost checkpoint saw, so objects above it
+  stay fresh to the trial. Thawed globals, placeholders of running
+  initializers and external stand-ins are kept for the TU (memo entries
+  and resolved globals may hold pointers to them).
 - **Reset**: at the end of every top-level evaluation the frame space is
   `reset()` (top to 0, slots truncated); its buffers are kept, so steady
   state allocates nothing (`Oven::footprint` is flat; tested over 10k
@@ -228,7 +243,8 @@ the evaluator's flattened type table.
   object is external: every access faults. `const_context` is clang's
   "is constant-initialized static" flag (lax evaluation, `RunState`).
   Silent, not recorded; an outermost evaluation (false when nested); the
-  temporary object is popped (`Memory::pop_static`) and memory reset.
+  temporary object is freed (`Memory::free_static`, "Abstract memory")
+  and memory reset.
 - `Oven::fold_rvalue(bridge, e) -> Option<ConstValueId>` (WP-165):
   `try_fold` in **lax mode** (`RunState::lax`), clang's codegen-time
   `EvaluateAsRValue`/`tryEmitAsConstant`. A `const`, non-volatile variable
@@ -381,8 +397,8 @@ The format is NDJSON (UTF-8, one JSON object per `\n`-terminated line), one
 line per **top-level evaluation** in the order the evaluations finished,
 then exactly one `total` line, which is the last line:
 ```
-{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"wall_us":4}
-{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"wall_us":4,"evaluations":1}}
+{"loc":"a.cpp:12:1","kind":"static_assert","steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"wall_us":4}
+{"total":{"steps":116,"bytes":40,"peak_bytes":32,"calls":3,"allocs":0,"peak_arena":32,"frozen_bytes":16,"static_bytes":0,"wall_us":4,"evaluations":1}}
 ```
 A top-level evaluation is one call of an evaluation entry point that the
 language requires (a manifestly constant-evaluated context): it includes
@@ -407,13 +423,17 @@ choice and must not move a budget.
 | `allocs` | Dynamic allocations (`new` expressions and `std::allocator<T>::allocate`). |
 | `peak_arena` | The maximum abstract-memory address space held at once (`frame.top + heap.top`), fragmentation included; see "Transient allocation". `peak_arena >= peak_bytes`. |
 | `frozen_bytes` | Bytes this evaluation added to the `ConstStore`: only newly interned bytes, so a result equal to one already frozen adds 0 (spec/ast.md §9). |
+| `static_bytes` | Bytes of the static space held when the evaluation ended (`Memory::static_top`: live static objects plus the free ranges below the top; "Abstract memory", static reclamation). The space persists across evaluations, so this is the TU's so far. Optional for consumers (absent in reports before WP-322: read as 0). |
 | `wall_us` | Wall-clock microseconds, rounded down. |
 
 The `total` object has the same counters summed over the evaluations, except
 `peak_bytes` and `peak_arena`, which are the **maximum** over them (top-level
 evaluations do not overlap, so the TU's peak is the largest single peak;
-a nested evaluation's peaks are exclusive, see "Nested evaluation"), plus
-`evaluations`, the number
+a nested evaluation's peaks are exclusive, see "Nested evaluation"), and
+`static_bytes`, the static space's **high-water mark** over the whole TU
+(`Memory::static_peak`), which also covers work no line records
+(`has_constant_destruction`, `try_fold`) and so is at least every line's,
+plus `evaluations`, the number
 of evaluation lines. All counters are integers in `[0, 2^53]`.
 
 Every counter except `wall_us` is **deterministic**: the same compiler on the
@@ -425,7 +445,7 @@ Consumers must reject a report that is not this format: a line that is not
 an object with the keys above (each of the right type), a `kind` outside the
 list, a missing or repeated `total`, text after it, or a `total` that does not
 match the evaluations (sums, maximum for `peak_bytes` and `peak_arena`, count for
-`evaluations`; `wall_us` is not cross-checked, since rounding makes its sum
+`evaluations`, at least the maximum for `static_bytes`; `wall_us` is not cross-checked, since rounding makes its sum
 inexact). They ignore unknown keys (so the format can grow) and blank lines.
 
 ### Builtins — normative (WP-088)
@@ -1955,6 +1975,13 @@ possible side effects is never evaluated, as in clang's `EvaluateStmt`
   logging, allocations and frees rolled back, nested checkpoints, unions
   and flags, the speculative refusals, and a flat footprint over failed
   trials.
+  Static reclamation (WP-322): every dead static is reclaimed wherever it
+  lies, slot reuse makes old pointers stale, top ranges coalesce and are
+  given back, and inside a trial nothing is reused nor lowered below the
+  checkpoint's top.
+- `tests/conformance/expr.const/oven-dead-statics.cpp` (WP-322, kiln only,
+  `oven: static_bytes`): the static space does not keep the scratch copies
+  of 32 constant-destruction checks.
 - `tests/conformance/expr.const/constant-p-trial*.cpp` (WP-135): a failed
   trial's callee writes, unions and allocations, nested trials, kept
   effects of a successful trial, and (kiln only, `oven:` budget) heap

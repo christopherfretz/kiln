@@ -9,7 +9,7 @@
 use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::{ExprKind, ValueCategory};
 use kiln_ast::ids::{ArgListId, NnsId, TemplateNameId};
-use kiln_ast::types::{ArgView, TemplateArg, TemplateName, TypeView};
+use kiln_ast::types::{ArgView, ExcSpec, TemplateArg, TemplateName, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -47,6 +47,11 @@ enum DeduceTarget {
     None,
     /// The function type of the address target ([temp.deduct.funcaddr]).
     FuncAddr(QualType),
+    /// The type of an explicit instantiation or specialization
+    /// ([temp.deduct.decl]): compared without either top-level exception
+    /// specification, which is checked against the specialization's
+    /// afterwards (clang `adjustCCAndNoReturn(..., AdjustExceptionSpec)`).
+    Decl(QualType),
     /// The type a conversion function template converts to
     /// ([temp.deduct.conv]).
     Conversion(QualType),
@@ -196,6 +201,21 @@ impl Sema<'_, '_> {
         self.deduce_spec(ft, explicit, None, DeduceTarget::FuncAddr(target), loc)
     }
 
+    /// The specialization of `ft` an explicit instantiation or
+    /// specialization of type `target` names ([temp.deduct.decl]): as
+    /// [`Self::deduce_funcaddr`], but neither top-level exception
+    /// specification takes part (nothing is deduced from it, and the
+    /// template's is not substituted).
+    pub(crate) fn deduce_decl(
+        &mut self,
+        ft: DeclId,
+        explicit: Option<ArgListId>,
+        target: QualType,
+        loc: Loc,
+    ) -> Result<DeclId, Box<DeductionFailure>> {
+        self.deduce_spec(ft, explicit, None, DeduceTarget::Decl(target), loc)
+    }
+
     /// The specialization of conversion function template `ft` that
     /// converts to `to` ([temp.deduct.conv]): P is the template's
     /// conversion type, A `to` (a reference type for a reference
@@ -271,6 +291,15 @@ impl Sema<'_, '_> {
         // [temp.deduct.funcaddr]: P is the function type, with the
         // explicit arguments substituted below.
         let mut pfn = self.ast.decls.get(templated).ty().unwrap_or(QualType::ERROR);
+        // [temp.deduct.decl], [temp.inst]/14: a declaration's match leaves
+        // the template's exception specification alone (it is instantiated
+        // when the specialization's is checked, not substituted here, so
+        // `noexcept(T::value)` is no substitution failure); a non-dependent
+        // one is kept for the mismatch note.
+        let pexc = self.written_exc_spec(pfn);
+        if matches!(target, DeduceTarget::Decl(_)) {
+            pfn = self.with_exc_spec(pfn, ExcSpec::None);
+        }
         // Expanded non-trailing function parameter packs.
         let mut retained = 0usize;
         let written: Vec<TemplateArg> =
@@ -346,7 +375,8 @@ impl Sema<'_, '_> {
             let tys = ptys.clone();
             let fn_has_pack =
                 tys.iter().any(|&t| crate::templ::pack::type_pattern(self, t).is_some());
-            let whole = matches!(target, DeduceTarget::FuncAddr(_)) && !fn_has_pack;
+            let whole =
+                matches!(target, DeduceTarget::FuncAddr(_) | DeduceTarget::Decl(_)) && !fn_has_pack;
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
                 let mut sub = Substituter::new(s, &levels);
                 // A function parameter pack keeps its pattern: the
@@ -426,9 +456,35 @@ impl Sema<'_, '_> {
             return Err(DeductionFailure::new(Tdk::TooFewArguments, d));
         }
         // [temp.deduct.funcaddr]: the function type against the target.
-        if let DeduceTarget::FuncAddr(a) = target {
-            let r = self.deduce(pfn, a, TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT, &mut d);
+        if let DeduceTarget::FuncAddr(a) | DeduceTarget::Decl(a) = target {
+            let decl = matches!(target, DeduceTarget::Decl(_));
+            let (p0, a0, tdf) = if decl {
+                let p0 = self.with_exc_spec(pfn, ExcSpec::None);
+                (p0, self.with_exc_spec(a, ExcSpec::None), TdfFlags::NONE)
+            } else {
+                (pfn, a, TdfFlags::IGNORE_NONDEDUCED_NOEXCEPT)
+            };
+            let r = self.deduce(p0, a0, tdf, &mut d);
             if r != Tdk::Success {
+                // clang shows the whole types with their specifications.
+                let whole_p = d.info.first.is_some_and(|f| match f.view() {
+                    ArgView::Type(t) => self.ast.types.same_type(t, p0),
+                    _ => false,
+                });
+                if decl && whole_p {
+                    let dependent = matches!(
+                        pexc,
+                        ExcSpec::DependentNoexcept(_)
+                            | ExcSpec::Deferred(_)
+                            | ExcSpec::NoexceptExpr {
+                                value: kiln_ast::types::NoexceptValue::Dependent(_),
+                                ..
+                            }
+                    );
+                    let shown = if dependent { pfn } else { self.with_exc_spec(pfn, pexc) };
+                    d.info.first = Some(TemplateArg::ty(shown));
+                    d.info.second = Some(TemplateArg::ty(a));
+                }
                 self.resugar_fn_mismatch(pfn, &mut d);
                 return Err(DeductionFailure::new(r, d));
             }
