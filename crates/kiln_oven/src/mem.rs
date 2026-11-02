@@ -11,8 +11,10 @@
 //!
 //! Each space keeps, per 8-byte granule, a byte-granular initialization
 //! mask (bit `i` = byte `i` of the granule holds a value) and a pointer
-//! mark (the granule holds a pointer, whose bytes are an encoded
-//! [`Ptr`]). Allocations start on a granule boundary.
+//! mark (nonzero: the granule holds a pointer, whose bytes are an encoded
+//! [`Ptr`]; 2 and up: a `void *` whose designated type is
+//! [`Memory::void_tag`] of the mark, spec/oven.md "Construction").
+//! Allocations start on a granule boundary.
 //!
 //! A pointer is a `u64`: `offset (32) | past-end (1) | slot (22) | gen (9)`.
 //! Null is 0 (frame slot 0 is never used). Slot numbers with bit 21 set
@@ -44,6 +46,8 @@ pub(crate) const FN_SLOT: u32 = (1 << 22) - 1;
 /// [`Alloc::base`] of a static allocation that holds no bytes
 /// ([`Memory::alloc_unbacked`]).
 pub(crate) const UNBACKED: u32 = u32::MAX;
+/// The first pointer mark of a tagged `void *` ([`Memory::void_mark`]).
+pub(crate) const PTR_TAGGED: u8 = 2;
 
 /// A decoded pointer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -255,7 +259,8 @@ pub(crate) struct Space {
     pub bytes: Vec<u8>,
     /// Per granule: bit i = byte i is initialized.
     pub init: Vec<u8>,
-    /// Per granule: holds a pointer.
+    /// Per granule: holds a pointer (nonzero; [`PTR_TAGGED`] and up: a
+    /// tagged `void *`, [`Memory::void_tag`]).
     pub ptr: Vec<u8>,
     /// Per granule: bit i = byte i is within the lifetime of an object.
     /// Meaningful for [`flags::TRACKED`] allocations only, and empty
@@ -353,6 +358,18 @@ impl Space {
         let g0 = abs / GRAN;
         let g1 = (abs + len.max(1) - 1) / GRAN;
         self.ptr[g0 as usize..=g1 as usize].fill(u8::from(v));
+    }
+
+    /// The pointer mark of the granule holding `abs`.
+    pub fn ptr_mark(&self, abs: u64) -> u8 {
+        self.ptr[(abs / GRAN) as usize]
+    }
+
+    /// Sets the pointer mark of the granules overlapping the range.
+    pub fn set_ptr_mark(&mut self, abs: u64, len: u64, m: u8) {
+        let g0 = abs / GRAN;
+        let g1 = (abs + len.max(1) - 1) / GRAN;
+        self.ptr[g0 as usize..=g1 as usize].fill(m);
     }
 
     pub fn read(&self, abs: u64, len: u64) -> u128 {
@@ -479,6 +496,12 @@ pub(crate) struct Memory {
     /// or assignment naming another is accepted (WP-233). Cleared with the
     /// entry by [`Memory::union_put`].
     pub union_alts: FxHashMap<UKey, u64>,
+    /// The designated types of the `void *` values stored to memory
+    /// (`kbc::VOID_TAG`), interned: pointer mark `PTR_TAGGED + i` is
+    /// `vtags[i]`. Append-only for the translation unit (a rolled-back or
+    /// copied mark stays valid) and at most `256 - PTR_TAGGED` long.
+    vtags: Vec<OTy>,
+    vtag_ix: FxHashMap<OTy, u8>,
     /// Bytes allocated (cumulative, granule-rounded; frame and heap).
     pub allocated: u64,
     /// Peak live bytes: `frame.top + heap_live`.
@@ -531,6 +554,8 @@ impl Memory {
             ctx: 0,
             unions: FxHashMap::default(),
             union_alts: FxHashMap::default(),
+            vtags: Vec::new(),
+            vtag_ix: FxHashMap::default(),
             allocated: 0,
             peak: 0,
             arena_peak: 0,
@@ -539,6 +564,29 @@ impl Memory {
             serial: 0,
             life_frame: false,
             trial: Trial::default(),
+        }
+    }
+
+    /// The pointer mark for a pointer register's tag bits (`v >> 64`,
+    /// `kbc::VOID_TAG`: a type + 1, or 0): 1 when untagged, else the
+    /// tag's interned mark, or 1 once every mark is taken (the `void *`
+    /// then falls back as an untagged one does).
+    pub fn void_mark(&mut self, tag: u32) -> u8 {
+        let Some(t) = tag.checked_sub(1).map(OTy) else { return 1 };
+        if let Some(&m) = self.vtag_ix.get(&t) {
+            return m;
+        }
+        let Ok(m) = u8::try_from(self.vtags.len() + usize::from(PTR_TAGGED)) else { return 1 };
+        self.vtags.push(t);
+        self.vtag_ix.insert(t, m);
+        m
+    }
+
+    /// The register tag bits (a type + 1, or 0) of pointer mark `m`.
+    pub fn void_tag(&self, m: u8) -> u32 {
+        match m.checked_sub(PTR_TAGGED) {
+            Some(i) => self.vtags[usize::from(i)].0 + 1,
+            None => 0,
         }
     }
 
@@ -559,6 +607,8 @@ impl Memory {
             + self.bins.footprint()
             + self.unions.capacity() * (size_of::<(UKey, u32)>() + 1)
             + self.union_alts.capacity() * (size_of::<(UKey, u64)>() + 1)
+            + self.vtags.capacity() * size_of::<OTy>()
+            + self.vtag_ix.capacity() * (size_of::<(OTy, u8)>() + 1)
             + self.trial.footprint()
     }
 
@@ -692,9 +742,28 @@ impl Memory {
     /// static object made since the checkpoint is fresh (its base is at
     /// or above the checkpoint's static top).
     pub fn alloc_static(&mut self, ty: OTy, size: u64, fl: u8, origin: Origin) -> u64 {
-        let len = size.max(1).next_multiple_of(GRAN);
         let reuse = !self.in_trial();
-        let hole = if reuse { self.sholes.iter().position(|&(_, l)| l >= len) } else { None };
+        let base = self.static_range(size);
+        let a = Alloc {
+            base: base as u32,
+            size: size as u32,
+            generation: 0,
+            live: true,
+            flags: fl,
+            ty,
+            origin,
+            frame: 0,
+        };
+        self.push_static(a, reuse)
+    }
+
+    /// Static bytes for an object of `size` (uninitialized, holding no
+    /// pointers): a free range (first fit) outside a trial, else the top
+    /// of the space ([`Memory::alloc_static`]).
+    fn static_range(&mut self, size: u64) -> u64 {
+        let len = size.max(1).next_multiple_of(GRAN);
+        let hole =
+            if self.in_trial() { None } else { self.sholes.iter().position(|&(_, l)| l >= len) };
         let base = match hole {
             Some(i) => {
                 let (b, l) = self.sholes[i];
@@ -715,17 +784,42 @@ impl Memory {
         };
         self.stat.set_init(base, len, false);
         self.stat.set_ptr(base, len, false);
-        let a = Alloc {
-            base: base as u32,
-            size: size as u32,
-            generation: 0,
-            live: true,
-            flags: fl,
-            ty,
-            origin,
-            frame: 0,
+        base
+    }
+
+    /// Makes live static object `p` (of type `ty`) a fresh object of the
+    /// same type in place: flags `fl`, origin `origin`, its bytes
+    /// uninitialized and its union records dropped. Its slot, generation
+    /// and address are kept, so a pointer to it stays valid; `backed`
+    /// gives an unbacked ([`Memory::alloc_unbacked`]) object bytes, and a
+    /// backed one keeps its bytes either way. The object of a global that
+    /// is resolved again (`Oven::lax_objs`, spec/oven.md "Evaluation entry
+    /// points") is remade with it, so re-resolving costs no static space.
+    pub fn reinit_static(&mut self, p: u64, fl: u8, origin: Origin, backed: bool, types: &Types) {
+        let pp = Ptr::decode(p);
+        let idx = (pp.slot & !STATIC_BIT) as usize;
+        let a = self.statics[idx];
+        debug_assert!(a.live && a.generation == pp.generation, "reinit of a dead static");
+        if a.flags & flags::HAS_UNION != 0 {
+            let key = Ptr::alloc_key(p);
+            for &(o, ut) in types.unions(a.ty) {
+                self.unions.remove(&UKey::new(key, o, ut));
+                self.union_alts.remove(&UKey::new(key, o, ut));
+            }
+        }
+        let size = u64::from(a.size);
+        let base = if a.base != UNBACKED {
+            let (b, len) = (u64::from(a.base), size.max(1).next_multiple_of(GRAN));
+            self.stat.set_init(b, len, false);
+            self.stat.set_ptr(b, len, false);
+            a.base
+        } else if backed {
+            self.static_range(size) as u32
+        } else {
+            UNBACKED
         };
-        self.push_static(a, reuse)
+        let fl = if base == UNBACKED { fl | flags::EXTERNAL } else { fl };
+        self.statics[idx] = Alloc { base, flags: fl, origin, ..a };
     }
 
     /// A static object no access may reach, of origin
@@ -2055,6 +2149,24 @@ mod tests {
         assert_eq!(m.footprint(), warm);
         // Every round freed everything it allocated on the heap.
         assert_eq!((m.heap.top, m.heap_live, m.heap_count), (0, 0, 0));
+    }
+
+    /// spec/oven.md "Construction" (WP-387): `void *` tags intern to
+    /// stable pointer marks, and past the mark space fall back to 1.
+    #[test]
+    fn void_marks_intern_and_saturate() {
+        let mut m = Memory::new(MIB);
+        assert_eq!(m.void_mark(0), 1);
+        assert_eq!(m.void_tag(1), 0);
+        let a = m.void_mark(8);
+        assert_eq!((a, m.void_mark(9), m.void_mark(8)), (PTR_TAGGED, PTR_TAGGED + 1, a));
+        assert_eq!(m.void_tag(a), 8);
+        for t in 10..300 {
+            let k = m.void_mark(t);
+            assert!(k == 1 || m.void_tag(k) == t);
+        }
+        assert_eq!(m.void_mark(1000), 1);
+        assert_eq!(m.void_tag(255), 255 - u32::from(PTR_TAGGED) + 8);
     }
 
     #[test]

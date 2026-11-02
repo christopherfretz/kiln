@@ -47,6 +47,8 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Float32
             | Kw::Float64
             | Kw::StdFloat128
+            | Kw::Float32x
+            | Kw::Float64x
             | Kw::Bf16
             | Kw::Fp16
             | Kw::Complex
@@ -727,11 +729,12 @@ impl Parser<'_, '_> {
                 Kw::Float128 => ds.set_base(TypeSpecKind::Float128, None, loc),
                 Kw::Float16 => ds.set_base(TypeSpecKind::Float16, None, loc),
                 // glibc's <bits/floatn*.h> declare `typedef float _Float32;`
-                // (and `_Float64`, `_Float128`) for C++ compilers that are
-                // not GCC >= 13; kiln reports itself as clang. In a system
-                // header such a typedef of a P1467 keyword declares
-                // nothing (spec/types.md §5.1).
-                Kw::Float32 | Kw::Float64 | Kw::StdFloat128
+                // (and `_Float64`, `_Float128`, `_Float32x`, `_Float64x`)
+                // for C++ compilers that are not GCC >= 13; kiln reports
+                // itself as clang. In a system header such a typedef of a
+                // P1467 keyword or GCC `_FloatNx` keyword declares nothing
+                // (spec/types.md §5.1).
+                Kw::Float32 | Kw::Float64 | Kw::StdFloat128 | Kw::Float32x | Kw::Float64x
                     if matches!(ds.storage, Some((StorageSpec::Typedef, _)))
                         && ds.has_type_specifier()
                         && self.peek_is(1, Punct::Semi)
@@ -743,6 +746,8 @@ impl Parser<'_, '_> {
                 Kw::Float32 => ds.set_base(TypeSpecKind::Float32, None, loc),
                 Kw::Float64 => ds.set_base(TypeSpecKind::Float64, None, loc),
                 Kw::StdFloat128 => ds.set_base(TypeSpecKind::StdFloat128, None, loc),
+                Kw::Float32x => ds.set_base(TypeSpecKind::Float32x, None, loc),
+                Kw::Float64x => ds.set_base(TypeSpecKind::Float64x, None, loc),
                 Kw::Bf16 => ds.set_base(TypeSpecKind::BFloat16, None, loc),
                 Kw::Fp16 => ds.set_base(TypeSpecKind::Fp16, None, loc),
                 Kw::Complex => {
@@ -2978,7 +2983,7 @@ impl Parser<'_, '_> {
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);
             let base = *base_ty.get_or_insert_with(|| self.group_base_type(&ds, &d));
-            if self.parse_asm_label_and_gnu_attrs(&mut d).is_err() {
+            if self.parse_asm_label_and_gnu_attrs(&mut d, declarators == 0).is_err() {
                 self.skip_until(&[], true, false);
                 break;
             }
@@ -3084,13 +3089,17 @@ impl Parser<'_, '_> {
     /// `ParseDeclGroup`): a C++11 attribute-specifier-seq here ends the
     /// declarator, and the `;` (or function body) expected there is
     /// reported by the caller.
-    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator) -> Result<(), ()> {
+    fn parse_asm_label_and_gnu_attrs(&mut self, d: &mut Declarator, first: bool) -> Result<(), ()> {
+        self.gnu_attr_end = Loc::INVALID;
+        if first && d.is_function_declarator() {
+            self.parse_gnu_attr_seq(&mut d.attrs);
+        }
         let label = self.parse_asm_label()?;
         if label.is_some() {
             d.end = self.prev_lo();
+            self.gnu_attr_end = Loc::INVALID;
         }
         d.asm_label = label;
-        self.gnu_attr_end = Loc::INVALID;
         self.parse_gnu_attr_seq(&mut d.attrs);
         if self.gnu_attr_end != Loc::INVALID {
             d.end = self.gnu_attr_end;

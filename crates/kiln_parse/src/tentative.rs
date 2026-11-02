@@ -275,6 +275,8 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Float32
                 | Kw::Float64
                 | Kw::StdFloat128
+                | Kw::Float32x
+                | Kw::Float64x
                 | Kw::Bf16
                 | Kw::Fp16 => self.after_simple_type(self.i + 1, braced),
                 // [dcl.type.auto.deduct]: `auto(x)` and `auto{x}` are
