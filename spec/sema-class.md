@@ -137,6 +137,17 @@ namespace of the definition.
 `private` for `class`, else `public`); cold map `friends: record → ListId`
 (befriended functions' first decls and classes), built at `}`, used only by
 access checks — friend name lookup goes through the namespace table (§2.3).
+In a class nested in a class template (or a partial specialization),
+`friend class X;`, `friend X;` and `friend class X<P...>;` naming the
+enclosing template's injected-class-name or its own parameters befriend the
+current instantiation ([temp.local]/1, [temp.dep.type]/1): the pattern is
+in the list (so the pattern's members check against it), and each
+instantiation befriends its own specialization only, whose members,
+out-of-line member templates instantiated later included, get access
+(libc++ `binomial_distribution::param_type`; tests/conformance/class.friend/
+nested-befriends-enclosing-template*.cpp). An elaborated-type-specifier
+`class X` naming the injected-class-name is the injected type `X<P...>`
+anywhere inside the template, not only in a friend declaration.
 
 **Rule** (`class/access.rs`, clang `SemaAccess`). Member `m` found in naming
 class `N` ([class.access.base]/5) is accessible at context `R` iff: (a) `m` as
