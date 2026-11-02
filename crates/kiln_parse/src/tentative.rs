@@ -319,7 +319,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         let Some((end, class)) = self.name_here() else {
             return Tpr::False;
         };
-        if matches!(class, NameClass::Undeclared) && self.undeclared_type_before_ident(end) {
+        if matches!(class, NameClass::Undeclared)
+            && (self.undeclared_type_before_ident(end)
+                || self.undeclared_template_id_before_ident(end))
+        {
             return Tpr::True;
         }
         match class {
@@ -347,6 +350,20 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     /// `(S::nom x)` is a parenthesized expression.
     fn undeclared_type_before_ident(&self, end: usize) -> bool {
         self.ident_at(end).is_some() && !(end > self.i + 1 && self.p.unresolved_scope_name(self.i))
+    }
+
+    /// `foo<args> bar` with `foo` unqualified and undeclared (the name
+    /// ends at `end`): lookup finding nothing before `<` makes `foo` a
+    /// template-name ([temp.names]/3.3, assumed to name functions), and a
+    /// declarator after the list shows it was meant as a type, so the
+    /// declaration parser reports "no template named" (clang's
+    /// `TNK_Undeclared_template`, `Ambiguous` in
+    /// `isCXXDeclarationSpecifier` until the declarator decides).
+    fn undeclared_template_id_before_ident(&self, end: usize) -> bool {
+        end == self.i + 1
+            && self.punct_at(end) == Some(Punct::Less)
+            && matches!(self.p.skip_template_args(end),
+                Some((close, false)) if self.ident_at(close + 1).is_some())
     }
 
     /// The `NameClass::Dependent` arm of [`Scan::decl_specifier`]: the
