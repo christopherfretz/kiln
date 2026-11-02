@@ -436,15 +436,22 @@ impl Substituter<'_, '_, '_> {
             let idx = u16::try_from(out.len()).unwrap_or(u16::MAX);
             let eo = pd.map_or(0, |x| x.flags & ParamData::EXPLICIT_OBJECT);
             let np = self.sema.builder().prototype_param(ctx, n.name(), n.loc(), ty, idx, eo);
-            if declared != ty {
-                self.sema.ast.decls.set_param_original_ty(np, declared);
-            }
             self.sema.unowned_params.insert(np);
             self.locals.insert(p, DeclOrPack::Decl(np));
+            // The type as declared is kept only while still dependent (a
+            // member template of a partially instantiated class), for the
+            // next substitution's invalid-type check (§5.7.2); clang's
+            // parse-time-only uses of it (a range-`for` over an array
+            // parameter) do not apply to an instantiation.
+            let original_ty =
+                (declared != ty && self.sema.is_dependent_type(declared)).then_some(declared);
+            if let Some(o) = original_ty {
+                self.sema.ast.decls.set_param_original_ty(np, o);
+            }
             out.push(ParamInfo {
                 name,
                 ty,
-                original_ty: (declared != ty).then_some(declared),
+                original_ty,
                 loc: n.loc(),
                 attrs: Vec::new(),
                 invalid: false,
