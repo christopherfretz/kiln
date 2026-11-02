@@ -88,6 +88,15 @@ impl Sema<'_, '_> {
         {
             self.add_converting_ctor_candidates(&mut set, c, opts);
         } else {
+            // [over.match.copy]/1.2, [over.match.ref]/1.1: one argument
+            // of a direct-initialization may reach a copy or move
+            // constructor through an explicit conversion function.
+            let opts =
+                if args.len() == 1 && matches!(style, InitStyle::Direct | InitStyle::DirectList) {
+                    opts.with(IcsOptions::DIRECT_COPY_CTOR)
+                } else {
+                    opts
+                };
             self.add_ctor_candidates(&mut set, c, opts, false);
         }
         if let [arg] = args
@@ -161,7 +170,31 @@ impl Sema<'_, '_> {
         let to = self.ast.types.canonical(self.class_type(c));
         let direct = matches!(style, InitStyle::Direct | InitStyle::DirectList);
         let opts = if direct { IcsOptions::ALLOW_EXPLICIT } else { IcsOptions::NONE };
-        for (found, f) in self.conversion_functions(from) {
+        for (found, f) in self.conversion_functions_all(from) {
+            if self.kind_of(f) == DeclKind::FunctionTemplate {
+                // clang `AddTemplateConversionCandidate` with
+                // `AllowResultConversion` false: the specialization
+                // deduced for `cv T` must yield exactly `cv T`.
+                let explicit =
+                    self.templated_function(f).is_some_and(|p| self.nondependently_explicit(p));
+                if !direct && explicit {
+                    continue;
+                }
+                let n = set.cands.len();
+                self.add_conversion_template_candidate(set, f, found, to, opts);
+                if let Some(c) = set.cands.get(n)
+                    && c.viable
+                {
+                    let ret = self.conversion_result_type(c.func());
+                    if self.ast.types.is_reference(ret) || !self.ast.types.same_unqualified(ret, to)
+                    {
+                        let start = c.ics.start as usize;
+                        set.cands.truncate(n);
+                        set.ics.truncate(start);
+                    }
+                }
+                continue;
+            }
             if self.kind_of(f) != DeclKind::CXXConversion
                 || (!direct && self.fn_spec(f).is_explicit())
             {
