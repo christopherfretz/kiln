@@ -770,18 +770,41 @@ impl<'a> Cg<'a> {
     }
 
     /// The `inline` part of a definition's attributes (clang
-    /// `SetLLVMFunctionAttributesForDefinition` at -O0).
+    /// `SetLLVMFunctionAttributesForDefinition`): `always_inline` gives
+    /// `alwaysinline`, or `noinline` alone when `noinline` is also present
+    /// (and keeps `optnone` off at -O0); otherwise -O0 gives `noinline
+    /// optnone`, and above -O0 a `noinline` function keeps `noinline` and
+    /// an `inline`-specified one (on a redeclaration or one of its
+    /// template pattern's) gets `inlinehint`.
     pub(crate) fn def_inline_attrs(&self, d: DeclId) -> DefInline {
         use kiln_ast::attr::AttrKind as K;
-        if !self.has_fn_attr(d, K::ALWAYS_INLINE) {
+        let noinline = self.has_fn_attr(d, K::NOINLINE);
+        if self.has_fn_attr(d, K::ALWAYS_INLINE) {
+            if noinline { DefInline::NoInline } else { DefInline::Always }
+        } else if !self.opts.optimize {
             DefInline::OptNone
-        } else if self.has_fn_attr(d, K::NOINLINE) {
-            // `always_inline` keeps `optnone` off even when `noinline`
-            // wins.
+        } else if noinline {
             DefInline::NoInline
+        } else if self.inline_specified(d) {
+            DefInline::Hint
         } else {
-            DefInline::Always
+            DefInline::Plain
         }
+    }
+
+    /// clang `isInlineSpecified` on a redeclaration of function `d` or of
+    /// its template instantiation pattern (an implicit `inline` — a
+    /// class-member definition, `constexpr` — does not count).
+    fn inline_specified(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let spec = |f: DeclId| {
+            ast.redecls_of(f).any(|r| ast.decls.function(r).is_some_and(|x| x.spec.is_inline()))
+        };
+        let first = ast.first(d);
+        let explicit_spec = ast.spec_info(first).map(|(_, s)| s.kind)
+            == Some(SpecKind::ExplicitSpecialization)
+            || self.is_member_explicit_spec(first);
+        spec(d) || (!explicit_spec && ast.instantiated_from(first).is_some_and(spec))
     }
 
     /// Whether a redeclaration of `d` carries an attribute of kind `k`.
@@ -1520,6 +1543,9 @@ impl<'a> Cg<'a> {
         if inline == DefInline::Always {
             a.push(Attr::Flag(AttrKind::AlwaysInline));
         }
+        if inline == DefInline::Hint {
+            a.push(Attr::Flag(AttrKind::InlineHint));
+        }
         if mustprogress {
             a.push(Attr::Flag(AttrKind::MustProgress));
         }
@@ -1811,8 +1837,9 @@ impl<'a> Cg<'a> {
     }
 
     /// The global of template parameter object `d` ([temp.param]/8):
-    /// a `linkonce_odr` constant in its own comdat holding its value
-    /// (clang `GetAddrOfTemplateParamObject`).
+    /// a `linkonce_odr` constant in its own comdat holding its value, or
+    /// an `internal` one when its value names an entity without external
+    /// linkage (clang `GetAddrOfTemplateParamObject`).
     pub fn param_object_global(&mut self, d: DeclId) -> R<GlobalId> {
         if let Some(&g) = self.gvars.get(&d) {
             return Ok(g);
@@ -1831,13 +1858,16 @@ impl<'a> Cg<'a> {
         if let Err(e) = self.m.set_initializer(g, Some(init)) {
             return err(loc, format!("bad initializer: {e:?}"));
         }
-        let align = self.global_align(ty);
-        let comdat = Some(self.m.comdat(&name, ComdatKind::Any));
+        // An object whose type or value names an entity without external
+        // linkage is `internal`; clang 19 keeps its comdat, clang 22 drops
+        // it. Neither sets an alignment.
+        let internal = mangle::is_internal_symbol(ast, d);
+        let comdat = (!internal || self.opts.clang_compat < 22)
+            .then(|| self.m.comdat(&name, ComdatKind::Any));
         let gv = self.m.global_mut(g);
         gv.is_constant = true;
-        gv.align = Some(align);
-        gv.linkage = Linkage::LinkOnceOdr;
-        gv.dso_local = true;
+        gv.linkage = if internal { Linkage::Internal } else { Linkage::LinkOnceOdr };
+        gv.dso_local = !internal;
         gv.comdat = comdat;
         Ok(g)
     }
@@ -1939,15 +1969,20 @@ pub(crate) fn gval(g: GlobalId) -> Value {
     Value::global(g)
 }
 
-/// The inlining attributes of a definition at -O0.
+/// The inlining attributes of a definition ([`Cg::def_inline_attrs`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DefInline {
-    /// `noinline optnone`, the default.
+    /// `noinline optnone`, the default at -O0 (nothing above -O0).
     OptNone,
-    /// `noinline` alone: `always_inline` together with `noinline`.
+    /// `noinline` alone: `always_inline` together with `noinline`, or
+    /// `noinline` above -O0.
     NoInline,
     /// `alwaysinline`.
     Always,
+    /// `inlinehint`: an `inline`-specified function above -O0.
+    Hint,
+    /// Nothing: any other function above -O0.
+    Plain,
 }
 
 /// The inputs of [`Cg::def_fn_attrs`]: the flags that decide a
