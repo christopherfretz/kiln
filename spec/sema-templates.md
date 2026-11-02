@@ -810,7 +810,17 @@ the running `Substituter` instead.
    declaration's parameters (§4.8.1):
    - matches kinds and arity;
    - fills missing args from defaults, substituting the earlier args into
-     them (frame `DefaultTemplateArgumentInstantiation`);
+     them (frame `DefaultTemplateArgumentInstantiation`). A dependent
+     default is substituted in the template's semantic context
+     (`in_inst_context(ctx of tmpl)`, as clang's
+     `SubstDefaultTemplateArgument` enters `Template->getDeclContext()`),
+     not the scopes of the use: a name the substitution looks up again
+     (an unqualified call with explicit template arguments,
+     `declval<Ts>()`) resolves from the template's namespace or class
+     ([temp.dep.candidate]/1; WP-378,
+     `tests/conformance/temp.param/default-argument-lookup-context.cpp`).
+     A template in a local scope keeps the use's scopes (its function's
+     names live only there);
    - converts NTTP args (converted constant expressions, evaluated by the
      Oven with `EvalKind::TemplateArg`);
    - packs the trailing args into a `Pack`.
