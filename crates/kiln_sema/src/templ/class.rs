@@ -1334,7 +1334,7 @@ impl Substituter<'_, '_, '_> {
         self.map_contexts(&[(def, spec)]);
         let sub = self;
         let (specs, mut invalid) = sub.class_bases(def);
-        sub.sema.act_on_base_specifiers(spec, &specs);
+        invalid |= !sub.sema.attach_bases(spec, &specs);
         let members: Vec<DeclId> = sub.sema.ast.decls.members(def).collect();
         let mut nsdmis = Vec::new();
         // clang `InstantiateClass`: a base that fails to substitute, an
