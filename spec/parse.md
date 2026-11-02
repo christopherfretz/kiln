@@ -1028,12 +1028,16 @@ clang's `ParseCXXNewExpression`, `ParseDirectNewDeclarator` and
     between them are kept (`parse_member_tail_attrs`; WP-324)
   - between decl-specifiers (clang `ProhibitAttributes` in
     `ParseDeclarationSpecifiers`), at the end of the decl-specifier-seq
-    ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1) or after
-    an array declarator ([dcl.array]/1): attributes there appertain to a
-    type; kiln does not attach them, and sema reports an `alignas` among
-    them as `'alignas' attribute cannot be applied to types`
-    (`skip_type_position_attrs`, `Sema::act_on_type_position_attrs`;
-    WP-312)
+    ([dcl.spec.general]/1), after a ptr-operator ([dcl.ptr]/1), after
+    an array declarator ([dcl.array]/1) or after a function declarator
+    ([dcl.fct]/1, parsed after `parse_function_suffix`): attributes
+    there appertain to a type. The parser hands each list to
+    `Sema::act_on_type_position_attrs`, which reports and removes the
+    declaration attributes (spec/sema.md §4.5, type-position
+    attributes). The rest are attached to the declaration at the end of
+    the decl-specifier-seq and after a function declarator, and dropped
+    after a ptr-operator or array declarator
+    (`skip_type_position_attrs`; WP-312, WP-324)
   - before a namespace-definition, a static_assert-declaration, or (for
     `alignas`; `[[...]] using` is an extension) a using-declaration or
     alias-declaration at file scope: `an attribute list cannot appear

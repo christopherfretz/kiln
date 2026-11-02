@@ -1096,10 +1096,9 @@ and returns the scope it names:
     `'alignas' attribute only applies to variables, data members and
     tag types`; in an attribute-declaration (`alignas(8);`) it
     appertains to nothing. The specifier is dropped. Written where only
-    type attributes may appear (the end of a decl-specifier-seq,
-    `char alignas(8) c;`, after a ptr-operator or array declarator) it
-    is `'alignas' attribute cannot be applied to types`
-    (`act_on_type_position_attrs`; clang `err_attribute_not_type_attr`).
+    type attributes may appear (`char alignas(8) c;`) it is `'alignas'
+    attribute cannot be applied to types` (the type-position rule
+    below).
     Before a namespace-definition, a static_assert-declaration, a
     using-declaration or an alias-declaration, a leading
     attribute-specifier-seq containing `alignas` is `an attribute list
@@ -1149,6 +1148,71 @@ and returns the scope it names:
     [class.mem.general]/8). Test:
     `tests/conformance/dcl.align/alignof-expression-diag.cpp`.
   - `act_on_tag_attrs` attaches class-head and enum-head attributes.
+  - **Attribute subjects** ([dcl.attr.grammar]/5, `decl_attrs.rs`
+    `check_decl_attrs`, clang `diagAppertainsToDecl` and the per-kind
+    handlers; WP-324). One table, applied to the attributes of every
+    declarator (variables, functions, data members, typedefs), every
+    alias-declaration (`using X [[a]] = T;` appertains to the
+    typedef-name, [dcl.typedef]/2) and every class-head and enum-head.
+    An attribute the subject rejects is diagnosed at its token and
+    dropped:
+    - `nodiscard`/`warn_unused_result` ([dcl.attr.nodiscard]/1): the
+      subject must be a class, an enumeration, a typedef, or a
+      declaration whose type is a function type or a pointer or
+      reference to one; otherwise `'X' attribute only applies to
+      Objective-C methods, enums, structs, unions, classes, functions,
+      function pointers, and typedefs` (warning). Then, in order: a
+      function type returning `void` (not a constructor) is `attribute
+      'X' cannot be applied to functions without return value`
+      (warning); the standard `[[nodiscard]]` on a variable or parameter
+      is `'nodiscard' attribute only applies to functions, classes, or
+      enumerations` (warning); a non-GNU spelling on a typedef is
+      `'X' attribute ignored when applied to a typedef; consider using
+      '__attribute__((warn_unused_result))' or
+      '[[clang::warn_unused_result]]' instead` (warning;
+      `__attribute__((warn_unused_result))` there is kept). The GNU
+      spellings (`__attribute__`, `[[gnu::...]]`) are told apart by
+      `AttrNode::is_gnu_spelling` (the `GNU_SCOPED` flag).
+    - The standard `[[noreturn]]` ([dcl.attr.noreturn]/1) on anything
+      but a function is `'noreturn' attribute only applies to
+      functions` (error). The GNU `noreturn` is accepted on a function
+      and on a variable, data member or typedef whose type is a
+      function type, a pointer, reference or member pointer to one, or
+      dependent; on another such declaration it is `'noreturn' only
+      applies to function types; type here is 'T'`, on anything else
+      `'noreturn' attribute only applies to functions and methods`
+      (warnings).
+    - `no_unique_address` ([dcl.attr.nouniqueaddr]/1): only a
+      non-bit-field non-static data member (error `... only applies to
+      non-bit-field non-static data members`). `carries_dependency`:
+      only a function or parameter (error `... only applies to
+      parameters, Objective-C methods, and functions`). `packed`: a
+      class, an enumeration or a data member; otherwise `'packed'
+      attribute ignored` (warning).
+    - `fallthrough`, `likely`, `unlikely` and `assume` are statement
+      attributes: on any declaration `'X' attribute cannot be applied to
+      a declaration` (error).
+    - `alignas`: the `alignas` subjects rule above.
+    - `deprecated`, `maybe_unused` and the GNU attributes kiln models
+      are accepted on all of these (a deprecated alias warns at its
+      uses).
+    Not yet: parameters (`act_on_param_declarator` only checks
+    `alignas`) and namespace-definitions are not run through the table.
+    Test: `tests/conformance/dcl.attr.grammar/attribute-subjects.cpp`.
+  - **Type-position attributes** ([dcl.spec.general]/1, [dcl.ptr]/1,
+    [dcl.array]/1, [dcl.fct]/1; `act_on_type_position_attrs`, clang
+    `err_attribute_not_type_attr`; WP-312, WP-324). An
+    attribute-specifier-seq at the end of a decl-specifier-seq or of an
+    alias-declaration's type-id (`using X = int [[deprecated]];`), after
+    a ptr-operator or array declarator, or after a function declarator
+    (`void f() [[noreturn]];`) appertains to a type. A declaration
+    attribute written there in `[[...]]` or `alignas` syntax is `'X'
+    attribute cannot be applied to types` (error), except that after a
+    function declarator a `[[gnu::X]]` one is `attribute 'X' ignored,
+    because it cannot be applied to a type` (warning); either way it is
+    dropped. `__attribute__((...))` there, and the type attributes
+    (`vector_size`, `ext_vector_type`, `mode`, ...), are kept (spec/parse.md
+    says where they attach).
 
 ### 4.6 Namespaces, linkage specifications, static_assert
 - **Namespaces:**
