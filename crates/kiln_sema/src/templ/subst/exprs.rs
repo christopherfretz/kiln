@@ -859,6 +859,26 @@ impl Substituter<'_, '_, '_> {
                 let o = self.opt_expr(o)?;
                 Ok(self.sema.act_on_throw(o, loc))
             }
+            // [expr.await], [expr.yield]: rebuilt from the operand as
+            // written (clang `TransformDependentCoawaitExpr`,
+            // `TransformCoyieldExpr`); the coroutine is built in the
+            // instantiation's body.
+            ExprKind::DependentCoawaitExpr | ExprKind::CoawaitExpr => {
+                let o = ex(self).coawait_operand(e, &self.sema.ast.lists);
+                let o = self.expr(o)?;
+                Ok(self.sema.build_coawait(o, loc))
+            }
+            ExprKind::CoyieldExpr => {
+                let o = ex(self).coawait_operand(e, &self.sema.ast.lists);
+                let o = match self.braced_source(o) {
+                    Some(b) => {
+                        let l = self.braced_list(b)?;
+                        self.sema.act_on_braced_arg(l)
+                    }
+                    None => self.expr(o)?,
+                };
+                Ok(self.sema.build_coyield(o, loc))
+            }
             ExprKind::CXXFoldExpr => self.fold(e, loc, end),
             ExprKind::SizeOfPackExpr => self.size_of_pack(e, loc, end),
             ExprKind::PackIndexingExpr => self.pack_indexing_expr(e, loc, end),

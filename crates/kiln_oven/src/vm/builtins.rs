@@ -426,6 +426,37 @@ impl Oven {
         }
     }
 
+    /// `bi::MSG_CHARS`: reads the `n` elements of type `ct` from `p` into
+    /// the message buffer (`Oven::evaluate_chars`; clang
+    /// `EvaluateCharRangeAsString` reads `data[i]` for each `i < n`).
+    pub(super) fn bi_msg_chars(&mut self, n: u128, mut p: u64, ct: OTy) -> Result<(), Fault> {
+        let mut out = std::mem::take(&mut self.msg_chars);
+        out.clear();
+        let mut r = Ok(());
+        let mut i = 0u128;
+        while i < n {
+            if i > 0 {
+                match self.ptr_add(p, 1, ct) {
+                    Ok(q) => p = q,
+                    Err(f) => {
+                        r = Err(f);
+                        break;
+                    }
+                }
+            }
+            match self.load(p, ct, ak::READ) {
+                Ok(v) => out.push(v as u8),
+                Err(f) => {
+                    r = Err(f);
+                    break;
+                }
+            }
+            i += 1;
+        }
+        self.msg_chars = out;
+        r
+    }
+
     /// `memcmp` (`wide` false: only arrays of narrow character types,
     /// compared as unsigned bytes) and `wmemcmp` (as `wchar_t`); with
     /// `str`, `strcmp`/`strncmp`/`wcscmp`/`wcsncmp`: any element type, and

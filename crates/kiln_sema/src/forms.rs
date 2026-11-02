@@ -295,6 +295,7 @@ impl Sema<'_, '_> {
     /// `T` (`void()` is a void prvalue; a class `T` is constructed by
     /// [`Sema::value_init_class_temporary`]).
     pub fn act_on_value_init_cast(&mut self, ty: QualType, loc: Loc, rparen: Loc) -> ExprId {
+        let ty = self.auto_cast_type(ty, &[], None, loc);
         let ty = self.ctad_cast_type(ty, &[], loc);
         if self.is_error_type(ty) {
             return self.recover(ty, &[], loc);
@@ -329,7 +330,7 @@ impl Sema<'_, '_> {
         let ty = if self.is_ctad_placeholder(ty) {
             self.act_on_ctad_list_cast_type(ty, l, loc)
         } else {
-            ty
+            self.auto_cast_type(ty, &[], Some(l), loc)
         };
         if self.is_error_type(ty) {
             let flat = Self::list_exprs(l);
@@ -434,6 +435,7 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) || args.iter().any(|&a| self.is_err_expr(a)) {
             return self.recover_dropping_braced(ty, args, loc);
         }
+        let ty = self.auto_cast_type(ty, args, None, loc);
         let ty = self.ctad_cast_type(ty, args, loc);
         if self.is_error_type(ty) {
             return self.recover_dropping_braced(ty, args, loc);
@@ -594,5 +596,104 @@ impl Sema<'_, '_> {
         } else {
             None
         }
+    }
+
+    /// `auto(x)` / `auto{x}` ([expr.type.conv]/1, P0849): the type of a
+    /// functional cast whose type is the placeholder `ty`, deduced as for
+    /// `auto v(x);` (so the decayed type of `x`: a prvalue decay-copy);
+    /// any other `ty` unchanged. `args` are the parenthesized operands
+    /// (`list` the braced-init-list for `auto{...}`). The error type after
+    /// clang's `BuildCXXTypeConstructExpr` diagnostics at `loc`: `auto`
+    /// before C++23 and `decltype(auto)` are not allowed here, the
+    /// initializer must be one expression and not a braced list. A
+    /// type-dependent operand keeps `ty` (deduced at instantiation).
+    pub(crate) fn auto_cast_type(
+        &mut self,
+        ty: QualType,
+        args: &[ExprId],
+        list: Option<&InitList>,
+        loc: Loc,
+    ) -> QualType {
+        use kiln_ast::types::{AutoKeyword, TypeView};
+        let TypeView::Auto { keyword, deduced: None, concept: None, .. } =
+            self.ast.types.view(ty.ty())
+        else {
+            return ty;
+        };
+        let decltype_auto = keyword == AutoKeyword::DecltypeAuto;
+        if decltype_auto || self.std < kiln_lex::Std::Cxx23 {
+            // clang `err_auto_not_allowed` ("here").
+            let msg = self
+                .diag(DiagId::sema_auto_not_allowed, loc)
+                .arg(u8::from(decltype_auto))
+                .arg(crate::templ::ctad_site::site::HERE);
+            self.emit(msg);
+            return QualType::ERROR;
+        }
+        let (items, nested): (Vec<ExprId>, Option<Loc>) = match list {
+            Some(l) => {
+                let mut v = Vec::new();
+                let mut nested = None;
+                for it in &l.items {
+                    match &it.value {
+                        InitValue::Expr(e) => v.push(*e),
+                        InitValue::List(n) => {
+                            nested.get_or_insert(n.lbrace);
+                        }
+                    }
+                }
+                (v, nested)
+            }
+            None => (args.to_vec(), None),
+        };
+        let n = list.map_or(args.len(), |l| l.items.len());
+        let name = self.ty_arg(ty);
+        let fail = if n == 0 {
+            Some(self.diag(DiagId::sema_auto_expr_init_no_expression, loc).arg(name.clone()))
+        } else if n > 1 {
+            let second = match list {
+                Some(l) => match &l.items[1].value {
+                    InitValue::Expr(e) => self.ast.exprs.get(*e).loc(),
+                    InitValue::List(x) => x.lbrace,
+                },
+                None => self.ast.exprs.get(args[1]).loc(),
+            };
+            Some(
+                self.diag(DiagId::sema_auto_expr_init_multiple_expressions, second)
+                    .arg(name.clone()),
+            )
+        } else if let Some(at) = nested {
+            Some(self.diag(DiagId::sema_auto_expr_init_paren_braces, at).arg(1u8).arg(name.clone()))
+        } else if list.is_none() && self.is_braced_arg(args[0]) {
+            let at = self.ast.exprs.get(args[0]).loc();
+            Some(self.diag(DiagId::sema_auto_expr_init_paren_braces, at).arg(0u8).arg(name.clone()))
+        } else {
+            None
+        };
+        if let Some(msg) = fail {
+            self.emit(msg);
+            return QualType::ERROR;
+        }
+        let e = items[0];
+        if self.is_err_expr(e) {
+            return QualType::ERROR;
+        }
+        if self.expr_is_type_dependent(e) {
+            return ty;
+        }
+        let deduced = if self.ast.exprs.get(e).ty() == QualType::OVERLOAD {
+            None
+        } else {
+            self.deduce_auto(ty, &[Some(e)], crate::templ::auto::AutoInit::Expr).ok()
+        };
+        if let Some(t) = deduced {
+            return t;
+        }
+        let msg = self
+            .diag(DiagId::sema_auto_expr_deduction_failure, loc)
+            .arg(name)
+            .arg(self.ty_arg(self.ast.exprs.get(e).ty()));
+        self.emit(msg);
+        QualType::ERROR
     }
 }

@@ -8,7 +8,7 @@ use kiln_ast::strings::StringEncoding;
 use kiln_ast::types::{ExcSpec, Quals, RefQual, TagKeyword, UnaryTransformKind};
 use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_lex::{Punct, TokKind};
+use kiln_lex::{Punct, Std, TokFlags, TokKind};
 use kiln_sema::DeclSite;
 use kiln_sema::declspec::SpecError;
 use kiln_sema::templ::auto::AutoGroup;
@@ -479,8 +479,11 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// `static_assert ( constant-expression [, string-literal] ) ;`
-    /// ([dcl.pre]/10).
+    /// `static_assert ( constant-expression [, static_assert-message] ) ;`
+    /// ([dcl.pre]/10). The message is an unevaluated string literal when
+    /// every token up to the `)` is a string literal without a
+    /// ud-suffix, else a constant-expression (P2741; clang 22's
+    /// lookahead, a C++26 extension before C++26).
     pub(crate) fn parse_static_assert(&mut self) -> Option<DeclId> {
         let loc = self.bump().span.lo;
         let Some(open) = self.expect(Punct::LParen) else {
@@ -494,7 +497,31 @@ impl Parser<'_, '_> {
         };
         let mut msg = None;
         if self.eat(Punct::Comma).is_some() {
-            if self.at_string() {
+            let mut as_expr = false;
+            for i in 0.. {
+                let t = self.peek(i);
+                if t.kind == TokKind::Punct(Punct::RParen) {
+                    break;
+                }
+                if !matches!(t.kind, TokKind::StringLit(_) | TokKind::RawStringLit(_))
+                    || t.flags.contains(TokFlags::UD_SUFFIX)
+                {
+                    as_expr = true;
+                    break;
+                }
+            }
+            if as_expr {
+                if self.std < Std::Cxx26 {
+                    let d = self.s.diag(DiagId::parse_ext_static_assert_user_message, self.loc());
+                    self.emit(d);
+                }
+                msg = self.parse_constant_expr();
+                if msg.is_none() {
+                    self.skip_until(&[Punct::RParen], false, true);
+                    self.skip_to_semi();
+                    return None;
+                }
+            } else if self.at_string() {
                 msg = self.parse_string_literal(true);
             } else {
                 self.error_here(DiagId::parse_expected_string_literal);
@@ -1995,7 +2022,7 @@ impl Parser<'_, '_> {
             }
             let ellipsis = self.eat(Punct::Ellipsis);
             if let Some(e) = ellipsis
-                && self.std < kiln_lex::Std::Cxx26
+                && self.std < Std::Cxx26
             {
                 // P1061: clang `ext_cxx_binding_pack`.
                 let w = self.s.diag(DiagId::parse_ext_binding_pack, e);
@@ -2222,7 +2249,16 @@ impl Parser<'_, '_> {
             }
             p.range = (start, self.prev_end());
             params.push(p);
-            if self.eat(Punct::Ellipsis).is_some() {
+            if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
+                // [dcl.fct]/3, [depr.ellipsis.comma] (C++26, P3176): a
+                // varargs ellipsis without a preceding comma (clang
+                // `warn_deprecated_missing_comma_before_ellipsis`).
+                if self.std >= Std::Cxx26 {
+                    let w = self
+                        .s
+                        .diag(DiagId::parse_deprecated_missing_comma_before_ellipsis, ellipsis);
+                    self.emit(w);
+                }
                 variadic = true;
                 break;
             }
@@ -2322,6 +2358,7 @@ impl Parser<'_, '_> {
     /// `= initializer-clause` after a parameter-declaration
     /// ([dcl.fct.default]/1). At the `=`.
     fn parse_default_argument(&mut self, p: &mut ParamInfo) {
+        p.default_loc = self.loc();
         self.bump();
         // clang rejects a default argument that starts with `({` outright
         // (`err_stmt_expr_in_default_arg`), skipping to the next `,`/`)`.

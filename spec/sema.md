@@ -1578,6 +1578,28 @@ and returns the scope it names:
     `write_arg_list_canonical`). A call to a function template-id keeps
     the explicit arguments on the resolved `DeclRefExpr`.
   - Evaluation notes follow (§8).
+  - **User-generated messages** ([dcl.pre]/10-12, P2741, WP-356). A
+    message that is not a string literal (spec/parse.md §4) must be an
+    object `m` with `m.size()` and `m.data()` (clang
+    `Sema::EvaluateAsString`): no such members is
+    `sema_static_assert_missing_member_function`, not a class at all
+    `sema_static_assert_invalid_message`, and `size()` not convertible
+    to `std::size_t` or `data()` not to `const char*` is
+    `sema_static_assert_invalid_mem_fn_ret_ty`. A dependent message
+    waits for instantiation. When the assertion fails, the message's
+    characters are evaluated in the Oven (`Oven::evaluate_chars`, §8):
+    `size()` then `data()[0..size)`, read as one evaluation; a message
+    that is not a constant expression is
+    `sema_static_assert_message_constexpr` plus the failure notes, and
+    the text is printed as clang prints a string argument (valid UTF-8
+    as is, an unprintable code point as `<U+XXXX>`, a stray byte as
+    `<XX>`). When the assertion holds the message is still evaluated,
+    as clang 22 does, and one that is not constant is
+    `sema_static_assert_message_not_constant`
+    (`-Winvalid-static-assert-message`, an error by default; disabling
+    it skips the evaluation, the operand being unevaluated). Wording
+    follows clang 22 (tests `requires: clang>=22`):
+    `dcl.pre/p2741-static-assert-message*.cpp`.
 
 ### 4.7 Exception specifications (`except.rs`)
 The parser calls these while parsing a function declarator, and stores
@@ -2071,7 +2093,18 @@ diagnostics and IR.
   - In a condition (`DeclaratorContext::Condition`, not an
     init-statement) it warns `ISO C++17 does not permit structured
     binding declaration in a condition` (`-Wbinding-in-condition`) at
-    `[`. Clang 19 does not implement P0963 yet and warns in C++26 too.
+    `[` before C++26 (clang 19's wording; clang 22 calls it a C++2c
+    extension). In C++26 it is valid and silent ([stmt.pre]/4, P0963,
+    WP-356). The condition's value is the decomposed object `e`
+    contextually converted to `bool`, and it is evaluated **before** the
+    bindings are initialized: codegen (`emit_cond_var_decl`, then the
+    condition, then `emit_binding_vars`, clang
+    `MaybeEmitDeferredVarDeclInit`) and the Oven (`cond_bindings`) emit
+    a tuple-like binding's holding variable (its `get` call) after the
+    test, for `if`, `while` and `for`, whatever the outcome. A `switch`
+    condition of class type is not supported (no class-to-integral
+    conversion in `act_on_start_switch`). Tests:
+    `dcl.struct.bind/p0963-binding-condition*.cpp`.
   - Only `static`, `thread_local`, `auto` and cv are allowed
     ([dcl.pre]/6). Another storage class, `constexpr`, `consteval`,
     `constinit` or `inline` is `decomposition declaration cannot be
@@ -3822,6 +3855,53 @@ Each rule names the libc++ test it fixed and its corpus test.
   (`'Box<Q, int>'`) and scoped elsewhere (`'N::Q *'`) (tuple.by.type).
   Test: `tests/conformance/temp.names/substituted-args-unscoped.cpp`.
 
+### 5.24 C++23/C++26 cluster (WP-356)
+
+- **`auto(x)` and `auto{x}`** ([expr.type.conv]/1-2, P0849;
+  `forms.rs`): a functional cast to the placeholder `auto` deduces the
+  type as for `auto v(x);`, so the result is a prvalue decay-copy of
+  `x` (arrays and functions decay, cv dropped). clang's
+  `BuildCXXTypeConstructExpr` diagnostics, at the type: `auto` before
+  C++23 and `decltype(auto)` are `auto not allowed here`; an empty
+  initializer, several expressions and a parenthesized or nested braced
+  list are `sema_auto_expr_init_no_expression`,
+  `sema_auto_expr_init_multiple_expressions` and
+  `sema_auto_expr_init_paren_braces`; a failed deduction
+  is `sema_auto_expr_deduction_failure`. A type-dependent operand keeps
+  the placeholder until instantiation. Tests:
+  `expr.type.conv/p0849-auto-cast*.cpp`.
+- **Placeholder `_`** ([basic.scope.scope]/5, P2169): a declaration
+  named `_` is name-independent when it is a block-scope variable of
+  automatic storage duration, a structured binding not at namespace
+  scope, an init-capture (spec/sema-lambda.md §2) or a non-static data
+  member. Redeclaring such a `_` in the same scope is not a conflict;
+  before C++26 it is `sema_ext_placeholder_var`
+  (`-Wc++26-extensions`). A *use* of `_` that finds more than one is
+  `sema_placeholder_ambiguous` with a `note_placeholder_declared` per
+  declaration (clang `err_reference_to_placeholder_ambiguous`; latest
+  first for unqualified lookup, in source order for member access).
+  A lookup with several results is worded this way when its first
+  declaration in source order is name-independent
+  (`placeholder_ambiguity`). Tests:
+  `basic.scope.scope/p2169-placeholder*.cpp`.
+- **Array comparisons** ([expr.eq]/2, [expr.rel]/2, [depr.array.comp],
+  P2865; `expr.rs`, clang `diagnoseTautologicalComparison`): `==`,
+  `!=`, `<`, `>`, `<=`, `>=` with two operands of array type is, in
+  C++26, `sema_array_comparison_cxx26` (`-Warray-compare-cxx26`, an
+  error by default); in C++20 and C++23 `sema_depr_array_comparison`
+  (`-Wdeprecated-array-compare`), or `sema_array_comparison`
+  (`-Warray-compare`) when that is disabled and before C++20. Then,
+  where run-time behaviour is diagnosed and both operands name
+  non-reference variables, `sema_comparison_always`
+  (`-Wtautological-compare`): distinct arrays compare unequal (`==`
+  false, `!=` true, a relational "a constant"); the same one is a
+  self-comparison. Operands decayed explicitly (`+a`), an array against
+  a pointer, and comparisons in a template instantiation (clang checks
+  the definition only; a dependent array type is not diagnosed) are not
+  affected. Tests: `expr.eq/p2865-array-comparison*.cpp`.
+- P0847 lambdas and P2036: spec/sema-lambda.md §2, §3.1, §4.4. P2360
+  and P3176: spec/parse.md. P0963: §4.9. P2741: §4.6.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - copy- and direct-initialization of scalars, through the implicit
@@ -4656,6 +4736,147 @@ wide signed bit-field reports `... to a one-bit wide bit-field ...`
   (`-Wbitfield-enum-conversion`) and `-Wsigned-enum-bitfield` are not
   implemented.
 
+### 7.13 Coroutines (`coroutine.rs`, WP-351)
+
+Clang's `SemaCoroutine.cpp`, rule for rule; every error below has
+clang's wording (the ids are the `sema_coroutine_*` family).
+
+**[dcl.fct.def.coroutine]/1: what is a coroutine.** The first
+`co_await`, `co_yield` or `co_return` of a function body makes the
+function a coroutine (`FnSpec::is_coroutine`, a LATE bit) and records
+the keyword for `function is a coroutine due to use of '<kw>' here`.
+Context checks, in clang's order (`isValidCoroutineContext`):
+
+- outside a function body (a namespace-scope or default-argument
+  initializer, a class member initializer): `'<kw>' cannot be used
+  outside a function`;
+- in a constructor, a destructor, `main`, a `constexpr` or `consteval`
+  function, a function with a deduced return type still undeduced, or
+  a C-variadic function: `'<kw>' cannot be used in <a constructor|...>`.
+  A lambda call operator that is constexpr only implicitly
+  ([expr.prim.lambda.closure]/5) silently stops being constexpr;
+- `co_await`/`co_yield` only ([expr.await]/2): in an unevaluated
+  operand, `'<kw>' cannot be used in an unevaluated context`; inside a
+  handler of a try-block (up to the function scope), `'<kw>' cannot be
+  used in the handler of a try block`.
+- A `return` statement in a coroutine is `return statement not allowed
+  in coroutine; did you mean 'co_return'?` (reported at the body's end,
+  with the coroutine note).
+
+**The promise ([dcl.fct.def.coroutine]/4-5).** At the first keyword (not
+in a template pattern) Sema declares the parameter copies, then the
+promise variable `__promise` of type
+`std::coroutine_traits<R, P...>::promise_type`. `R` is the declared
+return type; `P...` are the parameter types, preceded by the implicit
+object parameter's type (`cv C&`, or `cv C&&` with a `&&`
+ref-qualifier) for a non-static member function, lambda call operators
+included. Errors: `std::coroutine_traits` not found (`std::coroutine_
+traits type was not found; include <coroutine> before defining a
+coroutine`) or not a class template; an incomplete specialization
+(`missing definition of specialization`); no member `promise_type`
+(`this function cannot be a coroutine: 'std::coroutine_traits<R>' has
+no member named 'promise_type'`); a promise type that is not a class or
+is incomplete. A lookup that already failed with an error type (e.g.
+`typename R::promise_type` inside the primary template) adds nothing.
+The promise is direct-initialized from `*this` (a member function that
+is not a lambda call operator) followed by the parameter copies when
+that initialization is valid, else default-initialized
+([dcl.fct.def.coroutine]/5.7, as clang).
+
+**Parameter copies ([dcl.fct.def.coroutine]/13).** Each parameter of
+non-reference type gets a local copy initialized from an xvalue of the
+parameter (`std::move`); references are not copied. Uses of a parameter
+in the body refer to the copy (codegen remaps them, spec/codegen.md
+§7c).
+
+**Suspend points ([dcl.fct.def.coroutine]/5).** At the body start Sema
+builds the implicit `co_await __promise.initial_suspend()` and
+`co_await __promise.final_suspend()` (implicit `CoawaitExpr`s located at
+the function). `co_await __promise.final_suspend()` must not be
+potentially-throwing ([dcl.fct.def.coroutine]/15): every called function
+in it, and the destructor of every class-type result, must be
+non-throwing (`__builtin_coro_resume` excepted); else `the expression
+'co_await __promise.final_suspend()' is required to be non-throwing`
+with one `must be declared with 'noexcept'` note per offending function,
+at the end of its definition (the closing `}`) or, for a declaration
+without body, at its name (clang: the declarator's end; see Open
+questions).
+
+**`co_await e` ([expr.await]/3-5).** In order:
+
+1. `e` is transformed by `__promise.await_transform(e)` when the promise
+   has any member named `await_transform` (a failed call adds `call to
+   'await_transform' implicitly required by 'co_await' here`).
+2. The awaiter is the result of the best `operator co_await` (member
+   or non-member, found by ordinary unqualified lookup and ADL, through
+   operator overload resolution), else the operand itself.
+3. A prvalue awaiter is materialized; an lvalue `OpaqueValueExpr` stands
+   for it in the three calls `await_ready()` (contextually converted to
+   `bool`, its own full-expression), `await_suspend(h)` with `h` =
+   `std::coroutine_handle<P>::from_address(__builtin_coro_frame())`, and
+   `await_resume()` (the expression's type and value category).
+4. `await_suspend` returning `void` or `bool` is used as is; returning a
+   class (a `coroutine_handle<Z>`) the suspend expression becomes
+   `await_suspend(h).address()` (symmetric transfer,
+   `SuspendKind::Handle`); anything else is `return type of
+   'await_suspend' is required to be 'void' or 'bool' (have <T>)`.
+
+`co_yield e` ([expr.yield]/1) is `co_await __promise.yield_value(e)`
+(steps 2-4, no `await_transform`); a braced-init-list operand is a
+single argument. The whole expression is a `CoyieldExpr` with the same
+parts.
+
+**`co_return` ([stmt.return.coroutine]).** `co_return;` and `co_return
+e;` with `e` of type `void` call `__promise.return_void()` (after
+evaluating `e`); otherwise `__promise.return_value(e)` (a braced list is
+the argument as written). An operand naming an implicitly movable
+entity is tried as an xvalue first ([class.copy.elision]/3). A promise
+declaring both `return_value` and `return_void` is `the coroutine
+promise type '<P>' declares both 'return_value' and 'return_void'` with
+two `member '<m>' first declared here` notes. Flowing off the end
+([stmt.return.coroutine]/3) is an implicit `co_return;` when the promise
+has `return_void`; otherwise `-Wreturn-type` warns `non-void coroutine
+does not return a value` (`... in all control paths` when only some
+paths fall off).
+
+**The body (`complete_coroutine_body`, clang
+`CheckCompletedCoroutineBody`).** At the end of a non-template
+coroutine's body Sema replaces the body with a `CoroutineBodyStmt`
+(spec/ast.md §6) holding, as clang builds them:
+
+- `get_return_object()`, either initializing the returned object
+  directly (same type) or a `__coro_gro` variable converted at the
+  first return to the caller; `get_return_object()` returning `void`
+  for a non-void function is an error;
+- `unhandled_exception()` (required with exceptions on: `<P> is required
+  to declare the member 'unhandled_exception()'`), the implicit
+  fallthrough `co_return;`;
+- the frame allocation ([dcl.fct.def.coroutine]/9-11): the promise
+  class's `operator new` is looked up first; when it exists the call
+  tries the placement form `(size, [*this,] params...)` then `(size)`;
+  otherwise the global `operator new(size_t)`. When the promise declares
+  `get_return_object_on_allocation_failure()` (which must be a static
+  member function), the allocation must be non-throwing: a global or
+  missing `operator new` becomes `::operator new(size_t, std::nothrow)`
+  (errors: `std::nothrow was not found...`, `unable to find
+  '::operator new(size_t, nothrow_t)'`, `<new> is required to have a
+  non-throwing noexcept specification`), and the failure path returns
+  `P::get_return_object_on_allocation_failure()`. A class `operator new`
+  that fits neither form is `'operator new' provided by <P> is not
+  usable with the function signature of '<f>'`;
+- the deallocation: the promise class's usual `operator delete`, else
+  the global one, the sized form `(ptr, size)` preferred.
+
+Any failure marks the function invalid and keeps the plain body; codegen
+never sees a half-built coroutine.
+
+**Templates.** In a template pattern Sema checks only the context; it
+keeps `DependentCoawaitExpr` (operand only), a one-operand
+`CoyieldExpr` and a `CoreturnStmt` without promise call. Instantiation
+rebuilds each through `build_coawait`/`build_coyield`/`build_coreturn`,
+which builds the coroutine as above in the instantiated function.
+Coroutine lambdas follow the same rules (spec/sema-lambda.md).
+
 ## 8. Constant evaluation (`oven_bridge.rs`)
 
 Sema does no constant evaluation of its own: every constant it needs
@@ -4869,8 +5090,9 @@ the P2996R13 wording.
 - **Templates:** templates, concepts, packs; `auto` and `decltype`
   beyond the M2 basics. Design: spec/sema-templates.md (the type-trait
   list, including the clang 22 traits of WP-263, is its §9.1).
-- **Other language features:** lambdas, coroutines, reflection,
-  contracts. (Exceptions landed with WP-100: §5.5, §7.5.)
+- **Other language features:** lambdas, reflection, contracts.
+  (Exceptions landed with WP-100: §5.5, §7.5; coroutines with WP-351:
+  §7.13.)
 - **WP-064 follow-ups:**
   - prototype scope (§4.3)
   - `dynamic_cast` and polymorphic `typeid`
@@ -4922,6 +5144,10 @@ the P2996R13 wording.
 - AST goldens under `tests/conformance/ast/`.
 
 ## 12. Open questions
+- **Coroutine note location (WP-351):** the `must be declared with
+  'noexcept'` note of §7.13 points at a bodiless declaration's name;
+  clang points at the declarator's end (the `)` or exception
+  specification), which `FunctionData` does not record.
 - **Additive `kiln_ast` APIs added by WP-048:**
   - `label_stmt`/`goto_stmt`
   - `set_non_odr_use`, `replace_enumerator_init`, `mark_bitfield`

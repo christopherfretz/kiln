@@ -122,6 +122,7 @@ sema_partial_spec_fully_specialized = Error (1) "partial specialization of '{0}'
 sema_partial_spec_not_deducible = WarningError [UnusablePartialSpecialization] (2) "{0:class|variable} template partial specialization contains {1:a template parameter|template parameters} that cannot be deduced; this partial specialization will never be used";
 sema_partial_spec_not_more_specialized = WarningError [InvalidPartialSpecialization] (1) "{0:class|variable} template partial specialization is not more specialized than the primary template";
 sema_partial_spec_redecl_scope = Error (2) "class template partial specialization of '{0}' not in a namespace enclosing '{1}'";
+sema_placeholder_ambiguous = Error (1) "ambiguous reference to placeholder '{0}', which is defined multiple times";
 sema_placeholder_constraints_not_satisfied = Error (2) "deduced type {0} does not satisfy {1}";
 sema_placement_new_no_operator = Error (1) "no matching {0} function for non-allocating placement new expression; include <new>";
 // ----- WP-211 (GNU _Complex)
@@ -179,6 +180,7 @@ sema_reorder_ctor_multiple = WarningOff [ReorderCtor] (0) "initializer order doe
 // spec/sema-class.md §5.6).
 sema_ret_stack_addr = Warning [ReturnStackAddress] (3) "{0:address of|reference to} stack memory associated with {1:local variable|parameter} {2} returned";
 sema_return_has_expr = Error (1) "void function '{0}' should not return a value";
+sema_return_in_coroutine = Error (0) "return statement not allowed in coroutine; did you mean 'co_return'?";
 sema_return_in_ctor_handler = Error (0) "return in the catch of a function try block of a constructor is illegal";
 sema_return_init_list = Error (1) "void function '{0}' must not return a value";
 sema_return_local_temp_addr = Warning [ReturnStackAddress] (0) "returning address of local temporary object";

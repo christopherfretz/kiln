@@ -488,6 +488,13 @@ impl Fir {
         }
     }
 
+    /// Replaces argument `idx` of call `i` (clang `setArgOperand`).
+    pub fn set_call_arg(&mut self, i: u32, idx: usize, v: V) {
+        if let Op::Call { args, .. } = &mut self.insts[i as usize].op {
+            args[idx] = v;
+        }
+    }
+
     /// Adds a case to switch `i`.
     pub fn add_switch_case(&mut self, i: u32, v: V, d: Blk) {
         if let Op::Switch { cases, .. } = &mut self.insts[i as usize].op {
@@ -588,6 +595,34 @@ impl Fir {
         let insts = &mut self.blocks[b.0 as usize].insts;
         let at = insts.len().saturating_sub(1);
         insts.insert(at, n);
+        V::I(n)
+    }
+
+    /// Inserts `op` where LLVM's `CGBuilderTy(Inst->getParent(),
+    /// std::next(Inst))` would after the instruction `at`: right after it,
+    /// or for an `invoke` at the first insertion point of its normal
+    /// destination (after its phis and landing pad).
+    pub fn insert_after(&mut self, at: u32, op: Op, ty: TypeId) -> V {
+        let (b, pos) = if let Op::Invoke { normal, .. } = self.insts[at as usize].op {
+            let insts = &self.blocks[normal.0 as usize].insts;
+            let pos = insts
+                .iter()
+                .position(|&x| {
+                    !matches!(self.insts[x as usize].op, Op::Phi { .. } | Op::LandingPad { .. })
+                })
+                .unwrap_or(insts.len());
+            (normal, pos)
+        } else {
+            let b = self.insts[at as usize].block.expect("insertion after a live instruction");
+            let insts = &self.blocks[b.0 as usize].insts;
+            (b, insts.iter().position(|&x| x == at).expect("instruction in its block") + 1)
+        };
+        let n = self.insts.len() as u32;
+        for s in op.successors() {
+            self.blocks[s.0 as usize].uses += 1;
+        }
+        self.insts.push(Inst { op, ty, block: Some(b), md: Vec::new() });
+        self.blocks[b.0 as usize].insts.insert(pos, n);
         V::I(n)
     }
 

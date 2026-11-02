@@ -3,7 +3,7 @@
 // when the assertion fails. WP-185 feature probe.
 //@ expect: compile-fail
 //@ strict-diags
-//@ xfail(kiln): static_assert accepts only a string literal message
+// (WP-356: implemented.)
 //@ diag: 16:15 error "static assertion failed: kiln-msg"
 struct Msg {
   const char* p;

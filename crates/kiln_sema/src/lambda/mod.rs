@@ -135,6 +135,10 @@ pub(crate) struct LambdaScope {
     pub(crate) cap_tys: Vec<QualType>,
     /// The init-captures whose variables the body declares.
     init_caps: Vec<capture::InitCapture>,
+    /// The init-capture variables by name, in scope from the
+    /// introducer on (P2036: in the *lambda-declarator* too; the body
+    /// declares them in its own scope).
+    pub(crate) init_cap_vars: Vec<(Symbol, DeclId)>,
 }
 
 impl Sema<'_, '_> {
@@ -174,8 +178,10 @@ impl Sema<'_, '_> {
             call_template: None,
             cap_tys: Vec::new(),
             init_caps: Vec::new(),
+            init_cap_vars: Vec::new(),
         });
         self.act_on_explicit_captures(id, intro);
+        self.create_init_capture_vars(id);
         id
     }
 
@@ -205,6 +211,33 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The default arguments of lambda parameters `params`, checking
+    /// that every parameter after one with a default argument has one
+    /// too ([dcl.fct.default]/4).
+    fn lambda_default_args(&mut self, params: &[ParamInfo]) -> Vec<Option<ExprId>> {
+        if let Some(first) = params.iter().position(|p| p.default_arg != DefaultArg::None) {
+            for p in params.iter().skip(first + 1) {
+                if p.default_arg != DefaultArg::None || p.invalid {
+                    continue;
+                }
+                let msg = match p.name {
+                    Some((n, _)) => self
+                        .diag(DiagId::sema_missing_default_arg, p.loc)
+                        .arg(self.ast.symbols().as_str(n).to_string()),
+                    None => self.diag(DiagId::sema_missing_default_arg_unnamed, p.loc),
+                };
+                self.emit(msg);
+            }
+        }
+        params
+            .iter()
+            .map(|p| match p.default_arg {
+                DefaultArg::Parsed(e) => Some(e),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The *lambda-declarator* `d` (a member declarator whose single
     /// function chunk holds the parameters, the *noexcept-specifier* and
     /// the trailing return type) with specifiers `specs`: declares the
@@ -228,14 +261,19 @@ impl Sema<'_, '_> {
             self.take_innermost_head();
         }
         let is_static = specs.static_.is_some();
-        // [expr.prim.lambda.closure]/5: `const` unless `mutable` or
-        // `static`.
-        let quals = if specs.mutable.is_some() || is_static { Quals::NONE } else { Quals::CONST };
-        let mut params: Vec<ParamInfo> = Vec::new();
+        let params: Vec<ParamInfo> =
+            d.function_params().map(<[ParamInfo]>::to_vec).unwrap_or_default();
+        let explicit_obj = self.lambda_explicit_object(&params, specs);
+        // [expr.prim.lambda.closure]/5: `const` unless `mutable`,
+        // `static` or with an explicit object parameter.
+        let quals = if specs.mutable.is_some() || is_static || explicit_obj {
+            Quals::NONE
+        } else {
+            Quals::CONST
+        };
         for c in &mut d.chunks {
-            if let Chunk::Function { quals: q, params: p, .. } = c {
+            if let Chunk::Function { quals: q, .. } = c {
                 *q = quals;
-                params.clone_from(p);
             }
         }
         let base = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
@@ -262,6 +300,9 @@ impl Sema<'_, '_> {
         if is_static {
             spec = spec.with_storage(FnStorage::Static);
         }
+        if explicit_obj {
+            spec = spec.with_explicit_object(true);
+        }
         let h = DeclHead::new(closure, DeclName::operator(OverloadedOperator::Call), lbracket)
             .access(Access::Public);
         if generic {
@@ -275,33 +316,7 @@ impl Sema<'_, '_> {
         if let Some(top) = self.lambdas.last_mut() {
             top.call_template = call_template;
         }
-        let defaults: Vec<Option<ExprId>> = params
-            .iter()
-            .map(|p| match p.default_arg {
-                DefaultArg::Parsed(e) => Some(e),
-                _ => None,
-            })
-            .collect();
-        // [dcl.fct.default]/4: every parameter after one with a default
-        // argument has one too.
-        if let Some(first) = params.iter().position(|p| p.default_arg != DefaultArg::None) {
-            for p in params.iter().skip(first + 1) {
-                if p.default_arg != DefaultArg::None || p.invalid {
-                    continue;
-                }
-                let msg = match p.name {
-                    Some((n, _)) => self
-                        .diag(DiagId::sema_missing_default_arg, p.loc)
-                        .arg(self.ast.symbols().as_str(n).to_string()),
-                    None => self.diag(DiagId::sema_missing_default_arg_unnamed, p.loc),
-                };
-                self.emit(msg);
-            }
-        }
-        if let Some(l) = params.iter().find_map(|p| p.explicit_object) {
-            // P0847 lambdas (`[](this auto& self)`): a gap.
-            self.unsupported("explicit object parameters in a lambda", l);
-        }
+        let defaults = self.lambda_default_args(&params);
         self.create_params(f, &params, &defaults);
         let mut attrs = specs.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
@@ -320,8 +335,56 @@ impl Sema<'_, '_> {
             l.explicit_result =
                 d.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
         }
+        // A non-template call operator's object parameter type is checked
+        // here, once, at the parameter (clang); a specialization's at
+        // each call.
+        if explicit_obj
+            && call_template.is_none()
+            && let Some(p) = params.first()
+        {
+            let at = p.name.map_or(p.loc, |(_, l)| l);
+            self.check_lambda_explicit_object_type(f, at);
+        }
         self.number_lambda(id, closure, f);
         self.begin_lambda_body(f, specs.constexpr.is_some());
+    }
+
+    /// Whether the call operator of a lambda with parameters `params` and
+    /// specifiers `specs` is an explicit object member function
+    /// ([expr.prim.lambda.closure]/5, P0847): its first parameter is an
+    /// explicit object parameter. Diagnoses one anywhere else, in a
+    /// `static` or `mutable` lambda, with a default argument or as a pack
+    /// (clang `CheckExplicitObjectLambda`, `ActOnLambdaClosureParameters`).
+    fn lambda_explicit_object(&mut self, params: &[ParamInfo], specs: &LambdaSpecifiers) -> bool {
+        for p in params.iter().skip(1) {
+            if p.explicit_object.is_some() {
+                let m = self.diag(DiagId::sema_explicit_object_param_not_first, p.loc).arg(1u8);
+                self.emit(m);
+            }
+        }
+        let Some(first) = params.first() else { return false };
+        let Some(this_loc) = first.explicit_object else { return false };
+        if specs.static_.is_some() {
+            let m =
+                self.diag(DiagId::sema_explicit_object_param_nonmember, this_loc).arg(0u8).arg(1u8);
+            self.emit(m);
+            return false;
+        }
+        if specs.mutable.is_some() {
+            self.error(DiagId::sema_explicit_object_lambda_mutable, this_loc);
+        }
+        match first.default_arg {
+            DefaultArg::None => {}
+            DefaultArg::Unparsed(l, _) => self.error(DiagId::sema_explicit_object_param_default, l),
+            DefaultArg::Parsed(e) => {
+                let l = if first.default_loc.is_valid() { first.default_loc } else { self.eloc(e) };
+                self.error(DiagId::sema_explicit_object_param_default, l);
+            }
+        }
+        if matches!(self.ast.types.view(first.ty.ty()), TypeView::PackExpansion { .. }) {
+            self.error(DiagId::sema_explicit_object_param_pack, this_loc);
+        }
+        true
     }
 
     /// Before the delayed default argument of parameter `p` is parsed: a
@@ -523,7 +586,7 @@ impl Sema<'_, '_> {
         let top = self.lambdas.pop()?;
         if top.body_open {
             if let Some((b, rbrace)) = body {
-                self.end_function_body(b, rbrace);
+                let b = self.end_function_body(b, rbrace);
                 if let Some(f) = top.call_op {
                     let _ = self.builder().set_body(f, b);
                 }
@@ -688,7 +751,9 @@ impl Sema<'_, '_> {
         self.ast.templates.pattern_next = list.is_some();
         let conv = self.builder().function(h, DeclKind::CXXConversion, conv_ty, spec, None);
         self.wrap_thunk_template(conv, list);
-        if self.is_static_method(call_op) {
+        // The conversion of a static or explicit object call operator
+        // returns its address ([expr.prim.lambda.closure]/8, /11).
+        if self.is_static_method(call_op) || self.has_explicit_object(call_op) {
             return;
         }
         let mut spec = FnSpec::new().with_inline(true).with_storage(FnStorage::Static);
@@ -794,6 +859,12 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_body(target, body);
         }
         self.mark_function_referenced(target, loc);
+    }
+
+    /// True if the body of call operator `f` is open and its lambda was
+    /// declared `constexpr` or `consteval` explicitly.
+    pub(crate) fn lambda_explicitly_constexpr(&self, f: DeclId) -> bool {
+        self.lambdas.iter().rev().any(|t| t.call_op == Some(f) && t.explicit_constexpr)
     }
 
     /// True if `f` is the function call operator (or its template
