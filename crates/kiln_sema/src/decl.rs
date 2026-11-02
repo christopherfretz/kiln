@@ -1292,14 +1292,23 @@ impl Sema<'_, '_> {
         ty = self.apply_vector_attrs(ty, &mut attrs, false);
         let declared = ty;
         ty = self.adjust_param_type(ty);
-        let original_ty = (ty != declared).then_some(declared);
+        let mut original_ty = (ty != declared).then_some(declared);
         if let Some(l) = d.ellipsis {
             // [dcl.fct]/16, [temp.variadic]/5: a function parameter pack
             // `T... x` names a pack; else clang's
             // `err_function_parameter_pack_without_parameter_packs`, which
             // prints the declared (unadjusted) type and drops the `...`.
             if self.ast.types.flags(declared.ty()).contains(TypeFlags::UNEXPANDED_PACK) {
-                ty = self.act_pack_expansion_type(ty, l);
+                // An array whose bound alone names the pack (`int
+                // ...a[Ns]`) expands unadjusted; each element decays when
+                // the pack is substituted, as in clang.
+                let base = if self.has_unexpanded_pack(ty) {
+                    ty
+                } else {
+                    original_ty = None;
+                    declared
+                };
+                ty = self.act_pack_expansion_type(base, l);
             } else if !self.is_error_type(declared) {
                 let m =
                     self.diag(DiagId::sema_param_pack_without_packs, l).arg(self.ty_arg(declared));

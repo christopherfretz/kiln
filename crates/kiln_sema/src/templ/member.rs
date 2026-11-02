@@ -299,10 +299,8 @@ impl Substituter<'_, '_, '_> {
                 DeclKind::NonTypeTemplateParm => {
                     let t = self.decl_ty(p);
                     let (ty, expanded) = self.nttp_param_ty(t, pi.pack, n.loc())?;
-                    let np = self
-                        .sema
-                        .builder()
-                        .non_type_template_parm(h, ty, depth, pi.index, pi.pack);
+                    let np =
+                        self.sema.builder().non_type_template_parm(h, ty, depth, pi.index, pi.pack);
                     if let Some(l) = expanded {
                         self.sema.templ.expanded_packs.insert(np, l);
                     }

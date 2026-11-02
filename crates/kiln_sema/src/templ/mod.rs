@@ -782,12 +782,7 @@ impl Sema<'_, '_> {
     /// parameter pack of a plain type (`int... a`).
     pub(crate) fn is_nttp_pack_expansion(&self, p: DeclId) -> bool {
         self.kind_of(p) == DeclKind::NonTypeTemplateParm
-            && self
-                .ast
-                .decls
-                .get(p)
-                .ty()
-                .is_some_and(|t| pack::type_pattern(self, t).is_some())
+            && self.ast.decls.get(p).ty().is_some_and(|t| pack::type_pattern(self, t).is_some())
     }
 
     /// The innermost untaken head the declaration being declared consumes

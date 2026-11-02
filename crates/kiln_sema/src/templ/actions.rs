@@ -1866,24 +1866,32 @@ impl Sema<'_, '_> {
         self.ast.types.flags(t.ty()).contains(TypeFlags::UNEXPANDED_PACK)
     }
 
-    /// Whether the parameter type `t` of a declarator, looking through
-    /// its own pack expansion (`Ts... a`), names an unexpanded pack (clang's
-    /// `containsUnexpandedParameterPacks(Declarator&)`).
-    pub fn declarator_has_unexpanded_pack(&self, t: QualType) -> bool {
-        match self.ast.types.view(t.ty()) {
-            TypeView::PackExpansion { pattern, .. } => self.has_unexpanded_pack(pattern),
-            _ => self.has_unexpanded_pack(t),
+    /// Whether declarator `d` with decl-specifiers `ds` names an
+    /// unexpanded pack, judged syntactically before the declarator's type
+    /// is built (clang's `containsUnexpandedParameterPacks(Declarator&)`):
+    /// the named type of `ds`, an array bound, a function chunk's
+    /// parameter types, `noexcept` operand or trailing return type. A
+    /// pack the declarator itself expands (`Ts... a`) counts, as in clang.
+    pub fn declarator_has_unexpanded_pack(
+        &self,
+        ds: &crate::declspec::DeclSpec,
+        d: &crate::declspec::Declarator,
+    ) -> bool {
+        use crate::declspec::Chunk;
+        let expr_pack =
+            |e: ExprId| self.ast.exprs.get(e).deps().contains(ExprDeps::UNEXPANDED_PACK);
+        if ds.named.is_some_and(|t| self.has_unexpanded_pack(t)) {
+            return true;
         }
-    }
-
-    /// The function parameter `p` made a pack by a misplaced `...` at
-    /// `ellipsis` after its declarator (`Ts a...`, clang's
-    /// `DiagnoseMisplacedEllipsisInDeclarator` recovery).
-    pub fn make_param_pack(&mut self, p: &mut crate::declspec::ParamInfo, ellipsis: Loc) {
-        if self.has_unexpanded_pack(p.ty) {
-            p.ty = self.act_pack_expansion_type(p.ty, ellipsis);
-            p.ref_loc = Loc::INVALID;
-        }
+        d.chunks.iter().any(|c| match c {
+            Chunk::Array { size, .. } => size.is_some_and(expr_pack),
+            Chunk::Function { params, exc, trailing, .. } => {
+                params.iter().any(|p| self.has_unexpanded_pack(p.ty))
+                    || matches!(*exc, kiln_ast::types::ExcSpec::NoexceptExpr { expr, .. } if expr_pack(expr))
+                    || trailing.is_some_and(|(t, _)| self.has_unexpanded_pack(t))
+            }
+            _ => false,
+        })
     }
 
     /// The profile of a value-dependent expression `e` (for dependent

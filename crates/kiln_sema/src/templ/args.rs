@@ -508,7 +508,8 @@ impl Sema<'_, '_> {
         // `CheckNonTypeTemplateParameterType(NTTPType, NTTP->getLocation())`).
         // An element of an expanded pack has its own, known type.
         let elem = self.templ.nttp_elem.take();
-        let declared = elem.unwrap_or_else(|| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR));
+        let declared =
+            elem.unwrap_or_else(|| self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR));
         let substituted = elem.is_none() && self.ast.types.is_dependent(declared);
         if substituted {
             let poi = self.inst.template_id_loc.unwrap_or(at);
