@@ -3838,7 +3838,15 @@ clang `CheckExtVectorComponent`, `getEncodedElementAccess`):
   canonical types, keeping the written arguments as sugar, so it is the
   type the in-class declaration named. When they are still dependent,
   the template-id is formed again from the rebuilt arguments, defaults
-  included (stl_tree.h:2107). Tests:
+  included (stl_tree.h:2107). The rebuild also looks through `*`, `&`
+  and `&&` around such a member (`pair<typename X<T>::ptr&, bool>`,
+  libc++ `__tree::__find_equal`, WP-398). A template-id is dependent only
+  when a *canonical* argument is dependent ([temp.dep.type]/8, clang's
+  `anyDependentTemplateArguments`): `pair<nbp>` with `using nbp =
+  rebind<T, int>` (an alias of a dependent alias template specialization
+  naming `int*`) is the concrete `pair<int*>`, written arguments kept as
+  sugar. Tests:
+  `tests/conformance/temp.dep.type/p8-out-of-line-nondependent-alias-arg.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return.cpp`,
   `tests/conformance/temp.mem/libstdcxx-out-of-line-current-inst-return-args.cpp`.
   A qualifier `typename X<P...>::template M<A...>::m` (or the type
