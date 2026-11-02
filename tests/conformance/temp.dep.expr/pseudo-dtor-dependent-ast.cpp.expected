@@ -1,0 +1,22 @@
+TranslationUnitDecl
+`-FunctionTemplateDecl f
+  |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+  `-FunctionDecl f 'void (T *, T)'
+    |-ParmVarDecl referenced p 'T *'
+    |-ParmVarDecl referenced t 'T'
+    `-CompoundStmt
+      |-CallExpr 'void'
+      | `-CXXPseudoDestructorExpr '<bound member function type>'
+      |   `-ImplicitCastExpr 'T *' <LValueToRValue>
+      |     `-DeclRefExpr 'T *' lvalue ParmVar 'p' 'T *'
+      |-ParenExpr 'void'
+      | `-CallExpr 'void'
+      |   `-CXXPseudoDestructorExpr '<bound member function type>'
+      |     `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+      |-DeclStmt
+      | `-TypeAliasDecl D 'decltype(p->~T())'
+      `-CStyleCastExpr 'void' <ToVoid>
+        `-UnaryOperator '<dependent type>' prefix '&' cannot overflow
+          `-CallExpr 'void'
+            `-CXXPseudoDestructorExpr '<bound member function type>'
+              `-DeclRefExpr 'T' lvalue ParmVar 't' 'T'

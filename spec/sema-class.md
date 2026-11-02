@@ -2098,6 +2098,17 @@ access, out-of-line declarator scope.**
   The qualified form `p.N::~S()` recovers the same way, after the
   type-name check against the pointee (`act_on_member_destructor_q`;
   WP-352, `tests/conformance/expr.prim.id.dtor/pointer-dot-dtor-arrow-recovery.cpp`).
+  *Dependent pseudo-destructor calls* ([expr.call]/5, [temp.dep.expr]/1):
+  the call of a `CXXPseudoDestructorExpr` is `void` (`act_on_call`), but
+  when the callee is type-dependent (a dependent object or destroyed
+  type: `p->~T()`, `t.~T()` in a template) the call is type-dependent,
+  as clang's `CallExpr` takes its callee's dependence. kiln gives that
+  call the dependent type, so every use of it (`&`, `sizeof`, operators,
+  initialization, overload resolution, `decltype`) is formed at
+  instantiation, where the rebuilt call is `void`; the AST dump prints
+  the dependent call (and a `ParenExpr` around it) as `'void'`, as clang
+  (spec/ast-dump.md §3, `CallExpr`). WP-372,
+  `tests/conformance/temp.dep.expr/pseudo-dtor-dependent{,-ast,-run}.cpp`.
 - *Member not found* ([expr.ref]/7.4, [class.member.lookup]/1): "no
   member named 'm' in 'C'" names the object's class without its
   cv-qualifiers (`member_access`; clang prints the record, so a
